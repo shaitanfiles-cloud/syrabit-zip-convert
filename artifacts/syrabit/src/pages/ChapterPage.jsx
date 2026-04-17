@@ -649,6 +649,7 @@ export default function ChapterPage() {
         tags={[chapterTitle, subjectName, boardName, className, data.chapter_title || ''].filter(Boolean)}
         pageType="chapter"
         pageData={{ data, basePath }}
+        hasAssamese={hasAssamese}
       />
 
       <header className="border-b border-border/40 bg-card/80 backdrop-blur-md">

@@ -3227,3 +3227,275 @@ async def admin_cf_bot_report_run(admin: dict = Depends(get_admin_user)):
         "wow": result["wow"],
         "file_path": disk_path,
     }
+
+
+# ============================================================
+# Phase E (Plan 11): Daily Bing URL Submission API push
+# ============================================================
+
+_BING_SUBMIT_LOCK_ID = "bing_submit_daily"
+_BING_SUBMIT_LAST_RUN_KEY = "last_run_date"
+_BING_SUBMIT_TARGET_HOUR_UTC = 3
+_BING_SUBMIT_TOLERANCE_MINUTES = 30
+_BING_SUBMIT_LOOP_INTERVAL_S = 600
+_BING_SUBMIT_DAILY_CAP = 10000
+_BING_SUBMIT_STATS_COLLECTION = "bing_submit_daily"
+_BING_SUBMIT_SITE_URL = "https://syrabit.ai"
+_BING_SUBMIT_BACKOFF_AFTER_429 = 250
+
+
+def _bing_submit_today_tag(now_utc: datetime) -> str:
+    return now_utc.strftime("%Y-%m-%d")
+
+
+def _should_run_bing_submit_now(now_utc: datetime, last_run_date: str) -> bool:
+    """Run once per UTC day, in a 30-minute window around 03:00 UTC, and
+    only if we have not already recorded a successful submit for today."""
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    target = now_utc.replace(
+        hour=_BING_SUBMIT_TARGET_HOUR_UTC, minute=0, second=0, microsecond=0,
+    )
+    delta_minutes = abs((now_utc - target).total_seconds()) / 60.0
+    if delta_minutes > _BING_SUBMIT_TOLERANCE_MINUTES:
+        return False
+    return _bing_submit_today_tag(now_utc) != (last_run_date or "")
+
+
+async def _claim_bing_submit_slot(db, today_tag: str) -> bool:
+    """CAS on `db.job_locks[_BING_SUBMIT_LOCK_ID]` so only one replica per
+    cluster runs the Bing submit per UTC day. Mirrors the CF bot report
+    pattern at `_claim_cf_bot_report_slot`."""
+    from pymongo.errors import DuplicateKeyError
+    try:
+        res = await db.job_locks.find_one_and_update(
+            {"_id": _BING_SUBMIT_LOCK_ID,
+             _BING_SUBMIT_LAST_RUN_KEY: {"$ne": today_tag}},
+            {"$set": {_BING_SUBMIT_LAST_RUN_KEY: today_tag}},
+            upsert=False,
+        )
+        if res is not None:
+            return True
+    except Exception as exc:
+        logger.debug(f"[Bing submit] CAS update failed: {exc}")
+        return False
+    try:
+        await db.job_locks.insert_one({
+            "_id": _BING_SUBMIT_LOCK_ID,
+            _BING_SUBMIT_LAST_RUN_KEY: today_tag,
+        })
+        return True
+    except DuplicateKeyError:
+        return False
+    except Exception as exc:
+        logger.debug(f"[Bing submit] bootstrap insert failed: {exc}")
+        return False
+
+
+async def _load_prior_bing_submit_batch_size(db) -> int:
+    """Return the next-day batch size to use. If the most recent run hit a
+    429, halve the batch size (floor 100). Otherwise use the default."""
+    from bing_submit_client import BING_DEFAULT_BATCH_SIZE
+    try:
+        prior = await db[_BING_SUBMIT_STATS_COLLECTION].find_one(
+            {}, sort=[("date", -1)],
+        )
+    except Exception:
+        return BING_DEFAULT_BATCH_SIZE
+    if not prior:
+        return BING_DEFAULT_BATCH_SIZE
+    if prior.get("rate_limited"):
+        prev = int(prior.get("batch_size", BING_DEFAULT_BATCH_SIZE))
+        return max(100, prev // 2)
+    return BING_DEFAULT_BATCH_SIZE
+
+
+async def _try_run_bing_submit_once(db, now_utc: datetime) -> dict:
+    """One iteration of the daily Bing submit loop, factored out for tests."""
+    import os as _os
+    api_key = _os.getenv("BING_WEBMASTER_API_KEY", "").strip()
+    if not api_key:
+        return {"claimed": False, "reason": "no_api_key"}
+
+    today_tag = _bing_submit_today_tag(now_utc)
+    try:
+        cfg = await db.job_locks.find_one(
+            {"_id": _BING_SUBMIT_LOCK_ID},
+            {"_id": 0, _BING_SUBMIT_LAST_RUN_KEY: 1},
+        ) or {}
+    except Exception:
+        cfg = {}
+    last_run = cfg.get(_BING_SUBMIT_LAST_RUN_KEY, "")
+    if not _should_run_bing_submit_now(now_utc, last_run):
+        return {"claimed": False, "reason": "outside_window_or_dedup"}
+
+    if not await _claim_bing_submit_slot(db, today_tag):
+        return {"claimed": False, "reason": "lost_race"}
+
+    urls = await _collect_current_sitemap_urls()
+    urls = list(dict.fromkeys(urls))
+    capped_urls = urls[:_BING_SUBMIT_DAILY_CAP]
+
+    batch_size = await _load_prior_bing_submit_batch_size(db)
+
+    from bing_submit_client import submit_url_batch
+    result = await submit_url_batch(
+        api_key, _BING_SUBMIT_SITE_URL, capped_urls,
+        batch_size=batch_size,
+    )
+    summary = result.to_dict()
+    summary.update({
+        "date": today_tag,
+        "url_catalog_size": len(urls),
+        "submitted_capped": len(capped_urls),
+        "batch_size": batch_size,
+        "ts": now_utc.isoformat(),
+    })
+    try:
+        await db[_BING_SUBMIT_STATS_COLLECTION].update_one(
+            {"date": today_tag}, {"$set": summary}, upsert=True,
+        )
+    except Exception as exc:
+        logger.warning(f"[Bing submit] stats persist failed: {exc}")
+    if result.rate_limited:
+        logger.warning(
+            "[Bing submit] %d/%d URLs hit 429 rate limit — next-day batch will halve",
+            result.failed, result.submitted,
+        )
+    else:
+        logger.info(
+            "[Bing submit] day=%s submitted=%d ok=%d fail=%d (catalog=%d)",
+            today_tag, result.submitted, result.succeeded,
+            result.failed, len(urls),
+        )
+    return {"claimed": True, **summary}
+
+
+async def _bing_submit_daily_loop():
+    """Leader-elected background loop: every 10 min check whether todays
+    daily Bing submit should run, claim the Mongo CAS lock, and push the
+    sitemap URL catalog (up to 10k/day) to the Bing URL Submission API."""
+    from deps import db, is_mongo_available
+    await asyncio.sleep(60)
+    while True:
+        try:
+            if await is_mongo_available():
+                now_utc = datetime.now(timezone.utc)
+                await _try_run_bing_submit_once(db, now_utc)
+        except Exception as exc:
+            logger.debug(f"[Bing submit] loop iteration failed: {exc}")
+        await asyncio.sleep(_BING_SUBMIT_LOOP_INTERVAL_S)
+
+
+def _bing_submit_last_run_summary(rows: list) -> dict:
+    """Derive a one-line status for the most recent submit run from the
+    persisted daily docs. `status` is one of: never_run, rate_limited,
+    partial_failure, ok."""
+    if not rows:
+        return {"status": "never_run"}
+    latest = rows[0]
+    submitted = int(latest.get("submitted", 0))
+    succeeded = int(latest.get("succeeded", 0))
+    failed = int(latest.get("failed", 0))
+    if latest.get("rate_limited"):
+        status = "rate_limited"
+    elif failed > 0 and succeeded == 0:
+        status = "failed"
+    elif failed > 0:
+        status = "partial_failure"
+    else:
+        status = "ok"
+    return {
+        "status": status,
+        "date": latest.get("date"),
+        "ts": latest.get("ts"),
+        "submitted": submitted,
+        "succeeded": succeeded,
+        "failed": failed,
+        "batch_size": int(latest.get("batch_size", 0)),
+        "url_catalog_size": int(latest.get("url_catalog_size", 0)),
+        "errors": latest.get("errors", [])[:3],
+    }
+
+
+def _bing_submit_rolling_7d_usage(rows: list) -> dict:
+    """Sum the last 7 daily submit totals so the dashboard can show
+    how much of the rolling 70k/week (10k/day × 7) free quota we've
+    used. Rows must already be sorted newest-first."""
+    last7 = rows[:7]
+    submitted = sum(int(r.get("submitted", 0)) for r in last7)
+    succeeded = sum(int(r.get("succeeded", 0)) for r in last7)
+    failed = sum(int(r.get("failed", 0)) for r in last7)
+    weekly_cap = _BING_SUBMIT_DAILY_CAP * 7
+    return {
+        "days_with_data": len(last7),
+        "submitted": submitted,
+        "succeeded": succeeded,
+        "failed": failed,
+        "weekly_cap": weekly_cap,
+        "pct_of_weekly_cap": round(submitted / weekly_cap * 100, 2)
+            if weekly_cap else 0.0,
+    }
+
+
+@router.get("/admin/seo/bing-submit-stats")
+async def admin_bing_submit_stats(
+    days: int = Query(7, ge=1, le=60),
+    admin: dict = Depends(get_admin_user),
+):
+    """Phase E (Plan 11): admin SEO dashboard panel for the daily Bing
+    URL Submission API push. Returns:
+
+    - `enabled` — whether `BING_WEBMASTER_API_KEY` is set
+    - `last_run` — status summary of the most recent run (status, counts,
+      timestamp, top error snippets) so on-call can spot a stuck task
+    - `rolling_7d` — submitted / succeeded / failed totals for the last 7
+      days plus % of the weekly 70k free quota consumed
+    - `quota` — live `(daily_remaining, monthly_remaining)` from Bing's
+      GetUrlSubmissionQuota endpoint when the key is set
+    - `days` — last N (default 7, max 60) per-day rows for the trend chart
+    """
+    import os as _os
+    api_key = _os.getenv("BING_WEBMASTER_API_KEY", "").strip()
+    api_key_set = bool(api_key)
+    try:
+        from deps import db, is_mongo_available
+        if not await is_mongo_available():
+            return {
+                "enabled": api_key_set,
+                "reason": "mongo_unavailable",
+                "site_url": _BING_SUBMIT_SITE_URL,
+                "daily_cap": _BING_SUBMIT_DAILY_CAP,
+                "last_run": {"status": "never_run"},
+                "rolling_7d": _bing_submit_rolling_7d_usage([]),
+                "quota": {"daily_remaining": -1, "monthly_remaining": -1},
+                "days": [],
+            }
+    except Exception as exc:
+        return {"enabled": api_key_set, "reason": str(exc), "days": []}
+    try:
+        cursor = db[_BING_SUBMIT_STATS_COLLECTION].find(
+            {}, {"_id": 0},
+        ).sort("date", -1).limit(max(days, 7))
+        rows = await cursor.to_list(max(days, 7))
+    except Exception as exc:
+        return {"enabled": api_key_set, "reason": str(exc), "days": []}
+
+    quota = {"daily_remaining": -1, "monthly_remaining": -1}
+    if api_key_set:
+        try:
+            from bing_submit_client import get_quota
+            d_rem, m_rem = await get_quota(api_key, _BING_SUBMIT_SITE_URL)
+            quota = {"daily_remaining": d_rem, "monthly_remaining": m_rem}
+        except Exception as exc:
+            logger.debug(f"[Bing submit] quota fetch failed: {exc}")
+
+    return {
+        "enabled": api_key_set,
+        "site_url": _BING_SUBMIT_SITE_URL,
+        "daily_cap": _BING_SUBMIT_DAILY_CAP,
+        "last_run": _bing_submit_last_run_summary(rows),
+        "rolling_7d": _bing_submit_rolling_7d_usage(rows),
+        "quota": quota,
+        "days": rows[:days],
+    }

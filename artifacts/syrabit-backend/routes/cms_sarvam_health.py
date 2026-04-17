@@ -2005,7 +2005,7 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
                 return None
             chapter = await db.chapters.find_one(
                 {"subject_id": subj["id"], "slug": chapter_slug},
-                {"_id": 0, "title": 1, "description": 1, "content": 1, "topics": 1},
+                {"_id": 0, "title": 1, "description": 1, "content": 1, "topics": 1, "content_as": 1},
             )
             if not chapter:
                 return None
@@ -2013,6 +2013,7 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
             ch_desc = _html_mod.escape((chapter.get("description") or "")[:300])
             subj_name = _html_mod.escape(subj.get("name", subject_slug))
             page_url = f"https://syrabit.ai/{board}/{class_slug}/{subject_slug}/{chapter_slug}"
+            ch_has_as = bool((chapter.get("content_as") or "").strip())
             topics_list = chapter.get("topics", [])
             topics_html = ""
             if topics_list:
@@ -2043,7 +2044,10 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
 <meta property="og:site_name" content="Syrabit.ai">
 <meta name="robots" content="index, follow">
 <meta http-equiv="content-language" content="en-IN">
-<link rel="alternate" hreflang="en-IN" href="{page_url}">
+{('<link rel="alternate" hreflang="en" href="' + page_url + '">' + chr(10) +
+  '<link rel="alternate" hreflang="as" href="' + page_url + '?lang=as">' + chr(10) +
+  '<link rel="alternate" hreflang="x-default" href="' + page_url + '">') if ch_has_as else
+ ('<link rel="alternate" hreflang="en-IN" href="' + page_url + '">')}
 <script type="application/ld+json">{schema}</script>
 </head>
 <body>
@@ -2339,6 +2343,7 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
                 doc_desc = _html_mod.escape(doc.get("meta_description", doc.get("description", ""))[:300])
                 doc_body = doc.get("content_html", "") or _html_mod.escape(doc.get("content", "")[:2000])
                 page_url = f"https://syrabit.ai/learn/{learn_slug}"
+                doc_has_as = bool((doc.get("content_as") or "").strip())
                 graph_nodes = [
                     {"@type": "Article", "headline": doc.get("title", ""), "description": doc.get("meta_description", ""),
                      "url": page_url, "inLanguage": "en-IN",
@@ -2377,7 +2382,10 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
 <meta http-equiv="content-language" content="en-IN">
 <meta name="geo.region" content="IN-AS">
 <meta name="geo.placename" content="Assam, India">
-<link rel="alternate" hreflang="en-IN" href="{page_url}">
+{('<link rel="alternate" hreflang="en" href="' + page_url + '">' + chr(10) +
+  '<link rel="alternate" hreflang="as" href="' + page_url + '?lang=as">' + chr(10) +
+  '<link rel="alternate" hreflang="x-default" href="' + page_url + '">') if doc_has_as else
+ ('<link rel="alternate" hreflang="en-IN" href="' + page_url + '">')}
 <script type="application/ld+json">{schema}</script>
 </head>
 <body>
@@ -2406,6 +2414,21 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
                 stream_name = _html_mod.escape(subj.get("stream_name", ""))
                 og_title = f"{subj_name} — {class_name} {stream_name}".strip() if class_name else subj_name
                 page_url = f"https://syrabit.ai/subject/{subj_id}"
+                # Phase E (Plan 7): subject hub gets hreflang alternates when
+                # any chapter under this subject has Assamese content. The AS
+                # variant URL uses the same `?lang=as` LanguageContext switch.
+                subj_has_as = False
+                try:
+                    from deps import db as _db_mod
+                    if _db_mod is not None:
+                        as_ch = await _db_mod.chapters.find_one(
+                            {"subject_id": subj_id,
+                             "content_as": {"$exists": True, "$ne": ""}},
+                            {"_id": 1},
+                        )
+                        subj_has_as = as_ch is not None
+                except Exception:
+                    subj_has_as = False
                 html_content = f"""<!DOCTYPE html>
 <html lang="en-IN">
 <head>
@@ -2427,6 +2450,10 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
 <meta name="twitter:description" content="{subj_desc}">
 <meta name="twitter:image" content="https://syrabit.ai/opengraph.jpg">
 <meta name="robots" content="index, follow">
+{('<link rel="alternate" hreflang="en" href="' + page_url + '">' + chr(10) +
+  '<link rel="alternate" hreflang="as" href="' + page_url + '?lang=as">' + chr(10) +
+  '<link rel="alternate" hreflang="x-default" href="' + page_url + '">') if subj_has_as else
+ ('<link rel="alternate" hreflang="en-IN" href="' + page_url + '">')}
 </head>
 <body>
 <h1>{og_title}</h1>

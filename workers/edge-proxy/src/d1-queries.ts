@@ -354,7 +354,7 @@ export async function getSubjectSitemapEntries(db: D1Database): Promise<Array<{ 
   }
 }
 
-export async function getChapterSitemapEntries(db: D1Database): Promise<Array<{ board_slug: string; class_slug: string; subject_slug: string; chapter_slug: string; updated_at: string }> | null> {
+export async function getChapterSitemapEntries(db: D1Database): Promise<Array<{ board_slug: string; class_slug: string; subject_slug: string; chapter_slug: string; updated_at: string; has_assamese: boolean }> | null> {
   try {
     const [boardsRes, classesRes, streamsRes, subjectsRes, chaptersRes] = await db.batch([
       db.prepare("SELECT id, slug FROM boards"),
@@ -375,7 +375,7 @@ export async function getChapterSitemapEntries(db: D1Database): Promise<Array<{ 
     const streamMap = new Map(streams.map(s => [s.id, s.class_id]));
     const subjectMap = new Map(subjects.map(s => [s.id, { slug: s.slug, stream_id: s.stream_id }]));
 
-    const entries: Array<{ board_slug: string; class_slug: string; subject_slug: string; chapter_slug: string; updated_at: string }> = [];
+    const entries: Array<{ board_slug: string; class_slug: string; subject_slug: string; chapter_slug: string; updated_at: string; has_assamese: boolean }> = [];
 
     for (const ch of chapters) {
       const sub = subjectMap.get(ch.subject_id);
@@ -389,13 +389,16 @@ export async function getChapterSitemapEntries(db: D1Database): Promise<Array<{ 
       const chSlug = ch.slug || ch.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
       if (!chSlug) continue;
       let updatedAt = "";
+      let hasAssamese = false;
       if (ch.extra_json) {
         try {
-          const extra = JSON.parse(ch.extra_json) as Record<string, string>;
-          updatedAt = extra.updated_at || extra.created_at || "";
+          const extra = JSON.parse(ch.extra_json) as Record<string, unknown>;
+          updatedAt = (extra.updated_at as string) || (extra.created_at as string) || "";
+          const ca = extra.content_as;
+          hasAssamese = typeof ca === "string" && ca.trim().length > 0;
         } catch { /* ignore */ }
       }
-      entries.push({ board_slug: boardSlug, class_slug: cls.slug, subject_slug: sub.slug, chapter_slug: chSlug, updated_at: updatedAt });
+      entries.push({ board_slug: boardSlug, class_slug: cls.slug, subject_slug: sub.slug, chapter_slug: chSlug, updated_at: updatedAt, has_assamese: hasAssamese });
     }
     return entries;
   } catch {

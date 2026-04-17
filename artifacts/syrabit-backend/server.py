@@ -576,6 +576,13 @@ async def lifespan(app):
     if _is_leader:
         from routes.bot_discovery import _sitemap_indexnow_diff_loop
         asyncio.create_task(_sitemap_indexnow_diff_loop())
+    if _is_leader:
+        # Phase E (Plan 11): daily Bing URL Submission API push so Bingbot
+        # learns about our 1k+ syllabus URLs without waiting for organic
+        # discovery (current crawl pace 0.05 req/hr is too slow). Leader-
+        # gated so we don't spend our 10k/day quota N× across replicas.
+        from routes.bot_discovery import _bing_submit_daily_loop
+        asyncio.create_task(_bing_submit_daily_loop())
     asyncio.create_task(_seo_health_alert_loop())
     asyncio.create_task(_seo_weekly_digest_loop())
     if _is_leader:

@@ -15,6 +15,7 @@ export default function PageMeta({
   jsonLd,
   pageType,
   pageData,
+  hasAssamese = false,
 }) {
   const siteName = "Syrabit.ai";
   const absImage = image.startsWith("http") ? image : `https://syrabit.ai${image}`;
@@ -27,6 +28,13 @@ export default function PageMeta({
     ...(typedSchema ? [typedSchema] : []),
     ...(jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : []),
   ];
+
+  // Phase E (Plan 7): bilingual hreflang alternates. When an Assamese variant
+  // exists for this URL, emit en/as/x-default link tags so Google indexes both
+  // language versions instead of treating the AS page as a duplicate. The AS
+  // variant is the same URL with `?lang=as` (i18n routing convention is a
+  // client-side query param, not a path prefix).
+  const asUrl = url ? (url.includes("?") ? `${url}&lang=as` : `${url}?lang=as`) : null;
 
   return (
     <Helmet
@@ -70,7 +78,13 @@ export default function PageMeta({
       <meta name="ICBM" content="26.2006, 92.9376" />
       <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
       <meta httpEquiv="content-language" content="en-IN" />
-      <link rel="alternate" hrefLang="en-IN" href={url} />
+      {hasAssamese && asUrl ? (
+        <link rel="alternate" hrefLang="en" href={url} />
+      ) : (
+        <link rel="alternate" hrefLang="en-IN" href={url} />
+      )}
+      {hasAssamese && asUrl && <link rel="alternate" hrefLang="as" href={asUrl} />}
+      {hasAssamese && asUrl && <link rel="alternate" hrefLang="x-default" href={url} />}
 
       {allLd.map((ld, i) => (
         <script key={i} type="application/ld+json">

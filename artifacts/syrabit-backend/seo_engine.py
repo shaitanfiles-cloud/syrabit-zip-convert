@@ -3973,16 +3973,36 @@ STATIC_PAGES = [
 _SITEMAP_TYPES = ["notes", "mcqs", "important-questions", "examples", "definition"]
 
 def _build_urlset(entries: list[dict]) -> str:
-    lines = [
-        '<?xml version="1.0" encoding="UTF-8"?>',
-        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
-    ]
+    """Build a sitemap urlset XML. When any entry has `has_assamese=True`,
+    emit `xhtml:link rel="alternate"` entries for both EN and AS variants
+    (Phase E, Plan 7 — bilingual hreflang in sitemaps)."""
+    any_alt = any(e.get("has_assamese") for e in entries)
+    if any_alt:
+        opener = (
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" '
+            'xmlns:xhtml="http://www.w3.org/1999/xhtml">'
+        )
+    else:
+        opener = '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>', opener]
     for e in entries:
+        loc = e["loc"]
+        if e.get("has_assamese"):
+            sep = "&amp;" if "?" in loc else "?"
+            as_loc = f"{loc}{sep}lang=as"
+            alt = (
+                f'<xhtml:link rel="alternate" hreflang="en" href="{loc}"/>'
+                f'<xhtml:link rel="alternate" hreflang="as" href="{as_loc}"/>'
+                f'<xhtml:link rel="alternate" hreflang="x-default" href="{loc}"/>'
+            )
+        else:
+            alt = ""
         lines.append(
-            f'  <url><loc>{e["loc"]}</loc>'
+            f'  <url><loc>{loc}</loc>'
             f'<lastmod>{e["lastmod"]}</lastmod>'
             f'<changefreq>{e.get("freq", "monthly")}</changefreq>'
-            f'<priority>{e["pri"]}</priority></url>'
+            f'<priority>{e["pri"]}</priority>'
+            f'{alt}</url>'
         )
     lines.append("</urlset>")
     return "\n".join(lines)
@@ -4136,7 +4156,7 @@ async def get_sitemap_chapters():
     lib_streams = {s["id"]: s for s in await _db.streams.find({}, {"_id": 0}).to_list(500)}
     lib_classes = {c["id"]: c for c in await _db.classes.find({}, {"_id": 0}).to_list(500)}
     lib_boards = {b["id"]: b for b in await _db.boards.find({}, {"_id": 0}).to_list(500)}
-    chapters = await _db.chapters.find({}, {"_id": 0, "id": 1, "subject_id": 1, "slug": 1, "title": 1, "updated_at": 1, "created_at": 1}).to_list(5000)
+    chapters = await _db.chapters.find({}, {"_id": 0, "id": 1, "subject_id": 1, "slug": 1, "title": 1, "updated_at": 1, "created_at": 1, "content_as": 1}).to_list(5000)
     sub_map = {s["id"]: s for s in lib_subjects}
     entries = []
     for ch in chapters:
@@ -4160,6 +4180,7 @@ async def get_sitemap_chapters():
         entries.append({
             "loc": f"{BASE_URL}/{b_slug}/{c_slug}/{sub['slug']}/{ch_slug}",
             "lastmod": lastmod, "pri": "0.8", "freq": "monthly",
+            "has_assamese": bool((ch.get("content_as") or "").strip()),
         })
     return _xml_response(_build_urlset(entries))
 
