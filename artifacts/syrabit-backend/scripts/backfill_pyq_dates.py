@@ -102,11 +102,30 @@ def _derive_created_at(
     return _to_iso(datetime.now(timezone.utc)), "now_fallback"
 
 
+def _normalize_iso(raw: str) -> str:
+    """Coerce a stored timestamp string into the canonical `...Z` UTC ISO
+    format the rest of this script emits. Falls back to the raw string if
+    parsing fails so we don't drop usable data on unfamiliar formats."""
+    if not raw or not isinstance(raw, str):
+        return raw or ""
+    s = raw.strip()
+    # `datetime.fromisoformat` handles `+00:00` but not the trailing `Z`
+    # in older Python; normalize before parsing.
+    candidate = s[:-1] + "+00:00" if s.endswith("Z") else s
+    try:
+        dt = datetime.fromisoformat(candidate)
+    except ValueError:
+        return s  # leave alone — better than fabricating a wrong value
+    return _to_iso(dt)
+
+
 async def _load_upload_mtimes(db) -> dict[str, str]:
     """Build a {pyq_html_slug: created_at_iso} index from `pyq_uploads`.
 
     The upload row's `created_at` is the moment the operator ingested the
-    source PDF — the closest signal we have to the file's mtime.
+    source PDF — the closest signal we have to the file's mtime. Values
+    are normalized to canonical UTC `...Z` form so downstream rows have a
+    consistent timestamp shape regardless of how the upload was written.
     """
     out: dict[str, str] = {}
     cursor = db[UPLOADS_COLLECTION].find(
@@ -117,7 +136,7 @@ async def _load_upload_mtimes(db) -> dict[str, str]:
         slug = row.get("pyq_html_slug") or ""
         ts = row.get("created_at") or ""
         if slug and not _is_empty(ts):
-            out[slug] = ts
+            out[slug] = _normalize_iso(ts)
     return out
 
 
@@ -154,9 +173,9 @@ async def main() -> int:
         {"_id": 1, "slug": 1, "exam_year": 1, "created_at": 1, "updated_at": 1},
     )
     async for doc in cursor:
-        processed += 1
-        if args.limit and processed > args.limit:
+        if args.limit and processed >= args.limit:
             break
+        processed += 1
 
         update: dict[str, str] = {}
         existing_created = doc.get("created_at")

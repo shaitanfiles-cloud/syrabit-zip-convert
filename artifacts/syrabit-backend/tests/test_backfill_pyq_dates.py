@@ -10,6 +10,7 @@ from bson import ObjectId
 from scripts.backfill_pyq_dates import (
     _derive_created_at,
     _is_empty,
+    _normalize_iso,
     _to_iso,
 )
 
@@ -146,6 +147,18 @@ def test_updated_at_mirrors_resolved_created_at_when_missing():
     update = {"created_at": iso, "updated_at": iso}
     assert update["updated_at"] == expected
     assert update["created_at"] == expected
+
+
+def test_normalize_iso_canonicalizes_offsets_to_z():
+    # Common upload-row formats end up emitted as ...Z UTC.
+    assert _normalize_iso("2024-06-30T12:00:00+00:00") == "2024-06-30T12:00:00Z"
+    assert _normalize_iso("2024-06-30T12:00:00.123456Z") == "2024-06-30T12:00:00Z"
+    # A non-UTC offset is normalized to UTC.
+    assert _normalize_iso("2024-06-30T17:30:00+05:30") == "2024-06-30T12:00:00Z"
+    # Garbage strings are passed through rather than dropped.
+    assert _normalize_iso("not-a-date") == "not-a-date"
+    assert _normalize_iso("") == ""
+    assert _normalize_iso(None) == ""
 
 
 def test_existing_created_at_is_never_overwritten():
