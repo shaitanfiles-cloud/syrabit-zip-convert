@@ -1392,6 +1392,49 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                               {deepScan.data.truncated && ' (truncated at limit)'}
                             </span>
                           )}
+                          {/* Task #346: CSV export of the full failing list
+                              after a deep scan, so admins can paste it into
+                              a sheet or share with content/eng teammates
+                              without copying URLs row-by-row. Only shown
+                              once we actually have deep-scan results with
+                              at least one failing URL. */}
+                          {usingDeepScan && deepScan.data.failing?.length > 0 && (
+                            <button
+                              type="button"
+                              data-testid={`seo-sitemap-${sm.name}-download-csv`}
+                              onClick={() => {
+                                const rows = deepScan.data.failing.map((f) => {
+                                  // CSV escape: wrap any field that contains a
+                                  // comma, quote, or newline in double quotes
+                                  // and double-up internal quotes.
+                                  const esc = (v) => {
+                                    const s = v == null ? '' : String(v);
+                                    return /[",\n\r]/.test(s)
+                                      ? `"${s.replace(/"/g, '""')}"`
+                                      : s;
+                                  };
+                                  return [esc(f.url), esc(f.status ?? ''), esc(f.error ?? '')].join(',');
+                                });
+                                const csv = ['url,status,error', ...rows].join('\n');
+                                // Prepend BOM so Excel opens UTF-8 cleanly.
+                                const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+                                const ts = new Date().toISOString().replace(/[:.]/g, '-');
+                                const sitemapStem = sm.name.replace(/\.xml$/i, '');
+                                const filename = `failing-urls-${sitemapStem}-${ts}.csv`;
+                                const url = URL.createObjectURL(blob);
+                                const a = document.createElement('a');
+                                a.href = url;
+                                a.download = filename;
+                                document.body.appendChild(a);
+                                a.click();
+                                document.body.removeChild(a);
+                                URL.revokeObjectURL(url);
+                              }}
+                              className="text-[10px] font-semibold px-2 py-1 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                            >
+                              Download CSV
+                            </button>
+                          )}
                         </div>
                         {deepScan?.error && (
                           <div
