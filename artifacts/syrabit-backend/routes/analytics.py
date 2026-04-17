@@ -202,6 +202,83 @@ async def public_stats():
     return result
 
 
+# ─────────────────────────────────────────────
+# Top routes for build-time prerendering (Task #388)
+# ─────────────────────────────────────────────
+# Returns the most-visited routes over the last `days` days based on the
+# `page_views` collection (same source as the admin /admin/analytics
+# dashboard). Public + cached so the static-site build can fetch it
+# without an admin token. Filtered to subject + chapter route shapes
+# (3 or 4 path segments, lowercase slug-style) so consumers don't need
+# to re-filter. Falls back to an empty list when Mongo is unavailable.
+
+_top_routes_cache: Dict[str, Any] = {}
+_TOP_ROUTES_TTL_SECONDS = 600  # 10 min
+
+_SLUG_SEG_RE = re.compile(r"^[a-z0-9][a-z0-9\-]*$")
+
+
+def _is_prerender_candidate_path(path: str) -> bool:
+    if not path or not path.startswith("/"):
+        return False
+    parts = path.strip("/").split("/")
+    if len(parts) not in (3, 4):
+        return False
+    return all(_SLUG_SEG_RE.match(p) for p in parts)
+
+
+@router.get("/analytics/top-routes")
+async def top_routes(days: int = 30, limit: int = 200):
+    """Top subject + chapter routes by real pageviews.
+
+    Used by the static prerender step (Task #388) to pick which routes
+    to bake into HTML based on actual demand instead of bundle order.
+    No auth: returns aggregate counts only, no PII.
+    """
+    days = max(1, min(int(days or 30), 90))
+    limit = max(1, min(int(limit or 200), 1000))
+
+    cache_key = f"{days}:{limit}"
+    now = time.time()
+    cached = _top_routes_cache.get(cache_key)
+    if cached and now - cached["ts"] < _TOP_ROUTES_TTL_SECONDS:
+        return cached["data"]
+
+    routes: List[Dict[str, Any]] = []
+    try:
+        if db is not None and await is_mongo_available():
+            since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+            pipeline = [
+                {"$match": {
+                    "date": {"$gte": since},
+                    "is_bot": {"$ne": True},
+                    "is_404": {"$ne": True},
+                }},
+                {"$group": {"_id": "$path", "views": {"$sum": 1}}},
+                {"$sort": {"views": -1}},
+                {"$limit": limit * 4},  # over-fetch then filter
+            ]
+            rows = await db.page_views.aggregate(pipeline).to_list(limit * 4)
+            for row in rows:
+                p = row.get("_id") or ""
+                if _is_prerender_candidate_path(p):
+                    routes.append({"path": p, "views": int(row.get("views") or 0)})
+                if len(routes) >= limit:
+                    break
+    except Exception as e:
+        logger.debug(f"top_routes aggregation failed: {e}")
+        routes = []
+
+    result = {
+        "days": days,
+        "limit": limit,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "routes": routes,
+    }
+    _top_routes_cache[cache_key] = {"ts": now, "data": result}
+    return result
+
+
 @router.post("/analytics/session-ping")
 async def session_ping_endpoint(
     session_id: str = Body(...),

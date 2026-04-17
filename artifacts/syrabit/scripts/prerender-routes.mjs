@@ -18,9 +18,17 @@
 // browsers alike. Falls back to the SPA shell when the backend is
 // unreachable so the build never hard-fails on a transient network.
 //
+// Selection order (Task #388): the script asks the backend for the
+// most-visited subject + chapter routes over the last
+// PRERENDER_TRAFFIC_DAYS days (default 30) and uses that ranking to
+// pick which routes to prerender. Routes not present in the analytics
+// rollup fall back to bundle order, so a brand-new deployment with no
+// traffic data still ships a sensible set of pages.
+//
 // Limits are env-tunable so we can scale up gradually:
 //   PRERENDER_SUBJECTS_LIMIT          (default 50)
 //   PRERENDER_CHAPTERS_PER_SUBJECT    (default 5)
+//   PRERENDER_TRAFFIC_DAYS            (default 30)
 //   PRERENDER_BACKEND_URL / VITE_BACKEND_URL  (default https://syrabit.ai)
 
 import fs from "fs";
@@ -43,6 +51,10 @@ const SUBJECTS_LIMIT = parseInt(
 );
 const CHAPTERS_PER_SUBJECT = parseInt(
   process.env.PRERENDER_CHAPTERS_PER_SUBJECT || "5",
+  10,
+);
+const TRAFFIC_DAYS = parseInt(
+  process.env.PRERENDER_TRAFFIC_DAYS || "30",
   10,
 );
 const FETCH_TIMEOUT_MS = 8000;
@@ -289,10 +301,68 @@ async function main() {
   }
 
   const allSubjectRoutes = enumerateSubjectRoutes(bundle);
-  const subjectRoutes = allSubjectRoutes.slice(0, SUBJECTS_LIMIT);
+
+  // Pull traffic ranking (Task #388). Each entry is `{ path, views }`
+  // for the most-visited subject + chapter routes over the last
+  // TRAFFIC_DAYS days. We build path → views maps for both subject
+  // (3-segment) and chapter (4-segment) routes, then derive a subject
+  // priority that combines the subject landing-page views with the
+  // sum of all chapter views under that prefix. This means a subject
+  // whose chapters are popular gets prerendered even when the bare
+  // landing URL is rarely visited directly.
+  // Anything missing from analytics keeps its bundle-order position so
+  // a cold start still produces sensible output.
+  const subjectViews = new Map();
+  const chapterViews = new Map();
+  try {
+    const trafficPayload = await fetchJson(
+      `${BACKEND.replace(/\/$/, "")}/api/analytics/top-routes?days=${TRAFFIC_DAYS}&limit=1000`,
+    );
+    const list = Array.isArray(trafficPayload?.routes) ? trafficPayload.routes : [];
+    for (const row of list) {
+      if (!row || typeof row.path !== "string") continue;
+      const views = Number(row.views) || 0;
+      const segs = row.path.replace(/^\//, "").split("/");
+      if (segs.length === 3) {
+        subjectViews.set(row.path, views);
+      } else if (segs.length === 4) {
+        chapterViews.set(row.path, views);
+        const subjectPath = `/${segs[0]}/${segs[1]}/${segs[2]}`;
+        subjectViews.set(
+          subjectPath,
+          (subjectViews.get(subjectPath) || 0) + views,
+        );
+      }
+    }
+    console.log(
+      `[prerender-routes] traffic ranking: ${list.length} routes from last ${TRAFFIC_DAYS}d ` +
+        `(${subjectViews.size} subject prefixes, ${chapterViews.size} chapters)`,
+    );
+  } catch (err) {
+    console.warn(
+      `[prerender-routes] traffic ranking unavailable (${err.message}); ` +
+        `falling back to bundle order`,
+    );
+  }
+
+  const haveTraffic = subjectViews.size > 0 || chapterViews.size > 0;
+  const subjectScore = (route) => {
+    const url = `/${route.board}/${route.classSlug}/${route.subjectSlug}`;
+    return subjectViews.get(url) || 0;
+  };
+  const rankedSubjectRoutes = haveTraffic
+    ? [...allSubjectRoutes].sort((a, b) => {
+        const sa = subjectScore(a);
+        const sb = subjectScore(b);
+        if (sb !== sa) return sb - sa; // higher views first
+        return allSubjectRoutes.indexOf(a) - allSubjectRoutes.indexOf(b);
+      })
+    : allSubjectRoutes;
+  const subjectRoutes = rankedSubjectRoutes.slice(0, SUBJECTS_LIMIT);
   console.log(
     `[prerender-routes] ${subjectRoutes.length}/${allSubjectRoutes.length} subjects in scope ` +
-      `(limit=${SUBJECTS_LIMIT}, chapters per subject=${CHAPTERS_PER_SUBJECT})`,
+      `(limit=${SUBJECTS_LIMIT}, chapters per subject=${CHAPTERS_PER_SUBJECT}, ` +
+      `selection=${haveTraffic ? "traffic" : "bundle-order"})`,
   );
 
   const mod = await import(pathToFileURL(ssrEntry).href);
@@ -384,9 +454,20 @@ async function main() {
     }
 
     // ── Chapter prerender for the same subject ────────────────────
-    const candidateChapters = (chapters || [])
-      .filter((c) => c.slug)
-      .slice(0, CHAPTERS_PER_SUBJECT);
+    // Re-rank chapter candidates by real traffic (Task #388). Chapters
+    // missing from the analytics rollup keep their bundle-order
+    // position so we still prerender something useful for new
+    // subjects with no recorded views yet.
+    const chapterCandidates = (chapters || []).filter((c) => c.slug);
+    const rankedChapters = haveTraffic
+      ? [...chapterCandidates].sort((a, b) => {
+          const va = chapterViews.get(`${url}/${a.slug}`) || 0;
+          const vb = chapterViews.get(`${url}/${b.slug}`) || 0;
+          if (vb !== va) return vb - va; // higher views first
+          return chapterCandidates.indexOf(a) - chapterCandidates.indexOf(b);
+        })
+      : chapterCandidates;
+    const candidateChapters = rankedChapters.slice(0, CHAPTERS_PER_SUBJECT);
 
     for (const ch of candidateChapters) {
       const chapterSlug = ch.slug;
@@ -470,6 +551,12 @@ async function main() {
     limits: {
       subjects: SUBJECTS_LIMIT,
       chaptersPerSubject: CHAPTERS_PER_SUBJECT,
+    },
+    selection: {
+      mode: haveTraffic ? "traffic" : "bundle-order",
+      traffic_days: TRAFFIC_DAYS,
+      ranked_subjects: subjectViews.size,
+      ranked_chapters: chapterViews.size,
     },
     counts: {
       subjects_written: subjectsWritten,
