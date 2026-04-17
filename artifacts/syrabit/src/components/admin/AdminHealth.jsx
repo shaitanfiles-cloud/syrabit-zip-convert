@@ -620,6 +620,11 @@ export default function AdminHealth({ adminToken, onNavigate }) {
             <p className="text-xs text-gray-500 mb-3 leading-relaxed">
               Sends the sample below through the LIVE sanitiser using the currently active behaviour. Use this to validate a new override before letting real users hit it.
             </p>
+            {asmCfg?.config?.behaviour && (asmCfg.config.behaviour === 'regenerate' || asmCfg.config.behaviour === 'translate+regenerate') && (
+              <div className="mb-3 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-800 leading-relaxed" data-testid="asm-regenerate-warning">
+                <strong>Heads up:</strong> the active behaviour includes <code className="font-mono">regenerate</code>, but the test-fire route does not have a real chat context, so the regenerate step will be skipped here (you'll see <code className="font-mono">regenerated: false</code> in the diagnostic). Translate / strip behaviour IS exercised. Use a real chat query in Assamese to fully validate regenerate end-to-end.
+              </div>
+            )}
 
             <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Sample (Assamese with English leakage)</label>
             <textarea
