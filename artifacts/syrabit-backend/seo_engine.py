@@ -3630,7 +3630,7 @@ async def get_seo_html_default(board: str, class_slug: str, subject_slug: str, t
         page.get("chapter_title", ""), "notes",
     )
     resp = HTMLResponse(content=html_content)
-    resp.headers["X-Topic-Keywords"] = kw_header[:500]
+    resp.headers["X-Topic-Keywords"] = kw_header[:500].encode("ascii", "replace").decode("ascii")
     resp.headers["X-Content-Source"] = "Syrabit Browser"
     resp.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400"
     _lm = _iso_to_rfc7231(page.get("updated_at") or page.get("generated_at"))
@@ -3664,7 +3664,7 @@ async def get_seo_html_typed(board: str, class_slug: str, subject_slug: str, top
         page.get("chapter_title", ""), page_type,
     )
     resp = HTMLResponse(content=html_content)
-    resp.headers["X-Topic-Keywords"] = kw_header[:500]
+    resp.headers["X-Topic-Keywords"] = kw_header[:500].encode("ascii", "replace").decode("ascii")
     resp.headers["X-Content-Source"] = "Syrabit Browser"
     resp.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400"
     _lm = _iso_to_rfc7231(page.get("updated_at") or page.get("generated_at"))

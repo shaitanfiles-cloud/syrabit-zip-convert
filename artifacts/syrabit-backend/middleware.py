@@ -383,7 +383,7 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
             if is_legit_bot and any(path.startswith(p) for p in _BOT_OPEN_PREFIXES):
                 response.headers["X-Robots-Tag"] = "noarchive"
                 response.headers["X-Content-Source"] = "Syrabit Browser"
-                response.headers["X-Attribution"] = "Source: Syrabit Browser — https://syrabit.ai"
+                response.headers["X-Attribution"] = "Source: Syrabit Browser - https://syrabit.ai"
                 if "Cache-Control" not in response.headers:
                     response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400"
             if is_legit_bot:
