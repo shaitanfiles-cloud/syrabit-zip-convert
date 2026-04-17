@@ -426,3 +426,35 @@ After schema changes (new migration files in `migrations/`):
 wrangler d1 migrations apply syrabit-content --remote
 wrangler deploy
 ```
+
+---
+
+## Deploying via Cloudflare's "Workers Builds" (GitHub auto-deploy)
+
+If the worker is connected to a GitHub repo and Cloudflare auto-builds on push
+(Dashboard → Workers → `syrabit-edge` → Settings → Build), use these EXACT
+settings. The default values Cloudflare suggests will fail.
+
+| Field | Correct value | Why |
+|---|---|---|
+| **Root directory** | `/` (if repo only contains the worker) **OR** `workers/edge-proxy` (if pushing this whole monorepo) | Wrangler must run where `wrangler.toml` lives. |
+| **Build command** | *(leave empty)* — or `pnpm install --frozen-lockfile` | Wrangler bundles `src/index.ts` itself via esbuild. There is no separate build step. A no-op `"build": "echo …"` script is in `package.json` so `pnpm run build` will also succeed if Cloudflare insists on a value. |
+| **Deploy command** | `npx wrangler@3 deploy` | Pin to Wrangler 3. Wrangler 4 refuses to deploy from any folder containing `pnpm-workspace.yaml` ("workspace detection" error). The local `package.json` already pins `wrangler@^3.99.0` as a devDep. |
+| **Version command** | `npx wrangler@3 versions upload` | Same reason — pin to v3. |
+| **Production branch** | `master` (or whatever you push to) | Must match the branch you deploy from. |
+
+### Common failure → fix
+
+| Build log says | Real cause | Fix |
+|---|---|---|
+| `pnpm: command not found` or `Missing script: "build"` | Cloudflare ran `pnpm run build` but the repo had no build script | Either clear the build command, or pull this commit (adds a no-op `build` script). |
+| `The Wrangler application detection logic has been run in the root of a workspace…` | Wrangler 4 saw a `pnpm-workspace.yaml` at root | Change Deploy command to `npx wrangler@3 deploy`, **or** set Root directory to `workers/edge-proxy`. |
+| `Authentication error [code: 10000]` | The build-token API key lacks Workers Edit + D1 Edit + KV Edit permissions | Recreate "API token" under Build settings with: Workers Scripts:Edit, D1:Edit, Workers KV Storage:Edit, Account Settings:Read for your account. |
+| `Could not find zone for syrabit.ai` | Token missing Zone:Read for syrabit.ai | Add Zone:Read for the `syrabit.ai` zone to the build token. |
+| `KV namespace … not found` / `D1 database … not found` | The IDs in `wrangler.toml` don't exist in this CF account | Either create them with `wrangler kv namespace create …` / `wrangler d1 create …` and update IDs, or point the worker at the correct account. |
+
+### After fixing the dashboard
+
+Trigger a redeploy by pushing any commit (or click "Retry deploy" on the
+failed build). Then verify with the smoke commands at the top of this file
+(`x-source: edge` + `x-source: backend`).

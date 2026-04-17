@@ -64,6 +64,16 @@ Users
 
 Push to the connected GitHub branch. Cloudflare Pages auto-deploys on push.
 
+### Common Pages build failures → fix
+
+| Build log says | Real cause | Fix |
+|---|---|---|
+| `The Wrangler application detection logic has been run in the root of a workspace…` | The Pages "Deploy command" was set to `npx wrangler deploy`, and the repo root has a `pnpm-workspace.yaml` | Open Pages → Project → Settings → Build → **clear the Deploy command field**. Pages will then auto-upload `artifacts/syrabit/dist`. If you genuinely need a manual deploy command, use `pnpm run deploy:pages` instead. |
+| `ERR_PNPM_NO_MATCHING_VERSION_INSIDE_WORKSPACE` or workspace dep resolution errors | Build runs without `--frozen-lockfile`, or wrong pnpm version | Build command must be `pnpm install --frozen-lockfile && cd artifacts/syrabit && pnpm run build`. Set `PNPM_VERSION=10.26.1` in env vars to match the lockfile. |
+| `tsc: command not found` / `vite: command not found` | Build skipped install, or installed only one workspace | The `cd` happens AFTER install — the install above pulls all workspaces. Confirm root `node_modules` exists in the build log. |
+| 404s on deep links (e.g. `/pricing` after hard-refresh) | Either `_worker.js` was deleted from the build, or `_redirects` is missing | `public/_redirects` (`/* /index.html 200`) is now committed; the build copies it into `dist/`. Confirm both `_worker.js` and `_redirects` appear in the deployed file list. |
+| Old version still served after deploy | CF cache + immutable headers on `index.html` | `index.html` already has `must-revalidate` in `_headers`. Hard-refresh (Cmd+Shift+R), then check `cf-cache-status: REVALIDATED`. |
+
 ## Edge Proxy — Cloudflare Worker
 
 The Worker lives in `workers/edge-proxy/` and is deployed via Wrangler.
