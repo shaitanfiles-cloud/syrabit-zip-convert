@@ -237,10 +237,18 @@ def _spiky_report(success_rate=50.0, sitemap_breakdown=None):
     rep["summary"]["ok_url_checks"] = int(success_rate * 0.3)  # of 30
     rep["sitemaps"] = sitemap_breakdown or [
         {"name": "sitemap-learn.xml", "valid_xml": True, "url_count": 50,
-         "sample_checks": [{"ok": False, "status": 404} for _ in range(8)]
-                          + [{"ok": True, "status": 200} for _ in range(2)]},
+         "sample_checks": [
+             {"ok": False, "status": 404, "url": f"https://syrabit.ai/learn/broken-{i}"}
+             for i in range(8)
+         ] + [
+             {"ok": True, "status": 200, "url": f"https://syrabit.ai/learn/ok-{i}"}
+             for i in range(2)
+         ]},
         {"name": "sitemap-notes.xml", "valid_xml": True, "url_count": 80,
-         "sample_checks": [{"ok": True, "status": 200} for _ in range(10)]},
+         "sample_checks": [
+             {"ok": True, "status": 200, "url": f"https://syrabit.ai/notes/ok-{i}"}
+             for i in range(10)
+         ]},
     ]
     return rep
 
@@ -272,6 +280,100 @@ def test_format_by_sitemap_html_highlights_bad_rows():
     # good row is plain
     assert "sitemap-notes.xml" in html
     assert html.count("background:#fdecea") == 1  # only 1 bad row highlighted
+
+
+# -------- Task #299: failing URLs surfaced in snapshot + alert --------
+
+def test_snapshot_captures_failing_urls_per_sitemap():
+    """The snapshot must record the first 10 failing URLs (with status code)
+    per sitemap so admins don't need to re-run /api/seo/health."""
+    with patch.object(bot_discovery, "seo_health_check",
+                      AsyncMock(return_value=_spiky_report())):
+        snap = asyncio.run(bot_discovery._record_seo_health_snapshot())
+
+    by_name = {r["name"]: r for r in snap["by_sitemap"]}
+    learn = by_name["sitemap-learn.xml"]
+    assert "failing_urls" in learn
+    # 8 failing checks were synthesized; capped at 10 by design.
+    assert len(learn["failing_urls"]) == 8
+    first = learn["failing_urls"][0]
+    assert first["url"].startswith("https://syrabit.ai/learn/broken-")
+    assert first["status"] == 404
+    # Healthy sitemap reports an empty list, never None.
+    assert by_name["sitemap-notes.xml"]["failing_urls"] == []
+
+
+def test_snapshot_caps_failing_urls_at_ten():
+    """Even a sitemap with 50 failing samples should only persist 10 URLs
+    so the snapshot doc stays small and the alert email stays readable."""
+    rep = _spiky_report(sitemap_breakdown=[
+        {"name": "sitemap-flood.xml", "valid_xml": True, "url_count": 200,
+         "sample_checks": [
+             {"ok": False, "status": 404, "url": f"https://syrabit.ai/x/{i}"}
+             for i in range(50)
+         ]},
+    ])
+    with patch.object(bot_discovery, "seo_health_check",
+                      AsyncMock(return_value=rep)):
+        snap = asyncio.run(bot_discovery._record_seo_health_snapshot())
+    failing = snap["by_sitemap"][0]["failing_urls"]
+    assert len(failing) == 10
+    # Preserves order — first 10 from the sample.
+    assert failing[0]["url"].endswith("/x/0")
+    assert failing[-1]["url"].endswith("/x/9")
+
+
+def test_format_by_sitemap_html_renders_failing_urls():
+    """The HTML email body must include each failing URL's status code +
+    URL inside the per-sitemap table so admins can click straight through."""
+    rows = [{
+        "name": "sitemap-learn.xml", "ok": 2, "total": 10, "success_rate": 20.0,
+        "failing_urls": [
+            {"url": "https://syrabit.ai/learn/missing-1", "status": 404},
+            {"url": "https://syrabit.ai/learn/timeout-1", "status": 0},
+        ],
+    }]
+    html = bot_discovery._format_by_sitemap_html(rows, threshold_pct=20.0)
+    assert "Failing URLs" in html
+    assert "https://syrabit.ai/learn/missing-1" in html
+    assert "https://syrabit.ai/learn/timeout-1" in html
+    # Status codes are visible — 404 and 0 (network error).
+    assert ">404<" in html
+    assert ">0<" in html
+
+
+def test_format_by_sitemap_html_escapes_failing_urls():
+    """A malicious URL stored in Mongo must not break out of the email
+    HTML — render through html.escape, never raw interpolation."""
+    rows = [{
+        "name": "sitemap-x.xml", "ok": 0, "total": 1, "success_rate": 0.0,
+        "failing_urls": [{"url": "https://x/<script>alert(1)</script>", "status": 404}],
+    }]
+    html = bot_discovery._format_by_sitemap_html(rows, threshold_pct=20.0)
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+
+
+def test_format_by_sitemap_text_lists_failing_urls():
+    """Plain-text fallback must include the same actionable detail."""
+    rows = [{
+        "name": "sitemap-learn.xml", "ok": 2, "total": 10, "success_rate": 20.0,
+        "failing_urls": [
+            {"url": "https://syrabit.ai/learn/missing-1", "status": 404},
+        ],
+    }]
+    text = bot_discovery._format_by_sitemap_text(rows)
+    assert "[404] https://syrabit.ai/learn/missing-1" in text
+
+
+def test_format_by_sitemap_html_omits_section_when_no_failures():
+    """A healthy sitemap should NOT render an empty 'Failing URLs' block."""
+    rows = [{
+        "name": "sitemap-ok.xml", "ok": 10, "total": 10, "success_rate": 100.0,
+        "failing_urls": [],
+    }]
+    html = bot_discovery._format_by_sitemap_html(rows, threshold_pct=20.0)
+    assert "Failing URLs" not in html
 
 
 def test_url_spike_alert_fires_on_two_consecutive_low_rates():

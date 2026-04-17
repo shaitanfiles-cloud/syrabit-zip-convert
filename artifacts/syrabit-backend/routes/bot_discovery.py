@@ -1,5 +1,5 @@
 """Syrabit.ai — Bot discovery routes: RSS feeds, llms-full.txt, IndexNow, ai-plugin.json, bot analytics."""
-import asyncio, json, logging, os, time, uuid, hashlib
+import asyncio, html as _html, json, logging, os, time, uuid, hashlib
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict
 from xml.sax.saxutils import escape as xml_escape
@@ -1838,7 +1838,12 @@ def _should_send_weekly_digest_now(now_utc: datetime, last_iso_week: str) -> boo
 
 def _format_by_sitemap_html(by_sitemap, threshold_pct: float) -> str:
     """Render an HTML table showing per-sitemap pass/fail counts. Rows where
-    the success rate is at or below ``100 - threshold_pct`` are highlighted."""
+    the success rate is at or below ``100 - threshold_pct`` are highlighted.
+
+    Each failing row is followed by a sub-row listing the captured failing
+    URLs (status code + URL) so admins can jump directly to the offenders
+    instead of re-running ``/api/seo/health`` after the alert (Task #299).
+    """
     if not by_sitemap:
         return ""
     rows_html = []
@@ -1848,13 +1853,33 @@ def _format_by_sitemap_html(by_sitemap, threshold_pct: float) -> str:
         bg = "background:#fdecea;color:#c0392b;font-weight:bold" if bad else ""
         rows_html.append(
             f"<tr style='{bg}'>"
-            f"<td style='padding:6px 10px;border:1px solid #ddd'>{row.get('name', 'unknown')}</td>"
+            f"<td style='padding:6px 10px;border:1px solid #ddd'>{_html.escape(str(row.get('name', 'unknown')))}</td>"
             f"<td style='padding:6px 10px;border:1px solid #ddd'>{row.get('ok', 0)} / {row.get('total', 0)}</td>"
             f"<td style='padding:6px 10px;border:1px solid #ddd'>{sr}%</td>"
             f"</tr>"
         )
+        failing = row.get("failing_urls") or []
+        if failing:
+            items = []
+            for f in failing:
+                code = f.get("status") or 0
+                url = _html.escape(str(f.get("url", "")))
+                items.append(
+                    f"<li style='margin:2px 0'>"
+                    f"<code style='background:#fff;padding:1px 4px;border-radius:3px;color:#c0392b'>{code}</code> "
+                    f"<a href='{url}' style='color:#1f2937;text-decoration:none' target='_blank' rel='noopener'>{url}</a>"
+                    f"</li>"
+                )
+            rows_html.append(
+                "<tr style='background:#fff7f7'>"
+                "<td colspan='3' style='padding:6px 10px;border:1px solid #ddd;font-family:monospace;font-size:12px;color:#7f1d1d'>"
+                "<div style='font-weight:bold;margin-bottom:4px'>Failing URLs:</div>"
+                f"<ul style='margin:0;padding-left:18px'>{''.join(items)}</ul>"
+                "</td>"
+                "</tr>"
+            )
     return (
-        "<table style='border-collapse:collapse;margin:12px 0;width:100%;max-width:520px;font-family:sans-serif;font-size:13px'>"
+        "<table style='border-collapse:collapse;margin:12px 0;width:100%;max-width:720px;font-family:sans-serif;font-size:13px'>"
         "<tr style='background:#f3f4f6'>"
         "<th style='text-align:left;padding:6px 10px;border:1px solid #ddd'>Sitemap (page-type)</th>"
         "<th style='text-align:left;padding:6px 10px;border:1px solid #ddd'>OK / total</th>"
@@ -1866,11 +1891,20 @@ def _format_by_sitemap_html(by_sitemap, threshold_pct: float) -> str:
 
 
 def _format_by_sitemap_text(by_sitemap) -> str:
-    """Plain-text fallback for the per-sitemap breakdown."""
+    """Plain-text fallback for the per-sitemap breakdown — includes the
+    captured failing URLs (status code + URL) under each broken sitemap
+    so admins reading the text/plain part of the alert get the same
+    actionable detail (Task #299)."""
     if not by_sitemap:
         return ""
-    lines = [f"  - {r.get('name', 'unknown')}: {r.get('ok', 0)}/{r.get('total', 0)} OK ({r.get('success_rate', 0)}%)"
-             for r in by_sitemap]
+    lines: list[str] = []
+    for r in by_sitemap:
+        lines.append(
+            f"  - {r.get('name', 'unknown')}: {r.get('ok', 0)}/{r.get('total', 0)} OK "
+            f"({r.get('success_rate', 0)}%)"
+        )
+        for f in (r.get("failing_urls") or []):
+            lines.append(f"      [{f.get('status', 0)}] {f.get('url', '')}")
     return "\nPer-sitemap breakdown:\n" + "\n".join(lines)
 
 
@@ -1903,11 +1937,20 @@ async def _record_seo_health_snapshot() -> Dict:
             continue
         ok = sum(1 for c in checks if c.get("ok"))
         total = len(checks)
+        # Capture the first 10 failing URLs so the alert email and admin
+        # dashboard can show admins exactly which URLs returned 404 (Task
+        # #299) — not just the page-type breakdown. Status code 0 means
+        # the request errored out (timeout/DNS) rather than a 4xx/5xx.
+        failing_urls = [
+            {"url": c.get("url", ""), "status": int(c.get("status") or 0)}
+            for c in checks if not c.get("ok") and c.get("url")
+        ][:10]
         by_sitemap.append({
             "name": sm.get("name", "unknown"),
             "ok": ok,
             "total": total,
             "success_rate": round(ok / max(total, 1) * 100, 1),
+            "failing_urls": failing_urls,
         })
     snapshot = {
         "status": report.get("status", "unknown"),

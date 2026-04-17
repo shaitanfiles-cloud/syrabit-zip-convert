@@ -282,6 +282,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [seoLive, setSeoLive] = useState(null);
   const [seoLiveLoading, setSeoLiveLoading] = useState(false);
   const [seoLiveError, setSeoLiveError] = useState(null);
+  // Task #299: which sitemap row is currently expanded to show its
+  // failing URL list. Only one is open at a time to keep the card compact.
+  const [expandedSitemap, setExpandedSitemap] = useState(null);
   const [alertFilter, setAlertFilter] = useState('all');
   const [alertSettingsOpen, setAlertSettingsOpen] = useState(false);
   const [alertSettings, setAlertSettings] = useState(null);
@@ -1223,37 +1226,83 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                 const partial = sm.valid_xml && totalCount > 0 && okCount > 0 && okCount < totalCount;
                 const broken = !sm.valid_xml || (totalCount > 0 && okCount === 0);
                 const dotCls = allOk ? 'bg-emerald-500' : partial ? 'bg-amber-500' : broken ? 'bg-red-500' : 'bg-gray-300';
+                // Task #299: surface the exact failing URLs (with status
+                // code) inline so admins don't have to re-run the probe to
+                // discover which URLs are 404ing.
+                const failing = checks.filter((c) => !c.ok && c.url).slice(0, 10);
+                const isExpanded = expandedSitemap === sm.name;
+                const canExpand = failing.length > 0;
                 return (
                   <div
                     key={sm.name}
-                    className="flex items-center gap-3 px-3 py-2 rounded-lg border border-gray-100 bg-white hover:bg-gray-50"
+                    className="rounded-lg border border-gray-100 bg-white hover:bg-gray-50"
                     data-testid={`seo-sitemap-${sm.name}`}
                   >
-                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${dotCls}`} />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-mono text-gray-700 truncate">{sm.name}</p>
-                      {sm.error && (
-                        <p className="text-[10px] text-red-600 truncate" title={sm.error}>
-                          {sm.error}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3 text-[11px] text-gray-500 flex-shrink-0">
-                      <span title="URLs in sitemap" className="font-mono">
-                        {(sm.url_count ?? 0).toLocaleString()} urls
-                      </span>
-                      <span
-                        className={`font-mono px-2 py-0.5 rounded ${
-                          allOk ? 'bg-emerald-50 text-emerald-700' :
-                          partial ? 'bg-amber-50 text-amber-700' :
-                          broken ? 'bg-red-50 text-red-700' :
-                          'bg-gray-50 text-gray-500'
-                        }`}
-                        title="Sample HEAD checks against random URLs"
+                    <button
+                      type="button"
+                      onClick={() => canExpand && setExpandedSitemap(isExpanded ? null : sm.name)}
+                      disabled={!canExpand}
+                      className={`w-full flex items-center gap-3 px-3 py-2 text-left ${canExpand ? 'cursor-pointer' : 'cursor-default'}`}
+                    >
+                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${dotCls}`} />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-mono text-gray-700 truncate">{sm.name}</p>
+                        {sm.error && (
+                          <p className="text-[10px] text-red-600 truncate" title={sm.error}>
+                            {sm.error}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3 text-[11px] text-gray-500 flex-shrink-0">
+                        <span title="URLs in sitemap" className="font-mono">
+                          {(sm.url_count ?? 0).toLocaleString()} urls
+                        </span>
+                        <span
+                          className={`font-mono px-2 py-0.5 rounded ${
+                            allOk ? 'bg-emerald-50 text-emerald-700' :
+                            partial ? 'bg-amber-50 text-amber-700' :
+                            broken ? 'bg-red-50 text-red-700' :
+                            'bg-gray-50 text-gray-500'
+                          }`}
+                          title="Sample HEAD checks against random URLs"
+                        >
+                          {okCount}/{totalCount} ok
+                        </span>
+                        {canExpand && (
+                          <span className="text-gray-400 text-xs select-none">
+                            {isExpanded ? '▾' : '▸'}
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                    {canExpand && isExpanded && (
+                      <div
+                        className="px-4 pb-3 pt-1 border-t border-red-100 bg-red-50/50"
+                        data-testid={`seo-sitemap-${sm.name}-failing`}
                       >
-                        {okCount}/{totalCount} ok
-                      </span>
-                    </div>
+                        <p className="text-[10px] uppercase tracking-wider text-red-700 font-semibold mb-2">
+                          Failing URLs ({failing.length})
+                        </p>
+                        <ul className="space-y-1 max-h-48 overflow-y-auto">
+                          {failing.map((f, i) => (
+                            <li key={`${sm.name}-${i}`} className="flex items-center gap-2 text-[11px] font-mono">
+                              <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-semibold flex-shrink-0">
+                                {f.status === 0 || f.status == null ? 'ERR' : f.status}
+                              </span>
+                              <a
+                                href={f.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-gray-700 hover:text-blue-600 truncate"
+                                title={f.url}
+                              >
+                                {f.url}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </div>
                 );
               })}
