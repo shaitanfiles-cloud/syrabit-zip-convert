@@ -308,6 +308,11 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [notifPrefsSaving, setNotifPrefsSaving] = useState(false);
   const [notifPrefsOpen, setNotifPrefsOpen] = useState(false);
   const [pushDeliverySummary, setPushDeliverySummary] = useState(null);
+  // Task #434 — last_success_at / last_error for the browser-push
+  // channel from /admin/alert-settings (channel_status.push). Surfaced
+  // inline in the notifications tile so admins notice a degraded push
+  // pipeline without drilling into Bot Security → Alert Settings.
+  const [pushChannelStatus, setPushChannelStatus] = useState(null);
   const prevAlertIdsRef = useRef(new Set());
   const audioCtxRef = useRef(null);
   const customAudioRef = useRef(null);
@@ -353,6 +358,15 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       const statsRes = await axios.get(`${API_BASE}/admin/push/delivery-stats?days=7`, adminHdr(adminToken));
       setPushDeliverySummary(statsRes.data);
     } catch {}
+    // Task #434 — pull channel_status.push from /admin/alert-settings
+    // (the same payload Bot Security's Alert Settings panel uses) so
+    // the dashboard tile can show last_success_at + last_error inline.
+    try {
+      const settingsRes = await axios.get(`${API_BASE}/admin/alert-settings`, adminHdr(adminToken));
+      setPushChannelStatus(settingsRes.data?.channel_status?.push || null);
+    } catch {
+      setPushChannelStatus(null);
+    }
   }, [adminToken]);
 
   const saveNotifPrefs = useCallback(async (updates) => {
@@ -2233,6 +2247,64 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                   </div>
                 </div>
               )}
+
+              {pushChannelStatus && (() => {
+                // Task #434 — surface the same per-channel last_success_at /
+                // last_error that Bot Security → Alert Settings shows. We
+                // flag the row red when there's an error on record OR the
+                // last successful push is older than 24h while we *did*
+                // attempt one (otherwise "no attempts" stays neutral grey).
+                const lastSuccess = pushChannelStatus.last_success_at;
+                const lastError = pushChannelStatus.last_error;
+                const lastAttempt = pushChannelStatus.last_attempt_at;
+                const STALE_MS = 24 * 60 * 60 * 1000;
+                const successAge = lastSuccess ? (Date.now() - new Date(lastSuccess).getTime()) : null;
+                const isStale = lastAttempt && (!lastSuccess || (successAge !== null && successAge > STALE_MS));
+                const degraded = Boolean(lastError) || Boolean(isStale);
+                const tone = degraded
+                  ? 'bg-red-50 border-red-200 text-red-700'
+                  : (lastSuccess ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-gray-50 border-gray-200 text-gray-500');
+                const fmtRel = (iso) => {
+                  if (!iso) return 'never';
+                  const ms = Date.now() - new Date(iso).getTime();
+                  const s = Math.round(ms / 1000);
+                  if (s < 60) return `${s}s ago`;
+                  const m = Math.round(s / 60);
+                  if (m < 60) return `${m}m ago`;
+                  const h = Math.round(m / 60);
+                  if (h < 24) return `${h}h ago`;
+                  return `${Math.round(h / 24)}d ago`;
+                };
+                return (
+                  <button
+                    type="button"
+                    onClick={() => onNavigate && onNavigate('botsecurity')}
+                    title="Open Bot Security → Alert Settings"
+                    data-testid="dashboard-push-channel-health"
+                    className={`mt-3 w-full text-left rounded-lg border px-3 py-2 transition-colors hover:opacity-90 ${tone}`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Smartphone size={12} className="shrink-0 opacity-70" />
+                        <span className="text-[11px] font-semibold">Browser push pipeline</span>
+                      </div>
+                      <span className={`text-[9px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded ${
+                        degraded ? 'bg-red-600 text-white' : (lastSuccess ? 'bg-emerald-600 text-white' : 'bg-gray-400 text-white')
+                      }`} data-testid="dashboard-push-channel-badge">
+                        {degraded ? 'Degraded' : (lastSuccess ? 'Healthy' : 'Idle')}
+                      </span>
+                    </div>
+                    <p className="text-[10px] mt-1 opacity-90">
+                      Last success: {lastSuccess ? `${fmtRel(lastSuccess)} (${new Date(lastSuccess).toLocaleString()})` : 'never'}
+                    </p>
+                    {lastError && (
+                      <p className="text-[10px] mt-0.5 truncate" title={lastError}>
+                        Last error: {lastError}
+                      </p>
+                    )}
+                  </button>
+                );
+              })()}
             </div>
           )}
 
