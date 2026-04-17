@@ -394,6 +394,10 @@ async def sanitize_assamese_with_optional_regenerate(
     cleaned = raw
     diag = dict(initial_diag)
     diag["original_ratio"] = initial_diag["ratio"]
+    # Track the ratio AFTER translate-fix alone (before any destructive
+    # strip) so `translate+regenerate` can decide fallback purely on
+    # whether the non-destructive translate step succeeded.
+    post_translate_ratio = initial_diag["ratio"]
 
     # ── Step 1: translate-fix when requested ───────────────────────────────
     wants_translate = behaviour in ("translate", "translate+regenerate")
@@ -414,6 +418,7 @@ async def sanitize_assamese_with_optional_regenerate(
                 diag["ratio"] = tr_diag["ratio"]
                 diag["suspicious_tokens"] = tr_diag["suspicious_tokens"]
                 diag["action"] = "translated"
+                post_translate_ratio = tr_diag["ratio"]
 
     # ── Step 2: strip whatever is still leaking ────────────────────────────
     if diag.get("ratio", initial_diag["ratio"]) > thr:
@@ -428,13 +433,25 @@ async def sanitize_assamese_with_optional_regenerate(
             )
 
     # ── Step 3: optional one-shot regenerate retry ─────────────────────────
-    # Triggered when the ORIGINAL reply was above threshold — the LLM had
-    # one bad turn, so we ask it to try again with a stronger directive
-    # and keep whichever version has lower leakage. This is independent of
-    # whether the strip/translate step already brought the post-cleanup
-    # ratio under threshold, because the regenerated reply may be much
-    # cleaner without needing destructive sanitisation at all.
+    # Behaviour-specific gating:
+    #   * `regenerate` — strip is destructive, so always retry to see if a
+    #     fresh attempt produces a naturally cleaner Assamese reply, even
+    #     when strip already brought the post-cleanup ratio under threshold.
+    #   * `translate+regenerate` — translate is non-destructive (it
+    #     replaces leaked English with Assamese), so only fall back to a
+    #     regenerate when the post-translate/post-strip ratio is still
+    #     above threshold. This is the explicit "fallback" semantics the
+    #     task requires and avoids paying for an extra LLM call when the
+    #     translate step already produced a clean reply.
     wants_regenerate = behaviour in ("regenerate", "translate+regenerate")
+    # `translate+regenerate` regenerate gate is based on the
+    # post-translate ratio (NOT the post-strip ratio), because the
+    # whole point of the combo is "if non-destructive translate didn't
+    # bring the reply under threshold, ask the LLM for a fresh attempt
+    # rather than relying on destructive strip". When translate alone
+    # succeeded, we skip the extra LLM call.
+    if behaviour == "translate+regenerate" and post_translate_ratio <= thr:
+        wants_regenerate = False
     if wants_regenerate and regenerate_callable is not None:
         try:
             retry_raw = await regenerate_callable()

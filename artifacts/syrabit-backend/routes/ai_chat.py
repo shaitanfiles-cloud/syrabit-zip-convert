@@ -945,13 +945,24 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                         _early_emit,
                         translate_callable=_make_assamese_translate_callable("as-IN"),
                     )
-                    if _early_diag.get("action") not in (None, "noop"):
-                        logger.warning(
-                            f"[INDIC-SANITIZE][EARLY-CACHE] action={_early_diag.get('action')} "
-                            f"ratio={_early_diag.get('ratio', 0):.3f} "
-                            f"behaviour={_early_diag.get('behaviour')} "
-                            f"sample_tokens={_early_diag.get('suspicious_tokens', [])[:6]}"
-                        )
+                    # Per-Task #419: emit one diagnostic line per Assamese
+                    # reply (even no-op) so we can monitor leakage rates in
+                    # production logs.
+                    _early_action = _early_diag.get("action") or "noop"
+                    _early_log = (
+                        f"[INDIC-SANITIZE][EARLY-CACHE] action={_early_action} "
+                        f"ratio={_early_diag.get('ratio', 0):.3f} "
+                        f"threshold={_early_diag.get('threshold', 0):.3f} "
+                        f"behaviour={_early_diag.get('behaviour')} "
+                        f"translated={_early_diag.get('translated', False)} "
+                        f"regenerated={_early_diag.get('regenerated', False)} "
+                        f"sample_tokens={_early_diag.get('suspicious_tokens', [])[:6]}"
+                    )
+                    if _early_action == "noop":
+                        logger.info(_early_log)
+                    else:
+                        logger.warning(_early_log)
+                    if _early_action != "noop":
                         _early_emit = _cleaned_early
                         # Refresh cache so subsequent hits are clean.
                         try:
@@ -1569,13 +1580,23 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                             cached_answer,
                             translate_callable=_make_assamese_translate_callable("as-IN"),
                         )
-                        if _cache_diag.get("action") not in (None, "noop"):
-                            logger.warning(
-                                f"[INDIC-SANITIZE][CACHE] action={_cache_diag.get('action')} "
-                                f"ratio={_cache_diag.get('ratio', 0):.3f} "
-                                f"behaviour={_cache_diag.get('behaviour')} "
-                                f"sample_tokens={_cache_diag.get('suspicious_tokens', [])[:6]}"
-                            )
+                        # Per-Task #419: emit one diagnostic line per
+                        # Assamese reply (even no-op).
+                        _cache_action = _cache_diag.get("action") or "noop"
+                        _cache_log = (
+                            f"[INDIC-SANITIZE][CACHE] action={_cache_action} "
+                            f"ratio={_cache_diag.get('ratio', 0):.3f} "
+                            f"threshold={_cache_diag.get('threshold', 0):.3f} "
+                            f"behaviour={_cache_diag.get('behaviour')} "
+                            f"translated={_cache_diag.get('translated', False)} "
+                            f"regenerated={_cache_diag.get('regenerated', False)} "
+                            f"sample_tokens={_cache_diag.get('suspicious_tokens', [])[:6]}"
+                        )
+                        if _cache_action == "noop":
+                            logger.info(_cache_log)
+                        else:
+                            logger.warning(_cache_log)
+                        if _cache_action != "noop":
                             cached_answer = _cleaned_cache
                             # Refresh cache entry so subsequent hits are clean.
                             _redis_set("ai_cache", _cache_key_val, cached_answer, _cache_ttl_val)
@@ -1700,15 +1721,24 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                         regenerate_callable=_regenerate_indic,
                         translate_callable=_make_assamese_translate_callable(_sarvam_target or "as-IN"),
                     )
-                    if _asm_diag.get("action") not in (None, "noop") or _asm_diag.get("regenerated"):
-                        logger.warning(
-                            f"[INDIC-SANITIZE] Cleaned Assamese leakage "
-                            f"ratio={_asm_diag.get('ratio', 0):.3f} "
-                            f"threshold={_asm_diag.get('threshold', 0):.3f} "
-                            f"behaviour={_asm_diag.get('behaviour')} "
-                            f"regenerated={_asm_diag.get('regenerated', False)} "
-                            f"sample_tokens={_asm_diag.get('suspicious_tokens', [])[:6]}"
-                        )
+                    # Per-Task #419: emit one diagnostic line per Assamese
+                    # streamed reply (even no-op) so we can monitor live
+                    # leakage rates from production logs.
+                    _asm_action = _asm_diag.get("action") or "noop"
+                    _asm_log = (
+                        f"[INDIC-SANITIZE][STREAM] action={_asm_action} "
+                        f"ratio={_asm_diag.get('ratio', 0):.3f} "
+                        f"threshold={_asm_diag.get('threshold', 0):.3f} "
+                        f"behaviour={_asm_diag.get('behaviour')} "
+                        f"translated={_asm_diag.get('translated', False)} "
+                        f"regenerated={_asm_diag.get('regenerated', False)} "
+                        f"sample_tokens={_asm_diag.get('suspicious_tokens', [])[:6]}"
+                    )
+                    if _asm_action == "noop" and not _asm_diag.get("regenerated"):
+                        logger.info(_asm_log)
+                    else:
+                        logger.warning(_asm_log)
+                    if _asm_action not in (None, "noop") or _asm_diag.get("regenerated"):
                         full_response.clear()
                         full_response.append(_cleaned_indic)
                         _CHUNK_SIZE_INDIC = 300

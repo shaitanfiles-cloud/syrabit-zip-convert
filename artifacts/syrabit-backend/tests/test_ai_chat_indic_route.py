@@ -132,6 +132,128 @@ def test_chat_stream_assamese_cache_hit_sanitises_leaky_response(monkeypatch):
     assert "উৎসৱ" in emitted
 
 
+def test_chat_stream_assamese_cache_hit_emits_diagnostic_log(monkeypatch, caplog):
+    """Per-Task #419 the route MUST emit one [INDIC-SANITIZE] diagnostic
+    log line per Assamese reply (even on no-op clean replies). This test
+    seeds the early cache with a leaky reply, runs the stream, and
+    asserts a diagnostic line containing ratio/action/translated/
+    regenerated/sample_tokens fields was logged."""
+    import logging as _logging
+    from fastapi.testclient import TestClient
+
+    app, chat_mod = _build_chat_app()
+    chat_mod.supa_upsert_conversation = AsyncMock(return_value=None)
+    chat_mod._persist_chat_turn = AsyncMock(return_value=None)
+    chat_mod._record_chat_latency = lambda *_a, **_kw: None
+    chat_mod._refund_credit = AsyncMock(return_value=None)
+    chat_mod.redis_client = None
+    chat_mod._redis_get_ai_cache = lambda _k: None
+
+    msg_text = "uruka কি"
+    cache_key_msg = f"{msg_text}::lang=as"
+    cache_key = chat_mod._cache_key(
+        cache_key_msg, subject_id="", board_id="", conversation_id=""
+    )
+    chat_mod._ai_response_cache[cache_key] = LEAKY_ASSAMESE_CACHED
+
+    client = TestClient(app)
+    body = {
+        "message": msg_text,
+        "response_lang": "as",
+        "subject_id": "",
+        "board_id": "",
+        "conversation_id": "",
+    }
+    with caplog.at_level(_logging.INFO, logger="routes.ai_chat"):
+        _post_chat_stream(client, body)
+
+    # Find the per-reply diagnostic line.
+    indic_logs = [r for r in caplog.records if "[INDIC-SANITIZE]" in r.getMessage()]
+    assert indic_logs, (
+        "expected at least one [INDIC-SANITIZE] diagnostic log line "
+        "per Assamese reply (Task #419 requirement)"
+    )
+    # The line must contain all required diagnostic fields.
+    msg = indic_logs[-1].getMessage()
+    for required_field in (
+        "action=", "ratio=", "threshold=", "behaviour=",
+        "translated=", "regenerated=", "sample_tokens=",
+    ):
+        assert required_field in msg, f"diagnostic log missing field: {required_field!r} in {msg!r}"
+
+
+def test_translate_plus_regenerate_skips_regenerate_when_translate_cleans():
+    """Per-Task #419 `translate+regenerate` must be a true FALLBACK:
+    if the translate step alone brings leakage at or below threshold,
+    the regenerate LLM call MUST NOT be made (it would only add latency
+    + cost without improving purity)."""
+    import asyncio as _aio
+    from lang_sanitizer import sanitize_assamese_with_optional_regenerate
+
+    regen_called = {"n": 0}
+
+    async def _should_not_run():
+        regen_called["n"] += 1
+        return "এইটো এটা পুনৰ লিখা উত্তৰ।"
+
+    async def _good_translate(_fragment: str) -> str:
+        # Returns a long Assamese span so post-translate ratio drops to ~0.
+        return "অসমীয়া অনুবাদিত পাঠ"
+
+    cleaned, diag = _aio.new_event_loop().run_until_complete(
+        sanitize_assamese_with_optional_regenerate(
+            LEAKY_ASSAMESE_CACHED,
+            behaviour="translate+regenerate",
+            translate_callable=_good_translate,
+            regenerate_callable=_should_not_run,
+        )
+    )
+    # Translate alone cleaned the reply, so regenerate must NOT have run.
+    assert regen_called["n"] == 0, (
+        "translate+regenerate must skip regenerate when translate "
+        "already brings ratio at/under threshold"
+    )
+    assert diag.get("translated") is True
+    assert diag.get("regenerated") is False
+    assert "me uses" not in cleaned and "ssible" not in cleaned
+
+
+def test_translate_plus_regenerate_runs_regenerate_when_translate_insufficient():
+    """The opposite case: when the translate step CANNOT bring ratio
+    under threshold (e.g. callable returns empty), `translate+regenerate`
+    MUST fall back to the regenerate LLM call."""
+    import asyncio as _aio
+    from lang_sanitizer import sanitize_assamese_with_optional_regenerate
+
+    regen_called = {"n": 0}
+    clean_retry = (
+        "উৰুকা হৈছে মাঘ বিহুৰ পূৰ্বৰ ৰাতিৰ উৎসৱ। "
+        "অসমৰ মানুহে এই ৰাতি একেলগে ভোজন কৰে।"
+    )
+
+    async def _retry():
+        regen_called["n"] += 1
+        return clean_retry
+
+    async def _empty_translate(_fragment: str) -> str:
+        return ""
+
+    cleaned, diag = _aio.new_event_loop().run_until_complete(
+        sanitize_assamese_with_optional_regenerate(
+            LEAKY_ASSAMESE_CACHED,
+            behaviour="translate+regenerate",
+            translate_callable=_empty_translate,
+            regenerate_callable=_retry,
+        )
+    )
+    # Translate produced nothing, leakage still above threshold → regenerate must fire.
+    assert regen_called["n"] == 1
+    assert diag.get("regenerated") is True
+    assert "me uses" not in cleaned and "ssible" not in cleaned
+    # The clean retry text won.
+    assert "একেলগে" in cleaned
+
+
 def test_chat_stream_english_cache_hit_passes_through_unchanged(monkeypatch):
     """For non-Assamese requests the sanitiser must be a no-op so we
     don't accidentally strip legitimate English answers."""
