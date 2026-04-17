@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { isAdsAllowed } from './ads/adsConfig';
 
 /**
  * Google AdSense in-article fluid unit.
@@ -25,23 +26,24 @@ export default function InArticleAd({
 }) {
   const wrapRef = useRef(null);
   const pushed = useRef(false);
-  const [shouldRender, setShouldRender] = useState(false);
+  const [intersected, setIntersected] = useState(false);
 
+  // SSR-visibility: render the <ins> tag in the initial / prerendered HTML
+  // so AdSense crawlers + Lighthouse see the slot. push() is still deferred
+  // until the slot intersects the viewport for higher viewability CPM.
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const node = wrapRef.current;
     if (!node) return;
-
     if (typeof IntersectionObserver === 'undefined') {
-      setShouldRender(true);
+      setIntersected(true);
       return;
     }
-
     const io = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
           if (entry.isIntersecting) {
-            setShouldRender(true);
+            setIntersected(true);
             io.disconnect();
             break;
           }
@@ -54,34 +56,37 @@ export default function InArticleAd({
   }, []);
 
   useEffect(() => {
-    if (!shouldRender) return;
-    if (pushed.current) return;
+    if (!intersected || pushed.current) return;
     pushed.current = true;
     try {
       (window.adsbygoogle = window.adsbygoogle || []).push({});
     } catch {
       /* AdSense will retry once the loader script arrives. */
     }
-  }, [shouldRender, adKey]);
+  }, [intersected, adKey]);
+
+  // Client-side denylist gate. SSR is allow-by-default for the loader's
+  // benefit; on hydration we hide the slot if the route is denied.
+  if (typeof window !== 'undefined' && !isAdsAllowed(window.location?.pathname)) {
+    return null;
+  }
 
   return (
     <div
       ref={wrapRef}
       className={`my-8 w-full ${className}`}
       aria-label="Advertisement"
-      style={style}
+      style={{ minHeight: 250, ...style }}
     >
-      {shouldRender ? (
-        <ins
-          key={`${slot}-${adKey ?? ''}`}
-          className="adsbygoogle"
-          style={{ display: 'block', textAlign: 'center' }}
-          data-ad-layout="in-article"
-          data-ad-format="fluid"
-          data-ad-client={client}
-          data-ad-slot={slot}
-        />
-      ) : null}
+      <ins
+        key={`${slot}-${adKey ?? ''}`}
+        className="adsbygoogle"
+        style={{ display: 'block', textAlign: 'center' }}
+        data-ad-layout="in-article"
+        data-ad-format="fluid"
+        data-ad-client={client}
+        data-ad-slot={slot}
+      />
     </div>
   );
 }

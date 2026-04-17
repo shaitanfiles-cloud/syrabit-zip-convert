@@ -4,6 +4,7 @@ import PageMeta from '@/components/seo/PageMeta';
 import { useContentLang } from '@/context/LanguageContext';
 import LangToggle from '@/components/ui/LangToggle';
 import StatCard from '@/components/ui/StatCard';
+import AdSlot from '@/components/ads/AdSlot';
 import {
   Brain, BookOpen, GraduationCap, Smartphone, Sparkles,
   Shield, CreditCard, Search, Bell, Languages,
@@ -332,6 +333,9 @@ export default function TechnologyPage() {
             ))}
           </div>
 
+          {/* Top display ad — between hero stats and categories (Task #401) */}
+          <AdSlot variant="topDisplay" eager adKey="tech-top" className="mb-10" />
+
           <div className="mb-14">
             <h2 className="text-xl font-semibold text-foreground mb-1">{t.categoriesHeading}</h2>
             <p className="text-muted-foreground text-sm mb-6">{t.categoriesSubtext}</p>
@@ -384,6 +388,9 @@ export default function TechnologyPage() {
               <span className="font-semibold text-foreground">Dipak Rai</span>
             </p>
           </div>
+
+          {/* Bottom display ad — before final CTA (Task #401) */}
+          <AdSlot variant="bottomDisplay" adKey="tech-bottom" className="mb-10" />
 
           <div className="rounded-2xl border border-violet-200/40 bg-gradient-to-br from-violet-50/60 to-white p-8 text-center">
             <h2 className="text-xl font-semibold text-foreground mb-2">{t.ctaHeading}</h2>

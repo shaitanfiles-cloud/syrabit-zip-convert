@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useResolveSubject, useChapters } from '@/hooks/useContent';
 import InArticleAd from '@/components/InArticleAd';
 import InFeedAd from '@/components/InFeedAd';
+import AdSlot from '@/components/ads/AdSlot';
 
 export default function SubjectLandingPage() {
   const { board, classSlug, subjectSlug } = useParams();
@@ -203,6 +204,9 @@ export default function SubjectLandingPage() {
           </div>
         )}
 
+        {/* Top display ad — above chapter list (Task #401) */}
+        <AdSlot variant="topDisplay" eager adKey={`subj-landing-top-${subjectId}`} className="mb-6" />
+
         <Link
           to={`/chat?subject=${subject.id || subject._id || ''}`}
           className="flex items-center gap-3 mb-6 px-4 sm:px-5 py-3.5 rounded-2xl transition-all hover:border-violet-500/30"
@@ -276,6 +280,9 @@ export default function SubjectLandingPage() {
         {chapters.length > 0 && (
           <InArticleAd adKey={`subj-landing-mid-${subjectId}`} />
         )}
+
+        {/* Bottom multiplex (related-content) ad — high CTR after list (Task #401) */}
+        <AdSlot variant="multiplex" adKey={`subj-landing-multi-${subjectId}`} className="mt-6" />
 
         {subject.tags?.length > 0 && (
           <div className="mt-8 p-5 rounded-2xl glass-card">

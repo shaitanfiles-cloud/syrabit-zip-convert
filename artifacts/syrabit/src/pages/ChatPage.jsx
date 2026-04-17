@@ -23,6 +23,7 @@ import { Helmet } from 'react-helmet-async';
 // element on /chat — renders in the SSR snapshot and on the very first
 // client paint, instead of waiting for an async chunk. (Task #387)
 import { EmptyState } from './chat/EmptyState';
+import AdSlot from '@/components/ads/AdSlot';
 
 // ── ChatPage ──────────────────────────────────────────────────────────────────
 export default function ChatPage() {
@@ -449,16 +450,43 @@ export default function ChatPage() {
             {messages.length === 0 && (
               <div style={{ minHeight: '420px' }}>
                 <EmptyState subject={subject} documentId={documentId} defaultPrompts={defaultPrompts} setInput={setInput} textareaRef={textareaRef} />
+                {/* Empty-state display ad — does not interrupt active chat (Task #401) */}
+                <AdSlot variant="bottomDisplay" adKey="chat-empty" className="mt-8" />
               </div>
             )}
               {(() => {
                 let lastUIdx = -1;
                 for (let j = messages.length - 1; j >= 0; j--) { if (messages[j].role === 'user') { lastUIdx = j; break; } }
-                return messages.map((msg, i) => (
-                  <div key={msg.id || i} ref={i === lastUIdx ? lastUserMsgRef : undefined}>
-                    <MessageBubble msg={msg} isLast={i === messages.length - 1} onCopy={handleCopy} onRegenerate={msg.role === 'assistant' && i === messages.length - 1 ? handleRegenerate : null} messageIndex={i} conversationId={conversationId} responseLang={responseLang} />
-                  </div>
-                ));
+                const out = [];
+                messages.forEach((msg, i) => {
+                  out.push(
+                    <div key={msg.id || i} ref={i === lastUIdx ? lastUserMsgRef : undefined}>
+                      <MessageBubble msg={msg} isLast={i === messages.length - 1} onCopy={handleCopy} onRegenerate={msg.role === 'assistant' && i === messages.length - 1 ? handleRegenerate : null} messageIndex={i} conversationId={conversationId} responseLang={responseLang} />
+                    </div>
+                  );
+                  // Inter-turn ad: every 5 assistant turns (i.e., every
+                  // ~10 messages), but never as the very last item, and
+                  // never on the row currently streaming. Task #401.
+                  const isAssistantTurn = msg.role === 'assistant';
+                  const turnIndex = isAssistantTurn ? Math.floor(i / 2) + 1 : 0;
+                  if (
+                    isAssistantTurn &&
+                    turnIndex > 0 &&
+                    turnIndex % 5 === 0 &&
+                    i !== messages.length - 1 &&
+                    !isLoading
+                  ) {
+                    out.push(
+                      <AdSlot
+                        key={`ad-${i}`}
+                        variant="inArticle"
+                        adKey={`chat-turn-${conversationId || 'new'}-${turnIndex}`}
+                        className="my-4"
+                      />
+                    );
+                  }
+                });
+                return out;
               })()}
             <div ref={messagesEndRef} />
           </div>

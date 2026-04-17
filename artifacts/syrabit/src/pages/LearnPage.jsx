@@ -13,6 +13,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { apiClient, API_BASE, seoRelatedByChapter } from '@/utils/api';
 import { useShare } from '@/hooks/useShare';
 import StickyToc from '@/components/ui/StickyToc';
+import AdSlot from '@/components/ads/AdSlot';
 import { learnArticleSchema } from '@/lib/jsonld';
 
 function buildToc(headingsJson) {
@@ -283,6 +284,18 @@ export default function LearnPage() {
             </div>
           )}
 
+          {/* Top display ad — above the fold-but-below-hero (Task #401) */}
+          <AdSlot variant="topDisplay" eager adKey={`learn-top-${doc?.id || doc?.seo_slug || ''}`} className="mb-6" />
+
+          {/* After-intro in-article ad — only on long articles (Task #401) */}
+          {processedHtml && processedHtml.length > 1500 && (
+            <AdSlot
+              variant="inArticle"
+              adKey={`learn-intro-${doc?.id || doc?.seo_slug || ''}`}
+              className="mb-6"
+            />
+          )}
+
           {/* Main layout: content + TOC */}
           <div className="flex gap-8 items-start">
             {/* Article */}
@@ -319,15 +332,41 @@ export default function LearnPage() {
               </div>
             </article>
 
-            {/* TOC */}
-            <StickyToc
+            {/* TOC + desktop sticky sidebar ad (Task #401) */}
+            <aside className="hidden lg:flex flex-col gap-4 w-[260px] shrink-0 sticky top-24 self-start">
+              <StickyToc
                 headings={toc}
                 activeId={activeId}
                 variant="card"
                 labelIcon={<List size={13} className="text-primary" />}
                 minItems={1}
               />
+              <AdSlot
+                variant="sidebar"
+                adKey={`learn-side-${doc?.id || doc?.seo_slug || ''}`}
+                eager
+              />
+            </aside>
+            {/* Mobile/tablet — TOC only (no sidebar ad to keep CLS < 0.1) */}
+            <div className="lg:hidden">
+              <StickyToc
+                headings={toc}
+                activeId={activeId}
+                variant="card"
+                labelIcon={<List size={13} className="text-primary" />}
+                minItems={1}
+              />
+            </div>
           </div>
+
+          {/* In-article ad — long-form only (Task #401) */}
+          {processedHtml && processedHtml.length > 2500 && (
+            <AdSlot
+              variant="inArticle"
+              adKey={`learn-mid-${doc?.id || doc?.seo_slug || ''}`}
+              className="my-8"
+            />
+          )}
 
           {/* Important Questions (mark-wise) */}
           {pyqs.length > 0 && (
@@ -511,6 +550,9 @@ export default function LearnPage() {
               </ul>
             </nav>
           )}
+
+          {/* Bottom display ad — after main learn content (Task #401) */}
+          <AdSlot variant="bottomDisplay" adKey={`learn-bottom-${doc?.id || doc?.seo_slug || ''}`} className="mt-8" />
 
           {/* Footer CTA */}
           <div className="mt-8 rounded-2xl border border-border/20 p-6 flex flex-col sm:flex-row items-center gap-4" style={{ background: 'rgba(139,92,246,0.06)' }}>

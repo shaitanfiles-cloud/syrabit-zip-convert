@@ -11,6 +11,7 @@ import { PageTitle } from '@/components/PageTitle';
 import PageMeta from '@/components/seo/PageMeta';
 import { useContentLang } from '@/context/LanguageContext';
 import LangToggle from '@/components/ui/LangToggle';
+import AdSlot from '@/components/ads/AdSlot';
 
 function cn(...classes) { return classes.filter(Boolean).join(' '); }
 
@@ -253,6 +254,9 @@ export default function ExamRoutinePage() {
           ))}
         </div>
 
+        {/* Top display ad — between hero stats and routine list (Task #401) */}
+        <AdSlot variant="topDisplay" eager adKey="exam-routine-top" />
+
         {nextExam && (
           <div className="glass-card rounded-2xl p-4 border border-purple-500/30 bg-purple-500/5">
             <div className="flex items-start gap-3">
@@ -414,6 +418,9 @@ export default function ExamRoutinePage() {
             {t.notePost}
           </div>
         </div>
+
+        {/* Bottom display ad — before final CTA (Task #401) */}
+        <AdSlot variant="bottomDisplay" adKey="exam-routine-bottom" />
 
         <div className="glass-card rounded-2xl p-5 text-center space-y-3 border border-purple-500/20">
           <p className="text-sm font-medium text-foreground">

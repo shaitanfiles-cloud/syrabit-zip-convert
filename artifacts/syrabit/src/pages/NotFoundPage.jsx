@@ -3,14 +3,15 @@ import { useAuth } from '@/context/AuthContext';
 import { Home, BookOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { LogoMark } from '@/components/Logo';
+import AdSlot from '@/components/ads/AdSlot';
 
 export default function NotFoundPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
-      <div className="text-center max-w-sm px-4" data-testid="not-found-page">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-background px-4">
+      <div className="text-center max-w-sm" data-testid="not-found-page">
         {/* Logo with orbit ring */}
         <div className="relative inline-flex mb-8">
           <LogoMark size="2xl" className="anim-float" />
@@ -51,6 +52,12 @@ export default function NotFoundPage() {
             </Button>
           </Link>
         </div>
+      </div>
+      {/* 404 display + multiplex — monetize high-traffic 404s and surface
+          useful related links (Task #401). */}
+      <div className="w-full max-w-2xl mt-10 flex flex-col gap-6">
+        <AdSlot variant="bottomDisplay" adKey="not-found-display" />
+        <AdSlot variant="multiplex" adKey="not-found" />
       </div>
     </div>
   );

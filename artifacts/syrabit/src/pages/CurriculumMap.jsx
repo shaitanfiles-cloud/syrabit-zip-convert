@@ -7,6 +7,7 @@ import PageMeta from '@/components/seo/PageMeta';
 import { PublicNavbar } from '@/components/layout/PublicNavbar';
 import { PublicBottomNav } from '@/components/layout/PublicBottomNav';
 import { WORKER_API } from '@/utils/api';
+import AdSlot from '@/components/ads/AdSlot';
 
 function slugify(str = '') {
   return str.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
@@ -164,6 +165,9 @@ export default function CurriculumMap() {
           )}
         </div>
 
+        {/* Top display ad — between hero and tree (Task #401) */}
+        <AdSlot variant="topDisplay" eager adKey="curriculum-top" className="mb-6" />
+
         {isLoading && (
           <div className="space-y-3">
             {[1, 2].map((i) => (
@@ -217,6 +221,11 @@ export default function CurriculumMap() {
             ))}
           </TreeNode>
         ))}
+
+        {/* Bottom multiplex ad — at end of curriculum tree (Task #401) */}
+        {!isLoading && !error && (
+          <AdSlot variant="multiplex" adKey="curriculum-bottom" className="mt-8" />
+        )}
       </div>
       <div className="pb-20 md:pb-0" />
       <PublicBottomNav />

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { isAdsAllowed } from './ads/adsConfig';
 
 /**
  * Google AdSense in-feed native unit.
@@ -24,26 +25,23 @@ export default function InFeedAd({
   className = '',
   style,
 }) {
-  const insRef = useRef(null);
+  const wrapRef = useRef(null);
   const pushed = useRef(false);
-  const [shouldRender, setShouldRender] = useState(false);
+  const [intersected, setIntersected] = useState(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const node = insRef.current;
+    const node = wrapRef.current;
     if (!node) return;
-
-    // Older browsers / test envs without IO: render immediately.
     if (typeof IntersectionObserver === 'undefined') {
-      setShouldRender(true);
+      setIntersected(true);
       return;
     }
-
     const io = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
           if (entry.isIntersecting) {
-            setShouldRender(true);
+            setIntersected(true);
             io.disconnect();
             break;
           }
@@ -56,34 +54,35 @@ export default function InFeedAd({
   }, []);
 
   useEffect(() => {
-    if (!shouldRender) return;
-    if (pushed.current) return;
+    if (!intersected || pushed.current) return;
     pushed.current = true;
     try {
       (window.adsbygoogle = window.adsbygoogle || []).push({});
     } catch {
       /* AdSense will retry once the loader script arrives. */
     }
-  }, [shouldRender, adKey]);
+  }, [intersected, adKey]);
+
+  if (typeof window !== 'undefined' && !isAdsAllowed(window.location?.pathname)) {
+    return null;
+  }
 
   return (
     <div
-      ref={insRef}
+      ref={wrapRef}
       className={`w-full ${className}`}
       aria-label="Advertisement"
-      style={style}
+      style={{ minHeight: 200, ...style }}
     >
-      {shouldRender ? (
-        <ins
-          key={`${slot}-${adKey ?? ''}`}
-          className="adsbygoogle"
-          style={{ display: 'block' }}
-          data-ad-format="fluid"
-          data-ad-layout-key={layoutKey}
-          data-ad-client={client}
-          data-ad-slot={slot}
-        />
-      ) : null}
+      <ins
+        key={`${slot}-${adKey ?? ''}`}
+        className="adsbygoogle"
+        style={{ display: 'block' }}
+        data-ad-format="fluid"
+        data-ad-layout-key={layoutKey}
+        data-ad-client={client}
+        data-ad-slot={slot}
+      />
     </div>
   );
 }
