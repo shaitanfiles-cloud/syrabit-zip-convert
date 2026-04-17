@@ -93,7 +93,7 @@ export default function SeoPagesTab({
                 border: ga4TestResult.ok ? '1px solid rgba(16,185,129,0.15)' : '1px solid rgba(239,68,68,0.15)',
               }}>
               {ga4TestResult.ok
-                ? `✓ GA4 working — ${ga4TestResult.stats?.total_visitors?.toLocaleString() || 0} total visitors tracked`
+                ? `✓ GA4 connection healthy`
                 : `✗ ${ga4TestResult.reason}`}
             </div>
           )}
