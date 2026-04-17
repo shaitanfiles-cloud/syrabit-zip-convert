@@ -1,10 +1,6 @@
-import { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue, useTransition, lazy, Suspense } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import {
-  Search, Bookmark,
-  BookOpen, Globe, Languages,
-} from 'lucide-react';
-import { toast } from 'sonner';
+import { Search, Bookmark, BookOpen } from './library/icons';
 
 import PageMeta from '@/components/seo/PageMeta';
 import { Analytics } from '@/utils/analytics';
@@ -114,17 +110,27 @@ export default function LibraryPage() {
 
   const [searchQuery, setSearchQuery]   = useState('');
   const [activeFilter, setActiveFilter] = useState('all');
+  const deferredQuery = useDeferredValue(searchQuery);
+  const [, startTransition] = useTransition();
 
   const { data: slimBundle, isLoading: slimLoading } = useLibraryBundleSlim();
+  // Defer the heavy "full" library bundle (which carries every chapter) until
+  // the user actually interacts with the page (search, filter, scroll, tap).
+  // A long fallback keeps SEO bots and bounce visitors covered.
   const [chaptersReady, setChaptersReady] = useState(false);
   useEffect(() => {
-    if (!slimBundle) return;
-    const hasRIC = typeof window !== 'undefined' && 'requestIdleCallback' in window;
-    const id = hasRIC
-      ? window.requestIdleCallback(() => setChaptersReady(true), { timeout: 2000 })
-      : setTimeout(() => setChaptersReady(true), 500);
-    return () => { hasRIC ? window.cancelIdleCallback(id) : clearTimeout(id); };
-  }, [slimBundle]);
+    if (!slimBundle || chaptersReady) return;
+    const fire = () => { setChaptersReady(true); cleanup(); };
+    const events = ['pointerdown', 'keydown', 'scroll', 'touchstart'];
+    const opts = { passive: true, capture: true, once: true };
+    events.forEach((ev) => window.addEventListener(ev, fire, opts));
+    const fallback = setTimeout(fire, 6000);
+    function cleanup() {
+      events.forEach((ev) => window.removeEventListener(ev, fire, { capture: true }));
+      clearTimeout(fallback);
+    }
+    return cleanup;
+  }, [slimBundle, chaptersReady]);
   const { data: fullBundle, isFetching, refetch: refetchBundle } = useLibraryBundle(chaptersReady);
 
   const bundle = fullBundle || slimBundle;
@@ -200,7 +206,7 @@ export default function LibraryPage() {
   const allStreamChips = useMemo(() => [...baseChips, ...dynamicStreamChips], [baseChips, dynamicStreamChips]);
 
   const filteredSubjects = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
+    const q = deferredQuery.trim().toLowerCase();
     const seen = new Set();
     return enrichedSubjects.filter((sub) => {
       if (seen.has(sub.id)) return false;
@@ -224,7 +230,7 @@ export default function LibraryPage() {
       }
       return true;
     });
-  }, [enrichedSubjects, activeFilter, searchQuery, savedSubjectsSet, chaptersBySubject]);
+  }, [enrichedSubjects, activeFilter, deferredQuery, savedSubjectsSet, chaptersBySubject]);
 
   const totalSeoTopics = useMemo(() => {
     return enrichedSubjects.reduce((sum, s) => sum + (s.seo_stats?.topic_count || 0), 0);
@@ -258,8 +264,34 @@ export default function LibraryPage() {
       }, 1000);
     }
   }, [enrichedSubjects]);
-  const handleFilterChange = useCallback((filterId) => setActiveFilter(filterId), []);
+  const handleFilterChange = useCallback((filterId) => {
+    startTransition(() => setActiveFilter(filterId));
+  }, []);
   const handleSearchClear = useCallback(() => setSearchQuery(''), []);
+
+  // Lightweight windowing — render the first VIRTUAL_CHUNK cards immediately,
+  // then progressively reveal the rest as the user scrolls near the bottom of
+  // the grid. Keeps initial DOM bounded for catalogues with hundreds of items.
+  const VIRTUAL_CHUNK = 30;
+  const [renderLimit, setRenderLimit] = useState(VIRTUAL_CHUNK);
+  const sentinelRef = useRef(null);
+  useEffect(() => { setRenderLimit(VIRTUAL_CHUNK); }, [activeFilter, deferredQuery]);
+  useEffect(() => {
+    if (filteredSubjects.length <= renderLimit) return;
+    const el = sentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) {
+        startTransition(() => setRenderLimit((n) => n + VIRTUAL_CHUNK));
+      }
+    }, { rootMargin: '600px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [filteredSubjects.length, renderLimit]);
+  const visibleSubjects = useMemo(
+    () => filteredSubjects.slice(0, renderLimit),
+    [filteredSubjects, renderLimit]
+  );
 
   const seoTitle = 'Assamboard Subject Library — Notes, MCQs, Definitions & Exam Prep';
   const seoDescription = `Explore ${subjects.length || ''} Assamboard Class 11-12 and Degree subjects with ${totalSeoTopics || ''} study topics. AI-powered notes, MCQs, definitions, important questions, and examples for Assam students.`.replace(/  +/g, ' ').trim();
@@ -321,6 +353,8 @@ export default function LibraryPage() {
             backdropFilter: 'blur(16px)',
             WebkitBackdropFilter: 'blur(16px)',
             borderBottom: '1px solid rgba(139,92,246,0.08)',
+            minHeight: '140px',
+            contain: 'layout',
           }}
         >
           <div className="w-full max-w-6xl mx-auto px-4 md:px-6 pt-5 pb-3 space-y-3">
@@ -483,11 +517,13 @@ export default function LibraryPage() {
                 )}
               </div>
             ) : (
+              <>
               <div
                 className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5"
                 data-testid="library-subject-grid"
+                style={{ contain: 'layout style', minHeight: '420px' }}
               >
-                {filteredSubjects.map((sub, index) => (
+                {visibleSubjects.map((sub, index) => (
                   <SubjectCard
                     key={sub.id}
                     sub={sub}
@@ -499,6 +535,10 @@ export default function LibraryPage() {
                   />
                 ))}
               </div>
+              {filteredSubjects.length > visibleSubjects.length && (
+                <div ref={sentinelRef} aria-hidden="true" style={{ height: 1 }} />
+              )}
+              </>
             )}
           </div>
           <LazyOnVisible>

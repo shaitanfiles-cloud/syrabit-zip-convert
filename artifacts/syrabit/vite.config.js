@@ -457,7 +457,13 @@ function backendPreconnectPlugin() {
       if (!backendUrl) return html;
       try {
         const origin = new URL(backendUrl).origin;
-        const tags = `<link rel="preconnect" href="${origin}" crossorigin />\n    <link rel="dns-prefetch" href="${origin}" />`;
+        // Preload the slim library bundle ONLY when the current request is for
+        // /library — site-wide preload would waste bandwidth on every page.
+        const tags = [
+          `<link rel="preconnect" href="${origin}" crossorigin />`,
+          `<link rel="dns-prefetch" href="${origin}" />`,
+          `<script>(function(){if(/^\\/library(\\/|$)/.test(location.pathname)){var l=document.createElement('link');l.rel='preload';l.as='fetch';l.crossOrigin='anonymous';l.href=${JSON.stringify(`${origin}/api/content/library-bundle?slim=1`)};document.head.appendChild(l);}})();</script>`,
+        ].join('\n    ');
         return html.replace('<!--BACKEND_PRECONNECT-->', tags);
       } catch {
         return html;

@@ -2,11 +2,9 @@ import { useMemo, useState, useCallback, memo } from 'react';
 import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  Bookmark, BookmarkCheck,
-  BookOpen, Layers, ChevronRight, Sparkles,
-  Share2, ExternalLink, Lock, Loader2,
-  ChevronDown,
-} from 'lucide-react';
+  Bookmark, BookmarkCheck, BookOpen, Layers, Sparkles,
+  Share2, ExternalLink, Lock, Loader2, ChevronDown,
+} from './icons';
 import { useShare } from '@/hooks/useShare';
 import { prefetchSubjectData } from '@/hooks/useContent';
 import { useContentLang } from '@/context/LanguageContext';
@@ -86,13 +84,16 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
       data-subject-id={sub.id}
     >
       {sub.thumbnailUrl && (
-        <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-2xl" style={{ zIndex: 1 }}>
+        <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-2xl" style={{ zIndex: 1, aspectRatio: '4 / 3' }}>
           <img
             src={sub.thumbnailUrl}
             alt=""
-            loading="lazy"
+            loading={index === 0 ? 'eager' : 'lazy'}
+            fetchpriority={index === 0 ? 'high' : 'low'}
+            decoding="async"
             width="400"
             height="300"
+            sizes="(max-width: 768px) 100vw, (max-width: 1280px) 50vw, 33vw"
             className="absolute inset-0 w-full h-full object-cover"
             style={{ opacity: 0.25 }}
           />

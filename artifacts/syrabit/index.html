@@ -61,9 +61,14 @@
     <!-- Backend API preconnect — injected at build time by Vite (see vite.config.js htmlPlugin) -->
     <!--BACKEND_PRECONNECT-->
 
+    <!-- Same-origin API hint (Cloudflare Pages /api → Workers / FastAPI proxy) -->
+    <link rel="preconnect" href="https://syrabit.ai" crossorigin />
+    <link rel="dns-prefetch" href="https://syrabit.ai" />
+
     <link rel="preconnect" href="https://us.i.posthog.com" crossorigin />
     <link rel="preconnect" href="https://us-assets.i.posthog.com" crossorigin />
     <link rel="dns-prefetch" href="https://assets.emergent.sh" />
+    <link rel="dns-prefetch" href="https://pagead2.googlesyndication.com" />
 
     <!-- Font preconnect — reduces DNS/TLS handshake latency -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -294,12 +299,19 @@
       <script type="module" src="/src/index.jsx"></script>
       <script>
         (function deferThirdParty(){
-          var ric=window.requestIdleCallback||function(cb){setTimeout(cb,2000)};
-          ric(function(){
+          var loaded=false;
+          function load(){
+            if(loaded)return;loaded=true;
             window.addEventListener("error",function(e){if(e.error instanceof DOMException&&e.error.name==="DataCloneError"&&e.message&&e.message.includes("PerformanceServerTiming")){e.stopImmediatePropagation();e.preventDefault()}},true);
             var em=document.createElement("script");em.src="https://assets.emergent.sh/scripts/emergent-main.js";em.async=true;document.body.appendChild(em);
             var ad=document.createElement("script");ad.src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8958003374183515";ad.async=true;ad.crossOrigin="anonymous";document.body.appendChild(ad);
-          },{timeout:4000});
+            cleanup();
+          }
+          var events=["pointerdown","keydown","scroll","touchstart"];
+          function cleanup(){events.forEach(function(ev){window.removeEventListener(ev,load,{passive:true,capture:true})})}
+          events.forEach(function(ev){window.addEventListener(ev,load,{passive:true,capture:true,once:true})});
+          // Hard fallback so analytics/ads still load on bounce visitors after 8s
+          setTimeout(load,8000);
         })();
       </script>
       <script>
