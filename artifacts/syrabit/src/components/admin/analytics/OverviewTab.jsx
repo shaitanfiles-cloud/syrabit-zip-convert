@@ -73,11 +73,11 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <Stat icon={TrendingUp} label={`Visitors (${rangeLabel})`}
-          value={(cf.total_visitors ?? 0).toLocaleString()} color="#f6821f" sub="Cloudflare" />
+          value={cfConnected ? (cf.total_visitors ?? 0).toLocaleString() : '—'} color="#f6821f" sub="Cloudflare" />
         <Stat icon={Users} label="Visitors Today"
-          value={(cf.visitors_today ?? 0).toLocaleString()} color="#06b6d4" sub="Cloudflare" />
+          value={cfConnected ? (cf.visitors_today ?? 0).toLocaleString() : '—'} color="#06b6d4" sub="Cloudflare" />
         <Stat icon={Eye} label="Page Views Today"
-          value={(cf.page_views_today ?? 0).toLocaleString()} color="#ec4899" sub="Cloudflare" />
+          value={cfConnected ? (cf.page_views_today ?? 0).toLocaleString() : '—'} color="#ec4899" sub="Cloudflare" />
         <Stat icon={Users} label="Active Users" value={data?.active_users ?? 0} color="#8b5cf6" />
       </div>
 
