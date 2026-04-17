@@ -40,6 +40,34 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@router.get("/admin/analytics/cf-status")
+async def admin_cf_status(admin: dict = Depends(get_admin_user)):
+    """Surface Cloudflare Analytics token health for the admin UI banner.
+
+    Returns:
+      configured: env vars present?
+      auth_ok: True/False/None (None = not yet probed since startup)
+      needs_rotation: True when token is rejected by Cloudflare
+      last_error, last_check_at, blocked_for_seconds, rotation_hint
+    """
+    # If we've never tried, probe once now so the UI gets a definitive answer.
+    status_obj = cloudflare_client.get_auth_status()
+    if status_obj.get("auth_ok") is None and status_obj.get("configured"):
+        await cloudflare_client.get_visitor_stats_cf(days=1)
+        status_obj = cloudflare_client.get_auth_status()
+    return status_obj
+
+
+@router.post("/admin/analytics/cf-recheck")
+async def admin_cf_recheck(admin: dict = Depends(get_admin_user)):
+    """Reset the auth circuit breaker and re-probe Cloudflare immediately.
+    Call this after rotating CF_ANALYTICS_API_TOKEN on Railway."""
+    cloudflare_client.reset_auth_state()
+    if cloudflare_client.is_configured():
+        await cloudflare_client.get_visitor_stats_cf(days=1)
+    return cloudflare_client.get_auth_status()
+
+
 @router.get("/admin/analytics")
 async def admin_analytics(days: int = 30, admin: dict = Depends(get_admin_user)):
     """Admin analytics — Cloudflare is the sole source of truth for

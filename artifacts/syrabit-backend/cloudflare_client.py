@@ -13,6 +13,85 @@ logger = logging.getLogger(__name__)
 
 _cf_http: Optional["httpx.AsyncClient"] = None
 
+# ── Auth-failure circuit breaker ──────────────────────────────────────────────
+# When we detect a CF auth error (401 or GraphQL error code 10000), we mark the
+# token as broken and short-circuit all subsequent calls for AUTH_FAIL_TTL_SEC
+# seconds. This prevents log-spam and removes Cloudflare API latency from every
+# admin page load when the token has been revoked or its scopes are wrong.
+AUTH_FAIL_TTL_SEC = 300  # 5 minutes
+
+_auth_state: dict = {
+    "ok": None,                # None = unknown, True = working, False = broken
+    "last_check_at": None,     # ISO timestamp (str)
+    "last_error": None,        # human-readable error string
+    "blocked_until": None,     # epoch seconds; calls short-circuit until then
+    "consecutive_failures": 0,
+}
+
+
+def _now_epoch() -> float:
+    import time
+    return time.time()
+
+
+def _mark_auth_failed(error_msg: str):
+    """Trip the circuit breaker. Subsequent calls return None without hitting CF."""
+    _auth_state["ok"] = False
+    _auth_state["last_check_at"] = datetime.now(timezone.utc).isoformat()
+    _auth_state["last_error"] = error_msg[:240]
+    _auth_state["blocked_until"] = _now_epoch() + AUTH_FAIL_TTL_SEC
+    _auth_state["consecutive_failures"] += 1
+    # Log at WARN once per breaker-trip (not on every short-circuited call)
+    if _auth_state["consecutive_failures"] <= 3 or _auth_state["consecutive_failures"] % 50 == 0:
+        logger.warning(
+            f"CF_ANALYTICS token rejected ({error_msg[:120]}). "
+            f"Suppressing further calls for {AUTH_FAIL_TTL_SEC}s. "
+            f"Rotate token in Cloudflare dashboard with scopes: "
+            f"Account Analytics:Read, Zone Analytics:Read, Zone:Read."
+        )
+
+
+def _mark_auth_ok():
+    _auth_state["ok"] = True
+    _auth_state["last_check_at"] = datetime.now(timezone.utc).isoformat()
+    _auth_state["last_error"] = None
+    _auth_state["blocked_until"] = None
+    _auth_state["consecutive_failures"] = 0
+
+
+def _is_auth_blocked() -> bool:
+    bu = _auth_state.get("blocked_until")
+    return bool(bu and bu > _now_epoch())
+
+
+def get_auth_status() -> dict:
+    """Public status surface for admin UI. Safe to expose (no token leakage)."""
+    blocked_for = None
+    if _is_auth_blocked():
+        blocked_for = int(_auth_state["blocked_until"] - _now_epoch())
+    return {
+        "configured": is_configured(),
+        "auth_ok": _auth_state["ok"],
+        "last_check_at": _auth_state["last_check_at"],
+        "last_error": _auth_state["last_error"],
+        "consecutive_failures": _auth_state["consecutive_failures"],
+        "blocked_for_seconds": blocked_for,
+        "needs_rotation": _auth_state["ok"] is False,
+        "rotation_hint": (
+            "Create a new Cloudflare API token with scopes: "
+            "Account Analytics:Read, Zone Analytics:Read, Zone:Read. "
+            "Then update CF_ANALYTICS_API_TOKEN on Railway and restart the service."
+        ) if _auth_state["ok"] is False else None,
+    }
+
+
+def reset_auth_state():
+    """Force re-check of token on next call. Call after operator rotates token."""
+    _auth_state["ok"] = None
+    _auth_state["blocked_until"] = None
+    _auth_state["consecutive_failures"] = 0
+    _auth_state["last_error"] = None
+
 
 def _get_cf_client():
     global _cf_http
@@ -37,8 +116,27 @@ def is_configured() -> bool:
     return bool(c["api_token"] and c["zone_id"])
 
 
+def _looks_like_auth_error(data: dict, status_code: int = 200) -> Optional[str]:
+    """Detect a CF auth/permission failure. Returns the error string or None."""
+    if status_code in (401, 403):
+        return f"HTTP {status_code} from Cloudflare API"
+    errs = data.get("errors") if isinstance(data, dict) else None
+    if not errs:
+        return None
+    for e in errs:
+        code = e.get("code") if isinstance(e, dict) else None
+        msg = (e.get("message") if isinstance(e, dict) else str(e)) or ""
+        # CF auth error codes: 10000 (Auth error), 9109 (Unauthorized), 9106
+        if code in (10000, 9109, 9106) or "Authentication error" in msg or "Unauthorized" in msg:
+            return f"code={code} msg={msg}"
+    return None
+
+
 async def _graphql_query(query: str, variables: dict = None) -> Optional[dict]:
     if not is_configured():
+        return None
+    if _is_auth_blocked():
+        # Circuit breaker open — fail fast, no log, no API hit
         return None
     c = _cfg()
     try:
@@ -54,13 +152,24 @@ async def _graphql_query(query: str, variables: dict = None) -> Optional[dict]:
             },
             timeout=20,
         )
+        # Detect auth failure before raise_for_status
+        if r.status_code in (401, 403):
+            _mark_auth_failed(f"HTTP {r.status_code} from Cloudflare GraphQL")
+            return None
         r.raise_for_status()
         data = r.json()
+        auth_err = _looks_like_auth_error(data, r.status_code)
+        if auth_err:
+            _mark_auth_failed(auth_err)
+            return None
         if data.get("errors"):
+            # Non-auth GraphQL errors — log normally without tripping breaker
             logger.warning(f"CF GraphQL errors: {data['errors']}")
             return None
+        _mark_auth_ok()
         return data.get("data")
     except Exception as e:
+        # Network/parse error — log once, do not trip breaker
         logger.warning(f"Cloudflare GraphQL query failed: {e}")
         return None
 
