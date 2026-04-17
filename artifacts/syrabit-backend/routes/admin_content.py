@@ -15,6 +15,22 @@ def _schedule_prerender_refresh(reason: str = "content_update"):
         pass
 
 
+async def _trigger_prerender_now(reason: str = "bulk_admin_op"):
+    """Force-fire the Cloudflare Pages deploy hook immediately, bypassing
+    the debounce window (Task #398). Use for very large bulk operations
+    (seed/reset, mass imports) where waiting for the coalesce window
+    would needlessly delay the rebuild.
+
+    Wrapped in try/except so admin write paths never fail because the
+    deploy hook is misconfigured or the network is flaky.
+    """
+    try:
+        from pages_deploy import trigger_now
+        await trigger_now(reason)
+    except Exception:
+        pass
+
+
 def _schedule_indexnow_for_subject(subject_doc: dict):
     try:
         from routes.bot_discovery import indexnow_batcher
@@ -348,6 +364,7 @@ async def admin_delete_board(board_id: str, admin: dict = Depends(get_admin_user
     _invalidate_content_cache("subjects")
     _invalidate_content_cache("chapters")
     _schedule_d1_sync_fire("boards", "classes", "streams", "subjects", "chapters")
+    _schedule_prerender_refresh(f"board_deleted:{board.get('slug') or board_id}")
     return {"message": "Board and all children deleted"}
 
 @router.post("/admin/content/classes")
@@ -403,6 +420,7 @@ async def admin_delete_class(class_id: str, admin: dict = Depends(get_admin_user
     _invalidate_content_cache("subjects")
     _invalidate_content_cache("chapters")
     _schedule_d1_sync_fire("classes", "streams", "subjects", "chapters")
+    _schedule_prerender_refresh(f"class_deleted:{cls.get('slug') or class_id}")
     return {"message": "Class and all children deleted"}
 
 @router.post("/admin/content/streams")
@@ -455,6 +473,7 @@ async def admin_delete_stream(stream_id: str, admin: dict = Depends(get_admin_us
     _invalidate_content_cache("subjects")
     _invalidate_content_cache("chapters")
     _schedule_d1_sync_fire("streams", "subjects", "chapters")
+    _schedule_prerender_refresh(f"stream_deleted:{stream.get('slug') or stream_id}")
     return {"message": "Stream and all children deleted"}
 
 
@@ -1665,6 +1684,7 @@ async def upload_content_file(
     )
     
     logger.info(f"Content uploaded: {file.filename} ({file_ext}) for subject {subject_id}")
+    _schedule_prerender_refresh(f"content_uploaded:{subject_id}")
     return {"id": content_id, "message": "Upload successful", "file_type": file_ext}
 
 @router.post("/admin/reset-and-seed-content")
@@ -1876,6 +1896,10 @@ Last-minute preparation requires smart work, not just hard work. Follow this pro
         )
     
     logger.info(f"Content reset and seeded: {seeded_count} chapters across {len(subjects)} subjects")
+    # Bulk seed wipes & rewrites every chapter — fire the deploy hook
+    # immediately rather than waiting for the coalesce window or the
+    # nightly safety-net (Task #398).
+    await _trigger_prerender_now(f"reset_and_seed:{seeded_count}_chapters")
     return {"message": f"Reset complete! Seeded {seeded_count} chapters with 1000+ chars each", "chapters": seeded_count}
 
 
