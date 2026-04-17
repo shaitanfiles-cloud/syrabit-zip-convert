@@ -437,6 +437,7 @@ async def chat(msg: ChatMessage, request: Request, user: Optional[dict] = Depend
         syllabus=syllabus,
         web_results=web_results or None,
         resolved_intent=_detected_intent,
+        response_lang=_ns_resp_lang,
     )
     if not conv_id and user_id:
         conv_id = str(uuid.uuid4())
@@ -898,12 +899,37 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 _speedup.record_ttfb(_ttfb_early_ms)
             except Exception:
                 pass
+            # Sanitise cached Assamese replies before emission so legacy
+            # leaky cache entries (written before this filter existed) do
+            # not reach the user.
+            _early_emit = _early_cached_answer
+            if _resp_lang == "as":
+                from lang_sanitizer import (
+                    sanitize_assamese as _sanitize_asm_early,
+                    get_behaviour as _asm_behaviour_early,
+                )
+                if _asm_behaviour_early() != "off":
+                    _cleaned_early, _early_diag = _sanitize_asm_early(_early_emit)
+                    if _early_diag.get("action") == "stripped":
+                        logger.warning(
+                            f"[INDIC-SANITIZE][EARLY-CACHE] Stripped Assamese leakage "
+                            f"ratio={_early_diag['ratio']:.3f} "
+                            f"sample_tokens={_early_diag['suspicious_tokens'][:6]}"
+                        )
+                        _early_emit = _cleaned_early
+                        # Refresh cache so subsequent hits are clean.
+                        try:
+                            _redis_set("ai_cache", _cache_key_early, _early_emit, REDIS_AI_CACHE_TTL)
+                            if not redis_client:
+                                _ai_response_cache[_cache_key_early] = _early_emit
+                        except Exception:
+                            pass
             _CHUNK_SIZE = 300
-            for _ci in range(0, len(_early_cached_answer), _CHUNK_SIZE):
-                yield f"data: {json.dumps({'content': _early_cached_answer[_ci:_ci + _CHUNK_SIZE]})}\n\n"
+            for _ci in range(0, len(_early_emit), _CHUNK_SIZE):
+                yield f"data: {json.dumps({'content': _early_emit[_ci:_ci + _CHUNK_SIZE]})}\n\n"
                 if _ci % (_CHUNK_SIZE * 5) == 0:
                     await asyncio.sleep(0)
-            _answer_words = len(_early_cached_answer.split())
+            _answer_words = len(_early_emit.split())
             yield f"data: {json.dumps({'event': 'syrabit_done', 'conversation_id': _conv_id_early or '', 'rag_source': 'cache', 'words': _answer_words, 'web_search_used': False})}\n\n"
             yield "data: [DONE]\n\n"
             asyncio.create_task(_early_cache_persist())
@@ -1271,6 +1297,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         syllabus=syllabus,
         web_results=web_results or None,
         resolved_intent=_stream_intent,
+        response_lang=_resp_lang,
     )
 
     conv_id = msg.conversation_id
@@ -1339,9 +1366,11 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _LANG_NAME_MAP = {"as": "Assamese"}
     _target_lang_name = _LANG_NAME_MAP.get(_resp_lang)
     if _want_translate and _target_lang_name:
+        from prompts import assamese_enforcement_block as _asm_block
         _indic_system_prompt = (
             "তুমি Syra, এগৰাকী AI শিক্ষক। কেৱল অসমীয়াত উত্তৰ দিয়া। "
             "কাৰিকৰী শব্দ/সূত্ৰ ইংৰাজীত ৰাখিব পাৰা। চমুকৈ লিখা: ৩০-৬০ শব্দ, সৰ্বাধিক ২০০।\n"
+            + _asm_block()
         )
         if system_prompt:
             _ctx_markers = ["**GROUNDING CONTEXT", "**CURRICULUM", "**SUBJECT CHAPTERS", "REFERENCE MATERIAL:", "CONTEXT:", "RELEVANT CONTENT:"]
@@ -1490,6 +1519,28 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                     _speedup.record_ttfb(_ttfb_cache_ms)
                 except Exception:
                     pass
+                # Defensive sanitisation of cached Assamese answers — older
+                # cache entries may have been written before the leakage
+                # filter existed. Re-run the strip if the response was meant
+                # for response_lang="as" and contains stray English.
+                if _want_translate:
+                    from lang_sanitizer import (
+                        sanitize_assamese as _sanitize_asm_cache,
+                        get_behaviour as _asm_behaviour_cache,
+                    )
+                    if _asm_behaviour_cache() != "off":
+                        _cleaned_cache, _cache_diag = _sanitize_asm_cache(cached_answer)
+                        if _cache_diag.get("action") == "stripped":
+                            logger.warning(
+                                f"[INDIC-SANITIZE][CACHE] Stripped Assamese leakage "
+                                f"ratio={_cache_diag['ratio']:.3f} "
+                                f"sample_tokens={_cache_diag['suspicious_tokens'][:6]}"
+                            )
+                            cached_answer = _cleaned_cache
+                            # Refresh cache entry so subsequent hits are clean.
+                            _redis_set("ai_cache", _cache_key_val, cached_answer, _cache_ttl_val)
+                            if not redis_client:
+                                _ai_response_cache[_cache_key_val] = cached_answer
                 _CHUNK_SIZE = 300
                 for _ci in range(0, len(cached_answer), _CHUNK_SIZE):
                     yield f"data: {json.dumps({'content': cached_answer[_ci:_ci + _CHUNK_SIZE]})}\n\n"
@@ -1505,6 +1556,17 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
                 _stream_model = None if _want_translate else (msg.model or "openai/gpt-oss-20b")
                 _active_stream = call_llm_api_stream(messages_payload, model=_stream_model, max_tokens=max_tokens, intent=_stream_intent, response_lang=_resp_lang)
+
+                # For Assamese (Indic) responses we buffer the entire LLM
+                # output server-side instead of streaming it directly so we
+                # can sanitize stray English-fragment leakage (e.g. "me uses",
+                # "ssible") before any tokens reach the user.
+                from lang_sanitizer import (
+                    sanitize_assamese_with_optional_regenerate as _sanitize_asm_async,
+                    get_behaviour as _asm_behaviour,
+                )
+                _indic_buffer_mode = bool(_want_translate) and _asm_behaviour() != "off"
+                _indic_pending_chunks: list = []
 
                 async for chunk in _active_stream:
                     if '"__provider"' in chunk and chunk.startswith("data: "):
@@ -1543,7 +1605,10 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                             pass
                     if _output_violation:
                         break
-                    yield chunk
+                    if _indic_buffer_mode:
+                        _indic_pending_chunks.append(chunk)
+                    else:
+                        yield chunk
                     _bp_count += 1
                     if _bp_count % 40 == 0:
                         await asyncio.sleep(0)
@@ -1551,7 +1616,67 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                     full_response.clear()
                     _fallback = "I need to stop here — my response was heading in a direction that doesn't align with my guidelines. Please try rephrasing your question."
                     full_response.append(_fallback)
+                    _indic_pending_chunks = []
                     yield f"data: {json.dumps({'content': _fallback})}\n\n"
+
+                if _indic_buffer_mode and not _output_violation and full_response:
+                    _raw_indic = "".join(full_response)
+
+                    async def _regenerate_indic():
+                        # One-shot retry with a stronger leading directive.
+                        # Guard via a flag so this can only run once per turn.
+                        if getattr(_regenerate_indic, "_ran", False):
+                            return None
+                        _regenerate_indic._ran = True  # type: ignore[attr-defined]
+                        retry_payload = [dict(m) for m in messages_payload]
+                        if retry_payload and retry_payload[0].get("role") == "system":
+                            retry_payload[0]["content"] = (
+                                "STRICT RETRY — your previous reply contained "
+                                "stray English words inside an Assamese answer. "
+                                "Reply ONLY in Assamese script (অসমীয়া) this "
+                                "time. No mid-sentence English words.\n\n"
+                                + retry_payload[0]["content"]
+                            )
+                        retry_text_parts: list[str] = []
+                        try:
+                            async for _rchunk in call_llm_api_stream(
+                                retry_payload, model=_stream_model,
+                                max_tokens=max_tokens, intent=_stream_intent,
+                                response_lang=_resp_lang,
+                            ):
+                                if '"content"' in _rchunk and _rchunk.startswith("data: "):
+                                    try:
+                                        _rd = json.loads(_rchunk[6:])
+                                        retry_text_parts.append(_rd.get("content", ""))
+                                    except Exception:
+                                        pass
+                        except Exception as _re:
+                            logger.warning(f"[INDIC-SANITIZE] regenerate stream failed: {_re}")
+                            return None
+                        return "".join(retry_text_parts) or None
+
+                    _cleaned_indic, _asm_diag = await _sanitize_asm_async(
+                        _raw_indic, regenerate_callable=_regenerate_indic,
+                    )
+                    if _asm_diag.get("action") == "stripped" or _asm_diag.get("regenerated"):
+                        logger.warning(
+                            f"[INDIC-SANITIZE] Cleaned Assamese leakage "
+                            f"ratio={_asm_diag.get('ratio', 0):.3f} "
+                            f"threshold={_asm_diag.get('threshold', 0):.3f} "
+                            f"behaviour={_asm_diag.get('behaviour')} "
+                            f"regenerated={_asm_diag.get('regenerated', False)} "
+                            f"sample_tokens={_asm_diag.get('suspicious_tokens', [])[:6]}"
+                        )
+                        full_response.clear()
+                        full_response.append(_cleaned_indic)
+                        _CHUNK_SIZE_INDIC = 300
+                        for _ic in range(0, len(_cleaned_indic), _CHUNK_SIZE_INDIC):
+                            yield f"data: {json.dumps({'content': _cleaned_indic[_ic:_ic + _CHUNK_SIZE_INDIC]})}\n\n"
+                            if _ic % (_CHUNK_SIZE_INDIC * 5) == 0:
+                                await asyncio.sleep(0)
+                    else:
+                        for _pc in _indic_pending_chunks:
+                            yield _pc
 
                 if full_response:
                     answer_str = "".join(full_response)

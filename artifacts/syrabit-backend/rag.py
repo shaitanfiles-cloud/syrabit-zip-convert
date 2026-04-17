@@ -604,10 +604,14 @@ def build_rag_system_prompt(
     syllabus: dict = None,
     web_results: list = None,
     resolved_intent: str = "",
+    response_lang: str = "",
 ) -> str:
     from prompts import build_system_prompt, classify_intent, _format_board_label as _fbl, get_intent_extraction_rules
     import re as _re
-    base_prompt = build_system_prompt(context, user_info=user_info, query=query, resolved_intent=resolved_intent)
+    base_prompt = build_system_prompt(
+        context, user_info=user_info, query=query,
+        resolved_intent=resolved_intent, response_lang=response_lang,
+    )
     source = rag_context.get("source", "none")
 
     _intent = resolved_intent if resolved_intent else (classify_intent(query)[0] if query else "notes")

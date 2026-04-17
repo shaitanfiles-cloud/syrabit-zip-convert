@@ -838,6 +838,13 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
                 "CRITICAL: Do NOT use <think> tags. Do NOT write internal thoughts. "
                 "Do NOT start with 'Okay' or 'Let me'. "
                 "Reply DIRECTLY in Assamese (অসমীয়া). Start your answer immediately.\n"
+                "STRICT LANGUAGE RULES:\n"
+                "- Every running word MUST be in Assamese script. NO mid-sentence English words.\n"
+                "- NEVER emit partial English fragments such as 'me uses', 'terms', 'ssible'.\n"
+                "- Latin script is allowed ONLY for: pure numbers/dates, scientific units\n"
+                "  (cm, kg, Hz, °C, eV…), math symbols/equations, code, URLs, well-known\n"
+                "  proper nouns and acronyms (AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
+                "- For everyday nouns/verbs, use the Assamese word — do NOT fall back to English.\n"
             ) + patched[0]["content"]
         logger.info(f"[SARVAM-INDIC] No-think mode for {response_lang} — model={model}, api_max={api_max}")
     else:

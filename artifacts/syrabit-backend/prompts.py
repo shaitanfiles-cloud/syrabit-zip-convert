@@ -478,14 +478,57 @@ def get_intent_extraction_rules(intent: str) -> str:
     return _INTENT_EXTRACTION_RULES.get(intent, "")
 
 
-def build_system_prompt(context: dict, user_info: dict = None, query: str = "", resolved_intent: str = "") -> str:
+_ASSAMESE_ENFORCEMENT_BLOCK = (
+    "\n\nLANGUAGE — ASSAMESE ONLY (অসমীয়া):\n"
+    "- The student selected Assamese. Write the ENTIRE answer in Assamese script (অসমীয়া লিপি).\n"
+    "- Do NOT mix English words mid-sentence. Do NOT emit partial English fragments\n"
+    "  (e.g. 'me uses', 'terms', 'ssible'). Every running word MUST be Assamese.\n"
+    "- Allowed in Latin script ONLY (do not translate these): pure numbers and dates,\n"
+    "  scientific units (cm, kg, Hz, °C, eV…), math symbols and equations, code\n"
+    "  blocks/inline code, URLs, well-known proper nouns and acronyms (AHSEC, SEBA,\n"
+    "  NCERT, DNA, GDP, Magh Bihu, Newton).\n"
+    "- For everyday/common nouns and verbs, ALWAYS use the Assamese word — never the\n"
+    "  English equivalent in the middle of an Assamese sentence.\n"
+    "- If you are unsure of the Assamese word, write the proper noun in Latin and\n"
+    "  surround the explanation in Assamese. Never leave dangling English fragments.\n"
+)
+
+
+def assamese_enforcement_block() -> str:
+    """Shared Assamese-only enforcement text appended to system prompts.
+
+    Centralised so every prompt builder (`build_system_prompt`,
+    `build_rag_system_prompt`, the indic-direct prompt rebuild in the chat
+    route, and the Sarvam streaming preface) uses the same rules.
+    """
+    return _ASSAMESE_ENFORCEMENT_BLOCK
+
+
+def _is_assamese_lang(response_lang: str | None) -> bool:
+    if not response_lang:
+        return False
+    return response_lang.strip().lower() in {"as", "as-in", "assamese"}
+
+
+def build_system_prompt(
+    context: dict,
+    user_info: dict = None,
+    query: str = "",
+    resolved_intent: str = "",
+    response_lang: str = "",
+) -> str:
     ui = user_info or {}
     intent = resolved_intent if resolved_intent else (_classify_intent(query) if query else "notes")
     mode = INTENT_TO_MODE.get(intent, "structured")
     logger.info(f"Prompt mode selected: [{mode}] intent=[{intent}] for query: '{query[:60]}'")
 
     if mode == "casual":
-        return _prompt_casual(ui, context)
-    if mode == "general":
-        return _prompt_general(ui, context)
-    return _prompt_intent_aware(ui, context, intent)
+        prompt = _prompt_casual(ui, context)
+    elif mode == "general":
+        prompt = _prompt_general(ui, context)
+    else:
+        prompt = _prompt_intent_aware(ui, context, intent)
+
+    if _is_assamese_lang(response_lang):
+        prompt = prompt + _ASSAMESE_ENFORCEMENT_BLOCK
+    return prompt
