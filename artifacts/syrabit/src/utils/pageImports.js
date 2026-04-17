@@ -32,9 +32,14 @@ export function prefetchCriticalRoutes() {
       // Drop chapter prefetch on landing — most landing visitors never reach a chapter,
       // and the chapter chunk transitively pulls the heavy markdown bundle (~458KB).
     } else if (path === '/library' || path.match(/^\/[a-z]+\/[a-z]/)) {
-      schedule(() => pageImports.chat(), 1500);
-      schedule(() => pageImports.chapter(), 2500);
-      schedule(() => warmApiCache(['/api/content/boards']), 1500);
+      // Task #391: Don't pull non-library chunks on /library. ChatPage and
+      // ChapterPage are eagerly imported in App.jsx for hydration safety
+      // (Tasks #382/#385/#387) — re-prefetching them here is a no-op for
+      // the chunk graph but the network priority hint pulls them sooner
+      // than needed and shows up in Lighthouse's TBT trace.
+      // Warm the slim library bundle — the actual critical data path
+      // for /library (LibraryPage uses useLibraryBundleSlim, not /boards).
+      schedule(() => warmApiCache(['/api/content/library-bundle?slim=1']), 4000);
     } else {
       schedule(() => pageImports.chat(), 2500);
       schedule(() => pageImports.library(), 3500);

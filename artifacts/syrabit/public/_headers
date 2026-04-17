@@ -23,6 +23,12 @@
 /logo.webp
   Cache-Control: public, max-age=604800, stale-while-revalidate=86400
 
+/logo-56.webp
+  Cache-Control: public, max-age=31536000, immutable
+
+/logo-144.webp
+  Cache-Control: public, max-age=31536000, immutable
+
 /manifest.json
   Cache-Control: public, max-age=86400, stale-while-revalidate=3600
 

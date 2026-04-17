@@ -80,6 +80,10 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
           ? '0 0 32px rgba(139,92,246,0.15), 0 8px 32px rgba(0,0,0,0.08)'
           : '0 2px 12px rgba(0,0,0,0.06)',
         animationDelay: `${index * 50}ms`,
+        // Task #391: lock card height to skeleton (420px) until content
+        // settles so swapping skeleton → card produces zero CLS.
+        minHeight: '420px',
+        contain: 'layout style',
       }}
       data-testid="library-subject-card"
       data-subject-id={sub.id}

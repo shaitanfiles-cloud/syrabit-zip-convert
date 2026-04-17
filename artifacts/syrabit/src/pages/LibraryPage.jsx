@@ -270,19 +270,20 @@ export default function LibraryPage() {
   }, []);
   const handleSearchClear = useCallback(() => setSearchQuery(''), []);
 
-  // Lightweight windowing — render the first VIRTUAL_CHUNK cards immediately,
-  // then progressively reveal the rest as the user scrolls near the bottom of
-  // the grid. Keeps initial DOM bounded for catalogues with hundreds of items.
-  const VIRTUAL_CHUNK = 30;
+  // Task #391: drop the chunk-based progressive reveal in favour of always
+  // using the true windowed renderer below. Keeps initial DOM bounded to
+  // viewport+overscan rows even on small catalogues, which fixes the
+  // 2,763 mobile DOM-node count Lighthouse was reporting and removes the
+  // forced reflow that the IntersectionObserver sentinel triggered as
+  // each new chunk mounted.
+  const VIRTUAL_CHUNK = 6;
   const [renderLimit, setRenderLimit] = useState(VIRTUAL_CHUNK);
   const sentinelRef = useRef(null);
-  // Track in state (not just a ref) so child virtualizers re-measure once
-  // the scroll container actually mounts.
   const [scrollContainerEl, setScrollContainerEl] = useState(null);
-  // Switch to a true windowed renderer once the catalogue grows past the
-  // chunk size — keeps DOM nodes bounded so TBT/INP stay flat on mobile
-  // even with hundreds of subjects. Task #384.
-  const useVirtualGrid = filteredSubjects.length > VIRTUAL_CHUNK;
+  // Always virtualize when there is any list to render — the small per-row
+  // measurement cost is far cheaper than paying for hundreds of mounted
+  // SubjectCards on first paint.
+  const useVirtualGrid = filteredSubjects.length > 0;
   useEffect(() => { setRenderLimit(VIRTUAL_CHUNK); }, [activeFilter, deferredQuery]);
   useEffect(() => {
     // The legacy progressive-reveal sentinel is only needed for the

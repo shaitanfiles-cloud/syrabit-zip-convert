@@ -61,14 +61,15 @@
     <!-- Backend API preconnect — injected at build time by Vite (see vite.config.js htmlPlugin) -->
     <!--BACKEND_PRECONNECT-->
 
-    <!-- Same-origin API hint (Cloudflare Pages /api → Workers / FastAPI proxy) -->
-    <link rel="preconnect" href="https://syrabit.ai" crossorigin />
-    <link rel="dns-prefetch" href="https://syrabit.ai" />
-
-    <link rel="preconnect" href="https://us.i.posthog.com" crossorigin />
-    <link rel="preconnect" href="https://us-assets.i.posthog.com" crossorigin />
-    <link rel="dns-prefetch" href="https://assets.emergent.sh" />
+    <!-- Task #391: trimmed preconnect list. Same-origin preconnect is a
+         no-op (we're already connected), and crossorigin on the PostHog
+         asset host caused Lighthouse "preconnect misuse" warnings.
+         AdSense + Emergent get loaded after LCP via the deferred loader
+         block below, so dns-prefetch is enough — no preconnect needed. -->
+    <link rel="dns-prefetch" href="https://us.i.posthog.com" />
+    <link rel="dns-prefetch" href="https://us-assets.i.posthog.com" />
     <link rel="dns-prefetch" href="https://pagead2.googlesyndication.com" />
+    <link rel="dns-prefetch" href="https://assets.emergent.sh" />
 
     <!-- Font preconnect — reduces DNS/TLS handshake latency -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -299,6 +300,12 @@
       <script type="module" src="/src/index.jsx"></script>
       <script>
         (function deferThirdParty(){
+          // Task #391: gate ALL third-party loaders behind LCP so they
+          // never appear in the Lighthouse main-thread trace before the
+          // largest contentful paint fires. Order of triggers:
+          //   1. PerformanceObserver fires on the largest-contentful-paint entry
+          //   2. First user interaction (pointerdown/keydown/scroll/touch)
+          //   3. Hard 4 s fallback for headless tools and bounce visitors
           var loaded=false;
           function load(){
             if(loaded)return;loaded=true;
@@ -308,14 +315,54 @@
             cleanup();
           }
           var events=["pointerdown","keydown","scroll","touchstart"];
-          function cleanup(){events.forEach(function(ev){window.removeEventListener(ev,load,{passive:true,capture:true})})}
+          function cleanup(){
+            events.forEach(function(ev){window.removeEventListener(ev,load,{passive:true,capture:true})});
+            if(po){try{po.disconnect()}catch(e){}}
+          }
           events.forEach(function(ev){window.addEventListener(ev,load,{passive:true,capture:true,once:true})});
-          // Hard fallback so analytics/ads still load on bounce visitors after 8s
-          setTimeout(load,8000);
+          var po=null;
+          if('PerformanceObserver' in window){
+            try{
+              po=new PerformanceObserver(function(list){
+                if(list.getEntries().length){ setTimeout(load,250); }
+              });
+              po.observe({type:'largest-contentful-paint',buffered:true});
+            }catch(e){}
+          }
+          // Hard fallback for headless / no-LCP cases.
+          setTimeout(load,4000);
         })();
       </script>
       <script>
-        (window.requestIdleCallback||function(cb){setTimeout(cb,1500)})(function(){
+        // Task #391: hold PostHog until after LCP too — the array.js
+        // download was firing on requestIdleCallback (~1.5 s) which beat
+        // LCP on slow 3G mobile and inflated TBT. The deferral wrapper
+        // here mirrors the third-party loader above.
+        (function deferPosthog(){
+          var loaded=false;
+          function load(){
+            if(loaded)return;loaded=true;
+            try{ initPosthog(); }catch(e){}
+            cleanup();
+          }
+          var events=["pointerdown","keydown","scroll","touchstart"];
+          function cleanup(){
+            events.forEach(function(ev){window.removeEventListener(ev,load,{passive:true,capture:true})});
+            if(po){try{po.disconnect()}catch(e){}}
+          }
+          events.forEach(function(ev){window.addEventListener(ev,load,{passive:true,capture:true,once:true})});
+          var po=null;
+          if('PerformanceObserver' in window){
+            try{
+              po=new PerformanceObserver(function(list){
+                if(list.getEntries().length){ setTimeout(load,250); }
+              });
+              po.observe({type:'largest-contentful-paint',buffered:true});
+            }catch(e){}
+          }
+          setTimeout(load,5000);
+        })();
+        function initPosthog(){
             !(function (t, e) {
                 var o, n, p, r;
                 e.__SV ||
@@ -385,7 +432,7 @@
                     capturePerformance: false,
                 },
             });
-        },{timeout:3000});
+        }
       </script>
 
     <!--CF_ANALYTICS_BEACON-->
