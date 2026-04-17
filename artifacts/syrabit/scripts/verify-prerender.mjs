@@ -98,6 +98,20 @@ for (const { full, rel } of walk(distDir)) {
     fail(`${route}: legacy #__shell overlay still present`);
   }
 
+  // Task #395: each prerendered route must include a modulepreload
+  // hint for its own page chunk so the browser fetches the route's
+  // JS in parallel with the entry chunk (no extra hydration RTT).
+  const pageChunkBase =
+    kind === "subject" ? "SubjectLandingPage" : "ChapterPage";
+  const preloadRe = new RegExp(
+    `<link rel="modulepreload"[^>]*href="/assets/${pageChunkBase}-[^"]+\\.js"`,
+  );
+  if (!preloadRe.test(html)) {
+    fail(
+      `${route}: missing <link rel="modulepreload"> for ${pageChunkBase}-*.js (Task #395 contract)`,
+    );
+  }
+
   checked.push({ route, kind, bytes: html.length, rootBytes: inner.length });
 }
 

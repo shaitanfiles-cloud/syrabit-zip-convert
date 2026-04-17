@@ -72,6 +72,14 @@ for (const target of PRERENDERED) {
   }
 
   // 5) Must NOT contain the legacy #__shell overlay.
+  // Task #395: library/browser prerender must include the LibraryPage
+  // chunk modulepreload (entry chunk no longer statically imports it).
+  if (!/<link rel="modulepreload"[^>]*href="\/assets\/LibraryPage-[^"]+\.js"/.test(body)) {
+    fail(
+      `${path.relative(distDir, target)} missing <link rel="modulepreload"> for LibraryPage-*.js`,
+    );
+  }
+
   if (/<div id="__shell"/.test(body)) {
     fail(`${path.relative(distDir, target)} still contains a #__shell overlay`);
   }
