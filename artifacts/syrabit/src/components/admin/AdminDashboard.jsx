@@ -884,27 +884,29 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
             </div>
           </div>
 
-          <div className="rounded-xl p-3 bg-amber-50 border border-amber-200">
-            <div className="flex items-center gap-1.5 mb-2">
-              <Bot size={11} style={{ color: '#f59e0b' }} />
-              <span className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">Bot/Crawler Traffic</span>
-              <span className="text-[9px] text-gray-400 ml-auto">separate</span>
+          {vs.bot_traffic && (
+            <div className="rounded-xl p-3 bg-amber-50 border border-amber-200">
+              <div className="flex items-center gap-1.5 mb-2">
+                <Bot size={11} style={{ color: '#f59e0b' }} />
+                <span className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">Bot/Crawler Traffic</span>
+                <span className="text-[9px] text-gray-400 ml-auto">separate</span>
+              </div>
+              <div className="flex gap-4">
+                <div>
+                  <p className="text-gray-900 font-bold text-lg">{(vs.bot_traffic?.unique_total ?? 0).toLocaleString()}</p>
+                  <p className="text-[10px] text-gray-400">Unique bots</p>
+                </div>
+                <div>
+                  <p className="text-gray-900 font-bold text-lg">{(vs.bot_traffic?.hits_today ?? 0).toLocaleString()}</p>
+                  <p className="text-[10px] text-gray-400">Today</p>
+                </div>
+                <div>
+                  <p className="text-gray-500 font-bold text-lg">{(vs.bot_traffic?.total_hits ?? 0).toLocaleString()}</p>
+                  <p className="text-[10px] text-gray-400">Total</p>
+                </div>
+              </div>
             </div>
-            <div className="flex gap-4">
-              <div>
-                <p className="text-gray-900 font-bold text-lg">{(vs.bot_traffic?.unique_total ?? 0).toLocaleString()}</p>
-                <p className="text-[10px] text-gray-400">Unique bots</p>
-              </div>
-              <div>
-                <p className="text-gray-900 font-bold text-lg">{(vs.bot_traffic?.hits_today ?? 0).toLocaleString()}</p>
-                <p className="text-[10px] text-gray-400">Today</p>
-              </div>
-              <div>
-                <p className="text-gray-500 font-bold text-lg">{(vs.bot_traffic?.total_hits ?? 0).toLocaleString()}</p>
-                <p className="text-[10px] text-gray-400">Total</p>
-              </div>
-            </div>
-          </div>
+          )}
         </div>
 
         {vs.server_side?.total_unique > 0 && (

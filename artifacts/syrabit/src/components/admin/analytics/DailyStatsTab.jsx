@@ -1,5 +1,5 @@
 import { Loader2, RefreshCw, Globe, Eye, Users, Bot, MessageSquare,
-  Calendar, ArrowUpRight, ArrowDownRight, Cloud, BarChart3, Server } from 'lucide-react';
+  Calendar, ArrowUpRight, ArrowDownRight, Cloud } from 'lucide-react';
 import {
   XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, BarChart, Bar, Legend, LineChart, Line, AreaChart, Area,
@@ -91,55 +91,23 @@ export default function DailyStatsTab({ dailyDays, setDailyDays, dailyLoading, d
               ))}
             </div>
 
-            <Card title={`Daily Visitors & Page Views — Last ${dailyDays} Days (Best Estimate)`}
-              empty={!hasVisitors} emptyMsg="No visitor data for this range yet">
-              {(() => {
-                const hasSources = daily.some(d => d.sources && Object.keys(d.sources).length > 1);
-                const chartData = daily.map(d => {
-                  const row = { date: d.date, visitors: d.visitors, page_views: d.page_views, visitor_source: d.visitor_source };
-                  if (d.sources) {
-                    if (d.sources.cloudflare) {
-                      row.cf_visitors = d.sources.cloudflare.visitors;
-                      row.cf_pv = d.sources.cloudflare.page_views;
-                    }
-                    if (d.sources.ga4) {
-                      row.ga4_visitors = d.sources.ga4.visitors;
-                      row.ga4_pv = d.sources.ga4.page_views;
-                    }
-                    if (d.sources.server) {
-                      row.ss_visitors = d.sources.server.visitors;
-                      row.ss_pv = d.sources.server.page_views;
-                    }
-                    if (d.sources['js-tracked']) {
-                      row.js_visitors = d.sources['js-tracked'].visitors;
-                      row.js_pv = d.sources['js-tracked'].page_views;
-                    }
-                  }
-                  return row;
-                });
-                const hasCf = chartData.some(d => d.cf_visitors > 0);
-                const hasGa4 = chartData.some(d => d.ga4_visitors > 0);
-                const hasSs = chartData.some(d => d.ss_visitors > 0);
-                const hasJs = chartData.some(d => d.js_visitors > 0);
-                return (
-                  <ResponsiveContainer width="100%" height={260}>
-                    <AreaChart data={chartData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
-                      <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 10 }} tickFormatter={fmt}
-                        interval={Math.max(0, Math.floor(daily.length / 8) - 1)} />
-                      <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
-                      <Tooltip {...TT} />
-                      <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} />
-                      {hasSources && hasCf && <Area type="monotone" dataKey="cf_visitors" name="CF Visitors" stroke="#f6821f" fill="rgba(246,130,31,0.08)" strokeWidth={1.5} />}
-                      {hasSources && hasGa4 && <Area type="monotone" dataKey="ga4_visitors" name="GA4 Visitors" stroke="#4285f4" fill="rgba(66,133,244,0.08)" strokeWidth={1.5} />}
-                      {hasSources && hasSs && <Area type="monotone" dataKey="ss_visitors" name="Server Visitors" stroke="#10b981" fill="rgba(16,185,129,0.08)" strokeWidth={1.5} />}
-                      {hasSources && hasJs && <Area type="monotone" dataKey="js_visitors" name="JS Visitors" stroke="#8b5cf6" fill="rgba(139,92,246,0.08)" strokeWidth={1.5} />}
-                      <Area type="monotone" dataKey="visitors" name="Best Visitors" stroke="#06b6d4" fill="rgba(6,182,212,0.15)" strokeWidth={2.5} />
-                      <Area type="monotone" dataKey="page_views" name="Best Page Views" stroke="#ec4899" fill="rgba(236,72,153,0.10)" strokeWidth={2} strokeDasharray="4 2" />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                );
-              })()}
+            <Card title={`Daily Visitors & Page Views — Last ${dailyDays} Days`}
+              empty={!hasVisitors}
+              emptyMsg={dailyData.cf_connected ? 'No visitor data for this range yet' : 'Cloudflare analytics unavailable — check API token and Zone ID'}>
+              <ResponsiveContainer width="100%" height={260}>
+                <AreaChart data={daily} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
+                  <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 10 }} tickFormatter={fmt}
+                    interval={Math.max(0, Math.floor(daily.length / 8) - 1)} />
+                  <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
+                  <Tooltip {...TT} />
+                  <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} />
+                  <Area type="monotone" dataKey="visitors" name="Cloudflare Visitors"
+                    stroke="#f6821f" fill="rgba(246,130,31,0.15)" strokeWidth={2.5} />
+                  <Area type="monotone" dataKey="page_views" name="Cloudflare Page Views"
+                    stroke="#ec4899" fill="rgba(236,72,153,0.10)" strokeWidth={2} strokeDasharray="4 2" />
+                </AreaChart>
+              </ResponsiveContainer>
             </Card>
 
             <Card title={`Daily Sign-ups — Last ${dailyDays} Days`}

@@ -3376,154 +3376,19 @@ async def admin_analytics_daily(
         for d in day_keys
     }
 
-    # ── 1. Visitor / page-view data (merge all sources, pick best) ──────────
-    ga4_by_date: dict = {}
-    cf_by_date: dict = {}
-    js_by_date: dict = {}
-    ss_by_date: dict = {}
-    backfill_by_date: dict = {}
-
-    try:
-        ga4_resp = await ga4_client.run_report(
-            dimensions=["date"],
-            metrics=["activeUsers", "screenPageViews", "sessions", "bounceRate", "averageSessionDuration"],
-            date_ranges=[{"startDate": f"{days}daysAgo", "endDate": "today"}],
-            order_bys=[{"dimension": {"dimensionName": "date"}}],
-            limit=days + 1,
-        )
-        if ga4_resp and ga4_resp.get("rows"):
-            for row in ga4_resp["rows"]:
-                raw_date = row["dimensionValues"][0]["value"]
-                d = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:]}"
-                if d in daily:
-                    mv = row["metricValues"]
-                    ga4_by_date[d] = {
-                        "visitors": int(mv[0]["value"]) if mv[0]["value"] else 0,
-                        "page_views": int(mv[1]["value"]) if mv[1]["value"] else 0,
-                        "sessions": int(mv[2]["value"]) if mv[2]["value"] else 0,
-                    }
-                    try:
-                        daily[d]["bounce_rate"] = round(float(mv[3]["value"]) * 100, 1)
-                    except Exception:
-                        pass
-                    try:
-                        daily[d]["avg_session_duration"] = round(float(mv[4]["value"]), 1)
-                    except Exception:
-                        pass
-    except Exception:
-        pass
-
+    # ── 1. Visitor / page-view data — Cloudflare only (Task #364) ──────────
+    cf_connected = False
     try:
         cf_daily_data = await cloudflare_client.get_historical_daily(days=days)
-        if cf_daily_data:
-            for entry in cf_daily_data:
-                d = entry.get("date", "")
-                if d in daily:
-                    cf_by_date[d] = {
-                        "visitors": entry.get("visitors", 0),
-                        "page_views": entry.get("page_views", 0),
-                    }
-    except Exception:
-        pass
-
-    try:
-        cutoff_str = day_keys[0]
-        pipeline = [
-            {"$match": {"date": {"$gte": cutoff_str}, "is_bot": {"$ne": True}, "is_404": {"$ne": True}}},
-            {"$group": {"_id": "$date", "visitors": {"$addToSet": "$visitor_id"}, "page_views": {"$sum": 1}}},
-        ]
-        rows = await db.page_views.aggregate(pipeline).to_list(days + 5)
-        for row in rows:
-            d = row["_id"]
+        cf_connected = cf_daily_data is not None
+        for entry in (cf_daily_data or []):
+            d = entry.get("date", "")
             if d in daily:
-                js_by_date[d] = {
-                    "visitors": len(row["visitors"]),
-                    "page_views": row["page_views"],
-                }
+                daily[d]["visitors"] = entry.get("visitors", 0)
+                daily[d]["page_views"] = entry.get("page_views", 0)
+                daily[d]["visitor_source"] = "cloudflare"
     except Exception:
         pass
-
-    try:
-        cutoff_str = day_keys[0]
-        human_filter_ss = {"is_bot": {"$ne": True}, "date": {"$gte": cutoff_str}}
-        ss_pipeline = [
-            {"$match": human_filter_ss},
-            {"$group": {"_id": "$date", "visitors": {"$addToSet": "$ip_hash"}, "page_views": {"$sum": 1}}},
-        ]
-        ss_rows = await db.server_hits.aggregate(ss_pipeline).to_list(days + 5)
-        for row in ss_rows:
-            d = row["_id"]
-            if d in daily:
-                ss_by_date[d] = {
-                    "visitors": len(row["visitors"]),
-                    "page_views": row["page_views"],
-                }
-    except Exception:
-        pass
-
-    try:
-        backfill_rows = await db.analytics_daily_totals.find(
-            {"date": {"$gte": day_keys[0]}},
-            {"_id": 0, "date": 1, "source": 1, "visitors": 1, "page_views": 1},
-        ).to_list(days * 4)
-        for r in backfill_rows:
-            d = r.get("date", "")
-            src = r.get("source", "")
-            if d in daily and src:
-                if d not in backfill_by_date:
-                    backfill_by_date[d] = {}
-                backfill_by_date[d][src] = {
-                    "visitors": r.get("visitors", 0),
-                    "page_views": r.get("page_views", 0),
-                }
-    except Exception:
-        pass
-
-    for d in day_keys:
-        cf_v = cf_by_date.get(d, {}).get("visitors", 0)
-        ga4_v = ga4_by_date.get(d, {}).get("visitors", 0)
-        ss_v = ss_by_date.get(d, {}).get("visitors", 0)
-        js_v = js_by_date.get(d, {}).get("visitors", 0)
-        cf_pv = cf_by_date.get(d, {}).get("page_views", 0)
-        ga4_pv = ga4_by_date.get(d, {}).get("page_views", 0)
-        ss_pv = ss_by_date.get(d, {}).get("page_views", 0)
-        js_pv = js_by_date.get(d, {}).get("page_views", 0)
-
-        bf = backfill_by_date.get(d, {})
-        bf_cf_v = bf.get("cloudflare", {}).get("visitors", 0)
-        bf_ga4_v = bf.get("ga4", {}).get("visitors", 0)
-        cf_v = max(cf_v, bf_cf_v)
-        ga4_v = max(ga4_v, bf_ga4_v)
-        cf_pv = max(cf_pv, bf.get("cloudflare", {}).get("page_views", 0))
-        ga4_pv = max(ga4_pv, bf.get("ga4", {}).get("page_views", 0))
-
-        _PRIORITY = ["cloudflare", "ga4", "server", "js-tracked"]
-        _v_map = {"cloudflare": cf_v, "ga4": ga4_v, "server": ss_v, "js-tracked": js_v}
-        _pv_map = {"cloudflare": cf_pv, "ga4": ga4_pv, "server": ss_pv, "js-tracked": js_pv}
-        best_v, best_v_src = 0, "none"
-        for src in _PRIORITY:
-            if _v_map[src] > 0:
-                best_v, best_v_src = _v_map[src], src
-                break
-        best_pv = 0
-        for src in _PRIORITY:
-            if _pv_map[src] > 0:
-                best_pv = _pv_map[src]
-                break
-        daily[d]["visitors"] = best_v
-        daily[d]["page_views"] = best_pv
-        daily[d]["visitor_source"] = best_v_src
-        daily[d]["sessions"] = ga4_by_date.get(d, {}).get("sessions", 0)
-
-        daily[d]["sources"] = {}
-        if cf_v > 0:
-            daily[d]["sources"]["cloudflare"] = {"visitors": cf_v, "page_views": cf_pv}
-        if ga4_v > 0:
-            daily[d]["sources"]["ga4"] = {"visitors": ga4_v, "page_views": ga4_pv}
-        if ss_v > 0:
-            daily[d]["sources"]["server"] = {"visitors": ss_v, "page_views": ss_pv}
-        if js_v > 0:
-            daily[d]["sources"]["js-tracked"] = {"visitors": js_v, "page_views": js_pv}
 
     # ── 2. Signups (Supabase users by created_at date) ───────────────────────
     try:
@@ -3637,7 +3502,7 @@ async def admin_analytics_daily(
         },
     }
 
-    return {"daily": result, "summary": summary, "days": days}
+    return {"daily": result, "summary": summary, "days": days, "cf_connected": cf_connected}
 
 
 # ─────────────────────────────────────────────
