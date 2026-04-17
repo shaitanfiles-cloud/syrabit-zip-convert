@@ -31,6 +31,36 @@ from typing import Tuple, Awaitable, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
+# ── Run-recorder hook (Task #423) ──────────────────────────────────────
+# A separate module (typically routes/cms_sarvam_health.py) registers a
+# callback here at import-time. Every sanitiser run hands its diag dict
+# to the callback so the admin dashboard can show how often cleanup
+# fires, what action it took, and the leakage ratio distribution. The
+# hook lives in this module (instead of the route layer wrapping each
+# call) so EVERY caller of the sanitiser — current and future — emits
+# stats automatically. Default is a no-op so unit tests / non-API uses
+# don't need any wiring.
+_RUN_RECORDER: Optional[Callable[[dict], None]] = None
+
+
+def set_run_recorder(callback: Optional[Callable[[dict], None]]) -> None:
+    """Install (or clear with None) the diag-dict recorder callback."""
+    global _RUN_RECORDER
+    _RUN_RECORDER = callback
+
+
+def _emit_run(diag: dict) -> None:
+    """Hand the diag dict to the recorder. Defensive: never let a broken
+    recorder break the sanitiser response."""
+    cb = _RUN_RECORDER
+    if cb is None:
+        return
+    try:
+        cb(dict(diag))
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning(f"[INDIC-SANITIZE] run recorder failed: {e}")
+
+
 ASSAMESE_RE = re.compile(r"[\u0980-\u09FF]")
 LATIN_RUN_RE = re.compile(r"[A-Za-z][A-Za-z'’\-]*")
 
@@ -445,6 +475,7 @@ async def sanitize_assamese_with_optional_regenerate(
     behaviour: str | None = None,
     regenerate_callable: Optional[Callable[[], Awaitable[Optional[str]]]] = None,
     translate_callable: Optional[Callable[[str], Awaitable[str]]] = None,
+    _emit: bool = True,
 ) -> Tuple[str, dict]:
     """Sanitise Assamese output using the active behaviour strategy.
 
@@ -474,6 +505,8 @@ async def sanitize_assamese_with_optional_regenerate(
         diag.update({"action": "noop", "threshold": thr,
                      "regenerated": False, "translated": False,
                      "behaviour": behaviour})
+        if _emit:
+            _emit_run(diag)
         return raw, diag
 
     # Initial measure / decide whether to act at all.
@@ -484,6 +517,8 @@ async def sanitize_assamese_with_optional_regenerate(
     initial_diag["translated"] = False
     if not initial_diag["has_assamese"] or initial_diag["ratio"] <= thr:
         initial_diag["action"] = "noop"
+        if _emit:
+            _emit_run(initial_diag)
         return raw, initial_diag
 
     cleaned = raw
@@ -570,22 +605,41 @@ async def sanitize_assamese_with_optional_regenerate(
             ):
                 # Re-run the same pipeline on the retry so it also gets
                 # translate/strip benefit, but skip another regenerate.
+                # `_emit=False` suppresses the inner emission so each
+                # top-level invocation produces exactly ONE run doc —
+                # otherwise the dashboard double-counts every successful
+                # regenerate (one inner translate/strip + one outer
+                # regenerated event), inflating both `total` and the
+                # action distribution.
                 retry_clean, retry_clean_diag = await sanitize_assamese_with_optional_regenerate(
                     retry_raw,
                     threshold=thr,
                     behaviour="translate" if translate_callable else "strip",
                     translate_callable=translate_callable,
                     regenerate_callable=None,
+                    _emit=False,
                 )
                 retry_clean_diag["regenerated"] = True
                 retry_clean_diag["behaviour"] = behaviour
                 retry_clean_diag["original_ratio"] = initial_diag["ratio"]
+                # Force the OUTER action label so the dashboard counts
+                # this as a regenerate event, not a translate/strip event.
+                if retry_clean_diag.get("action", "noop") == "noop":
+                    retry_clean_diag["action"] = "regenerated"
+                else:
+                    retry_clean_diag["action"] = (
+                        f"regenerated+{retry_clean_diag['action']}"
+                    )
+                if _emit:
+                    _emit_run(retry_clean_diag)
                 return retry_clean, retry_clean_diag
 
     if diag.get("action", "noop") == "noop":
         # Nothing changed — surface that explicitly so callers can skip
         # re-emitting the buffered text.
         diag["action"] = "noop"
+    if _emit:
+        _emit_run(diag)
     return cleaned, diag
 
 

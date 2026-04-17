@@ -186,6 +186,25 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   const [asmDraft, setAsmDraft] = useState({ behaviour: '', threshold: '' });
   const [asmTestResult, setAsmTestResult] = useState(null);
   const [asmTestSample, setAsmTestSample] = useState('');
+  // Task #423 — sanitiser-run stats (rolling 24h / 7d).
+  const [asmStats, setAsmStats] = useState(null);
+  const [asmStatsLoading, setAsmStatsLoading] = useState(false);
+  const [asmStatsWindow, setAsmStatsWindow] = useState('24h');
+
+  const loadAsmStats = useCallback((win) => {
+    const w = win || asmStatsWindow;
+    setAsmStatsLoading(true);
+    axios.get(`${API_BASE}/admin/assamese-purity/stats`, {
+      params: { window: w },
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setAsmStats(r.data))
+      .catch((e) => {
+        const msg = e?.response?.data?.detail || 'Failed to load purity stats';
+        toast.error(msg);
+      })
+      .finally(() => setAsmStatsLoading(false));
+  }, [adminToken, asmStatsWindow]);
 
   const loadAsmCfg = useCallback(() => {
     setAsmLoading(true);
@@ -304,7 +323,12 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   }, [adminToken, loadPrerender]);
 
   useEffect(() => { if (healthTab === 'prerender') loadPrerender(); }, [healthTab, loadPrerender]);
-  useEffect(() => { if (healthTab === 'asm') loadAsmCfg(); }, [healthTab, loadAsmCfg]);
+  useEffect(() => {
+    if (healthTab === 'asm') {
+      loadAsmCfg();
+      loadAsmStats();
+    }
+  }, [healthTab, loadAsmCfg, loadAsmStats]);
 
   const healthUrl = `${import.meta.env.VITE_BACKEND_URL || ''}/health`;
 
@@ -518,6 +542,112 @@ export default function AdminHealth({ adminToken, onNavigate }) {
 
       {healthTab === 'asm' && (
         <div className="space-y-4" data-testid="asm-purity-tab">
+          {/* Task #423 — sanitiser-run stats so admins can see whether the
+              override they just set is actually changing live behaviour. */}
+          <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm" data-testid="asm-stats-card">
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                  <Activity size={16} className="text-blue-500" />
+                  Cleanup activity
+                </h3>
+                <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                  How often the sanitiser fired against real Sarvam Indic chat replies, what action it took, and how leaky those replies were.
+                </p>
+              </div>
+              <div className="flex items-center gap-1">
+                {['24h', '7d'].map((w) => (
+                  <button
+                    key={w}
+                    onClick={() => { setAsmStatsWindow(w); loadAsmStats(w); }}
+                    className={`px-3 py-1 rounded-lg text-[11px] font-semibold transition-all ${
+                      asmStatsWindow === w
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                    }`}
+                    data-testid={`button-asm-window-${w}`}
+                  >
+                    {w}
+                  </button>
+                ))}
+                <button
+                  onClick={() => loadAsmStats()}
+                  disabled={asmStatsLoading}
+                  className="p-2 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                  data-testid="button-refresh-asm-stats"
+                  title="Refresh stats"
+                >
+                  <RefreshCw size={14} className={asmStatsLoading ? 'animate-spin' : ''} />
+                </button>
+              </div>
+            </div>
+
+            {asmStatsLoading && !asmStats ? (
+              <div className="flex justify-center py-10"><RefreshCw size={20} className="animate-spin text-gray-300" /></div>
+            ) : asmStats ? (
+              asmStats.total === 0 ? (
+                <p className="text-xs text-gray-400 py-6 text-center" data-testid="asm-stats-empty">
+                  No sanitiser runs recorded in the last {asmStatsWindow}. Stats appear once Indic chat traffic flows through the sanitiser.
+                </p>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                    <PeakBadge label="Total runs" value={asmStats.total.toLocaleString()} color="blue" />
+                    <PeakBadge label="Cleanup fired" value={`${asmStats.active.toLocaleString()} (${asmStats.total ? Math.round(100 * asmStats.active / asmStats.total) : 0}%)`} color="amber" />
+                    <PeakBadge label="Avg leakage" value={(asmStats.avg_ratio || 0).toFixed(4)} color="violet" />
+                    <PeakBadge label="p95 leakage" value={(asmStats.p95_ratio || 0).toFixed(4)} color="emerald" />
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-2">Action breakdown</p>
+                      <div className="space-y-1.5" data-testid="asm-stats-actions">
+                        {Object.entries(asmStats.actions || {}).sort((a, b) => b[1] - a[1]).map(([action, count]) => {
+                          const pct = asmStats.total ? Math.round(100 * count / asmStats.total) : 0;
+                          return (
+                            <div key={action} className="flex items-center gap-2">
+                              <span className="text-xs font-mono text-gray-700 w-32 truncate" title={action}>{action}</span>
+                              <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                                <div className="h-full bg-blue-400" style={{ width: `${pct}%` }} />
+                              </div>
+                              <span className="text-[11px] text-gray-500 font-mono w-20 text-right">{count.toLocaleString()} · {pct}%</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-2">Behaviour split</p>
+                      <div className="space-y-1.5" data-testid="asm-stats-behaviours">
+                        {Object.entries(asmStats.behaviours || {}).sort((a, b) => b[1] - a[1]).map(([beh, count]) => {
+                          const pct = asmStats.total ? Math.round(100 * count / asmStats.total) : 0;
+                          return (
+                            <div key={beh} className="flex items-center gap-2">
+                              <span className="text-xs font-mono text-gray-700 w-32 truncate" title={beh}>{beh}</span>
+                              <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                                <div className="h-full bg-violet-400" style={{ width: `${pct}%` }} />
+                              </div>
+                              <span className="text-[11px] text-gray-500 font-mono w-20 text-right">{count.toLocaleString()} · {pct}%</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  {(asmStats.translated > 0 || asmStats.regenerated > 0) && (
+                    <p className="text-[11px] text-gray-400 mt-3 leading-relaxed">
+                      <span className="font-semibold text-gray-500">Translate-fix:</span> {asmStats.translated.toLocaleString()} runs ·{' '}
+                      <span className="font-semibold text-gray-500">Regenerate:</span> {asmStats.regenerated.toLocaleString()} runs
+                    </p>
+                  )}
+                </>
+              )
+            ) : (
+              <p className="text-xs text-gray-400 py-6 text-center">Stats unavailable.</p>
+            )}
+          </div>
+
           <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
             <div className="flex items-start justify-between gap-3 mb-4">
               <div>

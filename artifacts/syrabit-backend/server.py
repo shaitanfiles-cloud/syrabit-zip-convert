@@ -662,12 +662,16 @@ async def lifespan(app):
         from routes.cms_sarvam_health import (
             apply_persisted_assamese_purity_override,
             _assamese_purity_refresh_loop,
+            ensure_assamese_runs_index,
         )
         await apply_persisted_assamese_purity_override()
         # Per-worker refresher so a PATCH/DELETE done on one gunicorn
         # worker propagates to all sibling workers within ~15s without
         # needing pub/sub infra.
         asyncio.create_task(_assamese_purity_refresh_loop())
+        # Task #423: TTL index on the per-run stats collection so old
+        # docs auto-expire after 14 days and the dashboard stays cheap.
+        asyncio.create_task(ensure_assamese_runs_index())
     except Exception as _asm_load_err:
         logger.warning(f"[INDIC-SANITIZE] startup override load failed: {_asm_load_err}")
 

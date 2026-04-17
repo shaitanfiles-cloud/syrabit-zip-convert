@@ -1668,6 +1668,75 @@ async def sarvam_status():
 # the persisted override on boot.
 # ──────────────────────────────────────────────────────────────────────
 _ASM_OVERRIDE_DOC_KEY = "assamese_purity_override"
+_ASM_RUNS_COLLECTION = "assamese_purity_runs"
+# Keep run docs for two weeks — long enough for the dashboard's 7d
+# window plus headroom, short enough that the collection stays cheap.
+_ASM_RUNS_TTL_SECONDS = 14 * 24 * 3600
+
+
+async def _insert_assamese_run(doc: dict) -> None:
+    """Async fire-and-forget insert. Failures must NEVER affect the
+    sanitiser hot path, so all exceptions are swallowed with a warn."""
+    try:
+        from deps import db as _db
+        await _db[_ASM_RUNS_COLLECTION].insert_one(doc)
+    except Exception as e:
+        logger.warning(f"[INDIC-SANITIZE] insert run failed: {e}")
+
+
+def _record_assamese_run(diag: dict) -> None:
+    """Recorder callback installed into lang_sanitizer. Receives the
+    sanitiser diag dict on every run and schedules a small mongo insert
+    so admins can chart trigger counts / action distribution / leakage
+    ratio over time. Synchronous shape (so it's safe to call from the
+    sanitiser's sync entrypoints too) — schedules an asyncio task."""
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        return  # No running loop (e.g. unit tests) — silently skip.
+    if not loop.is_running():
+        return
+    doc = {
+        "ts": datetime.now(timezone.utc),
+        "action": str(diag.get("action") or "unknown")[:40],
+        "behaviour": str(diag.get("behaviour") or "unknown")[:40],
+        # `original_ratio` is set when sanitisation actually fired;
+        # otherwise the noop branch only carries `ratio`. Both are the
+        # pre-cleanup ratio we want to chart.
+        "ratio": float(diag.get("original_ratio", diag.get("ratio", 0.0)) or 0.0),
+        "post_ratio": float(diag.get("ratio", 0.0) or 0.0),
+        "threshold": float(diag.get("threshold", 0.0) or 0.0),
+        "translated": bool(diag.get("translated")),
+        "regenerated": bool(diag.get("regenerated")),
+        "has_assamese": bool(diag.get("has_assamese", True)),
+    }
+    try:
+        asyncio.create_task(_insert_assamese_run(doc))
+    except Exception as e:
+        logger.warning(f"[INDIC-SANITIZE] schedule run insert failed: {e}")
+
+
+# Install recorder at module import so every route worker (and any
+# script that imports cms_sarvam_health) automatically wires stats.
+try:
+    from lang_sanitizer import set_run_recorder as _set_recorder
+    _set_recorder(_record_assamese_run)
+except Exception as _rec_err:  # pragma: no cover - defensive
+    logger.warning(f"[INDIC-SANITIZE] recorder install failed: {_rec_err}")
+
+
+async def ensure_assamese_runs_index() -> None:
+    """Create the TTL index on the runs collection so old docs auto-
+    expire. Called from server.py lifespan (idempotent)."""
+    try:
+        from deps import db as _db
+        await _db[_ASM_RUNS_COLLECTION].create_index(
+            "ts", expireAfterSeconds=_ASM_RUNS_TTL_SECONDS,
+        )
+        await _db[_ASM_RUNS_COLLECTION].create_index([("ts", -1), ("action", 1)])
+    except Exception as e:
+        logger.warning(f"[INDIC-SANITIZE] runs index create failed: {e}")
 # Known leaky Assamese reply used by the test-fire button so admins can
 # validate the chosen behaviour against a deterministic input. Picked
 # to exercise both the `/translate` replace path AND the strip fallback.
@@ -1876,6 +1945,118 @@ async def admin_clear_assamese_purity(admin: dict = Depends(get_admin_user)):
         )
     _clear()
     return {"ok": True, "cleared": True, "config": _asm_cfg()}
+
+
+@router.get("/admin/assamese-purity/stats")
+async def admin_assamese_purity_stats(
+    window: str = "24h",
+    admin: dict = Depends(get_admin_user),
+):
+    """Aggregate the persisted sanitiser-run docs into a small dashboard
+    payload: total runs, action distribution, behaviour distribution,
+    and avg / p95 leakage ratio for the given window. Designed to be
+    cheap enough to call on every tab open.
+
+    `window` ∈ {"24h", "7d"} — anything else is rejected so the TTL on
+    the runs collection (14 days) can't be silently exceeded."""
+    if window not in ("24h", "7d"):
+        raise HTTPException(
+            status_code=400, detail="window must be '24h' or '7d'",
+        )
+    hours = 24 if window == "24h" else 24 * 7
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    try:
+        from deps import db as _db
+        coll = _db[_ASM_RUNS_COLLECTION]
+
+        # One pipeline per facet — Mongo handles each as a single pass
+        # and keeps the response shape obvious in tests.
+        # NOTE: we deliberately do NOT `$push` ratios in the overall
+        # pipeline. A naive `{"$push": "$ratio"}` is unbounded and can
+        # OOM the aggregation cursor on a 7d window after a busy day.
+        # Instead we run a separate `$sample`-bounded pipeline for p95
+        # so memory stays O(SAMPLE_CAP) regardless of traffic.
+        overall_pipe = [
+            {"$match": {"ts": {"$gte": since}}},
+            {"$group": {
+                "_id": None,
+                "total": {"$sum": 1},
+                "avg_ratio": {"$avg": "$ratio"},
+                "active": {"$sum": {
+                    "$cond": [{"$ne": ["$action", "noop"]}, 1, 0],
+                }},
+                "translated": {"$sum": {"$cond": ["$translated", 1, 0]}},
+                "regenerated": {"$sum": {"$cond": ["$regenerated", 1, 0]}},
+            }},
+        ]
+        action_pipe = [
+            {"$match": {"ts": {"$gte": since}}},
+            {"$group": {"_id": "$action", "count": {"$sum": 1}}},
+        ]
+        behaviour_pipe = [
+            {"$match": {"ts": {"$gte": since}}},
+            {"$group": {"_id": "$behaviour", "count": {"$sum": 1}}},
+        ]
+        # Random uniform sample → unbiased p95 estimate. Sampling BEFORE
+        # the group is the critical bit: previously we pulled every
+        # ratio and then `sorted(...)[:10000]` kept the 10k SMALLEST
+        # values, which biases p95 strongly downward whenever the window
+        # has more than 10k runs.
+        SAMPLE_CAP = 10000
+        ratio_pipe = [
+            {"$match": {"ts": {"$gte": since}}},
+            {"$sample": {"size": SAMPLE_CAP}},
+            {"$project": {"_id": 0, "ratio": 1}},
+        ]
+
+        overall_docs = await coll.aggregate(overall_pipe).to_list(length=1)
+        action_docs = await coll.aggregate(action_pipe).to_list(length=20)
+        behaviour_docs = await coll.aggregate(behaviour_pipe).to_list(length=20)
+        ratio_docs = await coll.aggregate(ratio_pipe).to_list(length=SAMPLE_CAP)
+    except Exception as e:
+        logger.warning(f"[INDIC-SANITIZE] stats aggregation failed: {e}")
+        return {
+            "ok": False, "window": window, "since": since.isoformat(),
+            "total": 0, "active": 0, "avg_ratio": 0.0, "p95_ratio": 0.0,
+            "actions": {}, "behaviours": {},
+            "translated": 0, "regenerated": 0,
+            "error": "stats aggregation failed (see api logs)",
+        }
+
+    overall = overall_docs[0] if overall_docs else {}
+    ratios = [
+        float(d.get("ratio") or 0.0)
+        for d in (ratio_docs or [])
+        if d.get("ratio") is not None
+    ]
+    if ratios:
+        import math
+        ratios_sorted = sorted(ratios)
+        # Nearest-rank p95: index is ceil(p * n) - 1 (0-based). Using
+        # `round` here would understate p95 for some sample sizes (e.g.
+        # n=11 → round(10.45)=10 but ceil(10.45)=11). Sampling happened
+        # at the mongo layer via `$sample`, so this is an unbiased
+        # estimate within the SAMPLE_CAP.
+        n = len(ratios_sorted)
+        p95_idx = max(0, math.ceil(0.95 * n) - 1)
+        p95 = float(ratios_sorted[min(p95_idx, n - 1)])
+    else:
+        p95 = 0.0
+
+    return {
+        "ok": True,
+        "window": window,
+        "since": since.isoformat(),
+        "total": int(overall.get("total", 0)),
+        "active": int(overall.get("active", 0)),
+        "avg_ratio": float(overall.get("avg_ratio") or 0.0),
+        "p95_ratio": p95,
+        "translated": int(overall.get("translated", 0)),
+        "regenerated": int(overall.get("regenerated", 0)),
+        "actions": {str(d["_id"]): int(d["count"]) for d in action_docs},
+        "behaviours": {str(d["_id"]): int(d["count"]) for d in behaviour_docs},
+    }
 
 
 @router.post("/admin/assamese-purity/test")
