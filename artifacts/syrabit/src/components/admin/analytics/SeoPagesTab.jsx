@@ -131,7 +131,7 @@ export default function SeoPagesTab({
       </Card>
 
       <Card title="Traffic Sources (Referrers)" empty={!hasReferrers}
-        emptyMsg="No referrer data yet — appears when visitors arrive from external sites or search engines">
+        emptyMsg="Referrer breakdown is not available on the current Cloudflare plan (free tier)">
         <div className="space-y-2">
           {(data.top_referrers || []).map((ref, i) => (
             <div key={i} className="flex items-center gap-2">
