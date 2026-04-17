@@ -365,7 +365,7 @@ export default function AdminPage() {
               adminToken={adminToken}
               adminName={adminName}
               onNavigate={handleNavigate}
-              navContext={activeSection === 'users' || activeSection === 'contenthub' ? navContext : null}
+              navContext={activeSection === 'users' || activeSection === 'contenthub' || activeSection === 'botsecurity' ? navContext : null}
             />
           </Suspense>
         </main>

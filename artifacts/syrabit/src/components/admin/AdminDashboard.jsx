@@ -2278,7 +2278,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                 return (
                   <button
                     type="button"
-                    onClick={() => onNavigate && onNavigate('botsecurity')}
+                    onClick={() => onNavigate && onNavigate('botsecurity', { panel: 'alert-settings', channel: 'push' })}
                     title="Open Bot Security → Alert Settings"
                     data-testid="dashboard-push-channel-health"
                     className={`mt-3 w-full text-left rounded-lg border px-3 py-2 transition-colors hover:opacity-90 ${tone}`}

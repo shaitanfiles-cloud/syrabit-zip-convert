@@ -149,19 +149,22 @@ function ChannelStatusPanel({ status, testing, testResult, testError, onTest }) 
       )}
       <div className="rounded-lg border border-gray-100 px-3">
         {channels.map((c) => (
-          <ChannelStatusRow
-            key={c}
-            channel={c}
-            entry={status?.[c]}
-            outcome={testResult?.[c]}
-          />
+          // Task #434 — anchor each channel row so the dashboard tile's
+          // deep-link can scroll/highlight the right one.
+          <div key={c} id={`alert-channel-${c}`} data-testid={`alert-channel-${c}`}>
+            <ChannelStatusRow
+              channel={c}
+              entry={status?.[c]}
+              outcome={testResult?.[c]}
+            />
+          </div>
         ))}
       </div>
     </div>
   );
 }
 
-function AlertThresholdPanel({ adminToken }) {
+function AlertThresholdPanel({ adminToken, navContext }) {
   const [settings, setSettings] = useState(null);
   const [form, setForm] = useState({ spoof_rpm: 50, auto_block_threshold: 100, auto_block_expiry_hours: 168, collection_growth_per_day: 500, email: '', webhook_url: '', seo_slack_enabled: true, hydrate_slack_enabled: true });
   const [defaults, setDefaults] = useState(null);
@@ -177,6 +180,27 @@ function AlertThresholdPanel({ adminToken }) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [testError, setTestError] = useState(null);
+
+  // Task #434 — when the dashboard's push-channel tile deep-links into
+  // Bot Security, navContext arrives as { panel: 'alert-settings',
+  // channel: 'push' }. Auto-expand the panel and scroll/highlight the
+  // requested channel row so admins land exactly on the right line.
+  useEffect(() => {
+    if (navContext?.panel !== 'alert-settings') return;
+    setExpanded(true);
+    if (!navContext?.channel) return;
+    const t = setTimeout(() => {
+      const el = document.getElementById(`alert-channel-${navContext.channel}`);
+      if (el && typeof el.scrollIntoView === 'function') {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('ring-2', 'ring-violet-400', 'rounded-lg');
+        setTimeout(() => {
+          el.classList.remove('ring-2', 'ring-violet-400', 'rounded-lg');
+        }, 2500);
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [navContext]);
 
   useEffect(() => {
     (async () => {
@@ -1231,7 +1255,7 @@ const PERIOD_OPTIONS = [
   { label: '90 days', value: 90 },
 ];
 
-export default function AdminBotSecurity({ adminToken }) {
+export default function AdminBotSecurity({ adminToken, navContext }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -1498,7 +1522,7 @@ export default function AdminBotSecurity({ adminToken }) {
         </GlassCard>
       )}
 
-      <AlertThresholdPanel adminToken={adminToken} />
+      <AlertThresholdPanel adminToken={adminToken} navContext={navContext} />
 
       <AlertHistoryPanel adminToken={adminToken} />
 
