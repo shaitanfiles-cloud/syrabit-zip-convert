@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Shield, Bot, AlertTriangle, RefreshCw, Loader2,
   Hash, Globe, Clock, TrendingUp, Eye, Ban, Unlock,
@@ -183,24 +183,51 @@ function AlertThresholdPanel({ adminToken, navContext }) {
 
   // Task #434 — when the dashboard's push-channel tile deep-links into
   // Bot Security, navContext arrives as { panel: 'alert-settings',
-  // channel: 'push' }. Auto-expand the panel and scroll/highlight the
-  // requested channel row so admins land exactly on the right line.
+  // channel: 'push' }. Auto-expand the panel.
   useEffect(() => {
+    if (navContext?.panel === 'alert-settings') {
+      setExpanded(true);
+    }
+  }, [navContext]);
+
+  // Mount-aware scroll/highlight: only runs once the panel body is
+  // actually rendered (loadingSettings === false, expanded === true,
+  // channelStatus available). Uses a short bounded poll because
+  // ChannelStatusPanel renders inside the expanded body and we need
+  // to wait for the row DOM node to exist before scrolling.
+  const deepLinkAppliedRef = useRef(false);
+  useEffect(() => {
+    if (deepLinkAppliedRef.current) return;
     if (navContext?.panel !== 'alert-settings') return;
-    setExpanded(true);
     if (!navContext?.channel) return;
-    const t = setTimeout(() => {
+    if (loadingSettings || !expanded) return;
+
+    let cancelled = false;
+    let attempts = 0;
+    const tryScroll = () => {
+      if (cancelled) return;
       const el = document.getElementById(`alert-channel-${navContext.channel}`);
       if (el && typeof el.scrollIntoView === 'function') {
+        deepLinkAppliedRef.current = true;
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         el.classList.add('ring-2', 'ring-violet-400', 'rounded-lg');
         setTimeout(() => {
           el.classList.remove('ring-2', 'ring-violet-400', 'rounded-lg');
         }, 2500);
+        return;
       }
-    }, 250);
-    return () => clearTimeout(t);
-  }, [navContext]);
+      attempts += 1;
+      if (attempts < 40) { // ~4s budget at 100ms intervals
+        setTimeout(tryScroll, 100);
+      }
+    };
+    // Wait one frame so React commits the expanded body before we look.
+    const raf = requestAnimationFrame(tryScroll);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+  }, [navContext, loadingSettings, expanded, channelStatus]);
 
   useEffect(() => {
     (async () => {
