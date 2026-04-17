@@ -3,6 +3,7 @@ import {
   Building2, GraduationCap, GitBranch,
 } from 'lucide-react';
 import InlineCreator from './InlineCreator';
+import StatusBadge from './StatusBadge';
 
 export default function HierarchyTree({
   boards, filteredClasses, filteredStreams,
@@ -25,6 +26,7 @@ export default function HierarchyTree({
                 {selBoard === b.id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                 <Building2 size={14} />
                 <span className="truncate">{b.name}</span>
+                <StatusBadge status={b.status} size="xs" className="ml-auto flex-shrink-0" />
               </button>
               <button onClick={() => onDelete('board', b.id)} className="p-1 rounded opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-400"><Trash2 size={12} /></button>
             </div>
@@ -42,6 +44,7 @@ export default function HierarchyTree({
                         {selClass === c.id ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                         <GraduationCap size={12} />
                         <span className="truncate">{c.name}</span>
+                        <StatusBadge status={c.status} size="xs" className="ml-auto flex-shrink-0" />
                       </button>
                       <button onClick={() => onDelete('classe', c.id)} className="p-1 rounded opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-400"><Trash2 size={10} /></button>
                     </div>
@@ -57,6 +60,7 @@ export default function HierarchyTree({
                             >
                               <GitBranch size={11} />
                               <span className="truncate">{st.icon || ''} {st.name}</span>
+                              <StatusBadge status={st.status} size="xs" className="ml-auto flex-shrink-0" />
                             </button>
                             <button onClick={() => onDelete('stream', st.id)} className="p-1 rounded opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-400"><Trash2 size={10} /></button>
                           </div>

@@ -4,6 +4,7 @@ import {
   BookOpen, Hash, Search, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { useState } from 'react';
+import StatusBadge, { STATUS_FILTER_OPTIONS } from './StatusBadge';
 
 const MARK_COLORS = {
   '1': { bg: 'rgba(59,130,246,0.12)', text: '#93c5fd', border: 'rgba(59,130,246,0.20)' },
@@ -16,12 +17,15 @@ const MARK_COLORS = {
 const SEO_TYPE_LABELS = { notes: 'Notes', definition: 'Defs', 'important-questions': 'ImpQ', mcqs: 'MCQs', examples: 'Ex', faq: 'FAQ' };
 
 export default function ChapterList({
-  chapters, chapterAssets,
+  chapters, totalChapters, chapterAssets,
+  statusFilter = 'all', setStatusFilter,
+  sortByStatus = false, setSortByStatus,
   generatingNotes,
   onGenerateNotes, onDeleteChapter,
   onViewChapter, onEditChapter,
   selSubject, subjectData, onCreateNew,
 }) {
+  const total = typeof totalChapters === 'number' ? totalChapters : chapters.length;
   const [expandedCard, setExpandedCard] = useState(null);
   return (
     <>
@@ -35,8 +39,32 @@ export default function ChapterList({
       </button>
 
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <p className="text-sm font-semibold text-gray-900">Chapters ({chapters.length})</p>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <p className="text-sm font-semibold text-gray-900">Chapters ({chapters.length}{chapters.length !== total ? ` of ${total}` : ''})</p>
+          {(setStatusFilter || setSortByStatus) && (
+            <div className="flex items-center gap-2">
+              {setStatusFilter && (
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="h-8 px-2 rounded-lg text-xs text-gray-700 bg-white border border-gray-200 outline-none focus:border-violet-400"
+                  data-testid="chapter-status-filter"
+                >
+                  {STATUS_FILTER_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              )}
+              {setSortByStatus && (
+                <button
+                  onClick={() => setSortByStatus(!sortByStatus)}
+                  className={`h-8 px-2 rounded-lg text-xs border transition-colors ${sortByStatus ? 'bg-violet-50 text-violet-600 border-violet-200' : 'bg-white text-gray-500 border-gray-200 hover:text-gray-700'}`}
+                  title="Sort by status (drafts/unpublished first)"
+                  data-testid="chapter-sort-status"
+                >
+                  Sort: status
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {chapters.length === 0 && <p className="text-xs text-gray-400 py-4 text-center">No chapters yet — create the first one above</p>}
@@ -70,6 +98,7 @@ export default function ChapterList({
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="text-sm font-semibold text-gray-900 truncate">{ch.title}</p>
+                    <StatusBadge status={ch.status} />
                     {ch.content_type === 'question_paper' && (
                       <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide" style={{ background: 'rgba(245,158,11,0.15)', color: '#d97706', border: '1px solid rgba(245,158,11,0.25)' }}>Question Paper</span>
                     )}

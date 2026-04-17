@@ -12,6 +12,7 @@ import HierarchyTree from './content-editor/HierarchyTree';
 import ChapterList from './content-editor/ChapterList';
 import ThumbnailStudio from './content-editor/ThumbnailStudio';
 import ConfirmDialog from './content-editor/ConfirmDialog';
+import StatusBadge, { normalizeStatus, STATUS_FILTER_OPTIONS } from './content-editor/StatusBadge';
 
 export default function AdminContentEditor({ adminToken, onNavigate, hubContext, onHubContext, onHierarchyChange }) {
   const [boards, setBoards] = useState([]);
@@ -47,6 +48,10 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const [savingSubject, setSavingSubject] = useState(false);
   const [bulkGenerating, setBulkGenerating] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState({ open: false, title: '', message: '', onConfirm: null });
+  const [subjectStatusFilter, setSubjectStatusFilter] = useState('all');
+  const [subjectSortByStatus, setSubjectSortByStatus] = useState(false);
+  const [chapterStatusFilter, setChapterStatusFilter] = useState('all');
+  const [chapterSortByStatus, setChapterSortByStatus] = useState(false);
 
   const subjectData = subjects.find(s => s.id === selSubject);
   const boardData = boards.find(b => b.id === selBoard);
@@ -57,7 +62,29 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const streamPlaceholder = isBoardDegree ? 'Course Type' : 'Stream';
   const filteredClasses = selBoard ? classes.filter(c => c.board_id === selBoard) : [];
   const filteredStreams = selClass ? streams.filter(s => s.class_id === selClass) : [];
-  const filteredSubjects = selStream ? subjects.filter(s => s.stream_id === selStream) : subjects;
+  const baseSubjects = selStream ? subjects.filter(s => s.stream_id === selStream) : subjects;
+  const filteredSubjects = (() => {
+    let list = baseSubjects;
+    if (subjectStatusFilter !== 'all') {
+      list = list.filter(s => normalizeStatus(s.status) === subjectStatusFilter);
+    }
+    if (subjectSortByStatus) {
+      const order = { draft: 0, unpublished: 1, archived: 2, published: 3 };
+      list = [...list].sort((a, b) => (order[normalizeStatus(a.status)] ?? 9) - (order[normalizeStatus(b.status)] ?? 9));
+    }
+    return list;
+  })();
+  const filteredChapters = (() => {
+    let list = chapters;
+    if (chapterStatusFilter !== 'all') {
+      list = list.filter(c => normalizeStatus(c.status) === chapterStatusFilter);
+    }
+    if (chapterSortByStatus) {
+      const order = { draft: 0, unpublished: 1, archived: 2, published: 3 };
+      list = [...list].sort((a, b) => (order[normalizeStatus(a.status)] ?? 9) - (order[normalizeStatus(b.status)] ?? 9));
+    }
+    return list;
+  })();
   const searchFiltered = searchQuery
     ? subjects.filter(s => s.name?.toLowerCase().includes(searchQuery.toLowerCase()) || s.description?.toLowerCase().includes(searchQuery.toLowerCase()))
     : null;
@@ -337,7 +364,10 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
               {searchFiltered.map(s => (
                 <button key={s.id} onClick={() => { setSearchQuery(''); const st = streams.find(x => x.id === s.stream_id); if (st) { const cl = classes.find(x => x.id === st.class_id); if (cl) setSelBoard(cl.board_id); setSelClass(st.class_id); } setSelStream(s.stream_id); setSelSubject(s.id); }}
                   className="p-4 rounded-xl border border-gray-200 hover:border-violet-300 bg-white text-left transition-colors shadow-sm">
-                  <p className="text-sm font-medium text-gray-900">{s.icon} {s.name}</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-medium text-gray-900 truncate">{s.icon} {s.name}</p>
+                    <StatusBadge status={s.status} />
+                  </div>
                   <p className="text-xs text-gray-400 truncate mt-1">{s.description}</p>
                 </button>
               ))}
@@ -382,12 +412,35 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                     <h3 className="text-xl font-bold text-gray-900">{streamData?.icon} {streamData?.name}</h3>
                     <p className="text-sm text-gray-400">{streamData?.description}</p>
                   </div>
-                  <p className="text-sm font-semibold text-gray-500">Subjects ({filteredSubjects.length})</p>
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <p className="text-sm font-semibold text-gray-500">Subjects ({filteredSubjects.length}{filteredSubjects.length !== baseSubjects.length ? ` of ${baseSubjects.length}` : ''})</p>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={subjectStatusFilter}
+                        onChange={(e) => setSubjectStatusFilter(e.target.value)}
+                        className="h-8 px-2 rounded-lg text-xs text-gray-700 bg-white border border-gray-200 outline-none focus:border-violet-400"
+                        data-testid="subject-status-filter"
+                      >
+                        {STATUS_FILTER_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
+                      <button
+                        onClick={() => setSubjectSortByStatus(v => !v)}
+                        className={`h-8 px-2 rounded-lg text-xs border transition-colors ${subjectSortByStatus ? 'bg-violet-50 text-violet-600 border-violet-200' : 'bg-white text-gray-500 border-gray-200 hover:text-gray-700'}`}
+                        title="Sort by status (drafts/unpublished first)"
+                        data-testid="subject-sort-status"
+                      >
+                        Sort: status
+                      </button>
+                    </div>
+                  </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {filteredSubjects.map(s => (
                       <div key={s.id} className="p-4 rounded-xl border border-gray-200 hover:border-violet-300 bg-white text-left transition-colors group cursor-pointer shadow-sm" onClick={() => setSelSubject(s.id)}>
                         <div className="flex items-center justify-between">
-                          <p className="text-sm font-medium text-gray-900">{s.icon || '📚'} {s.name}</p>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <p className="text-sm font-medium text-gray-900 truncate">{s.icon || '📚'} {s.name}</p>
+                            <StatusBadge status={s.status} />
+                          </div>
                           <div className="flex items-center gap-1">
                             <button onClick={(e) => { e.stopPropagation(); setEditingSubject(s.id); setSubjectEditForm({ name: s.name || '', description: s.description || '' }); }} className="p-1 rounded opacity-0 group-hover:opacity-100 text-gray-300 hover:text-violet-600"><Edit2 size={12} /></button>
                             <button onClick={(e) => { e.stopPropagation(); handleDelete('subject', s.id); }} className="p-1 rounded opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
@@ -453,7 +506,10 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                   </div>
                   <ThumbnailStudio adminToken={adminToken} selSubject={selSubject} subjectData={subjectData} onReload={() => reloadAll()} />
                   <ChapterList
-                    chapters={chapters} chapterAssets={chapterAssets}
+                    chapters={filteredChapters} totalChapters={chapters.length}
+                    statusFilter={chapterStatusFilter} setStatusFilter={setChapterStatusFilter}
+                    sortByStatus={chapterSortByStatus} setSortByStatus={setChapterSortByStatus}
+                    chapterAssets={chapterAssets}
                     generatingNotes={generatingNotes}
                     onGenerateNotes={handleGenerateNotes} onDeleteChapter={handleDeleteChapter}
                     onViewChapter={(ch) => setViewerItem(ch)}
