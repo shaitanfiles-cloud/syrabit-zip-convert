@@ -24,25 +24,30 @@ export function prefetchCriticalRoutes() {
 
   const afterInteractive = () => {
     const path = window.location.pathname;
-    if (path === '/chat' || path === '/') {
-      schedule(() => pageImports.library(), 200);
-      schedule(() => pageImports.chapter(), 800);
-      schedule(() => warmApiCache(['/api/content/boards', '/api/content/subjects']), 400);
+    // Landing/chat: defer aggressively so prefetch never competes with hydration
+    // (was: 200ms library + 800ms chapter — caused TBT 1.8s and TTI 14s on slow devices).
+    if (path === '/' || path === '/chat') {
+      schedule(() => pageImports.library(), 4000);
+      schedule(() => warmApiCache(['/api/content/boards']), 2500);
+      // Drop chapter prefetch on landing — most landing visitors never reach a chapter,
+      // and the chapter chunk transitively pulls the heavy markdown bundle (~458KB).
     } else if (path === '/library' || path.match(/^\/[a-z]+\/[a-z]/)) {
-      schedule(() => pageImports.chat(), 200);
-      schedule(() => pageImports.chapter(), 600);
-      schedule(() => warmApiCache(['/api/content/boards']), 300);
+      schedule(() => pageImports.chat(), 1500);
+      schedule(() => pageImports.chapter(), 2500);
+      schedule(() => warmApiCache(['/api/content/boards']), 1500);
     } else {
-      schedule(() => pageImports.chat(), 300);
-      schedule(() => pageImports.library(), 800);
-      schedule(() => pageImports.chapter(), 1200);
-      schedule(() => warmApiCache(['/api/content/boards']), 500);
+      schedule(() => pageImports.chat(), 2500);
+      schedule(() => pageImports.library(), 3500);
+      schedule(() => warmApiCache(['/api/content/boards']), 2000);
     }
   };
 
+  // Wait for full load + an extra 1.5s so the main thread is idle before we
+  // start downloading & parsing additional route chunks. This fixes Lighthouse
+  // TTI/TBT regressions caused by eager prefetch on landing.
   if (document.readyState === 'complete') {
-    setTimeout(afterInteractive, 100);
+    setTimeout(afterInteractive, 1500);
   } else {
-    window.addEventListener('load', () => setTimeout(afterInteractive, 200), { once: true });
+    window.addEventListener('load', () => setTimeout(afterInteractive, 1500), { once: true });
   }
 }

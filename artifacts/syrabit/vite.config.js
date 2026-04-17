@@ -612,8 +612,36 @@ export default defineConfig(({ mode }) => ({
             has('react-router') || has('react-router-dom') ||
             id.includes('/node_modules/@remix-run/') ||
             id.includes('/node_modules/@tanstack/') ||
-            id.includes('/node_modules/@radix-ui/')
+            id.includes('/node_modules/@radix-ui/') ||
+            // Radix UI peer deps — keep them in vendor so the catch-all
+            // below doesn't promote them to separate preloaded chunks
+            // and inflate the initial-load request count.
+            has('@floating-ui/core') || has('@floating-ui/dom') ||
+            has('@floating-ui/react-dom') || has('@floating-ui/utils') ||
+            has('aria-hidden') || has('react-remove-scroll') ||
+            has('react-remove-scroll-bar') || has('react-style-singleton') ||
+            has('use-callback-ref') || has('use-sidecar') ||
+            has('get-nonce') || has('detect-node-es') ||
+            has('react-fast-compare') || has('shallowequal') ||
+            has('invariant') || has('tslib') || has('web-vitals')
           ) return 'vendor';
+
+          // Catch-all for unmatched node_modules. Without this rule,
+          // every unmatched dep was lumped into the default async
+          // entry chunk (the 957KB `style-*.js`) which caused massive
+          // TBT/TTI regressions on the first non-landing route.
+          // Splitting by package keeps each chunk small enough to
+          // parse on a slow device and lets the browser cache them
+          // independently across deploys.
+          // pnpm layout: node_modules/.pnpm/<peerhash>/node_modules/<pkg>/...
+          // Match the LAST `node_modules/<pkg>/` segment so we get the real
+          // package name, not `.pnpm`. Falls back to the standard layout.
+          const pnpmMatch = id.match(/\/node_modules\/\.pnpm\/[^/]+\/node_modules\/(@[^/]+\/[^/]+|[^/]+)\//);
+          const stdMatch = pnpmMatch || id.match(/\/node_modules\/(@[^/]+\/[^/]+|[^/]+)\//);
+          if (stdMatch) {
+            const pkg = stdMatch[1].replace('@', '').replace('/', '-');
+            return `dep-${pkg}`;
+          }
         },
       },
     },

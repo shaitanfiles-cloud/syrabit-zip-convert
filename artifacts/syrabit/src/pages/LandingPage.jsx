@@ -107,11 +107,27 @@ export default function LandingPage() {
       <PublicNavbar />
       <LangToggle contentLang={contentLang} switchLang={switchLang} variant="floating" />
       <HeroSection contentLang={contentLang} />
-      <Suspense fallback={null}>
-        <FeaturesGrid contentLang={contentLang} />
-        <PlatformSection contentLang={contentLang} />
-        <PricingSection contentLang={contentLang} />
-        <TestimonialsFooter year={year} contentLang={contentLang} />
+      {/* Reserve vertical space for each lazy section so Suspense fall-in does
+          not cause CLS (was 0.18 — mostly from these four collapsing to 0px). */}
+      <Suspense fallback={<div style={{ minHeight: '720px' }} aria-hidden />}>
+        <div style={{ minHeight: '720px' }}>
+          <FeaturesGrid contentLang={contentLang} />
+        </div>
+      </Suspense>
+      <Suspense fallback={<div style={{ minHeight: '640px' }} aria-hidden />}>
+        <div style={{ minHeight: '640px' }}>
+          <PlatformSection contentLang={contentLang} />
+        </div>
+      </Suspense>
+      <Suspense fallback={<div style={{ minHeight: '720px' }} aria-hidden />}>
+        <div style={{ minHeight: '720px' }}>
+          <PricingSection contentLang={contentLang} />
+        </div>
+      </Suspense>
+      <Suspense fallback={<div style={{ minHeight: '480px' }} aria-hidden />}>
+        <div style={{ minHeight: '480px' }}>
+          <TestimonialsFooter year={year} contentLang={contentLang} />
+        </div>
       </Suspense>
       <PublicBottomNav />
     </div>
