@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { visualizer } from 'rollup-plugin-visualizer';
+import codemirrorStubPlugin from './vite-plugins/codemirror-stub.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isProd = process.env.NODE_ENV === 'production';
@@ -491,6 +492,15 @@ export default defineConfig(({ mode }) => ({
       brotliSize: true,
       template: 'treemap',
     }),
+    // Task #362: rewrite every @codemirror / @lezer / cm6-theme /
+    // `codemirror` import to inline no-op shims. The admin MDX editor
+    // never mounts MDXEditor's CodeMirror-backed code editor (we use a
+    // textarea descriptor), but the main barrel + sandpack-react drag
+    // in ~580 KB of runtime + parsers that can't be tree-shaken. The
+    // plugin replaces those imports with a Proxy-backed stub so any
+    // named import resolves to a noop without needing to enumerate
+    // exports per package.
+    codemirrorStubPlugin(),
   ],
 
   resolve: {
@@ -575,6 +585,10 @@ export default defineConfig(({ mode }) => ({
           ) return 'markdown';
           if (has('lucide-react')) return 'icons';
           if (has('react-syntax-highlighter') || has('refractor') || has('prismjs') || has('highlight.js')) return 'syntax';
+          // Task #362: CodeMirror is fully stubbed out by the
+          // codemirror-stub plugin (see vite-plugins/codemirror-stub.js).
+          // No CodeMirror runtime / parsers / themes survive in the
+          // bundle, so we no longer need a dedicated chunk.
           // React runtime — keep react + react-dom (client only) + scheduler
           // + react-is together in one chunk. Grouping them avoids the
           // `react-dom <-> vendor` circular chunk that arose when react-dom

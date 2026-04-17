@@ -2,7 +2,7 @@ import { forwardRef, useRef, useImperativeHandle } from 'react';
 import {
   MDXEditor,
   headingsPlugin, listsPlugin, quotePlugin, thematicBreakPlugin,
-  markdownShortcutPlugin, codeBlockPlugin, codeMirrorPlugin, tablePlugin,
+  markdownShortcutPlugin, codeBlockPlugin, tablePlugin,
   linkPlugin, diffSourcePlugin, toolbarPlugin,
   UndoRedo, BoldItalicUnderlineToggles, BlockTypeSelect,
   CreateLink, CodeToggle, InsertTable, InsertThematicBreak,
@@ -10,6 +10,7 @@ import {
 } from '@mdxeditor/editor';
 import '@mdxeditor/editor/style.css';
 import { Sparkles, Loader2 } from 'lucide-react';
+import { plainCodeBlockDescriptor } from '@/components/admin/cms-editor/PlainCodeBlockEditor';
 export { TEMPLATES } from '@/utils/editorTemplates';
 
 function AiBtn({ onAiParse, aiParsing }) {
@@ -66,12 +67,9 @@ const SharedMdxEditor = forwardRef(function SharedMdxEditor(
           quotePlugin(),
           thematicBreakPlugin(),
           markdownShortcutPlugin(),
-          codeBlockPlugin({ defaultCodeBlockLanguage: 'text' }),
-          codeMirrorPlugin({
-            codeBlockLanguages: {
-              js: 'JavaScript', ts: 'TypeScript', python: 'Python',
-              text: 'Text', md: 'Markdown', html: 'HTML', css: 'CSS',
-            },
+          codeBlockPlugin({
+            defaultCodeBlockLanguage: 'text',
+            codeBlockEditorDescriptors: [plainCodeBlockDescriptor],
           }),
           tablePlugin(),
           linkPlugin(),
