@@ -55,18 +55,52 @@ export default function PYQReplicaPage() {
   const [description, setDescription] = useState('');
   const [loading, setLoading]   = useState(true);
   const [notFound, setNotFound] = useState(false);
+  // Real worker-backfilled metadata (Task #338) — null until /meta resolves.
+  const [serverMeta, setServerMeta] = useState(null);
   const { sharing, share } = useShare();
 
   const pyqUrl = `https://syrabit.ai/pyq/${slug || ''}`;
-  const pyqMeta = useMemo(
-    () => deriveMetaFromSlug(slug, title, description),
-    [slug, title, description],
-  );
+  const pyqMeta = useMemo(() => {
+    const fallback = deriveMetaFromSlug(slug, title, description);
+    if (!serverMeta) return fallback;
+    // Real values from the worker take precedence; slug-derived values fill
+    // any gaps so the schema stays well-formed even on partial responses.
+    return {
+      ...fallback,
+      slug: serverMeta.slug || fallback.slug,
+      title: serverMeta.title || title || fallback.title,
+      description: serverMeta.description || description || fallback.description,
+      board: serverMeta.board || fallback.board,
+      subject: serverMeta.subject || fallback.subject,
+      year: serverMeta.year != null ? String(serverMeta.year) : fallback.year,
+      class_name: serverMeta.class_name || undefined,
+      educationalLevel: serverMeta.educational_level || fallback.educationalLevel,
+      paper_type: serverMeta.paper_type || undefined,
+      totalQuestions: serverMeta.total_questions || undefined,
+      author: serverMeta.author || undefined,
+      license: serverMeta.license || undefined,
+      published_at: serverMeta.published_at || undefined,
+      updated_at: serverMeta.updated_at || undefined,
+      inLanguage: serverMeta.language || fallback.inLanguage,
+    };
+  }, [slug, title, description, serverMeta]);
 
   const handleShare = useCallback(() => {
     const pyqTitle = title || `PYQ — ${slug}`;
     share(pyqTitle, `/pyq/${slug}`);
   }, [slug, title, share]);
+
+  useEffect(() => {
+    if (!slug) return;
+    let cancelled = false;
+    // Fire-and-forget: real metadata is a progressive enhancement for the
+    // JSON-LD schema. The HTML render path doesn't depend on it.
+    fetch(`${WORKER_API}/pyq/${slug}/meta`, { method: 'GET' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (!cancelled && data) setServerMeta(data); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [slug]);
 
   useEffect(() => {
     if (!slug) return;

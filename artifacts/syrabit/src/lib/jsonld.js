@@ -774,7 +774,12 @@ export function learnArticleSchema(doc, url) {
 /**
  * PYQ (previous year question paper) page → Dataset + Quiz + Breadcrumb.
  * `meta` is best-effort: { slug, title, description, board, subject, year,
- * educationalLevel, inLanguage, license }.
+ * educationalLevel, inLanguage, license, totalQuestions, author,
+ * published_at, updated_at, paper_type, dateCreated }.
+ *
+ * When the worker backfills real metadata (Task #338) we surface
+ * `numberOfQuestions`, a per-paper `author` (typically the board), and
+ * `dateModified` so Google can render richer Dataset / Quiz snippets.
  */
 export function pyqDatasetSchema(meta, url) {
   if (!meta || !url) return null;
@@ -783,7 +788,15 @@ export function pyqDatasetSchema(meta, url) {
   const inLanguage = _langFromLocale(meta.inLanguage || meta.language || 'en');
   const license = meta.license || 'https://creativecommons.org/licenses/by-nc/4.0/';
   const educationalLevel = meta.educationalLevel || meta.class_name || meta.board || 'Higher Secondary';
-  const datePublished = _iso(meta.published_at, meta.created_at, meta.year ? `${meta.year}-01-01` : null);
+  const datePublished = _iso(meta.published_at, meta.created_at, meta.dateCreated, meta.year ? `${meta.year}-01-01` : null);
+  const dateModified = _iso(meta.updated_at, meta.modified_at, meta.dateModified);
+  const totalQuestionsRaw = meta.totalQuestions ?? meta.total_questions ?? meta.question_count;
+  const totalQuestions = Number.isFinite(Number(totalQuestionsRaw)) && Number(totalQuestionsRaw) > 0
+    ? Number(totalQuestionsRaw) : null;
+  const authorName = meta.author || meta.board || (meta.subject ? `${meta.subject} Examiners` : '');
+  const authorNode = authorName
+    ? { '@type': 'Organization', name: authorName }
+    : undefined;
 
   const datasetNode = {
     '@type': 'Dataset',
@@ -793,7 +806,7 @@ export function pyqDatasetSchema(meta, url) {
     identifier: meta.slug || url,
     inLanguage,
     license,
-    creator: ORG_NODE,
+    creator: authorNode || ORG_NODE,
     publisher: ORG_NODE,
     keywords: [meta.subject, meta.board, meta.year ? `${meta.year}` : '', 'previous year question paper', 'PYQ']
       .filter(Boolean).join(', '),
@@ -802,21 +815,35 @@ export function pyqDatasetSchema(meta, url) {
     isAccessibleForFree: true,
   };
   if (datePublished) datasetNode.datePublished = datePublished;
+  if (dateModified) datasetNode.dateModified = dateModified;
+  if (totalQuestions) {
+    datasetNode.variableMeasured = {
+      '@type': 'PropertyValue',
+      name: 'Number of questions',
+      value: totalQuestions,
+    };
+  }
+
+  const quizNode = {
+    '@type': 'Quiz',
+    name: title,
+    about: meta.subject ? { '@type': 'Thing', name: meta.subject } : undefined,
+    educationalLevel,
+    inLanguage,
+    learningResourceType: 'Question Paper',
+    url,
+    provider: ORG_NODE,
+    license,
+  };
+  if (authorNode) quizNode.author = authorNode;
+  if (totalQuestions) quizNode.numberOfQuestions = totalQuestions;
+  if (datePublished) quizNode.dateCreated = datePublished;
 
   return {
     '@context': 'https://schema.org',
     '@graph': [
       datasetNode,
-      {
-        '@type': 'Quiz',
-        name: title,
-        about: meta.subject ? { '@type': 'Thing', name: meta.subject } : undefined,
-        educationalLevel,
-        inLanguage,
-        learningResourceType: 'Question Paper',
-        url,
-        provider: ORG_NODE,
-      },
+      quizNode,
       {
         '@type': 'BreadcrumbList',
         itemListElement: [

@@ -373,3 +373,58 @@ test('pyqSchema falls back gracefully when only a slug is known', () => {
   const quiz = g['@graph'].find((n) => n['@type'] === 'Quiz');
   assert.match(quiz.name, /mystery-paper/);
 });
+
+// ── Task #338 — metadata-driven PYQ Dataset/Quiz ───────────────────────
+
+test('pyqDatasetSchema emits totalQuestions, author, license, and dateModified when worker backfills meta', () => {
+  // Mirrors the JSON shape returned by the new
+  // /api/pyq/{slug}/meta worker endpoint so SERPs get richer
+  // Dataset/Quiz cards (numberOfQuestions, dateCreated, license).
+  const meta = {
+    slug: 'ahsec-2024-physics',
+    title: 'AHSEC Physics Major Question Paper 2024',
+    description: 'AHSEC Physics 2024 (MAJOR) — full 70-mark paper.',
+    subject: 'Physics',
+    board: 'AHSEC',
+    class_name: 'Class 12',
+    year: 2024,
+    paper_type: 'major',
+    educationalLevel: 'Class 12',
+    totalQuestions: 32,
+    author: 'AHSEC',
+    license: 'https://syrabit.ai/terms',
+    published_at: '2025-03-12T08:00:00Z',
+    updated_at: '2026-01-04T09:30:00Z',
+    inLanguage: 'en-IN',
+  };
+  const g = pyqDatasetSchema(meta, 'https://syrabit.ai/pyq/ahsec-2024-physics');
+  assert.ok(g, 'pyqDatasetSchema returned null with full meta');
+  const t = g['@graph'].map((n) => n['@type']);
+  for (const expected of ['Dataset', 'Quiz', 'BreadcrumbList']) {
+    assert.ok(t.includes(expected), `expected ${expected} (got: ${t.join(', ')})`);
+  }
+  const ds = g['@graph'].find((n) => n['@type'] === 'Dataset');
+  const quiz = g['@graph'].find((n) => n['@type'] === 'Quiz');
+  assert.equal(ds.license, 'https://syrabit.ai/terms');
+  assert.equal(ds.dateModified, '2026-01-04T09:30:00.000Z');
+  assert.equal(ds.datePublished, '2025-03-12T08:00:00.000Z');
+  assert.equal(ds.creator.name, 'AHSEC');
+  assert.equal(ds.variableMeasured.name, 'Number of questions');
+  assert.equal(ds.variableMeasured.value, 32);
+  assert.equal(quiz.numberOfQuestions, 32);
+  assert.equal(quiz.author.name, 'AHSEC');
+  assert.equal(quiz.dateCreated, '2025-03-12T08:00:00.000Z');
+  assert.equal(quiz.license, 'https://syrabit.ai/terms');
+});
+
+test('pyqDatasetSchema omits per-meta fields when worker hasn\u2019t backfilled them yet', () => {
+  // Slug-only fallback path — mustn't fabricate a question count or
+  // a dateModified out of thin air, since AI crawlers treat both as
+  // freshness signals.
+  const g = pyqDatasetSchema({ slug: 'mystery-paper' }, 'https://syrabit.ai/pyq/mystery-paper');
+  const ds = g['@graph'].find((n) => n['@type'] === 'Dataset');
+  const quiz = g['@graph'].find((n) => n['@type'] === 'Quiz');
+  assert.equal(ds.variableMeasured, undefined);
+  assert.equal(ds.dateModified, undefined);
+  assert.equal(quiz.numberOfQuestions, undefined);
+});

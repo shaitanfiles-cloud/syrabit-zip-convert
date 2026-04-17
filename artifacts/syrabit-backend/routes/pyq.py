@@ -1154,6 +1154,56 @@ async def _serve_pyq_html(slug: str):
     )
 
 
+@router.get("/api/pyq/{slug}/meta")
+async def public_pyq_page_meta(slug: str):
+    """Slim JSON metadata for a PYQ replica page (Task #338).
+
+    Companion to the HTML routes — lets the SPA hydrate
+    `pyqDatasetSchema` with real values (subject, board, year,
+    educational level, license, total questions, dates, author)
+    instead of guessing from the URL slug. Cached at the edge for
+    1h via the worker's `/api/pyq/` prefix policy.
+    """
+    if db is None:
+        raise HTTPException(503, "Database unavailable")
+    doc = await db.pyq_html_pages.find_one(
+        {"slug": slug},
+        {
+            "_id": 0,
+            "slug": 1, "seo_title": 1, "seo_description": 1,
+            "subject_name": 1, "board_name": 1, "class_name": 1, "stream_name": 1,
+            "exam_year": 1, "paper_type": 1, "question_count": 1,
+            "created_at": 1, "updated_at": 1,
+        },
+    )
+    if not doc:
+        raise HTTPException(404, f"PYQ page not found: {slug}")
+    board = doc.get("board_name") or ""
+    subject = doc.get("subject_name") or ""
+    klass = doc.get("class_name") or ""
+    year = doc.get("exam_year")
+    return {
+        "slug": doc.get("slug") or slug,
+        "title": doc.get("seo_title") or "",
+        "description": doc.get("seo_description") or "",
+        "subject": subject,
+        "board": board,
+        "class_name": klass,
+        "stream": doc.get("stream_name") or "",
+        "year": year,
+        "paper_type": doc.get("paper_type") or "",
+        "educational_level": (klass or board or "Higher Secondary").strip(),
+        "total_questions": doc.get("question_count") or 0,
+        # Boards retain copyright on their question papers; default to
+        # an "all rights reserved" stance and let admins override later.
+        "license": "https://syrabit.ai/terms",
+        "author": board or "Syrabit.ai Editorial Team",
+        "language": "en-IN",
+        "published_at": doc.get("created_at") or "",
+        "updated_at": doc.get("updated_at") or "",
+    }
+
+
 @router.get("/pyq/{slug}")
 async def public_pyq_page_canonical(slug: str):
     """Canonical SEO URL — serves full HTML document with head/meta/JSON-LD.
