@@ -960,6 +960,7 @@ function AlertHistoryPanel({ adminToken }) {
   const [typeFilter, setTypeFilter] = useState('');
   const [dateRange, setDateRange] = useState('');
   const [ackFilter, setAckFilter] = useState(null);
+  const [showSynthetic, setShowSynthetic] = useState(false);
   const [ackingId, setAckingId] = useState(null);
   const [ackingAll, setAckingAll] = useState(false);
   const [ackError, setAckError] = useState(null);
@@ -972,6 +973,7 @@ function AlertHistoryPanel({ adminToken }) {
       const params = { limit: 100 };
       if (typeFilter) params.type = typeFilter;
       if (ackFilter !== null) params.acknowledged = ackFilter;
+      if (showSynthetic) params.include_synthetic = true;
       if (dateRange) {
         const now = new Date();
         const from = new Date(now.getTime() - Number(dateRange) * 86400000);
@@ -986,7 +988,7 @@ function AlertHistoryPanel({ adminToken }) {
     } finally {
       setLoading(false);
     }
-  }, [adminToken, typeFilter, dateRange, ackFilter]);
+  }, [adminToken, typeFilter, dateRange, ackFilter, showSynthetic]);
 
   useEffect(() => {
     if (expanded) fetchAlerts();
@@ -1099,6 +1101,18 @@ function AlertHistoryPanel({ adminToken }) {
                 <option value="true">Acknowledged</option>
               </select>
             </div>
+            <label
+              className="flex items-center gap-1.5 text-[11px] text-gray-600 cursor-pointer select-none"
+              title="Include synthetic alerts produced by the Test alert delivery button"
+            >
+              <input
+                type="checkbox"
+                checked={showSynthetic}
+                onChange={(e) => setShowSynthetic(e.target.checked)}
+                className="h-3 w-3 rounded border-gray-300 text-violet-600 focus:ring-violet-200"
+              />
+              Show test alerts
+            </label>
             <div className="flex items-center gap-1.5 ml-auto">
               {unacknowledgedCount > 0 && (
                 <button

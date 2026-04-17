@@ -992,6 +992,7 @@ async def admin_get_alerts(
     alert_type: Optional[str] = Query(None, alias="type"),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
+    include_synthetic: bool = Query(False),
     admin: dict = Depends(get_admin_user),
 ):
     try:
@@ -1008,6 +1009,11 @@ async def admin_get_alerts(
                 date_filter["$lte"] = date_to
             if date_filter:
                 query["fired_at"] = date_filter
+        # Task #426: hide synthetic test alerts (from "Test alert delivery"
+        # button) from the dashboard feed by default so on-call admins don't
+        # confuse them with real incidents. Opt in via ?include_synthetic=true.
+        if not include_synthetic:
+            query["synthetic"] = {"$ne": True}
         cursor = db.alerts.find(query).sort("fired_at", -1).limit(limit)
         alerts = []
         async for doc in cursor:
@@ -1022,7 +1028,12 @@ async def admin_get_alerts(
 @router.get("/admin/alerts/unacknowledged-count")
 async def admin_unacknowledged_alert_count(admin: dict = Depends(get_admin_user)):
     try:
-        count = await db.alerts.count_documents({"acknowledged": False})
+        # Task #426: exclude synthetic test alerts from the bell badge count
+        # so the "Test alert delivery" button doesn't inflate the indicator.
+        count = await db.alerts.count_documents({
+            "acknowledged": False,
+            "synthetic": {"$ne": True},
+        })
         return {"count": count}
     except Exception as exc:
         logger.debug(f"Failed to count unacknowledged alerts: {exc}")

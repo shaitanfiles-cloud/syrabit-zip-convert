@@ -587,12 +587,13 @@ export const adminUpdateAlertSettings = (token, data) =>
 export const adminTestAlertDelivery = (token) =>
   axios.post(`${API_BASE}/admin/alert-settings/test-delivery`, {}, { headers: adminHeaders(token), withCredentials: true });
 
-export const adminGetAlerts = (token, { limit = 50, acknowledged, type, date_from, date_to } = {}) => {
+export const adminGetAlerts = (token, { limit = 50, acknowledged, type, date_from, date_to, include_synthetic } = {}) => {
   const params = { limit };
   if (acknowledged !== undefined && acknowledged !== null) params.acknowledged = acknowledged;
   if (type) params.type = type;
   if (date_from) params.date_from = date_from;
   if (date_to) params.date_to = date_to;
+  if (include_synthetic) params.include_synthetic = true;
   return axios.get(`${API_BASE}/admin/alerts`, { headers: adminHeaders(token), withCredentials: true, params });
 };
 

@@ -296,6 +296,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   // the last hour.
   const [seoAutoDeepScans, setSeoAutoDeepScans] = useState(null);
   const [alertFilter, setAlertFilter] = useState('all');
+  // Task #426: hide synthetic test alerts (from "Test alert delivery" button)
+  // by default; admins can opt in via the "Show test alerts" toggle.
+  const [showSyntheticAlerts, setShowSyntheticAlerts] = useState(false);
   const [alertSettingsOpen, setAlertSettingsOpen] = useState(false);
   const [alertSettings, setAlertSettings] = useState(null);
   const [alertSettingsDraft, setAlertSettingsDraft] = useState(null);
@@ -500,7 +503,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         axios.get(`${API_BASE}/admin/analytics/bot-traffic?days=30`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/indexnow/stats`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/indexnow/history?limit=20`, adminHdr(adminToken)),
-        axios.get(`${API_BASE}/admin/alerts?limit=50`, adminHdr(adminToken)),
+        axios.get(`${API_BASE}/admin/alerts?limit=50${showSyntheticAlerts ? '&include_synthetic=true' : ''}`, adminHdr(adminToken)),
         adminSeoHealthHistory(adminToken, 168),
       ]);
       const failed = [];
@@ -540,7 +543,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [adminToken]);
+  }, [adminToken, showSyntheticAlerts]);
 
   useEffect(() => {
     load();
@@ -1817,6 +1820,18 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                 <option value="unacknowledged">Unacknowledged</option>
                 <option value="acknowledged">Acknowledged</option>
               </select>
+              <label
+                className="flex items-center gap-1 text-[10px] text-gray-600 px-2 py-1 rounded-md border border-gray-200 bg-white cursor-pointer select-none hover:bg-gray-50"
+                title="Include synthetic alerts produced by the Test alert delivery button"
+              >
+                <input
+                  type="checkbox"
+                  checked={showSyntheticAlerts}
+                  onChange={e => setShowSyntheticAlerts(e.target.checked)}
+                  className="h-3 w-3 rounded border-gray-300 text-violet-600 focus:ring-violet-200"
+                />
+                Show test alerts
+              </label>
               {alertHistory.alerts?.some(a => !a.acknowledged) && (
                 <button
                   onClick={handleAcknowledgeAll}
