@@ -84,3 +84,9 @@ id = "GOXOoZtnK4lAWpksq-b_K"
 uri = "file://.local/audits/syrabit-bot-traction-projection.md"
 type = "text"
 title = "Syrabit.ai — Bot Traffic Projection (post tasks #1–#352)"
+
+[[outputs]]
+id = "AYIiVYb6BABVXoss0R8Yn"
+uri = "file://.local/audits/syrabit-page-load-speed-audit.md"
+type = "text"
+title = "Syrabit.ai Page Load Speed Audit"
