@@ -511,14 +511,22 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
             <p className="text-sm text-gray-400 mb-4">{searchFiltered.length} subject(s) matching "{searchQuery}"</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {searchFiltered.map(s => (
-                <button key={s.id} onClick={() => { setSearchQuery(''); const st = streams.find(x => x.id === s.stream_id); if (st) { const cl = classes.find(x => x.id === st.class_id); if (cl) setSelBoard(cl.board_id); setSelClass(st.class_id); } setSelStream(s.stream_id); setSelSubject(s.id); }}
-                  className="p-4 rounded-xl border border-gray-200 hover:border-violet-300 bg-white text-left transition-colors shadow-sm">
+                <div
+                  key={s.id}
+                  onClick={() => { setSearchQuery(''); const st = streams.find(x => x.id === s.stream_id); if (st) { const cl = classes.find(x => x.id === st.class_id); if (cl) setSelBoard(cl.board_id); setSelClass(st.class_id); } setSelStream(s.stream_id); setSelSubject(s.id); }}
+                  className="p-4 rounded-xl border border-gray-200 hover:border-violet-300 bg-white text-left transition-colors shadow-sm cursor-pointer"
+                  data-testid={`search-result-${s.id}`}
+                >
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-medium text-gray-900 truncate">{s.icon} {s.name}</p>
-                    <StatusBadge status={s.status} />
+                    <StatusQuickToggle
+                      status={s.status}
+                      onChange={(next) => handleSubjectStatusChange(s.id, next)}
+                      testIdPrefix={`search-status-toggle-${s.id}`}
+                    />
                   </div>
                   <p className="text-xs text-gray-400 truncate mt-1">{s.description}</p>
-                </button>
+                </div>
               ))}
               {searchFiltered.length === 0 && <p className="text-gray-400 text-sm col-span-3">No subjects found</p>}
             </div>
