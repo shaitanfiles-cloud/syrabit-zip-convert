@@ -1282,8 +1282,8 @@ export default {
       }
     }
 
-    if (!isApiRoute && request.method === "GET") {
-      if (isSearchBot) {
+    if (!isApiRoute && (request.method === "GET" || request.method === "HEAD")) {
+      if (isSearchBot && request.method === "GET") {
         const botResp = await handleBotContentRequest(env, pathname, clientIp, request, ctx);
         if (botResp) return botResp;
       }
@@ -1292,17 +1292,19 @@ export default {
       // the same worker route causing recursion that resolves to garbage
       // (Pages HTML body + backend 404 headers). Always proxy to the
       // Pages origin by its workers.dev hostname so the worker route is
-      // bypassed cleanly.
+      // bypassed cleanly. HEAD must be handled here too — the SEO health
+      // checker probes URLs with HEAD and would otherwise fall through to
+      // Railway and get 404.
       const pagesOrigin = env.PAGES_ORIGIN || "https://syrabit-zip-convert.pages.dev";
       const pagesUrl = `${pagesOrigin}${url.pathname}${url.search}`;
       return fetch(pagesUrl, {
-        method: "GET",
+        method: request.method,
         headers: request.headers,
         redirect: "manual",
       });
     }
 
-    if (request.method !== "GET" || isBypass(pathname)) {
+    if ((request.method !== "GET" && request.method !== "HEAD") || isBypass(pathname)) {
       return proxyToBackend(request, env, pathname, url.search, clientIp, cors, remaining);
     }
 
