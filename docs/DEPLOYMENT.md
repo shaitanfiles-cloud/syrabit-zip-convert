@@ -23,12 +23,21 @@ Users
 
 ## Frontend — Cloudflare Pages
 
-| Setting           | Value                                        |
-| ----------------- | -------------------------------------------- |
-| Root directory    | `artifacts/syrabit`                          |
-| Build command     | `cd artifacts/syrabit && npm install && npm run build` |
-| Output directory  | `artifacts/syrabit/dist`                     |
-| Node version      | 20                                           |
+| Setting           | Value                                                                          |
+| ----------------- | ------------------------------------------------------------------------------ |
+| Root directory    | _leave empty_ (use repo root)                                                  |
+| Build command     | `pnpm install --frozen-lockfile && cd artifacts/syrabit && pnpm run build`     |
+| Output directory  | `artifacts/syrabit/dist`                                                       |
+| Deploy command    | _leave empty_ (Pages auto-uploads the build output)                            |
+| Node version      | 20                                                                             |
+
+> ⚠️ **Do NOT set the deploy command to `npx wrangler deploy`.** This monorepo's
+> root contains a `pnpm-workspace.yaml`, which Wrangler 4 detects as a workspace
+> and refuses to deploy from. With the deploy command empty, Cloudflare Pages
+> uploads the configured output directory automatically. If you must run a
+> deploy command (e.g. for a non–git-integrated deploy), use the
+> `pnpm run deploy:pages` script defined in the root `package.json`, which
+> calls `wrangler pages deploy artifacts/syrabit/dist --project-name=syrabit`.
 
 ### Environment Variables (Pages)
 
@@ -41,7 +50,7 @@ Users
 
 ### Notes
 
-- **SPA routing**: Handled by `_worker.js` (Advanced Mode) + `_routes.json`. Do NOT add a `_redirects` file.
+- **SPA routing**: Primarily handled by `_worker.js` (Advanced Mode) + `_routes.json`, which also gives HEAD-probe parity (Task #365). A standard `public/_redirects` (`/* /index.html 200`) is also emitted as a fallback so deep links still resolve if `_worker.js` is ever removed.
 - **Compression**: Cloudflare Pages applies brotli/gzip at the edge automatically.
 - **Cache headers**: `public/_headers` configures immutable caching for hashed `/assets/*` files and must-revalidate for `index.html` and `sw.js`.
 - **Production env**: `.env.production` bakes in the API URL at build time.
