@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import StatusBadge, { STATUS_FILTER_OPTIONS } from './StatusBadge';
+import StatusQuickToggle from './StatusQuickToggle';
 
 const MARK_COLORS = {
   '1': { bg: 'rgba(59,130,246,0.12)', text: '#93c5fd', border: 'rgba(59,130,246,0.20)' },
@@ -21,7 +22,7 @@ export default function ChapterList({
   statusFilter = 'all', setStatusFilter,
   sortByStatus = false, setSortByStatus,
   generatingNotes,
-  onGenerateNotes, onDeleteChapter,
+  onGenerateNotes, onDeleteChapter, onChangeChapterStatus,
   onViewChapter, onEditChapter,
   selSubject, subjectData, onCreateNew,
 }) {
@@ -98,7 +99,13 @@ export default function ChapterList({
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="text-sm font-semibold text-gray-900 truncate">{ch.title}</p>
-                    <StatusBadge status={ch.status} />
+                    {onChangeChapterStatus
+                      ? <StatusQuickToggle
+                          status={ch.status}
+                          onChange={(next) => onChangeChapterStatus(ch.id, next)}
+                          testIdPrefix={`chapter-status-toggle-${ch.id}`}
+                        />
+                      : <StatusBadge status={ch.status} />}
                     {ch.content_type === 'question_paper' && (
                       <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide" style={{ background: 'rgba(245,158,11,0.15)', color: '#d97706', border: '1px solid rgba(245,158,11,0.25)' }}>Question Paper</span>
                     )}

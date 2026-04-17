@@ -13,6 +13,7 @@ import ChapterList from './content-editor/ChapterList';
 import ThumbnailStudio from './content-editor/ThumbnailStudio';
 import ConfirmDialog from './content-editor/ConfirmDialog';
 import StatusBadge, { normalizeStatus, STATUS_FILTER_OPTIONS } from './content-editor/StatusBadge';
+import StatusQuickToggle from './content-editor/StatusQuickToggle';
 
 export default function AdminContentEditor({ adminToken, onNavigate, hubContext, onHubContext, onHierarchyChange }) {
   const [boards, setBoards] = useState([]);
@@ -287,6 +288,30 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     } finally { setGeneratingNotes(prev => { const next = new Set(prev); next.delete(chapterId); return next; }); }
   };
 
+  const handleSubjectStatusChange = async (subjectId, nextStatus) => {
+    const prev = subjects;
+    setSubjects(p => p.map(s => s.id === subjectId ? { ...s, status: nextStatus } : s));
+    try {
+      await axios.patch(`${API}/admin/content/subjects/${subjectId}`, { status: nextStatus }, authHeaders(adminToken));
+      toast.success(`Subject set to ${nextStatus}`);
+    } catch (e) {
+      setSubjects(prev);
+      toast.error(e?.response?.data?.detail || 'Failed to update status');
+    }
+  };
+
+  const handleChapterStatusChange = async (chapterId, nextStatus) => {
+    const prev = chapters;
+    setChapters(p => p.map(c => c.id === chapterId ? { ...c, status: nextStatus } : c));
+    try {
+      await axios.patch(`${API}/admin/content/chapters/${chapterId}`, { status: nextStatus }, authHeaders(adminToken));
+      toast.success(`Chapter set to ${nextStatus}`);
+    } catch (e) {
+      setChapters(prev);
+      toast.error(e?.response?.data?.detail || 'Failed to update status');
+    }
+  };
+
   const handleUpdateSubject = async () => {
     if (!editingSubject || !subjectEditForm.name.trim()) return;
     setSavingSubject(true);
@@ -439,9 +464,13 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2 min-w-0">
                             <p className="text-sm font-medium text-gray-900 truncate">{s.icon || '📚'} {s.name}</p>
-                            <StatusBadge status={s.status} />
                           </div>
                           <div className="flex items-center gap-1">
+                            <StatusQuickToggle
+                              status={s.status}
+                              onChange={(next) => handleSubjectStatusChange(s.id, next)}
+                              testIdPrefix={`subject-status-toggle-${s.id}`}
+                            />
                             <button onClick={(e) => { e.stopPropagation(); setEditingSubject(s.id); setSubjectEditForm({ name: s.name || '', description: s.description || '' }); }} className="p-1 rounded opacity-0 group-hover:opacity-100 text-gray-300 hover:text-violet-600"><Edit2 size={12} /></button>
                             <button onClick={(e) => { e.stopPropagation(); handleDelete('subject', s.id); }} className="p-1 rounded opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
                           </div>
@@ -512,6 +541,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                     chapterAssets={chapterAssets}
                     generatingNotes={generatingNotes}
                     onGenerateNotes={handleGenerateNotes} onDeleteChapter={handleDeleteChapter}
+                    onChangeChapterStatus={handleChapterStatusChange}
                     onViewChapter={(ch) => setViewerItem(ch)}
                     onEditChapter={(ch) => { setEditTarget(ch); setContentForm({ title: ch.title, slug: ch.slug || '', description: ch.description || '', content: ch.content || '', content_type: ch.content_type || 'notes', order: ch.order || 1, topics: ch.topics || [], content_as: ch.content_as || '' }); setEditView('edit-chapter'); loadChapterStats(ch.id); }}
                     selSubject={selSubject} subjectData={subjectData}
