@@ -977,3 +977,299 @@ def test_seo_fanout_includes_google_indexing_step(monkeypatch):
     events = seo_fanout.recent_fanout_events(limit=1)
     assert events
     assert events[-1]["google_indexing"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Quota-exhausted ops alert
+# ---------------------------------------------------------------------------
+
+class _FakeClaimsCollection:
+    """In-memory stand-in for the cross-worker alert claims collection.
+    Mirrors the real Mongo behavior: `insert_one` raises DuplicateKeyError
+    when an `_id` is already present. Shared across workers in a test by
+    passing the SAME instance into both `_install_alert_db` calls."""
+
+    def __init__(self):
+        self.docs: dict = {}
+
+    async def insert_one(self, doc):
+        from pymongo.errors import DuplicateKeyError
+        _id = doc["_id"]
+        if _id in self.docs:
+            raise DuplicateKeyError(f"E11000 duplicate key: {_id}")
+        self.docs[_id] = dict(doc)
+        return MagicMock()
+
+
+def _install_alert_db(monkeypatch, gic, claims_coll=None):
+    """Wire a fake `deps.db` exposing the alert claims collection so the
+    cross-worker dedupe path can run end-to-end. Pass an existing
+    `claims_coll` to share the claim-set between simulated workers."""
+    import deps as deps_mod
+    if claims_coll is None:
+        claims_coll = _FakeClaimsCollection()
+
+    class _FakeDb:
+        def __getitem__(self, name):
+            if name == gic._QUOTA_ALERT_CLAIM_COLLECTION:
+                return claims_coll
+            return MagicMock()
+
+    async def _avail():
+        return True
+
+    monkeypatch.setattr(deps_mod, "db", _FakeDb(), raising=False)
+    monkeypatch.setattr(deps_mod, "is_mongo_available", _avail, raising=False)
+    return claims_coll
+
+
+def test_quota_exhausted_fires_ops_alert_once_per_day(monkeypatch):
+    """Hitting the daily cap dispatches a single ops alert via the shared
+    `metrics._dispatch_alert` pipeline. Subsequent quota_blocks on the
+    same UTC day must NOT re-dispatch (alert is de-duped per day per
+    process)."""
+    gic = _fresh_client(monkeypatch, limit=1)
+    fake = _FakeAsyncClient(post_response=_FakeResponse(200, "{}"))
+    _install_httpx(monkeypatch, gic, fake)
+    _install_alert_db(monkeypatch, gic)
+
+    # Opt the alert path INTO this test (it's gated off under pytest).
+    monkeypatch.setenv("GOOGLE_INDEXING_QUOTA_ALERT_IN_TESTS", "1")
+
+    dispatched: list = []
+
+    async def _fake_dispatch(alert_type, title, body, threshold_snapshot=None):
+        dispatched.append({
+            "alert_type": alert_type,
+            "title": title,
+            "body": body,
+            "threshold_snapshot": threshold_snapshot or {},
+        })
+
+    import sys, types
+    fake_metrics = types.ModuleType("metrics")
+    fake_metrics._dispatch_alert = _fake_dispatch
+    monkeypatch.setitem(sys.modules, "metrics", fake_metrics)
+
+    async def _drive():
+        # First call uses the only slot; second + third both quota_block.
+        await gic.notify_url_updated("https://syrabit.ai/a")
+        await gic.notify_url_updated("https://syrabit.ai/b")
+        await gic.notify_url_updated("https://syrabit.ai/c")
+        # Let the create_task'd alert dispatcher actually run.
+        for _ in range(4):
+            await asyncio.sleep(0)
+
+    _run(_drive())
+
+    assert len(dispatched) == 1, (
+        "exactly one alert per UTC day even with multiple quota_blocks"
+    )
+    alert = dispatched[0]
+    assert alert["alert_type"] == "google_indexing_quota_exhausted"
+    snap = alert["threshold_snapshot"]
+    assert snap["metric"] == "google_indexing_daily_limit"
+    assert snap["value"] == 1           # daily_limit
+    assert snap["actual"] == 1          # sent
+    assert snap["day"] == gic._today_key()
+    assert "/admin/seo/google-indexing-stats" in snap["dashboard_url"]
+    # The body summarises sent/cap and links to the admin page.
+    assert "1/1" in alert["body"]
+    assert "/admin/seo/google-indexing-stats" in alert["body"]
+
+
+def test_quota_alert_resets_in_process_dedupe_on_day_rollover(monkeypatch):
+    """When the UTC day rolls over, the in-process dedupe sentinel
+    `_quota_alert_fired_day` must be cleared so a fresh alert can be
+    scheduled the next time quota is exhausted (cross-worker Mongo dedupe
+    is keyed by date, so a new date is naturally a new claim slot)."""
+    import google_indexing_client as gic
+    gic._reset_state_for_tests()
+    # Pretend yesterday's run already fired an alert.
+    gic._quota_alert_fired_day = "1999-01-01"
+    # Stats still reflect yesterday; calling _roll_day_if_needed must
+    # detect the date change and clear the sentinel.
+    with gic._stats_lock:
+        gic._stats["day"] = "1999-01-01"
+        gic._roll_day_if_needed()
+    assert gic._quota_alert_fired_day == "", (
+        "day rollover must clear the in-process quota-alert dedupe so the "
+        "next exhaustion event can fire today's alert"
+    )
+
+
+def test_quota_alert_skipped_when_disabled_killswitch(monkeypatch):
+    """The ops alert respects an explicit env killswitch so operators can
+    silence the channel without disabling the underlying quota cap."""
+    gic = _fresh_client(monkeypatch, limit=1)
+    fake = _FakeAsyncClient(post_response=_FakeResponse(200, "{}"))
+    _install_httpx(monkeypatch, gic, fake)
+    _install_alert_db(monkeypatch, gic)
+    monkeypatch.setenv("GOOGLE_INDEXING_QUOTA_ALERT_IN_TESTS", "1")
+    monkeypatch.setenv("GOOGLE_INDEXING_QUOTA_ALERT_DISABLED", "true")
+
+    dispatched: list = []
+
+    async def _fake_dispatch(*a, **kw):
+        dispatched.append(a)
+
+    import sys, types
+    fake_metrics = types.ModuleType("metrics")
+    fake_metrics._dispatch_alert = _fake_dispatch
+    monkeypatch.setitem(sys.modules, "metrics", fake_metrics)
+
+    async def _drive():
+        await gic.notify_url_updated("https://syrabit.ai/a")
+        await gic.notify_url_updated("https://syrabit.ai/b")
+        for _ in range(4):
+            await asyncio.sleep(0)
+
+    _run(_drive())
+    assert dispatched == []
+
+
+def test_quota_alert_dedupes_across_workers_via_mongo_claim(monkeypatch):
+    """Two simulated worker processes both hit quota_blocks on the same
+    UTC day. The Mongo-backed claim collection (atomic insert with
+    duplicate-key contention) must guarantee only ONE worker's alert is
+    actually dispatched, not one-per-worker."""
+    import google_indexing_client as gic
+
+    # Single shared claims collection mirroring a real Mongo instance.
+    shared_claims = _FakeClaimsCollection()
+
+    monkeypatch.setenv("GOOGLE_INDEXING_QUOTA_ALERT_IN_TESTS", "1")
+
+    dispatched: list = []
+
+    async def _fake_dispatch(alert_type, title, body, threshold_snapshot=None):
+        dispatched.append(alert_type)
+
+    import sys, types
+    fake_metrics = types.ModuleType("metrics")
+    fake_metrics._dispatch_alert = _fake_dispatch
+    monkeypatch.setitem(sys.modules, "metrics", fake_metrics)
+
+    async def _simulate_worker(label):
+        # Each worker resets the in-process state to mimic a separate
+        # Python process on a fresh import (so the in-process dedupe is
+        # NOT what's protecting us — the Mongo claim is).
+        gic._reset_state_for_tests()
+        monkeypatch.setenv("GOOGLE_INDEXING_ENABLED", "true")
+        monkeypatch.setenv("GOOGLE_INDEXING_DAILY_LIMIT", "1")
+        monkeypatch.setenv("GOOGLE_INDEXING_SERVICE_ACCOUNT", json.dumps(_FAKE_SA))
+
+        async def _fake_mint():
+            return f"tok-{label}"
+        monkeypatch.setattr(gic, "_mint_access_token", _fake_mint)
+        fake_http = _FakeAsyncClient(post_response=_FakeResponse(200, "{}"))
+        _install_httpx(monkeypatch, gic, fake_http)
+        _install_alert_db(monkeypatch, gic, claims_coll=shared_claims)
+
+        await gic.notify_url_updated(f"https://syrabit.ai/{label}-a")
+        await gic.notify_url_updated(f"https://syrabit.ai/{label}-b")  # blocks
+        for _ in range(4):
+            await asyncio.sleep(0)
+
+    async def _drive():
+        await _simulate_worker("w1")
+        await _simulate_worker("w2")
+
+    _run(_drive())
+
+    assert len(dispatched) == 1, (
+        f"cross-worker dedupe must yield exactly one dispatch, "
+        f"got {len(dispatched)}"
+    )
+    today = gic._today_key()
+    expected_id = f"{gic._QUOTA_ALERT_TYPE}:{today}"
+    assert expected_id in shared_claims.docs
+
+
+def test_quota_alert_bypasses_metrics_cooldown_at_day_boundary(monkeypatch):
+    """Regression for the cooldown-at-midnight failure mode: if day N's
+    quota alert fired moments before UTC midnight, day N+1's alert must
+    still get through even though `metrics._dispatch_alert`'s 30-minute
+    per-alert-type cooldown would normally suppress it. Our dispatcher
+    pops the cooldown entry before sending, so a real "new day" event is
+    never silently swallowed."""
+    import google_indexing_client as gic
+    gic._reset_state_for_tests()
+
+    monkeypatch.setenv("GOOGLE_INDEXING_QUOTA_ALERT_IN_TESTS", "1")
+
+    # Simulated metrics module that mimics the real cooldown gate using
+    # `_alert_last_fired`. _dispatch_alert returns silently if the entry
+    # is fresh — exactly the suppression failure mode the reviewer flagged.
+    import sys, types, time as _time
+    fake_metrics = types.ModuleType("metrics")
+    fake_metrics._alert_last_fired = {}
+    fake_metrics._ALERT_COOLDOWN_S = 1800  # 30 min, matches prod
+    fake_metrics.dispatched: list = []  # type: ignore[attr-defined]
+
+    async def _fake_dispatch(alert_type, title, body, threshold_snapshot=None):
+        now = _time.time()
+        if now - fake_metrics._alert_last_fired.get(alert_type, 0) < fake_metrics._ALERT_COOLDOWN_S:
+            return
+        fake_metrics._alert_last_fired[alert_type] = now
+        fake_metrics.dispatched.append({
+            "alert_type": alert_type,
+            "day": (threshold_snapshot or {}).get("day"),
+        })
+
+    fake_metrics._dispatch_alert = _fake_dispatch
+    monkeypatch.setitem(sys.modules, "metrics", fake_metrics)
+
+    # Two distinct days, single shared claims collection.
+    shared_claims = _FakeClaimsCollection()
+    _install_alert_db(monkeypatch, gic, claims_coll=shared_claims)
+
+    async def _drive():
+        await gic._dispatch_quota_alert("2026-04-17", sent=200, limit=200)
+        # Same wall-clock time (well within the metrics cooldown) but a
+        # NEW UTC day → must still dispatch.
+        await gic._dispatch_quota_alert("2026-04-18", sent=200, limit=200)
+
+    _run(_drive())
+
+    days_alerted = [d["day"] for d in fake_metrics.dispatched]
+    assert days_alerted == ["2026-04-17", "2026-04-18"], (
+        f"day-boundary alert must bypass the metrics cooldown; got {days_alerted}"
+    )
+
+
+def test_quota_alert_falls_back_when_mongo_unavailable(monkeypatch):
+    """When the cross-worker claim collection is unreachable, prefer a
+    duplicate alert over silently swallowing a real quota event."""
+    gic = _fresh_client(monkeypatch, limit=1)
+    fake = _FakeAsyncClient(post_response=_FakeResponse(200, "{}"))
+    _install_httpx(monkeypatch, gic, fake)
+    monkeypatch.setenv("GOOGLE_INDEXING_QUOTA_ALERT_IN_TESTS", "1")
+
+    # Wire `is_mongo_available` to return False.
+    import deps as deps_mod
+
+    async def _avail_false():
+        return False
+
+    monkeypatch.setattr(deps_mod, "db", MagicMock(), raising=False)
+    monkeypatch.setattr(deps_mod, "is_mongo_available", _avail_false, raising=False)
+
+    dispatched: list = []
+
+    async def _fake_dispatch(alert_type, title, body, threshold_snapshot=None):
+        dispatched.append(alert_type)
+
+    import sys, types
+    fake_metrics = types.ModuleType("metrics")
+    fake_metrics._dispatch_alert = _fake_dispatch
+    monkeypatch.setitem(sys.modules, "metrics", fake_metrics)
+
+    async def _drive():
+        await gic.notify_url_updated("https://syrabit.ai/a")
+        await gic.notify_url_updated("https://syrabit.ai/b")
+        for _ in range(4):
+            await asyncio.sleep(0)
+
+    _run(_drive())
+    assert dispatched == ["google_indexing_quota_exhausted"]

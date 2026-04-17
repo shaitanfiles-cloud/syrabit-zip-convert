@@ -170,10 +170,11 @@ def _reset_state_for_tests() -> None:
         _stats.update(_fresh_stats())
     _loaded_days.clear()
     _load_locks.clear()
-    global _last_flushed_day
+    global _last_flushed_day, _quota_alert_fired_day
     for k in _COUNTER_KEYS:
         _last_flushed_stats[k] = 0
     _last_flushed_day = ""
+    _quota_alert_fired_day = ""
 
 
 # -----------------------------------------------------------------------------
@@ -337,6 +338,20 @@ _load_locks_guard = threading.Lock()
 _last_flushed_stats: Dict[str, int] = {k: 0 for k in _COUNTER_KEYS}
 _last_flushed_day: str = ""
 
+# Daily-quota-exhausted alert dedupe. We fire AT MOST ONCE per UTC day so a
+# busy fan-out batch that hits the cap doesn't spam ops with hundreds of
+# identical alerts. Stored as the YYYY-MM-DD key of the day we last fired
+# for; the day-rollover logic in `_roll_day_if_needed` resets it.
+_quota_alert_fired_day: str = ""
+_QUOTA_ALERT_TYPE = "google_indexing_quota_exhausted"
+_QUOTA_ALERT_DASHBOARD_URL = (
+    "https://syrabit.ai/admin/seo/google-indexing-stats"
+)
+# Mongo-backed cross-worker claim collection. The doc `_id` encodes the
+# alert type + UTC day, so an `insert_one` with a duplicate key means a
+# sibling worker already won the claim for today and we must NOT re-send.
+_QUOTA_ALERT_CLAIM_COLLECTION = "google_indexing_alert_claims"
+
 
 def _today_key() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -369,6 +384,9 @@ def _roll_day_if_needed() -> None:
         _stats.clear()
         _stats.update(_fresh_stats())
         _loaded_days.clear()
+        # Allow the quota-exhausted alert to fire once again for the new day.
+        global _quota_alert_fired_day
+        _quota_alert_fired_day = ""
 
 
 def _bump(key: str, amount: int = 1) -> None:
@@ -395,17 +413,177 @@ def _under_quota_and_reserve() -> bool:
     reserved, False if the daily cap has been hit. The reservation is
     released implicitly — a failed POST still counts against the quota so
     a misconfigured service account can't hammer Google."""
+    blocked = False
+    sent_now = 0
+    limit = 0
+    day_now = ""
     with _stats_lock:
         _roll_day_if_needed()
         limit = _daily_limit()
+        day_now = _stats.get("day", "")
         if _stats.get("sent", 0) >= limit:
             _stats["quota_blocks"] = _stats.get("quota_blocks", 0) + 1
-            reserved = False
+            blocked = True
+            sent_now = int(_stats.get("sent", 0))
         else:
             _stats["sent"] = _stats.get("sent", 0) + 1
-            reserved = True
+            sent_now = int(_stats.get("sent", 0))
     _schedule_flush()
-    return reserved
+    if blocked:
+        # Notify ops the very first time we hit the cap today. De-duped
+        # under the stats lock so concurrent quota_blocks across coroutines
+        # only schedule one alert per UTC day per process. Worker-level
+        # de-dup is provided by `metrics._dispatch_alert`'s cooldown.
+        _schedule_quota_alert(day_now, sent_now, limit)
+    return not blocked
+
+
+def _schedule_quota_alert(day: str, sent: int, limit: int) -> None:
+    """Fire-and-forget the ops alert when today's Google Indexing quota is
+    exhausted. At-most-once per UTC day per process. Killswitch-aware so
+    the test suite doesn't dispatch alerts."""
+    global _quota_alert_fired_day
+    if not day:
+        return
+    if os.getenv("GOOGLE_INDEXING_QUOTA_ALERT_DISABLED", "").strip().lower() in (
+        "1", "true", "yes", "on"
+    ):
+        return
+    if os.getenv("PYTEST_CURRENT_TEST") and not os.getenv(
+        "GOOGLE_INDEXING_QUOTA_ALERT_IN_TESTS"
+    ):
+        return
+    with _stats_lock:
+        if _quota_alert_fired_day == day:
+            return
+        # Mark fired BEFORE scheduling so a sibling coroutine racing in on
+        # the next quota_block doesn't queue a duplicate task.
+        _quota_alert_fired_day = day
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # Sync context (module imported standalone, tests). Nothing to do —
+        # the next async quota_block on a real event loop will catch up if
+        # we reset the fired-day below.
+        with _stats_lock:
+            _quota_alert_fired_day = ""
+        return
+    loop.create_task(_dispatch_quota_alert(day, sent, limit))
+
+
+async def _claim_quota_alert_day(day: str) -> bool:
+    """Atomic, cross-worker claim for "I will send today's quota alert".
+
+    The first worker to insert `_id="<alert_type>:<day>"` into the claims
+    collection wins; siblings hit `DuplicateKeyError` and bail. This is
+    the same pattern used by the SEO weekly digest (`_acquire_weekly_digest_claim`).
+    Returns True iff this worker should dispatch.
+
+    If Mongo is unavailable we fall back to letting the alert fire — a
+    duplicate alert during an outage is far better than silently swallowing
+    a real quota-exhaustion event."""
+    try:
+        from deps import db, is_mongo_available
+        if not await is_mongo_available():
+            logger.info(
+                "google_indexing quota alert: Mongo unavailable, "
+                "falling back to in-process dedupe only"
+            )
+            return True
+    except Exception as e:
+        logger.debug(
+            "google_indexing quota alert: deps import failed (%s); "
+            "falling back to in-process dedupe only", e,
+        )
+        return True
+    claim_id = f"{_QUOTA_ALERT_TYPE}:{day}"
+    try:
+        from pymongo.errors import DuplicateKeyError
+    except Exception as e:
+        logger.debug("google_indexing quota alert: pymongo import failed: %s", e)
+        return True
+    try:
+        await db[_QUOTA_ALERT_CLAIM_COLLECTION].insert_one({
+            "_id": claim_id,
+            "alert_type": _QUOTA_ALERT_TYPE,
+            "day": day,
+            "claimed_at": datetime.now(timezone.utc),
+        })
+        return True
+    except DuplicateKeyError:
+        logger.info(
+            "google_indexing quota alert: another worker already claimed %s",
+            claim_id,
+        )
+        return False
+    except Exception as e:
+        # Mongo hiccup mid-insert: don't lose the alert.
+        logger.debug(
+            "google_indexing quota alert: claim insert failed: %s; "
+            "falling back to in-process dedupe only", e,
+        )
+        return True
+
+
+async def _dispatch_quota_alert(day: str, sent: int, limit: int) -> None:
+    """Send the quota-exhausted alert through the shared metrics alert
+    pipeline (Resend email + webhook + admin-dashboard banner). Never
+    raises — the content generator must not be impacted by alert failures.
+
+    Cross-worker dedupe: before dispatching, race on a Mongo claim doc
+    keyed by today's UTC date. Only the first worker to insert wins; the
+    rest log and return without sending."""
+    won_claim = await _claim_quota_alert_day(day)
+    if not won_claim:
+        return
+    try:
+        from metrics import _dispatch_alert
+    except Exception as e:
+        logger.debug("google_indexing quota alert: metrics import failed: %s", e)
+        return
+    # `metrics._dispatch_alert` enforces a global per-alert-type cooldown
+    # (`_ALERT_COOLDOWN_S`, currently 30 min). Our own dedupe is already
+    # day-scoped via the Mongo claim above, so a fresh quota exhaustion on
+    # day N+1 just past UTC midnight could otherwise be silently swallowed
+    # if day N's alert fired within the cooldown window. Clear the cooldown
+    # entry for this alert type so day-boundary alerts always go through —
+    # same trick `bot_discovery._seo_health_alert_loop` uses for
+    # `seo_health_degraded` and `seo_url_spike`. Best-effort: imported
+    # separately so a metrics module without the cooldown table (e.g. test
+    # stubs) doesn't block the dispatch.
+    try:
+        from metrics import _alert_last_fired as _ml
+        _ml.pop(_QUOTA_ALERT_TYPE, None)
+    except Exception:
+        pass
+    title = "Google Indexing daily quota exhausted"
+    body = (
+        f"Google Indexing API submissions reached today's cap of "
+        f"{sent}/{limit} for {day} (UTC). Additional fresh URLs will skip "
+        f"Google notification until the UTC midnight rollover. To raise "
+        f"the cap, set the env var GOOGLE_INDEXING_DAILY_LIMIT and restart "
+        f"the API. Dashboard: {_QUOTA_ALERT_DASHBOARD_URL}"
+    )
+    try:
+        await _dispatch_alert(
+            _QUOTA_ALERT_TYPE,
+            title,
+            body,
+            threshold_snapshot={
+                "metric": "google_indexing_daily_limit",
+                "value": limit,
+                "actual": sent,
+                "day": day,
+                "dashboard_url": _QUOTA_ALERT_DASHBOARD_URL,
+            },
+        )
+    except Exception as e:
+        logger.debug("google_indexing quota alert dispatch failed: %s", e)
+        # Roll back the dedupe so the next quota_block can retry the alert.
+        global _quota_alert_fired_day
+        with _stats_lock:
+            if _quota_alert_fired_day == day:
+                _quota_alert_fired_day = ""
 
 
 # -----------------------------------------------------------------------------
