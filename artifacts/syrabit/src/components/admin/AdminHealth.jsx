@@ -48,10 +48,9 @@ function CustomTooltip({ active, payload, label }) {
   );
 }
 
-function formatRelative(ts) {
-  if (!ts) return 'never';
-  const d = typeof ts === 'number' ? new Date(ts * (ts < 1e12 ? 1000 : 1)) : new Date(ts);
-  if (isNaN(d.getTime())) return String(ts);
+function formatRelative(epochSec) {
+  if (!epochSec) return 'never';
+  const d = new Date(epochSec * 1000);
   const diff = Math.floor((Date.now() - d.getTime()) / 1000);
   if (diff < 60) return `${diff}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
@@ -59,19 +58,44 @@ function formatRelative(ts) {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
-function PrerenderStatusBody({ status }) {
-  const last = status.last_triggered_at ?? status.last_fired_at ?? status.last_fire_at ?? status.last_fire ?? status.last_at;
-  const lastStatus = status.last_status ?? status.status ?? '—';
-  const lastReason = status.last_reason ?? status.reason ?? '';
-  const lastError = status.last_error ?? status.error;
-  const queued = status.pending_reasons ?? status.queued_reasons ?? status.queued ?? [];
-  const queuedList = Array.isArray(queued) ? queued : (typeof queued === 'string' ? queued.split(',').filter(Boolean) : []);
-  const configured = status.configured ?? status.is_configured;
+// Backend contract from artifacts/syrabit-backend/pages_deploy.py status():
+//   configured: bool
+//   last_triggered_at: float epoch seconds | null
+//   last_status: "ok" | "http_NNN" | "error" | "not_configured" | null
+//   last_reason: string | null
+//   last_error: string | null
+//   pending_reasons: string[]
+//   pending: bool
+//   trigger_count: int
+//   coalesce_window_sec / min_interval_sec / nightly_interval_sec: int
+function classifyStatus(s) {
+  if (s === 'ok') return 'ok';
+  if (s === null || s === undefined) return 'idle';
+  // "error", "not_configured", or any "http_NNN" — all failure modes.
+  return 'fail';
+}
 
+function PrerenderStatusBody({ status }) {
+  const {
+    configured,
+    last_triggered_at: last,
+    last_status: lastStatus,
+    last_reason: lastReason,
+    last_error: lastError,
+    pending_reasons: pendingReasons = [],
+    pending,
+    trigger_count: triggerCount,
+    coalesce_window_sec: coalesceSec,
+    min_interval_sec: minIntervalSec,
+    nightly_interval_sec: nightlySec,
+  } = status;
+
+  const klass = classifyStatus(lastStatus);
   const statusColor =
-    lastStatus === 'ok' || lastStatus === 'success' ? 'text-emerald-600 bg-emerald-50 border-emerald-200'
-    : lastStatus === 'error' || lastStatus === 'failed' ? 'text-red-600 bg-red-50 border-red-200'
+    klass === 'ok'   ? 'text-emerald-600 bg-emerald-50 border-emerald-200'
+    : klass === 'fail' ? 'text-red-600 bg-red-50 border-red-200'
     : 'text-gray-500 bg-gray-50 border-gray-200';
+  const statusLabel = lastStatus ?? 'never fired';
 
   return (
     <div className="space-y-3">
@@ -92,25 +116,25 @@ function PrerenderStatusBody({ status }) {
           </p>
           {last && (
             <p className="text-[10px] text-gray-400 mt-0.5">
-              {(typeof last === 'number' ? new Date(last * (last < 1e12 ? 1000 : 1)) : new Date(last)).toLocaleString()}
+              {new Date(last * 1000).toLocaleString()}
             </p>
           )}
         </div>
 
         <div className={`rounded-xl p-3 border ${statusColor}`}>
           <p className="text-[10px] uppercase tracking-wider opacity-60 mb-1">Last status</p>
-          <p className="text-sm font-mono font-semibold capitalize" data-testid="prerender-last-status">{lastStatus}</p>
+          <p className="text-sm font-mono font-semibold" data-testid="prerender-last-status">{statusLabel}</p>
           {lastReason && <p className="text-[10px] opacity-70 mt-0.5 truncate" title={lastReason}>{lastReason}</p>}
         </div>
 
         <div className="rounded-xl p-3 border border-gray-200 bg-white">
-          <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1">Queued reasons</p>
+          <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1">Pending reasons</p>
           <p className="text-sm font-mono font-semibold text-gray-900" data-testid="prerender-queued-count">
-            {queuedList.length}
+            {pendingReasons.length}{pending ? ' · queued' : ''}
           </p>
-          {queuedList.length > 0 && (
-            <p className="text-[10px] text-gray-400 mt-0.5 truncate" title={queuedList.join(', ')}>
-              {queuedList.slice(0, 3).join(', ')}{queuedList.length > 3 ? '…' : ''}
+          {pendingReasons.length > 0 && (
+            <p className="text-[10px] text-gray-400 mt-0.5 truncate" title={pendingReasons.join(', ')}>
+              {pendingReasons.slice(0, 3).join(', ')}{pendingReasons.length > 3 ? '…' : ''}
             </p>
           )}
         </div>
@@ -125,6 +149,16 @@ function PrerenderStatusBody({ status }) {
           </div>
         </div>
       )}
+
+      <div className="text-[11px] text-gray-400 leading-relaxed border-t border-gray-100 pt-3 mt-1">
+        Total triggers: <span className="font-mono text-gray-600">{triggerCount ?? 0}</span>
+        {' · '}
+        coalesce window <span className="font-mono text-gray-600">{coalesceSec ?? '?'}s</span>
+        {' · '}
+        cooldown <span className="font-mono text-gray-600">{minIntervalSec ?? '?'}s</span>
+        {' · '}
+        nightly safety-net every <span className="font-mono text-gray-600">{nightlySec ?? '?'}s</span>.
+      </div>
     </div>
   );
 }
@@ -381,8 +415,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           </div>
 
           <p className="text-[11px] text-gray-400 leading-relaxed">
-            Edits coalesce automatically (default 60s window, 5min cooldown). A nightly safety-net rebuild also runs every 24h.
-            “Refresh now” bypasses the debounce and fires the deploy hook immediately.
+            Admin edits trigger debounced refreshes automatically. “Refresh now” bypasses the debounce/cooldown and fires the Cloudflare Pages deploy hook immediately.
           </p>
         </div>
       )}
