@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi, Copy, Check, Users, Activity, MessageSquare, TrendingUp, DollarSign, BarChart2, RotateCw, Clock } from 'lucide-react';
+import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi, Copy, Check, Users, Activity, MessageSquare, TrendingUp, DollarSign, BarChart2, RotateCw, Clock, Undo2 } from 'lucide-react';
 import { toast } from 'sonner';
 import AdminQuickLinks from './AdminQuickLinks';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar } from 'recharts';
@@ -202,6 +202,9 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     admin_email: '', since: '', until: '',
   });
   const [asmAuditOffset, setAsmAuditOffset] = useState(0);
+  // Task #431 — id of the audit row currently being reverted (so we can
+  // disable just that row's button instead of the whole table).
+  const [asmRevertingId, setAsmRevertingId] = useState(null);
   // Task #428 — per-run audit log of individual sanitiser cleanups.
   const [asmRuns, setAsmRuns] = useState(null);
   const [asmRunsLoading, setAsmRunsLoading] = useState(false);
@@ -233,6 +236,33 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       })
       .finally(() => setAsmAuditLoading(false));
   }, [adminToken]);
+
+  const revertAsmAuditRow = useCallback(async (row) => {
+    if (!row?.id) {
+      toast.error('This audit row predates revert support — no id to target.');
+      return;
+    }
+    const beforeLabel = row.before
+      ? `${row.before.behaviour ?? '·'} / ${row.before.threshold != null ? Number(row.before.threshold).toFixed(3) : '·'}`
+      : 'cleared (no override)';
+    if (!window.confirm(`Revert Sarvam purity to: ${beforeLabel}?`)) return;
+    setAsmRevertingId(row.id);
+    try {
+      await axios.post(
+        `${API_BASE}/admin/assamese-purity/audit/${encodeURIComponent(row.id)}/revert`,
+        null,
+        { headers: adminHeaders(adminToken), withCredentials: true },
+      );
+      toast.success('Reverted — applied immediately');
+      loadAsmCfg();
+      loadAsmAudit();
+    } catch (e) {
+      const msg = e?.response?.data?.detail || 'Revert failed';
+      toast.error(msg);
+    } finally {
+      setAsmRevertingId(null);
+    }
+  }, [adminToken, loadAsmCfg, loadAsmAudit]);
 
   const loadAsmRuns = useCallback((actionFilter) => {
     const a = actionFilter !== undefined ? actionFilter : asmRunsActionFilter;
@@ -1168,7 +1198,8 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                       <th className="py-2 pr-3 font-bold">Action</th>
                       <th className="py-2 pr-3 font-bold">Admin</th>
                       <th className="py-2 pr-3 font-bold">Before</th>
-                      <th className="py-2 font-bold">After</th>
+                      <th className="py-2 pr-3 font-bold">After</th>
+                      <th className="py-2 font-bold text-right">Revert</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1192,6 +1223,8 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                             <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold ${
                               row.action === 'delete'
                                 ? 'bg-red-50 text-red-600 border border-red-200'
+                                : row.action === 'revert'
+                                ? 'bg-amber-50 text-amber-700 border border-amber-200'
                                 : 'bg-violet-50 text-violet-600 border border-violet-200'
                             }`}>
                               {row.action || '—'}
@@ -1201,7 +1234,29 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                             {row.admin_email || row.admin_id || <span className="text-gray-400">unknown</span>}
                           </td>
                           <td className="py-2 pr-3">{fmtSide(row.before)}</td>
-                          <td className="py-2">{fmtSide(row.after)}</td>
+                          <td className="py-2 pr-3">{fmtSide(row.after)}</td>
+                          <td className="py-2 text-right">
+                            {row.action === 'revert' ? (
+                              <span
+                                className="text-[10px] text-gray-400"
+                                title={row.source_audit_id ? `Reverted from ${row.source_audit_id}` : ''}
+                              >
+                                ↩ revert
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => revertAsmAuditRow(row)}
+                                disabled={!row.id || asmRevertingId === row.id}
+                                title={row.id ? 'Re-apply this row\'s before-state' : 'No id — predates revert support'}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-amber-200 bg-amber-50 text-amber-700 text-[11px] font-semibold hover:bg-amber-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                                data-testid={`button-revert-asm-audit-${idx}`}
+                              >
+                                <Undo2 size={11} className={asmRevertingId === row.id ? 'animate-spin' : ''} />
+                                {asmRevertingId === row.id ? 'Reverting…' : 'Revert'}
+                              </button>
+                            )}
+                          </td>
                         </tr>
                       );
                     })}

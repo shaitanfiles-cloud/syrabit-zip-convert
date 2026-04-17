@@ -1845,13 +1845,18 @@ async def _record_assamese_audit(
     action: str,
     before: dict | None,
     after: dict | None,
-) -> None:
-    """Append an audit row for a PATCH / DELETE on `/admin/assamese-purity`.
-    Best-effort: if mongo is down we log and continue — losing an audit
-    row must NEVER fail the user-visible admin action."""
+    source_audit_id: str | None = None,
+) -> str | None:
+    """Append an audit row for a PATCH / DELETE / REVERT on
+    `/admin/assamese-purity`. Best-effort: if mongo is down we log and
+    continue — losing an audit row must NEVER fail the user-visible
+    admin action. Returns the new row's `id` so callers (e.g. the
+    revert endpoint) can reference it back to the source row."""
     try:
         from deps import db as _db
+        new_id = uuid.uuid4().hex
         doc = {
+            "id": new_id,
             "ts": datetime.now(timezone.utc),
             "action": action,
             "admin_email": (admin or {}).get("email"),
@@ -1859,9 +1864,13 @@ async def _record_assamese_audit(
             "before": before,
             "after": after,
         }
+        if source_audit_id:
+            doc["source_audit_id"] = source_audit_id
         await _db[_ASM_AUDIT_COLLECTION].insert_one(doc)
+        return new_id
     except Exception as e:
         logger.warning(f"[INDIC-SANITIZE] audit insert failed: {e}")
+        return None
 # Known leaky Assamese reply used by the test-fire button so admins can
 # validate the chosen behaviour against a deterministic input. Picked
 # to exercise both the `/translate` replace path AND the strip fallback.
@@ -2195,6 +2204,129 @@ async def admin_get_assamese_purity_audit(
             "until": until_dt.isoformat() if until_dt else None,
             "admin_email": admin_email or None,
         },
+    }
+
+
+@router.post("/admin/assamese-purity/audit/{audit_id}/revert")
+async def admin_revert_assamese_purity(
+    audit_id: str = Path(..., min_length=1, max_length=64),
+    admin: dict = Depends(get_admin_user),
+):
+    """One-click revert: re-apply the override state that existed
+    *before* the referenced audit row's change. Works for both `patch`
+    rows (re-applies their `before` snapshot) and `delete` rows
+    (restores the override that was deleted, which is also stored in
+    `before`). When `before` is empty (e.g. the very first patch made
+    on a fresh install), reverting clears the override entirely.
+
+    The revert itself is recorded as a fresh audit row tagged
+    `action: "revert"` with `source_audit_id` pointing at the row the
+    admin clicked, so the audit panel makes the chain auditable."""
+    from lang_sanitizer import (
+        apply_runtime_override as _apply,
+        clear_runtime_override as _clear,
+        _normalise_behaviour,
+        _normalise_threshold,
+        get_runtime_config as _asm_cfg,
+        get_runtime_override as _get_ov,
+    )
+
+    try:
+        from deps import db as _db
+        src = await _db[_ASM_AUDIT_COLLECTION].find_one(
+            {"id": audit_id}, {"_id": 0},
+        )
+    except Exception as e:
+        logger.error(f"[INDIC-SANITIZE] audit lookup for revert failed: {e}")
+        raise HTTPException(status_code=503, detail="audit log unavailable")
+    if not src:
+        raise HTTPException(status_code=404, detail="audit row not found")
+    if src.get("action") == "revert":
+        # Allowed in principle, but we reject to keep the chain readable
+        # — admin should revert to the *original* row, not a revert row.
+        raise HTTPException(
+            status_code=400,
+            detail="cannot revert a revert row; pick the original change",
+        )
+
+    target = src.get("before") or None
+    updated_by = (admin or {}).get("email") or (admin or {}).get("id") or "admin"
+
+    # Snapshot what the admin is overwriting so the new audit row is
+    # symmetric with patch/delete rows (before=current state).
+    before_now = await _load_persisted_assamese_purity_override()
+
+    if target and isinstance(target, dict) and (
+        target.get("behaviour") is not None or target.get("threshold") is not None
+    ):
+        # Validate the snapshot we're re-applying: defends against a
+        # row whose `before` was hand-edited or written before stricter
+        # validation existed.
+        beh = target.get("behaviour")
+        thr = target.get("threshold")
+        if beh is not None and _normalise_behaviour(beh) is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"audit row's `before.behaviour` is invalid: {beh!r}",
+            )
+        if thr is not None and _normalise_threshold(thr) is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"audit row's `before.threshold` is invalid: {thr!r}",
+            )
+        applied = _apply(behaviour=beh, threshold=thr, updated_by=updated_by)
+        persist_doc = {
+            **(_get_ov() or {}),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            await _db.api_config.update_one(
+                {},
+                {"$set": {_ASM_OVERRIDE_DOC_KEY: persist_doc}},
+                upsert=True,
+            )
+        except Exception as e:
+            logger.error(f"[INDIC-SANITIZE] revert persist failed: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="revert applied in-memory but failed to persist; "
+                       "value will reset on next api restart",
+            )
+        await _record_assamese_audit(
+            admin, action="revert", before=before_now, after=persist_doc,
+            source_audit_id=audit_id,
+        )
+        return {
+            "ok": True,
+            "reverted_to": persist_doc,
+            "applied": applied,
+            "config": _asm_cfg(),
+            "source_audit_id": audit_id,
+        }
+
+    # `before` was empty → reverting means dropping the override.
+    try:
+        await _db.api_config.update_one(
+            {}, {"$unset": {_ASM_OVERRIDE_DOC_KEY: ""}},
+        )
+    except Exception as e:
+        logger.error(f"[INDIC-SANITIZE] revert clear persist failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="failed to clear persisted override during revert; "
+                   "in-memory override left untouched",
+        )
+    _clear()
+    await _record_assamese_audit(
+        admin, action="revert", before=before_now, after=None,
+        source_audit_id=audit_id,
+    )
+    return {
+        "ok": True,
+        "reverted_to": None,
+        "cleared": True,
+        "config": _asm_cfg(),
+        "source_audit_id": audit_id,
     }
 
 
