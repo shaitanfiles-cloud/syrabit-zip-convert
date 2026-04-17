@@ -503,6 +503,77 @@ def _make_outcome():
     return {"attempted": False, "ok": False, "error": None, "skipped_reason": None}
 
 
+def _summarize_push_failure(doc: dict) -> str:
+    """Build a human-readable error string from a push_delivery_log entry."""
+    if not doc:
+        return "unknown error"
+    if doc.get("error"):
+        return str(doc["error"])[:200]
+    failed = int(doc.get("failed") or 0)
+    expired = int(doc.get("expired") or 0)
+    total = int(doc.get("total") or 0)
+    if total == 0:
+        return "no subscribers received the push"
+    parts = []
+    if failed:
+        parts.append(f"{failed} failed")
+    if expired:
+        parts.append(f"{expired} expired")
+    return ", ".join(parts) or "delivery failed"
+
+
+async def _recompute_push_channel_status() -> None:
+    """Refresh _channel_status['push'] from db.push_delivery_log so the Alert
+    Settings UI shows the truth (per Task #427) instead of the optimistic
+    queued-task signal that just confirms the dispatch coroutine started.
+
+    Scoped to ``target="admin-only"`` because the Alert Settings panel reports
+    on admin alert delivery health. Broadcast pushes (``target="all"``) sent
+    via /admin/notifications or the exam-reminder loop go to general users
+    and must not mask a broken admin push pipeline.
+    """
+    try:
+        admin_filter = {"target": "admin-only"}
+        latest = await db.push_delivery_log.find_one(
+            admin_filter, {"_id": 0}, sort=[("dispatched_at", -1)]
+        )
+        latest_success = await db.push_delivery_log.find_one(
+            {**admin_filter, "sent": {"$gt": 0}},
+            {"_id": 0},
+            sort=[("dispatched_at", -1)],
+        )
+        latest_failure = await db.push_delivery_log.find_one(
+            {
+                **admin_filter,
+                "$or": [
+                    {"skipped": True},
+                    {"error": {"$exists": True, "$ne": None}},
+                    {"$and": [{"sent": 0}, {"$or": [
+                        {"failed": {"$gt": 0}},
+                        {"expired": {"$gt": 0}},
+                        {"total": 0},
+                    ]}]},
+                ],
+            },
+            {"_id": 0},
+            sort=[("dispatched_at", -1)],
+        )
+        entry = _channel_status.setdefault("push", dict(_CHANNEL_STATUS_DEFAULT["push"]))
+        if latest:
+            entry["last_attempt_at"] = latest.get("dispatched_at") or entry.get("last_attempt_at")
+            entry["last_alert_type"] = latest.get("alert_type") or entry.get("last_alert_type")
+        entry["last_success_at"] = latest_success.get("dispatched_at") if latest_success else None
+        if latest_failure and (
+            not latest_success
+            or (latest_failure.get("dispatched_at") or "") > (latest_success.get("dispatched_at") or "")
+        ):
+            entry["last_error"] = _summarize_push_failure(latest_failure)
+        else:
+            entry["last_error"] = None
+    except Exception as exc:
+        logger.debug(f"Failed to recompute push channel status: {exc}")
+
+
 async def _persist_channel_status():
     """Best-effort write of in-memory _channel_status to db.api_config."""
     try:
@@ -690,6 +761,13 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
         outcomes["persisted"]["error"] = str(e)
 
     # 4) Browser push notification — filtered by per-admin prefs (push_enabled + push_severities)
+    #
+    # Task #427: Real per-subscriber delivery health is sourced from
+    # ``db.push_delivery_log`` after the dispatch completes (or, for queued
+    # fire-and-forget alerts, from the most recent prior dispatch). The
+    # outcomes["push"] entry below is only used as the immediate response
+    # signal for the test-delivery flow — the persisted _channel_status["push"]
+    # is recomputed from the log via ``_recompute_push_channel_status``.
     try:
         outcomes["push"]["attempted"] = True
         from routes.admin_notifications import _dispatch_push_to_admins
@@ -718,20 +796,29 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
             except Exception as e:
                 outcomes["push"]["error"] = str(e)
         else:
+            # Real alerts dispatch fire-and-forget — we cannot await without
+            # blocking the alerting loop. The queued-task signal is no longer
+            # used for _channel_status["push"]; truth is read from
+            # db.push_delivery_log via _recompute_push_channel_status (Task
+            # #427). The outcomes["push"] entry below stays unset (ok=False)
+            # because no synchronous result is available for the immediate
+            # response.
             asyncio.create_task(_dispatch_push_to_admins(push_payload))
-            # Real alerts dispatch fire-and-forget; record as ok=True since
-            # the task was successfully queued. Per-subscription delivery
-            # results are tracked separately in db.push_delivery_log.
-            outcomes["push"]["ok"] = True
+            outcomes["push"]["skipped_reason"] = "queued — see push delivery log for result"
     except Exception as e:
         outcomes["push"]["error"] = str(e)
         logger.debug(f"Alert push dispatch failed: {e}")
 
     # Record per-channel outcomes to in-memory + persisted status for the
-    # Alert Settings UI (Task #418).
+    # Alert Settings UI (Task #418). The push channel is sourced from
+    # db.push_delivery_log instead of the optimistic queued-task signal so
+    # admins see real delivery health (Task #427).
     now_iso = datetime.now(timezone.utc).isoformat()
     for ch in _CHANNEL_STATUS_KEYS:
+        if ch == "push":
+            continue
         _record_outcome(ch, outcomes[ch], alert_type, now_iso)
+    await _recompute_push_channel_status()
     await _persist_channel_status()
 
     return outcomes

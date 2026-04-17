@@ -123,12 +123,37 @@ async def _dispatch_push(payload: dict, admin_only: bool = False):
     Persists per-subscription delivery results to db.push_delivery_log."""
     dispatch_id = str(uuid.uuid4())
     now_iso = datetime.now(timezone.utc).isoformat()
+    label = "admin-only" if admin_only else "all"
+
+    async def _log_skip(reason: str):
+        """Persist a skip/failure entry so per-channel health (Task #427) can
+        surface that the dispatch never actually delivered to any subscriber."""
+        try:
+            await db.push_delivery_log.insert_one({
+                "dispatch_id": dispatch_id,
+                "dispatched_at": now_iso,
+                "target": label,
+                "payload_title": payload.get("title", ""),
+                "payload_body": payload.get("body", "")[:500],
+                "alert_type": payload.get("alert_type", ""),
+                "total": 0,
+                "sent": 0,
+                "failed": 0,
+                "expired": 0,
+                "results": [],
+                "skipped": True,
+                "error": reason,
+            })
+        except Exception as log_exc:
+            logger.warning(f"Failed to persist push skip log: {log_exc}")
+
     try:
         from pywebpush import webpush, WebPushException
         vapid = await _get_or_create_vapid_keys()
         private_pem = vapid.get("private_key_pem", "")
         if not private_pem:
             logger.warning("Push dispatch skipped — VAPID private key missing")
+            await _log_skip("VAPID private key missing")
             return
         if admin_only:
             admin_subs = await db.push_subscriptions.find(
@@ -145,6 +170,7 @@ async def _dispatch_push(payload: dict, admin_only: bool = False):
                     ).to_list(10000)
             if not admin_subs:
                 logger.info("Push dispatch (admin-only): no admin subscriptions found, skipping")
+                await _log_skip("no admin subscriptions registered")
                 return
 
             admin_ids_in_subs = {
@@ -176,6 +202,7 @@ async def _dispatch_push(payload: dict, admin_only: bool = False):
 
             if not eligible_admin_ids:
                 logger.info("Push dispatch (admin-only): no admins with push enabled for this alert type, skipping")
+                await _log_skip("no admins have push enabled for this alert type")
                 return
 
             subs = [
@@ -235,7 +262,6 @@ async def _dispatch_push(payload: dict, admin_only: bool = False):
                     "status": "failed",
                     "error": str(exc)[:200],
                 })
-        label = "admin-only" if admin_only else "all"
         logger.info(f"Push dispatch ({label}): sent={sent} failed={failed} expired={expired} total={len(subs)}")
         try:
             log_doc = {

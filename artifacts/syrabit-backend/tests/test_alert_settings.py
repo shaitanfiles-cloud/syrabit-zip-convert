@@ -1118,6 +1118,214 @@ class TestPushNotificationThresholdContext:
         assert payload["body"] == "Plain body"
 
 
+class TestPushChannelStatusFromDeliveryLog:
+    """Task #427: push channel status is recomputed from db.push_delivery_log
+    instead of the optimistic queued-task signal."""
+
+    def _make_db(self, log_docs):
+        mock_alerts = MagicMock()
+        mock_alerts.insert_one = AsyncMock(return_value=None)
+        mock_api_config = MagicMock()
+        mock_api_config.update_one = AsyncMock(return_value=None)
+
+        push_log = MagicMock()
+
+        async def _find_one(query, projection=None, sort=None):
+            matching = list(log_docs)
+            if "target" in query:
+                matching = [d for d in matching if d.get("target") == query["target"]]
+            if "sent" in query and isinstance(query["sent"], dict) and "$gt" in query["sent"]:
+                matching = [d for d in matching if int(d.get("sent") or 0) > 0]
+            if "$or" in query:
+                def _is_failure(d):
+                    if d.get("skipped"):
+                        return True
+                    if d.get("error"):
+                        return True
+                    if int(d.get("sent") or 0) == 0 and (
+                        int(d.get("failed") or 0) > 0
+                        or int(d.get("expired") or 0) > 0
+                        or int(d.get("total") or 0) == 0
+                    ):
+                        return True
+                    return False
+                matching = [d for d in matching if _is_failure(d)]
+            if sort:
+                key, direction = sort[0]
+                matching.sort(key=lambda d: d.get(key) or "", reverse=direction < 0)
+            return matching[0] if matching else None
+
+        push_log.find_one = AsyncMock(side_effect=_find_one)
+        return MagicMock(
+            alerts=mock_alerts,
+            api_config=mock_api_config,
+            push_delivery_log=push_log,
+        )
+
+    def test_push_status_reflects_successful_delivery(self):
+        _metrics_mod._notification_channels["email"] = ""
+        _metrics_mod._notification_channels["webhook_url"] = ""
+        _metrics_mod._channel_status = {
+            k: dict(v) for k, v in _metrics_mod._CHANNEL_STATUS_DEFAULT.items()
+        }
+        log_docs = [
+            {
+                "dispatched_at": "2026-04-17T12:00:00+00:00",
+                "alert_type": "high_error_rate",
+                "target": "admin-only",
+                "sent": 3, "failed": 0, "expired": 0, "total": 3,
+            }
+        ]
+        fake_db = self._make_db(log_docs)
+        with patch.dict(os.environ, {"ALERT_EMAIL": "", "ALERT_WEBHOOK_URL": "", "RESEND_API_KEY": ""}), \
+             patch.object(_metrics_mod, "db", fake_db), \
+             patch("routes.admin_notifications._dispatch_push_to_admins", new_callable=AsyncMock):
+            _run(_metrics_mod._dispatch_alert("high_error_rate", "T", "B", force=True))
+        push_status = _metrics_mod._channel_status["push"]
+        assert push_status["last_success_at"] == "2026-04-17T12:00:00+00:00"
+        assert push_status["last_error"] is None
+        assert push_status["last_alert_type"] == "high_error_rate"
+
+    def test_push_status_surfaces_vapid_or_subscriber_failure(self):
+        """When the most recent dispatch was a skip/failure (e.g. VAPID
+        missing or no admin subscriptions), the push row shows last_error
+        and a stale last_success_at — even though the alerting loop happily
+        queued the dispatch."""
+        _metrics_mod._notification_channels["email"] = ""
+        _metrics_mod._notification_channels["webhook_url"] = ""
+        _metrics_mod._channel_status = {
+            k: dict(v) for k, v in _metrics_mod._CHANNEL_STATUS_DEFAULT.items()
+        }
+        log_docs = [
+            {
+                "dispatched_at": "2026-04-17T12:30:00+00:00",
+                "alert_type": "high_error_rate",
+                "target": "admin-only",
+                "sent": 0, "failed": 0, "expired": 0, "total": 0,
+                "skipped": True,
+                "error": "no admin subscriptions registered",
+            },
+            {
+                "dispatched_at": "2026-04-10T08:00:00+00:00",
+                "alert_type": "spoofed_bot_surge",
+                "target": "admin-only",
+                "sent": 5, "failed": 0, "expired": 0, "total": 5,
+            },
+        ]
+        fake_db = self._make_db(log_docs)
+        with patch.dict(os.environ, {"ALERT_EMAIL": "", "ALERT_WEBHOOK_URL": "", "RESEND_API_KEY": ""}), \
+             patch.object(_metrics_mod, "db", fake_db), \
+             patch("routes.admin_notifications._dispatch_push_to_admins", new_callable=AsyncMock):
+            _run(_metrics_mod._dispatch_alert("high_error_rate", "T", "B", force=True))
+        push_status = _metrics_mod._channel_status["push"]
+        # Old success is preserved as "last successful delivery"…
+        assert push_status["last_success_at"] == "2026-04-10T08:00:00+00:00"
+        # …but the recent failure is surfaced so the panel is no longer
+        # misleading (the whole point of Task #427).
+        assert push_status["last_error"] == "no admin subscriptions registered"
+        assert push_status["last_attempt_at"] == "2026-04-17T12:30:00+00:00"
+
+    def test_broadcast_push_does_not_mask_admin_alert_failure(self):
+        """Mixed history: a recent successful broadcast push (target='all',
+        e.g. an admin notification or exam reminder) must not clear
+        last_error or refresh last_success_at on the Alert Settings push
+        row, which is scoped to admin alert delivery only."""
+        _metrics_mod._notification_channels["email"] = ""
+        _metrics_mod._notification_channels["webhook_url"] = ""
+        _metrics_mod._channel_status = {
+            k: dict(v) for k, v in _metrics_mod._CHANNEL_STATUS_DEFAULT.items()
+        }
+        log_docs = [
+            # Most recent: broadcast push to general users succeeded
+            {
+                "dispatched_at": "2026-04-17T13:00:00+00:00",
+                "alert_type": "",
+                "target": "all",
+                "sent": 42, "failed": 0, "expired": 0, "total": 42,
+            },
+            # Earlier: admin alert push failed (no admin subs)
+            {
+                "dispatched_at": "2026-04-17T12:30:00+00:00",
+                "alert_type": "high_error_rate",
+                "target": "admin-only",
+                "sent": 0, "failed": 0, "expired": 0, "total": 0,
+                "skipped": True,
+                "error": "no admin subscriptions registered",
+            },
+        ]
+        fake_db = self._make_db(log_docs)
+        with patch.dict(os.environ, {"ALERT_EMAIL": "", "ALERT_WEBHOOK_URL": "", "RESEND_API_KEY": ""}), \
+             patch.object(_metrics_mod, "db", fake_db), \
+             patch("routes.admin_notifications._dispatch_push_to_admins", new_callable=AsyncMock):
+            _run(_metrics_mod._dispatch_alert("high_error_rate", "T", "B", force=True))
+        push_status = _metrics_mod._channel_status["push"]
+        # Broadcast success at 13:00 must NOT be the admin push last_success.
+        assert push_status["last_success_at"] is None
+        assert push_status["last_error"] == "no admin subscriptions registered"
+        assert push_status["last_attempt_at"] == "2026-04-17T12:30:00+00:00"
+        assert push_status["last_alert_type"] == "high_error_rate"
+
+    def test_push_status_not_optimistically_marked_when_log_empty(self):
+        """If the push_delivery_log has no entries (e.g. dispatcher silently
+        bailed before logging in an older deployment), the push row stays
+        unset rather than showing a fake 'just now' success."""
+        _metrics_mod._notification_channels["email"] = ""
+        _metrics_mod._notification_channels["webhook_url"] = ""
+        _metrics_mod._channel_status = {
+            k: dict(v) for k, v in _metrics_mod._CHANNEL_STATUS_DEFAULT.items()
+        }
+        fake_db = self._make_db([])
+        with patch.dict(os.environ, {"ALERT_EMAIL": "", "ALERT_WEBHOOK_URL": "", "RESEND_API_KEY": ""}), \
+             patch.object(_metrics_mod, "db", fake_db), \
+             patch("routes.admin_notifications._dispatch_push_to_admins", new_callable=AsyncMock):
+            _run(_metrics_mod._dispatch_alert("high_error_rate", "T", "B"))
+        push_status = _metrics_mod._channel_status["push"]
+        assert push_status["last_success_at"] is None
+        assert push_status["last_error"] is None
+
+
+class TestPushDispatcherLogsSkips:
+    """Task #427: _dispatch_push must persist skip/failure entries so the
+    aggregator can compute accurate per-channel health."""
+
+    def test_logs_when_vapid_missing(self):
+        from routes import admin_notifications as _an
+        push_log = MagicMock()
+        push_log.insert_one = AsyncMock(return_value=None)
+        fake_db = MagicMock(push_delivery_log=push_log)
+        with patch.object(_an, "db", fake_db), \
+             patch.object(_an, "_get_or_create_vapid_keys", new_callable=AsyncMock, return_value={"private_key_pem": ""}):
+            _run(_an._dispatch_push({"title": "x", "body": "y", "alert_type": "z"}))
+        push_log.insert_one.assert_awaited_once()
+        doc = push_log.insert_one.call_args[0][0]
+        assert doc.get("skipped") is True
+        assert "VAPID" in doc.get("error", "")
+        assert doc.get("sent") == 0
+
+    def test_logs_when_no_admin_subscriptions(self):
+        from routes import admin_notifications as _an
+        push_log = MagicMock()
+        push_log.insert_one = AsyncMock(return_value=None)
+        push_subs = MagicMock()
+        empty_cursor = MagicMock()
+        empty_cursor.to_list = AsyncMock(return_value=[])
+        push_subs.find = MagicMock(return_value=empty_cursor)
+        users = MagicMock()
+        users.find = MagicMock(return_value=empty_cursor)
+        fake_db = MagicMock(
+            push_delivery_log=push_log,
+            push_subscriptions=push_subs,
+            users=users,
+        )
+        with patch.object(_an, "db", fake_db), \
+             patch.object(_an, "_get_or_create_vapid_keys", new_callable=AsyncMock, return_value={"private_key_pem": "PEM"}):
+            _run(_an._dispatch_push({"title": "x", "body": "y", "alert_type": "z"}, admin_only=True))
+        push_log.insert_one.assert_awaited_once()
+        doc = push_log.insert_one.call_args[0][0]
+        assert doc.get("skipped") is True
+        assert "no admin subscriptions" in doc.get("error", "")
+
+
 class TestCollectionSizeSnapshot:
 
     def test_snapshot_records_to_db(self):
