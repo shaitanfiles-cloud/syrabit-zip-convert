@@ -78,7 +78,7 @@ def _schedule_indexnow_for_chapter(chapter_doc: dict):
 from typing import Optional, List, Dict, Any, Union
 from datetime import datetime, timezone, timedelta
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
+    APIRouter, HTTPException, Depends, Query, Body, Path as FastAPIPath,
     File, UploadFile, Response, Request, Cookie, BackgroundTasks,
     Form, Header, status,
 )
