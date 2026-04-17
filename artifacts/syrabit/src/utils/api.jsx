@@ -209,8 +209,6 @@ export const adminTestGA4 = (token) =>
   axios.get(`${API_BASE}/admin/ga4/test`, { headers: adminHeaders(token), withCredentials: true });
 
 
-export const adminSyncHistorical = (token, days = 90) =>
-  axios.post(`${API_BASE}/admin/analytics/sync-historical`, { days }, { headers: adminHeaders(token), withCredentials: true });
 
 export const adminGetContentCardViews = (token, days = 0) =>
   axios.get(`${API_BASE}/admin/analytics/content-card-views`, { headers: adminHeaders(token), withCredentials: true, params: { days } });

@@ -33,7 +33,6 @@ from llm import call_llm_api, call_llm_api_stream
 from rag import *
 from utils import *
 from analytics_helpers import *
-import ga4_client
 import cloudflare_client
 
 logger = logging.getLogger(__name__)
@@ -104,94 +103,6 @@ async def admin_analytics(days: int = 30, admin: dict = Depends(get_admin_user))
         "ga4_connected": ga4_connected,
         "cf_connected": cf_connected,
     }
-
-
-class SyncHistoricalReq(BaseModel):
-    days: int = 90
-
-@router.post("/admin/analytics/sync-historical")
-async def sync_historical_data(
-    req: SyncHistoricalReq = Body(...),
-    admin: dict = Depends(get_admin_user),
-):
-    days = req.days
-    synced = {"cloudflare": 0, "ga4": 0}
-
-    cf_daily, ga4_daily = await asyncio.gather(
-        cloudflare_client.get_historical_daily(days=days),
-        _fetch_ga4_historical(days=days),
-        return_exceptions=True,
-    )
-
-    if isinstance(cf_daily, list) and cf_daily:
-        for entry in cf_daily:
-            try:
-                await db.analytics_daily_totals.update_one(
-                    {"date": entry["date"], "source": "cloudflare"},
-                    {"$set": {
-                        "date": entry["date"],
-                        "source": "cloudflare",
-                        "visitors": entry.get("visitors", 0),
-                        "page_views": entry.get("page_views", 0),
-                        "requests": entry.get("requests", 0),
-                        "synced_at": datetime.now(timezone.utc).isoformat(),
-                    }},
-                    upsert=True,
-                )
-                synced["cloudflare"] += 1
-            except Exception as e:
-                logger.debug(f"CF sync upsert error: {e}")
-
-    if isinstance(ga4_daily, list) and ga4_daily:
-        for entry in ga4_daily:
-            try:
-                await db.analytics_daily_totals.update_one(
-                    {"date": entry["date"], "source": "ga4"},
-                    {"$set": {
-                        "date": entry["date"],
-                        "source": "ga4",
-                        "visitors": entry.get("visitors", 0),
-                        "page_views": entry.get("page_views", 0),
-                        "synced_at": datetime.now(timezone.utc).isoformat(),
-                    }},
-                    upsert=True,
-                )
-                synced["ga4"] += 1
-            except Exception as e:
-                logger.debug(f"GA4 sync upsert error: {e}")
-
-    return {
-        "status": "ok",
-        "synced_days": synced,
-        "total_synced": synced["cloudflare"] + synced["ga4"],
-    }
-
-
-async def _fetch_ga4_historical(days: int = 90) -> list:
-    try:
-        resp = await ga4_client.run_report(
-            dimensions=["date"],
-            metrics=["activeUsers", "screenPageViews"],
-            date_ranges=[{"startDate": f"{days}daysAgo", "endDate": "today"}],
-            order_bys=[{"dimension": {"dimensionName": "date"}}],
-            limit=days + 1,
-        )
-        if not resp or not resp.get("rows"):
-            return []
-        results = []
-        for row in resp["rows"]:
-            raw_date = row["dimensionValues"][0]["value"]
-            formatted = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:]}"
-            results.append({
-                "date": formatted,
-                "visitors": int(row["metricValues"][0]["value"]),
-                "page_views": int(row["metricValues"][1]["value"]),
-                "source": "ga4",
-            })
-        return results
-    except Exception as e:
-        logger.warning(f"GA4 historical fetch failed: {e}")
-        return []
 
 
 @router.post("/analytics/page-view")
