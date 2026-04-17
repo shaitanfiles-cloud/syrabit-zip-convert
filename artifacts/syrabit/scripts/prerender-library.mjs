@@ -255,10 +255,16 @@ async function main() {
   // downloads on mobile first paint without affecting code-split fetches
   // on later navigations (the imports still resolve, just on demand).
   const NON_LIBRARY_PRELOAD_PATTERNS = [
-    /sandpack/i,    // chat code playground
-    /markdown/i,    // chapter content renderer
-    /framer/i,      // landing-only motion
-    /syntax/i,      // chat syntax highlighter
+    /sandpack/i,         // chat code playground
+    /^markdown-/i,       // chapter MD renderer chunk
+    /MarkdownC/i,
+    /framer/i,           // landing-only motion
+    /^syntax-/i,         // chat syntax highlighter
+    /ChatPa/,            // chat page chunk (if present)
+    /ChapterPa/,         // chapter page chunk (if present)
+    /StickyToc/,         // chapter TOC chunk (if present)
+    /^badge-/,           // chat badge chunk (if present)
+    /^skeleton-/,        // shared skeleton loader
   ];
   html = html.replace(
     /\s*<link rel="modulepreload"[^>]*href="\/assets\/([^"]+)"[^>]*>/g,
@@ -266,6 +272,30 @@ async function main() {
       return NON_LIBRARY_PRELOAD_PATTERNS.some((re) => re.test(file)) ? "" : match;
     },
   );
+
+  // Task #391: inline the main app CSS into /library/index.html and remove
+  // the external <link rel="stylesheet">. The /library page is fully
+  // prerendered (SSR snapshot inside #root), so the CSS file is a hard
+  // render-blocking dependency on the critical path. Inlining it cuts a
+  // ~300ms round-trip on slow 3G mobile and removes the Lighthouse
+  // "render-blocking resources" finding. The cost is one extra HTML
+  // payload per first hit (~70 KB CSS), but Cloudflare gzips this to
+  // ~14 KB and the result is cached by the page's edge SWR policy.
+  const cssLinkRe = /<link rel="stylesheet"[^>]*href="\/assets\/([^"]+\.css)"[^>]*>/;
+  const cssLinkMatch = html.match(cssLinkRe);
+  if (cssLinkMatch) {
+    const cssPath = path.join(distDir, "assets", cssLinkMatch[1]);
+    if (fs.existsSync(cssPath)) {
+      const cssContent = fs.readFileSync(cssPath, "utf-8");
+      html = html.replace(
+        cssLinkRe,
+        `<style data-inline-css="${cssLinkMatch[1]}">${cssContent}</style>`,
+      );
+      console.log(
+        `[prerender-library] inlined ${cssLinkMatch[1]} (${cssContent.length} bytes) — removed render-blocking CSS`,
+      );
+    }
+  }
 
   fs.mkdirSync(outDir, { recursive: true });
   fs.writeFileSync(outHtml, html);
