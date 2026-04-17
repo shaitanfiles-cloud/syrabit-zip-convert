@@ -8,6 +8,7 @@ import { AdminGuard } from "@/components/AdminGuard";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { HelmetProvider } from "react-helmet-async";
+import GlobalSeo from "@/components/seo/GlobalSeo";
 const PWAInstallPrompt = lazy(() => import("@/components/PWAInstallPrompt"));
 const SignupEncouragementPopup = lazy(() => import("@/components/SignupEncouragementPopup"));
 const LazyToaster = lazy(() => import("sonner").then(m => ({ default: m.Toaster })));
@@ -184,6 +185,7 @@ function App() {
   }, []);
   return (
     <HelmetProvider>
+    <GlobalSeo />
     <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
           <AuthProvider>

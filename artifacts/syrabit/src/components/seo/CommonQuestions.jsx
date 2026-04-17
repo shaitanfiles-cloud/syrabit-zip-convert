@@ -2,17 +2,22 @@ import { useState } from 'react';
 import { ChevronDown, ChevronUp, HelpCircle, ArrowRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
+// Task #336: structured-data attrs (`itemScope`, `itemProp`, `itemType`)
+// removed from this component — the canonical `FAQPage` graph is now
+// emitted exactly once as JSON-LD via `chapterSchema()` /
+// `subjectHubSchema()`. Keeping both surfaces caused Google's Rich
+// Results test to flag duplicate FAQPage declarations on chapter pages.
 function QaItem({ question, answer, index }) {
   const [open, setOpen] = useState(index === 0);
 
   return (
-    <div className="border border-white/8 rounded-xl overflow-hidden" itemScope itemProp="mainEntity" itemType="https://schema.org/Question">
+    <div className="border border-white/8 rounded-xl overflow-hidden">
       <button
         onClick={() => setOpen((o) => !o)}
         className="w-full flex items-center justify-between gap-3 px-4 py-3.5 text-left hover:bg-white/3 transition-colors group"
         aria-expanded={open}
       >
-        <span className="text-sm font-medium text-white group-hover:text-violet-200 transition-colors" itemProp="name">
+        <span className="text-sm font-medium text-white group-hover:text-violet-200 transition-colors">
           {question}
         </span>
         {open
@@ -21,11 +26,8 @@ function QaItem({ question, answer, index }) {
         }
       </button>
       {open && (
-        <div
-          className="border-t border-white/6 px-4 py-3.5 text-sm text-white/60 leading-relaxed whitespace-pre-wrap"
-          itemScope itemProp="acceptedAnswer" itemType="https://schema.org/Answer"
-        >
-          <span itemProp="text">{answer}</span>
+        <div className="border-t border-white/6 px-4 py-3.5 text-sm text-white/60 leading-relaxed whitespace-pre-wrap">
+          <span>{answer}</span>
         </div>
       )}
     </div>
@@ -43,7 +45,6 @@ export default function CommonQuestions({ qaPairs = [], board, classSlug, subjec
   return (
     <section
       className="mt-10 space-y-3"
-      itemScope itemType="https://schema.org/FAQPage"
       aria-label="Frequently asked questions"
     >
       {/* Section header */}

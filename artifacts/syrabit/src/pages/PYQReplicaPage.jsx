@@ -1,16 +1,41 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { WORKER_API } from '../utils/api';
 import { useShare } from '../hooks/useShare';
+import PageMeta from '@/components/seo/PageMeta';
+
+// Best-effort parse of slug like "ahsec-2024-physics-set-a" into the
+// shape `pyqSchema` expects. Worst case we return just `{ slug }` and
+// the schema falls back to its own defaults — never throws.
+function parsePyqSlug(slug) {
+  if (!slug) return { slug: '' };
+  const parts = slug.split('-').filter(Boolean);
+  const board = ['ahsec', 'seba', 'cbse', 'icse'].find(b => parts.includes(b)) || '';
+  const year = parts.find(p => /^(19|20)\d{2}$/.test(p)) || '';
+  const subject = parts.find(p => p.length > 3 && !['ahsec', 'seba', 'cbse', 'icse', 'set'].includes(p) && !/^\d+$/.test(p)) || '';
+  return { slug, board: board.toUpperCase(), year, subject };
+}
 
 export default function PYQReplicaPage() {
   const { slug } = useParams();
   const navigate = useNavigate();
   const [html, setHtml]         = useState('');
   const [title, setTitle]       = useState('');
+  const [description, setDescription] = useState('');
   const [loading, setLoading]   = useState(true);
   const [notFound, setNotFound] = useState(false);
   const { sharing, share } = useShare();
+
+  const pyqMeta = useMemo(() => {
+    const parsed = parsePyqSlug(slug);
+    return {
+      ...parsed,
+      title: title || `Previous Year Question Paper — ${slug}`,
+      description: description
+        || `${parsed.board || 'Board'} ${parsed.year ? parsed.year + ' ' : ''}${parsed.subject || ''} previous year question paper.`,
+    };
+  }, [slug, title, description]);
+  const pyqUrl = `https://syrabit.ai/pyq/${slug || ''}`;
 
   const handleShare = useCallback(() => {
     const pyqTitle = title || `PYQ — ${slug}`;
@@ -33,10 +58,7 @@ export default function PYQReplicaPage() {
         if (titleMatch) setTitle(titleMatch[1]);
         const descMatch  = rawHtml.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i)
                         || rawHtml.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["']/i);
-        if (descMatch) {
-          const el = document.querySelector('meta[name="description"]');
-          if (el) el.setAttribute('content', descMatch[1]);
-        }
+        if (descMatch) setDescription(descMatch[1]);
         setHtml(rawHtml);
       })
       .catch(() => setNotFound(true))
@@ -82,6 +104,14 @@ export default function PYQReplicaPage() {
 
   return (
     <div style={{ background: '#fff', minHeight: '100vh', position: 'relative' }}>
+      <PageMeta
+        title={pyqMeta.title}
+        description={pyqMeta.description}
+        url={pyqUrl}
+        type="article"
+        pageType="pyq"
+        pageData={{ doc: pyqMeta }}
+      />
       <div
         className="pyq-toolbar"
         style={{

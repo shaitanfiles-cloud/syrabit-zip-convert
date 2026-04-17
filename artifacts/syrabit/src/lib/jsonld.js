@@ -1,24 +1,151 @@
 /**
- * SEO Phase D — Per-page-type JSON-LD schema builders.
+ * SEO Phase D / Task #336 — Per-page-type JSON-LD schema builders.
  *
  * Pure functions, no side effects. Each returns a schema.org @graph
  * array suitable for embedding in a single <script type="application/ld+json">
  * tag (or to be passed to PageMeta's `jsonLd` prop).
  *
  * Builders:
- *   chapterSchema(data, url, basePath)      — Article + LearningResource + WebPage + BreadcrumbList (+ FAQPage)
+ *   chapterSchema(data, url, basePath)      — Article + LearningResource + WebPage + BreadcrumbList (+ FAQPage, HowTo)
  *   subjectHubSchema(subject, url)          — EducationalOrganization + CollectionPage + BreadcrumbList (+ Course, FAQPage)
  *   libraryLandingSchema(subjects, url)     — Course + ItemList + WebPage + BreadcrumbList
  *   homeSchema(url)                         — Organization + WebSite + BreadcrumbList
+ *   pyqSchema(doc, url)                     — Quiz + LearningResource + BreadcrumbList
+ *   howToSchema({ name, steps, ... })       — HowTo node (used standalone or merged into a chapter graph)
+ *   globalSiteSchema(url)                   — Organization + LocalBusiness (Guwahati) for the global head
  */
 
 const SITE_ORIGIN = 'https://syrabit.ai';
+const SITE_LOGO = `${SITE_ORIGIN}/icons/icon-192x192.png`;
 const ORG_NODE = {
   '@type': 'Organization',
   name: 'Syrabit.ai',
   url: SITE_ORIGIN,
-  logo: { '@type': 'ImageObject', url: `${SITE_ORIGIN}/icons/icon-192x192.png` },
+  logo: { '@type': 'ImageObject', url: SITE_LOGO },
 };
+
+// Single source of truth for the publisher's address/geo. Reused by the
+// chapter Article publisher node, the global LocalBusiness emission, and
+// any future PostalAddress consumers so the AI crawlers see the exact
+// same locality string everywhere ("Guwahati, Assam").
+const SYRABIT_ADDRESS = {
+  '@type': 'PostalAddress',
+  addressLocality: 'Guwahati',
+  addressRegion: 'Assam',
+  addressCountry: 'IN',
+};
+const SYRABIT_GEO = {
+  '@type': 'GeoCoordinates',
+  latitude: 26.1445,
+  longitude: 91.7362,
+};
+
+/**
+ * Detect numbered / stepwise content in a markdown-ish body and return
+ * a HowToStep[] array. Returns [] when no procedural pattern is found
+ * so callers can short-circuit. Patterns recognized:
+ *   • lines starting with "1.", "2.", … "n."
+ *   • lines starting with "Step 1:", "Step 2 —", etc.
+ * Steps are capped at 12 to keep the schema lean for SERP cards.
+ */
+export function extractHowToSteps(content) {
+  if (!content || typeof content !== 'string') return [];
+  const lines = content.split(/\r?\n/);
+  const steps = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    const m = line.match(/^(?:\*\*)?(?:Step\s+)?(\d{1,2})[.):\-—]\s+(.{8,300})$/i);
+    if (m) {
+      const text = m[2].replace(/\*\*/g, '').trim();
+      if (text) steps.push({ position: parseInt(m[1], 10), text });
+      if (steps.length >= 12) break;
+    }
+  }
+  // Require at least 2 distinct steps to avoid emitting HowTo for a
+  // single bullet that happens to start with "1." in prose.
+  if (steps.length < 2) return [];
+  steps.sort((a, b) => a.position - b.position);
+  return steps.map((s, i) => ({
+    '@type': 'HowToStep',
+    position: i + 1,
+    name: s.text.split(/[.!?:]/, 1)[0].slice(0, 110),
+    text: s.text,
+  }));
+}
+
+/**
+ * Site-wide JSON-LD: Organization + LocalBusiness (Guwahati). Mounted
+ * once globally via <GlobalSeo />. Centralizes the publisher entity so
+ * AI crawlers consistently identify Syrabit.ai across every page.
+ */
+export function globalSiteSchema(url) {
+  const homeUrl = url || `${SITE_ORIGIN}/`;
+  return {
+    '@context': 'https://schema.org',
+    '@graph': [
+      {
+        '@type': ['Organization', 'EducationalOrganization'],
+        '@id': `${SITE_ORIGIN}/#organization`,
+        name: 'Syrabit.ai',
+        alternateName: 'Syrabit',
+        url: SITE_ORIGIN,
+        logo: { '@type': 'ImageObject', url: SITE_LOGO, width: 192, height: 192 },
+        sameAs: [SITE_ORIGIN],
+        address: SYRABIT_ADDRESS,
+        areaServed: { '@type': 'AdministrativeArea', name: 'Assam, India' },
+        knowsLanguage: ['en', 'as'],
+      },
+      {
+        '@type': 'LocalBusiness',
+        '@id': `${SITE_ORIGIN}/#localbusiness`,
+        name: 'Syrabit.ai',
+        url: SITE_ORIGIN,
+        image: SITE_LOGO,
+        priceRange: '₹₹',
+        address: SYRABIT_ADDRESS,
+        geo: SYRABIT_GEO,
+        areaServed: { '@type': 'AdministrativeArea', name: 'Assam, India' },
+        parentOrganization: { '@id': `${SITE_ORIGIN}/#organization` },
+      },
+      {
+        '@type': 'WebPage',
+        '@id': homeUrl,
+        url: homeUrl,
+        isPartOf: { '@type': 'WebSite', '@id': SITE_ORIGIN, name: 'Syrabit.ai' },
+        publisher: { '@id': `${SITE_ORIGIN}/#organization` },
+      },
+    ],
+  };
+}
+
+/** Standalone HowTo builder. Pass `steps` (string[] | HowToStep[]). */
+export function howToSchema({ name, description, steps, totalTime, inLanguage = 'en-IN', url }) {
+  const stepNodes = (steps || []).map((s, i) => {
+    if (s && typeof s === 'object' && s['@type'] === 'HowToStep') {
+      return { ...s, position: s.position || i + 1 };
+    }
+    const text = String(s || '').trim();
+    if (!text) return null;
+    return {
+      '@type': 'HowToStep',
+      position: i + 1,
+      name: text.split(/[.!?:]/, 1)[0].slice(0, 110),
+      text,
+    };
+  }).filter(Boolean);
+  if (stepNodes.length < 2) return null;
+  const node = {
+    '@type': 'HowTo',
+    name: name || 'How To',
+    description: description || `${name || 'Step-by-step guide'} — ${stepNodes.length} steps.`,
+    inLanguage,
+    step: stepNodes,
+  };
+  if (totalTime) node.totalTime = totalTime;
+  if (url) node.url = url;
+  return { '@context': 'https://schema.org', '@graph': [node] };
+}
 
 function _kw(chapterTitle, subjectName, boardName, className) {
   const words = (chapterTitle || '').split(/[\s,\-–—/&]+/).filter(w => w.length > 2);
@@ -45,24 +172,37 @@ export function chapterSchema(data, url, basePath = '') {
     aboutThings.push({ '@type': 'Thing', name: data.chapter_title });
   }
 
-  const graph = [
-    {
-      '@type': 'Article',
-      headline: data.title,
-      description: data.meta_description,
-      url,
-      author: { '@type': 'Organization', name: 'Syrabit.ai', url: SITE_ORIGIN },
-      publisher: ORG_NODE,
-      datePublished: data.generated_at || new Date().toISOString(),
-      dateModified: data.updated_at || data.generated_at || new Date().toISOString(),
-      educationalLevel: `${className} ${boardName}`.trim(),
-      about: aboutThings.length > 1 ? aboutThings : aboutThings[0],
-      keywords: _kw(chapterTitle, subjectName, boardName, className),
-      wordCount: data.word_count || 0,
-      inLanguage: 'en-IN',
-      mainEntityOfPage: { '@type': 'WebPage', '@id': url },
-      image: `${SITE_ORIGIN}/opengraph.jpg`,
+  // Real timestamps only — never bake build-time dates into Article
+  // metadata, since AI crawlers use dateModified to decide whether the
+  // page is fresh enough to cite. If we have neither generated_at nor
+  // updated_at, drop the field rather than fabricate one.
+  const datePublished = data.generated_at || data.created_at || data.published_at || null;
+  const dateModified = data.updated_at || data.modified_at || datePublished || null;
+
+  const articleNode = {
+    '@type': 'Article',
+    headline: data.title,
+    description: data.meta_description,
+    url,
+    author: {
+      '@type': ['Organization', 'EducationalOrganization'],
+      name: 'Syrabit.ai',
+      url: SITE_ORIGIN,
     },
+    publisher: { ...ORG_NODE, address: SYRABIT_ADDRESS },
+    educationalLevel: `${className} ${boardName}`.trim(),
+    about: aboutThings.length > 1 ? aboutThings : aboutThings[0],
+    keywords: _kw(chapterTitle, subjectName, boardName, className),
+    wordCount: data.word_count || 0,
+    inLanguage: data.has_assamese ? ['en-IN', 'as-IN'] : 'en-IN',
+    mainEntityOfPage: { '@type': 'WebPage', '@id': url },
+    image: `${SITE_ORIGIN}/opengraph.jpg`,
+  };
+  if (datePublished) articleNode.datePublished = datePublished;
+  if (dateModified) articleNode.dateModified = dateModified;
+
+  const graph = [
+    articleNode,
     {
       '@type': 'LearningResource',
       name: chapterTitle,
@@ -107,7 +247,88 @@ export function chapterSchema(data, url, basePath = '') {
     });
   }
 
+  // Task #336: detect numbered/stepwise content in chapter body and
+  // emit a HowTo node so AI assistants can surface step-by-step
+  // procedural answers (rocket-science derivations, lab procedures,
+  // exam-prep workflows). The chapter title doubles as the HowTo name.
+  const howToSteps = extractHowToSteps(data.content || '');
+  if (howToSteps.length >= 2) {
+    graph.push({
+      '@type': 'HowTo',
+      name: chapterTitle,
+      description: data.meta_description || `${chapterTitle} — step-by-step.`,
+      inLanguage: 'en-IN',
+      step: howToSteps,
+    });
+  }
+
   return { '@context': 'https://schema.org', '@graph': graph };
+}
+
+/**
+ * Task #336: schema for PYQ (Previous Year Question paper) replicas.
+ * Emits Quiz + LearningResource + BreadcrumbList. Doc shape mirrors
+ * what the worker returns from `/pyq/{slug}`:
+ *   { slug, title, description?, board?, year?, subject?, class?, exam? }
+ */
+export function pyqSchema(doc, url) {
+  if (!doc || !url) return null;
+  const slug = doc.slug || '';
+  const title = doc.title || `Previous Year Question Paper — ${slug}`;
+  const subject = doc.subject || doc.subject_name || '';
+  const board = doc.board || doc.board_name || '';
+  const className = doc.class || doc.class_name || '';
+  const year = doc.year || doc.exam_year || '';
+  const description = doc.description
+    || `${board ? board + ' ' : ''}${subject ? subject + ' ' : ''}${year ? year + ' ' : ''}previous year question paper for ${className || 'students'}.`;
+  const eduLevel = `${className} ${board}`.trim() || 'Higher Secondary';
+
+  return {
+    '@context': 'https://schema.org',
+    '@graph': [
+      {
+        '@type': 'Quiz',
+        '@id': url,
+        name: title,
+        description,
+        url,
+        about: subject ? { '@type': 'Thing', name: subject } : undefined,
+        educationalLevel: eduLevel,
+        educationalAlignment: board
+          ? {
+              '@type': 'AlignmentObject',
+              alignmentType: 'educationalSubject',
+              educationalFramework: board,
+              targetName: subject || 'General',
+            }
+          : undefined,
+        learningResourceType: 'Question Paper',
+        inLanguage: 'en-IN',
+        author: { '@type': 'Organization', name: board || 'Syrabit.ai' },
+        publisher: ORG_NODE,
+      },
+      {
+        '@type': 'LearningResource',
+        name: title,
+        description,
+        url,
+        learningResourceType: 'Past Examination Paper',
+        educationalLevel: eduLevel,
+        inLanguage: 'en-IN',
+        isAccessibleForFree: true,
+        provider: ORG_NODE,
+        license: 'https://syrabit.ai/terms',
+      },
+      {
+        '@type': 'BreadcrumbList',
+        itemListElement: [
+          { '@type': 'ListItem', position: 1, name: 'Home', item: `${SITE_ORIGIN}/` },
+          { '@type': 'ListItem', position: 2, name: 'Library', item: `${SITE_ORIGIN}/library` },
+          { '@type': 'ListItem', position: 3, name: title, item: url },
+        ],
+      },
+    ],
+  };
 }
 
 export function subjectHubSchema(subject, url) {
@@ -291,6 +512,8 @@ export function buildSchemaForPageType(pageType, payload) {
       return libraryLandingSchema(payload?.subjects, payload?.url);
     case 'home':
       return homeSchema(payload?.url);
+    case 'pyq':
+      return pyqSchema(payload?.doc, payload?.url);
     default:
       return null;
   }
