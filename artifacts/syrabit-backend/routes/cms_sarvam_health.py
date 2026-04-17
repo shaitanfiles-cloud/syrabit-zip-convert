@@ -1766,6 +1766,29 @@ def _record_assamese_run(diag: dict) -> None:
             doc["raw_snippet"] = raw_snip
         if cleaned_snip:
             doc["cleaned_snippet"] = cleaned_snip
+        # Task #437 — persist the exact Latin runs the sanitiser flagged
+        # so the admin UI can highlight them inside the original snippet.
+        # Bounded list (50 tokens × 80 chars) so a runaway diag can't
+        # bloat the row; tokens are scrubbed for PII to match snippet
+        # treatment, deduped while preserving order, and any empty
+        # entries dropped. We keep noop runs token-free since we don't
+        # store snippets for them anyway.
+        raw_tokens = diag.get("suspicious_tokens") or []
+        if isinstance(raw_tokens, (list, tuple)):
+            seen: set[str] = set()
+            tokens: list[str] = []
+            for t in raw_tokens:
+                if not isinstance(t, str):
+                    continue
+                cleaned = _scrub_pii(t).strip()
+                if not cleaned or cleaned in seen:
+                    continue
+                seen.add(cleaned)
+                tokens.append(cleaned[:80])
+                if len(tokens) >= 50:
+                    break
+            if tokens:
+                doc["suspicious_tokens"] = tokens
     # Task #428 — trace fields (conversation_id, user_id) so admins can
     # answer "which user / which conversation triggered this leak?"
     # without combing Railway logs. We persist only stable IDs (no

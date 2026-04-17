@@ -242,6 +242,90 @@ class TestRecorderPersistsSnippets:
         assert "98765" not in snip
 
 
+class TestRecorderPersistsSuspiciousTokens:
+    """Task #437 — the sanitiser already exposes suspicious_tokens (the
+    exact Latin runs that triggered cleanup). The recorder must persist
+    them so the admin UI can highlight each token inline in the original
+    snippet."""
+
+    def _capture(self, diag):
+        import asyncio
+        from routes.cms_sarvam_health import _record_assamese_run
+        captured = {}
+
+        async def _fake_insert(doc):
+            captured["doc"] = doc
+
+        async def _run():
+            with patch("routes.cms_sarvam_health._insert_assamese_run", _fake_insert):
+                _record_assamese_run(diag)
+                await asyncio.sleep(0)
+
+        asyncio.run(_run())
+        return captured["doc"]
+
+    def test_tokens_persisted_for_active_run(self):
+        doc = self._capture({
+            "action": "stripped", "behaviour": "strip",
+            "ratio": 0.0, "original_ratio": 0.2, "threshold": 0.05,
+            "raw_text": "উৰুকা me uses ssible terms", "cleaned_text": "উৰুকা",
+            "suspicious_tokens": ["me uses", "ssible terms"],
+        })
+        assert doc["suspicious_tokens"] == ["me uses", "ssible terms"]
+
+    def test_tokens_dropped_for_noop(self):
+        """Noop runs don't get snippets either, so persisting tokens
+        for them would just bloat the collection with no UI benefit."""
+        doc = self._capture({
+            "action": "noop", "behaviour": "strip",
+            "ratio": 0.01, "threshold": 0.05,
+            "suspicious_tokens": ["foo"],
+        })
+        assert "suspicious_tokens" not in doc
+
+    def test_tokens_deduped_and_capped(self):
+        """50-token cap protects the doc from a runaway diag; dedup
+        keeps the highlighted UI clean when the same token shows up
+        many times."""
+        toks = ["dup"] * 5 + [f"t{i}" for i in range(60)]
+        doc = self._capture({
+            "action": "stripped", "behaviour": "strip",
+            "ratio": 0.0, "original_ratio": 0.2, "threshold": 0.05,
+            "raw_text": "x", "cleaned_text": "y",
+            "suspicious_tokens": toks,
+        })
+        persisted = doc["suspicious_tokens"]
+        assert len(persisted) == 50
+        assert persisted[0] == "dup"
+        assert persisted.count("dup") == 1
+        # First-cap policy: order preserved → t0..t48 fill the rest.
+        assert persisted[1] == "t0"
+        assert persisted[-1] == "t48"
+
+    def test_tokens_scrubbed_for_pii(self):
+        """If a Latin run happens to contain an email/phone, scrubbing
+        protects the audit log just like it does for the snippet."""
+        doc = self._capture({
+            "action": "stripped", "behaviour": "strip",
+            "ratio": 0.0, "original_ratio": 0.2, "threshold": 0.05,
+            "raw_text": "x", "cleaned_text": "y",
+            "suspicious_tokens": ["email me at user@example.com pls", "regular run"],
+        })
+        toks = doc["suspicious_tokens"]
+        assert "[email]" in toks[0]
+        assert "user@example.com" not in toks[0]
+        assert "regular run" in toks
+
+    def test_non_string_tokens_filtered(self):
+        doc = self._capture({
+            "action": "stripped", "behaviour": "strip",
+            "ratio": 0.0, "original_ratio": 0.2, "threshold": 0.05,
+            "raw_text": "x", "cleaned_text": "y",
+            "suspicious_tokens": ["ok", None, 42, "", "  ", "fine"],
+        })
+        assert doc["suspicious_tokens"] == ["ok", "fine"]
+
+
 class TestRecorderPersistsTrace:
     """Task #428 — conversation_id / user_id must reach the run doc so
     admins can answer "which user / which conversation triggered this

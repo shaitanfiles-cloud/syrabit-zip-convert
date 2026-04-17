@@ -6,6 +6,35 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import axios from 'axios';
 import { llmCosts, API_BASE } from '@/utils/api';
 
+// Task #437 — split a snippet into ordered text segments + matched
+// suspicious tokens so the audit UI can render <mark> spans inline.
+// Token matching is case-insensitive and longest-first (so "ssible
+// terms" wins over "ssible" when both are flagged), and falls back
+// to plain text when no tokens are provided.
+const _escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const buildHighlightedSegments = (text, tokens) => {
+  if (!text || typeof text !== 'string') return [];
+  const cleanTokens = (tokens || [])
+    .filter((t) => typeof t === 'string' && t.trim().length > 0)
+    .map((t) => t.trim())
+    // Longest-first so multi-word matches aren't shadowed by their prefix.
+    .sort((a, b) => b.length - a.length);
+  if (cleanTokens.length === 0) return [{ text, highlight: false }];
+  let pattern;
+  try {
+    pattern = new RegExp(`(${cleanTokens.map(_escapeRegex).join('|')})`, 'gi');
+  } catch {
+    return [{ text, highlight: false }];
+  }
+  const parts = text.split(pattern);
+  return parts
+    .filter((p) => p !== '')
+    .map((p) => ({
+      text: p,
+      highlight: cleanTokens.some((t) => p.toLowerCase() === t.toLowerCase()),
+    }));
+};
+
 const adminHeaders = (token) => {
   const isRealJwt = token && typeof token === 'string' && token.split('.').length === 3;
   return isRealJwt ? { Authorization: `Bearer ${token}` } : {};
@@ -789,9 +818,38 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                         <div className="px-3 pb-3 space-y-2" data-testid={`asm-run-detail-${idx}`}>
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                             <div className="rounded-lg border border-gray-200 p-2 bg-gray-50">
-                              <p className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-1">Original</p>
-                              <p className="text-xs text-gray-800 font-mono whitespace-pre-wrap break-words">
-                                {row.raw_snippet || <span className="text-gray-400">(not persisted)</span>}
+                              <div className="flex items-center justify-between mb-1">
+                                <p className="text-[10px] uppercase tracking-wider text-gray-500 font-bold">Original</p>
+                                {Array.isArray(row.suspicious_tokens) && row.suspicious_tokens.length > 0 && (
+                                  <span
+                                    className="text-[9px] uppercase tracking-wider text-amber-700 font-semibold"
+                                    data-testid={`asm-run-token-count-${idx}`}
+                                  >
+                                    {row.suspicious_tokens.length} flagged
+                                  </span>
+                                )}
+                              </div>
+                              <p
+                                className="text-xs text-gray-800 font-mono whitespace-pre-wrap break-words"
+                                data-testid={`asm-run-original-${idx}`}
+                              >
+                                {row.raw_snippet ? (
+                                  buildHighlightedSegments(row.raw_snippet, row.suspicious_tokens).map((seg, i) =>
+                                    seg.highlight ? (
+                                      <mark
+                                        key={i}
+                                        className="bg-amber-200 text-amber-900 rounded px-0.5"
+                                        data-testid={`asm-run-token-${idx}-${i}`}
+                                      >
+                                        {seg.text}
+                                      </mark>
+                                    ) : (
+                                      <span key={i}>{seg.text}</span>
+                                    ),
+                                  )
+                                ) : (
+                                  <span className="text-gray-400">(not persisted)</span>
+                                )}
                               </p>
                             </div>
                             <div className="rounded-lg border border-emerald-200 p-2 bg-emerald-50">
