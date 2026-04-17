@@ -24,10 +24,14 @@ Safety rails
 ------------
 - 5 s timeout on every outbound call; exceptions are logged but NEVER
   re-raised, so the content generator can't block or fail because of us.
-- Daily in-memory quota cap (default 200/day, configurable via env
-  `GOOGLE_INDEXING_DAILY_LIMIT`). When the quota is reached the client
-  short-circuits further `notify_url_updated` calls for the rest of the
-  UTC day.
+- Daily quota cap (default 200/day, configurable via env
+  `GOOGLE_INDEXING_DAILY_LIMIT`). The cap is enforced cross-worker via
+  an atomic Mongo `update_one` with filter `{day, sent: {$lt: limit}}`
+  + `$inc: {sent: 1}` so concurrent gunicorn workers cannot collectively
+  blow past the limit. A process-local mirror of the counter provides a
+  fast-path short-circuit and the Mongo-unavailable fallback. When the
+  quota is reached the client short-circuits further `notify_url_updated`
+  calls for the rest of the UTC day.
 - Missing `GOOGLE_INDEXING_SERVICE_ACCOUNT` secret is treated as
   "disabled" — we log a one-time warning and every `notify_url_updated`
   call returns a structured "skipped" result. Sitemap-ping still works.
@@ -409,10 +413,15 @@ def _record_status_code(status_code: int) -> None:
 
 
 def _under_quota_and_reserve() -> bool:
-    """Atomic check-and-increment: returns True if a submission slot was
-    reserved, False if the daily cap has been hit. The reservation is
-    released implicitly — a failed POST still counts against the quota so
-    a misconfigured service account can't hammer Google."""
+    """Process-local atomic check-and-increment used as the in-memory
+    fast-path AND as the Mongo-unavailable fallback for `_reserve_quota`.
+    Returns True if a slot was reserved, False if the local mirror of the
+    daily cap has been hit. A failed POST still counts against the quota
+    so a misconfigured service account can't hammer Google.
+
+    On the first quota_block of the UTC day this also schedules an ops
+    alert (de-duped per day per process; cross-worker dedupe via Mongo
+    claim doc inside `_dispatch_quota_alert`)."""
     blocked = False
     sent_now = 0
     limit = 0
@@ -584,6 +593,136 @@ async def _dispatch_quota_alert(day: str, sent: int, limit: int) -> None:
         with _stats_lock:
             if _quota_alert_fired_day == day:
                 _quota_alert_fired_day = ""
+
+
+async def _reserve_quota_in_store(limit: int) -> Optional[bool]:
+    """Atomically reserve a slot in the shared `google_indexing_daily`
+    Mongo doc. Returns:
+
+    - True  → reservation succeeded (`$inc: {sent: 1}` applied under the
+              filter `{day, sent: {$lt: limit}}`).
+    - False → daily cap reached on the DB side. The doc exists and its
+              `sent` is already >= `limit`.
+    - None  → Mongo unavailable / transient error. Caller should fall
+              back to the in-memory reservation.
+
+    This is the cross-worker authoritative cap. With multiple gunicorn
+    workers each holding their own in-memory `_stats`, the only way to
+    keep the aggregate Google Indexing API submissions per UTC day at or
+    below the configured cap is to gate every send on this DB-side
+    reservation.
+    """
+    try:
+        from deps import db, is_mongo_available
+        if not await is_mongo_available():
+            return None
+        coll = db[_STORE_COLLECTION]
+        day = _today_key()
+        now = datetime.now(timezone.utc)
+        # Atomic conditional reserve. Mongo serialises this update at the
+        # document level, so concurrent workers cannot both observe
+        # sent < limit and both increment past the cap.
+        updated = await coll.update_one(
+            {"day": day, "sent": {"$lt": limit}},
+            {
+                "$inc": {"sent": 1},
+                "$set": {"updated_at": now},
+            },
+        )
+        if getattr(updated, "matched_count", 0) >= 1:
+            return True
+        # No match: either the day's doc doesn't exist yet OR the cap was
+        # already reached. Distinguish with a probe.
+        existing = await coll.find_one({"day": day}, {"sent": 1, "_id": 0})
+        if existing is None:
+            # Race-safe bootstrap: create the day's doc with sent=0 only if
+            # nobody else got there first.
+            try:
+                await coll.update_one(
+                    {"day": day},
+                    {"$setOnInsert": {
+                        "day": day, "sent": 0,
+                        "created_at": now, "updated_at": now,
+                    }},
+                    upsert=True,
+                )
+            except Exception as e:
+                logger.debug(
+                    "google_indexing reserve bootstrap failed: %s", e,
+                )
+                return None
+            # Retry the conditional reserve now that the doc exists.
+            updated = await coll.update_one(
+                {"day": day, "sent": {"$lt": limit}},
+                {
+                    "$inc": {"sent": 1},
+                    "$set": {"updated_at": now},
+                },
+            )
+            if getattr(updated, "matched_count", 0) >= 1:
+                return True
+            # Still nothing — another worker raced us past the cap.
+        return False
+    except Exception as e:
+        logger.debug("google_indexing reserve failed: %s", e)
+        return None
+
+
+async def _reserve_quota(limit: int) -> bool:
+    """Reserve a submission slot honouring BOTH a process-local fast-path
+    AND a Mongo-authoritative cross-worker cap. Single source of truth for
+    "may we submit this URL right now?". Never raises.
+
+    Order of operations:
+      1. Local atomic reserve under `_stats_lock`. Serialises within the
+         worker; if local mirror already shows we are at the cap, short-
+         circuit without hitting Mongo.
+      2. Cross-worker reserve via `_reserve_quota_in_store`. The DB is
+         authoritative — if it says cap reached, we roll back the local
+         increment and report quota_blocked. If Mongo is unavailable, we
+         trust the local reserve so a Mongo outage does not stop sends.
+    """
+    # Step 1: local fast-path (atomic in-process).
+    if not _under_quota_and_reserve():
+        return False
+    # Step 2: cross-worker DB-authoritative reserve.
+    db_result = await _reserve_quota_in_store(limit)
+    if db_result is True:
+        # Mirror baseline so the next `_flush_to_store` does NOT $inc
+        # `sent` again — the reservation already incremented the shared
+        # doc's `sent` field directly.
+        global _last_flushed_day
+        with _stats_lock:
+            day = _stats.get("day")
+            if _last_flushed_day != day:
+                for k in _COUNTER_KEYS:
+                    _last_flushed_stats[k] = 0
+                _last_flushed_day = day
+            _last_flushed_stats["sent"] = (
+                _last_flushed_stats.get("sent", 0) + 1
+            )
+        return True
+    if db_result is False:
+        # DB cap reached. Roll back the optimistic local reserve and sync
+        # the local mirror to the cap so subsequent fast-path checks
+        # short-circuit without re-hitting Mongo.
+        with _stats_lock:
+            current = _stats.get("sent", 0)
+            _stats["sent"] = max(current - 1, limit)
+            _stats["quota_blocks"] = _stats.get("quota_blocks", 0) + 1
+            day = _stats.get("day")
+            if _last_flushed_day != day:
+                for k in _COUNTER_KEYS:
+                    _last_flushed_stats[k] = 0
+                _last_flushed_day = day
+            # Pin the baseline at the cap so flush won't re-$inc sent.
+            _last_flushed_stats["sent"] = max(
+                _last_flushed_stats.get("sent", 0), _stats["sent"],
+            )
+        _schedule_flush()
+        return False
+    # db_result is None → Mongo unavailable. Trust the local reserve.
+    return True
 
 
 # -----------------------------------------------------------------------------
@@ -811,7 +950,7 @@ async def notify_url_updated(url: str, source: str = "content_fanout") -> Dict[s
         result["reason"] = "no_service_account"
         _bump("skipped_disabled")
         return result
-    if not _under_quota_and_reserve():
+    if not await _reserve_quota(_daily_limit()):
         result["status"] = "quota_blocked"
         result["reason"] = "daily_limit_reached"
         return result

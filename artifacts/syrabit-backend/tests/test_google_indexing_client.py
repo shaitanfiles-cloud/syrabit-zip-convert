@@ -926,6 +926,167 @@ def test_day_rollover_clears_loaded_days(monkeypatch):
     assert gic._stats["sent"] == 1
 
 
+# ---------------------------------------------------------------------------
+# Task #331 — Mongo-authoritative quota cap across workers
+# ---------------------------------------------------------------------------
+
+class _AtomicQuotaCollection:
+    """Fake motor collection that honours `{sent: {$lt: limit}}` and
+    `$setOnInsert` upsert semantics. Models real Mongo's per-document
+    atomicity by serialising each await call through an asyncio lock,
+    which is enough to prove the cap holds under concurrent workers."""
+
+    def __init__(self):
+        self.docs: dict = {}
+        self._lock = asyncio.Lock()
+
+    async def update_one(self, filt, update, upsert=False):
+        async with self._lock:
+            day = filt["day"]
+            doc = self.docs.get(day)
+            cond = filt.get("sent")
+            # Evaluate the conditional `sent: {$lt: <limit>}` predicate.
+            if isinstance(cond, dict) and "$lt" in cond:
+                limit = cond["$lt"]
+                if doc is None or doc.get("sent", 0) >= limit:
+                    matched = 0
+                else:
+                    matched = 1
+            else:
+                matched = 1 if doc is not None else 0
+            if matched == 1:
+                if "$inc" in update:
+                    for k, v in update["$inc"].items():
+                        doc[k] = doc.get(k, 0) + v
+                if "$set" in update:
+                    doc.update(update["$set"])
+                self.docs[day] = doc
+            elif upsert and doc is None:
+                new_doc = {"day": day}
+                if "$setOnInsert" in update:
+                    new_doc.update(update["$setOnInsert"])
+                if "$set" in update:
+                    new_doc.update(update["$set"])
+                if "$inc" in update:
+                    for k, v in update["$inc"].items():
+                        new_doc[k] = new_doc.get(k, 0) + v
+                self.docs[day] = new_doc
+                matched = 1
+            result = MagicMock()
+            result.matched_count = matched
+            result.modified_count = matched
+            return result
+
+    async def find_one(self, filt, *_a, **_kw):
+        async with self._lock:
+            day = filt["day"]
+            doc = self.docs.get(day)
+            return dict(doc) if doc else None
+
+
+def _install_atomic_store(monkeypatch, gic):
+    import deps as deps_mod
+    coll = _AtomicQuotaCollection()
+
+    class _FakeDb:
+        def __getitem__(self, name):
+            if name == gic._STORE_COLLECTION:
+                return coll
+            return MagicMock()
+
+    async def _avail():
+        return True
+
+    monkeypatch.setattr(deps_mod, "db", _FakeDb(), raising=False)
+    monkeypatch.setattr(deps_mod, "is_mongo_available", _avail, raising=False)
+    monkeypatch.setenv("GOOGLE_INDEXING_PERSIST_IN_TESTS", "1")
+    return coll
+
+
+def test_db_authoritative_cap_holds_under_concurrent_load(monkeypatch):
+    """Prove the Mongo-side cap holds when many concurrent reservations
+    race against a shared store. With limit=200 and 250 concurrent
+    `_reserve_quota_in_store` calls, exactly 200 must succeed and the
+    stored `sent` must equal the cap — this is the cross-worker behavior
+    Task #331 enforces."""
+    gic = _fresh_client(monkeypatch, limit=200)
+    store = _install_atomic_store(monkeypatch, gic)
+
+    async def _drive():
+        results = await asyncio.gather(*[
+            gic._reserve_quota_in_store(200) for _ in range(250)
+        ])
+        return results
+
+    results = _run(_drive())
+    successes = sum(1 for r in results if r is True)
+    failures = sum(1 for r in results if r is False)
+    assert successes == 200, f"expected 200 reservations, got {successes}"
+    assert failures == 50, f"expected 50 cap-blocked, got {failures}"
+    today = gic._today_key()
+    assert store.docs[today]["sent"] == 200, (
+        "stored counter must be pinned at the cap, never above"
+    )
+
+
+def test_db_cap_blocks_even_when_local_mirror_is_stale(monkeypatch):
+    """Simulate a 'second worker' scenario: local in-memory `_stats`
+    shows sent=0 (fresh process), but the shared Mongo doc already has
+    sent=200 because peer workers exhausted the day's budget. The next
+    submission attempt MUST be quota-blocked even though the local
+    fast-path would otherwise let it through."""
+    gic = _fresh_client(monkeypatch, limit=200)
+    today = gic._today_key()
+    store = _install_atomic_store(monkeypatch, gic)
+    store.docs[today] = {"day": today, "sent": 200, "status_2xx": 200}
+    fake = _FakeAsyncClient(post_response=_FakeResponse(200, "{}"))
+    _install_httpx(monkeypatch, gic, fake)
+
+    # Skip hydrate so the local mirror stays at zero — this is the worst
+    # case where DB-authoritative gating is the only thing protecting the
+    # cap.
+    gic._loaded_days.add(today)
+
+    async def _drive():
+        return await gic.notify_url_updated("https://syrabit.ai/peer-blocked")
+
+    res = _run(_drive())
+    assert res["status"] == "quota_blocked", (
+        f"DB cap must override stale local mirror, got {res}"
+    )
+    # No outbound POST should have happened.
+    assert len(fake.post_calls) == 0
+    # Local mirror should be synced up to the cap so subsequent calls
+    # short-circuit on the fast path.
+    assert gic._stats["sent"] >= 200
+    # Stored counter must NOT have been incremented past the cap.
+    assert store.docs[today]["sent"] == 200
+
+
+def test_successful_reserve_does_not_double_count_on_flush(monkeypatch):
+    """A successful DB-side reservation already $inc'd `sent` directly.
+    The next `_flush_to_store` MUST send a zero delta for `sent`,
+    otherwise the same submission would be counted twice in the stored
+    aggregate."""
+    gic = _fresh_client(monkeypatch, limit=200)
+    store = _install_atomic_store(monkeypatch, gic)
+    fake = _FakeAsyncClient(post_response=_FakeResponse(200, "{}"))
+    _install_httpx(monkeypatch, gic, fake)
+
+    async def _drive():
+        await gic.notify_url_updated("https://syrabit.ai/once")
+        # Force flush to drain any pending counters.
+        await gic._flush_to_store()
+        await asyncio.sleep(0)
+        await gic._flush_to_store()
+
+    _run(_drive())
+    today = gic._today_key()
+    assert store.docs[today]["sent"] == 1, (
+        "stored sent must equal exactly one — reserve already incremented it"
+    )
+
+
 def test_seo_fanout_includes_google_indexing_step(monkeypatch):
     import seo_fanout
     import google_indexing_client as gic
