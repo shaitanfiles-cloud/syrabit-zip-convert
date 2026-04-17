@@ -13,8 +13,6 @@ import { useShare, SerpPreviewModal } from '@/hooks/useShare';
 import Analytics from '@/utils/analytics';
 import { useContentLang } from '@/context/LanguageContext';
 import StickyToc from '@/components/ui/StickyToc';
-import InArticleAd from '@/components/InArticleAd';
-import AdSlot from '@/components/ads/AdSlot';
 
 function ChapterJsonLd({ data, url, basePath }) {
   useEffect(() => {
@@ -824,8 +822,6 @@ export default function ChapterPage() {
       </header>
 
       <div className="max-w-7xl mx-auto px-4 py-6">
-        {/* Top display ad — below header, before article (Task #401) */}
-        <AdSlot variant="topDisplay" eager adKey={`chapter-top-${data?.chapter_id || chapterSlug}`} className="mb-4" />
         <div className="flex gap-8">
           <article ref={articleRef} className="flex-1 min-w-0">
             <div
@@ -850,18 +846,7 @@ export default function ChapterPage() {
               </Suspense>
             </div>
 
-            {typeof displayContent === 'string' && displayContent.length > 1500 && (
-              <InArticleAd adKey={data?.chapter_id || chapterSlug} />
-            )}
-
             <ImportantQuestions chapterTitle={chapterTitle} pyqData={pyqData} />
-
-            {/* Mid-content in-article ad — between Important Questions and
-                the Ask-AI CTA. Only render on long pages so AdSense's
-                thin-content guard isn't triggered (Task #401). */}
-            {typeof displayContent === 'string' && displayContent.length > 3000 && (
-              <InArticleAd adKey={`${data?.chapter_id || chapterSlug}-mid`} /> 
-            )}
 
             <div className="mt-8 p-5 rounded-2xl bg-primary/5 border border-primary/15">
               <p className="text-sm font-semibold text-primary mb-1">
@@ -890,15 +875,8 @@ export default function ChapterPage() {
               label={contentLang === 'as' ? 'এই পৃষ্ঠাত' : 'On this page'}
               onItemClick={(h) => Analytics.tocClick(h.text, document.title)}
             />
-            {/* Sticky desktop sidebar ad — hidden < lg (Task #401) */}
-            <div className="sticky top-24">
-              <AdSlot variant="sidebar" adKey={`chapter-side-${data?.chapter_id || chapterSlug}`} />
-            </div>
           </aside>
         </div>
-
-        {/* Bottom display ad — after main chapter article (Task #401) */}
-        <AdSlot variant="bottomDisplay" adKey={`chapter-bottom-${data?.chapter_id || chapterSlug}`} className="mt-8" />
 
         <nav className="mt-10 pt-6 border-t border-border/30" aria-label="Site navigation">
           <div className="flex flex-wrap gap-4 justify-center text-xs text-muted-foreground">

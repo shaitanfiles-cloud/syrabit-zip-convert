@@ -3,7 +3,6 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { WORKER_API } from '../utils/api';
 import { useShare } from '../hooks/useShare';
 import PageMeta from '@/components/seo/PageMeta';
-import AdSlot from '@/components/ads/AdSlot';
 
 /**
  * Best-effort parse of a PYQ slug like "ahsec-class-12-physics-2024" into
@@ -209,37 +208,7 @@ export default function PYQReplicaPage() {
         </button>
       </div>
       <div style={{ paddingTop: '48px' }}>
-        {/* Top display ad — below toolbar (Task #401) */}
-        <div style={{ maxWidth: 900, margin: '0 auto', padding: '12px 16px 0' }}>
-          <AdSlot variant="topDisplay" eager adKey={`pyq-top-${slug}`} />
-        </div>
-        {/* Per-section in-article ads — split on <h2> boundaries so each
-            year/section gets its own ad after long content. We only inject
-            between sections (never as the first or last child) to keep
-            the layout stable and CLS < 0.1. Task #401. */}
-        {(() => {
-          const parts = (html || '').split(/(?=<h2\b)/i);
-          if (parts.length <= 2) {
-            return <div dangerouslySetInnerHTML={{ __html: html }} />;
-          }
-          return parts.map((chunk, idx) => (
-            <div key={`pyq-section-${idx}`}>
-              <div dangerouslySetInnerHTML={{ __html: chunk }} />
-              {idx > 0 && idx < parts.length - 1 && chunk.length > 600 && (
-                <div style={{ maxWidth: 900, margin: '0 auto', padding: '12px 16px' }}>
-                  <AdSlot
-                    variant="inArticle"
-                    adKey={`pyq-section-${slug}-${idx}`}
-                  />
-                </div>
-              )}
-            </div>
-          ));
-        })()}
-        {/* Bottom display ad — after replica content (Task #401) */}
-        <div style={{ maxWidth: 900, margin: '0 auto', padding: '0 16px 24px' }}>
-          <AdSlot variant="bottomDisplay" adKey={`pyq-bottom-${slug}`} />
-        </div>
+        <div dangerouslySetInnerHTML={{ __html: html }} />
       </div>
     </div>
   );

@@ -13,8 +13,6 @@ import {
 import { useToggleSavedSubject } from '@/hooks/useUser';
 import SubjectCard from './library/SubjectCard';
 import VirtualSubjectGrid from './library/VirtualSubjectGrid';
-import InFeedAd from '@/components/InFeedAd';
-import AdSlot from '@/components/ads/AdSlot';
 import LibrarySkeleton from './library/LibrarySkeleton';
 import FilterChip from './library/FilterChip';
 import ScrollableFilterRow from './library/ScrollableFilterRow';
@@ -449,9 +447,6 @@ export default function LibraryPage() {
         <div className="flex-1 overflow-y-auto" ref={setScrollContainerEl}>
           <div className="w-full max-w-6xl mx-auto px-4 md:px-6 py-5">
 
-            {/* Top display ad — between hero/filters and grid (Task #401) */}
-            <AdSlot variant="topDisplay" eager adKey="library-top" className="mb-4" />
-
             <ScrollableFilterRow
               role="group"
               aria-label="Stream filters"
@@ -564,20 +559,7 @@ export default function LibraryPage() {
                       index={index}
                     />
                   );
-                  // Insert an in-feed native ad after every 6 subject cards.
-                  const shouldShowAd =
-                    (index + 1) % 6 === 0 && index < visibleSubjects.length - 1;
-                  return shouldShowAd
-                    ? [
-                        card,
-                        <div
-                          key={`infeed-ad-${index}`}
-                          className="col-span-1 md:col-span-2 xl:col-span-3"
-                        >
-                          <InFeedAd adKey={`library-${index}`} />
-                        </div>,
-                      ]
-                    : [card];
+                  return [card];
                 })}
               </div>
               {filteredSubjects.length > visibleSubjects.length && (
@@ -597,9 +579,6 @@ export default function LibraryPage() {
               <LazyCmsPostsGrid />
             </Suspense>
           </LazyOnVisible>
-
-          {/* Bottom multiplex ad — at the end of the library scroll (Task #401) */}
-          <AdSlot variant="multiplex" adKey="library-bottom" className="mt-8" />
         </div>
 
       </div>

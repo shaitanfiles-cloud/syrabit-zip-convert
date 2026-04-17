@@ -1,7 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate, useParams } from "react-router-dom";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { PageTracker } from "@/utils/usePageTracking";
-import AdAutoEnabler from "@/components/ads/AdAutoEnabler";
 import { AuthProvider } from "@/context/AuthContext";
 import { LanguageProvider } from "@/context/LanguageContext";
 import { AuthGuard } from "@/components/AuthGuard";
@@ -423,7 +422,6 @@ function App() {
     <AppShell>
       <BrowserRouter>
         <PageTracker />
-        <AdAutoEnabler />
         <Suspense fallback={<DeferredFallback />}>
           <AppRoutes />
         </Suspense>

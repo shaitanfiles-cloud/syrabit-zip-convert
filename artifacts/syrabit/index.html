@@ -19,9 +19,6 @@
     <!-- ── Google Search Console verification ── -->
     <meta name="google-site-verification" content="f13iLNDbp45Reawy65oBfjdxkM_HznvwIaaGLJHYTko" />
 
-    <!-- ── Google AdSense site verification (Task #401) ── -->
-    <meta name="google-adsense-account" content="ca-pub-8958003374183515" />
-
     <!-- ── SEO ── -->
     <title>Syrabit.ai</title>
     <meta http-equiv="content-language" content="en-IN" />
@@ -64,23 +61,13 @@
     <!-- Backend API preconnect — injected at build time by Vite (see vite.config.js htmlPlugin) -->
     <!--BACKEND_PRECONNECT-->
 
-    <!-- ── Google AdSense loader (Task #401) ──
-         Placed in <head> as required by AdSense policy + crawler so the
-         script tag is present in the static SSR/prerendered HTML and is
-         discovered before <ins> elements paint. `async` keeps it
-         non-blocking; the previous deferred-injection block (Task #391)
-         is retained below ONLY for emergent.sh / posthog scheduling. -->
-    <script async crossorigin="anonymous"
-      src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8958003374183515"></script>
-
     <!-- Task #391: trimmed preconnect list. Same-origin preconnect is a
          no-op (we're already connected), and crossorigin on the PostHog
          asset host caused Lighthouse "preconnect misuse" warnings.
-         AdSense + Emergent get loaded after LCP via the deferred loader
-         block below, so dns-prefetch is enough — no preconnect needed. -->
+         Emergent gets loaded after LCP via the deferred loader block
+         below, so dns-prefetch is enough — no preconnect needed. -->
     <link rel="dns-prefetch" href="https://us.i.posthog.com" />
     <link rel="dns-prefetch" href="https://us-assets.i.posthog.com" />
-    <link rel="dns-prefetch" href="https://pagead2.googlesyndication.com" />
     <link rel="dns-prefetch" href="https://assets.emergent.sh" />
 
     <!-- Font preconnect — reduces DNS/TLS handshake latency -->
@@ -324,10 +311,6 @@
             if(loaded)return;loaded=true;
             window.addEventListener("error",function(e){if(e.error instanceof DOMException&&e.error.name==="DataCloneError"&&e.message&&e.message.includes("PerformanceServerTiming")){e.stopImmediatePropagation();e.preventDefault()}},true);
             var em=document.createElement("script");em.src="https://assets.emergent.sh/scripts/emergent-main.js";em.async=true;document.body.appendChild(em);
-            // AdSense loader is now in <head> (Task #401). Auto Ads are
-            // enabled per-route from <AdAutoEnabler/> (mounted in App.jsx)
-            // so anonymous SEO routes get Auto Ads while auth/payment/
-            // admin/profile routes don't.
             if(po){try{po.disconnect()}catch(e){}}
             if(timer){clearTimeout(timer);timer=null;}
           }

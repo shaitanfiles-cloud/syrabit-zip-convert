@@ -3,7 +3,6 @@ import { useAuth } from '@/context/AuthContext';
 import { Home, BookOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { LogoMark } from '@/components/Logo';
-import AdSlot from '@/components/ads/AdSlot';
 
 export default function NotFoundPage() {
   const { user } = useAuth();
@@ -52,12 +51,6 @@ export default function NotFoundPage() {
             </Button>
           </Link>
         </div>
-      </div>
-      {/* 404 display + multiplex — monetize high-traffic 404s and surface
-          useful related links (Task #401). */}
-      <div className="w-full max-w-2xl mt-10 flex flex-col gap-6">
-        <AdSlot variant="bottomDisplay" adKey="not-found-display" />
-        <AdSlot variant="multiplex" adKey="not-found" />
       </div>
     </div>
   );

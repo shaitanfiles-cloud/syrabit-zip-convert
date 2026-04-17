@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import { useContentLang } from '@/context/LanguageContext';
 import LangToggle from '@/components/ui/LangToggle';
-import AdSlot from '@/components/ads/AdSlot';
 
 const _t = {
   en: {
@@ -181,9 +180,6 @@ export default function AboutPage() {
           </div>
           <p className="text-muted-foreground text-sm mb-10">{t.pageSubtitle}</p>
 
-          {/* Top display ad — between hero and prose (Task #401) */}
-          <AdSlot variant="topDisplay" eager adKey="about-top" className="mb-8" />
-
           <div className="space-y-10 text-foreground/70 leading-relaxed">
 
             <div>
@@ -252,9 +248,6 @@ export default function AboutPage() {
                 {t.founderDesc}
               </p>
             </div>
-
-            {/* Bottom display ad — before contact section (Task #401) */}
-            <AdSlot variant="bottomDisplay" adKey="about-bottom" />
 
             <div>
               <h2 className="text-foreground font-semibold mb-2">{t.contactTitle}</h2>

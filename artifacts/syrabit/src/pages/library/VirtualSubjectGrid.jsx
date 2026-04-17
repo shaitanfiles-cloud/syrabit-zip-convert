@@ -1,10 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import SubjectCard from './SubjectCard';
-import InFeedAd from '@/components/InFeedAd';
-
-// Insert an in-feed native ad after every N subject items.
-const AD_EVERY_ITEMS = 6;
 
 /**
  * Returns the number of grid columns to use, mirroring the
@@ -55,23 +51,14 @@ export default function VirtualSubjectGrid({
     [savedSubjects]
   );
 
-  // Build a row plan that interleaves subject rows with full-width ad rows
-  // every AD_EVERY_ITEMS subjects. Each ad row is its own virtualizer row so
-  // the virtualizer can measure/keep its height independently.
+  // Build a row plan — one row per `cols` subjects.
   const rowPlan = useMemo(() => {
     const plan = [];
     const total = subjects.length;
     let i = 0;
-    let adIndex = 0;
     while (i < total) {
       const end = Math.min(i + cols, total);
       plan.push({ type: 'subjects', start: i, end });
-      // Track items emitted so far; insert ad after each AD_EVERY_ITEMS items
-      // (but never as the very last row).
-      if (end < total && end % AD_EVERY_ITEMS === 0) {
-        plan.push({ type: 'ad', adIndex });
-        adIndex += 1;
-      }
       i = end;
     }
     return plan;
@@ -80,7 +67,7 @@ export default function VirtualSubjectGrid({
   const rowVirtualizer = useVirtualizer({
     count: rowPlan.length,
     getScrollElement: () => scrollParent,
-    estimateSize: (idx) => (rowPlan[idx]?.type === 'ad' ? 280 : 480),
+    estimateSize: () => 480,
     overscan: 3,
   });
 
@@ -101,25 +88,6 @@ export default function VirtualSubjectGrid({
       {virtualRows.map((virtualRow) => {
         const row = rowPlan[virtualRow.index];
         if (!row) return null;
-        if (row.type === 'ad') {
-          return (
-            <div
-              key={virtualRow.key}
-              data-index={virtualRow.index}
-              ref={rowVirtualizer.measureElement}
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                transform: `translateY(${virtualRow.start}px)`,
-                paddingBottom: '20px',
-              }}
-            >
-              <InFeedAd adKey={`library-virt-${row.adIndex}`} />
-            </div>
-          );
-        }
         const items = subjects.slice(row.start, row.end);
         return (
           <div

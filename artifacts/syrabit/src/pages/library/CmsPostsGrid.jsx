@@ -3,7 +3,6 @@ import { BookText, Loader2 } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/utils/api';
 import CmsPostCard from './CmsPostCard';
-import InFeedAd from '@/components/InFeedAd';
 
 const POSTS_PER_PAGE = 12;
 
@@ -64,23 +63,9 @@ export default function CmsPostsGrid({ board, classSlug }) {
         )}
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-        {allItems.flatMap((post, index) => {
-          const card = (
-            <CmsPostCard key={post.id || post._id || `${post.subject_id}-${index}`} post={post} />
-          );
-          const shouldShowAd = (index + 1) % 6 === 0 && index < allItems.length - 1;
-          return shouldShowAd
-            ? [
-                card,
-                <div
-                  key={`infeed-ad-${index}`}
-                  className="col-span-1 sm:col-span-2 xl:col-span-3"
-                >
-                  <InFeedAd adKey={`cms-${index}`} />
-                </div>,
-              ]
-            : [card];
-        })}
+        {allItems.map((post, index) => (
+          <CmsPostCard key={post.id || post._id || `${post.subject_id}-${index}`} post={post} />
+        ))}
       </div>
       {(isLoading || loadingMore) && (
         <div className="flex justify-center py-6">
