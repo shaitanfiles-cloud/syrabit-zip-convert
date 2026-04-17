@@ -1284,22 +1284,33 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                           Failing URLs ({failing.length})
                         </p>
                         <ul className="space-y-1 max-h-48 overflow-y-auto">
-                          {failing.map((f, i) => (
-                            <li key={`${sm.name}-${i}`} className="flex items-center gap-2 text-[11px] font-mono">
-                              <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-semibold flex-shrink-0">
-                                {f.status === 0 || f.status == null ? 'ERR' : f.status}
-                              </span>
-                              <a
-                                href={f.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-gray-700 hover:text-blue-600 truncate"
-                                title={f.url}
-                              >
-                                {f.url}
-                              </a>
-                            </li>
-                          ))}
+                          {failing.map((f, i) => {
+                            // Defense-in-depth: only render <a> for http(s) URLs
+                            // so a poisoned `javascript:` payload in Mongo can
+                            // never become a clickable link in the admin UI.
+                            const safeHref = typeof f.url === 'string'
+                              && /^https?:\/\//i.test(f.url) ? f.url : null;
+                            return (
+                              <li key={`${sm.name}-${i}`} className="flex items-center gap-2 text-[11px] font-mono">
+                                <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-semibold flex-shrink-0">
+                                  {f.status === 0 || f.status == null ? 'ERR' : f.status}
+                                </span>
+                                {safeHref ? (
+                                  <a
+                                    href={safeHref}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-gray-700 hover:text-blue-600 truncate"
+                                    title={f.url}
+                                  >
+                                    {f.url}
+                                  </a>
+                                ) : (
+                                  <span className="text-gray-700 truncate" title={f.url}>{f.url}</span>
+                                )}
+                              </li>
+                            );
+                          })}
                         </ul>
                       </div>
                     )}
