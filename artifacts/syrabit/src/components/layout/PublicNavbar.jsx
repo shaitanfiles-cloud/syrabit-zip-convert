@@ -96,6 +96,7 @@ export const PublicNavbar = () => {
                 to="/library"
                 onMouseEnter={() => handlePrefetch('/library')}
                 onTouchStart={() => handlePrefetch('/library')}
+                onFocus={() => handlePrefetch('/library')}
                 className="flex items-center gap-1.5 h-9 px-4 rounded-xl text-sm text-white font-semibold transition-all duration-150 hover:opacity-90 active:scale-95 hover:-translate-y-px btn-gradient"
               >
                 Go to App <ArrowRight size={14} />
@@ -184,6 +185,9 @@ export const PublicNavbar = () => {
                 <Link
                   to="/library"
                   role="menuitem"
+                  onMouseEnter={() => handlePrefetch('/library')}
+                  onTouchStart={() => handlePrefetch('/library')}
+                  onFocus={() => handlePrefetch('/library')}
                   className="flex items-center justify-center gap-2 w-full min-h-[44px] rounded-xl text-sm text-white font-semibold btn-gradient"
                   onClick={() => setMenuOpen(false)}
                 >
