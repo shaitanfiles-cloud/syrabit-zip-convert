@@ -59,7 +59,7 @@ export default function SeoPagesTab({
           {ga4Status && !ga4Status.connected && (
             <div className="space-y-3">
               <p className="text-gray-400 text-sm">
-                Connect GA4 to pull real visitor counts, page views, and top pages directly into this dashboard.
+                Visitor counts and page views are sourced from Cloudflare. Connecting GA4 here only enables connection-status checks for diagnostics — it does not power the headline metrics on this dashboard.
               </p>
               <div className="rounded-xl p-3 space-y-1.5 text-xs text-gray-400" style={{ background: '#f9fafb' }}>
                 <p className="font-medium text-gray-500 mb-1">Setup steps:</p>
