@@ -75,7 +75,6 @@ from llm import call_llm_api, call_llm_api_stream
 from rag import *
 from utils import *
 from analytics_helpers import *
-from routes.content import get_boards, get_classes, get_streams, get_subjects
 
 logger = logging.getLogger(__name__)
 
@@ -135,19 +134,30 @@ async def _cascade_delete_stream_children(stream_id: str):
 
 @router.get("/admin/content/boards")
 async def admin_list_boards(admin: dict = Depends(get_admin_user)):
-    return await get_boards()
+    """Admin boards — live MongoDB read, no cache, no status filter."""
+    boards = await db.boards.find({}, {"_id": 0}).to_list(500)
+    return boards
 
 @router.get("/admin/content/classes")
 async def admin_list_classes(admin: dict = Depends(get_admin_user)):
-    return await get_classes()
+    """Admin classes — live MongoDB read, no cache, no status filter."""
+    classes = await db.classes.find({}, {"_id": 0}).to_list(1000)
+    return classes
 
 @router.get("/admin/content/streams")
 async def admin_list_streams(admin: dict = Depends(get_admin_user)):
-    return await get_streams()
+    """Admin streams — live MongoDB read, no cache, no status filter."""
+    streams = await db.streams.find({}, {"_id": 0}).to_list(1000)
+    return streams
 
 @router.get("/admin/content/subjects")
 async def admin_list_subjects(admin: dict = Depends(get_admin_user)):
-    return await get_subjects()
+    """Admin subjects — live MongoDB read, no cache, no status filter (drafts/unpublished included)."""
+    subjects = await db.subjects.find({}, {"_id": 0}).to_list(2000)
+    for s in subjects:
+        if "thumbnail_url" in s and "thumbnailUrl" not in s:
+            s["thumbnailUrl"] = s.pop("thumbnail_url")
+    return subjects
 
 @router.get("/admin/content/chapters/{subject_id}")
 async def admin_list_chapters(subject_id: str, admin: dict = Depends(get_admin_user)):

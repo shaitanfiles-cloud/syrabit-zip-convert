@@ -13,7 +13,7 @@ import ChapterList from './content-editor/ChapterList';
 import ThumbnailStudio from './content-editor/ThumbnailStudio';
 import ConfirmDialog from './content-editor/ConfirmDialog';
 
-export default function AdminContentEditor({ adminToken, onNavigate, hubContext, onHubContext }) {
+export default function AdminContentEditor({ adminToken, onNavigate, hubContext, onHubContext, onHierarchyChange }) {
   const [boards, setBoards] = useState([]);
   const [classes, setClasses] = useState([]);
   const [streams, setStreams] = useState([]);
@@ -144,15 +144,25 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     finally { setAiParsing(false); }
   }, [contentForm.content, contentForm.title, selSubject, subjects]);
 
-  const load = useCallback(async (bustCache = false) => {
+  const load = useCallback(async () => {
     try {
-      const nc = bustCache ? '?nocache=1' : '';
-      const [b, c, s, sub] = await Promise.all([axios.get(`${API}/content/boards${nc}`), axios.get(`${API}/content/classes${nc}`), axios.get(`${API}/content/streams${nc}`), axios.get(`${API}/content/subjects${nc}`)]);
+      const cfg = authHeaders(adminToken);
+      const [b, c, s, sub] = await Promise.all([
+        axios.get(`${API}/admin/content/boards`, cfg),
+        axios.get(`${API}/admin/content/classes`, cfg),
+        axios.get(`${API}/admin/content/streams`, cfg),
+        axios.get(`${API}/admin/content/subjects`, cfg),
+      ]);
       setBoards(b.data || []); setClasses(c.data || []); setStreams(s.data || []); setSubjects(sub.data || []);
     } catch { toast.error('Failed to load content data'); }
-  }, []);
+  }, [adminToken]);
 
-  useEffect(() => { load(true); }, [load]);
+  const reloadAll = useCallback(async () => {
+    await reloadAll();
+    if (onHierarchyChange) { try { await onHierarchyChange(); } catch {} }
+  }, [load, onHierarchyChange]);
+
+  useEffect(() => { load(); }, [load]);
   useEffect(() => { try { const raw = localStorage.getItem('syrabit_editor_prefill'); if (!raw) return; const pf = JSON.parse(raw); if (Date.now() - (pf.timestamp || 0) > 10 * 60 * 1000) { localStorage.removeItem('syrabit_editor_prefill'); return; } localStorage.removeItem('syrabit_editor_prefill'); setContentForm(f => ({ ...f, title: pf.title || f.title || '', content: pf.content || f.content || '' })); setEditView('new-chapter'); toast.success(`Pre-filled from CMS Doc "${pf.title || 'Untitled'}" — select a subject and save`); } catch {} }, []);
   useEffect(() => { if (!hubContext?.subjectId || !subjects.length || selSubject) return; const sub = subjects.find(s => s.id === hubContext.subjectId); if (!sub) return; setSelBoard(hubContext.boardId || null); setSelClass(hubContext.classId || null); setSelStream(hubContext.streamId || null); setSelSubject(sub.id); }, [hubContext?.subjectId, subjects]);
   useEffect(() => { if (!onHubContext || !selSubject) return; const sub = subjects.find(s => s.id === selSubject); const str = streams.find(s => s.id === selStream); const cls = classes.find(c => c.id === selClass); const brd = boards.find(b => b.id === selBoard); onHubContext({ boardId: selBoard || '', boardName: brd?.name || '', classId: selClass || '', className: cls?.name || '', streamId: selStream || '', streamName: str?.name || '', subjectId: selSubject, subjectName: sub?.name || '' }); }, [selSubject]);
@@ -165,10 +175,10 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
 
   useEffect(() => { if (selSubject) refreshChapters(selSubject); }, [selSubject]);
 
-  const handleCreateBoard = async (name, desc) => { await axios.post(`${API}/admin/content/boards`, { name, description: desc }, authHeaders(adminToken)); await load(true); toast.success('Board created'); };
-  const handleCreateClass = async (name, desc) => { if (!selBoard) return toast.error('Select a board first'); await axios.post(`${API}/admin/content/classes`, { board_id: selBoard, name, description: desc }, authHeaders(adminToken)); await load(true); toast.success('Class created'); };
-  const handleCreateStream = async (name, desc) => { if (!selClass) return toast.error('Select a class first'); await axios.post(`${API}/admin/content/streams`, { class_id: selClass, name, description: desc }, authHeaders(adminToken)); await load(true); toast.success('Stream created'); };
-  const handleCreateSubject = async (name, desc) => { if (!selStream) return toast.error('Select a stream first'); await axios.post(`${API}/admin/content/subjects`, { stream_id: selStream, name, description: desc, tags: '', status: 'published' }, authHeaders(adminToken)); await load(true); toast.success('Subject created'); };
+  const handleCreateBoard = async (name, desc) => { await axios.post(`${API}/admin/content/boards`, { name, description: desc }, authHeaders(adminToken)); await reloadAll(); toast.success('Board created'); };
+  const handleCreateClass = async (name, desc) => { if (!selBoard) return toast.error('Select a board first'); await axios.post(`${API}/admin/content/classes`, { board_id: selBoard, name, description: desc }, authHeaders(adminToken)); await reloadAll(); toast.success('Class created'); };
+  const handleCreateStream = async (name, desc) => { if (!selClass) return toast.error('Select a class first'); await axios.post(`${API}/admin/content/streams`, { class_id: selClass, name, description: desc }, authHeaders(adminToken)); await reloadAll(); toast.success('Stream created'); };
+  const handleCreateSubject = async (name, desc) => { if (!selStream) return toast.error('Select a stream first'); await axios.post(`${API}/admin/content/subjects`, { stream_id: selStream, name, description: desc, tags: '', status: 'published' }, authHeaders(adminToken)); await reloadAll(); toast.success('Subject created'); };
 
   const handleDelete = (type, id) => {
     const label = type === 'classe' ? 'class' : type;
@@ -184,7 +194,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
           if (type === 'classe') { if (selClass === id) { setSelClass(null); setSelStream(null); setSelSubject(null); } }
           if (type === 'stream') { setSelStream(null); setSelSubject(null); }
           if (type === 'subject') { if (selSubject === id) setSelSubject(null); }
-          await load(true); toast.success(`${label} deleted`);
+          await reloadAll(); toast.success(`${label} deleted`);
         } catch (e) { toast.error(e.response?.data?.detail || `Failed to delete ${label}`); }
       },
     });
@@ -257,7 +267,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
       await axios.patch(`${API}/admin/content/subjects/${editingSubject}`, { name: subjectEditForm.name.trim(), description: subjectEditForm.description.trim() }, authHeaders(adminToken));
       toast.success('Subject updated');
       setEditingSubject(null);
-      await load(true);
+      await reloadAll();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed to update subject'); }
     finally { setSavingSubject(false); }
   };
@@ -441,7 +451,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                       </button>
                     )}
                   </div>
-                  <ThumbnailStudio adminToken={adminToken} selSubject={selSubject} subjectData={subjectData} onReload={() => load(true)} />
+                  <ThumbnailStudio adminToken={adminToken} selSubject={selSubject} subjectData={subjectData} onReload={() => reloadAll()} />
                   <ChapterList
                     chapters={chapters} chapterAssets={chapterAssets}
                     generatingNotes={generatingNotes}

@@ -6,6 +6,7 @@ import {
 import { toast } from 'sonner';
 import axios from 'axios';
 import { API_BASE } from '@/utils/api';
+import { authHeaders } from '@/utils/adminHelpers';
 
 const AdminContentEditor = lazy(() => import('./AdminContentEditor'));
 const AdminCmsDocEditor  = lazy(() => import('./AdminCmsDocEditor'));
@@ -95,23 +96,27 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate, n
     }
   }, [setHubContext, topNavigate]);
 
-  useEffect(() => {
-    const nc = `?_=${Date.now()}`;
-    Promise.all([
-      axios.get(`${API}/content/boards${nc}`),
-      axios.get(`${API}/content/classes${nc}`),
-      axios.get(`${API}/content/streams${nc}`),
-      axios.get(`${API}/content/subjects${nc}`),
-    ])
-      .then(([b, c, s, sub]) => {
-        setBoards(b.data || []);
-        setClasses(c.data || []);
-        setStreams(s.data || []);
-        setSubjects(sub.data || []);
-      })
-      .catch(() => toast.error('Failed to load content hierarchy'))
-      .finally(() => setLoading(false));
-  }, []);
+  const reloadHierarchy = useCallback(async () => {
+    const cfg = authHeaders(adminToken);
+    try {
+      const [b, c, s, sub] = await Promise.all([
+        axios.get(`${API}/admin/content/boards`, cfg),
+        axios.get(`${API}/admin/content/classes`, cfg),
+        axios.get(`${API}/admin/content/streams`, cfg),
+        axios.get(`${API}/admin/content/subjects`, cfg),
+      ]);
+      setBoards(b.data || []);
+      setClasses(c.data || []);
+      setStreams(s.data || []);
+      setSubjects(sub.data || []);
+    } catch {
+      toast.error('Failed to load content hierarchy');
+    } finally {
+      setLoading(false);
+    }
+  }, [adminToken]);
+
+  useEffect(() => { reloadHierarchy(); }, [reloadHierarchy]);
 
   const activeColor = COLOR_MAP[TABS.find(t => t.id === activeTab)?.color || 'violet'];
 
@@ -197,6 +202,7 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate, n
                 onNavigate={navigate}
                 hubContext={hubContext}
                 onHubContext={setHubContext}
+                onHierarchyChange={reloadHierarchy}
               />
             </div>
           )}
