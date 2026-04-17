@@ -1,0 +1,549 @@
+{
+  "src/App.jsx": [],
+  "src/components/AdminGuard.jsx": [],
+  "src/components/AuthGuard.jsx": [],
+  "src/components/ErrorBoundary.jsx": [],
+  "src/components/Logo.jsx": [],
+  "src/components/MarkdownRenderer.jsx": [
+    "/assets/MarkdownRenderer-CRacmJ1S.js"
+  ],
+  "src/components/PWAInstallPrompt.jsx": [
+    "/assets/PWAInstallPrompt-DdhYCHZj.js"
+  ],
+  "src/components/PageTitle.jsx": [
+    "/assets/PageTitle-OPrhOEvA.js"
+  ],
+  "src/components/SignupEncouragementPopup.jsx": [
+    "/assets/SignupEncouragementPopup-BO_i-CXp.js"
+  ],
+  "src/components/admin/AdminActivityLog.jsx": [
+    "/assets/AdminActivityLog-DEtQV72p.js"
+  ],
+  "src/components/admin/AdminAnalytics.jsx": [
+    "/assets/AdminAnalytics-DUQ-Y593.js"
+  ],
+  "src/components/admin/AdminApiConfig.jsx": [
+    "/assets/AdminApiConfig-BQiYuj1K.js"
+  ],
+  "src/components/admin/AdminAutomation.jsx": [
+    "/assets/AdminAutomation-B3Y95pck.js"
+  ],
+  "src/components/admin/AdminBotSecurity.jsx": [
+    "/assets/AdminBotSecurity-4F00VeGr.js"
+  ],
+  "src/components/admin/AdminCmsDocEditor.jsx": [
+    "/assets/AdminCmsDocEditor-DUK997I0.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/components/admin/AdminContentEditor.jsx": [
+    "/assets/AdminContentEditor-DqGMG8OP.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/components/admin/AdminContentHub.jsx": [
+    "/assets/AdminContentHub-veNqUY4R.js"
+  ],
+  "src/components/admin/AdminConversations.jsx": [
+    "/assets/AdminConversations-X0Rx302m.js"
+  ],
+  "src/components/admin/AdminDashboard.jsx": [
+    "/assets/AdminDashboard-B3ENB-d_.js"
+  ],
+  "src/components/admin/AdminFeedback.jsx": [
+    "/assets/AdminFeedback-DPraMHim.js"
+  ],
+  "src/components/admin/AdminGoogleAuth.jsx": [
+    "/assets/AdminGoogleAuth-DaDYVKSG.js"
+  ],
+  "src/components/admin/AdminHealth.jsx": [
+    "/assets/AdminHealth-Cr53JhZ1.js"
+  ],
+  "src/components/admin/AdminIntelligence.jsx": [
+    "/assets/AdminIntelligence-DP2OmOwG.js"
+  ],
+  "src/components/admin/AdminMonetization.jsx": [
+    "/assets/AdminMonetization-CdqRLyAf.js"
+  ],
+  "src/components/admin/AdminNotifications.jsx": [
+    "/assets/AdminNotifications-C6KtHsb4.js"
+  ],
+  "src/components/admin/AdminPlans.jsx": [
+    "/assets/AdminPlans-DCiDvMHx.js"
+  ],
+  "src/components/admin/AdminQuickLinks.jsx": [
+    "/assets/AdminQuickLinks-DmtiJqKR.js"
+  ],
+  "src/components/admin/AdminRateLimits.jsx": [
+    "/assets/AdminRateLimits-Bj-Wk5a1.js"
+  ],
+  "src/components/admin/AdminRoadmap.jsx": [
+    "/assets/AdminRoadmap-P7lRd6sh.js"
+  ],
+  "src/components/admin/AdminSeoManager.jsx": [
+    "/assets/AdminSeoManager-C7TN4Kx4.js"
+  ],
+  "src/components/admin/AdminSettings.jsx": [
+    "/assets/AdminSettings-Q7JRRlB_.js"
+  ],
+  "src/components/admin/AdminUsers.jsx": [
+    "/assets/AdminUsers-DZisbUfm.js"
+  ],
+  "src/components/admin/AdminVertexPanel.jsx": [
+    "/assets/AdminVertexPanel-Dmq1jqI5.js"
+  ],
+  "src/components/admin/AudioTrimPreview.jsx": [
+    "/assets/AdminDashboard-B3ENB-d_.js"
+  ],
+  "src/components/admin/BlogPublishWizard.jsx": [
+    "/assets/BlogPublishWizard-BS3elHx6.js"
+  ],
+  "src/components/admin/analytics/ContentCardViewsTab.jsx": [
+    "/assets/AdminAnalytics-DUQ-Y593.js"
+  ],
+  "src/components/admin/analytics/ConversionsTab.jsx": [
+    "/assets/AdminAnalytics-DUQ-Y593.js"
+  ],
+  "src/components/admin/analytics/DailyStatsTab.jsx": [
+    "/assets/AdminAnalytics-DUQ-Y593.js"
+  ],
+  "src/components/admin/analytics/FunnelTab.jsx": [
+    "/assets/AdminAnalytics-DUQ-Y593.js"
+  ],
+  "src/components/admin/analytics/HeatmapTab.jsx": [
+    "/assets/AdminAnalytics-DUQ-Y593.js"
+  ],
+  "src/components/admin/analytics/OverviewTab.jsx": [
+    "/assets/AdminAnalytics-DUQ-Y593.js"
+  ],
+  "src/components/admin/analytics/PredictionsTab.jsx": [
+    "/assets/AdminAnalytics-DUQ-Y593.js"
+  ],
+  "src/components/admin/analytics/RevenueTab.jsx": [
+    "/assets/AdminAnalytics-DUQ-Y593.js"
+  ],
+  "src/components/admin/analytics/SeoPagesTab.jsx": [
+    "/assets/AdminAnalytics-DUQ-Y593.js"
+  ],
+  "src/components/admin/analytics/shared.jsx": [
+    "/assets/AdminAnalytics-DUQ-Y593.js"
+  ],
+  "src/components/admin/cms-editor/ContentTab.jsx": [
+    "/assets/AdminCmsDocEditor-DUK997I0.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/components/admin/cms-editor/DocumentList.jsx": [
+    "/assets/AdminCmsDocEditor-DUK997I0.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/components/admin/cms-editor/EditorToolbar.jsx": [
+    "/assets/AdminCmsDocEditor-DUK997I0.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/components/admin/cms-editor/GeoTagsTab.jsx": [
+    "/assets/AdminCmsDocEditor-DUK997I0.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/components/admin/cms-editor/MdxToolbar.jsx": [
+    "/assets/AdminCmsDocEditor-DUK997I0.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/components/admin/cms-editor/SeoMetaTab.jsx": [
+    "/assets/AdminCmsDocEditor-DUK997I0.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/components/admin/cms-editor/useCmsEditor.jsx": [
+    "/assets/AdminCmsDocEditor-DUK997I0.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/components/admin/content-editor/ChapterEditForm.jsx": [
+    "/assets/AdminContentEditor-DqGMG8OP.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/components/admin/content-editor/ChapterList.jsx": [
+    "/assets/AdminContentEditor-DqGMG8OP.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/components/admin/content-editor/ConfirmDialog.jsx": [
+    "/assets/AdminContentEditor-DqGMG8OP.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/components/admin/content-editor/ContentViewerPopup.jsx": [
+    "/assets/AdminContentEditor-DqGMG8OP.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/components/admin/content-editor/HierarchyTree.jsx": [
+    "/assets/AdminContentEditor-DqGMG8OP.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/components/admin/content-editor/InlineCreator.jsx": [
+    "/assets/AdminContentEditor-DqGMG8OP.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/components/admin/content-editor/PYQUploadPanel.jsx": [
+    "/assets/AdminContentEditor-DqGMG8OP.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/components/admin/content-editor/StatusBadge.jsx": [
+    "/assets/AdminContentEditor-DqGMG8OP.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/components/admin/content-editor/StatusQuickToggle.jsx": [
+    "/assets/AdminContentEditor-DqGMG8OP.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/components/admin/content-editor/ThumbnailStudio.jsx": [
+    "/assets/AdminContentEditor-DqGMG8OP.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/components/admin/seo-manager/GenerateTab.jsx": [
+    "/assets/AdminSeoManager-C7TN4Kx4.js"
+  ],
+  "src/components/admin/seo-manager/InsightCard.jsx": [
+    "/assets/AdminSeoManager-C7TN4Kx4.js"
+  ],
+  "src/components/admin/seo-manager/InsightsTab.jsx": [
+    "/assets/AdminSeoManager-C7TN4Kx4.js"
+  ],
+  "src/components/admin/seo-manager/JobProgress.jsx": [
+    "/assets/AdminSeoManager-C7TN4Kx4.js"
+  ],
+  "src/components/admin/seo-manager/LinksTab.jsx": [
+    "/assets/AdminSeoManager-C7TN4Kx4.js"
+  ],
+  "src/components/admin/seo-manager/PagesTab.jsx": [
+    "/assets/AdminSeoManager-C7TN4Kx4.js"
+  ],
+  "src/components/admin/seo-manager/PilotTab.jsx": [
+    "/assets/AdminSeoManager-C7TN4Kx4.js"
+  ],
+  "src/components/admin/seo-manager/PipelineTab.jsx": [
+    "/assets/AdminSeoManager-C7TN4Kx4.js"
+  ],
+  "src/components/admin/seo-manager/QualityTab.jsx": [
+    "/assets/AdminSeoManager-C7TN4Kx4.js"
+  ],
+  "src/components/admin/seo-manager/ReviewTab.jsx": [
+    "/assets/AdminSeoManager-C7TN4Kx4.js"
+  ],
+  "src/components/admin/seo-manager/SchemaTab.jsx": [
+    "/assets/AdminSeoManager-C7TN4Kx4.js"
+  ],
+  "src/components/admin/seo-manager/SitemapTab.jsx": [
+    "/assets/AdminSeoManager-C7TN4Kx4.js"
+  ],
+  "src/components/admin/seo-manager/StatCard.jsx": [
+    "/assets/AdminSeoManager-C7TN4Kx4.js"
+  ],
+  "src/components/admin/seo-manager/TopicsTab.jsx": [
+    "/assets/AdminSeoManager-C7TN4Kx4.js"
+  ],
+  "src/components/admin/seo-manager/useSeoManager.jsx": [
+    "/assets/AdminSeoManager-C7TN4Kx4.js"
+  ],
+  "src/components/admin/vertex-panel/ContentGapsCard.jsx": [
+    "/assets/AdminVertexPanel-Dmq1jqI5.js"
+  ],
+  "src/components/admin/vertex-panel/FlashcardGeneratorCard.jsx": [
+    "/assets/AdminVertexPanel-Dmq1jqI5.js"
+  ],
+  "src/components/admin/vertex-panel/McqGeneratorCard.jsx": [
+    "/assets/AdminVertexPanel-Dmq1jqI5.js"
+  ],
+  "src/components/admin/vertex-panel/NlpConceptsCard.jsx": [
+    "/assets/AdminVertexPanel-Dmq1jqI5.js"
+  ],
+  "src/components/admin/vertex-panel/QualityScoreCard.jsx": [
+    "/assets/AdminVertexPanel-Dmq1jqI5.js"
+  ],
+  "src/components/admin/vertex-panel/SemanticSearchCard.jsx": [
+    "/assets/AdminVertexPanel-Dmq1jqI5.js"
+  ],
+  "src/components/admin/vertex-panel/SeoMetaCard.jsx": [
+    "/assets/AdminVertexPanel-Dmq1jqI5.js"
+  ],
+  "src/components/admin/vertex-panel/StatusHeader.jsx": [
+    "/assets/AdminVertexPanel-Dmq1jqI5.js"
+  ],
+  "src/components/admin/vertex-panel/TopicSuggesterCard.jsx": [
+    "/assets/AdminVertexPanel-Dmq1jqI5.js"
+  ],
+  "src/components/admin/vertex-panel/TranslationCard.jsx": [
+    "/assets/AdminVertexPanel-Dmq1jqI5.js"
+  ],
+  "src/components/admin/vertex-panel/VisionOcrCard.jsx": [
+    "/assets/AdminVertexPanel-Dmq1jqI5.js"
+  ],
+  "src/components/admin/vertex-panel/shared.jsx": [
+    "/assets/AdminVertexPanel-Dmq1jqI5.js"
+  ],
+  "src/components/layout/AppLayout.jsx": [],
+  "src/components/layout/BottomNav.jsx": [],
+  "src/components/layout/Navbar.jsx": [],
+  "src/components/layout/PublicBottomNav.jsx": [
+    "/assets/PublicBottomNav-Csg3rziy.js"
+  ],
+  "src/components/layout/PublicLayout.jsx": [
+    "/assets/PublicLayout-6pJp6vJQ.js"
+  ],
+  "src/components/layout/PublicNavbar.jsx": [
+    "/assets/PublicBottomNav-Csg3rziy.js"
+  ],
+  "src/components/layout/Sidebar.jsx": [],
+  "src/components/seo/GlobalSeo.jsx": [
+    "/assets/GlobalSeo-BClaUa0q.js"
+  ],
+  "src/components/seo/PageMeta.jsx": [],
+  "src/components/ui/LangToggle.jsx": [
+    "/assets/LangToggle-DnvOjW66.js"
+  ],
+  "src/components/ui/ModalOverlay.jsx": [
+    "/assets/ModalOverlay-BDysTp9d.js"
+  ],
+  "src/components/ui/StatCard.jsx": [
+    "/assets/TechnologyPage-DEV2ISwv.js"
+  ],
+  "src/components/ui/StickyToc.jsx": [
+    "/assets/StickyToc-DY77NzuG.js"
+  ],
+  "src/components/ui/accordion.jsx": [
+    "/assets/SubjectPage-DeHqjfd9.js"
+  ],
+  "src/components/ui/badge.jsx": [
+    "/assets/badge-DV99BDq5.js"
+  ],
+  "src/components/ui/button.jsx": [
+    "/assets/button-DJzsafk-.js"
+  ],
+  "src/components/ui/dropdown-menu.jsx": [
+    "/assets/AdminUsers-DZisbUfm.js"
+  ],
+  "src/components/ui/input.jsx": [
+    "/assets/input-CHBZqxxG.js"
+  ],
+  "src/components/ui/label.jsx": [
+    "/assets/label-B1dT6C2h.js"
+  ],
+  "src/components/ui/skeleton.jsx": [
+    "/assets/skeleton-C5C1Fkef.js"
+  ],
+  "src/components/ui/switch.jsx": [
+    "/assets/AdminSettings-Q7JRRlB_.js"
+  ],
+  "src/components/ui/tooltip.jsx": [],
+  "src/context/AuthContext.jsx": [],
+  "src/context/LanguageContext.jsx": [],
+  "src/entry-server.jsx": [],
+  "src/hooks/useContent.jsx": [],
+  "src/hooks/usePublicStats.jsx": [
+    "/assets/usePublicStats-CnU_czkn.js"
+  ],
+  "src/hooks/usePushNotifications.js": [
+    "/assets/AdminDashboard-B3ENB-d_.js"
+  ],
+  "src/hooks/useShare.jsx": [],
+  "src/hooks/useTurnstile.jsx": [
+    "/assets/ChatPage-S2AL69gi.js"
+  ],
+  "src/hooks/useUser.jsx": [],
+  "src/lib/jsonld.js": [],
+  "src/lib/utils.jsx": [],
+  "src/pages/AboutPage.jsx": [
+    "/assets/AboutPage-BqdyOJ16.js"
+  ],
+  "src/pages/AdminLoginPage.jsx": [
+    "/assets/AdminLoginPage-B5Z6V7mz.js"
+  ],
+  "src/pages/AdminPage.jsx": [
+    "/assets/AdminPage-Bbmzxp1Y.js"
+  ],
+  "src/pages/ChapterPage.jsx": [
+    "/assets/ChapterPage-p7L6rR9Z.js"
+  ],
+  "src/pages/ChatPage.jsx": [
+    "/assets/ChatPage-S2AL69gi.js"
+  ],
+  "src/pages/CurriculumMap.jsx": [
+    "/assets/CurriculumMap-os831swL.js"
+  ],
+  "src/pages/ExamRoutinePage.jsx": [
+    "/assets/ExamRoutinePage-CGQ0G8Hn.js"
+  ],
+  "src/pages/HistoryPage.jsx": [
+    "/assets/HistoryPage-R7ib9KgQ.js"
+  ],
+  "src/pages/LandingPage.jsx": [
+    "/assets/LandingPage-BulBSI2z.js"
+  ],
+  "src/pages/LearnPage.jsx": [
+    "/assets/LearnPage-CrgV-ndS.js"
+  ],
+  "src/pages/LibraryPage.jsx": [],
+  "src/pages/LoginPage.jsx": [
+    "/assets/LoginPage-BctX339R.js"
+  ],
+  "src/pages/NotFoundPage.jsx": [
+    "/assets/NotFoundPage-CI-2UmHo.js"
+  ],
+  "src/pages/OnboardingPage.jsx": [
+    "/assets/OnboardingPage-D7C5U2Yi.js"
+  ],
+  "src/pages/PYQReplicaPage.jsx": [
+    "/assets/PYQReplicaPage-B_mPWbOB.js"
+  ],
+  "src/pages/PaymentCancelPage.jsx": [
+    "/assets/PaymentCancelPage-C9x03p62.js"
+  ],
+  "src/pages/PaymentSuccessPage.jsx": [
+    "/assets/PaymentSuccessPage-B1jp-L5k.js"
+  ],
+  "src/pages/PersonalizedCmsPage.jsx": [
+    "/assets/PersonalizedCmsPage-Bq1dgSlm.js"
+  ],
+  "src/pages/PricingPage.jsx": [
+    "/assets/PricingPage-bGww9cw7.js"
+  ],
+  "src/pages/PrivacyPage.jsx": [
+    "/assets/PrivacyPage-C3oj9FMy.js"
+  ],
+  "src/pages/ProfilePage.jsx": [
+    "/assets/ProfilePage-C72rd2Ww.js"
+  ],
+  "src/pages/ResetPasswordPage.jsx": [
+    "/assets/ResetPasswordPage-BKsXKo7I.js"
+  ],
+  "src/pages/SignupPage.jsx": [
+    "/assets/SignupPage-DfBdh3HO.js"
+  ],
+  "src/pages/StatusPage.jsx": [
+    "/assets/StatusPage-Dqn9JmeM.js"
+  ],
+  "src/pages/SubjectLandingPage.jsx": [
+    "/assets/SubjectLandingPage-D8RpG2nL.js"
+  ],
+  "src/pages/SubjectPage.jsx": [
+    "/assets/SubjectPage-DeHqjfd9.js"
+  ],
+  "src/pages/TechnologyPage.jsx": [
+    "/assets/TechnologyPage-DEV2ISwv.js"
+  ],
+  "src/pages/TermsPage.jsx": [
+    "/assets/TermsPage-DEcbfdBs.js"
+  ],
+  "src/pages/chat/EmptyState.jsx": [
+    "/assets/EmptyState-B2Dw7YUA.js"
+  ],
+  "src/pages/chat/InputBar.jsx": [
+    "/assets/ChatPage-S2AL69gi.js"
+  ],
+  "src/pages/chat/MarkdownContent.jsx": [
+    "/assets/MarkdownContent-CbkF-yQa.js"
+  ],
+  "src/pages/chat/MessageBubble.jsx": [
+    "/assets/ChatPage-S2AL69gi.js"
+  ],
+  "src/pages/chat/ModelSelector.jsx": [
+    "/assets/ChatPage-S2AL69gi.js"
+  ],
+  "src/pages/chat/ThinkingIndicator.jsx": [
+    "/assets/ChatPage-S2AL69gi.js"
+  ],
+  "src/pages/landing/AnimatedChatDemo.jsx": [
+    "/assets/HeroBelowFold-DpY4lvLp.js"
+  ],
+  "src/pages/landing/AnimatedStat.jsx": [
+    "/assets/HeroBelowFold-DpY4lvLp.js"
+  ],
+  "src/pages/landing/FeaturesGrid.jsx": [
+    "/assets/FeaturesGrid-Dn4csCev.js"
+  ],
+  "src/pages/landing/GlowOrb.jsx": [
+    "/assets/GlowOrb-Ci3VftqS.js"
+  ],
+  "src/pages/landing/HeroBelowFold.jsx": [
+    "/assets/HeroBelowFold-DpY4lvLp.js"
+  ],
+  "src/pages/landing/HeroSection.jsx": [
+    "/assets/LandingPage-BulBSI2z.js"
+  ],
+  "src/pages/landing/PlatformSection.jsx": [
+    "/assets/PlatformSection-BrNdMpQf.js"
+  ],
+  "src/pages/landing/PricingSection.jsx": [
+    "/assets/PricingSection-BM44mdkm.js"
+  ],
+  "src/pages/landing/Reveal.jsx": [
+    "/assets/Reveal-Vh1Dxr7c.js"
+  ],
+  "src/pages/landing/TestimonialsFooter.jsx": [
+    "/assets/TestimonialsFooter--5uRf-Up.js"
+  ],
+  "src/pages/library/CmsDocCard.jsx": [
+    "/assets/CmsDocsSection-C6Xlqedq.js"
+  ],
+  "src/pages/library/CmsDocsSection.jsx": [
+    "/assets/CmsDocsSection-C6Xlqedq.js"
+  ],
+  "src/pages/library/CmsPostCard.jsx": [
+    "/assets/CmsPostsGrid-D04CNOTJ.js"
+  ],
+  "src/pages/library/CmsPostsGrid.jsx": [
+    "/assets/CmsPostsGrid-D04CNOTJ.js"
+  ],
+  "src/pages/library/FilterChip.jsx": [],
+  "src/pages/library/LibrarySkeleton.jsx": [],
+  "src/pages/library/ScrollableFilterRow.jsx": [],
+  "src/pages/library/SubjectCard.jsx": [],
+  "src/pages/library/VirtualSubjectGrid.jsx": [],
+  "src/pages/library/icons.jsx": [],
+  "src/pages/profile/AcademicDetails.jsx": [
+    "/assets/ProfilePage-C72rd2Ww.js"
+  ],
+  "src/pages/profile/AiCredits.jsx": [
+    "/assets/ProfilePage-C72rd2Ww.js"
+  ],
+  "src/pages/profile/DangerZone.jsx": [
+    "/assets/ProfilePage-C72rd2Ww.js"
+  ],
+  "src/pages/profile/DeleteConfirmDialog.jsx": [
+    "/assets/ProfilePage-C72rd2Ww.js"
+  ],
+  "src/pages/profile/EditFieldDialog.jsx": [
+    "/assets/ProfilePage-C72rd2Ww.js"
+  ],
+  "src/pages/profile/PaymentHistory.jsx": [
+    "/assets/ProfilePage-C72rd2Ww.js"
+  ],
+  "src/pages/profile/PaymentModal.jsx": [
+    "/assets/ProfilePage-C72rd2Ww.js"
+  ],
+  "src/pages/profile/ProfileHeader.jsx": [
+    "/assets/ProfilePage-C72rd2Ww.js"
+  ],
+  "src/pages/profile/SubscriptionPlans.jsx": [
+    "/assets/ProfilePage-C72rd2Ww.js"
+  ],
+  "src/pages/profile/TopUpModal.jsx": [
+    "/assets/ProfilePage-C72rd2Ww.js"
+  ],
+  "src/pages/profile/shared.jsx": [
+    "/assets/ProfilePage-C72rd2Ww.js"
+  ],
+  "src/utils/adminHelpers.js": [
+    "/assets/AdminContentHub-veNqUY4R.js"
+  ],
+  "src/utils/analytics.jsx": [],
+  "src/utils/api.jsx": [],
+  "src/utils/courseTypes.js": [
+    "/assets/courseTypes-BfAMtlfY.js"
+  ],
+  "src/utils/editorTemplates.js": [
+    "/assets/AdminContentEditor-DqGMG8OP.js",
+    "/assets/dep-mdxeditor-editor-CcnuWXUr.css"
+  ],
+  "src/utils/imageCdn.js": [],
+  "src/utils/logger.js": [],
+  "src/utils/pageImports.js": [],
+  "src/utils/plans.jsx": [
+    "/assets/plans-DT83eOJE.js"
+  ],
+  "src/utils/prefetchRoute.js": []
+}

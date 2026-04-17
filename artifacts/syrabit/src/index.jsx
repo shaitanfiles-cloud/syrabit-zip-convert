@@ -4,22 +4,52 @@ import "./index.css";
 import App from "./App";
 import { initWebVitals } from "./utils/webVitals";
 
-const root = ReactDOM.createRoot(document.getElementById("root"));
-root.render(
+const isLibrary =
+  typeof window !== "undefined" &&
+  /^\/library(\/|$)/.test(window.location.pathname);
+
+const rootEl = document.getElementById("root");
+const tree = (
   <React.StrictMode>
     <App />
   </React.StrictMode>
 );
 
+// /library ships a fully prerendered React tree inside #root. Hydrate
+// in place so React adopts the existing DOM (no remount, no flash).
+// Every other route still mounts the SPA via createRoot. (Task #382)
+const hasPrerender =
+  isLibrary &&
+  rootEl &&
+  rootEl.firstElementChild != null &&
+  rootEl.dataset.hydrate === "library";
+
+if (hasPrerender) {
+  ReactDOM.hydrateRoot(rootEl, tree);
+  if (typeof window !== "undefined") {
+    window.__SYRABIT_HYDRATED__ = true;
+  }
+} else {
+  ReactDOM.createRoot(rootEl).render(tree);
+}
+
 // Remove the pre-hydration shell once React has painted its first frame.
-// rAF-in-rAF guarantees we run after the commit, so users never see the
-// shell flash on top of the real UI. (Task #381)
-requestAnimationFrame(() => {
+// This only runs for routes that did not get a real prerendered tree
+// (i.e. everything except /library on the static build).
+function removeShell() {
+  const shell = document.getElementById("__shell");
+  if (shell && shell.parentNode) shell.parentNode.removeChild(shell);
+}
+
+if (!hasPrerender) {
   requestAnimationFrame(() => {
-    const shell = document.getElementById("__shell");
-    if (shell && shell.parentNode) shell.parentNode.removeChild(shell);
+    requestAnimationFrame(removeShell);
   });
-});
+} else {
+  // Belt & braces: a stale build of /library could still have a shell
+  // sibling around #root — drop it on the next frame.
+  requestAnimationFrame(removeShell);
+}
 
 
 if ("serviceWorker" in navigator && import.meta.env.PROD) {

@@ -1,0 +1,205 @@
+# Syrabit.ai — robots.txt
+
+# ── Search & Answer Bots (welcome) ─────────────────────────────────────────
+User-agent: Googlebot
+Allow: /
+Allow: /api/seo/
+Allow: /api/seo/keyword-index
+Allow: /api/seo/keyword-index.txt
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+
+User-agent: Googlebot-Image
+Allow: /
+
+User-agent: GoogleOther
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+Allow: /api/seo/
+Allow: /api/seo/keyword-index
+Allow: /api/seo/keyword-index.txt
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+
+User-agent: Yandexbot
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+
+User-agent: DuckDuckBot
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+
+User-agent: Applebot
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+
+User-agent: Applebot-Extended
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+
+# ── AI Search/Answer Bots that send referral traffic (welcome) ────────────
+User-agent: ChatGPT-User
+Allow: /
+Allow: /api/seo/
+Allow: /api/seo/keyword-index
+Allow: /api/seo/keyword-index.txt
+Allow: /api/content/library-bundle
+Allow: /api/content/chapters/
+Allow: /llms.txt
+Allow: /llms-full.txt
+Allow: /feed.xml
+Disallow: /admin/
+Disallow: /chat
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
+
+User-agent: OAI-SearchBot
+Allow: /
+Allow: /api/seo/
+Allow: /api/seo/keyword-index
+Allow: /api/seo/keyword-index.txt
+Allow: /llms.txt
+Allow: /llms-full.txt
+Disallow: /admin/
+Disallow: /chat
+Disallow: /api/auth/
+Disallow: /api/ai/
+
+User-agent: PerplexityBot
+Allow: /
+Allow: /api/seo/
+Allow: /api/seo/keyword-index
+Allow: /api/seo/keyword-index.txt
+Allow: /api/content/library-bundle
+Allow: /llms.txt
+Allow: /llms-full.txt
+Allow: /feed.xml
+Disallow: /admin/
+Disallow: /chat
+Disallow: /api/auth/
+Disallow: /api/ai/
+
+User-agent: Meta-ExternalAgent
+Allow: /
+Allow: /api/seo/
+Allow: /api/seo/keyword-index
+Allow: /api/seo/keyword-index.txt
+Disallow: /admin/
+Disallow: /chat
+Disallow: /api/auth/
+Disallow: /api/ai/
+
+# ── Long-tail Search Bots (welcome) ────────────────────────────────────────
+User-agent: PetalBot
+Allow: /
+
+User-agent: MojeekBot
+Allow: /
+
+User-agent: SeznamBot
+Allow: /
+
+User-agent: Yeti
+Allow: /
+
+# ── Training / Scraping Bots (BLOCKED) ─────────────────────────────────────
+User-agent: GPTBot
+Disallow: /
+
+User-agent: CCBot
+Disallow: /
+
+User-agent: ClaudeBot
+Disallow: /
+
+User-agent: Google-Extended
+Disallow: /
+
+User-agent: anthropic-ai
+Disallow: /
+
+User-agent: Cohere-ai
+Disallow: /
+
+User-agent: Bytespider
+Disallow: /
+
+User-agent: Scrapy
+Disallow: /
+
+User-agent: AhrefsBot
+Disallow: /
+
+User-agent: SemrushBot
+Disallow: /
+
+User-agent: MJ12bot
+Disallow: /
+
+User-agent: DotBot
+Disallow: /
+
+User-agent: Amazonbot
+Disallow: /
+
+User-agent: YouBot
+Disallow: /
+
+User-agent: Diffbot
+Disallow: /
+
+User-agent: img2dataset
+Disallow: /
+
+User-agent: omgili
+Disallow: /
+
+User-agent: FacebookBot
+Disallow: /
+
+# ── Default (all other bots) ───────────────────────────────────────────────
+User-agent: *
+Allow: /
+Allow: /api/seo/
+Allow: /api/seo/keyword-index
+Allow: /api/seo/keyword-index.txt
+Allow: /llms.txt
+Allow: /llms-full.txt
+Allow: /feed.xml
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
+
+# ── Sitemaps ────────────────────────────────────────────────────────────────
+Sitemap: https://syrabit.ai/sitemap-index.xml
+
+# ── Feeds ───────────────────────────────────────────────────────────────────
+# RSS feeds for content discovery
+# /feed.xml — Main feed (all content types)
+# /feed/notes.xml — Study notes feed
+# /feed/mcqs.xml — MCQ content feed
+# /feed/blog.xml — Blog/learn articles feed

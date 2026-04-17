@@ -1,0 +1,1 @@
+import{jsx as o}from"react/jsx-runtime";import m from"react-markdown";import t from"remark-gfm";import a from"rehype-raw";function u({children:r,components:e}){return o(m,{remarkPlugins:[t],rehypePlugins:[a],components:e,children:r})}export{u as default};

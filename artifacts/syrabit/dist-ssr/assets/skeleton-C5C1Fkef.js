@@ -1,0 +1,1 @@
+import{jsx as o}from"react/jsx-runtime";import{h as a}from"../entry-server.js";function t({className:r,...e}){return o("div",{className:a("animate-pulse rounded-md bg-gray-900/10",r),...e})}export{t as S};

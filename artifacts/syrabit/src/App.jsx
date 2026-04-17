@@ -18,7 +18,7 @@ const LazyGlobalSeo = lazy(() => import("@/components/seo/GlobalSeo"));
 import { apiClient } from "@/utils/api";
 
 // ── React Query client ────────────────────────────────────────────────────────
-const queryClient = new QueryClient({
+export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 10 * 60 * 1000,
@@ -30,6 +30,16 @@ const queryClient = new QueryClient({
   },
 });
 
+// Seed React Query from data baked into the prerendered HTML so the
+// first render on the client matches the server-rendered markup
+// exactly (Task #382 — required for hydrateRoot on /library to skip
+// the loading skeleton and avoid a hydration mismatch).
+if (typeof window !== "undefined" && window.__LIBRARY_BUNDLE__) {
+  try {
+    queryClient.setQueryData(["library-bundle-slim"], window.__LIBRARY_BUNDLE__);
+  } catch {}
+}
+
 
 import { pageImports, prefetchCriticalRoutes } from "@/utils/pageImports";
 
@@ -39,7 +49,11 @@ const LoginPage          = lazy(() => import("@/pages/LoginPage"));
 const SignupPage         = lazy(() => import("@/pages/SignupPage"));
 const ResetPasswordPage  = lazy(() => import("@/pages/ResetPasswordPage"));
 const OnboardingPage     = lazy(() => import("@/pages/OnboardingPage"));
-const LibraryPage        = lazy(pageImports.library);
+// LibraryPage is imported eagerly so the server-rendered output for
+// /library is byte-identical to React's first client render — lazy()
+// would render a Suspense fallback during SSR (or before its chunk
+// resolves on the client) and break hydration. (Task #382)
+import LibraryPage from "@/pages/LibraryPage";
 const SubjectPage        = lazy(() => import("@/pages/SubjectPage"));
 const ChatPage           = lazy(pageImports.chat);
 const HistoryPage        = lazy(pageImports.history);
@@ -110,6 +124,101 @@ function LegacyTopicRedirect() {
   return <Navigate to={`/${board}/${classSlug}/${subjectSlug}/${chapterSlug}`} replace />;
 }
 
+// ── Routes (extracted so SSR can render them inside a StaticRouter) ───────
+export function AppRoutes() {
+  return (
+    <Routes>
+      {/* ── Public routes ── */}
+      <Route path="/"         element={<Navigate to="/chat" replace />} />
+      <Route path="/home"     element={<LandingPage />} />
+      <Route path="/pricing"  element={<PricingPage />} />
+      <Route path="/terms"    element={<TermsPage />} />
+      <Route path="/privacy"       element={<PrivacyPage />} />
+      <Route path="/about"         element={<AboutPage />} />
+      <Route path="/technology"   element={<TechnologyPage />} />
+      <Route path="/status"        element={<StatusPage />} />
+      <Route path="/exam-routine" element={<ExamRoutinePage />} />
+      <Route path="/payment/success" element={<PaymentSuccessPage />} />
+      <Route path="/payment/cancel" element={<PaymentCancelPage />} />
+
+      {/* ── Auth routes ── */}
+      <Route path="/login"          element={<LoginPage />} />
+      <Route path="/signup"         element={<SignupPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
+
+      {/* ── Onboarding (self-guarded) ── */}
+      <Route path="/onboarding" element={<OnboardingPage />} />
+
+      {/* ── Public content routes (no auth) ── */}
+      <Route path="/library"           element={<LibraryPage />} />
+      <Route path="/curriculum"        element={<CurriculumMap />} />
+      <Route path="/subject/:subjectId" element={<SubjectPage />} />
+
+      {/* ── CMS Learn pages ── */}
+      <Route path="/learn/:slug" element={<LearnPage />} />
+
+      {/* ── Personalized CMS (private, paid) ── */}
+      <Route path="/cms/:userId/:slug" element={<AuthGuard><PersonalizedCmsPage /></AuthGuard>} />
+
+      {/* /subscribe → pricing */}
+      <Route path="/subscribe" element={<PricingPage />} />
+
+      {/* ── PYQ HTML Replica pages ── */}
+      <Route path="/pyq/:slug" element={<PYQReplicaPage />} />
+
+      {/* ── SEO routes: /{board}/{class}/{subject} and /{board}/{class}/{subject}/{chapter} ── */}
+      <Route path="/:board/:classSlug/:streamSlug/:subjectSlug/:chapterSlug" element={<ChapterPage />} />
+      <Route path="/:board/:classSlug/:subjectSlug/:chapterSlug" element={<ChapterPage />} />
+      <Route path="/:board/:classSlug/:subjectSlug/:chapterSlug/:pageType" element={<LegacyTopicRedirect />} />
+      <Route path="/:board/:classSlug/:subjectSlug" element={<SubjectLandingPage />} />
+
+      {/* ── Protected routes (require login) ── */}
+      <Route path="/chat"              element={<ChatPage />} />
+      <Route path="/history"           element={<HistoryPage />} />
+      <Route path="/profile"           element={<ProfilePage />} />
+
+      {/* ── Admin routes ── */}
+      <Route path="/admin/login" element={<AdminLoginPage />} />
+      <Route path="/admin"       element={<AdminGuard><AdminPage /></AdminGuard>} />
+
+      {/* ── 404 ── */}
+      <Route path="*" element={<NotFoundPage />} />
+    </Routes>
+  );
+}
+
+// ── Provider shell (no router, no client-only effects) ────────────────────
+// Used by both the client (wrapped with BrowserRouter) and the SSR entry
+// (wrapped with StaticRouter) so the prerendered DOM matches React's
+// first client render. (Task #382)
+export function AppShell({ children, ssr = false }) {
+  // In SSR (renderToString), any unresolved lazy() child triggers a
+  // Suspense abort and pollutes the prerendered HTML with React's
+  // "Switched to client rendering" templates, breaking hydration. We
+  // therefore omit the four lazy presentational/effects components on
+  // the server. They emit no DOM until their chunks load on the
+  // client, so the hydrated DOM matches: client first render also
+  // emits nothing for them (Suspense fallback={null}). Once their
+  // chunks resolve client-side, they mount normally. (Task #382)
+  return (
+    <HelmetProvider>
+      {ssr ? null : <Suspense fallback={null}><LazyGlobalSeo /></Suspense>}
+      <ErrorBoundary>
+        <QueryClientProvider client={queryClient}>
+          <AuthProvider>
+            <LanguageProvider>
+              {children}
+              {ssr ? null : <Suspense fallback={null}><LazyToaster richColors position="top-center" closeButton /></Suspense>}
+              {ssr ? null : <Suspense fallback={null}><SignupEncouragementPopup /></Suspense>}
+            </LanguageProvider>
+          </AuthProvider>
+          {ssr ? null : <Suspense fallback={null}><PWAInstallPrompt /></Suspense>}
+        </QueryClientProvider>
+      </ErrorBoundary>
+    </HelmetProvider>
+  );
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 function App() {
   useEffect(() => { prefetchCriticalRoutes(); }, []); // eslint-disable-line
@@ -170,82 +279,14 @@ function App() {
     };
   }, []);
   return (
-    <HelmetProvider>
-    <Suspense fallback={null}><LazyGlobalSeo /></Suspense>
-    <ErrorBoundary>
-        <QueryClientProvider client={queryClient}>
-          <AuthProvider>
-          <LanguageProvider>
-            <BrowserRouter>
-              <PageTracker />
-              <Suspense fallback={null}><LazyToaster richColors position="top-center" closeButton /></Suspense>
-              <Suspense fallback={<DeferredFallback />}>
-                <Routes>
-                  {/* ── Public routes ── */}
-                  <Route path="/"         element={<Navigate to="/chat" replace />} />
-                  <Route path="/home"     element={<LandingPage />} />
-                  <Route path="/pricing"  element={<PricingPage />} />
-                  <Route path="/terms"    element={<TermsPage />} />
-                  <Route path="/privacy"       element={<PrivacyPage />} />
-                  <Route path="/about"         element={<AboutPage />} />
-                  <Route path="/technology"   element={<TechnologyPage />} />
-                  <Route path="/status"        element={<StatusPage />} />
-                  <Route path="/exam-routine" element={<ExamRoutinePage />} />
-                  <Route path="/payment/success" element={<PaymentSuccessPage />} />
-                  <Route path="/payment/cancel" element={<PaymentCancelPage />} />
-
-                  {/* ── Auth routes ── */}
-                  <Route path="/login"          element={<LoginPage />} />
-                  <Route path="/signup"         element={<SignupPage />} />
-                  <Route path="/reset-password" element={<ResetPasswordPage />} />
-
-                  {/* ── Onboarding (self-guarded) ── */}
-                  <Route path="/onboarding" element={<OnboardingPage />} />
-
-                  {/* ── Public content routes (no auth) ── */}
-                  <Route path="/library"           element={<LibraryPage />} />
-                  <Route path="/curriculum"        element={<CurriculumMap />} />
-                  <Route path="/subject/:subjectId" element={<SubjectPage />} />
-
-                  {/* ── CMS Learn pages ── */}
-                  <Route path="/learn/:slug" element={<LearnPage />} />
-
-                  {/* ── Personalized CMS (private, paid) ── */}
-                  <Route path="/cms/:userId/:slug" element={<AuthGuard><PersonalizedCmsPage /></AuthGuard>} />
-
-                  {/* /subscribe → pricing */}
-                  <Route path="/subscribe" element={<PricingPage />} />
-
-                  {/* ── PYQ HTML Replica pages ── */}
-                  <Route path="/pyq/:slug" element={<PYQReplicaPage />} />
-
-                  {/* ── SEO routes: /{board}/{class}/{subject} and /{board}/{class}/{subject}/{chapter} ── */}
-                  <Route path="/:board/:classSlug/:streamSlug/:subjectSlug/:chapterSlug" element={<ChapterPage />} />
-                  <Route path="/:board/:classSlug/:subjectSlug/:chapterSlug" element={<ChapterPage />} />
-                  <Route path="/:board/:classSlug/:subjectSlug/:chapterSlug/:pageType" element={<LegacyTopicRedirect />} />
-                  <Route path="/:board/:classSlug/:subjectSlug" element={<SubjectLandingPage />} />
-
-                  {/* ── Protected routes (require login) ── */}
-                  <Route path="/chat"              element={<ChatPage />} />
-                  <Route path="/history"           element={<HistoryPage />} />
-                  <Route path="/profile"           element={<ProfilePage />} />
-
-                  {/* ── Admin routes ── */}
-                  <Route path="/admin/login" element={<AdminLoginPage />} />
-                  <Route path="/admin"       element={<AdminGuard><AdminPage /></AdminGuard>} />
-
-                  {/* ── 404 ── */}
-                  <Route path="*" element={<NotFoundPage />} />
-                </Routes>
-              </Suspense>
-            </BrowserRouter>
-            <Suspense fallback={null}><SignupEncouragementPopup /></Suspense>
-          </LanguageProvider>
-          </AuthProvider>
-          <Suspense fallback={null}><PWAInstallPrompt /></Suspense>
-        </QueryClientProvider>
-    </ErrorBoundary>
-    </HelmetProvider>
+    <AppShell>
+      <BrowserRouter>
+        <PageTracker />
+        <Suspense fallback={<DeferredFallback />}>
+          <AppRoutes />
+        </Suspense>
+      </BrowserRouter>
+    </AppShell>
   );
 }
 
