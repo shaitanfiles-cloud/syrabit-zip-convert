@@ -250,6 +250,7 @@ async def _compute_dashboard():
         "total_subjects": total_subjects,
         "plan_distribution": plan_dist,
         "visitor_stats": visitor_stats,
+        "cf_connected": cf_connected,
         "recent_events": recent_events,
         "conversation_date_range": {
             "oldest": oldest_conv,
