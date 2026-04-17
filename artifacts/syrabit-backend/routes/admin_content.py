@@ -227,6 +227,16 @@ async def admin_d1_export(request: Request):
         raise HTTPException(status_code=500, detail="Export returned empty")
     return payload
 
+_ALLOWED_HIERARCHY_STATUSES = {"published", "draft", "unpublished", "archived"}
+
+def _normalize_hierarchy_status(value, default="published"):
+    s = (value or "").strip().lower() if isinstance(value, str) else ""
+    if not s:
+        return default
+    if s not in _ALLOWED_HIERARCHY_STATUSES:
+        raise HTTPException(status_code=422, detail=f"Invalid status '{value}'. Must be one of: {sorted(_ALLOWED_HIERARCHY_STATUSES)}")
+    return s
+
 @router.post("/admin/content/boards")
 async def admin_create_board(data: dict, admin: dict = Depends(get_admin_user)):
     try:
@@ -241,6 +251,7 @@ async def admin_create_board(data: dict, admin: dict = Depends(get_admin_user)):
             "name": name,
             "slug": name.lower().replace(" ", "-"),
             "description": data.get("description", ""),
+            "status": _normalize_hierarchy_status(data.get("status")),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await asyncio.wait_for(db.boards.insert_one(board), timeout=8.0)
@@ -258,9 +269,11 @@ async def admin_create_board(data: dict, admin: dict = Depends(get_admin_user)):
 
 @router.patch("/admin/content/boards/{board_id}")
 async def admin_update_board(board_id: str, data: dict, admin: dict = Depends(get_admin_user)):
-    allowed = {k: v for k, v in data.items() if k in ["name", "description"]}
+    allowed = {k: v for k, v in data.items() if k in ["name", "description", "status"]}
     if "name" in allowed:
         allowed["slug"] = allowed["name"].lower().replace(" ", "-")
+    if "status" in allowed:
+        allowed["status"] = _normalize_hierarchy_status(allowed["status"])
     if allowed:
         await db.boards.update_one({"id": board_id}, {"$set": allowed})
         _invalidate_content_cache("boards")
@@ -300,6 +313,7 @@ async def admin_create_class(data: dict, admin: dict = Depends(get_admin_user)):
             "name": data["name"],
             "slug": data["name"].lower().replace(" ", "-"),
             "description": data.get("description", ""),
+            "status": _normalize_hierarchy_status(data.get("status")),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.classes.insert_one(cls)
@@ -314,9 +328,11 @@ async def admin_create_class(data: dict, admin: dict = Depends(get_admin_user)):
 
 @router.patch("/admin/content/classes/{class_id}")
 async def admin_update_class(class_id: str, data: dict, admin: dict = Depends(get_admin_user)):
-    allowed = {k: v for k, v in data.items() if k in ["name", "description"]}
+    allowed = {k: v for k, v in data.items() if k in ["name", "description", "status"]}
     if "name" in allowed:
         allowed["slug"] = allowed["name"].lower().replace(" ", "-")
+    if "status" in allowed:
+        allowed["status"] = _normalize_hierarchy_status(allowed["status"])
     if allowed:
         await db.classes.update_one({"id": class_id}, {"$set": allowed})
         _invalidate_content_cache("classes")
@@ -353,6 +369,7 @@ async def admin_create_stream(data: dict, admin: dict = Depends(get_admin_user))
             "slug": data["name"].lower().replace(" ", "-"),
             "description": data.get("description", ""),
             "icon": data.get("icon", "📚"),
+            "status": _normalize_hierarchy_status(data.get("status")),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.streams.insert_one(stream)
@@ -367,9 +384,11 @@ async def admin_create_stream(data: dict, admin: dict = Depends(get_admin_user))
 
 @router.patch("/admin/content/streams/{stream_id}")
 async def admin_update_stream(stream_id: str, data: dict, admin: dict = Depends(get_admin_user)):
-    allowed = {k: v for k, v in data.items() if k in ["name", "description", "icon"]}
+    allowed = {k: v for k, v in data.items() if k in ["name", "description", "icon", "status"]}
     if "name" in allowed:
         allowed["slug"] = allowed["name"].lower().replace(" ", "-")
+    if "status" in allowed:
+        allowed["status"] = _normalize_hierarchy_status(allowed["status"])
     if allowed:
         await db.streams.update_one({"id": stream_id}, {"$set": allowed})
         _invalidate_content_cache("streams")

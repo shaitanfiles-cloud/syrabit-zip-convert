@@ -1292,13 +1292,14 @@ if FRONTEND_BUILD.is_dir():
             from deps import db
             if not db:
                 return None
-            board = await db.boards.find_one({"slug": parts[0]}, {"_id": 0, "id": 1})
+            _pub = {"$or": [{"status": {"$exists": False}}, {"status": "published"}]}
+            board = await db.boards.find_one({"$and": [{"slug": parts[0]}, _pub]}, {"_id": 0, "id": 1})
             if not board:
                 return False
-            cls = await db.classes.find_one({"slug": parts[1], "board_id": board["id"]}, {"_id": 0, "id": 1})
+            cls = await db.classes.find_one({"$and": [{"slug": parts[1], "board_id": board["id"]}, _pub]}, {"_id": 0, "id": 1})
             if not cls:
                 return False
-            streams = await db.streams.find({"class_id": cls["id"]}, {"_id": 0, "id": 1}).to_list(100)
+            streams = await db.streams.find({"$and": [{"class_id": cls["id"]}, _pub]}, {"_id": 0, "id": 1}).to_list(100)
             stream_ids = [s["id"] for s in streams]
             if not stream_ids:
                 return None
@@ -1369,13 +1370,14 @@ if FRONTEND_BUILD.is_dir():
             subject_slug = m.group("subject")
             chapter_slug = m.group("chapter")
 
-            board = await db.boards.find_one({"slug": board_slug}, {"_id": 0, "id": 1, "name": 1})
+            _pub = {"$or": [{"status": {"$exists": False}}, {"status": "published"}]}
+            board = await db.boards.find_one({"$and": [{"slug": board_slug}, _pub]}, {"_id": 0, "id": 1, "name": 1})
             if not board:
                 return None
-            cls = await db.classes.find_one({"slug": class_slug, "board_id": board["id"]}, {"_id": 0, "id": 1, "name": 1})
+            cls = await db.classes.find_one({"$and": [{"slug": class_slug, "board_id": board["id"]}, _pub]}, {"_id": 0, "id": 1, "name": 1})
             if not cls:
                 return None
-            streams = await db.streams.find({"class_id": cls["id"]}, {"_id": 0, "id": 1}).to_list(100)
+            streams = await db.streams.find({"$and": [{"class_id": cls["id"]}, _pub]}, {"_id": 0, "id": 1}).to_list(100)
             stream_ids = [s["id"] for s in streams]
             subj = await db.subjects.find_one(
                 {"slug": subject_slug, "stream_id": {"$in": stream_ids}, "status": "published"},

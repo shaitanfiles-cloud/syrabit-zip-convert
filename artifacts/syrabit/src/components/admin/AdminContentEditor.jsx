@@ -206,10 +206,22 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
 
   useEffect(() => { if (selSubject) refreshChapters(selSubject); }, [selSubject]);
 
-  const handleCreateBoard = async (name, desc) => { await axios.post(`${API}/admin/content/boards`, { name, description: desc }, authHeaders(adminToken)); await reloadAll(); toast.success('Board created'); };
-  const handleCreateClass = async (name, desc) => { if (!selBoard) return toast.error('Select a board first'); await axios.post(`${API}/admin/content/classes`, { board_id: selBoard, name, description: desc }, authHeaders(adminToken)); await reloadAll(); toast.success('Class created'); };
-  const handleCreateStream = async (name, desc) => { if (!selClass) return toast.error('Select a class first'); await axios.post(`${API}/admin/content/streams`, { class_id: selClass, name, description: desc }, authHeaders(adminToken)); await reloadAll(); toast.success('Stream created'); };
-  const handleCreateSubject = async (name, desc) => { if (!selStream) return toast.error('Select a stream first'); await axios.post(`${API}/admin/content/subjects`, { stream_id: selStream, name, description: desc, tags: '', status: 'published' }, authHeaders(adminToken)); await reloadAll(); toast.success('Subject created'); };
+  const handleCreateBoard = async (name, desc, status = 'published') => { await axios.post(`${API}/admin/content/boards`, { name, description: desc, status }, authHeaders(adminToken)); await reloadAll(); toast.success('Board created'); };
+  const handleCreateClass = async (name, desc, status = 'published') => { if (!selBoard) return toast.error('Select a board first'); await axios.post(`${API}/admin/content/classes`, { board_id: selBoard, name, description: desc, status }, authHeaders(adminToken)); await reloadAll(); toast.success('Class created'); };
+  const handleCreateStream = async (name, desc, status = 'published') => { if (!selClass) return toast.error('Select a class first'); await axios.post(`${API}/admin/content/streams`, { class_id: selClass, name, description: desc, status }, authHeaders(adminToken)); await reloadAll(); toast.success('Stream created'); };
+  const handleCreateSubject = async (name, desc, status = 'published') => { if (!selStream) return toast.error('Select a stream first'); await axios.post(`${API}/admin/content/subjects`, { stream_id: selStream, name, description: desc, tags: '', status }, authHeaders(adminToken)); await reloadAll(); toast.success('Subject created'); };
+
+  const handleUpdateHierarchyStatus = async (type, id, status) => {
+    const endpoint = type === 'class' ? 'classes' : `${type}s`;
+    try {
+      await axios.patch(`${API}/admin/content/${endpoint}/${id}`, { status }, authHeaders(adminToken));
+      const setter = type === 'board' ? setBoards : type === 'class' ? setClasses : setStreams;
+      setter(prev => prev.map(item => item.id === id ? { ...item, status } : item));
+      toast.success(`${type[0].toUpperCase() + type.slice(1)} status set to ${status}`);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || `Failed to update ${type} status`);
+    }
+  };
 
   const handleDelete = (type, id) => {
     const label = type === 'classe' ? 'class' : type;
@@ -532,6 +544,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
               selStream={selStream} setSelStream={setSelStream} setSelSubject={setSelSubject} setEditView={setEditView}
               streamNodeLabel={streamNodeLabel} streamPlaceholder={streamPlaceholder}
               onDelete={handleDelete} onCreateBoard={handleCreateBoard} onCreateClass={handleCreateClass} onCreateStream={handleCreateStream}
+              onUpdateStatus={handleUpdateHierarchyStatus}
             />
             <div className="flex-1 overflow-y-auto">
               {!selStream && !selSubject ? (

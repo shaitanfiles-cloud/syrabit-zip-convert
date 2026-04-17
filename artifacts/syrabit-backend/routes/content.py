@@ -38,6 +38,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+_PUBLISHED_OR_LEGACY = {"$or": [{"status": {"$exists": False}}, {"status": "published"}]}
+
 @router.get("/content/library-bundle", response_model=LibraryBundleOut)
 async def get_library_bundle(nocache: Optional[str] = None, include_seo: Optional[str] = None, slim: Optional[str] = None, response: Response = None):
     cache_key = "library-bundle:slim" if slim == "1" else ("library-bundle:seo" if include_seo else "library-bundle")
@@ -56,9 +58,9 @@ async def get_library_bundle(nocache: Optional[str] = None, include_seo: Optiona
                 (boards_data, classes_data, streams_data, subjects_data,
                  chapters_data, pyq_data, fc_data) = await asyncio.wait_for(
                     asyncio.gather(
-                        db.boards.find({}, {"_id": 0, "id": 1, "name": 1, "slug": 1}).to_list(100),
-                        db.classes.find({}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "board_id": 1}).to_list(100),
-                        db.streams.find({}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "class_id": 1}).to_list(100),
+                        db.boards.find(_PUBLISHED_OR_LEGACY, {"_id": 0, "id": 1, "name": 1, "slug": 1}).to_list(100),
+                        db.classes.find(_PUBLISHED_OR_LEGACY, {"_id": 0, "id": 1, "name": 1, "slug": 1, "board_id": 1}).to_list(100),
+                        db.streams.find(_PUBLISHED_OR_LEGACY, {"_id": 0, "id": 1, "name": 1, "slug": 1, "class_id": 1}).to_list(100),
                         db.subjects.find({"status": "published"}, {"_id": 0}).to_list(500),
                         db.chapters.find(
                             {},
@@ -200,7 +202,7 @@ async def get_boards(nocache: Optional[str] = None, response: Response = None):
     try:
         if not await is_mongo_available():
             return []
-        boards = await db.boards.find({}, {"_id": 0}).to_list(100)
+        boards = await db.boards.find(_PUBLISHED_OR_LEGACY, {"_id": 0}).to_list(100)
         _set_content_cache("boards", boards)
         if response: response.headers["Cache-Control"] = "public, max-age=600, stale-while-revalidate=7200"
         return boards
@@ -219,6 +221,7 @@ async def get_classes(board_id: Optional[str] = None, nocache: Optional[str] = N
         if not await is_mongo_available():
             return []
         query = {"board_id": board_id} if board_id else {}
+        query = {"$and": [query, _PUBLISHED_OR_LEGACY]} if query else _PUBLISHED_OR_LEGACY
         classes = await db.classes.find(query, {"_id": 0}).to_list(100)
         _set_content_cache(ck, classes)
         if response: response.headers["Cache-Control"] = "public, max-age=600, stale-while-revalidate=7200"
@@ -238,6 +241,7 @@ async def get_streams(class_id: Optional[str] = None, nocache: Optional[str] = N
         if not await is_mongo_available():
             return []
         query = {"class_id": class_id} if class_id else {}
+        query = {"$and": [query, _PUBLISHED_OR_LEGACY]} if query else _PUBLISHED_OR_LEGACY
         streams = await db.streams.find(query, {"_id": 0}).to_list(100)
         _set_content_cache(ck, streams)
         if response: response.headers["Cache-Control"] = "public, max-age=600, stale-while-revalidate=7200"
@@ -256,9 +260,9 @@ async def get_subjects_by_course_type(board_id: str, nocache: Optional[str] = No
     try:
         if not await is_mongo_available():
             return []
-        all_classes = await db.classes.find({"board_id": board_id}, {"_id": 0}).to_list(50)
+        all_classes = await db.classes.find({"$and": [{"board_id": board_id}, _PUBLISHED_OR_LEGACY]}, {"_id": 0}).to_list(50)
         class_ids = [c["id"] for c in all_classes]
-        all_streams = await db.streams.find({"class_id": {"$in": class_ids}}, {"_id": 0}).to_list(200)
+        all_streams = await db.streams.find({"$and": [{"class_id": {"$in": class_ids}}, _PUBLISHED_OR_LEGACY]}, {"_id": 0}).to_list(200)
         stream_ids = [s["id"] for s in all_streams]
         all_subjects = await db.subjects.find({"stream_id": {"$in": stream_ids}, "status": "published"}, {"_id": 0}).to_list(1000)
         for s in all_subjects:
@@ -305,9 +309,12 @@ async def get_subjects(stream_id: Optional[str] = None, class_id: Optional[str] 
         if not await is_mongo_available():
             return []
         if stream_id:
+            stream = await db.streams.find_one({"$and": [{"id": stream_id}, _PUBLISHED_OR_LEGACY]}, {"_id": 0, "id": 1})
+            if not stream:
+                return []
             subjects = await db.subjects.find({"stream_id": stream_id, "status": "published"}, {"_id": 0}).to_list(100)
         elif class_id:
-            streams = await db.streams.find({"class_id": class_id}, {"_id": 0}).to_list(100)
+            streams = await db.streams.find({"$and": [{"class_id": class_id}, _PUBLISHED_OR_LEGACY]}, {"_id": 0}).to_list(100)
             stream_ids = [s["id"] for s in streams]
             subjects = await db.subjects.find({"stream_id": {"$in": stream_ids}, "status": "published"}, {"_id": 0}).to_list(500)
         else:
@@ -330,11 +337,11 @@ async def resolve_subject(board_slug: str, class_slug: str, stream_slug: str, su
         return cached
     if not await is_mongo_available():
         raise HTTPException(503, "Content database unavailable")
-    board = await db.boards.find_one({"slug": board_slug}, {"_id": 0})
+    board = await db.boards.find_one({"$and": [{"slug": board_slug}, _PUBLISHED_OR_LEGACY]}, {"_id": 0})
     if not board: raise HTTPException(404, "Board not found")
-    cls = await db.classes.find_one({"slug": class_slug, "board_id": board["id"]}, {"_id": 0})
+    cls = await db.classes.find_one({"$and": [{"slug": class_slug, "board_id": board["id"]}, _PUBLISHED_OR_LEGACY]}, {"_id": 0})
     if not cls: raise HTTPException(404, "Class not found")
-    stream = await db.streams.find_one({"slug": stream_slug, "class_id": cls["id"]}, {"_id": 0})
+    stream = await db.streams.find_one({"$and": [{"slug": stream_slug, "class_id": cls["id"]}, _PUBLISHED_OR_LEGACY]}, {"_id": 0})
     if not stream: raise HTTPException(404, "Stream not found")
     subj = await db.subjects.find_one({"slug": subject_slug, "stream_id": stream["id"], "status": "published"}, {"_id": 0})
     if not subj: raise HTTPException(404, "Subject not found")
@@ -352,11 +359,11 @@ async def resolve_subject_no_stream(board_slug: str, class_slug: str, subject_sl
         return cached
     if not await is_mongo_available():
         raise HTTPException(503, "Content database unavailable")
-    board = await db.boards.find_one({"slug": board_slug}, {"_id": 0})
+    board = await db.boards.find_one({"$and": [{"slug": board_slug}, _PUBLISHED_OR_LEGACY]}, {"_id": 0})
     if not board: raise HTTPException(404, "Board not found")
-    cls = await db.classes.find_one({"slug": class_slug, "board_id": board["id"]}, {"_id": 0})
+    cls = await db.classes.find_one({"$and": [{"slug": class_slug, "board_id": board["id"]}, _PUBLISHED_OR_LEGACY]}, {"_id": 0})
     if not cls: raise HTTPException(404, "Class not found")
-    streams = await db.streams.find({"class_id": cls["id"]}, {"_id": 0}).to_list(100)
+    streams = await db.streams.find({"$and": [{"class_id": cls["id"]}, _PUBLISHED_OR_LEGACY]}, {"_id": 0}).to_list(100)
     stream_ids = [s["id"] for s in streams]
     subj = await db.subjects.find_one({"slug": subject_slug, "stream_id": {"$in": stream_ids}, "status": "published"}, {"_id": 0})
     if not subj: raise HTTPException(404, "Subject not found")
