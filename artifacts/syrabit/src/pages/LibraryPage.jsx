@@ -12,6 +12,7 @@ import {
 } from '@/hooks/useContent';
 import { useToggleSavedSubject } from '@/hooks/useUser';
 import SubjectCard from './library/SubjectCard';
+import VirtualSubjectGrid from './library/VirtualSubjectGrid';
 import LibrarySkeleton from './library/LibrarySkeleton';
 import FilterChip from './library/FilterChip';
 import ScrollableFilterRow from './library/ScrollableFilterRow';
@@ -275,6 +276,13 @@ export default function LibraryPage() {
   const VIRTUAL_CHUNK = 30;
   const [renderLimit, setRenderLimit] = useState(VIRTUAL_CHUNK);
   const sentinelRef = useRef(null);
+  // Track in state (not just a ref) so child virtualizers re-measure once
+  // the scroll container actually mounts.
+  const [scrollContainerEl, setScrollContainerEl] = useState(null);
+  // Switch to a true windowed renderer once the catalogue grows past the
+  // chunk size — keeps DOM nodes bounded so TBT/INP stay flat on mobile
+  // even with hundreds of subjects. Task #384.
+  const useVirtualGrid = filteredSubjects.length > VIRTUAL_CHUNK;
   useEffect(() => { setRenderLimit(VIRTUAL_CHUNK); }, [activeFilter, deferredQuery]);
   useEffect(() => {
     if (filteredSubjects.length <= renderLimit) return;
@@ -430,7 +438,7 @@ export default function LibraryPage() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto" ref={setScrollContainerEl}>
           <div className="w-full max-w-6xl mx-auto px-4 md:px-6 py-5">
 
             <ScrollableFilterRow
@@ -517,6 +525,16 @@ export default function LibraryPage() {
                 )}
               </div>
             ) : (
+              useVirtualGrid ? (
+                <VirtualSubjectGrid
+                  scrollParent={scrollContainerEl}
+                  subjects={filteredSubjects}
+                  chaptersBySubject={chaptersBySubject}
+                  savedSubjects={savedSubjects}
+                  onToggleSave={handleToggleSave}
+                  onAskAI={handleAskAI}
+                />
+              ) : (
               <>
               <div
                 className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5"
@@ -539,6 +557,7 @@ export default function LibraryPage() {
                 <div ref={sentinelRef} aria-hidden="true" style={{ height: 1 }} />
               )}
               </>
+              )
             )}
           </div>
           <LazyOnVisible>
