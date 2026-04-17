@@ -5,7 +5,7 @@ import { visualizer } from "rollup-plugin-visualizer";
 const port = Number(process.env.PORT || 25144);
 const basePath = process.env.BASE_PATH ?? "/";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   base: basePath,
   plugins: [
     react(),
@@ -40,6 +40,7 @@ export default defineConfig({
     outDir: path.resolve(import.meta.dirname, "dist"),
     emptyOutDir: true,
     modulePreload: { polyfill: true },
+    target: "esnext",
     rollupOptions: {
       output: {
         manualChunks(id) {
@@ -60,11 +61,11 @@ export default defineConfig({
       },
     },
   },
-  esbuild: process.env.NODE_ENV === "production"
-    ? { drop: ["console", "debugger"] }
-    : {},
+  esbuild: mode === "production"
+    ? { drop: ["console", "debugger"], target: "esnext" }
+    : { target: "esnext" },
   define: {
-    "process.env.NODE_ENV": JSON.stringify(process.env.NODE_ENV || "development"),
+    "process.env.NODE_ENV": JSON.stringify(mode),
     "__TRUSTPILOT_BU_ID__": JSON.stringify(process.env.TRUSTPILOT_BUSINESS_UNIT_ID || ""),
   },
-});
+}));

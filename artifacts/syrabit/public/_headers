@@ -35,22 +35,22 @@
   Cache-Control: public, max-age=60, s-maxage=600, stale-while-revalidate=1800
 
 /
-  Cache-Control: public, max-age=0, s-maxage=120, stale-while-revalidate=60
+  Cache-Control: public, max-age=0, s-maxage=3600, stale-while-revalidate=86400
 
 /library
-  Cache-Control: public, max-age=0, s-maxage=120, stale-while-revalidate=60
+  Cache-Control: public, max-age=0, s-maxage=3600, stale-while-revalidate=86400
 
 /pricing
-  Cache-Control: public, max-age=0, s-maxage=120, stale-while-revalidate=60
+  Cache-Control: public, max-age=0, s-maxage=3600, stale-while-revalidate=86400
 
 /login
-  Cache-Control: public, max-age=0, s-maxage=120, stale-while-revalidate=60
+  Cache-Control: public, max-age=0, s-maxage=3600, stale-while-revalidate=86400
 
 /signup
-  Cache-Control: public, max-age=0, s-maxage=120, stale-while-revalidate=60
+  Cache-Control: public, max-age=0, s-maxage=3600, stale-while-revalidate=86400
 
 /exam-routine
-  Cache-Control: public, max-age=0, s-maxage=120, stale-while-revalidate=60
+  Cache-Control: public, max-age=0, s-maxage=3600, stale-while-revalidate=86400
 
 /assamboard/*
   Cache-Control: public, max-age=0, s-maxage=300, stale-while-revalidate=120
