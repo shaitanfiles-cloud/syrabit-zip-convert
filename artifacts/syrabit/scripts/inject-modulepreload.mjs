@@ -9,7 +9,13 @@ const htmlPath = path.join(distDir, "index.html");
 const assetsDir = path.join(distDir, "assets");
 const files = fs.readdirSync(assetsDir);
 
-const targets = ["react-dom", "vendor", "router", "query", "radix"];
+// Critical-path chunks for landing-page first paint. After Task #359 the
+// pnpm-aware manualChunks rule consolidates react-router, @tanstack, and
+// @radix-ui into the `vendor` chunk, so we no longer probe for separate
+// router/query/radix chunks (they don't exist in the active prod config).
+// `syntax` and `framer` are intentionally excluded — they are not on the
+// landing critical path and Vite no longer auto-preloads them.
+const targets = ["react-dom", "vendor"];
 const links = [];
 
 for (const name of targets) {

@@ -44,19 +44,52 @@ export default defineConfig(({ mode }) => ({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes("node_modules/react-dom")) return "react-dom";
-          if (id.includes("node_modules/react/") || id.includes("node_modules/scheduler")) return "vendor";
-          if (id.includes("node_modules/react-router-dom") || id.includes("node_modules/react-router/") || id.includes("node_modules/@remix-run")) return "router";
-          if (id.includes("node_modules/@tanstack/react-query")) return "query";
-          if (id.includes("node_modules/framer-motion")) return "framer";
-          if (id.includes("node_modules/lucide-react")) return "icons";
-          if (id.includes("node_modules/@radix-ui")) return "radix";
-          if (id.includes("node_modules/react-markdown") || id.includes("node_modules/remark-") || id.includes("node_modules/rehype-") || id.includes("node_modules/unified") || id.includes("node_modules/mdast-") || id.includes("node_modules/hast-") || id.includes("node_modules/micromark") || id.includes("node_modules/devlop") || id.includes("node_modules/vfile")) return "markdown";
-          if (id.includes("node_modules/recharts") || id.includes("node_modules/d3-") || id.includes("node_modules/victory-")) return "charts";
-          if (id.includes("node_modules/react-helmet-async")) return "seo";
-          if (id.includes("node_modules/sonner")) return "ui-extras";
-          if (id.includes("node_modules/codemirror") || id.includes("node_modules/@codemirror") || id.includes("node_modules/@lezer")) return "codemirror";
-          if (id.includes("node_modules/axios")) return "axios";
+          // Kept in lock-step with `vite.config.js` — see that file for the
+          // detailed comment on why pnpm path-name peer-dep encoding makes
+          // naive `id.includes('react-dom')` style matchers wrong.
+          if (!id.includes("node_modules")) return;
+          const has = (pkg: string) => id.includes(`/node_modules/${pkg}/`);
+
+          if (has("recharts") || /\/node_modules\/d3-[^/]+\//.test(id) || /\/node_modules\/victory-[^/]+\//.test(id) || id.includes("/node_modules/d3/")) return "charts";
+          if (
+            has("react-markdown") ||
+            /\/node_modules\/(remark|rehype|micromark|mdast-util|unist-util|hast-util)-[^/]+\//.test(id) ||
+            has("unified") || has("vfile") || has("devlop") || has("bail") ||
+            has("trough") || has("character-entities") || has("character-entities-html4") ||
+            has("character-entities-legacy") || has("character-reference-invalid") ||
+            has("decode-named-character-reference") || has("zwitch") ||
+            has("property-information") || has("space-separated-tokens") ||
+            has("comma-separated-tokens") || has("html-void-elements") ||
+            has("ccount") || has("escape-string-regexp") || has("longest-streak") ||
+            has("markdown-table") || has("html-url-attributes")
+          ) return "markdown";
+          if (has("lucide-react")) return "icons";
+          if (has("framer-motion") || has("motion-dom") || has("motion-utils")) return "framer";
+          if (has("react-syntax-highlighter") || has("refractor") || has("prismjs") || has("highlight.js")) return "syntax";
+          // React runtime kept together to avoid `react-dom <-> vendor`
+          // circular chunk warning.
+          if (
+            id.includes("/node_modules/react-dom/") &&
+            !/\/node_modules\/react-dom\/(server|static|profiling)/.test(id)
+          ) return "react-dom";
+          if (id.includes("/node_modules/scheduler/")) return "react-dom";
+          if (
+            id.includes("/node_modules/react/") ||
+            id.includes("/node_modules/react-is/")
+          ) return "react-dom";
+          if (
+            has("react-helmet") || has("react-helmet-async") ||
+            has("react-hot-toast") || has("sonner") || has("cmdk") ||
+            has("class-variance-authority") || has("clsx") || has("tailwind-merge")
+          ) return "ui-utils";
+          if (
+            has("react-router") || has("react-router-dom") ||
+            id.includes("/node_modules/@remix-run/") ||
+            id.includes("/node_modules/@tanstack/") ||
+            id.includes("/node_modules/@radix-ui/")
+          ) return "vendor";
+          if (id.includes("/node_modules/codemirror/") || id.includes("/node_modules/@codemirror/") || id.includes("/node_modules/@lezer/")) return "codemirror";
+          if (id.includes("/node_modules/axios/")) return "axios";
         },
       },
     },

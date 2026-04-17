@@ -526,29 +526,72 @@ export default defineConfig(({ mode }) => ({
     chunkSizeWarningLimit: 700,
     rollupOptions: {
       output: {
+        // Manual chunk strategy — see Task #359 for the full root-cause
+        // and the matching audit note in `.local/audits/syrabit-page-load
+        // -speed-audit.md`. Post-fix sizes (production build,
+        // NODE_ENV=production, measured 2026-04-17):
+        //   react-dom : 1,117 kB → 190 kB raw   /  ~280 kB → 60 kB gzipped
+        //                (react + react-dom/client + scheduler + react-is)
+        //   vendor    :    57 kB → 198 kB raw   /  ~18 kB → 63 kB gzipped
+        //                (react-router + @tanstack + @radix-ui only)
+        //   entry     : 108 kB raw / 35 kB gzipped
+        // dist/index.html modulepreload set is exactly the four chunks
+        // the entry statically imports — react-dom, vendor, ui-utils,
+        // icons — with no syntax/framer/codemirror leakage onto the
+        // landing critical path.
         manualChunks(id) {
           if (!id.includes('node_modules')) return;
-          if (id.includes('recharts') || id.includes('d3-') || id.includes('d3/') || id.includes('victory')) return 'charts';
+          // IMPORTANT: pnpm encodes peer-dep info in directory names
+          // (e.g. `framer-motion@12.35.1_react-dom@19.1.0_react@19.1.0`),
+          // so a naive `id.includes('react-dom')` matches every package
+          // that has react-dom as a peer dep — pulling CodeMirror,
+          // sandpack, lexical, radix, etc. into the react-dom chunk.
+          // Match against the *actual* package directory instead:
+          // `node_modules/<pkg>/...` (the second `node_modules/` in pnpm
+          // layouts: `node_modules/.pnpm/<peerhash>/node_modules/<pkg>/`).
+          const has = (pkg) => id.includes(`/node_modules/${pkg}/`);
+          const hasScope = (scope) => id.includes(`/node_modules/${scope}/`);
+
+          if (has('recharts') || hasScope('victory') || /\/node_modules\/d3-[^/]+\//.test(id) || id.includes('/node_modules/d3/')) return 'charts';
           if (
-            id.includes('react-markdown') ||
-            id.includes('remark') ||
-            id.includes('rehype') ||
-            id.includes('unified') ||
-            id.includes('micromark') ||
-            id.includes('mdast') ||
-            id.includes('unist') ||
-            id.includes('hast')
+            has('react-markdown') ||
+            /\/node_modules\/(remark|rehype|micromark|mdast-util|unist-util|hast-util)-[^/]+\//.test(id) ||
+            has('unified') || has('vfile') || has('devlop') || has('bail') ||
+            has('trough') || has('character-entities') || has('character-entities-html4') ||
+            has('character-entities-legacy') || has('character-reference-invalid') ||
+            has('decode-named-character-reference') || has('zwitch') ||
+            has('property-information') || has('space-separated-tokens') ||
+            has('comma-separated-tokens') || has('html-void-elements') ||
+            has('ccount') || has('escape-string-regexp') || has('longest-streak') ||
+            has('markdown-table') || has('html-url-attributes')
           ) return 'markdown';
-          if (id.includes('lucide-react')) return 'icons';
-          if (id.includes('framer-motion') || id.includes('motion-dom') || id.includes('motion-utils')) return 'framer';
-          if (id.includes('react-syntax-highlighter') || id.includes('refractor') || id.includes('prismjs') || id.includes('highlight.js')) return 'syntax';
-          if (id.includes('react-dom')) return 'react-dom';
-          if (id.includes('react-helmet') || id.includes('react-hot-toast') || id.includes('sonner') || id.includes('cmdk') || id.includes('class-variance-authority') || id.includes('clsx') || id.includes('tailwind-merge')) return 'ui-utils';
+          if (has('lucide-react')) return 'icons';
+          if (has('framer-motion') || has('motion-dom') || has('motion-utils')) return 'framer';
+          if (has('react-syntax-highlighter') || has('refractor') || has('prismjs') || has('highlight.js')) return 'syntax';
+          // React runtime — keep react + react-dom (client only) + scheduler
+          // + react-is together in one chunk. Grouping them avoids the
+          // `react-dom <-> vendor` circular chunk that arose when react-dom
+          // and react were in different chunks while react-router (in
+          // vendor) depended on react-dom.
           if (
-            id.includes('/react/') || id.includes('/react-is/') ||
-            id.includes('react-router') || id.includes('@remix-run') ||
-            id.includes('@tanstack') ||
-            id.includes('@radix-ui')
+            id.includes('/node_modules/react-dom/') &&
+            !/\/node_modules\/react-dom\/(server|static|profiling)/.test(id)
+          ) return 'react-dom';
+          if (id.includes('/node_modules/scheduler/')) return 'react-dom';
+          if (
+            id.includes('/node_modules/react/') ||
+            id.includes('/node_modules/react-is/')
+          ) return 'react-dom';
+          if (
+            has('react-helmet') || has('react-helmet-async') ||
+            has('react-hot-toast') || has('sonner') || has('cmdk') ||
+            has('class-variance-authority') || has('clsx') || has('tailwind-merge')
+          ) return 'ui-utils';
+          if (
+            has('react-router') || has('react-router-dom') ||
+            id.includes('/node_modules/@remix-run/') ||
+            id.includes('/node_modules/@tanstack/') ||
+            id.includes('/node_modules/@radix-ui/')
           ) return 'vendor';
         },
       },
