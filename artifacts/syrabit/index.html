@@ -258,7 +258,10 @@
     <!-- ── Pre-hydration shell ── paints FCP/LCP from HTML before React boots.
          React.createRoot().render() replaces #root contents on first commit.
          Tailored to /chat (the default route — / redirects here). On other
-         routes it is replaced before users see it. (Task #381) -->
+         routes it is replaced before users see it. JS-only: when JS is
+         disabled, the noscript style below hides the shell so the upstream
+         <noscript> content is what users see. (Task #381) -->
+    <noscript><style>#__shell{display:none!important}</style></noscript>
     <style>
       #__shell{position:fixed;inset:0;background:#0a0a1a;color:#e2e8f0;font-family:system-ui,-apple-system,'Space Grotesk',sans-serif;display:flex;flex-direction:column;z-index:0}
       #__shell header{height:56px;border-bottom:1px solid rgba(255,255,255,0.06);display:flex;align-items:center;padding:0 16px;gap:10px;flex-shrink:0}
