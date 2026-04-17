@@ -14,6 +14,7 @@ import AudioTrimPreview from './AudioTrimPreview';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import axios from 'axios';
 import { adminGetDashboard, seoPipelineStatus, adminSeoHealthHistory, adminSeoHealthSnapshotNow, seoHealthLive, seoHealthDeepScan, adminSeoDeepScanHistory, API_BASE } from '@/utils/api';
+import { pushChannelTone } from '@/utils/pushChannelTone';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, ReferenceLine, CartesianGrid, Legend,
@@ -2250,20 +2251,21 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
 
               {pushChannelStatus && (() => {
                 // Task #434 — surface the same per-channel last_success_at /
-                // last_error that Bot Security → Alert Settings shows. We
-                // flag the row red when there's an error on record OR the
-                // last successful push is older than 24h while we *did*
-                // attempt one (otherwise "no attempts" stays neutral grey).
+                // last_error that Bot Security → Alert Settings shows.
+                // Task #442 — staleness/degraded math is extracted to
+                // pushChannelTone() in src/utils/ for unit testing.
                 const lastSuccess = pushChannelStatus.last_success_at;
                 const lastError = pushChannelStatus.last_error;
-                const lastAttempt = pushChannelStatus.last_attempt_at;
-                const STALE_MS = 24 * 60 * 60 * 1000;
-                const successAge = lastSuccess ? (Date.now() - new Date(lastSuccess).getTime()) : null;
-                const isStale = lastAttempt && (!lastSuccess || (successAge !== null && successAge > STALE_MS));
-                const degraded = Boolean(lastError) || Boolean(isStale);
-                const tone = degraded
+                const { tone: toneKey, degraded } = pushChannelTone({
+                  last_success_at: lastSuccess,
+                  last_error: lastError,
+                  last_attempt_at: pushChannelStatus.last_attempt_at,
+                });
+                const tone = toneKey === 'degraded'
                   ? 'bg-red-50 border-red-200 text-red-700'
-                  : (lastSuccess ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-gray-50 border-gray-200 text-gray-500');
+                  : toneKey === 'healthy'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                    : 'bg-gray-50 border-gray-200 text-gray-500';
                 const fmtRel = (iso) => {
                   if (!iso) return 'never';
                   const ms = Date.now() - new Date(iso).getTime();
