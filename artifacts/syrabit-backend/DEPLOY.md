@@ -224,6 +224,35 @@ No code changes are needed — only the dashboard URLs must be updated.
 
 ---
 
+## Step 6.5: Cloudflare Pages Deploy Hook (prerender refresh)
+
+The frontend's prerendered subject and chapter HTML (Task #385) is built
+at deploy time. To keep that HTML in sync with admin content edits
+(Task #387), the backend triggers a Cloudflare Pages deploy hook.
+
+1. In Cloudflare Pages → your project → **Settings** → **Builds &
+   deployments** → **Deploy hooks**, click **Add deploy hook** with:
+   - Hook name: `syrabit-content-refresh`
+   - Branch to build: `main` (or your production branch)
+2. Copy the generated URL and set it on the App Runner service as the
+   secret `CF_PAGES_DEPLOY_HOOK_URL`.
+3. (Optional) Tune the cadence with these env vars (defaults shown):
+   - `CF_PAGES_DEPLOY_COALESCE=60` — seconds to batch admin edits before firing
+   - `CF_PAGES_DEPLOY_MIN_INTERVAL=300` — minimum seconds between consecutive fires
+   - `CF_PAGES_DEPLOY_NIGHTLY_INTERVAL=86400` — leader-only safety-net cadence
+
+Once configured:
+- Subject/chapter create / update / delete / bulk-status → debounced rebuild
+- `POST /api/admin/prerender/refresh` (admin auth, optional `?immediate=true`) → manual trigger
+- `GET /api/admin/prerender/status` (admin auth) → inspect last fire / pending state
+- A leader-elected nightly fire ensures stale content gets refreshed even
+  if admin edits go through paths that bypass the schedule helper.
+
+When `CF_PAGES_DEPLOY_HOOK_URL` is unset the backend silently no-ops, so
+non-prod environments are unaffected.
+
+---
+
 ## Step 7: Update Frontend Environment
 
 In the Cloudflare Pages dashboard for the frontend:

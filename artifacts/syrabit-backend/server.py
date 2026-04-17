@@ -610,6 +610,17 @@ async def lifespan(app):
         # Single-leader: only one replica should query the CF GraphQL API
         # and write the per-UA report each Monday.
         asyncio.create_task(_cf_bot_report_loop())
+    # Task #387 — leader-gated nightly Cloudflare Pages deploy hook so the
+    # prerendered subject/chapter HTML stays current even when no admin
+    # edits trigger a debounced refresh. No-ops if CF_PAGES_DEPLOY_HOOK_URL
+    # is unset.
+    if _is_leader:
+        try:
+            import pages_deploy as _pages_deploy
+            asyncio.create_task(_pages_deploy.nightly_loop())
+        except Exception as _pd_err:
+            logger.warning(f"pages_deploy nightly loop not started: {_pd_err}")
+
     # Task #314 uses atomic Mongo CAS via db.job_locks for dedup across
     # replicas, so it does not need a leader gate.
     asyncio.create_task(_bot_traffic_report_loop())

@@ -1,6 +1,20 @@
 """Syrabit.ai — Admin content CRUD & thumbnails"""
 import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
 
+def _schedule_prerender_refresh(reason: str = "content_update"):
+    """Queue a debounced Cloudflare Pages rebuild so prerendered subject/
+    chapter HTML stays in sync with admin edits (Task #387).
+
+    Wraps `pages_deploy.schedule_refresh` in a try/except so admin write
+    paths never fail because the deploy hook is misconfigured.
+    """
+    try:
+        from pages_deploy import schedule_refresh
+        schedule_refresh(reason)
+    except Exception:
+        pass
+
+
 def _schedule_indexnow_for_subject(subject_doc: dict):
     try:
         from routes.bot_discovery import indexnow_batcher
@@ -200,6 +214,41 @@ async def admin_purge_all_cache(admin: dict = Depends(get_admin_user), backgroun
         "cloudflare_purged": cf_ok,
         "d1_sync_queued": d1_ok,
     }
+
+@router.post("/admin/prerender/refresh")
+async def admin_prerender_refresh(
+    admin: dict = Depends(get_admin_user),
+    immediate: bool = Query(False, description="If true, fire the deploy hook now without debounce"),
+):
+    """Manually trigger a Cloudflare Pages rebuild so prerendered subject /
+    chapter HTML reflects the latest content (Task #387).
+
+    By default this enqueues a debounced refresh — multiple admin clicks
+    within the coalesce window collapse to a single deploy. Pass
+    `immediate=true` to bypass debounce (useful after a large bulk import
+    where the admin wants the rebuild to start right now).
+    """
+    from pages_deploy import (
+        is_configured, schedule_refresh, trigger_now, status as deploy_status,
+    )
+    if not is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="CF_PAGES_DEPLOY_HOOK_URL not set — configure the Cloudflare Pages deploy hook to enable on-demand prerender refresh",
+        )
+    if immediate:
+        ok = await trigger_now(reason=f"admin_manual:{admin.get('email', 'unknown')}")
+    else:
+        ok = schedule_refresh(reason=f"admin_manual:{admin.get('email', 'unknown')}")
+    return {"queued": bool(ok), "immediate": immediate, "status": deploy_status()}
+
+
+@router.get("/admin/prerender/status")
+async def admin_prerender_status(admin: dict = Depends(get_admin_user)):
+    """Inspect the Cloudflare Pages deploy-hook trigger state (Task #387)."""
+    from pages_deploy import status as deploy_status
+    return deploy_status()
+
 
 @router.post("/admin/d1-sync")
 async def admin_trigger_d1_sync(admin: dict = Depends(get_admin_user), tables: Optional[str] = Query(None)):
@@ -579,6 +628,7 @@ async def admin_create_subject(data: SubjectCreate, admin: dict = Depends(get_ad
         _invalidate_content_cache("subjects")
         _schedule_d1_sync_fire("subjects")
         _schedule_indexnow_for_subject(subj)
+        _schedule_prerender_refresh("subject_created")
         logger.info(f"Subject created: {data.name} (id={subject_id}, stream={stream_id_val})")
         return {k: v for k, v in subj.items() if k != "_id"}
     except HTTPException:
@@ -605,6 +655,7 @@ async def admin_update_subject(subject_id: str, data: dict, admin: dict = Depend
     updated_subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0, "board_slug": 1, "class_slug": 1, "slug": 1})
     if updated_subj:
         _schedule_indexnow_for_subject(updated_subj)
+    _schedule_prerender_refresh("subject_updated")
     return {"message": "Updated"}
 
 _ALLOWED_BULK_STATUSES = {"published", "draft", "unpublished", "archived"}
@@ -672,6 +723,8 @@ async def admin_bulk_status_update(data: dict, admin: dict = Depends(get_admin_u
         except Exception:
             pass
 
+    _schedule_prerender_refresh(f"bulk_status_{scope}")
+
     return {
         "scope": scope,
         "status": new_status,
@@ -695,6 +748,7 @@ async def admin_patch_subject(subject_id: str, data: dict, admin: dict = Depends
     updated_subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0, "board_slug": 1, "class_slug": 1, "slug": 1})
     if updated_subj:
         _schedule_indexnow_for_subject(updated_subj)
+    _schedule_prerender_refresh("subject_patched")
     return {"message": "Subject updated"}
 
 
@@ -1377,6 +1431,7 @@ async def admin_delete_subject(subject_id: str, admin: dict = Depends(get_admin_
     _invalidate_content_cache("subjects_by_course_type")
     _invalidate_content_cache("chapters")
     _schedule_d1_sync_fire("subjects", "chapters")
+    _schedule_prerender_refresh("subject_deleted")
     return {"message": "Deleted"}
 
 @router.delete("/admin/content/seo-pages/rejected")
@@ -1463,6 +1518,7 @@ async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_ad
     _invalidate_content_cache("subjects")
     _schedule_d1_sync_fire("chapters", "subjects")
     _schedule_indexnow_for_chapter(chap)
+    _schedule_prerender_refresh("chapter_created")
 
     # SEO Phase D — auto cross-link the new chapter into the parent subject
     # hub + 2-3 sibling chapters, then fan out the patched URLs through the
@@ -1936,5 +1992,6 @@ async def admin_update_chapter(chapter_id: str, data: dict, admin: dict = Depend
         updated_ch = await db.chapters.find_one({"id": chapter_id}, {"_id": 0, "slug": 1, "subject_id": 1})
     if updated_ch:
         _schedule_indexnow_for_chapter(updated_ch)
+    _schedule_prerender_refresh("chapter_updated")
     return {"message": "Chapter updated", **chunks_info}
 
