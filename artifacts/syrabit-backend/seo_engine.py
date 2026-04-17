@@ -1841,8 +1841,79 @@ async def update_page_status(page_id: str, status: str = "published", _admin: di
                 asyncio.create_task(notify_indexnow_for_page(page))
         except Exception:
             pass
+        try:
+            import asyncio
+            from d1_sync import sync_tables as _d1_sync_tables, is_d1_configured as _d1_ok
+            if _d1_ok():
+                asyncio.create_task(_d1_sync_tables(_db, ["seo_pages"]))
+        except Exception as e:
+            logger.warning(f"D1 auto-sync trigger failed: {e}")
 
     return {"message": f"Status updated to {status}"}
+
+
+# ─── ADMIN: D1 edge cache sync ────────────────────────────────────────────────
+
+@router.get("/d1/status")
+async def d1_status(_admin: dict = Depends(_require_admin)):
+    """Report D1 edge cache configuration and last-known sync state."""
+    try:
+        from d1_sync import is_d1_configured, D1_SYNC_SECRET, EDGE_WORKER_URL
+    except Exception as e:
+        return {"configured": False, "sync_secret_set": False, "error": str(e)}
+    last_sync = None
+    try:
+        meta = await _db.sync_meta.find_one({"_id": "d1_last_sync"}, {"_id": 0})
+        if meta:
+            last_sync = meta.get("last_sync") or meta.get("at")
+    except Exception:
+        pass
+    return {
+        "configured": is_d1_configured(),
+        "sync_secret_set": bool(D1_SYNC_SECRET and D1_SYNC_SECRET != "REPLACE_WITH_SECURE_RANDOM_SECRET"),
+        "edge_worker_url": EDGE_WORKER_URL,
+        "last_sync": last_sync,
+    }
+
+
+@router.post("/d1/sync-full")
+async def d1_sync_full(_admin: dict = Depends(_require_admin)):
+    """Push the full content catalog (boards, subjects, chapters, topics, seo_pages) to D1."""
+    from d1_sync import sync_full
+    result = await sync_full(_db)
+    if result.get("success"):
+        try:
+            await _db.sync_meta.update_one(
+                {"_id": "d1_last_sync"},
+                {"$set": {"last_sync": datetime.now(timezone.utc).isoformat(), "scope": "full"}},
+                upsert=True,
+            )
+        except Exception:
+            pass
+    return result
+
+
+@router.post("/d1/sync-tables")
+async def d1_sync_tables_endpoint(
+    body: dict,
+    _admin: dict = Depends(_require_admin),
+):
+    """Push selected tables to D1. Body: {"tables": ["seo_pages", "topics"]}"""
+    from d1_sync import sync_tables
+    tables = body.get("tables") or []
+    if not isinstance(tables, list) or not tables:
+        raise HTTPException(status_code=400, detail="Body must include non-empty 'tables' array")
+    result = await sync_tables(_db, tables)
+    if result.get("success"):
+        try:
+            await _db.sync_meta.update_one(
+                {"_id": "d1_last_sync"},
+                {"$set": {"last_sync": datetime.now(timezone.utc).isoformat(), "scope": ",".join(tables)}},
+                upsert=True,
+            )
+        except Exception:
+            pass
+    return result
 
 
 # ─── ADMIN: Review queue ─────────────────────────────────────────────────────
