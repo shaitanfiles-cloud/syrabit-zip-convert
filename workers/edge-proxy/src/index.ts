@@ -11,6 +11,7 @@ import { syncFromPayload, getSyncStatus } from "./d1-sync";
 
 interface Env {
   BACKEND_URL: string;
+  PAGES_ORIGIN?: string;
   RATE_LIMIT: KVNamespace;
   BOT_HTML_CACHE?: KVNamespace;
   CONTENT_DB: D1Database;
@@ -1286,7 +1287,19 @@ export default {
         const botResp = await handleBotContentRequest(env, pathname, clientIp, request, ctx);
         if (botResp) return botResp;
       }
-      return fetch(request);
+      // CRITICAL: do NOT call fetch(request) — this worker is bound to
+      // syrabit.ai/* and www.syrabit.ai/*, and fetch(request) re-enters
+      // the same worker route causing recursion that resolves to garbage
+      // (Pages HTML body + backend 404 headers). Always proxy to the
+      // Pages origin by its workers.dev hostname so the worker route is
+      // bypassed cleanly.
+      const pagesOrigin = env.PAGES_ORIGIN || "https://syrabit-zip-convert.pages.dev";
+      const pagesUrl = `${pagesOrigin}${url.pathname}${url.search}`;
+      return fetch(pagesUrl, {
+        method: "GET",
+        headers: request.headers,
+        redirect: "manual",
+      });
     }
 
     if (request.method !== "GET" || isBypass(pathname)) {
