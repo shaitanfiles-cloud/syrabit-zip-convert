@@ -236,7 +236,7 @@ function HydrateHealthCard({ hydrate, loading, error, onRetry }) {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <Stat icon={AlertOctagon} label="Preload failures"
               value={failed.toLocaleString()} color="#f59e0b"
-              sub={manual > 0 ? `${manual} not auto-recovered` : 'all auto-recovered'} />
+              sub={manual > 0 ? `${manual} without auto-reload attempt` : 'all auto-reload eligible'} />
             <Stat icon={RefreshCw} label="Auto-reload attempts"
               value={attempts.toLocaleString()} color="#7c3aed" sub="stale-chunk reloads" />
             <Stat icon={ShieldCheck} label="Recovery success"
