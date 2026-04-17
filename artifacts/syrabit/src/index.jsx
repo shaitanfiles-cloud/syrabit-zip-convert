@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import "./index.css";
 import App, { preloadPageForKind } from "./App";
 import { initWebVitals } from "./utils/webVitals";
+import Analytics from "./utils/analytics";
 
 const rootEl = document.getElementById("root");
 const tree = (
@@ -34,8 +35,39 @@ if (hasPrerender) {
   // parallel with this entry chunk; the await below is just the
   // join point.
   const kind = rootEl.dataset.hydrate;
+  // Task #405: when the page-chunk preload import() rejects (chunk
+  // 404 from a stale build, network blip, integrity mismatch), don't
+  // swallow it. We still proceed to hydrateRoot — React.lazy will
+  // fall back to its Suspense boundary, and DeferredFallback's
+  // recovery hint will surface a refresh prompt after a few seconds.
+  // We also report the failure so we can spot regressions in
+  // production.
+  function reportPreloadFailure(err) {
+    try {
+      const detail = {
+        kind,
+        path: window.location.pathname,
+        message: err?.message || String(err),
+        name: err?.name || "Error",
+      };
+      // Mark for the recovery hint + any e2e harness.
+      window.__SYRABIT_HYDRATE_PRELOAD_FAILED__ = detail;
+      try {
+        window.dispatchEvent(
+          new CustomEvent("syrabit:hydrate-preload-failed", { detail }),
+        );
+      } catch {}
+      try { Analytics.hydratePreloadFailed?.(detail); } catch {}
+      // Always log — preload failures are actionable for ops.
+       
+      console.warn("[hydrate] page-chunk preload failed", detail);
+    } catch {
+      /* never let reporting itself break hydration */
+    }
+  }
+
   Promise.resolve(preloadPageForKind(kind))
-    .catch(() => {})
+    .catch((err) => reportPreloadFailure(err))
     .then(() => {
       ReactDOM.hydrateRoot(rootEl, tree);
       if (typeof window !== "undefined") {

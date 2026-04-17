@@ -8,6 +8,7 @@ import { AdminGuard } from "@/components/AdminGuard";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { HelmetProvider } from "react-helmet-async";
+import Analytics from "@/utils/analytics";
 const PWAInstallPrompt = lazy(() => import("@/components/PWAInstallPrompt"));
 const SignupEncouragementPopup = lazy(() => import("@/components/SignupEncouragementPopup"));
 const LazyToaster = lazy(() => import("sonner").then(m => ({ default: m.Toaster })));
@@ -152,12 +153,83 @@ const PageFallbackContent = () => (
   </div>
 );
 
-function DeferredFallback({ delay = 150 }) {
+// Task #405: if hydration's Suspense fallback sticks around for an
+// unusually long time (slow chunk fetch, page-chunk preload that
+// rejected, etc.) we surface a recovery hint with a one-click
+// reload, instead of leaving users staring at a spinner. We also
+// emit one analytics event so we can track regressions in
+// production.
+function StalledRecoveryHint({ kind, onReload }) {
+  return (
+    <div
+      className="min-h-screen flex items-center justify-center bg-background px-6"
+      role="status"
+      aria-live="polite"
+    >
+      <div className="max-w-sm w-full text-center flex flex-col items-center gap-4">
+        <div className="w-12 h-12 rounded-2xl flex items-center justify-center overflow-hidden">
+          <img src="/logo.webp" alt="" width="48" height="48" className="w-12 h-12 object-cover" />
+        </div>
+        <div className="text-base font-medium text-foreground">
+          This is taking longer than usual.
+        </div>
+        <div className="text-sm text-muted-foreground">
+          A page resource didn’t load. Refreshing usually fixes it.
+        </div>
+        <button
+          type="button"
+          onClick={onReload}
+          className="mt-1 inline-flex items-center justify-center px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90"
+        >
+          Refresh page
+        </button>
+        {kind ? (
+          <div className="text-xs text-muted-foreground/70">page: {kind}</div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function DeferredFallback({ delay = 150, recoveryDelay = 5000 }) {
   const [show, setShow] = useState(false);
+  const [stalled, setStalled] = useState(false);
   useEffect(() => {
-    const timer = setTimeout(() => setShow(true), delay);
-    return () => clearTimeout(timer);
-  }, [delay]);
+    const showTimer = setTimeout(() => setShow(true), delay);
+    const stalledTimer = setTimeout(() => {
+      setStalled(true);
+      try {
+        const rootEl =
+          typeof document !== "undefined"
+            ? document.getElementById("root")
+            : null;
+        const kind = rootEl?.dataset?.hydrate || null;
+        const path =
+          typeof window !== "undefined" ? window.location.pathname : null;
+        Analytics.hydrateStalled?.({ kind, path, ms: recoveryDelay });
+      } catch {}
+    }, recoveryDelay);
+    return () => {
+      clearTimeout(showTimer);
+      clearTimeout(stalledTimer);
+    };
+  }, [delay, recoveryDelay]);
+
+  if (stalled) {
+    const rootEl =
+      typeof document !== "undefined"
+        ? document.getElementById("root")
+        : null;
+    const kind = rootEl?.dataset?.hydrate || null;
+    return (
+      <StalledRecoveryHint
+        kind={kind}
+        onReload={() => {
+          try { window.location.reload(); } catch {}
+        }}
+      />
+    );
+  }
   return show ? <PageFallbackContent /> : null;
 }
 

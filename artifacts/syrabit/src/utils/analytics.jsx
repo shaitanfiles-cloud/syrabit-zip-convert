@@ -210,6 +210,23 @@ export const Analytics = {
   adminLogin: (email) => {
     track('admin_logged_in', { email_domain: email.split('@')[1] });
   },
+
+  // ── Hydration / page-chunk preload health (Task #405) ─────────────────────
+  // Fired when the per-page chunk preload `import()` rejects in the
+  // browser before hydrateRoot() runs (chunk 404 from a stale build,
+  // network blip, integrity mismatch). We hydrate anyway and the
+  // Suspense fallback shows a recovery hint, but tracking these lets
+  // us spot regressions in production.
+  hydratePreloadFailed: ({ kind, path, message, name } = {}) => {
+    track('hydrate_preload_failed', { kind, path, message, error_name: name });
+  },
+
+  // Fired when hydration is still showing the Suspense fallback after
+  // the recovery threshold (~5s) — i.e. the user is staring at a
+  // loading state for an unusually long time.
+  hydrateStalled: ({ kind, path, ms } = {}) => {
+    track('hydrate_stalled', { kind, path, elapsed_ms: ms });
+  },
 };
 
 export default Analytics;
