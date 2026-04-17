@@ -78,3 +78,9 @@ id = "CTUB5gKOwuDIHA8KkM-1R"
 uri = "file://.local/audits/syrabit-feature-audit-tasks-1-352.md"
 type = "text"
 title = "Syrabit.ai — Feature & Workflow Audit (Tasks #1 – #352)"
+
+[[outputs]]
+id = "GOXOoZtnK4lAWpksq-b_K"
+uri = "file://.local/audits/syrabit-bot-traction-projection.md"
+type = "text"
+title = "Syrabit.ai — Bot Traffic Projection (post tasks #1–#352)"
