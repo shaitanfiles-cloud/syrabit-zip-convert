@@ -855,11 +855,11 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
             </div>
             <div className="flex gap-4">
               <div>
-                <p className="text-gray-900 font-bold text-lg">{(vs.cloudflare?.total_visitors ?? vs.total_visitors ?? 0).toLocaleString()}</p>
+                <p className="text-gray-900 font-bold text-lg">{vs.cloudflare ? (vs.cloudflare.total_visitors ?? 0).toLocaleString() : '—'}</p>
                 <p className="text-[10px] text-gray-400">Range</p>
               </div>
               <div>
-                <p className="text-gray-900 font-bold text-lg">{(vs.cloudflare?.visitors_today ?? vs.visitors_today ?? 0).toLocaleString()}</p>
+                <p className="text-gray-900 font-bold text-lg">{vs.cloudflare ? (vs.cloudflare.visitors_today ?? 0).toLocaleString() : '—'}</p>
                 <p className="text-[10px] text-gray-400">Today</p>
               </div>
             </div>
@@ -873,11 +873,11 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
             </div>
             <div className="flex gap-4">
               <div>
-                <p className="text-gray-900 font-bold text-lg">{(vs.cloudflare?.total_page_views ?? vs.total_page_views ?? 0).toLocaleString()}</p>
+                <p className="text-gray-900 font-bold text-lg">{vs.cloudflare ? (vs.cloudflare.total_page_views ?? 0).toLocaleString() : '—'}</p>
                 <p className="text-[10px] text-gray-400">Range</p>
               </div>
               <div>
-                <p className="text-gray-900 font-bold text-lg">{(vs.cloudflare?.page_views_today ?? vs.page_views_today ?? 0).toLocaleString()}</p>
+                <p className="text-gray-900 font-bold text-lg">{vs.cloudflare ? (vs.cloudflare.page_views_today ?? 0).toLocaleString() : '—'}</p>
                 <p className="text-[10px] text-gray-400">Today</p>
               </div>
             </div>

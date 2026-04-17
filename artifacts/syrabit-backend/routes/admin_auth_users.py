@@ -33,6 +33,7 @@ from llm import call_llm_api, call_llm_api_stream
 from rag import *
 from utils import *
 from analytics_helpers import *
+import cloudflare_client
 
 logger = logging.getLogger(__name__)
 
@@ -222,10 +223,23 @@ async def _compute_dashboard():
         p = u.get("plan", "free")
         plan_dist[p] = plan_dist.get(p, 0) + 1
 
-    visitor_stats, recent_events = await asyncio.gather(
-        get_visitor_stats(),
+    cf_stats, recent_events = await asyncio.gather(
+        cloudflare_client.get_visitor_stats_cf(days=7),
         get_recent_user_events(limit=10),
     )
+    cf_connected = bool(cf_stats)
+    if cf_stats:
+        visitor_stats = {
+            "total_visitors": cf_stats.get("total_visitors", 0),
+            "visitors_today": cf_stats.get("visitors_today", 0),
+            "page_views_today": cf_stats.get("page_views_today", 0),
+            "total_page_views": cf_stats.get("total_page_views", 0),
+            "total_requests": cf_stats.get("total_requests", 0),
+            "daily_visitors": cf_stats.get("daily_visitors", []),
+            "cloudflare": cf_stats,
+        }
+    else:
+        visitor_stats = {}
 
     return {
         "total_users": total_users,
