@@ -2544,26 +2544,7 @@ async def _seo_health_alert_loop():
                             and int(r.get("total", 0)) > 0
                         ]
                         if fully_failing:
-                            try:
-                                scans = await asyncio.gather(
-                                    *[_deep_scan_sitemap(name) for name in fully_failing],
-                                    return_exceptions=True,
-                                )
-                                for name, res in zip(fully_failing, scans):
-                                    if isinstance(res, Exception):
-                                        deep_scan_summaries[name] = {
-                                            "error": f"{type(res).__name__}: {str(res)[:160]}",
-                                        }
-                                        continue
-                                    deep_scan_summaries[name] = {
-                                        "total_urls": int(res.get("total_urls", 0)),
-                                        "checked": int(res.get("checked", 0)),
-                                        "failing_count": len(res.get("failing") or []),
-                                        "truncated": bool(res.get("truncated")),
-                                        **({"error": res["error"]} if res.get("error") else {}),
-                                    }
-                            except Exception as exc:
-                                logger.debug(f"deep scan during seo_url_spike failed: {exc}")
+                            deep_scan_summaries = await _collect_alert_deep_scans(fully_failing)
                         body_text = (
                             f"URL spot-check success rate has been at {latest_rate}% for two "
                             f"consecutive hourly checks (alert fires below {bad_floor}%). "
@@ -2780,6 +2761,50 @@ async def admin_seo_health_snapshot_now(admin: dict = Depends(get_admin_user)):
 # can show the full failing list on demand.
 SEO_DEEP_SCAN_MAX_URLS = 500
 SEO_DEEP_SCAN_CONCURRENCY = 20
+
+# Task #347: when the spike-alert loop auto-deep-scans multiple
+# fully-failing sitemaps in parallel, the per-scan
+# SEO_DEEP_SCAN_CONCURRENCY cap is multiplied by the number of failing
+# sitemaps. To keep total outbound HEAD pressure bounded during a wide
+# outage we run alert-triggered deep scans sequentially through a
+# shared async lock. (Manual /admin/.../deep-scan calls are unaffected.)
+_SEO_ALERT_DEEP_SCAN_LOCK = asyncio.Lock()
+
+
+async def _collect_alert_deep_scans(sitemap_names: List[str]) -> Dict[str, Dict]:
+    """Run a deep scan for each name in ``sitemap_names`` and return a
+    compact summary map keyed by sitemap name.
+
+    Scans run *sequentially* under :data:`_SEO_ALERT_DEEP_SCAN_LOCK` so
+    that the alert loop never multiplies ``SEO_DEEP_SCAN_CONCURRENCY``
+    across N failing sitemaps during a wide outage. Each scan still
+    self-throttles internally; serialising at the alert layer keeps
+    aggregate outbound HEAD pressure bounded.
+
+    Each entry contains ``total_urls``, ``checked``, ``failing_count``
+    and ``truncated`` — plus an ``error`` key when the scan itself
+    raised or returned an error payload.
+    """
+    summaries: Dict[str, Dict] = {}
+    async with _SEO_ALERT_DEEP_SCAN_LOCK:
+        for name in sitemap_names:
+            try:
+                res = await _deep_scan_sitemap(name)
+            except Exception as exc:  # noqa: BLE001
+                summaries[name] = {
+                    "error": f"{type(exc).__name__}: {str(exc)[:160]}",
+                }
+                continue
+            summary = {
+                "total_urls": int(res.get("total_urls", 0)),
+                "checked": int(res.get("checked", 0)),
+                "failing_count": len(res.get("failing") or []),
+                "truncated": bool(res.get("truncated")),
+            }
+            if res.get("error"):
+                summary["error"] = res["error"]
+            summaries[name] = summary
+    return summaries
 
 # Task #348: when a deep scan turns up MORE than this many failing URLs
 # we automatically email the full failing list as a CSV attachment to

@@ -736,10 +736,6 @@ def _fully_failing_report():
     return rep
 
 
-def _format_html_renders_deep_scan_summary():
-    pass
-
-
 def test_format_by_sitemap_html_renders_deep_scan_summary():
     """When deep_scan_summaries are passed, the per-sitemap row gains a
     'Deep scan: X of Y URLs failing' line so admins see the true blast
@@ -787,6 +783,71 @@ def test_format_by_sitemap_text_renders_deep_scan_summary():
     }}
     text = bot_discovery._format_by_sitemap_text(rows, summaries)
     assert "Deep scan: 47 of 312 URLs failing" in text
+
+
+def test_collect_alert_deep_scans_runs_sequentially_under_lock():
+    """Task #347: when multiple sitemaps are fully failing, the alert
+    helper must serialise the deep scans (one at a time) rather than
+    fan them all out in parallel — otherwise SEO_DEEP_SCAN_CONCURRENCY
+    is multiplied by N and we hammer origin during a wide outage."""
+    in_flight = 0
+    max_in_flight = 0
+    order: list = []
+
+    async def _fake_deep_scan(name):
+        nonlocal in_flight, max_in_flight
+        in_flight += 1
+        max_in_flight = max(max_in_flight, in_flight)
+        # yield to the loop a few times to give a concurrent caller a
+        # chance to interleave (which it must not under the lock).
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        in_flight -= 1
+        order.append(name)
+        return {
+            "sitemap": name, "total_urls": 100, "checked": 100,
+            "truncated": False, "failing": [{"url": "x", "status": 404}],
+        }
+
+    async def _run():
+        # Reset the module lock between tests for hermeticity
+        bot_discovery._SEO_ALERT_DEEP_SCAN_LOCK = asyncio.Lock()
+        a, b = await asyncio.gather(
+            bot_discovery._collect_alert_deep_scans(["sitemap-a.xml"]),
+            bot_discovery._collect_alert_deep_scans(["sitemap-b.xml"]),
+        )
+        return a, b
+
+    with patch.object(bot_discovery, "_deep_scan_sitemap", _fake_deep_scan):
+        a, b = asyncio.run(_run())
+
+    # Both scans completed and produced summaries
+    assert a["sitemap-a.xml"]["failing_count"] == 1
+    assert b["sitemap-b.xml"]["failing_count"] == 1
+    # ...but they NEVER overlapped — the lock kept us sequential.
+    assert max_in_flight == 1, f"deep scans overlapped: max_in_flight={max_in_flight}"
+    assert order == ["sitemap-a.xml", "sitemap-b.xml"]
+
+
+def test_collect_alert_deep_scans_records_error_when_scan_raises():
+    """A raising _deep_scan_sitemap must not abort the whole batch — the
+    failing sitemap gets an `error` summary and remaining scans run."""
+    async def _fake(name):
+        if name == "boom":
+            raise RuntimeError("boom kaboom")
+        return {"total_urls": 5, "checked": 5, "truncated": False,
+                "failing": [{"url": "u", "status": 404}]}
+
+    async def _run():
+        bot_discovery._SEO_ALERT_DEEP_SCAN_LOCK = asyncio.Lock()
+        return await bot_discovery._collect_alert_deep_scans(["boom", "ok"])
+
+    with patch.object(bot_discovery, "_deep_scan_sitemap", _fake):
+        out = asyncio.run(_run())
+
+    assert "error" in out["boom"]
+    assert "boom kaboom" in out["boom"]["error"]
+    assert out["ok"]["failing_count"] == 1
 
 
 def test_url_spike_alert_triggers_deep_scan_for_fully_failing_sitemap():
