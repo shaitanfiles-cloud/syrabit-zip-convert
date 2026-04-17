@@ -2704,14 +2704,48 @@ def _validate_backfill_url(url: str) -> Optional[str]:
 async def _collect_all_backfill_urls() -> tuple[List[str], Dict[str, int]]:
     """Discover every public URL that should be in Bing's index.
 
-    Reuses `_collect_current_sitemap_urls()` (which already mirrors the
-    full sitemap pipeline — STATIC_PAGES, subjects, chapters, learn docs,
-    and every published seo_page across all page_types) and explicitly
-    adds the homepage `/` (STATIC_PAGES uses `/home`, the Cloudflare
-    Pages root `/` is a separate URL).
+    Starts from `_collect_current_sitemap_urls()` (STATIC_PAGES + subjects
+    + chapters + learn docs + the legacy 5 seo_page types the daily
+    sitemap exposes) and then **explicitly enumerates every published
+    seo_page across ALL page_types** (no allowlist) so the catalog push
+    is genuinely complete — any future / non-legacy page_type ships too.
+    The homepage `/` is also appended explicitly (STATIC_PAGES emits
+    `/home`; Cloudflare Pages serves `/` as a separate canonical URL).
     """
     raw = await _collect_current_sitemap_urls()
     raw.append(f"{BASE_URL}/")
+
+    # Supplementary pass: pick up published seo_pages whose page_type sits
+    # outside the daily-sitemap allowlist. We do not filter by page_type
+    # at all here — the only requirement is that the page is published
+    # and that we can construct a usable URL.
+    try:
+        from deps import db, is_mongo_available
+        if await is_mongo_available():
+            try:
+                from seo_engine import _build_valid_slug_chains
+                valid_chains: Optional[set] = None
+                try:
+                    valid_chains = await _build_valid_slug_chains()
+                except Exception as e:  # pragma: no cover — diagnostic only
+                    logger.debug(f"backfill: valid_chains load failed: {e}")
+                pages = await db.seo_pages.find(
+                    {"status": "published"},
+                    {"_id": 0, "board_slug": 1, "class_slug": 1,
+                     "subject_slug": 1, "topic_slug": 1, "page_type": 1},
+                ).to_list(200000)
+                for p in pages:
+                    if valid_chains is not None and (
+                        p.get("board_slug"), p.get("class_slug"), p.get("subject_slug")
+                    ) not in valid_chains:
+                        continue
+                    u = _page_doc_to_url(p)
+                    if u:
+                        raw.append(u)
+            except Exception as e:
+                logger.warning(f"backfill: seo_pages full-type fetch failed: {e}")
+    except Exception as e:  # pragma: no cover — defensive
+        logger.debug(f"backfill: seo_pages supplementary pass skipped: {e}")
 
     seen: set = set()
     valid: List[str] = []

@@ -114,6 +114,60 @@ def test_collect_all_backfill_dedupes_and_includes_homepage(monkeypatch):
     assert skip == {}
 
 
+def test_collect_all_backfill_includes_all_seo_page_types(monkeypatch):
+    """Regression guard: the daily sitemap collector restricts seo_pages
+    to a 5-type allowlist (notes/mcqs/important-questions/examples/
+    definition). The backfill MUST go beyond that and include every
+    published seo_page regardless of page_type — otherwise newer / future
+    page types (e.g. ``summary``, ``cheatsheet``) would never reach Bing
+    via the catalog push."""
+    _patch_mongo_ok(monkeypatch)
+    from routes import bot_discovery as bd
+
+    legacy_url = "https://syrabit.ai/ahsec/class-12/physics"
+    summary_url = "https://syrabit.ai/ahsec/class-12/physics/motion/summary"
+
+    async def _fake_sitemap():
+        return [legacy_url]
+    monkeypatch.setattr(bd, "_collect_current_sitemap_urls", _fake_sitemap)
+
+    # _build_valid_slug_chains may be unavailable in the deps stub — patch
+    # it to None so we don't accidentally filter out the synthetic page.
+    import seo_engine as se
+    monkeypatch.setattr(
+        se, "_build_valid_slug_chains", AsyncMock(side_effect=Exception("stub")),
+    )
+
+    # _page_doc_to_url translates a Mongo seo_page doc → URL. Patch it to
+    # a deterministic mapping so we don't depend on slug chain logic.
+    def _fake_url(doc):
+        if doc.get("page_type") == "summary":
+            return summary_url
+        return None
+    monkeypatch.setattr(bd, "_page_doc_to_url", _fake_url)
+
+    # Stub the seo_pages cursor used by the supplementary backfill pass.
+    import deps as deps_mod
+    pages = [
+        {"board_slug": "ahsec", "class_slug": "class-12",
+         "subject_slug": "physics", "topic_slug": "motion",
+         "page_type": "summary"},  # NEW page type, not in legacy allowlist
+    ]
+
+    class _FakeCursor:
+        def to_list(self, _n):
+            async def _f():
+                return list(pages)
+            return _f()
+
+    deps_mod.db.seo_pages.find = MagicMock(return_value=_FakeCursor())
+
+    urls, skip = _run(bd._collect_all_backfill_urls())
+    assert summary_url in urls, "non-legacy seo_page types must be included"
+    assert legacy_url in urls
+    assert "https://syrabit.ai/" in urls  # homepage always present
+
+
 def test_collect_all_backfill_aggregates_skip_reasons(monkeypatch):
     from routes import bot_discovery as bd
 
