@@ -1950,6 +1950,40 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                     className="w-full text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white focus:ring-1 focus:ring-violet-300 focus:border-violet-300 outline-none"
                   />
                 </div>
+                <div>
+                  <label className="text-[10px] text-gray-500 font-medium block mb-1" title="Fires when more than this many hydrate_preload_failed events occur in the last hour. Indicates a stale-build / CDN gap.">Hydrate Failures /hr</label>
+                  <input
+                    type="number"
+                    step="1"
+                    min="1"
+                    value={alertSettingsDraft.thresholds.hydrate_failure_per_hour ?? ''}
+                    onChange={e => setAlertSettingsDraft(prev => ({ ...prev, thresholds: { ...prev.thresholds, hydrate_failure_per_hour: parseInt(e.target.value) || 0 } }))}
+                    className="w-full text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white focus:ring-1 focus:ring-violet-300 focus:border-violet-300 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-gray-500 font-medium block mb-1" title="Fires when the hydrate auto-reload success rate falls below this % over the last hour. Indicates the new build may also be broken.">Recovery Rate Floor (%)</label>
+                  <input
+                    type="number"
+                    step="1"
+                    min="1"
+                    max="100"
+                    value={alertSettingsDraft.thresholds.hydrate_recovery_min_rate_pct ?? ''}
+                    onChange={e => setAlertSettingsDraft(prev => ({ ...prev, thresholds: { ...prev.thresholds, hydrate_recovery_min_rate_pct: parseFloat(e.target.value) || 0 } }))}
+                    className="w-full text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white focus:ring-1 focus:ring-violet-300 focus:border-violet-300 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-gray-500 font-medium block mb-1" title="Minimum auto-reload attempts in the last hour before the recovery-rate alert is allowed to fire.">Recovery Min Attempts</label>
+                  <input
+                    type="number"
+                    step="1"
+                    min="1"
+                    value={alertSettingsDraft.thresholds.hydrate_recovery_min_attempts ?? ''}
+                    onChange={e => setAlertSettingsDraft(prev => ({ ...prev, thresholds: { ...prev.thresholds, hydrate_recovery_min_attempts: parseInt(e.target.value) || 0 } }))}
+                    className="w-full text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white focus:ring-1 focus:ring-violet-300 focus:border-violet-300 outline-none"
+                  />
+                </div>
               </div>
               <div className="flex items-center gap-4 pt-2 border-t border-gray-200">
                 <label className="flex items-center gap-2 cursor-pointer">

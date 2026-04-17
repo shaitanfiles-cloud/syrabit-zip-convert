@@ -271,6 +271,61 @@ def test_loop_does_not_mark_cooldown_when_dispatch_fails():
     assert "hydrate_failure_spike" not in analytics._HYDRATE_ALERT_LAST_FIRED
 
 
+# -------- admin-tunable thresholds --------
+
+def test_admin_overrides_failure_threshold_lowers_trigger_point():
+    """Admin can quiet/tighten the failure-spike threshold via
+    metrics._ALERT_THRESHOLDS without a deploy."""
+    _reset_cooldowns()
+    import metrics as _metrics_mod
+    saved = dict(_metrics_mod._ALERT_THRESHOLDS)
+    try:
+        # Tighten: alert at >5 failures/hr instead of the default 50.
+        _metrics_mod._ALERT_THRESHOLDS = {
+            **saved,
+            "hydrate_failure_per_hour": 5,
+        }
+        fake_db = _fake_db_with_counts(preload_failed_total=10)  # under default
+        with patch.object(analytics, "db", fake_db), \
+             patch.object(analytics, "is_mongo_available", AsyncMock(return_value=True)):
+            alerts = asyncio.run(analytics._evaluate_hydrate_alerts(now_ts=2000.0))
+        assert len(alerts) == 1
+        assert alerts[0]["alert_type"] == "hydrate_failure_spike"
+        # The snapshot reflects the live admin-configured value.
+        assert alerts[0]["threshold_snapshot"]["value"] == 5
+        assert "threshold: 5" in alerts[0]["body"]
+    finally:
+        _metrics_mod._ALERT_THRESHOLDS = saved
+
+
+def test_admin_overrides_recovery_min_attempts_gates_alert():
+    """Raising hydrate_recovery_min_attempts must suppress the recovery
+    alert for low-volume windows."""
+    _reset_cooldowns()
+    import metrics as _metrics_mod
+    saved = dict(_metrics_mod._ALERT_THRESHOLDS)
+    try:
+        _metrics_mod._ALERT_THRESHOLDS = {
+            **saved,
+            "hydrate_recovery_min_attempts": 100,   # demand 100 attempts
+            "hydrate_recovery_min_rate_pct": 50.0,
+            "hydrate_failure_per_hour": 1000,       # keep spike alert silent
+        }
+        # 12 attempts / 2 recoveries — would fire under defaults, must be
+        # suppressed under the higher attempts gate.
+        fake_db = _fake_db_with_counts(
+            preload_failed_total=10,
+            auto_reload_attempts=12,
+            auto_reload_recoveries=2,
+        )
+        with patch.object(analytics, "db", fake_db), \
+             patch.object(analytics, "is_mongo_available", AsyncMock(return_value=True)):
+            alerts = asyncio.run(analytics._evaluate_hydrate_alerts(now_ts=2000.0))
+        assert alerts == []
+    finally:
+        _metrics_mod._ALERT_THRESHOLDS = saved
+
+
 # -------- _format_hydrate_sample --------
 
 def test_format_sample_handles_missing_fields():

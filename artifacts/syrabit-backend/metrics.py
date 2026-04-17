@@ -261,6 +261,9 @@ _ALERT_THRESHOLDS_DEFAULT = {
     "endpoint_down_check_minutes": 15,
     "collection_growth_per_day": 500,
     "url_404_spike_pct": 20.0,
+    "hydrate_failure_per_hour": 50,
+    "hydrate_recovery_min_rate_pct": 50.0,
+    "hydrate_recovery_min_attempts": 10,
 }
 _ALERT_EXPIRATION_DEFAULT = {
     "enabled": False,

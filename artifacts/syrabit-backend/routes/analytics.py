@@ -571,9 +571,41 @@ async def admin_hydrate_stats(
 #      and the loop guard is firing.
 # ─────────────────────────────────────────────────────────────────────────────
 
+#
+# These three constants are *defaults*. The effective values used by the
+# alert loop come from db.api_config.alert_settings.thresholds (loaded into
+# metrics._ALERT_THRESHOLDS by metrics._load_alert_settings) so admins can
+# tune them from the Alert Settings panel without a deploy. The constants
+# are still exported because the test suite uses them as a baseline.
 HYDRATE_FAILURE_THRESHOLD = 50          # hydrate_preload_failed events / hour
 HYDRATE_RECOVERY_MIN_ATTEMPTS = 10      # min auto-reload attempts before judging
 HYDRATE_RECOVERY_MIN_RATE_PCT = 50.0    # success rate floor (%)
+
+
+def _effective_hydrate_thresholds() -> tuple:
+    """Return (failure_per_hour, recovery_min_rate_pct, recovery_min_attempts)
+    using the admin-configured values from metrics._ALERT_THRESHOLDS, falling
+    back to the module-level defaults when unset or invalid."""
+    failure = HYDRATE_FAILURE_THRESHOLD
+    rate = HYDRATE_RECOVERY_MIN_RATE_PCT
+    attempts = HYDRATE_RECOVERY_MIN_ATTEMPTS
+    try:
+        from metrics import _ALERT_THRESHOLDS
+        try:
+            failure = float(_ALERT_THRESHOLDS.get("hydrate_failure_per_hour", failure))
+        except (TypeError, ValueError):
+            pass
+        try:
+            rate = float(_ALERT_THRESHOLDS.get("hydrate_recovery_min_rate_pct", rate))
+        except (TypeError, ValueError):
+            pass
+        try:
+            attempts = int(float(_ALERT_THRESHOLDS.get("hydrate_recovery_min_attempts", attempts)))
+        except (TypeError, ValueError):
+            pass
+    except Exception:
+        pass
+    return failure, rate, attempts
 HYDRATE_ALERT_COOLDOWN_S = 60 * 60      # 60 min per incident type
 HYDRATE_ALERT_INTERVAL_S = 5 * 60       # poll every 5 min
 _HYDRATE_ALERT_DASHBOARD_URL = "https://syrabit.ai/admin/dashboard?tab=overview#hydrate-health"
@@ -673,6 +705,7 @@ async def _evaluate_hydrate_alerts(now_ts: Optional[float] = None) -> List[Dict[
         now_ts = time.time()
     snap = await _gather_hydrate_alert_window()
     alerts: List[Dict[str, Any]] = []
+    failure_threshold, recovery_min_rate, recovery_min_attempts = _effective_hydrate_thresholds()
 
     sample_str = _format_hydrate_sample(snap.get("sample_message"))
     top_kind = snap.get("top_kind") or {}
@@ -688,11 +721,11 @@ async def _evaluate_hydrate_alerts(now_ts: Optional[float] = None) -> List[Dict[
 
     # ── (1) hydrate_failure_spike
     failures = int(snap.get("preload_failed_total") or 0)
-    if failures > HYDRATE_FAILURE_THRESHOLD:
+    if failures > failure_threshold:
         if _cooldown_ok("hydrate_failure_spike"):
             body_lines = [
                 f"{failures} hydrate_preload_failed events in the last hour "
-                f"(threshold: {HYDRATE_FAILURE_THRESHOLD}).",
+                f"(threshold: {failure_threshold:g}).",
                 f"Top failing asset kind: {top_kind_str}.",
             ]
             if sample_str:
@@ -704,7 +737,7 @@ async def _evaluate_hydrate_alerts(now_ts: Optional[float] = None) -> List[Dict[
                 "body": "\n".join(body_lines),
                 "threshold_snapshot": {
                     "metric": "hydrate_preload_failed_per_hour",
-                    "value": HYDRATE_FAILURE_THRESHOLD,
+                    "value": failure_threshold,
                     "actual": failures,
                     "top_kind": top_kind.get("value") if top_kind else None,
                     "auto_reload_attempts": int(snap.get("auto_reload_attempts") or 0),
@@ -715,14 +748,14 @@ async def _evaluate_hydrate_alerts(now_ts: Optional[float] = None) -> List[Dict[
     # ── (2) hydrate_recovery_low
     attempts = int(snap.get("auto_reload_attempts") or 0)
     rate = snap.get("success_rate_pct")
-    if attempts >= HYDRATE_RECOVERY_MIN_ATTEMPTS and rate is not None and rate < HYDRATE_RECOVERY_MIN_RATE_PCT:
+    if attempts >= recovery_min_attempts and rate is not None and rate < recovery_min_rate:
         if _cooldown_ok("hydrate_recovery_low"):
             recoveries = int(snap.get("auto_reload_recoveries") or 0)
             body_lines = [
                 f"Auto-reload success rate is {rate:.1f}% "
                 f"({recoveries}/{attempts}) over the last hour, below the "
-                f"{HYDRATE_RECOVERY_MIN_RATE_PCT:.0f}% floor with "
-                f"≥ {HYDRATE_RECOVERY_MIN_ATTEMPTS} attempts.",
+                f"{recovery_min_rate:.0f}% floor with "
+                f"≥ {recovery_min_attempts} attempts.",
                 "The new build may also be broken — clients are likely hitting "
                 "the loop guard.",
                 f"Top failing asset kind: {top_kind_str}.",
@@ -736,7 +769,7 @@ async def _evaluate_hydrate_alerts(now_ts: Optional[float] = None) -> List[Dict[
                 "body": "\n".join(body_lines),
                 "threshold_snapshot": {
                     "metric": "auto_reload_success_rate_pct",
-                    "value": HYDRATE_RECOVERY_MIN_RATE_PCT,
+                    "value": recovery_min_rate,
                     "actual": rate,
                     "auto_reload_attempts": attempts,
                     "auto_reload_recoveries": recoveries,
@@ -758,16 +791,19 @@ async def _hydrate_alert_loop():
     await asyncio.sleep(150)
     while True:
         try:
+            # Refresh persisted alert settings BEFORE evaluation so admin
+            # threshold changes (failure/hour, recovery rate floor, min
+            # attempts) take effect within the next tick — same pattern
+            # the metrics._alerting_loop uses.
+            try:
+                from metrics import _load_alert_settings
+                await _load_alert_settings()
+            except Exception:
+                pass
             alerts = await _evaluate_hydrate_alerts()
             if alerts:
                 try:
-                    from metrics import _dispatch_alert, _alert_last_fired, _load_alert_settings
-                    # Refresh notification channel config so admin email
-                    # changes apply within the next tick.
-                    try:
-                        await _load_alert_settings()
-                    except Exception:
-                        pass
+                    from metrics import _dispatch_alert, _alert_last_fired
                     for a in alerts:
                         # Bypass the shared 30-min metrics cooldown — we
                         # already gate ourselves at 60 min per type.
