@@ -198,6 +198,31 @@ function ImportantQuestions({ chapterTitle, pyqData }) {
   );
 }
 
+// Look up the chapter payload baked into the prerendered HTML by
+// scripts/prerender-routes.mjs. On the server (SSR), entry-server.jsx
+// stashes the payload on globalThis. On the client, the prerender
+// script inlines `window.__CHAPTER_PRELOAD__` BEFORE the bootstrap
+// module so it's available on the very first render — letting
+// hydrateRoot match the SSR DOM without a skeleton flash. (Task #385)
+function readChapterPreload(board, classSlug, subjectSlug, chapterSlug) {
+  const matches = (p) =>
+    p &&
+    p.board === board &&
+    p.classSlug === classSlug &&
+    p.subjectSlug === subjectSlug &&
+    p.chapterSlug === chapterSlug &&
+    p.data;
+  if (typeof window !== "undefined") {
+    const p = window.__CHAPTER_PRELOAD__;
+    if (matches(p)) return p.data;
+  }
+  if (typeof globalThis !== "undefined") {
+    const p = globalThis.__SSR_CHAPTER_PRELOAD__;
+    if (matches(p)) return p.data;
+  }
+  return null;
+}
+
 export default function ChapterPage() {
   const params = useParams();
   const board = params.board;
@@ -207,9 +232,14 @@ export default function ChapterPage() {
   const chapterSlug = hasStreamInUrl ? params.chapterSlug : params.chapterSlug;
   const streamSlug = hasStreamInUrl ? params.streamSlug : null;
   const [searchParams, setSearchParams] = useSearchParams();
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const initialChapterData = useMemo(
+    () => readChapterPreload(board, classSlug, subjectSlug, chapterSlug),
+    [board, classSlug, subjectSlug, chapterSlug],
+  );
+  const [data, setData] = useState(initialChapterData);
+  const [loading, setLoading] = useState(!initialChapterData);
   const [error, setError] = useState(null);
+  const skipFirstFetchRef = useRef(!!initialChapterData);
   const [pyqData, setPyqData] = useState(null);
   const articleRef = useRef(null);
   const [activeId, setActiveId] = useState('');
@@ -218,6 +248,13 @@ export default function ChapterPage() {
 
   useEffect(() => {
     if (!board || !classSlug || !subjectSlug || !chapterSlug) return;
+    // Skip the first fetch when we hydrated with prerendered chapter
+    // data — it already matches this URL (validated in
+    // readChapterPreload). Subsequent SPA navigations refetch normally.
+    if (skipFirstFetchRef.current) {
+      skipFirstFetchRef.current = false;
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError(null);

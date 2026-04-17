@@ -34,10 +34,27 @@ export const queryClient = new QueryClient({
 // first render on the client matches the server-rendered markup
 // exactly (Task #382 — required for hydrateRoot on /library to skip
 // the loading skeleton and avoid a hydration mismatch).
-if (typeof window !== "undefined" && window.__LIBRARY_BUNDLE__) {
-  try {
-    queryClient.setQueryData(["library-bundle-slim"], window.__LIBRARY_BUNDLE__);
-  } catch {}
+//
+// `__LIBRARY_BUNDLE__` is the legacy single-payload hook for /library
+// (kept for back-compat). `__SSR_QUERIES__` is the generalised list
+// used by Task #385 prerendered subject + chapter routes — each entry
+// is `{ key: [...queryKey], data: <payload> }`.
+if (typeof window !== "undefined") {
+  if (window.__LIBRARY_BUNDLE__) {
+    try {
+      queryClient.setQueryData(
+        ["library-bundle-slim"],
+        window.__LIBRARY_BUNDLE__,
+      );
+    } catch {}
+  }
+  if (Array.isArray(window.__SSR_QUERIES__)) {
+    for (const q of window.__SSR_QUERIES__) {
+      try {
+        if (q && Array.isArray(q.key)) queryClient.setQueryData(q.key, q.data);
+      } catch {}
+    }
+  }
 }
 
 
@@ -49,11 +66,15 @@ const LoginPage          = lazy(() => import("@/pages/LoginPage"));
 const SignupPage         = lazy(() => import("@/pages/SignupPage"));
 const ResetPasswordPage  = lazy(() => import("@/pages/ResetPasswordPage"));
 const OnboardingPage     = lazy(() => import("@/pages/OnboardingPage"));
-// LibraryPage is imported eagerly so the server-rendered output for
-// /library is byte-identical to React's first client render — lazy()
-// would render a Suspense fallback during SSR (or before its chunk
-// resolves on the client) and break hydration. (Task #382)
+// LibraryPage, SubjectLandingPage, and ChapterPage are imported
+// eagerly so the server-rendered output for the prerendered routes
+// (/library, /:board/:class/:subject, /:board/:class/:subject/:chapter)
+// is byte-identical to React's first client render — lazy() would
+// render a Suspense fallback during SSR (or before its chunk resolves
+// on the client) and break hydration. (Tasks #382, #385)
 import LibraryPage from "@/pages/LibraryPage";
+import SubjectLandingPage from "@/pages/SubjectLandingPage";
+import ChapterPage from "@/pages/ChapterPage";
 const SubjectPage        = lazy(() => import("@/pages/SubjectPage"));
 // ChatPage is imported eagerly so the server-rendered output for /chat is
 // byte-identical to React's first client render — lazy() would render a
@@ -72,8 +93,6 @@ const NotFoundPage       = lazy(() => import("@/pages/NotFoundPage"));
 const AdminLoginPage     = lazy(() => import("@/pages/AdminLoginPage"));
 const AdminPage          = lazy(() => import("@/pages/AdminPage"));
 const ExamRoutinePage    = lazy(() => import("@/pages/ExamRoutinePage"));
-const ChapterPage        = lazy(pageImports.chapter);
-const SubjectLandingPage = lazy(() => import("@/pages/SubjectLandingPage"));
 const CurriculumMap      = lazy(() => import("@/pages/CurriculumMap"));
 const PaymentSuccessPage = lazy(() => import("@/pages/PaymentSuccessPage"));
 const PaymentCancelPage  = lazy(() => import("@/pages/PaymentCancelPage"));

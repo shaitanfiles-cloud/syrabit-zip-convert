@@ -11,15 +11,17 @@ const tree = (
   </React.StrictMode>
 );
 
-// /library and /chat ship a fully prerendered React tree inside #root.
-// Hydrate in place so React adopts the existing DOM (no remount, no flash).
+// Prerendered routes (/library, /chat, /:board/:class/:subject,
+// /:board/:class/:subject/:chapter) ship a fully prerendered React
+// tree inside #root tagged with `data-hydrate="<kind>"`. Hydrate in
+// place so React adopts the existing DOM — no remount, no flash.
 // Every other route still mounts the SPA via createRoot.
-// (Task #382 for /library, Task #387 for /chat.)
+// (Tasks #382, #385, #387)
+const PRERENDER_KINDS = new Set(["library", "chat", "subject", "chapter"]);
 const hasPrerender =
   rootEl &&
   rootEl.firstElementChild != null &&
-  (rootEl.dataset.hydrate === "library" ||
-    rootEl.dataset.hydrate === "chat");
+  PRERENDER_KINDS.has(rootEl.dataset.hydrate);
 
 if (hasPrerender) {
   ReactDOM.hydrateRoot(rootEl, tree);
