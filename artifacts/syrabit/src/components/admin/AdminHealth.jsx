@@ -582,6 +582,15 @@ export default function AdminHealth({ adminToken, onNavigate }) {
               </div>
             </div>
 
+            {asmStats && asmStats.ok === false && (
+              <div className="mb-3 p-3 rounded-xl bg-red-50 border border-red-200 flex items-start gap-2" data-testid="asm-stats-error">
+                <AlertTriangle size={14} className="text-red-500 mt-0.5 flex-shrink-0" />
+                <div className="text-[11px] text-red-700 leading-relaxed">
+                  <span className="font-semibold">Stats backend unavailable.</span>{' '}
+                  {asmStats.error || 'Aggregation failed — see api logs.'} Numbers below default to zero and are not authoritative.
+                </div>
+              </div>
+            )}
             {asmStatsLoading && !asmStats ? (
               <div className="flex justify-center py-10"><RefreshCw size={20} className="animate-spin text-gray-300" /></div>
             ) : asmStats ? (
