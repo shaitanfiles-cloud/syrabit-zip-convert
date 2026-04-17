@@ -513,8 +513,11 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
               {searchFiltered.map(s => (
                 <div
                   key={s.id}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => { setSearchQuery(''); const st = streams.find(x => x.id === s.stream_id); if (st) { const cl = classes.find(x => x.id === st.class_id); if (cl) setSelBoard(cl.board_id); setSelClass(st.class_id); } setSelStream(s.stream_id); setSelSubject(s.id); }}
-                  className="p-4 rounded-xl border border-gray-200 hover:border-violet-300 bg-white text-left transition-colors shadow-sm cursor-pointer"
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSearchQuery(''); const st = streams.find(x => x.id === s.stream_id); if (st) { const cl = classes.find(x => x.id === st.class_id); if (cl) setSelBoard(cl.board_id); setSelClass(st.class_id); } setSelStream(s.stream_id); setSelSubject(s.id); } }}
+                  className="p-4 rounded-xl border border-gray-200 hover:border-violet-300 bg-white text-left transition-colors shadow-sm cursor-pointer focus:outline-none focus:ring-2 focus:ring-violet-400"
                   data-testid={`search-result-${s.id}`}
                 >
                   <div className="flex items-center justify-between gap-2">
