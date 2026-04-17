@@ -177,6 +177,10 @@ export function AppRoutes() {
 
       {/* ── Public content routes (no auth) ── */}
       <Route path="/library"           element={<LibraryPage />} />
+      {/* /browser is an alias for /library — marketing/PageSpeed URL.
+          Both routes render the same component so neither produces a
+          404, and prerender-library.mjs writes static HTML for both. */}
+      <Route path="/browser"           element={<LibraryPage />} />
       <Route path="/curriculum"        element={<CurriculumMap />} />
       <Route path="/subject/:subjectId" element={<SubjectPage />} />
 
@@ -258,7 +262,7 @@ function App() {
       });
     };
 
-    const isOnLibrary = window.location.pathname === '/library' || window.location.pathname.match(/^\/[a-z]+\/[a-z]/);
+    const isOnLibrary = window.location.pathname === '/library' || window.location.pathname === '/browser' || window.location.pathname.match(/^\/[a-z]+\/[a-z]/);
     if (isOnLibrary) {
       prefetchBundle();
       return;

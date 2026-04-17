@@ -53,6 +53,12 @@
 /library/index.html
   Cache-Control: public, max-age=0, s-maxage=3600, stale-while-revalidate=86400
 
+/browser
+  Cache-Control: public, max-age=0, s-maxage=3600, stale-while-revalidate=86400
+
+/browser/index.html
+  Cache-Control: public, max-age=0, s-maxage=3600, stale-while-revalidate=86400
+
 /pricing
   Cache-Control: public, max-age=0, s-maxage=3600, stale-while-revalidate=86400
 

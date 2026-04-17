@@ -33,9 +33,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, "..", "dist");
 const distSsrDir = path.resolve(__dirname, "..", "dist-ssr");
 const srcHtml = path.join(distDir, "index.html");
-const outDir = path.join(distDir, "library");
-const outHtml = path.join(outDir, "index.html");
 const ssrEntry = path.join(distSsrDir, "entry-server.js");
+
+// Routes to prerender. /browser is an alias of /library — see App.jsx
+// route definitions and Task #386 (the marketing/PageSpeed URL).
+const ROUTES = [
+  { route: "/library", outDir: path.join(distDir, "library") },
+  { route: "/browser", outDir: path.join(distDir, "browser") },
+];
 
 const BACKEND =
   process.env.PRERENDER_BACKEND_URL ||
@@ -207,51 +212,13 @@ async function main() {
       "[prerender-library] entry-server.js did not export renderRoute()",
     );
   }
-  const out = renderRoute({ url: "/library", bundleSlim: slim });
-  if (Array.isArray(out?.errors) && out.errors.length) {
-    for (const e of out.errors) {
-      console.warn(
-        "[prerender-library] SSR onError:",
-        e?.stack || e?.message || e,
-      );
-    }
-  }
-  const ssrHtml = out?.html;
-  if (typeof ssrHtml !== "string" || ssrHtml.length === 0) {
-    throw new Error("[prerender-library] renderRoute() returned empty html");
-  }
-
-  // Replace the legacy pre-hydration shell block AND the empty #root
-  // with the SSR output. Mark with data-hydrate so the bootstrap
-  // calls hydrateRoot instead of createRoot.
-  html =
-    html.slice(0, startIdx) +
-    html.slice(rootMatch.index).replace(
-      rootRe,
-      `<div id="root" data-hydrate="library">${ssrHtml}</div>`,
-    );
-
-  // Inline the slim bundle BEFORE the main module script so React
-  // Query is seeded synchronously and the first client render matches
-  // the SSR output. (Skipped only when the backend was unreachable —
-  // in that case the SSR rendered the skeleton, which still hydrates
-  // correctly because the client also starts with empty data.)
-  if (slim) {
-    const json = JSON.stringify(slim).replace(/</g, "\\u003c");
-    const inlineScript = `<script>window.__LIBRARY_BUNDLE__=${json};</script>`;
-    html = html.replace(
-      /<script type="module"/,
-      `${inlineScript}\n    <script type="module"`,
-    );
-  }
-
-  html = rewriteHead(html);
+  let baseHtml = html;
 
   // Task #391: strip modulepreload links for chunks that /library does not
   // need on the critical path. Vite auto-emits modulepreload hints for
   // every static dep of the entry chunk, including chunks only used by
   // /chat (sandpack-client) and /chapter (markdown). Removing them from
-  // the prerendered /library/index.html cuts ~80-150KB of speculative
+  // the prerendered library snapshot cuts ~80-150KB of speculative
   // downloads on mobile first paint without affecting code-split fetches
   // on later navigations (the imports still resolve, just on demand).
   const NON_LIBRARY_PRELOAD_PATTERNS = [
@@ -266,28 +233,28 @@ async function main() {
     /^badge-/,           // chat badge chunk (if present)
     /^skeleton-/,        // shared skeleton loader
   ];
-  html = html.replace(
+  baseHtml = baseHtml.replace(
     /\s*<link rel="modulepreload"[^>]*href="\/assets\/([^"]+)"[^>]*>/g,
     (match, file) => {
       return NON_LIBRARY_PRELOAD_PATTERNS.some((re) => re.test(file)) ? "" : match;
     },
   );
 
-  // Task #391: inline the main app CSS into /library/index.html and remove
-  // the external <link rel="stylesheet">. The /library page is fully
-  // prerendered (SSR snapshot inside #root), so the CSS file is a hard
+  // Task #391: inline the main app CSS and remove the external
+  // <link rel="stylesheet">. The library page is fully prerendered
+  // (SSR snapshot inside #root), so the CSS file is a hard
   // render-blocking dependency on the critical path. Inlining it cuts a
   // ~300ms round-trip on slow 3G mobile and removes the Lighthouse
   // "render-blocking resources" finding. The cost is one extra HTML
   // payload per first hit (~70 KB CSS), but Cloudflare gzips this to
   // ~14 KB and the result is cached by the page's edge SWR policy.
   const cssLinkRe = /<link rel="stylesheet"[^>]*href="\/assets\/([^"]+\.css)"[^>]*>/;
-  const cssLinkMatch = html.match(cssLinkRe);
+  const cssLinkMatch = baseHtml.match(cssLinkRe);
   if (cssLinkMatch) {
     const cssPath = path.join(distDir, "assets", cssLinkMatch[1]);
     if (fs.existsSync(cssPath)) {
       const cssContent = fs.readFileSync(cssPath, "utf-8");
-      html = html.replace(
+      baseHtml = baseHtml.replace(
         cssLinkRe,
         `<style data-inline-css="${cssLinkMatch[1]}">${cssContent}</style>`,
       );
@@ -297,25 +264,60 @@ async function main() {
     }
   }
 
-  fs.mkdirSync(outDir, { recursive: true });
-  fs.writeFileSync(outHtml, html);
+  for (const { route, outDir } of ROUTES) {
+    const out = renderRoute({ url: route, bundleSlim: slim });
+    if (Array.isArray(out?.errors) && out.errors.length) {
+      for (const e of out.errors) {
+        console.warn(
+          `[prerender-library] SSR onError (${route}):`,
+          e?.stack || e?.message || e,
+        );
+      }
+    }
+    const ssrHtml = out?.html;
+    if (typeof ssrHtml !== "string" || ssrHtml.length === 0) {
+      throw new Error(
+        `[prerender-library] renderRoute(${route}) returned empty html`,
+      );
+    }
 
-  // Hard assertion: the generated file must contain `data-hydrate=
-  // "library"` and a non-empty #root.
-  const written = fs.readFileSync(outHtml, "utf-8");
-  if (
-    !written.includes('data-hydrate="library"') ||
-    /<div id="root" data-hydrate="library"><\/div>/.test(written)
-  ) {
-    throw new Error(
-      "[prerender-library] hydration assertion failed: #root is empty or missing data-hydrate marker",
+    let routeHtml =
+      baseHtml.slice(0, startIdx) +
+      baseHtml.slice(rootMatch.index).replace(
+        rootRe,
+        `<div id="root" data-hydrate="library">${ssrHtml}</div>`,
+      );
+
+    if (slim) {
+      const json = JSON.stringify(slim).replace(/</g, "\\u003c");
+      const inlineScript = `<script>window.__LIBRARY_BUNDLE__=${json};</script>`;
+      routeHtml = routeHtml.replace(
+        /<script type="module"/,
+        `${inlineScript}\n    <script type="module"`,
+      );
+    }
+
+    routeHtml = rewriteHead(routeHtml);
+
+    const outHtml = path.join(outDir, "index.html");
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.writeFileSync(outHtml, routeHtml);
+
+    const written = fs.readFileSync(outHtml, "utf-8");
+    if (
+      !written.includes('data-hydrate="library"') ||
+      /<div id="root" data-hydrate="library"><\/div>/.test(written)
+    ) {
+      throw new Error(
+        `[prerender-library] hydration assertion failed for ${route}: #root is empty or missing data-hydrate marker`,
+      );
+    }
+
+    console.log(
+      `[prerender-library] wrote ${path.relative(distDir, outHtml)} ` +
+        `(${(bundle?.subjects || []).length} subjects, ${routeHtml.length} bytes, SSR+hydrate)`,
     );
   }
-
-  console.log(
-    `[prerender-library] wrote ${path.relative(distDir, outHtml)} ` +
-      `(${(bundle?.subjects || []).length} subjects, ${html.length} bytes, SSR+hydrate)`,
-  );
 }
 
 main().catch((err) => {

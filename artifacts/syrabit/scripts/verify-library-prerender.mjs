@@ -12,67 +12,74 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, "..", "dist");
 const distSsrDir = path.resolve(__dirname, "..", "dist-ssr");
-const libraryHtml = path.join(distDir, "library", "index.html");
+const PRERENDERED = [
+  path.join(distDir, "library", "index.html"),
+  path.join(distDir, "browser", "index.html"),
+];
 
 function fail(msg) {
   console.error(`[verify-library-prerender] FAIL: ${msg}`);
   process.exit(1);
 }
 
-if (!fs.existsSync(libraryHtml)) {
-  fail(`missing prerender output at ${path.relative(distDir, libraryHtml)}`);
-}
-
-const html = fs.readFileSync(libraryHtml, "utf-8");
-
-// 1) data-hydrate marker present so the bootstrap calls hydrateRoot.
-if (!html.includes('data-hydrate="library"')) {
-  fail('missing data-hydrate="library" marker on #root');
-}
-
-// 1b) Reject React SSR abort signatures. renderToString aborts when
-//     it encounters an unresolved Suspense/lazy boundary and emits
-//     placeholder templates that switch the boundary to client-only
-//     rendering — that violates the "hydrate without remount" task
-//     contract. (Task #382 — architect re-review)
-const abortSignatures = [
-  "Switched to client rendering",
-  'does not support Suspense',
-  "<!--$!-->", // Suspense fallback / abort marker
-];
-for (const sig of abortSignatures) {
-  if (html.includes(sig)) {
-    fail(
-      `prerender HTML contains React SSR abort signature ${JSON.stringify(sig)} — ` +
-        `the SSR tree still has unresolved Suspense/lazy boundaries`,
-    );
+for (const target of PRERENDERED) {
+  if (!fs.existsSync(target)) {
+    fail(`missing prerender output at ${path.relative(distDir, target)}`);
   }
-}
 
-// 2) #root has actual content (not <div id="root" data-hydrate="library"></div>).
-const rootRe = /<div id="root" data-hydrate="library">([\s\S]*?)<\/div>\s*<script/;
-const m = html.match(rootRe);
-if (!m) {
-  fail("could not locate #root container in /library/index.html");
-}
-const rootInner = m[1];
-if (rootInner.trim().length < 500) {
-  fail(`#root content is too small (${rootInner.length} bytes) — SSR likely produced no real markup`);
-}
+  const body = fs.readFileSync(target, "utf-8");
 
-// 3) The inlined slim bundle must precede the main module script.
-const bundleIdx = html.indexOf("window.__LIBRARY_BUNDLE__");
-const moduleIdx = html.indexOf('<script type="module"');
-if (bundleIdx === -1) {
-  // Backend was unreachable at prerender time. The SSR still ran (the
-  // skeleton hydrates correctly), so this is a soft warning, not a
-  // hard fail — we don't want every build to require live backend.
-  console.warn(
-    "[verify-library-prerender] WARN: window.__LIBRARY_BUNDLE__ not inlined " +
-      "(backend was unreachable at prerender time); /library will hydrate the skeleton",
+  // 1) data-hydrate marker present so the bootstrap calls hydrateRoot.
+  if (!body.includes('data-hydrate="library"')) {
+    fail(`missing data-hydrate="library" marker on #root in ${path.relative(distDir, target)}`);
+  }
+
+  // 1b) Reject React SSR abort signatures.
+  const abortSignatures = [
+    "Switched to client rendering",
+    'does not support Suspense',
+    "<!--$!-->",
+  ];
+  for (const sig of abortSignatures) {
+    if (body.includes(sig)) {
+      fail(
+        `${path.relative(distDir, target)} contains React SSR abort signature ${JSON.stringify(sig)}`,
+      );
+    }
+  }
+
+  // 2) #root has actual content.
+  const rootRe = /<div id="root" data-hydrate="library">([\s\S]*?)<\/div>\s*<script/;
+  const m = body.match(rootRe);
+  if (!m) {
+    fail(`could not locate #root container in ${path.relative(distDir, target)}`);
+  }
+  const rootInner = m[1];
+  if (rootInner.trim().length < 500) {
+    fail(`#root content too small in ${path.relative(distDir, target)} (${rootInner.length} bytes)`);
+  }
+
+  // 3) The inlined slim bundle must precede the main module script.
+  const bundleIdx = body.indexOf("window.__LIBRARY_BUNDLE__");
+  const moduleIdx = body.indexOf('<script type="module"');
+  if (bundleIdx === -1) {
+    console.warn(
+      `[verify-library-prerender] WARN: window.__LIBRARY_BUNDLE__ not inlined in ${path.relative(distDir, target)} ` +
+        "(backend was unreachable at prerender time)",
+    );
+  } else if (moduleIdx === -1 || bundleIdx > moduleIdx) {
+    fail(`window.__LIBRARY_BUNDLE__ must be inlined BEFORE the main module script in ${path.relative(distDir, target)}`);
+  }
+
+  // 5) Must NOT contain the legacy #__shell overlay.
+  if (/<div id="__shell"/.test(body)) {
+    fail(`${path.relative(distDir, target)} still contains a #__shell overlay`);
+  }
+
+  console.log(
+    `[verify-library-prerender] OK: ${path.relative(distDir, target)} ` +
+      `(${body.length} bytes, ${rootInner.length} bytes inside #root)`,
   );
-} else if (moduleIdx === -1 || bundleIdx > moduleIdx) {
-  fail("window.__LIBRARY_BUNDLE__ must be inlined BEFORE the main module script");
 }
 
 // 4) Confirm the bootstrap is wired to hydrateRoot.
@@ -99,17 +106,6 @@ if (!foundHydrate) {
       "check src/index.jsx and ensure it survived minification",
   );
 }
-
-// 5) /library snapshot must NOT contain the legacy #__shell overlay
-//    (it would visually layer on top of the hydrated tree).
-if (/<div id="__shell"/.test(html)) {
-  fail("/library/index.html still contains a #__shell overlay");
-}
-
-console.log(
-  `[verify-library-prerender] OK: ${path.relative(distDir, libraryHtml)} ` +
-    `(${html.length} bytes, ${rootInner.length} bytes inside #root)`,
-);
 
 // 6) Clean up the SSR build directory so it can't be confused with
 //    the deploy directory. dist-ssr exists only as a build artifact
