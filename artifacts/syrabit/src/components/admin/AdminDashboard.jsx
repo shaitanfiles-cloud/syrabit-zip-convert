@@ -1235,15 +1235,23 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                 // discover which URLs are 404ing.
                 const sampleFailing = checks.filter((c) => !c.ok && c.url).slice(0, 10);
                 const isExpanded = expandedSitemap === sm.name;
-                // Task #345: when the 10-URL sample shows ≥10 failures we
-                // know the live probe hit its sample cap, so we offer a
-                // deep-scan button. The deep-scan response (when present)
-                // takes precedence over the sample for the displayed list.
+                // Task #345: deep-scan results (when present) replace
+                // the sample-based view. After a deep scan we know the
+                // EXACT failing count; before, we can only guess from
+                // the live probe's 10-URL sample.
                 const deepScan = sitemapDeepScans[sm.name];
                 const usingDeepScan = !!deepScan?.data;
                 const failing = usingDeepScan ? deepScan.data.failing : sampleFailing;
-                const sampleHitCap = sampleFailing.length >= 10;
-                const canExpand = failing.length > 0 || sampleHitCap;
+                // Show the "Scan all URLs" button only when the sitemap
+                // could plausibly have >10 broken pages: every sampled
+                // URL failed AND the sitemap contains more than 10 URLs
+                // (otherwise the sample IS the whole sitemap and there's
+                // nothing left to discover).
+                const sampleAllFailed = checks.length > 0
+                  && sampleFailing.length === checks.length;
+                const sitemapBigEnough = (sm.url_count ?? 0) > 10;
+                const mayHaveMoreFailures = sampleAllFailed && sitemapBigEnough;
+                const canExpand = failing.length > 0 || mayHaveMoreFailures;
                 return (
                   <div
                     key={sm.name}
@@ -1299,13 +1307,13 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                               ? ` of ${deepScan.data.total_urls}+`
                               : usingDeepScan
                               ? ` of ${deepScan.data.checked} scanned`
-                              : sampleHitCap ? '+ in sample' : ''})
+                              : mayHaveMoreFailures ? '+ in sample' : ''})
                           </p>
                           {/* Task #345: deep-scan button. Only shown when
                               the sample probe hit its 10-URL cap, since
                               that's the only situation where the displayed
                               list is incomplete. */}
-                          {sampleHitCap && !usingDeepScan && (
+                          {mayHaveMoreFailures && !usingDeepScan && (
                             <button
                               type="button"
                               data-testid={`seo-sitemap-${sm.name}-scan-all`}
