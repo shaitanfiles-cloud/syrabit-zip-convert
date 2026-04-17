@@ -2093,33 +2093,109 @@ async def admin_clear_assamese_purity(admin: dict = Depends(get_admin_user)):
 @router.get("/admin/assamese-purity/audit")
 async def admin_get_assamese_purity_audit(
     limit: int = 20,
+    offset: int = 0,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    admin_email: Optional[str] = None,
     admin: dict = Depends(get_admin_user),
 ):
-    """Return the most recent override-edit audit rows (newest first).
-    `limit` is clamped to [1, 100] so a curious caller cannot ask for
-    the whole table."""
+    """Return override-edit audit rows (newest first), with optional
+    filters so admins can bisect older incidents without dropping into
+    the mongo shell.
+
+    - `limit` is clamped to [1, 100] so a curious caller cannot ask for
+      the whole table.
+    - `offset` is clamped to >= 0 and used for paging beyond the first
+      `limit` entries.
+    - `since` / `until` are ISO-8601 timestamps (inclusive lower / upper
+      bound on the `ts` field). Naive strings are treated as UTC.
+    - `admin_email` is a case-insensitive substring match on the audit
+      row's recorded admin email."""
     try:
         n = max(1, min(100, int(limit)))
     except (TypeError, ValueError):
         n = _ASM_AUDIT_PAGE_LIMIT
     try:
+        off = max(0, int(offset))
+    except (TypeError, ValueError):
+        off = 0
+
+    def _parse_ts(s: Optional[str]) -> Optional[datetime]:
+        if not s:
+            return None
+        try:
+            # `fromisoformat` accepts trailing "Z" only on Py>=3.11; strip
+            # it so older runtimes don't choke on the common JS format.
+            cleaned = s.strip().replace("Z", "+00:00")
+            dt = datetime.fromisoformat(cleaned)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except Exception:
+            return None
+
+    since_dt = _parse_ts(since)
+    until_dt = _parse_ts(until)
+    if (since and not since_dt) or (until and not until_dt):
+        raise HTTPException(
+            status_code=400,
+            detail="since/until must be ISO-8601 timestamps",
+        )
+
+    query: dict = {}
+    ts_clause: dict = {}
+    if since_dt is not None:
+        ts_clause["$gte"] = since_dt
+    if until_dt is not None:
+        ts_clause["$lte"] = until_dt
+    if ts_clause:
+        query["ts"] = ts_clause
+    if admin_email:
+        # Anchor with a substring so admins can paste either the full
+        # email or just a domain. Escape regex metacharacters because
+        # raw "+" / "." appear in real emails.
+        query["admin_email"] = {
+            "$regex": re.escape(admin_email.strip()),
+            "$options": "i",
+        }
+
+    try:
         from deps import db as _db
+        coll = _db[_ASM_AUDIT_COLLECTION]
+        # Count first so the UI can render correct paging controls; then
+        # fetch the requested page. Both run against the `ts` desc index.
+        total = await coll.count_documents(query)
         cursor = (
-            _db[_ASM_AUDIT_COLLECTION]
-            .find({}, {"_id": 0})
+            coll.find(query, {"_id": 0})
             .sort("ts", -1)
+            .skip(off)
             .limit(n)
         )
         rows = await cursor.to_list(n)
     except Exception as e:
         logger.warning(f"[INDIC-SANITIZE] audit fetch failed: {e}")
-        return {"ok": False, "error": str(e), "entries": []}
+        return {
+            "ok": False, "error": str(e),
+            "entries": [], "total": 0,
+            "limit": n, "offset": off,
+        }
     # Normalise `ts` to ISO so the React side can format with toLocaleString.
     for r in rows:
         ts = r.get("ts")
         if isinstance(ts, datetime):
             r["ts"] = ts.replace(tzinfo=ts.tzinfo or timezone.utc).isoformat()
-    return {"ok": True, "entries": rows, "limit": n}
+    return {
+        "ok": True,
+        "entries": rows,
+        "total": int(total),
+        "limit": n,
+        "offset": off,
+        "filters": {
+            "since": since_dt.isoformat() if since_dt else None,
+            "until": until_dt.isoformat() if until_dt else None,
+            "admin_email": admin_email or None,
+        },
+    }
 
 
 @router.get("/admin/assamese-purity/stats")

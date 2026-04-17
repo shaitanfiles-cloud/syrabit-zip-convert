@@ -194,16 +194,36 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   // Task #424 — append-only audit log of override edits.
   const [asmAudit, setAsmAudit] = useState(null);
   const [asmAuditLoading, setAsmAuditLoading] = useState(false);
+  // Task #430 — search/paginate the audit history. `since`/`until` are
+  // bound to <input type="datetime-local"> values so they're naive
+  // strings; we send them as-is and the backend treats naive as UTC.
+  const ASM_AUDIT_PAGE = 20;
+  const [asmAuditFilters, setAsmAuditFilters] = useState({
+    admin_email: '', since: '', until: '',
+  });
+  const [asmAuditOffset, setAsmAuditOffset] = useState(0);
   // Task #428 — per-run audit log of individual sanitiser cleanups.
   const [asmRuns, setAsmRuns] = useState(null);
   const [asmRunsLoading, setAsmRunsLoading] = useState(false);
   const [asmRunsActionFilter, setAsmRunsActionFilter] = useState('');
   const [asmRunsExpanded, setAsmRunsExpanded] = useState({});
 
-  const loadAsmAudit = useCallback(() => {
+  // NOTE: callers always pass {offset, filters} overrides for paging /
+  // filtering so this callback can stay free of state deps. Keeping
+  // it stable also stops the tab-open effect from re-firing on every
+  // filter keystroke (which would race the user's typing).
+  const loadAsmAudit = useCallback((overrides = {}) => {
+    const offset = overrides.offset !== undefined ? overrides.offset : 0;
+    const filters = overrides.filters !== undefined
+      ? overrides.filters
+      : { admin_email: '', since: '', until: '' };
     setAsmAuditLoading(true);
+    const params = { limit: ASM_AUDIT_PAGE, offset };
+    if (filters.admin_email?.trim()) params.admin_email = filters.admin_email.trim();
+    if (filters.since) params.since = new Date(filters.since).toISOString();
+    if (filters.until) params.until = new Date(filters.until).toISOString();
     axios.get(`${API_BASE}/admin/assamese-purity/audit`, {
-      params: { limit: 20 },
+      params,
       headers: adminHeaders(adminToken), withCredentials: true,
     })
       .then((r) => setAsmAudit(r.data))
@@ -288,14 +308,19 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       });
       toast.success('Override saved — applied immediately');
       loadAsmCfg();
-      loadAsmAudit();
+      // Preserve the admin's active filters/page so the new audit row
+      // appears in context rather than yanking them back to "all rows".
+      loadAsmAudit({
+        offset: asmAudit?.offset ?? asmAuditOffset,
+        filters: asmAuditFilters,
+      });
     } catch (e) {
       const msg = e?.response?.data?.detail || 'Failed to save override';
       toast.error(msg);
     } finally {
       setAsmSaving(false);
     }
-  }, [adminToken, asmDraft, asmCfg, loadAsmCfg, loadAsmAudit]);
+  }, [adminToken, asmDraft, asmCfg, loadAsmCfg, loadAsmAudit, asmAudit, asmAuditOffset, asmAuditFilters]);
 
   const clearAsmOverride = useCallback(async () => {
     setAsmSaving(true);
@@ -306,14 +331,17 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       toast.success('Override cleared — env vars now in effect');
       setAsmTestResult(null);
       loadAsmCfg();
-      loadAsmAudit();
+      loadAsmAudit({
+        offset: asmAudit?.offset ?? asmAuditOffset,
+        filters: asmAuditFilters,
+      });
     } catch (e) {
       const msg = e?.response?.data?.detail || 'Failed to clear override';
       toast.error(msg);
     } finally {
       setAsmSaving(false);
     }
-  }, [adminToken, loadAsmCfg, loadAsmAudit]);
+  }, [adminToken, loadAsmCfg, loadAsmAudit, asmAudit, asmAuditOffset, asmAuditFilters]);
 
   const fireAsmTest = useCallback(async () => {
     setAsmTesting(true);
@@ -1016,7 +1044,8 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           </div>
 
           {/* Task #424 — append-only audit trail of override edits.
-              Read-only here; writes happen via PATCH/DELETE handlers. */}
+              Read-only here; writes happen via PATCH/DELETE handlers.
+              Task #430 — filter by admin email + date range, paginate. */}
           <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm" data-testid="asm-audit-card">
             <div className="flex items-start justify-between gap-3 mb-4">
               <div>
@@ -1025,11 +1054,21 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                   Recent override changes
                 </h3>
                 <p className="text-xs text-gray-500 mt-1 leading-relaxed">
-                  Append-only log of who edited the Sarvam purity override and what changed. Showing the last {asmAudit?.limit || 20} entries (newest first).
+                  Append-only log of who edited the Sarvam purity override and what changed.
+                  {' '}{(() => {
+                    const total = asmAudit?.total ?? 0;
+                    const off = asmAudit?.offset ?? 0;
+                    const shown = asmAudit?.entries?.length ?? 0;
+                    if (!shown) return `0 entries match the current filters.`;
+                    return `Showing ${off + 1}–${off + shown} of ${total} (newest first).`;
+                  })()}
                 </p>
               </div>
               <button
-                onClick={loadAsmAudit}
+                onClick={() => loadAsmAudit({
+                  offset: asmAudit?.offset ?? asmAuditOffset,
+                  filters: asmAuditFilters,
+                })}
                 disabled={asmAuditLoading}
                 className="p-2 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100"
                 data-testid="button-refresh-asm-audit"
@@ -1038,6 +1077,75 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                 <RefreshCw size={14} className={asmAuditLoading ? 'animate-spin' : ''} />
               </button>
             </div>
+
+            {/* Task #430 — filter row. Apply on submit so each keystroke
+                doesn't fire a request; Reset clears every filter and the
+                paging cursor in one click. */}
+            <form
+              className="grid grid-cols-1 sm:grid-cols-4 gap-2 mb-4"
+              onSubmit={(e) => {
+                e.preventDefault();
+                setAsmAuditOffset(0);
+                loadAsmAudit({ offset: 0, filters: asmAuditFilters });
+              }}
+              data-testid="asm-audit-filters"
+            >
+              <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-gray-500">
+                Admin email
+                <input
+                  type="text"
+                  value={asmAuditFilters.admin_email}
+                  onChange={(e) => setAsmAuditFilters((f) => ({ ...f, admin_email: e.target.value }))}
+                  placeholder="ops@syrabit.ai"
+                  className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-mono text-gray-700 focus:outline-none focus:border-violet-300"
+                  data-testid="input-asm-audit-email"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-gray-500">
+                From
+                <input
+                  type="datetime-local"
+                  value={asmAuditFilters.since}
+                  onChange={(e) => setAsmAuditFilters((f) => ({ ...f, since: e.target.value }))}
+                  className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-mono text-gray-700 focus:outline-none focus:border-violet-300"
+                  data-testid="input-asm-audit-since"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-gray-500">
+                To
+                <input
+                  type="datetime-local"
+                  value={asmAuditFilters.until}
+                  onChange={(e) => setAsmAuditFilters((f) => ({ ...f, until: e.target.value }))}
+                  className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-mono text-gray-700 focus:outline-none focus:border-violet-300"
+                  data-testid="input-asm-audit-until"
+                />
+              </label>
+              <div className="flex items-end gap-2">
+                <button
+                  type="submit"
+                  disabled={asmAuditLoading}
+                  className="flex-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+                  data-testid="button-apply-asm-audit"
+                >
+                  Apply
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const cleared = { admin_email: '', since: '', until: '' };
+                    setAsmAuditFilters(cleared);
+                    setAsmAuditOffset(0);
+                    loadAsmAudit({ offset: 0, filters: cleared });
+                  }}
+                  disabled={asmAuditLoading}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                  data-testid="button-reset-asm-audit"
+                >
+                  Reset
+                </button>
+              </div>
+            </form>
 
             {asmAudit && asmAudit.ok === false && (
               <div className="mb-3 p-3 rounded-xl bg-red-50 border border-red-200 flex items-start gap-2" data-testid="asm-audit-error">
@@ -1105,8 +1213,54 @@ export default function AdminHealth({ adminToken, onNavigate }) {
               </div>
             ) : (
               <p className="text-xs text-gray-400 py-6 text-center" data-testid="asm-audit-empty">
-                No override edits recorded yet. The first PATCH or DELETE on this tab will appear here.
+                {(asmAudit?.total ?? 0) > 0
+                  ? 'No entries on this page — try Prev or relax the filters.'
+                  : 'No override edits match. The first PATCH or DELETE on this tab will appear here.'}
               </p>
+            )}
+
+            {/* Task #430 — pagination. Prev/Next operate on the current
+                offset; the backend reports total so we can disable Next
+                when we've shown the last page. */}
+            {(asmAudit?.total ?? 0) > ASM_AUDIT_PAGE && (
+              <div className="flex items-center justify-between gap-3 mt-4 pt-3 border-t border-gray-100" data-testid="asm-audit-pager">
+                <p className="text-[11px] text-gray-400 font-mono">
+                  Page {Math.floor((asmAudit?.offset ?? 0) / ASM_AUDIT_PAGE) + 1}
+                  {' / '}
+                  {Math.max(1, Math.ceil((asmAudit?.total ?? 0) / ASM_AUDIT_PAGE))}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = Math.max(0, (asmAudit?.offset ?? 0) - ASM_AUDIT_PAGE);
+                      setAsmAuditOffset(next);
+                      loadAsmAudit({ offset: next, filters: asmAuditFilters });
+                    }}
+                    disabled={asmAuditLoading || (asmAudit?.offset ?? 0) <= 0}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                    data-testid="button-asm-audit-prev"
+                  >
+                    ← Prev
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = (asmAudit?.offset ?? 0) + ASM_AUDIT_PAGE;
+                      setAsmAuditOffset(next);
+                      loadAsmAudit({ offset: next, filters: asmAuditFilters });
+                    }}
+                    disabled={
+                      asmAuditLoading ||
+                      ((asmAudit?.offset ?? 0) + (asmAudit?.entries?.length ?? 0)) >= (asmAudit?.total ?? 0)
+                    }
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                    data-testid="button-asm-audit-next"
+                  >
+                    Next →
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         </div>

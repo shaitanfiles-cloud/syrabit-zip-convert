@@ -44,8 +44,10 @@ def _mock_db():
     audit_coll = MagicMock()
     audit_coll.insert_one = AsyncMock(return_value=None)
     audit_coll.create_index = AsyncMock(return_value=None)
+    audit_coll.count_documents = AsyncMock(return_value=0)
     cursor = MagicMock()
     cursor.sort.return_value = cursor
+    cursor.skip.return_value = cursor
     cursor.limit.return_value = cursor
     cursor.to_list = AsyncMock(return_value=[])
     audit_coll.find = MagicMock(return_value=cursor)
@@ -320,6 +322,47 @@ class TestAuditLog:
         body = r.json()
         assert body["ok"] is False
         assert body["entries"] == []
+
+    def test_get_audit_applies_offset_and_filters(self, app_client):
+        """Task #430 — `since`/`until`/`admin_email`/`offset` must
+        flow through to the mongo query so admins can bisect history."""
+        db, _ = _mock_db()
+        audit_coll = db.__getitem__.return_value
+        audit_coll.count_documents = AsyncMock(return_value=42)
+        cursor = audit_coll.find.return_value
+        cursor.to_list = AsyncMock(return_value=[])
+        with _patch_db(db):
+            r = app_client.get(
+                "/admin/assamese-purity/audit"
+                "?offset=20&limit=10"
+                "&since=2026-01-01T00:00:00Z"
+                "&until=2026-02-01T00:00:00Z"
+                "&admin_email=ops@syrabit.ai",
+            )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 42
+        assert body["offset"] == 20
+        assert body["limit"] == 10
+        # The mongo query must contain ts bounds and an i-regex on email.
+        call_filter = audit_coll.find.call_args.args[0]
+        assert "$gte" in call_filter["ts"] and "$lte" in call_filter["ts"]
+        assert call_filter["admin_email"]["$options"] == "i"
+        assert "ops" in call_filter["admin_email"]["$regex"]
+        assert "syrabit" in call_filter["admin_email"]["$regex"]
+        # count_documents must use the same filter (not {}).
+        count_filter = audit_coll.count_documents.call_args.args[0]
+        assert count_filter == call_filter
+        # Cursor pipeline is sort → skip(20) → limit(10).
+        cursor.skip.assert_called_with(20)
+        cursor.limit.assert_called_with(10)
+
+    def test_get_audit_rejects_bad_timestamp(self, app_client):
+        db, _ = _mock_db()
+        with _patch_db(db):
+            r = app_client.get("/admin/assamese-purity/audit?since=not-a-date")
+        assert r.status_code == 400
+        assert "iso" in r.json()["detail"].lower()
 
 
 class TestPersistedOverrideRoundTrip:
