@@ -67,3 +67,4 @@ Thumbs.db
 # ── Replit internals (not needed in clone) ────────────────────────────────────
 .cache/
 .local/
+dist-ssr/
