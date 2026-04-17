@@ -36,21 +36,30 @@ try:
 except ImportError:
     _parse_ua = None
 
+_SLOW_QUERY_LABEL_OVERRIDES = {
+    "library_bundle": 2000.0,
+}
+
 class _SlowQueryTimer:
-    __slots__ = ("_label", "_t0")
-    def __init__(self, label: str):
+    __slots__ = ("_label", "_t0", "_threshold")
+    def __init__(self, label: str, threshold_ms: Optional[float] = None):
         self._label = label
         self._t0 = 0.0
+        self._threshold = (
+            threshold_ms
+            if threshold_ms is not None
+            else _SLOW_QUERY_LABEL_OVERRIDES.get(label, SLOW_QUERY_THRESHOLD_MS)
+        )
     async def __aenter__(self):
         self._t0 = _time_mod.time()
         return self
     async def __aexit__(self, *exc):
         elapsed_ms = (_time_mod.time() - self._t0) * 1000
-        if elapsed_ms > SLOW_QUERY_THRESHOLD_MS:
-            logger.warning(f"SLOW_QUERY {self._label} took {elapsed_ms:.0f}ms (threshold={SLOW_QUERY_THRESHOLD_MS}ms)")
+        if elapsed_ms > self._threshold:
+            logger.warning(f"SLOW_QUERY {self._label} took {elapsed_ms:.0f}ms (threshold={self._threshold}ms)")
 
-def _slow_query(label: str) -> _SlowQueryTimer:
-    return _SlowQueryTimer(label)
+def _slow_query(label: str, threshold_ms: Optional[float] = None) -> _SlowQueryTimer:
+    return _SlowQueryTimer(label, threshold_ms=threshold_ms)
 
 def _extract_keywords(query: str) -> list:
     """Extract meaningful search keywords, removing stop-words."""

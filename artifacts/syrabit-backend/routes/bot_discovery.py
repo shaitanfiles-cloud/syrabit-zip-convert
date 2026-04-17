@@ -1741,7 +1741,7 @@ async def _probe_sitemap_url_with_retry(client, url: str) -> Dict:
 
 @router.get("/seo/health")
 async def seo_health_check(
-    request: Request,
+    request: Request = None,
     deep_scan: Optional[str] = Query(
         None,
         description=(
