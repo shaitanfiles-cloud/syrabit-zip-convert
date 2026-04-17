@@ -42,6 +42,7 @@
     "build": "vite build && vite build --ssr src/entry-server.jsx --outDir dist-ssr --emptyOutDir && node scripts/inject-modulepreload.mjs && node scripts/prerender-library.mjs && node scripts/prerender-chat.mjs && node scripts/prerender-routes.mjs && node scripts/verify-prerender.mjs && node scripts/verify-hydration.mjs && node scripts/verify-library-prerender.mjs && node scripts/generate-precache-manifest.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "verify:jsonld": "node scripts/validate-jsonld.mjs"
   },
   "devDependencies": {
@@ -51,6 +52,7 @@
     "@vitejs/plugin-react": "catalog:",
     "autoprefixer": "^10.4.20",
     "playwright": "^1.59.1",
+    "vitest": "^2.1.9",
     "postcss": "^8.4.49",
     "rollup-plugin-visualizer": "^7.0.1",
     "tailwindcss": "^3.4.17",
