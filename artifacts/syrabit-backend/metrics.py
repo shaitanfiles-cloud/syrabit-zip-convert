@@ -275,10 +275,17 @@ _NOTIFICATION_CHANNELS_DEFAULT = {
     # is suppressed for that alert type even if a webhook URL is configured.
     # (Email, persisted alerts, and browser push are unaffected.)
     "seo_slack_enabled": True,
+    # Task #414: per-category webhook toggle for the new hydrate /
+    # stale-build alerts. Email + persisted alerts + browser push are
+    # unaffected when False — only the Slack/Discord webhook is muted.
+    "hydrate_slack_enabled": True,
 }
 # Alert types treated as "SEO incidents" for the Slack webhook toggle.
 _SEO_WEBHOOK_ALERT_TYPES = ("seo_health_degraded", "seo_url_spike")
 _SEO_DASHBOARD_URL = "https://syrabit.ai/admin/seo"
+# Task #414: alert types that get a custom hydrate Slack card.
+_HYDRATE_WEBHOOK_ALERT_TYPES = ("hydrate_failure_spike", "hydrate_recovery_low")
+_HYDRATE_DASHBOARD_URL = "https://syrabit.ai/admin/dashboard?tab=overview#hydrate-health"
 _notification_channels: dict = dict(_NOTIFICATION_CHANNELS_DEFAULT)
 
 async def _load_alert_settings():
@@ -313,6 +320,8 @@ async def _load_alert_settings():
                 new_channels["webhook_url"] = channels["webhook_url"].strip()
             if isinstance(channels.get("seo_slack_enabled"), bool):
                 new_channels["seo_slack_enabled"] = channels["seo_slack_enabled"]
+            if isinstance(channels.get("hydrate_slack_enabled"), bool):
+                new_channels["hydrate_slack_enabled"] = channels["hydrate_slack_enabled"]
         _ALERT_THRESHOLDS = new_thresholds
         _alert_expiration = new_expiration
         _notification_channels = new_channels
@@ -389,6 +398,76 @@ def _build_seo_slack_payload(alert_type: str, title: str, body: str, snap: dict)
     }
 
 
+def _build_hydrate_slack_payload(alert_type: str, title: str, body: str, snap: dict) -> dict:
+    """Build a Slack-friendly message for hydrate / stale-build alerts
+    (Task #414). Mirrors ``_build_seo_slack_payload`` so admins on Slack
+    get the same depth of context as the dashboard email — failure count
+    vs threshold, top failing chunk kind, sample error message, and a
+    one-click button to the admin Analytics tile.
+    """
+    metric = snap.get("metric") or alert_type
+    configured = snap.get("value", "N/A")
+    actual = snap.get("actual", "N/A")
+    top_kind = snap.get("top_kind") or "n/a"
+    attempts = snap.get("auto_reload_attempts")
+    recoveries = snap.get("auto_reload_recoveries")
+
+    # Pretty units per alert type so the Slack card reads naturally.
+    if alert_type == "hydrate_failure_spike":
+        actual_str = f"{actual} events/hr"
+        threshold_str = f"> {configured}/hr"
+        severity_label = ":rotating_light: SPIKE"
+    elif alert_type == "hydrate_recovery_low":
+        actual_str = f"{actual}%"
+        threshold_str = f"< {configured}%"
+        severity_label = ":warning: RECOVERY LOW"
+    else:  # defensive — should not happen; routing gates on the tuple.
+        actual_str = str(actual)
+        threshold_str = str(configured)
+        severity_label = ":warning: HYDRATE"
+
+    recovery_line = ""
+    if attempts is not None and recoveries is not None:
+        recovery_line = f"Auto-reload: *{recoveries}/{attempts}* recovered in last hour"
+
+    text_fallback = (
+        f":rotating_light: *{title}*\n"
+        f"{severity_label} · `{metric}` actual *{actual_str}* (threshold {threshold_str})\n"
+        f"{body}\n"
+        f"Dashboard: {_HYDRATE_DASHBOARD_URL}"
+    )
+
+    fields = [
+        {"type": "mrkdwn", "text": f"*Severity*\n{severity_label}"},
+        {"type": "mrkdwn", "text": f"*Alert type*\n`{alert_type}`"},
+        {"type": "mrkdwn", "text": f"*Threshold*\n{threshold_str}"},
+        {"type": "mrkdwn", "text": f"*Actual*\n{actual_str}"},
+        {"type": "mrkdwn", "text": f"*Top failing kind*\n{top_kind}"},
+    ]
+    if recovery_line:
+        fields.append({"type": "mrkdwn", "text": f"*Recovery*\n{recovery_line.split(': ',1)[1]}"})
+
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": f"🚨 {title}", "emoji": True}},
+        {"type": "section", "fields": fields},
+        {"type": "section", "text": {"type": "mrkdwn", "text": body or "Hydration regression detected."}},
+        {"type": "actions", "elements": [
+            {"type": "button",
+             "text": {"type": "plain_text", "text": "Open Analytics tile", "emoji": True},
+             "url": _HYDRATE_DASHBOARD_URL,
+             "style": "primary"},
+        ]},
+    ]
+
+    return {
+        "text": text_fallback,
+        "blocks": blocks,
+        "alert_type": alert_type,
+        "service": "syrabit-api",
+        "threshold_snapshot": snap,
+    }
+
+
 async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snapshot: dict = None):
     """Send alert via email (Resend) and/or webhook. Respects cooldown."""
     now = _time_mod.time()
@@ -451,11 +530,18 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
         # Per-category opt-out: admins can silence SEO alerts on Slack
         # without affecting email or push delivery.
         seo_slack_enabled = bool(_notification_channels.get("seo_slack_enabled", True))
+        hydrate_slack_enabled = bool(_notification_channels.get("hydrate_slack_enabled", True))
         if alert_type in _SEO_WEBHOOK_ALERT_TYPES and not seo_slack_enabled:
+            webhook_url = ""
+        if alert_type in _HYDRATE_WEBHOOK_ALERT_TYPES and not hydrate_slack_enabled:
             webhook_url = ""
         if webhook_url:
             if alert_type in _SEO_WEBHOOK_ALERT_TYPES:
                 webhook_payload = _build_seo_slack_payload(
+                    alert_type, title, body, threshold_snapshot or {}
+                )
+            elif alert_type in _HYDRATE_WEBHOOK_ALERT_TYPES:
+                webhook_payload = _build_hydrate_slack_payload(
                     alert_type, title, body, threshold_snapshot or {}
                 )
             else:
