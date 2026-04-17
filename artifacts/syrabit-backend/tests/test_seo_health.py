@@ -49,7 +49,7 @@ def test_seo_health_ok_response_shape():
     fake.head.return_value = _mock_response(200)
 
     with patch("httpx.AsyncClient", lambda *a, **kw: fake):
-        result = asyncio.run(bot_discovery.seo_health_check())
+        result = asyncio.run(bot_discovery.seo_health_check(request=None, deep_scan=None))
 
     assert result["status"] == "ok"
     assert "sitemaps" in result
@@ -70,7 +70,7 @@ def test_seo_health_marks_critical_when_most_sitemaps_invalid():
     fake.head.return_value = _mock_response(500)
 
     with patch("httpx.AsyncClient", lambda *a, **kw: fake):
-        result = asyncio.run(bot_discovery.seo_health_check())
+        result = asyncio.run(bot_discovery.seo_health_check(request=None, deep_scan=None))
 
     assert result["status"] == "critical"
     assert result["summary"]["valid_sitemaps"] == 0
@@ -87,7 +87,7 @@ def test_seo_health_degraded_when_some_url_checks_fail():
     fake.head.return_value = _mock_response(404)
 
     with patch("httpx.AsyncClient", lambda *a, **kw: fake):
-        result = asyncio.run(bot_discovery.seo_health_check())
+        result = asyncio.run(bot_discovery.seo_health_check(request=None, deep_scan=None))
 
     assert result["status"] == "degraded"
     assert result["summary"]["valid_sitemaps"] == result["summary"]["total_sitemaps"]
@@ -206,16 +206,28 @@ def test_deep_scan_returns_error_when_sitemap_fetch_fails():
     assert result["failing"] == []
 
 
+def _fake_admin_request():
+    """Build a stand-in `Request` object that satisfies `get_admin_user`'s
+    interface for the deep-scan branch of `seo_health_check`. We patch
+    `get_admin_user` itself so the actual request shape doesn't matter."""
+    class _Req:
+        headers = {}
+        cookies = {}
+    return _Req()
+
+
 def test_deep_scan_endpoint_rejects_unknown_sitemap():
     """The route must whitelist the `sitemap` query param so an attacker
     can't coerce us into probing arbitrary URLs through this endpoint."""
     from fastapi import HTTPException
     raised = None
-    try:
-        asyncio.run(bot_discovery.admin_seo_sitemap_failing_urls(
-            sitemap="../../etc/passwd", admin={"id": "x"}))
-    except HTTPException as e:
-        raised = e
+    # Patch admin auth to a no-op so we exercise only the whitelist guard.
+    with patch.object(bot_discovery, "get_admin_user", new=lambda req: asyncio.sleep(0)):
+        try:
+            asyncio.run(bot_discovery.seo_health_check(
+                request=_fake_admin_request(), deep_scan="../../etc/passwd"))
+        except HTTPException as e:
+            raised = e
     assert raised is not None, "expected HTTPException for unknown sitemap"
     assert raised.status_code == 400
 
@@ -224,8 +236,30 @@ def test_deep_scan_endpoint_accepts_whitelisted_sitemap():
     """Sanity check: every name in SEO_SITEMAP_FILENAMES is accepted by
     the route (no typos in the whitelist drift away from real sitemaps)."""
     fake = _DeepScanFakeClient(_make_sitemap_xml([]), {})
-    for name in bot_discovery.SEO_SITEMAP_FILENAMES:
-        with patch("httpx.AsyncClient", lambda *a, **kw: fake):
-            res = asyncio.run(bot_discovery.admin_seo_sitemap_failing_urls(
-                sitemap=name, admin={"id": "x"}))
-        assert res["sitemap"] == name
+    with patch.object(bot_discovery, "get_admin_user", new=lambda req: asyncio.sleep(0)):
+        for name in bot_discovery.SEO_SITEMAP_FILENAMES:
+            with patch("httpx.AsyncClient", lambda *a, **kw: fake):
+                res = asyncio.run(bot_discovery.seo_health_check(
+                    request=_fake_admin_request(), deep_scan=name))
+            assert res["sitemap"] == name
+
+
+def test_deep_scan_endpoint_requires_admin_auth():
+    """Anonymous callers must NOT be able to trigger the deep scan via
+    `?deep_scan=`. The path-level dependency would normally raise; here
+    we make `get_admin_user` raise to mimic that and verify the route
+    propagates the failure before doing any sitemap fetching."""
+    from fastapi import HTTPException
+
+    async def _deny(_req):
+        raise HTTPException(status_code=401, detail="auth required")
+
+    raised = None
+    with patch.object(bot_discovery, "get_admin_user", new=_deny):
+        try:
+            asyncio.run(bot_discovery.seo_health_check(
+                request=_fake_admin_request(), deep_scan="sitemap-learn.xml"))
+        except HTTPException as e:
+            raised = e
+    assert raised is not None, "expected anonymous deep-scan to be rejected"
+    assert raised.status_code == 401

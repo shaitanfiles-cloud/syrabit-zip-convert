@@ -13,7 +13,7 @@ import {
 import AudioTrimPreview from './AudioTrimPreview';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import axios from 'axios';
-import { adminGetDashboard, seoPipelineStatus, adminSeoHealthHistory, adminSeoHealthSnapshotNow, seoHealthLive, adminSeoSitemapFailingUrls, API_BASE } from '@/utils/api';
+import { adminGetDashboard, seoPipelineStatus, adminSeoHealthHistory, adminSeoHealthSnapshotNow, seoHealthLive, seoHealthDeepScan, API_BASE } from '@/utils/api';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, ReferenceLine, CartesianGrid, Legend,
@@ -1242,15 +1242,17 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                 const deepScan = sitemapDeepScans[sm.name];
                 const usingDeepScan = !!deepScan?.data;
                 const failing = usingDeepScan ? deepScan.data.failing : sampleFailing;
-                // Show the "Scan all URLs" button only when the sitemap
-                // could plausibly have >10 broken pages: every sampled
-                // URL failed AND the sitemap contains more than 10 URLs
-                // (otherwise the sample IS the whole sitemap and there's
-                // nothing left to discover).
-                const sampleAllFailed = checks.length > 0
-                  && sampleFailing.length === checks.length;
-                const sitemapBigEnough = (sm.url_count ?? 0) > 10;
-                const mayHaveMoreFailures = sampleAllFailed && sitemapBigEnough;
+                // Show the "Show all failing URLs" control whenever the
+                // sitemap could plausibly have more than 10 broken pages.
+                // The /seo/health endpoint only probes a 10-URL random
+                // sample per sitemap, so as soon as we see ANY failures
+                // and the sitemap has more URLs than we sampled, the
+                // true failing count is unknown and may exceed 10.
+                // (Once a deep scan has run, this becomes irrelevant —
+                // the deep-scan response is authoritative.)
+                const mayHaveMoreFailures =
+                  sampleFailing.length > 0
+                  && (sm.url_count ?? 0) > checks.length;
                 const canExpand = failing.length > 0 || mayHaveMoreFailures;
                 return (
                   <div
@@ -1324,7 +1326,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                                   [sm.name]: { loading: true, error: null, data: null },
                                 }));
                                 try {
-                                  const res = await adminSeoSitemapFailingUrls(adminToken, sm.name);
+                                  const res = await seoHealthDeepScan(adminToken, sm.name);
                                   setSitemapDeepScans((prev) => ({
                                     ...prev,
                                     [sm.name]: { loading: false, error: null, data: res.data },

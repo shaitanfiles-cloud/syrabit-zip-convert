@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict
 from xml.sax.saxutils import escape as xml_escape
 
-from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks, Request
 from fastapi.responses import Response
 
 logger = logging.getLogger(__name__)
@@ -1687,9 +1687,31 @@ SEO_SITEMAP_FILENAMES = (
 
 
 @router.get("/seo/health")
-async def seo_health_check():
+async def seo_health_check(
+    request: Request,
+    deep_scan: Optional[str] = Query(
+        None,
+        description=(
+            "Task #345: when set to a sitemap filename (e.g. "
+            "'sitemap-learn.xml'), return that sitemap's FULL failing "
+            "URL list instead of the 10-URL random sample. Requires "
+            "admin auth because a full scan probes up to 500 URLs."
+        ),
+    ),
+):
     import httpx
     from deps import db, is_mongo_available
+
+    # Task #345: deep-scan path. Requires admin auth — the standard
+    # response is public, but probing up to 500 URLs per call is a
+    # DoS vector if exposed to anonymous traffic. We invoke the
+    # `get_admin_user` dependency manually because the rest of this
+    # endpoint is intentionally unauthenticated.
+    if deep_scan is not None:
+        if deep_scan not in SEO_SITEMAP_FILENAMES:
+            raise HTTPException(status_code=400, detail=f"Unknown sitemap: {deep_scan}")
+        await get_admin_user(request)
+        return await _deep_scan_sitemap(deep_scan)
 
     results = {
         "status": "ok",
@@ -2679,21 +2701,6 @@ async def _deep_scan_sitemap(sitemap_name: str) -> dict:
         result["failing"] = failing
 
     return result
-
-
-@router.get("/admin/seo/sitemap-failing-urls")
-async def admin_seo_sitemap_failing_urls(
-    sitemap: str = Query(..., description="Sitemap filename, e.g. 'sitemap-learn.xml'"),
-    admin: dict = Depends(get_admin_user),
-):
-    """Task #345: probe every URL in a single sitemap and return the
-    full failing list. The standard /api/seo/health probe only samples
-    10 random URLs per sitemap, so when an outage takes down hundreds
-    of pages admins were only seeing a fraction of them. This endpoint
-    backs the dashboard's 'Scan all URLs' button."""
-    if sitemap not in SEO_SITEMAP_FILENAMES:
-        raise HTTPException(status_code=400, detail=f"Unknown sitemap: {sitemap}")
-    return await _deep_scan_sitemap(sitemap)
 
 
 @router.post("/admin/indexnow/push")
