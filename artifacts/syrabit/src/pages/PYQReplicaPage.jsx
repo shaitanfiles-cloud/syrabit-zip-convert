@@ -4,16 +4,47 @@ import { WORKER_API } from '../utils/api';
 import { useShare } from '../hooks/useShare';
 import PageMeta from '@/components/seo/PageMeta';
 
-// Best-effort parse of slug like "ahsec-2024-physics-set-a" into the
-// shape `pyqSchema` expects. Worst case we return just `{ slug }` and
-// the schema falls back to its own defaults — never throws.
-function parsePyqSlug(slug) {
+/**
+ * Best-effort parse of a PYQ slug like "ahsec-class-12-physics-2024" into
+ * the shape `pyqDatasetSchema(meta, url)` expects. Worst case we return
+ * just `{ slug }` and the schema falls back to its own defaults — never
+ * throws. Combines the simple board/year heuristic with class detection
+ * and a richer subject reconstruction for cleaner Dataset titles.
+ */
+function deriveMetaFromSlug(slug, title, description) {
   if (!slug) return { slug: '' };
   const parts = slug.split('-').filter(Boolean);
-  const board = ['ahsec', 'seba', 'cbse', 'icse'].find(b => parts.includes(b)) || '';
-  const year = parts.find(p => /^(19|20)\d{2}$/.test(p)) || '';
-  const subject = parts.find(p => p.length > 3 && !['ahsec', 'seba', 'cbse', 'icse', 'set'].includes(p) && !/^\d+$/.test(p)) || '';
-  return { slug, board: board.toUpperCase(), year, subject };
+  const yearMatch = slug.match(/(19|20)\d{2}/);
+  const year = yearMatch ? yearMatch[0] : null;
+  const boardToken = ['ahsec', 'seba', 'cbse', 'icse'].find((b) => parts.includes(b));
+  const board = boardToken ? boardToken.toUpperCase() : null;
+  const classMatch = slug.match(/class[-_]?(\d{1,2})/i);
+  const educationalLevel = classMatch
+    ? `Class ${classMatch[1]}`
+    : (board ? board : 'Higher Secondary');
+  const subjectTokens = parts.filter((p) =>
+    !/^(ahsec|seba|cbse|icse|class|set|paper)$/i.test(p)
+    && !/^\d+$/.test(p)
+    && !/^(19|20)\d{2}$/.test(p)
+  );
+  const subject = subjectTokens.length
+    ? subjectTokens.map((t) => t.charAt(0).toUpperCase() + t.slice(1)).join(' ')
+    : null;
+  const fallbackTitle = `${subject ? subject + ' ' : ''}Previous Year Question Paper`
+    + `${year ? ' ' + year : ''}${board ? ' — ' + board : ''}`.trim();
+  const fallbackDesc = `${board || 'Assam Board'} previous year question paper`
+    + `${subject ? ' for ' + subject : ''}${year ? ', ' + year : ''}.`
+    + ' Free download and practice on Syrabit.ai.';
+  return {
+    slug,
+    title: title || fallbackTitle,
+    description: description || fallbackDesc,
+    board,
+    subject,
+    year,
+    educationalLevel,
+    inLanguage: 'en-IN',
+  };
 }
 
 export default function PYQReplicaPage() {
@@ -26,22 +57,16 @@ export default function PYQReplicaPage() {
   const [notFound, setNotFound] = useState(false);
   const { sharing, share } = useShare();
 
-  const pyqMeta = useMemo(() => {
-    const parsed = parsePyqSlug(slug);
-    return {
-      ...parsed,
-      title: title || `Previous Year Question Paper — ${slug}`,
-      description: description
-        || `${parsed.board || 'Board'} ${parsed.year ? parsed.year + ' ' : ''}${parsed.subject || ''} previous year question paper.`,
-    };
-  }, [slug, title, description]);
   const pyqUrl = `https://syrabit.ai/pyq/${slug || ''}`;
+  const pyqMeta = useMemo(
+    () => deriveMetaFromSlug(slug, title, description),
+    [slug, title, description],
+  );
 
   const handleShare = useCallback(() => {
     const pyqTitle = title || `PYQ — ${slug}`;
     share(pyqTitle, `/pyq/${slug}`);
   }, [slug, title, share]);
-
 
   useEffect(() => {
     if (!slug) return;
@@ -110,7 +135,7 @@ export default function PYQReplicaPage() {
         url={pyqUrl}
         type="article"
         pageType="pyq"
-        pageData={{ doc: pyqMeta }}
+        pageData={{ meta: pyqMeta, doc: pyqMeta }}
       />
       <div
         className="pyq-toolbar"
@@ -139,21 +164,15 @@ export default function PYQReplicaPage() {
             background: '#6366f1', color: '#fff', border: 'none', borderRadius: '8px',
             padding: '6px 14px', fontSize: '13px', fontWeight: 500,
             cursor: sharing ? 'wait' : 'pointer', fontFamily: 'system-ui, sans-serif',
-            opacity: sharing ? 0.7 : 1,
           }}
         >
-          📤 {sharing ? 'Sharing…' : 'Share'}
+          {sharing ? 'Sharing…' : 'Share'}
         </button>
       </div>
-
-      <div className="pyq-content" style={{ paddingTop: '52px' }} dangerouslySetInnerHTML={{ __html: html }} />
-
-      <style>{`
-        @media print {
-          .pyq-toolbar { display: none !important; }
-          .pyq-content { padding-top: 0 !important; }
-        }
-      `}</style>
+      <div
+        style={{ paddingTop: '48px' }}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
     </div>
   );
 }

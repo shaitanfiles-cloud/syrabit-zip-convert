@@ -10,6 +10,9 @@ import { useNavigate } from 'react-router-dom';
 function QaItem({ question, answer, index }) {
   const [open, setOpen] = useState(index === 0);
 
+  // Visual-only FAQ accordion. FAQPage structured data is emitted as JSON-LD
+  // via the per-page-type schema builder so we deliberately do not duplicate
+  // it as schema.org microdata here.
   return (
     <div className="border border-white/8 rounded-xl overflow-hidden">
       <button

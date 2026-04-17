@@ -104,6 +104,7 @@
       "@type": "EducationalOrganization",
       "@id": "https://syrabit.ai/#organization",
       "name": "Syrabit.ai",
+      "alternateName": ["Syrabit", "Syra"],
       "url": "https://syrabit.ai",
       "logo": {
         "@type": "ImageObject",
@@ -112,8 +113,21 @@
         "height": 192
       },
       "description": "AI-powered exam preparation for AHSEC (Class 11-12) and Degree students in Assam, India.",
-      "areaServed": { "@type": "State", "name": "Assam", "containedInPlace": { "@type": "Country", "name": "India" } },
-      "address": { "@type": "PostalAddress", "addressRegion": "Assam", "addressCountry": "IN" },
+      "sameAs": [
+        "https://syrabit.ai",
+        "https://twitter.com/SyrabitAI"
+      ],
+      "areaServed": [
+        { "@type": "State", "name": "Assam", "containedInPlace": { "@type": "Country", "name": "India" } },
+        { "@type": "City", "name": "Guwahati" }
+      ],
+      "address": {
+        "@type": "PostalAddress",
+        "addressLocality": "Guwahati",
+        "addressRegion": "Assam",
+        "postalCode": "781001",
+        "addressCountry": "IN"
+      },
       "hasOfferCatalog": {
         "@type": "OfferCatalog",
         "name": "Study Plans",
@@ -123,6 +137,39 @@
           { "@type": "Offer", "name": "Pro Plan", "price": "999", "priceCurrency": "INR" }
         ]
       }
+    }
+    </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "LocalBusiness",
+      "@id": "https://syrabit.ai/#localbusiness",
+      "name": "Syrabit.ai",
+      "url": "https://syrabit.ai",
+      "image": "https://syrabit.ai/icons/icon-512x512.png",
+      "logo": "https://syrabit.ai/icons/icon-192x192.png",
+      "description": "Syrabit.ai — AI-powered study platform for Assam Board (AHSEC, SEBA, FYUGP) students, headquartered in Guwahati, Assam, India.",
+      "address": {
+        "@type": "PostalAddress",
+        "addressLocality": "Guwahati",
+        "addressRegion": "Assam",
+        "postalCode": "781001",
+        "addressCountry": "IN"
+      },
+      "geo": {
+        "@type": "GeoCoordinates",
+        "latitude": 26.1445,
+        "longitude": 91.7362
+      },
+      "areaServed": [
+        { "@type": "State", "name": "Assam", "containedInPlace": { "@type": "Country", "name": "India" } },
+        { "@type": "City", "name": "Guwahati" }
+      ],
+      "priceRange": "₹0–₹999",
+      "sameAs": [
+        "https://syrabit.ai",
+        "https://twitter.com/SyrabitAI"
+      ]
     }
     </script>
 

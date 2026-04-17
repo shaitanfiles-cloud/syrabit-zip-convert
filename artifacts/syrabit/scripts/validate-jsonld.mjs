@@ -20,6 +20,11 @@ import {
   howToSchema,
   globalSiteSchema,
   extractHowToSteps,
+  learnArticleSchema,
+  pyqDatasetSchema,
+  howToFromContent,
+  detectHowToFromDoc,
+  dedupeGraphTypes,
   buildSchemaForPageType,
 } from '../src/lib/jsonld.js';
 
@@ -103,14 +108,122 @@ test('libraryLandingSchema → Course + ItemList + WebPage + Breadcrumb', () => 
   );
 });
 
-test('homeSchema → Organization + WebSite + Breadcrumb with SearchAction', () => {
+test('homeSchema → Organization + LocalBusiness (Guwahati) + WebSite + Breadcrumb with SearchAction', () => {
   const g = homeSchema('https://syrabit.ai/');
   const t = types(g);
-  for (const expected of ['Organization', 'WebSite', 'BreadcrumbList']) {
+  for (const expected of ['Organization', 'LocalBusiness', 'WebSite', 'BreadcrumbList']) {
     assert.ok(t.includes(expected), `home graph missing ${expected} (got: ${t.join(', ')})`);
   }
   const site = g['@graph'].find((n) => n['@type'] === 'WebSite');
   assert.equal(site.potentialAction['@type'], 'SearchAction');
+  const lb = g['@graph'].find((n) => n['@type'] === 'LocalBusiness');
+  assert.equal(lb.address.addressLocality, 'Guwahati');
+  assert.equal(lb.address.addressRegion, 'Assam');
+  assert.equal(lb.address.addressCountry, 'IN');
+  assert.equal(lb.geo['@type'], 'GeoCoordinates');
+  assert.ok(typeof lb.geo.latitude === 'number' && typeof lb.geo.longitude === 'number');
+});
+
+test('howToFromContent → emits HowTo with ordered HowToStep entries', () => {
+  const node = howToFromContent({
+    title: 'How to balance a chemical equation',
+    content: [
+      '1. Write the unbalanced equation with reactants and products.',
+      '2. Count the atoms of each element on both sides.',
+      '3. Adjust coefficients to equalise the atom counts.',
+      '4. Verify charge and total mass are conserved.',
+    ].join('\n'),
+    inLanguage: 'en-IN',
+  });
+  assert.ok(node, 'expected HowTo node');
+  assert.equal(node['@type'], 'HowTo');
+  assert.equal(node.inLanguage, 'en-IN');
+  assert.equal(node.step.length, 4);
+  assert.equal(node.step[0]['@type'], 'HowToStep');
+  assert.equal(node.step[0].position, 1);
+});
+
+test('howToFromContent returns null when no steps detected', () => {
+  assert.equal(howToFromContent({ title: 'Plain article', content: 'Just a paragraph of prose.' }), null);
+  assert.equal(howToFromContent({}), null);
+});
+
+test('detectHowToFromDoc gates on title / type / content heuristics', () => {
+  assert.ok(detectHowToFromDoc({
+    title: 'How to derive Newton\u2019s second law',
+    content: '1. Start from F. 2. Apply Newton.',
+  }));
+  assert.equal(detectHowToFromDoc({ title: 'Newton biography', content: 'No steps here.' }), null);
+});
+
+test('learnArticleSchema → Article + LearningResource + Breadcrumb (+ HowTo when applicable)', () => {
+  const doc = {
+    seo_slug: 'how-to-balance-equation',
+    title: 'How to balance a chemical equation',
+    meta_description: 'Step-by-step guide to balancing equations.',
+    type: 'tutorial',
+    content_html: '<ol><li>Write equation</li><li>Count atoms</li></ol>',
+    content: '1. Write the unbalanced equation. 2. Count atoms on both sides. 3. Balance coefficients.',
+    primary_keyword: 'balance chemical equation',
+    seo_tags: 'chemistry, tutorial',
+    updated_at: '2026-04-10T12:00:00Z',
+    created_at: '2026-03-01T08:00:00Z',
+    language: 'en',
+  };
+  const url = 'https://syrabit.ai/learn/how-to-balance-equation';
+  const g = learnArticleSchema(doc, url);
+  const t = types(g);
+  for (const expected of ['Article', 'LearningResource', 'BreadcrumbList', 'HowTo']) {
+    assert.ok(t.includes(expected), `learn graph missing ${expected} (got: ${t.join(', ')})`);
+  }
+  const article = g['@graph'].find((n) => n['@type'] === 'Article');
+  assert.equal(article.dateModified, '2026-04-10T12:00:00.000Z');
+  assert.equal(article.datePublished, '2026-03-01T08:00:00.000Z');
+  assert.equal(article.inLanguage, 'en-IN');
+});
+
+test('pyqDatasetSchema → Dataset + Quiz + Breadcrumb with license + inLanguage', () => {
+  const meta = {
+    slug: 'ahsec-class-12-physics-2024',
+    title: 'AHSEC Class 12 Physics 2024 Question Paper',
+    description: 'AHSEC Class 12 Physics previous year question paper, 2024.',
+    board: 'AHSEC',
+    subject: 'Physics',
+    year: '2024',
+    educationalLevel: 'Class 12',
+    inLanguage: 'en-IN',
+  };
+  const url = 'https://syrabit.ai/pyq/ahsec-class-12-physics-2024';
+  const g = pyqDatasetSchema(meta, url);
+  const t = types(g);
+  for (const expected of ['Dataset', 'Quiz', 'BreadcrumbList']) {
+    assert.ok(t.includes(expected), `pyq graph missing ${expected} (got: ${t.join(', ')})`);
+  }
+  const ds = g['@graph'].find((n) => n['@type'] === 'Dataset');
+  assert.equal(ds.inLanguage, 'en-IN');
+  assert.ok(ds.license.startsWith('https://'), 'expected license URL');
+  assert.equal(ds.educationalLevel, 'Class 12');
+  assert.equal(ds.about.name, 'Physics');
+  assert.equal(ds.identifier, 'ahsec-class-12-physics-2024');
+});
+
+test('dedupeGraphTypes drops FAQPage when caller already supplies it (Breadcrumb kept)', () => {
+  const subject = {
+    name: 'Physics', slug: 'physics', board_slug: 'ahsec', class_slug: 'class-12',
+    board_name: 'AHSEC', class_name: 'Class 12', stream_name: 'Science',
+    description: 'Physics notes for AHSEC Class 12 students.',
+    chapters: [
+      { title: 'Laws of Motion', slug: 'laws-of-motion', description: 'Newton\u2019s laws of motion explained in detail.' },
+      { title: 'Work, Energy & Power', slug: 'work-energy-power', description: 'Mechanical energy concepts explained in detail.' },
+    ],
+  };
+  const url = 'https://syrabit.ai/ahsec/class-12/physics';
+  const typed = subjectHubSchema(subject, url);
+  const external = { '@type': 'FAQPage', mainEntity: [] };
+  const deduped = dedupeGraphTypes(typed, [external]);
+  const t = deduped['@graph'].map((n) => n['@type']);
+  assert.ok(!t.includes('FAQPage'), 'FAQPage should have been removed');
+  assert.ok(t.includes('BreadcrumbList'), 'BreadcrumbList should always remain');
 });
 
 test('buildSchemaForPageType dispatches all known page types', () => {
@@ -119,6 +232,15 @@ test('buildSchemaForPageType dispatches all known page types', () => {
   assert.ok(buildSchemaForPageType('library', {
     url: 'https://syrabit.ai/library',
     subjects: [{ id: 's1', name: 'X', slug: 'x', boardSlug: 'b', classSlug: 'c' }],
+  }));
+  assert.ok(buildSchemaForPageType('learn', {
+    url: 'https://syrabit.ai/learn/x',
+    doc: { seo_slug: 'x', title: 'X', updated_at: '2026-01-01' },
+  }));
+  // dispatcher accepts both {meta} (canonical) and {doc} (legacy) for `pyq`.
+  assert.ok(buildSchemaForPageType('pyq', {
+    url: 'https://syrabit.ai/pyq/x',
+    meta: { slug: 'x', subject: 'Physics' },
   }));
   assert.ok(buildSchemaForPageType('pyq', {
     url: 'https://syrabit.ai/pyq/ahsec-2024-physics',
@@ -226,8 +348,8 @@ test('chapterSchema preserves real timestamps from chapter metadata', () => {
     '/s',
   );
   const article = g['@graph'].find((n) => n['@type'] === 'Article');
-  assert.equal(article.datePublished, '2026-01-02T03:04:05Z');
-  assert.equal(article.dateModified, '2026-04-17T10:20:30Z');
+  assert.equal(article.datePublished, '2026-01-02T03:04:05.000Z');
+  assert.equal(article.dateModified, '2026-04-17T10:20:30.000Z');
 });
 
 test('pyqSchema → Quiz + LearningResource + Breadcrumb with educational alignment', () => {

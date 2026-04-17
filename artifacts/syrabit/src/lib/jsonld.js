@@ -9,10 +9,17 @@
  *   chapterSchema(data, url, basePath)      — Article + LearningResource + WebPage + BreadcrumbList (+ FAQPage, HowTo)
  *   subjectHubSchema(subject, url)          — EducationalOrganization + CollectionPage + BreadcrumbList (+ Course, FAQPage)
  *   libraryLandingSchema(subjects, url)     — Course + ItemList + WebPage + BreadcrumbList
- *   homeSchema(url)                         — Organization + WebSite + BreadcrumbList
- *   pyqSchema(doc, url)                     — Quiz + LearningResource + BreadcrumbList
- *   howToSchema({ name, steps, ... })       — HowTo node (used standalone or merged into a chapter graph)
+ *   homeSchema(url)                         — WebSite + BreadcrumbList (Org/LocalBusiness ship globally)
  *   globalSiteSchema(url)                   — Organization + LocalBusiness (Guwahati) for the global head
+ *   learnArticleSchema(doc, url)            — Article + LearningResource + BreadcrumbList (+ HowTo when applicable)
+ *   pyqSchema(doc, url)                     — Quiz + LearningResource + BreadcrumbList (legacy, slim)
+ *   pyqDatasetSchema(meta, url)             — Dataset + Quiz + BreadcrumbList (canonical PYQ shape)
+ *   howToSchema({ name, steps, ... })       — HowTo node (standalone or merged into a chapter graph)
+ *   howToFromContent({ title, content, image, totalTime }) — HowTo if numbered steps detected
+ *   extractHowToSteps(content)              — HowToStep[] from numbered/markdown content
+ *
+ * Helper: dedupeGraphTypes(typedGraph, externalGraphs) drops duplicate
+ *   schema.org @types so the same type is never emitted twice.
  */
 
 const SITE_ORIGIN = 'https://syrabit.ai';
@@ -23,6 +30,8 @@ const ORG_NODE = {
   url: SITE_ORIGIN,
   logo: { '@type': 'ImageObject', url: SITE_LOGO },
 };
+
+const ORG_REF = { '@id': `${SITE_ORIGIN}/#organization` };
 
 // Single source of truth for the publisher's address/geo. Reused by the
 // chapter Article publisher node, the global LocalBusiness emission, and
@@ -157,6 +166,122 @@ function _kw(chapterTitle, subjectName, boardName, className) {
   return [...new Set(kws.map(k => String(k).toLowerCase()))].join(', ');
 }
 
+/**
+ * Return the first candidate that parses as a valid date, in ISO-8601.
+ * Returns `null` (NEVER `Date.now()`) when no real metadata is available so
+ * the schema builder can omit the date field instead of fabricating one —
+ * AI crawlers use these timestamps to gauge freshness.
+ */
+function _iso(...candidates) {
+  for (const c of candidates) {
+    if (!c) continue;
+    const d = new Date(c);
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+  return null;
+}
+
+function _langFromLocale(loc) {
+  if (!loc) return 'en-IN';
+  const s = String(loc).toLowerCase();
+  if (s === 'as' || s.startsWith('as-')) return 'as-IN';
+  return 'en-IN';
+}
+
+/**
+ * Detect numbered steps in markdown / HTML content and emit HowTo schema.
+ * Returns null if fewer than 2 steps look like genuine procedure steps.
+ */
+export function howToFromContent({ title, content, image, totalTime, inLanguage = 'en-IN', tools = [], supplies = [] } = {}) {
+  if (!title || !content) return null;
+  const text = String(content);
+  const steps = [];
+
+  // Generic numbered-step detector. Splits content on "1. ", "2. ", etc.
+  // boundaries (line-start OR after a sentence terminator) so both block-style
+  // ordered lists ("1.\n2.\n3.") and inline procedural prose
+  // ("1. Do X. 2. Do Y.") are recognised.
+  const splitRe = /(?:^|[\n.!?]\s+)(\d{1,2})\.\s+/g;
+  const stepBoundaries = [...text.matchAll(splitRe)].filter((m) => {
+    const idx = parseInt(m[1], 10);
+    return idx >= 1 && idx <= 25;
+  });
+  if (stepBoundaries.length >= 2) {
+    let expected = 1;
+    for (let i = 0; i < stepBoundaries.length; i++) {
+      const m = stepBoundaries[i];
+      const idx = parseInt(m[1], 10);
+      if (idx !== expected) {
+        if (idx === 1 && expected > 1) break;
+        continue;
+      }
+      const start = m.index + m[0].length;
+      const end = i + 1 < stepBoundaries.length ? stepBoundaries[i + 1].index : text.length;
+      const stepText = text.slice(start, end).replace(/[*_`<>]/g, ' ').replace(/\s+/g, ' ').trim().replace(/[.!?]\s*$/, '');
+      if (stepText.length >= 10) {
+        steps.push(stepText);
+        expected += 1;
+      }
+    }
+  }
+
+  // Fallback: explicit "Step N:" pattern in plain text or HTML.
+  if (steps.length < 2) {
+    steps.length = 0;
+    const stepMatches = [...text.matchAll(/(?:^|>|\n)\s*Step\s+(\d{1,2})\s*[:.\-]\s*([^\n<]{10,300})/gi)];
+    for (const m of stepMatches) {
+      steps.push(m[2].replace(/[*_`]/g, '').trim());
+    }
+  }
+
+  if (steps.length < 2) return null;
+
+  const node = {
+    '@type': 'HowTo',
+    name: title,
+    inLanguage,
+    step: steps.slice(0, 25).map((s, i) => ({
+      '@type': 'HowToStep',
+      position: i + 1,
+      name: s.length > 80 ? `${s.slice(0, 77)}…` : s,
+      text: s,
+    })),
+  };
+  if (image) node.image = image;
+  if (totalTime) node.totalTime = totalTime;
+  if (Array.isArray(tools) && tools.length) {
+    node.tool = tools.map((t) => ({ '@type': 'HowToTool', name: String(t) }));
+  }
+  if (Array.isArray(supplies) && supplies.length) {
+    node.supply = supplies.map((s) => ({ '@type': 'HowToSupply', name: String(s) }));
+  }
+  return node;
+}
+
+/**
+ * If the document looks like a tutorial / how-to, return the seed payload for
+ * `howToFromContent`. Heuristics: explicit `type` flag, "how to" in title,
+ * or `tutorial`/`guide`/`step-by-step` in seo_tags.
+ */
+export function detectHowToFromDoc(doc) {
+  if (!doc) return null;
+  const title = String(doc.title || '');
+  const tags = String(doc.seo_tags || '').toLowerCase();
+  const type = String(doc.type || '').toLowerCase();
+  const content = [doc.content, doc.content_html].filter(Boolean).join('\n');
+  const hint =
+    type === 'tutorial' || type === 'how-to' || type === 'howto' || type === 'guide' ||
+    /\bhow\s+to\b/i.test(title) ||
+    /\b(tutorial|how[-\s]?to|step[-\s]?by[-\s]?step|guide)\b/.test(tags);
+  if (!hint && !/(?:^|\n)\s*(\d{1,2}\.|Step\s+\d+)/i.test(String(content))) return null;
+  return {
+    title,
+    content,
+    image: doc.thumbnail_url || undefined,
+    inLanguage: _langFromLocale(doc.language || doc.lang || 'en'),
+  };
+}
+
 export function chapterSchema(data, url, basePath = '') {
   if (!data || !url) return null;
   const subjectName = data.subject_name || '';
@@ -164,6 +289,7 @@ export function chapterSchema(data, url, basePath = '') {
   const className = data.class_name || '';
   const chapterTitle = data.topic_title || data.chapter_title || '';
   const subjectUrl = basePath ? `${SITE_ORIGIN}${basePath}` : SITE_ORIGIN;
+  const inLanguage = _langFromLocale(data.language || data.lang || 'en');
 
   const aboutThings = [{ '@type': 'Thing', name: chapterTitle }];
   const words = chapterTitle.split(/[\s,\-–—/&]+/).filter(w => w.length > 2);
@@ -176,25 +302,26 @@ export function chapterSchema(data, url, basePath = '') {
   // metadata, since AI crawlers use dateModified to decide whether the
   // page is fresh enough to cite. If we have neither generated_at nor
   // updated_at, drop the field rather than fabricate one.
-  const datePublished = data.generated_at || data.created_at || data.published_at || null;
-  const dateModified = data.updated_at || data.modified_at || datePublished || null;
+  const datePublished = _iso(data.generated_at, data.created_at, data.published_at);
+  const dateModified = _iso(data.updated_at, data.modified_at, data.generated_at, data.created_at, data.published_at);
+
+  const authorName = data.author_name || 'Syrabit.ai Editorial Team';
+  const authorNode = data.author_name
+    ? { '@type': 'Person', name: authorName, affiliation: { '@type': 'Organization', name: 'Syrabit.ai', url: SITE_ORIGIN } }
+    : { '@type': ['Organization', 'EducationalOrganization'], name: 'Syrabit.ai', url: SITE_ORIGIN };
 
   const articleNode = {
     '@type': 'Article',
     headline: data.title,
     description: data.meta_description,
     url,
-    author: {
-      '@type': ['Organization', 'EducationalOrganization'],
-      name: 'Syrabit.ai',
-      url: SITE_ORIGIN,
-    },
+    author: authorNode,
     publisher: { ...ORG_NODE, address: SYRABIT_ADDRESS },
     educationalLevel: `${className} ${boardName}`.trim(),
     about: aboutThings.length > 1 ? aboutThings : aboutThings[0],
     keywords: _kw(chapterTitle, subjectName, boardName, className),
     wordCount: data.word_count || 0,
-    inLanguage: data.has_assamese ? ['en-IN', 'as-IN'] : 'en-IN',
+    inLanguage: data.has_assamese ? ['en-IN', 'as-IN'] : inLanguage,
     mainEntityOfPage: { '@type': 'WebPage', '@id': url },
     image: `${SITE_ORIGIN}/opengraph.jpg`,
   };
@@ -211,14 +338,17 @@ export function chapterSchema(data, url, basePath = '') {
       learningResourceType: 'Study Notes',
       teaches: chapterTitle,
       provider: { '@type': 'Organization', name: 'Syrabit.ai', url: SITE_ORIGIN },
-      inLanguage: 'en-IN',
+      inLanguage,
       isAccessibleForFree: true,
       url,
+      about: { '@type': 'Thing', name: chapterTitle },
     },
     {
       '@type': 'WebPage',
       '@id': url,
       name: data.title,
+      inLanguage,
+      isPartOf: { '@type': 'WebSite', '@id': SITE_ORIGIN, name: 'Syrabit.ai' },
       speakable: {
         '@type': 'SpeakableSpecification',
         cssSelector: ['article h1', 'article > p:first-of-type', 'article h2'],
@@ -236,30 +366,57 @@ export function chapterSchema(data, url, basePath = '') {
   ];
 
   const faq = Array.isArray(data.faq_entries) ? data.faq_entries : [];
-  if (faq.length >= 2) {
+  const cleanedFaq = faq
+    .map(q => ({
+      question: (q.question || q.name || '').trim(),
+      answer: (q.answer || q.text || '').trim(),
+    }))
+    .filter(q => q.question.length > 5 && q.answer.length > 10);
+  if (cleanedFaq.length >= 2) {
     graph.push({
       '@type': 'FAQPage',
-      mainEntity: faq.slice(0, 10).map(q => ({
+      mainEntity: cleanedFaq.slice(0, 10).map(q => ({
         '@type': 'Question',
-        name: q.question || q.name,
-        acceptedAnswer: { '@type': 'Answer', text: q.answer || q.text },
+        name: q.question,
+        acceptedAnswer: { '@type': 'Answer', text: q.answer },
       })),
     });
   }
 
   // Task #336: detect numbered/stepwise content in chapter body and
   // emit a HowTo node so AI assistants can surface step-by-step
-  // procedural answers (rocket-science derivations, lab procedures,
-  // exam-prep workflows). The chapter title doubles as the HowTo name.
-  const howToSteps = extractHowToSteps(data.content || '');
-  if (howToSteps.length >= 2) {
-    graph.push({
-      '@type': 'HowTo',
-      name: chapterTitle,
-      description: data.meta_description || `${chapterTitle} — step-by-step.`,
-      inLanguage: 'en-IN',
-      step: howToSteps,
-    });
+  // procedural answers. Prefer the smarter heuristic (detectHowToFromDoc
+  // + howToFromContent) which gates on title/type signals, then fall
+  // back to the simpler line-based extractor when that returns nothing.
+  const howToSeed = detectHowToFromDoc({
+    title: chapterTitle || data.title,
+    content: data.content || data.content_html || '',
+    type: data.type,
+    seo_tags: data.seo_tags,
+    thumbnail_url: data.thumbnail_url,
+    language: data.language || data.lang,
+  });
+  let howToEmitted = false;
+  if (howToSeed) {
+    const howTo = howToFromContent(howToSeed);
+    if (howTo) {
+      // howToFromContent may return either a single node or a {@graph} wrapper.
+      if (Array.isArray(howTo['@graph'])) graph.push(...howTo['@graph']);
+      else graph.push(howTo);
+      howToEmitted = true;
+    }
+  }
+  if (!howToEmitted) {
+    const howToSteps = extractHowToSteps(data.content || '');
+    if (howToSteps.length >= 2) {
+      graph.push({
+        '@type': 'HowTo',
+        name: chapterTitle,
+        description: data.meta_description || `${chapterTitle} — step-by-step.`,
+        inLanguage: 'en-IN',
+        step: howToSteps,
+      });
+    }
   }
 
   return { '@context': 'https://schema.org', '@graph': graph };
@@ -336,10 +493,12 @@ export function subjectHubSchema(subject, url) {
   const eduLevel = ((subject.class_name || '') + ' ' + (subject.board_name || '') + ' ' + (subject.stream_name || '')).replace(/\s+/g, ' ').trim() || 'FYUGP';
   const description = subject.description || `Complete ${subject.name} notes and study material for ${eduLevel} students.`;
   const chapters = Array.isArray(subject.chapters) ? subject.chapters : [];
+  const inLanguage = _langFromLocale(subject.language || 'en');
 
   const graph = [
     {
       '@type': 'EducationalOrganization',
+      '@id': `${SITE_ORIGIN}/#organization`,
       name: 'Syrabit.ai',
       url: SITE_ORIGIN,
       logo: `${SITE_ORIGIN}/icons/icon-192x192.png`,
@@ -352,7 +511,7 @@ export function subjectHubSchema(subject, url) {
       description,
       url,
       isPartOf: { '@type': 'WebSite', '@id': SITE_ORIGIN, name: 'Syrabit.ai' },
-      inLanguage: 'en-IN',
+      inLanguage,
       hasPart: chapters.slice(0, 50).map(ch => ({
         '@type': 'LearningResource',
         name: ch.title,
@@ -360,7 +519,7 @@ export function subjectHubSchema(subject, url) {
           ? `${SITE_ORIGIN}/${subject.board_slug}/${subject.class_slug}/${subject.slug}/${ch.slug}`
           : undefined,
         learningResourceType: 'Study Notes',
-        inLanguage: 'en-IN',
+        inLanguage,
       })),
     },
     {
@@ -370,7 +529,7 @@ export function subjectHubSchema(subject, url) {
       provider: { '@type': 'Organization', name: 'Syrabit.ai', sameAs: SITE_ORIGIN },
       educationalLevel: eduLevel,
       url,
-      inLanguage: 'en-IN',
+      inLanguage,
     },
     {
       '@type': 'BreadcrumbList',
@@ -382,19 +541,24 @@ export function subjectHubSchema(subject, url) {
     },
   ];
 
-  const faqEntries = [];
-  for (const ch of chapters) {
-    if (ch.title && ch.description && ch.description.length > 10) {
-      faqEntries.push({
-        '@type': 'Question',
-        name: `What is ${ch.title}?`,
-        acceptedAnswer: { '@type': 'Answer', text: ch.description },
-      });
+  // Auto-FAQ from chapter descriptions only when caller hasn't supplied
+  // their own FAQ via PageMeta.jsonLd. Callers can opt-out with
+  // subject.skipAutoFaq = true.
+  if (!subject.skipAutoFaq) {
+    const faqEntries = [];
+    for (const ch of chapters) {
+      if (ch.title && ch.description && ch.description.length > 20) {
+        faqEntries.push({
+          '@type': 'Question',
+          name: `What is ${ch.title}?`,
+          acceptedAnswer: { '@type': 'Answer', text: ch.description },
+        });
+      }
+      if (faqEntries.length >= 10) break;
     }
-    if (faqEntries.length >= 10) break;
-  }
-  if (faqEntries.length >= 2) {
-    graph.push({ '@type': 'FAQPage', mainEntity: faqEntries });
+    if (faqEntries.length >= 2) {
+      graph.push({ '@type': 'FAQPage', mainEntity: faqEntries });
+    }
   }
 
   return { '@context': 'https://schema.org', '@graph': graph };
@@ -474,7 +638,38 @@ export function homeSchema(url) {
         name: 'Syrabit.ai',
         url: SITE_ORIGIN,
         logo: { '@type': 'ImageObject', url: `${SITE_ORIGIN}/icons/icon-192x192.png` },
-        sameAs: [SITE_ORIGIN],
+        sameAs: [SITE_ORIGIN, 'https://twitter.com/SyrabitAI'],
+        address: {
+          '@type': 'PostalAddress',
+          addressLocality: 'Guwahati',
+          addressRegion: 'Assam',
+          postalCode: '781001',
+          addressCountry: 'IN',
+        },
+        areaServed: [
+          { '@type': 'State', name: 'Assam', containedInPlace: { '@type': 'Country', name: 'India' } },
+          { '@type': 'City', name: 'Guwahati' },
+        ],
+      },
+      {
+        '@type': 'LocalBusiness',
+        '@id': `${SITE_ORIGIN}/#localbusiness`,
+        name: 'Syrabit.ai',
+        url: SITE_ORIGIN,
+        image: `${SITE_ORIGIN}/icons/icon-512x512.png`,
+        address: {
+          '@type': 'PostalAddress',
+          addressLocality: 'Guwahati',
+          addressRegion: 'Assam',
+          postalCode: '781001',
+          addressCountry: 'IN',
+        },
+        geo: { '@type': 'GeoCoordinates', latitude: 26.1445, longitude: 91.7362 },
+        areaServed: [
+          { '@type': 'State', name: 'Assam' },
+          { '@type': 'City', name: 'Guwahati' },
+        ],
+        priceRange: '₹0–₹999',
       },
       {
         '@type': 'WebSite',
@@ -502,6 +697,169 @@ export function homeSchema(url) {
   };
 }
 
+/**
+ * LearnPage CMS document → Article + LearningResource (+ HowTo + Breadcrumb).
+ * Pulls dates and language from the document metadata, never from build time.
+ */
+export function learnArticleSchema(doc, url) {
+  if (!doc || !url) return null;
+  const eduLevel = doc.class_name || doc.board_name || doc.geo_tags || 'Assam Board';
+  const description = doc.meta_description || doc.description || '';
+  const inLanguage = _langFromLocale(doc.language || doc.lang || 'en');
+  const datePublished = _iso(doc.published_at, doc.created_at, doc.generated_at);
+  const dateModified = _iso(doc.updated_at, doc.modified_at, doc.published_at, doc.created_at, doc.generated_at);
+  const authorName = doc.author_name || 'Syrabit.ai Editorial Team';
+  const authorNode = doc.author_name
+    ? { '@type': 'Person', name: authorName, affiliation: { '@type': 'Organization', name: 'Syrabit.ai', url: SITE_ORIGIN } }
+    : { '@type': ['Organization', 'EducationalOrganization'], name: 'Syrabit.ai', url: SITE_ORIGIN };
+
+  const aboutName = doc.primary_keyword || doc.title;
+
+  const learnArticleNode = {
+    '@type': 'Article',
+    headline: doc.title,
+    description,
+    author: authorNode,
+    publisher: {
+      '@type': ['Organization', 'EducationalOrganization'],
+      name: 'Syrabit.ai',
+      url: SITE_ORIGIN,
+      logo: { '@type': 'ImageObject', url: `${SITE_ORIGIN}/icons/icon-192x192.png` },
+    },
+    keywords: doc.seo_tags || '',
+    inLanguage,
+    educationalLevel: eduLevel,
+    about: { '@type': 'Thing', name: aboutName },
+    mainEntityOfPage: { '@type': 'WebPage', '@id': url },
+    isPartOf: { '@type': 'WebSite', '@id': SITE_ORIGIN, name: 'Syrabit.ai' },
+    image: doc.thumbnail_url || `${SITE_ORIGIN}/opengraph.jpg`,
+    url,
+  };
+  if (datePublished) learnArticleNode.datePublished = datePublished;
+  if (dateModified) learnArticleNode.dateModified = dateModified;
+
+  const graph = [
+    learnArticleNode,
+    {
+      '@type': 'BreadcrumbList',
+      itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'Home', item: `${SITE_ORIGIN}/` },
+        { '@type': 'ListItem', position: 2, name: 'Library', item: `${SITE_ORIGIN}/library` },
+        { '@type': 'ListItem', position: 3, name: doc.title, item: url },
+      ],
+    },
+    {
+      '@type': 'LearningResource',
+      name: `${doc.title} — ${eduLevel}`,
+      description: description || `Study material for ${doc.title}`,
+      provider: { '@type': ['Organization', 'EducationalOrganization'], name: 'Syrabit.ai', sameAs: SITE_ORIGIN },
+      educationalLevel: eduLevel,
+      url,
+      inLanguage,
+      learningResourceType: doc.type || 'Study Material',
+      isAccessibleForFree: true,
+      about: { '@type': 'Thing', name: aboutName },
+    },
+  ];
+
+  const howToSeed = detectHowToFromDoc(doc);
+  if (howToSeed) {
+    const howTo = howToFromContent(howToSeed);
+    if (howTo) graph.push(howTo);
+  }
+
+  return { '@context': 'https://schema.org', '@graph': graph };
+}
+
+/**
+ * PYQ (previous year question paper) page → Dataset + Quiz + Breadcrumb.
+ * `meta` is best-effort: { slug, title, description, board, subject, year,
+ * educationalLevel, inLanguage, license }.
+ */
+export function pyqDatasetSchema(meta, url) {
+  if (!meta || !url) return null;
+  const title = meta.title || `Previous Year Question Paper${meta.year ? ` ${meta.year}` : ''}`;
+  const description = meta.description || `Previous year question paper${meta.subject ? ` for ${meta.subject}` : ''}${meta.board ? ` (${meta.board})` : ''}${meta.year ? `, ${meta.year}` : ''}.`;
+  const inLanguage = _langFromLocale(meta.inLanguage || meta.language || 'en');
+  const license = meta.license || 'https://creativecommons.org/licenses/by-nc/4.0/';
+  const educationalLevel = meta.educationalLevel || meta.class_name || meta.board || 'Higher Secondary';
+  const datePublished = _iso(meta.published_at, meta.created_at, meta.year ? `${meta.year}-01-01` : null);
+
+  const datasetNode = {
+    '@type': 'Dataset',
+    name: title,
+    description,
+    url,
+    identifier: meta.slug || url,
+    inLanguage,
+    license,
+    creator: ORG_NODE,
+    publisher: ORG_NODE,
+    keywords: [meta.subject, meta.board, meta.year ? `${meta.year}` : '', 'previous year question paper', 'PYQ']
+      .filter(Boolean).join(', '),
+    about: meta.subject ? { '@type': 'Thing', name: meta.subject } : undefined,
+    educationalLevel,
+    isAccessibleForFree: true,
+  };
+  if (datePublished) datasetNode.datePublished = datePublished;
+
+  return {
+    '@context': 'https://schema.org',
+    '@graph': [
+      datasetNode,
+      {
+        '@type': 'Quiz',
+        name: title,
+        about: meta.subject ? { '@type': 'Thing', name: meta.subject } : undefined,
+        educationalLevel,
+        inLanguage,
+        learningResourceType: 'Question Paper',
+        url,
+        provider: ORG_NODE,
+      },
+      {
+        '@type': 'BreadcrumbList',
+        itemListElement: [
+          { '@type': 'ListItem', position: 1, name: 'Home', item: `${SITE_ORIGIN}/` },
+          { '@type': 'ListItem', position: 2, name: 'Library', item: `${SITE_ORIGIN}/library` },
+          { '@type': 'ListItem', position: 3, name: title, item: url },
+        ],
+      },
+    ],
+  };
+}
+
+/**
+ * Drop schema.org @graph nodes from `typedGraph` whose @type already appears
+ * in any of the `externalGraphs` (or in plain `externalNodes`). Prevents
+ * double-emitting FAQPage / Article / etc. when a page supplies its own
+ * jsonLd alongside the per-page-type builder output.
+ */
+export function dedupeGraphTypes(typedGraph, externalGraphs = []) {
+  if (!typedGraph || !Array.isArray(typedGraph['@graph'])) return typedGraph;
+  const seen = new Set();
+  const externals = Array.isArray(externalGraphs) ? externalGraphs : [externalGraphs];
+  for (const ext of externals) {
+    if (!ext) continue;
+    if (Array.isArray(ext['@graph'])) {
+      for (const n of ext['@graph']) {
+        if (n && n['@type']) (Array.isArray(n['@type']) ? n['@type'] : [n['@type']]).forEach(t => seen.add(t));
+      }
+    } else if (ext['@type']) {
+      (Array.isArray(ext['@type']) ? ext['@type'] : [ext['@type']]).forEach(t => seen.add(t));
+    }
+  }
+  // Always allow these to appear multiple times — they carry per-page detail.
+  const ALWAYS_KEEP = new Set(['BreadcrumbList', 'WebPage', 'ListItem']);
+  const filtered = typedGraph['@graph'].filter((n) => {
+    if (!n || !n['@type']) return true;
+    const types = Array.isArray(n['@type']) ? n['@type'] : [n['@type']];
+    if (types.some(t => ALWAYS_KEEP.has(t))) return true;
+    return !types.some(t => seen.has(t));
+  });
+  return { ...typedGraph, '@graph': filtered };
+}
+
 export function buildSchemaForPageType(pageType, payload) {
   switch (pageType) {
     case 'chapter':
@@ -512,8 +870,14 @@ export function buildSchemaForPageType(pageType, payload) {
       return libraryLandingSchema(payload?.subjects, payload?.url);
     case 'home':
       return homeSchema(payload?.url);
+    case 'learn':
+      return learnArticleSchema(payload?.doc, payload?.url);
     case 'pyq':
-      return pyqSchema(payload?.doc, payload?.url);
+      // Accept either {meta} (canonical) or {doc} (legacy). Prefer the
+      // richer Dataset+Quiz emission; fall back to the slim Quiz-only
+      // pyqSchema if pyqDatasetSchema declines (returns null).
+      return pyqDatasetSchema(payload?.meta || payload?.doc, payload?.url)
+        ?? pyqSchema(payload?.doc || payload?.meta, payload?.url);
     default:
       return null;
   }

@@ -29,12 +29,19 @@ const CONTENT_TYPE_ICONS = {
   summary: List,
 };
 
+// Article JSON-LD for the merged blog-view of a subject. Course / FAQPage /
+// CollectionPage / BreadcrumbList are emitted by `subjectHubSchema` via
+// `<PageMeta pageType="subject">` so this only contributes the Article node
+// to avoid duplicating types in the page's structured-data graph.
 function ArticleJsonLd({ subject, title, url, wordCount }) {
   useEffect(() => {
     const eduLevel = ((subject?.class_name || '') + ' ' + (subject?.board_name || '') + ' ' + (subject?.stream_name || '')).replace(/\s+/g, ' ').trim() || 'FYUGP';
     const description = subject?.description || `Complete ${subject?.name || title} notes and study material for ${eduLevel} students.`;
-    const published = subject?.created_at || new Date().toISOString();
-    const modified = subject?.updated_at || published;
+    const datePublished = subject?.published_at || subject?.created_at || new Date().toISOString();
+    const dateModified = subject?.updated_at || subject?.modified_at || datePublished;
+    const author = subject?.author_name
+      ? { '@type': 'Person', name: subject.author_name, affiliation: { '@type': 'Organization', name: 'Syrabit.ai', url: 'https://syrabit.ai' } }
+      : { '@type': 'Organization', name: 'Syrabit.ai Editorial Team', url: 'https://syrabit.ai' };
 
     const graphNodes = [
       {
@@ -43,13 +50,13 @@ function ArticleJsonLd({ subject, title, url, wordCount }) {
         name: title,
         description,
         url,
-        author: { '@type': 'Organization', name: 'Syrabit.ai', url: 'https://syrabit.ai' },
+        author,
         publisher: {
           '@type': 'Organization', name: 'Syrabit.ai', url: 'https://syrabit.ai',
           logo: { '@type': 'ImageObject', url: 'https://syrabit.ai/icons/icon-192x192.png' },
         },
-        datePublished: published,
-        dateModified: modified,
+        datePublished,
+        dateModified,
         educationalLevel: eduLevel,
         about: { '@type': 'Thing', name: subject?.name || title },
         wordCount,
@@ -58,32 +65,7 @@ function ArticleJsonLd({ subject, title, url, wordCount }) {
         isPartOf: { '@type': 'WebSite', '@id': 'https://syrabit.ai', name: 'Syrabit.ai' },
         image: 'https://syrabit.ai/opengraph.jpg',
       },
-      {
-        '@type': 'Course',
-        name: `${subject?.name || title} — ${eduLevel}`,
-        description,
-        provider: { '@type': 'Organization', name: 'Syrabit.ai', sameAs: 'https://syrabit.ai' },
-        educationalLevel: eduLevel,
-        url,
-        inLanguage: 'en-IN',
-      },
     ];
-
-    const chapters = subject?.chapters || [];
-    const faqEntries = [];
-    for (const ch of chapters) {
-      if (ch.title && ch.description && ch.description.length > 10) {
-        faqEntries.push({
-          '@type': 'Question',
-          name: `What is ${ch.title}?`,
-          acceptedAnswer: { '@type': 'Answer', text: ch.description },
-        });
-      }
-      if (faqEntries.length >= 10) break;
-    }
-    if (faqEntries.length >= 2) {
-      graphNodes.push({ '@type': 'FAQPage', mainEntity: faqEntries });
-    }
 
     const script = document.createElement('script');
     script.type = 'application/ld+json';

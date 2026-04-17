@@ -13,6 +13,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { apiClient, API_BASE, seoRelatedByChapter } from '@/utils/api';
 import { useShare } from '@/hooks/useShare';
 import StickyToc from '@/components/ui/StickyToc';
+import { learnArticleSchema } from '@/lib/jsonld';
 
 function buildToc(headingsJson) {
   try {
@@ -24,58 +25,12 @@ function buildToc(headingsJson) {
 
 function SchemaOrg({ doc }) {
   const pageUrl = `https://syrabit.ai/learn/${doc.seo_slug}`;
-  const published = doc.created_at || doc.generated_at || new Date().toISOString();
-  const modified = doc.updated_at || published;
-  const eduLevel = doc.class_name || doc.board_name || doc.geo_tags || 'Assam Board';
-  const description = doc.meta_description || doc.description || '';
-
-  const graphNodes = [
-    {
-      '@type': 'Article',
-      headline: doc.title,
-      description,
-      author: { '@type': ['Organization', 'EducationalOrganization'], name: 'Syrabit.ai', url: 'https://syrabit.ai' },
-      publisher: {
-        '@type': ['Organization', 'EducationalOrganization'],
-        name: 'Syrabit.ai',
-        url: 'https://syrabit.ai',
-        logo: { '@type': 'ImageObject', url: 'https://syrabit.ai/icons/icon-192x192.png' },
-      },
-      datePublished: published,
-      dateModified: modified,
-      keywords: doc.seo_tags || '',
-      inLanguage: 'en-IN',
-      educationalLevel: eduLevel,
-      about: { '@type': 'Thing', name: doc.primary_keyword || doc.title },
-      mainEntityOfPage: { '@type': 'WebPage', '@id': pageUrl },
-      isPartOf: { '@type': 'WebSite', '@id': 'https://syrabit.ai', name: 'Syrabit.ai' },
-      image: 'https://syrabit.ai/opengraph.jpg',
-    },
-    {
-      '@type': 'BreadcrumbList',
-      itemListElement: [
-        { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://syrabit.ai' },
-        { '@type': 'ListItem', position: 2, name: 'Library', item: 'https://syrabit.ai/library' },
-        { '@type': 'ListItem', position: 3, name: doc.title, item: pageUrl },
-      ],
-    },
-    {
-      '@type': 'LearningResource',
-      name: `${doc.title} — ${eduLevel}`,
-      description: description || `Study material for ${doc.title}`,
-      provider: { '@type': ['Organization', 'EducationalOrganization'], name: 'Syrabit.ai', sameAs: 'https://syrabit.ai' },
-      educationalLevel: eduLevel,
-      url: pageUrl,
-      inLanguage: 'en-IN',
-      learningResourceType: doc.type || 'Study Material',
-      isAccessibleForFree: true,
-    },
-  ];
-
+  const graph = learnArticleSchema(doc, pageUrl);
+  if (!graph) return null;
   return (
     <script
       type="application/ld+json"
-      dangerouslySetInnerHTML={{ __html: JSON.stringify({ '@context': 'https://schema.org', '@graph': graphNodes }) }}
+      dangerouslySetInnerHTML={{ __html: JSON.stringify(graph) }}
     />
   );
 }

@@ -1,5 +1,5 @@
 import { Helmet } from "react-helmet-async";
-import { buildSchemaForPageType } from "@/lib/jsonld";
+import { buildSchemaForPageType, dedupeGraphTypes } from "@/lib/jsonld";
 
 export default function PageMeta({
   title,
@@ -23,10 +23,15 @@ export default function PageMeta({
   // Per-page-type JSON-LD (Phase D, Plan 9). When a `pageType` is supplied,
   // build the canonical schema graph for that page type and merge it with any
   // page-supplied `jsonLd` so legacy callers keep working.
-  const typedSchema = pageType ? buildSchemaForPageType(pageType, { url, ...(pageData || {}) }) : null;
+  const externalLd = jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : [];
+  const rawTyped = pageType ? buildSchemaForPageType(pageType, { url, ...(pageData || {}) }) : null;
+  // Deduplicate schema.org @types so the same type (e.g. FAQPage) is never
+  // emitted twice when a caller supplies its own jsonLd alongside the
+  // per-page-type builder output. BreadcrumbList / WebPage are always kept.
+  const typedSchema = rawTyped ? dedupeGraphTypes(rawTyped, externalLd) : null;
   const allLd = [
-    ...(typedSchema ? [typedSchema] : []),
-    ...(jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : []),
+    ...(typedSchema && Array.isArray(typedSchema['@graph']) && typedSchema['@graph'].length ? [typedSchema] : []),
+    ...externalLd,
   ];
 
   // Phase E (Plan 7): bilingual hreflang alternates. When an Assamese variant
