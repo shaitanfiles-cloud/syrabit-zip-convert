@@ -41,7 +41,7 @@ export default function SeoPagesTab({
             </div>
             <div className="flex-1">
               <h3 className="text-gray-700 font-medium text-sm">Google Analytics 4</h3>
-              <p className="text-gray-300 text-xs">Real visitor & page data from GA4</p>
+              <p className="text-gray-300 text-xs">GA4 connection status (visitor & page-view metrics come from Cloudflare)</p>
             </div>
             {ga4Status && (
               <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
