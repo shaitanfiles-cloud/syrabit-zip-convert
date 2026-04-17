@@ -3713,6 +3713,15 @@ async def admin_syllabus_reset_all(admin: dict = Depends(get_admin_user)):
     sub_result = await db.subjects.delete_many({})
     ch_result  = await db.chapters.delete_many({})
     logger.info(f"Syllabus reset by {admin.get('email','?')} — deleted {sub_result.deleted_count} subjects, {ch_result.deleted_count} chapters")
+    # Wiped every subject + chapter — fire the deploy hook immediately so
+    # the prerendered HTML doesn't keep advertising deleted pages (Task #398).
+    try:
+        from routes.admin_content import _trigger_prerender_now
+        await _trigger_prerender_now(
+            f"syllabus_reset:{sub_result.deleted_count}_subjects_{ch_result.deleted_count}_chapters"
+        )
+    except Exception:
+        pass
     return {
         "deleted_subjects": sub_result.deleted_count,
         "deleted_chapters":  ch_result.deleted_count,

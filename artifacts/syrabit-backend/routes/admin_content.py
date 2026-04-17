@@ -1,6 +1,9 @@
 """Syrabit.ai — Admin content CRUD & thumbnails"""
 import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
 
+_PRERENDER_LOG = logging.getLogger("syrabit.prerender_refresh")
+
+
 def _schedule_prerender_refresh(reason: str = "content_update"):
     """Queue a debounced Cloudflare Pages rebuild so prerendered subject/
     chapter HTML stays in sync with admin edits (Task #387).
@@ -11,8 +14,8 @@ def _schedule_prerender_refresh(reason: str = "content_update"):
     try:
         from pages_deploy import schedule_refresh
         schedule_refresh(reason)
-    except Exception:
-        pass
+    except Exception as exc:
+        _PRERENDER_LOG.warning("schedule_refresh(%r) failed: %s", reason, exc)
 
 
 async def _trigger_prerender_now(reason: str = "bulk_admin_op"):
@@ -27,8 +30,8 @@ async def _trigger_prerender_now(reason: str = "bulk_admin_op"):
     try:
         from pages_deploy import trigger_now
         await trigger_now(reason)
-    except Exception:
-        pass
+    except Exception as exc:
+        _PRERENDER_LOG.warning("trigger_now(%r) failed: %s", reason, exc)
 
 
 def _schedule_indexnow_for_subject(subject_doc: dict):

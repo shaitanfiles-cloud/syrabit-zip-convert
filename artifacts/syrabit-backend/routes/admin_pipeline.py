@@ -1894,6 +1894,13 @@ async def admin_reseed(admin: dict = Depends(get_admin_user)):
         await db.subjects.delete_many({})
         await db.chapters.delete_many({})
         await ensure_seeded()
+        # Wiped & re-seeded the entire content tree — fire the deploy
+        # hook immediately so prerendered pages don't stay stale (Task #398).
+        try:
+            from routes.admin_content import _trigger_prerender_now
+            await _trigger_prerender_now("admin_reseed")
+        except Exception:
+            pass
         return {"message": "Content reseeded successfully"}
     except HTTPException:
         raise
