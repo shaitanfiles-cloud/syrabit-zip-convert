@@ -1366,7 +1366,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                                   <Loader2 size={11} className="animate-spin" /> Scanning…
                                 </>
                               ) : (
-                                <>Scan all URLs</>
+                                <>Show all</>
                               )}
                             </button>
                           )}
