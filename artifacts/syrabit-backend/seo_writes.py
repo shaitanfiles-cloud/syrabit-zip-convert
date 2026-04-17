@@ -29,7 +29,7 @@ caller writes to those collections directly.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
 
@@ -44,7 +44,10 @@ async def _upsert_seo_doc(
     if db_handle is None:
         return
 
-    now = datetime.utcnow().isoformat()
+    # Timezone-aware UTC isoformat to stay consistent with the rest of
+    # the backend (callers like seo_engine.py / cms_sarvam_health.py
+    # already use `datetime.now(timezone.utc).isoformat()`).
+    now = datetime.now(timezone.utc).isoformat()
     body = dict(doc)
     created_at = body.pop("created_at", None) or now
     updated_at = body.pop("updated_at", None) or now
