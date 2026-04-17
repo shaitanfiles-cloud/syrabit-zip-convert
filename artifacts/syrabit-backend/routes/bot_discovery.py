@@ -1955,24 +1955,34 @@ def _format_by_sitemap_html(by_sitemap, threshold_pct: float,
         )
         ds = deep_scan_summaries.get(row.get("name"))
         if ds:
-            checked = int(ds.get("checked", 0))
-            total_urls = int(ds.get("total_urls", 0))
-            failing_count = int(ds.get("failing_count", 0))
-            truncated = bool(ds.get("truncated"))
-            error = ds.get("error")
-            if error:
+            if ds.get("skipped"):
+                # Task #351: cap reached for this firing — tell admin
+                # to deep-scan manually from the dashboard.
+                cap = int(ds.get("cap", 0))
                 summary_inner = (
-                    f"Deep scan failed: {_html.escape(str(error)[:200])}"
+                    f"<b>Deep scan skipped</b> — alert-cycle cap of {cap} sitemaps "
+                    f"already used. Run a manual deep scan from the SEO admin "
+                    f"dashboard to see the full failing list."
                 )
             else:
-                cap_note = (
-                    f" (capped at {checked} of {total_urls} URLs)"
-                    if truncated else ""
-                )
-                summary_inner = (
-                    f"<b>Deep scan:</b> {failing_count} of {checked} URLs failing"
-                    f"{cap_note}"
-                )
+                checked = int(ds.get("checked", 0))
+                total_urls = int(ds.get("total_urls", 0))
+                failing_count = int(ds.get("failing_count", 0))
+                truncated = bool(ds.get("truncated"))
+                error = ds.get("error")
+                if error:
+                    summary_inner = (
+                        f"Deep scan failed: {_html.escape(str(error)[:200])}"
+                    )
+                else:
+                    cap_note = (
+                        f" (capped at {checked} of {total_urls} URLs)"
+                        if truncated else ""
+                    )
+                    summary_inner = (
+                        f"<b>Deep scan:</b> {failing_count} of {checked} URLs failing"
+                        f"{cap_note}"
+                    )
             rows_html.append(
                 "<tr style='background:#fff7f7'>"
                 "<td colspan='3' style='padding:6px 10px;border:1px solid #ddd;font-size:12px;color:#7f1d1d'>"
@@ -2033,21 +2043,28 @@ def _format_by_sitemap_text(by_sitemap,
         )
         ds = deep_scan_summaries.get(r.get("name"))
         if ds:
-            error = ds.get("error")
-            if error:
-                lines.append(f"      Deep scan failed: {str(error)[:200]}")
-            else:
-                checked = int(ds.get("checked", 0))
-                total_urls = int(ds.get("total_urls", 0))
-                failing_count = int(ds.get("failing_count", 0))
-                cap_note = (
-                    f" (capped at {checked} of {total_urls} URLs)"
-                    if ds.get("truncated") else ""
-                )
+            if ds.get("skipped"):
+                cap = int(ds.get("cap", 0))
                 lines.append(
-                    f"      Deep scan: {failing_count} of {checked} URLs failing"
-                    f"{cap_note}"
+                    f"      Deep scan skipped — alert-cycle cap of {cap} sitemaps "
+                    f"already used. Run a manual deep scan from the dashboard."
                 )
+            else:
+                error = ds.get("error")
+                if error:
+                    lines.append(f"      Deep scan failed: {str(error)[:200]}")
+                else:
+                    checked = int(ds.get("checked", 0))
+                    total_urls = int(ds.get("total_urls", 0))
+                    failing_count = int(ds.get("failing_count", 0))
+                    cap_note = (
+                        f" (capped at {checked} of {total_urls} URLs)"
+                        if ds.get("truncated") else ""
+                    )
+                    lines.append(
+                        f"      Deep scan: {failing_count} of {checked} URLs failing"
+                        f"{cap_note}"
+                    )
         for f in (r.get("failing_urls") or []):
             lines.append(f"      [{f.get('status', 0)}] {f.get('url', '')}")
     return "\nPer-sitemap breakdown:\n" + "\n".join(lines)
@@ -2770,6 +2787,17 @@ SEO_DEEP_SCAN_CONCURRENCY = 20
 # shared async lock. (Manual /admin/.../deep-scan calls are unaffected.)
 _SEO_ALERT_DEEP_SCAN_LOCK = asyncio.Lock()
 
+# Task #351: hard cap on how many sitemaps the spike-alert loop will
+# auto-deep-scan in a single firing. During an origin-wide 5xx outage
+# every sitemap can show up as "fully failing" at once; serial scans
+# would still hammer the origin (and delay the alert email). Sitemaps
+# beyond this cap get a {skipped: true, reason: "alert_scan_cap"}
+# placeholder so the email still tells the admin those weren't scanned
+# and points them at the dashboard for manual deep-scan.
+SEO_ALERT_DEEP_SCAN_MAX_SITEMAPS = int(
+    os.environ.get("SEO_ALERT_DEEP_SCAN_MAX_SITEMAPS", "3")
+)
+
 
 async def _collect_alert_deep_scans(sitemap_names: List[str]) -> Dict[str, Dict]:
     """Run a deep scan for each name in ``sitemap_names`` and return a
@@ -2784,10 +2812,21 @@ async def _collect_alert_deep_scans(sitemap_names: List[str]) -> Dict[str, Dict]
     Each entry contains ``total_urls``, ``checked``, ``failing_count``
     and ``truncated`` — plus an ``error`` key when the scan itself
     raised or returned an error payload.
+
+    Task #351: when more than :data:`SEO_ALERT_DEEP_SCAN_MAX_SITEMAPS`
+    sitemaps are fully failing (e.g. an origin-wide outage), only the
+    first ``SEO_ALERT_DEEP_SCAN_MAX_SITEMAPS`` are deep-scanned. The
+    remainder receive a ``{skipped: true, reason: "alert_scan_cap",
+    cap: N}`` placeholder so the alert email still surfaces them to
+    the admin (with a hint to deep-scan manually from the dashboard)
+    without adding load to a struggling origin.
     """
     summaries: Dict[str, Dict] = {}
+    cap = max(int(SEO_ALERT_DEEP_SCAN_MAX_SITEMAPS), 0)
+    to_scan = list(sitemap_names)[:cap] if cap > 0 else []
+    skipped = list(sitemap_names)[len(to_scan):]
     async with _SEO_ALERT_DEEP_SCAN_LOCK:
-        for name in sitemap_names:
+        for name in to_scan:
             try:
                 res = await _deep_scan_sitemap(name)
             except Exception as exc:  # noqa: BLE001
@@ -2804,6 +2843,12 @@ async def _collect_alert_deep_scans(sitemap_names: List[str]) -> Dict[str, Dict]
             if res.get("error"):
                 summary["error"] = res["error"]
             summaries[name] = summary
+    for name in skipped:
+        summaries[name] = {
+            "skipped": True,
+            "reason": "alert_scan_cap",
+            "cap": cap,
+        }
     return summaries
 
 # Task #348: when a deep scan turns up MORE than this many failing URLs

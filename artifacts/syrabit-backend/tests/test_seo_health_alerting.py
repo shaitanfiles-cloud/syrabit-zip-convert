@@ -850,6 +850,64 @@ def test_collect_alert_deep_scans_records_error_when_scan_raises():
     assert out["ok"]["failing_count"] == 1
 
 
+def test_collect_alert_deep_scans_caps_to_max_sitemaps():
+    """Task #351: when more than SEO_ALERT_DEEP_SCAN_MAX_SITEMAPS sitemaps
+    are fully failing, only the first N are deep-scanned; the rest get a
+    skipped placeholder so the email still surfaces them."""
+    scanned: list = []
+
+    async def _fake(name):
+        scanned.append(name)
+        return {"total_urls": 10, "checked": 10, "truncated": False,
+                "failing": [{"url": "u", "status": 404}]}
+
+    names = [f"sitemap-{i}.xml" for i in range(5)]
+
+    async def _run():
+        bot_discovery._SEO_ALERT_DEEP_SCAN_LOCK = asyncio.Lock()
+        return await bot_discovery._collect_alert_deep_scans(names)
+
+    with patch.object(bot_discovery, "_deep_scan_sitemap", _fake), \
+         patch.object(bot_discovery, "SEO_ALERT_DEEP_SCAN_MAX_SITEMAPS", 3):
+        out = asyncio.run(_run())
+
+    # Only the first 3 were actually scanned.
+    assert scanned == names[:3]
+    for n in names[:3]:
+        assert out[n].get("failing_count") == 1
+        assert not out[n].get("skipped")
+    # The remaining 2 are present with skipped placeholders.
+    for n in names[3:]:
+        assert out[n] == {"skipped": True, "reason": "alert_scan_cap", "cap": 3}
+
+
+def test_format_helpers_render_skipped_deep_scan_placeholder():
+    """Task #351: skipped sitemaps get a clear 'manual deep scan' note in
+    both the HTML and text alert bodies."""
+    by_sm = [
+        {"name": "sitemap-a.xml", "ok": 0, "total": 5, "success_rate": 0.0,
+         "failing_urls": []},
+        {"name": "sitemap-b.xml", "ok": 0, "total": 5, "success_rate": 0.0,
+         "failing_urls": []},
+    ]
+    deep_scan_summaries = {
+        "sitemap-a.xml": {"total_urls": 10, "checked": 10,
+                          "failing_count": 4, "truncated": False},
+        "sitemap-b.xml": {"skipped": True, "reason": "alert_scan_cap", "cap": 3},
+    }
+    html = bot_discovery._format_by_sitemap_html(
+        by_sm, 20.0, deep_scan_summaries)
+    assert "Deep scan:</b> 4 of 10" in html
+    assert "Deep scan skipped" in html
+    assert "alert-cycle cap of 3 sitemaps" in html
+    assert "manual deep scan" in html.lower()
+
+    text = bot_discovery._format_by_sitemap_text(by_sm, deep_scan_summaries)
+    assert "Deep scan: 4 of 10 URLs failing" in text
+    assert "Deep scan skipped" in text
+    assert "cap of 3 sitemaps" in text
+
+
 def test_url_spike_alert_triggers_deep_scan_for_fully_failing_sitemap():
     """Task #347: when the spike branch fires and a sitemap's sample is
     fully failing (ok==0), _deep_scan_sitemap is invoked and its totals
