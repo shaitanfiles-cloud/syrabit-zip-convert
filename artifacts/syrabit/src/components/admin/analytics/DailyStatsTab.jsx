@@ -43,8 +43,6 @@ export default function DailyStatsTab({ dailyDays, setDailyDays, dailyLoading, d
         const hasVisitors = daily.some(d => d.visitors > 0);
         const hasSignups = daily.some(d => d.signups > 0);
         const hasMessages = daily.some(d => d.messages > 0 || d.ai_interactions > 0);
-        const hasBounce = daily.some(d => d.bounce_rate != null);
-        const hasDuration = daily.some(d => d.avg_session_duration != null);
 
         const fmtChg = (pct) => {
           if (pct == null) return null;

@@ -3355,7 +3355,7 @@ async def admin_analytics_daily(
     Per-day analytics for the Daily Analytics panel.
     Returns visitors, page_views, signups, messages, and AI interactions
     for each day in the requested range (default: last 30 days).
-    Prefers GA4 for visitor/page-view data and falls back to MongoDB.
+    Visitor/page-view data is sourced from Cloudflare only (Task #364).
     """
     now = datetime.now(timezone.utc)
 
