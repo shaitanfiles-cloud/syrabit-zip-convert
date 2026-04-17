@@ -191,27 +191,49 @@ function StalledRecoveryHint({ kind, onReload }) {
   );
 }
 
+// Only treat a Suspense fallback as a "hydration stall" when the
+// fallback shows up BEFORE initial hydration completes on a
+// prerendered route. Lazy chunks that suspend during later SPA
+// navigations are normal route loads, not hydration regressions.
+function isInitialHydrationContext() {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return false;
+  }
+  if (window.__SYRABIT_HYDRATED__) return false;
+  const rootEl = document.getElementById("root");
+  return Boolean(rootEl?.dataset?.hydrate);
+}
+
 function DeferredFallback({ delay = 150, recoveryDelay = 5000 }) {
   const [show, setShow] = useState(false);
   const [stalled, setStalled] = useState(false);
   useEffect(() => {
     const showTimer = setTimeout(() => setShow(true), delay);
-    const stalledTimer = setTimeout(() => {
-      setStalled(true);
-      try {
-        const rootEl =
-          typeof document !== "undefined"
-            ? document.getElementById("root")
-            : null;
-        const kind = rootEl?.dataset?.hydrate || null;
-        const path =
-          typeof window !== "undefined" ? window.location.pathname : null;
-        Analytics.hydrateStalled?.({ kind, path, ms: recoveryDelay });
-      } catch {}
-    }, recoveryDelay);
+    let stalledTimer = null;
+    if (isInitialHydrationContext()) {
+      stalledTimer = setTimeout(() => {
+        // Re-check at fire time — hydration may have completed in the
+        // intervening window.
+        if (!isInitialHydrationContext()) return;
+        setStalled(true);
+        try {
+          const rootEl = document.getElementById("root");
+          const kind = rootEl?.dataset?.hydrate || null;
+          const preloadFailed = Boolean(
+            window.__SYRABIT_HYDRATE_PRELOAD_FAILED__,
+          );
+          Analytics.hydrateStalled?.({
+            kind,
+            path: window.location.pathname,
+            ms: recoveryDelay,
+            preload_failed: preloadFailed,
+          });
+        } catch {}
+      }, recoveryDelay);
+    }
     return () => {
       clearTimeout(showTimer);
-      clearTimeout(stalledTimer);
+      if (stalledTimer) clearTimeout(stalledTimer);
     };
   }, [delay, recoveryDelay]);
 
