@@ -472,6 +472,58 @@ class TestPutAlertSettingsValidation:
         saved = mock_collection.replace_one.call_args[0][1]
         assert saved["alert_settings"]["notification_channels"]["seo_slack_enabled"] is False
 
+    def test_put_persists_hydrate_slack_toggle(self, app_client):
+        mock_collection = MagicMock()
+        mock_collection.find_one = AsyncMock(return_value={})
+        mock_collection.replace_one = AsyncMock(return_value=None)
+        with patch.object(_metrics_mod, "db", MagicMock(api_config=mock_collection)), \
+             patch("routes.admin_notifications.db", MagicMock(api_config=mock_collection)):
+            resp = app_client.put("/admin/alert-settings", json={
+                "thresholds": {},
+                "notification_channels": {
+                    "webhook_url": "https://hooks.slack.com/hyd",
+                    "hydrate_slack_enabled": False,
+                },
+            })
+        assert resp.status_code == 200
+        saved = mock_collection.replace_one.call_args[0][1]
+        assert saved["alert_settings"]["notification_channels"]["hydrate_slack_enabled"] is False
+
+    def test_put_round_trips_hydrate_slack_toggle_into_runtime(self, app_client):
+        """Save hydrate_slack_enabled=False, then GET — and verify
+        _load_alert_settings actually pushes the value into the
+        in-memory _notification_channels used by _dispatch_alert.
+        """
+        stored = {}
+        async def _find_one(*a, **kw):
+            return dict(stored) if stored else None
+        async def _replace_one(filt, doc, upsert=False):
+            stored.clear()
+            stored.update(doc)
+        mock_collection = MagicMock()
+        mock_collection.find_one = AsyncMock(side_effect=_find_one)
+        mock_collection.replace_one = AsyncMock(side_effect=_replace_one)
+        with patch.object(_metrics_mod, "db", MagicMock(api_config=mock_collection)), \
+             patch("routes.admin_notifications.db", MagicMock(api_config=mock_collection)):
+            resp = app_client.put("/admin/alert-settings", json={
+                "thresholds": {},
+                "notification_channels": {"hydrate_slack_enabled": False},
+            })
+            assert resp.status_code == 200
+            assert _metrics_mod._notification_channels["hydrate_slack_enabled"] is False
+            get_resp = app_client.get("/admin/alert-settings")
+            assert get_resp.status_code == 200
+            data = get_resp.json()
+            assert data["notification_channels"]["hydrate_slack_enabled"] is False
+
+    def test_rejects_invalid_hydrate_slack_toggle(self, app_client):
+        resp = app_client.put("/admin/alert-settings", json={
+            "thresholds": {},
+            "notification_channels": {"hydrate_slack_enabled": "yes"},
+        })
+        assert resp.status_code == 400
+        assert "hydrate_slack_enabled" in resp.json()["detail"]
+
     def test_rejects_invalid_email(self, app_client):
         resp = app_client.put("/admin/alert-settings", json={
             "thresholds": {},

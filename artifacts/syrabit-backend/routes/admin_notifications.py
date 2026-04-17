@@ -954,6 +954,14 @@ async def admin_update_alert_settings(
         if not isinstance(seo_val, bool):
             raise HTTPException(status_code=400, detail="seo_slack_enabled must be a boolean")
         validated_channels["seo_slack_enabled"] = seo_val
+    # Task #414: hydrate / stale-build alert Slack mute. Same shape as
+    # seo_slack_enabled — admins can silence the new hydrate Slack card
+    # without affecting email, persisted alerts, or browser push.
+    if "hydrate_slack_enabled" in notification_channels:
+        hyd_val = notification_channels["hydrate_slack_enabled"]
+        if not isinstance(hyd_val, bool):
+            raise HTTPException(status_code=400, detail="hydrate_slack_enabled must be a boolean")
+        validated_channels["hydrate_slack_enabled"] = hyd_val
     try:
         existing = await db.api_config.find_one({}, {"_id": 0})
         if existing is None:
