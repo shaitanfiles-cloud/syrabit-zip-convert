@@ -1408,7 +1408,15 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                                   // comma, quote, or newline in double quotes
                                   // and double-up internal quotes.
                                   const esc = (v) => {
-                                    const s = v == null ? '' : String(v);
+                                    let s = v == null ? '' : String(v);
+                                    // CSV formula-injection guard: a cell
+                                    // beginning with =, +, -, or @ would be
+                                    // executed as a formula by Excel/Sheets.
+                                    // Since `url`/`error` can carry external
+                                    // content, prefix a single quote to
+                                    // neutralize any such payload before the
+                                    // standard quote/escape pass.
+                                    if (/^[=+\-@]/.test(s)) s = `'${s}`;
                                     return /[",\n\r]/.test(s)
                                       ? `"${s.replace(/"/g, '""')}"`
                                       : s;
