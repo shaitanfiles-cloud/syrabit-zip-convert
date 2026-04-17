@@ -49,6 +49,39 @@ _PYQ_BUCKET   = "study-materials"
 _PYQ_PREFIX   = "pyqs"
 _PYQ_MAX_MB   = 50  # MB per file — stored in Supabase, not MongoDB
 
+
+async def _upsert_pyq_html_page(db_handle, slug: str, page_doc: dict) -> None:
+    """Upsert a `pyq_html_pages` row with guaranteed publish-date stamps.
+
+    Centralises every write into the collection so future call sites cannot
+    silently regress the legacy "missing created_at" bug fixed in Task #341.
+
+    - `created_at` is written via `$setOnInsert` so it is stamped exactly once
+      (on the original insert) and never overwritten on later upserts.
+    - `updated_at` is always refreshed via `$set`.
+    - If the caller already supplied either timestamp in `page_doc`, we honor
+      it (useful for backfills / tests) but still ensure both fields exist.
+    """
+    if db_handle is None:
+        return
+
+    now = datetime.utcnow().isoformat()
+    doc = dict(page_doc)
+    created_at = doc.pop("created_at", None) or now
+    updated_at = doc.pop("updated_at", None) or now
+    doc["slug"] = slug
+    doc["updated_at"] = updated_at
+
+    await db_handle.pyq_html_pages.update_one(
+        {"slug": slug},
+        {
+            "$set": doc,
+            "$setOnInsert": {"created_at": created_at},
+        },
+        upsert=True,
+    )
+
+
 def _pyq_supabase_upload(raw: bytes, storage_path: str, mime: str) -> str:
     """Upload bytes to Supabase storage and return the public URL.
     Raises on failure so caller can fall back to base64."""
@@ -307,8 +340,7 @@ async def admin_pyq_upload_text(
         "created_at": now, "updated_at": now,
         "created_by": admin.get("username", "admin"),
     }
-    if db is not None:
-        await db.pyq_html_pages.update_one({"slug": slug}, {"$set": page_doc}, upsert=True)
+    await _upsert_pyq_html_page(db, slug, page_doc)
 
     if raw_text.strip():
         asyncio.create_task(_index_pyq_rag_chunks(
@@ -614,8 +646,7 @@ async def admin_pyq_agentic_process(
         "questions": questions, "raw_text": raw_text[:5000],
         "created_at": now, "updated_at": now, "created_by": admin.get("username", "admin"),
     }
-    if db is not None:
-        await db.pyq_html_pages.update_one({"slug": slug}, {"$set": page_doc}, upsert=True)
+    await _upsert_pyq_html_page(db, slug, page_doc)
 
     # Index RAG chunks in background
     if raw_text.strip():
@@ -1025,12 +1056,7 @@ async def admin_pyq_html_replica(
         "updated_at":   now,
         "created_by":   admin.get("username", "admin"),
     }
-    if db is not None:
-        await db.pyq_html_pages.update_one(
-            {"slug": slug},
-            {"$set": page_doc},
-            upsert=True,
-        )
+    await _upsert_pyq_html_page(db, slug, page_doc)
 
     # ── Index extracted questions into RAG chunks (priority 1 / content_type=pyq) ──
     if raw_text.strip():
