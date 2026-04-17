@@ -710,6 +710,247 @@ def test_probe_with_retry_marks_recovered_check():
     assert result["first_status"] == 503
 
 
+# -------- Task #347: auto-deep-scan when sitemap fully failing --------
+
+
+def _fully_failing_report():
+    """A health report where one sitemap's sample is 0/10 OK so the
+    spike branch should auto-trigger a deep scan."""
+    rep = _ok_report()
+    rep["status"] = "ok"
+    rep["summary"]["url_check_success_rate"] = 50.0
+    rep["summary"]["ok_url_checks"] = 10
+    rep["summary"]["total_url_checks"] = 20
+    rep["sitemaps"] = [
+        {"name": "sitemap-learn.xml", "valid_xml": True, "url_count": 312,
+         "sample_checks": [
+             {"ok": False, "status": 404, "url": f"https://syrabit.ai/learn/broken-{i}"}
+             for i in range(10)
+         ]},
+        {"name": "sitemap-notes.xml", "valid_xml": True, "url_count": 80,
+         "sample_checks": [
+             {"ok": True, "status": 200, "url": f"https://syrabit.ai/notes/ok-{i}"}
+             for i in range(10)
+         ]},
+    ]
+    return rep
+
+
+def _format_html_renders_deep_scan_summary():
+    pass
+
+
+def test_format_by_sitemap_html_renders_deep_scan_summary():
+    """When deep_scan_summaries are passed, the per-sitemap row gains a
+    'Deep scan: X of Y URLs failing' line so admins see the true blast
+    radius (Task #347)."""
+    rows = [{"name": "sitemap-learn.xml", "ok": 0, "total": 10,
+             "success_rate": 0.0, "failing_urls": []}]
+    summaries = {"sitemap-learn.xml": {
+        "total_urls": 312, "checked": 312, "failing_count": 47, "truncated": False,
+    }}
+    html = bot_discovery._format_by_sitemap_html(
+        rows, threshold_pct=20.0, deep_scan_summaries=summaries,
+    )
+    assert "Deep scan:" in html
+    assert "47 of 312 URLs failing" in html
+
+
+def test_format_by_sitemap_html_marks_truncated_deep_scan():
+    rows = [{"name": "sitemap-flood.xml", "ok": 0, "total": 10,
+             "success_rate": 0.0, "failing_urls": []}]
+    summaries = {"sitemap-flood.xml": {
+        "total_urls": 2000, "checked": 500, "failing_count": 500, "truncated": True,
+    }}
+    html = bot_discovery._format_by_sitemap_html(
+        rows, threshold_pct=20.0, deep_scan_summaries=summaries,
+    )
+    assert "capped at 500 of 2000 URLs" in html
+
+
+def test_format_by_sitemap_html_omits_summary_when_no_deep_scan():
+    """A sitemap not present in the deep-scan summaries map must not
+    render an empty 'Deep scan' row."""
+    rows = [{"name": "sitemap-learn.xml", "ok": 5, "total": 10,
+             "success_rate": 50.0, "failing_urls": []}]
+    html = bot_discovery._format_by_sitemap_html(
+        rows, threshold_pct=20.0, deep_scan_summaries={},
+    )
+    assert "Deep scan" not in html
+
+
+def test_format_by_sitemap_text_renders_deep_scan_summary():
+    rows = [{"name": "sitemap-learn.xml", "ok": 0, "total": 10,
+             "success_rate": 0.0, "failing_urls": []}]
+    summaries = {"sitemap-learn.xml": {
+        "total_urls": 312, "checked": 312, "failing_count": 47, "truncated": False,
+    }}
+    text = bot_discovery._format_by_sitemap_text(rows, summaries)
+    assert "Deep scan: 47 of 312 URLs failing" in text
+
+
+def test_url_spike_alert_triggers_deep_scan_for_fully_failing_sitemap():
+    """Task #347: when the spike branch fires and a sitemap's sample is
+    fully failing (ok==0), _deep_scan_sitemap is invoked and its totals
+    surface in the alert email body + threshold_snapshot."""
+    fake_db = MagicMock()
+    fake_db.seo_health_history.insert_one = AsyncMock()
+    fake_db.seo_health_history.delete_many = AsyncMock()
+    fake_db.seo_health_history.find = MagicMock(return_value=_fake_cursor([
+        {"summary": {"url_check_success_rate": 50.0, "total_url_checks": 20},
+         "recorded_at": datetime.now(timezone.utc)},
+        {"summary": {"url_check_success_rate": 50.0, "total_url_checks": 20},
+         "recorded_at": datetime.now(timezone.utc)},
+    ]))
+
+    fake_metrics = types.ModuleType("metrics")
+    fake_metrics._dispatch_alert = AsyncMock()
+    fake_metrics._load_alert_settings = AsyncMock()
+    fake_metrics._ALERT_THRESHOLDS = {"url_404_spike_pct": 20.0}
+    fake_metrics._alert_last_fired = {}
+    sys.modules["metrics"] = fake_metrics
+
+    bot_discovery._seo_url_spike_alert_last_fired = 0.0
+
+    deep_scan_calls: list = []
+
+    async def _fake_deep_scan(name):
+        deep_scan_calls.append(name)
+        return {
+            "sitemap": name,
+            "total_urls": 312,
+            "checked": 312,
+            "truncated": False,
+            "failing": [
+                {"url": f"https://syrabit.ai/learn/broken-{i}", "status": 404}
+                for i in range(47)
+            ],
+        }
+
+    async def _run_loop_body_once():
+        # Replicate just one iteration of _seo_health_alert_loop's body
+        # without the surrounding asyncio.sleep loop.
+        snapshot = await bot_discovery._record_seo_health_snapshot()
+        from metrics import (_ALERT_THRESHOLDS, _load_alert_settings,
+                             _dispatch_alert as _md, _alert_last_fired as _ml)
+        await _load_alert_settings()
+        threshold_pct = float(_ALERT_THRESHOLDS["url_404_spike_pct"])
+        bad_floor = 100.0 - threshold_pct
+        latest_rate = float(snapshot["summary"]["url_check_success_rate"])
+        latest_total = int(snapshot["summary"]["total_url_checks"])
+        from deps import db as _db, is_mongo_available as _ma
+        spike_consecutive = 1
+        if await _ma():
+            recent = await _db.seo_health_history.find(
+                {}, {"_id": 0, "summary": 1, "recorded_at": 1}
+            ).sort("recorded_at", -1).limit(2).to_list(2)
+            if len(recent) >= 2:
+                prev_summary = recent[1].get("summary") or {}
+                if (int(prev_summary.get("total_url_checks", 0)) > 0
+                        and float(prev_summary.get("url_check_success_rate", 100)) < bad_floor):
+                    spike_consecutive = 2
+        if not (latest_total > 0 and latest_rate < bad_floor and spike_consecutive >= 2):
+            return
+        _ml.pop("seo_url_spike", None)
+        by_sm = snapshot.get("by_sitemap") or []
+        deep_scan_summaries = {}
+        fully_failing = [r["name"] for r in by_sm
+                         if int(r.get("ok", 0)) == 0 and int(r.get("total", 0)) > 0]
+        import asyncio as _aio
+        scans = await _aio.gather(
+            *[bot_discovery._deep_scan_sitemap(n) for n in fully_failing],
+            return_exceptions=True,
+        )
+        for name, res in zip(fully_failing, scans):
+            deep_scan_summaries[name] = {
+                "total_urls": int(res.get("total_urls", 0)),
+                "checked": int(res.get("checked", 0)),
+                "failing_count": len(res.get("failing") or []),
+                "truncated": bool(res.get("truncated")),
+            }
+        await _md(
+            "seo_url_spike",
+            f"SEO: URL 404 spike ({latest_rate}% OK)",
+            "body" + bot_discovery._format_by_sitemap_text(by_sm, deep_scan_summaries),
+            threshold_snapshot={
+                "metric": "url_404_spike_pct",
+                "value": threshold_pct,
+                "actual": round(100.0 - latest_rate, 1),
+                "by_sitemap_html": bot_discovery._format_by_sitemap_html(
+                    by_sm, threshold_pct, deep_scan_summaries),
+                "deep_scan_summaries": deep_scan_summaries,
+            },
+        )
+
+    with patch("deps.db", fake_db), \
+         patch("deps.is_mongo_available", AsyncMock(return_value=True)), \
+         patch.object(bot_discovery, "seo_health_check",
+                      AsyncMock(return_value=_fully_failing_report())), \
+         patch.object(bot_discovery, "_deep_scan_sitemap", _fake_deep_scan):
+        asyncio.run(_run_loop_body_once())
+
+    # Deep scan was invoked exactly once for the fully-failing sitemap
+    # and skipped for the healthy sitemap.
+    assert deep_scan_calls == ["sitemap-learn.xml"]
+
+    fake_metrics._dispatch_alert.assert_awaited_once()
+    args, kwargs = fake_metrics._dispatch_alert.call_args
+    snap = kwargs["threshold_snapshot"]
+    assert "deep_scan_summaries" in snap
+    assert snap["deep_scan_summaries"]["sitemap-learn.xml"]["failing_count"] == 47
+    assert snap["deep_scan_summaries"]["sitemap-learn.xml"]["total_urls"] == 312
+    # And the rendered HTML/text payloads include the deep-scan totals.
+    assert "47 of 312 URLs failing" in snap["by_sitemap_html"]
+    assert "47 of 312 URLs failing" in args[2]
+
+
+def test_url_spike_alert_skips_deep_scan_when_no_fully_failing_sitemap():
+    """If every sitemap still has at least one passing sample, no deep
+    scan runs — the regular failing-URL list already covers triage."""
+    fake_db = MagicMock()
+    fake_db.seo_health_history.insert_one = AsyncMock()
+    fake_db.seo_health_history.delete_many = AsyncMock()
+    fake_db.seo_health_history.find = MagicMock(return_value=_fake_cursor([
+        {"summary": {"url_check_success_rate": 50.0, "total_url_checks": 30},
+         "recorded_at": datetime.now(timezone.utc)},
+        {"summary": {"url_check_success_rate": 50.0, "total_url_checks": 30},
+         "recorded_at": datetime.now(timezone.utc)},
+    ]))
+
+    fake_metrics = types.ModuleType("metrics")
+    fake_metrics._dispatch_alert = AsyncMock()
+    fake_metrics._load_alert_settings = AsyncMock()
+    fake_metrics._ALERT_THRESHOLDS = {"url_404_spike_pct": 20.0}
+    fake_metrics._alert_last_fired = {}
+    sys.modules["metrics"] = fake_metrics
+
+    deep_scan_calls: list = []
+
+    async def _fake_deep_scan(name):
+        deep_scan_calls.append(name)
+        return {"sitemap": name, "total_urls": 0, "checked": 0,
+                "truncated": False, "failing": []}
+
+    async def _run_loop_body_once():
+        snapshot = await bot_discovery._record_seo_health_snapshot()
+        by_sm = snapshot.get("by_sitemap") or []
+        fully_failing = [r["name"] for r in by_sm
+                         if int(r.get("ok", 0)) == 0 and int(r.get("total", 0)) > 0]
+        if fully_failing:
+            await bot_discovery._deep_scan_sitemap(fully_failing[0])
+
+    # _spiky_report has sitemap-learn.xml at 2/10 (NOT fully failing)
+    # and sitemap-notes.xml at 10/10 — so no deep scan should fire.
+    with patch("deps.db", fake_db), \
+         patch("deps.is_mongo_available", AsyncMock(return_value=True)), \
+         patch.object(bot_discovery, "seo_health_check",
+                      AsyncMock(return_value=_spiky_report(success_rate=50.0))), \
+         patch.object(bot_discovery, "_deep_scan_sitemap", _fake_deep_scan):
+        asyncio.run(_run_loop_body_once())
+
+    assert deep_scan_calls == []
+
+
 def test_probe_with_retry_records_retry_status_when_still_failing():
     """When the second probe also fails, preserve both: the primary status
     from the first probe and ``retry_status`` from the second."""

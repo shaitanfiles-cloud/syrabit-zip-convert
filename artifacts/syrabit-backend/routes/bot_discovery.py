@@ -1924,16 +1924,23 @@ def _should_send_weekly_digest_now(now_utc: datetime, last_iso_week: str) -> boo
     return _iso_week_tag(now_utc) != (last_iso_week or "")
 
 
-def _format_by_sitemap_html(by_sitemap, threshold_pct: float) -> str:
+def _format_by_sitemap_html(by_sitemap, threshold_pct: float,
+                            deep_scan_summaries: Optional[Dict[str, Dict]] = None) -> str:
     """Render an HTML table showing per-sitemap pass/fail counts. Rows where
     the success rate is at or below ``100 - threshold_pct`` are highlighted.
 
     Each failing row is followed by a sub-row listing the captured failing
     URLs (status code + URL) so admins can jump directly to the offenders
     instead of re-running ``/api/seo/health`` after the alert (Task #299).
+
+    When ``deep_scan_summaries`` is provided (Task #347) — keyed by sitemap
+    name with ``{total_urls, checked, failing_count, truncated}`` — the row
+    gains a "Deep scan: X of Y URLs failing" line so admins know the true
+    blast radius before opening the dashboard.
     """
     if not by_sitemap:
         return ""
+    deep_scan_summaries = deep_scan_summaries or {}
     rows_html = []
     for row in by_sitemap:
         sr = row.get("success_rate", 0)
@@ -1946,6 +1953,33 @@ def _format_by_sitemap_html(by_sitemap, threshold_pct: float) -> str:
             f"<td style='padding:6px 10px;border:1px solid #ddd'>{sr}%</td>"
             f"</tr>"
         )
+        ds = deep_scan_summaries.get(row.get("name"))
+        if ds:
+            checked = int(ds.get("checked", 0))
+            total_urls = int(ds.get("total_urls", 0))
+            failing_count = int(ds.get("failing_count", 0))
+            truncated = bool(ds.get("truncated"))
+            error = ds.get("error")
+            if error:
+                summary_inner = (
+                    f"Deep scan failed: {_html.escape(str(error)[:200])}"
+                )
+            else:
+                cap_note = (
+                    f" (capped at {checked} of {total_urls} URLs)"
+                    if truncated else ""
+                )
+                summary_inner = (
+                    f"<b>Deep scan:</b> {failing_count} of {checked} URLs failing"
+                    f"{cap_note}"
+                )
+            rows_html.append(
+                "<tr style='background:#fff7f7'>"
+                "<td colspan='3' style='padding:6px 10px;border:1px solid #ddd;font-size:12px;color:#7f1d1d'>"
+                f"{summary_inner}"
+                "</td>"
+                "</tr>"
+            )
         failing = row.get("failing_urls") or []
         if failing:
             items = []
@@ -1978,19 +2012,42 @@ def _format_by_sitemap_html(by_sitemap, threshold_pct: float) -> str:
     )
 
 
-def _format_by_sitemap_text(by_sitemap) -> str:
+def _format_by_sitemap_text(by_sitemap,
+                            deep_scan_summaries: Optional[Dict[str, Dict]] = None) -> str:
     """Plain-text fallback for the per-sitemap breakdown — includes the
     captured failing URLs (status code + URL) under each broken sitemap
     so admins reading the text/plain part of the alert get the same
-    actionable detail (Task #299)."""
+    actionable detail (Task #299).
+
+    If deep-scan summaries are provided (Task #347) the per-sitemap row
+    gains a "Deep scan: X of Y URLs failing" line.
+    """
     if not by_sitemap:
         return ""
+    deep_scan_summaries = deep_scan_summaries or {}
     lines: list[str] = []
     for r in by_sitemap:
         lines.append(
             f"  - {r.get('name', 'unknown')}: {r.get('ok', 0)}/{r.get('total', 0)} OK "
             f"({r.get('success_rate', 0)}%)"
         )
+        ds = deep_scan_summaries.get(r.get("name"))
+        if ds:
+            error = ds.get("error")
+            if error:
+                lines.append(f"      Deep scan failed: {str(error)[:200]}")
+            else:
+                checked = int(ds.get("checked", 0))
+                total_urls = int(ds.get("total_urls", 0))
+                failing_count = int(ds.get("failing_count", 0))
+                cap_note = (
+                    f" (capped at {checked} of {total_urls} URLs)"
+                    if ds.get("truncated") else ""
+                )
+                lines.append(
+                    f"      Deep scan: {failing_count} of {checked} URLs failing"
+                    f"{cap_note}"
+                )
         for f in (r.get("failing_urls") or []):
             lines.append(f"      [{f.get('status', 0)}] {f.get('url', '')}")
     return "\nPer-sitemap breakdown:\n" + "\n".join(lines)
@@ -2473,12 +2530,46 @@ async def _seo_health_alert_loop():
                         _ml.pop("seo_url_spike", None)
                         s = snapshot.get("summary") or {}
                         by_sm = snapshot.get("by_sitemap") or []
+                        # Task #347: for any sitemap whose sample is fully
+                        # failing (ok == 0), kick off a deep scan so the
+                        # alert email shows the true blast radius before
+                        # the admin opens the dashboard. The deep scan
+                        # honours SEO_DEEP_SCAN_CONCURRENCY +
+                        # SEO_DEEP_SCAN_MAX_URLS so a runaway outage
+                        # cannot hammer origin.
+                        deep_scan_summaries: Dict[str, Dict] = {}
+                        fully_failing = [
+                            r.get("name") for r in by_sm
+                            if r.get("name") and int(r.get("ok", 0)) == 0
+                            and int(r.get("total", 0)) > 0
+                        ]
+                        if fully_failing:
+                            try:
+                                scans = await asyncio.gather(
+                                    *[_deep_scan_sitemap(name) for name in fully_failing],
+                                    return_exceptions=True,
+                                )
+                                for name, res in zip(fully_failing, scans):
+                                    if isinstance(res, Exception):
+                                        deep_scan_summaries[name] = {
+                                            "error": f"{type(res).__name__}: {str(res)[:160]}",
+                                        }
+                                        continue
+                                    deep_scan_summaries[name] = {
+                                        "total_urls": int(res.get("total_urls", 0)),
+                                        "checked": int(res.get("checked", 0)),
+                                        "failing_count": len(res.get("failing") or []),
+                                        "truncated": bool(res.get("truncated")),
+                                        **({"error": res["error"]} if res.get("error") else {}),
+                                    }
+                            except Exception as exc:
+                                logger.debug(f"deep scan during seo_url_spike failed: {exc}")
                         body_text = (
                             f"URL spot-check success rate has been at {latest_rate}% for two "
                             f"consecutive hourly checks (alert fires below {bad_floor}%). "
                             f"OK: {s.get('ok_url_checks', 0)}/{s.get('total_url_checks', 0)} "
                             f"sampled URLs. Inspect /api/seo/health and the SEO Manager dashboard."
-                            f"{_format_by_sitemap_text(by_sm)}"
+                            f"{_format_by_sitemap_text(by_sm, deep_scan_summaries)}"
                         )
                         try:
                             await _md(
@@ -2491,7 +2582,9 @@ async def _seo_health_alert_loop():
                                     "actual": round(100.0 - latest_rate, 1),
                                     "ok_url_checks": s.get("ok_url_checks", 0),
                                     "total_url_checks": s.get("total_url_checks", 0),
-                                    "by_sitemap_html": _format_by_sitemap_html(by_sm, threshold_pct),
+                                    "by_sitemap_html": _format_by_sitemap_html(
+                                        by_sm, threshold_pct, deep_scan_summaries),
+                                    "deep_scan_summaries": deep_scan_summaries,
                                 },
                             )
                             _seo_url_spike_alert_last_fired = now_ts
