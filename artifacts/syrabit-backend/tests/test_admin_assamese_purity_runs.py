@@ -100,6 +100,70 @@ class TestRunsEndpoint:
             r = app_client.get("/admin/assamese-purity/runs?limit=0")
         assert r.json()["limit"] == 1  # clamped lower bound
 
+    def test_suspicious_tokens_round_trip(self, app_client):
+        """Task #440 — wire the recorder + the GET endpoint together so
+        a future projection tweak that drops `suspicious_tokens` (or a
+        recorder change that stops persisting them) gets caught by a
+        single test instead of slipping past the unit-level coverage."""
+        import asyncio
+        from routes.cms_sarvam_health import _record_assamese_run
+
+        # Step 1: drive the real recorder to produce the doc that
+        # would be inserted into mongo. This proves the persistence
+        # path emits `suspicious_tokens` for active runs.
+        captured = {}
+
+        async def _fake_insert(doc):
+            captured["doc"] = doc
+
+        async def _drive():
+            with patch("routes.cms_sarvam_health._insert_assamese_run", _fake_insert):
+                _record_assamese_run({
+                    "action": "stripped",
+                    "behaviour": "strip",
+                    "ratio": 0.0,
+                    "original_ratio": 0.2,
+                    "threshold": 0.05,
+                    "translated": False,
+                    "regenerated": False,
+                    "has_assamese": True,
+                    "raw_text": "উৰুকা me uses ssible terms",
+                    "cleaned_text": "উৰুকা",
+                    # Duplicate + non-string + PII to also confirm the
+                    # scrub/dedupe survives the round trip.
+                    "suspicious_tokens": [
+                        "me uses",
+                        "me uses",
+                        "ssible terms",
+                        None,
+                        "ping user@example.com pls",
+                    ],
+                })
+                await asyncio.sleep(0)
+
+        asyncio.run(_drive())
+        persisted_doc = captured["doc"]
+        # Sanity: recorder did persist the field.
+        assert "suspicious_tokens" in persisted_doc
+        persisted_tokens = persisted_doc["suspicious_tokens"]
+        assert "me uses" in persisted_tokens
+        assert persisted_tokens.count("me uses") == 1  # deduped
+        assert "ssible terms" in persisted_tokens
+        assert any("[email]" in t for t in persisted_tokens)
+        assert all("user@example.com" not in t for t in persisted_tokens)
+
+        # Step 2: feed that exact doc back through the GET endpoint
+        # via the mocked cursor — proves the route's projection
+        # surfaces `suspicious_tokens` to the admin client.
+        with _patch_db_with_runs_rows([persisted_doc]):
+            r = app_client.get("/admin/assamese-purity/runs")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is True
+        assert len(body["entries"]) == 1
+        entry = body["entries"][0]
+        assert entry["suspicious_tokens"] == persisted_tokens
+
     def test_db_failure_returns_ok_false(self, app_client):
         coll = _find_cursor_mock([])
         coll.to_list = AsyncMock(side_effect=RuntimeError("mongo down"))
