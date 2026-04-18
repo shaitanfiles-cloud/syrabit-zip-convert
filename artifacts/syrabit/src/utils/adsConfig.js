@@ -97,6 +97,33 @@ export function setAdsOptOut(optedOut) {
   }
 }
 
+// Snapshot of the local opt-out value as it stood when the JS bundle
+// first loaded — i.e. before any server hydration overwrites it. The
+// one-time cross-device announcement (Task #532) needs to know the
+// pre-sync state so legacy users with local-only opt-outs are still
+// detected even after `hydrateAdsOptOutFromServer()` has clobbered the
+// localStorage flag. Captured eagerly so route-load order can't change
+// the answer, and only on the client (SSR safe).
+const _initialLocalAdsOptOut = (() => {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(ADS_OPT_OUT_KEY) === '1';
+  } catch {
+    return false;
+  }
+})();
+
+/**
+ * The local opt-out value as it was at first JS bundle load, before
+ * any server-side hydration ran. Stable for the lifetime of the page —
+ * useful for the one-time cross-device announcement which must
+ * remember the user's pre-sync local choice even after we've mirrored
+ * the server value into localStorage.
+ */
+export function getInitialLocalAdsOptOut() {
+  return _initialLocalAdsOptOut;
+}
+
 /**
  * Mirror a server-side `ads_opt_out` value into localStorage without
  * dispatching the change event (this is a rehydrate, not a user action).

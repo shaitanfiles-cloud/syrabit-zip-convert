@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import {
   getAdsOptOut,
   setAdsOptOut,
+  getInitialLocalAdsOptOut,
   hasSeenAdsCrossDeviceBanner,
   markAdsCrossDeviceBannerSeen,
 } from '@/utils/adsConfig';
@@ -43,7 +44,12 @@ export default function PrivacyControls({ profile }) {
       !hasSeenAdsCrossDeviceBanner()
     ) {
       announcedRef.current = true;
-      const hadLocalOptOut = getAdsOptOut();
+      // IMPORTANT: read the *initial* local value (snapshotted at JS
+      // bundle load), not the live localStorage flag — by the time
+      // this effect runs, ProfilePage's `hydrateAdsOptOutFromServer`
+      // has already overwritten localStorage with the server value, so
+      // checking it now would miss legacy local-only opt-outs.
+      const hadLocalOptOut = getInitialLocalAdsOptOut();
       if (next || hadLocalOptOut) {
         toast.success(
           'Your "Opt out of ads" choice now syncs across every device you sign in on — no need to set it again on each browser.',
