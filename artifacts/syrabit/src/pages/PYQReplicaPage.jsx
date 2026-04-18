@@ -4,6 +4,7 @@ import { WORKER_API } from '../utils/api';
 import { useShare } from '../hooks/useShare';
 import PageMeta from '@/components/seo/PageMeta';
 import ContinueLearning from '@/components/content/ContinueLearning';
+import AdSlot from '@/components/ads/AdSlot';
 import { MobileNavSwitch } from '@/components/layout/MobileNavSwitch';
 import { useLibraryBundle } from '@/hooks/useContent';
 
@@ -238,6 +239,17 @@ export default function PYQReplicaPage() {
         <div dangerouslySetInnerHTML={{ __html: html }} />
       </div>
 
+      {/* In-content ad — premium AdPushup/Magnite demand. The PYQ body is
+          opaque server-rendered HTML (dangerouslySetInnerHTML), so we cannot
+          reliably splice a slot after the "first answer block" without
+          mutating the HTML string. The closest stable placement is the
+          natural break between the answer sheet and the ContinueLearning
+          rail — students reach this point after scrolling at least one
+          answer block, which approximates the intended mid-content position. */}
+      <div style={{ maxWidth: 880, margin: '24px auto 0', padding: '0 16px' }}>
+        <AdSlot placement="pyq.inContent" />
+      </div>
+
       <div style={{ maxWidth: 880, margin: '24px auto 0', padding: '0 16px' }}>
         <ContinueLearning
           related={[]}
@@ -247,6 +259,11 @@ export default function PYQReplicaPage() {
             ? `/chat?prompt=${encodeURIComponent('Help me solve this ' + pyqMeta.subject + ' previous year question paper')}`
             : '/chat'}
         />
+      </div>
+
+      {/* End-of-content ad — second AdPushup/Magnite slot. */}
+      <div style={{ maxWidth: 880, margin: '24px auto 0', padding: '0 16px' }}>
+        <AdSlot placement="pyq.endOfContent" />
       </div>
 
       <div

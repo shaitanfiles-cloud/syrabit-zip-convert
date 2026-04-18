@@ -1,0 +1,92 @@
+# Ad stack — Syrabit.ai
+
+This document is the contract between the ad-ops team and the codebase.
+All wiring lives in two files:
+
+- `src/utils/adsConfig.js` — the only place that reads ad env vars.
+- `src/components/ads/AdSlot.jsx` — the only component that injects an
+  ad-network script into the page.
+
+When real publisher IDs / script URLs land, plugging them in is a config
+change (env vars + redeploy), not a code change.
+
+## Routes that DO show ads
+
+| Route             | Component             | Placement keys                                |
+| ----------------- | --------------------- | --------------------------------------------- |
+| `/pyq/:slug`      | `PYQReplicaPage.jsx`  | `pyq.inContent`, `pyq.endOfContent`           |
+| `/learn/:slug`    | `LearnPage.jsx`       | `learn.inContent`, `learn.endOfContent`       |
+
+PYQ pages get **AdPushup / Magnite** demand (premium display). Notes
+pages get **Adsterra** (in-content) and **PropellerAds** (end-of-content)
+as fallback networks.
+
+## Routes that are intentionally AD-FREE
+
+These pages must never import `<AdSlot />` or inject an ad script.
+A comment block at the top of each file makes the intent explicit.
+
+- `/chat`                 — `ChatPage.jsx`
+- `/library`, `/browser`  — `LibraryPage.jsx`
+- `/{board}/...` chapter routes — `ChapterPage.jsx`
+
+## Environment variables
+
+Each placement is gated by **all** of: a network script URL **and** a
+per-placement zone/slot ID. If any is empty, `<AdSlot />` renders
+nothing — no reserved space, no script tag.
+
+### AdPushup / Magnite (PYQ pages)
+
+| Variable                                  | Used for                       |
+| ----------------------------------------- | ------------------------------ |
+| `VITE_ADS_ADPUSHUP_SCRIPT_URL`            | Network script URL             |
+| `VITE_ADS_ADPUSHUP_PUBLISHER_ID`          | Publisher ID (optional)        |
+| `VITE_ADS_ADPUSHUP_PYQ_INCONTENT_ZONE`    | `pyq.inContent` zone ID        |
+| `VITE_ADS_ADPUSHUP_PYQ_END_ZONE`          | `pyq.endOfContent` zone ID     |
+
+### Adsterra (Notes / Learn — in-content)
+
+| Variable                                  | Used for                       |
+| ----------------------------------------- | ------------------------------ |
+| `VITE_ADS_ADSTERRA_SCRIPT_URL`            | Network script URL             |
+| `VITE_ADS_ADSTERRA_LEARN_INCONTENT_ZONE`  | `learn.inContent` zone ID      |
+
+### PropellerAds (Notes / Learn — end-of-content)
+
+| Variable                                       | Used for                       |
+| ---------------------------------------------- | ------------------------------ |
+| `VITE_ADS_PROPELLERADS_SCRIPT_URL`             | Network script URL             |
+| `VITE_ADS_PROPELLERADS_LEARN_END_ZONE`         | `learn.endOfContent` zone ID   |
+
+## Consent + environment gate
+
+`<AdSlot />` calls `adsConsentGranted()` from `adsConfig.js` before
+injecting any script. The current policy is:
+
+1. **Production builds only.** `import.meta.env.PROD` must be true. Dev
+   builds never call ad networks, even when env vars are set.
+2. **Manual opt-out.** A user can set
+   `localStorage.setItem('syrabit_ads_optout', '1')` to disable ads
+   entirely in their browser (handy for QA and privacy-conscious users).
+3. **Future CMP.** When Syrabit ships a consent-management platform,
+   wire it into `adsConsentGranted()` — `<AdSlot />` is the single
+   caller, so the change stays one-file.
+
+## Adding a new placement / network
+
+1. Add the env vars to your deployment.
+2. Add a `NETWORKS` entry (if it's a new network) and a `PLACEMENTS`
+   entry in `src/utils/adsConfig.js`.
+3. Drop `<AdSlot placement="your.key" />` into the page that should
+   render it. Done.
+
+## Performance guarantees
+
+- `<AdSlot />` reserves a fixed `minHeight` so enabled slots cause
+  zero CLS once the script loads.
+- The network script is only injected when the slot is within ~200px
+  of the viewport (IntersectionObserver) and only **once per page**
+  per script URL (de-duped by URL on the module).
+- Disabled slots render nothing — not even a placeholder div — so
+  they cost nothing on routes where the env var is empty.

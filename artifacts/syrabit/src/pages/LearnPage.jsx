@@ -17,6 +17,7 @@ import { useShare } from '@/hooks/useShare';
 import StickyToc from '@/components/ui/StickyToc';
 import { learnArticleSchema } from '@/lib/jsonld';
 import ContinueLearning from '@/components/content/ContinueLearning';
+import AdSlot from '@/components/ads/AdSlot';
 
 function buildToc(headingsJson) {
   try {
@@ -345,6 +346,13 @@ export default function LearnPage() {
             </div>
           </div>
 
+          {/* In-content ad — Adsterra slot, sits between the article body
+              and the Important Questions section. Reserves height even
+              when disabled-but-mounted? No — disabled slots render nothing. */}
+          <div className="mt-6">
+            <AdSlot placement="learn.inContent" />
+          </div>
+
           {/* Important Questions (mark-wise) */}
           {pyqs.length > 0 && (
             <div className="mt-8 rounded-2xl border border-amber-500/15 overflow-hidden">
@@ -558,6 +566,11 @@ export default function LearnPage() {
               />
             );
           })()}
+
+          {/* End-of-content ad — PropellerAds slot. */}
+          <div className="mt-6">
+            <AdSlot placement="learn.endOfContent" />
+          </div>
         </div>
       </div>
     </AppLayout>

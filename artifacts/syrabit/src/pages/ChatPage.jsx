@@ -24,6 +24,12 @@ import { Helmet } from 'react-helmet-async';
 // client paint, instead of waiting for an async chunk. (Task #387)
 import { EmptyState } from './chat/EmptyState';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// AD POLICY: /chat is intentionally AD-FREE. Do NOT import <AdSlot /> or any
+// ad-network script here. The ad stack (Task #526) only runs on PYQ and Learn
+// pages. Chat must stay distraction-free for the AI tutor experience.
+// ─────────────────────────────────────────────────────────────────────────────
+
 // ── ChatPage ──────────────────────────────────────────────────────────────────
 export default function ChatPage() {
   const { user } = useAuth();

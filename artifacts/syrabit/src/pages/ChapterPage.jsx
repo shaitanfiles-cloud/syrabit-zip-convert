@@ -19,6 +19,11 @@ import { useLibraryBundle, useLibraryBundleSlim } from '@/hooks/useContent';
 import { findSiblingChapters, siblingsAsRelated } from '@/utils/siblingChapter';
 import { pushRecentChapter } from '@/utils/recentChapters';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// AD POLICY: Chapter routes (/{board}/...) are intentionally AD-FREE in the
+// Task #526 rollout. Do NOT import <AdSlot /> or any ad-network script here.
+// ─────────────────────────────────────────────────────────────────────────────
+
 function ChapterJsonLd({ data, url, basePath }) {
   useEffect(() => {
     if (!data) return;

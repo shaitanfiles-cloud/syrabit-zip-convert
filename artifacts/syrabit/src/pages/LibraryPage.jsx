@@ -22,6 +22,11 @@ import ScrollableFilterRow from './library/ScrollableFilterRow';
 const LazyCmsDocsSection = lazy(() => import('./library/CmsDocsSection'));
 const LazyCmsPostsGrid = lazy(() => import('./library/CmsPostsGrid'));
 
+// ─────────────────────────────────────────────────────────────────────────────
+// AD POLICY: /library and its /browser alias are intentionally AD-FREE in the
+// Task #526 rollout. Do NOT import <AdSlot /> or any ad-network script here.
+// ─────────────────────────────────────────────────────────────────────────────
+
 const _t = {
   en: {
     heading: 'Educational Browser',
