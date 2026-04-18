@@ -329,6 +329,12 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   // see read/write counters & quota % at a glance and react before a
   // KV outage starts dropping pages and the analytics beacon.
   const [kvHealth, setKvHealth] = useState(null);
+  // Task #470 — Latest GitHub Actions run for the backend + frontend
+  // workflows. ``null`` while loading; ``{ configured: false, ... }``
+  // when GITHUB_REPO isn't set; ``{ configured: true, runs: {...} }``
+  // when the API responded. Surfaced so the on-call admin sees red CI
+  // without leaving the app.
+  const [ciStatus, setCiStatus] = useState(null);
   // Task #434 — last_success_at / last_error for the browser-push
   // channel from /admin/alert-settings (channel_status.push). Surfaced
   // inline in the notifications tile so admins notice a degraded push
@@ -407,6 +413,16 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       setKvHealth(kvRes.data || null);
     } catch {
       setKvHealth({ configured: false, reason: 'Backend unreachable' });
+    }
+    // Task #470 — latest CI build status (backend + frontend workflows).
+    try {
+      const ciRes = await axios.get(
+        `${API_BASE}/admin/ci-status`,
+        adminHdr(adminToken),
+      );
+      setCiStatus(ciRes.data || null);
+    } catch {
+      setCiStatus({ configured: false, reason: 'Backend unreachable' });
     }
   }, [adminToken]);
 
@@ -2264,6 +2280,104 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                   "exhausted" state means traffic is still being served —
                   but writes are queued and will replay once the quota
                   resets at 00:00 UTC. */}
+              {/* Task #470 — Latest CI build status. Shows the latest
+                  GitHub Actions run for the backend + frontend gates
+                  with a colored pill (green=success, red=failure,
+                  amber=in progress) and the run age so the on-call
+                  admin sees red CI without leaving the app. */}
+              <div className="mb-3 pb-3 border-b border-gray-200" data-testid="notif-prefs-ci-status">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[10px] text-gray-500 font-medium">
+                    CI build status (latest on {ciStatus?.branch || 'main'})
+                  </label>
+                  {ciStatus?.repo && (
+                    <span className="text-[10px] text-gray-400">{ciStatus.repo}</span>
+                  )}
+                </div>
+                {ciStatus === null ? (
+                  <div className="text-[10px] text-gray-400">Loading…</div>
+                ) : ciStatus.configured === false ? (
+                  <div className="text-[10px] text-gray-400" data-testid="notif-prefs-ci-status-unconfigured">
+                    CI status not available{ciStatus.reason ? ` — ${ciStatus.reason}` : ''}.
+                    Set <code className="font-mono">GITHUB_REPO</code> (and
+                    optionally <code className="font-mono">GITHUB_TOKEN</code>
+                    {' '}for private repos) to surface the latest workflow
+                    runs here.
+                  </div>
+                ) : (
+                  <ul className="space-y-1.5" data-testid="notif-prefs-ci-status-runs">
+                    {Object.entries(ciStatus.runs || {}).map(([wf, run]) => {
+                      if (!run) {
+                        return (
+                          <li
+                            key={wf}
+                            className="text-[11px] text-gray-500 flex items-center justify-between"
+                            data-testid={`notif-prefs-ci-status-row-${wf}`}
+                          >
+                            <span className="font-medium">{wf}</span>
+                            <span className="text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded ring-1 bg-gray-100 text-gray-600 ring-gray-200">
+                              no runs
+                            </span>
+                          </li>
+                        );
+                      }
+                      const inProgress = run.status !== 'completed';
+                      const ok = !inProgress && run.conclusion === 'success';
+                      const pillCls = inProgress
+                        ? 'bg-amber-100 text-amber-700 ring-amber-200'
+                        : ok
+                          ? 'bg-emerald-100 text-emerald-700 ring-emerald-200'
+                          : 'bg-red-100 text-red-700 ring-red-200';
+                      const label = inProgress
+                        ? (run.status || 'running')
+                        : (run.conclusion || 'unknown');
+                      const ageStr = (() => {
+                        const a = run.age_seconds;
+                        if (a == null) return '';
+                        if (a < 60) return `${a}s ago`;
+                        if (a < 3600) return `${Math.round(a / 60)}m ago`;
+                        if (a < 86400) return `${Math.round(a / 3600)}h ago`;
+                        return `${Math.round(a / 86400)}d ago`;
+                      })();
+                      return (
+                        <li
+                          key={wf}
+                          className="text-[11px] text-gray-700"
+                          data-testid={`notif-prefs-ci-status-row-${wf}`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium">{wf}</span>
+                            <span className={`text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded ring-1 ${pillCls}`}>
+                              {label}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-gray-500 mt-0.5 flex items-center justify-between">
+                            <span>
+                              #{run.run_number} · {run.head_sha} · {run.event} · {ageStr}
+                            </span>
+                            {run.html_url && (
+                              <a
+                                href={run.html_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-600 hover:underline"
+                              >
+                                view run →
+                              </a>
+                            )}
+                          </div>
+                        </li>
+                      );
+                    })}
+                    {ciStatus.error && (
+                      <li className="text-[10px] text-amber-700" data-testid="notif-prefs-ci-status-error">
+                        CI status temporarily unavailable — {ciStatus.error}.
+                      </li>
+                    )}
+                  </ul>
+                )}
+              </div>
+
               <div className="mb-3 pb-3 border-b border-gray-200" data-testid="notif-prefs-kv-health">
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="text-[10px] text-gray-500 font-medium">

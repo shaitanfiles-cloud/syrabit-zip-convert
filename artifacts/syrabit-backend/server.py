@@ -822,6 +822,7 @@ from routes.cms_sarvam_health import router as cms_sarvam_health_router
 from routes.admin_advanced import router as admin_advanced_router
 from routes.admin_benchmark import router as admin_benchmark_router
 from routes.admin_kv_health import router as admin_kv_health_router
+from routes.admin_ci_status import router as admin_ci_status_router
 
 api.include_router(auth_router)
 api.include_router(content_router)
@@ -841,6 +842,7 @@ api.include_router(cms_sarvam_health_router)
 api.include_router(admin_advanced_router)
 api.include_router(admin_benchmark_router)
 api.include_router(admin_kv_health_router)
+api.include_router(admin_ci_status_router)
 
 from llm import call_llm_api, call_llm_api_content
 from auth_deps import get_admin_user
