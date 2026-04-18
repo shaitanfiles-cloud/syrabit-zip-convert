@@ -1,5 +1,5 @@
 """Syrabit.ai — Metrics collection, health check infrastructure."""
-import time as _time_mod, threading as _threading, logging, asyncio, os
+import time as _time_mod, threading as _threading, logging, asyncio, os, uuid
 from typing import Dict
 from collections import defaultdict as _defaultdict
 from datetime import datetime, timezone, timedelta
@@ -830,7 +830,57 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
         }
         if mark_synthetic:
             push_payload["synthetic"] = True
-        if force:
+
+        # Task #452: short-circuit when no active admin push subscriptions
+        # exist so the channel reflects "no active push subscribers" instead
+        # of the optimistic queued-task signal. Task #435's auto-prune can
+        # leave a tenant with zero active admin endpoints; without this
+        # pre-check every alert silently reports "queued" while nothing is
+        # ever delivered.
+        active_admin_subs = -1
+        try:
+            active_admin_subs = await db.push_subscriptions.count_documents({
+                "$or": [{"role": "admin"}, {"is_admin": True}],
+                "active": {"$ne": False},
+            })
+            # Mirror the legacy admin-id fallback used by _dispatch_push so
+            # tenants that pre-date the role/is_admin field are not flagged
+            # as empty when their subs are stored against user_id only.
+            if active_admin_subs == 0:
+                admin_docs = await db.users.find(
+                    {"is_admin": True}, {"_id": 0, "id": 1}
+                ).to_list(500)
+                legacy_admin_ids = [str(d["id"]) for d in admin_docs if d.get("id")]
+                if legacy_admin_ids:
+                    active_admin_subs = await db.push_subscriptions.count_documents({
+                        "user_id": {"$in": legacy_admin_ids},
+                        "active": {"$ne": False},
+                    })
+        except Exception as exc:
+            logger.debug(f"Push pre-check (active admin subs) failed: {exc}")
+
+        if active_admin_subs == 0:
+            skip_reason = "no active push subscribers"
+            try:
+                await db.push_delivery_log.insert_one({
+                    "dispatch_id": str(uuid.uuid4()),
+                    "dispatched_at": datetime.now(timezone.utc).isoformat(),
+                    "target": "admin-only",
+                    "payload_title": push_payload.get("title", ""),
+                    "payload_body": push_payload.get("body", "")[:500],
+                    "alert_type": alert_type,
+                    "total": 0,
+                    "sent": 0,
+                    "failed": 0,
+                    "expired": 0,
+                    "results": [],
+                    "skipped": True,
+                    "error": skip_reason,
+                })
+            except Exception as log_exc:
+                logger.warning(f"Failed to persist push skip log: {log_exc}")
+            outcomes["push"]["skipped_reason"] = skip_reason
+        elif force:
             # Test deliveries: await so we can surface failures synchronously.
             try:
                 await _dispatch_push_to_admins(push_payload)
