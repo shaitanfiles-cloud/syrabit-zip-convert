@@ -183,3 +183,66 @@ def test_module_identity_restoration_when_deleted_part_b():
     """Verifies the autouse fixture re-installed the original deps
     module after the deletion in part_a."""
     assert sys.modules.get("deps") is _ORIGINAL_DEPS_MODULE
+
+
+# ---------------------------------------------------------------------------
+# Task #472 — same module-identity restoration guarantee for ``metrics``.
+# The historical bug was that ``test_seo_health_alerting`` pops
+# ``sys.modules['metrics']`` and reimports it, which left a partially
+# initialized module behind on subsequent runs and broke
+# ``from metrics import _metrics`` in unrelated test files.
+# ---------------------------------------------------------------------------
+
+
+import metrics as _metrics_module  # noqa: E402  -- imported for identity probe
+
+_ORIGINAL_METRICS_MODULE = sys.modules["metrics"]
+
+
+def test_metrics_module_pinned_in_sys_modules():
+    """Sanity: ``metrics`` is in sys.modules and exposes the symbols
+    that downstream callers depend on. If this fails the rest of the
+    Task #472 guards are meaningless."""
+    m = sys.modules.get("metrics")
+    assert m is not None
+    assert hasattr(m, "_metrics"), "metrics._metrics must exist"
+    assert hasattr(m, "_snapshot_metrics"), "metrics._snapshot_metrics must exist"
+
+
+def test_metrics_module_identity_restoration_part_a():
+    """Pollute ``sys.modules['metrics']`` the same way
+    ``test_seo_health_alerting.test_dispatch_alert_email_includes_by_sitemap_html``
+    does — pop the entry and replace it with a foreign module. The
+    autouse fixture must restore the original after this test."""
+    import types as _types
+    foreign = _types.ModuleType("metrics")
+    foreign.is_foreign_pollution_marker = True
+    sys.modules["metrics"] = foreign
+    assert sys.modules["metrics"] is foreign
+    assert sys.modules["metrics"] is not _ORIGINAL_METRICS_MODULE
+
+
+def test_metrics_module_identity_restoration_part_b():
+    """The autouse fixture should have undone part_a's pollution
+    before this test runs. Crucially, ``from metrics import _metrics``
+    must still work — this is the exact import that
+    ``routes/cms_sarvam_health.py`` performs and that historically
+    broke after the alerting tests ran first."""
+    assert sys.modules.get("metrics") is _ORIGINAL_METRICS_MODULE
+    from metrics import _metrics, _snapshot_metrics  # noqa: F401
+    assert not hasattr(sys.modules["metrics"], "is_foreign_pollution_marker")
+
+
+def test_metrics_module_identity_restoration_when_deleted_part_a():
+    """Same shape as the deps deletion guard — a test that ``del``s
+    ``sys.modules['metrics']`` must not strand later tests."""
+    del sys.modules["metrics"]
+    assert "metrics" not in sys.modules
+
+
+def test_metrics_module_identity_restoration_when_deleted_part_b():
+    """Verifies the autouse fixture re-installed the original metrics
+    module after the deletion in part_a, and that the canonical
+    downstream import path still resolves cleanly."""
+    assert sys.modules.get("metrics") is _ORIGINAL_METRICS_MODULE
+    from metrics import _metrics  # noqa: F401

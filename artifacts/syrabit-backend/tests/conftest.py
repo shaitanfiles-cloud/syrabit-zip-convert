@@ -2,6 +2,12 @@
 
 Task #469 — autouse fixture that resets the synthetic ``deps`` stub
 between tests so call-history mutations cannot bleed across files.
+Task #472 — extends the same snapshot/restore pattern to the
+``metrics`` module so a test like
+``test_seo_health_alerting.test_dispatch_alert_email_includes_by_sitemap_html``
+that pops/reimports ``sys.modules['metrics']`` cannot leave a later
+test (e.g. ``test_bing_keyword_pipeline``) staring at a half-built
+``metrics`` module that fails ``from metrics import _metrics``.
 
 The stub itself (see ``tests/_deps_stub.py``) now uses ``_MotorDbMock`` /
 ``_MotorCollectionMock`` so every call to ``await db.<coll>.<method>(...)``
@@ -13,7 +19,9 @@ would otherwise accumulate across the whole pytest session, making
 
 Production ``deps`` (the real module, when imported) is intentionally
 left alone — we recognise the stub by the ``_is_syrabit_test_stub``
-marker.
+marker. The ``metrics`` snapshot is symmetric: we always restore the
+module identity that existed pre-test (since ``metrics`` has no stub
+distinction — it's always the real thing in the test process).
 """
 import os
 import sys
@@ -25,16 +33,36 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 
 _DEPS_KEY = "deps"
+_METRICS_KEY = "metrics"
 _SNAPSHOT_ATTRS = ("db", "is_mongo_available", "supa")
 _MISSING = object()
 
 
+def _snapshot_module(name: str):
+    """Return ``(was_present, module_object)`` for ``sys.modules[name]``."""
+    return (name in sys.modules, sys.modules.get(name))
+
+
+def _restore_module(name: str, was_present: bool, module_obj) -> None:
+    """Restore ``sys.modules[name]`` to its pre-test identity. If a
+    test deleted, replaced, or installed the module, undo that — but
+    only if it actually changed (the fast-path no-op keeps this hot
+    fixture cheap)."""
+    current = sys.modules.get(name)
+    if current is module_obj:
+        return
+    if was_present:
+        sys.modules[name] = module_obj
+    else:
+        sys.modules.pop(name, None)
+
+
 @pytest.fixture(autouse=True)
 def _reset_test_stub_state():
-    """Snapshot/restore ``sys.modules['deps']`` around every test so
-    one test's pollution cannot bleed into another.
+    """Snapshot/restore ``sys.modules['deps']`` and ``sys.modules['metrics']``
+    around every test so one test's pollution cannot bleed into another.
 
-    Three layers of protection, in order:
+    For ``deps`` (the synthetic stub):
 
     1. **Module identity in ``sys.modules``.** If a test deletes
        ``sys.modules['deps']``, swaps it for a different module
@@ -55,15 +83,18 @@ def _reset_test_stub_state():
        while preserving any ``side_effect`` / ``return_value``
        deliberately set by the next test.
 
-    Only touches the stub installed by ``tests._deps_stub``
-    (recognised via the ``_is_syrabit_test_stub`` marker). The real
-    ``deps`` module — if a test happens to be running with production
-    deps loaded — is left completely alone (no reset, no attribute
-    overwrite).
+    For ``metrics`` (Task #472): we only do the module-identity
+    snapshot/restore. ``metrics`` is the real module, not a stub, and
+    has no per-attribute mock state we need to clear — restoring
+    identity is enough to guarantee that downstream
+    ``from metrics import _metrics, _snapshot_metrics, ...``
+    statements continue to find the same fully-initialized module
+    they would have found in a fresh process.
     """
     # --- Pre-test snapshot ---
-    deps_present_pre = _DEPS_KEY in sys.modules
-    deps_module_pre = sys.modules.get(_DEPS_KEY)
+    deps_present_pre, deps_module_pre = _snapshot_module(_DEPS_KEY)
+    metrics_present_pre, metrics_module_pre = _snapshot_module(_METRICS_KEY)
+
     is_stub_pre = bool(getattr(deps_module_pre, "_is_syrabit_test_stub", False))
     # Snapshot: record (had_attr, value) per key so we can faithfully
     # restore even when the original value was ``None`` (e.g. ``supa``
@@ -80,15 +111,11 @@ def _reset_test_stub_state():
 
     # --- Post-test restore ---
 
-    # 1. Restore module identity in sys.modules.
-    deps_module_post = sys.modules.get(_DEPS_KEY)
-    if deps_module_post is not deps_module_pre:
-        if deps_present_pre:
-            sys.modules[_DEPS_KEY] = deps_module_pre  # type: ignore[assignment]
-        else:
-            sys.modules.pop(_DEPS_KEY, None)
+    # 1. Restore module identities in sys.modules.
+    _restore_module(_DEPS_KEY, deps_present_pre, deps_module_pre)
+    _restore_module(_METRICS_KEY, metrics_present_pre, metrics_module_pre)
 
-    # 2. Only touch our stub. The real production module is off-limits.
+    # 2. Only touch our deps stub. The real production module is off-limits.
     deps_now = sys.modules.get(_DEPS_KEY)
     if deps_now is None or not getattr(deps_now, "_is_syrabit_test_stub", False):
         return
