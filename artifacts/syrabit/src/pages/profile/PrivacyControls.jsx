@@ -69,8 +69,8 @@ export default function PrivacyControls({ profile }) {
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-foreground">Opt out of ads</p>
             <p className="text-xs text-muted-foreground/70 mt-0.5">
-              Stop ad scripts from loading on your device. Your preference is stored locally
-              and applies on the next page you open.
+              Stop ad scripts from loading. While you're signed in, this preference is saved to
+              your account and synced across all your devices, and applies on the next page you open.
             </p>
           </div>
           <button

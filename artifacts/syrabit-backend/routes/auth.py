@@ -324,6 +324,7 @@ async def get_me(user: Optional[dict] = Depends(get_current_user_optional)):
         stream_id=user.get("stream_id"),
         created_at=user.get("created_at", ""),
         avatar_url=user.get("avatar_url", ""),
+        ads_opt_out=bool(user.get("ads_opt_out", False)),
     )
 
 

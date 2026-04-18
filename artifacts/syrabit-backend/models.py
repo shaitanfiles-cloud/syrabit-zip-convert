@@ -38,6 +38,7 @@ class UserOut(BaseModel):
     stream_id: Optional[str] = None
     created_at: str
     avatar_url: Optional[str] = ""
+    ads_opt_out: bool = False
 
 
 class TokenOut(BaseModel):

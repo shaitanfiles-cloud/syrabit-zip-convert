@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef } f
 import axios from 'axios';
 import { API_BASE, setAuthToken } from '@/utils/api';
 import { Analytics } from '@/utils/analytics';
+import { hydrateAdsOptOutFromServer } from '@/utils/adsConfig';
 
 const AuthContext = createContext(null);
 
@@ -27,6 +28,11 @@ export const AuthProvider = ({ children }) => {
       const userData = res.data;
       if (userData && userData.id) {
         setUser(userData);
+        // Task #530: rehydrate the local ad opt-out flag from the
+        // server so cookie-restored sessions and signed-in returning
+        // users immediately apply their cross-device choice on every
+        // ad-bearing route, not just /profile.
+        hydrateAdsOptOutFromServer(userData.ads_opt_out);
       } else {
         setUser(null);
       }
@@ -88,6 +94,7 @@ export const AuthProvider = ({ children }) => {
     if (access_token) _storeToken(access_token);
     justAuthenticated.current = true;
     setUser(userData);
+    hydrateAdsOptOutFromServer(userData?.ads_opt_out);
     try { Analytics.login(userData.id, userData.email); } catch {}
     return userData;
   };
@@ -100,6 +107,7 @@ export const AuthProvider = ({ children }) => {
     if (access_token) _storeToken(access_token);
     justAuthenticated.current = true;
     setUser(userData);
+    hydrateAdsOptOutFromServer(userData?.ads_opt_out);
     try { Analytics.signup(userData.email, userData.plan); } catch {}
     return userData;
   };
@@ -110,6 +118,7 @@ export const AuthProvider = ({ children }) => {
     if (access_token) _storeToken(access_token);
     justAuthenticated.current = true;
     setUser(userData);
+    hydrateAdsOptOutFromServer(userData?.ads_opt_out);
     try { Analytics.login(userData.id, userData.email); } catch {}
     return userData;
   };
