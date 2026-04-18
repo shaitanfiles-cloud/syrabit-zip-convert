@@ -172,3 +172,79 @@ HEAD /random/spa/path                  → HTTP/2 200 text/html
 - **#522** — diagnose the 35-min build wall using the Cloudflare
   dashboard's streamed log and ship the underlying fix.
 - **#524** — supply the correct `VITE_GA4_ID` Measurement ID.
+
+---
+
+## Task #523 — Credential rotation runbook
+
+Every value below was set on the public Pages project at some point and
+must therefore be treated as fully compromised. Removing it from Pages
+(done in #521) does **not** invalidate the leaked value. Each one must
+be regenerated at the provider's dashboard and the new value pushed to
+the legitimate consumer (Railway backend env, Cloudflare Worker secrets,
+or Replit secrets) — never back to Pages.
+
+### How to use this checklist
+
+For each row:
+
+1. Open the provider dashboard, generate a new credential, and **revoke
+   the old one** (this is what actually closes the leak — generation
+   alone is not enough).
+2. Update the new value at every consumer listed in the "Update at"
+   column.
+3. Tick the box and write the rotation date in the "Rotated on" column.
+4. If a rotation is impossible (e.g. provider doesn't allow rotating a
+   given key without breaking live traffic), record that in
+   `Notes` and open a follow-up so it isn't silently skipped.
+
+> All consumer updates must be done via the provider's secrets UI — do
+> not paste any of these values into a code file, a `.env` committed to
+> git, or back onto the Pages project.
+
+### Production env — leaked
+
+| Done | Credential                    | Rotate at                                         | Update at                          | Rotated on |
+| :--: | ----------------------------- | ------------------------------------------------- | ---------------------------------- | ---------- |
+|  ☐   | `CF_ANALYTICS_API_TOKEN`      | Cloudflare → My Profile → API Tokens              | Railway backend env                |            |
+
+### Preview env — leaked
+
+| Done | Credential                       | Rotate at                                            | Update at                                | Rotated on |
+| :--: | -------------------------------- | ---------------------------------------------------- | ---------------------------------------- | ---------- |
+|  ☐   | `RAZORPAY_KEY_ID`                | Razorpay Dashboard → Settings → API Keys             | Railway backend env                      |            |
+|  ☐   | `RAZORPAY_KEY_SECRET`            | Razorpay Dashboard → Settings → API Keys             | Railway backend env                      |            |
+|  ☐   | `RAZORPAY_WEBHOOK_SECRET`        | Razorpay Dashboard → Settings → Webhooks             | Railway backend env (verify slot — was URL?) |        |
+|  ☐   | `JWT_SECRET`                     | Generate fresh 64-byte random (e.g. `openssl rand -hex 32`) | Railway backend env               |            |
+|  ☐   | `SESSION_SECRET`                 | Generate fresh 64-byte random                        | Railway backend env                      |            |
+|  ☐   | `ADMIN_JWT_SECRET`               | Generate fresh 64-byte random                        | Railway backend env                      |            |
+|  ☐   | `ADMIN_PASSWORDS`                | Generate fresh strong passwords for every admin     | Railway backend env + notify each admin   |            |
+|  ☐   | `GOOGLE_CLIENT_SECRET`           | Google Cloud Console → APIs & Services → Credentials | Railway backend env                      |            |
+|  ☐   | `GROQ_API_KEY`                   | console.groq.com → API Keys                          | Railway backend env + Replit secret      |            |
+|  ☐   | `GROQ_API_KEY_2`                 | console.groq.com → API Keys                          | Railway backend env + Replit secret      |            |
+|  ☐   | `GEMINI_API_KEY`                 | aistudio.google.com → API keys                       | Railway backend env + Replit secret      |            |
+|  ☐   | `OPENROUTER_API_KEY`             | openrouter.ai → Keys                                 | Railway backend env + Replit secret      |            |
+|  ☐   | `CEREBRAS_API_KEY`               | cloud.cerebras.ai → API Keys                         | Railway backend env + Replit secret      |            |
+|  ☐   | `SARVAM_API_KEY`                 | dashboard.sarvam.ai → API Keys                       | Railway backend env + Replit secret      |            |
+|  ☐   | `SARVAM_API_KEY_2`               | dashboard.sarvam.ai → API Keys                       | Railway backend env + Replit secret      |            |
+|  ☐   | `SARVAM_API_KEY_3`               | dashboard.sarvam.ai → API Keys                       | Railway backend env + Replit secret      |            |
+|  ☐   | `VOYAGE_API_KEY`                 | dash.voyageai.com → API Keys                         | Railway backend env + Replit secret      |            |
+|  ☐   | `MONGO_URL`                      | MongoDB Atlas → Database Access → rotate user pwd    | Railway backend env                      |            |
+|  ☐   | `SUPABASE_SERVICE_KEY`           | Supabase → Project Settings → API → reset service role key | Railway backend env + Replit secret |        |
+|  ☐   | `UPSTASH_REDIS_REST_TOKEN`       | console.upstash.com → DB → REST API → Reset token    | Railway backend env + Worker secret      |            |
+|  ☐   | `UPSTASH_REDIS_REST_URL`         | (URL itself isn't secret, but rotating the token may change it — verify) | Railway backend env + Worker secret |  |
+|  ☐   | `RESEND_API_KEY`                 | resend.com → API Keys                                | Railway backend env + Replit secret      |            |
+|  ☐   | `TRUSTPILOT_API_KEY`             | business.trustpilot.com → Integrations → API         | Railway backend env + Replit secret      |            |
+
+### After every row above is ticked
+
+1. Restart the Railway backend service so all new values are picked up.
+2. Redeploy the edge proxy Worker (`wrangler deploy`) if any Worker
+   secret changed.
+3. Run the full smoke set against `https://api.syrabit.ai` (auth, chat,
+   payment webhook test event, Resend test email, Trustpilot fetch).
+4. Record the completion date here:
+
+> **Rotation completed on:** ____________________ (fill in once the
+> last row above is ticked)
+
