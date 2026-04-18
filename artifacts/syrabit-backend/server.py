@@ -652,6 +652,21 @@ async def lifespan(app):
     except Exception as _sap_stale_err:
         logger.warning(
             f"seo auto-publish staleness loop not started: {_sap_stale_err}")
+    # Task #484 — poll GitHub Actions every 10 min and email admins +
+    # drop an in-app notification when the latest main-branch run for
+    # backend-tests/frontend-tests flips to failure (or stays red past
+    # the 6h re-page window). Recovery alert fires once on red→green.
+    # Leader-gated so multi-replica deployments don't burn the GitHub
+    # API quota N×; the per-workflow CAS inside the loop is a defense
+    # in depth in case leadership fails over mid-poll. No-ops cleanly
+    # when GITHUB_REPO is unset (e.g. local dev).
+    if _is_leader:
+        try:
+            from routes.admin_ci_alerts import _ci_alert_loop
+            asyncio.create_task(_ci_alert_loop())
+        except Exception as _ci_alert_err:
+            logger.warning(
+                f"ci alert loop not started: {_ci_alert_err}")
     if _is_leader:
         # Single-leader: only one replica should query the CF GraphQL API
         # and write the per-UA report each Monday.
