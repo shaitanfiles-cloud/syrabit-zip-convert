@@ -18,13 +18,6 @@ const _t = {
   },
 };
 
-function buildLandingPath(sub) {
-  if (sub.boardSlug && sub.classSlug && sub.slug) {
-    return `/${sub.boardSlug}/${sub.classSlug}/${sub.slug}`;
-  }
-  return `/subject/${sub.id}`;
-}
-
 export default function PopularSubjects({ contentLang = 'en' }) {
   const t = _t[contentLang] || _t.en;
   const { data: bundle } = useLibraryBundleSlim();
@@ -33,15 +26,41 @@ export default function PopularSubjects({ contentLang = 'en' }) {
     const subjects = bundle?.subjects || [];
     if (!subjects.length) return [];
 
-    // Score by chapter count (rough proxy for richness/popularity) then take 10.
-    return subjects
-      .filter((s) => s.boardSlug && s.classSlug && s.slug)
-      .map((s) => ({
-        label: s.name,
-        href: buildLandingPath(s),
-        board: (s.board_name || s.boardSlug || '').toString().toUpperCase(),
-        score: (s.chapter_count || s.chapterCount || 0),
-      }))
+    // Bundle subjects expose only relational IDs (stream_id → class → board);
+    // walk those maps to derive the canonical /board/class/subject URL the
+    // same way LibraryPage's enrichedSubjects does.
+    const streamMap = new Map((bundle.streams || []).map((s) => [s.id, s]));
+    const classMap  = new Map((bundle.classes || []).map((c) => [c.id, c]));
+    const boardMap  = new Map((bundle.boards  || []).map((b) => [b.id, b]));
+
+    const enriched = subjects.map((sub) => {
+      const stream = streamMap.get(sub.stream_id);
+      const cls    = classMap.get(stream?.class_id);
+      const board  = boardMap.get(cls?.board_id);
+      return {
+        id: sub.id,
+        name: sub.name,
+        slug: sub.slug,
+        boardName: board?.name || '',
+        boardSlug: board?.slug || '',
+        classSlug: cls?.slug || '',
+        chapterCount: sub.chapter_count || sub.chapterCount || 0,
+      };
+    });
+
+    return enriched
+      .map((s) => {
+        const href = (s.boardSlug && s.classSlug && s.slug)
+          ? `/${s.boardSlug}/${s.classSlug}/${s.slug}`
+          : (s.id ? `/subject/${s.id}` : null);
+        return href ? {
+          label: s.name,
+          href,
+          board: (s.boardName || s.boardSlug || '').toString().toUpperCase(),
+          score: s.chapterCount,
+        } : null;
+      })
+      .filter(Boolean)
       .sort((a, b) => b.score - a.score)
       .slice(0, 10);
   }, [bundle]);
