@@ -11,7 +11,7 @@
 // asset hashes from dist/index.html are preserved unchanged.
 //
 // Routes covered:
-//   /home       (LandingPage — public marketing landing)
+//   /home         (LandingPage — public marketing landing)
 //   /pricing
 //   /login
 //   /signup
@@ -19,11 +19,19 @@
 //   /privacy
 //   /about
 //   /technology
+//   /profile      (auth-gated shell — emit canonical + noindex)
+//   /admin/login  (auth-gated shell — emit canonical + noindex)
 //
 // /chat and /library are prerendered with full SSR by their dedicated
 // scripts; subject + chapter pages by scripts/prerender-routes.mjs.
-// Auth-gated routes (/profile, /history, /admin, /onboarding) are not
-// emitted here because they should stay noindex via robots.txt.
+//
+// Task #499: even auth-gated shells (/profile, /admin/login) need a
+// route-specific <link rel="canonical"> in the byte-zero HTML so the
+// Lighthouse `canonical` SEO audit passes on every audited route.
+// They keep `<meta name="robots" content="noindex, follow">` so search
+// engines never index the shell, but the canonical still has to point
+// to the correct URL (Lighthouse fails the audit when it is missing
+// or inherits the homepage URL via the SPA fallback).
 
 import fs from "fs";
 import path from "path";
@@ -85,6 +93,27 @@ const ROUTES = [
     title: "Technology Behind Syrabit.ai — RAG, AI Tutors & Speed",
     description:
       "How Syrabit.ai combines retrieval-augmented generation, AI tutors and Cloudflare's edge to deliver fast, syllabus-grounded answers for Assam students.",
+  },
+  {
+    // Task #499: auth-gated user shell — must ship its own canonical
+    // even though it's noindex,follow, so the Lighthouse canonical
+    // SEO audit passes (today it fails because the SPA fallback for
+    // /profile carries no canonical at byte zero).
+    path: "/profile",
+    title: "Your Profile — Syrabit.ai",
+    description:
+      "Manage your Syrabit.ai account, study history, and AHSEC, SEBA or Degree exam preparation preferences.",
+    robots: "noindex, follow",
+  },
+  {
+    // Task #499: admin login is also noindex but still needs a
+    // route-specific canonical at byte zero so the SEO audit doesn't
+    // fail on this URL.
+    path: "/admin/login",
+    title: "Admin Login | Syrabit.ai",
+    description:
+      "Internal Syrabit.ai administrator sign-in. Not for student accounts — students log in at /login instead.",
+    robots: "noindex, follow",
   },
 ];
 

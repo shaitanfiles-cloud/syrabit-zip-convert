@@ -2799,8 +2799,15 @@ _BOT_UA_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Task #499: keep /history (deep auth-only path) and admin API/console
+# routes as bot-skip, but DO NOT skip the /profile and /admin/login
+# auth-shell URLs anymore — bots that hit them must still receive a
+# byte-zero <link rel="canonical"> pointing at the route's own URL so
+# the Lighthouse `canonical` SEO audit passes. The narrower /admin/api
+# and /admin/console prefixes below keep the actual admin surface
+# off-limits to crawlers.
 _BOT_SKIP_PREFIXES = (
-    "/api/", "/admin", "/history", "/profile", "/static/",
+    "/api/", "/admin/api", "/admin/console", "/history", "/static/",
     "/health", "/docs", "/openapi.json", "/assets/", "/icons/",
     "/fonts/", "/robots.txt", "/sitemap",
 )
@@ -2843,7 +2850,14 @@ def _extract_faq_items(content: str, title: str = "") -> list[dict]:
     return faq_items
 
 
-def _bot_html_response(html: str):
+def _bot_html_response(html: str, *, robots_tag: str = "index, follow"):
+    """Wrap a bot-render HTML payload in an HTMLResponse.
+
+    Task #499: callers can pass `robots_tag="noindex, follow"` for
+    auth-shell routes (/login, /signup, /profile, /admin/login) so the
+    HTTP `X-Robots-Tag` header agrees with the noindex meta in the body
+    instead of overriding it with a global `index, follow`.
+    """
     from fastapi.responses import HTMLResponse
     return HTMLResponse(
         content=html, status_code=200,
@@ -2851,7 +2865,7 @@ def _bot_html_response(html: str):
             "Cache-Control": "public, max-age=3600, s-maxage=86400",
             "X-Bot-Rendered": "1",
             "Vary": "User-Agent",
-            "X-Robots-Tag": "index, follow",
+            "X-Robots-Tag": robots_tag,
             "Content-Language": "en-IN",
         },
     )
@@ -2897,6 +2911,12 @@ def derive_bot_cache_key(path: str):
 
     if n == 0 or (n == 1 and parts[0] == "library"):
         return "_homepage_"
+    # Task #499: /home is the public LandingPage; treat it as its own
+    # bot-render target so the rendered HTML carries the route's own
+    # canonical (https://syrabit.ai/home) instead of inheriting the
+    # homepage canonical and failing the Lighthouse `canonical` audit.
+    if n == 1 and parts[0] == "home":
+        return "_home_"
     if n == 1 and parts[0] == "pricing":
         return "_pricing_"
     if n == 1 and parts[0] == "terms":
@@ -2905,12 +2925,27 @@ def derive_bot_cache_key(path: str):
         return "_privacy_"
     if n == 1 and parts[0] == "about":
         return "_about_"
+    # Task #499: /technology is a public marketing page that previously
+    # fell through to the SPA shell for bots — emit a route-specific
+    # canonical so it stops failing the SEO audit.
+    if n == 1 and parts[0] == "technology":
+        return "_technology_"
     if n == 1 and parts[0] == "chat":
         return "_chat_"
     if n == 1 and parts[0] == "curriculum":
         return "_curriculum_"
     if n == 1 and parts[0] == "exam-routine":
         return "_exam_routine_"
+    # Task #499: auth-gated shells still need a route-specific canonical
+    # in the byte-zero HTML for crawlers, even though they ship
+    # `noindex, follow`. Without this, bots that hit /login, /signup,
+    # /profile, /admin/login fall through to the SPA shell with no
+    # canonical and the Lighthouse `canonical` SEO audit fails on
+    # those URLs.
+    if n == 1 and parts[0] in ("login", "signup", "profile"):
+        return f"_authshell_/{parts[0]}"
+    if n == 2 and parts[0] == "admin" and parts[1] == "login":
+        return "_authshell_/admin-login"
     if n == 1 and parts[0] in _BOT_KNOWN_BOARDS:
         return f"_board_/{parts[0]}"
     if n == 2 and parts[0] == "learn":
@@ -3126,7 +3161,13 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
 
         cached_html = _bot_html_cache.get(cache_key)
         if cached_html:
-            return _bot_html_response(cached_html)
+            # Task #499: auth-shell cache keys must keep their
+            # `noindex, follow` X-Robots-Tag on cache hit too — without
+            # this, the first uncached response is correctly tagged
+            # but every subsequent cached one reverts to the default
+            # `index, follow` and undercuts the noindex meta in body.
+            cached_robots = "noindex, follow" if cache_key.startswith("_authshell_/") else "index, follow"
+            return _bot_html_response(cached_html, robots_tag=cached_robots)
 
         try:
             _seo_port = int(os.environ.get("PORT", "8000"))
@@ -3332,36 +3373,55 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
                 _track_bot_render("board_class", True)
                 return _bot_html_response(html_content)
 
-            if cache_key in ("_pricing_", "_terms_", "_privacy_"):
-                page_name = cache_key.strip("_")
-                page_titles = {"pricing": "Pricing & Plans", "terms": "Terms of Service", "privacy": "Privacy Policy"}
-                page_title = page_titles.get(page_name, page_name.title())
+            # Task #499: unify the bot-render output for every static
+            # public/auth-shell page so each one ships its own
+            # <link rel="canonical"> at byte zero. Indexable pages keep
+            # `index, follow`; auth-gated shells get `noindex, follow`
+            # (and a self-referential canonical, which Lighthouse still
+            # requires for the SEO `canonical` audit to pass).
+            _STATIC_PAGE_META = {
+                "_pricing_":     ("pricing",     "Pricing & Plans",                    "index, follow"),
+                "_terms_":       ("terms",       "Terms of Service",                    "index, follow"),
+                "_privacy_":     ("privacy",     "Privacy Policy",                      "index, follow"),
+                "_home_":        ("home",        "Syrabit.ai — Educational Browser For Assam Board Students", "index, follow"),
+                "_technology_":  ("technology",  "Technology Behind Syrabit.ai — RAG, AI Tutors & Speed",      "index, follow"),
+                "_authshell_/login":       ("login",       "Log In to Syrabit.ai",                              "noindex, follow"),
+                "_authshell_/signup":      ("signup",      "Create Your Free Syrabit.ai Account",               "noindex, follow"),
+                "_authshell_/profile":     ("profile",     "Your Profile — Syrabit.ai",                         "noindex, follow"),
+                "_authshell_/admin-login": ("admin/login", "Admin Login | Syrabit.ai",                          "noindex, follow"),
+            }
+            if cache_key in _STATIC_PAGE_META:
+                page_name, page_title, robots_meta = _STATIC_PAGE_META[cache_key]
+                page_url = f"https://syrabit.ai/{page_name}"
                 html_content = f"""<!DOCTYPE html>
 <html lang="en-IN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{page_title} | Syrabit.ai</title>
-<link rel="canonical" href="https://syrabit.ai/{page_name}">
-<meta property="og:title" content="{page_title} | Syrabit.ai">
-<meta property="og:url" content="https://syrabit.ai/{page_name}">
+<title>{page_title}</title>
+<link rel="canonical" href="{page_url}">
+<meta property="og:title" content="{page_title}">
+<meta property="og:url" content="{page_url}">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Syrabit.ai">
-<meta name="robots" content="index, follow">
+<meta name="robots" content="{robots_meta}">
 <meta http-equiv="content-language" content="en-IN">
-<link rel="alternate" hreflang="en-IN" href="https://syrabit.ai/{page_name}">
-<script type="application/ld+json">{{"@context":"https://schema.org","@type":"WebPage","name":"{page_title}","url":"https://syrabit.ai/{page_name}","isPartOf":{{"@type":"WebSite","@id":"https://syrabit.ai","name":"Syrabit.ai"}},"provider":{{"@type":"EducationalOrganization","name":"Syrabit.ai","url":"https://syrabit.ai"}}}}</script>
+<link rel="alternate" hreflang="en-IN" href="{page_url}">
+<script type="application/ld+json">{{"@context":"https://schema.org","@type":"WebPage","name":"{page_title}","url":"{page_url}","isPartOf":{{"@type":"WebSite","@id":"https://syrabit.ai","name":"Syrabit.ai"}},"provider":{{"@type":"EducationalOrganization","name":"Syrabit.ai","url":"https://syrabit.ai"}}}}</script>
 </head>
 <body>
 <nav><a href="https://syrabit.ai">Home</a> &rsaquo; <span>{page_title}</span></nav>
 <h1>{page_title}</h1>
-<p>Visit <a href="https://syrabit.ai/{page_name}">this page</a> for full details.</p>
+<p>Visit <a href="{page_url}">this page</a> for full details.</p>
 <footer><a href="https://syrabit.ai/library">Library</a> &middot; <a href="https://syrabit.ai/pricing">Pricing</a> &middot; <a href="https://syrabit.ai/sitemap.xml">Sitemap</a></footer>
 </body>
 </html>"""
                 _bot_html_cache[cache_key] = html_content
                 _track_bot_render("static_page", True)
-                return _bot_html_response(html_content)
+                # Task #499: forward the per-route robots policy to the
+                # response header so auth-shell pages return the same
+                # `noindex, follow` over HTTP that they declare in <meta>.
+                return _bot_html_response(html_content, robots_tag=robots_meta)
 
             if cache_key.startswith("_learn_/"):
                 learn_slug = parts[1]

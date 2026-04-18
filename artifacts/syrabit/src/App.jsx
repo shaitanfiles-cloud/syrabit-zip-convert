@@ -339,7 +339,7 @@ export function AppRoutes() {
 // Used by both the client (wrapped with BrowserRouter) and the SSR entry
 // (wrapped with StaticRouter) so the prerendered DOM matches React's
 // first client render. (Task #382)
-export function AppShell({ children, ssr = false }) {
+export function AppShell({ children, ssr = false, helmetContext }) {
   // In SSR (renderToString), any unresolved lazy() child triggers a
   // Suspense abort and pollutes the prerendered HTML with React's
   // "Switched to client rendering" templates, breaking hydration. We
@@ -349,7 +349,7 @@ export function AppShell({ children, ssr = false }) {
   // emits nothing for them (Suspense fallback={null}). Once their
   // chunks resolve client-side, they mount normally. (Task #382)
   return (
-    <HelmetProvider>
+    <HelmetProvider context={helmetContext}>
       {ssr ? null : <Suspense fallback={null}><LazyGlobalSeo /></Suspense>}
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>

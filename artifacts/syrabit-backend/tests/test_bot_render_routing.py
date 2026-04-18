@@ -16,6 +16,14 @@ class TestStaticPages:
         ("/chat", "_chat_"),
         ("/curriculum", "_curriculum_"),
         ("/exam-routine", "_exam_routine_"),
+        # Task #499: every audited route must derive a distinct cache
+        # key so the bot-render output carries its own canonical.
+        ("/home", "_home_"),
+        ("/technology", "_technology_"),
+        ("/login", "_authshell_/login"),
+        ("/signup", "_authshell_/signup"),
+        ("/profile", "_authshell_/profile"),
+        ("/admin/login", "_authshell_/admin-login"),
     ])
     def test_static(self, path, expected):
         assert derive_bot_cache_key(path) == expected
@@ -23,6 +31,11 @@ class TestStaticPages:
     def test_strips_trailing_slash(self):
         assert derive_bot_cache_key("/pricing/") == "_pricing_"
         assert derive_bot_cache_key("/curriculum///") == "_curriculum_"
+        # Task #499: trailing-slash variants must still hit the same
+        # auth-shell cache key — otherwise /login/ would skip bot-render
+        # and lose its byte-zero canonical.
+        assert derive_bot_cache_key("/login/") == "_authshell_/login"
+        assert derive_bot_cache_key("/admin/login/") == "_authshell_/admin-login"
 
 
 class TestBoardLevel:

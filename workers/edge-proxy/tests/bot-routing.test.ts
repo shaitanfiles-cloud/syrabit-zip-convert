@@ -14,6 +14,14 @@ describe("getBotPageCacheKey", () => {
       ["/curriculum", "bot:static:/curriculum"],
       ["/exam-routine", "bot:static:/exam-routine"],
       ["/chat", "bot:static:/chat"],
+      // Task #499: every audited route must resolve to its OWN bot
+      // static cache slot so the per-route canonical the origin emits
+      // doesn't get clobbered by another route's cached HTML.
+      ["/technology", "bot:static:/technology"],
+      ["/login", "bot:static:/login"],
+      ["/signup", "bot:static:/signup"],
+      ["/profile", "bot:static:/profile"],
+      ["/admin/login", "bot:static:/admin/login"],
     ])("returns static cache key for %s", (path, expected) => {
       expect(getBotPageCacheKey(path)).toBe(expected);
     });
@@ -100,16 +108,28 @@ describe("getBotPageCacheKey", () => {
   describe("excluded paths", () => {
     it.each([
       "/api/chat",
-      "/admin",
-      "/admin/dashboard",
+      // Task #499: real admin surfaces (/admin/api, /admin/console)
+      // are still excluded from bot rendering — only /admin/login is
+      // an explicit exception (it's an auth shell that needs a
+      // self-canonical for the SEO audit).
+      "/admin/api/users",
+      "/admin/console/dashboard",
       "/static/foo.css",
       "/assets/main.js",
       "/icons/logo.svg",
       "/fonts/inter.woff2",
       "/history",
-      "/profile",
     ])("returns null for %s", (path) => {
       expect(getBotPageCacheKey(path)).toBeNull();
+    });
+
+    // Task #499: previously-excluded routes that MUST now flow through
+    // the bot path so the origin can return a route-specific canonical.
+    it.each([
+      ["/profile", "bot:static:/profile"],
+      ["/admin/login", "bot:static:/admin/login"],
+    ])("now returns a bot cache key for %s (was excluded)", (path, expected) => {
+      expect(getBotPageCacheKey(path)).toBe(expected);
     });
 
     it.each([

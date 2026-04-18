@@ -950,9 +950,18 @@ const BOT_CONTENT_PATTERNS: Array<{ regex: RegExp; type: string; test?: (p: stri
   { regex: /^\/pyq\/([a-z0-9-]+)$/, type: "pyq" },
 ];
 
+// Task #499: every entry here is a route the origin's BotRenderMiddleware
+// returns a route-specific <link rel="canonical"> for. Adding a path here
+// gives it its own bot-render cache slot at the edge — without that, two
+// distinct URLs (e.g. /technology and /about) would collide on the same
+// cache key and one of them would inherit the other's canonical, failing
+// the Lighthouse `canonical` SEO audit. Auth-shell routes (/login,
+// /signup, /profile, /admin/login) are noindex,follow but still need a
+// self-referential canonical to pass the audit.
 const BOT_STATIC_PAGES = new Set([
   "/", "/home", "/library", "/pricing", "/terms", "/privacy",
-  "/about", "/curriculum", "/exam-routine", "/chat",
+  "/about", "/technology", "/curriculum", "/exam-routine", "/chat",
+  "/login", "/signup", "/profile", "/admin/login",
 ]);
 
 const BOT_SKIP_EXTENSIONS = /\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|map|json|webp|avif|mp4|webm)$/i;
@@ -964,14 +973,20 @@ export function getBotPageCacheKey(pathname: string): string | null {
   const clean = pathname.replace(/\/+$/, "") || "/";
 
   if (BOT_SKIP_EXTENSIONS.test(clean)) return null;
-  if (clean.startsWith("/api/") || clean.startsWith("/admin") ||
+  // Task #499: an audited route in BOT_STATIC_PAGES (e.g. /profile,
+  // /admin/login) MUST be allowed through the bot path so the origin
+  // can return its route-specific canonical. We therefore short-circuit
+  // the skip-prefix check below for any path explicitly listed as a
+  // static bot page. Real admin surfaces (/admin/api, /admin/console)
+  // are not listed and continue to be skipped.
+  if (BOT_STATIC_PAGES.has(clean)) return `bot:static:${clean}`;
+  if (clean.startsWith("/api/") ||
+      clean.startsWith("/admin/api") || clean.startsWith("/admin/console") ||
       clean.startsWith("/static/") || clean.startsWith("/assets/") ||
       clean.startsWith("/icons/") || clean.startsWith("/fonts/") ||
-      clean.startsWith("/history") || clean.startsWith("/profile")) {
+      clean.startsWith("/history")) {
     return null;
   }
-
-  if (BOT_STATIC_PAGES.has(clean)) return `bot:static:${clean}`;
 
   for (const pat of BOT_CONTENT_PATTERNS) {
     if (pat.regex.test(clean)) {
@@ -1002,12 +1017,22 @@ async function fetchBotRenderedHtml(
   const seoBase = `${env.BACKEND_URL}/api/seo`;
   let apiUrl: string;
 
-  if (clean === "/" || clean === "/home" || clean === "/library") {
+  if (clean === "/" || clean === "/library") {
     apiUrl = `${seoBase}/html/homepage`;
   } else if (clean === "/about") {
     apiUrl = `${seoBase}/html/about`;
-  } else if (clean === "/pricing" || clean === "/terms" || clean === "/privacy" ||
-             clean === "/curriculum" || clean === "/exam-routine" || clean === "/chat") {
+  } else if (
+    // Task #499: route every audited public/auth-shell page directly
+    // to the origin so BotRenderMiddleware emits its route-specific
+    // canonical (https://syrabit.ai/<path>) — including /home, which
+    // must NOT alias the homepage canonical, plus /technology, /login,
+    // /signup, /profile, /admin/login.
+    clean === "/home" || clean === "/technology" ||
+    clean === "/pricing" || clean === "/terms" || clean === "/privacy" ||
+    clean === "/curriculum" || clean === "/exam-routine" || clean === "/chat" ||
+    clean === "/login" || clean === "/signup" || clean === "/profile" ||
+    clean === "/admin/login"
+  ) {
     apiUrl = `${env.BACKEND_URL}${clean}`;
   } else if (clean.startsWith("/learn/")) {
     apiUrl = `${env.BACKEND_URL}${clean}`;

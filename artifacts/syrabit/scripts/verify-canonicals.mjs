@@ -32,6 +32,13 @@ const REQUIRED_ROUTES = [
   { route: "/signup",   file: "signup/index.html" },
   { route: "/terms",    file: "terms/index.html" },
   { route: "/privacy",  file: "privacy/index.html" },
+  { route: "/about",    file: "about/index.html" },
+  { route: "/technology", file: "technology/index.html" },
+  // Task #499: auth-gated shells must still ship a route-specific
+  // canonical at byte zero so the Lighthouse `canonical` SEO audit
+  // passes on every audited route. Both stay noindex via robots meta.
+  { route: "/profile",     file: "profile/index.html" },
+  { route: "/admin/login", file: "admin/login/index.html" },
 ];
 
 function fail(msg) {

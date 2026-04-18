@@ -54,11 +54,19 @@ export async function renderRoute({ url, bundleSlim, seed } = {}) {
     try { await preloadPageForKind(kind); } catch {}
   }
 
+  // Task #499: capture Helmet's SSR output so prerender scripts can
+  // inject the per-page <head> tags (canonical, title, description, og,
+  // jsonld) declared by `PageMeta` directly into the byte-zero HTML.
+  // Without this, those tags only land in the DOM after react-helmet-
+  // async runs on the client — Lighthouse and Googlebot see an empty
+  // canonical and the route fails the SEO `canonical` audit.
+  const helmetContext = {};
+
   const errors = [];
   let html = "";
   try {
     html = renderToString(
-      <AppShell ssr>
+      <AppShell ssr helmetContext={helmetContext}>
         <StaticRouter location={url || "/library"}>
           <AppRoutes />
         </StaticRouter>
@@ -73,7 +81,30 @@ export async function renderRoute({ url, bundleSlim, seed } = {}) {
     if (seed?.chapterPreload) delete globalThis.__SSR_CHAPTER_PRELOAD__;
   }
 
-  return { html, errors };
+  // helmetContext.helmet is populated synchronously by react-helmet-
+  // async after renderToString resolves. Each *.toString() returns the
+  // raw HTML string for that tag family ready to be concatenated into
+  // a <head>. Returning the canonical href separately lets prerender
+  // scripts assert that the SSR head matches the URL they intended to
+  // render — catches accidental drift between PageMeta and the
+  // prerender pipeline.
+  const helmet = helmetContext.helmet || null;
+  const headHtml = helmet
+    ? [
+        helmet.title?.toString() || "",
+        helmet.meta?.toString() || "",
+        helmet.link?.toString() || "",
+        helmet.script?.toString() || "",
+      ].join("")
+    : "";
+  let canonical = null;
+  if (helmet?.link) {
+    const linkHtml = helmet.link.toString();
+    const m = linkHtml.match(/<link[^>]*rel="canonical"[^>]*href="([^"]+)"/);
+    if (m) canonical = m[1];
+  }
+
+  return { html, errors, head: headHtml, canonical, helmet };
 }
 
 export default renderRoute;
