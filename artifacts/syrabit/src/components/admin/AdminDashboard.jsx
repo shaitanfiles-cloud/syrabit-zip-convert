@@ -2206,6 +2206,93 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                     Email failing-URL CSV after deep scan
                   </span>
                 </label>
+                {/* Task #473: opt-out toggle for the daily SEO auto-publish
+                    summary email added in Task #465. Default ON server-side
+                    so opted-in admins get the digest after every scheduled
+                    auto-publish run; this lets them turn it off without
+                    hitting the API directly. */}
+                <label className="flex items-center gap-2 cursor-pointer" data-testid="notif-prefs-email-seo-daily-summary">
+                  <input
+                    type="checkbox"
+                    checked={notifPrefs.email_seo_daily_summary_enabled ?? true}
+                    onChange={e => saveNotifPrefs({ email_seo_daily_summary_enabled: e.target.checked })}
+                    className="w-3.5 h-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
+                  />
+                  <span className="text-[11px] text-gray-600 font-medium">
+                    Email me the daily SEO auto-publish summary
+                  </span>
+                </label>
+              </div>
+
+              {/* Task #473: per-admin UTC quiet-hours window (consumed by
+                  _quiet_hours_active in seo_engine.py). Either bound left
+                  blank disables the window. Window may wrap across UTC
+                  midnight (e.g. start=22, end=6 silences 22:00–06:00 UTC). */}
+              <div className="mb-3 pb-3 border-b border-gray-200" data-testid="notif-prefs-quiet-hours">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[10px] text-gray-500 font-medium">
+                    Quiet Hours (UTC) — pause non-critical emails in this window
+                  </label>
+                  {(notifPrefs.quiet_hours_start_utc != null || notifPrefs.quiet_hours_end_utc != null) && (
+                    <button
+                      onClick={() => saveNotifPrefs({ quiet_hours_start_utc: null, quiet_hours_end_utc: null })}
+                      className="text-[10px] text-gray-400 hover:text-violet-600 font-medium"
+                      data-testid="notif-prefs-quiet-hours-clear"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] text-gray-500">From</span>
+                    <select
+                      value={notifPrefs.quiet_hours_start_utc ?? ''}
+                      onChange={e => {
+                        const raw = e.target.value;
+                        saveNotifPrefs({ quiet_hours_start_utc: raw === '' ? null : parseInt(raw, 10) });
+                      }}
+                      className="text-[11px] px-2 py-1 rounded-md border border-gray-200 bg-white text-gray-700 focus:ring-1 focus:ring-violet-400 focus:border-violet-400"
+                      data-testid="notif-prefs-quiet-hours-start"
+                    >
+                      <option value="">—</option>
+                      {Array.from({ length: 24 }, (_, h) => (
+                        <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] text-gray-500">To</span>
+                    <select
+                      value={notifPrefs.quiet_hours_end_utc ?? ''}
+                      onChange={e => {
+                        const raw = e.target.value;
+                        saveNotifPrefs({ quiet_hours_end_utc: raw === '' ? null : parseInt(raw, 10) });
+                      }}
+                      className="text-[11px] px-2 py-1 rounded-md border border-gray-200 bg-white text-gray-700 focus:ring-1 focus:ring-violet-400 focus:border-violet-400"
+                      data-testid="notif-prefs-quiet-hours-end"
+                    >
+                      <option value="">—</option>
+                      {Array.from({ length: 24 }, (_, h) => (
+                        <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>
+                      ))}
+                    </select>
+                  </div>
+                  {notifPrefs.quiet_hours_start_utc != null && notifPrefs.quiet_hours_end_utc != null && (
+                    notifPrefs.quiet_hours_start_utc === notifPrefs.quiet_hours_end_utc ? (
+                      // Backend (_quiet_hours_active) treats start == end as
+                      // an inactive window, not a 24-hour silence.
+                      <span className="text-[10px] text-amber-500">
+                        Inactive — start and end hour are the same
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-gray-400">
+                        Active {String(notifPrefs.quiet_hours_start_utc).padStart(2, '0')}:00–{String(notifPrefs.quiet_hours_end_utc).padStart(2, '0')}:00 UTC
+                        {notifPrefs.quiet_hours_start_utc > notifPrefs.quiet_hours_end_utc && ' (wraps midnight)'}
+                      </span>
+                    )
+                  )}
+                </div>
               </div>
 
               <div className="mb-3">
