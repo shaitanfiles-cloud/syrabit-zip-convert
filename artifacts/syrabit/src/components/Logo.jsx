@@ -16,16 +16,22 @@ const SIZE_MAP = {
 /**
  * LogoMark — icon only (the S-mark image).
  */
+// DPR-aware srcset: tiny slots (≤28px CSS) prefer the 56px asset @1x and
+// promote to 144px @2x for retina; larger slots stay on 144px since the
+// 56px asset would upscale and look soft.
+const _logoSrcSet = (px) =>
+  px <= 28
+    ? { src: '/logo-56.webp', srcSet: '/logo-56.webp 1x, /logo-144.webp 2x' }
+    : { src: '/logo-144.webp', srcSet: '/logo-144.webp 1x, /logo-144.webp 2x' };
+
 export const LogoMark = ({ size = 'md', className = '', style = {} }) => {
   const px = SIZE_MAP[size] ?? SIZE_MAP.md;
-  // Serve a correctly-sized variant. The 502x486 master is wasteful for the
-  // 16-72px slots we render at; ship a 56px variant for ≤sm and a 144px
-  // variant (covers up to 72px display @ 2x DPR) for everything larger.
-  const src = px <= 28 ? '/logo-56.webp' : '/logo-144.webp';
+  const { src, srcSet } = _logoSrcSet(px);
   return (
     <span className={className} style={{ display: 'inline-flex', flexShrink: 0, ...style }}>
       <img
         src={src}
+        srcSet={srcSet}
         alt="Syrabit.ai logo"
         width={px}
         height={px}
@@ -58,16 +64,20 @@ export const LogoFull = ({
 
   return (
     <span className={`inline-flex items-center gap-2 ${className}`}>
-      {!hideIcon && (
-        <img
-          src={px <= 28 ? '/logo-56.webp' : '/logo-144.webp'}
-          alt="Syrabit.ai logo"
-          width={px}
-          height={px}
-          decoding="async"
-          style={{ width: px, height: px, borderRadius: px * 0.25, objectFit: 'cover', flexShrink: 0 }}
-        />
-      )}
+      {!hideIcon && (() => {
+        const { src, srcSet } = _logoSrcSet(px);
+        return (
+          <img
+            src={src}
+            srcSet={srcSet}
+            alt="Syrabit.ai logo"
+            width={px}
+            height={px}
+            decoding="async"
+            style={{ width: px, height: px, borderRadius: px * 0.25, objectFit: 'cover', flexShrink: 0 }}
+          />
+        );
+      })()}
       {!hideText && (
         <span
           className={`font-bold tracking-tight ${textSizes[size] ?? textSizes.md} ${textClassName}`}

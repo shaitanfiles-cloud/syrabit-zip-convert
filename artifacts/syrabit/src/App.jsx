@@ -168,7 +168,16 @@ function StalledRecoveryHint({ kind, onReload }) {
     >
       <div className="max-w-sm w-full text-center flex flex-col items-center gap-4">
         <div className="w-12 h-12 rounded-2xl flex items-center justify-center overflow-hidden">
-          <img src="/logo.webp" alt="" width="48" height="48" className="w-12 h-12 object-cover" />
+          {/* Use the 144px variant; the 485x486 master is wasteful at 48px display. */}
+          <img
+            src="/logo-144.webp"
+            srcSet="/logo-56.webp 1x, /logo-144.webp 2x"
+            alt=""
+            width="48"
+            height="48"
+            decoding="async"
+            className="w-12 h-12 object-cover"
+          />
         </div>
         <div className="text-base font-medium text-foreground">
           This is taking longer than usual.
