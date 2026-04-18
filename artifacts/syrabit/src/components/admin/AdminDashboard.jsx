@@ -2269,8 +2269,10 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                           : `${Math.round(ageMs / 86_400_000)}d ago`;
                         const sent = d.sent ?? 0;
                         const failed = d.failed ?? 0;
+                        const totalRecipients = d.total_recipients ?? (sent + failed);
                         const suppressed = d.suppressed_quiet_hours ?? 0;
                         const optedOut = d.opted_out ?? 0;
+                        const errs = Array.isArray(d.errors) ? d.errors : [];
                         const ok = failed === 0 && (sent > 0 || (suppressed === 0 && optedOut === 0 && !d.reason));
                         const dot = failed > 0 ? 'bg-red-500'
                           : sent > 0 ? 'bg-emerald-500'
@@ -2282,12 +2284,15 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                             data-testid={`notif-prefs-seo-summary-history-row-${i}`}
                           >
                             <span className={`inline-block w-1.5 h-1.5 rounded-full mt-1.5 ${dot}`} />
-                            <div className="flex-1">
+                            <div className="flex-1 min-w-0">
                               <div>
                                 <span className="font-medium text-gray-700">{ageStr}</span>
-                                <span className="text-gray-400"> · sent to </span>
-                                <span className="font-medium text-gray-700">{sent}</span>
+                                <span className="text-gray-400"> · attempted </span>
+                                <span className="font-medium text-gray-700">{totalRecipients}</span>
                                 <span className="text-gray-400">/{d.total_admins ?? '?'} admins</span>
+                                {sent > 0 && (
+                                  <span className="text-emerald-600"> · {sent} delivered</span>
+                                )}
                                 {failed > 0 && (
                                   <span className="text-red-500"> · {failed} failed</span>
                                 )}
@@ -2302,6 +2307,19 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                                 <div className="text-[10px] text-gray-400 mt-0.5">
                                   Reason: <code>{d.reason}</code>
                                 </div>
+                              )}
+                              {errs.length > 0 && (
+                                <ul
+                                  className="mt-1 space-y-0.5"
+                                  data-testid={`notif-prefs-seo-summary-history-row-${i}-errors`}
+                                >
+                                  {errs.map((e, ei) => (
+                                    <li key={ei} className="text-[10px] text-red-500 truncate">
+                                      <span className="font-medium">{e.email || e.admin_id || 'unknown'}</span>
+                                      {e.error ? <span className="text-gray-500"> — {e.error}</span> : null}
+                                    </li>
+                                  ))}
+                                </ul>
                               )}
                             </div>
                           </li>

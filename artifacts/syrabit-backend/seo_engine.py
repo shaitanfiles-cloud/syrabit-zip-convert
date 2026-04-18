@@ -5790,6 +5790,7 @@ async def _send_seo_daily_summary_email(stats: dict, recipients: list) -> dict:
         return {"sent": 0, "failed": len(recipients), "total": len(recipients),
                 "reason": f"send_error:{type(exc).__name__}"}
     sent = failed = 0
+    errors: list = []  # Task #474 — per-admin failures surfaced in admin UI.
     for r in recipients:
         try:
             _resend_sdk.Emails.send({
@@ -5801,12 +5802,19 @@ async def _send_seo_daily_summary_email(stats: dict, recipients: list) -> dict:
             sent += 1
         except Exception as exc:
             failed += 1
+            err_msg = f"{type(exc).__name__}: {exc}"[:200]
+            errors.append({
+                "admin_id": r.get("admin_id", ""),
+                "email": r.get("email", ""),
+                "error": err_msg,
+            })
             logger.warning(f"[seo-daily-summary] send failed to {r.get('email','')}: {exc}")
     logger.info(
         f"[seo-daily-summary] dispatched job={stats.get('job_id','')} "
         f"sent={sent} failed={failed} total={len(recipients)}"
     )
-    return {"sent": sent, "failed": failed, "total": len(recipients), "subject": subject}
+    return {"sent": sent, "failed": failed, "total": len(recipients),
+            "subject": subject, "errors": errors}
 
 
 _SEO_SUMMARY_DISPATCH_LOG = "seo_summary_email_log"
@@ -5878,6 +5886,9 @@ async def _maybe_dispatch_seo_daily_summary(job_id: str, log_doc: dict) -> dict:
         "reason": result.get("reason"),
         "subject": result.get("subject"),
         "pages_generated": int((log_doc or {}).get("total_generated", 0) or 0),
+        # Per-admin send failures so the admin notifications panel can show
+        # exactly which recipients hit a Resend error (Task #474 review).
+        "errors": list(result.get("errors") or []),
     }
     await _record_seo_summary_dispatch(enriched)
     # Mirror persisted counters back into the return dict so callers

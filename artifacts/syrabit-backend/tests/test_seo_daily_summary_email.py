@@ -271,6 +271,14 @@ def test_send_continues_when_one_recipient_fails():
     assert res["sent"] == 2
     assert res["failed"] == 1
     assert len(calls) == 3
+    # Task #474 — per-admin failures must be captured so the admin
+    # notifications panel can show exactly which recipient failed.
+    assert isinstance(res.get("errors"), list) and len(res["errors"]) == 1
+    err = res["errors"][0]
+    assert err["admin_id"] == "a2"
+    assert err["email"] == "bad@x.com"
+    assert "smtp boom" in err["error"]
+    assert err["error"].startswith("RuntimeError")
 
 
 # ── _maybe_dispatch_seo_daily_summary ───────────────────────────────────────
