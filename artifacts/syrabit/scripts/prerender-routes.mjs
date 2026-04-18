@@ -57,25 +57,38 @@ const TRAFFIC_DAYS = parseInt(
   process.env.PRERENDER_TRAFFIC_DAYS || "30",
   10,
 );
-const FETCH_TIMEOUT_MS = parseInt(
-  process.env.PRERENDER_FETCH_TIMEOUT_MS || "5000",
-  10,
-);
+// Defensive env-knob parser — clamps to [min, max] and falls back to
+// `fallback` for non-numeric / out-of-range input so a typo in the
+// Pages dashboard can't silently degrade the build.
+function envInt(name, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < min || n > max) {
+    console.warn(
+      `[prerender-routes] ignoring invalid ${name}=${raw} (using ${fallback})`,
+    );
+    return fallback;
+  }
+  return n;
+}
+
+const FETCH_TIMEOUT_MS = envInt("PRERENDER_FETCH_TIMEOUT_MS", 5000, {
+  min: 500, max: 60_000,
+});
 // Task #522: bounded concurrency for backend fan-out. The previous
 // fully-serial loop (50 subjects × up to 7 fetches each = 350 serial
 // network round-trips, each capped at 8s) could blow past Cloudflare's
 // 35-min build wall whenever Railway was cold or rate-limiting.
-const FETCH_CONCURRENCY = parseInt(
-  process.env.PRERENDER_FETCH_CONCURRENCY || "8",
-  10,
-);
+const FETCH_CONCURRENCY = envInt("PRERENDER_FETCH_CONCURRENCY", 8, {
+  min: 1, max: 64,
+});
 // Global wall-clock budget for the entire prerender pass. If we exceed
 // it (e.g. backend hard-down), we soft-fail with whatever we managed to
 // produce so far — the SPA shell still serves the rest.
-const PRERENDER_BUDGET_MS = parseInt(
-  process.env.PRERENDER_BUDGET_MS || (12 * 60 * 1000).toString(),
-  10,
-);
+const PRERENDER_BUDGET_MS = envInt("PRERENDER_BUDGET_MS", 12 * 60 * 1000, {
+  min: 60_000, max: 30 * 60 * 1000,
+});
 
 async function pMap(items, mapper, concurrency = FETCH_CONCURRENCY) {
   const out = new Array(items.length);
