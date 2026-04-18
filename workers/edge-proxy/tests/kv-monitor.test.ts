@@ -306,6 +306,66 @@ describe("lastAlertFired", () => {
   });
 });
 
+/* ───────────── exact-boundary quota semantics ───────────── */
+
+describe("exact-boundary quota semantics", () => {
+  it("the operation that lands EXACTLY on the cap still hits KV; only ops past the cap fall back", async () => {
+    const inner = new FakeKv();
+    const cache = new FakeCache();
+    const kv = wrapKvNamespace(inner as unknown as KVNamespace, "RATE_LIMIT", {
+      ctx: noopCtx,
+      cache: cache as unknown as Cache,
+      quota: { read: 3 },
+      warningPct: 99,
+    });
+    const innerGet = vi.spyOn(inner, "get");
+    // Reads 1, 2, 3 land at 33%, 66%, and EXACTLY 100%. All three
+    // should hit KV (otherwise we'd waste an entry of available
+    // quota by routing it to the fallback).
+    await kv.get("k");
+    await kv.get("k");
+    await kv.get("k");
+    expect(innerGet).toHaveBeenCalledTimes(3);
+    // Read 4 (past the cap) is the first one short-circuited to the
+    // cache fallback.
+    await kv.get("k");
+    expect(innerGet).toHaveBeenCalledTimes(3);
+  });
+
+  it("escalation alert: warning fires once, then a separate exhausted alert when the same op crosses 100%", async () => {
+    const calls: { url: string; body: string }[] = [];
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url, body: typeof init.body === "string" ? init.body : "" });
+      return new Response("", { status: 204 });
+    });
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+    try {
+      const kv = wrapKvNamespace(new FakeKv() as unknown as KVNamespace, "RATE_LIMIT", {
+        ctx: noopCtx,
+        quota: { write: 4 },
+        warningPct: 50,
+        backendUrl: "https://api.example.com",
+        alertSecret: "shh",
+      });
+      // 50% threshold of 4 writes = 2 → first warning.
+      await kv.put("a", "1");
+      await kv.put("b", "2");
+      // Push past 100% → escalation to "exhausted".
+      await kv.put("c", "3");
+      await kv.put("d", "4");
+      await kv.put("e", "5");
+      await new Promise((r) => setTimeout(r, 0));
+      const writeAlerts = calls.filter((c) => c.body.includes('"op":"write"'));
+      // Exactly two distinct severities for the same op: warning, then exhausted.
+      const severities = writeAlerts.map((a) => JSON.parse(a.body).severity).sort();
+      expect(severities).toEqual(["exhausted", "warning"]);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+});
+
 /* ───────────── proactive near-quota fallback ───────────── */
 
 describe("proactive near-quota fallback", () => {

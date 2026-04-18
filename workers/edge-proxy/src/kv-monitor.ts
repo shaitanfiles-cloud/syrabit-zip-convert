@@ -78,7 +78,11 @@ export interface MonitorAlertContext {
 interface BindingState {
   counters: KvUsageCounters;
   fallbackWriteQueue: Map<string, { value: string; opts?: KVNamespacePutOptions }>;
-  alertedToday: Set<KvOp>;
+  /** Per-op set of severities already alerted-on today. Stored as
+   *  "<op>:<severity>" so we fire warning AND exhausted as separate
+   *  alerts (escalation), but never duplicate the same severity for
+   *  the same op on the same day. */
+  alertedToday: Set<string>;
   fallbackActive: boolean;
   lastAlertFired: { op: KvOp; severity: "warning" | "exhausted"; at: string } | null;
 }
@@ -288,9 +292,13 @@ async function maybeFireAlert(
   const cap = quota[op] || 1;
   const pct = (used / cap) * 100;
   if (pct < warningPct) return;
-  if (s.alertedToday.has(op)) return;
-  s.alertedToday.add(op);
   const severity: "warning" | "exhausted" = pct >= 100 ? "exhausted" : "warning";
+  // Allow escalation: warning fires once/op/day, exhausted fires once
+  // more once that op crosses 100%. Same severity for the same op on
+  // the same day is suppressed.
+  const dedupeKey = `${op}:${severity}`;
+  if (s.alertedToday.has(dedupeKey)) return;
+  s.alertedToday.add(dedupeKey);
   s.lastAlertFired = { op, severity, at: new Date().toISOString() };
   if (!ctx.backendUrl || !ctx.alertSecret) return;
   const body = JSON.stringify({
@@ -341,9 +349,13 @@ export interface WrapKvOptions extends MonitorAlertContext {
  * fallback policy, complementing the failure-triggered branch. */
 function isOverQuota(binding: string, op: KvOp, ctx: MonitorAlertContext): boolean {
   const quota = { ...DEFAULT_QUOTA, ...(ctx.quota || {}) };
+  // Counter has already been bumped for this op when we reach here, so
+  // `used` represents what the counter would be AFTER this call. The
+  // op that lands exactly on the cap is still allowed to hit KV; only
+  // ops past the cap are short-circuited to the fallback path.
   const used = (getBindingState(binding).counters[op] ?? 0);
   const cap = quota[op] || 1;
-  return used >= cap;
+  return used > cap;
 }
 
 export function wrapKvNamespace(
