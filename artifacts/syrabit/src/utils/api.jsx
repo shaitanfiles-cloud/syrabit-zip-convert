@@ -364,6 +364,9 @@ export const adminSeoBulkPublish = (token, pageType = null, subjectId = null) =>
 export const adminSeoSubjectCoverage = (token) =>
   axios.get(`${API_BASE}/seo/subject-coverage`, { headers: adminHeaders(token), withCredentials: true });
 
+export const adminSeoAutoPublishSchedule = (token) =>
+  axios.get(`${API_BASE}/seo/auto-publish/schedule`, { headers: adminHeaders(token), withCredentials: true });
+
 export const adminSeoRunSubject = (token, subjectId, force = false, pageTypes = null) =>
   axios.post(`${API_BASE}/seo/run-subject`, pageTypes ? { page_types: pageTypes } : {}, {
     headers: adminHeaders(token),

@@ -10,6 +10,7 @@ import {
   seoInjectSchemaBulk, seoInjectSchema, seoSitemapValidate,
   adminSeoRefreshMeta, adminSeoReviewQueue,
   adminSeoDiagnoseTopics, adminSeoBackfillNotes,
+  adminSeoAutoPublishSchedule,
 } from '@/utils/api';
 
 const HUB_CTX_KEY = 'syrabit_hub_ctx';
@@ -107,6 +108,22 @@ export default function useSeoManager(adminToken) {
   useEffect(() => {
     if (tab === 'review' && reviewQueue.length === 0) loadReviewQueue();
   }, [tab, reviewQueue.length, loadReviewQueue]);
+
+  const [schedule, setSchedule] = useState(null);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+
+  const loadSchedule = useCallback(async () => {
+    setScheduleLoading(true);
+    try {
+      const res = await adminSeoAutoPublishSchedule(adminToken);
+      setSchedule(res.data || { config: null, last_marker: null, recent_runs: [] });
+    } catch { toast.error('Failed to load auto-publish schedule'); }
+    finally { setScheduleLoading(false); }
+  }, [adminToken]);
+
+  useEffect(() => {
+    if (tab === 'schedule' && !schedule) loadSchedule();
+  }, [tab, schedule, loadSchedule]);
 
   useEffect(() => () => Object.values(subjectPollsRef.current).forEach(clearInterval), []);
 
@@ -508,6 +525,7 @@ export default function useSeoManager(adminToken) {
     handleRefreshMeta, handlePilot, handleRunSubject,
     diagnostics, diagnosticsLoading, backfilling,
     handleDiagnoseTopics, handleBackfillNotes,
+    schedule, scheduleLoading, loadSchedule,
     toggleTopic, toggleType, filteredTopics, filteredPages,
     publishedCount, draftCount, coverage,
   };

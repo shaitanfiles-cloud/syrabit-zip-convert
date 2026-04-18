@@ -14,6 +14,7 @@ import SchemaTab from './seo-manager/SchemaTab';
 import SitemapTab from './seo-manager/SitemapTab';
 import PipelineTab from './seo-manager/PipelineTab';
 import QualityTab from './seo-manager/QualityTab';
+import SchedulePanel from './seo-manager/SchedulePanel';
 import useSeoManager from './seo-manager/useSeoManager';
 
 export default function AdminSeoManager({ adminToken, onNavigate }) {
@@ -31,6 +32,7 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
     { id: 'schema',   label: '🧬 Schema',  count: null },
     { id: 'sitemap',  label: '🗺 Sitemap', count: null },
     { id: 'quality',  label: '🛡 Quality', count: null },
+    { id: 'schedule', label: '🗓 Schedule', count: null },
   ];
 
   return (
@@ -177,6 +179,11 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
 
       {s.tab === 'quality' && (
         <QualityTab adminToken={adminToken} />
+      )}
+
+      {s.tab === 'schedule' && (
+        <SchedulePanel schedule={s.schedule} scheduleLoading={s.scheduleLoading}
+          loadSchedule={s.loadSchedule} />
       )}
 
       <AdminQuickLinks links={['content','vertex','analytics','dashboard','editor']} onNavigate={onNavigate} />
