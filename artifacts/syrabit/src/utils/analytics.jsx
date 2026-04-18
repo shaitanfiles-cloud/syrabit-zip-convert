@@ -255,6 +255,13 @@ export const Analytics = {
     } catch { return {}; }
   },
 
+  // ── Ads (Task #528) ──────────────────────────────────────────────────────
+  // Fired once per AdSlot mount when the slot first crosses 50% in-viewport.
+  // Gated by ad consent in the caller so opt-out users emit nothing.
+  adSlotViewed: ({ placement, network, enabled } = {}) => {
+    track('ad_slot_viewed', { placement, network, enabled });
+  },
+
   adminLogin: (email) => {
     track('admin_logged_in', { email_domain: email.split('@')[1] });
   },

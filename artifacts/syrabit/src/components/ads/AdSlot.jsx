@@ -15,6 +15,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { getAdConfig, adsConsentGranted } from '@/utils/adsConfig';
+import Analytics from '@/utils/analytics';
 
 // Scripts injected this session, keyed by URL. Survives across mounts
 // because it lives on the module, not on a component instance.
@@ -40,6 +41,8 @@ export default function AdSlot({ placement, className = '', style = {} }) {
   const ref = useRef(null);
   const [shouldLoad, setShouldLoad] = useState(false);
   const [consentOk, setConsentOk] = useState(false);
+  // Task #528: ensure the viewability ping fires at most once per mount.
+  const viewedRef = useRef(false);
 
   // Resolve consent on the client. Avoids SSR/hydration mismatch
   // because `adsConsentGranted()` reads localStorage and import.meta.env.PROD.
@@ -70,6 +73,38 @@ export default function AdSlot({ placement, className = '', style = {} }) {
     if (!shouldLoad || !cfg.enabled) return;
     injectScript(cfg.scriptUrl);
   }, [shouldLoad, cfg.enabled, cfg.scriptUrl]);
+
+  // Task #528: viewability ping. Fire one PostHog event the first time
+  // this slot is at least 50% within the viewport. Gated on the same
+  // consent + enabled checks as the script loader so opt-out users
+  // emit nothing. The observer disconnects after the first ping so
+  // each mount produces at most one `ad_slot_viewed` event.
+  useEffect(() => {
+    if (!cfg.enabled || !consentOk) return;
+    const el = ref.current;
+    if (!el || typeof window === 'undefined') return;
+    if (typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
+          if (!viewedRef.current) {
+            viewedRef.current = true;
+            try {
+              Analytics.adSlotViewed({
+                placement,
+                network: cfg.network,
+                enabled: !!cfg.enabled,
+              });
+            } catch {}
+          }
+          io.disconnect();
+          return;
+        }
+      }
+    }, { threshold: 0.5 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [cfg.enabled, cfg.network, consentOk, placement]);
 
   // Disabled placements collapse completely — no reserved space, no DOM
   // beyond an empty fragment. Required so /chat, /library, /browser, and
