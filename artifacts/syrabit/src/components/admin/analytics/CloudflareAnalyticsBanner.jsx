@@ -83,9 +83,12 @@ export default function CloudflareAnalyticsBanner({
       if (myReq !== reqIdRef.current) return;
       const next = r.data || null;
       setStatus(next);
+      // Notify parent on every successful recheck response so it can refresh
+      // dependent widgets — recovery (auth_ok=true) AND failure transitions
+      // both warrant a parent reload (e.g. to clear stale chart data).
+      onRecheck?.(next);
       if (next?.auth_ok) {
         setRecheckedOk(true);
-        onRecheck?.(next);
       } else if (next?.last_error) {
         setRecheckError(next.last_error);
       } else {
@@ -217,6 +220,32 @@ export default function CloudflareAnalyticsBanner({
           style={{ borderColor: isDark ? 'rgba(239,68,68,0.15)' : '#fecaca', background: palette.subBg }}
         >
           <p className={`text-xs ${palette.body}`}>{hint}</p>
+
+          <div>
+            <p className={`text-[10px] uppercase tracking-wider font-semibold mb-1.5 ${palette.meta}`}>
+              Probe diagnostics
+            </p>
+            <dl className={`text-[11px] grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 ${palette.body}`}>
+              <dt className={`font-mono ${palette.meta}`}>last_error</dt>
+              <dd className={`font-mono break-all ${palette.body}`}>
+                {status.last_error || <span className={palette.meta}>—</span>}
+              </dd>
+              <dt className={`font-mono ${palette.meta}`}>consecutive_failures</dt>
+              <dd className={`font-mono ${palette.body}`}>{status.consecutive_failures ?? 0}</dd>
+              <dt className={`font-mono ${palette.meta}`}>blocked_for_seconds</dt>
+              <dd className={`font-mono ${palette.body}`}>
+                {status.blocked_for_seconds != null && status.blocked_for_seconds > 0
+                  ? `${status.blocked_for_seconds}s (${blockedFor})`
+                  : <span className={palette.meta}>0 — breaker closed</span>}
+              </dd>
+              {status.configured != null && (
+                <>
+                  <dt className={`font-mono ${palette.meta}`}>configured</dt>
+                  <dd className={`font-mono ${palette.body}`}>{String(status.configured)}</dd>
+                </>
+              )}
+            </dl>
+          </div>
 
           <div>
             <p className={`text-[10px] uppercase tracking-wider font-semibold mb-1.5 ${palette.meta}`}>
