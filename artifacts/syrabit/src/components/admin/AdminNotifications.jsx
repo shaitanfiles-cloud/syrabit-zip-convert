@@ -57,6 +57,8 @@ export default function AdminNotifications({ adminToken, onNavigate }) {
   const [deliveryLoading, setDeliveryLoading] = useState(false);
   const [subscriptions, setSubscriptions] = useState([]);
   const [subsTotal, setSubsTotal] = useState(0);
+  const [pruneStatus, setPruneStatus] = useState(null);
+  const [pruneRunning, setPruneRunning] = useState(false);
   const [expandedDispatch, setExpandedDispatch] = useState(null);
   const [dispatchDetail, setDispatchDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -142,10 +144,11 @@ export default function AdminNotifications({ adminToken, onNavigate }) {
   const loadDeliveryData = useCallback(async () => {
     setDeliveryLoading(true);
     try {
-      const [statsRes, logsRes, subsRes] = await Promise.allSettled([
+      const [statsRes, logsRes, subsRes, pruneRes] = await Promise.allSettled([
         adminAxios(`${API_BASE}/admin/push/delivery-stats?days=${statsDays}`),
         adminAxios(`${API_BASE}/admin/push/delivery-log?limit=50`),
         adminAxios(`${API_BASE}/admin/push/subscriptions`),
+        adminAxios(`${API_BASE}/admin/push/prune-dead`),
       ]);
       if (statsRes.status === 'fulfilled') setDeliveryStats(statsRes.value.data);
       if (logsRes.status === 'fulfilled') {
@@ -156,9 +159,32 @@ export default function AdminNotifications({ adminToken, onNavigate }) {
         setSubscriptions(subsRes.value.data.subscriptions || []);
         setSubsTotal(subsRes.value.data.total || 0);
       }
+      if (pruneRes.status === 'fulfilled') setPruneStatus(pruneRes.value.data);
     } catch {}
     finally { setDeliveryLoading(false); }
   }, [adminAxios, statsDays]);
+
+  const runPruneNow = useCallback(async () => {
+    setPruneRunning(true);
+    try {
+      const res = await axios.post(
+        `${API_BASE}/admin/push/prune-dead`,
+        {},
+        { headers: adminHeaders(adminToken), withCredentials: true },
+      );
+      const summary = res.data || {};
+      toast.success(
+        summary.deactivated
+          ? `Pruned ${summary.deactivated} stale subscriber${summary.deactivated === 1 ? '' : 's'}`
+          : 'No stale subscribers found',
+      );
+      await loadDeliveryData();
+    } catch {
+      toast.error('Failed to run prune');
+    } finally {
+      setPruneRunning(false);
+    }
+  }, [adminToken, loadDeliveryData]);
 
   useEffect(() => {
     if (mainTab === 'delivery') loadDeliveryData();
@@ -622,6 +648,96 @@ export default function AdminNotifications({ adminToken, onNavigate }) {
                             </td>
                             <td className="py-2 px-3 text-gray-500 truncate" style={{ maxWidth: 160 }}>{s.endpoint_domain || '-'}</td>
                             <td className="py-2 px-3 text-gray-400">{formatTime(s.subscribed_at)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+                <div className="p-4 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Trash2 size={14} className="text-amber-500 shrink-0" />
+                    <p className="text-sm font-bold text-gray-900">Stale Subscribers (auto-pruned)</p>
+                    {pruneStatus && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 border border-amber-100">
+                        {pruneStatus.inactive_subscriptions || 0} inactive
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    onClick={runPruneNow}
+                    disabled={pruneRunning || deliveryLoading}
+                    className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg border border-violet-200 text-violet-700 bg-violet-50 hover:bg-violet-100 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {pruneRunning
+                      ? <Loader2 size={11} className="animate-spin" />
+                      : <Trash2 size={11} />}
+                    Run prune now
+                  </button>
+                </div>
+
+                {pruneStatus && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 border-b border-gray-100 bg-gray-50/60">
+                    <div>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Total subs</p>
+                      <p className="text-base font-bold text-gray-900 mt-0.5">{pruneStatus.total_subscriptions || 0}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-amber-500 uppercase tracking-wider">Inactive</p>
+                      <p className="text-base font-bold text-amber-700 mt-0.5">{pruneStatus.inactive_subscriptions || 0}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Threshold</p>
+                      <p className="text-base font-bold text-gray-900 mt-0.5">
+                        {pruneStatus.fail_threshold || 0}
+                        <span className="text-[10px] font-medium text-gray-400 ml-1">fails / {pruneStatus.lookback_days || 0}d</span>
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Last prune</p>
+                      <p className="text-xs font-semibold text-gray-700 mt-0.5">
+                        {pruneStatus.recent_inactive?.[0]?.deactivated_at
+                          ? formatTime(pruneStatus.recent_inactive[0].deactivated_at)
+                          : '—'}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="overflow-y-auto" style={{ maxHeight: 300 }}>
+                  {!pruneStatus?.recent_inactive?.length ? (
+                    <div className="text-center py-8">
+                      <CheckCircle2 size={24} className="mx-auto text-emerald-200 mb-2" />
+                      <p className="text-sm text-gray-400">No inactive subscribers — all endpoints healthy</p>
+                    </div>
+                  ) : (
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-gray-400 border-b border-gray-100 bg-gray-50">
+                          <th className="text-left py-2 px-3 font-medium">User ID</th>
+                          <th className="text-left py-2 px-3 font-medium">Role</th>
+                          <th className="text-left py-2 px-3 font-medium">Push Service</th>
+                          <th className="text-right py-2 px-3 font-medium">Streak</th>
+                          <th className="text-left py-2 px-3 font-medium">Deactivated</th>
+                          <th className="text-left py-2 px-3 font-medium">Reason</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pruneStatus.recent_inactive.map((s, i) => (
+                          <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                            <td className="py-2 px-3 text-gray-700 font-mono truncate" style={{ maxWidth: 140 }}>{s.user_id || '-'}</td>
+                            <td className="py-2 px-3">
+                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                                s.role === 'admin' ? 'bg-violet-50 text-violet-600' : 'bg-gray-100 text-gray-500'
+                              }`}>{s.role || 'unknown'}</span>
+                            </td>
+                            <td className="py-2 px-3 text-gray-500 truncate" style={{ maxWidth: 160 }}>{s.endpoint_domain || '-'}</td>
+                            <td className="py-2 px-3 text-right text-red-500 font-bold">{s.consecutive_failures_at_prune ?? '-'}</td>
+                            <td className="py-2 px-3 text-gray-400">{formatTime(s.deactivated_at)}</td>
+                            <td className="py-2 px-3 text-gray-500 truncate" style={{ maxWidth: 220 }} title={s.deactivation_reason}>{s.deactivation_reason || '-'}</td>
                           </tr>
                         ))}
                       </tbody>
