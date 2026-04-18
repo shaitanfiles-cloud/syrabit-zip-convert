@@ -206,20 +206,21 @@ def test_dispatches_helper_clamps_limit_between_1_and_50():
         def __getitem__(self, _n): return _Coll()
 
     import asyncio
+    # NOTE: ``asyncio.get_event_loop()`` raises ``RuntimeError: There is
+    # no current event loop in thread 'MainThread'`` on Python 3.11+
+    # when no loop is running and the auto-create-on-demand behaviour
+    # has been removed. ``asyncio.run()`` creates a fresh loop per call,
+    # which is what we want here — each clamp assertion is independent.
     with patch.object(seo_engine, "_db", _DB()):
-        asyncio.get_event_loop().run_until_complete(
-            seo_engine.get_recent_seo_summary_dispatches(limit=9999))
+        asyncio.run(seo_engine.get_recent_seo_summary_dispatches(limit=9999))
         assert captured["limit"] == 50
         # Negative limits are floored to 1 so a malformed URL can't ask Mongo
         # for a reverse/unbounded scan.
-        asyncio.get_event_loop().run_until_complete(
-            seo_engine.get_recent_seo_summary_dispatches(limit=-5))
+        asyncio.run(seo_engine.get_recent_seo_summary_dispatches(limit=-5))
         assert captured["limit"] == 1
         # ``limit=0`` falls back to the documented default (10) via the
         # ``limit or 10`` guard rather than being clamped to 1.
-        asyncio.get_event_loop().run_until_complete(
-            seo_engine.get_recent_seo_summary_dispatches(limit=0))
+        asyncio.run(seo_engine.get_recent_seo_summary_dispatches(limit=0))
         assert captured["limit"] == 10
-        asyncio.get_event_loop().run_until_complete(
-            seo_engine.get_recent_seo_summary_dispatches(limit=20))
+        asyncio.run(seo_engine.get_recent_seo_summary_dispatches(limit=20))
         assert captured["limit"] == 20

@@ -21,6 +21,16 @@ import pytest
 
 ROUTES_DIR = pathlib.Path(__file__).resolve().parent.parent / "routes"
 
+# Modules that live under `routes/` for organisational reasons but
+# intentionally don't expose an APIRouter — they are background-loop
+# helpers wired up by `server.py` rather than HTTP route bundles.
+# The import-smoke check still runs against them (a bad import would
+# crash gunicorn at startup just the same), but the `router` assertion
+# is skipped.
+_NON_ROUTER_MODULES = frozenset({
+    "admin_ci_alerts",  # Task #484: leader-gated CI red-alert poller
+})
+
 
 def _route_modules():
     for path in sorted(ROUTES_DIR.glob("*.py")):
@@ -32,7 +42,11 @@ def _route_modules():
 @pytest.mark.parametrize("module_name", list(_route_modules()))
 def test_route_module_imports_cleanly(module_name: str):
     mod = importlib.import_module(f"routes.{module_name}")
-    # Every route module exposes an APIRouter named `router`.
+    if module_name in _NON_ROUTER_MODULES:
+        # Background-loop helper. Successful import is the whole point
+        # of the smoke check for these — no `router` symbol expected.
+        return
+    # Every other route module exposes an APIRouter named `router`.
     # If something else is convention here later, relax this assertion.
     assert hasattr(mod, "router"), (
         f"routes/{module_name}.py imported but exposes no `router`. "

@@ -38,6 +38,37 @@ _SNAPSHOT_ATTRS = ("db", "is_mongo_available", "supa")
 _MISSING = object()
 
 
+# Task #469 follow-up: pin the synthetic ``deps`` stub at session start.
+#
+# The historical pattern was that any test file wanting the stub did
+# ``install_deps_stub()`` at *its own* module-load time. That works in
+# isolation, but ``install_deps_stub()`` is a no-op if ``sys.modules['deps']``
+# already exists (force=False). So if any earlier test's import chain
+# pulled in the *real* ``deps.py`` (e.g. via a TestClient that mounts a
+# router whose import chain bottoms out in ``from deps import db``), the
+# real module sticks around in ``sys.modules['deps']`` and every later
+# ``install_deps_stub()`` call silently returns the real module instead.
+#
+# The autouse fixture below then snapshots whatever is current pre-test
+# and restores it post-test, so the real-deps pollution propagates to
+# every subsequent test — most visibly to ``test_no_sys_modules_pollution``,
+# whose entire job is to assert the stub is intact.
+#
+# Fix: install the stub here, at conftest module load (which happens
+# *before* any test file is imported), force=True so we win even if some
+# eager import beat us to it. Then in the per-test fixture, if the stub
+# went missing during the previous test, restore it. This guarantees
+# every test starts with the same stub identity.
+try:
+    from tests._deps_stub import install_deps_stub  # noqa: E402
+    _PINNED_DEPS_STUB = install_deps_stub(force=True)
+except Exception:
+    # If the stub can't be installed (e.g. import-time error in a
+    # production module the stub relies on), fall back to the legacy
+    # behaviour rather than crashing the whole suite.
+    _PINNED_DEPS_STUB = None
+
+
 def _snapshot_module(name: str):
     """Return ``(was_present, module_object)`` for ``sys.modules[name]``."""
     return (name in sys.modules, sys.modules.get(name))
@@ -91,6 +122,18 @@ def _reset_test_stub_state():
     statements continue to find the same fully-initialized module
     they would have found in a fresh process.
     """
+    # --- Pre-test stub re-pinning ---
+    # If the previous test (or its import chain) replaced our pinned
+    # stub with the real ``deps`` module — or with a different stub
+    # instance — restore the canonical pinned stub *before* snapshotting
+    # so this test starts from the same identity every other test
+    # started from. Without this, real-deps pollution leaks across
+    # tests via the snapshot/restore loop itself.
+    if _PINNED_DEPS_STUB is not None and (
+        sys.modules.get(_DEPS_KEY) is not _PINNED_DEPS_STUB
+    ):
+        sys.modules[_DEPS_KEY] = _PINNED_DEPS_STUB
+
     # --- Pre-test snapshot ---
     deps_present_pre, deps_module_pre = _snapshot_module(_DEPS_KEY)
     metrics_present_pre, metrics_module_pre = _snapshot_module(_METRICS_KEY)
