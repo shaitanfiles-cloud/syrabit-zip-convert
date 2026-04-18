@@ -256,8 +256,11 @@ async def _compute_dashboard():
             "page_views_today": cf_stats.get("page_views_today", 0),
             "total_page_views": cf_stats.get("total_page_views", 0),
             "total_requests": cf_stats.get("total_requests", 0),
+            "requests_today": cf_stats.get("requests_today", 0),
+            "total_bytes": cf_stats.get("total_bytes", 0),
+            "bytes_today": cf_stats.get("bytes_today", 0),
             "daily_visitors": cf_stats.get("daily_visitors", []),
-            "cloudflare": cf_stats,
+            "cloudflare": {**cf_stats, "period_days": 7},
         }
     else:
         visitor_stats = {}

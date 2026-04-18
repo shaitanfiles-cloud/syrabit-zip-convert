@@ -287,6 +287,7 @@ async def get_visitor_stats_cf(days: int = 7) -> Optional[dict]:
             sum {
               requests
               pageViews
+              bytes
             }
             uniq {
               uniques
@@ -303,6 +304,7 @@ async def get_visitor_stats_cf(days: int = 7) -> Optional[dict]:
             sum {
               requests
               pageViews
+              bytes
             }
             uniq {
               uniques
@@ -331,24 +333,30 @@ async def get_visitor_stats_cf(days: int = 7) -> Optional[dict]:
         today_data = zone.get("todayData", [{}])[0] if zone.get("todayData") else {}
         visitors_today = today_data.get("uniq", {}).get("uniques", 0)
         page_views_today = today_data.get("sum", {}).get("pageViews", 0)
+        requests_today = today_data.get("sum", {}).get("requests", 0)
+        bytes_today = today_data.get("sum", {}).get("bytes", 0)
 
         daily_visitors = []
         total_visitors = 0
         total_page_views = 0
         total_requests = 0
+        total_bytes = 0
         for day in zone.get("daily", []):
             dims = day.get("dimensions", {})
             day_visitors = day.get("uniq", {}).get("uniques", 0)
             day_page_views = day.get("sum", {}).get("pageViews", 0)
             day_requests = day.get("sum", {}).get("requests", 0)
+            day_bytes = day.get("sum", {}).get("bytes", 0)
             total_visitors += day_visitors
             total_page_views += day_page_views
             total_requests += day_requests
+            total_bytes += day_bytes
             daily_visitors.append({
                 "date": dims.get("date", ""),
                 "visitors": day_visitors,
                 "page_views": day_page_views,
                 "requests": day_requests,
+                "bytes": day_bytes,
             })
 
         return {
@@ -357,6 +365,9 @@ async def get_visitor_stats_cf(days: int = 7) -> Optional[dict]:
             "page_views_today": page_views_today,
             "total_page_views": total_page_views,
             "total_requests": total_requests,
+            "requests_today": requests_today,
+            "total_bytes": total_bytes,
+            "bytes_today": bytes_today,
             "daily_visitors": daily_visitors,
             "source": "cloudflare",
         }

@@ -114,7 +114,11 @@ async def admin_analytics(days: int = 30, admin: dict = Depends(get_admin_user))
             "page_views_today": cf_data.get("page_views_today", 0),
             "total_page_views": cf_data.get("total_page_views", 0),
             "total_requests": cf_data.get("total_requests", 0),
+            "requests_today": cf_data.get("requests_today", 0),
+            "total_bytes": cf_data.get("total_bytes", 0),
+            "bytes_today": cf_data.get("bytes_today", 0),
             "daily_visitors": cf_data.get("daily_visitors", []),
+            "period_days": fetch_days,
         }
         visitor_stats = {
             **cloudflare_block,

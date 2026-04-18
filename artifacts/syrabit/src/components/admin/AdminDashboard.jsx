@@ -19,6 +19,7 @@ import { pushChannelTone } from '@/utils/pushChannelTone';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, ReferenceLine, CartesianGrid, Legend,
+  AreaChart, Area,
 } from 'recharts';
 
 function GlassCard({ children, className = '', glow, ...props }) {
@@ -853,8 +854,16 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         <div className="flex items-center gap-2 mb-4 flex-wrap">
           <Globe size={14} style={{ color: '#0891b2' }} />
           <span className="text-xs font-bold text-cyan-700">Traffic (Cloudflare)</span>
-          <span className="ml-auto text-[10px] text-gray-400 italic">
-            All visitor &amp; page-view counts come from Cloudflare
+          <a
+            href="https://dash.cloudflare.com/?to=/:account/analytics"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[10px] text-cyan-600 hover:text-cyan-800 underline-offset-2 hover:underline"
+          >
+            Account analytics documentation
+          </a>
+          <span className="ml-auto text-[10px] text-gray-500">
+            All sites for account · Previous {vs.cloudflare?.period_days ?? 7} days
           </span>
         </div>
 
@@ -866,67 +875,99 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           />
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
-          <div className="rounded-xl p-3 bg-emerald-50 border border-emerald-200">
-            <div className="flex items-center gap-1.5 mb-2">
-              <Globe size={11} style={{ color: '#10b981' }} />
-              <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider">Visitors</span>
-              <span className="text-[9px] text-gray-400 ml-auto">Cloudflare</span>
+        {(() => {
+          const cf = vs.cloudflare || {};
+          const daily = Array.isArray(cf.daily_visitors) ? cf.daily_visitors : [];
+          const fmtBytes = (n) => {
+            n = Number(n) || 0;
+            if (n < 1024) return `${n} B`;
+            if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
+            if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+            if (n < 1024 ** 4) return `${(n / 1024 ** 3).toFixed(2)} GB`;
+            return `${(n / 1024 ** 4).toFixed(2)} TB`;
+          };
+          const fmtNum = (n) => {
+            n = Number(n) || 0;
+            if (n < 1000) return String(n);
+            if (n < 1e6) return `${(n / 1000).toFixed(2).replace(/\.?0+$/, '')}k`;
+            if (n < 1e9) return `${(n / 1e6).toFixed(2).replace(/\.?0+$/, '')}M`;
+            return `${(n / 1e9).toFixed(2)}B`;
+          };
+          const tiles = [
+            { key: 'requests',   label: 'Requests',   total: cf.total_requests,   today: cf.requests_today,   fmt: fmtNum },
+            { key: 'bytes',      label: 'Bandwidth',  total: cf.total_bytes,      today: cf.bytes_today,      fmt: fmtBytes },
+            { key: 'visitors',   label: 'Visits',     total: cf.total_visitors,   today: cf.visitors_today,   fmt: fmtNum },
+            { key: 'page_views', label: 'Page views', total: cf.total_page_views, today: cf.page_views_today, fmt: fmtNum },
+          ];
+          const hasData = vs.cloudflare && daily.length > 0;
+          return (
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
+              {tiles.map(t => (
+                <div key={t.key} className="rounded-xl p-3 bg-white border border-gray-200">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">{t.label}</p>
+                  <p className="text-gray-900 font-bold text-2xl leading-none">
+                    {hasData ? t.fmt(t.total) : '—'}
+                  </p>
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    Today: {hasData ? t.fmt(t.today) : '—'}
+                  </p>
+                  <div className="h-10 mt-2 -mx-1">
+                    {hasData && (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={daily} margin={{ top: 2, right: 2, left: 2, bottom: 0 }}>
+                          <defs>
+                            <linearGradient id={`cf-spark-${t.key}`} x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.35} />
+                              <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
+                            </linearGradient>
+                          </defs>
+                          <Area
+                            type="monotone"
+                            dataKey={t.key}
+                            stroke="#3b82f6"
+                            strokeWidth={1.5}
+                            fill={`url(#cf-spark-${t.key})`}
+                            isAnimationActive={false}
+                          />
+                          <Tooltip
+                            cursor={{ stroke: '#94a3b8', strokeWidth: 1 }}
+                            formatter={(v) => [t.fmt(v), t.label]}
+                            labelFormatter={(_, p) => p?.[0]?.payload?.date || ''}
+                            contentStyle={{ fontSize: '11px', padding: '4px 6px', borderRadius: '6px' }}
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
-            <div className="flex gap-4">
+          );
+        })()}
+
+        {vs.bot_traffic && (
+          <div className="rounded-xl p-3 bg-amber-50 border border-amber-200 mb-3">
+            <div className="flex items-center gap-1.5 mb-2">
+              <Bot size={11} style={{ color: '#f59e0b' }} />
+              <span className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">Bot/Crawler Traffic (excluded above)</span>
+              <span className="text-[9px] text-gray-400 ml-auto">separate</span>
+            </div>
+            <div className="flex gap-6 flex-wrap">
               <div>
-                <p className="text-gray-900 font-bold text-lg">{vs.cloudflare ? (vs.cloudflare.total_visitors ?? 0).toLocaleString() : '—'}</p>
-                <p className="text-[10px] text-gray-400">Range</p>
+                <p className="text-gray-900 font-bold text-lg">{(vs.bot_traffic?.unique_total ?? 0).toLocaleString()}</p>
+                <p className="text-[10px] text-gray-400">Unique bots</p>
               </div>
               <div>
-                <p className="text-gray-900 font-bold text-lg">{vs.cloudflare ? (vs.cloudflare.visitors_today ?? 0).toLocaleString() : '—'}</p>
+                <p className="text-gray-900 font-bold text-lg">{(vs.bot_traffic?.hits_today ?? 0).toLocaleString()}</p>
                 <p className="text-[10px] text-gray-400">Today</p>
+              </div>
+              <div>
+                <p className="text-gray-500 font-bold text-lg">{(vs.bot_traffic?.total_hits ?? 0).toLocaleString()}</p>
+                <p className="text-[10px] text-gray-400">Total</p>
               </div>
             </div>
           </div>
-
-          <div className="rounded-xl p-3 bg-violet-50 border border-violet-200">
-            <div className="flex items-center gap-1.5 mb-2">
-              <Eye size={11} style={{ color: '#8b5cf6' }} />
-              <span className="text-[10px] font-bold text-violet-700 uppercase tracking-wider">Page Views</span>
-              <span className="text-[9px] text-gray-400 ml-auto">Cloudflare</span>
-            </div>
-            <div className="flex gap-4">
-              <div>
-                <p className="text-gray-900 font-bold text-lg">{vs.cloudflare ? (vs.cloudflare.total_page_views ?? 0).toLocaleString() : '—'}</p>
-                <p className="text-[10px] text-gray-400">Range</p>
-              </div>
-              <div>
-                <p className="text-gray-900 font-bold text-lg">{vs.cloudflare ? (vs.cloudflare.page_views_today ?? 0).toLocaleString() : '—'}</p>
-                <p className="text-[10px] text-gray-400">Today</p>
-              </div>
-            </div>
-          </div>
-
-          {vs.bot_traffic && (
-            <div className="rounded-xl p-3 bg-amber-50 border border-amber-200">
-              <div className="flex items-center gap-1.5 mb-2">
-                <Bot size={11} style={{ color: '#f59e0b' }} />
-                <span className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">Bot/Crawler Traffic</span>
-                <span className="text-[9px] text-gray-400 ml-auto">separate</span>
-              </div>
-              <div className="flex gap-4">
-                <div>
-                  <p className="text-gray-900 font-bold text-lg">{(vs.bot_traffic?.unique_total ?? 0).toLocaleString()}</p>
-                  <p className="text-[10px] text-gray-400">Unique bots</p>
-                </div>
-                <div>
-                  <p className="text-gray-900 font-bold text-lg">{(vs.bot_traffic?.hits_today ?? 0).toLocaleString()}</p>
-                  <p className="text-[10px] text-gray-400">Today</p>
-                </div>
-                <div>
-                  <p className="text-gray-500 font-bold text-lg">{(vs.bot_traffic?.total_hits ?? 0).toLocaleString()}</p>
-                  <p className="text-[10px] text-gray-400">Total</p>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+        )}
 
         {vs.bot_traffic?.top_bots?.length > 0 && (
           <div className="mt-3">
