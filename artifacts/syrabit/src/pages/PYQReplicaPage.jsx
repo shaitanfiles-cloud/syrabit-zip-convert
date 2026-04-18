@@ -4,6 +4,7 @@ import { WORKER_API } from '../utils/api';
 import { useShare } from '../hooks/useShare';
 import PageMeta from '@/components/seo/PageMeta';
 import ContinueLearning from '@/components/content/ContinueLearning';
+import { MobileNavSwitch } from '@/components/layout/MobileNavSwitch';
 import { useLibraryBundle } from '@/hooks/useContent';
 
 /**
@@ -248,6 +249,12 @@ export default function PYQReplicaPage() {
         />
       </div>
 
+      <div
+        aria-hidden="true"
+        className="md:hidden"
+        style={{ height: 'calc(4rem + env(safe-area-inset-bottom, 0px))' }}
+      />
+      <MobileNavSwitch />
     </div>
   );
 }

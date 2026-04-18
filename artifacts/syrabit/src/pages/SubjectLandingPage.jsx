@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useResolveSubject, useChapters } from '@/hooks/useContent';
 import ContinueLearning from '@/components/content/ContinueLearning';
+import { MobileNavSwitch } from '@/components/layout/MobileNavSwitch';
 import { useContentLang } from '@/context/LanguageContext';
 import { seoRelatedByChapter } from '@/utils/api';
 import { siblingsAsRelated } from '@/utils/siblingChapter';
@@ -332,16 +333,19 @@ export default function SubjectLandingPage() {
 
         <nav className="mt-10 pt-6 border-t border-border/30" aria-label="Site navigation">
           <div className="flex flex-wrap gap-4 justify-center text-xs text-muted-foreground">
-            <Link to="/" className="hover:text-violet-600 transition-colors">Home</Link>
-            <Link to="/library" className="hover:text-violet-600 transition-colors">Browser</Link>
-            <Link to="/pricing" className="hover:text-violet-600 transition-colors">Plans & Pricing</Link>
             <Link to="/chat" className="hover:text-violet-600 transition-colors">Ask Syra</Link>
           </div>
           <p className="text-center text-xs text-muted-foreground/50 mt-3">
             Syrabit.ai — AI-powered exam prep for AssamBoard students (AHSEC · DEGREE · SEBA)
           </p>
         </nav>
+        <div
+          className="md:hidden"
+          aria-hidden="true"
+          style={{ height: 'calc(4rem + env(safe-area-inset-bottom, 0px))' }}
+        />
       </div>
+      <MobileNavSwitch />
     </div>
   );
 }

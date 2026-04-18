@@ -14,6 +14,7 @@ import Analytics from '@/utils/analytics';
 import { useContentLang } from '@/context/LanguageContext';
 import StickyToc from '@/components/ui/StickyToc';
 import ContinueLearning from '@/components/content/ContinueLearning';
+import { MobileNavSwitch } from '@/components/layout/MobileNavSwitch';
 import { useLibraryBundle, useLibraryBundleSlim } from '@/hooks/useContent';
 import { findSiblingChapters, siblingsAsRelated } from '@/utils/siblingChapter';
 import { pushRecentChapter } from '@/utils/recentChapters';
@@ -937,17 +938,20 @@ export default function ChapterPage() {
 
         <nav className="mt-10 pt-6 border-t border-border/30" aria-label="Site navigation">
           <div className="flex flex-wrap gap-4 justify-center text-xs text-muted-foreground">
-            <Link to="/" className="hover:text-primary transition-colors">Home</Link>
-            <Link to="/library" className="hover:text-primary transition-colors">Browser</Link>
             <Link to={basePath} className="hover:text-primary transition-colors">{subjectName}</Link>
-            <Link to="/pricing" className="hover:text-primary transition-colors">Plans & Pricing</Link>
           </div>
           <p className="text-center text-xs text-muted-foreground/60 mt-3">
             Syrabit.ai — AI-powered exam prep for Assam Board students (AHSEC · DEGREE · SEBA)
           </p>
         </nav>
+        <div
+          className="md:hidden"
+          aria-hidden="true"
+          style={{ height: 'calc(4rem + env(safe-area-inset-bottom, 0px))' }}
+        />
       </div>
       <SerpPreviewModal preview={serpPreview} onConfirm={confirmShare} onDismiss={dismissPreview} />
+      <MobileNavSwitch />
     </div>
   );
 }
