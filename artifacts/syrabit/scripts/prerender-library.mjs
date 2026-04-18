@@ -95,10 +95,20 @@ function rewriteHead(html) {
     /<meta name="description" content="[^"]*"\s*\/?>(\n)?/,
     `<meta name="description" content="${escapeHtml(DESCRIPTION)}" />\n    `,
   );
-  html = html.replace(
-    /<link rel="canonical" href="[^"]*"\s*\/?>(\n)?/,
-    `<link rel="canonical" href="${CANONICAL}" />\n    `,
-  );
+  // Task #494: static template no longer carries a placeholder canonical;
+  // swap if present (legacy builds) else inject before </head>.
+  if (/<link rel="canonical" href="[^"]*"\s*\/?>(\n)?/.test(html)) {
+    html = html.replace(
+      /<link rel="canonical" href="[^"]*"\s*\/?>(\n)?/,
+      `<link rel="canonical" href="${CANONICAL}" />\n    `,
+    );
+  } else {
+    html = html.replace(
+      /<\/head>/,
+      `    <link rel="canonical" href="${CANONICAL}" />\n` +
+      `    <link rel="alternate" hreflang="en-IN" href="${CANONICAL}" />\n  </head>`,
+    );
+  }
   html = html.replace(
     /<meta property="og:url" content="[^"]*"\s*\/?>/,
     `<meta property="og:url" content="${CANONICAL}" />`,
