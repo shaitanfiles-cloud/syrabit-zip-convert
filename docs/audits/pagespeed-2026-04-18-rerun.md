@@ -430,3 +430,111 @@ Upgrade behaviour is preserved: when a returning user already has a controlling 
 - No effect on returning users with a SW already controlling the page (upgrade reload still fires as before).
 
 A fresh PSI run cannot be executed from this environment — the change has to land in the next Pages deploy first. After deploy, re-run `node scripts/run-pagespeed-audit.mjs` then `node scripts/build-pagespeed-report.mjs` to confirm the `redirects` audit clears and to capture the per-route Performance delta.
+
+## Re-audit run #2 — Task #503 (2026-04-18, post-contrast-fix verification)
+
+A fresh PSI run was kicked off after Task #500 to confirm the `color-contrast`
+audit clears on all 12 routes and that Accessibility lifts to 100 (or ≥ 95).
+Raw JSON for this run lives in
+[`docs/audits/pagespeed-2026-04-18-rerun-raw/`](./pagespeed-2026-04-18-rerun-raw/)
+(the original first-rerun JSON was overwritten — the new files **are** the
+post-fix snapshot). The full per-URL tables and Top-10 generated from the new
+data are in [`pagespeed-2026-04-18-rerun-2.md`](./pagespeed-2026-04-18-rerun-2.md).
+
+### Headline numbers (mobile)
+
+| Metric | Before fix (rerun #1) | After fix (rerun #2) | Target | Status |
+|---|---|---|---|---|
+| Avg Accessibility score | 91 / 100 | **91 / 100** | 100 (≥ 95) | 🔴 unchanged |
+| Routes with Accessibility ≥ 95 | 2 / 12 | **2 / 12** | 12 / 12 | 🔴 unchanged |
+| Routes with Accessibility = 100 | 0 / 12 | **0 / 12** | 12 / 12 | 🔴 unchanged |
+| Routes passing `color-contrast` | 0 / 12 | **0 / 12** | 12 / 12 | 🔴 unchanged |
+| Total failing contrast nodes (24 runs, mobile + desktop) | — | **152** | 0 | 🔴 |
+
+Per-route Accessibility / `color-contrast` snapshot (mobile · desktop):
+
+| Route | A11y M · D | `color-contrast` M · D | Failing nodes M · D |
+|---|---|---|---|
+| `/home` | 93 · 90 | 🔴 0 · 🔴 0 | 20 · 13 |
+| `/library` | 94 · 94 | 🔴 0 · 🔴 0 | 12 · 32 |
+| `/assamboard/class-12/physics` | 90 · 90 | 🔴 0 · 🔴 0 | 1 · 1 |
+| `/assamboard/class-12/physics/electric-charges-and-fields` | 91 · 91 | 🔴 0 · 🔴 0 | 2 · 2 |
+| `/chat` | 96 · 96 | 🔴 0 · 🔴 0 | 4 · 6 |
+| `/login` | 86 · 86 | 🔴 0 · 🔴 0 | 1 · 1 |
+| `/signup` | 86 · 86 | 🔴 0 · 🔴 0 | 1 · 1 |
+| `/profile` | 96 · 96 | 🔴 0 · 🔴 0 | 1 · 2 |
+| `/pricing` | 93 · 92 | 🔴 0 · 🔴 0 | 6 · 16 |
+| `/admin/login` | 81 · 81 | 🔴 0 · 🔴 0 | 1 · 1 |
+| `/about` | 91 · 89 | 🔴 0 · 🔴 0 | 1 · 11 |
+| `/technology` | 94 · 94 | 🔴 0 · 🔴 0 | 3 · 13 |
+
+### Verdict — task acceptance criteria NOT met
+
+- ❌ `color-contrast` audit does **not** show `score=1` on any of the 12 routes
+  (still `score=0` on all 24 mobile + desktop runs, 152 failing nodes total).
+- ❌ Accessibility category did not reach 100 on any route, and only 2 / 12
+  reach ≥ 95 (`/chat`, `/profile` at 96; identical to rerun #1).
+- ✅ Audit pipeline itself ran cleanly (24 / 24 PSI calls succeeded, no errors).
+
+### Why the fix didn't take
+
+The dominant failing color pair is **identical** to what rerun #1 reported, so
+the fix from Task #500 did **not** change what the production CSS actually
+serves. The five colour pairs that account for **120 / 152** failing nodes are:
+
+| Foreground | Background | Ratio | Needed | Tailwind / CSS source |
+|---|---|---|---|---|
+| `#607490` | `#f3f3f7` | 4.31 : 1 | 4.5 : 1 | `text-muted-foreground` on default `bg-background` |
+| `#607490` | `#f4f3f8` | 4.32 : 1 | 4.5 : 1 | `text-muted-foreground` on slightly tinted card |
+| `#607490` | `#eeebf7` | 4.06 : 1 | 4.5 : 1 | `text-muted-foreground` on `library` filter chips |
+| `#607490` | `#efedf7` | 4.12 : 1 | 4.5 : 1 | `text-muted-foreground` on `chat` quick-prompt buttons |
+| `#8b99af` on `#f0eef7` | — | 2.51 : 1 | 4.5 : 1 | `hsl(var(--muted-foreground) / 0.7)` inline style |
+
+`#607490` is the resolved value of `--muted-foreground` (HSL ≈ `215 22% 47%`).
+It is **0.19 contrast points short** of WCAG AA against the page background, so
+no amount of "tweaking opacity" inside components will fix it — the token
+itself has to be darkened to roughly `215 25% 40%` (approx `#4d5a73`, which
+gives ~6.0 : 1) and any `text-muted-foreground/50`, `/70` or
+`hsl(var(--muted-foreground) / 0.x)` usages dropped or replaced with a
+dedicated lighter token that is only used on *non-text* surfaces (icons, rules).
+
+Two smaller, separate failures remain on form pages:
+
+- `/login`, `/signup`: the password input uses `border-gray-200` on
+  `bg-transparent`, resolving to `#e2e8f0` on `#fcfcfd` — **1.2 : 1**, an
+  outright invisible border. Bump to `border-gray-300` or darker.
+- `/admin/login`: the same input pattern plus a 2nd low-contrast hint string
+  pin Accessibility at 81.
+
+### Most likely root cause
+
+The pre-deploy assumption in Task #500 was that the contrast fix had landed in
+production, but the new Lighthouse report shows the same exact pixel colours
+and node counts as before. Either:
+1. The deploy didn't ship — verify the Cloudflare Pages build SHA on
+   `https://syrabit.ai` matches the commit that fixed `--muted-foreground`, or
+2. The fix only changed Tailwind class definitions in the source bundle but
+   the inline `style="color: hsl(var(--muted-foreground) / 0.7)"` usages
+   (visible in the failing snippets in `library` and on the home page) bypass
+   the token change and still resolve to the old colour.
+
+Either way, the Accessibility = 100 target cannot be claimed yet. A follow-up
+should: (a) confirm the build SHA on prod, (b) audit the source for inline
+`hsl(var(--muted-foreground) / …)` usages and `text-muted-foreground/{50,70}`
+opacity modifiers, (c) darken `--muted-foreground` to ≥ `4.6 : 1` against
+`--background` and `--card`, and (d) replace `border-gray-200` with a token
+that meets 3 : 1 against the input background. Then re-run this audit.
+
+### How to reproduce
+
+```bash
+# Re-audit against prod (uses PAGESPEED_API_KEY from env)
+rm -rf docs/audits/pagespeed-2026-04-18-rerun-raw
+AUDIT_OUT_DIR=docs/audits/pagespeed-2026-04-18-rerun-raw \
+  node scripts/run-pagespeed-audit.mjs
+
+# Build the per-run report (writes pagespeed-2026-04-18-rerun-2.md)
+ln -sf pagespeed-2026-04-18-rerun-raw \
+  docs/audits/pagespeed-2026-04-18-rerun-2-raw
+AUDIT_DATE=2026-04-18-rerun-2 node scripts/build-pagespeed-report.mjs
+```
