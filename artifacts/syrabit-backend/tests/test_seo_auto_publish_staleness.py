@@ -72,6 +72,48 @@ class _FakeColl:
         self._docs[_id] = cur
         return None
 
+    async def find_one_and_update(self, query, update, upsert=False):
+        """Minimal Mongo CAS emulator: applies `$set` only when the
+        guard matches. Supports the small subset of operators used by
+        ``_claim_seo_staleness_alert_slot``: top-level field equality,
+        ``$ne``, ``$lt``, ``$exists``, and a top-level ``$or``."""
+        def _matches(doc, q):
+            for k, v in q.items():
+                if k == "$or":
+                    if not any(_matches(doc, sub) for sub in v):
+                        return False
+                    continue
+                actual = doc.get(k)
+                if isinstance(v, dict):
+                    if "$ne" in v and actual == v["$ne"]:
+                        return False
+                    if "$lt" in v and not (actual is not None and actual < v["$lt"]):
+                        return False
+                    if "$exists" in v and (k in doc) != bool(v["$exists"]):
+                        return False
+                else:
+                    if actual != v:
+                        return False
+            return True
+
+        _id = query["_id"]
+        doc = self._docs.get(_id)
+        if doc is None:
+            return None
+        if not _matches(doc, query):
+            return None
+        prior = dict(doc)
+        doc.update(update.get("$set", {}))
+        return prior
+
+    async def insert_one(self, doc):
+        _id = doc["_id"]
+        if _id in self._docs:
+            from pymongo.errors import DuplicateKeyError
+            raise DuplicateKeyError("dup")
+        self._docs[_id] = dict(doc)
+        return None
+
     def find(self, *a, **kw):
         # Used by the admin email lookup — return an empty list of users.
         return _FakeCursor([])

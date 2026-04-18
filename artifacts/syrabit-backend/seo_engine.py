@@ -17,7 +17,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
 from typing import Any, Callable, Coroutine, List, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from email.utils import format_datetime as _email_format_datetime
 import asyncio, uuid, re, logging, json, html as html_mod, hashlib
 
@@ -6218,6 +6218,73 @@ async def _persist_seo_staleness_state(
         logger.debug(f"[seo-staleness] persist failed: {exc}")
 
 
+async def _claim_seo_staleness_alert_slot(
+    db, kind: str, prior_state: Optional[str], now_utc: datetime,
+    last_run_at: Optional[str],
+) -> bool:
+    """Atomic single-winner CAS so a multi-replica deployment cannot
+    page admins twice for the same transition. Each replica races to
+    flip the lock doc with a guard expressing "I observed the same
+    prior state you'd need to observe to legitimately fire this alert".
+    The first writer wins; the loser's ``find_one_and_update`` returns
+    ``None`` and we skip the email/notification entirely.
+
+    Guards:
+      * ``stale``: prior must NOT already be stale (initial detection)
+        OR the prior alert must be older than the debounce window
+        (legitimate re-page).
+      * ``recovered``: prior must currently be ``stale`` (otherwise
+        nothing to recover from).
+    """
+    set_payload = {
+        "last_state": "stale" if kind == "stale" else "healthy",
+        "last_alert_at": now_utc.isoformat(),
+        "last_run_at_observed": last_run_at,
+        "updated_at": now_utc.isoformat(),
+    }
+    if kind == "stale":
+        cutoff_iso = (now_utc - timedelta(hours=_SEO_STALENESS_REALERT_INTERVAL_H)).isoformat()
+        guard = {
+            "_id": _SEO_STALENESS_ALERT_LOCK_ID,
+            "$or": [
+                {"last_state": {"$ne": "stale"}},
+                {"last_alert_at": {"$lt": cutoff_iso}},
+                {"last_alert_at": {"$exists": False}},
+            ],
+        }
+    else:  # recovered
+        guard = {
+            "_id": _SEO_STALENESS_ALERT_LOCK_ID,
+            "last_state": "stale",
+        }
+    try:
+        res = await db.job_locks.find_one_and_update(
+            guard, {"$set": set_payload}, upsert=False,
+        )
+        if res is not None:
+            return True
+    except Exception as exc:
+        logger.debug(f"[seo-staleness] CAS failed: {exc}")
+        return False
+    # No prior doc → bootstrap a stale alert via insert. Recovery has no
+    # bootstrap path: there must be a prior `stale` row to recover from.
+    if kind != "stale":
+        return False
+    try:
+        from pymongo.errors import DuplicateKeyError
+        await db.job_locks.insert_one({
+            "_id": _SEO_STALENESS_ALERT_LOCK_ID,
+            **set_payload,
+        })
+        return True
+    except DuplicateKeyError:
+        # A peer just inserted the doc; let them own this alert.
+        return False
+    except Exception as exc:
+        logger.debug(f"[seo-staleness] bootstrap insert failed: {exc}")
+        return False
+
+
 async def _send_seo_staleness_alert(
     db, state: dict, kind: str, now_utc: datetime,
 ) -> None:
@@ -6295,16 +6362,27 @@ async def _email_admins_about_seo_staleness(db, title: str, message: str) -> Non
     """Email the same admin audience that gets the SEO daily summary —
     reuses ``_resolve_seo_summary_audience`` so an admin who has opted
     out of the daily digest also gets opted out of the staleness alert
-    (and we honor their quiet hours), keeping the noise predictable."""
+    (and we honor their quiet hours), keeping the noise predictable.
+
+    The broad-admin fallback only fires when the prefs subsystem
+    actually *failed* (raised) — an empty recipient list from a
+    successful resolve means admins intentionally suppressed
+    themselves (opt-out / quiet hours) and we must respect that."""
+    audience_resolved = False
+    recipients: list = []
     try:
         audience = await _resolve_seo_summary_audience(db, datetime.now(timezone.utc))
         recipients = [r.get("email") for r in audience.get("recipients", []) if r.get("email")]
+        audience_resolved = True
     except Exception as exc:
         logger.debug(f"[seo-staleness] audience resolve failed: {exc}")
-        recipients = []
-    if not recipients:
-        # Fallback to the broad admin email lookup so a staleness alert
-        # still goes somewhere even if the prefs subsystem is empty.
+        audience_resolved = False
+    if not recipients and not audience_resolved:
+        # Prefs subsystem itself failed — degrade to a broad admin
+        # lookup so a staleness alert still reaches *someone*. We
+        # intentionally do NOT do this when the resolve succeeded with
+        # an empty list (that means everyone is opted out / in quiet
+        # hours and that suppression must be honored).
         try:
             cursor = db.users.find({"is_admin": True}, {"_id": 0, "email": 1})
             async for u in cursor:
@@ -6365,23 +6443,31 @@ async def _check_and_alert_seo_auto_publish_staleness(
     last_alert_dt = _parse_iso_utc(prior.get("last_alert_at"))
 
     if state["stale"]:
+        # Fast-path debounce check (avoids a round-trip when we already
+        # know we'll lose the CAS). The CAS itself is the authoritative
+        # gate against duplicate alerts across replicas.
         if prior_state == "stale" and last_alert_dt is not None:
             elapsed_h = (now_utc - last_alert_dt).total_seconds() / 3600.0
             if elapsed_h < _SEO_STALENESS_REALERT_INTERVAL_H:
                 return {"action": "skip", "reason": "debounced",
                         "elapsed_h": elapsed_h, "state": state}
+        # Atomic single-winner gate — only the replica that flips the
+        # lock doc actually emails admins, so a multi-worker deployment
+        # can't burst-page the same transition.
+        if not await _claim_seo_staleness_alert_slot(
+            db, "stale", prior_state, now_utc, state["last_run_at"],
+        ):
+            return {"action": "skip", "reason": "lost_race", "state": state}
         await _send_seo_staleness_alert(db, state, "stale", now_utc)
-        await _persist_seo_staleness_state(
-            db, "stale", now_utc, state["last_run_at"], update_alert_at=True,
-        )
         return {"action": "alerted", "kind": "stale", "state": state}
 
     # Healthy path.
     if prior_state == "stale":
+        if not await _claim_seo_staleness_alert_slot(
+            db, "recovered", prior_state, now_utc, state["last_run_at"],
+        ):
+            return {"action": "skip", "reason": "lost_race", "state": state}
         await _send_seo_staleness_alert(db, state, "recovered", now_utc)
-        await _persist_seo_staleness_state(
-            db, "healthy", now_utc, state["last_run_at"], update_alert_at=True,
-        )
         return {"action": "alerted", "kind": "recovered", "state": state}
 
     # Healthy → healthy: persist on first observation only so we don't
