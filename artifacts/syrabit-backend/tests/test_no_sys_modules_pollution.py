@@ -45,7 +45,9 @@ def test_stub_carries_marker_attribute():
 
 def test_db_async_methods_are_awaitable_via_attribute():
     """``await db.<random_collection>.insert_one(...)`` must work even
-    when no test has explicitly initialised that collection."""
+    when no test has explicitly initialised that collection. The body
+    must complete without ``TypeError: object MagicMock can't be used
+    in 'await' expression``."""
     deps = sys.modules["deps"]
 
     async def _exercise():
@@ -53,12 +55,9 @@ def test_db_async_methods_are_awaitable_via_attribute():
         await deps.db.never_seen_before.update_one({"x": 1}, {"$set": {"y": 2}})
         await deps.db.never_seen_before.find_one({"x": 1})
         await deps.db.never_seen_before.delete_one({"x": 1})
-        return await deps.db.never_seen_before.count_documents({})
+        await deps.db.never_seen_before.count_documents({})
 
-    result = asyncio.run(_exercise())
-    # AsyncMock's default return is a MagicMock — what matters here
-    # is that no TypeError was raised.
-    assert result is not None or result is None  # noqa: PIE790
+    asyncio.run(_exercise())
 
 
 def test_db_async_methods_are_awaitable_via_subscript():
@@ -139,3 +138,48 @@ def test_real_deps_module_is_never_touched_by_fixture(monkeypatch):
     # autouse fixture mid-test, but we can assert the recognition
     # condition itself: no marker means skip.
     assert not getattr(fake_real_deps, "_is_syrabit_test_stub", False)
+
+
+# ---------------------------------------------------------------------------
+# Module-identity restoration: the conftest fixture must restore
+# ``sys.modules['deps']`` (or its absence) after every test. These two
+# tests use lexical ordering — part_a mutates, part_b verifies restoration.
+# ---------------------------------------------------------------------------
+
+
+_ORIGINAL_DEPS_MODULE = sys.modules["deps"]
+
+
+def test_module_identity_restoration_part_a():
+    """Pollute ``sys.modules['deps']`` with a foreign module object.
+    The autouse fixture must restore the original module after this
+    test returns."""
+    import types as _types
+    foreign = _types.ModuleType("deps")
+    foreign.is_foreign_pollution_marker = True
+    sys.modules["deps"] = foreign
+    # Sanity: pollution succeeded inside this test.
+    assert sys.modules["deps"] is foreign
+    assert sys.modules["deps"] is not _ORIGINAL_DEPS_MODULE
+
+
+def test_module_identity_restoration_part_b():
+    """The autouse fixture should have undone part_a's pollution
+    before this test runs — ``sys.modules['deps']`` must be the
+    original stub module again."""
+    assert sys.modules.get("deps") is _ORIGINAL_DEPS_MODULE
+    assert getattr(sys.modules["deps"], "_is_syrabit_test_stub", False) is True
+    assert not hasattr(sys.modules["deps"], "is_foreign_pollution_marker")
+
+
+def test_module_identity_restoration_when_deleted_part_a():
+    """A test that deletes ``sys.modules['deps']`` must not leave
+    later tests with a missing module."""
+    del sys.modules["deps"]
+    assert "deps" not in sys.modules
+
+
+def test_module_identity_restoration_when_deleted_part_b():
+    """Verifies the autouse fixture re-installed the original deps
+    module after the deletion in part_a."""
+    assert sys.modules.get("deps") is _ORIGINAL_DEPS_MODULE
