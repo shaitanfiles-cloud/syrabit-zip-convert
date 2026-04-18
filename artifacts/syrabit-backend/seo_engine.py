@@ -21,6 +21,11 @@ from datetime import datetime, timezone, timedelta
 from email.utils import format_datetime as _email_format_datetime
 import asyncio, uuid, re, logging, json, html as html_mod, hashlib
 
+try:
+    import bing_webmaster as _bwt
+except ImportError:
+    _bwt = None
+
 
 def _iso_to_rfc7231(value) -> Optional[str]:
     """Convert a Mongo `updated_at` (ISO 8601 string or datetime) into the
@@ -1339,6 +1344,50 @@ def _smart_board_display(bn: str) -> str:
     return _map.get((bn or "").strip().upper(), bn or "AHSEC")
 
 
+async def _bing_keyword_brief(topic_title: str, subject_name: str = "",
+                              board_name: str = "") -> dict:
+    """Pull real Bing search-volume data for the topic phrase + a board-qualified
+    variant. Combines results so the LLM gets both the broad and exam-specific
+    high-impression phrases. Always returns a dict (possibly with empty fields)."""
+    if _bwt is None or not _bwt.is_configured() or not topic_title:
+        return {"top_related_phrases": [], "total_impressions": 0, "queries_used": []}
+
+    queries = [topic_title.strip()]
+    qualified = " ".join(p for p in [topic_title.strip(), subject_name.strip(), board_name.strip()] if p)
+    if qualified and qualified.lower() != topic_title.strip().lower():
+        queries.append(qualified)
+
+    try:
+        briefs = await asyncio.gather(
+            *[_bwt.keyword_brief(q, max_related=8) for q in queries],
+            return_exceptions=True,
+        )
+    except Exception as exc:
+        logger.warning(f"BWT keyword_brief gather failed: {exc}")
+        return {"top_related_phrases": [], "total_impressions": 0, "queries_used": queries}
+
+    seen: set[str] = set()
+    merged: list[dict] = []
+    total = 0
+    for b in briefs:
+        if isinstance(b, Exception) or not isinstance(b, dict):
+            continue
+        total += int(b.get("total_impressions", 0))
+        for r in b.get("related", []):
+            kw = (r.get("query") or "").strip()
+            if not kw or kw.lower() in seen:
+                continue
+            seen.add(kw.lower())
+            merged.append(r)
+
+    merged.sort(key=lambda d: d.get("impressions", 0), reverse=True)
+    return {
+        "top_related_phrases": [m["query"] for m in merged[:8]],
+        "total_impressions": total,
+        "queries_used": queries,
+    }
+
+
 _BOARD_EXAM_CONTEXT = {
     "AHSEC": (
         "AHSEC conducts the HS Final Exam for Class 11-12. "
@@ -1400,6 +1449,22 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         board_key = "DEGREE"
     board_exam_context = _BOARD_EXAM_CONTEXT.get(board_key, _BOARD_EXAM_CONTEXT["AHSEC"])
 
+    bwt_brief = await _bing_keyword_brief(topic["title"], subject_name, board_display)
+    bwt_phrases = bwt_brief.get("top_related_phrases", [])
+    if bwt_phrases:
+        bwt_block = (
+            f"\n--- REAL SEARCH DEMAND (Bing Webmaster Tools) ---\n"
+            f"Students are actually searching these high-impression phrases related "
+            f"to \"{topic['title']}\":\n"
+            + "\n".join(f"  - {p}" for p in bwt_phrases[:8])
+            + "\nUse these phrases naturally inside H2/H3 headings, FAQ questions, "
+              "the answer-first opening paragraph, and at least once in the "
+              "meta-description-worthy summary. Do NOT keyword-stuff — weave them "
+              "into genuine educational sentences.\n"
+        )
+    else:
+        bwt_block = ""
+
     syllabus_context = (
         f"\n\n--- SYLLABUS CONTEXT ---\n"
         f"Board: {board_display} | Class/Level: {prompt_class_label}\n"
@@ -1408,7 +1473,8 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         f"Position: {syllabus_position or 'Unknown'}\n"
         f"Sibling topics in this chapter: {sibling_list}\n"
         f"Stream/Course Type: {stream_name or 'General'}\n"
-        f"IMPORTANT: Write ONLY about \"{topic['title']}\" — do NOT cover the entire chapter.\n\n"
+        f"IMPORTANT: Write ONLY about \"{topic['title']}\" — do NOT cover the entire chapter.\n"
+        f"{bwt_block}\n"
         f"--- BOARD EXAM PATTERN ---\n"
         f"{board_exam_context}\n\n"
         f"--- END CONTEXT ---\n"
@@ -1733,6 +1799,17 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
             except Exception:
                 pass
     return page
+
+
+@router.get("/admin/bing/keyword-brief")
+async def bing_keyword_brief_endpoint(q: str, subject: str = "", board: str = "",
+                                      _admin: dict = Depends(_require_admin)):
+    """Diagnostic: return the BWT keyword brief for a phrase. Lets us validate
+    the Bing Webmaster Tools wiring without re-running a content batch."""
+    if _bwt is None or not _bwt.is_configured():
+        raise HTTPException(status_code=503, detail="BING_WEBMASTER_API_KEY not configured")
+    brief = await _bing_keyword_brief(q, subject, board)
+    return {"configured": True, **brief}
 
 
 @router.post("/refresh-meta")

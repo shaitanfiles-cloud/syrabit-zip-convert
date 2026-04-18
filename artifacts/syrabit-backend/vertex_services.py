@@ -39,7 +39,12 @@ def _get_embed_client() -> httpx.AsyncClient:
     return _embed_http_client
 
 # ── Model names ───────────────────────────────────────────────────────────────
-_EMBED_MODEL  = "gemini-embedding-001"
+# Embeddings now flow through Voyage's voyage-multilingual-2 (1024-dim, native
+# Assamese / Bengali / Hindi support, stable rate limits). Gemini stays on-call
+# as a last-resort fallback ONLY for legacy 768-dim use cases — see
+# voyage_embeddings.py and the embed_text() implementation below.
+_EMBED_MODEL  = "voyage-multilingual-2"
+_LEGACY_GEMINI_EMBED_MODEL = "gemini-embedding-001"
 _GEN_MODEL    = "gemini-2.5-flash"
 _PRO_MODEL    = "gemini-2.5-flash"
 _VISION_MODEL = "gemini-2.5-flash"
@@ -134,10 +139,11 @@ def _gen_url(model: str) -> str:
 
 
 def _embed_url() -> str:
-    """Resolve embedding URL for the active auth mode."""
+    """Resolve LEGACY Gemini embedding URL for the active auth mode.
+    Only used by the Gemini fallback path in embed_text()."""
     if _SA_CREDS is not None:
-        return f"{_VERTEX_BASE}/{_EMBED_MODEL}:predict"
-    return f"{_BASE}/models/{_EMBED_MODEL}:embedContent"
+        return f"{_VERTEX_BASE}/{_LEGACY_GEMINI_EMBED_MODEL}:predict"
+    return f"{_BASE}/models/{_LEGACY_GEMINI_EMBED_MODEL}:embedContent"
 
 
 # Kept for any legacy sync callers (API-key mode only)
@@ -146,34 +152,37 @@ def _headers() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. TEXT EMBEDDINGS  (text-embedding-004)
+# 1. TEXT EMBEDDINGS  — Voyage primary (1024d), Gemini fallback (768d)
 # ─────────────────────────────────────────────────────────────────────────────
+#
+# Embeddings flow:
+#   1. Try Voyage (voyage-multilingual-2, 1024-dim) — native Assamese/Bengali
+#      support and stable rate limits. This is what Vectorize syllabus-index-v2
+#      stores.
+#   2. If Voyage is unconfigured / fails, fall back to Gemini's
+#      gemini-embedding-001 at 1024-dim so the returned vector is dimensionally
+#      compatible with the same Vectorize index.
+#   3. If both fail, return None and let the caller degrade gracefully.
+#
+# The 1024-dim choice is enforced for both providers so callers never need to
+# branch on which provider produced a given vector.
 
-_EMBED_DIMENSIONS = 768
+_EMBED_DIMENSIONS = 1024
 
-async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Optional[List[float]]:
-    """Return embedding vector for text. Returns None on failure.
-    Uses gemini-embedding-001 with outputDimensionality=768 for Vectorize compatibility."""
+try:
+    import voyage_embeddings as _voyage
+except ImportError:
+    _voyage = None
+    logger.warning("voyage_embeddings module not importable — embedding will fall back to Gemini only")
+
+
+async def _gemini_embed_one(text: str, task_type: str) -> Optional[List[float]]:
+    """Legacy Gemini embedding path. Returns 1024-dim vector when available."""
     if not _ok() or not text:
         return None
-    try:
-        from cache import _embedding_cache, _embedding_cache_key
-        _ek = _embedding_cache_key(text, task_type)
-        if _ek in _embedding_cache:
-            return _embedding_cache[_ek]
-    except Exception:
-        _ek = None
     headers = await _auth_headers()
-
-    def _store_embed_cache(vec):
-        try:
-            if _ek and vec:
-                from cache import _embedding_cache
-                _embedding_cache[_ek] = vec
-        except Exception:
-            pass
-
     c = _get_embed_client()
+
     if _SA_CREDS is not None:
         url  = _embed_url()
         body = {
@@ -186,14 +195,12 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Option
                 _mark_forbidden()
                 return None
             r.raise_for_status()
-            vec = r.json()["predictions"][0]["embeddings"]["values"]
-            _store_embed_cache(vec)
-            return vec
+            return r.json()["predictions"][0]["embeddings"]["values"]
         except Exception as e:
-            logger.warning(f"embed_text (Vertex) failed: {e}")
+            logger.warning(f"gemini fallback embed (Vertex) failed: {e}")
             return None
 
-    for model in (_EMBED_MODEL, "text-embedding-004"):
+    for model in (_LEGACY_GEMINI_EMBED_MODEL, "text-embedding-004"):
         url  = f"{_BASE}/models/{model}:embedContent"
         body = {
             "model":   f"models/{model}",
@@ -207,24 +214,82 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Option
                 _mark_forbidden()
                 return None
             if r.status_code == 404:
-                logger.warning(f"embed_text: model {model} not found (404), trying next…")
                 continue
             r.raise_for_status()
-            vec = r.json()["embedding"]["values"]
-            _store_embed_cache(vec)
-            return vec
+            return r.json()["embedding"]["values"]
         except Exception as e:
-            logger.warning(f"embed_text ({model}) failed: {e}")
+            logger.warning(f"gemini fallback embed ({model}) failed: {e}")
             continue
-
     return None
 
 
+async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Optional[List[float]]:
+    """Return a 1024-dim embedding vector. Tries Voyage first, then Gemini.
+    Returns None if both providers fail."""
+    if not text:
+        return None
+
+    try:
+        from cache import _embedding_cache, _embedding_cache_key
+        _ek = _embedding_cache_key(text, task_type)
+        cached = _embedding_cache.get(_ek)
+        if cached:
+            return cached
+    except Exception:
+        _ek = None
+        _embedding_cache = None
+
+    def _store(vec):
+        try:
+            if _ek and vec and _embedding_cache is not None:
+                _embedding_cache[_ek] = vec
+        except Exception:
+            pass
+
+    if _voyage is not None and _voyage.is_configured():
+        try:
+            vec = await _voyage.embed_one(text, task_type=task_type)
+            if vec:
+                _store(vec)
+                return vec
+        except Exception as exc:
+            logger.warning(f"Voyage embed_text failed, falling back to Gemini: {exc}")
+
+    vec = await _gemini_embed_one(text, task_type)
+    if vec:
+        _store(vec)
+    return vec
+
+
 async def embed_batch(texts: List[str], task_type: str = "RETRIEVAL_DOCUMENT") -> List[Optional[List[float]]]:
-    """Embed a batch of texts. Returns list of vectors (or None per item)."""
-    import asyncio
-    tasks = [embed_text(t, task_type=task_type) for t in texts]
-    return await asyncio.gather(*tasks)
+    """Embed a batch of texts. Returns list of vectors (or None per item).
+
+    Voyage gets first crack as a true batch call (one HTTP request) for speed
+    and quota efficiency; per-item failures fall back to Gemini individually.
+    """
+    if not texts:
+        return []
+
+    out: List[Optional[List[float]]] = [None] * len(texts)
+
+    if _voyage is not None and _voyage.is_configured():
+        try:
+            voyage_results = await _voyage.embed_batch(texts, task_type=task_type)
+            for i, v in enumerate(voyage_results):
+                if v:
+                    out[i] = v
+        except Exception as exc:
+            logger.warning(f"Voyage embed_batch failed wholesale, per-item Gemini fallback: {exc}")
+
+    missing_idx = [i for i, v in enumerate(out) if v is None]
+    if missing_idx:
+        gemini_results = await asyncio.gather(
+            *[_gemini_embed_one(texts[i], task_type) for i in missing_idx]
+        )
+        for i, v in zip(missing_idx, gemini_results):
+            out[i] = v
+
+    return out
 
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:

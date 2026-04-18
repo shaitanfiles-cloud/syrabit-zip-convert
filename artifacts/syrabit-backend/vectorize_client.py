@@ -9,7 +9,14 @@ Environment variables required:
   CLOUDFLARE_ACCOUNT_ID — Cloudflare account ID
 
 Setup (run once):
-  wrangler vectorize create syllabus-index --dimensions=768 --metric=cosine
+  wrangler vectorize create syllabus-index-v2 --dimensions=1024 --metric=cosine
+  wrangler vectorize create-metadata-index syllabus-index-v2 --property-name=subject_id --type=string
+  wrangler vectorize create-metadata-index syllabus-index-v2 --property-name=chapter_id --type=string
+  wrangler vectorize create-metadata-index syllabus-index-v2 --property-name=level --type=string
+  wrangler vectorize create-metadata-index syllabus-index-v2 --property-name=board --type=string
+
+Index name is overridable via VECTORIZE_INDEX_NAME env var (rollback: set to
+"syllabus-index" to use the legacy 768-dim Gemini index).
 """
 
 import json
@@ -20,8 +27,8 @@ from typing import Optional
 
 logger = logging.getLogger("vectorize_client")
 
-VECTORIZE_INDEX_NAME = "syllabus-index"
-VECTORIZE_DIMENSIONS = 768
+VECTORIZE_INDEX_NAME = os.environ.get("VECTORIZE_INDEX_NAME", "syllabus-index-v2").strip() or "syllabus-index-v2"
+VECTORIZE_DIMENSIONS = 1024
 VECTORIZE_BATCH_SIZE = 20
 
 # ── Auth-failure circuit breaker ─────────────────────────────────────────────
