@@ -98,3 +98,77 @@ minutes** (down from ~34 minutes). If it ever regresses, check:
    compile, Chromium download). Add the corresponding skip env var to
    the Pages project.
 3. Lockfile drift forced `pnpm install` off the frozen path.
+
+## Task #521 — Pages config applied 2026-04-18
+
+The configuration above was applied to the existing Pages project
+`syrabit-analytics` (account `d66e40eac539fff1db270fddf384a5ec`, custom
+domains `syrabit.ai` + `www.syrabit.ai`, GitHub source
+`shaitanfiles-cloud/syrabit-zip-convert` branch `master`) via the
+Cloudflare API. The script that captures the exact PATCH body and is
+safe to re-run is at `artifacts/syrabit/scripts/apply-pages-config.mjs`.
+
+**Build config — applied:**
+
+- `build_command`: scoped pnpm install per the snippet above
+- `destination_dir`: `artifacts/syrabit/dist`
+- `root_dir`: `/`
+
+**Production env vars — enforced by the script:** `NODE_ENV=production`,
+`NODE_VERSION=22` (canonical Pages knob for picking the build image's
+Node runtime — pins to "20 or 22" per the table above),
+`VITE_BACKEND_URL=https://api.syrabit.ai`,
+`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`, `PUPPETEER_SKIP_DOWNLOAD=1`.
+(`VITE_BACKEND_URL` was already set on the project before Task #521 and
+is now also re-asserted by the runbook script for idempotency.
+`VITE_SITE_URL`, `VITE_WORKER_API_URL`, and `SKIP_PYTHON_INSTALL` were
+preserved as-is.)
+
+**Production env vars — removed (leaked backend secret, must rotate):**
+`CF_ANALYTICS_API_TOKEN`.
+
+**`VITE_GA4_ID` not set** because the only existing value
+(`530170895`, on the preview env) is the GA4 *Property ID*, not the
+*Measurement ID* (`G-XXXXXXXXXX`), and would fail the regex above. Set
+the correct value from the Pages dashboard once known.
+
+**Preview env vars — removed (all leaked, all must be rotated at the
+source-of-truth provider — every value is now public history):**
+`ADMIN_EMAILS`, `ADMIN_NAMES`, `ADMIN_PASSWORDS`, `ADMIN_JWT_SECRET`,
+`CEREBRAS_API_KEY`, `CORS_ORIGINS`, `DB_NAME`, `GA4_PROPERTY_ID`,
+`GEMINI_API_KEY`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_OAUTH_CLIENT_ID`,
+`GROQ_API_KEY`, `GROQ_API_KEY_2`, `JWT_SECRET`, `MONGO_URL`,
+`OPENROUTER_API_KEY`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`,
+`RAZORPAY_WEBHOOK_SECRET`, `RESEND_API_KEY`, `SARVAM_API_KEY`,
+`SARVAM_API_KEY_2`, `SARVAM_API_KEY_3`, `SECURE_COOKIES`,
+`SESSION_SECRET`, `SUPABASE_SERVICE_KEY`, `TRUSTPILOT_API_KEY`,
+`TRUSTPILOT_BUSINESS_UNIT_ID`, `UPSTASH_REDIS_REST_TOKEN`,
+`UPSTASH_REDIS_REST_URL`, `VOYAGE_API_KEY`.
+
+**Verification deploy — failed at the build wall, NOT reverted.**
+Deployment id `bd511fe9-6631-49e1-abc3-3eb54588fa9d` (commit
+`6ec1479` on `master`) ran for ~36 min and was killed by Cloudflare's
+hard 35-min limit. The streamed build log is only available from the
+Cloudflare dashboard (the API returned only the clone-stage lines for
+this failed build), so the actual root cause — lockfile drift, filter
+scope mismatch on the GitHub `master` branch, or a hanging
+postinstall — must be diagnosed from the dashboard. The Pages config
+itself is correct now; the next push that fixes the underlying cause
+will deploy cleanly. Tracked as follow-up task **#522**.
+
+**Smoke tests run against the still-live previous build (all pass):**
+
+```text
+GET  /library/some-slug                → HTTP/2 200 text/html
+HEAD /assets/index-zlGiluct.js         → cache-control: public, max-age=31536000, immutable
+HEAD /index.html                       → cache-control: public, max-age=0, must-revalidate
+HEAD /random/spa/path                  → HTTP/2 200 text/html
+```
+
+**Required follow-up by the human user:**
+
+- **#523** — rotate every credential listed above (production +
+  preview). Removal from Pages does not invalidate them.
+- **#522** — diagnose the 35-min build wall using the Cloudflare
+  dashboard's streamed log and ship the underlying fix.
+- **#524** — supply the correct `VITE_GA4_ID` Measurement ID.
