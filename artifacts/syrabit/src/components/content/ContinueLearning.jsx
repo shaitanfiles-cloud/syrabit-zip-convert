@@ -25,7 +25,10 @@ export default function ContinueLearning({
 }) {
   const isAS = contentLang === 'as';
   const hasPrevNext = !!(prev || next);
-  const hasRelated = Array.isArray(related) && related.length > 0;
+  const safeRelated = (Array.isArray(related) ? related : []).filter(
+    (r) => r && r.seo_path && r.seo_path !== '#'
+  );
+  const hasRelated = safeRelated.length > 0;
   if (!hasPrevNext && !hasRelated && !subjectPath) return null;
 
   return (
@@ -103,7 +106,7 @@ export default function ContinueLearning({
               {isAS ? 'সম্পৰ্কীয় বিষয়' : 'Related topics'}
             </div>
             <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {related.slice(0, 6).map((rt) => (
+              {safeRelated.slice(0, 6).map((rt) => (
                 <li key={rt.id || rt.seo_path}>
                   <Link
                     to={rt.seo_path}
