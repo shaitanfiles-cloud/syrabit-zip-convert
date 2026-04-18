@@ -2240,10 +2240,10 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
 
               {/* Task #474 — recent SEO summary dispatches so admins can see
                   whether the last scheduled run actually emailed them, was
-                  suppressed by quiet hours, or hit a Resend failure. Only
-                  shown when the SEO summary toggle is on (otherwise the
-                  data isn't actionable for this admin). */}
-              {(notifPrefs.email_seo_daily_summary_enabled ?? true) && (
+                  suppressed by quiet hours, or hit a Resend failure. Always
+                  shown (even when the admin has opted out) so they can
+                  verify the system-wide dispatch is healthy. */}
+              {true && (
                 <div className="mb-3 pb-3 border-b border-gray-200" data-testid="notif-prefs-seo-summary-history">
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="text-[10px] text-gray-500 font-medium">
