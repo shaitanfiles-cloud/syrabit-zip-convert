@@ -21,10 +21,17 @@ const _t = {
     product: 'PRODUCT',
     company: 'COMPANY',
     contact: 'CONTACT',
+    boards: 'BOARDS',
     features: 'Features',
     pricing: 'Pricing',
-    subjects: 'Subjects',
-    chat: 'Chat',
+    subjects: 'Library',
+    curriculum: 'Curriculum',
+    examRoutine: 'Exam Routine',
+    chat: 'Ask Syra (Chat)',
+    ahsec12: 'AHSEC Class 12',
+    ahsec11: 'AHSEC Class 11',
+    seba: 'SEBA Class 10',
+    degree: 'Degree (B.Com / B.A / B.Sc)',
     aboutUs: 'About Us',
     technology: 'Technology',
     privacyPolicy: 'Privacy Policy',
@@ -47,10 +54,17 @@ const _t = {
     product: 'সামগ্ৰী',
     company: 'কোম্পানী',
     contact: 'যোগাযোগ',
+    boards: 'বোৰ্ডসমূহ',
     features: 'সুবিধাসমূহ',
     pricing: 'মূল্য নিৰ্ধাৰণ',
-    subjects: 'বিষয়সমূহ',
-    chat: 'চেট',
+    subjects: 'লাইব্ৰেৰী',
+    curriculum: 'পাঠ্যক্ৰম',
+    examRoutine: 'পৰীক্ষাৰ সময়সূচী',
+    chat: 'Syra ক সোধক (চেট)',
+    ahsec12: 'AHSEC দ্বাদশ শ্ৰেণী',
+    ahsec11: 'AHSEC একাদশ শ্ৰেণী',
+    seba: 'SEBA দশম শ্ৰেণী',
+    degree: 'ডিগ্ৰী (B.Com / B.A / B.Sc)',
     aboutUs: 'আমাৰ বিষয়ে',
     technology: 'প্ৰযুক্তি',
     privacyPolicy: 'গোপনীয়তা নীতি',
@@ -227,7 +241,7 @@ export default function TestimonialsFooter({ year, contentLang = 'en' }) {
         style={{ borderColor: 'hsl(var(--border) / 0.3)', background: 'hsl(var(--muted) / 0.3)' }}
       >
         <div className="max-w-6xl mx-auto px-5">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6 md:gap-8 mb-12">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 sm:gap-6 md:gap-8 mb-12">
             <div className="col-span-2 md:col-span-1 space-y-4">
               <LogoFull size="sm" textClassName="text-foreground" />
               <p className="text-sm leading-relaxed text-muted-foreground">
@@ -252,7 +266,17 @@ export default function TestimonialsFooter({ year, contentLang = 'en' }) {
               <Link to="/home#features" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">{t.features}</Link>
               <Link to="/pricing" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">{t.pricing}</Link>
               <Link to="/library" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">{t.subjects}</Link>
+              <Link to="/curriculum" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">{t.curriculum}</Link>
+              <Link to="/exam-routine" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">{t.examRoutine}</Link>
               <Link to="/chat" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">{t.chat}</Link>
+            </div>
+
+            <div className="space-y-1">
+              <p className="text-xs font-bold tracking-[0.10em] pb-1 text-muted-foreground">{t.boards}</p>
+              <Link to="/ahsec/class-12/physics" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">{t.ahsec12}</Link>
+              <Link to="/ahsec/class-11/physics" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">{t.ahsec11}</Link>
+              <Link to="/seba/class-10/science" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">{t.seba}</Link>
+              <Link to="/library?stream=commerce" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">{t.degree}</Link>
             </div>
 
             <div className="space-y-1">

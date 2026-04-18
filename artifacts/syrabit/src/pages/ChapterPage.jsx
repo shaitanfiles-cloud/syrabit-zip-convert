@@ -8,11 +8,15 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 const MarkdownRenderer = lazy(() => import('@/components/MarkdownRenderer'));
-import { apiClient } from '@/utils/api';
+import { apiClient, seoRelatedByChapter } from '@/utils/api';
 import { useShare, SerpPreviewModal } from '@/hooks/useShare';
 import Analytics from '@/utils/analytics';
 import { useContentLang } from '@/context/LanguageContext';
 import StickyToc from '@/components/ui/StickyToc';
+import ContinueLearning from '@/components/content/ContinueLearning';
+import { useLibraryBundle, useLibraryBundleSlim } from '@/hooks/useContent';
+import { findSiblingChapters, siblingsAsRelated } from '@/utils/siblingChapter';
+import { pushRecentChapter } from '@/utils/recentChapters';
 
 function ChapterJsonLd({ data, url, basePath }) {
   useEffect(() => {
@@ -242,6 +246,38 @@ export default function ChapterPage() {
   const [pyqData, setPyqData] = useState(null);
   const articleRef = useRef(null);
   const [activeId, setActiveId] = useState('');
+  const [relatedChapterTopics, setRelatedChapterTopics] = useState([]);
+
+  // Fetch related topics across the chapter for in-content internal links.
+  useEffect(() => {
+    let cancelled = false;
+    if (!data?.chapter_id) { setRelatedChapterTopics([]); return; }
+    seoRelatedByChapter(data.chapter_id, null, 6)
+      .then((rows) => {
+        if (cancelled) return;
+        const list = Array.isArray(rows) ? rows : (rows?.related || rows?.items || []);
+        setRelatedChapterTopics(Array.isArray(list) ? list : []);
+      })
+      .catch(() => { if (!cancelled) setRelatedChapterTopics([]); });
+    return () => { cancelled = true; };
+  }, [data?.chapter_id]);
+
+  // Library bundle (slim then full) — used for sibling chapter prev/next.
+  const { data: _slim } = useLibraryBundleSlim();
+  const { data: _full } = useLibraryBundle(true);
+  const _bundle = _full || _slim;
+
+  // Track recently viewed chapters for the Library "Continue where you left off" rail.
+  useEffect(() => {
+    if (!data || !data.chapter_id) return;
+    pushRecentChapter({
+      path: `${`/${board}/${classSlug}${data.stream_slug ? '/' + data.stream_slug : ''}/${subjectSlug}`}/${chapterSlug}`,
+      title: data.topic_title || data.chapter_title || chapterSlug,
+      subject: data.subject_name || subjectSlug,
+      board: data.board_name || board,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.chapter_id]);
   const { sharing, share, serpPreview, confirmShare, dismissPreview } = useShare();
   const { contentLang, switchLang } = useContentLang();
 
@@ -848,22 +884,32 @@ export default function ChapterPage() {
 
             <ImportantQuestions chapterTitle={chapterTitle} pyqData={pyqData} />
 
-            <div className="mt-8 p-5 rounded-2xl bg-primary/5 border border-primary/15">
-              <p className="text-sm font-semibold text-primary mb-1">
-                {contentLang === 'as' ? `${chapterTitle} সম্পৰ্কে প্ৰশ্ন আছে নেকি?` : `Have a question about ${chapterTitle}?`}
-              </p>
-              <p className="text-xs text-muted-foreground mb-3">
-                {contentLang === 'as' ? `Syra ৰ পৰা ${boardName}-সংগতিপূৰ্ণ উত্তৰ তৎক্ষণাৎ পাওক।` : `Get ${boardName}-aligned answers instantly from Syra.`}
-              </p>
-              <Link
-                to={`/chat?subject=${subjectSlug}`}
-                onClick={() => Analytics.chapterAskAi(subjectSlug, data?.topic_title || data?.chapter_title || chapterSlug)}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white transition-all hover:opacity-90"
-                style={{ background: 'linear-gradient(135deg, #7c3aed, #8b5cf6)' }}
-              >
-                <Sparkles size={14} /> {contentLang === 'as' ? 'Syra ক এই বিষয়ে সোধক' : 'Ask Syra about this'}
-              </Link>
-            </div>
+            {(() => {
+              const subjChapters = (_bundle?.chapters || []).filter(
+                (ch) => ch.subject_id && data?.subject_id && ch.subject_id === data.subject_id
+              );
+              const { prev, next } = findSiblingChapters(
+                subjChapters,
+                data?.chapter_id,
+                chapterSlug,
+              );
+              const prevLink = prev ? { title: prev.title || prev.slug, path: `${basePath}/${prev.slug}` } : null;
+              const nextLink = next ? { title: next.title || next.slug, path: `${basePath}/${next.slug}` } : null;
+              const related = relatedChapterTopics.length > 0
+                ? relatedChapterTopics
+                : siblingsAsRelated(subjChapters, data?.chapter_id, chapterSlug, basePath, 6);
+              return (
+                <ContinueLearning
+                  prev={prevLink}
+                  next={nextLink}
+                  related={related}
+                  subjectName={subjectName}
+                  subjectPath={basePath}
+                  chatHref={`/chat?subject=${subjectSlug}`}
+                  contentLang={contentLang}
+                />
+              );
+            })()}
           </article>
 
           <aside className="hidden lg:flex flex-col gap-4 w-[300px] flex-shrink-0">

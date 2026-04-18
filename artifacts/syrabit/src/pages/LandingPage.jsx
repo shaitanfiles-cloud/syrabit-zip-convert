@@ -7,6 +7,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useContentLang } from '@/context/LanguageContext';
 import LangToggle from '@/components/ui/LangToggle';
 import HeroSection from './landing/HeroSection';
+import PopularSubjects from './landing/PopularSubjects';
 const FeaturesGrid = lazy(() => import('./landing/FeaturesGrid'));
 const PricingSection = lazy(() => import('./landing/PricingSection'));
 const PlatformSection = lazy(() => import('./landing/PlatformSection'));
@@ -107,6 +108,7 @@ export default function LandingPage() {
       <PublicNavbar />
       <LangToggle contentLang={contentLang} switchLang={switchLang} variant="floating" />
       <HeroSection contentLang={contentLang} />
+      <PopularSubjects contentLang={contentLang} />
       {/* Reserve vertical space for each lazy section so Suspense fall-in does
           not cause CLS (was 0.18 — mostly from these four collapsing to 0px). */}
       <Suspense fallback={<div style={{ minHeight: '720px' }} aria-hidden />}>

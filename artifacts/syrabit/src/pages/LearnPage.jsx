@@ -14,6 +14,7 @@ import { apiClient, API_BASE, seoRelatedByChapter } from '@/utils/api';
 import { useShare } from '@/hooks/useShare';
 import StickyToc from '@/components/ui/StickyToc';
 import { learnArticleSchema } from '@/lib/jsonld';
+import ContinueLearning from '@/components/content/ContinueLearning';
 
 function buildToc(headingsJson) {
   try {
@@ -492,51 +493,16 @@ export default function LearnPage() {
             </div>
           )}
 
-          {/* Related topics for internal linking & SEO */}
-          {relatedTopics.length > 0 && (
-            <nav
-              aria-label="Related topics"
-              className="mt-6 rounded-2xl border border-violet-500/15 overflow-hidden"
-            >
-              <div className="px-5 py-3.5 border-b border-violet-500/10 flex items-center gap-2"
-                style={{ background: 'rgba(139,92,246,0.05)' }}>
-                <Layers size={15} className="text-violet-400" />
-                <span className="text-sm font-bold text-foreground">Related Topics in this Chapter</span>
-                <span className="ml-auto px-2 py-0.5 rounded-full text-[10px] font-semibold"
-                  style={{ background: 'rgba(139,92,246,0.12)', color: '#c4b5fd', border: '1px solid rgba(139,92,246,0.20)' }}>
-                  {relatedTopics.length} links
-                </span>
-              </div>
-              <ul className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-2"
-                style={{ background: 'hsl(var(--card))' }}>
-                {relatedTopics.map((rt) => (
-                  <li key={rt.id}>
-                    <Link
-                      to={rt.seo_path || `/learn/${rt.slug}`}
-                      className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border border-border/30 hover:border-violet-400/40 hover:bg-violet-500/5 transition-colors text-sm text-foreground"
-                    >
-                      <span className="truncate">{rt.title}</span>
-                      <ChevronRight size={14} className="text-muted-foreground/50 flex-shrink-0" />
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </nav>
-          )}
-
-          {/* Footer CTA */}
-          <div className="mt-8 rounded-2xl border border-border/20 p-6 flex flex-col sm:flex-row items-center gap-4" style={{ background: 'rgba(139,92,246,0.06)' }}>
-            <div className="flex-1 text-center sm:text-left">
-              <p className="text-foreground font-semibold mb-1">Want AI-powered answers on this topic?</p>
-              <p className="text-muted-foreground text-sm">Ask Syrabit — your Assam Board exam tutor — any question about this content.</p>
-            </div>
-            <Link
-              to="/chat"
-              className="h-10 px-5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold flex items-center gap-2 flex-shrink-0 transition-colors"
-            >
-              <BookOpen size={14} /> Ask Syra
-            </Link>
-          </div>
+          <ContinueLearning
+            related={(relatedTopics || []).map((rt) => ({
+              id: rt.id,
+              title: rt.title,
+              seo_path: rt.seo_path || `/learn/${rt.slug}`,
+            }))}
+            subjectName={doc?.subject_name || ''}
+            subjectPath={doc?.subject_id ? `/subject/${doc.subject_id}` : ''}
+            chatHref={doc?.subject_id ? `/chat?subject=${doc.subject_id}` : '/chat'}
+          />
         </div>
       </div>
     </AppLayout>

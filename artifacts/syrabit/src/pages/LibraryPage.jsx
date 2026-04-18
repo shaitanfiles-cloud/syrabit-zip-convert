@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue, useTransition, lazy, Suspense } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Search, Bookmark, BookOpen } from './library/icons';
+import { ChevronRight, Clock } from 'lucide-react';
+import { getRecentChapters, clearRecentChapters } from '@/utils/recentChapters';
 
 import PageMeta from '@/components/seo/PageMeta';
 import { Analytics } from '@/utils/analytics';
@@ -98,6 +100,63 @@ const STREAM_CHIPS_AS = [
   { id: 'all', label: 'সকলো' },
   { id: 'saved', label: '★ সংৰক্ষিত' },
 ];
+
+function ContinueRail({ contentLang = 'en' }) {
+  const [items, setItems] = useState(() => getRecentChapters());
+  useEffect(() => {
+    setItems(getRecentChapters());
+    const sync = () => setItems(getRecentChapters());
+    window.addEventListener('focus', sync);
+    return () => window.removeEventListener('focus', sync);
+  }, []);
+  if (!items || items.length === 0) return null;
+  const isAS = contentLang === 'as';
+  return (
+    <section
+      aria-label={isAS ? 'অধ্যয়ন চলাই থাকক' : 'Continue where you left off'}
+      className="mb-5"
+      data-testid="library-continue-rail"
+    >
+      <div className="flex items-center justify-between mb-2.5 px-0.5">
+        <div className="flex items-center gap-2">
+          <Clock size={14} className="text-violet-500" />
+          <h2 className="text-sm font-bold text-foreground">
+            {isAS ? 'অধ্যয়ন চলাই থাকক' : 'Continue where you left off'}
+          </h2>
+        </div>
+        <button
+          type="button"
+          onClick={() => { clearRecentChapters(); setItems([]); }}
+          className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+          data-testid="library-continue-clear"
+        >
+          {isAS ? 'মচক' : 'Clear'}
+        </button>
+      </div>
+      <div className="flex gap-2.5 overflow-x-auto pb-1 -mx-4 px-4 md:mx-0 md:px-0 scrollbar-thin">
+        {items.map((it) => (
+          <Link
+            key={it.path}
+            to={it.path}
+            className="group shrink-0 w-[260px] flex flex-col gap-1.5 p-3.5 rounded-xl border border-border/40 hover:border-violet-400/40 hover:bg-violet-500/5 transition-colors"
+            data-testid="library-continue-item"
+          >
+            <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-violet-500/80">
+              <span className="truncate">{it.board || (isAS ? 'বিষয়' : 'Subject')}</span>
+              {it.subject && <><span className="text-muted-foreground/40">·</span><span className="truncate">{it.subject}</span></>}
+            </div>
+            <div className="flex items-start gap-1.5">
+              <span className="text-sm font-semibold text-foreground leading-snug line-clamp-2 group-hover:text-violet-600 transition-colors flex-1">
+                {it.title}
+              </span>
+              <ChevronRight size={14} className="text-muted-foreground/50 shrink-0 mt-0.5" />
+            </div>
+          </Link>
+        ))}
+      </div>
+    </section>
+  );
+}
 
 function getOnboardingProfile() {
   try { const raw = localStorage.getItem('syrabit:onboarding'); return raw ? JSON.parse(raw) : null; } catch { return null; }
@@ -480,6 +539,8 @@ export default function LibraryPage() {
 
         <div className="flex-1 overflow-y-auto" ref={setScrollContainerEl}>
           <div className="w-full max-w-6xl mx-auto px-4 md:px-6 py-5">
+
+            <ContinueRail contentLang={contentLang} />
 
             <ScrollableFilterRow
               role="group"
