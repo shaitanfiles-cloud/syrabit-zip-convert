@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import ast
 import importlib
+import importlib.util
 import pathlib
+import sys
 
 import pytest
 
@@ -37,9 +39,51 @@ SHARED_MODULES = [
 BACKEND_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
+def _load_real_module(module_name: str):
+    """Load a shared module straight from its source file, bypassing any
+    stub that an earlier test installed into ``sys.modules`` (Task #467).
+
+    Several test files install a synthetic ``deps`` module via
+    ``tests._deps_stub.install_deps_stub`` so they do not trigger Mongo /
+    Redis / Postgres connection attempts at collection time. The stub
+    intentionally does not declare ``__all__`` because production code
+    never reads it. When this test then ran ``importlib.import_module``,
+    it received the cached stub instead of the real source — and
+    failed on a contract that the real source actually honors.
+
+    Loading from disk via ``spec_from_file_location`` always returns a
+    fresh module object built from the on-disk file, so the contract
+    test reflects the real ``__all__`` regardless of ordering.
+    """
+    src_path = BACKEND_DIR / f"{module_name}.py"
+    spec = importlib.util.spec_from_file_location(
+        f"_real_{module_name}", src_path
+    )
+    assert spec and spec.loader, f"could not build import spec for {src_path}"
+    real = importlib.util.module_from_spec(spec)
+    # Don't pollute sys.modules under the real name — keep whatever the
+    # rest of the suite installed there.
+    sys.modules[spec.name] = real
+    try:
+        spec.loader.exec_module(real)
+    except (ConnectionError, OSError, TimeoutError) as exc:
+        # Some modules (e.g. deps) try to open external connections
+        # (Mongo, Redis, Postgres) at import time. Fall back to the
+        # cached/stub version only for connection-class failures so a
+        # genuine import-time bug (NameError, SyntaxError,
+        # AttributeError, etc.) still surfaces here instead of being
+        # silently swallowed.
+        sys.modules.pop(spec.name, None)
+        logging_msg = f"_load_real_module({module_name!r}) fell back to sys.modules: {exc!r}"
+        import warnings
+        warnings.warn(logging_msg, RuntimeWarning, stacklevel=2)
+        return importlib.import_module(module_name)
+    return real
+
+
 @pytest.mark.parametrize("module_name", SHARED_MODULES)
 def test_shared_module_declares_all(module_name: str):
-    mod = importlib.import_module(module_name)
+    mod = _load_real_module(module_name)
     assert hasattr(mod, "__all__"), (
         f"{module_name}.py must define `__all__` — it is part of the "
         f"project's shared API surface (see Task #449)."
@@ -52,7 +96,7 @@ def test_shared_module_declares_all(module_name: str):
 
 @pytest.mark.parametrize("module_name", SHARED_MODULES)
 def test_shared_module_all_names_resolve(module_name: str):
-    mod = importlib.import_module(module_name)
+    mod = _load_real_module(module_name)
     missing = [name for name in mod.__all__ if not hasattr(mod, name)]
     assert not missing, (
         f"{module_name}.__all__ lists names not defined in the module: "

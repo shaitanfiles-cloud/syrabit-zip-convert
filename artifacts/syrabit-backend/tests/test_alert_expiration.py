@@ -239,7 +239,13 @@ class TestGetAlerts:
             resp = app_client.get("/admin/alerts")
         assert resp.status_code == 200
         call_args = mock_alerts.find.call_args
-        assert call_args[0][0] == {}
+        # Task #426 changed the production behaviour: by default the
+        # /admin/alerts feed hides synthetic test alerts so on-call
+        # admins don't confuse "Test alert delivery" presses with real
+        # incidents. Without ?include_synthetic=true and with no other
+        # filters set, the only entry in the query must be the
+        # synthetic-exclusion clause.
+        assert call_args[0][0] == {"synthetic": {"$ne": True}}
 
     def test_limit_param(self, app_client):
         mock_cursor = MagicMock()

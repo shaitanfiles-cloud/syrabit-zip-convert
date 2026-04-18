@@ -167,8 +167,15 @@ def test_chat_stream_assamese_cache_hit_emits_diagnostic_log(monkeypatch, caplog
     with caplog.at_level(_logging.INFO, logger="routes.ai_chat"):
         _post_chat_stream(client, body)
 
-    # Find the per-reply diagnostic line.
-    indic_logs = [r for r in caplog.records if "[INDIC-SANITIZE]" in r.getMessage()]
+    # Find the per-reply diagnostic line. Task #467: filter to lines
+    # that actually carry the structured diagnostic fields. Other
+    # `[INDIC-SANITIZE]` log lines (e.g. the cms_sarvam_health "insert
+    # run failed" warning that fires when a sibling test left a
+    # MagicMock as `db.indic_sanitize_runs`) must not be picked.
+    indic_logs = [
+        r for r in caplog.records
+        if "[INDIC-SANITIZE]" in r.getMessage() and "action=" in r.getMessage()
+    ]
     assert indic_logs, (
         "expected at least one [INDIC-SANITIZE] diagnostic log line "
         "per Assamese reply (Task #419 requirement)"
@@ -290,8 +297,16 @@ def test_chat_stream_off_mode_still_logs_and_passes_through_unchanged(monkeypatc
     with caplog.at_level(_logging.INFO, logger="routes.ai_chat"):
         emitted = _post_chat_stream(client, body)
 
-    # 1. Diagnostic line MUST still appear in `off` mode.
-    indic_logs = [r for r in caplog.records if "[INDIC-SANITIZE]" in r.getMessage()]
+    # 1. Diagnostic line MUST still appear in `off` mode. Task #467:
+    #    filter to lines that actually carry the structured diagnostic
+    #    fields so unrelated `[INDIC-SANITIZE]` warnings (e.g. the
+    #    cms_sarvam_health "insert run failed" message that fires when
+    #    a sibling test left a MagicMock as `db.indic_sanitize_runs`)
+    #    cannot mask the real diagnostic.
+    indic_logs = [
+        r for r in caplog.records
+        if "[INDIC-SANITIZE]" in r.getMessage() and "behaviour=" in r.getMessage()
+    ]
     assert indic_logs, (
         "[INDIC-SANITIZE] diagnostic line must be emitted even when "
         "ASSAMESE_LEAK_BEHAVIOUR=off"

@@ -34,7 +34,11 @@ def _make_fake_db() -> MagicMock:
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # Task #467: use asyncio.run() so each call gets a fresh event loop.
+    # Earlier tests in the suite call asyncio.run() which closes the
+    # default loop, leaving asyncio.get_event_loop() to raise
+    # "There is no current event loop in thread 'MainThread'".
+    return asyncio.run(coro)
 
 
 def test_fresh_insert_stamps_both_timestamps():
