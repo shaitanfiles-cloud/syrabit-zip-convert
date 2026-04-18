@@ -44,7 +44,7 @@ export default function SubjectLandingPage() {
   useEffect(() => {
     let cancelled = false;
     if (!seedChapterId) { setSeoRelated([]); return; }
-    seoRelatedByChapter(seedChapterId, { limit: 6 })
+    seoRelatedByChapter(seedChapterId, null, 6)
       .then((rows) => {
         if (cancelled) return;
         const payload = rows?.data ?? rows;

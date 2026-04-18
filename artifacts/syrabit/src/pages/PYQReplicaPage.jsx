@@ -4,6 +4,7 @@ import { WORKER_API } from '../utils/api';
 import { useShare } from '../hooks/useShare';
 import PageMeta from '@/components/seo/PageMeta';
 import ContinueLearning from '@/components/content/ContinueLearning';
+import { useLibraryBundle } from '@/hooks/useContent';
 
 /**
  * Best-effort parse of a PYQ slug like "ahsec-class-12-physics-2024" into
@@ -85,6 +86,30 @@ export default function PYQReplicaPage() {
       inLanguage: serverMeta.language || fallback.inLanguage,
     };
   }, [slug, title, description, serverMeta]);
+
+  // Resolve a real subject hub path from the library bundle when possible.
+  // The PYQ slug parser is best-effort; never invent a path that may 404.
+  const { data: libraryBundle } = useLibraryBundle();
+  const pyqSubjectPath = useMemo(() => {
+    const sub = pyqMeta?.subject?.toLowerCase().trim();
+    const board = pyqMeta?.board?.toLowerCase().trim();
+    const cls = (pyqMeta?.class_name || '').toString().toLowerCase().trim();
+    const subjects = libraryBundle?.subjects || [];
+    if (!subjects.length || !sub) return '/library';
+    const match = subjects.find((s) => {
+      const sname = (s.name || '').toLowerCase();
+      const bslug = (s.boardSlug || '').toLowerCase();
+      const cslug = (s.classSlug || '').toLowerCase();
+      const nameOk = sname === sub || sname.startsWith(sub) || sub.startsWith(sname);
+      const boardOk = !board || bslug === board || bslug.includes(board);
+      const classOk = !cls || cslug.includes(cls.replace(/\D/g, ''));
+      return nameOk && boardOk && classOk && s.slug;
+    }) || subjects.find((s) => (s.name || '').toLowerCase() === sub && s.slug);
+    if (match && match.boardSlug && match.classSlug && match.slug) {
+      return `/${match.boardSlug}/${match.classSlug}/${match.slug}`;
+    }
+    return '/library';
+  }, [libraryBundle, pyqMeta]);
 
   const handleShare = useCallback(() => {
     const pyqTitle = title || `PYQ — ${slug}`;
@@ -216,9 +241,7 @@ export default function PYQReplicaPage() {
         <ContinueLearning
           related={[]}
           subjectName={pyqMeta.subject || ''}
-          subjectPath={pyqMeta.board && pyqMeta.subject
-            ? `/${pyqMeta.board.toLowerCase()}/class-12/${pyqMeta.subject.toLowerCase().split(' ')[0]}`.replace(/\/$/, '')
-            : '/library'}
+          subjectPath={pyqSubjectPath}
           chatHref={pyqMeta.subject
             ? `/chat?prompt=${encodeURIComponent('Help me solve this ' + pyqMeta.subject + ' previous year question paper')}`
             : '/chat'}
