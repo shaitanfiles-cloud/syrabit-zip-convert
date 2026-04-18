@@ -326,6 +326,18 @@ export function usePageTracking() {
 
     Analytics.pageView(path, document.title);
 
+    // GA4 page_view — only when gtag.js was injected at build time
+    // (vite ga4Plugin gates on a valid VITE_GA4_ID). No-op otherwise.
+    try {
+      if (typeof window.gtag === 'function') {
+        window.gtag('event', 'page_view', {
+          page_path: path,
+          page_title: document.title,
+          page_location: window.location.href,
+        });
+      }
+    } catch {}
+
     // ── Fire the per-session page-view boost on the FIRST real
     // navigation of this session. Subsequent route changes within the
     // same session count normally (one event per route change) — we
