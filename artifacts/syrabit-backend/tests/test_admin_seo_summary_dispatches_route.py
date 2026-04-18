@@ -86,3 +86,140 @@ def test_dispatches_endpoint_returns_empty_list_when_no_history(app_client_authe
         res = app_client_authed.get("/admin/seo/daily-summary-dispatches")
     assert res.status_code == 200
     assert res.json() == {"dispatches": []}
+
+
+def test_dispatches_endpoint_default_limit_is_ten(app_client_authed):
+    """When the admin UI omits ``?limit=`` the route must call the engine
+    helper with the documented default of 10 — the AdminDashboard relies on
+    this to render the ~10 most recent rows in the prefs modal."""
+    fake = AsyncMock(return_value=[])
+    with patch("seo_engine.get_recent_seo_summary_dispatches", fake):
+        res = app_client_authed.get("/admin/seo/daily-summary-dispatches")
+    assert res.status_code == 200
+    fake.assert_awaited_once()
+    forwarded = fake.await_args.kwargs.get("limit")
+    if forwarded is None and fake.await_args.args:
+        forwarded = fake.await_args.args[0]
+    assert forwarded == 10
+
+
+def test_dispatches_endpoint_forwards_custom_limit(app_client_authed):
+    """A non-default limit query param must reach the engine helper unmodified
+    so admins can widen/narrow the window from the URL without the route
+    silently capping it."""
+    fake = AsyncMock(return_value=[])
+    with patch("seo_engine.get_recent_seo_summary_dispatches", fake):
+        res = app_client_authed.get("/admin/seo/daily-summary-dispatches?limit=25")
+    assert res.status_code == 200
+    forwarded = fake.await_args.kwargs.get("limit")
+    if forwarded is None and fake.await_args.args:
+        forwarded = fake.await_args.args[0]
+    assert forwarded == 25
+
+
+def test_dispatches_endpoint_returns_iso_timestamps_through_helper():
+    """End-to-end: feed the real ``get_recent_seo_summary_dispatches`` a fake
+    Mongo cursor of rows whose ``at`` is a ``datetime`` and assert the helper
+    serializes it to an ISO string before the route hands it to the UI. This
+    locks in the timestamp contract the AdminDashboard renders against — a
+    silent regression here would crash the prefs modal."""
+    import datetime as _dt
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routes.admin_notifications import router
+    from auth_deps import get_admin_user
+    import seo_engine
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides = {
+        get_admin_user: lambda: {"id": "a", "sub": "a", "is_admin": True}
+    }
+    client = TestClient(app)
+
+    rows = [
+        {"at": _dt.datetime(2026, 4, 18, 10, 0, 0,
+                            tzinfo=_dt.timezone.utc),
+         "sent": 2, "failed": 0, "total_recipients": 2,
+         "suppressed_quiet_hours": 0, "opted_out": 0, "no_email": 0,
+         "total_admins": 2, "errors": [], "reason": None},
+    ]
+
+    class _Cursor:
+        def __init__(self, docs):
+            self._docs = [dict(d) for d in docs]
+        def sort(self, *_a, **_k): return self
+        def limit(self, *_a, **_k): return self
+        def __aiter__(self):
+            self._i = 0
+            return self
+        async def __anext__(self):
+            if self._i >= len(self._docs):
+                raise StopAsyncIteration
+            d = self._docs[self._i]
+            self._i += 1
+            return d
+
+    class _Coll:
+        def find(self, *_a, **_k):
+            return _Cursor(rows)
+
+    class _DB:
+        def __getitem__(self, _name):
+            return _Coll()
+
+    with patch.object(seo_engine, "_db", _DB()):
+        res = client.get("/admin/seo/daily-summary-dispatches?limit=5")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert "dispatches" in body and len(body["dispatches"]) == 1
+    at = body["dispatches"][0]["at"]
+    assert isinstance(at, str)
+    # ISO 8601 — the AdminDashboard parses this with `new Date(...)`.
+    assert at.startswith("2026-04-18T10:00:00")
+
+
+def test_dispatches_helper_clamps_limit_between_1_and_50():
+    """The engine helper clamps wildly-large or non-positive ``limit`` values
+    to the documented [1, 50] range so a malformed admin URL can't ask Mongo
+    for an unbounded scan. The route forwards the raw value, so this guard
+    must live in the helper."""
+    import seo_engine
+
+    captured = {}
+
+    class _Cursor:
+        def sort(self, *_a, **_k): return self
+        def limit(self, n, *_a, **_k):
+            captured["limit"] = n
+            return self
+        def __aiter__(self):
+            return self
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    class _Coll:
+        def find(self, *_a, **_k): return _Cursor()
+
+    class _DB:
+        def __getitem__(self, _n): return _Coll()
+
+    import asyncio
+    with patch.object(seo_engine, "_db", _DB()):
+        asyncio.get_event_loop().run_until_complete(
+            seo_engine.get_recent_seo_summary_dispatches(limit=9999))
+        assert captured["limit"] == 50
+        # Negative limits are floored to 1 so a malformed URL can't ask Mongo
+        # for a reverse/unbounded scan.
+        asyncio.get_event_loop().run_until_complete(
+            seo_engine.get_recent_seo_summary_dispatches(limit=-5))
+        assert captured["limit"] == 1
+        # ``limit=0`` falls back to the documented default (10) via the
+        # ``limit or 10`` guard rather than being clamped to 1.
+        asyncio.get_event_loop().run_until_complete(
+            seo_engine.get_recent_seo_summary_dispatches(limit=0))
+        assert captured["limit"] == 10
+        asyncio.get_event_loop().run_until_complete(
+            seo_engine.get_recent_seo_summary_dispatches(limit=20))
+        assert captured["limit"] == 20
