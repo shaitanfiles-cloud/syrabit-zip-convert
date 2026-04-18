@@ -30,6 +30,21 @@ A comment block at the top of each file makes the intent explicit.
 - `/library`, `/browser`  — `LibraryPage.jsx`
 - `/{board}/...` chapter routes — `ChapterPage.jsx`
 
+### Build-time guard (Task #529)
+
+The policy above is enforced by `scripts/verify-no-ads.mjs`, which runs
+as the first step of `pnpm build` and is also exposed as
+`pnpm --filter @workspace/syrabit run lint:ads`. It hard-fails if any
+of the guarded route files imports a module under
+`src/components/ads/` (e.g. `@/components/ads/AdSlot`). The comment
+banners at the top of those files are a hint; this script is the
+enforcement.
+
+To change the policy:
+
+1. Edit the `GUARDED_FILES` array in `scripts/verify-no-ads.mjs`.
+2. Update the routes table above so the docs match the guard.
+
 ## Environment variables
 
 Each placement is gated by **all** of: a network script URL **and** a
