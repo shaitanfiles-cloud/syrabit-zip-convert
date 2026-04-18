@@ -203,10 +203,13 @@ if _OPENAI_KEY and _OPENAI_KEY != 'x':
     _LLM_PROVIDERS.append({"provider": "openai",      "key": _OPENAI_KEY,     "default_model": "gpt-4o-mini"})
 
 _LLM_PROVIDERS_CHAT: list[dict] = []
-if _GROQ_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
+# Order matters: pipeline.py iterates this list in priority order. Cerebras
+# now leads because Groq's hosted Llama-4 Scout endpoint has been failing
+# 100% in prod (see _SLM_SLOT_CANDIDATES note above).
 if _CEREBRAS_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama-4-scout-17b-16e-instruct"})
+if _GROQ_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
 if _OPENROUTER_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "meta-llama/llama-4-scout"})
 
@@ -244,8 +247,13 @@ _MODEL_ALIAS_MAP = {
 # Slots in the same tier are load-balanced by in-flight count.
 #
 _SLM_SLOT_CANDIDATES = [
-    ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 0),
-    ("cerebras",    "llama-4-scout-17b-16e-instruct",                      4, 1),
+    # Cerebras serves the same Llama-4 Scout model as Groq but at higher
+    # tok/s and far better latency in our region; Groq's hosted endpoint
+    # for this model has been intermittently failing (100% fallback rate
+    # observed in prod alerts), so Cerebras is now Tier 0 and Groq is
+    # the Tier 1 fallback.
+    ("cerebras",    "llama-4-scout-17b-16e-instruct",                    4, 0),
+    ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 1),
     ("openrouter",  "meta-llama/llama-4-scout",                          4, 2),
 ]
 
