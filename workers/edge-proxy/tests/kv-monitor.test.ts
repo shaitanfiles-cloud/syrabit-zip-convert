@@ -1,0 +1,269 @@
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import {
+  wrapKvNamespace,
+  getUsageSnapshot,
+  _resetMonitorStateForTests,
+  DEFAULT_QUOTA,
+} from "../src/kv-monitor";
+
+/* ───────────── fakes ───────────── */
+
+class FakeKv {
+  private store = new Map<string, string>();
+  public failNext = 0; // count of next ops that should throw
+  public failAll = false;
+  public lastPutOpts: unknown = undefined;
+
+  private maybeFail(): void {
+    if (this.failAll) throw new Error("kv simulated outage");
+    if (this.failNext > 0) {
+      this.failNext -= 1;
+      throw new Error("kv simulated transient failure");
+    }
+  }
+
+  async get(key: string): Promise<string | null> {
+    this.maybeFail();
+    return this.store.has(key) ? this.store.get(key)! : null;
+  }
+  async put(key: string, value: string, opts?: unknown): Promise<void> {
+    this.maybeFail();
+    this.lastPutOpts = opts;
+    this.store.set(key, value);
+  }
+  async delete(key: string): Promise<void> {
+    this.maybeFail();
+    this.store.delete(key);
+  }
+  async list(): Promise<{ keys: { name: string }[]; list_complete: boolean }> {
+    this.maybeFail();
+    return {
+      keys: Array.from(this.store.keys()).map((name) => ({ name })),
+      list_complete: true,
+    };
+  }
+  async getWithMetadata(key: string): Promise<{ value: string | null; metadata: unknown }> {
+    this.maybeFail();
+    return { value: this.store.get(key) ?? null, metadata: null };
+  }
+}
+
+class FakeCache {
+  private store = new Map<string, Response>();
+  async match(req: Request | string): Promise<Response | undefined> {
+    const url = typeof req === "string" ? req : req.url;
+    const r = this.store.get(url);
+    return r ? r.clone() : undefined;
+  }
+  async put(req: Request | string, resp: Response): Promise<void> {
+    const url = typeof req === "string" ? req : req.url;
+    this.store.set(url, resp.clone());
+  }
+}
+
+const noopCtx = {
+  waitUntil: (_p: Promise<unknown>) => undefined,
+  passThroughOnException: () => undefined,
+} as unknown as ExecutionContext;
+
+beforeEach(() => {
+  _resetMonitorStateForTests();
+});
+
+/* ───────────── counter accuracy ───────────── */
+
+describe("counter accuracy", () => {
+  it("increments read/write/list/delete counters per op", async () => {
+    const kv = wrapKvNamespace(new FakeKv() as unknown as KVNamespace, "RATE_LIMIT", {
+      cache: new FakeCache() as unknown as Cache,
+      ctx: noopCtx,
+    });
+    await kv.put("a", "1");
+    await kv.put("b", "2");
+    await kv.get("a");
+    await kv.get("missing");
+    await kv.delete("b");
+    await kv.list();
+
+    const snap = getUsageSnapshot(["RATE_LIMIT"]);
+    const b = snap.bindings[0];
+    expect(b.counters.write).toBe(2);
+    expect(b.counters.read).toBe(2);
+    expect(b.counters.delete).toBe(1);
+    expect(b.counters.list).toBe(1);
+    expect(b.status).toBe("healthy");
+    expect(b.fallbackActive).toBe(false);
+  });
+
+  it("keeps separate counters per binding name", async () => {
+    const a = wrapKvNamespace(new FakeKv() as unknown as KVNamespace, "RATE_LIMIT", { ctx: noopCtx });
+    const b = wrapKvNamespace(new FakeKv() as unknown as KVNamespace, "BOT_HTML_CACHE", { ctx: noopCtx });
+    await a.get("x");
+    await a.get("y");
+    await b.put("p", "q");
+
+    const snap = getUsageSnapshot(["RATE_LIMIT", "BOT_HTML_CACHE"]);
+    const ratelimit = snap.bindings.find((x) => x.binding === "RATE_LIMIT")!;
+    const bothtml = snap.bindings.find((x) => x.binding === "BOT_HTML_CACHE")!;
+    expect(ratelimit.counters.read).toBe(2);
+    expect(ratelimit.counters.write).toBe(0);
+    expect(bothtml.counters.write).toBe(1);
+    expect(bothtml.counters.read).toBe(0);
+  });
+});
+
+/* ───────────── fallback paths ───────────── */
+
+describe("read fallback to Cache API on KV failure", () => {
+  it("returns the last-known-good value from the Cache API when KV throws", async () => {
+    const inner = new FakeKv();
+    const cache = new FakeCache();
+    const kv = wrapKvNamespace(inner as unknown as KVNamespace, "RATE_LIMIT", {
+      cache: cache as unknown as Cache,
+      ctx: noopCtx,
+    });
+
+    // Seed the value through the wrapper so the Cache API mirror is populated.
+    await kv.put("hello", "world");
+    // Wait a tick so the (sync-resolved) `void writeToCacheFallback` has settled.
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Now KV starts failing.
+    inner.failAll = true;
+    const v = await kv.get("hello");
+    expect(v).toBe("world");
+
+    // Snapshot reflects the active fallback.
+    const snap = getUsageSnapshot(["RATE_LIMIT"]);
+    expect(snap.bindings[0].fallbackActive).toBe(true);
+  });
+
+  it("returns null (not throw) when KV fails and Cache API has nothing", async () => {
+    const inner = new FakeKv();
+    inner.failAll = true;
+    const kv = wrapKvNamespace(inner as unknown as KVNamespace, "RATE_LIMIT", {
+      cache: new FakeCache() as unknown as Cache,
+      ctx: noopCtx,
+    });
+    await expect(kv.get("nothing")).resolves.toBeNull();
+  });
+
+  it("list() returns an empty completed result instead of throwing on KV failure", async () => {
+    const inner = new FakeKv();
+    inner.failAll = true;
+    const kv = wrapKvNamespace(inner as unknown as KVNamespace, "RATE_LIMIT", { ctx: noopCtx });
+    const r = await kv.list();
+    expect(r.keys).toEqual([]);
+    expect(r.list_complete).toBe(true);
+  });
+});
+
+describe("write fallback queues deferred writes when KV throws", () => {
+  it("does not throw to the caller when put() fails", async () => {
+    const inner = new FakeKv();
+    inner.failAll = true;
+    const kv = wrapKvNamespace(inner as unknown as KVNamespace, "RATE_LIMIT", { ctx: noopCtx });
+    await expect(kv.put("k", "v", { expirationTtl: 60 })).resolves.toBeUndefined();
+    const snap = getUsageSnapshot(["RATE_LIMIT"]);
+    expect(snap.bindings[0].fallbackActive).toBe(true);
+    expect(snap.bindings[0].counters.write).toBe(1);
+  });
+
+  it("drains the deferred queue once KV recovers (replay via setTimeout)", async () => {
+    vi.useFakeTimers();
+    try {
+      const inner = new FakeKv();
+      inner.failAll = true;
+      const kv = wrapKvNamespace(inner as unknown as KVNamespace, "RATE_LIMIT", { ctx: noopCtx });
+      await kv.put("a", "1");
+      await kv.put("b", "2");
+      // KV recovers.
+      inner.failAll = false;
+      // Advance past the 1s backoff so the replay runs.
+      await vi.advanceTimersByTimeAsync(1100);
+      // Both keys should now be in the underlying store.
+      expect(await inner.get("a")).toBe("1");
+      expect(await inner.get("b")).toBe("2");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/* ───────────── threshold / status ───────────── */
+
+describe("threshold detection", () => {
+  it("transitions healthy → warning → exhausted as the counter climbs", async () => {
+    const kv = wrapKvNamespace(new FakeKv() as unknown as KVNamespace, "RATE_LIMIT", {
+      ctx: noopCtx,
+      quota: { write: 10, read: DEFAULT_QUOTA.read, list: DEFAULT_QUOTA.list, delete: DEFAULT_QUOTA.delete },
+      warningPct: 80,
+    });
+    for (let i = 0; i < 7; i++) await kv.put(`k${i}`, "v");
+    let snap = getUsageSnapshot(["RATE_LIMIT"], { quota: { write: 10 }, warningPct: 80 });
+    expect(snap.bindings[0].status).toBe("healthy");
+
+    await kv.put("k7", "v"); // 8/10 = 80% → warning
+    snap = getUsageSnapshot(["RATE_LIMIT"], { quota: { write: 10 }, warningPct: 80 });
+    expect(snap.bindings[0].status).toBe("warning");
+
+    for (let i = 0; i < 5; i++) await kv.put(`x${i}`, "v"); // push over 100%
+    snap = getUsageSnapshot(["RATE_LIMIT"], { quota: { write: 10 }, warningPct: 80 });
+    expect(snap.bindings[0].status).toBe("exhausted");
+  });
+
+  it("fires a one-shot alert webhook when the warning threshold is crossed", async () => {
+    const calls: { url: string; body: string; secret: string | null }[] = [];
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({
+        url,
+        body: typeof init.body === "string" ? init.body : "",
+        secret: (init.headers as Record<string, string>)["X-KV-Alert-Secret"] ?? null,
+      });
+      return new Response("", { status: 204 });
+    });
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+    try {
+      const kv = wrapKvNamespace(new FakeKv() as unknown as KVNamespace, "RATE_LIMIT", {
+        ctx: noopCtx,
+        quota: { write: 4 },
+        warningPct: 50,
+        backendUrl: "https://api.example.com",
+        alertSecret: "shh",
+      });
+      // 50% threshold of 4 writes = 2.
+      await kv.put("a", "1");
+      await kv.put("b", "2");
+      await kv.put("c", "3");
+      // Allow async alert calls to settle.
+      await new Promise((r) => setTimeout(r, 0));
+      // Exactly one alert fired for "write" — subsequent writes are
+      // suppressed by the per-day dedupe set.
+      const writeAlerts = calls.filter((c) => c.url.endsWith("/admin/kv-alerts") && c.body.includes('"op":"write"'));
+      expect(writeAlerts.length).toBe(1);
+      expect(writeAlerts[0].secret).toBe("shh");
+      const parsed = JSON.parse(writeAlerts[0].body);
+      expect(parsed.binding).toBe("RATE_LIMIT");
+      expect(parsed.severity).toBe("warning");
+      expect(parsed.percentage).toBeGreaterThanOrEqual(50);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+});
+
+/* ───────────── caller never sees an error ───────────── */
+
+describe("never throws to callers", () => {
+  it("get/put/delete/list all resolve even with full KV outage and no cache", async () => {
+    const inner = new FakeKv();
+    inner.failAll = true;
+    const kv = wrapKvNamespace(inner as unknown as KVNamespace, "RATE_LIMIT", { ctx: noopCtx });
+    await expect(kv.get("x")).resolves.toBeNull();
+    await expect(kv.put("x", "y")).resolves.toBeUndefined();
+    await expect(kv.delete("x")).resolves.toBeUndefined();
+    const r = await kv.list();
+    expect(r.keys).toEqual([]);
+  });
+});

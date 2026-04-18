@@ -322,6 +322,13 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   // under the SEO summary opt-in toggle so admins can see whether the last
   // scheduled run actually emailed them (or was suppressed by quiet hours).
   const [seoSummaryDispatches, setSeoSummaryDispatches] = useState(null);
+  // Task #476 — Cloudflare Workers KV usage snapshot from the edge
+  // worker. ``null`` while loading; ``{ configured: false, ... }`` when
+  // the edge URL/secret aren't set; ``{ configured: true, snapshot }``
+  // when the worker responded. Surfaced in the prefs modal so admins can
+  // see read/write counters & quota % at a glance and react before a
+  // KV outage starts dropping pages and the analytics beacon.
+  const [kvHealth, setKvHealth] = useState(null);
   // Task #434 — last_success_at / last_error for the browser-push
   // channel from /admin/alert-settings (channel_status.push). Surfaced
   // inline in the notifications tile so admins notice a degraded push
@@ -390,6 +397,16 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       setSeoSummaryDispatches(dispRes.data?.dispatches || []);
     } catch {
       setSeoSummaryDispatches([]);
+    }
+    // Task #476 — Cloudflare Workers KV usage snapshot.
+    try {
+      const kvRes = await axios.get(
+        `${API_BASE}/admin/kv-health`,
+        adminHdr(adminToken),
+      );
+      setKvHealth(kvRes.data || null);
+    } catch {
+      setKvHealth({ configured: false, reason: 'Backend unreachable' });
     }
   }, [adminToken]);
 
@@ -2236,6 +2253,84 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                     Email me the daily SEO auto-publish summary
                   </span>
                 </label>
+              </div>
+
+              {/* Task #476 — Cloudflare Workers KV health panel.
+                  Shows per-binding daily counters vs quota with a colored
+                  status pill so admins notice quota pressure before pages
+                  start failing and the analytics beacon drops. The edge
+                  worker auto-falls-back to the Cache API + an in-memory
+                  write queue when KV throws, so a "warning" or
+                  "exhausted" state means traffic is still being served —
+                  but writes are queued and will replay once the quota
+                  resets at 00:00 UTC. */}
+              <div className="mb-3 pb-3 border-b border-gray-200" data-testid="notif-prefs-kv-health">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[10px] text-gray-500 font-medium">
+                    Cloudflare Workers KV — daily usage (UTC)
+                  </label>
+                  {kvHealth?.snapshot?.utcDay && (
+                    <span className="text-[10px] text-gray-400">{kvHealth.snapshot.utcDay}</span>
+                  )}
+                </div>
+                {kvHealth === null ? (
+                  <div className="text-[10px] text-gray-400">Loading…</div>
+                ) : kvHealth.configured === false || !kvHealth.snapshot ? (
+                  <div className="text-[10px] text-gray-400" data-testid="notif-prefs-kv-health-unconfigured">
+                    KV usage telemetry not available{kvHealth.reason ? ` — ${kvHealth.reason}` : ''}.
+                    The edge worker will still serve cached reads and queue
+                    writes during a KV outage; this panel just won't show
+                    live counters until the edge is wired up.
+                  </div>
+                ) : (
+                  <ul className="space-y-1.5">
+                    {(kvHealth.snapshot.bindings || []).map((b) => {
+                      const pillCls =
+                        b.status === 'exhausted' ? 'bg-red-100 text-red-700 ring-red-200'
+                        : b.status === 'warning' ? 'bg-amber-100 text-amber-700 ring-amber-200'
+                        : 'bg-emerald-100 text-emerald-700 ring-emerald-200';
+                      const ops = ['read', 'write', 'list', 'delete'];
+                      return (
+                        <li
+                          key={b.binding}
+                          className="text-[11px] text-gray-700"
+                          data-testid={`notif-prefs-kv-health-row-${b.binding}`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium">{b.binding}</span>
+                            <span className={`text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded ring-1 ${pillCls}`}>
+                              {b.status}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-4 gap-1 mt-1 text-[10px] text-gray-500">
+                            {ops.map((op) => {
+                              const used = b.counters?.[op] ?? 0;
+                              const cap = b.quota?.[op] ?? 0;
+                              const pct = b.percentages?.[op] ?? 0;
+                              const tone =
+                                pct >= 100 ? 'text-red-600'
+                                : pct >= (kvHealth.snapshot.warningPct || 80) ? 'text-amber-600'
+                                : 'text-gray-500';
+                              return (
+                                <div key={op} className="flex flex-col">
+                                  <span className="uppercase text-[9px]">{op}</span>
+                                  <span className={`tabular-nums ${tone}`}>
+                                    {used.toLocaleString()}/{cap.toLocaleString()} ({pct.toFixed(1)}%)
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          {b.fallbackActive && (
+                            <div className="text-[10px] text-amber-700 mt-1" data-testid={`notif-prefs-kv-health-fallback-${b.binding}`}>
+                              Fallback active — serving recent reads from the Cache API and queueing writes in memory.
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
               </div>
 
               {/* Task #474 — recent SEO summary dispatch history. */}

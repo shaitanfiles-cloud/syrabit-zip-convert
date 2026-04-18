@@ -8,6 +8,12 @@ import {
   getSubjectSitemapEntries, getChapterSitemapEntries,
 } from "./d1-queries";
 import { syncFromPayload, getSyncStatus } from "./d1-sync";
+import {
+  wrapKvNamespace,
+  getUsageSnapshot,
+  type WrapKvOptions,
+  type KvUsageQuota,
+} from "./kv-monitor";
 
 interface Env {
   BACKEND_URL: string;
@@ -16,6 +22,71 @@ interface Env {
   BOT_HTML_CACHE?: KVNamespace;
   CONTENT_DB: D1Database;
   D1_SYNC_SECRET: string;
+  /** Secret shared with the FastAPI backend for /admin/kv-alerts. */
+  KV_ALERT_SECRET?: string;
+  /** Override warning threshold (percentage of quota). Defaults to 80. */
+  KV_WARNING_PCT?: string;
+  /** Override per-op daily quotas as a JSON string. */
+  KV_QUOTA?: string;
+}
+
+const KV_BINDINGS = ["RATE_LIMIT", "BOT_HTML_CACHE"] as const;
+
+function buildKvMonitorOpts(env: Env, ctx: ExecutionContext): WrapKvOptions {
+  let quota: Partial<KvUsageQuota> | undefined;
+  if (env.KV_QUOTA) {
+    try { quota = JSON.parse(env.KV_QUOTA); } catch { /* ignore malformed override */ }
+  }
+  let warningPct: number | undefined;
+  if (env.KV_WARNING_PCT) {
+    const n = Number(env.KV_WARNING_PCT);
+    if (Number.isFinite(n) && n > 0 && n <= 100) warningPct = n;
+  }
+  return {
+    backendUrl: env.BACKEND_URL,
+    alertSecret: env.KV_ALERT_SECRET,
+    warningPct,
+    quota,
+    ctx,
+  };
+}
+
+function wrapEnvKv(env: Env, ctx: ExecutionContext): Env {
+  const opts = buildKvMonitorOpts(env, ctx);
+  // Idempotent: only wrap actual `KVNamespace` instances. The wrapper
+  // uses module-scoped counters keyed by binding name, so re-wrapping
+  // across requests is safe and cheap.
+  const wrapped: Env = { ...env };
+  if (env.RATE_LIMIT) {
+    wrapped.RATE_LIMIT = wrapKvNamespace(env.RATE_LIMIT, "RATE_LIMIT", opts);
+  }
+  if (env.BOT_HTML_CACHE) {
+    wrapped.BOT_HTML_CACHE = wrapKvNamespace(env.BOT_HTML_CACHE, "BOT_HTML_CACHE", opts);
+  }
+  return wrapped;
+}
+
+function handleKvUsage(env: Env, request: Request, cors: Record<string, string>): Response {
+  const provided = request.headers.get("X-Edge-Admin-Secret") || "";
+  if (!env.D1_SYNC_SECRET || provided !== env.D1_SYNC_SECRET) {
+    return new Response(JSON.stringify({ detail: "Unauthorized" }), {
+      status: 401,
+      headers: { ...cors, "Content-Type": "application/json" },
+    });
+  }
+  const snapshot = getUsageSnapshot([...KV_BINDINGS], buildKvMonitorOpts(env, {
+    waitUntil: () => undefined,
+    passThroughOnException: () => undefined,
+  } as unknown as ExecutionContext));
+  return new Response(JSON.stringify(snapshot), {
+    status: 200,
+    headers: {
+      ...cors,
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+      "X-Source": "edge-kv-monitor",
+    },
+  });
 }
 
 interface D1Database {
@@ -1209,6 +1280,17 @@ export default {
         return new Response(null, { status: 403 });
       }
       return new Response(null, { status: 204, headers: preflight });
+    }
+
+    // From here on, all KV access goes through the monitored wrapper so
+    // counters are accurate and graceful fallback kicks in on quota
+    // exhaustion. The wrappers are cheap closures — re-creating them
+    // per-request keeps the binding instances `const` and lets the
+    // monitor module share state across requests via its own Map.
+    env = wrapEnvKv(env, ctx);
+
+    if (pathname === "/api/edge/kv-usage" && request.method === "GET") {
+      return handleKvUsage(env, request, cors);
     }
 
     if (pathname === "/api/health" || pathname === "/health") {
