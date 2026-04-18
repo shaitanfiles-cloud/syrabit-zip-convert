@@ -56,7 +56,7 @@ export default function PopularSubjects({ contentLang = 'en' }) {
       .sort((a, b) => b.score - a.score)
       .slice(0, 10);
 
-    return scored.length >= 6 ? scored : FALLBACK;
+    return scored.length > 0 ? scored : FALLBACK;
   }, [bundle]);
 
   return (

@@ -11,6 +11,8 @@ import {
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { apiClient, API_BASE, seoRelatedByChapter } from '@/utils/api';
+import { useLibraryBundle, useLibraryBundleSlim } from '@/hooks/useContent';
+import { findSiblingChapters, siblingsAsRelated } from '@/utils/siblingChapter';
 import { useShare } from '@/hooks/useShare';
 import StickyToc from '@/components/ui/StickyToc';
 import { learnArticleSchema } from '@/lib/jsonld';
@@ -59,6 +61,7 @@ export default function LearnPage() {
   const [showAllPyqs, setShowAllPyqs] = useState(false);
   const [flippedCards, setFlippedCards] = useState(new Set());
   const articleRef = useRef(null);
+  const { data: libraryBundle } = useLibraryBundle();
 
   useEffect(() => {
     setLoading(true);
@@ -494,25 +497,56 @@ export default function LearnPage() {
           )}
 
           {(() => {
-            const items = (relatedTopics || []).map((rt) => ({
+            // Chapter-order prev/next derived from the library bundle for the
+            // doc's parent chapter. Falls back gracefully when bundle is not
+            // yet loaded.
+            const subjChapters = (libraryBundle?.chapters || []).filter(
+              (ch) => ch.subject_id && doc?.subject_id && ch.subject_id === doc.subject_id
+            );
+            const sub = (libraryBundle?.subjects || []).find((s) => s.id === doc?.subject_id) || null;
+            const subjectBasePath = (sub && sub.boardSlug && sub.classSlug && sub.slug)
+              ? `/${sub.boardSlug}/${sub.classSlug}/${sub.slug}`
+              : (doc?.subject_id ? `/subject/${doc.subject_id}` : '/library');
+
+            const { prev: pCh, next: nCh } = findSiblingChapters(
+              subjChapters,
+              doc?.linked_chapter_id,
+              null,
+            );
+            const prevLink = pCh && pCh.slug
+              ? { title: pCh.title || pCh.slug, path: `${subjectBasePath}/${pCh.slug}` }
+              : null;
+            const nextLink = nCh && nCh.slug
+              ? { title: nCh.title || nCh.slug, path: `${subjectBasePath}/${nCh.slug}` }
+              : null;
+
+            // Related: prefer endpoint result, backfill with sibling chapters
+            // until at least 4 (target 4–6) so the rail is never sparse.
+            const seedRelated = (relatedTopics || []).map((rt) => ({
               id: rt.id,
               title: rt.title,
-              path: rt.seo_path || `/learn/${rt.slug}`,
+              seo_path: rt.seo_path || `/learn/${rt.slug}`,
             }));
-            const prev = items[0] ? { title: items[0].title, path: items[0].path } : null;
-            const next = items[1] ? { title: items[1].title, path: items[1].path } : null;
-            const related = items.slice(2).map((rt) => ({
-              id: rt.id,
-              title: rt.title,
-              seo_path: rt.path,
-            }));
+            const siblings = siblingsAsRelated(subjChapters, doc?.linked_chapter_id, null, subjectBasePath, 8);
+            const related = (() => {
+              const out = [...seedRelated];
+              if (out.length < 4) {
+                const seen = new Set(out.map((r) => r.seo_path));
+                for (const s of siblings) {
+                  if (out.length >= 6) break;
+                  if (!seen.has(s.seo_path)) out.push(s);
+                }
+              }
+              return out.slice(0, 6);
+            })();
+
             return (
               <ContinueLearning
-                prev={prev}
-                next={next}
+                prev={prevLink}
+                next={nextLink}
                 related={related}
-                subjectName={doc?.subject_name || ''}
-                subjectPath={doc?.subject_id ? `/subject/${doc.subject_id}` : '/library'}
+                subjectName={doc?.subject_name || sub?.name || ''}
+                subjectPath={subjectBasePath}
                 chatHref={doc?.subject_id ? `/chat?subject=${doc.subject_id}` : '/chat'}
               />
             );

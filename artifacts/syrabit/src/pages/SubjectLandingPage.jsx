@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import {
@@ -10,6 +10,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useResolveSubject, useChapters } from '@/hooks/useContent';
 import ContinueLearning from '@/components/content/ContinueLearning';
 import { useContentLang } from '@/context/LanguageContext';
+import { seoRelatedByChapter } from '@/utils/api';
+import { siblingsAsRelated } from '@/utils/siblingChapter';
 
 export default function SubjectLandingPage() {
   const { board, classSlug, subjectSlug } = useParams();
@@ -34,6 +36,41 @@ export default function SubjectLandingPage() {
   }, [chapters, searchQuery]);
 
   const basePath = `/${board}/${classSlug}/${subjectSlug}`;
+
+  // Pull SEO related-topics for the first chapter to seed the
+  // ContinueLearning rail, then backfill with sibling chapters until ≥4 links.
+  const [seoRelated, setSeoRelated] = useState([]);
+  const seedChapterId = chapters[0]?.id || chapters[0]?._id || null;
+  useEffect(() => {
+    let cancelled = false;
+    if (!seedChapterId) { setSeoRelated([]); return; }
+    seoRelatedByChapter(seedChapterId, { limit: 6 })
+      .then((rows) => {
+        if (cancelled) return;
+        const payload = rows?.data ?? rows;
+        const list = Array.isArray(payload) ? payload : (payload?.related || payload?.items || []);
+        setSeoRelated(list.map((r) => ({
+          id: r.id || r.slug,
+          title: r.title,
+          seo_path: r.seo_path || (r.slug ? `/learn/${r.slug}` : '#'),
+        })));
+      })
+      .catch(() => { if (!cancelled) setSeoRelated([]); });
+    return () => { cancelled = true; };
+  }, [seedChapterId]);
+
+  const continueRelated = useMemo(() => {
+    const out = [...(seoRelated || [])];
+    if (out.length < 4) {
+      const seen = new Set(out.map((r) => r.seo_path));
+      const sibs = siblingsAsRelated(chapters, seedChapterId, null, basePath, 8);
+      for (const s of sibs) {
+        if (out.length >= 6) break;
+        if (!seen.has(s.seo_path)) out.push(s);
+      }
+    }
+    return out.slice(0, 6);
+  }, [seoRelated, chapters, seedChapterId, basePath]);
 
   const subjectName = subject?.name || subjectSlug;
   const boardName = subject?.board_name || board;
@@ -272,11 +309,7 @@ export default function SubjectLandingPage() {
 
         {chapters.length > 0 && (
           <ContinueLearning
-            related={chapters.slice(0, 6).map((ch) => ({
-              id: ch.id,
-              title: ch.title,
-              seo_path: ch.slug ? `${basePath}/${ch.slug}` : basePath,
-            }))}
+            related={continueRelated}
             subjectName={subjectName}
             subjectPath={basePath}
             chatHref={`/chat?subject=${subject.id || subject._id || ''}`}

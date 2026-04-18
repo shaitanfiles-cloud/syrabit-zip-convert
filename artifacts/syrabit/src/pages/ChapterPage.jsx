@@ -896,9 +896,19 @@ export default function ChapterPage() {
               );
               const prevLink = prev ? { title: prev.title || prev.slug, path: `${basePath}/${prev.slug}` } : null;
               const nextLink = next ? { title: next.title || next.slug, path: `${basePath}/${next.slug}` } : null;
-              const related = relatedChapterTopics.length > 0
-                ? relatedChapterTopics
-                : siblingsAsRelated(subjChapters, data?.chapter_id, chapterSlug, basePath, 6);
+              const seedRelated = relatedChapterTopics || [];
+              const siblings = siblingsAsRelated(subjChapters, data?.chapter_id, chapterSlug, basePath, 8);
+              const related = (() => {
+                const out = [...seedRelated];
+                if (out.length < 4) {
+                  const seenPaths = new Set(out.map((r) => r.seo_path));
+                  for (const s of siblings) {
+                    if (out.length >= 6) break;
+                    if (!seenPaths.has(s.seo_path)) out.push(s);
+                  }
+                }
+                return out.slice(0, 6);
+              })();
               return (
                 <ContinueLearning
                   prev={prevLink}
