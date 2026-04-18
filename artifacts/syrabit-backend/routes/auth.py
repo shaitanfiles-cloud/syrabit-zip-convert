@@ -142,6 +142,7 @@ async def login(data: UserLogin, response: Response):
         stream_id=user.get("stream_id"),
         created_at=user.get("created_at", ""),
         avatar_url=user.get("avatar_url", ""),
+        ads_opt_out=bool(user.get("ads_opt_out", False)),
     )
     _session_kwargs = dict(key="syrabit_session", value=token, httponly=True, secure=SECURE_COOKIES, samesite=COOKIE_SAMESITE, max_age=JWT_ACCESS_EXPIRE_MINUTES * 60)
     _refresh_kwargs = dict(key="syrabit_refresh", value=refresh, httponly=True, secure=SECURE_COOKIES, samesite=COOKIE_SAMESITE, path="/api/auth/refresh", max_age=JWT_REFRESH_EXPIRE_MINUTES * 60)
@@ -228,6 +229,7 @@ async def google_auth(data: GoogleAuthRequest, response: Response):
             stream_id=existing.get("stream_id"),
             created_at=existing.get("created_at", ""),
             avatar_url=existing.get("avatar_url", ""),
+            ads_opt_out=bool(existing.get("ads_opt_out", False)),
         )
     else:
         settings = await supa_get_settings()

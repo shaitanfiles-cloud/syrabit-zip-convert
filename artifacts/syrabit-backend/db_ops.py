@@ -60,7 +60,8 @@ def _pg_user_cols():
               board_id, board_name, class_id, class_name, stream_id, stream_name,
               credits_used_today, credits_reset_date, created_at,
               google_id, auth_provider,
-              consent_dpdp, consent_dpdp_version, consent_dpdp_at"""
+              consent_dpdp, consent_dpdp_version, consent_dpdp_at,
+              ads_opt_out"""
 
 # ── Supabase mirror helper ────────────────────────────────────────────────────
 def _supa_mirror(fn):
