@@ -6120,6 +6120,25 @@ _SEO_STALENESS_REALERT_INTERVAL_H = 24
 _SEO_STALENESS_LOOP_SLEEP_S = 3600  # 1 hour
 _SEO_STALENESS_WARMUP_S = 900       # 15 min — let migrations settle
 
+# ─── Task #491 — liveness heartbeat for the staleness monitor itself ────────
+#
+# Task #485 surfaced the monitor's ``updated_at`` in the Schedule panel so an
+# admin who happens to look can see whether the monitor is alive. This block
+# automates that check: every 6h, verify the monitor bumped its heartbeat
+# within the last ~3h (2x its own 1h loop interval) and page admins exactly
+# once if it hasn't. Same CAS + debounce + recovery shape as the parent
+# staleness alert (Task #471) and the CI alert (Task #484), so on-call
+# muscle memory is consistent.
+_SEO_STALENESS_HEARTBEAT_ALERT_LOCK_ID = "seo_staleness_monitor_heartbeat_alert"
+_SEO_STALENESS_HEARTBEAT_LOOP_SLEEP_S = 21600  # 6h between liveness checks
+_SEO_STALENESS_HEARTBEAT_WARMUP_S = 1200       # 20 min — let the monitor
+                                                # finish its own warmup +
+                                                # first iteration before we
+                                                # start grading it
+_SEO_STALENESS_HEARTBEAT_MAX_AGE_H = 3.0       # 2x the monitor's 1h cadence
+_SEO_STALENESS_HEARTBEAT_REALERT_INTERVAL_H = 12  # debounce a continuing
+                                                   # outage to ≤2 pages/day
+
 
 def _seo_auto_publish_staleness_threshold_hours(frequency: str) -> int:
     """Mirror the client-side thresholds in
@@ -6427,6 +6446,12 @@ async def _check_and_alert_seo_auto_publish_staleness(
         meaningful changes.
     """
     now_utc = now_utc or datetime.now(timezone.utc)
+    # Task #491 — touch the lock doc's ``updated_at`` on EVERY iteration
+    # (including the disabled branch) so the heartbeat watcher has a true
+    # liveness signal. Without this, the existing persistence path only
+    # writes on state transitions, which means a steady-state-healthy
+    # monitor's ``updated_at`` would freeze and falsely look dead.
+    await _bump_staleness_monitor_heartbeat(db, now_utc)
     state = await _evaluate_seo_auto_publish_staleness(db, now_utc)
     if not state["enabled"]:
         return {"action": "skip", "reason": "disabled", "state": state}
@@ -6493,6 +6518,260 @@ async def _seo_auto_publish_staleness_loop():
         except Exception as exc:
             logger.debug(f"[seo-staleness] loop iteration error: {exc}")
         await asyncio.sleep(_SEO_STALENESS_LOOP_SLEEP_S)
+
+
+# ─── Task #491 — heartbeat watcher for the staleness monitor ────────────────
+
+async def _bump_staleness_monitor_heartbeat(db, now_utc: datetime) -> None:
+    """Touch ``updated_at`` on the staleness monitor's lock doc every
+    iteration so the heartbeat watcher (Task #491) has a true liveness
+    signal. Best-effort: a transient Mongo blip must not break the
+    parent monitor's iteration. Uses ``$set`` only on ``updated_at`` so
+    we never clobber ``last_state`` / ``last_alert_at`` written by the
+    real alert path; ``upsert=True`` so the very first iteration on a
+    fresh install creates the doc and unblocks the heartbeat."""
+    try:
+        await db.job_locks.update_one(
+            {"_id": _SEO_STALENESS_ALERT_LOCK_ID},
+            {"$set": {"updated_at": now_utc.isoformat()}},
+            upsert=True,
+        )
+    except Exception as exc:
+        logger.debug(f"[seo-staleness] heartbeat bump failed: {exc}")
+
+
+async def _claim_staleness_heartbeat_alert_slot(
+    db, kind: str, now_utc: datetime,
+) -> bool:
+    """Cross-replica single-winner CAS for the heartbeat alert. Mirrors
+    :func:`_claim_seo_staleness_alert_slot` so leader fail-over mid-loop
+    can't burst-page admins. Guard semantics:
+
+      * ``down``: prior must NOT already be ``down`` (initial detection)
+        OR the prior alert must be older than the heartbeat debounce
+        window (legitimate re-page).
+      * ``recovered``: prior must currently be ``down`` (otherwise
+        nothing to recover from).
+    """
+    set_payload = {
+        "last_state": "down" if kind == "down" else "healthy",
+        "last_alert_at": now_utc.isoformat(),
+        "updated_at": now_utc.isoformat(),
+    }
+    if kind == "down":
+        cutoff_iso = (
+            now_utc - timedelta(hours=_SEO_STALENESS_HEARTBEAT_REALERT_INTERVAL_H)
+        ).isoformat()
+        guard = {
+            "_id": _SEO_STALENESS_HEARTBEAT_ALERT_LOCK_ID,
+            "$or": [
+                {"last_state": {"$ne": "down"}},
+                {"last_alert_at": {"$lt": cutoff_iso}},
+                {"last_alert_at": {"$exists": False}},
+            ],
+        }
+    else:  # recovered
+        guard = {
+            "_id": _SEO_STALENESS_HEARTBEAT_ALERT_LOCK_ID,
+            "last_state": "down",
+        }
+    try:
+        res = await db.job_locks.find_one_and_update(
+            guard, {"$set": set_payload}, upsert=False,
+        )
+        if res is not None:
+            return True
+    except Exception as exc:
+        logger.debug(f"[seo-staleness-heartbeat] CAS failed: {exc}")
+        return False
+    # Bootstrap path: no prior heartbeat-alert doc exists. Recovery has
+    # no bootstrap (you can't recover from a state we never recorded).
+    if kind != "down":
+        return False
+    try:
+        from pymongo.errors import DuplicateKeyError
+        await db.job_locks.insert_one({
+            "_id": _SEO_STALENESS_HEARTBEAT_ALERT_LOCK_ID,
+            **set_payload,
+        })
+        return True
+    except DuplicateKeyError:
+        return False
+    except Exception as exc:
+        logger.debug(
+            f"[seo-staleness-heartbeat] bootstrap insert failed: {exc}")
+        return False
+
+
+async def _send_staleness_heartbeat_alert(
+    db, kind: str, now_utc: datetime, age_h: float,
+    monitor_updated_at: Optional[str],
+) -> None:
+    """Email admins + drop an in-app notification. ``kind`` is
+    ``"down"`` (heartbeat fell behind) or ``"recovered"`` (heartbeat
+    caught up). Reuses the same admin audience + email helper as the
+    parent staleness alert so on-call gets one consistent inbox."""
+    if kind == "down":
+        title = "SEO staleness monitor is not running"
+        msg = (
+            f"The SEO auto-publish staleness monitor has not heartbeated "
+            f"in {age_h:.1f}h (threshold "
+            f"{_SEO_STALENESS_HEARTBEAT_MAX_AGE_H:.1f}h, ~2x its "
+            f"{_SEO_STALENESS_LOOP_SLEEP_S // 3600}h loop interval). Last "
+            f"observed heartbeat: {monitor_updated_at or 'unknown'}.\n\n"
+            f"Nothing is currently watching the auto-publish scheduler — "
+            f"a stalled cron would NO LONGER page admins. Likely causes: "
+            f"the leader replica is down without re-electing, the "
+            f"staleness loop crashed, or Mongo is unreachable from the "
+            f"leader. Check the server logs for `[seo-staleness]` "
+            f"entries and confirm the leader replica is healthy."
+        )
+        notif_type = "error"
+    else:
+        title = "SEO staleness monitor recovered"
+        msg = (
+            f"The SEO auto-publish staleness monitor heartbeated again at "
+            f"{monitor_updated_at or 'unknown'} (current age {age_h:.1f}h, "
+            f"threshold {_SEO_STALENESS_HEARTBEAT_MAX_AGE_H:.1f}h). "
+            f"Previously its heartbeat had fallen behind; it is now "
+            f"alive again — no further action required."
+        )
+        notif_type = "info"
+
+    try:
+        from db_ops import supa_insert_notification
+        await supa_insert_notification({
+            "id": str(uuid.uuid4()),
+            "title": title,
+            "message": msg,
+            "type": notif_type,
+            "channel": "in_app",
+            "audience": "admins",
+            "status": "sent",
+            "created_at": now_utc.isoformat(),
+            "sent_at": now_utc.isoformat(),
+            "meta": {
+                "kind": "seo_staleness_monitor_heartbeat",
+                "state": kind,
+                "age_hours": age_h,
+                "monitor_updated_at": monitor_updated_at,
+                "max_age_h": _SEO_STALENESS_HEARTBEAT_MAX_AGE_H,
+            },
+        })
+    except Exception as exc:
+        logger.debug(
+            f"[seo-staleness-heartbeat] notification persist failed: {exc}")
+
+    # Best-effort email — fire-and-forget so a slow Resend can't back up
+    # the heartbeat loop.
+    asyncio.create_task(_email_admins_about_seo_staleness(db, title, msg))
+
+    # Audit trail in the activity log.
+    asyncio.create_task(_seo_log(
+        "seo_staleness_monitor_heartbeat_alert",
+        f"{kind}: age_hours={age_h:.2f} "
+        f"max_age_h={_SEO_STALENESS_HEARTBEAT_MAX_AGE_H} "
+        f"monitor_updated_at={monitor_updated_at}",
+        "warning" if kind == "down" else "info",
+    ))
+
+
+async def _check_and_alert_staleness_heartbeat(
+    db, now_utc: Optional[datetime] = None,
+) -> dict:
+    """One iteration of the heartbeat watcher. Returns a small report
+    dict for tests / observability.
+
+    Decision tree:
+      * No monitor doc → silent (we can't distinguish "monitor down"
+        from "monitor never ran"; the parent monitor's first iteration
+        will create the doc).
+      * Heartbeat ≤ ``_SEO_STALENESS_HEARTBEAT_MAX_AGE_H`` → silent
+        (and recovery if we previously paged).
+      * Heartbeat behind → page once via CAS; debounce subsequent pages
+        for ``_SEO_STALENESS_HEARTBEAT_REALERT_INTERVAL_H``.
+    """
+    now_utc = now_utc or datetime.now(timezone.utc)
+    try:
+        monitor_doc = await db.job_locks.find_one(
+            {"_id": _SEO_STALENESS_ALERT_LOCK_ID}
+        )
+    except Exception as exc:
+        logger.debug(
+            f"[seo-staleness-heartbeat] monitor doc load failed: {exc}")
+        return {"action": "skip", "reason": "monitor_doc_load_failed"}
+
+    monitor_updated_at = (monitor_doc or {}).get("updated_at")
+    monitor_updated_dt = _parse_iso_utc(monitor_updated_at)
+    if monitor_updated_dt is None:
+        # Fresh install / monitor never bumped — silent. We deliberately
+        # do NOT alert here: the parent monitor may legitimately not
+        # have completed its first iteration yet, and we'd rather miss
+        # one bootstrap window than page admins on every cold start.
+        return {"action": "skip", "reason": "monitor_never_ran"}
+
+    age_h = (now_utc - monitor_updated_dt).total_seconds() / 3600.0
+
+    try:
+        prior = await db.job_locks.find_one(
+            {"_id": _SEO_STALENESS_HEARTBEAT_ALERT_LOCK_ID}
+        ) or {}
+    except Exception as exc:
+        logger.debug(
+            f"[seo-staleness-heartbeat] prior load failed: {exc}")
+        prior = {}
+    prior_state = prior.get("last_state")
+    last_alert_dt = _parse_iso_utc(prior.get("last_alert_at"))
+
+    if age_h > _SEO_STALENESS_HEARTBEAT_MAX_AGE_H:
+        # Fast-path debounce check (avoids a round-trip when we already
+        # know we'll lose the CAS).
+        if prior_state == "down" and last_alert_dt is not None:
+            elapsed_h = (now_utc - last_alert_dt).total_seconds() / 3600.0
+            if elapsed_h < _SEO_STALENESS_HEARTBEAT_REALERT_INTERVAL_H:
+                return {
+                    "action": "skip", "reason": "debounced",
+                    "elapsed_h": elapsed_h, "age_h": age_h,
+                }
+        if not await _claim_staleness_heartbeat_alert_slot(
+            db, "down", now_utc,
+        ):
+            return {"action": "skip", "reason": "lost_race", "age_h": age_h}
+        await _send_staleness_heartbeat_alert(
+            db, "down", now_utc, age_h, monitor_updated_at,
+        )
+        return {"action": "alerted", "kind": "down", "age_h": age_h}
+
+    # Healthy heartbeat path.
+    if prior_state == "down":
+        if not await _claim_staleness_heartbeat_alert_slot(
+            db, "recovered", now_utc,
+        ):
+            return {"action": "skip", "reason": "lost_race", "age_h": age_h}
+        await _send_staleness_heartbeat_alert(
+            db, "recovered", now_utc, age_h, monitor_updated_at,
+        )
+        return {"action": "alerted", "kind": "recovered", "age_h": age_h}
+
+    return {"action": "skip", "reason": "healthy", "age_h": age_h}
+
+
+async def _seo_staleness_heartbeat_loop():
+    """Background loop: every 6h, verify the staleness monitor itself
+    is still heartbeating. Leader-gated by ``server.py`` so a multi-
+    replica deployment doesn't N×-page admins when the monitor goes
+    quiet — the per-doc CAS is defense-in-depth in case leadership
+    fails over mid-loop."""
+    from deps import db, is_mongo_available  # type: ignore
+    await asyncio.sleep(_SEO_STALENESS_HEARTBEAT_WARMUP_S)
+    while True:
+        try:
+            if await is_mongo_available():
+                await _check_and_alert_staleness_heartbeat(db)
+        except Exception as exc:
+            logger.debug(
+                f"[seo-staleness-heartbeat] loop iteration error: {exc}")
+        await asyncio.sleep(_SEO_STALENESS_HEARTBEAT_LOOP_SLEEP_S)
 
 
 # ─── ADMIN: Scheduled auto-publish status ───────────────────────────────────

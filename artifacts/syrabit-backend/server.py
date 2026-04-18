@@ -652,6 +652,19 @@ async def lifespan(app):
     except Exception as _sap_stale_err:
         logger.warning(
             f"seo auto-publish staleness loop not started: {_sap_stale_err}")
+    # Task #491 — liveness heartbeat for the staleness monitor itself.
+    # Every 6h, verify the monitor's lock-doc ``updated_at`` is younger
+    # than ~3h (2x its 1h cadence) and page admins exactly once if not.
+    # Leader-gated so a multi-replica deployment doesn't N×-page when
+    # the monitor goes quiet; the per-doc CAS inside the loop is a
+    # defense-in-depth against leader fail-over mid-iteration.
+    if _is_leader:
+        try:
+            from seo_engine import _seo_staleness_heartbeat_loop
+            asyncio.create_task(_seo_staleness_heartbeat_loop())
+        except Exception as _sap_hb_err:
+            logger.warning(
+                f"seo staleness heartbeat loop not started: {_sap_hb_err}")
     # Task #484 — poll GitHub Actions every 10 min and email admins +
     # drop an in-app notification when the latest main-branch run for
     # backend-tests/frontend-tests flips to failure (or stays red past
