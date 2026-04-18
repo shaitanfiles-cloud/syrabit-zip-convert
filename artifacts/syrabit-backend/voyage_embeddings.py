@@ -52,6 +52,24 @@ _TASK_TYPE_MAP = {
 
 _http_client: Optional[httpx.AsyncClient] = None
 
+# Permanently disable Voyage on the first 401/403 — the key won't fix itself
+# mid-process, and continuing to hit the endpoint just spams the logs and
+# delays every embed call by one wasted round-trip. Reset on process restart
+# (which is what happens when the user updates the secret).
+_DISABLED = False
+
+
+def _disable(reason: str) -> None:
+    global _DISABLED
+    if not _DISABLED:
+        _DISABLED = True
+        logger.error(
+            "Voyage embeddings disabled for this session: %s. "
+            "All future embed calls will go straight to the Gemini fallback. "
+            "Restart the api workflow after updating VOYAGE_API_KEY to re-enable.",
+            reason,
+        )
+
 
 def _client() -> httpx.AsyncClient:
     global _http_client
@@ -65,6 +83,8 @@ def _client() -> httpx.AsyncClient:
 
 
 def is_configured() -> bool:
+    if _DISABLED:
+        return False
     return bool(os.environ.get("VOYAGE_API_KEY", "").strip())
 
 
@@ -121,8 +141,8 @@ async def embed_batch(texts: List[str], task_type: str = "RETRIEVAL_DOCUMENT",
 
         try:
             resp = await client.post(API_URL, headers=headers, json=body)
-            if resp.status_code == 401:
-                logger.error("Voyage 401 — VOYAGE_API_KEY invalid or revoked. Falling back to Gemini for the rest of the call.")
+            if resp.status_code in (401, 403):
+                _disable(f"HTTP {resp.status_code} from Voyage — VOYAGE_API_KEY invalid, revoked, or unauthorized for embeddings")
                 return out
             if resp.status_code == 429:
                 logger.warning("Voyage 429 rate-limited. Backing off and falling back to Gemini for this batch.")
@@ -134,6 +154,13 @@ async def embed_batch(texts: List[str], task_type: str = "RETRIEVAL_DOCUMENT",
                 if 0 <= idx < len(non_empty_idx):
                     abs_idx = chunk_start + non_empty_idx[idx]
                     out[abs_idx] = item.get("embedding")
+        except httpx.HTTPStatusError as exc:
+            sc = exc.response.status_code if exc.response is not None else None
+            if sc in (401, 403):
+                _disable(f"HTTP {sc} from Voyage — VOYAGE_API_KEY invalid, revoked, or unauthorized for embeddings")
+                return out
+            logger.warning(f"Voyage embed batch failed (chunk @ {chunk_start}): HTTP {sc}")
+            continue
         except httpx.HTTPError as exc:
             logger.warning(f"Voyage embed batch failed (chunk @ {chunk_start}): {type(exc).__name__}: {exc}")
             continue
