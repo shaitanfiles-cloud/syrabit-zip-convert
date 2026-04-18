@@ -54,6 +54,10 @@ export interface KvBindingUsage {
   percentages: Record<KvOp, number>;
   status: "healthy" | "warning" | "exhausted";
   fallbackActive: boolean;
+  /** Most recent alert fired for this binding today (or null). Surfaced
+   * in the admin KV health panel so operators can confirm an alert was
+   * dispatched and at what severity. */
+  lastAlertFired: { op: KvOp; severity: "warning" | "exhausted"; at: string } | null;
 }
 
 export interface KvUsageSnapshot {
@@ -76,6 +80,7 @@ interface BindingState {
   fallbackWriteQueue: Map<string, { value: string; opts?: KVNamespacePutOptions }>;
   alertedToday: Set<KvOp>;
   fallbackActive: boolean;
+  lastAlertFired: { op: KvOp; severity: "warning" | "exhausted"; at: string } | null;
 }
 
 const _state: Map<string, BindingState> = new Map();
@@ -108,6 +113,7 @@ function getBindingState(binding: string): BindingState {
       fallbackWriteQueue: new Map(),
       alertedToday: new Set(),
       fallbackActive: false,
+      lastAlertFired: null,
     };
     _state.set(binding, s);
   }
@@ -162,6 +168,7 @@ export function getUsageSnapshot(
       percentages,
       status,
       fallbackActive: s.fallbackActive,
+      lastAlertFired: s.lastAlertFired,
     });
   }
   return { utcDay: _currentDay, warningPct, bindings: out };
@@ -184,6 +191,8 @@ async function maybeFireAlert(
   if (pct < warningPct) return;
   if (s.alertedToday.has(op)) return;
   s.alertedToday.add(op);
+  const severity: "warning" | "exhausted" = pct >= 100 ? "exhausted" : "warning";
+  s.lastAlertFired = { op, severity, at: new Date().toISOString() };
   if (!ctx.backendUrl || !ctx.alertSecret) return;
   const body = JSON.stringify({
     binding,
@@ -192,7 +201,7 @@ async function maybeFireAlert(
     quota: cap,
     percentage: Math.round(pct * 10) / 10,
     utc_day: _currentDay,
-    severity: pct >= 100 ? "exhausted" : "warning",
+    severity,
   });
   const fire = fetch(`${ctx.backendUrl.replace(/\/$/, "")}/admin/kv-alerts`, {
     method: "POST",
@@ -224,6 +233,18 @@ export interface WrapKvOptions extends MonitorAlertContext {
   ctx?: ExecutionContext;
   /** Inject Cache API for tests. */
   cache?: Cache;
+}
+
+/** Returns true when the per-op counter has hit/passed the configured quota
+ * for this binding — in that case the wrapper proactively short-circuits
+ * to the fallback path instead of issuing the KV call (which would just
+ * throw with a 429/quota error). This is the "near-quota" branch of the
+ * fallback policy, complementing the failure-triggered branch. */
+function isOverQuota(binding: string, op: KvOp, ctx: MonitorAlertContext): boolean {
+  const quota = { ...DEFAULT_QUOTA, ...(ctx.quota || {}) };
+  const used = (getBindingState(binding).counters[op] ?? 0);
+  const cap = quota[op] || 1;
+  return used >= cap;
 }
 
 export function wrapKvNamespace(
@@ -285,6 +306,11 @@ export function wrapKvNamespace(
     async get(key: string, getOpts?: KVNamespaceGetOptions<undefined> | "text"): Promise<string | null> {
       bump(binding, "read");
       void maybeFireAlert(binding, "read", opts, opts.ctx);
+      if (isOverQuota(binding, "read", opts)) {
+        // Proactive near-quota fallback: don't even attempt KV.
+        getBindingState(binding).fallbackActive = true;
+        return await readFromCacheFallback(key);
+      }
       try {
         const v = await (kv.get as (k: string, o?: unknown) => Promise<string | null>)(key, getOpts);
         if (v !== null && v !== undefined) {
@@ -302,6 +328,11 @@ export function wrapKvNamespace(
     async put(key: string, value: string, putOpts?: KVNamespacePutOptions): Promise<void> {
       bump(binding, "write");
       void maybeFireAlert(binding, "write", opts, opts.ctx);
+      if (isOverQuota(binding, "write", opts)) {
+        // Proactive near-quota fallback: queue the write for later.
+        enqueueDeferredWrite(key, value, putOpts);
+        return;
+      }
       try {
         await kv.put(key, value, putOpts);
         // Mirror to cache so reads during a later outage still return the

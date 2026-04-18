@@ -267,3 +267,168 @@ describe("never throws to callers", () => {
     expect(r.keys).toEqual([]);
   });
 });
+
+/* ───────────── last alert fired surfaced in snapshot ───────────── */
+
+describe("lastAlertFired", () => {
+  it("records the most recent alert (op + severity + timestamp) per binding", async () => {
+    const fetchMock = vi.fn(async () => new Response("", { status: 204 }));
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+    try {
+      const kv = wrapKvNamespace(new FakeKv() as unknown as KVNamespace, "RATE_LIMIT", {
+        ctx: noopCtx,
+        quota: { write: 4 },
+        warningPct: 50,
+        backendUrl: "https://api.example.com",
+        alertSecret: "shh",
+      });
+      // Untouched binding has no alert.
+      let snap = getUsageSnapshot(["RATE_LIMIT"], { quota: { write: 4 }, warningPct: 50 });
+      expect(snap.bindings[0].lastAlertFired).toBeNull();
+
+      // Cross 50% threshold (writes 1 & 2 → 50%).
+      await kv.put("a", "1");
+      await kv.put("b", "2");
+      await new Promise((r) => setTimeout(r, 0));
+
+      snap = getUsageSnapshot(["RATE_LIMIT"], { quota: { write: 4 }, warningPct: 50 });
+      const alert = snap.bindings[0].lastAlertFired;
+      expect(alert).not.toBeNull();
+      expect(alert!.op).toBe("write");
+      expect(alert!.severity).toBe("warning");
+      expect(typeof alert!.at).toBe("string");
+      expect(new Date(alert!.at).toString()).not.toBe("Invalid Date");
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+});
+
+/* ───────────── proactive near-quota fallback ───────────── */
+
+describe("proactive near-quota fallback", () => {
+  it("skips KV reads and returns cache fallback once the read quota is exhausted", async () => {
+    const inner = new FakeKv();
+    const cache = new FakeCache();
+    // Pre-seed the cache with the value so the proactive fallback has
+    // something to return.
+    await cache.put(
+      `https://kv-fallback.invalid/RATE_LIMIT/key`,
+      new Response("cached-value", { status: 200 }),
+    );
+    const kv = wrapKvNamespace(inner as unknown as KVNamespace, "RATE_LIMIT", {
+      ctx: noopCtx,
+      cache: cache as unknown as Cache,
+      quota: { read: 2 },
+      warningPct: 99,
+    });
+
+    // Use up the read quota with two real reads.
+    await kv.get("key");
+    await kv.get("key");
+    // Now KV should be skipped entirely. Force the inner to throw to
+    // prove we never call it: if we did, the wrapper's catch would
+    // also return the cache, so we instead spy on the inner directly.
+    const innerGet = vi.spyOn(inner, "get");
+    const v = await kv.get("key");
+    expect(v).toBe("cached-value");
+    expect(innerGet).not.toHaveBeenCalled();
+    expect(getUsageSnapshot(["RATE_LIMIT"], { quota: { read: 2 } }).bindings[0].fallbackActive).toBe(true);
+  });
+
+  it("queues writes instead of calling KV once the write quota is exhausted", async () => {
+    const inner = new FakeKv();
+    const kv = wrapKvNamespace(inner as unknown as KVNamespace, "BOT_HTML_CACHE", {
+      ctx: noopCtx,
+      quota: { write: 1 },
+      warningPct: 99,
+    });
+
+    await kv.put("first", "v"); // 1/1 → at quota
+    const innerPut = vi.spyOn(inner, "put");
+    await kv.put("second", "v"); // would-be over quota → queued
+    expect(innerPut).not.toHaveBeenCalled();
+    const snap = getUsageSnapshot(["BOT_HTML_CACHE"], { quota: { write: 1 } });
+    expect(snap.bindings[0].fallbackActive).toBe(true);
+  });
+});
+
+/* ───────────── integration: page render + analytics beacon survive a KV outage ─────────────
+   This is the acceptance test the task spec called out:
+   "page rendering and analytics beacon still succeed during KV outage".
+   It exercises the full default fetch handler with KV bindings that
+   throw on every call, and verifies:
+     - /api/health returns 200 (the beacon's reachability check)
+     - a non-cacheable POST to a backend route still gets proxied (the
+       analytics beacon path) and the worker returns the backend's
+       response instead of an internal 5xx.
+*/
+
+describe("worker default fetch handler under a KV outage", () => {
+  it("/api/health and analytics beacon still succeed when both KV bindings throw", async () => {
+    // Import lazily so module-level state is fresh-isolated per test.
+    const worker = (await import("../src/index")).default;
+
+    const failingKv = {
+      get: async () => { throw new Error("kv outage"); },
+      put: async () => { throw new Error("kv outage"); },
+      delete: async () => { throw new Error("kv outage"); },
+      list: async () => { throw new Error("kv outage"); },
+      getWithMetadata: async () => { throw new Error("kv outage"); },
+    } as unknown as KVNamespace;
+
+    const env = {
+      RATE_LIMIT: failingKv,
+      BOT_HTML_CACHE: failingKv,
+      BACKEND_URL: "https://backend.example.com",
+      PAGES_ORIGIN: "https://pages.example.com",
+    } as unknown as Parameters<typeof worker.fetch>[1];
+
+    const ctx = {
+      waitUntil: () => undefined,
+      passThroughOnException: () => undefined,
+    } as unknown as ExecutionContext;
+
+    // Stub global fetch to (a) succeed for the analytics beacon proxy
+    // and (b) never throw — i.e. the upstream is healthy, only KV is
+    // broken.
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const u = typeof input === "string" ? input : (input instanceof URL ? input.href : input.url);
+      if (u.includes("/api/analytics/track")) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response("ok", { status: 200 });
+    }) as unknown as typeof globalThis.fetch;
+
+    try {
+      // 1) /api/health — does not need KV but exercises the wrapped env.
+      const health = await worker.fetch(
+        new Request("https://api.syrabit.ai/api/health"),
+        env,
+        ctx,
+      );
+      expect(health.status).toBe(200);
+
+      // 2) Analytics beacon — POST to /api/analytics/track. Hits
+      //    rate-limit (KV throws), then proxies to backend. Worker must
+      //    NOT return 5xx from the KV failure.
+      const beacon = await worker.fetch(
+        new Request("https://api.syrabit.ai/api/analytics/track", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.5" },
+          body: JSON.stringify({ event: "page_view" }),
+        }),
+        env,
+        ctx,
+      );
+      expect(beacon.status).toBeLessThan(500);
+      // Workers KV throwing must not turn into a 429 either — rate
+      // limiting failed open since the counter couldn't be read.
+      expect(beacon.status).not.toBe(429);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+});

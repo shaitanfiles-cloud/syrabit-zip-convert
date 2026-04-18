@@ -2326,6 +2326,11 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                               Fallback active — serving recent reads from the Cache API and queueing writes in memory.
                             </div>
                           )}
+                          {b.lastAlertFired && (
+                            <div className="text-[10px] text-gray-500 mt-1" data-testid={`notif-prefs-kv-health-last-alert-${b.binding}`}>
+                              Last alert fired: {b.lastAlertFired.severity} on {b.lastAlertFired.op} at {new Date(b.lastAlertFired.at).toLocaleString()}
+                            </div>
+                          )}
                         </li>
                       );
                     })}
