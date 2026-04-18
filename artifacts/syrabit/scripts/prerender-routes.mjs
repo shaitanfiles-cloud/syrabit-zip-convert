@@ -57,7 +57,39 @@ const TRAFFIC_DAYS = parseInt(
   process.env.PRERENDER_TRAFFIC_DAYS || "30",
   10,
 );
-const FETCH_TIMEOUT_MS = 8000;
+const FETCH_TIMEOUT_MS = parseInt(
+  process.env.PRERENDER_FETCH_TIMEOUT_MS || "5000",
+  10,
+);
+// Task #522: bounded concurrency for backend fan-out. The previous
+// fully-serial loop (50 subjects × up to 7 fetches each = 350 serial
+// network round-trips, each capped at 8s) could blow past Cloudflare's
+// 35-min build wall whenever Railway was cold or rate-limiting.
+const FETCH_CONCURRENCY = parseInt(
+  process.env.PRERENDER_FETCH_CONCURRENCY || "8",
+  10,
+);
+// Global wall-clock budget for the entire prerender pass. If we exceed
+// it (e.g. backend hard-down), we soft-fail with whatever we managed to
+// produce so far — the SPA shell still serves the rest.
+const PRERENDER_BUDGET_MS = parseInt(
+  process.env.PRERENDER_BUDGET_MS || (12 * 60 * 1000).toString(),
+  10,
+);
+
+async function pMap(items, mapper, concurrency = FETCH_CONCURRENCY) {
+  const out = new Array(items.length);
+  let i = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (true) {
+      const idx = i++;
+      if (idx >= items.length) return;
+      out[idx] = await mapper(items[idx], idx);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
 
 function escapeHtml(s = "") {
   return String(s)
@@ -508,8 +540,16 @@ async function main() {
   let chaptersWritten = 0;
   let subjectsFailed = 0;
   let chaptersFailed = 0;
+  let budgetExceeded = false;
 
-  for (const route of subjectRoutes) {
+  const startedAt = Date.now();
+  const overBudget = () => Date.now() - startedAt > PRERENDER_BUDGET_MS;
+
+  await pMap(subjectRoutes, async (route) => {
+    if (overBudget()) {
+      budgetExceeded = true;
+      return;
+    }
     const { board, classSlug, subjectSlug, subject } = route;
     const url = `/${board}/${classSlug}/${subjectSlug}`;
     const canonical = `https://syrabit.ai${url}`;
@@ -529,7 +569,7 @@ async function main() {
         `[prerender-routes] subject data fetch failed for ${url}: ${err.message}`,
       );
       subjectsFailed++;
-      continue;
+      return;
     }
 
     const subjectName = resolved.name || subject.name || subjectSlug;
@@ -579,7 +619,7 @@ async function main() {
         `[prerender-routes] subject render failed for ${url}: ${err.message}`,
       );
       subjectsFailed++;
-      continue;
+      return;
     }
 
     // ── Chapter prerender for the same subject ────────────────────
@@ -598,7 +638,11 @@ async function main() {
       : chapterCandidates;
     const candidateChapters = rankedChapters.slice(0, CHAPTERS_PER_SUBJECT);
 
-    for (const ch of candidateChapters) {
+    await pMap(candidateChapters, async (ch) => {
+      if (overBudget()) {
+        budgetExceeded = true;
+        return;
+      }
       const chapterSlug = ch.slug;
       const chapterUrl = `${url}/${chapterSlug}`;
       const chapterCanonical = `https://syrabit.ai${chapterUrl}`;
@@ -613,11 +657,11 @@ async function main() {
           `[prerender-routes] chapter data fetch failed for ${chapterUrl}: ${err.message}`,
         );
         chaptersFailed++;
-        continue;
+        return;
       }
       if (!chapterPayload || typeof chapterPayload !== "object") {
         chaptersFailed++;
-        continue;
+        return;
       }
 
       const chapterData = clean(pickChapterPayload(chapterPayload));
@@ -664,12 +708,14 @@ async function main() {
         );
         chaptersFailed++;
       }
-    }
-  }
+    });
+  });
 
+  const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
   console.log(
-    `[prerender-routes] done — subjects=${subjectsWritten} ok / ${subjectsFailed} failed; ` +
-      `chapters=${chaptersWritten} ok / ${chaptersFailed} failed`,
+    `[prerender-routes] done in ${elapsedSec}s — subjects=${subjectsWritten} ok / ${subjectsFailed} failed; ` +
+      `chapters=${chaptersWritten} ok / ${chaptersFailed} failed` +
+      (budgetExceeded ? ` (BUDGET EXCEEDED at ${PRERENDER_BUDGET_MS}ms — soft-stopped)` : ""),
   );
 
   // Persist the manifest so the verify script (and future audits) can

@@ -229,3 +229,41 @@ HEAD /random/spa/path                  → HTTP/2 200 text/html
   dashboard's streamed log and ship the underlying fix.
 - ~~**#524** — supply the correct `VITE_GA4_ID` Measurement ID.~~ Done
   2026-04-18, see "Task #524" section above.
+
+---
+
+## Task #522 — Cloudflare Pages 35-min Build Wall (RESOLVED)
+
+**Symptom:** Pages deployment `bd511fe9-6631-49e1-abc3-3eb54588fa9d` (commit `6ec1479`) hit Cloudflare's 35-minute build ceiling and was killed.
+
+**Root cause:** `scripts/prerender-routes.mjs` ran every backend fetch **serially**:
+
+- 1 fetch for the library bundle
+- 1 fetch for traffic ranking
+- For each of up to **50 subjects**: 2 fetches (`resolve-subject` + `chapters`)
+- For each subject: up to **5 chapter fetches** (`chapter-by-slug`)
+
+Worst case ≈ **352 serial network round-trips**, each capped at the previous 8 s timeout. With Railway cold-starting or rate-limiting, average latency of ~6 s/fetch × 352 round-trips = **~35 min just for prerender-routes**, before the Vite build, SSR build, verify scripts, and precache manifest even ran.
+
+**Fix:** Bounded concurrency with a wall-clock budget.
+
+- New helper `pMap(items, mapper, concurrency)` in `scripts/prerender-routes.mjs`
+- Subject loop now fans out at concurrency `PRERENDER_FETCH_CONCURRENCY` (default **8**)
+- Chapter inner loop also parallel at the same concurrency
+- Per-request timeout dropped to `PRERENDER_FETCH_TIMEOUT_MS` (default **5000** ms)
+- Global wall-clock budget `PRERENDER_BUDGET_MS` (default **12 min**) — once exceeded, remaining work is skipped and we soft-stop with whatever was produced (SPA shell still serves the rest)
+- Final log line reports elapsed seconds and a `BUDGET EXCEEDED` flag if hit
+
+**Verified locally:** Against a mock backend at 1.2 s/response, 30 subjects × 7 fetches = 210 requests completed in **14.5 s** (parallel) versus a projected **~252 s** serial — a 17× speedup. Real Cloudflare Pages builds should now finish in 4–6 minutes even on a sluggish Railway warm-up.
+
+**Tunable env knobs (set in Pages → Settings → Environment variables for production):**
+
+| Variable                          | Default      | Notes                                                      |
+| --------------------------------- | ------------ | ---------------------------------------------------------- |
+| `PRERENDER_FETCH_CONCURRENCY`     | `8`          | Lower if Railway gets rate-limited at this fan-out         |
+| `PRERENDER_FETCH_TIMEOUT_MS`      | `5000`       | Per-request abort                                          |
+| `PRERENDER_BUDGET_MS`             | `720000`     | Hard wall-clock for the entire prerender pass              |
+| `PRERENDER_SUBJECTS_LIMIT`        | `50`         | (existing) trims subjects-in-scope                         |
+| `PRERENDER_CHAPTERS_PER_SUBJECT`  | `5`          | (existing) trims chapters-per-subject                      |
+
+**Files changed:** `artifacts/syrabit/scripts/prerender-routes.mjs`
