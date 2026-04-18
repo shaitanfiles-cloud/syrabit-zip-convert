@@ -4,12 +4,13 @@ from typing import Optional, Any
 from datetime import datetime, timezone
 
 __all__ = [
-    "db", "redis_client", "supa", "pg_pool", "pwd_ctx", "security",
+    "db", "mongo_client", "redis_client", "supa", "pg_pool", "pwd_ctx", "security",
     "sarvam_client", "sarvam_translate_client", "sarvam_llm_client",
     "sarvam_client_direct", "sarvam_llm_client_direct",
     "logger",
     "is_mongo_available", "mark_mongo_down",
     "_cms_request_ctx", "_assert_not_cms_context", "_init_pg_pool",
+    "_create_supa", "_rate_cleanup_task",
     "_sarvam_headers", "_sarvam_timeout", "_sarvam_llm_timeout", "_sarvam_pool_limits",
 ]
 try:

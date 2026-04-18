@@ -28,6 +28,7 @@ The project is a pnpm workspace monorepo, with a React + Vite frontend and a Fas
 
 **Backend Architecture:**
 - **Modular Design:** App factory, shared modules, route modules.
+- **Shared API Surface (`__all__`):** The seven shared backend modules — `config`, `deps`, `cache`, `db_ops`, `rag`, `utils`, `analytics_helpers` (under `artifacts/syrabit-backend/`) — are the project's declared cross-module API. Each one exposes its public surface via an explicit `__all__` list at the top of the file. When adding a new symbol that other modules will import, you must add its name to that module's `__all__`. The test `tests/test_shared_module_all.py` enforces that every name in `__all__` resolves and that none of these modules use `from X import *` (which caused the Task #443 outage by re-exporting `pathlib.Path` into a route).
 - **On-Demand Embeddings:** Automatic generation and management of chapter embeddings.
 - **Observability:** Tracks LLM provider metrics, vector search similarity, and pipeline runs.
 - **Content Feedback Loop:** Auto-detection of thin chapters, auto-heal with version history, and quality gates.

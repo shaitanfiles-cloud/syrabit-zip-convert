@@ -14,6 +14,7 @@ __all__ = [
     "REDIS_CHAT_CACHE_TTL", "REDIS_CONTENT_PREFIX", "REDIS_RATE_WINDOW",
     "REDIS_SEARCH_CACHE_TTL", "REDIS_SESSION_CACHE_TTL",
     "_ai_response_cache", "_cache_key", "_content_cache",
+    "_embedding_cache", "_embedding_cache_key", "_query_embed_cache",
     "_content_card_cache", "_content_card_cache_key", "_conv_cache", "_conv_cache_key",
     "_get_content_cache", "_invalidate_content_cache", "_invalidate_conv_cache",
     "_invalidate_user_cache", "_rag_cache", "_rag_cache_key",

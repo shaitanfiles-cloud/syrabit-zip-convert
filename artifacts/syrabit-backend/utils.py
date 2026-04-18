@@ -13,7 +13,9 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "_BOT_PATTERNS", "_SEARCH_BOT_UA_RE", "_ABUSIVE_SCRAPER_UA_RE",
-    "_SlowQueryTimer", "_extract_keywords", "_get_device_type",
+    "_TRAINING_SCRAPER_UA_RE",
+    "_SlowQueryTimer", "_do_rdns_verify",
+    "_extract_keywords", "_get_device_type",
     "_ip_country_cache", "_is_bot", "_resolve_country", "_slow_query",
     "get_library_analytics", "track_library_event",
     "slugify_title", "verify_bot_ip",
