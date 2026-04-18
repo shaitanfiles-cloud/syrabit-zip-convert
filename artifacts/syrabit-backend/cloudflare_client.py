@@ -288,6 +288,7 @@ async def get_visitor_stats_cf(days: int = 7) -> Optional[dict]:
               requests
               pageViews
               bytes
+              visits
             }
             uniq {
               uniques
@@ -305,6 +306,7 @@ async def get_visitor_stats_cf(days: int = 7) -> Optional[dict]:
               requests
               pageViews
               bytes
+              visits
             }
             uniq {
               uniques
@@ -331,7 +333,8 @@ async def get_visitor_stats_cf(days: int = 7) -> Optional[dict]:
         zone = zones[0]
 
         today_data = zone.get("todayData", [{}])[0] if zone.get("todayData") else {}
-        visitors_today = today_data.get("uniq", {}).get("uniques", 0)
+        # CF dashboard "Visits" = sum.visits (sessions, NOT unique visitors).
+        visitors_today = today_data.get("sum", {}).get("visits", 0)
         page_views_today = today_data.get("sum", {}).get("pageViews", 0)
         requests_today = today_data.get("sum", {}).get("requests", 0)
         bytes_today = today_data.get("sum", {}).get("bytes", 0)
@@ -343,7 +346,7 @@ async def get_visitor_stats_cf(days: int = 7) -> Optional[dict]:
         total_bytes = 0
         for day in zone.get("daily", []):
             dims = day.get("dimensions", {})
-            day_visitors = day.get("uniq", {}).get("uniques", 0)
+            day_visitors = day.get("sum", {}).get("visits", 0)  # CF "Visits"
             day_page_views = day.get("sum", {}).get("pageViews", 0)
             day_requests = day.get("sum", {}).get("requests", 0)
             day_bytes = day.get("sum", {}).get("bytes", 0)
@@ -412,7 +415,7 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
                 limit: 48
               ) {
                 dimensions { datetime }
-                sum { requests pageViews bytes }
+                sum { requests pageViews bytes visits }
                 uniq { uniques }
               }
             }
@@ -438,7 +441,7 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
                 limit: 100
               ) {
                 dimensions { date }
-                sum { requests pageViews bytes }
+                sum { requests pageViews bytes visits }
                 uniq { uniques }
               }
             }
@@ -463,6 +466,12 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
         if len(rows) > max_buckets:
             rows = rows[-max_buckets:]
         series = []
+        # NOTE: "visitors" here mirrors the Cloudflare Account Analytics
+        # dashboard's **Visits** tile, which is `sum.visits` (a session is
+        # a sequence of pageviews from the same visitor with <30min idle
+        # gap), NOT `uniq.uniques` (distinct visitors). They are different
+        # metrics — using uniques here was causing the admin dashboard to
+        # not match what Cloudflare shows.
         totals = {"requests": 0, "bytes": 0, "visitors": 0, "page_views": 0}
         for row in rows:
             dims = row.get("dimensions", {}) or {}
@@ -472,7 +481,8 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
             req = int(s.get("requests", 0) or 0)
             byt = int(s.get("bytes", 0) or 0)
             pv = int(s.get("pageViews", 0) or 0)
-            vis = int(u.get("uniques", 0) or 0)
+            vis = int(s.get("visits", 0) or 0)            # CF "Visits"
+            uniques = int(u.get("uniques", 0) or 0)        # CF "Unique visitors"
             totals["requests"] += req
             totals["bytes"] += byt
             totals["page_views"] += pv
@@ -483,6 +493,7 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
                 "bytes": byt,
                 "page_views": pv,
                 "visitors": vis,
+                "uniques": uniques,
             })
         return {
             "range": range_key if range_key in ("24h", "7d", "30d") else "7d",
