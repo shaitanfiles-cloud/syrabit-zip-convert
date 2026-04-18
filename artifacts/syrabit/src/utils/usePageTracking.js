@@ -3,6 +3,7 @@ import { useLocation, matchPath } from 'react-router-dom';
 import axios from 'axios';
 import { Analytics } from './analytics';
 import { API_BASE } from './api';
+import { incrementVisitIfNewSession } from './visitTracker';
 
 const KNOWN_PATTERNS = [
   '/',
@@ -66,6 +67,101 @@ let hiddenAt = null;
 
 const SESSION_RESUME_WINDOW_MS = 30 * 60 * 1000;
 
+// ── Per-visit page-view boost (Task #483) ─────────────────────────────────
+// Fires 4 additional page-view events on the first navigation of every
+// new session so the visit total reaches 5+ across all trackers
+// (internal /api/analytics/page-view, PostHog $pageview, Cloudflare Web
+// Analytics SPA beacon, GA4 if configured). Spaced 600ms apart so neither
+// the CF beacon dedup nor PostHog batching drops them.
+//
+// Resilience: remaining-count is stored in sessionStorage and decremented
+// only AFTER each synthetic event actually fires. If the tracker unmounts
+// mid-boost (React StrictMode, HMR, route remount) the next mount picks
+// up the remainder rather than losing it permanently.
+const PV_BOOST_KEY = 'syrabit:pv_boost_remaining';
+const PV_BOOST_EXTRA = 4;
+const PV_BOOST_INTERVAL_MS = 600;
+
+function getPvBoostRemaining() {
+  try {
+    const raw = sessionStorage.getItem(PV_BOOST_KEY);
+    if (raw === null) return null;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+function setPvBoostRemaining(n) {
+  try { sessionStorage.setItem(PV_BOOST_KEY, String(n)); } catch {}
+}
+
+function clearPvBoostRemaining() {
+  try { sessionStorage.removeItem(PV_BOOST_KEY); } catch {}
+}
+
+function fireSyntheticPageView({ path, title, visitorId, sessionId, referrer, is404Hint }) {
+  // 1) Internal analytics endpoint — same payload shape as the real
+  // page-view post so backend aggregation works identically.
+  try {
+    axios.post(
+      `${API_BASE}/analytics/page-view`,
+      {
+        path,
+        visitor_id: visitorId,
+        session_id: sessionId,
+        referrer,
+        user_agent: navigator.userAgent,
+        screen_width: window.screen.width,
+        is_404_hint: is404Hint,
+      },
+      { withCredentials: true }
+    ).catch(() => {});
+  } catch {}
+
+  // 2) PostHog $pageview — same path/title as the landing page.
+  try { Analytics.pageView(path, title); } catch {}
+
+  // 3) Cloudflare Web Analytics SPA beacon — the beacon hooks
+  // window.history.pushState/replaceState and sends a hit on every call.
+  // A same-URL replaceState is a no-op for routing (no popstate, same
+  // location) but still fires the CF beacon hit.
+  try {
+    if (typeof window.history?.replaceState === 'function') {
+      window.history.replaceState(window.history.state, '', window.location.href);
+    }
+  } catch {}
+
+  // 4) GA4 — only if gtag is loaded (not currently bundled, but if a
+  // GA4 tag is added at runtime by ops it will receive these events).
+  try {
+    if (typeof window.gtag === 'function') {
+      window.gtag('event', 'page_view', {
+        page_path: path,
+        page_title: title,
+        page_location: window.location.href,
+      });
+    }
+  } catch {}
+}
+
+function schedulePageViewBoost(remaining, args) {
+  const timers = [];
+  for (let i = 1; i <= remaining; i++) {
+    const t = setTimeout(() => {
+      fireSyntheticPageView(args);
+      // Decrement using the latest persisted value to stay correct
+      // across remounts/HMR (other timer chains may also be writing).
+      const cur = getPvBoostRemaining();
+      const next = cur === null ? 0 : Math.max(0, cur - 1);
+      setPvBoostRemaining(next);
+    }, i * PV_BOOST_INTERVAL_MS);
+    timers.push(t);
+  }
+  return () => timers.forEach((t) => clearTimeout(t));
+}
+
 function startHeartbeat(sessionId, visitorId) {
   if (heartbeatInterval) clearInterval(heartbeatInterval);
   lastSessionId = sessionId;
@@ -112,12 +208,18 @@ export function usePageTracking() {
   const lastPath = useRef(null);
   const sessionIdRef = useRef(null);
   const visitorIdRef = useRef(null);
+  const cancelBoostRef = useRef(null);
 
   useEffect(() => {
     const visitorId = getOrCreateVisitorId();
     const sessionId = getOrCreateSessionId();
     visitorIdRef.current = visitorId;
     sessionIdRef.current = sessionId;
+
+    // Preserve the legacy visit_count side effect that previously lived
+    // at the module top-level of SignupEncouragementPopup.jsx (Task #483
+    // removed the popup but kept the visitor_id/visit_count state intact).
+    incrementVisitIfNewSession();
 
     startHeartbeat(sessionId, visitorId);
 
@@ -135,6 +237,9 @@ export function usePageTracking() {
           const actualEndTime = Date.now() - elapsed;
           sendSessionEnd(sessionIdRef.current, visitorIdRef.current, actualEndTime);
           try { sessionStorage.removeItem('syrabit:session_id'); } catch {}
+          // Reset boost so the resumed session also gets its 4 extras
+          // on its next route change.
+          clearPvBoostRemaining();
           const newSid = getOrCreateSessionId();
           sessionIdRef.current = newSid;
           lastSessionId = newSid;
@@ -162,6 +267,10 @@ export function usePageTracking() {
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       stopHeartbeatAndSendEnd(sessionIdRef.current, visitorIdRef.current);
+      if (cancelBoostRef.current) {
+        try { cancelBoostRef.current(); } catch {}
+        cancelBoostRef.current = null;
+      }
     };
   }, []);
 
@@ -192,6 +301,32 @@ export function usePageTracking() {
     ).catch(() => {});
 
     Analytics.pageView(path, document.title);
+
+    // ── Fire the per-session page-view boost on the FIRST real
+    // navigation of this session. Subsequent route changes within the
+    // same session count normally (one event per route change) — we
+    // never re-fire the full boost. If a previous mount started the
+    // boost but unmounted before all 4 events fired (StrictMode, HMR,
+    // route remount), the remaining count was persisted to
+    // sessionStorage and we resume here.
+    let remaining = getPvBoostRemaining();
+    if (remaining === null) {
+      remaining = PV_BOOST_EXTRA;
+      setPvBoostRemaining(remaining);
+    }
+    if (remaining > 0) {
+      if (cancelBoostRef.current) {
+        try { cancelBoostRef.current(); } catch {}
+      }
+      cancelBoostRef.current = schedulePageViewBoost(remaining, {
+        path,
+        title: document.title,
+        visitorId,
+        sessionId,
+        referrer,
+        is404Hint,
+      });
+    }
   }, [location.pathname]);
 }
 
