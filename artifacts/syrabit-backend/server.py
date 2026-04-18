@@ -916,7 +916,6 @@ Allow: /api/seo/
 Allow: /api/seo/keyword-index
 Allow: /api/seo/keyword-index.txt
 Disallow: /admin/
-Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
@@ -936,7 +935,6 @@ Allow: /api/seo/
 Allow: /api/seo/keyword-index
 Allow: /api/seo/keyword-index.txt
 Disallow: /admin/
-Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
@@ -945,7 +943,6 @@ User-agent: Yandexbot
 Allow: /
 Allow: /api/seo/
 Disallow: /admin/
-Disallow: /chat
 Disallow: /history
 Disallow: /profile
 
@@ -953,19 +950,16 @@ User-agent: DuckDuckBot
 Allow: /
 Allow: /api/seo/
 Disallow: /admin/
-Disallow: /chat
 
 User-agent: Applebot
 Allow: /
 Allow: /api/seo/
 Disallow: /admin/
-Disallow: /chat
 
 User-agent: Applebot-Extended
 Allow: /
 Allow: /api/seo/
 Disallow: /admin/
-Disallow: /chat
 
 # ── AI Search/Answer Bots (send traffic, welcome) ──────────────────────
 User-agent: ChatGPT-User
@@ -979,7 +973,6 @@ Allow: /llms.txt
 Allow: /llms-full.txt
 Allow: /feed.xml
 Disallow: /admin/
-Disallow: /chat
 Disallow: /api/auth/
 Disallow: /api/ai/
 Disallow: /api/admin/
@@ -992,7 +985,6 @@ Allow: /api/seo/keyword-index.txt
 Allow: /llms.txt
 Allow: /llms-full.txt
 Disallow: /admin/
-Disallow: /chat
 Disallow: /api/auth/
 Disallow: /api/ai/
 
@@ -1006,7 +998,6 @@ Allow: /llms.txt
 Allow: /llms-full.txt
 Allow: /feed.xml
 Disallow: /admin/
-Disallow: /chat
 Disallow: /api/auth/
 Disallow: /api/ai/
 
@@ -1018,7 +1009,6 @@ Allow: /api/seo/keyword-index.txt
 Allow: /llms.txt
 Allow: /llms-full.txt
 Disallow: /admin/
-Disallow: /chat
 Disallow: /api/auth/
 Disallow: /api/ai/
 
@@ -1028,7 +1018,6 @@ Allow: /api/seo/
 Allow: /api/seo/keyword-index
 Allow: /api/seo/keyword-index.txt
 Disallow: /admin/
-Disallow: /chat
 Disallow: /api/auth/
 Disallow: /api/ai/
 
@@ -1094,7 +1083,6 @@ Allow: /llms.txt
 Allow: /llms-full.txt
 Allow: /feed.xml
 Disallow: /admin/
-Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
