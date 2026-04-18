@@ -223,8 +223,7 @@ All animations respect `prefers-reduced-motion: reduce` — animations are disab
 
 | File | Purpose |
 |---|---|
-| `src/styles/tokens.css` | CSS custom properties (HSL-based), duplicated light/dark mode tokens |
-| `src/index.css` | Full design system — tokens + keyframes + utility classes + component classes |
+| `src/index.css` | Full design system — tokens + keyframes + utility classes + component classes (single source of truth) |
 
 ### 3b. Layout System
 
