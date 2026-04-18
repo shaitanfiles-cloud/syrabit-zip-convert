@@ -23,7 +23,7 @@ export function EmptyState({ subject, documentId, defaultPrompts, setInput, text
             border: '1px solid rgba(139,92,246,0.25)',
           }}
         >
-          <BookOpen size={36} className="text-violet-400" />
+          <BookOpen size={36} className="text-violet-600" />
         </div>
       </div>
 

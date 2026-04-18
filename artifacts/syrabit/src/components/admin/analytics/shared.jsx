@@ -38,7 +38,7 @@ export function Card({ title, children, empty, emptyMsg, action, error, onRetry 
         <h3 className="text-gray-500 text-sm font-medium">{title}</h3>
         <div className="flex items-center gap-2">
           {error && onRetry && (
-            <button onClick={onRetry} className="text-xs text-amber-600 hover:text-amber-700 px-2 py-0.5 rounded-lg transition-colors flex items-center gap-1 bg-amber-50 border border-amber-200">
+            <button onClick={onRetry} className="text-xs text-amber-700 hover:text-amber-700 px-2 py-0.5 rounded-lg transition-colors flex items-center gap-1 bg-amber-50 border border-amber-200">
               <RefreshCw size={10} /> Retry
             </button>
           )}
@@ -49,11 +49,11 @@ export function Card({ title, children, empty, emptyMsg, action, error, onRetry 
         ? (
           <div className="flex items-center gap-2 py-6 justify-center">
             <AlertTriangle size={14} className="text-amber-500" />
-            <p className="text-amber-600 text-sm">Failed to load — data unavailable</p>
+            <p className="text-amber-700 text-sm">Failed to load — data unavailable</p>
           </div>
         )
         : empty
-          ? <p className="text-gray-400 text-sm text-center py-6">{emptyMsg || 'No data yet'}</p>
+          ? <p className="text-gray-600 text-sm text-center py-6">{emptyMsg || 'No data yet'}</p>
           : children}
     </div>
   );
@@ -69,7 +69,7 @@ export function Stat({ icon: Icon, label, value, color, sub, trend }) {
       <div className="flex-1 min-w-0">
         <p className="text-gray-900 font-bold text-lg leading-none truncate">{value ?? '—'}</p>
         <p className="text-gray-500 text-xs mt-0.5">{label}</p>
-        {sub && <p className="text-gray-400 text-[10px] mt-0.5">{sub}</p>}
+        {sub && <p className="text-gray-600 text-[10px] mt-0.5">{sub}</p>}
       </div>
       {trend !== undefined && (
         <div className={`flex items-center gap-0.5 text-xs font-semibold flex-shrink-0 ${up ? 'text-emerald-600' : 'text-red-500'}`}>
@@ -92,7 +92,7 @@ export function InsightBar({ label, value, max, color }) {
       <div className="w-20 h-2 rounded-full overflow-hidden flex-shrink-0 bg-gray-100">
         <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, background: c }} />
       </div>
-      <span className="text-gray-400 text-xs w-8 text-right flex-shrink-0">{value}</span>
+      <span className="text-gray-600 text-xs w-8 text-right flex-shrink-0">{value}</span>
     </div>
   );
 }

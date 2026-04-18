@@ -33,7 +33,7 @@ export default function PaymentModal({
       <ul className="space-y-2">
         {PLAN_FEATURES[paymentPlan].map((f) => (
           <li key={f} className="flex items-center gap-2 text-sm text-muted-foreground/80">
-            <CheckCircle size={14} className="text-emerald-400 flex-shrink-0" />
+            <CheckCircle size={14} className="text-emerald-600 flex-shrink-0" />
             {f}
           </li>
         ))}

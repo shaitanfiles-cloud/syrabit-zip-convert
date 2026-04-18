@@ -4,10 +4,10 @@ import { getPaymentHistory, requestRefund } from '@/utils/api';
 import { toast } from 'sonner';
 
 const STATUS_CONFIG = {
-  completed: { icon: CheckCircle, color: 'text-emerald-400', bg: 'bg-emerald-400/10', label: 'Completed' },
-  failed:    { icon: XCircle,     color: 'text-red-400',     bg: 'bg-red-400/10',     label: 'Failed' },
-  skipped:   { icon: AlertTriangle, color: 'text-amber-400', bg: 'bg-amber-400/10',   label: 'Skipped' },
-  unknown:   { icon: Clock,       color: 'text-slate-400',   bg: 'bg-slate-400/10',   label: 'Pending' },
+  completed: { icon: CheckCircle, color: 'text-emerald-600', bg: 'bg-emerald-400/10', label: 'Completed' },
+  failed:    { icon: XCircle,     color: 'text-red-600',     bg: 'bg-red-400/10',     label: 'Failed' },
+  skipped:   { icon: AlertTriangle, color: 'text-amber-700', bg: 'bg-amber-400/10',   label: 'Skipped' },
+  unknown:   { icon: Clock,       color: 'text-slate-600',   bg: 'bg-slate-400/10',   label: 'Pending' },
 };
 
 function formatDate(isoStr) {
@@ -83,7 +83,7 @@ export default function PaymentHistory({ refreshKey = 0 }) {
             </div>
           ) : payments.length === 0 ? (
             <div className="text-center py-8">
-              <Receipt size={28} className="mx-auto text-muted-foreground/30 mb-2" />
+              <Receipt size={28} className="mx-auto text-muted-foreground/70 mb-2" />
               <p className="text-sm text-muted-foreground">No transactions yet</p>
               <p className="text-xs text-muted-foreground/60 mt-1">Your payment history will appear here</p>
             </div>
@@ -118,13 +118,13 @@ export default function PaymentHistory({ refreshKey = 0 }) {
                     </div>
 
                     {isRefundRequested && (
-                      <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-400">
+                      <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-700">
                         <Clock size={12} />
                         Refund requested {p.refund_requested_at ? `on ${formatDate(p.refund_requested_at)}` : ''}
                       </div>
                     )}
                     {isRefundProcessed && (
-                      <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-400">
+                      <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-600">
                         <CheckCircle size={12} />
                         Refund processed
                       </div>
@@ -147,7 +147,7 @@ export default function PaymentHistory({ refreshKey = 0 }) {
                           value={refundReason}
                           onChange={(e) => setRefundReason(e.target.value)}
                           placeholder="Tell us the reason..."
-                          className="w-full h-16 rounded-lg px-3 py-2 text-xs bg-background border border-border text-foreground placeholder:text-muted-foreground/50 resize-none focus:outline-none focus:ring-1 focus:ring-violet-500"
+                          className="w-full h-16 rounded-lg px-3 py-2 text-xs bg-background border border-border text-foreground placeholder:text-muted-foreground/70 resize-none focus:outline-none focus:ring-1 focus:ring-violet-500"
                         />
                         <div className="flex gap-2">
                           <button

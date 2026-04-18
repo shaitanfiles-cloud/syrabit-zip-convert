@@ -15,10 +15,10 @@ export function DeletionBanner({
       style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)' }}
     >
       <div className="flex items-start gap-3">
-        <Clock size={18} className="text-amber-400 flex-shrink-0 mt-0.5" />
+        <Clock size={18} className="text-amber-700 flex-shrink-0 mt-0.5" />
         <div className="flex-1">
-          <p className="text-amber-400 font-semibold text-sm">Account deletion scheduled</p>
-          <p className="text-amber-400/70 text-xs mt-0.5">
+          <p className="text-amber-700 font-semibold text-sm">Account deletion scheduled</p>
+          <p className="text-amber-700/70 text-xs mt-0.5">
             Your account will be permanently deleted in ~{getDeletionHoursLeft()} hours.
             All data will be erased.
           </p>
@@ -26,7 +26,7 @@ export function DeletionBanner({
         <button
           onClick={handleCancelDeletion}
           disabled={cancellingDelete}
-          className="flex-shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold text-amber-400 border border-amber-400/30 hover:bg-amber-400/10 transition-colors"
+          className="flex-shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold text-amber-700 border border-amber-400/30 hover:bg-amber-400/10 transition-colors"
         >
           {cancellingDelete ? <Loader2 size={12} className="animate-spin" /> : 'Cancel Deletion'}
         </button>
@@ -63,7 +63,7 @@ export default function DangerZone({ profile, deletionPending, setShowDeleteConf
               </div>
               <p className="text-xs text-muted-foreground/60 mt-0.5">Manage users, content, analytics</p>
             </div>
-            <ChevronRight size={14} className="text-muted-foreground/50" />
+            <ChevronRight size={14} className="text-muted-foreground/70" />
           </div>
         </Link>
       )}
@@ -76,7 +76,7 @@ export default function DangerZone({ profile, deletionPending, setShowDeleteConf
           <div className="p-4">
             <div className="flex items-start gap-3 p-3 rounded-xl"
               style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}>
-              <AlertTriangle size={16} className="text-red-400 flex-shrink-0 mt-0.5" />
+              <AlertTriangle size={16} className="text-red-600 flex-shrink-0 mt-0.5" />
               <div className="flex-1">
                 <p className="text-sm font-semibold text-foreground">Delete Account</p>
                 <p className="text-xs text-muted-foreground/70 mt-0.5">
@@ -85,7 +85,7 @@ export default function DangerZone({ profile, deletionPending, setShowDeleteConf
               </div>
               <button
                 onClick={() => setShowDeleteConfirm(true)}
-                className="flex-shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold text-red-400 border border-red-500/25 hover:bg-red-500/10 transition-colors"
+                className="flex-shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold text-red-600 border border-red-500/25 hover:bg-red-500/10 transition-colors"
                 data-testid="delete-account-button"
               >
                 <Trash2 size={12} className="inline mr-1" />

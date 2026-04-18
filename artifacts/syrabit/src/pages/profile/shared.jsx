@@ -7,7 +7,7 @@ export function StarRating({ value = 4, max = 5 }) {
         <Star
           key={i}
           size={12}
-          className={i < value ? 'text-amber-400 fill-amber-400' : 'text-muted-foreground/30'}
+          className={i < value ? 'text-amber-700 fill-amber-400' : 'text-muted-foreground/70'}
         />
       ))}
     </div>
@@ -28,9 +28,9 @@ export function UsageDots({ value = 3, max = 4, color = 'bg-primary' }) {
 }
 
 export const PLANS = {
-  free:    { label: 'Free',    credits: 30,   creditsLabel: '30/day',    price: '₹0',   period: 'forever',   badge: 'FREE TIER',   badgeColor: 'text-slate-400 bg-slate-400/10 border-slate-400/20',  docAccess: 'zero'    },
-  starter: { label: 'Starter', credits: 500,  creditsLabel: '500/day',   price: '₹99',  period: 'one-time',  badge: 'POPULAR',     badgeColor: 'text-violet-400 bg-violet-400/10 border-violet-400/20', docAccess: 'limited' },
-  pro:     { label: 'Pro',     credits: 4000, creditsLabel: '4,000/day', price: '₹999', period: 'one-time',  badge: 'BEST VALUE',  badgeColor: 'text-amber-400 bg-amber-400/10 border-amber-400/20',    docAccess: 'full'    },
+  free:    { label: 'Free',    credits: 30,   creditsLabel: '30/day',    price: '₹0',   period: 'forever',   badge: 'FREE TIER',   badgeColor: 'text-slate-600 bg-slate-400/10 border-slate-400/20',  docAccess: 'zero'    },
+  starter: { label: 'Starter', credits: 500,  creditsLabel: '500/day',   price: '₹99',  period: 'one-time',  badge: 'POPULAR',     badgeColor: 'text-violet-600 bg-violet-400/10 border-violet-400/20', docAccess: 'limited' },
+  pro:     { label: 'Pro',     credits: 4000, creditsLabel: '4,000/day', price: '₹999', period: 'one-time',  badge: 'BEST VALUE',  badgeColor: 'text-amber-700 bg-amber-400/10 border-amber-400/20',    docAccess: 'full'    },
 };
 
 export const PLAN_RANK = { free: 0, starter: 1, pro: 2 };

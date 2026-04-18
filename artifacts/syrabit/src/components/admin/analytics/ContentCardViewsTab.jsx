@@ -61,12 +61,12 @@ export default function ContentCardViewsTab({ adminToken }) {
           {cards.map((c, i) => (
             <div key={c.subject_id} className="flex items-center gap-2 px-2.5 py-2 rounded-xl transition-colors"
               style={{ background: i % 2 === 0 ? '#f9fafb' : 'transparent' }}>
-              <span className="text-gray-300 text-xs w-5 text-right flex-shrink-0">{i + 1}</span>
+              <span className="text-gray-700 text-xs w-5 text-right flex-shrink-0">{i + 1}</span>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-gray-700 text-sm font-medium truncate">{c.name}</span>
                   {(c.board || c.class_name) && (
-                    <span className="text-gray-300 text-[10px] flex-shrink-0 truncate">
+                    <span className="text-gray-700 text-[10px] flex-shrink-0 truncate">
                       {[c.board, c.class_name].filter(Boolean).join(' · ')}
                     </span>
                   )}
@@ -81,11 +81,11 @@ export default function ContentCardViewsTab({ adminToken }) {
               </div>
               <div className="flex items-center gap-3 flex-shrink-0">
                 <span className="flex items-center gap-1 text-gray-500 text-xs" title="Card opens (internal product event)">
-                  <Eye size={11} className="text-violet-400" />
+                  <Eye size={11} className="text-violet-600" />
                   {c.page_views.toLocaleString()} opens
                 </span>
-                <span className="flex items-center gap-1 text-gray-400 text-xs" title="Unique users who opened this card">
-                  <Users size={11} className="text-blue-400" />
+                <span className="flex items-center gap-1 text-gray-600 text-xs" title="Unique users who opened this card">
+                  <Users size={11} className="text-blue-600" />
                   {c.unique_visitors.toLocaleString()} users
                 </span>
               </div>

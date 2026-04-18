@@ -43,7 +43,7 @@ export function ThinkingIndicator() {
               style={{ height: '100%', width: '50%', borderRadius: 4, background: 'linear-gradient(90deg,#7c3aed,#a78bfa)' }}
             />
           </div>
-          <span style={{ fontSize: 11, color: '#9ca3af' }}>
+          <span style={{ fontSize: 11, color: '#4b5563' }}>
             {elapsed}s
           </span>
         </div>

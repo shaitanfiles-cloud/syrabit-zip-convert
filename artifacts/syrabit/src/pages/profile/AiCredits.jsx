@@ -14,10 +14,10 @@ export default function AiCredits({
       <div className="p-4">
         <div className="grid grid-cols-2 gap-3">
           {[
-            { icon: Database, label: 'Total Tokens', value: stats.total_tokens > 1000 ? `${(stats.total_tokens/1000).toFixed(0)}K` : stats.total_tokens, color: 'text-blue-400', bg: 'rgba(59,130,246,0.10)' },
-            { icon: Zap,      label: 'Credits Left', value: creditsRemaining,  color: isLowCredits ? 'text-amber-400' : 'text-emerald-400', bg: isLowCredits ? 'rgba(245,158,11,0.10)' : 'rgba(16,185,129,0.10)' },
-            { icon: MessageSquare, label: 'Conversations', value: stats.conversations, color: 'text-violet-400', bg: 'rgba(139,92,246,0.10)' },
-            { icon: BookMarked, label: 'Saved Subjects', value: stats.saved_subjects, color: 'text-pink-400', bg: 'rgba(244,63,94,0.10)' },
+            { icon: Database, label: 'Total Tokens', value: stats.total_tokens > 1000 ? `${(stats.total_tokens/1000).toFixed(0)}K` : stats.total_tokens, color: 'text-blue-600', bg: 'rgba(59,130,246,0.10)' },
+            { icon: Zap,      label: 'Credits Left', value: creditsRemaining,  color: isLowCredits ? 'text-amber-700' : 'text-emerald-600', bg: isLowCredits ? 'rgba(245,158,11,0.10)' : 'rgba(16,185,129,0.10)' },
+            { icon: MessageSquare, label: 'Conversations', value: stats.conversations, color: 'text-violet-600', bg: 'rgba(139,92,246,0.10)' },
+            { icon: BookMarked, label: 'Saved Subjects', value: stats.saved_subjects, color: 'text-pink-700', bg: 'rgba(244,63,94,0.10)' },
           ].map(({ icon: Icon, label, value, color, bg }) => (
             <div key={label} className="rounded-xl p-3" style={{ background: bg, border: `1px solid ${bg.replace('0.10', '0.20')}` }}>
               <Icon size={18} className={`${color} mb-2`} />
@@ -29,7 +29,7 @@ export default function AiCredits({
         <div className="mt-4">
           <div className="flex justify-between text-xs text-muted-foreground mb-1.5">
             <span>{creditsLimit === 0 ? 'No credits — upgrade to chat' : 'Credits used'}</span>
-            <span className={isLowCredits ? 'text-amber-400' : ''}>
+            <span className={isLowCredits ? 'text-amber-700' : ''}>
               {creditsLimit === 0 ? '' : `${creditsUsed} / ${creditsLimit}`}
             </span>
           </div>

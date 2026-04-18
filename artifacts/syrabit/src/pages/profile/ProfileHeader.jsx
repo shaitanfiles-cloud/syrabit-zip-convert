@@ -96,10 +96,10 @@ export default function ProfileHeader({
 
         <button
           onClick={handleCopyId}
-          className="text-muted-foreground/40 hover:text-foreground/60 transition-colors p-1"
+          className="text-muted-foreground/70 hover:text-foreground/60 transition-colors p-1"
           title="Copy User ID"
         >
-          {copiedId ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+          {copiedId ? <Check size={14} className="text-emerald-600" /> : <Copy size={14} />}
         </button>
       </div>
 

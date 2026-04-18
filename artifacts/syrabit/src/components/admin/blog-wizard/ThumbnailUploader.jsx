@@ -65,21 +65,21 @@ export default function ThumbnailUploader({ docId, value, onChange, altText, onA
           <div className="flex flex-col items-center justify-center py-6 gap-2">
             {loading
               ? <>
-                  <Loader2 size={24} className="text-violet-400 animate-spin" />
-                  <p className="text-xs text-violet-300 font-medium">Analyzing cover & extracting color DNA…</p>
-                  <p className="text-[10px] text-gray-400">Generating 3 abstract variants</p>
+                  <Loader2 size={24} className="text-violet-600 animate-spin" />
+                  <p className="text-xs text-violet-700 font-medium">Analyzing cover & extracting color DNA…</p>
+                  <p className="text-[10px] text-gray-600">Generating 3 abstract variants</p>
                 </>
               : <>
                   <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-1"
                     style={{ background: 'rgba(139,92,246,0.15)' }}>
-                    <FileUp size={18} className="text-violet-400" />
+                    <FileUp size={18} className="text-violet-600" />
                   </div>
                   <p className="text-sm font-semibold text-gray-600">Upload a book cover</p>
-                  <p className="text-[11px] text-white/35 text-center max-w-xs">
+                  <p className="text-[11px] text-gray-600 text-center max-w-xs">
                     PNG, JPG, WebP — max 2 MB. The AI will extract its color DNA and generate 3 copyright-safe abstract variants.
                   </p>
                   {!docId && (
-                    <p className="text-[10px] text-amber-400 mt-1">Complete Step 1 first to enable upload</p>
+                    <p className="text-[10px] text-amber-700 mt-1">Complete Step 1 first to enable upload</p>
                   )}
                 </>
             }
@@ -91,14 +91,14 @@ export default function ThumbnailUploader({ docId, value, onChange, altText, onA
         <div>
           {analysis?.dominant_colors?.length > 0 && (
             <div className="flex items-center gap-2 mb-3 flex-wrap">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Color DNA</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-gray-600">Color DNA</span>
               {analysis.dominant_colors.slice(0, 5).map((c, i) => (
                 <div key={i} title={c}
                   className="w-5 h-5 rounded-full border-2 border-gray-200 flex-shrink-0"
                   style={{ background: c }} />
               ))}
               {analysis.style && (
-                <span className="text-[10px] text-gray-400 italic">
+                <span className="text-[10px] text-gray-600 italic">
                   {analysis.style}{analysis.mood ? ` · ${analysis.mood}` : ''}
                 </span>
               )}
@@ -107,7 +107,7 @@ export default function ThumbnailUploader({ docId, value, onChange, altText, onA
 
           <div className="grid grid-cols-4 gap-2">
             <div className="space-y-1.5">
-              <p className="text-[10px] font-semibold text-gray-400 text-center uppercase tracking-wider">Original</p>
+              <p className="text-[10px] font-semibold text-gray-600 text-center uppercase tracking-wider">Original</p>
               <div className="relative rounded-xl overflow-hidden border border-gray-200"
                 style={{ aspectRatio: '2/3', background: '#f9fafb' }}>
                 <img src={original} alt="original cover" className="w-full h-full object-cover" />
@@ -117,7 +117,7 @@ export default function ThumbnailUploader({ docId, value, onChange, altText, onA
             {variants.map((v, i) => (
               <div key={i} className="space-y-1.5">
                 <p className="text-[10px] font-semibold text-center uppercase tracking-wider"
-                  style={{ color: selected === i ? '#a78bfa' : '#9ca3af' }}>
+                  style={{ color: selected === i ? '#7c3aed' : '#4b5563' }}>
                   {VARIANT_LABELS[i]}
                 </p>
                 <button
@@ -146,12 +146,12 @@ export default function ThumbnailUploader({ docId, value, onChange, altText, onA
           <div className="mt-2 flex items-center justify-between">
             <button
               onClick={() => { setVariants(null); setOriginal(null); setSelected(null); onChange(''); }}
-              className="flex items-center gap-1.5 text-[11px] text-gray-400 hover:text-gray-500 transition"
+              className="flex items-center gap-1.5 text-[11px] text-gray-600 hover:text-gray-800 transition"
             >
               <RefreshCw size={10} /> Upload different cover
             </button>
             {value && (
-              <span className="flex items-center gap-1 text-[11px] text-emerald-400 font-semibold">
+              <span className="flex items-center gap-1 text-[11px] text-emerald-600 font-semibold">
                 <Check size={11} /> Variant {selected + 1} selected
               </span>
             )}

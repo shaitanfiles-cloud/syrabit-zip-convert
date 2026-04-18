@@ -10,14 +10,14 @@ export default function DailyStatsTab({ dailyDays, setDailyDays, dailyLoading, d
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex items-center gap-1.5 text-gray-400 text-sm">
+        <div className="flex items-center gap-1.5 text-gray-600 text-sm">
           <Calendar size={14} />
           <span>Date range:</span>
         </div>
         {[7, 14, 30, 60, 90].map(d => (
           <button key={d} onClick={() => setDailyDays(d)}
             className={`px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all ${
-              dailyDays === d ? 'text-white' : 'text-gray-400 hover:text-gray-500'
+              dailyDays === d ? 'text-white' : 'text-gray-600 hover:text-gray-800'
             }`}
             style={dailyDays === d
               ? { background: 'linear-gradient(135deg, #7c3aed, #6d28d9)', boxShadow: '0 2px 12px rgba(124,58,237,0.3)' }
@@ -27,7 +27,7 @@ export default function DailyStatsTab({ dailyDays, setDailyDays, dailyLoading, d
           </button>
         ))}
         <button onClick={() => loadDailyAnalytics(dailyDays)} disabled={dailyLoading}
-          className="ml-auto flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs text-gray-400 hover:text-gray-900 transition-all"
+          className="ml-auto flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs text-gray-600 hover:text-gray-900 transition-all"
           style={{ background: '#ffffff', border: '1px solid #e5e7eb' }}>
           <RefreshCw size={12} className={dailyLoading ? 'animate-spin' : ''} /> Refresh
         </button>
@@ -35,7 +35,7 @@ export default function DailyStatsTab({ dailyDays, setDailyDays, dailyLoading, d
 
       {dailyLoading ? (
         <div className="flex justify-center p-10">
-          <Loader2 size={24} className="animate-spin text-violet-400/60" />
+          <Loader2 size={24} className="animate-spin text-violet-600/60" />
         </div>
       ) : dailyData ? (() => {
         const s = dailyData.summary || {};
@@ -48,7 +48,7 @@ export default function DailyStatsTab({ dailyDays, setDailyDays, dailyLoading, d
           if (pct == null) return null;
           const up = pct >= 0;
           return (
-            <div className={`flex items-center gap-0.5 text-xs font-semibold flex-shrink-0 ${up ? 'text-emerald-400' : 'text-red-400'}`}>
+            <div className={`flex items-center gap-0.5 text-xs font-semibold flex-shrink-0 ${up ? 'text-emerald-600' : 'text-red-600'}`}>
               {up ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
               {Math.abs(pct)}%
             </div>
@@ -82,7 +82,7 @@ export default function DailyStatsTab({ dailyDays, setDailyDays, dailyLoading, d
                   </div>
                   <div className="flex-1 min-w-0 relative">
                     <p className="text-gray-900 font-bold text-lg leading-none">{sc.value.toLocaleString()}</p>
-                    <p className="text-gray-400 text-xs mt-0.5 leading-tight">{sc.label}</p>
+                    <p className="text-gray-600 text-xs mt-0.5 leading-tight">{sc.label}</p>
                   </div>
                   {fmtChg(sc.chg)}
                 </div>
@@ -95,11 +95,11 @@ export default function DailyStatsTab({ dailyDays, setDailyDays, dailyLoading, d
               <ResponsiveContainer width="100%" height={260}>
                 <AreaChart data={daily} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
-                  <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 10 }} tickFormatter={fmt}
+                  <XAxis dataKey="date" tick={{ fill: '#4b5563', fontSize: 10 }} tickFormatter={fmt}
                     interval={Math.max(0, Math.floor(daily.length / 8) - 1)} />
-                  <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
+                  <YAxis tick={{ fill: '#4b5563', fontSize: 11 }} />
                   <Tooltip {...TT} />
-                  <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} />
+                  <Legend wrapperStyle={{ fontSize: 11, color: '#4b5563' }} />
                   <Area type="monotone" dataKey="visitors" name="Cloudflare Visitors"
                     stroke="#f6821f" fill="rgba(246,130,31,0.15)" strokeWidth={2.5} />
                   <Area type="monotone" dataKey="page_views" name="Cloudflare Page Views"
@@ -113,9 +113,9 @@ export default function DailyStatsTab({ dailyDays, setDailyDays, dailyLoading, d
               <ResponsiveContainer width="100%" height={180}>
                 <BarChart data={daily} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
-                  <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 10 }} tickFormatter={fmt}
+                  <XAxis dataKey="date" tick={{ fill: '#4b5563', fontSize: 10 }} tickFormatter={fmt}
                     interval={Math.max(0, Math.floor(daily.length / 8) - 1)} />
-                  <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} allowDecimals={false} />
+                  <YAxis tick={{ fill: '#4b5563', fontSize: 11 }} allowDecimals={false} />
                   <Tooltip {...TT} />
                   <Bar dataKey="signups" name="Sign-ups" fill="#10b981" radius={[4, 4, 0, 0]} />
                 </BarChart>
@@ -127,11 +127,11 @@ export default function DailyStatsTab({ dailyDays, setDailyDays, dailyLoading, d
               <ResponsiveContainer width="100%" height={200}>
                 <BarChart data={daily} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
-                  <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 10 }} tickFormatter={fmt}
+                  <XAxis dataKey="date" tick={{ fill: '#4b5563', fontSize: 10 }} tickFormatter={fmt}
                     interval={Math.max(0, Math.floor(daily.length / 8) - 1)} />
-                  <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} allowDecimals={false} />
+                  <YAxis tick={{ fill: '#4b5563', fontSize: 11 }} allowDecimals={false} />
                   <Tooltip {...TT} />
-                  <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} />
+                  <Legend wrapperStyle={{ fontSize: 11, color: '#4b5563' }} />
                   <Bar dataKey="messages"        name="Messages"        fill="#8b5cf6" radius={[4, 4, 0, 0]} />
                   <Bar dataKey="ai_interactions" name="AI Interactions" fill="#f59e0b" radius={[4, 4, 0, 0]} />
                 </BarChart>
@@ -145,8 +145,8 @@ export default function DailyStatsTab({ dailyDays, setDailyDays, dailyLoading, d
           background: '#ffffff',
           border: '1px solid #e5e7eb',
         }}>
-          <Calendar size={32} className="text-gray-200 mx-auto mb-3" />
-          <p className="text-gray-300 text-sm">Select a date range above to load daily metrics</p>
+          <Calendar size={32} className="text-gray-700 mx-auto mb-3" />
+          <p className="text-gray-700 text-sm">Select a date range above to load daily metrics</p>
         </div>
       )}
     </div>

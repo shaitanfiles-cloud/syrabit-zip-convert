@@ -18,7 +18,7 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
 
   const metaLen = (state.metaDescription || '').length;
   const metaValid = metaLen >= 120 && metaLen <= 160;
-  const metaColor = metaLen === 0 ? 'text-gray-400' : metaValid ? 'text-emerald-400' : 'text-red-400';
+  const metaColor = metaLen === 0 ? 'text-gray-600' : metaValid ? 'text-emerald-600' : 'text-red-600';
   const metaErrorMsg = metaLen > 0 && !metaValid
     ? (metaLen < 120 ? `Too short (${metaLen}/120 min)` : `Too long (${metaLen}/160 max)`)
     : '';
@@ -106,13 +106,13 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
       <div className="mb-5 flex items-start justify-between gap-3">
         <div>
           <h2 className="text-base font-bold text-gray-900">Step 4 — SEO & GEO Metadata</h2>
-          <p className="text-xs text-gray-400 mt-1">Fill all fields for maximum search and AI visibility.</p>
+          <p className="text-xs text-gray-600 mt-1">Fill all fields for maximum search and AI visibility.</p>
         </div>
         <button
           onClick={handleAutoFill}
           disabled={generating}
           className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition flex-shrink-0"
-          style={{ background: 'rgba(139,92,246,0.20)', color: '#c4b5fd', border: '1px solid rgba(139,92,246,0.30)' }}
+          style={{ background: 'rgba(139,92,246,0.20)', color: '#5b21b6', border: '1px solid rgba(139,92,246,0.30)' }}
         >
           {generating ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
           {generating ? 'Generating…' : 'Auto-fill with AI'}
@@ -127,12 +127,12 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
             value={state.seoSlug}
             onChange={e => set({ seoSlug: autoSlug(e.target.value) })} />
           {state.canonicalUrl && (
-            <p className="text-[10px] text-gray-400 mt-1">Canonical: {state.canonicalUrl}</p>
+            <p className="text-[10px] text-gray-600 mt-1">Canonical: {state.canonicalUrl}</p>
           )}
         </div>
 
         <div>
-          <label className={lbl}>SEO Title * <span className="text-gray-300 font-normal">({(state.seoTitle || '').length}/65 chars)</span></label>
+          <label className={lbl}>SEO Title * <span className="text-gray-700 font-normal">({(state.seoTitle || '').length}/65 chars)</span></label>
           <input className={inp(!state.seoTitle && saving)}
             placeholder="Topic Complete Notes Assamboard Class 12 | Syrabit"
             value={state.seoTitle}
@@ -158,7 +158,7 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
               }} />
           </div>
           {metaErrorMsg && (
-            <p className="text-xs text-red-400 mt-1 flex items-center gap-1">
+            <p className="text-xs text-red-600 mt-1 flex items-center gap-1">
               <AlertCircle size={11} /> {metaErrorMsg}
             </p>
           )}
@@ -213,10 +213,10 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
       </div>
 
       <div className="mt-6 space-y-3">
-        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Live Previews</p>
+        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Live Previews</p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <p className="text-[10px] text-gray-400 mb-1.5 font-medium">Google SERP</p>
+            <p className="text-[10px] text-gray-600 mb-1.5 font-medium">Google SERP</p>
             <SerpPreview
               title={state.seoTitle}
               slug={state.seoSlug}
@@ -224,7 +224,7 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
             />
           </div>
           <div>
-            <p className="text-[10px] text-gray-400 mb-1.5 font-medium">Perplexity / AI Overview</p>
+            <p className="text-[10px] text-gray-600 mb-1.5 font-medium">Perplexity / AI Overview</p>
             <PerplexityPreview
               title={state.seoTitle}
               slug={state.seoSlug}

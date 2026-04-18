@@ -17,7 +17,7 @@ export default function FunnelTab({ funnel, widgetErrors, load }) {
             <div key={i}>
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-gray-700 text-sm font-medium">{stage.stage}</span>
-                <span className="text-gray-400 text-sm">{stage.count?.toLocaleString()} ({stage.pct}%)</span>
+                <span className="text-gray-600 text-sm">{stage.count?.toLocaleString()} ({stage.pct}%)</span>
               </div>
               <div className="h-8 rounded-xl overflow-hidden" style={{ background: '#f9fafb' }}>
                 <div className="h-full rounded-xl transition-all duration-500"

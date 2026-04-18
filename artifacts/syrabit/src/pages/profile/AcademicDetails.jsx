@@ -89,13 +89,13 @@ function CourseTypeSelector({ profile, onUpdate }) {
           <p className="text-xs text-muted-foreground">Course Type</p>
           <p className="text-sm font-medium text-foreground truncate">{currentLabel}</p>
         </div>
-        <ChevronDown size={14} className={`text-muted-foreground/50 flex-shrink-0 transition-transform ${showSelector ? 'rotate-180' : ''}`} />
+        <ChevronDown size={14} className={`text-muted-foreground/70 flex-shrink-0 transition-transform ${showSelector ? 'rotate-180' : ''}`} />
       </button>
 
       {showSelector && (
         <div className="px-4 pb-4">
           {loading ? (
-            <div className="flex justify-center py-6"><Loader2 size={20} className="animate-spin text-violet-400" /></div>
+            <div className="flex justify-center py-6"><Loader2 size={20} className="animate-spin text-violet-600" /></div>
           ) : (
             <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
               {courseTypes.map((ct) => {
@@ -135,10 +135,10 @@ function CourseTypeSelector({ profile, onUpdate }) {
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
                         {selectedInThis > 0 && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-400 font-medium">{selectedInThis}</span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-600 font-medium">{selectedInThis}</span>
                         )}
-                        {isSelected && <Check size={14} className="text-violet-400" />}
-                        <ChevronDown size={12} className={`text-muted-foreground/50 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                        {isSelected && <Check size={14} className="text-violet-600" />}
+                        <ChevronDown size={12} className={`text-muted-foreground/70 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                       </div>
                     </button>
 
@@ -233,7 +233,7 @@ export default function AcademicDetails({ profile, isDegreeProfile, openEdit, on
               <p className="text-xs text-muted-foreground">{label}</p>
               <p className="text-sm font-medium text-foreground truncate">{value || `Add ${label.toLowerCase()}`}</p>
             </div>
-            <ChevronRight size={14} className="text-muted-foreground/50 flex-shrink-0" />
+            <ChevronRight size={14} className="text-muted-foreground/70 flex-shrink-0" />
           </button>
         ))}
 

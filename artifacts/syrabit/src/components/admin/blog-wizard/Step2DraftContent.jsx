@@ -78,10 +78,10 @@ export default function Step2DraftContent({ state, set, goNext, goPrev, adminTok
       <div className="px-6 pt-5 pb-3 flex items-center justify-between flex-shrink-0">
         <div>
           <h2 className="text-base font-bold text-gray-900">Step 2 — Draft Content</h2>
-          <p className="text-xs text-gray-400 mt-0.5">Write, paste, or extract content. Need ≥ 150 words to continue.</p>
+          <p className="text-xs text-gray-600 mt-0.5">Write, paste, or extract content. Need ≥ 150 words to continue.</p>
         </div>
         <div className="flex items-center gap-2">
-          <div className={`text-xs font-semibold px-2.5 py-1 rounded-lg ${canContinue ? 'text-emerald-400 bg-emerald-500/10' : 'text-amber-400 bg-amber-500/10'}`}>
+          <div className={`text-xs font-semibold px-2.5 py-1 rounded-lg ${canContinue ? 'text-emerald-600 bg-emerald-500/10' : 'text-amber-700 bg-amber-500/10'}`}>
             {wc} / 150 words
           </div>
           <input ref={pdfRef} type="file" accept=".pdf" className="hidden" onChange={handlePdfUpload} />
@@ -89,7 +89,7 @@ export default function Step2DraftContent({ state, set, goNext, goPrev, adminTok
             onClick={() => pdfRef.current?.click()}
             disabled={pdfLoading}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition disabled:opacity-50"
-            style={{ background: 'rgba(139,92,246,0.15)', color: '#c4b5fd', border: '1px solid rgba(139,92,246,0.25)' }}
+            style={{ background: 'rgba(139,92,246,0.15)', color: '#5b21b6', border: '1px solid rgba(139,92,246,0.25)' }}
           >
             {pdfLoading ? <Loader2 size={12} className="animate-spin" /> : <FileUp size={12} />}
             {pdfLoading ? 'Extracting…' : 'From PDF'}

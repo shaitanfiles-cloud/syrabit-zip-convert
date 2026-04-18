@@ -17,7 +17,7 @@ export default function DeleteConfirmDialog({
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl flex items-center justify-center"
             style={{ background: 'rgba(239,68,68,0.10)', border: '1px solid rgba(239,68,68,0.20)' }}>
-            <AlertTriangle size={18} className="text-red-400" />
+            <AlertTriangle size={18} className="text-red-600" />
           </div>
           <div>
             <h3 className="font-semibold text-foreground">Delete Account?</h3>
@@ -27,7 +27,7 @@ export default function DeleteConfirmDialog({
       }
     >
       <div className="rounded-xl p-3" style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)' }}>
-        <p className="text-xs text-amber-400 font-medium">72-hour grace period</p>
+        <p className="text-xs text-amber-700 font-medium">72-hour grace period</p>
         <p className="text-xs text-muted-foreground/70 mt-0.5">
           You can cancel deletion within 72 hours. After that, all data is permanently erased.
         </p>
@@ -44,7 +44,7 @@ export default function DeleteConfirmDialog({
 
       <div>
         <label className="text-xs text-muted-foreground mb-1.5 block">
-          Type <span className="font-mono font-bold text-red-400">DELETE</span> to confirm
+          Type <span className="font-mono font-bold text-red-600">DELETE</span> to confirm
         </label>
         <input
           type="text"

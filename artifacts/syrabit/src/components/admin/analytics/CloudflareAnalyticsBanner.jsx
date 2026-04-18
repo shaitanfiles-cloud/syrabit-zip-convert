@@ -111,14 +111,14 @@ export default function CloudflareAnalyticsBanner({
     ? {
         bg: 'rgba(239,68,68,0.06)',
         border: '1px solid rgba(239,68,68,0.20)',
-        title: 'text-red-400',
-        body: 'text-red-300/80',
+        title: 'text-red-600',
+        body: 'text-red-700/80',
         subBg: 'rgba(0,0,0,0.20)',
         subBorder: '1px solid rgba(239,68,68,0.10)',
         meta: 'text-red-200/70',
-        chip: 'bg-red-500/10 text-red-300 border border-red-500/20',
+        chip: 'bg-red-500/10 text-red-700 border border-red-500/20',
         btn: 'bg-red-500/15 text-red-200 border border-red-500/25 hover:bg-red-500/25',
-        btnGhost: 'text-red-300 hover:text-red-100',
+        btnGhost: 'text-red-700 hover:text-red-100',
         codeBg: 'bg-black/30 text-red-100',
       }
     : {

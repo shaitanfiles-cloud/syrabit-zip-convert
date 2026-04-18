@@ -35,8 +35,8 @@ export default function DocsDrawer({ docs, loading, onClose, onLoad, adminToken,
         <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: '#e5e7eb' }}>
           <h3 className="text-sm font-bold text-gray-900">My Documents</h3>
           <div className="flex items-center gap-2">
-            <button onClick={onRefresh} className="text-gray-400 hover:text-gray-600 transition"><RefreshCw size={13} /></button>
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition"><X size={16} /></button>
+            <button onClick={onRefresh} className="text-gray-600 hover:text-gray-800 transition"><RefreshCw size={13} /></button>
+            <button onClick={onClose} className="text-gray-600 hover:text-gray-800 transition"><X size={16} /></button>
           </div>
         </div>
 
@@ -50,12 +50,12 @@ export default function DocsDrawer({ docs, loading, onClose, onLoad, adminToken,
 
         <div className="flex-1 overflow-y-auto p-3 space-y-2">
           {loading && (
-            <div className="flex items-center justify-center py-8 gap-2 text-gray-400 text-sm">
+            <div className="flex items-center justify-center py-8 gap-2 text-gray-600 text-sm">
               <Loader2 size={16} className="animate-spin" /> Loading…
             </div>
           )}
           {!loading && filtered.length === 0 && (
-            <p className="text-center py-8 text-gray-400 text-sm">No documents found</p>
+            <p className="text-center py-8 text-gray-600 text-sm">No documents found</p>
           )}
           {filtered.map(doc => (
             <div key={doc.id}
@@ -65,24 +65,24 @@ export default function DocsDrawer({ docs, loading, onClose, onLoad, adminToken,
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-gray-700 truncate">{doc.title || 'Untitled'}</p>
-                  <p className="text-[10px] text-white/35 truncate mt-0.5">{doc.seo_slug || doc.id}</p>
+                  <p className="text-[10px] text-gray-600 truncate mt-0.5">{doc.seo_slug || doc.id}</p>
                 </div>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
                   <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
-                    doc.status === 'published' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-gray-100 text-gray-400'}`}>
+                    doc.status === 'published' ? 'bg-emerald-500/15 text-emerald-600' : 'bg-gray-100 text-gray-600'}`}>
                     {doc.status}
                   </span>
                   <button
                     onClick={e => handleDelete(doc, e)}
                     disabled={deleting === doc.id}
-                    className="opacity-0 group-hover:opacity-100 transition text-red-400/50 hover:text-red-400"
+                    className="opacity-0 group-hover:opacity-100 transition text-red-600/50 hover:text-red-600"
                   >
                     {deleting === doc.id ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
                   </button>
                 </div>
               </div>
               {doc.word_count && (
-                <p className="text-[10px] text-gray-300 mt-1">{doc.word_count} words · {doc.schema_type}</p>
+                <p className="text-[10px] text-gray-700 mt-1">{doc.word_count} words · {doc.schema_type}</p>
               )}
             </div>
           ))}

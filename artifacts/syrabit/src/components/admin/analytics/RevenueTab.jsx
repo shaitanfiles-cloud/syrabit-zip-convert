@@ -13,9 +13,9 @@ export default function RevenueTab({ widgetErrors, load, mrr, predicted, growth,
           background: 'rgba(245,158,11,0.06)',
           border: '1px solid rgba(245,158,11,0.15)',
         }}>
-          <AlertTriangle size={14} className="text-amber-400 flex-shrink-0" />
-          <p className="text-xs text-amber-300/80 flex-1">Revenue data failed to load.</p>
-          <button onClick={() => load(true)} className="text-xs text-amber-300 hover:text-gray-900 px-2.5 py-1 rounded-lg transition-colors"
+          <AlertTriangle size={14} className="text-amber-700 flex-shrink-0" />
+          <p className="text-xs text-amber-700/80 flex-1">Revenue data failed to load.</p>
+          <button onClick={() => load(true)} className="text-xs text-amber-700 hover:text-gray-900 px-2.5 py-1 rounded-lg transition-colors"
             style={{ background: 'rgba(245,158,11,0.12)' }}>Retry</button>
         </div>
       )}
@@ -33,8 +33,8 @@ export default function RevenueTab({ widgetErrors, load, mrr, predicted, growth,
         <ResponsiveContainer width="100%" height={220}>
           <LineChart data={dailyRev} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
-            <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={fmt} />
-            <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={v => `₹${v}`} />
+            <XAxis dataKey="date" tick={{ fill: '#4b5563', fontSize: 11 }} tickFormatter={fmt} />
+            <YAxis tick={{ fill: '#4b5563', fontSize: 11 }} tickFormatter={v => `₹${v}`} />
             <Tooltip {...TT} formatter={v => [`₹${v}`, 'Revenue']} />
             <Line type="monotone" dataKey="revenue_inr" name="Revenue ₹" stroke="#10b981" strokeWidth={2.5}
               dot={{ r: 3, fill: '#10b981' }} activeDot={{ r: 5 }} />
@@ -48,8 +48,8 @@ export default function RevenueTab({ widgetErrors, load, mrr, predicted, growth,
             <ResponsiveContainer width="100%" height={160}>
               <BarChart data={cohortData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
-                <XAxis dataKey="plan" tick={{ fill: '#9ca3af', fontSize: 11 }} />
-                <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} allowDecimals={false} />
+                <XAxis dataKey="plan" tick={{ fill: '#4b5563', fontSize: 11 }} />
+                <YAxis tick={{ fill: '#4b5563', fontSize: 11 }} allowDecimals={false} />
                 <Tooltip {...TT} />
                 <Bar dataKey="count" name="Users" radius={[4, 4, 0, 0]}>
                   {cohortData.map((entry, i) => (
@@ -73,7 +73,7 @@ export default function RevenueTab({ widgetErrors, load, mrr, predicted, growth,
               <div key={i} className="flex items-center justify-between p-2 rounded-lg" style={{
                 background: i % 2 === 0 ? '#f9fafb' : 'transparent',
               }}>
-                <span className="text-gray-400 text-sm">{item.label}</span>
+                <span className="text-gray-600 text-sm">{item.label}</span>
                 <span className="font-semibold text-sm" style={{ color: item.color }}>{item.value.toLocaleString()}</span>
               </div>
             ))}

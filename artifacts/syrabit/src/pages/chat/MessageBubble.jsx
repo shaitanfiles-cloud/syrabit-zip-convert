@@ -106,7 +106,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                 title="Copy"
                 aria-label={copied ? 'Copied' : 'Copy'}
               >
-                {copied ? <Check size={14} style={{ color: '#34d399' }} /> : <Copy size={14} />}
+                {copied ? <Check size={14} style={{ color: '#047857' }} /> : <Copy size={14} />}
               </button>
             </div>
           )}
@@ -234,7 +234,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                       title="Copy"
                       aria-label={copied ? 'Copied' : 'Copy'}
                     >
-                      {copied ? <Check size={16} style={{ color: '#34d399' }} /> : <Copy size={16} />}
+                      {copied ? <Check size={16} style={{ color: '#047857' }} /> : <Copy size={16} />}
                     </button>
                     {isLast && onRegenerate && (
                       <button
@@ -252,7 +252,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                         setReaction(next);
                         if (next) sendFeedback('reaction', next);
                       }}
-                      className={`w-11 h-11 rounded-lg flex items-center justify-center transition-colors ${reaction === 'like' ? 'bg-green-500/15 text-green-400' : 'hover:bg-primary/10 text-muted-foreground hover:text-primary'}`}
+                      className={`w-11 h-11 rounded-lg flex items-center justify-center transition-colors ${reaction === 'like' ? 'bg-green-500/15 text-green-700' : 'hover:bg-primary/10 text-muted-foreground hover:text-primary'}`}
                       title="Like"
                       aria-label="Like"
                     >
@@ -264,7 +264,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                         setReaction(next);
                         if (next) sendFeedback('reaction', next);
                       }}
-                      className={`w-11 h-11 rounded-lg flex items-center justify-center transition-colors ${reaction === 'dislike' ? 'bg-red-500/15 text-red-400' : 'hover:bg-primary/10 text-muted-foreground hover:text-primary'}`}
+                      className={`w-11 h-11 rounded-lg flex items-center justify-center transition-colors ${reaction === 'dislike' ? 'bg-red-500/15 text-red-600' : 'hover:bg-primary/10 text-muted-foreground hover:text-primary'}`}
                       title="Dislike"
                       aria-label="Dislike"
                     >
@@ -325,7 +325,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                         </button>
                       )}
                       {commentSent && (
-                        <Check size={16} style={{ color: '#34d399' }} />
+                        <Check size={16} style={{ color: '#047857' }} />
                       )}
                     </div>
                   )}

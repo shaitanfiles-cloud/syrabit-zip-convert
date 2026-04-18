@@ -51,14 +51,14 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
   return (
     <>
       <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex items-center gap-1.5 text-gray-400 text-sm">
+        <div className="flex items-center gap-1.5 text-gray-600 text-sm">
           <Calendar size={14} />
           <span>Time range:</span>
         </div>
         {TIME_RANGES.map(t => (
           <button key={t.value} onClick={() => setOverviewDays(t.value)}
             className={`px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all ${
-              overviewDays === t.value ? 'text-white' : 'text-gray-400 hover:text-gray-500'
+              overviewDays === t.value ? 'text-white' : 'text-gray-600 hover:text-gray-800'
             }`}
             style={overviewDays === t.value
               ? { background: 'linear-gradient(135deg, #7c3aed, #6d28d9)', boxShadow: '0 2px 12px rgba(124,58,237,0.3)' }
@@ -74,9 +74,9 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
           background: 'rgba(245,158,11,0.06)',
           border: '1px solid rgba(245,158,11,0.15)',
         }}>
-          <AlertTriangle size={14} className="text-amber-400 flex-shrink-0" />
-          <p className="text-xs text-amber-300/80 flex-1">Overview data failed to load — some metrics unavailable.</p>
-          <button onClick={() => load(true)} className="text-xs text-amber-300 hover:text-gray-900 px-2.5 py-1 rounded-lg transition-colors"
+          <AlertTriangle size={14} className="text-amber-700 flex-shrink-0" />
+          <p className="text-xs text-amber-700/80 flex-1">Overview data failed to load — some metrics unavailable.</p>
+          <button onClick={() => load(true)} className="text-xs text-amber-700 hover:text-gray-900 px-2.5 py-1 rounded-lg transition-colors"
             style={{ background: 'rgba(245,158,11,0.12)' }}>Retry</button>
         </div>
       )}
@@ -112,9 +112,9 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
         <ResponsiveContainer width="100%" height={260}>
           <AreaChart data={dailyVisitors} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
-            <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={fmt}
+            <XAxis dataKey="date" tick={{ fill: '#4b5563', fontSize: 11 }} tickFormatter={fmt}
               interval={Math.max(0, Math.floor(dailyVisitors.length / 8) - 1)} />
-            <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
+            <YAxis tick={{ fill: '#4b5563', fontSize: 11 }} />
             <Tooltip {...TT} />
             <Area type="monotone" dataKey="visitors" name="Cloudflare Visitors"
               stroke="#f6821f" fill="rgba(246,130,31,0.12)" strokeWidth={2} />
@@ -126,9 +126,9 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
         <ResponsiveContainer width="100%" height={220}>
           <AreaChart data={dailyVisitors} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
-            <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={fmt}
+            <XAxis dataKey="date" tick={{ fill: '#4b5563', fontSize: 11 }} tickFormatter={fmt}
               interval={Math.max(0, Math.floor(dailyVisitors.length / 8) - 1)} />
-            <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
+            <YAxis tick={{ fill: '#4b5563', fontSize: 11 }} />
             <Tooltip {...TT} />
             <Area type="monotone" dataKey="page_views" name="Cloudflare Page Views"
               stroke="#ec4899" fill="rgba(236,72,153,0.10)" strokeWidth={2} />
@@ -140,9 +140,9 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
         <ResponsiveContainer width="100%" height={180}>
           <BarChart data={data.daily_signups} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
-            <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={fmt}
+            <XAxis dataKey="date" tick={{ fill: '#4b5563', fontSize: 11 }} tickFormatter={fmt}
               interval={Math.max(0, Math.floor((data.daily_signups?.length || 0) / 8) - 1)} />
-            <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} allowDecimals={false} />
+            <YAxis tick={{ fill: '#4b5563', fontSize: 11 }} allowDecimals={false} />
             <Tooltip {...TT} />
             <Bar dataKey="count" name="Signups" fill="#7c3aed" radius={[4, 4, 0, 0]} />
           </BarChart>
@@ -155,8 +155,8 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
             <BarChart data={Object.entries(data.plan_usage).map(([plan, used]) => ({ plan, used }))}
               margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
-              <XAxis dataKey="plan" tick={{ fill: '#9ca3af', fontSize: 11 }} />
-              <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
+              <XAxis dataKey="plan" tick={{ fill: '#4b5563', fontSize: 11 }} />
+              <YAxis tick={{ fill: '#4b5563', fontSize: 11 }} />
               <Tooltip {...TT} />
               <Bar dataKey="used" name="Credits Used" fill="#7c3aed" radius={[4, 4, 0, 0]} />
             </BarChart>
@@ -204,7 +204,7 @@ function HydrateHealthCard({ hydrate, loading, error, onRetry, adminToken }) {
   if (loading && !hydrate) {
     return (
       <Card title="Hydration & Stale-Build Recovery (7d)">
-        <p className="text-gray-400 text-sm text-center py-6">Loading…</p>
+        <p className="text-gray-600 text-sm text-center py-6">Loading…</p>
       </Card>
     );
   }
@@ -232,7 +232,7 @@ function HydrateHealthCard({ hydrate, loading, error, onRetry, adminToken }) {
       action={
         <button
           onClick={onRetry}
-          className="text-xs text-gray-400 hover:text-gray-700 px-2 py-0.5 rounded-lg flex items-center gap-1"
+          className="text-xs text-gray-600 hover:text-gray-700 px-2 py-0.5 rounded-lg flex items-center gap-1"
         >
           <RefreshCw size={10} /> Refresh
         </button>
@@ -259,7 +259,7 @@ function HydrateHealthCard({ hydrate, loading, error, onRetry, adminToken }) {
           </div>
           <div>
             <p className="text-emerald-600 text-sm font-medium">No stale-build recoveries — healthy</p>
-            <p className="text-gray-400 text-xs mt-0.5">No hydration failures or stalls in the last 7 days.</p>
+            <p className="text-gray-600 text-xs mt-0.5">No hydration failures or stalls in the last 7 days.</p>
           </div>
         </div>
       ) : (
@@ -288,7 +288,7 @@ function HydrateHealthCard({ hydrate, loading, error, onRetry, adminToken }) {
                     {topKinds.map((row, i) => (
                       <li key={i} className="flex items-center justify-between text-xs">
                         <span className="text-gray-700 truncate mr-2">{row.value || '—'}</span>
-                        <span className="text-gray-400 font-mono">{row.count}</span>
+                        <span className="text-gray-600 font-mono">{row.count}</span>
                       </li>
                     ))}
                   </ul>
@@ -303,7 +303,7 @@ function HydrateHealthCard({ hydrate, loading, error, onRetry, adminToken }) {
                         <span className="text-gray-700 truncate mr-2" title={row.value}>
                           {(row.value || '—').slice(0, 60)}
                         </span>
-                        <span className="text-gray-400 font-mono">{row.count}</span>
+                        <span className="text-gray-600 font-mono">{row.count}</span>
                       </li>
                     ))}
                   </ul>

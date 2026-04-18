@@ -81,7 +81,7 @@ export default function Step5ReviewPublish({ state, set, goPrev, adminToken, aut
     <div className="p-6 max-w-2xl mx-auto">
       <div className="mb-5">
         <h2 className="text-base font-bold text-gray-900">Step 5 — Review & Publish</h2>
-        <p className="text-xs text-gray-400 mt-1">Check all fields, then publish or save as draft.</p>
+        <p className="text-xs text-gray-600 mt-1">Check all fields, then publish or save as draft.</p>
       </div>
 
       <div className="rounded-xl border p-4 mb-5" style={{ background: '#ffffff', borderColor: '#e5e7eb' }}>
@@ -100,8 +100,8 @@ export default function Step5ReviewPublish({ state, set, goPrev, adminToken, aut
             ['Status', state.publishedStatus],
           ].map(([k, v]) => (
             <div key={k} className="flex gap-2 text-xs">
-              <span className="text-white/35 flex-shrink-0 w-28">{k}</span>
-              <span className="text-white/65 min-w-0 break-words">{v || '—'}</span>
+              <span className="text-gray-600 flex-shrink-0 w-28">{k}</span>
+              <span className="text-gray-800 min-w-0 break-words">{v || '—'}</span>
             </div>
           ))}
         </div>
@@ -113,10 +113,10 @@ export default function Step5ReviewPublish({ state, set, goPrev, adminToken, aut
           {checks.map(({ label, ok, value }) => (
             <div key={label} className="flex items-center gap-3 text-xs">
               {ok
-                ? <CheckCircle2 size={14} className="text-emerald-400 flex-shrink-0" />
-                : <AlertCircle size={14} className="text-amber-400 flex-shrink-0" />}
-              <span className={ok ? 'text-gray-500' : 'text-amber-300/70'}>{label}</span>
-              <span className="ml-auto text-gray-400 truncate max-w-[120px]">{value}</span>
+                ? <CheckCircle2 size={14} className="text-emerald-600 flex-shrink-0" />
+                : <AlertCircle size={14} className="text-amber-700 flex-shrink-0" />}
+              <span className={ok ? 'text-gray-500' : 'text-amber-700/70'}>{label}</span>
+              <span className="ml-auto text-gray-600 truncate max-w-[120px]">{value}</span>
             </div>
           ))}
         </div>
@@ -125,21 +125,21 @@ export default function Step5ReviewPublish({ state, set, goPrev, adminToken, aut
       {state.publishedStatus === 'published' && (
         <div className="rounded-xl border p-4 mb-5" style={{ background: 'rgba(16,185,129,0.08)', borderColor: 'rgba(16,185,129,0.25)' }}>
           <div className="flex items-center gap-2 mb-2">
-            <CheckCircle2 size={16} className="text-emerald-400" />
-            <span className="text-sm font-bold text-emerald-400">Published & Live!</span>
+            <CheckCircle2 size={16} className="text-emerald-600" />
+            <span className="text-sm font-bold text-emerald-600">Published & Live!</span>
           </div>
           {liveUrl && (
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-500 truncate flex-1">https://syrabit.ai{liveUrl}</span>
               <button onClick={copyUrl}
                 className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold transition flex-shrink-0"
-                style={{ background: 'rgba(16,185,129,0.18)', color: '#34d399' }}>
+                style={{ background: 'rgba(16,185,129,0.18)', color: '#047857' }}>
                 {copied ? <Check size={11} /> : <Copy size={11} />}
                 {copied ? 'Copied!' : 'Copy'}
               </button>
               <a href={liveUrl} target="_blank" rel="noreferrer"
                 className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold flex-shrink-0"
-                style={{ background: 'rgba(16,185,129,0.10)', color: '#34d399' }}>
+                style={{ background: 'rgba(16,185,129,0.10)', color: '#047857' }}>
                 <ExternalLink size={11} /> View
               </a>
             </div>
@@ -182,7 +182,7 @@ export default function Step5ReviewPublish({ state, set, goPrev, adminToken, aut
       </div>
 
       {!allGreen && state.publishedStatus !== 'published' && (
-        <p className="text-xs text-amber-400/70 mt-3 text-right">Fix checklist items above to enable "Publish Now"</p>
+        <p className="text-xs text-amber-700/70 mt-3 text-right">Fix checklist items above to enable "Publish Now"</p>
       )}
     </div>
   );

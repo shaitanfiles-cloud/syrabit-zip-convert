@@ -89,7 +89,7 @@ export default function SubscriptionPlans({
                   <ul className="mt-1 space-y-1 flex-1">
                     {PLAN_FEATURES[planKey].slice(0, 3).map((f) => (
                       <li key={f} className="flex items-center gap-1 text-[10px] text-muted-foreground/70">
-                        <Check size={10} className="text-emerald-400 flex-shrink-0" aria-hidden="true" />
+                        <Check size={10} className="text-emerald-600 flex-shrink-0" aria-hidden="true" />
                         {f}
                       </li>
                     ))}

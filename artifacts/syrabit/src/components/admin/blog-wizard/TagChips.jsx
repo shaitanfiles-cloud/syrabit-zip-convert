@@ -14,10 +14,10 @@ export default function TagChips({ value, onChange, placeholder }) {
       <div className="flex flex-wrap gap-1.5 mb-1.5">
         {tags.map((t, i) => (
           <span key={i} className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs"
-            style={{ background: 'rgba(139,92,246,0.15)', color: '#c4b5fd' }}>
+            style={{ background: 'rgba(139,92,246,0.15)', color: '#5b21b6' }}>
             {t}
             <button onClick={() => onChange(tags.filter((_, idx) => idx !== i).join(', '))}
-              className="text-gray-400 hover:text-gray-600"><X size={10} /></button>
+              className="text-gray-600 hover:text-gray-800"><X size={10} /></button>
           </span>
         ))}
       </div>
@@ -27,7 +27,7 @@ export default function TagChips({ value, onChange, placeholder }) {
           placeholder={placeholder}
           className="flex-1 h-8 px-3 rounded-lg text-xs text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-500" />
         <button onClick={addTag} className="px-2 h-8 rounded-lg text-xs font-semibold"
-          style={{ background: 'rgba(139,92,246,0.20)', color: '#c4b5fd' }}>Add</button>
+          style={{ background: 'rgba(139,92,246,0.20)', color: '#5b21b6' }}>Add</button>
       </div>
     </div>
   );

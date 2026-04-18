@@ -109,7 +109,7 @@ export default function Step1TargetScope({ state, set, goNext, boards, classes, 
     <div className="p-6 max-w-2xl mx-auto">
       <div className="mb-6">
         <h2 className="text-base font-bold text-gray-900">Step 1 — Target & Scope</h2>
-        <p className="text-xs text-gray-400 mt-1">Select the board/class/subject scope and define the primary keyword.</p>
+        <p className="text-xs text-gray-600 mt-1">Select the board/class/subject scope and define the primary keyword.</p>
       </div>
 
       <div className="space-y-4">
@@ -175,7 +175,7 @@ export default function Step1TargetScope({ state, set, goNext, boards, classes, 
           <input className={inp} placeholder="e.g. photosynthesis class 12 assamboard"
             value={state.primaryKeyword}
             onChange={e => set({ primaryKeyword: e.target.value })} />
-          <p className="text-[10px] text-gray-300 mt-1">4–7 words. This is the core search query you're targeting.</p>
+          <p className="text-[10px] text-gray-700 mt-1">4–7 words. This is the core search query you're targeting.</p>
         </div>
 
         <div>
@@ -193,7 +193,7 @@ export default function Step1TargetScope({ state, set, goNext, boards, classes, 
 
         {state.subjectId && (
           <div className="rounded-xl p-3" style={{ background: 'rgba(139,92,246,0.10)', border: '1px solid rgba(139,92,246,0.20)' }}>
-            <p className="text-xs font-semibold text-violet-300 mb-1">Selected Scope</p>
+            <p className="text-xs font-semibold text-violet-700 mb-1">Selected Scope</p>
             <p className="text-xs text-gray-500">
               {[state.boardName, state.className, state.streamName, state.subjectName].filter(Boolean).join(' → ')}
             </p>
@@ -204,7 +204,7 @@ export default function Step1TargetScope({ state, set, goNext, boards, classes, 
       {linkError && (
         <div className="mt-3 flex items-center justify-between gap-3 rounded-xl px-3 py-2"
           style={{ background: 'rgba(239,68,68,0.10)', border: '1px solid rgba(239,68,68,0.25)' }}>
-          <span className="text-xs text-red-400">Scope link failed. Please retry to proceed.</span>
+          <span className="text-xs text-red-600">Scope link failed. Please retry to proceed.</span>
           <button onClick={handleContinue} disabled={saving || linkingScope}
             className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold transition"
             style={{ background: 'rgba(239,68,68,0.18)', color: '#fca5a5' }}>
