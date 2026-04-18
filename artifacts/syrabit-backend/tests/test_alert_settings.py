@@ -1359,3 +1359,180 @@ class TestCollectionSizeSnapshot:
         d1 = mock_history.update_one.call_args_list[0][0][0]["date"]
         d2 = mock_history.update_one.call_args_list[1][0][0]["date"]
         assert d1 == d2
+
+
+class TestPushAutoPruneDeadSubscribers:
+    """Task #435: subs with N consecutive non-recoverable failures get
+    marked active=False so they stop polluting the dispatcher list and
+    the per-channel push health signal."""
+
+    def _make_db(self, log_docs, sub_state=None):
+        """Build a fake db where push_delivery_log.aggregate(...) returns
+        ``log_docs`` and push_subscriptions.update_one tracks calls."""
+        sub_state = sub_state if sub_state is not None else {}
+
+        push_log = MagicMock()
+
+        class _AsyncIter:
+            def __init__(self, docs):
+                self._docs = list(docs)
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not self._docs:
+                    raise StopAsyncIteration
+                return self._docs.pop(0)
+
+        def _aggregate(pipeline):
+            sort_dir = None
+            for stage in pipeline:
+                if "$sort" in stage:
+                    sort_dir = stage["$sort"].get("dispatched_at")
+            docs = list(log_docs)
+            if sort_dir is not None:
+                docs.sort(key=lambda d: d.get("dispatched_at") or "",
+                          reverse=sort_dir < 0)
+            grouped: dict = {}
+            for doc in docs:
+                for r in doc.get("results") or []:
+                    ep = r.get("endpoint")
+                    if not ep:
+                        continue
+                    grouped.setdefault(ep, []).append(r.get("status"))
+            return _AsyncIter([
+                {"_id": ep, "statuses": s} for ep, s in grouped.items()
+            ])
+
+        push_log.aggregate = MagicMock(side_effect=_aggregate)
+
+        push_subs = MagicMock()
+        update_calls = []
+
+        async def _update_one(query, update):
+            update_calls.append((query, update))
+            ep = query.get("endpoint")
+            current = sub_state.get(ep, {"active": True})
+            if current.get("active") is False:
+                class _R:
+                    modified_count = 0
+                return _R()
+            sub_state[ep] = {**current, **update.get("$set", {})}
+
+            class _R:
+                modified_count = 1
+            return _R()
+
+        push_subs.update_one = AsyncMock(side_effect=_update_one)
+        fake_db = MagicMock(
+            push_delivery_log=push_log,
+            push_subscriptions=push_subs,
+        )
+        return fake_db, update_calls, sub_state
+
+    def test_deactivates_endpoint_with_streak_of_failures(self):
+        from routes import admin_notifications as _an
+        ep = "https://fcm.example/abc"
+        log_docs = [
+            {"dispatched_at": f"2026-04-{10+i}T00:00:00+00:00",
+             "results": [{"endpoint": ep, "status": "failed"}]}
+            for i in range(6)
+        ]
+        fake_db, calls, state = self._make_db(log_docs)
+        with patch.object(_an, "db", fake_db):
+            summary = _run(_an.prune_dead_push_subscribers(fail_threshold=5))
+        assert summary["deactivated"] == 1
+        assert summary["scanned_endpoints"] == 1
+        assert summary["endpoints"][0]["endpoint"] == ep
+        assert summary["endpoints"][0]["consecutive_failures"] >= 5
+        assert state[ep]["active"] is False
+        assert state[ep]["consecutive_failures_at_prune"] >= 5
+        assert "deactivated_at" in state[ep]
+
+    def test_recent_success_resets_streak(self):
+        from routes import admin_notifications as _an
+        ep = "https://fcm.example/recovered"
+        log_docs = [
+            {"dispatched_at": "2026-04-10T00:00:00+00:00",
+             "results": [{"endpoint": ep, "status": "failed"}]},
+            {"dispatched_at": "2026-04-11T00:00:00+00:00",
+             "results": [{"endpoint": ep, "status": "failed"}]},
+            {"dispatched_at": "2026-04-12T00:00:00+00:00",
+             "results": [{"endpoint": ep, "status": "failed"}]},
+            {"dispatched_at": "2026-04-13T00:00:00+00:00",
+             "results": [{"endpoint": ep, "status": "failed"}]},
+            {"dispatched_at": "2026-04-14T00:00:00+00:00",
+             "results": [{"endpoint": ep, "status": "failed"}]},
+            {"dispatched_at": "2026-04-15T00:00:00+00:00",
+             "results": [{"endpoint": ep, "status": "sent"}]},
+        ]
+        fake_db, calls, state = self._make_db(log_docs)
+        with patch.object(_an, "db", fake_db):
+            summary = _run(_an.prune_dead_push_subscribers(fail_threshold=5))
+        assert summary["deactivated"] == 0
+        assert ep not in state or state[ep].get("active") is True
+
+    def test_below_threshold_is_not_pruned(self):
+        from routes import admin_notifications as _an
+        ep = "https://fcm.example/few-fails"
+        log_docs = [
+            {"dispatched_at": f"2026-04-{10+i}T00:00:00+00:00",
+             "results": [{"endpoint": ep, "status": "failed"}]}
+            for i in range(3)
+        ]
+        fake_db, calls, state = self._make_db(log_docs)
+        with patch.object(_an, "db", fake_db):
+            summary = _run(_an.prune_dead_push_subscribers(fail_threshold=5))
+        assert summary["deactivated"] == 0
+
+    def test_idempotent_on_already_inactive(self):
+        from routes import admin_notifications as _an
+        ep = "https://fcm.example/already-off"
+        log_docs = [
+            {"dispatched_at": f"2026-04-{10+i}T00:00:00+00:00",
+             "results": [{"endpoint": ep, "status": "failed"}]}
+            for i in range(8)
+        ]
+        fake_db, calls, state = self._make_db(
+            log_docs, sub_state={ep: {"active": False}}
+        )
+        with patch.object(_an, "db", fake_db):
+            summary = _run(_an.prune_dead_push_subscribers(fail_threshold=5))
+        assert summary["deactivated"] == 0
+        assert state[ep]["active"] is False
+
+    def test_dispatcher_skips_inactive_subs(self):
+        """_dispatch_push must filter out subs marked active=False."""
+        from routes import admin_notifications as _an
+        captured_filters = []
+
+        push_log = MagicMock()
+        push_log.insert_one = AsyncMock(return_value=None)
+
+        push_subs = MagicMock()
+        empty_cursor = MagicMock()
+        empty_cursor.to_list = AsyncMock(return_value=[])
+
+        def _find(query, projection=None):
+            captured_filters.append(query)
+            return empty_cursor
+
+        push_subs.find = MagicMock(side_effect=_find)
+        users = MagicMock()
+        users.find = MagicMock(return_value=empty_cursor)
+        fake_db = MagicMock(
+            push_delivery_log=push_log,
+            push_subscriptions=push_subs,
+            users=users,
+        )
+        with patch.object(_an, "db", fake_db), \
+             patch.object(_an, "_get_or_create_vapid_keys",
+                          new_callable=AsyncMock,
+                          return_value={"private_key_pem": "PEM"}):
+            _run(_an._dispatch_push({"title": "x", "body": "y", "alert_type": "z"},
+                                    admin_only=False))
+        assert captured_filters, "dispatcher should query push_subscriptions"
+        # The broadcast (admin_only=False) path applies the active filter.
+        broadcast_filter = captured_filters[-1]
+        assert broadcast_filter.get("active") == {"$ne": False}

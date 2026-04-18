@@ -162,7 +162,11 @@ async def _dispatch_push(payload: dict, admin_only: bool = False):
             return
         if admin_only:
             admin_subs = await db.push_subscriptions.find(
-                {"$or": [{"role": "admin"}, {"is_admin": True}]}, {"_id": 0}
+                {
+                    "$or": [{"role": "admin"}, {"is_admin": True}],
+                    "active": {"$ne": False},
+                },
+                {"_id": 0},
             ).to_list(10000)
             if not admin_subs:
                 admin_docs = await db.users.find(
@@ -171,7 +175,11 @@ async def _dispatch_push(payload: dict, admin_only: bool = False):
                 legacy_admin_ids = [str(d["id"]) for d in admin_docs if d.get("id")]
                 if legacy_admin_ids:
                     admin_subs = await db.push_subscriptions.find(
-                        {"user_id": {"$in": legacy_admin_ids}}, {"_id": 0}
+                        {
+                            "user_id": {"$in": legacy_admin_ids},
+                            "active": {"$ne": False},
+                        },
+                        {"_id": 0},
                     ).to_list(10000)
             if not admin_subs:
                 logger.info("Push dispatch (admin-only): no admin subscriptions found, skipping")
@@ -215,7 +223,9 @@ async def _dispatch_push(payload: dict, admin_only: bool = False):
                 if (sub.get("admin_id") or sub.get("user_id")) in eligible_admin_ids
             ]
         else:
-            subs = await db.push_subscriptions.find({}, {"_id": 0}).to_list(10000)
+            subs = await db.push_subscriptions.find(
+                {"active": {"$ne": False}}, {"_id": 0}
+            ).to_list(10000)
         sent = failed = expired = 0
         delivery_results = []
         for sub in subs:
@@ -319,9 +329,15 @@ async def push_subscribe(data: dict, user: dict = Depends(get_current_user)):
         "subscribed_at":     datetime.now(timezone.utc).isoformat(),
         "is_admin":          is_admin,
         "admin_id":          admin_id,
+        "active":            True,
     }
+    # A re-subscribe always reactivates the endpoint and clears the
+    # consecutive-failure counter (Task #435 auto-prune).
     await db.push_subscriptions.update_one(
-        {"endpoint": endpoint}, {"$set": doc}, upsert=True
+        {"endpoint": endpoint},
+        {"$set": doc, "$unset": {"deactivated_at": "", "deactivation_reason": "",
+                                  "consecutive_failures_at_prune": ""}},
+        upsert=True,
     )
     return {"ok": True}
 
@@ -1240,6 +1256,189 @@ async def admin_synthetic_cleanup_run(
     deleted = await cleanup_synthetic_alerts()
     logger.info(f"[alerts] manual synthetic cleanup by {admin.get('email','admin')}: {deleted} deleted")
     return {"ok": True, "deleted": deleted}
+
+
+# ─────────────────────────────────────────────
+# AUTO-PRUNE DEAD PUSH SUBSCRIBERS (Task #435)
+# ─────────────────────────────────────────────
+#
+# Subscriptions that return 404/410 from the push service are deleted
+# inline by ``_dispatch_push`` (browser uninstalled / endpoint expired).
+# But persistent non-recoverable failures — timeouts, repeated 5xx,
+# transport errors — accumulate in db.push_delivery_log and pollute the
+# active subscriber list, dragging down the per-channel health signal
+# computed by ``metrics._recompute_push_channel_status`` (Task #427).
+#
+# This module aggregates db.push_delivery_log per endpoint, walks the
+# results newest-first, and counts consecutive `failed` outcomes (a
+# `sent` resets the counter; `expired` rows refer to subs already
+# deleted inline so they're treated as a reset too). Subscriptions with
+# >= ``_PUSH_PRUNE_FAIL_THRESHOLD`` consecutive failures are marked
+# ``active=False`` so the dispatcher's filter (active != False) skips
+# them. They remain in the collection so admins can audit why a
+# browser was disabled, and a re-subscribe flips ``active`` back to
+# True and clears the deactivation metadata.
+_PUSH_PRUNE_FAIL_THRESHOLD = 5
+_PUSH_PRUNE_LOOKBACK_DAYS = 7
+_PUSH_PRUNE_INTERVAL_S = 6 * 3600
+
+
+async def prune_dead_push_subscribers(
+    fail_threshold: int = _PUSH_PRUNE_FAIL_THRESHOLD,
+    lookback_days: int = _PUSH_PRUNE_LOOKBACK_DAYS,
+) -> dict:
+    """Mark push subscriptions with >= ``fail_threshold`` consecutive
+    non-recoverable failures (in the last ``lookback_days``) as
+    ``active=False``. Returns a summary dict::
+
+        {
+            "scanned_endpoints": int,
+            "deactivated": int,
+            "endpoints": [{"endpoint": str, "consecutive_failures": int}, ...],
+            "fail_threshold": int,
+            "lookback_days": int,
+        }
+
+    Idempotent: subs that are already inactive are skipped.
+    """
+    summary = {
+        "scanned_endpoints": 0,
+        "deactivated": 0,
+        "endpoints": [],
+        "fail_threshold": fail_threshold,
+        "lookback_days": lookback_days,
+    }
+    try:
+        cutoff_iso = (
+            datetime.now(timezone.utc) - timedelta(days=lookback_days)
+        ).isoformat()
+        # Aggregate per-endpoint result statuses, newest-first. We sort
+        # before $unwind so ``$push`` preserves order; using $unwind with
+        # ``includeArrayIndex`` would also work but this keeps the
+        # pipeline straightforward.
+        pipeline = [
+            {"$match": {
+                "dispatched_at": {"$gte": cutoff_iso},
+                "results": {"$exists": True, "$ne": []},
+            }},
+            {"$sort": {"dispatched_at": -1}},
+            {"$unwind": "$results"},
+            {"$match": {"results.endpoint": {"$nin": [None, ""]}}},
+            {"$group": {
+                "_id": "$results.endpoint",
+                "statuses": {"$push": "$results.status"},
+            }},
+        ]
+        cursor = db.push_delivery_log.aggregate(pipeline)
+        endpoints_to_deactivate = []
+        async for row in cursor:
+            summary["scanned_endpoints"] += 1
+            endpoint = row.get("_id")
+            statuses = row.get("statuses") or []
+            consecutive = 0
+            for status in statuses:
+                if status == "failed":
+                    consecutive += 1
+                else:
+                    # ``sent`` proves the endpoint still works; ``expired``
+                    # rows refer to subs already deleted inline by the
+                    # dispatcher so the streak doesn't apply.
+                    break
+            if consecutive >= fail_threshold and endpoint:
+                endpoints_to_deactivate.append((endpoint, consecutive))
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for endpoint, streak in endpoints_to_deactivate:
+            res = await db.push_subscriptions.update_one(
+                {"endpoint": endpoint, "active": {"$ne": False}},
+                {"$set": {
+                    "active": False,
+                    "deactivated_at": now_iso,
+                    "deactivation_reason": (
+                        f"{streak} consecutive push failures "
+                        f"(threshold {fail_threshold}) over last {lookback_days}d"
+                    ),
+                    "consecutive_failures_at_prune": streak,
+                }},
+            )
+            if getattr(res, "modified_count", 0):
+                summary["deactivated"] += 1
+                summary["endpoints"].append({
+                    "endpoint": endpoint,
+                    "consecutive_failures": streak,
+                })
+    except Exception as exc:
+        logger.warning(f"[push-prune] aggregation failed: {exc}")
+    return summary
+
+
+async def _push_prune_loop() -> None:
+    """Background loop: prune dead push subscribers every 6h."""
+    # Defer first sweep so startup work settles.
+    await asyncio.sleep(5 * 60)
+    while True:
+        try:
+            summary = await prune_dead_push_subscribers()
+            if summary["deactivated"]:
+                logger.info(
+                    f"[push-prune] deactivated {summary['deactivated']} "
+                    f"endpoint(s) (scanned {summary['scanned_endpoints']}, "
+                    f"threshold {summary['fail_threshold']} consecutive failures)"
+                )
+        except Exception as exc:
+            logger.warning(f"[push-prune] loop iteration failed: {exc}")
+        await asyncio.sleep(_PUSH_PRUNE_INTERVAL_S)
+
+
+@router.get("/admin/push/prune-dead")
+async def admin_push_prune_dead_status(
+    admin: dict = Depends(get_admin_user),
+):
+    """Inspect the auto-prune state: how many subs are currently marked
+    inactive and the configured threshold/lookback."""
+    try:
+        total = await db.push_subscriptions.count_documents({})
+        inactive = await db.push_subscriptions.count_documents({"active": False})
+        recent_inactive = await db.push_subscriptions.find(
+            {"active": False},
+            {"_id": 0, "endpoint": 1, "deactivated_at": 1,
+             "deactivation_reason": 1, "consecutive_failures_at_prune": 1,
+             "user_id": 1, "role": 1},
+        ).sort("deactivated_at", -1).limit(50).to_list(50)
+        for s in recent_inactive:
+            ep = s.get("endpoint", "")
+            try:
+                from urllib.parse import urlparse
+                s["endpoint_domain"] = urlparse(ep).netloc
+            except Exception:
+                s["endpoint_domain"] = ""
+            # Don't leak full endpoint URL in the dashboard.
+            s.pop("endpoint", None)
+        return {
+            "ok": True,
+            "fail_threshold": _PUSH_PRUNE_FAIL_THRESHOLD,
+            "lookback_days": _PUSH_PRUNE_LOOKBACK_DAYS,
+            "interval_seconds": _PUSH_PRUNE_INTERVAL_S,
+            "total_subscriptions": total,
+            "inactive_subscriptions": inactive,
+            "recent_inactive": recent_inactive,
+        }
+    except Exception as e:
+        logger.warning(f"[push-prune] status read failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to read push-prune status")
+
+
+@router.post("/admin/push/prune-dead")
+async def admin_push_prune_dead_run(
+    admin: dict = Depends(get_admin_user),
+):
+    """Manually trigger the dead-push-subscriber prune. Idempotent."""
+    summary = await prune_dead_push_subscribers()
+    logger.info(
+        f"[push-prune] manual run by {admin.get('email','admin')}: "
+        f"deactivated={summary['deactivated']} scanned={summary['scanned_endpoints']}"
+    )
+    return {"ok": True, **summary}
 
 
 @router.post("/admin/alerts/backfill-thresholds")

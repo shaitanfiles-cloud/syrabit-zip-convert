@@ -590,8 +590,15 @@ async def lifespan(app):
         _exam_reminder_loop,
         ensure_synthetic_alerts_ttl_index,
         _synthetic_alert_cleanup_loop,
+        _push_prune_loop,
     )
     asyncio.create_task(_exam_reminder_loop())
+    # Task #435: auto-prune browser push subscriptions that hit a long
+    # streak of non-recoverable failures so the per-channel push
+    # health signal (Task #427) reflects live subscribers only. Loop
+    # is leader-gated so we don't double-write across replicas.
+    if _is_leader:
+        asyncio.create_task(_push_prune_loop())
     # Task #433: TTL index + periodic sweep so synthetic test alerts
     # (from the "Test alert delivery" admin button) auto-expire after
     # ~7d instead of accumulating in db.alerts forever. Index creation
