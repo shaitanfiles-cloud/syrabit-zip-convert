@@ -153,6 +153,77 @@ const HYDRATE_KIND_TO_CHUNK_BASE = {
   chat: "ChatPage",
 };
 
+// Task #496: per-hydrate-kind modulepreload allow-list. Vite emits a
+// `<link rel="modulepreload">` for every static dep of the entry chunk
+// in dist/index.html. For prerendered subject + chapter snapshots,
+// that pulls in 80-150 KB of JS the route never executes on the
+// critical path (chat code playground, alternate page chunks, framer,
+// etc.), inflating mobile TBT and the "Reduce unused JavaScript"
+// Lighthouse opportunity (audited 2026-04-18: ~617 KB on chapter,
+// ~646 KB on subject). The patterns below match
+// prerender-library.mjs's NON_LIBRARY_PRELOAD_PATTERNS but tuned per
+// route — chapter pages legitimately need markdown / syntax /
+// StickyToc, subject landings do not.
+const PRELOAD_STRIP_BY_KIND = {
+  subject: [
+    /sandpack/i,
+    /^markdown-/i,
+    /MarkdownC/i,
+    /framer/i,
+    /^syntax-/i,
+    /ChatPa/,
+    /ChapterPa/,
+    /StickyToc/,
+    /^badge-/,
+    /^skeleton-/,
+    /LibraryPa/,
+  ],
+  chapter: [
+    /sandpack/i,
+    /framer/i,
+    /ChatPa/,
+    /LibraryPa/,
+    /^badge-/,
+    /CmsDocsSection/,
+    /CmsPostsGrid/,
+  ],
+};
+
+function stripUnusedModulepreloads(html, hydrateKind) {
+  const patterns = PRELOAD_STRIP_BY_KIND[hydrateKind];
+  if (!patterns || !patterns.length) return html;
+  return html.replace(
+    /\s*<link rel="modulepreload"[^>]*href="\/assets\/([^"]+)"[^>]*>/g,
+    (match, file) =>
+      patterns.some((re) => re.test(file)) ? "" : match,
+  );
+}
+
+// Task #496: inline the main app CSS the same way prerender-library.mjs
+// does. Subject and chapter snapshots are fully prerendered (SSR
+// markup inside #root), so the external CSS link is a hard
+// render-blocking dependency on the critical path. Inlining cuts a
+// ~300 ms round-trip on slow 3G mobile and removes the Lighthouse
+// "Render blocking requests" finding for these routes. The cost is one
+// extra HTML payload (~70 KB raw → ~14 KB gzipped) but it's cached by
+// the page's edge SWR policy after the first hit.
+function inlineMainCssOnce(html, distDir) {
+  const cssLinkRe = /<link rel="stylesheet"[^>]*href="\/assets\/([^"]+\.css)"[^>]*>/;
+  const m = html.match(cssLinkRe);
+  if (!m) return html;
+  const cssPath = path.join(distDir, "assets", m[1]);
+  if (!fs.existsSync(cssPath)) return html;
+  const cssContent = fs.readFileSync(cssPath, "utf-8");
+  const out = html.replace(
+    cssLinkRe,
+    `<style data-inline-css="${m[1]}">${cssContent}</style>`,
+  );
+  console.log(
+    `[prerender-routes] inlined ${m[1]} (${cssContent.length} bytes) — removed render-blocking CSS for subject + chapter snapshots`,
+  );
+  return out;
+}
+
 function injectShell(htmlTemplate, { ssrHtml, hydrateKind, inlineScripts, pageChunkPreload }) {
   const startMarker =
     `<noscript><style>#__shell{display:none!important}</style></noscript>`;
@@ -290,7 +361,11 @@ async function renderOne(renderRoute, htmlTemplate, opts) {
     );
   }
   const pageChunkPreload = await resolvePageChunkPreload(opts.hydrateKind);
-  const html = injectShell(htmlTemplate, {
+  const trimmedTemplate = stripUnusedModulepreloads(
+    htmlTemplate,
+    opts.hydrateKind,
+  );
+  const html = injectShell(trimmedTemplate, {
     ssrHtml,
     hydrateKind: opts.hydrateKind,
     inlineScripts: opts.inlineScripts,
@@ -412,7 +487,10 @@ async function main() {
     );
   }
 
-  const htmlTemplate = fs.readFileSync(srcHtml, "utf-8");
+  let htmlTemplate = fs.readFileSync(srcHtml, "utf-8");
+  // Task #496: inline CSS once on the shared template — both subject
+  // and chapter snapshots inherit the non-render-blocking CSS load.
+  htmlTemplate = inlineMainCssOnce(htmlTemplate, distDir);
 
   let subjectsWritten = 0;
   let chaptersWritten = 0;
