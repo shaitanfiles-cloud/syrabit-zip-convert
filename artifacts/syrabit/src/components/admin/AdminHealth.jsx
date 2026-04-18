@@ -205,6 +205,10 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   // Task #431 — id of the audit row currently being reverted (so we can
   // disable just that row's button instead of the whole table).
   const [asmRevertingId, setAsmRevertingId] = useState(null);
+  // Task #441 — row being previewed in the side-by-side revert modal.
+  // Holding the row (not just the id) means we can render the snapshot
+  // even after the user navigates the audit page underneath the modal.
+  const [asmRevertPreview, setAsmRevertPreview] = useState(null);
   // Task #428 — per-run audit log of individual sanitiser cleanups.
   const [asmRuns, setAsmRuns] = useState(null);
   const [asmRunsLoading, setAsmRunsLoading] = useState(false);
@@ -237,15 +241,20 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       .finally(() => setAsmAuditLoading(false));
   }, [adminToken]);
 
-  const revertAsmAuditRow = useCallback(async (row) => {
+  // Task #441 — open the side-by-side preview instead of the legacy
+  // window.confirm. The actual POST is fired from `confirmAsmRevert`
+  // once the admin OKs the diff in the modal.
+  const revertAsmAuditRow = useCallback((row) => {
     if (!row?.id) {
       toast.error('This audit row predates revert support — no id to target.');
       return;
     }
-    const beforeLabel = row.before
-      ? `${row.before.behaviour ?? '·'} / ${row.before.threshold != null ? Number(row.before.threshold).toFixed(3) : '·'}`
-      : 'cleared (no override)';
-    if (!window.confirm(`Revert Sarvam purity to: ${beforeLabel}?`)) return;
+    setAsmRevertPreview(row);
+  }, []);
+
+  const confirmAsmRevert = useCallback(async () => {
+    const row = asmRevertPreview;
+    if (!row?.id) return;
     setAsmRevertingId(row.id);
     try {
       await axios.post(
@@ -254,15 +263,19 @@ export default function AdminHealth({ adminToken, onNavigate }) {
         { headers: adminHeaders(adminToken), withCredentials: true },
       );
       toast.success('Reverted — applied immediately');
+      setAsmRevertPreview(null);
       loadAsmCfg();
-      loadAsmAudit();
+      loadAsmAudit({
+        offset: asmAudit?.offset ?? asmAuditOffset,
+        filters: asmAuditFilters,
+      });
     } catch (e) {
       const msg = e?.response?.data?.detail || 'Revert failed';
       toast.error(msg);
     } finally {
       setAsmRevertingId(null);
     }
-  }, [adminToken, loadAsmCfg, loadAsmAudit]);
+  }, [adminToken, asmRevertPreview, loadAsmCfg, loadAsmAudit, asmAudit, asmAuditOffset, asmAuditFilters]);
 
   const loadAsmRuns = useCallback((actionFilter) => {
     const a = actionFilter !== undefined ? actionFilter : asmRunsActionFilter;
@@ -1318,6 +1331,112 @@ export default function AdminHealth({ adminToken, onNavigate }) {
               </div>
             )}
           </div>
+
+          {/* Task #441 — side-by-side revert preview. Renders the
+              currently persisted override against the source row's
+              `before` snapshot so an admin can confirm provenance
+              before re-applying an old value. */}
+          {asmRevertPreview && (() => {
+            const row = asmRevertPreview;
+            const current = asmCfg?.persisted || null;
+            const target = row.before || null;
+            const reverting = asmRevertingId === row.id;
+            const fmtVal = (v, digits = 3) =>
+              v == null || v === ''
+                ? <span className="text-gray-400">·</span>
+                : <span className="font-mono text-gray-800">{typeof v === 'number' ? v.toFixed(digits) : v}</span>;
+            const Side = ({ heading, accent, snapshot, footer }) => (
+              <div className={`flex-1 rounded-xl border ${accent} p-4 min-w-0`}>
+                <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 mb-3">{heading}</p>
+                <dl className="space-y-2 text-xs">
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-gray-500">Behaviour</dt>
+                    <dd>{fmtVal(snapshot?.behaviour, 0)}</dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-gray-500">Threshold</dt>
+                    <dd>{fmtVal(snapshot?.threshold)}</dd>
+                  </div>
+                </dl>
+                {footer && <div className="mt-3 pt-3 border-t border-gray-100 text-[10px] text-gray-500 leading-relaxed">{footer}</div>}
+              </div>
+            );
+            return (
+              <div
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="asm-revert-modal-title"
+                onClick={() => { if (!reverting) setAsmRevertPreview(null); }}
+                data-testid="asm-revert-modal"
+              >
+                <div
+                  className="bg-white rounded-2xl shadow-2xl border border-gray-200 max-w-2xl w-full p-6"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-start gap-3 mb-4">
+                    <div className="w-9 h-9 rounded-full bg-amber-50 border border-amber-200 flex items-center justify-center flex-shrink-0">
+                      <Undo2 size={16} className="text-amber-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h3 id="asm-revert-modal-title" className="text-base font-semibold text-gray-900">Revert Sarvam purity?</h3>
+                      <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">
+                        Compare the live override with the snapshot you're about to re-apply. This action is logged as a new <code className="font-mono">revert</code> row.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-3 mb-4">
+                    <Side
+                      heading="Current (live)"
+                      accent="bg-gray-50 border-gray-200"
+                      snapshot={current}
+                      footer={
+                        current?.updated_at
+                          ? <>Last edit by <span className="font-mono text-gray-700">{current.updated_by || 'admin'}</span> · {new Date(current.updated_at).toLocaleString()}</>
+                          : <span className="text-gray-400">No persisted override (env vars in effect).</span>
+                      }
+                    />
+                    <div className="hidden sm:flex items-center text-gray-300 text-xl px-1" aria-hidden="true">→</div>
+                    <Side
+                      heading="Target (revert to)"
+                      accent="bg-amber-50 border-amber-200"
+                      snapshot={target}
+                      footer={
+                        <>
+                          Source row by <span className="font-mono text-gray-700">{row.admin_email || row.admin_id || 'unknown'}</span>
+                          {row.ts && <> · {new Date(row.ts).toLocaleString()}</>}
+                          {!target && <div className="mt-1 text-amber-700">Snapshot is empty — this will clear the override.</div>}
+                        </>
+                      }
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100">
+                    <button
+                      type="button"
+                      onClick={() => setAsmRevertPreview(null)}
+                      disabled={reverting}
+                      className="px-4 py-2 rounded-lg border border-gray-200 text-gray-600 text-xs font-semibold hover:bg-gray-50 disabled:opacity-40"
+                      data-testid="button-asm-revert-cancel"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={confirmAsmRevert}
+                      disabled={reverting}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-amber-500 text-white text-xs font-semibold hover:bg-amber-600 disabled:opacity-40"
+                      data-testid="button-asm-revert-confirm"
+                    >
+                      <Undo2 size={12} className={reverting ? 'animate-spin' : ''} />
+                      {reverting ? 'Reverting…' : 'Confirm revert'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
 
