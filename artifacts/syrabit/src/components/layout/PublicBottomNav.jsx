@@ -18,17 +18,18 @@ export const PublicBottomNav = memo(function PublicBottomNav() {
   const isActive = (path) =>
     location.pathname === path || location.pathname.startsWith(path + '/');
 
-  // For signed-in users we drop the duplicate /chat tile and surface a
-  // single "Dashboard" CTA so the nav has unique destinations and unique
-  // React keys. Signed-out users keep all four tiles + the Sign-Up CTA.
-  const baseItems = user
-    ? NAV_ITEMS.filter((it) => it.to !== '/chat')
-    : NAV_ITEMS;
+  // Signed-out users see Home/Library/Chat/Pricing + a Sign-Up CTA.
+  // Signed-in users keep the same four nav tiles (so Library/Chat/Pricing
+  // remain present on every public page) and get an "Open App" CTA that
+  // also routes to /chat — same destination, distinct visual role.
   const ctaItem = user
-    ? { to: '/dashboard', icon: Sparkles, label: 'Dashboard', isCta: true }
-    : { to: '/signup', icon: LogIn, label: 'Sign Up', isCta: true };
+    ? { to: '/chat', icon: Sparkles, label: 'Open App', isCta: true, key: 'cta-open-app' }
+    : { to: '/signup', icon: LogIn, label: 'Sign Up', isCta: true, key: 'cta-signup' };
 
-  const items = [...baseItems, ctaItem];
+  const items = [
+    ...NAV_ITEMS.map((it) => ({ ...it, key: `nav-${it.to}` })),
+    ctaItem,
+  ];
 
   return (
     <nav
@@ -46,12 +47,12 @@ export const PublicBottomNav = memo(function PublicBottomNav() {
       data-testid="public-bottom-nav"
     >
       <div className="flex items-center justify-around h-16 px-1 gap-0.5">
-        {items.map(({ to, icon: Icon, label, isCta }) => {
+        {items.map(({ to, icon: Icon, label, isCta, key }) => {
           const active = isActive(to);
           if (isCta) {
             return (
               <Link
-                key={to}
+                key={key}
                 to={to}
                 onTouchStart={() => prefetchRoute(to)}
                 className="flex items-center gap-1 px-3 py-2 rounded-full text-[11px] font-semibold text-white transition-all duration-200 active:scale-95"
@@ -68,7 +69,7 @@ export const PublicBottomNav = memo(function PublicBottomNav() {
           }
           return (
             <Link
-              key={to}
+              key={key}
               to={to}
               onTouchStart={() => prefetchRoute(to)}
               onMouseEnter={() => prefetchRoute(to)}
