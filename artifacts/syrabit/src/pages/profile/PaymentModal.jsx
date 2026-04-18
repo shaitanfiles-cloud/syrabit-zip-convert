@@ -69,7 +69,7 @@ export default function PaymentModal({
         </button>
       </div>
 
-      <p className="text-center text-xs text-muted-foreground/40">
+      <p className="text-center text-xs text-muted-foreground">
         Secured by Razorpay · Supports all UPI apps & QR scanner
       </p>
     </ModalOverlay>

@@ -16,7 +16,7 @@
 
     /* ── Neutral ── */
     --muted: 263 55% 97%;
-    --muted-foreground: 215 20% 47%;
+    --muted-foreground: 215 28% 35%; /* #405973 — WCAG AA on light surfaces (~6.7:1) */
     --accent: 225 75% 93%;
     --accent-foreground: 243 73% 34%;
 

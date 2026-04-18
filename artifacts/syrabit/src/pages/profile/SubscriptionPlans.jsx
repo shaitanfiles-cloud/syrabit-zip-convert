@@ -101,7 +101,7 @@ export default function SubscriptionPlans({
                       <CheckCircle size={12} className="mr-1" aria-hidden="true" /> Current Plan
                     </div>
                   ) : isLower ? (
-                    <div className="mt-3 w-full h-8 rounded-lg flex items-center justify-center text-[10px] font-medium text-muted-foreground/50"
+                    <div className="mt-3 w-full h-8 rounded-lg flex items-center justify-center text-[10px] font-medium text-muted-foreground"
                       style={{ background: 'hsl(var(--muted) / 0.3)', border: '1px solid hsl(var(--border) / 0.2)' }}>
                       Included in your plan
                     </div>

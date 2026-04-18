@@ -213,7 +213,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
               </span>
             ))}
             {tags.length > 3 && (
-              <span className="text-[10px] px-1" style={{ color: hasWP ? 'rgba(255,255,255,0.50)' : 'hsl(var(--muted-foreground) / 0.4)' }}>
+              <span className="text-[10px] px-1" style={{ color: hasWP ? 'rgba(255,255,255,0.85)' : 'hsl(var(--muted-foreground))' }}>
                 +{tags.length - 3}
               </span>
             )}

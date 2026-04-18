@@ -335,7 +335,7 @@ export default function SubjectLandingPage() {
           <div className="flex flex-wrap gap-4 justify-center text-xs text-muted-foreground">
             <Link to="/chat" className="hover:text-violet-600 transition-colors">Ask Syra</Link>
           </div>
-          <p className="text-center text-xs text-muted-foreground/50 mt-3">
+          <p className="text-center text-xs text-muted-foreground mt-3">
             Syrabit.ai — AI-powered exam prep for AssamBoard students (AHSEC · DEGREE · SEBA)
           </p>
         </nav>

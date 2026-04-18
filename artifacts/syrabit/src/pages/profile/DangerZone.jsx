@@ -93,7 +93,7 @@ export default function DangerZone({ profile, deletionPending, setShowDeleteConf
               </button>
             </div>
 
-            <p className="text-xs text-muted-foreground/40 mt-3 text-center">
+            <p className="text-xs text-muted-foreground mt-3 text-center">
               Member since {profile?.created_at ? new Date(profile.created_at).toLocaleDateString('en-IN', { year: 'numeric', month: 'long' }) : '—'}
             </p>
           </div>

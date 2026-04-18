@@ -182,7 +182,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                         <div className="flex items-center gap-1.5 mb-1">
                           <Globe size={11} className="source-card-icon" />
                           <span className="source-card-label text-[10px] font-semibold uppercase tracking-wider">Source</span>
-                          <span className="text-[10px] text-muted-foreground/30">·</span>
+                          <span className="text-[10px] text-muted-foreground" aria-hidden="true">·</span>
                           <span className="source-card-browser text-[10.5px] font-medium">Web Search</span>
                         </div>
                         {chapterLabel && (
@@ -194,13 +194,13 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                           {boardLabel && (
                             <>
                               <span className="source-card-badge text-[11px] font-medium px-1.5 py-0.5 rounded">{boardLabel}</span>
-                              <span className="text-[11px] text-muted-foreground/40">·</span>
+                              <span className="text-[11px] text-muted-foreground" aria-hidden="true">·</span>
                             </>
                           )}
                           {classLabel && (
                             <>
                               <span className="source-card-badge text-[11px] font-medium px-1.5 py-0.5 rounded">{classLabel}</span>
-                              <span className="text-[11px] text-muted-foreground/40">·</span>
+                              <span className="text-[11px] text-muted-foreground" aria-hidden="true">·</span>
                             </>
                           )}
                           <span className="source-card-badge text-[11px] font-medium px-1.5 py-0.5 rounded">{subjectLabel}</span>
