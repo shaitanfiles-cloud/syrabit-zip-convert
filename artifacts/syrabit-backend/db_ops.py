@@ -199,6 +199,7 @@ _ALLOWED_USER_COLUMNS = frozenset({
     "google_id", "auth_provider",
     "consent_dpdp", "consent_dpdp_version", "consent_dpdp_at",
     "is_admin",
+    "ads_opt_out",
 })
 
 _ALLOWED_CONV_COLUMNS = frozenset({

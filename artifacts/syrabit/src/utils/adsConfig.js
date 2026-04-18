@@ -98,6 +98,27 @@ export function setAdsOptOut(optedOut) {
 }
 
 /**
+ * Mirror a server-side `ads_opt_out` value into localStorage without
+ * dispatching the change event (this is a rehydrate, not a user action).
+ * Used after `/user/profile` loads so signed-in users see their cross-
+ * device preference applied on the next page load. Pass `undefined` /
+ * `null` (server didn't return the field) to no-op.
+ */
+export function hydrateAdsOptOutFromServer(serverValue) {
+  if (typeof window === 'undefined') return;
+  if (serverValue === undefined || serverValue === null) return;
+  try {
+    if (serverValue) {
+      window.localStorage.setItem(ADS_OPT_OUT_KEY, '1');
+    } else {
+      window.localStorage.removeItem(ADS_OPT_OUT_KEY);
+    }
+  } catch {
+    /* ignore storage failures */
+  }
+}
+
+/**
  * Resolve the config for a placement key. Always returns an object with at
  * least `{ enabled, height }`. `enabled` is false when:
  *   - the placement key is unknown,

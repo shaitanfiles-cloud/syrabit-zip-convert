@@ -87,6 +87,7 @@ async def get_profile(user: Optional[dict] = Depends(get_current_user_optional))
         "status": user.get("status", "active"),
         "deletion_requested_at": user.get("deletion_requested_at"),
         "deletion_hard_at": user.get("deletion_hard_at"),
+        "ads_opt_out": bool(user.get("ads_opt_out", False)),
     }
 
 @router.patch("/user/profile")
@@ -100,6 +101,7 @@ async def update_profile(data: ProfileUpdate, user: dict = Depends(get_current_u
     if data.stream_name is not None: update["stream_name"] = data.stream_name
     if data.course_type is not None: update["course_type"] = data.course_type
     if data.selected_subjects is not None: update["selected_subjects"] = data.selected_subjects
+    if data.ads_opt_out is not None: update["ads_opt_out"] = bool(data.ads_opt_out)
     if data.avatar_url is not None:
         if data.avatar_url and not data.avatar_url.startswith("data:image/"):
             raise HTTPException(status_code=400, detail="Invalid avatar URL format")

@@ -82,7 +82,7 @@ const sections = [
   },
   {
     title: '9. Advertising & Opt-Out',
-    body: `Syrabit.ai may display non-personalized ads to support free access. You can disable ads at any time from the Privacy section of your Profile page using the "Opt out of ads" toggle. When enabled, your browser will stop loading ad scripts on subsequent page loads. This preference is stored locally on your device, so you may need to set it on each device or browser you use.`,
+    body: `Syrabit.ai may display non-personalized ads to support free access. You can disable ads at any time from the Privacy section of your Profile page using the "Opt out of ads" toggle. When enabled, your browser will stop loading ad scripts on subsequent page loads. While signed in, your preference is saved to your account and synced across every device and browser you use to log in. If you are signed out, the preference is stored locally on the current device only.`,
   },
   {
     title: '10. Children\'s Privacy',

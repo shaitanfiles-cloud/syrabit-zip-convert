@@ -3,23 +3,46 @@ import { Link } from 'react-router-dom';
 import { ShieldOff, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { getAdsOptOut, setAdsOptOut } from '@/utils/adsConfig';
+import { apiClient } from '@/utils/api';
 
-export default function PrivacyControls() {
+export default function PrivacyControls({ profile }) {
   const [optedOut, setOptedOut] = useState(false);
+  const [saving, setSaving] = useState(false);
 
+  // Hydrate from the server-side value when the profile loads, so the
+  // toggle reflects the cross-device preference instead of whatever
+  // localStorage happened to hold on this device.
   useEffect(() => {
-    setOptedOut(getAdsOptOut());
-  }, []);
+    if (profile && typeof profile.ads_opt_out === 'boolean') {
+      setOptedOut(profile.ads_opt_out);
+    } else {
+      setOptedOut(getAdsOptOut());
+    }
+  }, [profile?.ads_opt_out]);
 
-  const handleToggle = () => {
+  const handleToggle = async () => {
+    if (saving) return;
     const next = !optedOut;
-    setAdsOptOut(next);
+    // Optimistic local update so the UI is instant.
     setOptedOut(next);
-    toast.success(
-      next
-        ? 'Ads disabled — takes effect on next page load'
-        : 'Ads re-enabled — thanks for supporting Syrabit'
-    );
+    setAdsOptOut(next);
+    setSaving(true);
+    try {
+      await apiClient().patch('/user/profile', { ads_opt_out: next });
+      toast.success(
+        next
+          ? 'Ads disabled across all your devices — takes effect on next page load'
+          : 'Ads re-enabled across all your devices — thanks for supporting Syrabit'
+      );
+    } catch {
+      // Server save failed — keep the local change but warn the user
+      // that other devices won't pick it up until they're online.
+      toast.warning(
+        'Saved on this device, but we couldn\'t sync it across your other devices. Try again when you\'re back online.'
+      );
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (

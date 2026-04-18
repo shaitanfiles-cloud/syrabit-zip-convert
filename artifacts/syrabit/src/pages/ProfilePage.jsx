@@ -19,6 +19,7 @@ import DeleteConfirmDialog from './profile/DeleteConfirmDialog';
 import PaymentModal from './profile/PaymentModal';
 import TopUpModal from './profile/TopUpModal';
 import PaymentHistory from './profile/PaymentHistory';
+import { hydrateAdsOptOutFromServer } from '@/utils/adsConfig';
 
 export default function ProfilePage() {
   const { user, refreshUser } = useAuth();
@@ -58,6 +59,10 @@ export default function ProfilePage() {
         const p = profileRes.data;
         setProfile(p);
         setStats(statsRes.data);
+        // Task #530: rehydrate the local opt-out flag from the server so
+        // signing in on a new device immediately applies the user's
+        // cross-device choice on the next ad-bearing route they visit.
+        hydrateAdsOptOutFromServer(p?.ads_opt_out);
         if (p.status === 'pending_deletion' && p.deletion_hard_at) {
           setDeletionPending(true);
           setDeletionHardAt(p.deletion_hard_at);
@@ -330,7 +335,7 @@ export default function ProfilePage() {
           setPaymentPlan={setPaymentPlan} setShowPaymentModal={setShowPaymentModal}
         />
         <PaymentHistory refreshKey={paymentRefreshKey} />
-        <PrivacyControls />
+        <PrivacyControls profile={profile} />
         <DangerZone
           profile={profile} deletionPending={deletionPending}
           setShowDeleteConfirm={setShowDeleteConfirm}

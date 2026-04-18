@@ -149,6 +149,9 @@ CREATE TABLE IF NOT EXISTS users (
 ALTER TABLE users ADD COLUMN IF NOT EXISTS credits_used_today INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS credits_reset_date TEXT NOT NULL DEFAULT '';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT '';
+-- Task #530: cross-device ad opt-out preference. Default FALSE so
+-- existing accounts are not auto-opted-out on first read.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS ads_opt_out BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,

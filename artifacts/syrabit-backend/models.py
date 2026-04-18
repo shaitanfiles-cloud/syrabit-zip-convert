@@ -157,6 +157,7 @@ class ProfileUpdate(BaseModel):
     stream_name: Optional[str] = None
     course_type: Optional[str] = None
     selected_subjects: Optional[list] = None
+    ads_opt_out: Optional[bool] = None
 
 
 class PasswordResetReq(BaseModel):
