@@ -896,6 +896,17 @@ _ADMIN_NOTIF_PREFS_DEFAULTS = {
     # start triage from a phone. Default ON; per-admin opt-out via this
     # toggle in notification preferences.
     "email_failing_csv_enabled": True,
+    # Task #465: per-admin opt-in for the daily summary email sent after
+    # the scheduled SEO auto-publish run completes. Default ON so admins
+    # see degraded runs (errors, drops in avg score, 0 pages) without
+    # having to babysit the scheduler.
+    "email_seo_daily_summary_enabled": True,
+    # Task #465: optional UTC quiet-hours window (inclusive start, exclusive
+    # end). When the dispatch time falls inside the window, the SEO daily
+    # summary email is suppressed for that admin. Either field can be ``None``
+    # to disable the gate. Honored by ``seo_engine._quiet_hours_active``.
+    "quiet_hours_start_utc": None,
+    "quiet_hours_end_utc": None,
 }
 
 
@@ -938,6 +949,19 @@ async def upsert_admin_notification_prefs(admin_id: str, prefs: dict) -> dict:
         doc["push_severities"] = [s for s in prefs["push_severities"] if s in valid_severities]
     if "email_failing_csv_enabled" in prefs:
         doc["email_failing_csv_enabled"] = bool(prefs["email_failing_csv_enabled"])
+    if "email_seo_daily_summary_enabled" in prefs:
+        doc["email_seo_daily_summary_enabled"] = bool(prefs["email_seo_daily_summary_enabled"])
+    for _qh_key in ("quiet_hours_start_utc", "quiet_hours_end_utc"):
+        if _qh_key in prefs:
+            raw = prefs[_qh_key]
+            if raw is None or raw == "":
+                doc[_qh_key] = None
+            else:
+                try:
+                    h = int(raw)
+                except (TypeError, ValueError):
+                    h = None
+                doc[_qh_key] = h if (h is not None and 0 <= h <= 23) else None
 
     await db.admin_notification_prefs.update_one(
         {"admin_id": admin_id},

@@ -5535,7 +5535,7 @@ async def _auto_run_bg(job_id: str, page_types: list):
         if job_id in _seo_jobs:
             _seo_jobs[job_id]["avg_seo_score"] = avg_seo
             _seo_jobs[job_id]["avg_geo_score"] = avg_geo
-        await _db.seo_generation_log.insert_one({
+        run_log_doc = {
             "job_id": job_id,
             "total_generated": done - skipped - errors,
             "skipped": skipped,
@@ -5547,7 +5547,19 @@ async def _auto_run_bg(job_id: str, page_types: list):
             "outcomes": job_outcomes,
             "reasons": job_reasons,
             "page_types": list(page_types),
-        })
+        }
+        await _db.seo_generation_log.insert_one(run_log_doc)
+
+        # Task #465: scheduled runs email opted-in admins a daily summary so
+        # quietly degraded runs (errors spiking, avg score dropping, 0 pages)
+        # don't go unnoticed. Ad-hoc admin-triggered runs are skipped inside
+        # `_maybe_dispatch_seo_daily_summary` (trigger != "scheduler").
+        try:
+            await _maybe_dispatch_seo_daily_summary(job_id, run_log_doc)
+        except Exception as email_exc:
+            logger.warning(
+                f"[seo-daily-summary] post-run dispatch failed for job {job_id}: {email_exc}"
+            )
 
         try:
             from routes.bot_discovery import indexnow_batcher
@@ -5567,6 +5579,223 @@ async def _auto_run_bg(job_id: str, page_types: list):
     except Exception as e:
         logger.error(f"Auto-run pipeline error: {e}")
         _job_update(job_id, status="error", current=f"Pipeline error: {str(e)[:120]}", finished_at=datetime.now(timezone.utc).isoformat())
+
+
+# ─── Daily summary email (Task #465) ────────────────────────────────────────
+# After every scheduled SEO auto-publish run we email opted-in admins a
+# concise summary so degraded runs (errors spiking, avg score dropping, 0
+# pages because all topics were blocked) don't go unnoticed. Per-admin
+# opt-in via ``admin_notification_prefs.email_seo_daily_summary_enabled``;
+# optional UTC quiet-hours window via ``quiet_hours_start_utc`` /
+# ``quiet_hours_end_utc`` (inclusive start, exclusive end).
+
+_ADMIN_SEO_PAGE_URL = "https://syrabit.ai/admin/seo"
+
+
+def _top_failure_reasons(outcomes: list, k: int = 3) -> list:
+    """Return the top ``k`` failure reasons from a list of per-topic outcome
+    rows (as written into ``db.seo_generation_log.outcomes``)."""
+    from collections import Counter
+    cnt: Counter = Counter()
+    for o in outcomes or []:
+        if (o or {}).get("outcome") != "failed":
+            continue
+        reason = ((o.get("reason") or "unknown")).strip()[:140]
+        if not reason:
+            reason = "unknown"
+        cnt[reason] += 1
+    return [{"reason": r, "count": c} for r, c in cnt.most_common(k)]
+
+
+def _compose_seo_daily_summary(log_doc: dict) -> dict:
+    """Build the email payload from a ``seo_generation_log`` row."""
+    outcomes = log_doc.get("outcomes") or []
+    return {
+        "job_id": log_doc.get("job_id", ""),
+        "completed_at": log_doc.get("completed_at", ""),
+        "pages_generated": int(log_doc.get("total_generated", 0) or 0),
+        "skipped": int(log_doc.get("skipped", 0) or 0),
+        "errors": int(log_doc.get("errors", 0) or 0),
+        "new_topics": int(log_doc.get("new_topics", 0) or 0),
+        "avg_seo_score": int(log_doc.get("avg_seo_score", 0) or 0),
+        "avg_geo_score": int(log_doc.get("avg_geo_score", 0) or 0),
+        "page_types": list(log_doc.get("page_types") or []),
+        "top_failure_reasons": _top_failure_reasons(outcomes, 3),
+    }
+
+
+def _format_seo_daily_summary_html(stats: dict) -> str:
+    """Render the daily summary as a self-contained HTML email body."""
+    fr = stats.get("top_failure_reasons") or []
+    if fr:
+        rows = "".join(
+            f"<li style='margin:4px 0'>{html_mod.escape(item['reason'])} "
+            f"<b>×{int(item['count'])}</b></li>"
+            for item in fr
+        )
+    else:
+        rows = "<li style='color:#16a34a'>None — every page generated cleanly.</li>"
+    pt = ", ".join(stats.get("page_types") or []) or "—"
+    return (
+        "<div style='font-family:sans-serif;max-width:560px;margin:auto;color:#0f172a'>"
+        "<h2 style='color:#7c3aed;margin:0 0 4px'>Syrabit SEO daily summary</h2>"
+        f"<p style='color:#475569;margin:0 0 16px'>Job "
+        f"<code>{html_mod.escape(stats.get('job_id',''))}</code> finished "
+        f"{html_mod.escape(stats.get('completed_at',''))}.</p>"
+        "<table style='width:100%;border-collapse:collapse'>"
+        f"<tr><td style='padding:8px;border:1px solid #e2e8f0'>Pages generated</td>"
+        f"<td style='padding:8px;border:1px solid #e2e8f0;text-align:right'><b>{stats['pages_generated']}</b></td></tr>"
+        f"<tr><td style='padding:8px;border:1px solid #e2e8f0'>Skipped</td>"
+        f"<td style='padding:8px;border:1px solid #e2e8f0;text-align:right'>{stats['skipped']}</td></tr>"
+        f"<tr><td style='padding:8px;border:1px solid #e2e8f0'>Errors</td>"
+        f"<td style='padding:8px;border:1px solid #e2e8f0;text-align:right'>"
+        f"<b style='color:{'#c0392b' if stats['errors'] else '#475569'}'>{stats['errors']}</b></td></tr>"
+        f"<tr><td style='padding:8px;border:1px solid #e2e8f0'>New topics extracted</td>"
+        f"<td style='padding:8px;border:1px solid #e2e8f0;text-align:right'>{stats['new_topics']}</td></tr>"
+        f"<tr><td style='padding:8px;border:1px solid #e2e8f0'>Avg SEO score</td>"
+        f"<td style='padding:8px;border:1px solid #e2e8f0;text-align:right'><b>{stats['avg_seo_score']}</b></td></tr>"
+        f"<tr><td style='padding:8px;border:1px solid #e2e8f0'>Avg GEO score</td>"
+        f"<td style='padding:8px;border:1px solid #e2e8f0;text-align:right'><b>{stats['avg_geo_score']}</b></td></tr>"
+        f"<tr><td style='padding:8px;border:1px solid #e2e8f0'>Page types</td>"
+        f"<td style='padding:8px;border:1px solid #e2e8f0;text-align:right'>{html_mod.escape(pt)}</td></tr>"
+        "</table>"
+        "<h3 style='margin:18px 0 6px;color:#0f172a'>Top failure reasons</h3>"
+        f"<ul style='margin:0;padding-left:20px;color:#475569'>{rows}</ul>"
+        f"<p style='margin:18px 0'><a href='{_ADMIN_SEO_PAGE_URL}' "
+        "style='display:inline-block;background:#7c3aed;color:white;text-decoration:none;"
+        "padding:10px 20px;border-radius:8px;font-weight:600;font-size:14px'>"
+        "Open SEO Manager</a></p>"
+        "<p style='color:#94a3b8;font-size:12px;margin-top:24px'>"
+        "You're receiving this because the scheduled SEO auto-publish run completed today and "
+        "your admin notification preferences have <b>email_seo_daily_summary_enabled</b> on. "
+        "Toggle it off (or set quiet hours) from the admin notifications page."
+        "</p></div>"
+    )
+
+
+def _quiet_hours_active(prefs: dict, now_utc: datetime) -> bool:
+    """True iff ``now_utc.hour`` falls inside the admin's UTC quiet-hours
+    window. Window is [start, end) by hour-of-day; supports wrap-around
+    (e.g. start=22, end=6 = 22:00–06:00 UTC). Returns False when either
+    bound is missing or invalid."""
+    start = prefs.get("quiet_hours_start_utc")
+    end = prefs.get("quiet_hours_end_utc")
+    try:
+        start_i = int(start) if start is not None else None
+        end_i = int(end) if end is not None else None
+    except (TypeError, ValueError):
+        return False
+    if start_i is None or end_i is None:
+        return False
+    if not (0 <= start_i <= 23 and 0 <= end_i <= 23) or start_i == end_i:
+        return False
+    h = now_utc.hour
+    if start_i < end_i:
+        return start_i <= h < end_i
+    return h >= start_i or h < end_i
+
+
+async def _resolve_seo_summary_recipients(db, now_utc: datetime) -> list:
+    """Return ``[{admin_id, email}, ...]`` for admins opted-in to the SEO
+    daily summary email and not currently inside their quiet-hours window."""
+    try:
+        admins = await db.users.find(
+            {"is_admin": True}, {"_id": 0, "id": 1, "email": 1}
+        ).to_list(500)
+    except Exception as exc:
+        logger.debug(f"[seo-daily-summary] admin lookup failed: {exc}")
+        return []
+    try:
+        from db_ops import get_admin_notification_prefs, _ADMIN_NOTIF_PREFS_DEFAULTS
+    except Exception:
+        get_admin_notification_prefs = None
+        _ADMIN_NOTIF_PREFS_DEFAULTS = {}
+    recipients: list = []
+    for u in admins:
+        email = (u.get("email") or "").strip()
+        if not email:
+            continue
+        admin_id = str(u.get("id") or email)
+        prefs: dict = {}
+        if get_admin_notification_prefs is not None:
+            try:
+                prefs = await get_admin_notification_prefs(admin_id)
+            except Exception as exc:
+                logger.debug(f"[seo-daily-summary] prefs fetch failed for {admin_id}: {exc}")
+                prefs = {}
+        opt_in_default = bool(_ADMIN_NOTIF_PREFS_DEFAULTS.get("email_seo_daily_summary_enabled", True))
+        if not bool(prefs.get("email_seo_daily_summary_enabled", opt_in_default)):
+            continue
+        if _quiet_hours_active(prefs, now_utc):
+            logger.info(f"[seo-daily-summary] suppressed for {admin_id} — quiet hours active")
+            continue
+        recipients.append({"admin_id": admin_id, "email": email})
+    return recipients
+
+
+async def _send_seo_daily_summary_email(stats: dict, recipients: list) -> dict:
+    """Send the rendered summary to each recipient via Resend.
+    Fire-and-forget — never raises; returns a small report dict."""
+    if not stats:
+        return {"sent": 0, "failed": 0, "total": 0, "reason": "no_stats"}
+    if not recipients:
+        return {"sent": 0, "failed": 0, "total": 0, "reason": "no_recipients"}
+    import os as _os
+    resend_key = _os.environ.get("RESEND_API_KEY", "").strip()
+    if not resend_key:
+        return {"sent": 0, "failed": 0, "total": len(recipients), "reason": "no_resend_key"}
+    try:
+        from email_templates import EMAIL_FROM
+    except Exception:
+        EMAIL_FROM = _os.environ.get("EMAIL_FROM", "Syrabit.ai <noreply@syrabit.ai>").strip()
+    html = _format_seo_daily_summary_html(stats)
+    subject = (
+        f"Syrabit SEO daily summary · "
+        f"{stats['pages_generated']} pages · "
+        f"avg SEO {stats['avg_seo_score']} / GEO {stats['avg_geo_score']}"
+    )
+    try:
+        import resend as _resend_sdk
+        _resend_sdk.api_key = resend_key
+    except Exception as exc:
+        logger.warning(f"[seo-daily-summary] resend import failed: {exc}")
+        return {"sent": 0, "failed": len(recipients), "total": len(recipients),
+                "reason": f"send_error:{type(exc).__name__}"}
+    sent = failed = 0
+    for r in recipients:
+        try:
+            _resend_sdk.Emails.send({
+                "from": EMAIL_FROM,
+                "to": [r["email"]],
+                "subject": subject,
+                "html": html,
+            })
+            sent += 1
+        except Exception as exc:
+            failed += 1
+            logger.warning(f"[seo-daily-summary] send failed to {r.get('email','')}: {exc}")
+    logger.info(
+        f"[seo-daily-summary] dispatched job={stats.get('job_id','')} "
+        f"sent={sent} failed={failed} total={len(recipients)}"
+    )
+    return {"sent": sent, "failed": failed, "total": len(recipients), "subject": subject}
+
+
+async def _maybe_dispatch_seo_daily_summary(job_id: str, log_doc: dict) -> dict:
+    """Compose + send the daily summary if this job was triggered by the
+    scheduler. Safe to call after every ``_auto_run_bg`` completion — runs
+    triggered by an admin button click are silently skipped so we don't
+    spam admins with ad-hoc-run summaries."""
+    job_meta = _seo_jobs.get(job_id) or {}
+    if job_meta.get("trigger") != "scheduler":
+        return {"sent": 0, "failed": 0, "total": 0, "reason": "non_scheduled_run"}
+    try:
+        stats = _compose_seo_daily_summary(log_doc)
+        recipients = await _resolve_seo_summary_recipients(_db, datetime.now(timezone.utc))
+        return await _send_seo_daily_summary_email(stats, recipients)
+    except Exception as exc:
+        logger.warning(f"[seo-daily-summary] dispatch error for job {job_id}: {exc}")
+        return {"sent": 0, "failed": 0, "total": 0, "reason": f"dispatch_error:{type(exc).__name__}"}
 
 
 # ─── Scheduled auto-publish (Task #458) ─────────────────────────────────────
