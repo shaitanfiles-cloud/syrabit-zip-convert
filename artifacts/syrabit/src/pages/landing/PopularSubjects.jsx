@@ -3,17 +3,6 @@ import { Link } from 'react-router-dom';
 import { ArrowRight, BookOpen } from 'lucide-react';
 import { useLibraryBundleSlim } from '@/hooks/useContent';
 
-const FALLBACK = [
-  { label: 'Class 12 Physics',     href: '/ahsec/class-12/physics',     board: 'AHSEC' },
-  { label: 'Class 12 Chemistry',   href: '/ahsec/class-12/chemistry',   board: 'AHSEC' },
-  { label: 'Class 12 Mathematics', href: '/ahsec/class-12/mathematics', board: 'AHSEC' },
-  { label: 'Class 12 Biology',     href: '/ahsec/class-12/biology',     board: 'AHSEC' },
-  { label: 'Class 12 Accountancy', href: '/ahsec/class-12/accountancy', board: 'AHSEC' },
-  { label: 'Class 11 Physics',     href: '/ahsec/class-11/physics',     board: 'AHSEC' },
-  { label: 'Class 10 Science',     href: '/seba/class-10/science',      board: 'SEBA'  },
-  { label: 'Class 10 Mathematics', href: '/seba/class-10/mathematics',  board: 'SEBA'  },
-];
-
 const _t = {
   en: {
     eyebrow: 'Browse the syllabus',
@@ -42,10 +31,10 @@ export default function PopularSubjects({ contentLang = 'en' }) {
 
   const items = useMemo(() => {
     const subjects = bundle?.subjects || [];
-    if (!subjects.length) return FALLBACK;
+    if (!subjects.length) return [];
 
     // Score by chapter count (rough proxy for richness/popularity) then take 10.
-    const scored = subjects
+    return subjects
       .filter((s) => s.boardSlug && s.classSlug && s.slug)
       .map((s) => ({
         label: s.name,
@@ -55,9 +44,9 @@ export default function PopularSubjects({ contentLang = 'en' }) {
       }))
       .sort((a, b) => b.score - a.score)
       .slice(0, 10);
-
-    return scored.length > 0 ? scored : FALLBACK;
   }, [bundle]);
+
+  if (!items.length) return null;
 
   return (
     <section

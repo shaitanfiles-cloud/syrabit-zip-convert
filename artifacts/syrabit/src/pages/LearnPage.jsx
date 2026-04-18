@@ -504,20 +504,25 @@ export default function LearnPage() {
               (ch) => ch.subject_id && doc?.subject_id && ch.subject_id === doc.subject_id
             );
             const sub = (libraryBundle?.subjects || []).find((s) => s.id === doc?.subject_id) || null;
-            const subjectBasePath = (sub && sub.boardSlug && sub.classSlug && sub.slug)
+            const canonicalSubjectPath = (sub && sub.boardSlug && sub.classSlug && sub.slug)
               ? `/${sub.boardSlug}/${sub.classSlug}/${sub.slug}`
-              : (doc?.subject_id ? `/subject/${doc.subject_id}` : '/library');
+              : null;
+            // For the "All chapters" CTA: link back to subject hub if known,
+            // otherwise just send the user to the library index.
+            const subjectBasePath = canonicalSubjectPath || '/library';
 
             const { prev: pCh, next: nCh } = findSiblingChapters(
               subjChapters,
               doc?.linked_chapter_id,
               null,
             );
-            const prevLink = pCh && pCh.slug
-              ? { title: pCh.title || pCh.slug, path: `${subjectBasePath}/${pCh.slug}` }
+            // Prev/Next must point to real chapter URLs. Hide them entirely
+            // when we can't construct a canonical /board/class/subject path.
+            const prevLink = (canonicalSubjectPath && pCh && pCh.slug)
+              ? { title: pCh.title || pCh.slug, path: `${canonicalSubjectPath}/${pCh.slug}` }
               : null;
-            const nextLink = nCh && nCh.slug
-              ? { title: nCh.title || nCh.slug, path: `${subjectBasePath}/${nCh.slug}` }
+            const nextLink = (canonicalSubjectPath && nCh && nCh.slug)
+              ? { title: nCh.title || nCh.slug, path: `${canonicalSubjectPath}/${nCh.slug}` }
               : null;
 
             // Related: prefer endpoint result, backfill with sibling chapters
@@ -527,7 +532,9 @@ export default function LearnPage() {
               title: rt.title,
               seo_path: rt.seo_path || `/learn/${rt.slug}`,
             }));
-            const siblings = siblingsAsRelated(subjChapters, doc?.linked_chapter_id, null, subjectBasePath, 8);
+            const siblings = canonicalSubjectPath
+              ? siblingsAsRelated(subjChapters, doc?.linked_chapter_id, null, canonicalSubjectPath, 8)
+              : [];
             const related = (() => {
               const out = [...seedRelated];
               if (out.length < 4) {
