@@ -6512,6 +6512,7 @@ async def auto_publish_schedule(_admin: dict = Depends(_require_admin)):
     }
     last_marker = None
     recent_runs: list = []
+    staleness_monitor = _build_staleness_monitor_state(None, datetime.now(timezone.utc))
     if _db is not None:
         try:
             last_marker = await _db.job_locks.find_one(
@@ -6529,10 +6530,59 @@ async def auto_publish_schedule(_admin: dict = Depends(_require_admin)):
             recent_runs = await cursor.to_list(10)
         except Exception:
             recent_runs = []
+        try:
+            lock_doc = await _db.job_locks.find_one(
+                {"_id": _SEO_STALENESS_ALERT_LOCK_ID}, {"_id": 0}
+            )
+            staleness_monitor = _build_staleness_monitor_state(
+                lock_doc, datetime.now(timezone.utc)
+            )
+        except Exception:
+            # Keep the absent-doc default surfaced above so the UI can
+            # still render the "Monitor health" subsection even when
+            # Mongo hiccups on this single read.
+            pass
     return {
         "config": cfg,
         "last_marker": last_marker,
         "recent_runs": recent_runs,
+        "staleness_monitor": staleness_monitor,
+    }
+
+
+def _build_staleness_monitor_state(
+    lock_doc: Optional[dict], now_utc: datetime,
+) -> dict:
+    """Shape the ``db.job_locks[seo_auto_publish_staleness_alert]`` doc
+    into a stable response block for the Schedule panel.
+
+    An absent doc (fresh install, or the monitor has never observed a
+    transition worth persisting) is rendered as ``last_state=None`` —
+    NOT ``healthy`` — so the UI can distinguish "monitor has not run
+    yet" from "monitor ran and saw a healthy scheduler". The CAS path
+    in :func:`_claim_seo_staleness_alert_slot` treats an absent doc as
+    healthy for alerting purposes; that's a separate concern from how
+    we surface the doc to admins.
+
+    ``debounce_remaining_h`` is the time left in the 24h re-alert
+    window (clamped to ``0`` when expired or no prior alert exists)
+    so an admin can see at a glance "we already paged 3h ago, next
+    re-page in 21h"."""
+    doc = lock_doc or {}
+    last_alert_iso = doc.get("last_alert_at")
+    last_alert_dt = _parse_iso_utc(last_alert_iso)
+    if last_alert_dt is not None:
+        elapsed_h = (now_utc - last_alert_dt).total_seconds() / 3600.0
+        remaining = max(0.0, _SEO_STALENESS_REALERT_INTERVAL_H - elapsed_h)
+    else:
+        remaining = 0.0
+    return {
+        "last_state": doc.get("last_state"),
+        "last_alert_at": last_alert_iso,
+        "last_run_at_observed": doc.get("last_run_at_observed"),
+        "updated_at": doc.get("updated_at"),
+        "realert_interval_h": _SEO_STALENESS_REALERT_INTERVAL_H,
+        "debounce_remaining_h": remaining,
     }
 
 

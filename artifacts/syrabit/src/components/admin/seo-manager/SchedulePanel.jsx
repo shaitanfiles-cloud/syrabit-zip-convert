@@ -1,4 +1,4 @@
-import { Loader2, RefreshCw, Calendar, Clock, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Loader2, RefreshCw, Calendar, Clock, AlertTriangle, CheckCircle2, ShieldCheck, HelpCircle } from 'lucide-react';
 
 function fmtDate(v) {
   if (!v) return '—';
@@ -16,6 +16,27 @@ function hoursSince(v) {
     if (Number.isNaN(d.getTime())) return null;
     return (Date.now() - d.getTime()) / 3600000;
   } catch { return null; }
+}
+
+function fmtRelative(v) {
+  const h = hoursSince(v);
+  if (h == null) return 'never';
+  if (h < 1) return `${Math.max(1, Math.round(h * 60))}m ago`;
+  if (h < 48) return `${Math.round(h)}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+}
+
+function monitorStatePill(state) {
+  // `state` is the persisted ``last_state`` string from the lock doc:
+  // "stale" (red), "healthy" (green), or null (the monitor has not
+  // yet recorded a transition — most often a fresh install).
+  if (state === 'stale') {
+    return { label: 'Stale', bg: 'rgba(239,68,68,0.10)', fg: '#b91c1c', border: 'rgba(239,68,68,0.30)' };
+  }
+  if (state === 'healthy') {
+    return { label: 'Healthy', bg: 'rgba(16,185,129,0.10)', fg: '#047857', border: 'rgba(16,185,129,0.25)' };
+  }
+  return { label: 'Not yet observed', bg: '#f3f4f6', fg: '#6b7280', border: '#e5e7eb' };
 }
 
 function nextExpectedRun(cfg, lastIso) {
@@ -73,6 +94,16 @@ export default function SchedulePanel({ schedule, scheduleLoading, loadSchedule 
   const staleThresholdH = freq === 'weekly' ? 24 * 8 : 36;
   const isStale = enabled && (lastAgeH == null || lastAgeH > staleThresholdH);
   const next = nextExpectedRun(cfg, lastRunIso);
+  const monitor = schedule?.staleness_monitor || null;
+  const pill = monitorStatePill(monitor?.last_state);
+  const debounceH = Number(monitor?.debounce_remaining_h ?? 0);
+  const realertH = Number(monitor?.realert_interval_h ?? 24);
+  const inDebounce = debounceH > 0;
+  const tooltip = `The staleness monitor re-pages admins at most once every ${realertH}h while the scheduler is stale, so a known-broken cron doesn't spam your inbox. ${
+    inDebounce
+      ? `An alert was sent recently — the next re-page would fire in ~${Math.round(debounceH)}h if the scheduler is still stale by then.`
+      : 'No active debounce — the next stale observation would page admins immediately.'
+  }`;
 
   return (
     <div className="space-y-5">
@@ -141,6 +172,55 @@ export default function SchedulePanel({ schedule, scheduleLoading, loadSchedule 
               </div>
             </div>
           )}
+
+          <div className="rounded-xl p-4 border" style={{ background: '#fafafa', borderColor: '#e5e7eb' }}>
+            <div className="flex items-center gap-2">
+              <ShieldCheck size={14} style={{ color: '#6b7280' }} />
+              <p className="text-sm font-semibold text-gray-900">Monitor health</p>
+              <span
+                className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium"
+                style={{ background: pill.bg, color: pill.fg, border: `1px solid ${pill.border}` }}
+              >
+                {pill.label}
+              </span>
+              <span title={tooltip} className="cursor-help inline-flex items-center" style={{ color: '#9ca3af' }}>
+                <HelpCircle size={12} />
+              </span>
+            </div>
+            <p className="text-[11px] mt-1" style={{ color: '#9ca3af' }}>
+              Server-side check that emails admins when this scheduler stops firing. Re-pages at most once every {realertH}h while stale.
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-wider" style={{ color: '#9ca3af' }}>Last evaluated</p>
+                <p className="text-xs font-medium mt-1 text-gray-800" title={fmtDate(monitor?.updated_at)}>
+                  {fmtRelative(monitor?.updated_at)}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wider" style={{ color: '#9ca3af' }}>Last alert sent</p>
+                <p className="text-xs font-medium mt-1 text-gray-800" title={fmtDate(monitor?.last_alert_at)}>
+                  {fmtRelative(monitor?.last_alert_at)}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wider" style={{ color: '#9ca3af' }}>Last run observed</p>
+                <p className="text-xs font-medium mt-1 text-gray-800" title={fmtDate(monitor?.last_run_at_observed)}>
+                  {monitor?.last_run_at_observed ? fmtRelative(monitor.last_run_at_observed) : '—'}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wider" style={{ color: '#9ca3af' }}>Re-page debounce</p>
+                <p
+                  className="text-xs font-medium mt-1"
+                  style={{ color: inDebounce ? '#b45309' : '#10b981' }}
+                  title={tooltip}
+                >
+                  {inDebounce ? `${Math.round(debounceH)}h remaining` : 'Ready to fire'}
+                </p>
+              </div>
+            </div>
+          </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="rounded-xl p-4 border" style={{ background: '#f9fafb', borderColor: '#e5e7eb' }}>
