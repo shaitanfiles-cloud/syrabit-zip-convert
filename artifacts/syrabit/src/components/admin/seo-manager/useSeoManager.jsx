@@ -42,6 +42,8 @@ export default function useSeoManager(adminToken) {
   const [topicSearch, setTopicSearch]   = useState('');
   const [pageSearch, setPageSearch]     = useState('');
   const [pageFilter, setPageFilter]     = useState('all');
+  const [pageSort, setPageSort]         = useState('combined');
+  const [minCombined, setMinCombined]   = useState(0);
   const [selectedTopics, setSelectedTopics]   = useState(new Set());
   const [selectedTypes, setSelectedTypes]     = useState(new Set(['notes', 'important-questions', 'mcqs']));
 
@@ -452,11 +454,31 @@ export default function useSeoManager(adminToken) {
       || (t.chapter_title || '').toLowerCase().includes(q);
   });
 
+  const getSeoScore = (p) => p.quality_score?.score ?? p.quality?.score ?? 0;
+  const getGeoScore = (p) => p.geo_score?.score ?? p.quality?.geo_score ?? 0;
+  const getCombinedScore = (p) => {
+    if (typeof p.combined_score === 'number') return p.combined_score;
+    if (typeof p.quality?.combined_score === 'number') return p.quality.combined_score;
+    return Math.round((getSeoScore(p) + getGeoScore(p)) / 2);
+  };
+
   const filteredPages = pages.filter(p => {
     if (pageFilter !== 'all' && p.status !== pageFilter) return false;
+    if (minCombined > 0 && getCombinedScore(p) < minCombined) return false;
     if (!pageSearch.trim()) return true;
     const q = pageSearch.toLowerCase();
-    return (p.title || '').toLowerCase().includes(q) || (p.topic_title || '').toLowerCase().includes(q) || (p.subject_name || '').toLowerCase().includes(q);
+    return (p.title || '').toLowerCase().includes(q)
+      || (p.topic_title || '').toLowerCase().includes(q)
+      || (p.subject_name || '').toLowerCase().includes(q)
+      || (p.answer_summary || '').toLowerCase().includes(q);
+  }).slice().sort((a, b) => {
+    if (pageSort === 'combined') return getCombinedScore(b) - getCombinedScore(a);
+    if (pageSort === 'geo')      return getGeoScore(b) - getGeoScore(a);
+    if (pageSort === 'seo')      return getSeoScore(b) - getSeoScore(a);
+    if (pageSort === 'recent') {
+      return String(b.updated_at || b.generated_at || '').localeCompare(String(a.updated_at || a.generated_at || ''));
+    }
+    return 0;
   });
 
   const publishedCount = pages.filter(p => p.status === 'published').length;
@@ -467,7 +489,8 @@ export default function useSeoManager(adminToken) {
     tab, setTab, stats, topics, pages, insights, loading, insightsLoading,
     extracting, generating, sitemap, publishing, activeJob, setActiveJob,
     actionLoading, topicSearch, setTopicSearch, pageSearch, setPageSearch,
-    pageFilter, setPageFilter, selectedTopics, selectedTypes,
+    pageFilter, setPageFilter, pageSort, setPageSort, minCombined, setMinCombined,
+    selectedTopics, selectedTypes,
     piloting, pilotResult, pilotBoard, setPilotBoard, pilotClass, setPilotClass,
     pilotSubject, setPilotSubject, pilotChapters, setPilotChapters,
     hubCtx, scopeSubjectOnly, setScopeSubjectOnly,

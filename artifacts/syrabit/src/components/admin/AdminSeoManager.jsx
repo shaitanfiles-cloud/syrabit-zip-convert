@@ -106,6 +106,8 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
           publishedCount={s.publishedCount} draftCount={s.draftCount}
           pageSearch={s.pageSearch} setPageSearch={s.setPageSearch}
           pageFilter={s.pageFilter} setPageFilter={s.setPageFilter}
+          pageSort={s.pageSort} setPageSort={s.setPageSort}
+          minCombined={s.minCombined} setMinCombined={s.setMinCombined}
           handleToggleStatus={s.handleToggleStatus} handleAutoRun={s.handleAutoRun} />
       )}
 
