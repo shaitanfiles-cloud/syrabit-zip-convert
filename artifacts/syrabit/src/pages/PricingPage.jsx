@@ -376,7 +376,7 @@ export default function PricingPage() {
                         <X size={16} className="text-muted-foreground/30 flex-shrink-0" />
                       )}
                       <span className={`text-sm ${
-                        feature.included ? 'text-foreground/80' : 'text-muted-foreground/40'
+                        feature.included ? 'text-foreground/80' : 'text-muted-foreground'
                       }`}>{feature.label}</span>
                     </li>
                   ))}
@@ -399,7 +399,7 @@ export default function PricingPage() {
         </div>
 
         {user && (
-          <p className="text-center text-muted-foreground/50 text-sm mt-8">
+          <p className="text-center text-muted-foreground text-sm mt-8">
             {t.signedInAs} <span className="text-violet-600">{user.email}</span> {t.upgradeNote}
           </p>
         )}

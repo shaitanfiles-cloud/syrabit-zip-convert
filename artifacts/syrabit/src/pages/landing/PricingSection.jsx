@@ -139,7 +139,7 @@ export default function PricingSection({ contentLang = 'en' }) {
                 </div>
                 <div className="mb-5">
                   <span style={{ fontSize: '2.2rem', fontWeight: 800, color: priceColor }}>{plan.price}</span>
-                  <span className="text-sm ml-1 text-muted-foreground/50">{plan.period}</span>
+                  <span className="text-sm ml-1 text-muted-foreground">{plan.period}</span>
                   {plan.docAccess && (
                     <p className="text-xs font-medium mt-1.5" style={{ color: isPro ? '#059669' : plan.highlighted ? '#7c3aed' : '#64748b' }}>
                       {plan.docAccess}
@@ -171,7 +171,7 @@ export default function PricingSection({ contentLang = 'en' }) {
           })}
         </div>
 
-        <p className="text-center text-sm mt-8 text-muted-foreground/50">
+        <p className="text-center text-sm mt-8 text-muted-foreground">
           {t.footer}
         </p>
       </div>

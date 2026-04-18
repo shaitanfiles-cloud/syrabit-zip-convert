@@ -107,7 +107,7 @@ export default function AdminLoginPage() {
             </button>
           </form>
 
-          <p className="text-center text-gray-400 text-xs mt-5 flex items-center justify-center gap-1.5">
+          <p className="text-center text-gray-600 text-xs mt-5 flex items-center justify-center gap-1.5">
             <ShieldCheck size={10} />
             Protected by HMAC authentication · 8-hour session
           </p>
