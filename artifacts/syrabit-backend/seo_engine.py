@@ -6791,7 +6791,9 @@ async def auto_publish_schedule(_admin: dict = Depends(_require_admin)):
     }
     last_marker = None
     recent_runs: list = []
-    staleness_monitor = _build_staleness_monitor_state(None, datetime.now(timezone.utc))
+    now_utc = datetime.now(timezone.utc)
+    staleness_monitor = _build_staleness_monitor_state(None, now_utc)
+    heartbeat_monitor = _build_heartbeat_monitor_state(None, None, now_utc)
     if _db is not None:
         try:
             last_marker = await _db.job_locks.find_one(
@@ -6814,18 +6816,31 @@ async def auto_publish_schedule(_admin: dict = Depends(_require_admin)):
                 {"_id": _SEO_STALENESS_ALERT_LOCK_ID}, {"_id": 0}
             )
             staleness_monitor = _build_staleness_monitor_state(
-                lock_doc, datetime.now(timezone.utc)
+                lock_doc, now_utc
             )
         except Exception:
             # Keep the absent-doc default surfaced above so the UI can
             # still render the "Monitor health" subsection even when
             # Mongo hiccups on this single read.
+            lock_doc = None
+        try:
+            hb_doc = await _db.job_locks.find_one(
+                {"_id": _SEO_STALENESS_HEARTBEAT_ALERT_LOCK_ID}, {"_id": 0}
+            )
+            heartbeat_monitor = _build_heartbeat_monitor_state(
+                hb_doc, lock_doc, now_utc
+            )
+        except Exception:
+            # Same rationale as the staleness block above — keep the
+            # absent-doc default so the UI can still render the
+            # "Heartbeat watcher" subsection.
             pass
     return {
         "config": cfg,
         "last_marker": last_marker,
         "recent_runs": recent_runs,
         "staleness_monitor": staleness_monitor,
+        "heartbeat_monitor": heartbeat_monitor,
     }
 
 
@@ -6862,6 +6877,58 @@ def _build_staleness_monitor_state(
         "updated_at": doc.get("updated_at"),
         "realert_interval_h": _SEO_STALENESS_REALERT_INTERVAL_H,
         "debounce_remaining_h": remaining,
+    }
+
+
+def _build_heartbeat_monitor_state(
+    hb_lock_doc: Optional[dict],
+    monitor_lock_doc: Optional[dict],
+    now_utc: datetime,
+) -> dict:
+    """Shape the heartbeat-watcher lock doc
+    (``db.job_locks[seo_staleness_monitor_heartbeat_alert]``) plus the
+    parent monitor's last heartbeat into a stable response block for
+    the Schedule panel.
+
+    Mirrors :func:`_build_staleness_monitor_state` so the UI can render
+    a sibling "Heartbeat watcher" subsection. ``age_h`` is the age (in
+    hours) of the parent monitor's last ``updated_at`` heartbeat —
+    i.e. exactly the value the watcher in
+    :func:`_check_and_alert_staleness_heartbeat` compares against
+    ``_SEO_STALENESS_HEARTBEAT_MAX_AGE_H``. ``None`` means the monitor
+    has never heartbeated yet (fresh install / cold start), which the
+    UI surfaces distinctly from "monitor heartbeated 0h ago".
+
+    ``debounce_remaining_h`` is the time left in the heartbeat
+    re-alert window (clamped to ``0``); same semantics as the parent
+    block."""
+    hb_doc = hb_lock_doc or {}
+    monitor_doc = monitor_lock_doc or {}
+    monitor_updated_iso = monitor_doc.get("updated_at")
+    monitor_updated_dt = _parse_iso_utc(monitor_updated_iso)
+    if monitor_updated_dt is not None:
+        age_h: Optional[float] = (
+            now_utc - monitor_updated_dt
+        ).total_seconds() / 3600.0
+    else:
+        age_h = None
+    last_alert_iso = hb_doc.get("last_alert_at")
+    last_alert_dt = _parse_iso_utc(last_alert_iso)
+    if last_alert_dt is not None:
+        elapsed_h = (now_utc - last_alert_dt).total_seconds() / 3600.0
+        remaining = max(
+            0.0, _SEO_STALENESS_HEARTBEAT_REALERT_INTERVAL_H - elapsed_h
+        )
+    else:
+        remaining = 0.0
+    return {
+        "last_state": hb_doc.get("last_state"),
+        "last_alert_at": last_alert_iso,
+        "age_h": age_h,
+        "debounce_remaining_h": remaining,
+        "monitor_updated_at": monitor_updated_iso,
+        "max_age_h": _SEO_STALENESS_HEARTBEAT_MAX_AGE_H,
+        "realert_interval_h": _SEO_STALENESS_HEARTBEAT_REALERT_INTERVAL_H,
     }
 
 

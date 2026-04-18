@@ -39,6 +39,21 @@ function monitorStatePill(state) {
   return { label: 'Not yet observed', bg: '#f3f4f6', fg: '#6b7280', border: '#e5e7eb' };
 }
 
+function heartbeatStatePill(state) {
+  // Heartbeat watcher's persisted ``last_state``: "down" means the
+  // watcher paged because the monitor stopped heartbeating; "healthy"
+  // means it has since recovered. ``null`` means the watcher has not
+  // observed (or persisted) a transition yet — typically a fresh
+  // install, since the watcher only writes on actual down/recovery.
+  if (state === 'down') {
+    return { label: 'Down', bg: 'rgba(239,68,68,0.10)', fg: '#b91c1c', border: 'rgba(239,68,68,0.30)' };
+  }
+  if (state === 'healthy') {
+    return { label: 'Recovered', bg: 'rgba(16,185,129,0.10)', fg: '#047857', border: 'rgba(16,185,129,0.25)' };
+  }
+  return { label: 'Not yet observed', bg: '#f3f4f6', fg: '#6b7280', border: '#e5e7eb' };
+}
+
 function nextExpectedRun(cfg, lastIso) {
   if (!cfg) return null;
   const hour = Number(cfg.target_hour_utc ?? 2);
@@ -103,6 +118,20 @@ export default function SchedulePanel({ schedule, scheduleLoading, loadSchedule 
     inDebounce
       ? `An alert was sent recently — the next re-page would fire in ~${Math.round(debounceH)}h if the scheduler is still stale by then.`
       : 'No active debounce — the next stale observation would page admins immediately.'
+  }`;
+
+  const heartbeat = schedule?.heartbeat_monitor || null;
+  const hbPill = heartbeatStatePill(heartbeat?.last_state);
+  const hbAgeH = heartbeat?.age_h == null ? null : Number(heartbeat.age_h);
+  const hbMaxAgeH = Number(heartbeat?.max_age_h ?? 3);
+  const hbDebounceH = Number(heartbeat?.debounce_remaining_h ?? 0);
+  const hbRealertH = Number(heartbeat?.realert_interval_h ?? 12);
+  const hbInDebounce = hbDebounceH > 0;
+  const hbBehind = hbAgeH != null && hbAgeH > hbMaxAgeH;
+  const hbTooltip = `The heartbeat watcher pages admins once if the staleness monitor itself stops heartbeating (no signal for >${hbMaxAgeH}h), then debounces re-pages for ${hbRealertH}h. ${
+    hbInDebounce
+      ? `An alert was sent recently — the next re-page would fire in ~${Math.round(hbDebounceH)}h if the monitor is still down by then.`
+      : 'No active debounce — the next down observation would page admins immediately.'
   }`;
 
   return (
@@ -173,51 +202,116 @@ export default function SchedulePanel({ schedule, scheduleLoading, loadSchedule 
             </div>
           )}
 
-          <div className="rounded-xl p-4 border" style={{ background: '#fafafa', borderColor: '#e5e7eb' }}>
-            <div className="flex items-center gap-2">
-              <ShieldCheck size={14} style={{ color: '#6b7280' }} />
-              <p className="text-sm font-semibold text-gray-900">Monitor health</p>
-              <span
-                className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium"
-                style={{ background: pill.bg, color: pill.fg, border: `1px solid ${pill.border}` }}
-              >
-                {pill.label}
-              </span>
-              <span title={tooltip} className="cursor-help inline-flex items-center" style={{ color: '#9ca3af' }}>
-                <HelpCircle size={12} />
-              </span>
-            </div>
-            <p className="text-[11px] mt-1" style={{ color: '#9ca3af' }}>
-              Server-side check that emails admins when this scheduler stops firing. Re-pages at most once every {realertH}h while stale.
-            </p>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
-              <div>
-                <p className="text-[10px] uppercase tracking-wider" style={{ color: '#9ca3af' }}>Last evaluated</p>
-                <p className="text-xs font-medium mt-1 text-gray-800" title={fmtDate(monitor?.updated_at)}>
-                  {fmtRelative(monitor?.updated_at)}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase tracking-wider" style={{ color: '#9ca3af' }}>Last alert sent</p>
-                <p className="text-xs font-medium mt-1 text-gray-800" title={fmtDate(monitor?.last_alert_at)}>
-                  {fmtRelative(monitor?.last_alert_at)}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase tracking-wider" style={{ color: '#9ca3af' }}>Last run observed</p>
-                <p className="text-xs font-medium mt-1 text-gray-800" title={fmtDate(monitor?.last_run_at_observed)}>
-                  {monitor?.last_run_at_observed ? fmtRelative(monitor.last_run_at_observed) : '—'}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase tracking-wider" style={{ color: '#9ca3af' }}>Re-page debounce</p>
-                <p
-                  className="text-xs font-medium mt-1"
-                  style={{ color: inDebounce ? '#b45309' : '#10b981' }}
-                  title={tooltip}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            <div className="rounded-xl p-4 border" style={{ background: '#fafafa', borderColor: '#e5e7eb' }}>
+              <div className="flex items-center gap-2">
+                <ShieldCheck size={14} style={{ color: '#6b7280' }} />
+                <p className="text-sm font-semibold text-gray-900">Monitor health</p>
+                <span
+                  className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium"
+                  style={{ background: pill.bg, color: pill.fg, border: `1px solid ${pill.border}` }}
                 >
-                  {inDebounce ? `${Math.round(debounceH)}h remaining` : 'Ready to fire'}
-                </p>
+                  {pill.label}
+                </span>
+                <span title={tooltip} className="cursor-help inline-flex items-center" style={{ color: '#9ca3af' }}>
+                  <HelpCircle size={12} />
+                </span>
+              </div>
+              <p className="text-[11px] mt-1" style={{ color: '#9ca3af' }}>
+                Server-side check that emails admins when this scheduler stops firing. Re-pages at most once every {realertH}h while stale.
+              </p>
+              <div className="grid grid-cols-2 gap-3 mt-3">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider" style={{ color: '#9ca3af' }}>Last evaluated</p>
+                  <p className="text-xs font-medium mt-1 text-gray-800" title={fmtDate(monitor?.updated_at)}>
+                    {fmtRelative(monitor?.updated_at)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider" style={{ color: '#9ca3af' }}>Last alert sent</p>
+                  <p className="text-xs font-medium mt-1 text-gray-800" title={fmtDate(monitor?.last_alert_at)}>
+                    {fmtRelative(monitor?.last_alert_at)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider" style={{ color: '#9ca3af' }}>Last run observed</p>
+                  <p className="text-xs font-medium mt-1 text-gray-800" title={fmtDate(monitor?.last_run_at_observed)}>
+                    {monitor?.last_run_at_observed ? fmtRelative(monitor.last_run_at_observed) : '—'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider" style={{ color: '#9ca3af' }}>Re-page debounce</p>
+                  <p
+                    className="text-xs font-medium mt-1"
+                    style={{ color: inDebounce ? '#b45309' : '#10b981' }}
+                    title={tooltip}
+                  >
+                    {inDebounce ? `${Math.round(debounceH)}h remaining` : 'Ready to fire'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl p-4 border" style={{ background: '#fafafa', borderColor: '#e5e7eb' }}>
+              <div className="flex items-center gap-2">
+                <ShieldCheck size={14} style={{ color: '#6b7280' }} />
+                <p className="text-sm font-semibold text-gray-900">Heartbeat watcher</p>
+                <span
+                  className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium"
+                  style={{ background: hbPill.bg, color: hbPill.fg, border: `1px solid ${hbPill.border}` }}
+                >
+                  {hbPill.label}
+                </span>
+                <span title={hbTooltip} className="cursor-help inline-flex items-center" style={{ color: '#9ca3af' }}>
+                  <HelpCircle size={12} />
+                </span>
+              </div>
+              <p className="text-[11px] mt-1" style={{ color: '#9ca3af' }}>
+                Watches the monitor itself. Pages admins once if the monitor stops heartbeating for &gt;{hbMaxAgeH}h, then debounces re-pages for {hbRealertH}h.
+              </p>
+              <div className="grid grid-cols-2 gap-3 mt-3">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider" style={{ color: '#9ca3af' }}>Monitor heartbeat age</p>
+                  <p
+                    className="text-xs font-medium mt-1"
+                    style={{ color: hbAgeH == null ? '#6b7280' : (hbBehind ? '#b91c1c' : '#047857') }}
+                    title={fmtDate(heartbeat?.monitor_updated_at)}
+                  >
+                    {hbAgeH == null
+                      ? '—'
+                      : hbAgeH < 1
+                        ? `${Math.max(1, Math.round(hbAgeH * 60))}m`
+                        : `${hbAgeH.toFixed(1)}h`}
+                    {hbAgeH != null && (
+                      <span style={{ color: '#9ca3af' }}> / {hbMaxAgeH}h max</span>
+                    )}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider" style={{ color: '#9ca3af' }}>Last alert sent</p>
+                  <p className="text-xs font-medium mt-1 text-gray-800" title={fmtDate(heartbeat?.last_alert_at)}>
+                    {fmtRelative(heartbeat?.last_alert_at)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider" style={{ color: '#9ca3af' }}>Watcher state</p>
+                  <p
+                    className="text-xs font-medium mt-1"
+                    style={{ color: heartbeat?.last_state === 'down' ? '#b91c1c' : (heartbeat?.last_state === 'healthy' ? '#047857' : '#6b7280') }}
+                  >
+                    {heartbeat?.last_state ? heartbeat.last_state : 'not yet observed'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider" style={{ color: '#9ca3af' }}>Re-page debounce</p>
+                  <p
+                    className="text-xs font-medium mt-1"
+                    style={{ color: hbInDebounce ? '#b45309' : '#10b981' }}
+                    title={hbTooltip}
+                  >
+                    {hbInDebounce ? `${Math.round(hbDebounceH)}h remaining` : 'Ready to fire'}
+                  </p>
+                </div>
               </div>
             </div>
           </div>
