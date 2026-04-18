@@ -79,6 +79,8 @@ const SESSION_RESUME_WINDOW_MS = 30 * 60 * 1000;
 // mid-boost (React StrictMode, HMR, route remount) the next mount picks
 // up the remainder rather than losing it permanently.
 const PV_BOOST_KEY = 'syrabit:pv_boost_remaining';
+const PV_BOOST_PATH_KEY = 'syrabit:pv_boost_path';
+const PV_BOOST_TITLE_KEY = 'syrabit:pv_boost_title';
 const PV_BOOST_EXTRA = 4;
 const PV_BOOST_INTERVAL_MS = 600;
 
@@ -98,7 +100,29 @@ function setPvBoostRemaining(n) {
 }
 
 function clearPvBoostRemaining() {
-  try { sessionStorage.removeItem(PV_BOOST_KEY); } catch {}
+  try {
+    sessionStorage.removeItem(PV_BOOST_KEY);
+    sessionStorage.removeItem(PV_BOOST_PATH_KEY);
+    sessionStorage.removeItem(PV_BOOST_TITLE_KEY);
+  } catch {}
+}
+
+function getPinnedBoostTarget() {
+  try {
+    return {
+      path: sessionStorage.getItem(PV_BOOST_PATH_KEY),
+      title: sessionStorage.getItem(PV_BOOST_TITLE_KEY),
+    };
+  } catch {
+    return { path: null, title: null };
+  }
+}
+
+function setPinnedBoostTarget(path, title) {
+  try {
+    sessionStorage.setItem(PV_BOOST_PATH_KEY, path || '/');
+    sessionStorage.setItem(PV_BOOST_TITLE_KEY, title || '');
+  } catch {}
 }
 
 function fireSyntheticPageView({ path, title, visitorId, sessionId, referrer, is404Hint }) {
@@ -313,18 +337,22 @@ export function usePageTracking() {
     if (remaining === null) {
       remaining = PV_BOOST_EXTRA;
       setPvBoostRemaining(remaining);
+      // Pin the landing path/title so a mid-boost navigation does not
+      // shift the synthetic events to the new route (architect note).
+      setPinnedBoostTarget(path, document.title);
     }
     if (remaining > 0) {
       if (cancelBoostRef.current) {
         try { cancelBoostRef.current(); } catch {}
       }
+      const pinned = getPinnedBoostTarget();
       cancelBoostRef.current = schedulePageViewBoost(remaining, {
-        path,
-        title: document.title,
+        path: pinned.path || path,
+        title: pinned.title || document.title,
         visitorId,
         sessionId,
         referrer,
-        is404Hint,
+        is404Hint: pinned.path ? detectIs404(pinned.path) : is404Hint,
       });
     }
   }, [location.pathname]);
