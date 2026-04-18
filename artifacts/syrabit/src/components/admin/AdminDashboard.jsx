@@ -2238,96 +2238,91 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                 </label>
               </div>
 
-              {/* Task #474 — recent SEO summary dispatches so admins can see
-                  whether the last scheduled run actually emailed them, was
-                  suppressed by quiet hours, or hit a Resend failure. Always
-                  shown (even when the admin has opted out) so they can
-                  verify the system-wide dispatch is healthy. */}
-              {true && (
-                <div className="mb-3 pb-3 border-b border-gray-200" data-testid="notif-prefs-seo-summary-history">
+              {/* Task #474 — recent SEO summary dispatch history. */}
+              <div className="mb-3 pb-3 border-b border-gray-200" data-testid="notif-prefs-seo-summary-history">
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="text-[10px] text-gray-500 font-medium">
                       Recent SEO summary email dispatches
-                    </label>
+                  </label>
+                </div>
+                {seoSummaryDispatches === null ? (
+                  <div className="text-[10px] text-gray-400">Loading…</div>
+                ) : seoSummaryDispatches.length === 0 ? (
+                  <div className="text-[10px] text-gray-400" data-testid="notif-prefs-seo-summary-history-empty">
+                    No scheduled auto-publish runs have completed yet — once one does, the dispatch result will appear here.
                   </div>
-                  {seoSummaryDispatches === null ? (
-                    <div className="text-[10px] text-gray-400">Loading…</div>
-                  ) : seoSummaryDispatches.length === 0 ? (
-                    <div className="text-[10px] text-gray-400" data-testid="notif-prefs-seo-summary-history-empty">
-                      No scheduled auto-publish runs have completed yet — once one does, the dispatch result will appear here.
-                    </div>
-                  ) : (
-                    <ul className="space-y-1">
-                      {seoSummaryDispatches.map((d, i) => {
-                        const at = d.at ? new Date(d.at) : null;
-                        const ageMs = at ? Date.now() - at.getTime() : null;
-                        const ageStr = ageMs == null
-                          ? '—'
-                          : ageMs < 60_000 ? 'just now'
-                          : ageMs < 3_600_000 ? `${Math.round(ageMs / 60_000)}m ago`
-                          : ageMs < 86_400_000 ? `${Math.round(ageMs / 3_600_000)}h ago`
-                          : `${Math.round(ageMs / 86_400_000)}d ago`;
-                        const sent = d.sent ?? 0;
-                        const failed = d.failed ?? 0;
-                        const totalRecipients = d.total_recipients ?? (sent + failed);
-                        const suppressed = d.suppressed_quiet_hours ?? 0;
-                        const optedOut = d.opted_out ?? 0;
-                        const errs = Array.isArray(d.errors) ? d.errors : [];
-                        const ok = failed === 0 && (sent > 0 || (suppressed === 0 && optedOut === 0 && !d.reason));
-                        const dot = failed > 0 ? 'bg-red-500'
-                          : sent > 0 ? 'bg-emerald-500'
-                          : 'bg-gray-300';
-                        return (
-                          <li
-                            key={`${d.job_id}-${i}`}
-                            className="flex items-start gap-2 text-[11px] text-gray-600"
-                            data-testid={`notif-prefs-seo-summary-history-row-${i}`}
-                          >
-                            <span className={`inline-block w-1.5 h-1.5 rounded-full mt-1.5 ${dot}`} />
-                            <div className="flex-1 min-w-0">
-                              <div>
-                                <span className="font-medium text-gray-700">{ageStr}</span>
-                                <span className="text-gray-400"> · attempted </span>
-                                <span className="font-medium text-gray-700">{totalRecipients}</span>
-                                <span className="text-gray-400">/{d.total_admins ?? '?'} admins</span>
-                                {sent > 0 && (
-                                  <span className="text-emerald-600"> · {sent} delivered</span>
-                                )}
-                                {failed > 0 && (
-                                  <span className="text-red-500"> · {failed} failed</span>
-                                )}
-                                {suppressed > 0 && (
-                                  <span className="text-amber-600"> · {suppressed} in quiet hours</span>
-                                )}
-                                {optedOut > 0 && (
-                                  <span className="text-gray-400"> · {optedOut} opted out</span>
-                                )}
-                              </div>
-                              {(!ok && d.reason) && (
-                                <div className="text-[10px] text-gray-400 mt-0.5">
-                                  Reason: <code>{d.reason}</code>
-                                </div>
+                ) : (
+                  <ul className="space-y-1">
+                    {seoSummaryDispatches.map((d, i) => {
+                      const at = d.at ? new Date(d.at) : null;
+                      const ageMs = at ? Date.now() - at.getTime() : null;
+                      const ageStr = ageMs == null
+                        ? '—'
+                        : ageMs < 60_000 ? 'just now'
+                        : ageMs < 3_600_000 ? `${Math.round(ageMs / 60_000)}m ago`
+                        : ageMs < 86_400_000 ? `${Math.round(ageMs / 3_600_000)}h ago`
+                        : `${Math.round(ageMs / 86_400_000)}d ago`;
+                      const sent = d.sent ?? 0;
+                      const failed = d.failed ?? 0;
+                      const totalRecipients = d.total_recipients ?? (sent + failed);
+                      const suppressed = d.suppressed_quiet_hours ?? 0;
+                      const optedOut = d.opted_out ?? 0;
+                      const errs = Array.isArray(d.errors) ? d.errors : [];
+                      const ok = failed === 0 && (sent > 0 || (suppressed === 0 && optedOut === 0 && !d.reason));
+                      const dot = failed > 0 ? 'bg-red-500'
+                        : sent > 0 ? 'bg-emerald-500'
+                        : 'bg-gray-300';
+                      return (
+                        <li
+                          key={`${d.job_id}-${i}`}
+                          className="flex items-start gap-2 text-[11px] text-gray-600"
+                          data-testid={`notif-prefs-seo-summary-history-row-${i}`}
+                        >
+                          <span className={`inline-block w-1.5 h-1.5 rounded-full mt-1.5 ${dot}`} />
+                          <div className="flex-1 min-w-0">
+                            <div>
+                              <span className="font-medium text-gray-700">{ageStr}</span>
+                              <span className="text-gray-400"> · attempted </span>
+                              <span className="font-medium text-gray-700">{totalRecipients}</span>
+                              <span className="text-gray-400">/{d.total_admins ?? '?'} admins</span>
+                              {sent > 0 && (
+                                <span className="text-emerald-600"> · {sent} delivered</span>
                               )}
-                              {errs.length > 0 && (
-                                <ul
-                                  className="mt-1 space-y-0.5"
-                                  data-testid={`notif-prefs-seo-summary-history-row-${i}-errors`}
-                                >
-                                  {errs.map((e, ei) => (
-                                    <li key={ei} className="text-[10px] text-red-500 truncate">
-                                      <span className="font-medium">{e.email || e.admin_id || 'unknown'}</span>
-                                      {e.error ? <span className="text-gray-500"> — {e.error}</span> : null}
-                                    </li>
-                                  ))}
-                                </ul>
+                              {failed > 0 && (
+                                <span className="text-red-500"> · {failed} failed</span>
+                              )}
+                              {suppressed > 0 && (
+                                <span className="text-amber-600"> · {suppressed} in quiet hours</span>
+                              )}
+                              {optedOut > 0 && (
+                                <span className="text-gray-400"> · {optedOut} opted out</span>
                               )}
                             </div>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                </div>
+                            {(!ok && d.reason) && (
+                              <div className="text-[10px] text-gray-400 mt-0.5">
+                                Reason: <code>{d.reason}</code>
+                              </div>
+                            )}
+                            {errs.length > 0 && (
+                              <ul
+                                className="mt-1 space-y-0.5"
+                                data-testid={`notif-prefs-seo-summary-history-row-${i}-errors`}
+                              >
+                                {errs.map((e, ei) => (
+                                  <li key={ei} className="text-[10px] text-red-500 truncate">
+                                    <span className="font-medium">{e.email || e.admin_id || 'unknown'}</span>
+                                    {e.error ? <span className="text-gray-500"> — {e.error}</span> : null}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
               )}
 
               {/* Task #473: per-admin UTC quiet-hours window (consumed by
