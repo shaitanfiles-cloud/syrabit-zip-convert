@@ -632,6 +632,15 @@ async def lifespan(app):
         asyncio.create_task(_bing_keyword_refresh_loop())
     asyncio.create_task(_seo_health_alert_loop())
     asyncio.create_task(_seo_weekly_digest_loop())
+    # Task #458 — daily/weekly auto-publish of SEO pages so the 991 syllabus
+    # topics steadily fill in without admin clicks. Cross-replica dedup is
+    # handled inside the loop via atomic CAS on db.job_locks, so it does not
+    # need a leader gate. No-op when SEO_AUTO_PUBLISH_ENABLED=false.
+    try:
+        from seo_engine import _seo_auto_publish_loop
+        asyncio.create_task(_seo_auto_publish_loop())
+    except Exception as _sap_err:
+        logger.warning(f"seo auto-publish loop not started: {_sap_err}")
     if _is_leader:
         # Single-leader: only one replica should query the CF GraphQL API
         # and write the per-UA report each Monday.

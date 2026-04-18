@@ -5569,6 +5569,229 @@ async def _auto_run_bg(job_id: str, page_types: list):
         _job_update(job_id, status="error", current=f"Pipeline error: {str(e)[:120]}", finished_at=datetime.now(timezone.utc).isoformat())
 
 
+# ─── Scheduled auto-publish (Task #458) ─────────────────────────────────────
+# Periodically run ``_auto_run_bg`` so the 991-topic syllabus steadily fills
+# in without an admin clicking the button. Cross-replica safety is provided
+# by an atomic compare-and-set on ``db.job_locks`` (``_id`` =
+# ``_SEO_AUTO_PUBLISH_LOCK_ID``); the runtime cadence is configurable via
+# environment variables so ops can dial it up/down without a code change.
+
+_SEO_AUTO_PUBLISH_LOCK_ID = "seo_auto_publish_marker"
+_SEO_AUTO_PUBLISH_LAST_RUN_KEY = "last_run_tag"
+_SEO_AUTO_PUBLISH_LOOP_SLEEP_S = 5 * 60  # poll every 5 minutes
+_SEO_AUTO_PUBLISH_WINDOW_MINUTES = 30    # ±30 min around target time
+
+
+def _seo_auto_publish_enabled() -> bool:
+    import os
+    val = (os.environ.get("SEO_AUTO_PUBLISH_ENABLED", "true") or "").strip().lower()
+    return val in ("1", "true", "yes", "on")
+
+
+def _seo_auto_publish_frequency() -> str:
+    import os
+    val = (os.environ.get("SEO_AUTO_PUBLISH_FREQUENCY", "daily") or "").strip().lower()
+    return "weekly" if val == "weekly" else "daily"
+
+
+def _seo_auto_publish_target_hour_utc() -> int:
+    import os
+    try:
+        h = int(os.environ.get("SEO_AUTO_PUBLISH_HOUR_UTC", "2"))
+    except (TypeError, ValueError):
+        h = 2
+    return max(0, min(h, 23))
+
+
+def _seo_auto_publish_weekday() -> int:
+    """Mon=0 .. Sun=6 — only used for weekly mode."""
+    import os
+    try:
+        d = int(os.environ.get("SEO_AUTO_PUBLISH_WEEKDAY", "0"))
+    except (TypeError, ValueError):
+        d = 0
+    return max(0, min(d, 6))
+
+
+def _seo_auto_publish_page_types() -> list:
+    import os
+    raw = (os.environ.get("SEO_AUTO_PUBLISH_PAGE_TYPES", "") or "").strip()
+    if not raw:
+        return list(AUTO_PAGE_TYPES)
+    parts = [p.strip().lower() for p in raw.split(",") if p.strip()]
+    valid = [p for p in parts if p in ALL_PAGE_TYPES]
+    return valid or list(AUTO_PAGE_TYPES)
+
+
+def _seo_auto_publish_run_tag(now_utc: datetime, frequency: str) -> str:
+    if frequency == "weekly":
+        iso_year, iso_week, _ = now_utc.isocalendar()
+        return f"{iso_year}-W{iso_week:02d}"
+    return now_utc.strftime("%Y-%m-%d")
+
+
+def _should_run_seo_auto_publish_now(now_utc: datetime, last_run_tag: str) -> bool:
+    """True iff we are inside the ±window around the configured target time
+    AND the dedup marker hasn't already recorded today's/this-week's tag."""
+    if not _seo_auto_publish_enabled():
+        return False
+    frequency = _seo_auto_publish_frequency()
+    if frequency == "weekly" and now_utc.weekday() != _seo_auto_publish_weekday():
+        return False
+    target_hour = _seo_auto_publish_target_hour_utc()
+    minutes_from_target = (now_utc.hour - target_hour) * 60 + now_utc.minute
+    if abs(minutes_from_target) > _SEO_AUTO_PUBLISH_WINDOW_MINUTES:
+        return False
+    cur_tag = _seo_auto_publish_run_tag(now_utc, frequency)
+    return cur_tag != (last_run_tag or "")
+
+
+async def _claim_seo_auto_publish_slot(db, cur_tag: str) -> bool:
+    """Atomic CAS on ``db.job_locks[_SEO_AUTO_PUBLISH_LOCK_ID]``. Only the
+    first replica that flips the tag from ``!= cur_tag`` to ``cur_tag`` wins
+    the right to run the pipeline this cycle."""
+    from pymongo.errors import DuplicateKeyError
+    try:
+        res = await db.job_locks.find_one_and_update(
+            {
+                "_id": _SEO_AUTO_PUBLISH_LOCK_ID,
+                _SEO_AUTO_PUBLISH_LAST_RUN_KEY: {"$ne": cur_tag},
+            },
+            {"$set": {_SEO_AUTO_PUBLISH_LAST_RUN_KEY: cur_tag,
+                      "claimed_at": datetime.now(timezone.utc).isoformat()}},
+            upsert=False,
+        )
+        if res is not None:
+            return True
+    except Exception as exc:
+        logger.debug(f"[seo-auto-publish] CAS update failed: {exc}")
+        return False
+    try:
+        await db.job_locks.insert_one({
+            "_id": _SEO_AUTO_PUBLISH_LOCK_ID,
+            _SEO_AUTO_PUBLISH_LAST_RUN_KEY: cur_tag,
+            "claimed_at": datetime.now(timezone.utc).isoformat(),
+        })
+        return True
+    except DuplicateKeyError:
+        return False
+    except Exception as exc:
+        logger.debug(f"[seo-auto-publish] bootstrap insert failed: {exc}")
+        return False
+
+
+async def _try_run_seo_auto_publish_once(db, now_utc: Optional[datetime] = None) -> dict:
+    """One iteration of the scheduler loop. Factored out so tests can drive
+    it deterministically without a real wall clock."""
+    now_utc = now_utc or datetime.now(timezone.utc)
+    if not _seo_auto_publish_enabled():
+        return {"ran": False, "reason": "disabled"}
+    try:
+        cfg = await db.job_locks.find_one(
+            {"_id": _SEO_AUTO_PUBLISH_LOCK_ID},
+            {"_id": 0, _SEO_AUTO_PUBLISH_LAST_RUN_KEY: 1},
+        ) or {}
+    except Exception:
+        cfg = {}
+    last_tag = cfg.get(_SEO_AUTO_PUBLISH_LAST_RUN_KEY, "")
+    if not _should_run_seo_auto_publish_now(now_utc, last_tag):
+        return {"ran": False, "reason": "outside_window_or_dedup"}
+
+    cur_tag = _seo_auto_publish_run_tag(now_utc, _seo_auto_publish_frequency())
+    if not await _claim_seo_auto_publish_slot(db, cur_tag):
+        return {"ran": False, "reason": "lost_race"}
+
+    page_types = _seo_auto_publish_page_types()
+    job_id = f"job-sched-{uuid.uuid4().hex[:10]}"
+    _seo_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "queued",
+        "total": 0,
+        "done": 0,
+        "errors": 0,
+        "skipped": 0,
+        "current": "Scheduled auto-publish starting…",
+        "started_at": now_utc.isoformat(),
+        "finished_at": None,
+        "page_types": page_types,
+        "trigger": "scheduler",
+        "schedule_tag": cur_tag,
+    }
+    logger.info(
+        f"[seo-auto-publish] starting scheduled run job_id={job_id} "
+        f"tag={cur_tag} page_types={page_types}"
+    )
+    asyncio.create_task(_seo_log(
+        "seo_auto_publish_started",
+        f"Scheduled auto-publish started (tag={cur_tag}, page_types={','.join(page_types)})",
+        "info",
+    ))
+    # Fire-and-forget — `_auto_run_bg` already persists the run summary
+    # (with outcomes/reasons/avg scores) to ``db.seo_generation_log`` so the
+    # admin Stats endpoint surfaces it as the most recent generation.
+    asyncio.create_task(_auto_run_bg(job_id, page_types))
+    return {"ran": True, "job_id": job_id, "tag": cur_tag, "page_types": page_types}
+
+
+async def _seo_auto_publish_loop():
+    """Background loop: polls every 5 minutes and fires the auto-run pipeline
+    once per day (or per week) inside a ±30 min window around the configured
+    target hour. Cross-replica dedup via ``db.job_locks`` so multi-worker
+    deployments don't multiply LLM spend."""
+    from deps import db, is_mongo_available  # type: ignore
+    # Slightly longer warm-up than the SEO digest loop so we never compete
+    # with the burst of startup migrations/backfills for DB attention.
+    await asyncio.sleep(720)
+    while True:
+        try:
+            if _seo_auto_publish_enabled() and await is_mongo_available():
+                await _try_run_seo_auto_publish_once(db)
+        except Exception as exc:
+            logger.debug(f"[seo-auto-publish] loop iteration error: {exc}")
+        await asyncio.sleep(_SEO_AUTO_PUBLISH_LOOP_SLEEP_S)
+
+
+# ─── ADMIN: Scheduled auto-publish status ───────────────────────────────────
+
+@router.get("/auto-publish/schedule")
+async def auto_publish_schedule(_admin: dict = Depends(_require_admin)):
+    """Surface scheduler config + recent scheduled runs so admins can verify
+    the cron is firing without needing shell access."""
+    cfg = {
+        "enabled": _seo_auto_publish_enabled(),
+        "frequency": _seo_auto_publish_frequency(),
+        "target_hour_utc": _seo_auto_publish_target_hour_utc(),
+        "weekday": _seo_auto_publish_weekday(),
+        "page_types": _seo_auto_publish_page_types(),
+        "window_minutes": _SEO_AUTO_PUBLISH_WINDOW_MINUTES,
+        "loop_interval_seconds": _SEO_AUTO_PUBLISH_LOOP_SLEEP_S,
+    }
+    last_marker = None
+    recent_runs: list = []
+    if _db is not None:
+        try:
+            last_marker = await _db.job_locks.find_one(
+                {"_id": _SEO_AUTO_PUBLISH_LOCK_ID}, {"_id": 0}
+            )
+        except Exception:
+            last_marker = None
+        try:
+            cursor = _db.seo_generation_log.find(
+                {"job_id": {"$regex": "^job-sched-"}},
+                {"_id": 0, "job_id": 1, "completed_at": 1, "total_generated": 1,
+                 "skipped": 1, "errors": 1, "new_topics": 1, "avg_seo_score": 1,
+                 "avg_geo_score": 1, "page_types": 1},
+            ).sort("completed_at", -1).limit(10)
+            recent_runs = await cursor.to_list(10)
+        except Exception:
+            recent_runs = []
+    return {
+        "config": cfg,
+        "last_marker": last_marker,
+        "recent_runs": recent_runs,
+    }
+
+
 # ─── ADMIN: Gap-fill insights ────────────────────────────────────────────────
 
 @router.get("/insights")
