@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   wrapKvNamespace,
   getUsageSnapshot,
+  getUsageSnapshotAggregated,
   _resetMonitorStateForTests,
   DEFAULT_QUOTA,
 } from "../src/kv-monitor";
@@ -429,6 +430,76 @@ describe("worker default fetch handler under a KV outage", () => {
       expect(beacon.status).not.toBe(429);
     } finally {
       globalThis.fetch = origFetch;
+    }
+  });
+});
+
+/* ───────────── cross-isolate counter aggregation ─────────────
+   Verifies that the global daily total reflects every isolate's
+   ops, not just the current one. We simulate a second isolate by
+   pre-seeding the shared KV store with another isolate's counters,
+   then asserting the aggregated snapshot adds them to ours. */
+
+describe("cross-isolate aggregation", () => {
+  it("sums shared __kv_usage:* keys across isolates", async () => {
+    const inner = new FakeKv();
+    const day = new Date().toISOString().slice(0, 10);
+    // Pre-seed the shared store with a sibling isolate's counters.
+    await inner.put(
+      `__kv_usage:RATE_LIMIT:${day}:other-isolate-id`,
+      JSON.stringify({ read: 50, write: 5, list: 0, delete: 0 }),
+    );
+
+    const kv = wrapKvNamespace(inner as unknown as KVNamespace, "RATE_LIMIT", { ctx: noopCtx });
+    // Local ops in this isolate.
+    await kv.get("a");
+    await kv.get("b");
+    await kv.put("a", "v");
+
+    const snap = await getUsageSnapshotAggregated(
+      [{ binding: "RATE_LIMIT", kv: inner as unknown as KVNamespace }],
+      { quota: { read: 100, write: 10, list: 100, delete: 100 } },
+    );
+    // Local: 2 reads + 1 write (+ aggregated flush write).
+    // Sibling: 50 reads + 5 writes.
+    expect(snap.bindings[0].counters.read).toBeGreaterThanOrEqual(52);
+    expect(snap.bindings[0].counters.write).toBeGreaterThanOrEqual(6);
+  });
+});
+
+/* ───────────── deferred writes survive day rollover ─────────────
+   When yesterday's quota was blown and today has fresh quota, the
+   queued writes must be replayed — not silently dropped. */
+
+describe("deferred writes across day rollover", () => {
+  it("retains queued writes when the UTC day rolls over and replays them on next put()", async () => {
+    vi.useFakeTimers();
+    try {
+      const inner = new FakeKv();
+      inner.failAll = true; // forces every put into the deferred queue
+      const kv = wrapKvNamespace(inner as unknown as KVNamespace, "RATE_LIMIT", { ctx: noopCtx });
+      await kv.put("queued-a", "v1");
+      await kv.put("queued-b", "v2");
+      // Sanity: nothing in the underlying store yet (peek without
+      // tripping the failAll switch).
+      inner.failAll = false;
+      expect(await inner.get("queued-a")).toBeNull();
+      inner.failAll = true;
+
+      // Advance system time past UTC midnight to force a day rollover
+      // on the next op. Counters reset; the queue must NOT be cleared.
+      vi.setSystemTime(new Date(Date.now() + 25 * 60 * 60 * 1000));
+      inner.failAll = false;
+      await kv.put("fresh-c", "v3");
+      // Allow the deferred replay (1s backoff) to fire and drain both
+      // queued entries against the now-healthy KV.
+      await vi.advanceTimersByTimeAsync(2000);
+
+      expect(await inner.get("queued-a")).toBe("v1");
+      expect(await inner.get("queued-b")).toBe("v2");
+      expect(await inner.get("fresh-c")).toBe("v3");
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

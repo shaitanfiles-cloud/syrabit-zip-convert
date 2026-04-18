@@ -11,6 +11,7 @@ import { syncFromPayload, getSyncStatus } from "./d1-sync";
 import {
   wrapKvNamespace,
   getUsageSnapshot,
+  getUsageSnapshotAggregated,
   type WrapKvOptions,
   type KvUsageQuota,
 } from "./kv-monitor";
@@ -66,7 +67,7 @@ function wrapEnvKv(env: Env, ctx: ExecutionContext): Env {
   return wrapped;
 }
 
-function handleKvUsage(env: Env, request: Request, cors: Record<string, string>): Response {
+async function handleKvUsage(env: Env, request: Request, cors: Record<string, string>): Promise<Response> {
   const provided = request.headers.get("X-Edge-Admin-Secret") || "";
   if (!env.D1_SYNC_SECRET || provided !== env.D1_SYNC_SECRET) {
     return new Response(JSON.stringify({ detail: "Unauthorized" }), {
@@ -74,10 +75,30 @@ function handleKvUsage(env: Env, request: Request, cors: Record<string, string>)
       headers: { ...cors, "Content-Type": "application/json" },
     });
   }
-  const snapshot = getUsageSnapshot([...KV_BINDINGS], buildKvMonitorOpts(env, {
+  // Use the aggregated snapshot so the dashboard shows global Worker
+  // usage (sum across all isolates that have flushed to the shared
+  // `__kv_usage:*` keys), not just this isolate's slice.
+  const opts = buildKvMonitorOpts(env, {
     waitUntil: () => undefined,
     passThroughOnException: () => undefined,
-  } as unknown as ExecutionContext));
+  } as unknown as ExecutionContext);
+  const bindingArgs: Array<{ binding: string; kv: KVNamespace }> = [];
+  // NOTE: env was already wrapped by `wrapEnvKv` for the request, but
+  // the underlying KV bindings on the original env object are what we
+  // want for the shared-store reads/writes (so they don't recurse
+  // through the monitor wrapper). The wrapper does not mutate the
+  // original env, so we'd have to access the raw bindings — but here
+  // env is the WRAPPED env. Calling list/get on the wrapper still
+  // works; the wrapper just counts them too (a small, predictable
+  // overhead for the snapshot endpoint).
+  if (env.RATE_LIMIT) bindingArgs.push({ binding: "RATE_LIMIT", kv: env.RATE_LIMIT });
+  if (env.BOT_HTML_CACHE) bindingArgs.push({ binding: "BOT_HTML_CACHE", kv: env.BOT_HTML_CACHE });
+  let snapshot;
+  try {
+    snapshot = await getUsageSnapshotAggregated(bindingArgs, opts);
+  } catch {
+    snapshot = getUsageSnapshot([...KV_BINDINGS], opts);
+  }
   return new Response(JSON.stringify(snapshot), {
     status: 200,
     headers: {

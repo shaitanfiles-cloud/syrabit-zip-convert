@@ -98,11 +98,23 @@ function rollDayIfNeeded(): void {
       s.counters = { read: 0, write: 0, list: 0, delete: 0 };
       s.alertedToday = new Set();
       s.fallbackActive = false;
-      // Drop the deferred queue too — its target day is gone.
-      s.fallbackWriteQueue.clear();
+      // Deferred writes intentionally survive the day rollover: the
+      // queue exists precisely because the previous day's quota was
+      // exhausted, and the new day's fresh quota is exactly when we
+      // want to drain it. The wrapper's replay loop will flush them
+      // out on the next put() / on the next ctx.waitUntil tick.
     }
   }
 }
+
+/* ───── per-isolate identity for cross-isolate counter aggregation ───── */
+const _isolateId: string =
+  (typeof crypto !== "undefined" && (crypto as Crypto).randomUUID)
+    ? (crypto as Crypto).randomUUID()
+    : Math.random().toString(36).slice(2) + Date.now().toString(36);
+const SHARED_COUNTER_PREFIX = "__kv_usage:";
+const FLUSH_EVERY_OPS = 10;
+const _opsSinceFlush: Map<string, number> = new Map();
 
 function getBindingState(binding: string): BindingState {
   rollDayIfNeeded();
@@ -123,6 +135,22 @@ function getBindingState(binding: string): BindingState {
 function bump(binding: string, op: KvOp): void {
   const s = getBindingState(binding);
   s.counters[op] = (s.counters[op] ?? 0) + 1;
+}
+
+/** Schedule a shared-counter flush every Nth op via ctx.waitUntil so
+ *  cross-isolate aggregation stays roughly current without blocking
+ *  the request. Skipped when no underlying KV / ExecutionContext is
+ *  available (e.g. in unit tests). */
+function maybeFlush(binding: string, kv: KVNamespace | undefined, ctx?: ExecutionContext): void {
+  if (!kv) return;
+  const n = (_opsSinceFlush.get(binding) ?? 0) + 1;
+  if (n < FLUSH_EVERY_OPS) {
+    _opsSinceFlush.set(binding, n);
+    return;
+  }
+  _opsSinceFlush.set(binding, 0);
+  const p = flushSharedCounter(binding, kv);
+  if (ctx) ctx.waitUntil(p); else void p;
 }
 
 /** Reset all in-memory state. Test-only. */
@@ -149,6 +177,10 @@ function statusFor(counters: KvUsageCounters, quota: KvUsageQuota, warningPct: n
   return { percentages, status };
 }
 
+/** Backwards-compat sync snapshot: uses isolate-local counters only.
+ *  Prefer `getUsageSnapshotAggregated` when you have the underlying KV
+ *  namespaces, since it sums counters across all worker isolates that
+ *  have flushed to the shared `__kv_usage:*` keys. */
 export function getUsageSnapshot(
   bindings: string[],
   ctx: MonitorAlertContext = {},
@@ -172,6 +204,73 @@ export function getUsageSnapshot(
     });
   }
   return { utcDay: _currentDay, warningPct, bindings: out };
+}
+
+/** Async cross-isolate snapshot. For each binding, flushes the local
+ *  isolate's counters to a shared KV key, lists every isolate's key for
+ *  today, and sums them. This is what the dashboard endpoint uses so
+ *  the numbers reflect global Worker traffic, not just one isolate. */
+export async function getUsageSnapshotAggregated(
+  bindings: Array<{ binding: string; kv: KVNamespace }>,
+  ctx: MonitorAlertContext = {},
+): Promise<KvUsageSnapshot> {
+  rollDayIfNeeded();
+  const quota = { ...DEFAULT_QUOTA, ...(ctx.quota || {}) };
+  const warningPct = ctx.warningPct ?? DEFAULT_WARNING_PCT;
+  const out: KvBindingUsage[] = [];
+  for (const { binding, kv } of bindings) {
+    const local = getBindingState(binding);
+    // Flush our local counter so the listing below includes us.
+    await flushSharedCounter(binding, kv);
+    let aggregated: KvUsageCounters = { read: 0, write: 0, list: 0, delete: 0 };
+    try {
+      const listResult = await kv.list({
+        prefix: `${SHARED_COUNTER_PREFIX}${binding}:${_currentDay}:`,
+      });
+      const keys = (listResult as { keys: { name: string }[] }).keys || [];
+      for (const k of keys) {
+        try {
+          const raw = await kv.get(k.name);
+          if (!raw) continue;
+          const parsed = JSON.parse(raw) as KvUsageCounters;
+          for (const op of ["read", "write", "list", "delete"] as KvOp[]) {
+            aggregated[op] += parsed[op] ?? 0;
+          }
+        } catch { /* skip malformed isolate entry */ }
+      }
+    } catch {
+      // Listing failed (KV outage) — fall back to local-only counters
+      // so the panel still has data to show.
+      aggregated = { ...local.counters };
+    }
+    // If the shared store had nothing yet (cold isolate), use local.
+    const sum = aggregated.read + aggregated.write + aggregated.list + aggregated.delete;
+    if (sum === 0) aggregated = { ...local.counters };
+    const { percentages, status } = statusFor(aggregated, quota, warningPct);
+    out.push({
+      binding,
+      utcDay: _currentDay,
+      counters: aggregated,
+      quota,
+      percentages,
+      status,
+      fallbackActive: local.fallbackActive,
+      lastAlertFired: local.lastAlertFired,
+    });
+  }
+  return { utcDay: _currentDay, warningPct, bindings: out };
+}
+
+/** Persist this isolate's per-binding counters under a unique shared
+ *  key so other isolates can sum them. Uses the underlying (unwrapped)
+ *  KV directly so it doesn't recurse through the monitor wrapper. */
+async function flushSharedCounter(binding: string, kv: KVNamespace): Promise<void> {
+  rollDayIfNeeded();
+  const s = getBindingState(binding);
+  const key = `${SHARED_COUNTER_PREFIX}${binding}:${_currentDay}:${_isolateId}`;
+  try {
+    await kv.put(key, JSON.stringify(s.counters), { expirationTtl: 60 * 60 * 48 });
+  } catch { /* shared-store write best-effort */ }
 }
 
 /* ─────────────────────── alerting ─────────────────────── */
@@ -305,6 +404,7 @@ export function wrapKvNamespace(
   return {
     async get(key: string, getOpts?: KVNamespaceGetOptions<undefined> | "text"): Promise<string | null> {
       bump(binding, "read");
+      maybeFlush(binding, kv, opts.ctx);
       void maybeFireAlert(binding, "read", opts, opts.ctx);
       if (isOverQuota(binding, "read", opts)) {
         // Proactive near-quota fallback: don't even attempt KV.
@@ -327,6 +427,7 @@ export function wrapKvNamespace(
     },
     async put(key: string, value: string, putOpts?: KVNamespacePutOptions): Promise<void> {
       bump(binding, "write");
+      maybeFlush(binding, kv, opts.ctx);
       void maybeFireAlert(binding, "write", opts, opts.ctx);
       if (isOverQuota(binding, "write", opts)) {
         // Proactive near-quota fallback: queue the write for later.
@@ -346,6 +447,7 @@ export function wrapKvNamespace(
     },
     async delete(key: string): Promise<void> {
       bump(binding, "delete");
+      maybeFlush(binding, kv, opts.ctx);
       void maybeFireAlert(binding, "delete", opts, opts.ctx);
       try {
         await kv.delete(key);
@@ -353,6 +455,7 @@ export function wrapKvNamespace(
     },
     async list(listOpts?: KVNamespaceListOptions): Promise<KVNamespaceListResult<unknown>> {
       bump(binding, "list");
+      maybeFlush(binding, kv, opts.ctx);
       void maybeFireAlert(binding, "list", opts, opts.ctx);
       try {
         return await kv.list(listOpts);
