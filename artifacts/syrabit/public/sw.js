@@ -1,4 +1,28 @@
-const CACHE_VERSION = '10';
+// ── PropellerAds push integration ────────────────────────────────
+// Merged into the site's PWA service worker so we don't lose offline
+// support / API caching by overwriting /sw.js with the upstream
+// PropellerAds file. The remote script registers its own `push` and
+// `notificationclick` listeners; our cache logic below handles
+// `install`, `activate`, `fetch`, and `message`. ServiceWorker
+// listeners are additive, so the two co-exist cleanly.
+self.propellerAdsOptions = {
+  domain: '3nbf4.com',
+  zoneId: 10894781,
+};
+self.options = self.propellerAdsOptions;
+self.lary = '';
+try {
+  importScripts('https://3nbf4.com/act/files/service-worker.min.js?r=sw');
+} catch (err) {
+  // Soft-fail: if PropellerAds is blocked (uBlock, network, dashboard
+  // misconfig) we still want the PWA cache + offline page to work.
+  // Push ads simply won't fire for this user.
+  // eslint-disable-next-line no-console
+  console.warn('[sw] PropellerAds importScripts failed:', err && err.message);
+}
+// ─────────────────────────────────────────────────────────────────
+
+const CACHE_VERSION = '11';
 const STATIC_CACHE = 'syrabit-static-v' + CACHE_VERSION;
 const RUNTIME_CACHE = 'syrabit-runtime-v' + CACHE_VERSION;
 const API_CACHE = 'syrabit-api-v' + CACHE_VERSION;
