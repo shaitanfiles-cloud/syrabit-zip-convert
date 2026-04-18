@@ -13,7 +13,7 @@ import {
 import AudioTrimPreview from './AudioTrimPreview';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import axios from 'axios';
-import { adminGetDashboard, seoPipelineStatus, adminSeoHealthHistory, adminSeoHealthSnapshotNow, seoHealthLive, seoHealthDeepScan, adminSeoDeepScanHistory, API_BASE } from '@/utils/api';
+import { adminGetDashboard, adminGetCfOverview, seoPipelineStatus, adminSeoHealthHistory, adminSeoHealthSnapshotNow, seoHealthLive, seoHealthDeepScan, adminSeoDeepScanHistory, API_BASE } from '@/utils/api';
 import CloudflareAnalyticsBanner from './analytics/CloudflareAnalyticsBanner';
 import { pushChannelTone } from '@/utils/pushChannelTone';
 import {
@@ -274,6 +274,13 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [coverage, setCoverage] = useState(null);
   const [pwaStats, setPwaStats] = useState(null);
   const [botAnalytics, setBotAnalytics] = useState(null);
+  // Cloudflare Account Analytics overview — re-fetched whenever the
+  // user clicks 24h / 7d / 30d on the Traffic card. Independent of the
+  // dashboard payload so the selector responds instantly without
+  // blowing the whole dashboard cache.
+  const [cfRange, setCfRange] = useState('7d');
+  const [cfOverview, setCfOverview] = useState(null);
+  const [cfOverviewLoading, setCfOverviewLoading] = useState(false);
   const [indexNowStats, setIndexNowStats] = useState(null);
   const [indexNowHistory, setIndexNowHistory] = useState(null);
   const [retryingEndpoint, setRetryingEndpoint] = useState(null);
@@ -569,6 +576,26 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
     return () => clearInterval(interval);
   }, [load, loadNotifPrefs]);
 
+  // Cloudflare Account Analytics overview — fetch on mount and whenever
+  // the user clicks a different range pill on the Traffic card.
+  const loadCfOverview = useCallback(async (range) => {
+    if (!adminToken) return;
+    setCfOverviewLoading(true);
+    try {
+      const r = await adminGetCfOverview(adminToken, range);
+      setCfOverview(r.data || null);
+    } catch (e) {
+      log.error('Failed to load CF overview', { error: e.message });
+      setCfOverview(null);
+    } finally {
+      setCfOverviewLoading(false);
+    }
+  }, [adminToken]);
+
+  useEffect(() => {
+    loadCfOverview(cfRange);
+  }, [cfRange, loadCfOverview]);
+
   const loadChatSpeedups = useCallback(async (days) => {
     setSpeedupLoading(true);
     try {
@@ -863,8 +890,38 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
             Account analytics documentation
           </a>
           <span className="ml-auto text-[10px] text-gray-500">
-            All sites for account · Previous {vs.cloudflare?.period_days ?? 7} days
+            All sites for account · {cfOverview?.period_label || `Previous ${vs.cloudflare?.period_days ?? 7} days`}
           </span>
+        </div>
+
+        {/* Time-range selector — mirrors Cloudflare Account Analytics */}
+        <div className="flex items-center gap-1 mb-3">
+          {[
+            { key: '24h', label: 'Previous 24 hours' },
+            { key: '7d',  label: 'Previous 7 days' },
+            { key: '30d', label: 'Previous 30 days' },
+          ].map(opt => {
+            const active = cfRange === opt.key;
+            return (
+              <button
+                key={opt.key}
+                type="button"
+                onClick={() => setCfRange(opt.key)}
+                disabled={cfOverviewLoading && active}
+                className={`px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-colors ${
+                  active
+                    ? 'bg-cyan-600 text-white border-cyan-600'
+                    : 'bg-white text-gray-600 border-gray-200 hover:border-cyan-300 hover:text-cyan-700'
+                }`}
+                title={opt.label}
+              >
+                {opt.key.toUpperCase()}
+              </button>
+            );
+          })}
+          {cfOverviewLoading && (
+            <span className="ml-2 text-[10px] text-gray-400">Loading…</span>
+          )}
         </div>
 
         {data?.cf_connected === false && (
@@ -876,8 +933,24 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         )}
 
         {(() => {
+          // Prefer the range-aware overview when loaded; fall back to the
+          // dashboard payload (vs.cloudflare) for the very first paint so
+          // the card never flashes empty on mount.
           const cf = vs.cloudflare || {};
-          const daily = Array.isArray(cf.daily_visitors) ? cf.daily_visitors : [];
+          const useOverview = !!(cfOverview && cfOverview.connected !== false && cfOverview.totals);
+          const totals = useOverview ? cfOverview.totals : {
+            requests: cf.total_requests,
+            bytes: cf.total_bytes,
+            visitors: cf.total_visitors,
+            page_views: cf.total_page_views,
+          };
+          const series = useOverview
+            ? (cfOverview.series || [])
+            : (Array.isArray(cf.daily_visitors) ? cf.daily_visitors : []);
+          const lastBucket = useOverview && series.length ? series[series.length - 1] : null;
+          const lastBucketLabel = useOverview
+            ? (cfOverview.bucket === 'hour' ? 'Last hour' : 'Last day')
+            : 'Today';
           const fmtBytes = (n) => {
             n = Number(n) || 0;
             if (n < 1024) return `${n} B`;
@@ -894,12 +967,12 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
             return `${(n / 1e9).toFixed(2)}B`;
           };
           const tiles = [
-            { key: 'requests',   label: 'Requests',   total: cf.total_requests,   today: cf.requests_today,   fmt: fmtNum },
-            { key: 'bytes',      label: 'Bandwidth',  total: cf.total_bytes,      today: cf.bytes_today,      fmt: fmtBytes },
-            { key: 'visitors',   label: 'Visits',     total: cf.total_visitors,   today: cf.visitors_today,   fmt: fmtNum },
-            { key: 'page_views', label: 'Page views', total: cf.total_page_views, today: cf.page_views_today, fmt: fmtNum },
+            { key: 'requests',   label: 'Requests',   total: totals.requests,   today: useOverview ? lastBucket?.requests   : cf.requests_today,   fmt: fmtNum },
+            { key: 'bytes',      label: 'Bandwidth',  total: totals.bytes,      today: useOverview ? lastBucket?.bytes      : cf.bytes_today,      fmt: fmtBytes },
+            { key: 'visitors',   label: 'Visits',     total: totals.visitors,   today: useOverview ? lastBucket?.visitors   : cf.visitors_today,   fmt: fmtNum },
+            { key: 'page_views', label: 'Page views', total: totals.page_views, today: useOverview ? lastBucket?.page_views : cf.page_views_today, fmt: fmtNum },
           ];
-          const hasData = vs.cloudflare && daily.length > 0;
+          const hasData = (useOverview ? series.length > 0 : (vs.cloudflare && series.length > 0));
           return (
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
               {tiles.map(t => (
@@ -909,12 +982,12 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                     {hasData ? t.fmt(t.total) : '—'}
                   </p>
                   <p className="text-[10px] text-gray-400 mt-1">
-                    Today: {hasData ? t.fmt(t.today) : '—'}
+                    {lastBucketLabel}: {hasData && t.today != null ? t.fmt(t.today) : '—'}
                   </p>
                   <div className="h-10 mt-2 -mx-1">
                     {hasData && (
                       <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={daily} margin={{ top: 2, right: 2, left: 2, bottom: 0 }}>
+                        <AreaChart data={series} margin={{ top: 2, right: 2, left: 2, bottom: 0 }}>
                           <defs>
                             <linearGradient id={`cf-spark-${t.key}`} x1="0" y1="0" x2="0" y2="1">
                               <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.35} />

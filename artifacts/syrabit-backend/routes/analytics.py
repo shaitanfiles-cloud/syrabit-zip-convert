@@ -63,6 +63,20 @@ async def admin_cf_status(admin: dict = Depends(get_admin_user)):
     return status_obj
 
 
+@router.get("/admin/analytics/cf-overview")
+async def admin_cf_overview(range: str = "7d", admin: dict = Depends(get_admin_user)):
+    """Cloudflare-mirror analytics overview (Requests / Bandwidth / Visits /
+    Page views) for the admin Traffic card. ``range`` is ``24h`` / ``7d`` / ``30d``
+    matching the Cloudflare Account Analytics time selector."""
+    if range not in ("24h", "7d", "30d"):
+        range = "7d"
+    overview = await cloudflare_client.get_cf_overview(range_key=range)
+    if overview is None:
+        # Pass auth/breaker status through so the UI can render the rotation banner
+        return {"connected": False, "range": range, "status": cloudflare_client.get_auth_status()}
+    return {"connected": True, **overview}
+
+
 @router.post("/admin/analytics/cf-recheck")
 async def admin_cf_recheck(admin: dict = Depends(get_admin_user)):
     """Reset the auth circuit breaker and re-probe Cloudflare immediately.

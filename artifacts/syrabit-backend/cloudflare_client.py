@@ -376,6 +376,127 @@ async def get_visitor_stats_cf(days: int = 7) -> Optional[dict]:
         return None
 
 
+async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
+    """Cloudflare-mirror analytics overview with selectable time range.
+
+    Returns ``{requests, bytes, visitors, page_views}`` totals and a uniform
+    ``series`` list (one entry per bucket: hour for 24h, day for 7d/30d) with
+    ``{ts, requests, bytes, visitors, page_views}`` fields. ``range_key`` is
+    one of ``"24h"``, ``"7d"``, ``"30d"`` (anything else falls back to 7d).
+
+    For ``24h`` we use the hourly dataset (``httpRequests1hGroups``) so the
+    sparkline shows 24 buckets. For ``7d``/``30d`` we use the daily dataset
+    that matches what the Cloudflare account-analytics dashboard renders.
+    """
+    if not is_configured():
+        return None
+
+    zone_id = _cfg()["zone_id"]
+    now = datetime.now(timezone.utc)
+
+    if range_key == "24h":
+        # Hourly buckets, exact 24-hour rolling window. Cloudflare aligns
+        # hourly buckets to the top of the hour, so a naive `now - 24h`
+        # range may straddle 25 buckets. We over-fetch slightly and then
+        # slice to the last 24 entries below for a precise window.
+        since = now - timedelta(hours=24)
+        since_str = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+        until_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        query = """
+        query CfOverviewHourly($zoneTag: String!, $since: String!, $until: String!) {
+          viewer {
+            zones(filter: { zoneTag: $zoneTag }) {
+              series: httpRequests1hGroups(
+                filter: { datetime_geq: $since, datetime_lt: $until }
+                orderBy: [datetime_ASC]
+                limit: 48
+              ) {
+                dimensions { datetime }
+                sum { requests pageViews bytes }
+                uniq { uniques }
+              }
+            }
+          }
+        }
+        """
+        variables = {"zoneTag": zone_id, "since": since_str, "until": until_str}
+        period_label = "Previous 24 hours"
+        bucket = "hour"
+    else:
+        days = 30 if range_key == "30d" else 7
+        # `date_geq` + `date_leq` is inclusive on both ends, so to get
+        # exactly N daily buckets we step back (days - 1) from today.
+        since_d = (now - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+        until_d = now.strftime("%Y-%m-%d")
+        query = """
+        query CfOverviewDaily($zoneTag: String!, $since: String!, $until: String!) {
+          viewer {
+            zones(filter: { zoneTag: $zoneTag }) {
+              series: httpRequests1dGroups(
+                filter: { date_geq: $since, date_leq: $until }
+                orderBy: [date_ASC]
+                limit: 100
+              ) {
+                dimensions { date }
+                sum { requests pageViews bytes }
+                uniq { uniques }
+              }
+            }
+          }
+        }
+        """
+        variables = {"zoneTag": zone_id, "since": since_d, "until": until_d}
+        period_label = f"Previous {days} days"
+        bucket = "day"
+
+    data = await _graphql_query(query, variables)
+    if not data:
+        return None
+
+    try:
+        zones = data.get("viewer", {}).get("zones", []) or []
+        if not zones:
+            return None
+        rows = zones[0].get("series", []) or []
+        # Trim to exact bucket count for the requested range.
+        max_buckets = 24 if bucket == "hour" else (30 if range_key == "30d" else 7)
+        if len(rows) > max_buckets:
+            rows = rows[-max_buckets:]
+        series = []
+        totals = {"requests": 0, "bytes": 0, "visitors": 0, "page_views": 0}
+        for row in rows:
+            dims = row.get("dimensions", {}) or {}
+            ts = dims.get("datetime") or dims.get("date") or ""
+            s = row.get("sum", {}) or {}
+            u = row.get("uniq", {}) or {}
+            req = int(s.get("requests", 0) or 0)
+            byt = int(s.get("bytes", 0) or 0)
+            pv = int(s.get("pageViews", 0) or 0)
+            vis = int(u.get("uniques", 0) or 0)
+            totals["requests"] += req
+            totals["bytes"] += byt
+            totals["page_views"] += pv
+            totals["visitors"] += vis
+            series.append({
+                "ts": ts,
+                "requests": req,
+                "bytes": byt,
+                "page_views": pv,
+                "visitors": vis,
+            })
+        return {
+            "range": range_key if range_key in ("24h", "7d", "30d") else "7d",
+            "bucket": bucket,
+            "period_label": period_label,
+            "totals": totals,
+            "series": series,
+            "source": "cloudflare",
+        }
+    except Exception as e:
+        logger.warning(f"CF overview parsing failed: {e}")
+        return None
+
+
 async def get_historical_daily(days: int = 90) -> Optional[list]:
     if not is_configured():
         return None

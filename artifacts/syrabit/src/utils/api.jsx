@@ -203,6 +203,15 @@ export const adminGetCfStatus = (token) =>
 export const adminCfRecheck = (token) =>
   axios.post(`${API_BASE}/admin/analytics/cf-recheck`, {}, { headers: adminHeaders(token), withCredentials: true });
 
+// Cloudflare-mirror Account Analytics overview for the Traffic card.
+// `range` is "24h" | "7d" | "30d".
+export const adminGetCfOverview = (token, range = '7d') =>
+  axios.get(`${API_BASE}/admin/analytics/cf-overview`, {
+    params: { range },
+    headers: adminHeaders(token),
+    withCredentials: true,
+  });
+
 // Task #408: hydrate-lifecycle / stale-build telemetry tile
 export const adminGetHydrateStats = (token, days = 7) =>
   axios.get(`${API_BASE}/admin/analytics/hydrate-stats`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
