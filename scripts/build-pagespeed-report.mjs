@@ -262,10 +262,41 @@ md += `- **Top opportunity overall: "${topFixes[0]?.title || '—'}"** ` +
       `(estimated ${Math.round(topFixes[0]?.totalMs || 0)} ms / ${fmtKb(topFixes[0]?.totalBytes || 0)} cumulative savings across the audited surface). ` +
       `See [Top 10 fixes](#top-10-prioritized-fixes) below.\n\n`;
 
-md += `### 🚨 Two SEO red flags worth flagging before perf work\n\n`;
-md += `1. **Every audited URL fails Lighthouse's \`canonical\` SEO audit (12/12 routes, mobile + desktop).** ` +
-      `\`index.html\` ships a single hard-coded \`<link rel="canonical" href="https://syrabit.ai/">\` that is the same on every route, so Lighthouse treats every non-root URL as having a canonical that points elsewhere. Per-route canonicals (already set inside the React tree via \`PageMeta\`) likely arrive after Lighthouse evaluates the SEO category. Fix: emit a route-specific canonical at SSR/prerender time, or remove the static one from \`index.html\` and let \`react-helmet-async\` own it. **Risk: Google may merge ranking signals from all routes onto \`/\`.**\n`;
-md += `2. **\`/chat\` is blocked from indexing by \`robots.txt\` (line 248).** \`/chat\` is the destination of the \`/\` redirect — i.e. it _is_ the user-facing homepage — but the audit confirms it returns "Page is blocked from indexing." \`/admin/login\` failing the same check is fine and expected. Fix: remove \`/chat\` from the \`Disallow\` block, or change \`/\` to render the chat shell directly instead of redirecting.\n\n`;
+// SEO red flags: data-driven from this run's diagnostics so the section
+// never goes stale relative to the raw audit data.
+function countRouteFailures(auditId) {
+  let count = 0;
+  const failedRoutes = [];
+  for (const r of routes) {
+    const m = r.mobile;
+    if (!m) continue;
+    const hit = m.diagnostics.find((d) => d.id === auditId) || m.opportunities.find((o) => o.id === auditId);
+    if (hit) { count += 1; failedRoutes.push(r.path); }
+  }
+  return { count, failedRoutes };
+}
+const canonicalFails = countRouteFailures('canonical');
+const crawlableFails = countRouteFailures('is-crawlable');
+const seoRedFlags = [];
+if (canonicalFails.count > 0) {
+  seoRedFlags.push(
+    `**${canonicalFails.count}/${routes.length} mobile routes fail Lighthouse's \`canonical\` SEO audit.** ` +
+    `Failing routes: ${canonicalFails.failedRoutes.map((p) => '`' + p + '`').join(', ')}. ` +
+    `Most common cause: per-route canonicals are emitted by client-side React after hydration, so the byte-zero HTML Lighthouse evaluates has no canonical (or has a stale, hard-coded one in \`index.html\`). Fix: emit the correct canonical at SSR/prerender/edge-render time so it's present on the first byte.`
+  );
+}
+if (crawlableFails.count > 0) {
+  seoRedFlags.push(
+    `**${crawlableFails.count}/${routes.length} mobile routes fail \`is-crawlable\`** (page blocked from indexing). ` +
+    `Failing routes: ${crawlableFails.failedRoutes.map((p) => '`' + p + '`').join(', ')}. ` +
+    `Check \`robots.txt\`, \`<meta name="robots">\` tags, and \`X-Robots-Tag\` response headers for these paths. Some (e.g. \`/admin/login\`) may be intentionally blocked.`
+  );
+}
+if (seoRedFlags.length > 0) {
+  md += `### 🚨 SEO red flags detected in this run\n\n`;
+  seoRedFlags.forEach((line, i) => { md += `${i + 1}. ${line}\n`; });
+  md += `\n`;
+}
 
 md += `> **Reading the badges:** 🟢 = passes Google's "good" threshold · 🟡 = "needs improvement" · 🔴 = "poor". ` +
       `LCP ≤ 2500 ms, INP ≤ 200 ms, CLS ≤ 0.10, FCP ≤ 1800 ms, TTFB ≤ 800 ms.\n\n`;

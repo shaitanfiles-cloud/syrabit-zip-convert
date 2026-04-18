@@ -377,3 +377,53 @@ Ranked by **estimated cumulative mobile savings × number of routes affected**. 
 - No code changes were made — this report is audit-only. Fixes from the Top 10 list should be opened as separate, focused tasks.
 - Authenticated-only flows were not exercised: `/profile` and `/admin` were audited as their logged-out shells (the auth guard renders a redirect/login skeleton, which is what crawlers see anyway).
 - Backend latency was not load-tested separately — TTFB numbers above come from the single PSI request and reflect cold-cache CDN behaviour at the moment of the audit.
+
+---
+
+## Re-audit follow-up — 2026-04-18 (rerun)
+
+A second PSI run was executed against `https://syrabit.ai` later the same day to confirm the baseline before kicking off the 100/100 work in task #497. The fresh report is at [`pagespeed-2026-04-18-rerun.md`](./pagespeed-2026-04-18-rerun.md) with raw JSON in [`pagespeed-2026-04-18-rerun-raw/`](./pagespeed-2026-04-18-rerun-raw/).
+
+### Aggregate before → after (mobile)
+
+| Metric | Original | Rerun | Δ |
+|---|---|---|---|
+| Avg Performance | 47 | **43** | 🔴 −4 |
+| Avg Accessibility | 91 | 91 | — |
+| Avg Best Practices | 91 | **93** | 🟢 +2 |
+| Avg SEO | 79 | 79 | — |
+| Routes failing perf (<50) | 5/12 | **8/12** | 🔴 +3 |
+| Routes passing perf (≥90) | 0/12 | 0/12 | — |
+| Worst mobile LCP | chapter 18.0 s | subject-landing 15.1 s | 🟢 −2.9 s |
+
+### Per-route mobile Performance, before → after
+
+| Route | Original | Rerun | Δ |
+|---|---|---|---|
+| `/home` | 62 | 34 | 🔴 −28 |
+| `/library` | 39 | 37 | 🔴 −2 |
+| `/assamboard/class-12/physics` | 37 | 22 | 🔴 −15 |
+| `/assamboard/class-12/physics/electric-charges-and-fields` | 36 | 35 | 🔴 −1 |
+| `/chat` | 60 | 40 | 🔴 −20 |
+| `/login` | 53 | 49 | 🔴 −4 |
+| `/signup` | 19 | 50 | 🟢 +31 |
+| `/profile` | 44 | 46 | 🟢 +2 |
+| `/pricing` | 55 | 40 | 🔴 −15 |
+| `/admin/login` | 53 | 52 | 🔴 −1 |
+| `/about` | 51 | 50 | 🔴 −1 |
+| `/technology` | 50 | 60 | 🟢 +10 |
+
+### What changed since the original report
+
+- The **two SEO red flags called out in the original executive summary are partially resolved in code already**:
+  - Static `<link rel="canonical" href="https://syrabit.ai/">` was removed from `artifacts/syrabit/index.html`; per-route canonicals are now owned by `react-helmet-async` via `PageMeta`. **However, Lighthouse still fails the `canonical` audit on all 12 routes** because the canonical isn't in the initial HTML — it's injected by React after hydration. To pass, the canonical must be present in the byte-zero HTML (per-route prerender, edge worker, or backend render).
+  - `/chat` is no longer in any `Disallow` block in `robots.txt`. The `is-crawlable` failure on `/chat` and `/admin/login` in the rerun is now driven by other signals (likely `<meta name="robots">` or response header), not robots.txt.
+- The **redirect chain (~3.6–7.5 s on every route, top opportunity by cumulative ms)** has not been touched and is still the single biggest perf lever.
+- Variance: PSI lab runs are noisy (CPU contention in Google's datacenter), so single-route deltas of ±10 are not unusual. The trend across the surface is what matters: still 0/12 passing, still no green Core Web Vitals on mobile.
+
+### Recommendation for task #497 scope
+
+Hitting **100/100 across 4 categories × 12 routes × 2 strategies = 96 perfect cells** is not a realistic single-task goal — most highly-tuned production SPAs land at 95–99 on mobile Performance and one CrUX p75 drift can knock it off. Suggest:
+
+1. Re-scope #497 as **"all routes ≥ 95 in every category, all CWV in green on mobile lab + CrUX p75"** — that's the bar Google actually rewards in Search rankings.
+2. Split the 11 sub-steps in the task description into focused follow-up tasks (redirect chain, per-route SSR canonical, JS code-split, critical CSS, color-contrast tokens, security headers + Best Practices, SEO metadata, CWV CLS/LCP, CI guardrail). Each is a 1–2 day task on its own.
