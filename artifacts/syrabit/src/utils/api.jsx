@@ -192,6 +192,17 @@ export const adminGetAnalytics = (token, days = 30) =>
 export const adminGetDailyAnalytics = (token, days = 30) =>
   axios.get(`${API_BASE}/admin/analytics/daily`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
 
+// Task #456: Cloudflare-Analytics token health for the admin banner.
+// `cf-status` returns { configured, auth_ok, needs_rotation, last_error,
+// last_check_at, blocked_for_seconds, consecutive_failures, rotation_hint }.
+// `cf-recheck` resets the auth circuit-breaker and re-probes immediately
+// (no Railway restart needed after rotating CF_ANALYTICS_API_TOKEN).
+export const adminGetCfStatus = (token) =>
+  axios.get(`${API_BASE}/admin/analytics/cf-status`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminCfRecheck = (token) =>
+  axios.post(`${API_BASE}/admin/analytics/cf-recheck`, {}, { headers: adminHeaders(token), withCredentials: true });
+
 // Task #408: hydrate-lifecycle / stale-build telemetry tile
 export const adminGetHydrateStats = (token, days = 7) =>
   axios.get(`${API_BASE}/admin/analytics/hydrate-stats`, { headers: adminHeaders(token), withCredentials: true, params: { days } });

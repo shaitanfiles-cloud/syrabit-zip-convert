@@ -8,12 +8,13 @@ import {
   UserPlus, Globe, Search, Bot, BarChart2, Server, Clock,
   CheckCircle, AlertCircle, AlertTriangle, Wifi, Database, DollarSign, Crown,
   Layers, Link2, Code2, FileCheck, Target, Cpu, ShieldCheck, Smartphone,
-  Volume2, VolumeX, Bell, BellOff, RotateCcw, Upload, Trash2, Music, Cloud,
+  Volume2, VolumeX, Bell, BellOff, RotateCcw, Upload, Trash2, Music,
 } from 'lucide-react';
 import AudioTrimPreview from './AudioTrimPreview';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import axios from 'axios';
 import { adminGetDashboard, seoPipelineStatus, adminSeoHealthHistory, adminSeoHealthSnapshotNow, seoHealthLive, seoHealthDeepScan, adminSeoDeepScanHistory, API_BASE } from '@/utils/api';
+import CloudflareAnalyticsBanner from './analytics/CloudflareAnalyticsBanner';
 import { pushChannelTone } from '@/utils/pushChannelTone';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
@@ -858,10 +859,11 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         </div>
 
         {data?.cf_connected === false && (
-          <div className="mb-3 flex items-start gap-2 p-3 rounded-xl bg-red-50 border border-red-200">
-            <Cloud size={13} className="text-red-500 flex-shrink-0 mt-0.5" />
-            <p className="text-xs text-red-600">Cloudflare analytics unavailable — check API token and Zone ID</p>
-          </div>
+          <CloudflareAnalyticsBanner
+            adminToken={adminToken}
+            onRecheck={() => load(true)}
+            className="mb-3"
+          />
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">

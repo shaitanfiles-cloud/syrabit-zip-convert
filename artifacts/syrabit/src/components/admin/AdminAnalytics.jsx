@@ -15,6 +15,7 @@ import RevenueTab from './analytics/RevenueTab';
 import PredictionsTab from './analytics/PredictionsTab';
 import ConversionsTab from './analytics/ConversionsTab';
 import ContentCardViewsTab from './analytics/ContentCardViewsTab';
+import CloudflareAnalyticsBanner from './analytics/CloudflareAnalyticsBanner';
 
 export default function AdminAnalytics({ adminToken, onNavigate }) {
   const [data, setData]         = useState(null);
@@ -175,6 +176,15 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
           <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} /> Refresh
         </button>
       </div>
+
+      {/* Task #456: surfaces last_error / consecutive_failures / blocked_for_seconds
+          plus a one-click "Re-check now" button (POST /admin/analytics/cf-recheck)
+          and a deep-link to https://dash.cloudflare.com/profile/api-tokens with the
+          three required scopes pre-listed. Self-hides when auth_ok=true. */}
+      <CloudflareAnalyticsBanner
+        adminToken={adminToken}
+        onRecheck={() => load(true)}
+      />
 
       <div className="flex gap-1 flex-wrap rounded-xl p-1 w-fit bg-gray-100">
         {TABS.map(t => (

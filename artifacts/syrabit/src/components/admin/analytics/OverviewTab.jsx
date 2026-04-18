@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { TrendingUp, Eye, Users, DollarSign, Zap, Target,
-  Cloud, AlertTriangle, Calendar, ShieldCheck, RefreshCw,
+  AlertTriangle, Calendar, ShieldCheck, RefreshCw,
   AlertOctagon } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -78,19 +78,6 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
           <p className="text-xs text-amber-300/80 flex-1">Overview data failed to load — some metrics unavailable.</p>
           <button onClick={() => load(true)} className="text-xs text-amber-300 hover:text-gray-900 px-2.5 py-1 rounded-lg transition-colors"
             style={{ background: 'rgba(245,158,11,0.12)' }}>Retry</button>
-        </div>
-      )}
-
-      {!cfConnected && (
-        <div className="flex items-start gap-3 p-4 rounded-xl" style={{
-          background: 'rgba(239,68,68,0.06)',
-          border: '1px solid rgba(239,68,68,0.15)',
-        }}>
-          <Cloud size={16} className="text-red-400 flex-shrink-0 mt-0.5" />
-          <div className="flex-1">
-            <p className="text-sm font-semibold text-red-500">Cloudflare analytics unavailable</p>
-            <p className="text-xs text-red-400/80 mt-0.5">All visitor and page-view numbers come from Cloudflare. Check the Cloudflare API token and Zone ID environment variables.</p>
-          </div>
         </div>
       )}
 
