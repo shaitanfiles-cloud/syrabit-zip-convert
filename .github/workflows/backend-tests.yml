@@ -19,6 +19,14 @@ on:
   pull_request:
     branches: [main]
 
+# Least-privilege defaults. The PR-coverage-comment step needs
+# `pull-requests: write`, but on forked PRs GitHub downgrades the
+# token to read-only — that step is also guarded with `continue-on-error`
+# below so a permissions failure cannot turn an otherwise-green build red.
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   pytest:
     name: pytest --cov
@@ -99,8 +107,15 @@ jobs:
           DIFF=$(python -c "print(round(${HEAD} - ${BASE:-0}, 2))")
           echo "diff_pct=$DIFF" >> "$GITHUB_OUTPUT"
 
+      # Only comment when coverage actually drops > 1pp — keeps PR
+      # threads quiet on the common path. ``continue-on-error`` so a
+      # downgraded fork-PR token can't fail an otherwise-green build.
       - name: Comment coverage drop on PR
-        if: github.event_name == 'pull_request'
+        if: |
+          github.event_name == 'pull_request' &&
+          steps.head_cov.outputs.diff_pct != '' &&
+          fromJSON(steps.head_cov.outputs.diff_pct) < -1
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
@@ -108,19 +123,36 @@ jobs:
             const base = parseFloat("${{ steps.base_cov.outputs.base_pct }}" || "0");
             const diff = parseFloat("${{ steps.head_cov.outputs.diff_pct }}" || "0");
             const sign = diff >= 0 ? "+" : "";
-            const emoji = diff < -1 ? "⚠️" : "✅";
+            const marker = "<!-- syrabit-backend-coverage-bot -->";
             const body = [
-              `${emoji} **Backend coverage:** ${head.toFixed(2)}% (base ${base.toFixed(2)}%, ${sign}${diff.toFixed(2)}pp)`,
-              diff < -1
-                ? "> Coverage dropped more than 1 percentage point vs the base branch — please add tests for the new code paths."
-                : "> Coverage is stable.",
+              marker,
+              `⚠️ **Backend coverage dropped:** ${head.toFixed(2)}% (base ${base.toFixed(2)}%, ${sign}${diff.toFixed(2)}pp)`,
+              "> Coverage dropped more than 1 percentage point vs the base branch — please add tests for the new code paths.",
             ].join("\n\n");
-            await github.rest.issues.createComment({
+            // Upsert: replace the previous bot comment instead of stacking
+            // a new one on every push so the PR thread stays clean.
+            const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body,
+              per_page: 100,
             });
+            const existing = comments.find(c => (c.body || "").includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
 
       - name: Fail if coverage dropped > 1pp on PR
         if: github.event_name == 'pull_request'
