@@ -18,11 +18,17 @@ export const PublicBottomNav = memo(function PublicBottomNav() {
   const isActive = (path) =>
     location.pathname === path || location.pathname.startsWith(path + '/');
 
+  // For signed-in users we drop the duplicate /chat tile and surface a
+  // single "Dashboard" CTA so the nav has unique destinations and unique
+  // React keys. Signed-out users keep all four tiles + the Sign-Up CTA.
+  const baseItems = user
+    ? NAV_ITEMS.filter((it) => it.to !== '/chat')
+    : NAV_ITEMS;
   const ctaItem = user
-    ? { to: '/chat', icon: Sparkles, label: 'Open App', isCta: true }
+    ? { to: '/dashboard', icon: Sparkles, label: 'Dashboard', isCta: true }
     : { to: '/signup', icon: LogIn, label: 'Sign Up', isCta: true };
 
-  const items = [...NAV_ITEMS, ctaItem];
+  const items = [...baseItems, ctaItem];
 
   return (
     <nav
