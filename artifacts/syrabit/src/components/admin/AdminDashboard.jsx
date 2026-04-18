@@ -2323,7 +2323,6 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                   </ul>
                 )}
               </div>
-              )}
 
               {/* Task #473: per-admin UTC quiet-hours window (consumed by
                   _quiet_hours_active in seo_engine.py). Either bound left
