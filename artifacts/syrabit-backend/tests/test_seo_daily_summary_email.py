@@ -285,17 +285,92 @@ def test_dispatch_skips_non_scheduled_runs():
 
 def test_dispatch_runs_for_scheduled_jobs():
     seo_engine._seo_jobs["job-sched-9"] = {"trigger": "scheduler"}
-    fake_send = AsyncMock(return_value={"sent": 1, "failed": 0, "total": 1})
-    fake_resolve = AsyncMock(return_value=[{"admin_id": "a", "email": "a@b.com"}])
+    fake_send = AsyncMock(return_value={"sent": 1, "failed": 0, "total": 1,
+                                        "subject": "subj"})
+    fake_audience = AsyncMock(return_value={
+        "recipients": [{"admin_id": "a", "email": "a@b.com"}],
+        "suppressed_quiet_hours": 2, "opted_out": 1,
+        "no_email": 0, "total_admins": 4,
+    })
+    fake_record = AsyncMock(return_value=None)
     log_doc = {"job_id": "job-sched-9", "total_generated": 3, "errors": 0,
                "skipped": 0, "new_topics": 1, "avg_seo_score": 80, "avg_geo_score": 75,
                "page_types": ["notes"], "outcomes": []}
     with patch.object(seo_engine, "_send_seo_daily_summary_email", fake_send), \
-         patch.object(seo_engine, "_resolve_seo_summary_recipients", fake_resolve):
+         patch.object(seo_engine, "_resolve_seo_summary_audience", fake_audience), \
+         patch.object(seo_engine, "_record_seo_summary_dispatch", fake_record):
         res = asyncio.run(seo_engine._maybe_dispatch_seo_daily_summary("job-sched-9", log_doc))
     assert res["sent"] == 1
+    # Task #474 — dispatcher must mirror audience counters into the result
+    # so the persisted log doc and admin UI agree.
+    assert res["suppressed_quiet_hours"] == 2
+    assert res["opted_out"] == 1
     fake_send.assert_awaited_once()
     sent_stats = fake_send.await_args.args[0]
     assert sent_stats["pages_generated"] == 3
     assert sent_stats["job_id"] == "job-sched-9"
+    fake_record.assert_awaited_once()
+    persisted = fake_record.await_args.args[0]
+    assert persisted["job_id"] == "job-sched-9"
+    assert persisted["sent"] == 1
+    assert persisted["suppressed_quiet_hours"] == 2
+    assert persisted["opted_out"] == 1
+    assert persisted["total_admins"] == 4
+    assert persisted["pages_generated"] == 3
     seo_engine._seo_jobs.pop("job-sched-9", None)
+
+
+def test_dispatch_persists_log_even_on_send_error():
+    """Even when send blows up we must still write a row so admins can see
+    the failure surfaced in the notifications panel (Task #474)."""
+    seo_engine._seo_jobs["job-sched-err"] = {"trigger": "scheduler"}
+    fake_audience = AsyncMock(return_value={
+        "recipients": [{"admin_id": "a", "email": "a@b.com"}],
+        "suppressed_quiet_hours": 0, "opted_out": 0,
+        "no_email": 0, "total_admins": 1,
+    })
+    fake_send = AsyncMock(side_effect=RuntimeError("boom"))
+    fake_record = AsyncMock(return_value=None)
+    log_doc = {"job_id": "job-sched-err", "total_generated": 0}
+    with patch.object(seo_engine, "_send_seo_daily_summary_email", fake_send), \
+         patch.object(seo_engine, "_resolve_seo_summary_audience", fake_audience), \
+         patch.object(seo_engine, "_record_seo_summary_dispatch", fake_record):
+        res = asyncio.run(seo_engine._maybe_dispatch_seo_daily_summary("job-sched-err", log_doc))
+    assert res["sent"] == 0
+    assert "dispatch_error" in (res.get("reason") or "")
+    fake_record.assert_awaited_once()
+    persisted = fake_record.await_args.args[0]
+    assert persisted["sent"] == 0
+    assert "dispatch_error" in (persisted.get("reason") or "")
+    seo_engine._seo_jobs.pop("job-sched-err", None)
+
+
+# ── _resolve_seo_summary_audience ───────────────────────────────────────────
+
+def test_audience_breaks_down_suppression_reasons():
+    """Audience helper must distinguish quiet-hours suppression from opt-out
+    and missing-email so the persisted dispatch log is meaningful."""
+    admins = [
+        {"id": "a1", "email": "opt-in@x.com"},
+        {"id": "a2", "email": "opt-out@x.com"},
+        {"id": "a3", "email": "quiet@x.com"},
+        {"id": "a4", "email": ""},  # missing email
+    ]
+    prefs_map = {
+        "a1": {**_ADMIN_NOTIF_PREFS_DEFAULTS, "email_seo_daily_summary_enabled": True},
+        "a2": {**_ADMIN_NOTIF_PREFS_DEFAULTS, "email_seo_daily_summary_enabled": False},
+        "a3": {**_ADMIN_NOTIF_PREFS_DEFAULTS, "email_seo_daily_summary_enabled": True,
+               "quiet_hours_start_utc": 0, "quiet_hours_end_utc": 6},
+    }
+
+    async def _fake_get_prefs(admin_id):
+        return prefs_map.get(admin_id, {**_ADMIN_NOTIF_PREFS_DEFAULTS})
+
+    now = datetime(2026, 4, 18, 2, 30, tzinfo=timezone.utc)  # inside a3's quiet window
+    with patch("db_ops.get_admin_notification_prefs", _fake_get_prefs):
+        audience = asyncio.run(seo_engine._resolve_seo_summary_audience(_fake_db(admins), now))
+    assert [r["email"] for r in audience["recipients"]] == ["opt-in@x.com"]
+    assert audience["suppressed_quiet_hours"] == 1
+    assert audience["opted_out"] == 1
+    assert audience["no_email"] == 1
+    assert audience["total_admins"] == 4

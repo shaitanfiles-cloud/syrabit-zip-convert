@@ -318,6 +318,10 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [notifPrefsSaving, setNotifPrefsSaving] = useState(false);
   const [notifPrefsOpen, setNotifPrefsOpen] = useState(false);
   const [pushDeliverySummary, setPushDeliverySummary] = useState(null);
+  // Task #474 — most-recent SEO daily-summary email dispatches, surfaced
+  // under the SEO summary opt-in toggle so admins can see whether the last
+  // scheduled run actually emailed them (or was suppressed by quiet hours).
+  const [seoSummaryDispatches, setSeoSummaryDispatches] = useState(null);
   // Task #434 — last_success_at / last_error for the browser-push
   // channel from /admin/alert-settings (channel_status.push). Surfaced
   // inline in the notifications tile so admins notice a degraded push
@@ -376,6 +380,16 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       setPushChannelStatus(settingsRes.data?.channel_status?.push || null);
     } catch {
       setPushChannelStatus(null);
+    }
+    // Task #474 — recent SEO daily-summary email dispatches.
+    try {
+      const dispRes = await axios.get(
+        `${API_BASE}/admin/seo/daily-summary-dispatches?limit=5`,
+        adminHdr(adminToken),
+      );
+      setSeoSummaryDispatches(dispRes.data?.dispatches || []);
+    } catch {
+      setSeoSummaryDispatches([]);
     }
   }, [adminToken]);
 
@@ -2223,6 +2237,80 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                   </span>
                 </label>
               </div>
+
+              {/* Task #474 — recent SEO summary dispatches so admins can see
+                  whether the last scheduled run actually emailed them, was
+                  suppressed by quiet hours, or hit a Resend failure. Only
+                  shown when the SEO summary toggle is on (otherwise the
+                  data isn't actionable for this admin). */}
+              {(notifPrefs.email_seo_daily_summary_enabled ?? true) && (
+                <div className="mb-3 pb-3 border-b border-gray-200" data-testid="notif-prefs-seo-summary-history">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-[10px] text-gray-500 font-medium">
+                      Recent SEO summary email dispatches
+                    </label>
+                  </div>
+                  {seoSummaryDispatches === null ? (
+                    <div className="text-[10px] text-gray-400">Loading…</div>
+                  ) : seoSummaryDispatches.length === 0 ? (
+                    <div className="text-[10px] text-gray-400" data-testid="notif-prefs-seo-summary-history-empty">
+                      No scheduled auto-publish runs have completed yet — once one does, the dispatch result will appear here.
+                    </div>
+                  ) : (
+                    <ul className="space-y-1">
+                      {seoSummaryDispatches.map((d, i) => {
+                        const at = d.at ? new Date(d.at) : null;
+                        const ageMs = at ? Date.now() - at.getTime() : null;
+                        const ageStr = ageMs == null
+                          ? '—'
+                          : ageMs < 60_000 ? 'just now'
+                          : ageMs < 3_600_000 ? `${Math.round(ageMs / 60_000)}m ago`
+                          : ageMs < 86_400_000 ? `${Math.round(ageMs / 3_600_000)}h ago`
+                          : `${Math.round(ageMs / 86_400_000)}d ago`;
+                        const sent = d.sent ?? 0;
+                        const failed = d.failed ?? 0;
+                        const suppressed = d.suppressed_quiet_hours ?? 0;
+                        const optedOut = d.opted_out ?? 0;
+                        const ok = failed === 0 && (sent > 0 || (suppressed === 0 && optedOut === 0 && !d.reason));
+                        const dot = failed > 0 ? 'bg-red-500'
+                          : sent > 0 ? 'bg-emerald-500'
+                          : 'bg-gray-300';
+                        return (
+                          <li
+                            key={`${d.job_id}-${i}`}
+                            className="flex items-start gap-2 text-[11px] text-gray-600"
+                            data-testid={`notif-prefs-seo-summary-history-row-${i}`}
+                          >
+                            <span className={`inline-block w-1.5 h-1.5 rounded-full mt-1.5 ${dot}`} />
+                            <div className="flex-1">
+                              <div>
+                                <span className="font-medium text-gray-700">{ageStr}</span>
+                                <span className="text-gray-400"> · sent to </span>
+                                <span className="font-medium text-gray-700">{sent}</span>
+                                <span className="text-gray-400">/{d.total_admins ?? '?'} admins</span>
+                                {failed > 0 && (
+                                  <span className="text-red-500"> · {failed} failed</span>
+                                )}
+                                {suppressed > 0 && (
+                                  <span className="text-amber-600"> · {suppressed} in quiet hours</span>
+                                )}
+                                {optedOut > 0 && (
+                                  <span className="text-gray-400"> · {optedOut} opted out</span>
+                                )}
+                              </div>
+                              {(!ok && d.reason) && (
+                                <div className="text-[10px] text-gray-400 mt-0.5">
+                                  Reason: <code>{d.reason}</code>
+                                </div>
+                              )}
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              )}
 
               {/* Task #473: per-admin UTC quiet-hours window (consumed by
                   _quiet_hours_active in seo_engine.py). Either bound left

@@ -5695,25 +5695,35 @@ def _quiet_hours_active(prefs: dict, now_utc: datetime) -> bool:
     return h >= start_i or h < end_i
 
 
-async def _resolve_seo_summary_recipients(db, now_utc: datetime) -> list:
-    """Return ``[{admin_id, email}, ...]`` for admins opted-in to the SEO
-    daily summary email and not currently inside their quiet-hours window."""
+async def _resolve_seo_summary_audience(db, now_utc: datetime) -> dict:
+    """Resolve the full audience breakdown for the SEO daily summary email.
+
+    Returns ``{"recipients": [...], "suppressed_quiet_hours": int,
+    "opted_out": int, "no_email": int, "total_admins": int}`` so the
+    dispatcher can persist a delivery log that distinguishes "skipped
+    because quiet hours" from "skipped because opted out". Task #474.
+    """
     try:
         admins = await db.users.find(
             {"is_admin": True}, {"_id": 0, "id": 1, "email": 1}
         ).to_list(500)
     except Exception as exc:
         logger.debug(f"[seo-daily-summary] admin lookup failed: {exc}")
-        return []
+        return {"recipients": [], "suppressed_quiet_hours": 0,
+                "opted_out": 0, "no_email": 0, "total_admins": 0}
     try:
         from db_ops import get_admin_notification_prefs, _ADMIN_NOTIF_PREFS_DEFAULTS
     except Exception:
         get_admin_notification_prefs = None
         _ADMIN_NOTIF_PREFS_DEFAULTS = {}
     recipients: list = []
+    suppressed_quiet_hours = 0
+    opted_out = 0
+    no_email = 0
     for u in admins:
         email = (u.get("email") or "").strip()
         if not email:
+            no_email += 1
             continue
         admin_id = str(u.get("id") or email)
         prefs: dict = {}
@@ -5725,12 +5735,30 @@ async def _resolve_seo_summary_recipients(db, now_utc: datetime) -> list:
                 prefs = {}
         opt_in_default = bool(_ADMIN_NOTIF_PREFS_DEFAULTS.get("email_seo_daily_summary_enabled", True))
         if not bool(prefs.get("email_seo_daily_summary_enabled", opt_in_default)):
+            opted_out += 1
             continue
         if _quiet_hours_active(prefs, now_utc):
+            suppressed_quiet_hours += 1
             logger.info(f"[seo-daily-summary] suppressed for {admin_id} — quiet hours active")
             continue
         recipients.append({"admin_id": admin_id, "email": email})
-    return recipients
+    return {
+        "recipients": recipients,
+        "suppressed_quiet_hours": suppressed_quiet_hours,
+        "opted_out": opted_out,
+        "no_email": no_email,
+        "total_admins": len(admins),
+    }
+
+
+async def _resolve_seo_summary_recipients(db, now_utc: datetime) -> list:
+    """Return ``[{admin_id, email}, ...]`` for admins opted-in to the SEO
+    daily summary email and not currently inside their quiet-hours window.
+
+    Thin wrapper around :func:`_resolve_seo_summary_audience` preserved for
+    callers that only need the recipient list (and for existing tests)."""
+    audience = await _resolve_seo_summary_audience(db, now_utc)
+    return audience["recipients"]
 
 
 async def _send_seo_daily_summary_email(stats: dict, recipients: list) -> dict:
@@ -5781,21 +5809,105 @@ async def _send_seo_daily_summary_email(stats: dict, recipients: list) -> dict:
     return {"sent": sent, "failed": failed, "total": len(recipients), "subject": subject}
 
 
+_SEO_SUMMARY_DISPATCH_LOG = "seo_summary_email_log"
+_SEO_SUMMARY_DISPATCH_LOG_MAX = 200  # keep at most ~200 most-recent docs
+
+
+async def _record_seo_summary_dispatch(doc: dict) -> None:
+    """Persist a single dispatch result to ``seo_summary_email_log`` and
+    trim the collection to the most-recent ``_SEO_SUMMARY_DISPATCH_LOG_MAX``
+    rows. Best-effort — never raises (Task #474).
+    """
+    if _db is None:
+        return
+    try:
+        await _db[_SEO_SUMMARY_DISPATCH_LOG].insert_one(doc)
+    except Exception as exc:
+        logger.debug(f"[seo-daily-summary] persist failed: {exc}")
+        return
+    # Soft cap — drop oldest rows once we cross the limit to keep the
+    # collection tiny without a TTL index dependency.
+    try:
+        coll = _db[_SEO_SUMMARY_DISPATCH_LOG]
+        total = await coll.count_documents({})
+        excess = total - _SEO_SUMMARY_DISPATCH_LOG_MAX
+        if excess > 0:
+            cutoff_cursor = coll.find({}, {"_id": 1}).sort("at", 1).limit(excess)
+            cutoff_ids = [d["_id"] async for d in cutoff_cursor]
+            if cutoff_ids:
+                await coll.delete_many({"_id": {"$in": cutoff_ids}})
+    except Exception as exc:
+        logger.debug(f"[seo-daily-summary] trim failed: {exc}")
+
+
 async def _maybe_dispatch_seo_daily_summary(job_id: str, log_doc: dict) -> dict:
     """Compose + send the daily summary if this job was triggered by the
     scheduler. Safe to call after every ``_auto_run_bg`` completion — runs
     triggered by an admin button click are silently skipped so we don't
-    spam admins with ad-hoc-run summaries."""
+    spam admins with ad-hoc-run summaries.
+
+    Every scheduled invocation persists a row to ``seo_summary_email_log``
+    so the admin notifications panel can show recent delivery status
+    (Task #474). Manual/non-scheduled runs are intentionally not logged."""
     job_meta = _seo_jobs.get(job_id) or {}
     if job_meta.get("trigger") != "scheduler":
         return {"sent": 0, "failed": 0, "total": 0, "reason": "non_scheduled_run"}
+    now = datetime.now(timezone.utc)
+    audience = {"recipients": [], "suppressed_quiet_hours": 0,
+                "opted_out": 0, "no_email": 0, "total_admins": 0}
     try:
         stats = _compose_seo_daily_summary(log_doc)
-        recipients = await _resolve_seo_summary_recipients(_db, datetime.now(timezone.utc))
-        return await _send_seo_daily_summary_email(stats, recipients)
+        audience = await _resolve_seo_summary_audience(_db, now)
+        result = await _send_seo_daily_summary_email(stats, audience["recipients"])
     except Exception as exc:
         logger.warning(f"[seo-daily-summary] dispatch error for job {job_id}: {exc}")
-        return {"sent": 0, "failed": 0, "total": 0, "reason": f"dispatch_error:{type(exc).__name__}"}
+        result = {"sent": 0, "failed": 0, "total": len(audience["recipients"]),
+                  "reason": f"dispatch_error:{type(exc).__name__}"}
+    # Persist regardless of success so operators can see "0 sent because
+    # no_resend_key" or "0 sent because all admins in quiet hours".
+    enriched = {
+        "at": now,
+        "job_id": job_id,
+        "sent": int(result.get("sent", 0) or 0),
+        "failed": int(result.get("failed", 0) or 0),
+        "total_recipients": int(result.get("total", len(audience["recipients"])) or 0),
+        "suppressed_quiet_hours": audience["suppressed_quiet_hours"],
+        "opted_out": audience["opted_out"],
+        "no_email": audience["no_email"],
+        "total_admins": audience["total_admins"],
+        "reason": result.get("reason"),
+        "subject": result.get("subject"),
+        "pages_generated": int((log_doc or {}).get("total_generated", 0) or 0),
+    }
+    await _record_seo_summary_dispatch(enriched)
+    # Mirror persisted counters back into the return dict so callers
+    # (and tests) can see the same view the admin UI will render.
+    result.setdefault("suppressed_quiet_hours", audience["suppressed_quiet_hours"])
+    result.setdefault("opted_out", audience["opted_out"])
+    return result
+
+
+async def get_recent_seo_summary_dispatches(limit: int = 10) -> list:
+    """Fetch the most-recent SEO summary email dispatches for the admin
+    notifications panel (Task #474). Returns ``[]`` if MongoDB is
+    unavailable or the collection has not yet been written to.
+    """
+    if _db is None:
+        return []
+    try:
+        cursor = _db[_SEO_SUMMARY_DISPATCH_LOG].find(
+            {}, {"_id": 0}
+        ).sort("at", -1).limit(max(1, min(int(limit or 10), 50)))
+        rows = []
+        async for d in cursor:
+            at = d.get("at")
+            if hasattr(at, "isoformat"):
+                d["at"] = at.isoformat()
+            rows.append(d)
+        return rows
+    except Exception as exc:
+        logger.debug(f"[seo-daily-summary] history fetch failed: {exc}")
+        return []
 
 
 # ─── Scheduled auto-publish (Task #458) ─────────────────────────────────────

@@ -750,6 +750,27 @@ async def admin_update_notification_prefs(
     return prefs
 
 
+@router.get("/admin/seo/daily-summary-dispatches")
+async def admin_get_seo_daily_summary_dispatches(
+    limit: int = 10,
+    admin: dict = Depends(get_admin_user),
+):
+    """Task #474 — return the most-recent SEO auto-publish summary email
+    dispatches so the admin notifications panel can show "Last summary sent
+    Xh ago to N admins (M suppressed by quiet hours)" inline. Source rows
+    are written by ``seo_engine._maybe_dispatch_seo_daily_summary`` after
+    every scheduled auto-publish run. Manual runs are intentionally skipped
+    upstream so this never reflects ad-hoc admin button clicks.
+    """
+    try:
+        from seo_engine import get_recent_seo_summary_dispatches
+    except Exception as exc:
+        logger.debug(f"[admin] seo_engine import failed: {exc}")
+        return {"dispatches": []}
+    rows = await get_recent_seo_summary_dispatches(limit=limit)
+    return {"dispatches": rows}
+
+
 _CHIME_BUCKET = "study-materials"
 _CHIME_PREFIX = "admin-chimes"
 _CHIME_MAX_BYTES = 500 * 1024
