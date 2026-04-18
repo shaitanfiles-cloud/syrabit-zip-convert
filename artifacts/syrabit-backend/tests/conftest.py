@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 _DEPS_KEY = "deps"
 _SNAPSHOT_ATTRS = ("db", "is_mongo_available", "supa")
+_MISSING = object()
 
 
 @pytest.fixture(autouse=True)
@@ -64,10 +65,14 @@ def _reset_test_stub_state():
     deps_present_pre = _DEPS_KEY in sys.modules
     deps_module_pre = sys.modules.get(_DEPS_KEY)
     is_stub_pre = bool(getattr(deps_module_pre, "_is_syrabit_test_stub", False))
+    # Snapshot: record (had_attr, value) per key so we can faithfully
+    # restore even when the original value was ``None`` (e.g. ``supa``
+    # on the synthetic stub starts as ``None``).
     attr_snapshot = None
     if is_stub_pre:
         attr_snapshot = {
-            attr: getattr(deps_module_pre, attr, None)
+            attr: (hasattr(deps_module_pre, attr),
+                   getattr(deps_module_pre, attr, None))
             for attr in _SNAPSHOT_ATTRS
         }
 
@@ -89,15 +94,21 @@ def _reset_test_stub_state():
         return
 
     # 3. Restore attributes a test may have reassigned on the stub.
+    # Restore by *key presence* not value, so a snapshot of ``None``
+    # (e.g. ``deps.supa = None`` is the stub's default) is faithfully
+    # re-applied and a test can't leak a ``deps.supa = MagicMock()``
+    # mutation across the suite.
     if attr_snapshot is not None:
-        for attr, original in attr_snapshot.items():
-            if original is None:
-                continue
-            if getattr(deps_now, attr, None) is not original:
-                try:
-                    setattr(deps_now, attr, original)
-                except Exception:
-                    pass
+        for attr, (had_attr, original) in attr_snapshot.items():
+            try:
+                if had_attr:
+                    if getattr(deps_now, attr, _MISSING) is not original:
+                        setattr(deps_now, attr, original)
+                else:
+                    if hasattr(deps_now, attr):
+                        delattr(deps_now, attr)
+            except Exception:
+                pass
 
     # 4. Clear accumulated call history on the (restored) db mock.
     db = getattr(deps_now, "db", None)
