@@ -5,6 +5,7 @@ Also provides edge cache purge functionality.
 Falls back gracefully when credentials are missing/invalid.
 """
 import os
+import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List
@@ -20,18 +21,57 @@ _cf_http: Optional["httpx.AsyncClient"] = None
 # admin page load when the token has been revoked or its scopes are wrong.
 AUTH_FAIL_TTL_SEC = 300  # 5 minutes
 
+# ── Task #455: alert dispatch debounce ────────────────────────────────────────
+# When the analytics token starts being rejected, fire a single alert through
+# `metrics._dispatch_alert` so admins hear about it on email / Slack / push
+# without having to load the admin Analytics page. Debounced so that a 401
+# burst (or a sustained outage) doesn't spam the channels — at most one
+# "rejected" alert per `_ALERT_DEBOUNCE_SEC` window. The matching one-shot
+# "recovered" alert fires on the failure → success transition.
+_ALERT_DEBOUNCE_SEC = 24 * 3600
+_last_alert_at: dict = {"failed": 0.0}
+
 _auth_state: dict = {
     "ok": None,                # None = unknown, True = working, False = broken
     "last_check_at": None,     # ISO timestamp (str)
     "last_error": None,        # human-readable error string
     "blocked_until": None,     # epoch seconds; calls short-circuit until then
     "consecutive_failures": 0,
+    # Task #455: set by `reset_auth_state()` when the operator clicks
+    # "Re-check now" after a known failure, so the next successful probe
+    # still fires the one-shot recovery alert even though the explicit
+    # `ok=False` state was cleared by the reset.
+    "_pending_recovery_alert": False,
 }
 
 
 def _now_epoch() -> float:
     import time
     return time.time()
+
+
+async def _send_alert_async(alert_type: str, title: str, body: str):
+    """Lazy-imported wrapper around ``metrics._dispatch_alert`` so this
+    module stays import-cycle-free. ``force=True`` because we run our own
+    24h debounce in `_last_alert_at` (Task #455) — the global 30-minute
+    cooldown in metrics is too short for token-rotation paging."""
+    try:
+        from metrics import _dispatch_alert
+        await _dispatch_alert(alert_type, title, body, force=True)
+    except Exception as exc:
+        logger.debug(f"CF auth alert dispatch failed ({alert_type}): {exc}")
+
+
+def _schedule_alert(alert_type: str, title: str, body: str):
+    """Fire-and-forget alert dispatch. Safe to call from sync code paths
+    that run inside an async event loop (every CF call originates from
+    `_graphql_query`, which is async). If somehow invoked outside a loop
+    (e.g. unit tests) we silently drop instead of crashing the breaker."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(_send_alert_async(alert_type, title, body))
 
 
 def _mark_auth_failed(error_msg: str):
@@ -50,13 +90,58 @@ def _mark_auth_failed(error_msg: str):
             f"Account Analytics:Read, Zone Analytics:Read, Zone:Read."
         )
 
+    # Task #455: page admins on email / Slack / push via the existing
+    # alert pipeline so the dashboard isn't the only place this surfaces.
+    # 24h debounce so a sustained outage doesn't repeatedly spam channels.
+    now = _now_epoch()
+    if now - _last_alert_at.get("failed", 0) >= _ALERT_DEBOUNCE_SEC:
+        _last_alert_at["failed"] = now
+        status_obj = get_auth_status()
+        hint = status_obj.get("rotation_hint") or (
+            "Create a new Cloudflare API token with scopes: "
+            "Account Analytics:Read, Zone Analytics:Read, Zone:Read. "
+            "Then update CF_ANALYTICS_API_TOKEN on Railway and restart the service."
+        )
+        body = (
+            f"Cloudflare rejected the analytics token: {error_msg[:200]}\n\n"
+            f"{hint}\n\n"
+            f"Calls are short-circuited for {AUTH_FAIL_TTL_SEC}s after each "
+            f"failure burst. After rotating, click 'Re-check now' on "
+            f"/admin/analytics, or open /admin/notifications (Delivery tab) "
+            f"to confirm channel health."
+        )
+        _schedule_alert(
+            "cf_analytics_token_rejected",
+            "Cloudflare analytics token rejected",
+            body,
+        )
+
 
 def _mark_auth_ok():
+    was_failed = (
+        _auth_state["ok"] is False
+        or _auth_state.get("_pending_recovery_alert", False)
+    )
     _auth_state["ok"] = True
     _auth_state["last_check_at"] = datetime.now(timezone.utc).isoformat()
     _auth_state["last_error"] = None
     _auth_state["blocked_until"] = None
     _auth_state["consecutive_failures"] = 0
+    _auth_state["_pending_recovery_alert"] = False
+
+    # Task #455: one-shot recovery alert on the failure → success edge so
+    # admins know rotation worked without checking the dashboard. Reset
+    # the failure-debounce timer so a fresh outage after recovery pages
+    # immediately rather than waiting out the old 24h window.
+    if was_failed:
+        _last_alert_at["failed"] = 0.0
+        _schedule_alert(
+            "cf_analytics_token_recovered",
+            "Cloudflare analytics token recovered",
+            "Cloudflare analytics calls are succeeding again. If you just "
+            "rotated CF_ANALYTICS_API_TOKEN, the rotation worked.\n\n"
+            "Channel health: /admin/notifications (Delivery tab)."
+        )
 
 
 def _is_auth_blocked() -> bool:
@@ -87,6 +172,13 @@ def get_auth_status() -> dict:
 
 def reset_auth_state():
     """Force re-check of token on next call. Call after operator rotates token."""
+    # Task #455: if we were in a known-failed state, remember that across
+    # the reset so the next successful probe (typically the
+    # `get_visitor_stats_cf(days=1)` re-probe in `admin_cf_recheck`) still
+    # fires the one-shot recovery alert. Without this, clearing `ok` here
+    # would mask the failure → success transition from `_mark_auth_ok`.
+    if _auth_state.get("ok") is False:
+        _auth_state["_pending_recovery_alert"] = True
     _auth_state["ok"] = None
     _auth_state["blocked_until"] = None
     _auth_state["consecutive_failures"] = 0
