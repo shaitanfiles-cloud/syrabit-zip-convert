@@ -1,6 +1,6 @@
 import {
   Loader2, RefreshCw, BookOpen, FileText, Globe, Search,
-  Play, GitBranch, Database, Cpu,
+  Play, GitBranch, Database, Cpu, Activity, Zap,
 } from 'lucide-react';
 import JobProgress from './JobProgress';
 
@@ -8,6 +8,8 @@ export default function PipelineTab({
   subjectCoverage, coverageLoading, loadCoverage,
   subjectJobs, handleRunSubject, handleAutoRun,
   activeJob, setActiveJob, pipelineSearch, setPipelineSearch,
+  handleBackfillNotes, backfilling,
+  handleDiagnoseTopics, diagnostics, diagnosticsLoading,
 }) {
   return (
     <div className="space-y-4">
@@ -24,6 +26,20 @@ export default function PipelineTab({
             style={{ color: '#6b7280', borderColor: '#e5e7eb' }}>
             <RefreshCw size={12} className={coverageLoading ? 'animate-spin' : ''} /> Refresh
           </button>
+          {handleDiagnoseTopics && (
+            <button onClick={handleDiagnoseTopics} disabled={diagnosticsLoading}
+              className="h-8 px-3 rounded-xl text-xs flex items-center gap-1.5 border disabled:opacity-40"
+              style={{ color: '#6b7280', borderColor: '#e5e7eb' }}>
+              <Activity size={12} className={diagnosticsLoading ? 'animate-spin' : ''} /> Diagnose Topics
+            </button>
+          )}
+          {handleBackfillNotes && (
+            <button onClick={handleBackfillNotes} disabled={backfilling || (activeJob && activeJob.status !== 'done' && activeJob.status !== 'error')}
+              className="h-8 px-3 rounded-xl text-xs font-semibold flex items-center gap-1.5 disabled:opacity-40"
+              style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}>
+              <Zap size={12} /> Backfill Notes
+            </button>
+          )}
           <button onClick={handleAutoRun}
             disabled={activeJob && activeJob.status !== 'done' && activeJob.status !== 'error'}
             className="h-8 px-3 rounded-xl text-xs font-semibold flex items-center gap-1.5 disabled:opacity-40"
@@ -32,6 +48,47 @@ export default function PipelineTab({
           </button>
         </div>
       </div>
+
+      {diagnostics && (
+        <div style={{ borderRadius: 10, border: '1px solid #fde68a', background: '#fffbeb', padding: '10px 14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#92400e' }}>
+              Topic diagnostic — {diagnostics.summary?.ready ?? 0} ready · {diagnostics.summary?.blocked ?? 0} blocked · {diagnostics.summary?.fully_covered ?? 0} fully covered
+              <span style={{ color: '#a16207', fontWeight: 500, marginLeft: 6 }}>
+                (of {diagnostics.summary?.total ?? 0} topics)
+              </span>
+            </div>
+          </div>
+          {diagnostics.summary?.reasons && Object.keys(diagnostics.summary.reasons).length > 0 && (
+            <div style={{ fontSize: 10, color: '#78350f', marginTop: 4 }}>
+              {Object.entries(diagnostics.summary.reasons).map(([r, n], i) => (
+                <span key={r}>{i ? ' · ' : ''}<strong>{n}</strong> {r}</span>
+              ))}
+            </div>
+          )}
+          {Array.isArray(diagnostics.items) && diagnostics.items.length > 0 && (
+            <details style={{ marginTop: 6 }}>
+              <summary style={{ cursor: 'pointer', fontSize: 11, color: '#92400e' }}>
+                Show {Math.min(diagnostics.items.length, 25)} blocked topics
+              </summary>
+              <ul style={{ marginTop: 6, paddingLeft: 16, fontSize: 10.5, color: '#78350f' }}>
+                {diagnostics.items.slice(0, 25).map(it => (
+                  <li key={it.topic_id} style={{ margin: '3px 0' }}>
+                    <strong>{it.topic_title || it.topic_id}</strong>
+                    {' — '}{(it.blockers || []).join(', ') || 'unknown'}
+                    {' '}<span style={{ color: '#a16207' }}>({it.subject_name || 'no subject'} · {it.page_count} pages · status={it.status})</span>
+                    {it.last_error && (
+                      <div style={{ color: '#b91c1c', marginLeft: 12, fontSize: 10 }}>
+                        ↳ last {it.last_error.status} ({it.last_error.page_type}): {it.last_error.reason || '—'}
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '8px 12px', borderRadius: 8, background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.15)' }}>
         {[

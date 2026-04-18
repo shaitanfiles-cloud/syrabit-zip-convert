@@ -41,6 +41,49 @@ export default function JobProgress({ job, onDismiss }) {
       {job.current && (
         <p className="text-[10px] truncate mt-1.5" style={{ color: '#9ca3af' }}>{job.current}</p>
       )}
+
+      {Array.isArray(job.outcomes) && job.outcomes.length > 0 && (
+        <div className="mt-3 pt-2 border-t" style={{ borderColor: 'rgba(124,58,237,0.2)' }}>
+          <div className="text-[10px] font-semibold mb-1" style={{ color: '#6b7280' }}>
+            Recent topic outcomes
+          </div>
+          <ul className="space-y-0.5">
+            {job.outcomes.slice(-5).reverse().map((o, i) => {
+              const colour = o.status === 'generated' ? '#34d399'
+                : o.status === 'skipped' ? '#9ca3af'
+                : '#f87171';
+              const glyph = o.status === 'generated' ? '✓'
+                : o.status === 'skipped' ? '⟳'
+                : '✗';
+              return (
+                <li key={i} className="text-[10px] truncate" style={{ color: colour }}>
+                  <span style={{ color: colour, fontWeight: 700 }}>{glyph}</span>{' '}
+                  <span style={{ color: '#374151' }}>{o.topic_title || o.topic_id}</span>
+                  {' · '}
+                  <span style={{ color: '#9ca3af' }}>{o.page_type}</span>
+                  {o.reason && <span style={{ color: '#9ca3af' }}> — {o.reason}</span>}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {(job.avg_seo_score || job.avg_geo_score) && (
+        <div className="mt-2 text-[10px]" style={{ color: '#6b7280' }}>
+          <span style={{ fontWeight: 600 }}>Run averages: </span>
+          SEO {job.avg_seo_score ?? 0}/100 · GEO {job.avg_geo_score ?? 0}/100
+        </div>
+      )}
+
+      {job.reasons && Object.keys(job.reasons).length > 0 && (
+        <div className="mt-2 text-[10px]" style={{ color: '#9ca3af' }}>
+          <span style={{ fontWeight: 600 }}>Skip/error reasons: </span>
+          {Object.entries(job.reasons).map(([r, n], i) => (
+            <span key={r}>{i ? ' · ' : ''}{r} ({n})</span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

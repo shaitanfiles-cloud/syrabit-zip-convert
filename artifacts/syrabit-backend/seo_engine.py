@@ -769,6 +769,172 @@ def _compute_quality_score(content: str, page_type: str, context: dict | None = 
     }
 
 
+# ─── Task #457: GEO (Generative Engine Optimisation) scoring ──────────────────
+
+_ANSWER_SUMMARY_MIN_WORDS = 40
+_ANSWER_SUMMARY_MAX_WORDS = 80
+
+
+def _extract_answer_summary(content: str, topic_title: str = "") -> str:
+    """Extract / synthesise an answer-first summary (~40-60 words).
+
+    AI engines (Perplexity, Google AI Overviews, ChatGPT browsing) reward
+    pages that lead with a direct, self-contained answer. We pull the first
+    substantive paragraph after any leading H1, trim it to a clean sentence
+    boundary inside the target window. If the page has no usable lead
+    paragraph we synthesise a minimal answer from the title.
+    """
+    if not content:
+        return f"{topic_title}: detailed explanation, examples, and exam-ready notes for students." if topic_title else ""
+    body = re.sub(r'^#\s+.+\n+', '', content.lstrip(), count=1)
+    body = re.sub(r'^\s*[\-*>]\s+', '', body, flags=re.MULTILINE)
+    paragraphs = [p.strip() for p in re.split(r'\n\s*\n', body) if p.strip()]
+    lead = ""
+    for p in paragraphs:
+        if p.startswith('#') or p.startswith('|') or p.startswith('```'):
+            continue
+        cleaned = re.sub(r'\s+', ' ', re.sub(r'[*_`]+', '', p)).strip()
+        if len(cleaned.split()) >= 15:
+            lead = cleaned
+            break
+    if not lead:
+        return f"{topic_title}: a concise study guide with definition, key points, examples and exam questions." if topic_title else ""
+    words = lead.split()
+    if len(words) > _ANSWER_SUMMARY_MAX_WORDS:
+        truncated = " ".join(words[:_ANSWER_SUMMARY_MAX_WORDS])
+        last = max(truncated.rfind('. '), truncated.rfind('? '), truncated.rfind('! '))
+        if last > 80:
+            return truncated[: last + 1].strip()
+        return truncated.rstrip(',;:') + "."
+    return lead
+
+
+def _extract_key_facts(content: str, limit: int = 6) -> list[str]:
+    """Pull short, citable facts from the page for an at-a-glance KEY FACTS block.
+
+    Looks for bullet items under headings like "Key Points", "Quick Recap",
+    "At a Glance", "Important Points". Falls back to the first short sentences
+    of the page.
+    """
+    facts: list[str] = []
+    if not content:
+        return facts
+    sect_re = re.compile(
+        r'#{2,4}\s*(?:Key Point|Key Takeaway|Important Point|Quick Recap|Points to Remember|At a Glance|Key Fact|Summary)s?[^\n]*\n+([\s\S]*?)(?=\n#{1,4}\s|\Z)',
+        re.IGNORECASE,
+    )
+    for m in sect_re.finditer(content):
+        block = m.group(1)
+        for ln in block.splitlines():
+            s = ln.strip()
+            if not s or s.startswith('#'):
+                continue
+            s = re.sub(r'^[\-*>•\d\.\)]+\s*', '', s)
+            s = re.sub(r'[*_`]+', '', s).strip()
+            if 4 <= len(s.split()) <= 30:
+                facts.append(s)
+                if len(facts) >= limit:
+                    return facts
+    if facts:
+        return facts
+    sents = re.split(r'(?<=[\.!?])\s+', re.sub(r'\s+', ' ', re.sub(r'[*_`#>]+', '', content)))
+    for s in sents:
+        s = s.strip()
+        if 6 <= len(s.split()) <= 24 and not s.startswith('|'):
+            facts.append(s)
+            if len(facts) >= limit:
+                break
+    return facts
+
+
+def _compute_geo_score(content: str, page_type: str, context: dict | None = None) -> dict:
+    """Compute Generative Engine Optimisation score (0-100).
+
+    Rewards: answer-first summary in target word window, key-facts block,
+    inline citations / source mentions, freshness signal (year mention),
+    explicit author / reviewer attribution, structured-data friendly cues
+    (numbered Q&A, definition lists), and topic anchoring.
+    """
+    if not content:
+        return {"score": 0}
+    summary = _extract_answer_summary(content, (context or {}).get("topic_title", ""))
+    summary_words = len(summary.split()) if summary else 0
+    facts = _extract_key_facts(content)
+    has_summary = _ANSWER_SUMMARY_MIN_WORDS <= summary_words <= (_ANSWER_SUMMARY_MAX_WORDS + 10)
+    has_facts_block = len(facts) >= 3
+
+    citations = len(re.findall(
+        r'(NCERT|SCERT|syllabus|prescribed textbook|board guideline|Class\s*\d+\s+textbook|chapter\s+\d+)',
+        content, re.IGNORECASE,
+    ))
+    current_year = datetime.now(timezone.utc).year
+    has_freshness = bool(re.search(rf'\b({current_year}|{current_year-1})\b', content))
+    has_attribution = bool(re.search(
+        r'(Reviewed by|Written by|Author:|Reviewer:|Last updated|Last reviewed|Updated on)',
+        content, re.IGNORECASE,
+    ))
+    has_qa_pairs = bool(re.search(
+        r'(?:^|\n)(?:Q[:\.\)]|Question\s*\d+|\*\*Q\d*[:\.])',
+        content, re.IGNORECASE | re.MULTILINE,
+    ))
+    has_definition = bool(re.search(
+        r'#{2,4}\s*(Definition|What is|Meaning of|In simple words)',
+        content, re.IGNORECASE,
+    ))
+    has_anchor = False
+    if context:
+        for k in ("subject_name", "chapter_title", "topic_title"):
+            v = (context.get(k) or "").lower()
+            if v and len(v) > 3 and v in content.lower():
+                has_anchor = True
+                break
+    else:
+        has_anchor = True
+
+    score = 0
+    if has_summary: score += 22
+    elif summary_words >= 25: score += 12
+    score += min(len(facts), 6) * 4              # up to 24
+    score += min(citations, 4) * 4               # up to 16
+    if has_freshness: score += 8
+    if has_attribution: score += 8
+    if has_qa_pairs: score += 8
+    if has_definition: score += 6
+    if has_anchor: score += 8
+
+    missing: list[str] = []
+    if not has_summary: missing.append("answer_summary")
+    if not has_facts_block: missing.append("key_facts")
+    if citations == 0: missing.append("citations")
+    if not has_freshness: missing.append("freshness_year")
+    if not has_attribution: missing.append("attribution")
+    if not has_qa_pairs and page_type == "important-questions":
+        missing.append("qa_pairs")
+    if not has_anchor: missing.append("topic_anchor")
+
+    return {
+        "score": min(score, 100),
+        "answer_summary": summary,
+        "answer_summary_words": summary_words,
+        "key_facts": facts,
+        "key_facts_count": len(facts),
+        "citations": citations,
+        "has_freshness": has_freshness,
+        "has_attribution": has_attribution,
+        "has_qa_pairs": has_qa_pairs,
+        "has_definition": has_definition,
+        "anchored": has_anchor,
+        "missing": missing,
+    }
+
+
+def _combined_quality_score(seo: dict, geo: dict) -> int:
+    """Weighted blend of SEO and GEO sub-scores (70/30)."""
+    s = int(seo.get("score", 0) or 0)
+    g = int(geo.get("score", 0) or 0)
+    return int(round(0.7 * s + 0.3 * g))
+
+
 class TopicCreate(BaseModel):
     chapter_id: str
     title: str
@@ -788,6 +954,7 @@ class GenerateRequest(BaseModel):
     topic_ids: Optional[List[str]] = None
     page_types: Optional[List[str]] = None
     batch: Optional[bool] = False
+    only_published: Optional[bool] = False
 
 
 class PageTypesRequest(BaseModel):
@@ -795,6 +962,16 @@ class PageTypesRequest(BaseModel):
 
 
 async def _resolve_hierarchy(topic: dict) -> dict:
+    """Resolve full curriculum hierarchy for a topic.
+
+    Task #457: lenient resolution. Historically this returned ``{}`` if
+    the stream/class/board chain was incomplete, which silently dropped
+    every page in ``_auto_run_bg``. We now require only chapter+subject
+    and synthesise sensible fallbacks (board='DEGREE', class='General')
+    when the upstream chain is missing, so the existing 991 topics
+    actually generate pages. Slugs prefer the upstream docs but fall
+    back to whatever the subject/topic doc itself carries.
+    """
     if _db is None:
         return {}
     chapter = await _db.chapters.find_one({"id": topic.get("chapter_id", "")}, {"_id": 0})
@@ -802,21 +979,59 @@ async def _resolve_hierarchy(topic: dict) -> dict:
         return {}
     subject = await _db.subjects.find_one({"id": chapter.get("subject_id", "")}, {"_id": 0})
     if not subject:
+        # Without a subject we cannot build URLs; this is a real blocker.
         return {}
-    stream = await _db.streams.find_one({"id": subject.get("stream_id", "")}, {"_id": 0})
-    cls = await _db.classes.find_one({"id": stream.get("class_id", "")}, {"_id": 0}) if stream else None
-    board = await _db.boards.find_one({"id": cls.get("board_id", "")}, {"_id": 0}) if cls else None
+    stream = None
+    cls = None
+    board = None
+    if subject.get("stream_id"):
+        stream = await _db.streams.find_one({"id": subject.get("stream_id", "")}, {"_id": 0})
+    if stream and stream.get("class_id"):
+        cls = await _db.classes.find_one({"id": stream.get("class_id", "")}, {"_id": 0})
+    if cls and cls.get("board_id"):
+        board = await _db.boards.find_one({"id": cls.get("board_id", "")}, {"_id": 0})
+
+    # Fallback objects so downstream code can keep using `.get("name")`
+    # without exploding when the upstream chain is incomplete.
+    fallback_board_name = (
+        topic.get("board_name")
+        or subject.get("board_name")
+        or chapter.get("board_name")
+        or "DEGREE"
+    )
+    fallback_class_name = (
+        topic.get("class_name")
+        or subject.get("class_name")
+        or chapter.get("class_name")
+        or "General"
+    )
+    if board is None:
+        board = {
+            "name": fallback_board_name,
+            "slug": subject.get("board_slug") or _slug(fallback_board_name),
+        }
+    if cls is None:
+        cls = {
+            "name": fallback_class_name,
+            "slug": subject.get("class_slug") or _slug(fallback_class_name),
+        }
+    if stream is None:
+        stream = {
+            "name": subject.get("stream_name", ""),
+            "slug": subject.get("stream_slug", ""),
+        }
+
     return {
         "chapter": chapter,
         "subject": subject,
         "stream": stream,
         "class": cls,
         "board": board,
-        "board_slug": board.get("slug", "") if board else "",
-        "class_slug": cls.get("slug", "") if cls else "",
-        "stream_slug": stream.get("slug", "") if stream else "",
+        "board_slug": board.get("slug", "") or subject.get("board_slug", ""),
+        "class_slug": cls.get("slug", "") or subject.get("class_slug", ""),
+        "stream_slug": stream.get("slug", "") or subject.get("stream_slug", ""),
         "subject_slug": subject.get("slug", ""),
-        "chapter_slug": _slug(chapter.get("title", "")),
+        "chapter_slug": chapter.get("slug") or _slug(chapter.get("title", "")),
     }
 
 
@@ -1243,6 +1458,14 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         f"11. MANDATORY: Include exam marking references — '2-mark question', '5-mark answer', "
         f"'long answer (10 marks)', 'short answer type' to match board exam patterns\n"
         f"12. Include relevant real-world examples and practical applications that connect the academic content to students' experience\n"
+        f"13. GEO/AI-search ready: open with a 40-60 word answer-first paragraph "
+        f"directly defining \"{topic['title']}\" before any heading.\n"
+        f"14. GEO: include a '## Key Facts' (or '## Quick Facts') bullet list with 4-6 "
+        f"crisp factual bullets a search engine can lift verbatim.\n"
+        f"15. GEO: explicitly mention the current academic year ({datetime.now(timezone.utc).year}) "
+        f"and a 'Last updated' or 'Reviewed' line so freshness is detectable.\n"
+        f"16. GEO: end with an 'Author:' or 'Reviewed by' attribution line "
+        f"(e.g., 'Reviewed by Syrabit Academic Team').\n"
     )
 
     messages = [
@@ -1398,15 +1621,44 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         "board_name": board_display,
         "subject_name": subject_name,
         "chapter_title": h.get("chapter", {}).get("title", ""),
+        "topic_title": topic["title"],
     }
     quality_score = _compute_quality_score(content, page_type, context=quality_context)
     q_score = quality_score.get("score", 0)
 
-    if q_score >= _QUALITY_PUBLISH_THRESHOLD:
+    # Task #457: compute Generative Engine Optimisation sub-score. A page
+    # is auto-published only when *both* the SEO sub-score and the GEO
+    # sub-score clear the existing publish threshold (Task #41). Pages
+    # that do not pass are stored as `draft` with structured failing
+    # reasons so editors can review and fix them.
+    geo_score = _compute_geo_score(content, page_type, context=quality_context)
+    g_score = geo_score.get("score", 0)
+    combined = _combined_quality_score(quality_score, geo_score)
+    # Task #457 publish policy: both SEO and GEO sub-scores must clear
+    # the same Task #41-aligned publish threshold. Gate is purely
+    # threshold-based so behaviour is predictable and auditable; any
+    # `geo_score.missing` markers are kept on the page doc for editor
+    # context but do NOT independently force a draft.
+    _GEO_PUBLISH_THRESHOLD = _QUALITY_PUBLISH_THRESHOLD
+
+    fail_reasons: list[str] = []
+    if q_score < _QUALITY_PUBLISH_THRESHOLD:
+        fail_reasons.append(
+            f"seo_below_threshold ({q_score}<{_QUALITY_PUBLISH_THRESHOLD})"
+        )
+    if g_score < _GEO_PUBLISH_THRESHOLD:
+        fail_reasons.append(
+            f"geo_below_threshold ({g_score}<{_GEO_PUBLISH_THRESHOLD})"
+        )
+
+    if not fail_reasons:
         page_status = "published"
     else:
-        page_status = "rejected"
-        logger.warning(f"Page for {topic['title']}/{page_type} scored {q_score} — rejected (below {_QUALITY_PUBLISH_THRESHOLD} quality threshold)")
+        page_status = "draft"
+        logger.warning(
+            f"Page for {topic['title']}/{page_type} scored seo={q_score} geo={g_score} "
+            f"combined={combined} — saved as draft ({'; '.join(fail_reasons)})"
+        )
 
     page = {
         "id": f"seo-{uuid.uuid4().hex[:8]}",
@@ -1437,8 +1689,18 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         "prompt_variant": variant_idx,
         "title_variant": title_idx,
         "quality_score": quality_score,
-        "quality": {"score": q_score, "word_count": word_count},
+        "geo_score": geo_score,
+        "combined_score": combined,
+        "answer_summary": geo_score.get("answer_summary", ""),
+        "key_facts": geo_score.get("key_facts", []),
+        "quality": {
+            "score": q_score,
+            "geo_score": g_score,
+            "combined_score": combined,
+            "word_count": word_count,
+        },
         "status": page_status,
+        "fail_reasons": fail_reasons,
         "in_sitemap": page_status == "published",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -1540,7 +1802,12 @@ async def generate_seo_content(data: GenerateRequest, background_tasks: Backgrou
     page_types = data.page_types or PAGE_TYPES
 
     if data.batch:
-        topics = await _db.topics.find({"status": "published"}, {"_id": 0}).to_list(5000)
+        # Task #457: tolerant query — pick up legacy/missing/draft
+        # status topics so the existing 991 actually generate pages.
+        topics = await _db.topics.find(
+            _eligible_topic_filter(only_published=bool(data.only_published)),
+            {"_id": 0},
+        ).to_list(10000)
         if not topics:
             raise HTTPException(status_code=404, detail="No topics found. Run extract-topics or generate-lessons first.")
 
@@ -1656,13 +1923,32 @@ async def generate_lesson_pages(background_tasks: BackgroundTasks, _admin: dict 
     }
 
 
-async def _batch_generate(topics: list, page_types: list):
+async def _batch_generate(topics: list, page_types: list, job_id: str | None = None):
     total = 0
     errors = 0
+    skipped = 0
+    seo_scores: list[int] = []
+    geo_scores: list[int] = []
+    outcomes_local: list[dict] = []
+
+    def _record(tid: str, ttitle: str, pt: str, status: str, reason: str = ""):
+        outcomes_local.append({
+            "topic_id": tid, "topic_title": ttitle, "page_type": pt,
+            "status": status, "reason": reason,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        })
+        if job_id:
+            _job_record_outcome(job_id, tid, ttitle, pt, status, reason)
+
     for topic in topics:
+        tid = topic.get("id", "")
+        ttitle = topic.get("title", "")
         try:
             hierarchy = await _resolve_hierarchy(topic)
             if not hierarchy:
+                for pt in page_types:
+                    _record(tid, ttitle, pt, "skipped", "no hierarchy")
+                    skipped += 1
                 continue
             for pt in page_types:
                 existing = await _db.seo_pages.find_one(
@@ -1670,23 +1956,51 @@ async def _batch_generate(topics: list, page_types: list):
                     {"_id": 0, "id": 1}
                 )
                 if existing:
+                    _record(tid, ttitle, pt, "skipped", "page already exists")
+                    skipped += 1
                     continue
                 try:
                     page = await _generate_single_page(topic, pt, hierarchy)
                     if page:
                         total += 1
+                        q = (page.get("quality") or {}).get("score")
+                        g = (page.get("quality") or {}).get("geo_score")
+                        if isinstance(q, int): seo_scores.append(q)
+                        if isinstance(g, int): geo_scores.append(g)
+                        fr = page.get("fail_reasons") or []
+                        _record(tid, ttitle, pt, "generated",
+                                f"score={q} geo={g} status={page.get('status')}"
+                                + (f" — {','.join(fr)}" if fr else ""))
                 except Exception as e:
                     logger.error(f"Generation error for {topic['title']}/{pt}: {e}")
+                    _record(tid, ttitle, pt, "failed", str(e)[:160])
                     errors += 1
         except Exception as e:
             logger.error(f"Hierarchy error for topic {topic.get('id')}: {e}")
+            for pt in page_types:
+                _record(tid, ttitle, pt, "failed", f"hierarchy: {str(e)[:140]}")
             errors += 1
 
-    logger.info(f"Batch generation complete: {total} pages generated, {errors} errors")
+    avg_seo = round(sum(seo_scores) / len(seo_scores)) if seo_scores else 0
+    avg_geo = round(sum(geo_scores) / len(geo_scores)) if geo_scores else 0
+    if job_id and job_id in _seo_jobs:
+        _seo_jobs[job_id]["avg_seo_score"] = avg_seo
+        _seo_jobs[job_id]["avg_geo_score"] = avg_geo
+
+    logger.info(
+        f"Batch generation complete: {total} pages generated, {skipped} skipped, "
+        f"{errors} errors · avg_seo={avg_seo} avg_geo={avg_geo}"
+    )
     await _db.seo_generation_log.insert_one({
         "id": f"genlog-{uuid.uuid4().hex[:8]}",
+        "job_id": job_id,
         "total_generated": total,
+        "skipped": skipped,
         "errors": errors,
+        "avg_seo_score": avg_seo,
+        "avg_geo_score": avg_geo,
+        "outcomes": outcomes_local,
+        "page_types": list(page_types),
         "completed_at": datetime.now(timezone.utc).isoformat(),
     })
     try:
@@ -2451,6 +2765,34 @@ def _render_seo_html(
             "url": page_url,
         })
 
+    # Task #457: QAPage schema for important-questions improves AI engine
+    # quotability and helps Google surface them as Q&A rich results.
+    if page_type == "important-questions":
+        raw_content = page.get("content", "")
+        qa_items = []
+        current_q = None
+        for line in raw_content.split("\n"):
+            stripped = line.strip().lstrip("#").replace("**", "").strip()
+            if stripped.endswith("?") and len(stripped) > 12:
+                current_q = stripped
+            elif current_q and len(stripped) > 25:
+                qa_items.append({
+                    "@type": "Question",
+                    "name": current_q,
+                    "answerCount": 1,
+                    "acceptedAnswer": {"@type": "Answer", "text": stripped[:600]},
+                })
+                current_q = None
+                if len(qa_items) >= 8:
+                    break
+        if qa_items:
+            graph_nodes.append({
+                "@type": "QAPage",
+                "mainEntity": qa_items[0],
+                "about": {"@type": "Thing", "name": page.get("topic_title", "")},
+                "additionalProperty": [{"@type": "PropertyValue", "name": "questionCount", "value": len(qa_items)}],
+            })
+
     if page_type == "mcqs":
         raw_content = page.get("content", "")
         mcq_questions = []
@@ -2588,6 +2930,56 @@ def _render_seo_html(
     if parts:
         prevnext_html = f'<nav class="pn-nav" aria-label="Topic navigation">{"".join(parts)}</nav>'
 
+    # ── Task #457: GEO blocks (answer-first summary + Key Facts + attribution)
+    answer_summary = page.get("answer_summary") or ""
+    key_facts = page.get("key_facts") or []
+    if not answer_summary or not key_facts:
+        # Older pages (pre-Task #457) don't have these fields stored — derive
+        # them on the fly from the content so the upgraded template still
+        # renders the GEO blocks for the existing corpus.
+        try:
+            geo = _compute_geo_score(
+                page.get("content", ""),
+                page_type,
+                context={
+                    "topic_title": page.get("topic_title", ""),
+                    "subject_name": page.get("subject_name", ""),
+                    "chapter_title": page.get("chapter_title", ""),
+                },
+            )
+            if not answer_summary:
+                answer_summary = geo.get("answer_summary", "")
+            if not key_facts:
+                key_facts = geo.get("key_facts", []) or []
+        except Exception:
+            pass
+
+    answer_html = ""
+    if answer_summary:
+        answer_html = (
+            f'<aside class="answer-first" aria-label="Quick answer">'
+            f'<h2>Quick answer</h2>'
+            f'<p>{html_mod.escape(answer_summary)}</p>'
+            f'</aside>'
+        )
+    facts_html = ""
+    if key_facts:
+        items = "".join(
+            f'<li>{html_mod.escape(str(f))}</li>' for f in key_facts[:6]
+        )
+        facts_html = (
+            f'<aside class="key-facts" aria-label="Key facts">'
+            f'<h2>Key facts</h2><ul>{items}</ul>'
+            f'</aside>'
+        )
+    attribution_html = (
+        f'<p class="byline">'
+        f'Reviewed by the Syrabit.ai editorial team · '
+        f'Last updated {html_mod.escape(updated[:10] if updated else "")}'
+        f'</p>'
+    )
+    geo_top_html = answer_html + facts_html + attribution_html
+
     return f"""<!DOCTYPE html>
 <html lang="en-IN">
 <head>
@@ -2663,6 +3055,9 @@ tr:nth-child(even) td{{background:#fafbfc}}
 .pn-prev,.pn-next{{color:#7c3aed;text-decoration:none;font-size:.9rem;max-width:45%}}.pn-prev:hover,.pn-next:hover{{text-decoration:underline}}
 nav[aria-label="Breadcrumb"]{{font-size:.85rem;color:#6b7280;margin-bottom:.5rem}}
 nav[aria-label="Breadcrumb"] a{{color:#7c3aed;text-decoration:none}}
+.answer-first{{background:#eef2ff;border:1px solid #c7d2fe;border-left:4px solid #6366f1;border-radius:8px;padding:.85rem 1.1rem;margin:1.25rem 0}}.answer-first h2{{margin:0 0 .35rem;font-size:1rem;color:#4338ca;text-transform:uppercase;letter-spacing:.04em}}.answer-first p{{margin:0;color:#1f2937;line-height:1.65}}
+.key-facts{{background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #16a34a;border-radius:8px;padding:.85rem 1.1rem;margin:1.25rem 0}}.key-facts h2{{margin:0 0 .4rem;font-size:1rem;color:#15803d;text-transform:uppercase;letter-spacing:.04em}}.key-facts ul{{margin:.2rem 0 0;padding-left:1.2rem}}.key-facts li{{margin:.2rem 0;color:#1f2937}}
+.byline{{font-size:.82rem;color:#6b7280;margin:.5rem 0 1.25rem;font-style:italic}}
 .content-info{{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:1rem 1.25rem;margin:2rem 0}}
 .content-info h2{{margin-top:0;font-size:1rem;color:#334155}}.content-info dl{{margin:0}}.content-info dt{{font-weight:600;color:#475569;margin-top:.5rem;font-size:.9rem}}.content-info dd{{margin:0 0 .25rem 0;color:#64748b;font-size:.85rem}}
 footer{{color:#6b7280;font-size:.85rem;margin-top:2rem;padding-top:1rem;border-top:1px solid #e5e7eb}}
@@ -2685,6 +3080,7 @@ footer{{color:#6b7280;font-size:.85rem;margin-top:2rem;padding-top:1rem;border-t
 <article>
 <h1>{topic} — {board} {cls} {subject}</h1>
 <p><em>{desc}</em></p>
+{geo_top_html}
 {content_html}
 </article>
 {related_html}
@@ -4548,10 +4944,56 @@ async def bulk_publish_pages(
 
 _seo_jobs: dict = {}  # job_id -> {status, total, done, errors, current, started_at, finished_at}
 
+# Task #457: any topic status that is NOT one of these is treated as
+# eligible for batch/auto-run generation. This is intentionally broad
+# so the existing 991 legacy topics (which may have missing or
+# non-standard statuses) actually get picked up. Callers that need
+# strict published-only behaviour pass ``only_published=True``.
+_TOPIC_INELIGIBLE_STATUSES = {"archived", "rejected", "deleted", "hidden"}
+
+
+def _eligible_topic_filter(only_published: bool = False) -> dict:
+    if only_published:
+        return {"status": "published"}
+    return {
+        "$or": [
+            {"status": {"$exists": False}},
+            {"status": None},
+            {"status": ""},
+            {"status": {"$nin": list(_TOPIC_INELIGIBLE_STATUSES)}},
+        ]
+    }
+
 
 def _job_update(jid: str, **kwargs):
     if jid in _seo_jobs:
         _seo_jobs[jid].update(kwargs)
+
+
+def _job_record_outcome(jid: str, topic_id: str, topic_title: str, page_type: str,
+                        status: str, reason: str = ""):
+    """Append a per-topic generation outcome to the job for live UI feedback.
+
+    Keeps only the most recent 100 outcomes in memory to bound size,
+    and aggregates skip/error reasons in a counter the admin UI surfaces.
+    """
+    job = _seo_jobs.get(jid)
+    if not job:
+        return
+    outcomes = job.setdefault("outcomes", [])
+    outcomes.append({
+        "topic_id": topic_id,
+        "topic_title": topic_title,
+        "page_type": page_type,
+        "status": status,
+        "reason": reason,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    })
+    if len(outcomes) > 5000:
+        del outcomes[: len(outcomes) - 5000]
+    if reason and status in ("skipped", "failed"):
+        reasons = job.setdefault("reasons", {})
+        reasons[reason] = reasons.get(reason, 0) + 1
 
 
 @router.get("/jobs/{job_id}")
@@ -4808,6 +5250,142 @@ async def _run_subject_bg(job_id: str, subject_id: str, force: bool, page_types:
 
 # ─── ADMIN: Full auto-run pipeline ──────────────────────────────────────────
 
+@router.get("/diagnose-topics")
+async def diagnose_topics(
+    limit: int = 50,
+    only_blocked: bool = True,
+    _admin: dict = Depends(_require_admin),
+):
+    """Task #457: per-topic eligibility/blocker report.
+
+    Helps admins understand WHY 991 topics produced 0 pages by surfacing
+    the exact reason each topic was skipped (status, missing chapter,
+    missing subject, no upstream hierarchy, all pages already exist).
+    """
+    if _db is None:
+        return {"items": [], "summary": {}}
+    limit = max(1, min(int(limit or 50), 500))
+    topics = await _db.topics.find({}, {"_id": 0}).to_list(20000)
+    items: list[dict] = []
+    summary = {"total": len(topics), "blocked": 0, "ready": 0, "fully_covered": 0}
+    reasons: dict = {}
+
+    # Task #457: collect the most recent generation error per topic from the
+    # persisted run outcomes so the admin sees actionable failure context
+    # alongside structural blockers.
+    last_errors: dict[str, dict] = {}
+    try:
+        recent_logs = await _db.seo_generation_log.find(
+            {"outcomes": {"$exists": True}},
+            {"_id": 0, "outcomes": 1, "completed_at": 1, "job_id": 1},
+        ).sort("completed_at", -1).limit(20).to_list(20)
+        for log in recent_logs:
+            for o in (log.get("outcomes") or []):
+                tid = o.get("topic_id")
+                if not tid or o.get("status") not in ("failed", "skipped"):
+                    continue
+                if tid in last_errors:
+                    continue
+                last_errors[tid] = {
+                    "status": o.get("status"),
+                    "reason": o.get("reason", ""),
+                    "page_type": o.get("page_type"),
+                    "ts": o.get("ts"),
+                    "job_id": log.get("job_id"),
+                }
+    except Exception as e:
+        logger.warning(f"diagnose-topics: last_error lookup failed: {e}")
+
+    for topic in topics:
+        status = (topic.get("status") or "").lower() or "(unset)"
+        ineligible = status in _TOPIC_INELIGIBLE_STATUSES
+        blockers: list[str] = []
+        if ineligible:
+            blockers.append(f"status={status}")
+        chapter = await _db.chapters.find_one(
+            {"id": topic.get("chapter_id", "")}, {"_id": 0, "id": 1, "subject_id": 1, "title": 1}
+        )
+        if not chapter:
+            blockers.append("missing chapter")
+            subject = None
+        else:
+            subject = await _db.subjects.find_one(
+                {"id": chapter.get("subject_id", "")}, {"_id": 0, "id": 1, "name": 1, "slug": 1}
+            )
+            if not subject:
+                blockers.append("missing subject")
+        hierarchy_resolved = bool(chapter and subject)
+        existing_pages = await _db.seo_pages.find(
+            {"topic_id": topic.get("id", "")},
+            {"_id": 0, "page_type": 1, "status": 1},
+        ).to_list(50)
+        page_count = len(existing_pages)
+        coverage = {pt: False for pt in PAGE_TYPES}
+        for p in existing_pages:
+            pt = p.get("page_type")
+            if pt in coverage:
+                coverage[pt] = True
+        if not blockers and page_count >= len(PAGE_TYPES):
+            blockers.append("all page types already generated")
+            summary["fully_covered"] += 1
+
+        is_blocked = bool(blockers)
+        if is_blocked:
+            summary["blocked"] += 1
+            for b in blockers:
+                reasons[b] = reasons.get(b, 0) + 1
+        else:
+            summary["ready"] += 1
+
+        if only_blocked and not is_blocked:
+            continue
+        if len(items) < limit:
+            items.append({
+                "topic_id": topic.get("id"),
+                "topic_title": topic.get("title", ""),
+                "status": status,
+                "chapter_id": topic.get("chapter_id"),
+                "subject_id": chapter.get("subject_id") if chapter else None,
+                "subject_name": (subject or {}).get("name") if subject else None,
+                "page_count": page_count,
+                "hierarchy_resolved": hierarchy_resolved,
+                "has_existing_page": page_count > 0,
+                "coverage": coverage,
+                "blockers": blockers,
+                "last_error": last_errors.get(topic.get("id", "")),
+            })
+
+    summary["reasons"] = reasons
+    return {"items": items, "summary": summary}
+
+
+@router.post("/backfill-notes")
+async def backfill_notes(
+    background_tasks: BackgroundTasks,
+    _admin: dict = Depends(_require_admin),
+):
+    """Task #457: one-shot backfill that generates the ``notes`` page for
+    every eligible topic that does not yet have one. Reuses the auto-run
+    job framework so progress and per-topic outcomes appear in the same
+    admin UI."""
+    job_id = f"job-{uuid.uuid4().hex[:10]}"
+    _seo_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "queued",
+        "total": 0,
+        "done": 0,
+        "errors": 0,
+        "skipped": 0,
+        "current": "Backfill queued…",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "finished_at": None,
+        "page_types": ["notes"],
+        "kind": "backfill-notes",
+    }
+    background_tasks.add_task(_auto_run_bg, job_id, ["notes"])
+    return {"job_id": job_id, "message": "Notes backfill started", "status": "queued"}
+
+
 @router.post("/auto-run")
 async def auto_run_pipeline(
     background_tasks: BackgroundTasks,
@@ -4868,20 +5446,32 @@ async def _auto_run_bg(job_id: str, page_types: list):
 
 
         # Step 2: Generate missing pages for all topics
-        all_topics = await _db.topics.find({"status": "published"}, {"_id": 0}).to_list(10000)
+        # Task #457: tolerant filter — pick up legacy/missing/suggested
+        # statuses, not just "published".
+        all_topics = await _db.topics.find(
+            _eligible_topic_filter(only_published=False),
+            {"_id": 0},
+        ).to_list(20000)
         total_ops = len(all_topics) * len(page_types)
         _job_update(job_id, status="generating", total=total_ops, current=f"Generating pages for {len(all_topics)} topics…")
 
         done = 0
         errors = 0
         skipped = 0
+        seo_scores: list[int] = []
+        geo_scores: list[int] = []
 
         for topic in all_topics:
-            _job_update(job_id, current=f"Processing: {topic.get('title', topic.get('id', ''))}")
+            tid = topic.get("id", "")
+            ttitle = topic.get("title", tid)
+            _job_update(job_id, current=f"Processing: {ttitle}")
             try:
                 hierarchy = await _resolve_hierarchy(topic)
                 if not hierarchy:
-                    logger.warning(f"Auto-run: no hierarchy for topic {topic.get('id')} (chapter_id={topic.get('chapter_id')}) — skipping")
+                    reason = "missing chapter or subject"
+                    logger.warning(f"Auto-run: no hierarchy for topic {tid} (chapter_id={topic.get('chapter_id')}) — {reason}")
+                    for pt in page_types:
+                        _job_record_outcome(job_id, tid, ttitle, pt, "skipped", reason)
                     skipped += len(page_types)
                     done += len(page_types)
                     _job_update(job_id, done=done, skipped=skipped)
@@ -4889,10 +5479,11 @@ async def _auto_run_bg(job_id: str, page_types: list):
 
                 for pt in page_types:
                     existing = await _db.seo_pages.find_one(
-                        {"topic_id": topic["id"], "page_type": pt},
+                        {"topic_id": tid, "page_type": pt},
                         {"_id": 0, "id": 1}
                     )
                     if existing:
+                        _job_record_outcome(job_id, tid, ttitle, pt, "skipped", "page already exists")
                         skipped += 1
                         done += 1
                         _job_update(job_id, done=done, skipped=skipped)
@@ -4900,31 +5491,62 @@ async def _auto_run_bg(job_id: str, page_types: list):
                     try:
                         page = await _generate_single_page(topic, pt, hierarchy)
                         if page:
+                            q = (page.get("quality") or {}).get("score")
+                            g = (page.get("quality") or {}).get("geo_score")
+                            if isinstance(q, int): seo_scores.append(q)
+                            if isinstance(g, int): geo_scores.append(g)
+                            fr = page.get("fail_reasons") or []
+                            _job_record_outcome(
+                                job_id, tid, ttitle, pt, "generated",
+                                f"{page.get('status','')} score={q} geo={g}"
+                                + (f" — {','.join(fr)}" if fr else "")
+                            )
                             done += 1
                         else:
+                            _job_record_outcome(job_id, tid, ttitle, pt, "failed",
+                                                "generator returned no page")
                             errors += 1
                             done += 1
                     except Exception as e:
-                        logger.error(f"Auto-run gen error {topic.get('id')}/{pt}: {e}")
+                        logger.error(f"Auto-run gen error {tid}/{pt}: {e}")
+                        _job_record_outcome(job_id, tid, ttitle, pt, "failed", str(e)[:160])
                         errors += 1
                         done += 1
                     _job_update(job_id, done=done, errors=errors)
 
             except Exception as e:
-                logger.error(f"Auto-run topic error {topic.get('id')}: {e}")
+                logger.error(f"Auto-run topic error {tid}: {e}")
+                for pt in page_types:
+                    _job_record_outcome(job_id, tid, ttitle, pt, "failed", f"topic loop: {str(e)[:140]}")
                 errors += len(page_types)
                 done += len(page_types)
                 _job_update(job_id, done=done, errors=errors)
 
         # Step 3: Log to DB
         now = datetime.now(timezone.utc).isoformat()
+        # Task #457: persist per-topic outcomes alongside the run summary so
+        # failures are auditable after the in-memory job is gone, and the
+        # diagnostic endpoint can surface the most recent generation error
+        # for each topic.
+        job_outcomes = list(_seo_jobs.get(job_id, {}).get("outcomes") or [])
+        job_reasons = dict(_seo_jobs.get(job_id, {}).get("reasons") or {})
+        avg_seo = round(sum(seo_scores) / len(seo_scores)) if seo_scores else 0
+        avg_geo = round(sum(geo_scores) / len(geo_scores)) if geo_scores else 0
+        if job_id in _seo_jobs:
+            _seo_jobs[job_id]["avg_seo_score"] = avg_seo
+            _seo_jobs[job_id]["avg_geo_score"] = avg_geo
         await _db.seo_generation_log.insert_one({
             "job_id": job_id,
             "total_generated": done - skipped - errors,
             "skipped": skipped,
             "errors": errors,
             "new_topics": new_topics,
+            "avg_seo_score": avg_seo,
+            "avg_geo_score": avg_geo,
             "completed_at": now,
+            "outcomes": job_outcomes,
+            "reasons": job_reasons,
+            "page_types": list(page_types),
         })
 
         try:

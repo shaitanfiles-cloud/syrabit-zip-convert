@@ -342,6 +342,12 @@ export const adminSeoAutoRun = (token, pageTypes = null) =>
 export const adminSeoJobStatus = (token, jobId) =>
   axios.get(`${API_BASE}/seo/jobs/${jobId}`, { headers: adminHeaders(token), withCredentials: true });
 
+export const adminSeoDiagnoseTopics = (token, params = {}) =>
+  axios.get(`${API_BASE}/seo/diagnose-topics`, { headers: adminHeaders(token), withCredentials: true, params });
+
+export const adminSeoBackfillNotes = (token) =>
+  axios.post(`${API_BASE}/seo/backfill-notes`, {}, { headers: adminHeaders(token), withCredentials: true });
+
 export const adminSeoInsights = (token) =>
   axios.get(`${API_BASE}/seo/insights`, { headers: adminHeaders(token), withCredentials: true });
 

@@ -167,7 +167,10 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
           loadCoverage={s.loadCoverage} subjectJobs={s.subjectJobs}
           handleRunSubject={s.handleRunSubject} handleAutoRun={s.handleAutoRun}
           activeJob={s.activeJob} setActiveJob={s.setActiveJob}
-          pipelineSearch={s.pipelineSearch} setPipelineSearch={s.setPipelineSearch} />
+          pipelineSearch={s.pipelineSearch} setPipelineSearch={s.setPipelineSearch}
+          handleBackfillNotes={s.handleBackfillNotes} backfilling={s.backfilling}
+          handleDiagnoseTopics={s.handleDiagnoseTopics}
+          diagnostics={s.diagnostics} diagnosticsLoading={s.diagnosticsLoading} />
       )}
 
       {s.tab === 'quality' && (

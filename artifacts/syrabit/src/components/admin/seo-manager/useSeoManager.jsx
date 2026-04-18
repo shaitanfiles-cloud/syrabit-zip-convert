@@ -9,6 +9,7 @@ import {
   seoInternalLinksAnalyze, seoInternalLinksInject,
   seoInjectSchemaBulk, seoInjectSchema, seoSitemapValidate,
   adminSeoRefreshMeta, adminSeoReviewQueue,
+  adminSeoDiagnoseTopics, adminSeoBackfillNotes,
 } from '@/utils/api';
 
 const HUB_CTX_KEY = 'syrabit_hub_ctx';
@@ -211,6 +212,43 @@ export default function useSeoManager(adminToken) {
       setSubjectJobs(prev => { const n = { ...prev }; delete n[subjectId]; return n; });
     }
   }, [adminToken, pollSubjectJob]);
+
+  // ── Task #457: diagnostics + notes backfill ────────────────────────────
+  const [diagnostics, setDiagnostics] = useState(null);
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
+
+  const handleDiagnoseTopics = useCallback(async () => {
+    setDiagnosticsLoading(true);
+    try {
+      const res = await adminSeoDiagnoseTopics(adminToken, { limit: 100, only_blocked: true });
+      setDiagnostics(res.data || { items: [], summary: {} });
+      const blocked = res.data?.summary?.blocked ?? 0;
+      const ready = res.data?.summary?.ready ?? 0;
+      toast.success(`Diagnostic: ${ready} ready · ${blocked} blocked`);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Diagnostic failed');
+    } finally {
+      setDiagnosticsLoading(false);
+    }
+  }, [adminToken]);
+
+  const handleBackfillNotes = useCallback(async () => {
+    if (!confirm('Generate notes for every eligible topic that does not yet have one?')) return;
+    setBackfilling(true);
+    try {
+      const res = await adminSeoBackfillNotes(adminToken);
+      const jobId = res.data?.job_id;
+      if (!jobId) throw new Error('No job_id returned');
+      setActiveJob({ job_id: jobId, status: 'queued', total: 0, done: 0, errors: 0, skipped: 0, current: 'Backfill starting…', kind: 'backfill-notes' });
+      startPolling(jobId);
+      toast.success('Notes backfill started');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Backfill failed');
+    } finally {
+      setBackfilling(false);
+    }
+  }, [adminToken, startPolling]);
 
   const handleAutoRun = useCallback(async () => {
     try {
@@ -445,6 +483,8 @@ export default function useSeoManager(adminToken) {
     handleInsightAction, handleLinksAnalyze, handleLinksInject,
     handleSchemaInjectSingle, handleSchemaBulk, handleSitemapValidate,
     handleRefreshMeta, handlePilot, handleRunSubject,
+    diagnostics, diagnosticsLoading, backfilling,
+    handleDiagnoseTopics, handleBackfillNotes,
     toggleTopic, toggleType, filteredTopics, filteredPages,
     publishedCount, draftCount, coverage,
   };
