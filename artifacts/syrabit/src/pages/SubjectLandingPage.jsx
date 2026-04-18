@@ -8,10 +8,13 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useResolveSubject, useChapters } from '@/hooks/useContent';
+import ContinueLearning from '@/components/content/ContinueLearning';
+import { useContentLang } from '@/context/LanguageContext';
 
 export default function SubjectLandingPage() {
   const { board, classSlug, subjectSlug } = useParams();
   const [searchQuery, setSearchQuery] = useState('');
+  const { contentLang } = useContentLang();
 
   const { data: subject = null, isLoading: subjectLoading, error: subjectError } = useResolveSubject(board, classSlug, subjectSlug);
   const subjectId = subject?.id || subject?._id;
@@ -266,6 +269,20 @@ export default function SubjectLandingPage() {
             })
           )}
         </div>
+
+        {chapters.length > 0 && (
+          <ContinueLearning
+            related={chapters.slice(0, 6).map((ch) => ({
+              id: ch.id,
+              title: ch.title,
+              seo_path: ch.slug ? `${basePath}/${ch.slug}` : basePath,
+            }))}
+            subjectName={subjectName}
+            subjectPath={basePath}
+            chatHref={`/chat?subject=${subject.id || subject._id || ''}`}
+            contentLang={contentLang}
+          />
+        )}
 
         {subject.tags?.length > 0 && (
           <div className="mt-8 p-5 rounded-2xl glass-card">

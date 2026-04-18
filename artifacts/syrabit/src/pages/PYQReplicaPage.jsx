@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { WORKER_API } from '../utils/api';
 import { useShare } from '../hooks/useShare';
 import PageMeta from '@/components/seo/PageMeta';
+import ContinueLearning from '@/components/content/ContinueLearning';
 
 /**
  * Best-effort parse of a PYQ slug like "ahsec-class-12-physics-2024" into
@@ -209,6 +210,19 @@ export default function PYQReplicaPage() {
       </div>
       <div style={{ paddingTop: '48px' }}>
         <div dangerouslySetInnerHTML={{ __html: html }} />
+      </div>
+
+      <div style={{ maxWidth: 880, margin: '24px auto 0', padding: '0 16px' }}>
+        <ContinueLearning
+          related={[]}
+          subjectName={pyqMeta.subject || ''}
+          subjectPath={pyqMeta.board && pyqMeta.subject
+            ? `/${pyqMeta.board.toLowerCase()}/class-12/${pyqMeta.subject.toLowerCase().split(' ')[0]}`.replace(/\/$/, '')
+            : '/library'}
+          chatHref={pyqMeta.subject
+            ? `/chat?prompt=${encodeURIComponent('Help me solve this ' + pyqMeta.subject + ' previous year question paper')}`
+            : '/chat'}
+        />
       </div>
 
       <footer

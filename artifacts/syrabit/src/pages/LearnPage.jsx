@@ -83,8 +83,8 @@ export default function LearnPage() {
           apiClient().get(`/content/chapters/${chId}/flashcards?limit=10`)
             .then(fr => setFlashcards(fr.data?.flashcards || []))
             .catch(() => {});
-          seoRelatedByChapter(chId, r.data?.linked_topic_id || null, 5)
-            .then(rr => setRelatedTopics(rr.data?.related || []))
+          seoRelatedByChapter(chId, r.data?.linked_topic_id || null, 6)
+            .then(rr => setRelatedTopics(rr.data?.related || rr.data?.items || []))
             .catch(() => {});
         }
       })
@@ -493,16 +493,30 @@ export default function LearnPage() {
             </div>
           )}
 
-          <ContinueLearning
-            related={(relatedTopics || []).map((rt) => ({
+          {(() => {
+            const items = (relatedTopics || []).map((rt) => ({
               id: rt.id,
               title: rt.title,
-              seo_path: rt.seo_path || `/learn/${rt.slug}`,
-            }))}
-            subjectName={doc?.subject_name || ''}
-            subjectPath={doc?.subject_id ? `/subject/${doc.subject_id}` : ''}
-            chatHref={doc?.subject_id ? `/chat?subject=${doc.subject_id}` : '/chat'}
-          />
+              path: rt.seo_path || `/learn/${rt.slug}`,
+            }));
+            const prev = items[0] ? { title: items[0].title, path: items[0].path } : null;
+            const next = items[1] ? { title: items[1].title, path: items[1].path } : null;
+            const related = items.slice(2).map((rt) => ({
+              id: rt.id,
+              title: rt.title,
+              seo_path: rt.path,
+            }));
+            return (
+              <ContinueLearning
+                prev={prev}
+                next={next}
+                related={related}
+                subjectName={doc?.subject_name || ''}
+                subjectPath={doc?.subject_id ? `/subject/${doc.subject_id}` : '/library'}
+                chatHref={doc?.subject_id ? `/chat?subject=${doc.subject_id}` : '/chat'}
+              />
+            );
+          })()}
         </div>
       </div>
     </AppLayout>

@@ -255,7 +255,8 @@ export default function ChapterPage() {
     seoRelatedByChapter(data.chapter_id, null, 6)
       .then((rows) => {
         if (cancelled) return;
-        const list = Array.isArray(rows) ? rows : (rows?.related || rows?.items || []);
+        const payload = rows?.data ?? rows;
+        const list = Array.isArray(payload) ? payload : (payload?.related || payload?.items || []);
         setRelatedChapterTopics(Array.isArray(list) ? list : []);
       })
       .catch(() => { if (!cancelled) setRelatedChapterTopics([]); });

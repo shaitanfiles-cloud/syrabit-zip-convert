@@ -1,12 +1,13 @@
 import { memo } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, BookOpen, CreditCard, LogIn, Sparkles } from 'lucide-react';
+import { Home, BookOpen, MessageCircle, CreditCard, LogIn, Sparkles } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { prefetchRoute } from '@/utils/prefetchRoute';
 
 const NAV_ITEMS = [
   { to: '/home', icon: Home, label: 'Home' },
-  { to: '/library', icon: BookOpen, label: 'Browse' },
+  { to: '/library', icon: BookOpen, label: 'Library' },
+  { to: '/chat', icon: MessageCircle, label: 'Chat' },
   { to: '/pricing', icon: CreditCard, label: 'Pricing' },
 ];
 
@@ -38,7 +39,7 @@ export const PublicBottomNav = memo(function PublicBottomNav() {
       }}
       data-testid="public-bottom-nav"
     >
-      <div className="flex items-center justify-around h-16 px-2">
+      <div className="flex items-center justify-around h-16 px-1 gap-0.5">
         {items.map(({ to, icon: Icon, label, isCta }) => {
           const active = isActive(to);
           if (isCta) {
@@ -47,7 +48,7 @@ export const PublicBottomNav = memo(function PublicBottomNav() {
                 key={to}
                 to={to}
                 onTouchStart={() => prefetchRoute(to)}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-semibold text-white transition-all duration-200 active:scale-95"
+                className="flex items-center gap-1 px-3 py-2 rounded-full text-[11px] font-semibold text-white transition-all duration-200 active:scale-95"
                 style={{
                   background: 'linear-gradient(135deg, #7c3aed, #8b5cf6)',
                   boxShadow: '0 2px 12px rgba(124,58,237,0.3)',
@@ -65,7 +66,7 @@ export const PublicBottomNav = memo(function PublicBottomNav() {
               to={to}
               onTouchStart={() => prefetchRoute(to)}
               onMouseEnter={() => prefetchRoute(to)}
-              className="flex flex-col items-center justify-center gap-0.5 px-3 py-2 rounded-xl text-[11px] font-medium transition-all duration-200 min-w-[56px] min-h-[44px]"
+              className="flex flex-col items-center justify-center gap-0.5 px-2 py-2 rounded-xl text-[10px] font-medium transition-all duration-200 min-w-[48px] min-h-[44px]"
               style={active ? {
                 color: 'hsl(var(--primary))',
               } : {
@@ -75,7 +76,7 @@ export const PublicBottomNav = memo(function PublicBottomNav() {
               aria-current={active ? 'page' : undefined}
             >
               <Icon
-                size={22}
+                size={20}
                 strokeWidth={active ? 2.2 : 1.8}
                 aria-hidden="true"
               />

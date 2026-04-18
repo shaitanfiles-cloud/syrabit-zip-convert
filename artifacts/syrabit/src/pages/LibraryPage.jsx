@@ -101,6 +101,60 @@ const STREAM_CHIPS_AS = [
   { id: 'saved', label: '★ সংৰক্ষিত' },
 ];
 
+function TrendingRail({ chapters = [], subjectsById = new Map(), contentLang = 'en' }) {
+  const items = useMemo(() => {
+    if (!Array.isArray(chapters) || chapters.length === 0) return [];
+    return chapters.slice(0, 8).map((ch) => {
+      const sub = subjectsById.get(ch.subject_id) || {};
+      const path = (sub.boardSlug && sub.classSlug && sub.slug && ch.slug)
+        ? `/${sub.boardSlug}/${sub.classSlug}/${sub.slug}/${ch.slug}`
+        : `/library`;
+      return {
+        path,
+        title: ch.title || ch.slug,
+        subject: sub.name || '',
+        board: (sub.board_name || sub.boardSlug || '').toString().toUpperCase(),
+      };
+    }).filter((it) => it.path !== '/library');
+  }, [chapters, subjectsById]);
+  if (items.length === 0) return null;
+  const isAS = contentLang === 'as';
+  return (
+    <section
+      aria-label={isAS ? 'জনপ্ৰিয় অধ্যায়সমূহ' : 'Trending chapters'}
+      className="mb-5"
+      data-testid="library-trending-rail"
+    >
+      <div className="flex items-center justify-between mb-2.5 px-0.5">
+        <h2 className="text-sm font-bold text-foreground">
+          {isAS ? '🔥 জনপ্ৰিয় অধ্যায়সমূহ' : '🔥 Trending chapters'}
+        </h2>
+      </div>
+      <div className="flex gap-2.5 overflow-x-auto pb-1 -mx-4 px-4 md:mx-0 md:px-0 scrollbar-thin">
+        {items.map((it) => (
+          <Link
+            key={it.path}
+            to={it.path}
+            className="group shrink-0 w-[260px] flex flex-col gap-1.5 p-3.5 rounded-xl border border-border/40 hover:border-violet-400/40 hover:bg-violet-500/5 transition-colors"
+            data-testid="library-trending-item"
+          >
+            <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-violet-500/80">
+              <span className="truncate">{it.board || (isAS ? 'বিষয়' : 'Subject')}</span>
+              {it.subject && <><span className="text-muted-foreground/40">·</span><span className="truncate">{it.subject}</span></>}
+            </div>
+            <div className="flex items-start gap-1.5">
+              <span className="text-sm font-semibold text-foreground leading-snug line-clamp-2 group-hover:text-violet-600 transition-colors flex-1">
+                {it.title}
+              </span>
+              <ChevronRight size={14} className="text-muted-foreground/50 shrink-0 mt-0.5" />
+            </div>
+          </Link>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function ContinueRail({ contentLang = 'en' }) {
   const [items, setItems] = useState(() => getRecentChapters());
   useEffect(() => {
@@ -282,6 +336,11 @@ export default function LibraryPage() {
       };
     });
   }, [subjects, streamMap, classMap, boardMap]);
+
+  const trendingSubjectsById = useMemo(
+    () => new Map(enrichedSubjects.map((s) => [s.id, s])),
+    [enrichedSubjects]
+  );
 
   const savedSubjectsSet = useMemo(() => new Set(savedSubjects), [savedSubjects]);
   const dynamicStreamChips = useMemo(() => {
@@ -541,6 +600,11 @@ export default function LibraryPage() {
           <div className="w-full max-w-6xl mx-auto px-4 md:px-6 py-5">
 
             <ContinueRail contentLang={contentLang} />
+            <TrendingRail
+              chapters={allChapters}
+              subjectsById={trendingSubjectsById}
+              contentLang={contentLang}
+            />
 
             <ScrollableFilterRow
               role="group"

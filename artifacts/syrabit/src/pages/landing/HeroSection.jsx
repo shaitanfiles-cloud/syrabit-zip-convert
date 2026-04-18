@@ -1,6 +1,6 @@
 import { useState, useCallback, lazy, Suspense } from 'react';
 import { Link } from 'react-router-dom';
-import { Sparkles, Play } from 'lucide-react';
+import { Sparkles, BookOpen } from 'lucide-react';
 import { prefetchRoute } from '@/utils/prefetchRoute';
 
 const HeroBelowFold = lazy(() => import('./HeroBelowFold'));
@@ -11,8 +11,9 @@ const _t = {
     heroLine2Pre: 'For ',
     heroLine2Highlight: 'AssamBoard Students',
     subtitle: 'Syrabit gives AssamBoard students (AHSEC, DEGREE & SEBA) instant, syllabus-aligned AI answers, PYQ insights, and structured subject notes — all in one place.',
-    ctaPrimary: 'Start for Free — No Card Needed',
-    ctaSecondary: 'See how it works',
+    ctaPrimary: 'Browse Library',
+    ctaSecondary: 'Ask Syra AI',
+    ctaTertiary: 'or start free → no card needed',
     freeNote: 'Free plan · No credits needed to browse · Upgrade from ₹99',
     statDivisions: 'AssamBoard Divisions',
     statStudents: 'Students',
@@ -23,8 +24,9 @@ const _t = {
     heroLine2Pre: '',
     heroLine2Highlight: 'অসম বোৰ্ডৰ ছাত্ৰ-ছাত্ৰীৰ বাবে',
     subtitle: 'Syrabit-এ অসম বোৰ্ডৰ ছাত্ৰ-ছাত্ৰীক (AHSEC, DEGREE আৰু SEBA) তাৎক্ষণিক, পাঠ্যক্ৰম-সামঞ্জস্যপূৰ্ণ AI উত্তৰ, PYQ অন্তৰ্দৃষ্টি, আৰু গাঁথনিমূলক বিষয়ৰ টোকা প্ৰদান কৰে — সকলো এটা ঠাইতে।',
-    ctaPrimary: 'বিনামূলীয়াকৈ আৰম্ভ কৰক — কাৰ্ডৰ প্ৰয়োজন নাই',
-    ctaSecondary: 'কেনেকৈ কাম কৰে চাওক',
+    ctaPrimary: 'লাইব্ৰেৰী ব্ৰাউজ কৰক',
+    ctaSecondary: 'Syra AI ক সোধক',
+    ctaTertiary: 'বা বিনামূলীয়াকৈ আৰম্ভ কৰক → কাৰ্ডৰ প্ৰয়োজন নাই',
     freeNote: 'বিনামূলীয়া পৰিকল্পনা · ব্ৰাউজ কৰিবলৈ ক্ৰেডিট নালাগে · ₹99ৰ পৰা আপগ্ৰেড',
     statDivisions: 'অসম বোৰ্ড বিভাগ',
     statStudents: 'ছাত্ৰ-ছাত্ৰী',
@@ -103,9 +105,9 @@ export default function HeroSection({ contentLang = 'en' }) {
             style={{ animation: HERO_ENTRANCE, animationDelay: '0.48s' }}
           >
             <Link
-              to="/signup"
-              onMouseEnter={() => prefetchRoute('/signup')}
-              onTouchStart={() => prefetchRoute('/signup')}
+              to="/library"
+              onMouseEnter={() => prefetchRoute('/library')}
+              onTouchStart={() => prefetchRoute('/library')}
               className="hero-cta-primary flex flex-wrap items-center justify-center gap-2.5 text-white font-bold btn-gradient"
               style={{
                 minHeight: 54,
@@ -117,30 +119,46 @@ export default function HeroSection({ contentLang = 'en' }) {
               }}
               data-testid="landing-hero-primary-cta-button"
             >
-              <Sparkles size={18} className="flex-shrink-0" />
+              <BookOpen size={18} className="flex-shrink-0" />
               <span>{t.ctaPrimary}</span>
             </Link>
-            <a
-              href="#features"
+            <Link
+              to="/chat"
+              onMouseEnter={() => prefetchRoute('/chat')}
+              onTouchStart={() => prefetchRoute('/chat')}
               className="hero-cta-secondary flex items-center gap-2.5 font-semibold transition-all duration-200 hover:bg-violet-500/[0.06]"
               style={{
                 minHeight: 54,
                 padding: '0.75rem 1.5rem',
                 borderRadius: '1rem',
                 fontSize: 'clamp(0.875rem, 2.5vw, 1rem)',
-                color: 'hsl(var(--muted-foreground))',
+                color: 'hsl(var(--foreground))',
                 border: '1px solid hsl(var(--border))',
                 background: 'hsl(var(--muted) / 0.3)',
               }}
               data-testid="landing-hero-secondary-cta-button"
             >
-              <Play size={15} />
+              <Sparkles size={15} />
               {t.ctaSecondary}
-            </a>
+            </Link>
           </div>
 
           <p
-            className="text-sm mt-7 text-muted-foreground"
+            className="text-sm mt-4 text-muted-foreground"
+            style={{ animation: 'fadeIn 0.8s ease 0.6s both' }}
+          >
+            <Link
+              to="/signup"
+              onMouseEnter={() => prefetchRoute('/signup')}
+              className="underline-offset-4 hover:underline hover:text-violet-600 transition-colors"
+              data-testid="landing-hero-tertiary-cta"
+            >
+              {t.ctaTertiary}
+            </Link>
+          </p>
+
+          <p
+            className="text-xs mt-3 text-muted-foreground/80"
             style={{ animation: 'fadeIn 0.8s ease 0.7s both' }}
           >
             {t.freeNote}
