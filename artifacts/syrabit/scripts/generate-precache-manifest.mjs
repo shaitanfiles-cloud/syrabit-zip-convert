@@ -12,7 +12,7 @@ const critical = new Set();
 
 const scriptMatches = html.matchAll(/src="(\/assets\/[^"]+\.js)"/g);
 for (const m of scriptMatches) {
-  if (!m[1].includes("emergent") && !m[1].includes("googlesyndication") && !m[1].includes("posthog")) {
+  if (!m[1].includes("emergent") && !m[1].includes("posthog")) {
     critical.add(m[1]);
   }
 }

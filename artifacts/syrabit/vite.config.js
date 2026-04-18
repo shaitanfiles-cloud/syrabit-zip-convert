@@ -561,7 +561,6 @@ export default defineConfig(({ mode }) => ({
       '/health': { target: BACKEND_TARGET, changeOrigin: true },
       '/docs': { target: BACKEND_TARGET, changeOrigin: true },
       '/openapi.json': { target: BACKEND_TARGET, changeOrigin: true },
-      '/ads.txt': { target: BACKEND_TARGET, changeOrigin: true },
     },
   },
 
