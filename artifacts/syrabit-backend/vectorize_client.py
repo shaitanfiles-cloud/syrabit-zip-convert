@@ -19,6 +19,7 @@ Index name is overridable via VECTORIZE_INDEX_NAME env var (rollback: set to
 "syllabus-index" to use the legacy 768-dim Gemini index).
 """
 
+import asyncio
 import json
 import os
 import logging
@@ -46,9 +47,77 @@ _auth_fail_count = 0
 _auth_breaker_until = 0.0
 _auth_breaker_logged = False
 
+# ── Task #516: page on-call when the breaker trips ───────────────────────────
+# Without an active alert, an expired/revoked CLOUDFLARE_API_TOKEN silently
+# degrades RAG quality — only a single WARNING line lands in Railway logs and
+# nobody notices until users complain. We piggyback on the existing
+# ``metrics._dispatch_alert`` pipeline (email via Resend, Slack/Discord
+# webhook, persisted alert, browser push) so this lands wherever every other
+# ops alert already lands.
+#
+# Debounce: at most one "tripped" alert per 24h window so a sustained outage
+# (the breaker re-arms every 5 min while the token stays bad) doesn't spam
+# every channel. The matching one-shot "recovered" alert fires on the
+# tripped → healthy transition and resets the debounce so a fresh outage
+# after recovery pages immediately.
+_ALERT_TRIP_DEBOUNCE_SEC = 24 * 3600
+_last_trip_alert_at = 0.0
+
+
+def _railway_log_hint() -> str:
+    """Best-effort link to the Railway logs for whoever gets paged.
+
+    Operators can set ``RAILWAY_LOGS_URL`` in the deploy env to override
+    with a deep link (e.g. a saved log query). Otherwise we surface the
+    standard Railway service/environment names so the on-call can find the
+    right tail in seconds.
+    """
+    explicit = os.environ.get("RAILWAY_LOGS_URL", "").strip()
+    if explicit:
+        return f"Logs: {explicit}"
+    project = os.environ.get("RAILWAY_PROJECT_NAME", "").strip()
+    service = os.environ.get("RAILWAY_SERVICE_NAME", "").strip()
+    env = os.environ.get("RAILWAY_ENVIRONMENT_NAME", "").strip()
+    bits = [b for b in (project, service, env) if b]
+    if bits:
+        return "Logs: Railway → " + " / ".join(bits) + " (filter: vectorize_client)"
+    return "Logs: Railway dashboard → syrabit-backend service (filter: vectorize_client)"
+
+
+async def _send_alert_async(alert_type: str, title: str, body: str) -> None:
+    """Lazy-imported wrapper around ``metrics._dispatch_alert`` so this
+    module stays import-cycle-free (metrics imports the world).
+
+    ``force=True`` because we run our own 24h debounce in
+    ``_last_trip_alert_at`` — the global 30-minute cooldown in metrics is
+    too short for token-rotation paging, and we don't want the recovery
+    edge to be swallowed by an unrelated cooldown.
+    """
+    try:
+        from metrics import _dispatch_alert  # local import: avoid cycle on cold start
+        await _dispatch_alert(alert_type, title, body, force=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Vectorize auth alert dispatch failed (%s): %s", alert_type, exc)
+
+
+def _schedule_alert(alert_type: str, title: str, body: str) -> None:
+    """Fire-and-forget alert dispatch from the breaker hot path.
+
+    Every Vectorize call originates from async code (upsert/query loops),
+    so a running event loop is the common case. If we're somehow invoked
+    outside one (e.g. unit tests calling the breaker helpers directly),
+    we silently no-op rather than crashing the breaker — the WARNING log
+    line is still emitted for forensic context.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(_send_alert_async(alert_type, title, body))
+
 
 def _record_auth_failure() -> None:
-    global _auth_fail_count, _auth_breaker_until, _auth_breaker_logged
+    global _auth_fail_count, _auth_breaker_until, _auth_breaker_logged, _last_trip_alert_at
     _auth_fail_count += 1
     if _auth_fail_count >= AUTH_BREAKER_THRESHOLD and time.monotonic() >= _auth_breaker_until:
         _auth_breaker_until = time.monotonic() + AUTH_BREAKER_COOLDOWN
@@ -60,14 +129,57 @@ def _record_auth_failure() -> None:
             )
             _auth_breaker_logged = True
 
+            # Page on-call. Debounced so a sustained outage (the breaker
+            # re-arms every cooldown window) doesn't keep pinging Slack.
+            now = time.time()
+            if now - _last_trip_alert_at >= _ALERT_TRIP_DEBOUNCE_SEC:
+                _last_trip_alert_at = now
+                body = (
+                    f"Cloudflare Vectorize is rejecting writes to index "
+                    f"`{VECTORIZE_INDEX_NAME}` — the auth-failure circuit breaker "
+                    f"tripped after {_auth_fail_count} consecutive 401s and all "
+                    f"upserts/queries are now short-circuited for "
+                    f"{int(AUTH_BREAKER_COOLDOWN)}s. RAG indexing will silently "
+                    f"degrade until this is fixed.\n\n"
+                    f"Likely cause: CLOUDFLARE_API_TOKEN expired, was revoked, or "
+                    f"is missing the Vectorize:Edit scope.\n\n"
+                    f"Fix: rotate the token in the Cloudflare dashboard with "
+                    f"scopes Account → Vectorize:Edit + Account → Vectorize:Read, "
+                    f"update CLOUDFLARE_API_TOKEN on Railway, and run "
+                    f"`python scripts/verify_vectorize_token.py` to confirm.\n\n"
+                    f"{_railway_log_hint()}"
+                )
+                _schedule_alert(
+                    "vectorize_auth_breaker_tripped",
+                    f"Vectorize auth breaker tripped ({VECTORIZE_INDEX_NAME})",
+                    body,
+                )
+
 
 def _record_success() -> None:
-    global _auth_fail_count, _auth_breaker_until, _auth_breaker_logged
+    global _auth_fail_count, _auth_breaker_until, _auth_breaker_logged, _last_trip_alert_at
+    was_tripped = _auth_breaker_logged or _breaker_open()
     if _auth_fail_count or _auth_breaker_until or _auth_breaker_logged:
         logger.info("Vectorize auth recovered — resetting circuit breaker.")
     _auth_fail_count = 0
     _auth_breaker_until = 0.0
     _auth_breaker_logged = False
+
+    # One-shot recovery alert on the tripped → healthy edge. Reset the
+    # debounce so a fresh outage after recovery pages immediately rather
+    # than waiting out the old 24h window.
+    if was_tripped:
+        _last_trip_alert_at = 0.0
+        _schedule_alert(
+            "vectorize_auth_recovered",
+            f"Vectorize auth recovered ({VECTORIZE_INDEX_NAME})",
+            (
+                f"Cloudflare Vectorize calls to `{VECTORIZE_INDEX_NAME}` are "
+                f"succeeding again. If you just rotated CLOUDFLARE_API_TOKEN, "
+                f"the rotation worked.\n\n"
+                f"{_railway_log_hint()}"
+            ),
+        )
 
 
 def _breaker_open() -> bool:
