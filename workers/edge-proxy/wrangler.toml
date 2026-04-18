@@ -38,11 +38,35 @@ database_name = "syrabit-content"
 database_id = "da5b5b9d-a8f9-43dd-bd23-a938f5c0cf69"
 migrations_dir = "migrations"
 
-# Vectorize requires separate API permission — add back after creating index:
-#   wrangler vectorize create syllabus-index --dimensions=768 --metric=cosine
+# Vectorize binding — currently OFF by design.
+#
+# Embedding generation, upserts, and queries all happen in the Railway
+# backend (see artifacts/syrabit-backend/vectorize_client.py). The backend
+# talks to Vectorize over the Cloudflare REST API using CLOUDFLARE_API_TOKEN
+# and writes to the index named in the VECTORIZE_INDEX_NAME env var
+# (defaults to `syllabus-index-v2`, 1024 dim, cosine — Voyage→Gemini 1024d
+# fallback after the 2026-04 migration; the legacy `syllabus-index` 768d
+# index is kept untouched for rollback).
+#
+# Re-enable this binding only if/when the edge worker itself needs to do
+# semantic search at the edge (lower latency, no backend round-trip).
+# In that case, first create the index from your local machine:
+#
+#   pnpm dlx wrangler vectorize create syllabus-index-v2 \
+#       --dimensions=1024 --metric=cosine
+#   pnpm dlx wrangler vectorize create-metadata-index \
+#       syllabus-index-v2 --property-name=subject_id --type=string
+#   pnpm dlx wrangler vectorize create-metadata-index \
+#       syllabus-index-v2 --property-name=chapter_id --type=string
+#   pnpm dlx wrangler vectorize create-metadata-index \
+#       syllabus-index-v2 --property-name=level      --type=string
+#   pnpm dlx wrangler vectorize create-metadata-index \
+#       syllabus-index-v2 --property-name=board      --type=string
+#
+# Then uncomment:
 # [[vectorize]]
-# binding = "SYLLABUS_INDEX"
-# index_name = "syllabus-index"
+# binding   = "SYLLABUS_INDEX"
+# index_name = "syllabus-index-v2"
 
 [triggers]
 crons = ["0 */6 * * *"]
