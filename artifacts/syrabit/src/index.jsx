@@ -180,6 +180,21 @@ if (!hasPrerender) {
 
 if ("serviceWorker" in navigator && import.meta.env.PROD) {
   window.addEventListener("load", () => {
+    // Task #498: capture controller existence BEFORE the registration
+    // resolves. PageSpeed traces showed every audited route losing
+    // 3.6–7.5s (simulated) to a "redirect chain" that was actually a
+    // duplicate same-URL Document fetch fired ~850ms after the initial
+    // navigation. Root cause: on FIRST visit the SW's `activate` handler
+    // calls `clients.claim()`, which triggers `controllerchange` on the
+    // currently-controlled-by-nobody page; the listener below then ran
+    // `window.location.reload()` and Lighthouse recorded the reload as
+    // a redirect of `/<route>` → `/<route>` worth ~5s of simulated
+    // savings. The reload is only meaningful when an UPDATED SW takes
+    // over from a previously-controlling SW (so the user sees the new
+    // assets immediately). On first install there is nothing to refresh
+    // — the page already loaded with the latest HTML.
+    const hadInitialController = !!navigator.serviceWorker.controller;
+
     navigator.serviceWorker
       .register("/sw.js", { updateViaCache: "none" })
       .then((reg) => {
@@ -208,10 +223,13 @@ if ("serviceWorker" in navigator && import.meta.env.PROD) {
 
     let refreshing = false;
     navigator.serviceWorker.addEventListener("controllerchange", () => {
-      if (!refreshing) {
-        refreshing = true;
-        window.location.reload();
-      }
+      if (refreshing) return;
+      // Skip the first-install controllerchange (null → SW). Reloading
+      // there fires a duplicate Document fetch that Lighthouse counts
+      // as a multi-second redirect chain on every cold visit.
+      if (!hadInitialController) return;
+      refreshing = true;
+      window.location.reload();
     });
   });
 } else if ("serviceWorker" in navigator && !import.meta.env.PROD) {

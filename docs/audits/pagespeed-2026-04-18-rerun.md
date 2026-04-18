@@ -377,3 +377,56 @@ Ranked by **estimated cumulative mobile savings × number of routes affected**. 
 - No code changes were made — this report is audit-only. Fixes from the Top 10 list should be opened as separate, focused tasks.
 - Authenticated-only flows were not exercised: `/profile` and `/admin` were audited as their logged-out shells (the auth guard renders a redirect/login skeleton, which is what crawlers see anyway).
 - Backend latency was not load-tested separately — TTFB numbers above come from the single PSI request and reflect cold-cache CDN behaviour at the moment of the audit.
+
+## Re-audit follow-up — Task #498 fix landed (2026-04-18)
+
+**Top fix #1 ("Avoid multiple page redirects") root-caused and patched.**
+
+### What Lighthouse was actually reporting
+
+Every audited route showed the `redirects` audit failing with a 2-hop "chain" where both hops have the **same URL** (`/<route>` → `/<route>`) and the first hop "wastes" 3.6–7.5 s of simulated time. A `curl -IL` against any of those URLs returns `HTTP 200` in ~120 ms with `num_redirects=0` — there is no HTTP 3xx hop on the wire.
+
+Inspection of `lighthouseResult.audits.network-requests` for `/home` shows two `Document` requests for `https://syrabit.ai/home`:
+
+| # | networkRequestTime | rendererStartTime | priority | experimentalFromMainFrame |
+|---|---|---|---|---|
+| 1 | 1 ms | 0 (initial nav) | VeryHigh | true |
+| 2 | 854 ms | 853 ms (JS-initiated) | VeryHigh | true |
+
+Lighthouse's `redirects` audit reads the network analysis output and treats this duplicate same-URL Document fetch as a redirect chain on the main resource. The simulator (Slow 4G + 4× CPU) scales the ~850 ms real-world gap to the ~5 s "savings" reported across every route.
+
+### Root cause
+
+`artifacts/syrabit/src/index.jsx` registered the Service Worker on the `load` event. The SW's `activate` handler in `public/sw.js` calls `self.clients.claim()`. On a fresh visit (no prior SW), the page transitions from "uncontrolled" to "controlled by the just-activated SW", which fires `controllerchange` on the page. The page's listener then ran `window.location.reload()` — intended for SW *upgrades* (so users see new assets immediately) but firing on every cold install too.
+
+That reload is the second `/home` Document fetch in the trace. It accounts for 100% of the wasted time the `redirects` audit is reporting.
+
+### Fix
+
+Snapshot `navigator.serviceWorker.controller` *before* registering. Skip the reload when there was no controller at registration time (= first install, not an upgrade).
+
+```diff
++const hadInitialController = !!navigator.serviceWorker.controller;
+ navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" })
+ …
+ navigator.serviceWorker.addEventListener("controllerchange", () => {
+-  if (!refreshing) {
+-    refreshing = true;
+-    window.location.reload();
+-  }
++  if (refreshing) return;
++  if (!hadInitialController) return;  // first install, not an upgrade
++  refreshing = true;
++  window.location.reload();
+ });
+```
+
+Upgrade behaviour is preserved: when a returning user already has a controlling SW and a new SW takes over, `hadInitialController` is `true` and the reload still fires (so they pick up the new bundle in one tick instead of waiting for a manual refresh).
+
+### Expected impact
+
+- `redirects` audit goes from `Est savings of 3,620–7,544 ms` (failing on 12/12 routes) → 0 ms / passing on every route.
+- Aggregate mobile Performance: removes ~5 s of simulated TTFB/FCP/LCP from each cold load. Per route, this should translate to roughly +10–15 Lighthouse Performance points (the redirects audit feeds into FCP and LCP).
+- No effect on returning users with a SW already controlling the page (upgrade reload still fires as before).
+
+A fresh PSI run cannot be executed from this environment — the change has to land in the next Pages deploy first. After deploy, re-run `node scripts/run-pagespeed-audit.mjs` then `node scripts/build-pagespeed-report.mjs` to confirm the `redirects` audit clears and to capture the per-route Performance delta.
