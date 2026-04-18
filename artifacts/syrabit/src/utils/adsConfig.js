@@ -67,6 +67,36 @@ const PLACEMENTS = {
   },
 };
 
+// ── Opt-out flag (Task #527) ─────────────────────────────────────────────────
+// User-controlled localStorage flag. Read by `adsConsentGranted()` below and
+// toggled from the Privacy section on the Profile page.
+export const ADS_OPT_OUT_KEY = 'syrabit_ads_optout';
+
+export function getAdsOptOut() {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(ADS_OPT_OUT_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function setAdsOptOut(optedOut) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (optedOut) {
+      window.localStorage.setItem(ADS_OPT_OUT_KEY, '1');
+    } else {
+      window.localStorage.removeItem(ADS_OPT_OUT_KEY);
+    }
+    window.dispatchEvent(
+      new CustomEvent('syrabit:ads-optout-changed', { detail: { optedOut } })
+    );
+  } catch {
+    /* ignore storage failures */
+  }
+}
+
 /**
  * Resolve the config for a placement key. Always returns an object with at
  * least `{ enabled, height }`. `enabled` is false when:
@@ -101,9 +131,6 @@ export function getAdConfig(placement) {
  */
 export function adsConsentGranted() {
   if (typeof window === 'undefined') return false;
-  // Honor a manual opt-out via localStorage for QA / privacy-conscious users.
-  try {
-    if (localStorage.getItem('syrabit_ads_optout') === '1') return false;
-  } catch {}
+  if (getAdsOptOut()) return false;
   return !!(env && env.PROD);
 }

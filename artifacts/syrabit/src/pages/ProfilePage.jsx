@@ -13,6 +13,7 @@ import AcademicDetails from './profile/AcademicDetails';
 import AiCredits from './profile/AiCredits';
 import SubscriptionPlans from './profile/SubscriptionPlans';
 import DangerZone, { DeletionBanner } from './profile/DangerZone';
+import PrivacyControls from './profile/PrivacyControls';
 import EditFieldDialog from './profile/EditFieldDialog';
 import DeleteConfirmDialog from './profile/DeleteConfirmDialog';
 import PaymentModal from './profile/PaymentModal';
@@ -329,6 +330,7 @@ export default function ProfilePage() {
           setPaymentPlan={setPaymentPlan} setShowPaymentModal={setShowPaymentModal}
         />
         <PaymentHistory refreshKey={paymentRefreshKey} />
+        <PrivacyControls />
         <DangerZone
           profile={profile} deletionPending={deletionPending}
           setShowDeleteConfirm={setShowDeleteConfirm}

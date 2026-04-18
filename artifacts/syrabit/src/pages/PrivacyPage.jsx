@@ -81,23 +81,27 @@ const sections = [
     body: `We use browser local storage (not tracking cookies) to maintain your session and preferences. No third-party tracking cookies are used. Cloudflare Web Analytics is used for anonymized, aggregate page-view analytics — it is cookie-free and does not collect personally identifiable information.`,
   },
   {
-    title: '9. Children\'s Privacy',
+    title: '9. Advertising & Opt-Out',
+    body: `Syrabit.ai may display non-personalized ads to support free access. You can disable ads at any time from the Privacy section of your Profile page using the "Opt out of ads" toggle. When enabled, your browser will stop loading ad scripts on subsequent page loads. This preference is stored locally on your device, so you may need to set it on each device or browser you use.`,
+  },
+  {
+    title: '10. Children\'s Privacy',
     body: `Syrabit.ai is intended for students aged 16 and above. We do not knowingly collect personal data from children under 18 without verifiable parental consent. If we discover that a child under 18 has provided personal data without appropriate consent, we will delete it promptly.`,
   },
   {
-    title: '10. Cross-Border Data Transfer',
+    title: '11. Cross-Border Data Transfer',
     body: `Some of our AI and cloud infrastructure providers may process data outside India. In such cases, we ensure that adequate safeguards are in place as required under Section 16 of the DPDP Act, 2023, and that such providers maintain security standards equivalent to those required under Indian law.`,
   },
   {
-    title: '11. Data Breach Notification',
+    title: '12. Data Breach Notification',
     body: `In the event of a personal data breach that is likely to cause harm to you, we will notify the Data Protection Board of India and affected users as required under Section 8 of the DPDP Act, 2023, without unreasonable delay.`,
   },
   {
-    title: '12. Changes to This Policy',
+    title: '13. Changes to This Policy',
     body: `We may update this Privacy Policy from time to time. Material changes will be communicated via email or a prominent notice on the platform. Continued use of Syrabit.ai after changes constitutes acceptance of the updated policy.`,
   },
   {
-    title: '13. Grievance Officer & Contact',
+    title: '14. Grievance Officer & Contact',
     body: null,
     subsections: [
       { label: 'Grievance Officer / Data Protection Officer', value: 'Dipak Rai' },
