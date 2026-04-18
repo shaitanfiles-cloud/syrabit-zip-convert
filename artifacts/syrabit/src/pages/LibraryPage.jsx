@@ -8,7 +8,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { useAuth } from '@/context/AuthContext';
 import { useContentLang } from '@/context/LanguageContext';
 import {
-  useLibraryBundle, useLibraryBundleSlim, useSavedSubjects,
+  useLibraryBundle, useLibraryBundleSlim, useLibraryBundleBoot, useSavedSubjects,
 } from '@/hooks/useContent';
 import { useToggleSavedSubject } from '@/hooks/useUser';
 import SubjectCard from './library/SubjectCard';
@@ -114,10 +114,41 @@ export default function LibraryPage() {
   const deferredQuery = useDeferredValue(searchQuery);
   const [, startTransition] = useTransition();
 
+  // Tier 1 — slim metadata: tiny, always-fetched first paint payload.
   const { data: slimBundle, isLoading: slimLoading } = useLibraryBundleSlim();
-  // Defer the heavy "full" library bundle (which carries every chapter) until
-  // the user actually interacts with the page (search, filter, scroll, tap).
-  // A long fallback keeps SEO bots and bounce visitors covered.
+
+  // Tier 2 — boot bundle: slim metadata + chapters scoped to the user's
+  // active board only. Fetched in parallel with slim when an onboarding
+  // board is known. ~150-300KB instead of the ~1MB full bundle, so chapter
+  // counts and chapter-search work for the user's own board without
+  // dragging LCP. Anonymous visitors with no onboarding skip this tier.
+  // Tracked as state (not just a useMemo) so cross-tab onboarding
+  // completion via the `storage` event re-fires the boot fetch without a
+  // hard refresh.
+  const [onboardingProfile, setOnboardingProfile] = useState(getOnboardingProfile);
+  useEffect(() => {
+    const sync = (e) => {
+      if (e && e.key && e.key !== 'syrabit:onboarding') return;
+      setOnboardingProfile(getOnboardingProfile());
+    };
+    window.addEventListener('storage', sync);
+    // Also listen for in-tab completion (OnboardingPage doesn't fire a
+    // storage event in the same window).
+    window.addEventListener('syrabit:onboarding-updated', sync);
+    return () => {
+      window.removeEventListener('storage', sync);
+      window.removeEventListener('syrabit:onboarding-updated', sync);
+    };
+  }, []);
+  const activeBoardId = useMemo(
+    () => onboardingProfile?.board_id || user?.board_id || null,
+    [onboardingProfile?.board_id, user?.board_id],
+  );
+  const { data: bootBundle } = useLibraryBundleBoot(activeBoardId, !!activeBoardId);
+
+  // Tier 3 — full bundle (every board's chapters, ~1MB). Required for
+  // cross-board chapter search. Deferred behind interaction or a long
+  // timeout so it never competes with first paint.
   const [chaptersReady, setChaptersReady] = useState(false);
   useEffect(() => {
     if (!slimBundle || chaptersReady) return;
@@ -134,14 +165,17 @@ export default function LibraryPage() {
   }, [slimBundle, chaptersReady]);
   const { data: fullBundle, isFetching, refetch: refetchBundle } = useLibraryBundle(chaptersReady);
 
-  const bundle = fullBundle || slimBundle;
+  // Prefer richest available payload for metadata; merge chapters from the
+  // tier(s) that have them so the active-board chapter UI lights up as
+  // soon as boot lands, even before the full bundle arrives.
+  const bundle = fullBundle || bootBundle || slimBundle;
   const bundleLoading = slimLoading;
   const bundleError = !bundle && !slimLoading;
   const subjects    = bundle?.subjects  || [];
   const boards      = bundle?.boards    || [];
   const classes     = bundle?.classes   || [];
   const streams     = bundle?.streams   || [];
-  const allChapters = fullBundle?.chapters || [];
+  const allChapters = fullBundle?.chapters || bootBundle?.chapters || [];
   const { data: savedSubjects = [] } = useSavedSubjects(user);
   const toggleSaved = useToggleSavedSubject();
   const handleToggleSave = useCallback((id) => toggleSaved.mutate(id), [toggleSaved]);

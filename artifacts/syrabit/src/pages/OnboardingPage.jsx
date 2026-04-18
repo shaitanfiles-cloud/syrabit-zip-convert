@@ -132,6 +132,10 @@ export default function OnboardingPage() {
       }
       await saveOnboarding(onboardingData);
       localStorage.setItem('syrabit:onboarding', JSON.stringify(onboardingData));
+      // In-tab signal — `storage` events only fire in OTHER tabs, so the
+      // LibraryPage in this tab needs an explicit notification to refetch
+      // its boot bundle for the newly-selected board.
+      try { window.dispatchEvent(new Event('syrabit:onboarding-updated')); } catch {}
       updateUser({ onboarding_done: true });
       try {
         await refreshUser();

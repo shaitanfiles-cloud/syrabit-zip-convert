@@ -24,6 +24,11 @@ const fetchLibraryBundle = () =>
 const fetchLibraryBundleSlim = () =>
   apiClient().get('/content/library-bundle?slim=1').then((r) => r.data);
 
+const fetchLibraryBundleBoot = (boardId) =>
+  apiClient()
+    .get(`/content/library-bundle?boot=${encodeURIComponent(boardId)}`)
+    .then((r) => r.data);
+
 const fetchSubject = (id) =>
   apiClient().get(`/content/subjects/${id}`).then((r) => r.data);
 
@@ -121,6 +126,21 @@ export const useLibraryBundleSlim = () =>
     queryFn: fetchLibraryBundleSlim,
     staleTime: 30 * 60 * 1000,
     gcTime: 60 * 60 * 1000,
+  });
+
+/**
+ * Boot-tier library bundle: slim metadata + chapters scoped to ONE board.
+ * Used as a payload-light first paint when the active board is known
+ * (~150-300KB vs ~1MB for the full bundle). The full bundle is still
+ * required for cross-board chapter search and is fetched lazily afterwards.
+ */
+export const useLibraryBundleBoot = (boardId, enabled = true) =>
+  useQuery({
+    queryKey: ['library-bundle-boot', boardId],
+    queryFn: () => fetchLibraryBundleBoot(boardId),
+    staleTime: 30 * 60 * 1000,
+    gcTime: 60 * 60 * 1000,
+    enabled: !!boardId && enabled,
   });
 
 const fetchResolveSubject = (board, classSlug, subjectSlug) =>

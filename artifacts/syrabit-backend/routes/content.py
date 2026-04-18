@@ -51,8 +51,20 @@ router = APIRouter()
 _PUBLISHED_OR_LEGACY = {"$or": [{"status": {"$exists": False}}, {"status": "published"}]}
 
 @router.get("/content/library-bundle", response_model=LibraryBundleOut)
-async def get_library_bundle(nocache: Optional[str] = None, include_seo: Optional[str] = None, slim: Optional[str] = None, response: Response = None):
-    cache_key = "library-bundle:slim" if slim == "1" else ("library-bundle:seo" if include_seo else "library-bundle")
+async def get_library_bundle(nocache: Optional[str] = None, include_seo: Optional[str] = None, slim: Optional[str] = None, boot: Optional[str] = None, response: Response = None):
+    # Mode precedence: slim > boot > seo > full. `boot=<board_id>` returns
+    # slim metadata + chapters scoped to that one board only (Task: PSI
+    # /library payload split — shrinks 1.0MB full bundle to ~200KB so first
+    # paint isn't competing with chapter download bytes).
+    boot_id = (boot or "").strip() or None
+    if slim == "1":
+        cache_key = "library-bundle:slim"
+    elif boot_id:
+        cache_key = f"library-bundle:boot:{boot_id}"
+    elif include_seo:
+        cache_key = "library-bundle:seo"
+    else:
+        cache_key = "library-bundle"
     if not nocache:
         cached = _get_content_cache(cache_key)
         if cached:
@@ -64,26 +76,60 @@ async def get_library_bundle(nocache: Optional[str] = None, include_seo: Optiona
         if not await is_mongo_available():
             return {"boards": [], "classes": [], "streams": [], "subjects": []}
         async with _slow_query("library_bundle"):
+            # When boot is set we need subject_ids first to scope the
+            # chapter query, so split into two phases. The metadata phase
+            # is unchanged from full-bundle cost; only the chapter query
+            # shrinks (the actual payload win).
             try:
                 (boards_data, classes_data, streams_data, subjects_data,
-                 chapters_data, pyq_data, fc_data) = await asyncio.wait_for(
+                 pyq_data, fc_data) = await asyncio.wait_for(
                     asyncio.gather(
                         db.boards.find(_PUBLISHED_OR_LEGACY, {"_id": 0, "id": 1, "name": 1, "slug": 1}).to_list(100),
                         db.classes.find(_PUBLISHED_OR_LEGACY, {"_id": 0, "id": 1, "name": 1, "slug": 1, "board_id": 1}).to_list(100),
                         db.streams.find(_PUBLISHED_OR_LEGACY, {"_id": 0, "id": 1, "name": 1, "slug": 1, "class_id": 1}).to_list(100),
                         db.subjects.find({"status": "published"}, {"_id": 0}).to_list(500),
-                        db.chapters.find(
-                            {},
-                            {"_id": 0, "id": 1, "title": 1, "slug": 1, "subject_id": 1, "order_index": 1, "notes_generated": 1},
-                        ).sort("order_index", 1).to_list(2000),
                         db.topic_pyq_collections.find({}, {"_id": 0, "subject_id": 1, "total": 1}).to_list(2000),
                         db.flashcard_collections.find({}, {"_id": 0, "subject_id": 1, "total": 1}).to_list(2000),
                     ),
                     timeout=10.0,
                 )
             except asyncio.TimeoutError:
-                logger.warning("library-bundle MongoDB query timed out after 10s")
+                logger.warning("library-bundle MongoDB metadata query timed out after 10s")
                 return {"boards": [], "classes": [], "streams": [], "subjects": []}
+
+            if boot_id:
+                # Walk board → classes → streams → subjects to derive the
+                # scoped subject_id set. All in-memory; collections are
+                # already loaded.
+                class_ids = {c["id"] for c in classes_data if c.get("board_id") == boot_id}
+                stream_ids = {s["id"] for s in streams_data if s.get("class_id") in class_ids}
+                scoped_subject_ids = [s["id"] for s in subjects_data if s.get("stream_id") in stream_ids]
+                if not scoped_subject_ids:
+                    chapters_data: list = []
+                else:
+                    try:
+                        chapters_data = await asyncio.wait_for(
+                            db.chapters.find(
+                                {"subject_id": {"$in": scoped_subject_ids}},
+                                {"_id": 0, "id": 1, "title": 1, "slug": 1, "subject_id": 1, "order_index": 1, "notes_generated": 1},
+                            ).sort("order_index", 1).to_list(2000),
+                            timeout=8.0,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("library-bundle boot chapters query timed out")
+                        chapters_data = []
+            else:
+                try:
+                    chapters_data = await asyncio.wait_for(
+                        db.chapters.find(
+                            {},
+                            {"_id": 0, "id": 1, "title": 1, "slug": 1, "subject_id": 1, "order_index": 1, "notes_generated": 1},
+                        ).sort("order_index", 1).to_list(2000),
+                        timeout=8.0,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("library-bundle full chapters query timed out")
+                    chapters_data = []
 
         chapters_by_subject: dict = {}
         chapter_id_to_subject: dict = {}
@@ -194,6 +240,11 @@ async def get_library_bundle(nocache: Optional[str] = None, include_seo: Optiona
         bundle = {"boards": boards_data, "classes": classes_data, "streams": streams_data, "subjects": subjects_data}
         if slim != "1":
             bundle["chapters"] = chapters_data
+        if boot_id:
+            # Marker so the client knows chapters[] is scoped to this board
+            # only and a full fetch is still required for cross-board search.
+            bundle["boot"] = boot_id
+            bundle["chapters_partial"] = True
         _set_content_cache(cache_key, bundle)
         if response:
             response.headers["Cache-Control"] = "public, max-age=600, s-maxage=3600, stale-while-revalidate=86400"

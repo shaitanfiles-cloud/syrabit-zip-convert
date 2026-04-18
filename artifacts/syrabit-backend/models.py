@@ -242,6 +242,10 @@ class LibraryBundleOut(BaseModel):
     streams: List[dict]
     subjects: List[dict]
     chapters: List[dict] = []
+    # Boot tier: chapters[] is scoped to a single board id; client should
+    # still fetch the full bundle for cross-board search.
+    boot: Optional[str] = None
+    chapters_partial: Optional[bool] = None
 
 
 class ChatResponseOut(BaseModel):
