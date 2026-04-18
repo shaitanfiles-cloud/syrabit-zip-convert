@@ -118,6 +118,30 @@ export function hydrateAdsOptOutFromServer(serverValue) {
   }
 }
 
+// One-time banner that explains the new cross-device sync behaviour to
+// users who already had a local "opt out of ads" choice set before the
+// account-synced version of the toggle shipped. Bump the version
+// suffix if we ever want to re-prompt every user (e.g. policy change).
+const ADS_BANNER_SEEN_KEY = 'syrabit:ads-cross-device-banner-seen-v1';
+
+export function hasSeenAdsCrossDeviceBanner() {
+  if (typeof window === 'undefined') return true;
+  try {
+    return window.localStorage.getItem(ADS_BANNER_SEEN_KEY) === '1';
+  } catch {
+    return true;
+  }
+}
+
+export function markAdsCrossDeviceBannerSeen() {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(ADS_BANNER_SEEN_KEY, '1');
+  } catch {
+    /* ignore storage failures */
+  }
+}
+
 /**
  * Resolve the config for a placement key. Always returns an object with at
  * least `{ enabled, height }`. `enabled` is false when:

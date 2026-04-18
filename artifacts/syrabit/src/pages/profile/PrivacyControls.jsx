@@ -1,24 +1,58 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ShieldOff, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
-import { getAdsOptOut, setAdsOptOut } from '@/utils/adsConfig';
+import {
+  getAdsOptOut,
+  setAdsOptOut,
+  hasSeenAdsCrossDeviceBanner,
+  markAdsCrossDeviceBannerSeen,
+} from '@/utils/adsConfig';
 import { apiClient } from '@/utils/api';
+import { useAuth } from '@/context/AuthContext';
 
 export default function PrivacyControls({ profile }) {
+  const { user } = useAuth();
   const [optedOut, setOptedOut] = useState(false);
   const [saving, setSaving] = useState(false);
+  const announcedRef = useRef(false);
 
   // Hydrate from the server-side value when the profile loads, so the
   // toggle reflects the cross-device preference instead of whatever
   // localStorage happened to hold on this device.
   useEffect(() => {
+    let next;
     if (profile && typeof profile.ads_opt_out === 'boolean') {
-      setOptedOut(profile.ads_opt_out);
+      next = profile.ads_opt_out;
     } else {
-      setOptedOut(getAdsOptOut());
+      next = getAdsOptOut();
     }
-  }, [profile?.ads_opt_out]);
+    setOptedOut(next);
+
+    // Task #532: one-time announcement that the opt-out preference now
+    // syncs across the user's devices. Only shown to signed-in users
+    // who already had ads opted out (locally OR on the server) — i.e.
+    // the population whose existing choice has just been "promoted"
+    // to a cross-device account preference. Mark seen on first run so
+    // it never reappears, even if they toggle the setting later.
+    if (
+      user &&
+      profile &&
+      typeof profile.ads_opt_out === 'boolean' &&
+      !announcedRef.current &&
+      !hasSeenAdsCrossDeviceBanner()
+    ) {
+      announcedRef.current = true;
+      const hadLocalOptOut = getAdsOptOut();
+      if (next || hadLocalOptOut) {
+        toast.success(
+          'Your "Opt out of ads" choice now syncs across every device you sign in on — no need to set it again on each browser.',
+          { duration: 7000 }
+        );
+        markAdsCrossDeviceBannerSeen();
+      }
+    }
+  }, [profile?.ads_opt_out, user]);
 
   const handleToggle = async () => {
     if (saving) return;
@@ -26,6 +60,18 @@ export default function PrivacyControls({ profile }) {
     // Optimistic local update so the UI is instant.
     setOptedOut(next);
     setAdsOptOut(next);
+
+    // Signed-out fallback: this control is normally only reachable from
+    // the auth-gated profile page, but if the session has expired in
+    // the background we still want to honour the local toggle and tell
+    // the user how to make it stick across devices.
+    if (!user) {
+      toast.info(
+        'Saved on this device. Sign in to sync this preference across all your devices.'
+      );
+      return;
+    }
+
     setSaving(true);
     try {
       await apiClient().patch('/user/profile', { ads_opt_out: next });
@@ -34,6 +80,9 @@ export default function PrivacyControls({ profile }) {
           ? 'Ads disabled across all your devices — takes effect on next page load'
           : 'Ads re-enabled across all your devices — thanks for supporting Syrabit'
       );
+      // The user has now made an explicit cross-device choice; suppress
+      // the one-time announcement on subsequent visits.
+      markAdsCrossDeviceBannerSeen();
     } catch {
       // Server save failed — keep the local change but warn the user
       // that other devices won't pick it up until they're online.
