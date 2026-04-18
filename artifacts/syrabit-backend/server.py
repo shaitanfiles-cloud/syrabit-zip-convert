@@ -641,6 +641,17 @@ async def lifespan(app):
         asyncio.create_task(_seo_auto_publish_loop())
     except Exception as _sap_err:
         logger.warning(f"seo auto-publish loop not started: {_sap_err}")
+    # Task #471 — proactive staleness monitor for the auto-publish job.
+    # Hourly check; emails admins + drops an in-app notification when the
+    # cron has not completed a run within 36h (daily) / 8d (weekly).
+    # Debounced to at most one alert per 24h while stale, plus exactly
+    # one recovery notification when the job runs again.
+    try:
+        from seo_engine import _seo_auto_publish_staleness_loop
+        asyncio.create_task(_seo_auto_publish_staleness_loop())
+    except Exception as _sap_stale_err:
+        logger.warning(
+            f"seo auto-publish staleness loop not started: {_sap_stale_err}")
     if _is_leader:
         # Single-leader: only one replica should query the CF GraphQL API
         # and write the per-UA report each Monday.

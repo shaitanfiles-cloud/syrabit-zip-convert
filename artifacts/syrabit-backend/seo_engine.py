@@ -6103,6 +6103,312 @@ async def _seo_auto_publish_loop():
         await asyncio.sleep(_SEO_AUTO_PUBLISH_LOOP_SLEEP_S)
 
 
+# ─── Task #471 — proactive staleness alerts for the auto-publish job ────────
+#
+# The SchedulePanel surfaces "stale" when the last scheduled run is older
+# than 36h (daily) or 8d (weekly), but admins only see it if they happen
+# to open that tab. This block runs the same check server-side every
+# hour and emails the admin audience + drops an in-app notification when
+# the cron has stopped firing — and again when it recovers.
+#
+# Cross-replica dedup + alert-spam debounce are both done via the same
+# ``db.job_locks`` collection the auto-publish run itself uses, so we
+# don't add a new collection.
+
+_SEO_STALENESS_ALERT_LOCK_ID = "seo_auto_publish_staleness_alert"
+_SEO_STALENESS_REALERT_INTERVAL_H = 24
+_SEO_STALENESS_LOOP_SLEEP_S = 3600  # 1 hour
+_SEO_STALENESS_WARMUP_S = 900       # 15 min — let migrations settle
+
+
+def _seo_auto_publish_staleness_threshold_hours(frequency: str) -> int:
+    """Mirror the client-side thresholds in
+    ``SchedulePanel.jsx`` so server alerts fire at the same boundary the
+    UI surfaces a "stale" badge — no hidden disagreement between the
+    two."""
+    return 24 * 8 if frequency == "weekly" else 36
+
+
+def _parse_iso_utc(value) -> Optional[datetime]:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        s = str(value).strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+async def _resolve_seo_auto_publish_last_run(db) -> Optional[datetime]:
+    """Last actual scheduled run, in UTC. Prefers the ``completed_at`` of
+    the most recent ``job-sched-*`` log entry (the source of truth for
+    "did the pipeline finish"); falls back to the marker's
+    ``claimed_at`` when no log row has been written yet (e.g. fresh
+    install, or the run is mid-flight)."""
+    try:
+        last_log = await db.seo_generation_log.find_one(
+            {"job_id": {"$regex": "^job-sched-"}},
+            sort=[("completed_at", -1)],
+            projection={"_id": 0, "completed_at": 1},
+        )
+        dt = _parse_iso_utc((last_log or {}).get("completed_at"))
+        if dt is not None:
+            return dt
+    except Exception as exc:
+        logger.debug(f"[seo-staleness] log lookup failed: {exc}")
+    try:
+        marker = await db.job_locks.find_one(
+            {"_id": _SEO_AUTO_PUBLISH_LOCK_ID},
+            projection={"_id": 0, "claimed_at": 1},
+        )
+        return _parse_iso_utc((marker or {}).get("claimed_at"))
+    except Exception as exc:
+        logger.debug(f"[seo-staleness] marker lookup failed: {exc}")
+        return None
+
+
+async def _evaluate_seo_auto_publish_staleness(db, now_utc: datetime) -> dict:
+    """Pure evaluation — does NOT fire alerts. Returned shape is also
+    suitable for surfacing in ``/seo/auto-publish/schedule`` so the UI
+    and the alert pipeline always agree."""
+    enabled = _seo_auto_publish_enabled()
+    frequency = _seo_auto_publish_frequency()
+    threshold_h = _seo_auto_publish_staleness_threshold_hours(frequency)
+    last_run = await _resolve_seo_auto_publish_last_run(db)
+    age_h = None
+    if last_run is not None:
+        age_h = (now_utc - last_run).total_seconds() / 3600.0
+    stale = enabled and (age_h is None or age_h > threshold_h)
+    return {
+        "enabled": enabled,
+        "frequency": frequency,
+        "threshold_h": threshold_h,
+        "last_run_at": last_run.isoformat() if last_run else None,
+        "age_hours": age_h,
+        "stale": stale,
+    }
+
+
+async def _persist_seo_staleness_state(
+    db, state_label: str, now_utc: datetime, last_run_at: Optional[str],
+    update_alert_at: bool,
+) -> None:
+    """Upsert the alert log into ``db.job_locks``. ``update_alert_at`` is
+    only true on actual sends (stale alert or recovery) so a healthy
+    bootstrap doesn't reset the debounce window."""
+    payload = {
+        "last_state": state_label,
+        "last_run_at_observed": last_run_at,
+        "updated_at": now_utc.isoformat(),
+    }
+    if update_alert_at:
+        payload["last_alert_at"] = now_utc.isoformat()
+    try:
+        await db.job_locks.update_one(
+            {"_id": _SEO_STALENESS_ALERT_LOCK_ID},
+            {"$set": payload},
+            upsert=True,
+        )
+    except Exception as exc:
+        logger.debug(f"[seo-staleness] persist failed: {exc}")
+
+
+async def _send_seo_staleness_alert(
+    db, state: dict, kind: str, now_utc: datetime,
+) -> None:
+    """Email admins + record an admin notification. ``kind`` is
+    ``"stale"`` or ``"recovered"``. Best-effort: never raises."""
+    frequency = state["frequency"]
+    threshold_h = state["threshold_h"]
+    age_h = state["age_hours"]
+    last_run_at = state["last_run_at"]
+    age_str = f"{age_h:.1f}h" if age_h is not None else "never"
+
+    if kind == "recovered":
+        title = "SEO auto-publish recovered"
+        msg = (
+            f"The SEO auto-publish scheduler ({frequency}) ran again at "
+            f"{last_run_at or 'unknown'}. Previously this job had been "
+            f"stale beyond the {threshold_h}h threshold; it is now "
+            f"healthy again — no further action required."
+        )
+        notif_type = "info"
+    else:
+        title = f"SEO auto-publish is stale ({frequency})"
+        msg = (
+            f"The SEO auto-publish scheduler has not completed a run in "
+            f"{age_str} (threshold {threshold_h}h for the configured "
+            f"`{frequency}` cadence). Last successful run: "
+            f"{last_run_at or 'never recorded'}.\n\n"
+            f"Likely causes: the worker process is down, "
+            f"`SEO_AUTO_PUBLISH_ENABLED` was disabled, the cron loop "
+            f"crashed, or the LLM provider is failing. Check the "
+            f"Schedule panel and `seo_generation_log` for clues."
+        )
+        notif_type = "error"
+
+    # Admin notification (in-app inbox).
+    try:
+        from db_ops import supa_insert_notification
+        await supa_insert_notification({
+            "id": str(uuid.uuid4()),
+            "title": title,
+            "message": msg,
+            "type": notif_type,
+            "channel": "in_app",
+            "audience": "admins",
+            "status": "sent",
+            "created_at": now_utc.isoformat(),
+            "sent_at": now_utc.isoformat(),
+            "meta": {
+                "kind": "seo_auto_publish_staleness",
+                "state": kind,
+                "frequency": frequency,
+                "threshold_h": threshold_h,
+                "age_hours": age_h,
+                "last_run_at": last_run_at,
+            },
+        })
+    except Exception as exc:
+        logger.debug(f"[seo-staleness] notification persist failed: {exc}")
+
+    # Best-effort email blast — fire-and-forget so a slow Resend can't
+    # back up the staleness loop.
+    asyncio.create_task(_email_admins_about_seo_staleness(db, title, msg))
+
+    # Audit trail in the activity log so the on-call has a paper trail
+    # even if the email/notification path fails.
+    asyncio.create_task(_seo_log(
+        "seo_auto_publish_staleness_alert",
+        f"{kind}: frequency={frequency} age_hours={age_h} "
+        f"threshold_h={threshold_h} last_run_at={last_run_at}",
+        "warning" if kind == "stale" else "info",
+    ))
+
+
+async def _email_admins_about_seo_staleness(db, title: str, message: str) -> None:
+    """Email the same admin audience that gets the SEO daily summary —
+    reuses ``_resolve_seo_summary_audience`` so an admin who has opted
+    out of the daily digest also gets opted out of the staleness alert
+    (and we honor their quiet hours), keeping the noise predictable."""
+    try:
+        audience = await _resolve_seo_summary_audience(db, datetime.now(timezone.utc))
+        recipients = [r.get("email") for r in audience.get("recipients", []) if r.get("email")]
+    except Exception as exc:
+        logger.debug(f"[seo-staleness] audience resolve failed: {exc}")
+        recipients = []
+    if not recipients:
+        # Fallback to the broad admin email lookup so a staleness alert
+        # still goes somewhere even if the prefs subsystem is empty.
+        try:
+            cursor = db.users.find({"is_admin": True}, {"_id": 0, "email": 1})
+            async for u in cursor:
+                e = (u.get("email") or "").strip()
+                if e:
+                    recipients.append(e)
+        except Exception as exc:
+            logger.debug(f"[seo-staleness] admin lookup failed: {exc}")
+    if not recipients:
+        return
+    try:
+        from email_templates import _send  # internal helper, intentional
+    except Exception as exc:
+        logger.debug(f"[seo-staleness] email helper unavailable: {exc}")
+        return
+    html = (
+        f"<h2 style='color:#dc2626;margin:0 0 8px;'>{title}</h2>"
+        f"<p style='font-size:14px;line-height:1.6;color:#374151;white-space:pre-line;'>{message}</p>"
+        f"<p style='font-size:12px;color:#6b7280;'>This is an automated alert from "
+        f"the Syrabit SEO auto-publish staleness monitor (Task #471).</p>"
+    )
+    for email in recipients:
+        try:
+            await _send(email, title, html)
+        except Exception as exc:
+            logger.debug(f"[seo-staleness] email send failed for {email}: {exc}")
+
+
+async def _check_and_alert_seo_auto_publish_staleness(
+    db, now_utc: Optional[datetime] = None,
+) -> dict:
+    """One iteration of the staleness monitor. Returns a small report
+    dict for tests / observability.
+
+    Dedup rules:
+      * On `stale`: only re-alert if ``> _SEO_STALENESS_REALERT_INTERVAL_H``
+        has elapsed since the last alert (so admins aren't paged hourly
+        during a multi-day outage).
+      * On `healthy` after a prior `stale`: send exactly one recovery
+        notification, then settle into "skip while healthy".
+      * On `disabled`: never alert; we only persist state when something
+        meaningful changes.
+    """
+    now_utc = now_utc or datetime.now(timezone.utc)
+    state = await _evaluate_seo_auto_publish_staleness(db, now_utc)
+    if not state["enabled"]:
+        return {"action": "skip", "reason": "disabled", "state": state}
+
+    prior: dict = {}
+    try:
+        prior = await db.job_locks.find_one(
+            {"_id": _SEO_STALENESS_ALERT_LOCK_ID}
+        ) or {}
+    except Exception as exc:
+        logger.debug(f"[seo-staleness] prior load failed: {exc}")
+        prior = {}
+    prior_state = prior.get("last_state")
+    last_alert_dt = _parse_iso_utc(prior.get("last_alert_at"))
+
+    if state["stale"]:
+        if prior_state == "stale" and last_alert_dt is not None:
+            elapsed_h = (now_utc - last_alert_dt).total_seconds() / 3600.0
+            if elapsed_h < _SEO_STALENESS_REALERT_INTERVAL_H:
+                return {"action": "skip", "reason": "debounced",
+                        "elapsed_h": elapsed_h, "state": state}
+        await _send_seo_staleness_alert(db, state, "stale", now_utc)
+        await _persist_seo_staleness_state(
+            db, "stale", now_utc, state["last_run_at"], update_alert_at=True,
+        )
+        return {"action": "alerted", "kind": "stale", "state": state}
+
+    # Healthy path.
+    if prior_state == "stale":
+        await _send_seo_staleness_alert(db, state, "recovered", now_utc)
+        await _persist_seo_staleness_state(
+            db, "healthy", now_utc, state["last_run_at"], update_alert_at=True,
+        )
+        return {"action": "alerted", "kind": "recovered", "state": state}
+
+    # Healthy → healthy: persist on first observation only so we don't
+    # rewrite the doc every hour for no reason.
+    if prior_state != "healthy":
+        await _persist_seo_staleness_state(
+            db, "healthy", now_utc, state["last_run_at"], update_alert_at=False,
+        )
+    return {"action": "skip", "reason": "healthy", "state": state}
+
+
+async def _seo_auto_publish_staleness_loop():
+    """Background loop: hourly staleness check. Cross-replica dedup is
+    not strictly needed (the alert itself is debounced by the lock doc),
+    but we still warm up so we don't fight the auto-publish loop for
+    DB attention at boot."""
+    from deps import db, is_mongo_available  # type: ignore
+    await asyncio.sleep(_SEO_STALENESS_WARMUP_S)
+    while True:
+        try:
+            if await is_mongo_available():
+                await _check_and_alert_seo_auto_publish_staleness(db)
+        except Exception as exc:
+            logger.debug(f"[seo-staleness] loop iteration error: {exc}")
+        await asyncio.sleep(_SEO_STALENESS_LOOP_SLEEP_S)
+
+
 # ─── ADMIN: Scheduled auto-publish status ───────────────────────────────────
 
 @router.get("/auto-publish/schedule")
