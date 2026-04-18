@@ -351,3 +351,42 @@ def test_healthy_bootstrap_persists_state_without_alerting(fake_db):
     saved = fake_db.job_locks._docs[seo_engine._SEO_STALENESS_ALERT_LOCK_ID]
     assert saved["last_state"] == "healthy"
     assert "last_alert_at" not in saved
+
+
+def test_email_helper_delivers_to_resolved_admin_recipients(fake_db):
+    """Guard against silent suppression regressions: under a normal
+    admin setup the prefs subsystem returns at least one recipient and
+    the email helper actually invokes the SMTP send path with that
+    recipient. If a future refactor accidentally swallows the audience
+    or skips delivery, this test fails loudly instead of letting
+    staleness alerts vanish into the void."""
+    async def _fake_audience(_db, _now):
+        return {"recipients": [
+            {"email": "ops@syrabit.ai"},
+            {"email": "founder@syrabit.ai"},
+        ]}
+
+    sent_to: list = []
+
+    async def _fake_send(to, subject, html, *args, **kwargs):
+        sent_to.append({"to": to, "subject": subject})
+        return True
+
+    import sys, types
+    mod = types.ModuleType("email_templates")
+    mod._send = _fake_send  # type: ignore[attr-defined]
+    sys.modules["email_templates"] = mod
+    try:
+        with patch.object(seo_engine, "_resolve_seo_summary_audience",
+                          new=AsyncMock(side_effect=_fake_audience)):
+            asyncio.run(seo_engine._email_admins_about_seo_staleness(
+                fake_db, "subj", "body",
+            ))
+    finally:
+        sys.modules.pop("email_templates", None)
+
+    assert len(sent_to) >= 1, "expected at least one outbound email"
+    addrs = sent_to[0]["to"]
+    if isinstance(addrs, str):
+        addrs = [addrs]
+    assert any("ops@syrabit.ai" in a or "founder@syrabit.ai" in a for a in addrs)
