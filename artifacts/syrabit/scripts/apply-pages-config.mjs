@@ -159,6 +159,16 @@ for (const k of Object.keys(preview)) {
     stripped.preview.push(k);
   }
 }
+// Mirror VITE_GA4_ID onto preview so PR previews report under the same
+// stream as production. Without this, preview keeps whatever stale
+// value was there before (in our case the GA4 *Property ID* 530170895,
+// which fails the regex and silently disables gtag).
+if (REQUIRED_PROD_ENV.VITE_GA4_ID) {
+  previewEnvPatch.VITE_GA4_ID = {
+    type: "plain_text",
+    value: REQUIRED_PROD_ENV.VITE_GA4_ID,
+  };
+}
 
 const body = {
   build_config: BUILD_CONFIG,
