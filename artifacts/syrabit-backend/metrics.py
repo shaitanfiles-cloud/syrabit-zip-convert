@@ -282,6 +282,12 @@ async def _bg_health_loop():
 
 _ALERT_COOLDOWN_S = 1800   # 30 min between same alert type
 _alert_last_fired: dict = {}   # { "alert_key": timestamp }
+# Task #453: per-alert-type debounce for the inline "no working browser
+# push endpoints" warning that gets attached to email/webhook bodies when
+# Task #452's pre-check finds zero active admin push subs. Without this,
+# every alert burst would re-warn on the still-healthy channels.
+_PUSH_SILENT_WARN_COOLDOWN_S = 24 * 3600
+_push_silent_warning_last_at: dict = {}   # { "alert_key": timestamp }
 _ALERT_THRESHOLDS_DEFAULT = {
     "latency_p95_ms": 2000,
     "error_rate_pct": 5.0,
@@ -672,6 +678,53 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
     _alert_last_fired[alert_type] = now
     logger.warning(f"ALERT [{alert_type}] {title}: {body}")
 
+    # Task #453: detect zero active admin push endpoints up-front so the
+    # email/webhook channels can carry an inline "browser push is silent"
+    # warning. The push step (#4 below) reuses ``active_admin_subs`` to
+    # short-circuit. Inline warning is debounced per-alert-type
+    # (_PUSH_SILENT_WARN_COOLDOWN_S = 24h) so an alert burst doesn't spam
+    # every still-healthy channel. -1 means the check itself errored — we
+    # then fall through to the legacy dispatch path so we never silently
+    # drop a real alert.
+    active_admin_subs = -1
+    try:
+        active_admin_subs = await db.push_subscriptions.count_documents({
+            "$or": [{"role": "admin"}, {"is_admin": True}],
+            "active": {"$ne": False},
+        })
+        if active_admin_subs == 0:
+            admin_docs = await db.users.find(
+                {"is_admin": True}, {"_id": 0, "id": 1}
+            ).to_list(500)
+            legacy_admin_ids = [str(d["id"]) for d in admin_docs if d.get("id")]
+            if legacy_admin_ids:
+                active_admin_subs = await db.push_subscriptions.count_documents({
+                    "user_id": {"$in": legacy_admin_ids},
+                    "active": {"$ne": False},
+                })
+    except Exception as exc:
+        logger.debug(f"Push pre-check (active admin subs) failed: {exc}")
+
+    push_silent_warn_text = ""
+    push_silent_warn_html = ""
+    if active_admin_subs == 0:
+        last_warn = _push_silent_warning_last_at.get(alert_type, 0)
+        if force or now - last_warn >= _PUSH_SILENT_WARN_COOLDOWN_S:
+            _push_silent_warning_last_at[alert_type] = now
+            push_silent_warn_text = (
+                "\n\n⚠️ No working browser push endpoints — "
+                "re-enable notifications at /admin/notifications"
+            )
+            push_silent_warn_html = (
+                "<p style=\"margin:14px 0;padding:12px 14px;border-left:4px solid #f59e0b;"
+                "background:#fff7ed;color:#92400e;font-weight:600;border-radius:4px\">"
+                "&#9888;&#65039; No working browser push endpoints &mdash; "
+                "re-enable notifications at "
+                "<a href=\"/admin/notifications\" style=\"color:#92400e;text-decoration:underline\">"
+                "/admin/notifications</a>"
+                "</p>"
+            )
+
     # 1) Email alert via Resend (to admin)
     try:
         admin_email = (_notification_channels.get("email") or os.environ.get("ALERT_EMAIL", "")).strip()
@@ -720,7 +773,7 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
                 "from": EMAIL_FROM,
                 "to": [admin_email],
                 "subject": f"🚨 Syrabit Alert: {title}",
-                "html": f"<h2>{title}</h2><p>{body_html}</p>{threshold_html}{extra_html}<p style='color:#888'>Alert type: {alert_type}<br>Cooldown: {_ALERT_COOLDOWN_S // 60} min</p>",
+                "html": f"<h2>{title}</h2><p>{body_html}</p>{push_silent_warn_html}{threshold_html}{extra_html}<p style='color:#888'>Alert type: {alert_type}<br>Cooldown: {_ALERT_COOLDOWN_S // 60} min</p>",
             })
             outcomes["email"]["ok"] = True
     except Exception as e:
@@ -765,6 +818,13 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
                         f"| Threshold: {threshold_snapshot.get('value', 'N/A')} "
                         f"| Actual: *{threshold_snapshot.get('actual', 'N/A')}*"
                     )
+            # Task #453: append the "browser push is silent" advisory to
+            # generic and SEO/hydrate Slack payloads alike. The branded
+            # _build_*_slack_payload helpers also expose a top-level
+            # ``text`` field, so this works uniformly.
+            if push_silent_warn_text and isinstance(webhook_payload.get("text"), str):
+                webhook_payload["text"] = webhook_payload["text"] + push_silent_warn_text
+                webhook_payload["push_silent"] = True
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(webhook_url, json=webhook_payload)
                 if 200 <= resp.status_code < 300:
@@ -831,34 +891,10 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
         if mark_synthetic:
             push_payload["synthetic"] = True
 
-        # Task #452: short-circuit when no active admin push subscriptions
-        # exist so the channel reflects "no active push subscribers" instead
-        # of the optimistic queued-task signal. Task #435's auto-prune can
-        # leave a tenant with zero active admin endpoints; without this
-        # pre-check every alert silently reports "queued" while nothing is
-        # ever delivered.
-        active_admin_subs = -1
-        try:
-            active_admin_subs = await db.push_subscriptions.count_documents({
-                "$or": [{"role": "admin"}, {"is_admin": True}],
-                "active": {"$ne": False},
-            })
-            # Mirror the legacy admin-id fallback used by _dispatch_push so
-            # tenants that pre-date the role/is_admin field are not flagged
-            # as empty when their subs are stored against user_id only.
-            if active_admin_subs == 0:
-                admin_docs = await db.users.find(
-                    {"is_admin": True}, {"_id": 0, "id": 1}
-                ).to_list(500)
-                legacy_admin_ids = [str(d["id"]) for d in admin_docs if d.get("id")]
-                if legacy_admin_ids:
-                    active_admin_subs = await db.push_subscriptions.count_documents({
-                        "user_id": {"$in": legacy_admin_ids},
-                        "active": {"$ne": False},
-                    })
-        except Exception as exc:
-            logger.debug(f"Push pre-check (active admin subs) failed: {exc}")
-
+        # Task #452 / #453: ``active_admin_subs`` was already counted at the
+        # top of _dispatch_alert (so the email/webhook bodies can carry the
+        # "browser push is silent" warning). Reuse that result here to
+        # short-circuit the push step.
         if active_admin_subs == 0:
             skip_reason = "no active push subscribers"
             try:
