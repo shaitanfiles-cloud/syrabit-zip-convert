@@ -119,11 +119,31 @@ export default {
     const ua = request.headers.get("User-Agent") || "";
     const isBot = SEARCH_BOT_UA.test(ua);
 
-    // Bot rendering: GET requests from verified search/AI bots that
-    // hit a non-skip path get the backend-rendered HTML. We do this
-    // BEFORE the asset lookup so bots never see the SPA shell.
+    // Loop guard: if this request already carries the X-Bot-Render
+    // tag (i.e. it's the backend fetching back through the Pages
+    // host because BACKEND_BOT_URL was misconfigured), do NOT
+    // recurse — fall through to the asset pipeline. Same for any
+    // request whose target host literally equals the configured
+    // backend host: that means someone pointed BACKEND_BOT_URL at
+    // syrabit.ai itself.
+    const backendHost = (() => {
+      try { return new URL((env && env.BACKEND_BOT_URL) || DEFAULT_BACKEND).host; }
+      catch { return ""; }
+    })();
+    const wouldLoop =
+      request.headers.get("X-Bot-Render") === "1" ||
+      (backendHost && backendHost === url.host);
+
+    // Bot rendering: GET requests from search/AI bot UAs that hit a
+    // non-skip path get the backend-rendered HTML. We do this BEFORE
+    // the asset lookup so bots never see the SPA shell. UA-only
+    // matching here (no IP verification) — the trade-off is some
+    // false positives from spoofed UAs may hit the backend, but the
+    // backend caches /html/* aggressively so the cost is minimal,
+    // and any miss falls through gracefully below.
     if (
       isBot &&
+      !wouldLoop &&
       request.method === "GET" &&
       shouldBotRender(url.pathname)
     ) {
