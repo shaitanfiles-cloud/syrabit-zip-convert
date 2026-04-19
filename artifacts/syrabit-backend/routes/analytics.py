@@ -156,9 +156,18 @@ async def admin_analytics(days: int = 30, admin: dict = Depends(get_admin_user))
     }
 
 
+async def _bg_track_page_view(**kwargs):
+    """Background wrapper — must never raise, telemetry is best-effort."""
+    try:
+        await track_page_view(**kwargs)
+    except Exception as e:
+        logger.debug(f"bg page-view write failed: {e}")
+
+
 @router.post("/analytics/page-view")
 async def track_page_view_endpoint(
     request: StarletteRequest,
+    background_tasks: BackgroundTasks,
     path: str = Body(...),
     visitor_id: str = Body(...),
     referrer: str = Body(None),
@@ -171,13 +180,16 @@ async def track_page_view_endpoint(
     """
     Public endpoint to track a page view.
     Called from frontend on every route change.
+    Returns 200 immediately; the Mongo write is deferred to a background
+    task so the browser is not blocked on cross-region DB latency.
     """
     user_id = user.get("id") if user else None
     effective_ua = user_agent or request.headers.get("user-agent") or ""
     cf_country = request.headers.get("cf-ipcountry", "")
     x_forwarded = request.headers.get("x-forwarded-for", "")
     client_ip = x_forwarded.split(",")[0].strip() if x_forwarded else (request.client.host if request.client else "")
-    await track_page_view(
+    background_tasks.add_task(
+        _bg_track_page_view,
         path=path,
         visitor_id=visitor_id,
         user_id=user_id,
@@ -302,12 +314,7 @@ async def top_routes(days: int = 30, limit: int = 200):
     return result
 
 
-@router.post("/analytics/session-ping")
-async def session_ping_endpoint(
-    session_id: str = Body(...),
-    visitor_id: str = Body(...),
-):
-    """Keep a session alive. Called every 30s from frontend heartbeat."""
+async def _bg_session_ping(session_id: str, visitor_id: str):
     try:
         if db is not None and await is_mongo_available():
             now_iso = datetime.now(timezone.utc).isoformat()
@@ -328,38 +335,70 @@ async def session_ping_endpoint(
             )
     except Exception as e:
         logger.debug(f"session_ping failed: {e}")
+
+
+@router.post("/analytics/session-ping")
+async def session_ping_endpoint(
+    background_tasks: BackgroundTasks,
+    session_id: str = Body(...),
+    visitor_id: str = Body(...),
+):
+    """Keep a session alive. Called every 30s from frontend heartbeat.
+    Defers the Mongo upsert so the heartbeat returns instantly."""
+    background_tasks.add_task(_bg_session_ping, session_id, visitor_id)
     return {"status": "ok"}
 
 
-@router.post("/analytics/session-end")
-async def session_end_endpoint(
-    session_id: str = Body(...),
-    visitor_id: str = Body(None),
-    end_timestamp: str = Body(None),
-):
-    """Record session end time. Called via sendBeacon on tab close."""
+async def _bg_session_end(session_id: str, end_iso: str):
     try:
         if db is not None and await is_mongo_available():
-            end_iso = None
-            if end_timestamp:
-                try:
-                    datetime.fromisoformat(end_timestamp.replace("Z", "+00:00"))
-                    end_iso = end_timestamp
-                except (ValueError, AttributeError):
-                    pass
-            if not end_iso:
-                end_iso = datetime.now(timezone.utc).isoformat()
             await db.sessions.update_one(
                 {"session_id": session_id},
                 {"$set": {"end_time": end_iso, "last_ping": end_iso}},
             )
     except Exception as e:
         logger.debug(f"session_end failed: {e}")
+
+
+@router.post("/analytics/session-end")
+async def session_end_endpoint(
+    background_tasks: BackgroundTasks,
+    session_id: str = Body(...),
+    visitor_id: str = Body(None),
+    end_timestamp: str = Body(None),
+):
+    """Record session end time. Called via sendBeacon on tab close.
+    Validation runs synchronously; the Mongo write runs in the background."""
+    end_iso = None
+    if end_timestamp:
+        try:
+            datetime.fromisoformat(end_timestamp.replace("Z", "+00:00"))
+            end_iso = end_timestamp
+        except (ValueError, AttributeError):
+            pass
+    if not end_iso:
+        end_iso = datetime.now(timezone.utc).isoformat()
+    background_tasks.add_task(_bg_session_end, session_id, end_iso)
     return {"status": "ok"}
+
+
+async def _bg_track_pwa_install(action: str, metadata: dict, user_id: Optional[str]):
+    try:
+        await track_pwa_install(action=action, metadata=metadata, user_id=user_id)
+    except Exception as e:
+        logger.debug(f"bg pwa_install track failed: {e}")
+
+
+async def _bg_track_library_event(**kwargs):
+    try:
+        await track_library_event(**kwargs)
+    except Exception as e:
+        logger.debug(f"bg library_event track failed: {e}")
 
 
 @router.post("/analytics/track")
 async def track_event(
+    background_tasks: BackgroundTasks,
     event_type: str = Body(...),
     subject_id: str = Body(None),
     chapter_id: str = Body(None),
@@ -370,30 +409,32 @@ async def track_event(
     """
     Public endpoint for tracking library interactions.
     Called from frontend when user interacts with content.
-    
+
     Event types:
     - search: User searched in library
     - subject_view: User opened a subject
     - chapter_view: User viewed a chapter
     - ask_ai_click: User clicked Ask AI button
     - document_open: User opened document viewer
+
+    Mongo writes are deferred so this returns instantly.
     """
     user_id = user.get("id") if user else None
-    
+
     if event_type == "pwa_install":
         action = (metadata or {}).get("action", "unknown")
-        await track_pwa_install(action=action, metadata=metadata, user_id=user_id)
+        background_tasks.add_task(_bg_track_pwa_install, action, metadata, user_id)
         return {"status": "tracked"}
 
-    await track_library_event(
+    background_tasks.add_task(
+        _bg_track_library_event,
         event_type=event_type,
         subject_id=subject_id,
         chapter_id=chapter_id,
         user_id=user_id,
         search_query=search_query,
-        metadata=metadata
+        metadata=metadata,
     )
-    
     return {"status": "tracked"}
 
 
@@ -456,26 +497,37 @@ async def track_hydrate_event(
     """
     if event not in _HYDRATE_VALID_EVENTS:
         return {"status": "ignored"}
-    try:
-        await _ensure_hydrate_indexes()
-        ua = request.headers.get("user-agent", "")[:300]
-        # Cap free-form fields so a runaway client can't bloat documents.
-        doc = {
-            "event": event,
-            "kind": (kind or "")[:64] or None,
-            "path": (path or "")[:200] or None,
-            "auto_reload": bool(auto_reload) if auto_reload is not None else None,
-            "preload_failed": bool(preload_failed) if preload_failed is not None else None,
-            "message": (message or "")[:300] or None,
-            "name": (name or "")[:64] or None,
-            "elapsed_ms": int(elapsed_ms) if isinstance(elapsed_ms, (int, float)) else None,
-            "ms_since_reload": int(ms_since_reload) if isinstance(ms_since_reload, (int, float)) else None,
-            "ua": ua or None,
-            "created_at": datetime.now(timezone.utc),
-        }
-        await db.hydrate_telemetry.insert_one(doc)
-    except Exception as e:
-        logger.debug(f"hydrate-event ingest failed: {e}")
+    # Build the document synchronously (validation/capping) but defer the
+    # Mongo write so the page-load isn't blocked on cross-region latency.
+    ua = request.headers.get("user-agent", "")[:300]
+    doc = {
+        "event": event,
+        "kind": (kind or "")[:64] or None,
+        "path": (path or "")[:200] or None,
+        "auto_reload": bool(auto_reload) if auto_reload is not None else None,
+        "preload_failed": bool(preload_failed) if preload_failed is not None else None,
+        "message": (message or "")[:300] or None,
+        "name": (name or "")[:64] or None,
+        "elapsed_ms": int(elapsed_ms) if isinstance(elapsed_ms, (int, float)) else None,
+        "ms_since_reload": int(ms_since_reload) if isinstance(ms_since_reload, (int, float)) else None,
+        "ua": ua or None,
+        "created_at": datetime.now(timezone.utc),
+    }
+
+    async def _bg_insert():
+        try:
+            await _ensure_hydrate_indexes()
+            await db.hydrate_telemetry.insert_one(doc)
+        except Exception as e:
+            logger.debug(f"hydrate-event ingest failed: {e}")
+
+    bg = getattr(request.state, "background_tasks", None)
+    if bg is None:
+        # Fall back to spawning a fire-and-forget task on the running loop
+        # if no BackgroundTasks instance was injected via the route signature.
+        asyncio.create_task(_bg_insert())
+    else:
+        bg.add_task(_bg_insert)
     return {"status": "tracked"}
 
 
