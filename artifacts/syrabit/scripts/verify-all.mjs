@@ -346,7 +346,7 @@ if (hydrationCode !== 0) {
   fail(`verify-hydration exited with code ${hydrationCode}`);
 }
 
-// ── Cleanup dist-ssr (matches verify-library-prerender behaviour) ───
+// ── Cleanup dist-ssr (matches the legacy library-verifier behaviour) ───
 if (fs.existsSync(distSsrDir)) {
   fs.rmSync(distSsrDir, { recursive: true, force: true });
   console.log(

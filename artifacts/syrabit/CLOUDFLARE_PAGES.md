@@ -282,7 +282,7 @@ Worst case ≈ **352 serial network round-trips**, each capped at the previous 8
 1. **Single shared backend cache.** New `scripts/_prerender-data.mjs` exposes `loadLibraryBundle()` / `loadTopRoutes()` / `warmCache()` with on-disk caching under `node_modules/.cache/prerender/` (10-min TTL) and in-flight promise dedup. The first script in the build pays the network hop; subsequent scripts read from disk.
 2. **Parallel client + SSR builds.** `vite build` and `vite build --ssr` now run via `Promise.all` in `scripts/build.mjs` instead of sequentially.
 3. **Parallel prerender fan-out.** `scripts/prerender-all.mjs` pre-warms the shared cache then spawns the four prerender scripts via `Promise.all`. Each child has a per-step deadline (`PRERENDER_STEP_BUDGET_MS`, default 6 min).
-4. **Single-pass verifier.** `scripts/verify-all.mjs` walks `dist/` once and runs every structural assertion previously split across `verify-prerender`, `verify-library-prerender`, and `verify-canonicals` (those three thin-wrapper scripts were removed in Task #538 once one production build cycle confirmed verify-all was sufficient). Then runs `verify-hydration.mjs` (headless Chromium) in a child process.
+4. **Single-pass verifier.** `scripts/verify-all.mjs` walks `dist/` once and runs every structural assertion previously split across the legacy verifier wrappers (removed in Task #538 once one production build cycle confirmed verify-all was sufficient). Then runs `verify-hydration.mjs` (headless Chromium) in a child process.
 5. **Hard wall-clock budget.** `scripts/build.mjs` enforces `BUILD_BUDGET_MS` (default **8 min**, ceiling 30 min). Exceeding it kills the build with a clear `WALL-CLOCK BUDGET EXCEEDED` log line so the failure cause is obvious instead of opaque.
 6. **Fail-fast env check.** `scripts/check-build-env.mjs` runs first and refuses to start a build with a missing `VITE_BACKEND_URL` or a malformed `VITE_GA4_ID`.
 7. **Modulepreload as a Vite plugin.** `vite-plugins/modulepreload-inject.js` replaces the post-build `scripts/inject-modulepreload.mjs` so the hint injection is part of the bundle write, not a separate `node` invocation.
@@ -411,7 +411,7 @@ The prerender stage spent its full 5-min budget because both `prerender-library.
 
 ### Reproducing the measurement
 
-The Replit workspace and the GitHub repo `shaitanfiles-cloud/syrabit-zip-convert@master` are now in sync as of commit `009abb9d` (which added `scripts/build.mjs`, `scripts/check-build-env.mjs`, `scripts/prerender-all.mjs`, `scripts/_prerender-data.mjs`, `scripts/verify-all.mjs`, `vite-plugins/modulepreload-inject.js`; removed `scripts/compress-assets.mjs`, `scripts/inject-modulepreload.mjs`; and updated `scripts/{prerender-library,prerender-routes,verify-prerender,verify-canonicals,verify-library-prerender}.mjs`, `vite.config.js`, `package.json`). To reproduce:
+The Replit workspace and the GitHub repo `shaitanfiles-cloud/syrabit-zip-convert@master` are now in sync as of commit `009abb9d` (which added `scripts/build.mjs`, `scripts/check-build-env.mjs`, `scripts/prerender-all.mjs`, `scripts/_prerender-data.mjs`, `scripts/verify-all.mjs`, `vite-plugins/modulepreload-inject.js`; removed `scripts/compress-assets.mjs`, `scripts/inject-modulepreload.mjs`; and updated `scripts/{prerender-library,prerender-routes}.mjs` plus the legacy verifier wrappers, `vite.config.js`, `package.json`). The verifier wrappers were later deleted in Task #538. To reproduce:
 
 ```sh
 # Trigger a fresh prod deploy via the CF API
@@ -442,7 +442,7 @@ $ curl -sI https://syrabit.ai/library/some-slug  → HTTP/2 200 text/html
 The Task #535 pipeline files were authored in the Replit workspace and were not yet on `shaitanfiles-cloud/syrabit-zip-convert@master`, which is what Pages builds from. As part of this task they were synced to `master` as a single commit (`009abb9d`) so the Pages build could be run against the real refactor. The exact set of changes synced:
 
 - **Added:** `artifacts/syrabit/scripts/{build.mjs, check-build-env.mjs, prerender-all.mjs, _prerender-data.mjs, verify-all.mjs}`, `artifacts/syrabit/vite-plugins/modulepreload-inject.js`
-- **Modified:** `artifacts/syrabit/scripts/{prerender-library, prerender-routes, verify-prerender, verify-canonicals, verify-library-prerender}.mjs`, `artifacts/syrabit/vite.config.js`, `artifacts/syrabit/package.json`
+- **Modified:** `artifacts/syrabit/scripts/{prerender-library, prerender-routes}.mjs` plus the legacy verifier wrappers (the latter subsequently deleted in Task #538), `artifacts/syrabit/vite.config.js`, `artifacts/syrabit/package.json`
 - **Deleted:** `artifacts/syrabit/scripts/{compress-assets.mjs, inject-modulepreload.mjs}`
 
 Prior to this commit, the most recent legacy-pipeline production attempt was `d529c6f4` (commit `dd9d722`, 2026-04-19 02:47Z) which ran 2178 s = 36.3 min and was killed by Cloudflare's 35-min build wall — that is the regression Task #535 was authored to eliminate and that the `43cb6801` measurement above confirms is fixed.
