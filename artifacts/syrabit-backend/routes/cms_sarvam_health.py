@@ -3435,7 +3435,148 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
                 # we want Google to actually see every feature so the
                 # page can rank for queries like "Syrabit features",
                 # "what does Syrabit do", "AHSEC AI tutor", etc.
-                if cache_key == "_technology_":
+                if cache_key == "_home_":
+                    # ── /home: brand-entity narrative for Google ──
+                    # Order matters: Google extracts text top-down for the
+                    # SERP snippet and feeds the H1/H2 hierarchy into its
+                    # entity ranker. We tell the story: 1) what Syrabit is,
+                    # 2) who Dipak Rai is, 3) why building from Assam is
+                    # hard and what that means, 4) what the product offers.
+                    home_features = [
+                        "Multi-model AI tutor (Cerebras, Groq, Fireworks, Gemini, xAI) with sources cited",
+                        "Bilingual chat in English and Assamese (অসমীয়া)",
+                        "Syllabus-aligned notes for AHSEC, SEBA and Degree subjects",
+                        "Previous year questions (PYQs) with solutions and HTML replicas",
+                        "Mark-wise question banks (1, 2, 3, 5, 10 marks)",
+                        "MCQs, flashcards, and AI-generated study guides",
+                        "Indic Text-to-Speech via Sarvam AI",
+                        "Installable PWA with offline access for low-connectivity areas",
+                        "Free tier with 30 daily AI credits; Starter and Pro plans for heavier use",
+                    ]
+                    home_features_html = "".join(f"<li>{_html_mod.escape(x)}</li>" for x in home_features)
+                    home_schema = json.dumps({
+                        "@context": "https://schema.org",
+                        "@graph": [
+                            {
+                                "@type": "WebPage",
+                                "@id": f"{page_url}#webpage",
+                                "url": page_url,
+                                "name": page_title,
+                                "inLanguage": ["en-IN", "as-IN"],
+                                "isPartOf": {"@type": "WebSite", "@id": "https://syrabit.ai/#website",
+                                              "name": "Syrabit.ai", "url": "https://syrabit.ai"},
+                                "about": {"@id": "https://syrabit.ai/#organization"},
+                                "mainEntity": {"@id": "https://syrabit.ai/#organization"},
+                            },
+                            {
+                                "@type": ["Organization", "EducationalOrganization"],
+                                "@id": "https://syrabit.ai/#organization",
+                                "name": "Syrabit.ai",
+                                "alternateName": ["Syrabit", "Syra"],
+                                "url": "https://syrabit.ai",
+                                "logo": {"@type": "ImageObject", "url": "https://syrabit.ai/icons/icon-192x192.png"},
+                                "description": "AI-powered study browser for AHSEC, SEBA and Degree students in Assam, India. Founded and bootstrapped in 2025 from Assam by Dipak Rai.",
+                                "foundingDate": "2025",
+                                "foundingLocation": {"@type": "Place", "name": "Guwahati, Assam, India"},
+                                "founder": {"@id": "https://syrabit.ai/#founder"},
+                                "knowsAbout": ["AHSEC syllabus", "SEBA syllabus", "NEP FYUGP curriculum",
+                                               "Assamese-medium education", "AI in education"],
+                                "areaServed": {"@type": "State", "name": "Assam",
+                                                "containedInPlace": {"@type": "Country", "name": "India"}},
+                                "sameAs": ["https://twitter.com/SyrabitAI"],
+                            },
+                            {
+                                "@type": "Person",
+                                "@id": "https://syrabit.ai/#founder",
+                                "name": "Dipak Rai",
+                                "givenName": "Dipak",
+                                "familyName": "Rai",
+                                "jobTitle": "Founder",
+                                "nationality": {"@type": "Country", "name": "India"},
+                                "worksFor": {"@id": "https://syrabit.ai/#organization"},
+                                "url": "https://syrabit.ai/about",
+                                "knowsAbout": ["AHSEC syllabus", "SEBA syllabus",
+                                               "Education technology", "AI in education"],
+                            },
+                            {
+                                "@type": "AboutPage",
+                                "@id": f"{page_url}#aboutpage",
+                                "url": page_url,
+                                "name": "About Syrabit and its Assam-built story",
+                                "primaryImageOfPage": {"@type": "ImageObject",
+                                                        "url": "https://syrabit.ai/opengraph.jpg"},
+                                "about": {"@id": "https://syrabit.ai/#organization"},
+                                "author": {"@id": "https://syrabit.ai/#founder"},
+                                "mentions": [
+                                    {"@type": "Place", "name": "Assam, India"},
+                                    {"@type": "EducationalOrganization", "name": "AHSEC"},
+                                    {"@type": "EducationalOrganization", "name": "SEBA"},
+                                ],
+                            },
+                            {
+                                "@type": "BreadcrumbList",
+                                "itemListElement": [
+                                    {"@type": "ListItem", "position": 1, "name": "Home", "item": "https://syrabit.ai"},
+                                    {"@type": "ListItem", "position": 2, "name": "About", "item": page_url},
+                                ],
+                            },
+                        ],
+                    }, ensure_ascii=False)
+                    home_desc = ("Syrabit.ai is an AI-powered study browser for AHSEC, SEBA and Degree "
+                                 "students in Assam. Founded in 2025 by Dipak Rai and bootstrapped from "
+                                 "Assam — a region with limited edtech infrastructure and tech-talent "
+                                 "depth — Syrabit offers an AI tutor in English and Assamese, "
+                                 "syllabus-aligned notes, PYQs, MCQs and offline access.")
+                    html_content = f"""<!DOCTYPE html>
+<html lang="en-IN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{page_title}</title>
+<meta name="description" content="{_html_mod.escape(home_desc)}">
+<link rel="canonical" href="{page_url}">
+<meta property="og:title" content="{page_title}">
+<meta property="og:description" content="{_html_mod.escape(home_desc)}">
+<meta property="og:url" content="{page_url}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Syrabit.ai">
+<meta property="og:image" content="https://syrabit.ai/opengraph.jpg">
+<meta name="robots" content="{robots_meta}">
+<meta http-equiv="content-language" content="en-IN">
+<link rel="alternate" hreflang="en-IN" href="{page_url}">
+<link rel="alternate" hreflang="as-IN" href="{page_url}">
+<script type="application/ld+json">{home_schema}</script>
+</head>
+<body>
+<nav><a href="https://syrabit.ai">Home</a> &rsaquo; <span>About Syrabit</span></nav>
+
+<h1>Syrabit.ai — AI Study Browser for Assam Board Students</h1>
+<p><strong>Syrabit.ai is an AI-powered study browser built for AHSEC, SEBA and Degree students in Assam.</strong> It combines a curated syllabus library with a multi-model AI tutor that answers in both English and Assamese, grounded in official Assam Board curricula.</p>
+
+<section id="founder">
+<h2>About the Founder — Dipak Rai</h2>
+<p>Syrabit.ai was founded in 2025 by <strong>Dipak Rai</strong>, an independent builder from Assam. He started Syrabit after seeing how few learning tools served Assamese-medium and Assam Board students in a way that respected the local syllabus, language, and exam structure. The platform is built solo, end-to-end — frontend, backend, AI integration, and the editorial content pipeline.</p>
+</section>
+
+<section id="built-in-assam">
+<h2>Built in Assam — and Why That Matters</h2>
+<p>Most Indian edtech is built in Bangalore, Delhi or Hyderabad, where capital, engineering talent, and startup infrastructure are concentrated. Assam has very little of that ecosystem: there are no major venture funds based in the state, the local pool of full-stack and AI engineers is small, reliable connectivity is uneven outside the major cities, and there is no established edtech blueprint for AHSEC or SEBA boards to copy.</p>
+<p>Building a production-grade AI study platform from Assam therefore costs more, takes longer, and carries more execution risk than building the same product in a metro. Syrabit.ai was bootstrapped under exactly those constraints — without venture funding, without a hired engineering team, and without an existing Assam-board edtech to learn from. Every architectural decision (Cloudflare edge, Railway backend, MongoDB Atlas, Sarvam AI for Indic speech, multi-model LLM routing) was made to keep recurring costs low enough that one founder could carry them while serving students at a price they can afford.</p>
+<p>The result is the only edtech platform we are aware of that is built in Assam, by an Assamese founder, specifically for the Assam Board syllabus and the Assamese language — instead of being an afterthought inside a national platform.</p>
+</section>
+
+<section id="features">
+<h2>What Syrabit Offers</h2>
+<ul>
+{home_features_html}
+</ul>
+<p>See the <a href="https://syrabit.ai/technology">complete feature catalogue</a> for all 60+ features.</p>
+</section>
+
+<footer><a href="https://syrabit.ai/library">Library</a> &middot; <a href="https://syrabit.ai/technology">Technology</a> &middot; <a href="https://syrabit.ai/pricing">Pricing</a> &middot; <a href="https://syrabit.ai/sitemap.xml">Sitemap</a></footer>
+</body>
+</html>"""
+                elif cache_key == "_technology_":
                     feature_groups = [
                         ("AI Study Assistant", [
                             "Multi-model AI chat (Cerebras, Groq, Fireworks, OpenRouter, Gemini, xAI)",

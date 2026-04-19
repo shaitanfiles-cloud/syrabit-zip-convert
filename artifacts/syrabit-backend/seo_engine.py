@@ -2616,11 +2616,41 @@ _ASSAM_GEO = {
     "address": {"@type": "PostalAddress", "addressRegion": "Assam", "addressCountry": "IN"},
 }
 
+# ─────────────────────────────────────────────────────────────
+# Founder entity. Reused (by @id) across every page so Google
+# can build a stable knowledge graph linking Syrabit ↔ Dipak Rai.
+# When someone searches "Syrabit", Google's brand-entity logic
+# pulls founder + org info from the first crawled page that
+# carries this graph — and every page does, via _ORG_NODE.
+# ─────────────────────────────────────────────────────────────
+_FOUNDER_NODE = {
+    "@type": "Person",
+    "@id": "https://syrabit.ai/#founder",
+    "name": "Dipak Rai",
+    "givenName": "Dipak",
+    "familyName": "Rai",
+    "jobTitle": "Founder",
+    "nationality": {"@type": "Country", "name": "India"},
+    "worksFor": {"@id": "https://syrabit.ai/#organization"},
+    "knowsAbout": [
+        "AHSEC syllabus",
+        "SEBA syllabus",
+        "Education technology",
+        "AI in education",
+        "Assam Board examinations",
+    ],
+    "url": "https://syrabit.ai/about",
+}
+
 _ORG_NODE = {
     "@type": ["Organization", "EducationalOrganization"],
+    "@id": "https://syrabit.ai/#organization",
     "name": "Syrabit.ai",
+    "alternateName": ["Syrabit", "Syra"],
+    "legalName": "Syrabit",
     "url": "https://syrabit.ai",
     "logo": {"@type": "ImageObject", "url": "https://syrabit.ai/icons/icon-192x192.png"},
+    "image": "https://syrabit.ai/icons/icon-512x512.png",
     "description": (
         "Syrabit.ai is an academic content platform that produces syllabus-aligned study material "
         "for AHSEC (Assam Higher Secondary Education Council), SEBA (Board of Secondary Education, Assam), "
@@ -2628,6 +2658,8 @@ _ORG_NODE = {
         "and is editorially reviewed for accuracy, exam relevance, and academic depth."
     ),
     "foundingDate": "2025",
+    "founder": _FOUNDER_NODE,
+    "founders": [_FOUNDER_NODE],
     "knowsAbout": [
         "AHSEC syllabus", "SEBA syllabus", "NEP FYUGP curriculum",
         "Assam Board examinations", "Gauhati University syllabus",
@@ -3232,10 +3264,16 @@ async def get_homepage_html():
 
     total_pages = await _db.seo_pages.count_documents({"status": "published"})
 
-    title = "Syrabit.ai — Free AHSEC, SEBA & Degree Study Notes, PYQs & MCQs for Assam Students"
+    title = "Syrabit.ai — AI Study Browser for Assam Students | Founded by Dipak Rai"
+    # ── Meta description follows the narrative the founder wants Google
+    # to surface: 1) what Syrabit is, 2) who built it, 3) where & against
+    # what odds, 4) what it offers. Google uses the first ~155 chars as
+    # the SERP snippet. ──
     desc = (
-        "Comprehensive study platform for Assam Board (AHSEC/SEBA) and Degree students. "
-        "Free syllabus-aligned notes, previous year questions, MCQs, and important questions "
+        "Syrabit.ai is an AI-powered study browser for AHSEC, SEBA and Degree students in Assam. "
+        "Founded in 2025 by Dipak Rai and bootstrapped from Assam — a region with limited "
+        "edtech infrastructure and tech-talent depth — Syrabit offers syllabus-aligned notes, "
+        "previous year questions, MCQs, an AI tutor in English and Assamese, and exam prep "
         f"across {len(subjects)} subjects and {total_pages}+ pages."
     )
 
@@ -3250,15 +3288,19 @@ async def get_homepage_html():
     subj_list = "\n".join(subj_html_parts)
 
     schema = json.dumps({"@context": "https://schema.org", "@graph": [
-        {"@type": "WebSite", "name": "Syrabit.ai", "url": "https://syrabit.ai",
+        {"@type": "WebSite", "@id": "https://syrabit.ai/#website",
+         "name": "Syrabit.ai", "url": "https://syrabit.ai",
          "description": desc,
+         "publisher": {"@id": "https://syrabit.ai/#organization"},
          "potentialAction": {"@type": "SearchAction", "target": "https://syrabit.ai/search?q={search_term_string}",
                              "query-input": "required name=search_term_string"}},
         _ORG_NODE,
-        {"@type": "EducationalOrganization", "name": "Syrabit.ai",
-         "description": "Syllabus-aligned study platform for Assam Board students",
-         "areaServed": {"@type": "State", "name": "Assam", "containedInPlace": {"@type": "Country", "name": "India"}},
-         "address": {"@type": "PostalAddress", "addressRegion": "Assam", "addressCountry": "IN"}},
+        _FOUNDER_NODE,
+        {"@type": "WebPage", "@id": "https://syrabit.ai/#webpage",
+         "url": "https://syrabit.ai", "name": title, "description": desc,
+         "isPartOf": {"@id": "https://syrabit.ai/#website"},
+         "about": {"@id": "https://syrabit.ai/#organization"},
+         "primaryImageOfPage": {"@type": "ImageObject", "url": "https://syrabit.ai/opengraph.jpg"}},
     ]}, ensure_ascii=False)
 
     html_out = f"""<!DOCTYPE html>
@@ -3300,25 +3342,47 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 <body>
 <header>
 <h1>Syrabit.ai</h1>
-<p>Free syllabus-aligned study material for <strong>AHSEC</strong>, <strong>SEBA</strong>, and <strong>Degree</strong> students in Assam.</p>
+<p><strong>Syrabit.ai is an AI-powered study browser built for AHSEC, SEBA and Degree students in Assam.</strong> It combines a curated syllabus library with a multi-model AI tutor that answers in both English and Assamese, grounded in official Assam Board curricula.</p>
 <div class="stats">
 <div class="stat"><strong>{total_pages}+</strong>Study pages</div>
 <div class="stat"><strong>{len(subjects)}</strong>Subjects</div>
 </div>
 </header>
 <main>
+
+<section id="founder">
+<h2>About the Founder — Dipak Rai</h2>
+<p>Syrabit.ai was founded in 2025 by <strong>Dipak Rai</strong>, an independent builder from Assam. He started Syrabit after seeing how few learning tools served Assamese-medium and Assam Board students in a way that respected the local syllabus, language, and exam structure. The platform is built solo, end-to-end — frontend, backend, AI integration, and content pipeline.</p>
+</section>
+
+<section id="built-in-assam">
+<h2>Built in Assam — and Why That Matters</h2>
+<p>Most Indian edtech is built in Bangalore, Delhi or Hyderabad, where capital, engineering talent, and startup infrastructure are concentrated. Assam has very little of that ecosystem: there are no major venture funds based in the state, the local pool of full-stack and AI engineers is small, reliable connectivity is uneven outside the major cities, and there is no established edtech blueprint for AHSEC or SEBA boards to copy.</p>
+<p>Building a production-grade AI study platform from Assam therefore costs more, takes longer, and carries more execution risk than building the same product in a metro. Syrabit.ai was bootstrapped under exactly those constraints — without venture funding, without a hired engineering team, and without an existing Assam-board edtech to learn from. Every architectural decision (Cloudflare edge, Railway backend, MongoDB Atlas, Sarvam AI for Indic speech, multi-model LLM routing) was made to keep recurring costs low enough that one founder could carry them while serving students at a price they can afford.</p>
+<p>The result is the only edtech platform we are aware of that is built in Assam, by an Assamese founder, specifically for the Assam Board syllabus and the Assamese language — instead of being an afterthought inside a national platform.</p>
+</section>
+
+<section id="features">
+<h2>What Syrabit Offers</h2>
+<ul>
+<li><strong>AI tutor</strong> — multi-model AI chat (Cerebras, Groq, Fireworks, Gemini, xAI) that answers your syllabus questions in English or Assamese, with sources cited.</li>
+<li><strong>Syllabus-aligned notes</strong> — topic-wise study notes for AHSEC, SEBA, and NEP FYUGP Degree subjects.</li>
+<li><strong>Previous year questions (PYQs)</strong> — with full solutions, faithful HTML replicas of original board papers.</li>
+<li><strong>Mark-wise question banks</strong> — 1, 2, 3, 5, and 10-mark questions sorted by chapter.</li>
+<li><strong>MCQs &amp; flashcards</strong> — quick revision tools with memory tricks.</li>
+<li><strong>Indic Text-to-Speech</strong> — listen to notes and answers in Assamese via Sarvam AI.</li>
+<li><strong>Mobile + offline</strong> — installable as a PWA, with cached materials that work in low-connectivity areas of Assam.</li>
+<li><strong>Free tier</strong> — 30 daily AI credits, no card required; Starter and Pro plans for heavier use.</li>
+<li><strong>Bilingual experience</strong> — entire interface available in English and অসমীয়া.</li>
+</ul>
+</section>
+
+<section id="subjects">
 <h2>Browse Subjects</h2>
 <ul>
 {subj_list}
 </ul>
-<h2>What You Get — Free</h2>
-<ul>
-<li>Topic-wise study notes aligned to your syllabus</li>
-<li>Previous year questions (PYQs) with answers</li>
-<li>MCQs for quick revision</li>
-<li>Important questions mark-wise</li>
-<li>Definitions and examples</li>
-</ul>
+</section>
 </main>
 <footer>
 <p>&copy; Syrabit.ai — Free syllabus-aligned exam prep for Assam Board (AHSEC/SEBA) &amp; Degree students</p>
