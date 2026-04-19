@@ -70,6 +70,9 @@ ENABLE_E2E_ADMIN = "true"
 
 [userenv.production]
 VITE_BACKEND_URL = "https://api.syrabit.ai"
+VITE_ADS_PROPELLERADS_SCRIPT_URL = "https://quge5.com/88/tag.min.js"
+VITE_ADS_PROPELLERADS_LEARN_AFTER_PYQS_ZONE = "231351"
+VITE_ADS_PROPELLERADS_LEARN_END_ZONE = "231351"
 
 [[ports]]
 localPort = 7766
