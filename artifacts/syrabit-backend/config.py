@@ -69,8 +69,10 @@ GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '').strip()
 
 # ── Email Configuration ───────────────────────────────────────────────────────
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
-EMAIL_FROM     = os.environ.get('EMAIL_FROM', 'noreply@syrabit.ai').strip()
-FRONTEND_URL   = os.environ.get('FRONTEND_URL', 'https://syrabit.ai').strip().rstrip('/')
+# EMAIL_FROM and FRONTEND_URL must be set via environment variables in each
+# deployment environment. The defaults below are safe placeholders only.
+EMAIL_FROM     = os.environ.get('EMAIL_FROM', 'noreply@example.com').strip()
+FRONTEND_URL   = os.environ.get('FRONTEND_URL', 'https://example.com').strip().rstrip('/')
 
 # ── Cloudflare Analytics API ─────────────────────────────────────────────────
 CF_ANALYTICS_API_TOKEN = os.environ.get('CF_ANALYTICS_API_TOKEN', '').strip()
@@ -202,7 +204,9 @@ OPENAI_API_KEY = LLM_API_KEY
 SARVAM_API_KEY = os.environ.get('SARVAM_API_KEY', '').strip()
 SARVAM_API_KEY_2 = os.environ.get('SARVAM_API_KEY_2', '').strip()
 SARVAM_TRANSLATE_KEY = SARVAM_API_KEY or SARVAM_API_KEY_2
-SARVAM_BASE_URL = 'https://api.sarvam.ai'
+# SARVAM_BASE_URL can be overridden via environment variable (e.g. to point at
+# a self-hosted or staging instance). Defaults to the public Sarvam API.
+SARVAM_BASE_URL = os.environ.get('SARVAM_BASE_URL', 'https://api.sarvam.ai').strip().rstrip('/')
 
 # ── Redis (Upstash) ──────────────────────────────────────────────────────────
 _upstash_url   = os.environ.get('UPSTASH_REDIS_REST_URL', '').strip().strip('"').strip("'")
@@ -249,30 +253,14 @@ else:
             CORS_ORIGINS.append(f"https://{_rd}")
     _CORS_ALLOW_CREDENTIALS = True
 
-_HARDCODED_PROD_ORIGINS = [
-    "https://syrabit.ai",
-    "https://www.syrabit.ai",
-    "https://api.syrabit.ai",
-]
-for _hpo in _HARDCODED_PROD_ORIGINS:
-    if _hpo not in CORS_ORIGINS:
-        CORS_ORIGINS.append(_hpo)
-
+# Production origins must be supplied via CORS_ORIGINS or PRODUCTION_ORIGINS
+# environment variables — no domain names are hardcoded here.
 _prod_origins_raw = os.environ.get('PRODUCTION_ORIGINS', '').strip()
 if _prod_origins_raw:
     for _po in _prod_origins_raw.split(','):
         _po = _po.strip()
         if _po and _po not in CORS_ORIGINS:
             CORS_ORIGINS.append(_po)
-
-_default_prod_origins = [
-    "https://syrabit.ai",
-    "https://www.syrabit.ai",
-    "https://api.syrabit.ai",
-]
-for _dpo in _default_prod_origins:
-    if _dpo not in CORS_ORIGINS:
-        CORS_ORIGINS.append(_dpo)
 
 _apprunner_url = os.environ.get('APPRUNNER_SERVICE_URL', '').strip().rstrip('/')
 if _apprunner_url:
@@ -295,15 +283,25 @@ def _load_admin_accounts():
 ADMIN_ACCOUNTS = _load_admin_accounts()
 
 _E2E_ADMIN_ENABLED = os.environ.get('ENABLE_E2E_ADMIN', '').strip().lower() in ('1', 'true', 'yes')
+# E2E admin credentials are read entirely from environment variables.
+# Set E2E_ADMIN_EMAIL, E2E_ADMIN_PASSWORD, and optionally E2E_ADMIN_NAME
+# in the test environment — never hardcode credentials in source code.
 _E2E_ADMIN = {
-    "email": "e2e-admin@syrabit.test",
-    "password": "e2e-test-admin-2026",
-    "name": "E2E Test Admin",
+    "email":    os.environ.get('E2E_ADMIN_EMAIL',    '').strip(),
+    "password": os.environ.get('E2E_ADMIN_PASSWORD', '').strip(),
+    "name":     os.environ.get('E2E_ADMIN_NAME',     'E2E Test Admin').strip(),
 }
-if _E2E_ADMIN_ENABLED and not any(a["email"] == _E2E_ADMIN["email"] for a in ADMIN_ACCOUNTS):
-    ADMIN_ACCOUNTS.append(_E2E_ADMIN)
+if _E2E_ADMIN_ENABLED and _E2E_ADMIN["email"] and _E2E_ADMIN["password"]:
+    if not any(a["email"] == _E2E_ADMIN["email"] for a in ADMIN_ACCOUNTS):
+        ADMIN_ACCOUNTS.append(_E2E_ADMIN)
     import logging as _adm_log
     _adm_log.getLogger("config").info("E2E test admin account enabled (ENABLE_E2E_ADMIN=true)")
+elif _E2E_ADMIN_ENABLED:
+    import logging as _adm_log
+    _adm_log.getLogger("config").warning(
+        "ENABLE_E2E_ADMIN=true but E2E_ADMIN_EMAIL or E2E_ADMIN_PASSWORD is not set — "
+        "E2E admin account was NOT created."
+    )
 
 ADMIN_EMAIL    = ADMIN_ACCOUNTS[0]["email"]    if ADMIN_ACCOUNTS else ""
 ADMIN_PASSWORD = ADMIN_ACCOUNTS[0]["password"] if ADMIN_ACCOUNTS else ""
@@ -331,6 +329,10 @@ CONTENT_CACHE_SECONDS = 600
 REDIS_CONTENT_PREFIX = "content:"
 
 # ── Plan configuration ────────────────────────────────────────────────────────
+# INTENTIONALLY HARDCODED: PLAN_LIMITS and PLAN_PRICES are application-level
+# business logic that is the same across all environments. They are not
+# environment-specific and do not need to be env vars. If you need to change
+# plan limits per environment, extract them to env vars at that point.
 # Credits reset daily at midnight UTC.
 PLAN_LIMITS = {
     # `req_per_min` for free is the per-anon-IP cap. Bumped 5→15 because a
@@ -347,6 +349,12 @@ PLAN_PRICES = {
     "pro":     {"price": 999, "label": "Pro",      "description": "4,000 credits/day · full document access"},
 }
 
+# ── Seed data ─────────────────────────────────────────────────────────────────
+# INTENTIONALLY HARDCODED: SEED_DATA defines the canonical academic taxonomy
+# (boards, classes, streams) for this application. These IDs and slugs are
+# referenced by content documents in the database and must remain stable across
+# all environments. Do not move to env vars — changes here require a matching
+# database migration.
 SEED_DATA = {
     "boards": [
         {"id": "b1", "name": "AHSEC", "slug": "ahsec", "group_name": "AssamBoard", "description": "AssamBoard — AHSEC (Class 11–12)", "created_at": "2024-01-01T00:00:00Z"},
