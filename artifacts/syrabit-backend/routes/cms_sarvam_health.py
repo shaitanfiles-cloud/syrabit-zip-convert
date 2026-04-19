@@ -3475,8 +3475,8 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
                                 "alternateName": ["Syrabit", "Syra"],
                                 "url": "https://syrabit.ai",
                                 "logo": {"@type": "ImageObject", "url": "https://syrabit.ai/icons/icon-192x192.png"},
-                                "description": "AI-powered study browser for AHSEC, SEBA and Degree students in Assam, India. Founded and bootstrapped in 2025 from Assam by Dipak Rai.",
-                                "foundingDate": "2025",
+                                "description": "AI-powered study browser for AHSEC, SEBA and Degree students in Assam, India. Founded and bootstrapped in 2026 from Assam by Dipak Rai.",
+                                "foundingDate": "2026",
                                 "foundingLocation": {"@type": "Place", "name": "Guwahati, Assam, India"},
                                 "founder": {"@id": "https://syrabit.ai/#founder"},
                                 "knowsAbout": ["AHSEC syllabus", "SEBA syllabus", "NEP FYUGP curriculum",
@@ -3523,7 +3523,7 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
                         ],
                     }, ensure_ascii=False)
                     home_desc = ("Syrabit.ai is an AI-powered study browser for AHSEC, SEBA and Degree "
-                                 "students in Assam. Founded in 2025 by Dipak Rai and bootstrapped from "
+                                 "students in Assam. Founded in 2026 by Dipak Rai and bootstrapped from "
                                  "Assam — a region with limited edtech infrastructure and tech-talent "
                                  "depth — Syrabit offers an AI tutor in English and Assamese, "
                                  "syllabus-aligned notes, PYQs, MCQs and offline access.")
@@ -3555,7 +3555,7 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
 
 <section id="founder">
 <h2>About the Founder — Dipak Rai</h2>
-<p>Syrabit.ai was founded in 2025 by <strong>Dipak Rai</strong>, an independent builder from Assam. He started Syrabit after seeing how few learning tools served Assamese-medium and Assam Board students in a way that respected the local syllabus, language, and exam structure. The platform is built solo, end-to-end — frontend, backend, AI integration, and the editorial content pipeline.</p>
+<p>Syrabit.ai was founded in 2026 by <strong>Dipak Rai</strong>, an independent builder from Assam. He started Syrabit after seeing how few learning tools served Assamese-medium and Assam Board students in a way that respected the local syllabus, language, and exam structure. The platform is built solo, end-to-end — frontend, backend, AI integration, and the editorial content pipeline.</p>
 </section>
 
 <section id="built-in-assam">

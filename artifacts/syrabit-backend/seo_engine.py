@@ -2657,7 +2657,7 @@ _ORG_NODE = {
         "and NEP FYUGP Degree students. Content follows official board/university curricula "
         "and is editorially reviewed for accuracy, exam relevance, and academic depth."
     ),
-    "foundingDate": "2025",
+    "foundingDate": "2026",
     "founder": _FOUNDER_NODE,
     "founders": [_FOUNDER_NODE],
     "knowsAbout": [
@@ -3271,7 +3271,7 @@ async def get_homepage_html():
     # the SERP snippet. ──
     desc = (
         "Syrabit.ai is an AI-powered study browser for AHSEC, SEBA and Degree students in Assam. "
-        "Founded in 2025 by Dipak Rai and bootstrapped from Assam — a region with limited "
+        "Founded in 2026 by Dipak Rai and bootstrapped from Assam — a region with limited "
         "edtech infrastructure and tech-talent depth — Syrabit offers syllabus-aligned notes, "
         "previous year questions, MCQs, an AI tutor in English and Assamese, and exam prep "
         f"across {len(subjects)} subjects and {total_pages}+ pages."
@@ -3352,7 +3352,7 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 
 <section id="founder">
 <h2>About the Founder — Dipak Rai</h2>
-<p>Syrabit.ai was founded in 2025 by <strong>Dipak Rai</strong>, an independent builder from Assam. He started Syrabit after seeing how few learning tools served Assamese-medium and Assam Board students in a way that respected the local syllabus, language, and exam structure. The platform is built solo, end-to-end — frontend, backend, AI integration, and content pipeline.</p>
+<p>Syrabit.ai was founded in 2026 by <strong>Dipak Rai</strong>, an independent builder from Assam. He started Syrabit after seeing how few learning tools served Assamese-medium and Assam Board students in a way that respected the local syllabus, language, and exam structure. The platform is built solo, end-to-end — frontend, backend, AI integration, and content pipeline.</p>
 </section>
 
 <section id="built-in-assam">
@@ -3438,7 +3438,7 @@ async def get_about_html():
             "logo": {"@type": "ImageObject", "url": "https://syrabit.ai/icons/icon-192x192.png"},
             "image": "https://syrabit.ai/opengraph.jpg",
             "description": desc,
-            "foundingDate": "2025",
+            "foundingDate": "2026",
             "foundingLocation": {"@type": "Place", "name": "Assam, India"},
             "knowsAbout": [
                 "AHSEC syllabus and examinations",
