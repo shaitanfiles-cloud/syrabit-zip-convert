@@ -267,3 +267,71 @@ Worst case ≈ **352 serial network round-trips**, each capped at the previous 8
 | `PRERENDER_CHAPTERS_PER_SUBJECT`  | `5`          | (existing) trims chapters-per-subject                      |
 
 **Files changed:** `artifacts/syrabit/scripts/prerender-routes.mjs`
+
+---
+
+## Task #535 — Build pipeline refactor (target < 8 min worst case)
+
+**Symptom:** Even after Task #522 added bounded-concurrency fan-out inside `prerender-routes.mjs`, the overall `pnpm run build` script still chained **13 sequential steps** that each opened their own backend connection — the library prerender, chat prerender, routes prerender, and static-routes prerender all re-fetched the slim `library-bundle`, doubling-up backend round-trips. On a slow Railway warm-up that was enough to brush against the 35-min Pages wall.
+
+**Fix:** Top-to-bottom pipeline rewrite.
+
+1. **Single shared backend cache.** New `scripts/_prerender-data.mjs` exposes `loadLibraryBundle()` / `loadTopRoutes()` / `warmCache()` with on-disk caching under `node_modules/.cache/prerender/` (10-min TTL) and in-flight promise dedup. The first script in the build pays the network hop; subsequent scripts read from disk.
+2. **Parallel client + SSR builds.** `vite build` and `vite build --ssr` now run via `Promise.all` in `scripts/build.mjs` instead of sequentially.
+3. **Parallel prerender fan-out.** `scripts/prerender-all.mjs` pre-warms the shared cache then spawns the four prerender scripts via `Promise.all`. Each child has a per-step deadline (`PRERENDER_STEP_BUDGET_MS`, default 6 min).
+4. **Single-pass verifier.** `scripts/verify-all.mjs` walks `dist/` once and runs every structural assertion the legacy `verify-prerender`, `verify-library-prerender`, and `verify-canonicals` scripts performed. Then runs `verify-hydration.mjs` (headless Chromium) in a child process.
+5. **Hard wall-clock budget.** `scripts/build.mjs` enforces `BUILD_BUDGET_MS` (default **8 min**, ceiling 30 min). Exceeding it kills the build with a clear `WALL-CLOCK BUDGET EXCEEDED` log line so the failure cause is obvious instead of opaque.
+6. **Fail-fast env check.** `scripts/check-build-env.mjs` runs first and refuses to start a build with a missing `VITE_BACKEND_URL` or a malformed `VITE_GA4_ID`.
+7. **Modulepreload as a Vite plugin.** `vite-plugins/modulepreload-inject.js` replaces the post-build `scripts/inject-modulepreload.mjs` so the hint injection is part of the bundle write, not a separate `node` invocation.
+8. **Orphan removal.** Deleted `scripts/compress-assets.mjs` (Cloudflare brotli-compresses on the fly; was unreferenced) and `scripts/inject-modulepreload.mjs` (subsumed by the Vite plugin).
+
+### New `package.json` scripts
+
+The monolithic `build` script is now an orchestrator. Each stage is independently runnable for targeted debugging:
+
+```sh
+pnpm --filter @workspace/syrabit run build:env        # fail-fast env check
+pnpm --filter @workspace/syrabit run build:client     # vite build
+pnpm --filter @workspace/syrabit run build:ssr        # vite build --ssr
+pnpm --filter @workspace/syrabit run build:prerender  # parallel prerender fan-out
+pnpm --filter @workspace/syrabit run build:verify     # single-pass dist/ walk + headless hydration
+pnpm --filter @workspace/syrabit run build:precache   # SW precache manifest
+pnpm --filter @workspace/syrabit run build            # full orchestrator (the Pages entry point)
+```
+
+The Cloudflare Pages **build command** above does not need to change — `pnpm --filter @workspace/syrabit run build` still works and now invokes `node scripts/build.mjs` under the hood.
+
+### New tunable env knobs
+
+| Variable                          | Default      | Notes                                                                |
+| --------------------------------- | ------------ | -------------------------------------------------------------------- |
+| `BUILD_BUDGET_MS`                 | `480000` (8 min) | Hard wall-clock for the entire build. Exceeding it aborts with a clear log line. Floor 2 min, ceiling 30 min. |
+| `PRERENDER_STEP_BUDGET_MS`        | `360000` (6 min) | Per-script deadline for each of the four prerender children.         |
+| `PRERENDER_FETCH_TIMEOUT_MS`      | `3000`       | Per-request abort for backend fetches. Lowered from 5000 in #522.    |
+| `PRERENDER_FETCH_CONCURRENCY`     | `8`          | (existing) bounded concurrency inside `prerender-routes.mjs`.        |
+| `PRERENDER_SUBJECTS_LIMIT`        | `50`         | (existing) trims subjects-in-scope. Set to `0` to skip subject/chapter prerender entirely (SPA shell-only deploy). |
+| `PRERENDER_CHAPTERS_PER_SUBJECT`  | `5`          | (existing) trims chapters-per-subject.                               |
+| `PRERENDER_TRAFFIC_DAYS`          | `30`         | (existing) traffic ranking window for prerender selection.           |
+| `SKIP_VERIFY_HYDRATION`           | unset        | Set to `1` to skip the headless Chromium check (e.g. on a build host where Playwright can't run). |
+
+### Expected timings
+
+On Railway warm-path:
+
+| Stage                          | Typical | Worst case |
+| ------------------------------ | ------- | ---------- |
+| `build:env` + `lint:ads`       | < 1 s   | < 2 s      |
+| `build:client` ‖ `build:ssr`   | 60–90 s | 3 min      |
+| `build:prerender` (parallel)   | 40–80 s | 4 min      |
+| `build:verify` (single walk + headless hydration) | 15–30 s | 60 s |
+| `build:precache`               | 1–2 s   | 5 s        |
+| **Total**                      | **3–4 min** | **< 8 min** |
+
+If a build approaches the 8-min budget, the watchdog in `scripts/build.mjs` will print `WALL-CLOCK BUDGET EXCEEDED` and exit non-zero — well inside Cloudflare's 35-min wall.
+
+### Troubleshooting
+
+- **Build aborts with `WALL-CLOCK BUDGET EXCEEDED`:** The backend was unusually slow. Either raise `BUILD_BUDGET_MS` temporarily (max 30 min — beyond that you'll hit the Pages wall anyway) or set `PRERENDER_SUBJECTS_LIMIT=0` for an emergency shell-only deploy.
+- **Prerender step logs `library bundle unavailable`:** The backend was unreachable within `PRERENDER_FETCH_TIMEOUT_MS`. The build still succeeds — the SPA shell + edge fallback Worker continue to serve real HTML for un-prerendered routes.
+- **`verify-all` hard-fails with a manifest-vs-disk mismatch:** Indicates a prerender script wrote the manifest but its output didn't survive — usually a Vite asset-naming change broke the modulepreload regex in `verify-all.mjs` (`/assets/SubjectLandingPage-*.js`). Update the regex when chunk names change.
+- **Need to re-run a single stage:** Use the per-stage `pnpm` scripts above. Each one is independently runnable; `build:verify` only needs `build:client` + `build:ssr` + `build:prerender` to have run.
