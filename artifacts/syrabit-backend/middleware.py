@@ -14,6 +14,42 @@ logger = logging.getLogger(__name__)
 
 request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="")
 
+
+# ── BaseHTTPMiddleware "No response returned." race guard ───────────────────
+#
+# Starlette's BaseHTTPMiddleware wraps the inner ASGI app in an anyio
+# TaskGroup. When a client (CF Worker, browser, Railway healthcheck) closes
+# the connection between when `call_next` is awaited and when the inner
+# handler tries to send the response, the inner task is cancelled and exits
+# without producing a Response. BaseHTTPMiddleware then raises:
+#
+#     RuntimeError("No response returned.")
+#
+# This is a benign race — the client is already gone, so there is nothing
+# to send a response to. But Starlette surfaces it as an unhandled
+# exception, which pollutes the error log and (on some platforms) trips
+# alerts. We wrap every `call_next` site through this helper, which
+# downgrades the race to a single INFO line and returns a sentinel 499
+# Response. The sentinel is never delivered (no client to deliver it to)
+# but lets each middleware's bookkeeping (`response.headers`, status_code
+# recording, finally blocks) execute without secondary exceptions.
+#
+# Real handler errors (anything other than this exact RuntimeError text)
+# continue to propagate untouched.
+async def _safe_call_next(call_next, request: StarletteRequest):
+    from starlette.responses import Response
+    try:
+        return await call_next(request)
+    except RuntimeError as exc:
+        if str(exc) == "No response returned.":
+            rid = getattr(request.state, "request_id", "") or "-"
+            logger.info(
+                f"[client-disconnect] {request.method} {request.url.path} "
+                f"rid={rid} (BaseHTTPMiddleware race; client closed connection)"
+            )
+            return Response(status_code=499)
+        raise
+
 def _env_bool(key: str, default: bool = True) -> bool:
     val = os.environ.get(key, "").strip().lower()
     if not val:
@@ -259,7 +295,7 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: StarletteRequest, call_next):
         path = request.url.path
         if not path.startswith("/api/"):
-            return await call_next(request)
+            return await _safe_call_next(call_next, request)
 
         rid = uuid.uuid4().hex[:12]
         request_id_var.set(rid)
@@ -289,7 +325,7 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
         if exempt:
             _metrics.inc_active()
             try:
-                response = await call_next(request)
+                response = await _safe_call_next(call_next, request)
                 _metrics.record_request(path, response.status_code)
                 response.headers["X-Request-Id"] = rid
                 return response
@@ -377,7 +413,7 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
 
         _metrics.inc_active()
         try:
-            response = await call_next(request)
+            response = await _safe_call_next(call_next, request)
             _metrics.record_request(path, response.status_code, user_id)
             response.headers["X-Request-Id"] = rid
             if is_legit_bot and any(path.startswith(p) for p in _BOT_OPEN_PREFIXES):
@@ -435,7 +471,7 @@ class ServerSideTrackingMiddleware(BaseHTTPMiddleware):
             any(path.startswith(p) for p in _SKIP_TRACKING_PREFIXES)
             or _STATIC_ASSET_RE.search(path)
         ):
-            return await call_next(request)
+            return await _safe_call_next(call_next, request)
 
         ua = request.headers.get("user-agent", "")
         bot_match = _SERVER_BOT_RE.search(ua) if ua else None
@@ -450,7 +486,7 @@ class ServerSideTrackingMiddleware(BaseHTTPMiddleware):
         ip_hash_stable = _hash_ip_stable(client_ip)
         cf_country = request.headers.get("cf-ipcountry", "")
 
-        response = await call_next(request)
+        response = await _safe_call_next(call_next, request)
 
         import asyncio
         async def _bg_track():
