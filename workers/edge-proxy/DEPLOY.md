@@ -87,7 +87,7 @@ can stage a rename without downtime:
 | Role             | Resolution chain (first-match wins)                                                          |
 | ---------------- | -------------------------------------------------------------------------------------------- |
 | Runtime          | `CLOUDFLARE_ANALYTICS_TOKEN` → `CLOUDFLARE_API_TOKEN` (logged warning)                       |
-| Analytics reads  | `CLOUDFLARE_ANALYTICS_TOKEN` → `CF_ANALYTICS_API_TOKEN` → `CF_PAGES_API_TOKEN` → `CF_API_TOKEN` → `CLOUDFLARE_API_TOKEN` |
+| Analytics reads  | `CLOUDFLARE_ANALYTICS_TOKEN` → `CLOUDFLARE_API_TOKEN` (one-shot WARNING) — Pages/legacy CF_* names are intentionally REJECTED at runtime |
 | Pages CI         | `CLOUDFLARE_PAGES_TOKEN` → `CF_PAGES_API_TOKEN`                                              |
 
 To migrate a deployment fully to the spec names, set
