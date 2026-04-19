@@ -1,6 +1,15 @@
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
+# Files outside these globs do NOT trigger a redeploy. Keep this list in
+# sync with everything the FastAPI image actually depends on. The
+# dashboard "Watch Paths" must mirror these (or be left empty so Railway
+# falls back to this list).
+watchPatterns = [
+    "artifacts/syrabit-backend/**",
+    "artifacts/syrabit-backend/Dockerfile",
+    "artifacts/syrabit-backend/requirements.txt",
+]
 
 [deploy]
 startCommand = "gunicorn server:app -c gunicorn.conf.py"
