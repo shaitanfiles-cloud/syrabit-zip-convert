@@ -1,9 +1,10 @@
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile"
+dockerfilePath = "artifacts/syrabit-backend/Dockerfile"
 
 [deploy]
 startCommand = "gunicorn server:app -c gunicorn.conf.py"
+preDeployCommand = "python scripts/verify_vectorize_token.py --predeploy"
 healthcheckPath = "/api/health"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
