@@ -166,6 +166,16 @@ import time as _time
 
 _CF_ACCOUNT_ID = os.environ.get('CF_AI_GATEWAY_ACCOUNT_ID', '').strip()
 _CF_GATEWAY_ID = os.environ.get('CF_AI_GATEWAY_ID', '').strip()
+# Authenticated Gateway token (Cloudflare dashboard → AI Gateway →
+# <gateway> → Settings → Authenticated Gateway). When the gateway has
+# auth turned on, every request must carry
+#   cf-aig-authorization: Bearer <token>
+# or Cloudflare returns HTTP 401 with `{code: 2009, message: Unauthorized}`
+# — which is exactly the error we kept seeing in production logs every
+# few minutes (one wasted round trip per request before the direct-URL
+# fallback kicks in for 5 min). Leaving this env var unset disables the
+# header (gateway must then have auth turned OFF in the dashboard).
+CF_AI_GATEWAY_TOKEN = os.environ.get('CF_AI_GATEWAY_TOKEN', '').strip()
 CF_GATEWAY_ENABLED = bool(_CF_ACCOUNT_ID and _CF_GATEWAY_ID)
 CF_GATEWAY_BASE = (
     f"https://gateway.ai.cloudflare.com/v1/{_CF_ACCOUNT_ID}/{_CF_GATEWAY_ID}"

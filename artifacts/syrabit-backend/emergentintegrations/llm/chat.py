@@ -101,9 +101,20 @@ class LlmChat:
                 yield token
 
     def _cf_cache_headers(self) -> dict | None:
-        if is_cf_gateway_up():
-            return {"cf-aig-cache-ttl": str(CF_CACHE_TTL)}
-        return None
+        # Mirror llm._cf_cache_headers — also send the
+        # cf-aig-authorization bearer when CF_AI_GATEWAY_TOKEN is set,
+        # otherwise an authenticated CF gateway returns 401 on every
+        # streaming call and we waste a round trip per token batch.
+        if not is_cf_gateway_up():
+            return None
+        headers = {"cf-aig-cache-ttl": str(CF_CACHE_TTL)}
+        try:
+            from config import CF_AI_GATEWAY_TOKEN as _tok
+        except Exception:
+            _tok = ""
+        if _tok:
+            headers["cf-aig-authorization"] = f"Bearer {_tok}"
+        return headers
 
     @staticmethod
     def _is_cf_conn_err(exc: Exception) -> bool:

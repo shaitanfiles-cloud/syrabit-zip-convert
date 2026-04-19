@@ -550,9 +550,21 @@ async def _call_sarvam_llm(messages: list, api_key: str, model: str, max_tokens:
     return result
 
 def _cf_cache_headers() -> dict:
-    if is_cf_gateway_up():
-        return {"cf-aig-cache-ttl": str(CF_CACHE_TTL)}
-    return {}
+    # When the AI Gateway is up we always send the cache-ttl hint.
+    # Additionally, if the gateway has Authenticated-Gateway mode
+    # turned on (CF dashboard → AI Gateway → <gw> → Settings) we must
+    # send the bearer token, otherwise CF returns 401 (code 2009) and
+    # we waste a round trip on every LLM call before the direct-URL
+    # fallback kicks in. Token comes from the CF_AI_GATEWAY_TOKEN env
+    # var; absent → header is omitted, which is the correct behaviour
+    # for unauthenticated gateways.
+    if not is_cf_gateway_up():
+        return {}
+    headers = {"cf-aig-cache-ttl": str(CF_CACHE_TTL)}
+    from config import CF_AI_GATEWAY_TOKEN as _tok
+    if _tok:
+        headers["cf-aig-authorization"] = f"Bearer {_tok}"
+    return headers
 
 def _is_cf_connection_error(exc: Exception) -> bool:
     err = str(exc).lower()
