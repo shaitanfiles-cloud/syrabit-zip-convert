@@ -18,6 +18,7 @@ import StickyToc from '@/components/ui/StickyToc';
 import { learnArticleSchema } from '@/lib/jsonld';
 import ContinueLearning from '@/components/content/ContinueLearning';
 import AdSlot from '@/components/ads/AdSlot';
+import useQuge5Multitag from '@/components/ads/useQuge5Multitag';
 
 function buildToc(headingsJson) {
   try {
@@ -49,6 +50,7 @@ function injectHeadingIds(html) {
 }
 
 export default function LearnPage() {
+  useQuge5Multitag();
   const { slug } = useParams();
   const navigate = useNavigate();
   const [doc, setDoc]             = useState(null);

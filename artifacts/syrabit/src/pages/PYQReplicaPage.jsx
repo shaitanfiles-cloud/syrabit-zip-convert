@@ -5,6 +5,7 @@ import { useShare } from '../hooks/useShare';
 import PageMeta from '@/components/seo/PageMeta';
 import ContinueLearning from '@/components/content/ContinueLearning';
 import AdSlot from '@/components/ads/AdSlot';
+import useQuge5Multitag from '@/components/ads/useQuge5Multitag';
 import { MobileNavSwitch } from '@/components/layout/MobileNavSwitch';
 import { useLibraryBundle } from '@/hooks/useContent';
 
@@ -52,6 +53,7 @@ function deriveMetaFromSlug(slug, title, description) {
 }
 
 export default function PYQReplicaPage() {
+  useQuge5Multitag();
   const { slug } = useParams();
   const navigate = useNavigate();
   const [html, setHtml]         = useState('');
