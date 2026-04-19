@@ -82,6 +82,12 @@ export default function ChatPage() {
   const modelMenuRef      = useRef(null);
   const scrollTimeoutRef  = useRef(null);
   const pendingSendScroll = useRef(false);
+  // Conversation IDs created locally during this session — we already
+  // have their messages in state, so the URL→DB loader effect must
+  // skip them (otherwise it overwrites the in-flight streaming AI
+  // message with the not-yet-persisted DB snapshot, leaving the chat
+  // visually empty until refresh).
+  const ownedConvIds = useRef(new Set());
 
   useEffect(() => {
     return () => { if (abortControllerRef.current) abortControllerRef.current.abort(); };
@@ -132,6 +138,10 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (!convId) return;
+    // Skip server reload for conversations we just created locally —
+    // their messages are already in state and the DB copy may be
+    // missing the in-flight assistant message.
+    if (ownedConvIds.current.has(convId)) return;
     setSyncState('syncing');
     const fetcher = user ? getConversation(convId) : getAnonConversation(convId);
     fetcher
@@ -369,6 +379,7 @@ export default function ChatPage() {
       if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
       if (pendingChunk) { fullContent += pendingChunk; pendingChunk = ''; }
       if (meta.convId && meta.convId !== conversationId) {
+        ownedConvIds.current.add(meta.convId);
         setConversationId(meta.convId);
         setSearchParams((prev) => { const next = new URLSearchParams(prev); next.set('id', meta.convId); return next; }, { replace: true });
       } else { setConversationId(meta.convId); }
