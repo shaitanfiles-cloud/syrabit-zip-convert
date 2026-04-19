@@ -111,11 +111,21 @@ function rollDayIfNeeded(): void {
   }
 }
 
-/* ───── per-isolate identity for cross-isolate counter aggregation ───── */
-const _isolateId: string =
-  (typeof crypto !== "undefined" && (crypto as Crypto).randomUUID)
-    ? (crypto as Crypto).randomUUID()
-    : Math.random().toString(36).slice(2) + Date.now().toString(36);
+/* ───── per-isolate identity for cross-isolate counter aggregation ─────
+ * Lazy-initialized: Cloudflare's Workers validator now rejects async I/O,
+ * setTimeout, AND random-value generation in module global scope (error
+ * code 10021). `crypto.randomUUID()`, `Math.random()`, and `Date.now()`
+ * all qualify, so we defer the call to first request inside `_getIsolateId()`.
+ */
+let _isolateIdCache: string | null = null;
+function _getIsolateId(): string {
+  if (_isolateIdCache !== null) return _isolateIdCache;
+  _isolateIdCache =
+    (typeof crypto !== "undefined" && (crypto as Crypto).randomUUID)
+      ? (crypto as Crypto).randomUUID()
+      : Math.random().toString(36).slice(2) + Date.now().toString(36);
+  return _isolateIdCache;
+}
 const SHARED_COUNTER_PREFIX = "__kv_usage:";
 const FLUSH_EVERY_OPS = 10;
 const _opsSinceFlush: Map<string, number> = new Map();
@@ -271,7 +281,7 @@ export async function getUsageSnapshotAggregated(
 async function flushSharedCounter(binding: string, kv: KVNamespace): Promise<void> {
   rollDayIfNeeded();
   const s = getBindingState(binding);
-  const key = `${SHARED_COUNTER_PREFIX}${binding}:${_currentDay}:${_isolateId}`;
+  const key = `${SHARED_COUNTER_PREFIX}${binding}:${_currentDay}:${_getIsolateId()}`;
   try {
     await kv.put(key, JSON.stringify(s.counters), { expirationTtl: 60 * 60 * 48 });
   } catch { /* shared-store write best-effort */ }
