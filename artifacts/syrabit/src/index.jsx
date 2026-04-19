@@ -130,7 +130,18 @@ if (hasPrerender) {
       reportPreloadFailure(err);
     })
     .then(() => {
-      ReactDOM.hydrateRoot(rootEl, tree);
+      ReactDOM.hydrateRoot(rootEl, tree, {
+        onRecoverableError: (error, info) => {
+          try {
+            window.__HYDRATE_REC__ = window.__HYDRATE_REC__ || [];
+            window.__HYDRATE_REC__.push({
+              message: String((error && error.message) || error),
+              stack: String((error && error.stack) || '').slice(0, 4000),
+              componentStack: String((info && info.componentStack) || '').slice(0, 4000),
+            });
+          } catch {}
+        },
+      });
       if (typeof window !== "undefined") {
         window.__SYRABIT_HYDRATED__ = true;
         // If this hydration is the result of a Task #407 auto-reload,

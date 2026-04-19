@@ -1,13 +1,13 @@
 import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
+import MarkdownRenderer from '@/components/MarkdownRenderer';
 import {
   BookOpen, ArrowLeft, ChevronRight, Home, Share2, RefreshCw,
   Clock, Hash, Sparkles, FileText, HelpCircle, ChevronDown,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-const MarkdownRenderer = lazy(() => import('@/components/MarkdownRenderer'));
 import { apiClient, seoRelatedByChapter } from '@/utils/api';
 import { useShare, SerpPreviewModal } from '@/hooks/useShare';
 import Analytics from '@/utils/analytics';

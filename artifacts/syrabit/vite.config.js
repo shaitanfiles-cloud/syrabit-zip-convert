@@ -642,7 +642,7 @@ export default defineConfig(({ mode }) => ({
           if (has('recharts') || hasScope('victory') || /\/node_modules\/d3-[^/]+\//.test(id) || id.includes('/node_modules/d3/')) return 'charts';
           if (
             has('react-markdown') ||
-            /\/node_modules\/(remark|rehype|micromark|mdast-util|unist-util|hast-util)-[^/]+\//.test(id) ||
+            /\/node_modules\/(remark|rehype|micromark|mdast-util|unist-util|hast-util)(-[^/]+)?\//.test(id) ||
             has('unified') || has('vfile') || has('devlop') || has('bail') ||
             has('trough') || has('character-entities') || has('character-entities-html4') ||
             has('character-entities-legacy') || has('character-reference-invalid') ||

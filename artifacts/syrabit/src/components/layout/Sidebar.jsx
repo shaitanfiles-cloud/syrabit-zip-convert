@@ -18,13 +18,23 @@ export const Sidebar = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, logout } = useAuth();
-  const [collapsed, setCollapsed] = useState(
-    () => localStorage.getItem('syrabit:sidebar-collapsed') === 'true'
-  );
+  // Always start uncollapsed so SSR and the client first render match.
+  // After mount, hydrate from localStorage. Avoids React error #418.
+  const [collapsed, setCollapsed] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    localStorage.setItem('syrabit:sidebar-collapsed', String(collapsed));
-  }, [collapsed]);
+    try {
+      const v = localStorage.getItem('syrabit:sidebar-collapsed') === 'true';
+      if (v) setCollapsed(true);
+    } catch {}
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    try { localStorage.setItem('syrabit:sidebar-collapsed', String(collapsed)); } catch {}
+  }, [collapsed, hydrated]);
 
   const handleLogout = () => { logout(); navigate('/login'); };
   const isActive = (path) =>

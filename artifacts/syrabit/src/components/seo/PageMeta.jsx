@@ -1,17 +1,90 @@
-// React 19 natively hoists <title>, <meta>, <link>, and
-// <script type="application/ld+json"> to <head> from anywhere in the tree
-// AND keeps SSR/client output identical so hydration matches. We previously
-// used react-helmet-async, but on React 19 it emitted these tags inline in
-// the SSR body while emitting nothing on the client first render —
-// triggering React error #418 (hydration mismatch) on every prerendered
-// page. Render the tags directly; React handles hoisting + dedupe.
+// PageMeta — manages <head> tags via useEffect, renders nothing.
+//
+// Why: React 19's "native" <title>/<meta>/<link> hoisting renders the tags
+// inline in body during SSR but hoists them away (or never emits them in
+// body) on the client first render. That difference triggers React error
+// #418 hydration mismatch on every prerendered page. The same problem
+// existed earlier with react-helmet-async.
+//
+// For prerendered routes, scripts/prerender-routes.mjs already injects
+// <title>, <meta name="description">, <link rel="canonical">, og:*,
+// twitter:*, and hreflang alternates into <head>. So this component only
+// needs to:
+//   - keep <head> in sync during SPA navigation (route changes after
+//     hydration), where the prerender pipeline is not in play
+//   - inject JSON-LD <script> tags (also under data-pm cleanup)
+//
+// By returning null, SSR body and client first-render body are identical
+// (both empty for this component) → no hydration mismatch.
+import { useEffect } from "react";
 import { buildSchemaForPageType, dedupeGraphTypes } from "@/lib/jsonld";
+
+const SITE_NAME = "Syrabit.ai";
+const ABS_DEFAULT_IMG = "https://syrabit.ai/opengraph.jpg";
+const MARKER_ATTR = "data-pm";
+
+function setMetaByName(name, content) {
+  if (content == null || content === "") return;
+  let el = document.head.querySelector(`meta[name="${name}"]`);
+  if (!el) {
+    el = document.createElement("meta");
+    el.setAttribute("name", name);
+    el.setAttribute(MARKER_ATTR, "1");
+    document.head.appendChild(el);
+  }
+  el.setAttribute("content", String(content));
+}
+
+function setMetaByProperty(property, content) {
+  if (content == null || content === "") return;
+  let el = document.head.querySelector(`meta[property="${property}"]`);
+  if (!el) {
+    el = document.createElement("meta");
+    el.setAttribute("property", property);
+    el.setAttribute(MARKER_ATTR, "1");
+    document.head.appendChild(el);
+  }
+  el.setAttribute("content", String(content));
+}
+
+function setLink(rel, href, extraAttrs = {}) {
+  if (!href) return;
+  // For rel="alternate" with hreflang, multiple links are valid; key by hreflang.
+  const hreflang = extraAttrs.hreflang;
+  const selector = hreflang
+    ? `link[rel="${rel}"][hreflang="${hreflang}"]`
+    : `link[rel="${rel}"]`;
+  let el = document.head.querySelector(selector);
+  if (!el) {
+    el = document.createElement("link");
+    el.setAttribute("rel", rel);
+    el.setAttribute(MARKER_ATTR, "1");
+    document.head.appendChild(el);
+  }
+  el.setAttribute("href", href);
+  for (const [k, v] of Object.entries(extraAttrs)) el.setAttribute(k, v);
+}
+
+function syncJsonLd(blocks) {
+  // Remove our previously-managed JSON-LD blocks, then re-add. Keeps any
+  // JSON-LD injected by the prerender pipeline (no data-pm attr) intact.
+  document.head
+    .querySelectorAll(`script[type="application/ld+json"][${MARKER_ATTR}]`)
+    .forEach((el) => el.remove());
+  for (const block of blocks) {
+    const s = document.createElement("script");
+    s.type = "application/ld+json";
+    s.setAttribute(MARKER_ATTR, "1");
+    s.textContent = JSON.stringify(block);
+    document.head.appendChild(s);
+  }
+}
 
 export default function PageMeta({
   title,
   description,
   url,
-  image = "https://syrabit.ai/opengraph.jpg",
+  image = ABS_DEFAULT_IMG,
   keywords,
   type = "website",
   section,
@@ -23,87 +96,97 @@ export default function PageMeta({
   pageData,
   hasAssamese = false,
 }) {
-  const siteName = "Syrabit.ai";
-  const absImage = image.startsWith("http") ? image : `https://syrabit.ai${image}`;
+  useEffect(() => {
+    if (typeof document === "undefined") return;
 
-  // Per-page-type JSON-LD (Phase D, Plan 9). When a `pageType` is supplied,
-  // build the canonical schema graph for that page type and merge it with any
-  // page-supplied `jsonLd` so legacy callers keep working.
-  const externalLd = jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : [];
-  const rawTyped = pageType ? buildSchemaForPageType(pageType, { url, ...(pageData || {}) }) : null;
-  // Deduplicate schema.org @types so the same type (e.g. FAQPage) is never
-  // emitted twice when a caller supplies its own jsonLd alongside the
-  // per-page-type builder output. BreadcrumbList / WebPage are always kept.
-  const typedSchema = rawTyped ? dedupeGraphTypes(rawTyped, externalLd) : null;
-  const allLd = [
-    ...(typedSchema && Array.isArray(typedSchema['@graph']) && typedSchema['@graph'].length ? [typedSchema] : []),
-    ...externalLd,
-  ];
+    const finalTitle = title ? `${title} | ${SITE_NAME}` : SITE_NAME;
+    const absImage = image && image.startsWith("http")
+      ? image
+      : `https://syrabit.ai${image || ""}`;
 
-  // Phase E (Plan 7): bilingual hreflang alternates. When an Assamese variant
-  // exists for this URL, emit en/as/x-default link tags so Google indexes both
-  // language versions instead of treating the AS page as a duplicate. The AS
-  // variant is the same URL with `?lang=as` (i18n routing convention is a
-  // client-side query param, not a path prefix).
-  const asUrl = url ? (url.includes("?") ? `${url}&lang=as` : `${url}?lang=as`) : null;
+    document.title = finalTitle;
 
-  // Mirror react-helmet-async titleTemplate behavior locally so existing
-  // callers that pass a bare `title` continue to get the "%s | Syrabit.ai"
-  // suffix in <title>.
-  const finalTitle = title ? `${title} | ${siteName}` : siteName;
+    setMetaByName("description", description);
+    if (keywords) setMetaByName("keywords", keywords);
 
-  return (
-    <>
-      <title>{finalTitle}</title>
-      <meta name="description" content={description} />
-      {keywords && <meta name="keywords" content={keywords} />}
+    setLink("canonical", url);
 
-      <link rel="canonical" href={url} />
+    setMetaByProperty("og:site_name", SITE_NAME);
+    setMetaByProperty("og:locale", "en_IN");
+    setMetaByProperty("og:title", title);
+    setMetaByProperty("og:description", description);
+    setMetaByProperty("og:type", type);
+    setMetaByProperty("og:url", url);
+    setMetaByProperty("og:image", absImage);
+    setMetaByProperty("og:image:width", "1200");
+    setMetaByProperty("og:image:height", "630");
 
-      {/* OpenGraph */}
-      <meta property="og:site_name" content={siteName} />
-      <meta property="og:locale" content="en_IN" />
-      <meta property="og:title" content={title} />
-      <meta property="og:description" content={description} />
-      <meta property="og:type" content={type} />
-      <meta property="og:url" content={url} />
-      <meta property="og:image" content={absImage} />
-      <meta property="og:image:width" content="1200" />
-      <meta property="og:image:height" content="630" />
-      {type === "article" && section && <meta property="article:section" content={section} />}
-      {type === "article" && tags && tags.map((tag) => (
-        <meta key={tag} property="article:tag" content={tag} />
-      ))}
-      {type === "article" && publishedTime && <meta property="article:published_time" content={publishedTime} />}
-      {type === "article" && modifiedTime && <meta property="article:modified_time" content={modifiedTime} />}
+    if (type === "article") {
+      if (section) setMetaByProperty("article:section", section);
+      if (publishedTime) setMetaByProperty("article:published_time", publishedTime);
+      if (modifiedTime) setMetaByProperty("article:modified_time", modifiedTime);
+      // article:tag — multi-valued. Remove old managed ones then re-add.
+      document.head
+        .querySelectorAll(`meta[property="article:tag"][${MARKER_ATTR}]`)
+        .forEach((el) => el.remove());
+      if (Array.isArray(tags)) {
+        for (const t of tags) {
+          const m = document.createElement("meta");
+          m.setAttribute("property", "article:tag");
+          m.setAttribute("content", String(t));
+          m.setAttribute(MARKER_ATTR, "1");
+          document.head.appendChild(m);
+        }
+      }
+    }
 
-      {/* Twitter */}
-      <meta name="twitter:card" content="summary_large_image" />
-      <meta name="twitter:site" content="@SyrabitAI" />
-      <meta name="twitter:title" content={title} />
-      <meta name="twitter:description" content={description} />
-      <meta name="twitter:image" content={absImage} />
+    setMetaByName("twitter:card", "summary_large_image");
+    setMetaByName("twitter:site", "@SyrabitAI");
+    setMetaByName("twitter:title", title);
+    setMetaByName("twitter:description", description);
+    setMetaByName("twitter:image", absImage);
 
-      {/* GEO targeting */}
-      <meta name="geo.region" content="IN-AS" />
-      <meta name="geo.placename" content="Assam, India" />
-      <meta name="geo.position" content="26.2006;92.9376" />
-      <meta name="ICBM" content="26.2006, 92.9376" />
-      <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
-      <meta httpEquiv="content-language" content="en-IN" />
-      {hasAssamese && asUrl ? (
-        <link rel="alternate" hrefLang="en" href={url} />
-      ) : (
-        <link rel="alternate" hrefLang="en-IN" href={url} />
-      )}
-      {hasAssamese && asUrl && <link rel="alternate" hrefLang="as" href={asUrl} />}
-      {hasAssamese && asUrl && <link rel="alternate" hrefLang="x-default" href={url} />}
+    setMetaByName("geo.region", "IN-AS");
+    setMetaByName("geo.placename", "Assam, India");
+    setMetaByName("geo.position", "26.2006;92.9376");
+    setMetaByName("ICBM", "26.2006, 92.9376");
+    setMetaByName(
+      "robots",
+      "index, follow, max-snippet:-1, max-image-preview:large",
+    );
 
-      {allLd.map((ld, i) => (
-        <script key={i} type="application/ld+json">
-          {JSON.stringify(ld)}
-        </script>
-      ))}
-    </>
-  );
+    // hreflang alternates
+    if (hasAssamese && url) {
+      const asUrl = url.includes("?") ? `${url}&lang=as` : `${url}?lang=as`;
+      setLink("alternate", url, { hreflang: "en" });
+      setLink("alternate", asUrl, { hreflang: "as" });
+      setLink("alternate", url, { hreflang: "x-default" });
+    } else if (url) {
+      setLink("alternate", url, { hreflang: "en-IN" });
+    }
+
+    // JSON-LD blocks
+    const externalLd = jsonLd
+      ? Array.isArray(jsonLd) ? jsonLd : [jsonLd]
+      : [];
+    const rawTyped = pageType
+      ? buildSchemaForPageType(pageType, { url, ...(pageData || {}) })
+      : null;
+    const typedSchema = rawTyped ? dedupeGraphTypes(rawTyped, externalLd) : null;
+    const allLd = [
+      ...(typedSchema && Array.isArray(typedSchema["@graph"]) && typedSchema["@graph"].length
+        ? [typedSchema]
+        : []),
+      ...externalLd,
+    ];
+    syncJsonLd(allLd);
+  }, [
+    title, description, url, image, keywords, type, section,
+    publishedTime, modifiedTime, hasAssamese, pageType,
+    // intentionally leaving tags/jsonLd/pageData out of deps to avoid
+    // triggering on referentially-new arrays/objects each render; the
+    // string-y deps capture the meaningful changes.
+  ]);
+
+  return null;
 }

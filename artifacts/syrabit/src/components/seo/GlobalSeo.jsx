@@ -1,4 +1,4 @@
-import { Helmet } from 'react-helmet-async';
+import { useEffect } from 'react';
 import { globalSiteSchema } from '@/lib/jsonld';
 
 /**
@@ -9,12 +9,26 @@ import { globalSiteSchema } from '@/lib/jsonld';
  * a `pageType` to PageMeta. Per-page PageMeta blocks add more specific
  * graphs on top; nothing here gets duplicated because each node uses
  * a stable `@id`.
+ *
+ * Renders nothing into the React tree — injects directly into
+ * document.head via useEffect. Returning real <script> tags from a
+ * component triggers React 19 hydration mismatch (#418) on every
+ * prerendered page; managing the head DOM imperatively avoids that.
  */
 export default function GlobalSeo() {
-  const schema = globalSiteSchema('https://syrabit.ai/');
-  return (
-    <Helmet>
-      <script type="application/ld+json">{JSON.stringify(schema)}</script>
-    </Helmet>
-  );
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const schema = globalSiteSchema('https://syrabit.ai/');
+    // De-dupe across re-renders / route changes via a stable marker attr.
+    document.head
+      .querySelectorAll('script[type="application/ld+json"][data-globalseo]')
+      .forEach((el) => el.remove());
+    const s = document.createElement('script');
+    s.type = 'application/ld+json';
+    s.setAttribute('data-globalseo', '1');
+    s.textContent = JSON.stringify(schema);
+    document.head.appendChild(s);
+  }, []);
+
+  return null;
 }

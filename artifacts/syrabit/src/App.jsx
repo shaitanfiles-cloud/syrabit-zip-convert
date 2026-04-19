@@ -340,26 +340,29 @@ export function AppRoutes() {
 // (wrapped with StaticRouter) so the prerendered DOM matches React's
 // first client render. (Task #382)
 export function AppShell({ children, ssr = false, helmetContext }) {
-  // In SSR (renderToString), any unresolved lazy() child triggers a
-  // Suspense abort and pollutes the prerendered HTML with React's
-  // "Switched to client rendering" templates, breaking hydration. We
-  // therefore omit the four lazy presentational/effects components on
-  // the server. They emit no DOM until their chunks load on the
-  // client, so the hydrated DOM matches: client first render also
-  // emits nothing for them (Suspense fallback={null}). Once their
-  // chunks resolve client-side, they mount normally. (Task #382)
+  // The four lazy presentational/effects components below are gated on a
+  // post-hydration `mounted` flag — NOT on `ssr` — so the FIRST render
+  // tree is identical on the server and on the client. Gating on `ssr`
+  // alone created a structural fiber-tree mismatch (server: null,
+  // client first render: <Suspense><Lazy /></Suspense>) which React 18
+  // hydration reports as error #418 even though both branches emit no
+  // DOM. After `useEffect` runs, `mounted` flips true and the deferred
+  // Suspense subtrees mount client-only. (Tasks #382, #506)
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+  const showDeferred = mounted && !ssr;
   return (
     <HelmetProvider context={helmetContext}>
-      {ssr ? null : <Suspense fallback={null}><LazyGlobalSeo /></Suspense>}
+      {showDeferred ? <Suspense fallback={null}><LazyGlobalSeo /></Suspense> : null}
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
             <LanguageProvider>
               {children}
-              {ssr ? null : <Suspense fallback={null}><LazyToaster richColors position="top-center" closeButton /></Suspense>}
+              {showDeferred ? <Suspense fallback={null}><LazyToaster richColors position="top-center" closeButton /></Suspense> : null}
             </LanguageProvider>
           </AuthProvider>
-          {ssr ? null : <Suspense fallback={null}><PWAInstallPrompt /></Suspense>}
+          {showDeferred ? <Suspense fallback={null}><PWAInstallPrompt /></Suspense> : null}
         </QueryClientProvider>
       </ErrorBoundary>
     </HelmetProvider>
