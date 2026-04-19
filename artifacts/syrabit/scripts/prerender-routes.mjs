@@ -771,11 +771,22 @@ async function main() {
   );
 }
 
-main().catch((err) => {
-  // Soft-fail: a transient network blip on the build host should not
-  // break the whole deployment. Subject + chapter routes will fall
-  // back to the SPA shell on Cloudflare Pages, exactly as they did
-  // before this script existed. (Task #385 — architect review)
-  console.error("[prerender-routes] non-fatal failure:", err?.stack || err);
-  process.exit(0);
-});
+main()
+  .then(() => {
+    // Force-exit so the orchestrator does not SIGTERM us after the
+    // 5-min budget. Even after main() resolves, Node keeps the event
+    // loop alive due to keep-alive HTTP sockets to the backend (see
+    // Cloudflare Pages build log 2026-04-19: "[prerender-routes] done
+    // in 37s" followed 4 minutes later by "exceeded 300000ms — sending
+    // SIGTERM"). All useful work has already been written to disk by
+    // the time we get here, so a clean exit is safe.
+    process.exit(0);
+  })
+  .catch((err) => {
+    // Soft-fail: a transient network blip on the build host should not
+    // break the whole deployment. Subject + chapter routes will fall
+    // back to the SPA shell on Cloudflare Pages, exactly as they did
+    // before this script existed. (Task #385 — architect review)
+    console.error("[prerender-routes] non-fatal failure:", err?.stack || err);
+    process.exit(0);
+  });

@@ -350,9 +350,18 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err?.stack || err);
-  // Hard fail — the deployed artifact must contain a hydrated
-  // /library snapshot. (Task #382 — architect review)
-  process.exit(1);
-});
+main()
+  .then(() => {
+    // Force-exit so the orchestrator does not SIGTERM us after the
+    // 5-min budget. Without this, keep-alive HTTP sockets to the
+    // backend held the event loop open and the parent killed us
+    // anyway (see Cloudflare Pages build log 2026-04-19:
+    // "prerender-library.mjs exceeded 300000ms — sending SIGTERM").
+    process.exit(0);
+  })
+  .catch((err) => {
+    console.error(err?.stack || err);
+    // Hard fail — the deployed artifact must contain a hydrated
+    // /library snapshot. (Task #382 — architect review)
+    process.exit(1);
+  });
