@@ -185,8 +185,8 @@ CF_CACHE_TTL = int(os.environ.get('CF_AI_GATEWAY_CACHE_TTL', '3600'))
 
 _CF_PROVIDER_SLUGS = {
     "openai":      "openai",
-    "groq":        "groq",
-    "xai":         "grok",
+    "groq":        "groq/openai/v1",
+    "xai":         "grok/v1",
     "gemini":      "google-ai-studio/v1beta/openai",
 }
 
