@@ -202,29 +202,27 @@ _LEGACY_CF_WARNING_EMITTED = False
 def _runtime_cf_token() -> str:
     """Resolve the runtime Cloudflare REST token (Task #534).
 
-    Priority order:
+    Strict role boundary — only two env vars are accepted so a leaked
+    runtime token can never collapse into the deploy or Pages role:
       1. CLOUDFLARE_ANALYTICS_TOKEN  ← Task #534 spec name (preferred)
-      2. CF_ANALYTICS_API_TOKEN      ← legacy
-      3. CF_PAGES_API_TOKEN / CF_API_TOKEN / CLOUDFLARE_API_TOKEN ← legacy
-    Emits a one-shot WARNING when falling back off the spec name so
-    operators can see migration is incomplete (mirrors vectorize_client).
+      2. CLOUDFLARE_API_TOKEN        ← legacy fallback, one-shot WARNING
+
+    CF_PAGES_API_TOKEN / CF_API_TOKEN / CF_ANALYTICS_API_TOKEN are
+    intentionally NOT accepted here — Pages-scoped or undifferentiated
+    legacy names must not be used at runtime.
     """
     global _LEGACY_CF_WARNING_EMITTED
     spec = os.getenv("CLOUDFLARE_ANALYTICS_TOKEN", "").strip()
     if spec:
         return spec
-    legacy = (
-        os.getenv("CF_ANALYTICS_API_TOKEN", "").strip()
-        or os.getenv("CF_PAGES_API_TOKEN", "").strip()
-        or os.getenv("CF_API_TOKEN", "").strip()
-        or os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
-    )
+    legacy = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
     if legacy and not _LEGACY_CF_WARNING_EMITTED:
         _LEGACY_CF_WARNING_EMITTED = True
         print(
-            "[cloudflare_client] WARNING: runtime CF REST is using a legacy "
-            "token env var; set CLOUDFLARE_ANALYTICS_TOKEN to complete the "
-            "Task #534 migration and retire CF_*/CLOUDFLARE_API_TOKEN.",
+            "[cloudflare_client] WARNING: runtime CF REST is using legacy "
+            "CLOUDFLARE_API_TOKEN; set CLOUDFLARE_ANALYTICS_TOKEN (Task "
+            "#534 spec name) to complete the migration and retire the "
+            "deploy-scoped token from runtime use.",
             flush=True,
         )
     return legacy
@@ -788,16 +786,12 @@ _ALL_CONTENT_URLS = list(set(
 
 
 def _purge_cfg():
-    # Task #534: cache-purge is a runtime concern; prefer the spec name
-    # CLOUDFLARE_ANALYTICS_TOKEN. Legacy CF_* names retained as fallback.
+    # Task #534: cache-purge is a runtime concern, so it shares the strict
+    # runtime resolver — only CLOUDFLARE_ANALYTICS_TOKEN with a single
+    # CLOUDFLARE_API_TOKEN fallback. Pages/legacy CF_* names are NOT
+    # accepted at runtime.
     return {
-        "api_token": (
-            os.getenv("CLOUDFLARE_ANALYTICS_TOKEN", "").strip()
-            or os.getenv("CF_ANALYTICS_API_TOKEN", "").strip()
-            or os.getenv("CF_API_TOKEN", "").strip()
-            or os.getenv("CF_PAGES_API_TOKEN", "").strip()
-            or os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
-        ),
+        "api_token": _runtime_cf_token(),
         "zone_id": os.getenv("CF_ZONE_ID", "").strip(),
     }
 
