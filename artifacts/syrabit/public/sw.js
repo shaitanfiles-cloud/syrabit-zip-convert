@@ -41,7 +41,7 @@ try {
 }
 // ─────────────────────────────────────────────────────────────────
 
-const CACHE_VERSION = '11';
+const CACHE_VERSION = '12';
 const STATIC_CACHE = 'syrabit-static-v' + CACHE_VERSION;
 const RUNTIME_CACHE = 'syrabit-runtime-v' + CACHE_VERSION;
 const API_CACHE = 'syrabit-api-v' + CACHE_VERSION;
@@ -105,6 +105,15 @@ self.addEventListener('fetch', (event) => {
       event.respondWith(cacheFirst(request, RUNTIME_CACHE));
       return;
     }
+    return;
+  }
+
+  // Always bypass the SW for /admin* — admin pages must never serve a stale
+  // cached HTML that references chunk hashes from a previous deploy. Letting
+  // the browser hit the network directly guarantees fresh HTML + fresh chunks.
+  // Symptom this prevents: "login succeeds, then bounced back / page doesn't
+  // load" caused by SW returning yesterday's index.html with dead chunk URLs.
+  if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
     return;
   }
 
