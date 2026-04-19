@@ -196,19 +196,43 @@ def _get_cf_client():
     return _cf_http
 
 
+_LEGACY_CF_WARNING_EMITTED = False
+
+
+def _runtime_cf_token() -> str:
+    """Resolve the runtime Cloudflare REST token (Task #534).
+
+    Priority order:
+      1. CLOUDFLARE_ANALYTICS_TOKEN  ← Task #534 spec name (preferred)
+      2. CF_ANALYTICS_API_TOKEN      ← legacy
+      3. CF_PAGES_API_TOKEN / CF_API_TOKEN / CLOUDFLARE_API_TOKEN ← legacy
+    Emits a one-shot WARNING when falling back off the spec name so
+    operators can see migration is incomplete (mirrors vectorize_client).
+    """
+    global _LEGACY_CF_WARNING_EMITTED
+    spec = os.getenv("CLOUDFLARE_ANALYTICS_TOKEN", "").strip()
+    if spec:
+        return spec
+    legacy = (
+        os.getenv("CF_ANALYTICS_API_TOKEN", "").strip()
+        or os.getenv("CF_PAGES_API_TOKEN", "").strip()
+        or os.getenv("CF_API_TOKEN", "").strip()
+        or os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
+    )
+    if legacy and not _LEGACY_CF_WARNING_EMITTED:
+        _LEGACY_CF_WARNING_EMITTED = True
+        print(
+            "[cloudflare_client] WARNING: runtime CF REST is using a legacy "
+            "token env var; set CLOUDFLARE_ANALYTICS_TOKEN to complete the "
+            "Task #534 migration and retire CF_*/CLOUDFLARE_API_TOKEN.",
+            flush=True,
+        )
+    return legacy
+
+
 def _cfg():
-    # Task #534: prefer the spec name CLOUDFLARE_ANALYTICS_TOKEN. Fall back
-    # through legacy CF_* env vars for backwards compatibility. The runtime
-    # CF token is intentionally separated from the deploy token so a leaked
-    # runtime token cannot be used to deploy or destroy infrastructure.
     return {
-        "api_token": (
-            os.getenv("CLOUDFLARE_ANALYTICS_TOKEN", "").strip()
-            or os.getenv("CF_ANALYTICS_API_TOKEN", "").strip()
-            or os.getenv("CF_PAGES_API_TOKEN", "").strip()
-            or os.getenv("CF_API_TOKEN", "").strip()
-            or os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
-        ),
+        "api_token": _runtime_cf_token(),
         "zone_id": os.getenv("CF_ZONE_ID", "").strip(),
     }
 
