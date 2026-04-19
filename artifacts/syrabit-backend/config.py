@@ -102,21 +102,31 @@ _PAGES_TOKEN_ENV_NAMES = (
 )
 
 
-_ANALYTICS_LEGACY_WARNED = False
-_PAGES_LEGACY_WARNED = False
+_ANALYTICS_LEGACY_LOGGED = False
+_PAGES_LEGACY_LOGGED = False
+
+# Fallback names that are documented permanent policy (DEPLOY.md): both
+# `CLOUDFLARE_API_TOKEN` (analytics) and `CF_PAGES_API_TOKEN` (Pages) are
+# accepted forever — they map to the same secret value as the spec name.
+# We log a single one-line INFO that we used the fallback (for operator
+# transparency) instead of a multi-line WARNING that shows up in error
+# log dashboards / Railway alert filters.
+_ANALYTICS_ACCEPTED_FALLBACKS = {'CF_ANALYTICS_API_TOKEN', 'CLOUDFLARE_API_TOKEN'}
+_PAGES_ACCEPTED_FALLBACKS = {'CF_PAGES_API_TOKEN'}
 
 
 def _resolve_cf_analytics_token() -> str:
-    global _ANALYTICS_LEGACY_WARNED
+    global _ANALYTICS_LEGACY_LOGGED
     for _name in _ANALYTICS_TOKEN_ENV_NAMES:
         _val = os.environ.get(_name, '').strip()
         if _val:
-            if _name != _ANALYTICS_TOKEN_ENV_NAMES[0] and not _ANALYTICS_LEGACY_WARNED:
-                _ANALYTICS_LEGACY_WARNED = True
+            if _name != _ANALYTICS_TOKEN_ENV_NAMES[0] and not _ANALYTICS_LEGACY_LOGGED:
+                _ANALYTICS_LEGACY_LOGGED = True
+                # Documented-fallback: INFO. Unknown alias: keep WARNING.
+                level = "INFO" if _name in _ANALYTICS_ACCEPTED_FALLBACKS else "WARNING"
                 print(
-                    f"[config] WARNING: CF analytics token resolved from "
-                    f"legacy env {_name!r}; set CLOUDFLARE_ANALYTICS_TOKEN "
-                    f"(Task #534 spec name) to silence this warning.",
+                    f"[config] {level}: CF analytics token resolved from "
+                    f"{_name!r} (CLOUDFLARE_ANALYTICS_TOKEN preferred but optional).",
                     flush=True,
                 )
             return _val
@@ -124,16 +134,16 @@ def _resolve_cf_analytics_token() -> str:
 
 
 def _resolve_cf_pages_token() -> str:
-    global _PAGES_LEGACY_WARNED
+    global _PAGES_LEGACY_LOGGED
     for _name in _PAGES_TOKEN_ENV_NAMES:
         _val = os.environ.get(_name, '').strip()
         if _val:
-            if _name != _PAGES_TOKEN_ENV_NAMES[0] and not _PAGES_LEGACY_WARNED:
-                _PAGES_LEGACY_WARNED = True
+            if _name != _PAGES_TOKEN_ENV_NAMES[0] and not _PAGES_LEGACY_LOGGED:
+                _PAGES_LEGACY_LOGGED = True
+                level = "INFO" if _name in _PAGES_ACCEPTED_FALLBACKS else "WARNING"
                 print(
-                    f"[config] WARNING: CF Pages token resolved from "
-                    f"legacy env {_name!r}; set CLOUDFLARE_PAGES_TOKEN "
-                    f"(Task #534 spec name) to silence this warning.",
+                    f"[config] {level}: CF Pages token resolved from "
+                    f"{_name!r} (CLOUDFLARE_PAGES_TOKEN preferred but optional).",
                     flush=True,
                 )
             return _val
@@ -292,7 +302,42 @@ REDIS_RATE_WINDOW = 60
 SLOW_QUERY_THRESHOLD_MS = float(os.environ.get("SLOW_QUERY_THRESHOLD_MS", "200"))
 
 # ── Supabase ──────────────────────────────────────────────────────────────────
-SUPABASE_URL         = os.environ.get('SUPABASE_URL', '')
+# `SUPABASE_URL` is the REST API URL (https://<ref>.supabase.co) used by the
+# supabase-py client. If only `SUPABASE_DB_URL` is set (the Postgres DSN),
+# we derive the REST URL from it to avoid forcing operators to set both.
+#
+# DSN format examples we handle:
+#   postgresql://postgres.<ref>:pwd@aws-1-<region>.pooler.supabase.com:5432/postgres
+#   postgresql://postgres:pwd@db.<ref>.supabase.co:5432/postgres
+#
+# The project ref `<ref>` (e.g. `czeznmqogtwecidhpysa`) lives either in the
+# username after `postgres.` (pooler DSN) or in the hostname before
+# `.supabase.co` (direct-connect DSN).
+def _derive_supabase_url_from_dsn(dsn: str) -> str:
+    if not dsn:
+        return ''
+    try:
+        from urllib.parse import urlparse
+        u = urlparse(dsn)
+        # Pooler form: user is `postgres.<ref>`
+        if u.username and '.' in u.username:
+            ref = u.username.split('.', 1)[1]
+            if ref:
+                return f"https://{ref}.supabase.co"
+        # Direct form: host is `db.<ref>.supabase.co`
+        if u.hostname and u.hostname.endswith('.supabase.co'):
+            host_parts = u.hostname.split('.')
+            # ['db', '<ref>', 'supabase', 'co']
+            if len(host_parts) >= 4 and host_parts[0] == 'db':
+                return f"https://{host_parts[1]}.supabase.co"
+    except Exception:
+        pass
+    return ''
+
+SUPABASE_URL         = (
+    os.environ.get('SUPABASE_URL', '').strip()
+    or _derive_supabase_url_from_dsn(os.environ.get('SUPABASE_DB_URL', '').strip())
+)
 SUPABASE_SERVICE_KEY = os.environ.get('SUPABASE_SERVICE_KEY', '') or os.environ.get('SUPABASE_KEY', '')
 SUPABASE_ANON_KEY    = os.environ.get('SUPABASE_ANON_KEY', '') or os.environ.get('SUPABASE_KEY', '')
 
