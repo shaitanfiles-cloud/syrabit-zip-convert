@@ -33,7 +33,7 @@ BASE_PATH = "/"
 [[services]]
 name = "api"
 paths = [ "/api" ]
-localPort = 8000
+localPort = 8080
 
 [services.development]
 run = "cd /home/runner/workspace/artifacts/syrabit-backend && gunicorn server:app -c gunicorn.conf.py"
@@ -43,4 +43,4 @@ build = [ "sh", "-c", "PIP_USER=0 pip3 install --no-cache-dir --target=/home/run
 run = [ "sh", "-c", "cd /home/runner/workspace/artifacts/syrabit-backend && PYTHONPATH=/home/runner/workspace/.python-deps gunicorn server:app -c gunicorn.conf.py" ]
 
 [services.env]
-PORT = "8000"
+PORT = "8080"
