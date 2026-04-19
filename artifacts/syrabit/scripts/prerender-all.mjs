@@ -24,16 +24,35 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STEP_BUDGET_MS = (() => {
   const raw = process.env.PRERENDER_STEP_BUDGET_MS;
   const n = raw ? Number.parseInt(raw, 10) : NaN;
+  // Task #543: bumped default 6m → 8m to accommodate 429 retry-with-
+  // backoff in _prerender-data.mjs without prematurely SIGTERMing
+  // the child. build.mjs allots prerender 8m, which is the matching
+  // outer budget; the inner deadline is ε shorter to surface clean
+  // errors before the outer guard nukes the process.
   return Number.isFinite(n) && n >= 30_000 && n <= 30 * 60_000
     ? n
-    : 6 * 60_000;
+    : 8 * 60_000 - 5_000;
 })();
 
-const SCRIPTS = [
-  "prerender-library.mjs",
-  "prerender-chat.mjs",
-  "prerender-routes.mjs",
-  "prerender-static-routes.mjs",
+// Task #543: concurrency cap. Running all four prerender scripts in
+// parallel was hammering the backend with concurrent subject/chapter
+// fetches, triggering HTTP 429s on api.syrabit.ai (per-tenant rate
+// limit). Lowering the cap to 2 lets the slower content-driven scripts
+// (library + routes) get fair share without competing with each other.
+// Configurable via env so a more permissive backend can opt in.
+const CONCURRENCY = (() => {
+  const raw = process.env.PRERENDER_CONCURRENCY;
+  const n = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(n) && n >= 1 && n <= 8 ? n : 2;
+})();
+
+// Run the two heavy backend-driven scripts in the FIRST batch and the
+// two light scripts in the SECOND. Prevents library + routes (which
+// both fan out to /api/content/resolve-subject + /api/content/chapter-
+// by-slug) from competing with each other for the rate limit.
+const SCRIPT_BATCHES = [
+  ["prerender-library.mjs", "prerender-routes.mjs"],
+  ["prerender-chat.mjs", "prerender-static-routes.mjs"],
 ];
 
 function runStep(scriptName) {
@@ -98,12 +117,24 @@ async function main() {
     );
   }
 
-  const results = await Promise.all(SCRIPTS.map(runStep));
+  // Task #543: run scripts in capped-concurrency batches instead of
+  // one big Promise.all so we don't burst-hit the backend rate limit.
+  // Flatten SCRIPT_BATCHES, then walk it CONCURRENCY-at-a-time.
+  const ordered = SCRIPT_BATCHES.flat();
+  const results = [];
+  for (let i = 0; i < ordered.length; i += CONCURRENCY) {
+    const slice = ordered.slice(i, i + CONCURRENCY);
+    console.log(
+      `[prerender-all] batch ${Math.floor(i / CONCURRENCY) + 1}: ${slice.join(", ")}`,
+    );
+    const batchResults = await Promise.all(slice.map(runStep));
+    results.push(...batchResults);
+  }
 
   const totalElapsed = Math.round((Date.now() - overallStart) / 1000);
   const failed = results.filter((r) => !r.ok);
   console.log(
-    `[prerender-all] done in ${totalElapsed}s — ${results.length - failed.length}/${results.length} steps ok` +
+    `[prerender-all] done in ${totalElapsed}s — ${results.length - failed.length}/${results.length} steps ok (concurrency=${CONCURRENCY})` +
       (failed.length
         ? `, failures: ${failed.map((f) => f.scriptName).join(", ")}`
         : ""),

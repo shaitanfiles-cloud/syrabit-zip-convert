@@ -232,19 +232,78 @@ async function backendSchemaSignal(url) {
   }
 }
 
-async function fetchJson(url, timeoutMs = FETCH_TIMEOUT_MS) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, {
-      signal: ctrl.signal,
-      headers: { Accept: "application/json" },
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
-    return await res.json();
-  } finally {
-    clearTimeout(timer);
+// Task #543: retry-with-backoff for transient HTTP failures, with
+// honour for the Retry-After header on 429s. Configurable via env so
+// CI can tune for known-slow backends without code changes.
+const RETRY_MAX_ATTEMPTS = (() => {
+  const n = Number.parseInt(process.env.PRERENDER_FETCH_RETRIES || "", 10);
+  return Number.isFinite(n) && n >= 1 && n <= 10 ? n : 4;
+})();
+const RETRY_BASE_DELAY_MS = (() => {
+  const n = Number.parseInt(process.env.PRERENDER_FETCH_RETRY_BASE_MS || "", 10);
+  return Number.isFinite(n) && n >= 100 && n <= 30_000 ? n : 750;
+})();
+const RETRY_MAX_DELAY_MS = 30_000;
+
+function parseRetryAfter(value) {
+  if (!value) return null;
+  const n = Number(value);
+  if (Number.isFinite(n) && n >= 0) return Math.min(n * 1000, RETRY_MAX_DELAY_MS);
+  const date = Date.parse(value);
+  if (Number.isFinite(date)) {
+    return Math.min(Math.max(0, date - Date.now()), RETRY_MAX_DELAY_MS);
   }
+  return null;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function fetchJson(url, timeoutMs = FETCH_TIMEOUT_MS) {
+  let lastErr;
+  for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        signal: ctrl.signal,
+        headers: { Accept: "application/json" },
+      });
+      if (res.ok) return await res.json();
+      // Retry only on transient classes: 429 (rate-limited) and 5xx.
+      const transient = res.status === 429 || res.status >= 500;
+      if (!transient || attempt === RETRY_MAX_ATTEMPTS) {
+        throw new Error(`HTTP ${res.status} ${url}`);
+      }
+      const retryAfterMs = parseRetryAfter(res.headers.get("retry-after"));
+      const backoff = Math.min(
+        RETRY_BASE_DELAY_MS * 2 ** (attempt - 1),
+        RETRY_MAX_DELAY_MS,
+      );
+      const jitter = Math.floor(Math.random() * 250);
+      const wait = (retryAfterMs ?? backoff) + jitter;
+      console.warn(
+        `[prerender-data] ${url} HTTP ${res.status} (attempt ${attempt}/${RETRY_MAX_ATTEMPTS}); retrying in ${wait}ms`,
+      );
+      await sleep(wait);
+      lastErr = new Error(`HTTP ${res.status} ${url}`);
+      continue;
+    } catch (err) {
+      lastErr = err;
+      // AbortError / network errors are also retryable.
+      if (attempt === RETRY_MAX_ATTEMPTS) break;
+      const backoff = Math.min(
+        RETRY_BASE_DELAY_MS * 2 ** (attempt - 1),
+        RETRY_MAX_DELAY_MS,
+      );
+      console.warn(
+        `[prerender-data] ${url} ${err?.name || "Error"}: ${err?.message || err} (attempt ${attempt}/${RETRY_MAX_ATTEMPTS}); retrying in ${backoff}ms`,
+      );
+      await sleep(backoff);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr ?? new Error(`fetchJson failed for ${url}`);
 }
 
 // In-memory promise cache so concurrent callers in the same process

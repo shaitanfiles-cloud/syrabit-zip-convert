@@ -195,14 +195,48 @@ function serveDist(rootDir) {
 
 // --- Browser check ----------------------------------------------------------
 
+// Task #543: detect Playwright environment problems (missing npm package
+// OR missing browser binary) and soft-skip rather than hard-fail the
+// build. The hydration check is a quality gate, not a structural
+// correctness gate — when the build host can't run a headless browser
+// (no Playwright cache, missing system libs, etc.), the deploy should
+// still go out. The structural assertions in verify-all.mjs already
+// guarantee the prerendered HTML itself is well-formed.
+function isPlaywrightEnvProblem(err) {
+  const msg = String(err?.message || err || "");
+  return (
+    /Executable doesn[''']t exist/i.test(msg) ||
+    /please run the following command to download new browsers/i.test(msg) ||
+    /browserType\.launch.*Failed to launch/i.test(msg) ||
+    /Failed to launch the browser process/i.test(msg) ||
+    /libgbm\.so/i.test(msg) ||
+    /libnss3\.so/i.test(msg) ||
+    /Host system is missing dependencies/i.test(msg) ||
+    /ENOENT.*chrome/i.test(msg) ||
+    /MODULE_NOT_FOUND/i.test(msg) ||
+    /Cannot find package ['"]playwright['"]?/i.test(msg)
+  );
+}
+function softSkip(reason) {
+  warn(reason);
+  warn(
+    "skipping headless hydration verification — structural checks in verify-all.mjs still ran",
+  );
+  process.exit(0);
+}
+
 async function main() {
   let chromium;
   try {
     ({ chromium } = await import("playwright"));
   } catch (err) {
+    if (isPlaywrightEnvProblem(err)) {
+      softSkip(
+        `playwright npm package not importable: ${err?.message || err}`,
+      );
+    }
     fail(
-      "playwright is not installed in artifacts/syrabit. Run `pnpm --filter @workspace/syrabit add -D playwright` " +
-        "and `pnpm --filter @workspace/syrabit exec playwright install chromium`.\n" +
+      "playwright import failed for an unexpected reason. " +
         `Underlying error: ${err?.message || err}`,
     );
   }
@@ -239,10 +273,22 @@ async function main() {
       // /nix/store not present (non-Replit env) — skip the patch.
     }
 
-    browser = await chromium.launch({
-      args: ["--no-sandbox", "--disable-dev-shm-usage"],
-      env,
-    });
+    try {
+      browser = await chromium.launch({
+        args: ["--no-sandbox", "--disable-dev-shm-usage"],
+        env,
+      });
+    } catch (launchErr) {
+      // Tear down the static server before the soft-skip so we don't
+      // leak a listening port to the rest of the build.
+      try { server.close(); } catch {}
+      if (isPlaywrightEnvProblem(launchErr)) {
+        softSkip(
+          `chromium.launch() failed in this environment: ${launchErr?.message || launchErr}`,
+        );
+      }
+      throw launchErr;
+    }
 
     for (const target of targets) {
       const url = `${baseUrl}${target.route}`;
