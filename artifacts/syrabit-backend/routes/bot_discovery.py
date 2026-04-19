@@ -1380,14 +1380,18 @@ async def diff_sitemap_against_submitted(source: str = "sitemap_diff") -> dict:
     # sitemap endpoint so Googlebot re-fetches the sitemap index sooner
     # than its natural ~24-72h polling cadence. Free, unauthenticated,
     # and failure-tolerant — never raises.
-    summary["google_sitemap_ping"] = "skipped"
-    if to_queue:
-        try:
-            ping_result = await _ping_google_sitemap()
-            summary["google_sitemap_ping"] = ping_result.get("status", "skipped")
-        except Exception as e:
-            logger.debug(f"sitemap diff: google sitemap ping failed: {e}")
-            summary["google_sitemap_ping"] = "error"
+    # Task #560: ping Google's sitemap endpoint on every diff run, not just
+    # when new URLs were queued. Free, idempotent, and rate-limit-safe; the
+    # ping is the cheapest way to nudge Googlebot to re-fetch the sitemap
+    # index sooner than its natural ~24-72h polling cadence so freshly
+    # published pages are picked up daily even when the diff finds no new
+    # additions (e.g. when content changes are only edits to existing URLs).
+    try:
+        ping_result = await _ping_google_sitemap()
+        summary["google_sitemap_ping"] = ping_result.get("status", "skipped")
+    except Exception as e:
+        logger.debug(f"sitemap diff: google sitemap ping failed: {e}")
+        summary["google_sitemap_ping"] = "error"
 
     try:
         if await is_mongo_available():
@@ -3244,6 +3248,66 @@ async def admin_indexnow_push(admin: dict = Depends(get_admin_user)):
         await push_indexnow(urls, source="admin_manual")
 
     return {"status": "ok", "urls_pushed": len(urls)}
+
+
+@router.post("/admin/indexnow/submit-urls")
+async def admin_indexnow_submit_urls(
+    body: dict,
+    admin: dict = Depends(get_admin_user),
+):
+    """Task #560: manually submit a single URL or batch of URLs to IndexNow
+    from the admin "Submit & Monitor" panel. Body shape:
+
+        {"urls": ["https://syrabit.ai/foo", "https://syrabit.ai/bar"]}
+
+    Each URL is validated against the same host/scheme/length rules the
+    nightly backfill uses (`_validate_backfill_url`) so we never ship
+    off-host or malformed entries that would burn Bing's daily quota.
+    Returns a summary the UI can render without an extra round-trip.
+    """
+    raw_urls = body.get("urls") if isinstance(body, dict) else None
+    if not isinstance(raw_urls, list) or not raw_urls:
+        raise HTTPException(
+            status_code=400,
+            detail="Body must include a non-empty 'urls' array",
+        )
+    if len(raw_urls) > 1000:
+        raise HTTPException(
+            status_code=400,
+            detail="Submit at most 1000 URLs per request",
+        )
+
+    valid: List[str] = []
+    skipped: List[dict] = []
+    seen: set = set()
+    for entry in raw_urls:
+        if not isinstance(entry, str):
+            skipped.append({"url": str(entry)[:200], "reason": "not_string"})
+            continue
+        norm = entry.strip()
+        if not norm or norm in seen:
+            if norm in seen:
+                skipped.append({"url": norm, "reason": "duplicate"})
+            continue
+        seen.add(norm)
+        reason = _validate_backfill_url(norm)
+        if reason is not None:
+            skipped.append({"url": norm, "reason": reason})
+            continue
+        valid.append(norm)
+
+    pushed = 0
+    push_results = None
+    if valid:
+        push_results = await push_indexnow(valid, source="admin_submit_urls")
+        pushed = len(valid)
+
+    return {
+        "status": "ok",
+        "submitted": pushed,
+        "skipped": skipped,
+        "endpoint_results": push_results,
+    }
 
 
 @router.post("/admin/indexnow/resubmit-recent")

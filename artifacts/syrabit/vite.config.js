@@ -479,6 +479,22 @@ function ga4Plugin() {
   };
 }
 
+// Task #560: inject Bing Webmaster verification meta tag at build time
+// when VITE_BING_VERIFICATION is provided. Mirrors the GA4 plugin pattern
+// so the placeholder cleanly no-ops when the env var is unset.
+function bingVerificationPlugin() {
+  const raw = (process.env.VITE_BING_VERIFICATION || '').trim();
+  return {
+    name: 'syrabit-bing-verification',
+    transformIndexHtml(html) {
+      if (!raw) return html.replace('<!--BING_VERIFICATION-->', '');
+      const safe = raw.replace(/[<>"']/g, '');
+      const tag = `<meta name="msvalidate.01" content="${safe}" />`;
+      return html.replace('<!--BING_VERIFICATION-->', tag);
+    },
+  };
+}
+
 function backendPreconnectPlugin() {
   const backendUrl = process.env.VITE_BACKEND_URL || '';
   return {
@@ -524,6 +540,7 @@ export default defineConfig(({ mode }) => ({
       include: /\.(js|jsx|ts|tsx)$/,
     }),
     backendPreconnectPlugin(),
+    bingVerificationPlugin(),
     cfAnalyticsPlugin(),
     ga4Plugin(),
     pyqPagePlugin(),

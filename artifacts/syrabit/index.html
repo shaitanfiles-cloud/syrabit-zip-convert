@@ -40,7 +40,13 @@
          Prerendered routes (/library, /chat, /browser, subject + chapter pages)
          have their per-route canonical injected at build time by
          scripts/prerender-*.mjs (rewriteHead). -->
-    <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
+    <!-- Task #560: canonical sitemap is the dynamic backend-generated index;
+         /sitemap.xml is kept as a 301 alias for backwards compatibility. -->
+    <link rel="sitemap" type="application/xml" href="/sitemap-index.xml" />
+    <!-- Bing Webmaster verification — populated at build time when
+         VITE_BING_VERIFICATION is set (Task #560). The placeholder below
+         is rewritten by vite-plugin htmlPlugin (see vite.config.js). -->
+    <!--BING_VERIFICATION-->
     <link rel="alternate" type="application/rss+xml" title="Syrabit.ai — All Content (RSS)" href="/feed.xml" />
     <link rel="alternate" type="application/rss+xml" title="Syrabit.ai — Study Notes (RSS)" href="/feed/notes.xml" />
     <link rel="alternate" type="application/rss+xml" title="Syrabit.ai — MCQs (RSS)" href="/feed/mcqs.xml" />

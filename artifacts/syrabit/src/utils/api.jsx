@@ -683,3 +683,13 @@ export const adminIndexNowBackfillStart = (token) =>
 
 export const adminIndexNowBackfillProgress = (token) =>
   axios.get(`${API_BASE}/admin/indexnow/backfill-progress`, { headers: adminHeaders(token), withCredentials: true });
+
+// Task #560: Submit & Monitor — manual single/batch URL submit + recent log + sitemap ping
+export const adminIndexNowSubmitUrls = (token, urls = []) =>
+  axios.post(`${API_BASE}/admin/indexnow/submit-urls`, { urls }, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminIndexNowHistory = (token, limit = 20) =>
+  axios.get(`${API_BASE}/admin/indexnow/history`, { headers: adminHeaders(token), withCredentials: true, params: { limit } });
+
+export const adminSeoGoogleSitemapPing = (token) =>
+  axios.post(`${API_BASE}/admin/seo/google-sitemap-ping`, {}, { headers: adminHeaders(token), withCredentials: true });

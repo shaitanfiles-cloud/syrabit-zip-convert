@@ -1,9 +1,12 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Loader2, RefreshCw, Map, Sparkles, CheckCircle2, AlertTriangle, Send, Rocket } from 'lucide-react';
+import { Loader2, RefreshCw, Map, Sparkles, CheckCircle2, AlertTriangle, Send, Rocket, Bell, ClipboardList } from 'lucide-react';
 import {
   adminSeoGoogleIndexingStats,
   adminIndexNowBackfillStart,
   adminIndexNowBackfillProgress,
+  adminIndexNowSubmitUrls,
+  adminIndexNowHistory,
+  adminSeoGoogleSitemapPing,
 } from '@/utils/api';
 
 const INDEXING_FIELDS = [
@@ -313,6 +316,206 @@ function IndexNowBackfillCard({ adminToken }) {
   );
 }
 
+// Task #560: Submit & Monitor — manual sitemap ping + URL batch submission
+// + recent submission log. Lets admins push a one-off URL list to IndexNow
+// and verify it actually went out, without waiting for the nightly diff.
+function SubmitMonitorCard({ adminToken }) {
+  const [urlsText, setUrlsText] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [submitResult, setSubmitResult] = useState(null);
+  const [pinging, setPinging] = useState(false);
+  const [pingResult, setPingResult] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const loadHistory = useCallback(async () => {
+    if (!adminToken) return;
+    setHistoryLoading(true);
+    try {
+      const r = await adminIndexNowHistory(adminToken, 20);
+      setHistory(r.data?.pushes || []);
+    } catch (e) {
+      setError(e?.response?.data?.detail || e?.message || 'Failed to load submission history');
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [adminToken]);
+
+  useEffect(() => { loadHistory(); }, [loadHistory]);
+
+  const handleSubmit = async () => {
+    setError(null);
+    setSubmitResult(null);
+    const lines = urlsText
+      .split(/\r?\n/)
+      .map(l => l.trim())
+      .filter(Boolean);
+    if (lines.length === 0) {
+      setError('Enter at least one URL (one per line).');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const r = await adminIndexNowSubmitUrls(adminToken, lines);
+      setSubmitResult(r.data);
+      await loadHistory();
+    } catch (e) {
+      setError(e?.response?.data?.detail || e?.message || 'Submission failed');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handlePing = async () => {
+    setError(null);
+    setPingResult(null);
+    setPinging(true);
+    try {
+      const r = await adminSeoGoogleSitemapPing(adminToken);
+      setPingResult(r.data);
+      await loadHistory();
+    } catch (e) {
+      setError(e?.response?.data?.detail || e?.message || 'Ping failed');
+    } finally {
+      setPinging(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border p-5 space-y-4" style={{ background: '#f9fafb', borderColor: '#e5e7eb' }}>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <p className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
+            <ClipboardList size={14} className="text-violet-500" />
+            Submit &amp; Monitor
+          </p>
+          <p className="text-xs mt-0.5" style={{ color: '#9ca3af' }}>
+            Manually submit one or more URLs to IndexNow (Bing/Yandex), ping Google's sitemap endpoint, and watch recent submission attempts.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={handlePing} disabled={pinging || !adminToken}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-40"
+            style={{ background: '#fff', border: '1px solid #e5e7eb', color: '#4b5563' }}>
+            {pinging ? <Loader2 size={12} className="animate-spin" /> : <Bell size={12} />}
+            Ping Google sitemap
+          </button>
+          <button onClick={loadHistory} disabled={historyLoading || !adminToken}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-40"
+            style={{ background: '#fff', border: '1px solid #e5e7eb', color: '#4b5563' }}>
+            {historyLoading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+            Refresh log
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 p-2.5 rounded-lg" style={{ background: 'rgba(239,68,68,0.06)' }}>
+          <AlertTriangle size={12} className="text-red-400 flex-shrink-0 mt-0.5" />
+          <span className="text-xs" style={{ color: '#dc2626' }}>{error}</span>
+        </div>
+      )}
+
+      {pingResult && (
+        <div className="text-xs px-2.5 py-2 rounded" style={{ background: 'rgba(22,163,74,0.06)', color: '#166534' }}>
+          Google sitemap ping: <span className="font-mono">{pingResult.status || 'sent'}</span>
+          {pingResult.http_status ? ` · HTTP ${pingResult.http_status}` : ''}
+        </div>
+      )}
+
+      <div className="space-y-2">
+        <label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: '#9ca3af' }}>
+          URLs to submit (one per line, max 1000)
+        </label>
+        <textarea
+          value={urlsText}
+          onChange={e => setUrlsText(e.target.value)}
+          rows={5}
+          placeholder="https://syrabit.ai/assamboard/class-12/physics/electric-charges-and-fields"
+          className="w-full px-3 py-2 rounded-lg border text-xs font-mono"
+          style={{ background: '#fff', borderColor: '#e5e7eb', color: '#374151' }}
+        />
+        <div className="flex items-center justify-between">
+          <p className="text-[11px]" style={{ color: '#9ca3af' }}>
+            Only absolute https://syrabit.ai URLs are accepted; off-host or malformed entries are reported as skipped.
+          </p>
+          <button onClick={handleSubmit} disabled={submitting || !adminToken || !urlsText.trim()}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-40"
+            style={{ background: '#7c3aed', color: '#fff' }}>
+            {submitting ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+            {submitting ? 'Submitting…' : 'Submit to IndexNow'}
+          </button>
+        </div>
+      </div>
+
+      {submitResult && (
+        <div className="rounded-lg p-3 text-xs space-y-1.5" style={{ background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.20)' }}>
+          <p className="font-semibold text-gray-900">
+            Submitted <span style={{ color: '#7c3aed' }}>{submitResult.submitted}</span> URL(s)
+            {Array.isArray(submitResult.skipped) && submitResult.skipped.length > 0 && (
+              <> · skipped <span style={{ color: '#dc2626' }}>{submitResult.skipped.length}</span></>
+            )}
+          </p>
+          {submitResult.endpoint_results && (
+            <div className="space-y-0.5">
+              {Object.entries(submitResult.endpoint_results).map(([ep, info]) => (
+                <div key={ep} className="flex items-center justify-between font-mono">
+                  <span style={{ color: '#6b7280' }}>{ep}</span>
+                  <span style={{ color: (info?.status >= 200 && info?.status < 300) ? '#16a34a' : '#dc2626' }}>
+                    {info?.status ?? 'n/a'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {Array.isArray(submitResult.skipped) && submitResult.skipped.length > 0 && (
+            <details className="mt-1">
+              <summary className="cursor-pointer" style={{ color: '#92400e' }}>Show skipped</summary>
+              <div className="mt-1.5 max-h-32 overflow-y-auto space-y-0.5">
+                {submitResult.skipped.slice(0, 50).map((s, i) => (
+                  <div key={i} className="flex items-center justify-between font-mono">
+                    <span className="truncate" style={{ color: '#6b7280' }}>{s.url}</span>
+                    <span className="ml-2 flex-shrink-0" style={{ color: '#92400e' }}>{s.reason}</span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
+
+      <div>
+        <p className="text-[11px] font-bold uppercase tracking-wider mb-1.5" style={{ color: '#9ca3af' }}>
+          Recent submissions ({history.length})
+        </p>
+        {history.length === 0 ? (
+          <p className="text-xs italic py-3 text-center" style={{ color: '#9ca3af' }}>
+            {historyLoading ? 'Loading…' : 'No submissions logged yet.'}
+          </p>
+        ) : (
+          <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
+            {history.map((h, i) => (
+              <div key={i} className="flex items-center justify-between text-xs px-2 py-1.5 rounded font-mono"
+                style={{ background: '#fff', border: '1px solid #e5e7eb' }}>
+                <span className="truncate" style={{ color: '#374151' }}>
+                  {h.source || 'unknown'}
+                </span>
+                <span className="flex items-center gap-3 flex-shrink-0">
+                  <span style={{ color: '#7c3aed' }}>{h.url_count ?? 0} URLs</span>
+                  <span style={{ color: '#9ca3af' }}>
+                    {h.pushed_at ? new Date(h.pushed_at).toLocaleString() : '—'}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function SitemapTab({
   sitemapData, sitemapValidating, handleSitemapValidate,
   refreshingMeta, handleRefreshMeta,
@@ -322,6 +525,7 @@ export default function SitemapTab({
   return (
     <div className="space-y-5">
       <IndexingStatsCard adminToken={adminToken} />
+      <SubmitMonitorCard adminToken={adminToken} />
       <IndexNowBackfillCard adminToken={adminToken} />
 
       <div className="rounded-xl border p-5 space-y-4" style={{ background: '#f9fafb', borderColor: '#e5e7eb' }}>

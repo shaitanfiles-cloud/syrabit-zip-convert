@@ -304,6 +304,62 @@ try {
   warn(`unable to scan dist/assets for hydrateRoot: ${err.message}`);
 }
 
+// ── Task #560: build-time indexability gate ─────────────────────────
+// Every prerendered HTML file that ships in dist/ must carry the three
+// fields Google/Bing need to index a URL: a non-empty <title>, a
+// <meta name="description"> with content, and a <link rel="canonical">.
+// Routes the SPA serves only as the JS shell (e.g. /admin/*, /reset,
+// /history, /profile) are skipped — they're explicitly disallowed in
+// robots.txt so missing SEO meta on them is intentional.
+const INDEXABILITY_SKIP_RE =
+  /^(admin\/|history\/|profile\/|reset\/|cms\/|api\/)/;
+const TITLE_RE = /<title[^>]*>([\s\S]*?)<\/title>/i;
+const DESC_RE =
+  /<meta\s+[^>]*name=["']description["'][^>]*content=["']([^"']*)["'][^>]*>/i;
+const CANONICAL_RE =
+  /<link\s+[^>]*rel=["']canonical["'][^>]*href=["']([^"']*)["'][^>]*>/i;
+
+let indexabilityChecked = 0;
+for (const page of pages) {
+  if (page.rel === "index.html") continue; // root has dynamic SPA-injected meta
+  if (INDEXABILITY_SKIP_RE.test(page.rel)) continue;
+  const route = "/" + page.rel.replace(/\/index\.html$/, "");
+  indexabilityChecked++;
+
+  const titleMatch = page.body.match(TITLE_RE);
+  const titleText = titleMatch ? titleMatch[1].trim() : "";
+  if (!titleText || titleText === "Syrabit.ai") {
+    fail(
+      `${route}: missing or generic <title> (got ${JSON.stringify(titleText)}); ` +
+        `every indexable URL must ship a unique title at build time`,
+    );
+  }
+
+  const descMatch = page.body.match(DESC_RE);
+  const descText = descMatch ? descMatch[1].trim() : "";
+  if (!descText) {
+    fail(`${route}: missing or empty <meta name="description">`);
+  } else if (descText.length < 50) {
+    warn(
+      `${route}: meta description is short (${descText.length} chars) — ` +
+        `Google may rewrite it. Aim for 80-160 chars.`,
+    );
+  }
+
+  const canonMatch = page.body.match(CANONICAL_RE);
+  if (!canonMatch || !canonMatch[1].trim()) {
+    fail(`${route}: missing <link rel="canonical">`);
+  } else if (!canonMatch[1].startsWith("https://syrabit.ai")) {
+    fail(
+      `${route}: canonical href must be absolute https://syrabit.ai/* ` +
+        `(got ${canonMatch[1]})`,
+    );
+  }
+}
+console.log(
+  `[verify-all] indexability gate: checked ${indexabilityChecked} prerendered route(s)`,
+);
+
 // ── Print warnings + decide outcome ─────────────────────────────────
 for (const w of warnings) console.warn(`[verify-all] WARN: ${w}`);
 

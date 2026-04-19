@@ -184,6 +184,8 @@ Disallow: /api/ai/
 Disallow: /api/admin/
 
 # ── Sitemaps ────────────────────────────────────────────────────────────────
+# Canonical: dynamic sitemap-index.xml served by the backend SEO engine.
+# Listed once so crawlers do not see two competing sources of truth.
 Sitemap: https://syrabit.ai/sitemap-index.xml
 
 # ── Feeds ───────────────────────────────────────────────────────────────────
