@@ -53,7 +53,7 @@ build output, so you must trigger a fresh deploy after changing them.
 These are **backend / Worker secrets only**. Setting them on the Pages
 project leaks them into public build logs and is a real security incident:
 
-- `CF_ANALYTICS_API_TOKEN` — backend reads CF Analytics GraphQL with this
+- `CLOUDFLARE_ANALYTICS_TOKEN` (Task #534 spec name; legacy alias `CF_ANALYTICS_API_TOKEN`) — backend reads CF Analytics GraphQL with this. Pages CI uses its own `CLOUDFLARE_PAGES_TOKEN` (legacy alias `CF_PAGES_API_TOKEN`); never reuse the runtime/analytics token for Pages or vice-versa.
 - `CF_ZONE_ID` — backend-only
 - `D1_SYNC_SECRET`, `EDGE_WORKER_URL`
 - `SUPABASE_DB_URL`, `SUPABASE_SERVICE_ROLE_KEY`
@@ -125,7 +125,10 @@ is now also re-asserted by the runbook script for idempotency.
 preserved as-is.)
 
 **Production env vars — removed (leaked backend secret, must rotate):**
-`CF_ANALYTICS_API_TOKEN`.
+`CF_ANALYTICS_API_TOKEN` (now superseded by `CLOUDFLARE_ANALYTICS_TOKEN`
+per Task #534; the legacy alias still resolves but logs a one-shot
+WARNING — see `workers/edge-proxy/DEPLOY.md` for the canonical token
+matrix).
 
 **`VITE_GA4_ID` not set** because the only existing value
 (`530170895`, on the preview env) is the GA4 *Property ID*, not the
