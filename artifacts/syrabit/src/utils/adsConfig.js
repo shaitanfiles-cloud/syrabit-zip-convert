@@ -201,12 +201,10 @@ export function setAdsOptOut(optedOut) {
     } else {
       window.localStorage.removeItem(ADS_OPT_OUT_KEY);
     }
-    window.dispatchEvent(
-      new CustomEvent('syrabit:ads-optout-changed', { detail: { optedOut } })
-    );
     // Unified consent-change event so `<AdSlot />` and the page-level
-    // hooks can re-evaluate and tear down injected scripts when the
-    // user toggles the privacy opt-out mid-session.
+    // hooks (`useAdsenseAutoAds`, `useQuge5Multitag`) can re-evaluate
+    // `adsConsentGranted()` and tear down already-injected scripts
+    // when the user toggles the privacy opt-out mid-session — Task #555.
     window.dispatchEvent(
       new CustomEvent('syrabit:ads-consent-changed', {
         detail: { reason: 'optout', optedOut },
