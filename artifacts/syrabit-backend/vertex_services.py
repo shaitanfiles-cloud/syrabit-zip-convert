@@ -1,890 +1,200 @@
 """
-Vertex AI / Gemini-powered services for Syrabit.ai
+vertex_services — DISABLED STUB (2026-04-19)
 
-Supports TWO authentication modes detected automatically from GEMINI_API_KEY:
-  A) Simple API key (AIza...)  — Google AI Studio / Vertex Express
-     → generativelanguage.googleapis.com
-  B) Service-account JSON      — full Vertex AI
-     → {region}-aiplatform.googleapis.com (OAuth2 Bearer)
+The original 890-line module wrapped Google Vertex AI / Gemini for
+embeddings, vision OCR, translation, content enhancement and ~15 other
+services. It has been retired per user request alongside the Gemini
+chat-LLM removal.
 
-Services:
-  1. Text Embeddings    — semantic search across topics & pages
-  2. Translation        — Assamese + other regional language translation
-  3. Vision Analysis    — thumbnail/image analysis via Gemini Vision
-  4. Content Enhancer   — improve auto-generated notes/MCQs
-  5. Quality Scorer     — score content before publishing
-  6. Topic Suggester    — fill syllabus gaps with AI suggestions
-  7. SEO Meta Generator — title, description, keywords from content
-  8. Content Gap Finder — find missing high-value topics
-  9. Long Doc Reader    — summarise / extract from textbook PDFs
+This stub is kept (instead of deleting the file) so that every
+`import vertex_services` and `from vertex_services import X` site
+across the codebase still resolves at module-load time. Route modules
+like `routes/pyq.py`, `routes/admin_advanced.py` and
+`routes/cms_sarvam_health.py` do `import vertex_services` at the top —
+removing the file would crash the entire FastAPI app on startup.
+
+Behaviour:
+  • Embedding functions return [] / 0.0 so semantic-search and
+    syllabus-seed loops degrade to "no results" instead of crashing.
+    Callers in syllabus_embedder.py already log a warning and skip
+    the chunk on empty embeddings.
+  • All generation / OCR / translate functions raise RuntimeError
+    with the standard message. Existing try/except blocks in routes
+    convert this to HTTP 502, e.g. PYQ upload returns "Gemini OCR
+    failed".
+  • Constants (_EMBED_MODEL) keep stable string values so equality
+    checks against cached embeddings still work.
+
+To restore the original module, `git checkout cedd1e06^ -- artifacts/syrabit-backend/vertex_services.py`.
 """
 
-import os
-import json
-import asyncio
 import logging
-import base64
-from typing import Optional, List, Dict
-
-import httpx
+from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-_embed_http_client: Optional[httpx.AsyncClient] = None
-
-# Bounded concurrency for the embed path (Task #545).
-#
-# Why: previously the embed client had no application-level concurrency
-# bound — only httpx's internal connection-pool semaphore (`max_connections=30`).
-# The syllabus-seed pass fires hundreds of concurrent embed calls, each
-# wrapped in `asyncio.wait_for(..., timeout=5.0)`. When wait_for cancels
-# a task that was blocked waiting for an httpx pool slot, the cancel
-# propagation can leave httpx's internal `_connections` semaphore in an
-# inconsistent state, surfacing as `semaphore released too many times`.
-#
-# Fix: gate embed calls behind our own asyncio.Semaphore _before_ they
-# enter httpx. This caps in-flight requests at a number well under the
-# httpx pool size, so the pool semaphore never reaches a contention
-# state where cancellation can race the release. Configurable via env
-# so we can dial up/down without a redeploy if Vertex changes its quota.
-_EMBED_MAX_CONCURRENT = int(os.environ.get("EMBED_MAX_CONCURRENT", "8"))
-_EMBED_SEMAPHORE: Optional[asyncio.Semaphore] = None
-
-def _get_embed_semaphore() -> asyncio.Semaphore:
-    global _EMBED_SEMAPHORE
-    if _EMBED_SEMAPHORE is None:
-        _EMBED_SEMAPHORE = asyncio.Semaphore(_EMBED_MAX_CONCURRENT)
-    return _EMBED_SEMAPHORE
+_DISABLED_MSG = "vertex_services has been disabled — Gemini-backed feature unavailable"
+_warned_once = False
 
 
-def _get_embed_client() -> httpx.AsyncClient:
-    global _embed_http_client
-    if _embed_http_client is None or _embed_http_client.is_closed:
-        # Task #545: timeout 5s → 15s. Gemini cold-starts on Vertex AI
-        # routinely take 8–10 s; the previous 5 s budget was tripping
-        # ReadTimeout on every cold call. The outer wait_for in the
-        # syllabus embedder still bounds total time per task.
-        _embed_http_client = httpx.AsyncClient(
-            timeout=15,
-            http2=True,
-            limits=httpx.Limits(max_connections=30, max_keepalive_connections=15),
-        )
-    return _embed_http_client
+def _warn_once() -> None:
+    global _warned_once
+    if not _warned_once:
+        logger.warning(_DISABLED_MSG)
+        _warned_once = True
 
 
-# Task #545: retry-with-backoff for embed calls. Mirrors the prerender
-# retry policy. Transient failures = httpx ReadTimeout / ConnectError /
-# RemoteProtocolError, SSL handshake errors (`SSLV3_ALERT_BAD_RECORD_MAC`),
-# 429s, and 5xxs from Vertex/Gemini. We do NOT retry 403s (auth) or 4xxs
-# other than 429 (caller bug).
-_EMBED_RETRY_MAX_ATTEMPTS = int(os.environ.get("EMBED_RETRY_MAX_ATTEMPTS", "3"))
-_EMBED_RETRY_BASE_MS = int(os.environ.get("EMBED_RETRY_BASE_MS", "400"))
+# ── Constants kept for callers that read them ────────────────────────────────
+_EMBED_MODEL = "disabled-embed-model"
+_EMBED_DIM = 768
 
 
-def _is_transient_embed_error(exc: BaseException) -> bool:
-    """True if the embed error is the kind we should retry."""
-    if isinstance(exc, asyncio.CancelledError):
-        return False
-    msg = str(exc).lower()
-    if any(s in msg for s in (
-        "ssl", "timeout", "timed out", "connection", "remote",
-        "semaphore released too many times",
-        "rate limit", "429", "500", "502", "503", "504",
-    )):
-        return True
-    if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)):
-        return True
-    return False
-
-# ── Model names ───────────────────────────────────────────────────────────────
-# Embeddings flow through Gemini's gemini-embedding-001 at 1024 dimensions —
-# the same dimensionality that Vectorize syllabus-index-v2 expects.
-_EMBED_MODEL  = "gemini-embedding-001"
-_GEN_MODEL    = "gemini-2.5-flash"
-_PRO_MODEL    = "gemini-2.5-flash"
-_VISION_MODEL = "gemini-2.5-flash"
-
-# ── Auth: detect key type at import time ──────────────────────────────────────
-# Priority:
-#   1. VERTEX_SERVICE_ACCOUNT  — dedicated SA JSON env var (cleanest)
-#   2. GEMINI_API_KEY          — SA JSON or simple AIza... key (legacy / backwards compat)
-_KEY_RAW = (
-    os.getenv("VERTEX_SERVICE_ACCOUNT", "").strip()
-    or os.getenv("GEMINI_API_KEY", "").strip()
-)
-
-# Mode A: simple API key
-_API_KEY: str = ""
-
-# Mode B: Vertex AI service account
-_SA_CREDS         = None   # google.oauth2.service_account.Credentials | None
-_VERTEX_PROJECT   = ""
-_VERTEX_LOCATION  = "us-central1"
-_VERTEX_BASE      = ""
-
-# Shared endpoints (used in API-key mode)
-_BASE    = "https://generativelanguage.googleapis.com/v1beta"
-_BASE_V1 = "https://generativelanguage.googleapis.com/v1"
-
-# Legacy export kept for any callers outside this module
-GEMINI_KEY = _KEY_RAW
-
-if _KEY_RAW.startswith("{"):
-    # Service-account JSON — Vertex AI mode
-    try:
-        from google.oauth2 import service_account as _sa_mod
-        _sa_info        = json.loads(_KEY_RAW)
-        _VERTEX_PROJECT = _sa_info.get("project_id", "")
-        _VERTEX_BASE    = (
-            f"https://{_VERTEX_LOCATION}-aiplatform.googleapis.com/v1"
-            f"/projects/{_VERTEX_PROJECT}/locations/{_VERTEX_LOCATION}"
-            f"/publishers/google/models"
-        )
-        _SA_CREDS = _sa_mod.Credentials.from_service_account_info(
-            _sa_info,
-            scopes=["https://www.googleapis.com/auth/cloud-platform"],
-        )
-        logger.info(
-            f"vertex_services: Vertex AI service-account mode (project={_VERTEX_PROJECT})"
-        )
-    except Exception as _sa_err:
-        logger.error(f"vertex_services: Failed to parse service-account JSON — {_sa_err}")
-        _SA_CREDS = None
-else:
-    _API_KEY = _KEY_RAW
-    if _API_KEY:
-        logger.info("vertex_services: Google AI Studio API-key mode")
-
-_GEMINI_FORBIDDEN = False  # set True on permanent 403
+# ── Embedding API (returns empty so loops skip cleanly) ──────────────────────
+async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> List[float]:
+    _warn_once()
+    return []
 
 
-def _ok() -> bool:
-    return (bool(_API_KEY) or _SA_CREDS is not None) and not _GEMINI_FORBIDDEN
-
-
-def _mark_forbidden():
-    global _GEMINI_FORBIDDEN
-    if not _GEMINI_FORBIDDEN:
-        _GEMINI_FORBIDDEN = True
-        logger.error(
-            "Gemini API returned 403 Forbidden — key is invalid or the model is not "
-            "accessible. Disabling all Gemini calls for this session. "
-            "Check GEMINI_API_KEY in your environment secrets."
-        )
-
-
-async def _auth_headers() -> dict:
-    """Return HTTP headers for the active auth mode."""
-    if _SA_CREDS is not None:
-        from google.auth.transport.requests import Request as _GReq
-        def _refresh():
-            if not _SA_CREDS.valid:
-                _SA_CREDS.refresh(_GReq())
-            return _SA_CREDS.token
-        token = await asyncio.get_event_loop().run_in_executor(None, _refresh)
-        return {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
-    return {"Content-Type": "application/json", "x-goog-api-key": _API_KEY}
-
-
-def _gen_url(model: str) -> str:
-    """Resolve generateContent URL for the active auth mode."""
-    if _SA_CREDS is not None:
-        return f"{_VERTEX_BASE}/{model}:generateContent"
-    return f"{_BASE}/models/{model}:generateContent"
-
-
-def _embed_url() -> str:
-    """Resolve Gemini embedding URL for the active auth mode."""
-    if _SA_CREDS is not None:
-        return f"{_VERTEX_BASE}/{_EMBED_MODEL}:predict"
-    return f"{_BASE}/models/{_EMBED_MODEL}:embedContent"
-
-
-# Kept for any legacy sync callers (API-key mode only)
-def _headers() -> dict:
-    return {"Content-Type": "application/json", "x-goog-api-key": _API_KEY}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 1. TEXT EMBEDDINGS  — Gemini gemini-embedding-001 at 1024 dims
-# ─────────────────────────────────────────────────────────────────────────────
-#
-# Embeddings flow:
-#   1. Call Gemini's gemini-embedding-001 at 1024-dim — the dimensionality
-#      Vectorize syllabus-index-v2 expects.
-#   2. If Gemini is unconfigured / forbidden / fails, return None and let the
-#      caller degrade gracefully.
-
-_EMBED_DIMENSIONS = 1024
-
-
-async def _post_embed_with_retry(
-    url: str, body: dict, headers: dict, label: str
-) -> Optional[httpx.Response]:
-    """POST to an embed endpoint with retry-with-backoff for transient errors.
-    Returns the final Response (caller decides how to interpret) or None if
-    all attempts exhausted on transient errors. Returns the response on the
-    first non-transient outcome (including 403 and 4xx) so caller can handle
-    auth + 404-fallback cases without retry interference.
-    """
-    c = _get_embed_client()
-    last_exc: Optional[BaseException] = None
-    for attempt in range(1, _EMBED_RETRY_MAX_ATTEMPTS + 1):
-        try:
-            r = await c.post(url, json=body, headers=headers)
-            # Retry only on transient HTTP statuses (429, 5xx).
-            if r.status_code == 429 or 500 <= r.status_code < 600:
-                if attempt == _EMBED_RETRY_MAX_ATTEMPTS:
-                    return r  # let caller see the final non-retried failure
-                wait_ms = _EMBED_RETRY_BASE_MS * (2 ** (attempt - 1))
-                logger.info(
-                    f"gemini embed ({label}) HTTP {r.status_code} attempt "
-                    f"{attempt}/{_EMBED_RETRY_MAX_ATTEMPTS}; retrying in {wait_ms}ms"
-                )
-                await asyncio.sleep(wait_ms / 1000.0)
-                continue
-            return r
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            last_exc = exc
-            if not _is_transient_embed_error(exc) or attempt == _EMBED_RETRY_MAX_ATTEMPTS:
-                # Non-transient OR final attempt: surface as logged failure.
-                logger.warning(f"gemini embed ({label}) failed: {exc}")
-                return None
-            wait_ms = _EMBED_RETRY_BASE_MS * (2 ** (attempt - 1))
-            logger.info(
-                f"gemini embed ({label}) transient {type(exc).__name__} attempt "
-                f"{attempt}/{_EMBED_RETRY_MAX_ATTEMPTS}; retrying in {wait_ms}ms"
-            )
-            await asyncio.sleep(wait_ms / 1000.0)
-    # Defensive — should not reach here, but if we do, log + return None.
-    if last_exc:
-        logger.warning(f"gemini embed ({label}) exhausted retries: {last_exc}")
-    return None
-
-
-async def _embed_one(text: str, task_type: str) -> Optional[List[float]]:
-    """Gemini embedding path. Returns 1024-dim vector when available.
-    Concurrency-bounded by `_EMBED_SEMAPHORE` and retried with backoff
-    on transient SSL/timeout/rate-limit failures (Task #545).
-    """
-    if not _ok() or not text:
-        return None
-    headers = await _auth_headers()
-
-    async with _get_embed_semaphore():
-        if _SA_CREDS is not None:
-            url  = _embed_url()
-            body = {
-                "instances": [{"content": text[:8000], "task_type": task_type}],
-                "parameters": {"outputDimensionality": _EMBED_DIMENSIONS},
-            }
-            r = await _post_embed_with_retry(url, body, headers, "Vertex")
-            if r is None:
-                return None
-            if r.status_code == 403:
-                _mark_forbidden()
-                return None
-            try:
-                r.raise_for_status()
-                return r.json()["predictions"][0]["embeddings"]["values"]
-            except Exception as e:
-                logger.warning(f"gemini embed (Vertex) parse failed: {e}")
-                return None
-
-        for model in (_EMBED_MODEL, "text-embedding-004"):
-            url  = f"{_BASE}/models/{model}:embedContent"
-            body = {
-                "model":   f"models/{model}",
-                "content": {"parts": [{"text": text[:8000]}]},
-                "taskType": task_type,
-                "outputDimensionality": _EMBED_DIMENSIONS,
-            }
-            r = await _post_embed_with_retry(url, body, headers, model)
-            if r is None:
-                continue
-            if r.status_code == 403:
-                _mark_forbidden()
-                return None
-            if r.status_code == 404:
-                continue
-            try:
-                r.raise_for_status()
-                return r.json()["embedding"]["values"]
-            except Exception as e:
-                logger.warning(f"gemini embed ({model}) parse failed: {e}")
-                continue
-        return None
-
-
-async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Optional[List[float]]:
-    """Return a 1024-dim Gemini embedding vector, or None on failure."""
-    if not text:
-        return None
-
-    try:
-        from cache import _embedding_cache, _embedding_cache_key
-        _ek = _embedding_cache_key(text, task_type)
-        cached = _embedding_cache.get(_ek)
-        if cached:
-            return cached
-    except Exception:
-        _ek = None
-        _embedding_cache = None
-
-    vec = await _embed_one(text, task_type)
-    try:
-        if _ek and vec and _embedding_cache is not None:
-            _embedding_cache[_ek] = vec
-    except Exception:
-        pass
-    return vec
-
-
-async def embed_batch(texts: List[str], task_type: str = "RETRIEVAL_DOCUMENT") -> List[Optional[List[float]]]:
-    """Embed a batch of texts via Gemini. Returns list of vectors (or None per item)."""
-    if not texts:
-        return []
-    results = await asyncio.gather(
-        *[_embed_one(t, task_type) for t in texts]
-    )
-    return list(results)
+async def embed_batch(texts: List[str]) -> List[List[float]]:
+    _warn_once()
+    return []
 
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:
-    if not a or not b:
-        return 0.0
-    dot   = sum(x * y for x, y in zip(a, b))
-    mag_a = sum(x * x for x in a) ** 0.5
-    mag_b = sum(x * x for x in b) ** 0.5
-    return dot / (mag_a * mag_b + 1e-9)
+    return 0.0
 
 
-async def semantic_search(query: str, candidates: List[Dict], text_key: str = "title",
-                           top_k: int = 10) -> List[Dict]:
-    """
-    Rank `candidates` by semantic similarity to `query`.
-    Each candidate must have a field `text_key`. Returns top_k sorted items
-    with an added `score` field.
-    """
-    if not _ok() or not candidates:
-        return candidates[:top_k]
-
-    q_vec = await embed_text(query, task_type="RETRIEVAL_QUERY")
-    if not q_vec:
-        return candidates[:top_k]
-
-    import asyncio
-    texts = [c.get(text_key, "") for c in candidates]
-    vecs  = await embed_batch(texts)
-
-    scored = []
-    for item, vec in zip(candidates, vecs):
-        score = cosine_similarity(q_vec, vec) if vec else 0.0
-        scored.append({**item, "score": round(score, 4)})
-
-    scored.sort(key=lambda x: x["score"], reverse=True)
-    return scored[:top_k]
+# ── Generation / OCR / Vision (raise — caught by route try/except) ───────────
+async def _generate(prompt: str, max_tokens: int = 1024, temperature: float = 0.7, **_kw: Any) -> str:
+    raise RuntimeError(_DISABLED_MSG)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 2. TRANSLATION  (Gemini multilingual)
-# ─────────────────────────────────────────────────────────────────────────────
-
-_LANG_NAMES = {
-    "as": "Assamese",
-    "hi": "Hindi",
-    "bn": "Bengali",
-    "en": "English",
-    "bho": "Bodo",
-}
+async def analyze_image(
+    image_bytes: bytes,
+    mime_type: str = "image/jpeg",
+    prompt: str = "",
+    max_output_tokens: int = 4096,
+    **_kw: Any,
+) -> str:
+    raise RuntimeError(_DISABLED_MSG)
 
 
-async def translate(text: str, target_lang: str = "as", source_lang: str = "en") -> Optional[str]:
-    """Translate text to target language using Gemini. Default: English → Assamese."""
-    if not _ok() or not text:
-        return None
-    lang_name = _LANG_NAMES.get(target_lang, target_lang)
-    prompt = (
-        f"Translate the following educational content from {_LANG_NAMES.get(source_lang, source_lang)} "
-        f"to {lang_name}. Keep all technical terms, subject names, and proper nouns as-is. "
-        f"Return ONLY the translated text, no explanations.\n\n{text[:4000]}"
-    )
-    return await _generate(prompt, max_tokens=4096)
+async def ocr_image(img_bytes: bytes, mime_type: str = "image/jpeg", **_kw: Any) -> Dict[str, Any]:
+    raise RuntimeError(_DISABLED_MSG)
 
 
-async def translate_structured(content: dict, fields: List[str], target_lang: str = "as") -> dict:
-    """Translate specific fields in a dict. Returns dict with translated fields."""
-    import asyncio
-    tasks = {f: translate(content.get(f, ""), target_lang) for f in fields if content.get(f)}
-    results = await asyncio.gather(*tasks.values())
-    out = dict(content)
-    for key, result in zip(tasks.keys(), results):
-        if result:
-            out[f"{key}_{target_lang}"] = result
-    return out
+async def extract_from_document(pdf_bytes: bytes, task: str = "summary", **_kw: Any) -> Dict[str, Any]:
+    raise RuntimeError(_DISABLED_MSG)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 3. VISION ANALYSIS  (Gemini Vision — replaces Groq vision)
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def analyze_image(image_bytes: bytes, mime_type: str = "image/jpeg",
-                         prompt: str = "Describe this image in detail.",
-                         max_output_tokens: int = 1024) -> Optional[str]:
-    """Analyze an image with Gemini Vision. Returns text description.
-
-    max_output_tokens: increase for dense documents like full question papers
-    (up to 8192 for thorough extraction of all questions).
-    """
-    if not _ok():
-        return None
-    b64 = base64.b64encode(image_bytes).decode()
-    url = _gen_url(_VISION_MODEL)
-    headers = await _auth_headers()
-    body = {
-        "contents": [{"parts": [
-            {"text": prompt},
-            {"inline_data": {"mime_type": mime_type, "data": b64}},
-        ]}],
-        "generationConfig": {"maxOutputTokens": max_output_tokens},
-    }
-    try:
-        async with httpx.AsyncClient(timeout=60) as c:
-            r = await c.post(url, json=body, headers=headers)
-            if r.status_code == 403:
-                _mark_forbidden()
-                return None
-            r.raise_for_status()
-            return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception as e:
-        logger.warning(f"analyze_image failed: {e}")
-        return None
+# ── Translation / Content services ──────────────────────────────────────────
+async def translate(
+    text: str,
+    target_lang: str = "en",
+    source_lang: Optional[str] = None,
+    **_kw: Any,
+) -> Dict[str, Any]:
+    raise RuntimeError(_DISABLED_MSG)
 
 
-async def analyze_thumbnail(image_bytes: bytes, subject: str = "", topic: str = "") -> dict:
-    """Full thumbnail analysis: colors, style, accessibility, improvement suggestions."""
-    if not _ok():
-        return {}
-    prompt = (
-        f"Analyze this educational thumbnail for '{topic}' ({subject}). "
-        f"Return a JSON object with: dominant_colors (list), style (string), "
-        f"accessibility_score (0-10), text_readability (0-10), "
-        f"improvement_suggestions (list of strings), overall_score (0-10). "
-        f"Return ONLY valid JSON."
-    )
-    raw = await analyze_image(image_bytes, prompt=prompt)
-    if not raw:
-        return {}
-    try:
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("```")[1]
-            if cleaned.startswith("json"):
-                cleaned = cleaned[4:]
-        return json.loads(cleaned)
-    except Exception:
-        return {"raw_analysis": raw}
+async def semantic_search(
+    query: str,
+    items: List[Dict[str, Any]],
+    text_key: str = "title",
+    top_k: int = 10,
+    **_kw: Any,
+) -> List[Dict[str, Any]]:
+    _warn_once()
+    return []
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 3b. VISION OCR  (Cloud Vision API equivalent via Gemini Vision)
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def ocr_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
-    """Extract clean text from an AHSEC question paper or textbook page image."""
-    if not _ok():
-        return {"error": "No API key"}
-    prompt = (
-        "You are an OCR engine for AHSEC/SEBA educational content. "
-        "Extract ALL visible text from this image exactly as written, preserving "
-        "question numbers, sub-parts, mathematical notation, and formatting. "
-        "Structure the output as:\n"
-        "- Detected content type (question paper / textbook / notes)\n"
-        "- Extracted text (verbatim)\n"
-        "- Structured questions list (if applicable): [{number, text, marks, sub_parts:[]}]\n"
-        "Return JSON: {content_type, raw_text, questions, word_count}"
-    )
-    raw = await analyze_image(image_bytes, mime_type=mime_type, prompt=prompt)
-    if not raw:
-        return {"error": "OCR failed — check GEMINI_API_KEY and image format"}
-    try:
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("```")[1]
-            if cleaned.startswith("json"):
-                cleaned = cleaned[4:]
-        return json.loads(cleaned)
-    except Exception:
-        return {"raw_text": raw, "content_type": "extracted", "questions": [], "word_count": len(raw.split())}
+async def enhance_content(
+    content: str,
+    page_type: str = "",
+    subject: str = "",
+    topic: str = "",
+    class_name: str = "",
+    **_kw: Any,
+) -> Dict[str, Any]:
+    raise RuntimeError(_DISABLED_MSG)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 3c. NLP KEY CONCEPTS  (Cloud Natural Language API equivalent via Gemini)
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def extract_key_concepts(text: str, subject: str = "", class_name: str = "Class 11") -> dict:
-    """Extract key concepts, entities, definitions and difficulty from educational text."""
-    if not _ok():
-        return {"error": "No API key"}
-    prompt = (
-        f"You are an educational NLP engine for {subject} ({class_name}, AHSEC/SEBA board). "
-        f"Analyse this chapter/passage and extract:\n"
-        f"1. key_terms: top 10-15 important terms as [{{term, definition, importance: high/medium/low}}]\n"
-        f"2. entities: named entities (laws, formulas, people, places, events) as [{{name, type, context}}]\n"
-        f"3. difficulty_level: easy/medium/hard/advanced\n"
-        f"4. chapter_summary: 2-3 sentence summary\n"
-        f"5. exam_weightage: estimated marks weightage (low/medium/high)\n"
-        f"6. prerequisite_topics: list of topics students need to know first\n\n"
-        f"TEXT:\n{text[:4000]}\n\n"
-        f"Return ONLY valid JSON."
-    )
-    raw = await _generate(prompt, max_tokens=2048, temperature=0.1)
-    if not raw:
-        return {"error": "NLP analysis failed"}
-    try:
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("```")[1]
-            if cleaned.startswith("json"):
-                cleaned = cleaned[4:]
-        return json.loads(cleaned)
-    except Exception:
-        return {"raw": raw}
+async def score_content(
+    content: str,
+    page_type: str = "",
+    topic: str = "",
+    subject: str = "",
+    **_kw: Any,
+) -> Dict[str, Any]:
+    raise RuntimeError(_DISABLED_MSG)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 3d. FLASHCARD GENERATOR
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def generate_flashcards(text: str, subject: str = "", count: int = 10,
-                               class_name: str = "Class 11") -> dict:
-    """Generate Q&A flashcards from chapter content for student revision."""
-    if not _ok():
-        return {"error": "No API key"}
-    prompt = (
-        f"Generate {count} high-quality revision flashcards for {subject} ({class_name}, AHSEC board).\n"
-        f"Based on this content:\n{text[:4000]}\n\n"
-        f"Mix card types:\n"
-        f"- Definition cards (What is X?)\n"
-        f"- Concept cards (Explain Y)\n"
-        f"- Application cards (How does Z work?)\n"
-        f"- Formula/fact cards\n"
-        f"- True/False cards\n\n"
-        f"For each card: {{id, front, back, type, difficulty: easy/medium/hard, tags: []}}\n"
-        f"Return ONLY a JSON object: {{flashcards: [...], subject, total_cards}}"
-    )
-    raw = await _generate(prompt, max_tokens=3000, temperature=0.1)
-    if not raw:
-        return {"error": "Flashcard generation failed"}
-    try:
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("```")[1]
-            if cleaned.startswith("json"):
-                cleaned = cleaned[4:]
-        return json.loads(cleaned)
-    except Exception:
-        return {"raw": raw, "flashcards": [], "subject": subject}
+async def suggest_topics(
+    subject: str,
+    class_name: str = "",
+    existing: Optional[List[str]] = None,
+    board: str = "",
+    **_kw: Any,
+) -> List[Dict[str, Any]]:
+    raise RuntimeError(_DISABLED_MSG)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 3e. MCQ GENERATOR  (text-based, complements PDF extract_from_document)
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def generate_mcqs(text: str, subject: str = "", class_name: str = "Class 11",
-                         count: int = 10, difficulty: str = "mixed") -> dict:
-    """Generate MCQs from chapter text with AHSEC exam patterns."""
-    if not _ok():
-        return {"error": "No API key"}
-    prompt = (
-        f"Generate {count} AHSEC-pattern MCQ questions for {subject} ({class_name}) with {difficulty} difficulty.\n"
-        f"Based on content:\n{text[:4000]}\n\n"
-        f"Each MCQ must have exactly 4 options (A, B, C, D).\n"
-        f"Format: [{{id, question, options: {{A, B, C, D}}, correct_answer, explanation, difficulty, topic, marks: 1}}]\n"
-        f"Make distractors plausible. Ensure correct_answer is one of A/B/C/D.\n"
-        f"Return ONLY valid JSON: {{mcqs: [...], subject, total, difficulty}}"
-    )
-    raw = await _generate(prompt, max_tokens=3000, temperature=0.1)
-    if not raw:
-        return {"error": "MCQ generation failed"}
-    try:
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("```")[1]
-            if cleaned.startswith("json"):
-                cleaned = cleaned[4:]
-        return json.loads(cleaned)
-    except Exception:
-        return {"raw": raw, "mcqs": [], "subject": subject}
+async def generate_seo_meta(
+    topic: str,
+    subject: str = "",
+    class_name: str = "",
+    page_type: str = "",
+    board: str = "",
+    content_preview: str = "",
+    **_kw: Any,
+) -> Dict[str, Any]:
+    raise RuntimeError(_DISABLED_MSG)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 4. CONTENT ENHANCER
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def enhance_content(content: str, page_type: str = "notes",
-                           subject: str = "", topic: str = "",
-                           class_name: str = "Class 11") -> Optional[str]:
-    """
-    Improve AI-generated educational content.
-    page_type: notes | mcqs | definition | important-questions | examples
-    """
-    if not _ok() or not content:
-        return None
-
-    type_hints = {
-        "notes":               "Make the notes clearer, add more examples, better structure with headers, and ensure exam relevance.",
-        "mcqs":                "Improve MCQ distractors to be more plausible, ensure questions test understanding not just recall.",
-        "definition":          "Make the definition precise, include etymology if helpful, and give a real-world analogy.",
-        "important-questions": "Ensure questions cover all mark categories in ascending order (1-mark, 2-mark, 3-mark, 5-mark, 10-mark). Use AHSEC/SEBA/Degree exam-style language. Add model answer hints.",
-        "examples":            "Add more relatable, Assam-context examples that AssamBoard students will recognize.",
-    }
-
-    prompt = (
-        f"You are an expert {subject} teacher for AssamBoard ({class_name}) students in Assam, India.\n"
-        f"Improve the following {page_type} content for the topic: {topic}\n\n"
-        f"Instruction: {type_hints.get(page_type, 'Make it better and more exam-focused.')}\n\n"
-        f"Return ONLY the improved content in the same format (Markdown). Do not add explanatory text.\n\n"
-        f"ORIGINAL CONTENT:\n{content[:6000]}"
-    )
-    return await _generate(prompt, max_tokens=4096)
+async def find_content_gaps(
+    published: List[str],
+    top_searches: List[str],
+    subjects: List[str],
+    **_kw: Any,
+) -> List[Dict[str, Any]]:
+    raise RuntimeError(_DISABLED_MSG)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 5. QUALITY SCORER
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def score_content(content: str, page_type: str = "notes",
-                         topic: str = "", subject: str = "") -> dict:
-    """Score content quality. Returns dict with scores and issues."""
-    if not _ok() or not content:
-        return {"overall": 0, "error": "No content or API key"}
-
-    prompt = (
-        f"Score this {page_type} content about '{topic}' ({subject}) for AssamBoard students.\n"
-        f"Return a JSON with:\n"
-        f"  accuracy (0-10): factual correctness\n"
-        f"  completeness (0-10): topic coverage\n"
-        f"  clarity (0-10): easy to understand\n"
-        f"  exam_relevance (0-10): useful for board exams\n"
-        f"  overall (0-10): weighted average\n"
-        f"  issues (list of strings): specific problems found\n"
-        f"  strengths (list of strings): what's good\n"
-        f"Return ONLY valid JSON.\n\nCONTENT:\n{content[:3000]}"
-    )
-    raw = await _generate(prompt, max_tokens=512)
-    if not raw:
-        return {"overall": 0, "error": "Generation failed"}
-    try:
-        cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```")
-        return json.loads(cleaned)
-    except Exception:
-        return {"overall": 5, "raw": raw}
+async def extract_key_concepts(
+    text: str,
+    subject: str = "",
+    class_name: str = "",
+    **_kw: Any,
+) -> Dict[str, Any]:
+    raise RuntimeError(_DISABLED_MSG)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 6. TOPIC SUGGESTER
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def suggest_topics(subject: str, class_name: str,
-                          existing_topics: List[str],
-                          board: str = "AHSEC") -> List[dict]:
-    """Suggest missing high-value topics for a subject."""
-    if not _ok():
-        return []
-    existing_sample = ", ".join(existing_topics[:30])
-    prompt = (
-        f"You are an expert {board} {class_name} {subject} curriculum designer.\n"
-        f"The platform already has content for: {existing_sample}{'...' if len(existing_topics) > 30 else ''}.\n\n"
-        f"Suggest 10 important topics that are MISSING and have HIGH search volume from students.\n"
-        f"Return a JSON array of objects with: title, priority (high/medium), search_volume_estimate (number/month), reason.\n"
-        f"Return ONLY valid JSON array."
-    )
-    raw = await _generate(prompt, max_tokens=1024)
-    if not raw:
-        return []
-    try:
-        cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```")
-        result = json.loads(cleaned)
-        return result if isinstance(result, list) else []
-    except Exception:
-        return []
+async def generate_flashcards(
+    text: str,
+    subject: str = "",
+    count: int = 10,
+    class_name: str = "",
+    **_kw: Any,
+) -> Dict[str, Any]:
+    raise RuntimeError(_DISABLED_MSG)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 7. SEO META GENERATOR
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def generate_seo_meta(topic: str, subject: str, class_name: str,
-                             page_type: str, board: str = "AHSEC",
-                             content_preview: str = "") -> dict:
-    """Generate optimised SEO meta: title, description, keywords, OG tags."""
-    if not _ok():
-        return {}
-    prompt = (
-        f"Generate SEO metadata for an educational page about:\n"
-        f"  Topic: {topic}\n  Subject: {subject}\n  Class: {class_name}\n"
-        f"  Page type: {page_type}\n  Board: {board}\n"
-        f"{'Content preview: ' + content_preview[:500] if content_preview else ''}\n\n"
-        f"Return JSON with:\n"
-        f"  title (max 60 chars, include topic + board + class)\n"
-        f"  meta_description (max 160 chars, includes call-to-action)\n"
-        f"  keywords (list of 8-12 strings)\n"
-        f"  og_title (Open Graph title, can be slightly longer)\n"
-        f"  og_description (2 sentences, benefit-focused)\n"
-        f"  schema_name (for JSON-LD)\n"
-        f"Return ONLY valid JSON."
-    )
-    raw = await _generate(prompt, max_tokens=512)
-    if not raw:
-        return {}
-    try:
-        cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```")
-        return json.loads(cleaned)
-    except Exception:
-        return {"raw": raw}
+async def generate_mcqs(
+    text: str,
+    subject: str = "",
+    class_name: str = "",
+    **_kw: Any,
+) -> Dict[str, Any]:
+    raise RuntimeError(_DISABLED_MSG)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 8. CONTENT GAP FINDER
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def find_content_gaps(published_slugs: List[str],
-                             top_searches: List[str],
-                             subjects: List[str]) -> List[dict]:
-    """
-    Cross-reference published content with top searches to find high-value gaps.
-    Returns list of {query, gap_type, priority, suggested_slug, estimated_monthly_searches}.
-    """
-    if not _ok():
-        return []
-    prompt = (
-        f"Analyse these search queries from students and identify content gaps.\n\n"
-        f"Top student search queries:\n{chr(10).join(f'- {q}' for q in top_searches[:20])}\n\n"
-        f"Subjects covered: {', '.join(subjects[:10])}\n"
-        f"Published pages count: {len(published_slugs)}\n\n"
-        f"Return a JSON array of top 10 gaps with:\n"
-        f"  query (string), gap_type (missing_topic/incomplete_coverage/wrong_level),\n"
-        f"  priority (high/medium), suggested_action (string),\n"
-        f"  estimated_monthly_searches (number)\n"
-        f"Return ONLY valid JSON array."
-    )
-    raw = await _generate(prompt, max_tokens=1024)
-    if not raw:
-        return []
-    try:
-        cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```")
-        result = json.loads(cleaned)
-        return result if isinstance(result, list) else []
-    except Exception:
-        return []
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 9. LONG DOCUMENT READER  (Gemini 1.5 Pro — 1M token context)
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def extract_from_document(pdf_bytes: bytes, task: str = "extract_mcqs") -> dict:
-    """
-    Process a PDF (textbook, question paper) with Gemini 1.5 Pro.
-    task: extract_mcqs | extract_topics | summarise | extract_questions
-    """
-    if not _ok():
-        return {"error": "No API key"}
-
-    b64 = base64.b64encode(pdf_bytes).decode()
-    task_prompts = {
-        "extract_mcqs":      "Extract all MCQ questions with their options and correct answers. Return a JSON array of {question, options, correct_answer, topic}.",
-        "extract_topics":    "List all chapter topics and subtopics covered. Return a JSON array of {chapter, topics: []}.",
-        "summarise":         "Summarise each chapter in 3-5 bullet points. Return a JSON array of {chapter, summary_points: []}.",
-        "extract_questions": "Extract all exam-style questions (short answer, long answer, numericals). Return a JSON array of {question, type, marks, topic}.",
-    }
-
-    prompt = task_prompts.get(task, task_prompts["summarise"])
-    url = _gen_url(_PRO_MODEL)
-    headers = await _auth_headers()
-    body = {
-        "contents": [{"parts": [
-            {"text": prompt + "\n\nReturn ONLY valid JSON."},
-            {"inline_data": {"mime_type": "application/pdf", "data": b64}},
-        ]}],
-        "generationConfig": {"maxOutputTokens": 8192},
-    }
-    try:
-        async with httpx.AsyncClient(timeout=120) as c:
-            r = await c.post(url, json=body, headers=headers)
-            if r.status_code == 403:
-                _mark_forbidden()
-                return {"error": "Gemini Vision is not configured — check GEMINI_API_KEY"}
-            r.raise_for_status()
-            raw = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```")
-            return {"result": json.loads(cleaned), "task": task}
-    except Exception as e:
-        logger.warning(f"extract_from_document failed: {e}")
-        return {"error": str(e)}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# INTERNAL: shared generate helper
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def _generate(prompt: str, model: str = _GEN_MODEL,
-                    max_tokens: int = 2048, temperature: float = 0.1) -> Optional[str]:
-    if not _ok():
-        return None
-    url = _gen_url(model)
-    headers = await _auth_headers()
-    body = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "maxOutputTokens": max_tokens,
-            "temperature": temperature,
-        },
-    }
-    try:
-        async with httpx.AsyncClient(timeout=45) as c:
-            r = await c.post(url, json=body, headers=headers)
-            if r.status_code == 403:
-                _mark_forbidden()
-                return None
-            r.raise_for_status()
-            return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception as e:
-        logger.warning(f"vertex _generate failed: {e}")
-        return None
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STATUS CHECK
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def health_check() -> dict:
-    """Quick connectivity check — returns service status for all features."""
-    if not _ok():
-        reason = "GEMINI_API_KEY not set or failed to parse"
-        return {"ok": False, "reason": reason}
-    auth_mode = "vertex_ai_service_account" if _SA_CREDS is not None else "google_ai_studio_api_key"
-    test = await embed_text("test", task_type="SEMANTIC_SIMILARITY")
-    gen_test = await _generate("Reply with just the word: OK", max_tokens=5)
+# ── Health probe ────────────────────────────────────────────────────────────
+async def health_check() -> Dict[str, Any]:
     return {
-        "ok": True,
-        "auth_mode": auth_mode,
-        "project": _VERTEX_PROJECT or None,
-        "embeddings": test is not None,
-        "generation": gen_test is not None and "OK" in (gen_test or ""),
-        "models": {
-            "generation": _GEN_MODEL,
-            "embedding":  _EMBED_MODEL,
-            "vision":     _VISION_MODEL,
-            "long_doc":   _PRO_MODEL,
-        },
-        "services": [
-            "text_embeddings", "semantic_search", "translation",
-            "vision_analysis", "content_enhancer", "quality_scorer",
-            "topic_suggester", "seo_meta_generator", "content_gap_finder",
-            "long_doc_reader",
-        ],
+        "status": "disabled",
+        "message": _DISABLED_MSG,
+        "embed_model": _EMBED_MODEL,
     }
+
+
+logger.info("vertex_services: stub loaded — all Gemini features disabled")
