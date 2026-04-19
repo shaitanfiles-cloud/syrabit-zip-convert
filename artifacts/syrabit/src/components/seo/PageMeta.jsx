@@ -1,4 +1,10 @@
-import { Helmet } from "react-helmet-async";
+// React 19 natively hoists <title>, <meta>, <link>, and
+// <script type="application/ld+json"> to <head> from anywhere in the tree
+// AND keeps SSR/client output identical so hydration matches. We previously
+// used react-helmet-async, but on React 19 it emitted these tags inline in
+// the SSR body while emitting nothing on the client first render —
+// triggering React error #418 (hydration mismatch) on every prerendered
+// page. Render the tags directly; React handles hoisting + dedupe.
 import { buildSchemaForPageType, dedupeGraphTypes } from "@/lib/jsonld";
 
 export default function PageMeta({
@@ -41,12 +47,14 @@ export default function PageMeta({
   // client-side query param, not a path prefix).
   const asUrl = url ? (url.includes("?") ? `${url}&lang=as` : `${url}?lang=as`) : null;
 
+  // Mirror react-helmet-async titleTemplate behavior locally so existing
+  // callers that pass a bare `title` continue to get the "%s | Syrabit.ai"
+  // suffix in <title>.
+  const finalTitle = title ? `${title} | ${siteName}` : siteName;
+
   return (
-    <Helmet
-      title={title}
-      titleTemplate={`%s | ${siteName}`}
-      defaultTitle={siteName}
-    >
+    <>
+      <title>{finalTitle}</title>
       <meta name="description" content={description} />
       {keywords && <meta name="keywords" content={keywords} />}
 
@@ -96,6 +104,6 @@ export default function PageMeta({
           {JSON.stringify(ld)}
         </script>
       ))}
-    </Helmet>
+    </>
   );
 }

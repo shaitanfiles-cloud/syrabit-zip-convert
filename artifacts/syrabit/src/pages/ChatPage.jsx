@@ -17,7 +17,9 @@ import { InputBar } from './chat/InputBar';
 import { ModelSelector, MODELS } from './chat/ModelSelector';
 import { useTurnstile } from '@/hooks/useTurnstile';
 import { Analytics } from '@/utils/analytics';
-import { Helmet } from 'react-helmet-async';
+// React 19 hoists <title>/<meta>/<link> to <head> from anywhere in the
+// tree without the SSR/client mismatch react-helmet-async causes. Use
+// native tags directly. (Removes React error #418 on prerendered /chat.)
 
 // EmptyState is imported eagerly so its h2 ("Hi! I'm Syra…") — the LCP
 // element on /chat — renders in the SSR snapshot and on the very first
@@ -418,27 +420,25 @@ export default function ChatPage() {
 
   return (
     <>
-      <Helmet>
-        <title>Syrabit AI Chat — Ask Anything About Your Syllabus</title>
-        <meta
-          name="description"
-          content="Ask Syrabit's AI tutor anything about AHSEC, SEBA and Degree subjects. Get instant explanations, MCQs, definitions and exam-ready answers in English or Assamese."
-        />
-        <link rel="canonical" href="https://syrabit.ai/chat" />
-        {/* /chat is auth-gated and personalized — keep it out of the index. */}
-        <meta name="robots" content="noindex, follow" />
-        <meta property="og:title" content="Syrabit AI Chat — Ask Anything About Your Syllabus" />
-        <meta
-          property="og:description"
-          content="AI-powered tutor for Assam Board (AHSEC, SEBA) and Degree students. Free to start, no card needed."
-        />
-        <meta property="og:url" content="https://syrabit.ai/chat" />
-        <meta name="twitter:title" content="Syrabit AI Chat — Ask Anything About Your Syllabus" />
-        <meta
-          name="twitter:description"
-          content="AI-powered tutor for Assam Board (AHSEC, SEBA) and Degree students. Free to start, no card needed."
-        />
-      </Helmet>
+      <title>Syrabit AI Chat — Ask Anything About Your Syllabus</title>
+      <meta
+        name="description"
+        content="Ask Syrabit's AI tutor anything about AHSEC, SEBA and Degree subjects. Get instant explanations, MCQs, definitions and exam-ready answers in English or Assamese."
+      />
+      <link rel="canonical" href="https://syrabit.ai/chat" />
+      {/* /chat is auth-gated and personalized — keep it out of the index. */}
+      <meta name="robots" content="noindex, follow" />
+      <meta property="og:title" content="Syrabit AI Chat — Ask Anything About Your Syllabus" />
+      <meta
+        property="og:description"
+        content="AI-powered tutor for Assam Board (AHSEC, SEBA) and Degree students. Free to start, no card needed."
+      />
+      <meta property="og:url" content="https://syrabit.ai/chat" />
+      <meta name="twitter:title" content="Syrabit AI Chat — Ask Anything About Your Syllabus" />
+      <meta
+        name="twitter:description"
+        content="AI-powered tutor for Assam Board (AHSEC, SEBA) and Degree students. Free to start, no card needed."
+      />
       <AppLayout pageTitle={
         <ModelSelector
           model={model} setModel={setModel}
