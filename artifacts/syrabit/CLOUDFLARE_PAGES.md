@@ -199,7 +199,7 @@ source-of-truth provider — every value is now public history):**
 `SARVAM_API_KEY_2`, `SARVAM_API_KEY_3`, `SECURE_COOKIES`,
 `SESSION_SECRET`, `SUPABASE_SERVICE_KEY`, `TRUSTPILOT_API_KEY`,
 `TRUSTPILOT_BUSINESS_UNIT_ID`, `UPSTASH_REDIS_REST_TOKEN`,
-`UPSTASH_REDIS_REST_URL`, `VOYAGE_API_KEY`.
+`UPSTASH_REDIS_REST_URL`.
 
 **Verification deploy — failed at the build wall, NOT reverted.**
 Deployment id `bd511fe9-6631-49e1-abc3-3eb54588fa9d` (commit

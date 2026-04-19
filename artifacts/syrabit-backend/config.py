@@ -324,7 +324,6 @@ if _PG_DSN:
 else:
     _cfg_log.warning("PG DSN empty — neither DATABASE_URL nor SUPABASE_DB_URL is set")
 
-VOYAGE_API_KEY = os.environ.get('VOYAGE_API_KEY', '').strip()
 
 SARVAM_THINK_BUFFER = 80
 

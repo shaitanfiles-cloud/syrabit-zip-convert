@@ -75,7 +75,6 @@ railway variables set CEREBRAS_API_KEY="csk-xxx"
 railway variables set SARVAM_API_KEY="xxx"
 railway variables set SARVAM_API_KEY_2="xxx"
 railway variables set OPENROUTER_API_KEY="sk-or-xxx"
-railway variables set VOYAGE_API_KEY="pa-xxx"
 
 # Payments & Email
 railway variables set RAZORPAY_KEY_ID="rzp_live_xxx"

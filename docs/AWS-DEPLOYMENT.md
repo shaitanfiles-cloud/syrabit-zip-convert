@@ -120,7 +120,6 @@ In ECS → Your service → **Task definition** → **Environment variables**, a
 | `SARVAM_API_KEY_2` | Second Sarvam key |
 | `FIREWORKS_API_KEY` | Fallback LLM provider |
 | `OPENROUTER_API_KEY` | Fallback LLM provider |
-| `VOYAGE_API_KEY` | Embeddings for syllabus search |
 | `EMERGENT_API_KEY` | Badge/attribution |
 | `XAI_API_KEY` | xAI provider (optional) |
 

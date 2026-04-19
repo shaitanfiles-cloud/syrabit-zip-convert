@@ -160,7 +160,6 @@ The backend is hosted on Railway using the Dockerfile in `artifacts/syrabit-back
 | `GEMINI_API_KEY`      | Google Gemini          |
 | `OPENROUTER_API_KEY`  | OpenRouter             |
 | `XAI_API_KEY`         | xAI (Grok)             |
-| `VOYAGE_API_KEY`      | Voyage AI (embeddings) |
 
 ### Auth, Payments & Email
 

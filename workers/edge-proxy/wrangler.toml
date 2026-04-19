@@ -44,8 +44,8 @@ migrations_dir = "migrations"
 # backend (see artifacts/syrabit-backend/vectorize_client.py). The backend
 # talks to Vectorize over the Cloudflare REST API using CLOUDFLARE_API_TOKEN
 # and writes to the index named in the VECTORIZE_INDEX_NAME env var
-# (defaults to `syllabus-index-v2`, 1024 dim, cosine — Voyage→Gemini 1024d
-# fallback after the 2026-04 migration; the legacy `syllabus-index` 768d
+# (defaults to `syllabus-index-v2`, 1024 dim, cosine — Gemini
+# gemini-embedding-001 at 1024d; the legacy `syllabus-index` 768d
 # index is kept untouched for rollback).
 #
 # Re-enable this binding only if/when the edge worker itself needs to do

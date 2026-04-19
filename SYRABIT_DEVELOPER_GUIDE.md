@@ -125,7 +125,6 @@ The application serves as a comprehensive study companion for Assam Board studen
 | Sarvam AI | Regional language support, translation, TTS |
 | Fireworks AI | DeepSeek, Qwen models |
 | Cerebras | Ultra-fast Llama inference |
-| Voyage AI | Reranking in RAG pipeline |
 | OpenRouter / OpenAI / xAI | Fallback providers |
 
 ### Infrastructure
@@ -940,7 +939,6 @@ Context is gathered from multiple tiers, each progressively broader:
 | **Storage** | MongoDB Atlas Vector Search on `seo_pages` and `chunks` collections |
 | **Retrieval** | Vector similarity search (cosine distance) against embedded content |
 | **Deduplication** | Merges results from vector hits + full-text MongoDB search, removes duplicate content |
-| **Reranking** | Voyage AI reranker applied to candidate results for improved relevance |
 
 ### 6d. Trust Layer & Safety
 
@@ -1291,7 +1289,6 @@ Pages are auto-generated for high-intent educational topics from the syllabus:
 | **Sarvam AI** | Regional language support, translation, TTS | Backend, Admin Translation tool |
 | **Fireworks AI** | DeepSeek/Qwen model inference | Backend `llm.py` |
 | **Cerebras** | Ultra-fast Llama inference | Backend `llm.py` |
-| **Voyage AI** | RAG result reranking | Backend `rag.py` |
 | **OpenRouter / OpenAI / xAI** | Fallback LLM providers | Backend `llm.py` |
 | **MongoDB Atlas** | Content database + vector search | Backend `db_ops.py` |
 | **Redis (Upstash)** | Sessions, rate limiting, AI response caching | Backend `cache.py` |
@@ -2603,7 +2600,7 @@ There is **no GitHub Actions, Jenkins, or automated CI/CD pipeline** currently c
 | **Authentication** | `PyJWT==2.12.0`, `passlib[bcrypt]==1.7.4`, `bcrypt==4.0.1` |
 | **Validation** | `pydantic==2.12.5`, `email-validator==2.3.0` |
 | **Supabase** | `supabase==2.28.0` |
-| **AI** | `openai>=1.0.0`, `cachetools>=5.3.3`, `voyageai>=0.3.0` |
+| **AI** | `openai>=1.0.0`, `cachetools>=5.3.3` |
 | **Markdown** | `mistune>=3.0.0` |
 | **HTTP** | `httpx>=0.27.0` |
 | **Utilities** | `python-dotenv==1.2.1`, `groq>=0.4.0`, `upstash-redis>=1.0.0`, `gunicorn>=22.0.0`, `celery[redis]>=5.3.0`, `redis>=5.0.0` |
@@ -2669,7 +2666,6 @@ All environment variables are loaded in `config.py` via `python-dotenv`. Create 
 | `OPENROUTER_API_KEY` | OpenRouter API key (fallback aggregator) | No | `""` |
 | `LLM_PROVIDER` | Force a specific provider: `groq`, `sarvam`, `fireworksai`, `openai` | No | Auto-detected |
 | `LLM_MODEL` | Override the default model for the selected provider | No | Provider-specific default |
-| `VOYAGE_API_KEY` | Voyage AI API key (RAG reranking) | No | `""` |
 | `AWS_ACCESS_KEY_ID` | AWS access key (for Bedrock models) | No | `""` |
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key | No | `""` |
 | `AWS_REGION` | AWS region | No | `us-east-1` |
