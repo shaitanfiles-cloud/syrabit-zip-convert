@@ -4686,30 +4686,51 @@ def _page_to_entry(p: dict, today: str, valid_chains: set[tuple[str, str, str]] 
 
 @router.get("/sitemap-index.xml", response_class=Response)
 async def get_sitemap_index():
+    """
+    Build a sitemap index that lists ONLY non-empty sub-sitemaps.
+
+    Google Search Console flags any sub-sitemap that returns
+    `<urlset></urlset>` with zero entries as a fetch error
+    ("1 error" in the Sitemaps report). Three of our sub-sitemaps
+    (PYQs, examples, definitions) have been empty for weeks
+    because none of those page_types have published rows yet —
+    that turned a single submission into 4 GSC errors out of 9.
+
+    The fix: every sub-sitemap (including the ones in
+    `always_include`) is checked for actual published content
+    before being listed. If `seo_pages` has no published row for
+    its page_type, it is skipped here AND will not appear under
+    `<loc>` entries inside the index. The endpoint that serves
+    the sub-sitemap itself remains live for direct hits — it
+    just stops being advertised.
+    """
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    always_include = [
-        "sitemap-pages.xml",
-        "sitemap-subjects.xml",
-        "sitemap-chapters.xml",
-        "sitemap-learn.xml",
-        "sitemap-notes.xml",
-    ]
-    type_to_sitemap = {
-        "mcqs": "sitemap-mcqs.xml",
-        "important-questions": "sitemap-pyqs.xml",
-        "examples": "sitemap-examples.xml",
-        "definition": "sitemap-definitions.xml",
+    sitemap_to_types = {
+        "sitemap-pages.xml":       None,                     # static pages, always served
+        "sitemap-subjects.xml":    ["notes"],                # subjects derived from notes
+        "sitemap-chapters.xml":    ["notes"],                # chapters derived from notes
+        "sitemap-learn.xml":       None,                     # editorial pages, always served
+        "sitemap-notes.xml":       ["notes"],
+        "sitemap-mcqs.xml":        ["mcqs"],
+        "sitemap-pyqs.xml":        ["important-questions"],
+        "sitemap-examples.xml":    ["examples"],
+        "sitemap-definitions.xml": ["definition"],
     }
-    published_types = set()
-    async for rec in _db.seo_pages.aggregate([
-        {"$match": {"status": "published", "page_type": {"$in": list(type_to_sitemap.keys())}}},
-        {"$group": {"_id": "$page_type"}},
-    ]):
-        published_types.add(rec["_id"])
-    sitemap_names = list(always_include)
-    for pt, sm_name in type_to_sitemap.items():
-        if pt in published_types:
-            sitemap_names.append(sm_name)
+    all_types = sorted({t for ts in sitemap_to_types.values() if ts for t in ts})
+    published_types: set[str] = set()
+    if all_types:
+        async for rec in _db.seo_pages.aggregate([
+            {"$match": {"status": "published", "page_type": {"$in": all_types}}},
+            {"$group": {"_id": "$page_type"}},
+        ]):
+            published_types.add(rec["_id"])
+    sitemap_names: list[str] = []
+    for name, required_types in sitemap_to_types.items():
+        if required_types is None:
+            sitemap_names.append(name)
+            continue
+        if any(t in published_types for t in required_types):
+            sitemap_names.append(name)
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
