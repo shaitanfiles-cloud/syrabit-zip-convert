@@ -58,27 +58,18 @@ function injectQuge5() {
   return s;
 }
 
+// DISABLED 2026-04-19 — Quge5 network turned off site-wide as part of
+// the "keep only AdSense" cleanup. The hook is kept (rather than
+// deleted) so existing import sites in LearnPage / PYQReplicaPage
+// keep building, but it is now a no-op AND it actively removes any
+// Quge5 script tag a previously-cached bundle may have injected.
+// To restore, `git checkout cdd0d7f5 -- src/components/ads/useQuge5Multitag.js`.
 export default function useQuge5Multitag() {
   useEffect(() => {
-    if (typeof document === 'undefined') return undefined;
-    let mounted = true;
-
-    const apply = () => {
-      if (!mounted) return;
-      if (adsConsentGranted()) {
-        injectQuge5();
-      } else {
-        removeInjectedQuge5();
-      }
-    };
-
-    apply();
-    window.addEventListener('syrabit:ads-consent-changed', apply);
-
-    return () => {
-      mounted = false;
-      window.removeEventListener('syrabit:ads-consent-changed', apply);
-      removeInjectedQuge5();
-    };
+    // Defensive cleanup: a previously-deployed bundle may have
+    // injected the Quge5 script before this hot-update reached the
+    // browser. Strip it on mount so live sessions clear immediately
+    // instead of waiting for a hard reload.
+    removeInjectedQuge5();
   }, []);
 }

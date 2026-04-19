@@ -373,11 +373,24 @@ export function markAdsCrossDeviceBannerSeen() {
 // returns `{ enabled: false }` from `getAdConfig()` so `<AdSlot />`
 // renders nothing — no script tag, no reserved height, no layout shift.
 // To re-enable, remove the network name from this set.
-//   - propellerads: disabled per user request 2026-04-19. The two
-//     `learn.afterPyqs` and `learn.endOfContent` slots now silently
-//     omit. Adsterra still covers `learn.inContent` /
-//     `learn.afterFlashcards` and AdSense Auto Ads runs page-level.
-const DISABLED_NETWORKS = new Set(['propellerads']);
+//   - propellerads: disabled 2026-04-19. (NSFW push notifications.)
+//   - adsterra:     disabled 2026-04-19. (Reputation for adult /
+//                   popunder creatives slipping past category filters.)
+//   - quge5:        disabled 2026-04-19. (Same — popunders + adult.)
+//   - adpushup:     disabled 2026-04-19 per user request "keep only
+//                   adsense". Premium SSP, brand-safe, but user wants
+//                   single-network simplicity.
+//
+// Net result: only Google AdSense serves ads on the site. Auto Ads
+// runs page-level on /learn + /pyq via `useAdsenseAutoAds`, plus the
+// `*.adsense.*` per-slot placements stay available for ad-ops to
+// fill specific positions if the per-slot env vars are populated.
+const DISABLED_NETWORKS = new Set([
+  'propellerads',
+  'adsterra',
+  'quge5',
+  'adpushup',
+]);
 
 export function getAdConfig(placement) {
   const p = PLACEMENTS[placement];
