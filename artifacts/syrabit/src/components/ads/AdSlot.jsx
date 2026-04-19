@@ -21,17 +21,20 @@ import Analytics from '@/utils/analytics';
 // because it lives on the module, not on a component instance.
 const _injected = new Set();
 
-function injectScript(url) {
+function injectScript(url, opts = {}) {
   if (typeof document === 'undefined') return;
   if (_injected.has(url)) return;
   // Also de-dupe against any matching script already in the DOM (e.g.
-  // injected by a sibling slot before this module's Set was hydrated).
+  // injected by a sibling slot before this module's Set was hydrated,
+  // or by `useAdsenseAutoAds` for the AdSense loader).
   const existing = document.querySelector(`script[src="${url}"]`);
   if (existing) { _injected.add(url); return; }
   const s = document.createElement('script');
   s.src = url;
   s.async = true;
   s.dataset.syrabitAd = '1';
+  if (opts.crossorigin) s.crossOrigin = opts.crossorigin;
+  if (opts.dataAdClient) s.setAttribute('data-ad-client', opts.dataAdClient);
   document.head.appendChild(s);
   _injected.add(url);
 }
@@ -71,8 +74,24 @@ export default function AdSlot({ placement, className = '', style = {} }) {
 
   useEffect(() => {
     if (!shouldLoad || !cfg.enabled) return;
-    injectScript(cfg.scriptUrl);
-  }, [shouldLoad, cfg.enabled, cfg.scriptUrl]);
+    injectScript(cfg.scriptUrl, {
+      crossorigin: cfg.crossorigin,
+      dataAdClient: cfg.network === 'adsense' ? cfg.publisherId : '',
+    });
+    // AdSense: queue an empty config onto `window.adsbygoogle` so the
+    // network fills the <ins> element rendered below. The array is
+    // AdSense's own command queue — pushes made before the loader has
+    // evaluated are picked up and processed once it boots, so this is
+    // safe to call before the script tag has executed. Wrapped in a
+    // try/catch purely as a defensive guard against a hostile global.
+    if (cfg.network === 'adsense') {
+      try {
+        (window.adsbygoogle = window.adsbygoogle || []).push({});
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [shouldLoad, cfg.enabled, cfg.scriptUrl, cfg.network, cfg.publisherId, cfg.crossorigin]);
 
   // Task #528: viewability ping. Fire one PostHog event the first time
   // this slot is at least 50% within the viewport. Gated on the same
@@ -130,14 +149,29 @@ export default function AdSlot({ placement, className = '', style = {} }) {
         ...style,
       }}
     >
-      {/* The network's injected script populates this container. We
-          give it a deterministic id so the network can target it. */}
-      <div
-        id={`syrabit-ad-${placement.replace(/\./g, '-')}`}
-        data-slot-id={cfg.slotId}
-        data-publisher-id={cfg.publisherId || undefined}
-        style={{ minHeight: `${cfg.height}px`, width: '100%' }}
-      />
+      {cfg.network === 'adsense' ? (
+        // AdSense per-slot manual unit. The loader script is injected
+        // by the effect above (and de-duped against `useAdsenseAutoAds`
+        // when both are present), then `(adsbygoogle = …).push({})`
+        // tells the network to fill this <ins>.
+        <ins
+          className="adsbygoogle"
+          style={{ display: 'block', minHeight: `${cfg.height}px`, width: '100%' }}
+          data-ad-client={cfg.publisherId}
+          data-ad-slot={cfg.slotId}
+          data-ad-format="auto"
+          data-full-width-responsive="true"
+        />
+      ) : (
+        // Other networks: deterministic container id so the network can
+        // target it from its injected script.
+        <div
+          id={`syrabit-ad-${placement.replace(/\./g, '-')}`}
+          data-slot-id={cfg.slotId}
+          data-publisher-id={cfg.publisherId || undefined}
+          style={{ minHeight: `${cfg.height}px`, width: '100%' }}
+        />
+      )}
     </div>
   );
 }

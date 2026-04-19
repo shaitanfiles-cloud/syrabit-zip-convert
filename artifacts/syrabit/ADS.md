@@ -24,6 +24,18 @@ PYQ pages get **AdPushup / Magnite** demand (premium display). Notes
 pages get **Adsterra** (top / in-content / after-flashcards / sidebar)
 and **PropellerAds** (after-PYQs / end-of-content) as fallback networks.
 
+In addition, **Google AdSense** (publisher `ca-pub-8958003374183515`)
+runs alongside the above stack on the same two routes via the
+`useAdsenseAutoAds` hook (Task #550). It loads in **Auto Ads** mode by
+default: the AdSense loader is injected once per page from
+`LearnPage.jsx` and `PYQReplicaPage.jsx`, and AdSense itself decides
+where to render. Per-slot `<AdSlot placement="learn.adsense.*" />` /
+`placement="pyq.adsense.*"` units are also defined in `adsConfig.js`
+and stay disabled (no reserved space, no script tag) until per-slot
+`data-ad-slot` env vars are provided — same disabled-by-default
+pattern as every other network. AdSense is **additive**: it does not
+replace Quge5, Adsterra, PropellerAds, or AdPushup.
+
 The `learn.afterPyqs` / `learn.afterFlashcards` slots only mount when the
 parent section (Important Questions / Flashcards) is present, so notes
 without PYQs or flashcards don't render an empty ad rail there. The
@@ -102,6 +114,28 @@ nothing — no reserved space, no script tag.
 | `VITE_ADS_PROPELLERADS_SCRIPT_URL`                | Network script URL                |
 | `VITE_ADS_PROPELLERADS_LEARN_AFTER_PYQS_ZONE`     | `learn.afterPyqs` zone ID         |
 | `VITE_ADS_PROPELLERADS_LEARN_END_ZONE`            | `learn.endOfContent` zone ID      |
+
+### Google AdSense (Notes + PYQ — Auto Ads, Task #550)
+
+The AdSense loader script and publisher client are pinned in
+`adsConfig.js` (publisher `ca-pub-8958003374183515`); no env vars are
+required for the page-level Auto Ads mode to fill on Notes + PYQ.
+
+The per-slot env vars below are **optional** — they only enable the
+matching `<AdSlot placement="…adsense.…" />` units. Leave them empty
+to run AdSense in Auto Ads mode only.
+
+| Variable                                            | Used for                           |
+| --------------------------------------------------- | ---------------------------------- |
+| `VITE_ADS_ADSENSE_PYQ_TOP_SLOT`                     | `pyq.adsense.top` slot ID          |
+| `VITE_ADS_ADSENSE_PYQ_INCONTENT_SLOT`               | `pyq.adsense.inContent` slot ID    |
+| `VITE_ADS_ADSENSE_PYQ_END_SLOT`                     | `pyq.adsense.end` slot ID          |
+| `VITE_ADS_ADSENSE_LEARN_TOP_SLOT`                   | `learn.adsense.top` slot ID        |
+| `VITE_ADS_ADSENSE_LEARN_INCONTENT_SLOT`             | `learn.adsense.inContent` slot ID  |
+| `VITE_ADS_ADSENSE_LEARN_AFTER_PYQS_SLOT`            | `learn.adsense.afterPyqs` slot ID  |
+| `VITE_ADS_ADSENSE_LEARN_AFTER_FLASHCARDS_SLOT`      | `learn.adsense.afterFlashcards` slot ID |
+| `VITE_ADS_ADSENSE_LEARN_END_SLOT`                   | `learn.adsense.end` slot ID        |
+| `VITE_ADS_ADSENSE_LEARN_SIDEBAR_SLOT`               | `learn.adsense.sidebar` slot ID    |
 
 ## Consent + environment gate
 

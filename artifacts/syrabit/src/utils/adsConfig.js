@@ -34,6 +34,18 @@ const NETWORKS = {
   propellerads: {
     scriptUrl: env.VITE_ADS_PROPELLERADS_SCRIPT_URL || '',
   },
+  // Google AdSense (Task #550) — Auto Ads runs page-level via
+  // `useAdsenseAutoAds`. Per-slot manual units are also supported and
+  // stay disabled (no reserved space, no script tag) until per-slot
+  // `data-ad-slot` env vars are provided. The page-level script URL is
+  // the AdSense loader pinned to our publisher client; same URL is used
+  // by both the auto-ads hook and any per-slot `<AdSlot />` units, so
+  // the in-module dedupe Set in `<AdSlot />` keeps it loaded once.
+  adsense: {
+    scriptUrl: 'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8958003374183515',
+    publisherId: 'ca-pub-8958003374183515',
+    crossorigin: 'anonymous',
+  },
 };
 
 // ── Per-placement wiring ─────────────────────────────────────────────────────
@@ -100,6 +112,68 @@ const PLACEMENTS = {
   'learn.sidebar': {
     network: 'adsterra',
     slotId: env.VITE_ADS_ADSTERRA_LEARN_SIDEBAR_ZONE || '',
+    height: 600,
+    label: 'Advertisement',
+  },
+
+  // ── AdSense per-slot units (Task #550) ────────────────────────────────────
+  // Optional manual AdSense placements. Stay disabled (no reserved
+  // space, no script tag) until the per-slot `data-ad-slot` env var is
+  // provided. AdSense Auto Ads runs unconditionally on the same routes
+  // via `useAdsenseAutoAds`, so leaving these empty still nets full
+  // AdSense coverage on Notes + PYQ — the per-slot keys are an
+  // override for ad-ops to target specific positions if/when desired.
+  'pyq.adsense.top': {
+    network: 'adsense',
+    slotId: env.VITE_ADS_ADSENSE_PYQ_TOP_SLOT || '',
+    height: 250,
+    label: 'Advertisement',
+  },
+  'pyq.adsense.inContent': {
+    network: 'adsense',
+    slotId: env.VITE_ADS_ADSENSE_PYQ_INCONTENT_SLOT || '',
+    height: 280,
+    label: 'Advertisement',
+  },
+  'pyq.adsense.end': {
+    network: 'adsense',
+    slotId: env.VITE_ADS_ADSENSE_PYQ_END_SLOT || '',
+    height: 280,
+    label: 'Advertisement',
+  },
+  'learn.adsense.top': {
+    network: 'adsense',
+    slotId: env.VITE_ADS_ADSENSE_LEARN_TOP_SLOT || '',
+    height: 250,
+    label: 'Advertisement',
+  },
+  'learn.adsense.inContent': {
+    network: 'adsense',
+    slotId: env.VITE_ADS_ADSENSE_LEARN_INCONTENT_SLOT || '',
+    height: 250,
+    label: 'Advertisement',
+  },
+  'learn.adsense.afterPyqs': {
+    network: 'adsense',
+    slotId: env.VITE_ADS_ADSENSE_LEARN_AFTER_PYQS_SLOT || '',
+    height: 250,
+    label: 'Advertisement',
+  },
+  'learn.adsense.afterFlashcards': {
+    network: 'adsense',
+    slotId: env.VITE_ADS_ADSENSE_LEARN_AFTER_FLASHCARDS_SLOT || '',
+    height: 250,
+    label: 'Advertisement',
+  },
+  'learn.adsense.end': {
+    network: 'adsense',
+    slotId: env.VITE_ADS_ADSENSE_LEARN_END_SLOT || '',
+    height: 250,
+    label: 'Advertisement',
+  },
+  'learn.adsense.sidebar': {
+    network: 'adsense',
+    slotId: env.VITE_ADS_ADSENSE_LEARN_SIDEBAR_SLOT || '',
     height: 600,
     label: 'Advertisement',
   },
@@ -226,6 +300,7 @@ export function getAdConfig(placement) {
     network: p.network,
     scriptUrl: net?.scriptUrl || '',
     publisherId: net?.publisherId || '',
+    crossorigin: net?.crossorigin || '',
     slotId: p.slotId,
     height: p.height,
     label: p.label,

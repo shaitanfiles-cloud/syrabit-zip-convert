@@ -59,6 +59,16 @@ function isForbidden(spec) {
   return /(?:^|\/)components\/ads(?:\/|$)/.test(spec);
 }
 
+// Task #550: also reject any literal mention of the Google AdSense
+// loader URL in guarded files. The new `useAdsenseAutoAds` hook is
+// already covered by the import scan (it lives under
+// `src/components/ads/`), but a contributor could theoretically inline
+// the script tag or a `document.createElement('script'); s.src = "…"`
+// snippet directly. This second pass catches that.
+const FORBIDDEN_LITERALS = [
+  "pagead2.googlesyndication.com/pagead/js/adsbygoogle.js",
+];
+
 const violations = [];
 
 for (const rel of GUARDED_FILES) {
@@ -78,6 +88,16 @@ for (const rel of GUARDED_FILES) {
         const ln = lineOf(code, m.index);
         violations.push(`${rel}:${ln}: forbidden ad import → ${spec}`);
       }
+    }
+  }
+  for (const literal of FORBIDDEN_LITERALS) {
+    let from = 0;
+    while (true) {
+      const idx = code.indexOf(literal, from);
+      if (idx === -1) break;
+      const ln = lineOf(code, idx);
+      violations.push(`${rel}:${ln}: forbidden ad script URL → ${literal}`);
+      from = idx + literal.length;
     }
   }
 }
