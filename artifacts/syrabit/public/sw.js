@@ -1,47 +1,22 @@
-// ── PropellerAds push integration ────────────────────────────────
-// Merged into the site's PWA service worker so we don't lose offline
-// support / API caching by overwriting /sw.js with the upstream
-// PropellerAds file. The remote script registers its own `push` and
-// `notificationclick` listeners; our cache logic below handles
-// `install`, `activate`, `fetch`, and `message`. ServiceWorker
-// listeners are additive, so the two co-exist cleanly.
+// ── PropellerAds push integration — DISABLED 2026-04-19 ──────────
+// Per user request, both PropellerAds push zones (10894781 and
+// 10896932) have been removed from the service worker. The upstream
+// `https://3nbf4.com/act/files/service-worker.min.js` is no longer
+// imported, so this SW no longer registers PropellerAds `push` or
+// `notificationclick` handlers. Existing browsers that already cached
+// the previous SW will pick up this new version on next visit (we bump
+// CACHE_VERSION below on every deploy, which forces an `activate`).
 //
-// Task #542: a second PropellerAds zone (10896932) needs verification
-// from the same SW endpoint. Both zones share the 3nbf4.com domain, so
-// we re-import the upstream worker a second time with `self.options`
-// re-pointed at the new zoneId. The upstream script registers its
-// listeners against the live `self.options.zoneId` at import time, so
-// two sequential imports register two zones from a single /sw.js.
-self.propellerAdsOptions = {
-  domain: '3nbf4.com',
-  zoneId: 10894781,
-};
-self.options = self.propellerAdsOptions;
-self.lary = '';
-try {
-  importScripts('https://3nbf4.com/act/files/service-worker.min.js?r=sw');
-} catch (err) {
-  // Soft-fail: if PropellerAds is blocked (uBlock, network, dashboard
-  // misconfig) we still want the PWA cache + offline page to work.
-  // Push ads simply won't fire for this user.
-  // eslint-disable-next-line no-console
-  console.warn('[sw] PropellerAds zone 10894781 importScripts failed:', err && err.message);
-}
-// Second zone (Task #542). Re-point self.options before re-importing.
-self.propellerAdsOptionsZone10896932 = {
-  domain: '3nbf4.com',
-  zoneId: 10896932,
-};
-self.options = self.propellerAdsOptionsZone10896932;
-try {
-  importScripts('https://3nbf4.com/act/files/service-worker.min.js?r=sw-zone-10896932');
-} catch (err) {
-  // eslint-disable-next-line no-console
-  console.warn('[sw] PropellerAds zone 10896932 importScripts failed:', err && err.message);
-}
+// Our own `push` and `notificationclick` handlers further down still
+// run for first-party Web Push notifications. To restore PropellerAds,
+// `git checkout cc3dd2a2 -- artifacts/syrabit/public/sw.js`.
 // ─────────────────────────────────────────────────────────────────
 
-const CACHE_VERSION = '12';
+// Bumped to v13 (2026-04-19) to force `activate` on all returning
+// visitors so the PropellerAds importScripts disappears from their
+// installed SW immediately on next page load instead of waiting for
+// the browser's normal 24h SW update window.
+const CACHE_VERSION = '13';
 const STATIC_CACHE = 'syrabit-static-v' + CACHE_VERSION;
 const RUNTIME_CACHE = 'syrabit-runtime-v' + CACHE_VERSION;
 const API_CACHE = 'syrabit-api-v' + CACHE_VERSION;

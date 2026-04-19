@@ -368,9 +368,21 @@ export function markAdsCrossDeviceBannerSeen() {
  *
  * `<AdSlot />` is responsible for the consent + production-build gates.
  */
+// Networks that have been hard-disabled at the config layer regardless of
+// whether their env vars are set. Any placement on a disabled network
+// returns `{ enabled: false }` from `getAdConfig()` so `<AdSlot />`
+// renders nothing — no script tag, no reserved height, no layout shift.
+// To re-enable, remove the network name from this set.
+//   - propellerads: disabled per user request 2026-04-19. The two
+//     `learn.afterPyqs` and `learn.endOfContent` slots now silently
+//     omit. Adsterra still covers `learn.inContent` /
+//     `learn.afterFlashcards` and AdSense Auto Ads runs page-level.
+const DISABLED_NETWORKS = new Set(['propellerads']);
+
 export function getAdConfig(placement) {
   const p = PLACEMENTS[placement];
   if (!p) return { enabled: false, height: 0 };
+  if (DISABLED_NETWORKS.has(p.network)) return { enabled: false, height: 0 };
   const net = NETWORKS[p.network];
   const enabled = !!(net && net.scriptUrl && p.slotId);
   return {
