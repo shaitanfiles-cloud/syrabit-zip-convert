@@ -204,15 +204,47 @@ def auth_breaker_status() -> dict:
 
 
 _cf_client = None
+_runtime_token_warned = False
+
+
+def _runtime_token() -> str:
+    """Resolve the runtime Cloudflare token per Task #534 contract.
+
+    Priority order:
+      1. CLOUDFLARE_ANALYTICS_TOKEN  — Task #534 spec name (analytics-scoped
+         token: Vectorize:Edit + Cache Purge + Analytics:Read)
+      2. CLOUDFLARE_API_TOKEN        — legacy / backwards-compat fallback
+
+    The Vectorize REST and Python SDK calls below all flow through this
+    helper, so the runtime never reaches for a deploy-scoped token by
+    accident. A one-shot warning is emitted if we fall back to the legacy
+    name so operators see the deprecation in the logs.
+    """
+    global _runtime_token_warned
+    spec = os.environ.get("CLOUDFLARE_ANALYTICS_TOKEN", "").strip()
+    if spec:
+        return spec
+    legacy = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+    if legacy and not _runtime_token_warned:
+        logger.warning(
+            "Vectorize is using legacy CLOUDFLARE_API_TOKEN; set "
+            "CLOUDFLARE_ANALYTICS_TOKEN (Task #534 spec name) to silence "
+            "this warning. Both names resolve to the same value here."
+        )
+        _runtime_token_warned = True
+    return legacy
 
 
 def _get_cf_client():
     global _cf_client
     if _cf_client is None:
         from cloudflare import AsyncCloudflare
-        token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+        token = _runtime_token()
         if not token:
-            raise RuntimeError("CLOUDFLARE_API_TOKEN must be set")
+            raise RuntimeError(
+                "CLOUDFLARE_ANALYTICS_TOKEN (or legacy CLOUDFLARE_API_TOKEN) "
+                "must be set for Vectorize runtime calls"
+            )
         _cf_client = AsyncCloudflare(api_token=token)
     return _cf_client
 
@@ -225,7 +257,7 @@ def _account_id() -> str:
 
 
 def is_configured() -> bool:
-    token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+    token = _runtime_token()
     account = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
     return bool(token and account)
 
@@ -241,7 +273,7 @@ async def upsert_vectors(vectors: list[dict]) -> dict:
     if _breaker_open():
         return {"upserted": 0, "errors": ["auth_breaker_open"]}
 
-    token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+    token = _runtime_token()
     account_id = _account_id()
 
     total_upserted = 0

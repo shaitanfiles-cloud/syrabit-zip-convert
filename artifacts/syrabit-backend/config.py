@@ -72,17 +72,34 @@ RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
 EMAIL_FROM     = os.environ.get('EMAIL_FROM', 'noreply@syrabit.ai').strip()
 FRONTEND_URL   = os.environ.get('FRONTEND_URL', 'https://syrabit.ai').strip().rstrip('/')
 
-# ── Cloudflare Analytics API ─────────────────────────────────────────────────
-# The analytics token can live under any of these env-var names. We resolve
-# them in priority order so operators don't have to duplicate secrets:
-#   1. CF_PAGES_API_TOKEN     — preferred name when the same token is also
-#                               used for Cloudflare Pages deploy permissions
-#   2. CF_ANALYTICS_API_TOKEN — original/legacy name kept for backwards compat
-#   3. CF_API_TOKEN           — generic catch-all
+# ── Cloudflare API tokens (Task #534 contract) ──────────────────────────────
+# Three tokens, three roles. Priority order respects the spec while keeping
+# legacy names working so operators don't have to rotate secrets just to
+# upgrade to the new naming:
+#
+#   Runtime / analytics (Vectorize:Edit, Cache Purge, Analytics:Read):
+#     1. CLOUDFLARE_ANALYTICS_TOKEN  — Task #534 spec name
+#     2. CF_ANALYTICS_API_TOKEN      — legacy name
+#     3. CF_PAGES_API_TOKEN          — same-token shortcut (deploy-scope
+#                                      reused for analytics; logs a warning)
+#     4. CF_API_TOKEN / CLOUDFLARE_API_TOKEN — last-resort fallback
+#
+#   Pages CI (Pages:Edit + Vectorize:Edit):
+#     1. CLOUDFLARE_PAGES_TOKEN      — Task #534 spec name
+#     2. CF_PAGES_API_TOKEN          — legacy name
+#
+# Wrangler deploy reads CLOUDFLARE_API_TOKEN itself (auto-detect); we don't
+# expose it through this module since the FastAPI process never deploys.
 _ANALYTICS_TOKEN_ENV_NAMES = (
-    'CF_PAGES_API_TOKEN',
+    'CLOUDFLARE_ANALYTICS_TOKEN',
     'CF_ANALYTICS_API_TOKEN',
+    'CF_PAGES_API_TOKEN',
     'CF_API_TOKEN',
+    'CLOUDFLARE_API_TOKEN',
+)
+_PAGES_TOKEN_ENV_NAMES = (
+    'CLOUDFLARE_PAGES_TOKEN',
+    'CF_PAGES_API_TOKEN',
 )
 
 
@@ -94,7 +111,16 @@ def _resolve_cf_analytics_token() -> str:
     return ''
 
 
+def _resolve_cf_pages_token() -> str:
+    for _name in _PAGES_TOKEN_ENV_NAMES:
+        _val = os.environ.get(_name, '').strip()
+        if _val:
+            return _val
+    return ''
+
+
 CF_ANALYTICS_API_TOKEN = _resolve_cf_analytics_token()
+CF_PAGES_DEPLOY_TOKEN = _resolve_cf_pages_token()
 CF_ZONE_ID = os.environ.get('CF_ZONE_ID', '').strip()
 CF_API_TOKEN = os.environ.get('CF_API_TOKEN', '').strip() or CF_ANALYTICS_API_TOKEN
 

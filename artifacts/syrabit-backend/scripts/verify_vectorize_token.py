@@ -65,14 +65,41 @@ import httpx
 # in priority order so operators don't have to duplicate secrets when the
 # same Cloudflare API token is reused for Pages deploy + analytics access.
 _ANALYTICS_TOKEN_ENV_NAMES = (
-    "CF_PAGES_API_TOKEN",
+    "CLOUDFLARE_ANALYTICS_TOKEN",
     "CF_ANALYTICS_API_TOKEN",
+    "CF_PAGES_API_TOKEN",
     "CF_API_TOKEN",
+)
+_RUNTIME_TOKEN_ENV_NAMES = (
+    "CLOUDFLARE_ANALYTICS_TOKEN",
+    "CLOUDFLARE_API_TOKEN",
+)
+_PAGES_TOKEN_ENV_NAMES = (
+    "CLOUDFLARE_PAGES_TOKEN",
+    "CF_PAGES_API_TOKEN",
 )
 
 
 def _analytics_token() -> str:
     for _name in _ANALYTICS_TOKEN_ENV_NAMES:
+        _val = os.environ.get(_name, "").strip()
+        if _val:
+            return _val
+    return ""
+
+
+def _runtime_token() -> str:
+    """Vectorize / Cache-Purge token (Task #534 spec name first)."""
+    for _name in _RUNTIME_TOKEN_ENV_NAMES:
+        _val = os.environ.get(_name, "").strip()
+        if _val:
+            return _val
+    return ""
+
+
+def _pages_token() -> str:
+    """Pages CI / Wrangler deploy token (Task #534 spec name first)."""
+    for _name in _PAGES_TOKEN_ENV_NAMES:
         _val = os.environ.get(_name, "").strip()
         if _val:
             return _val

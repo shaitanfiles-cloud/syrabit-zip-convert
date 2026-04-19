@@ -12,7 +12,8 @@ Usage:
 
 Environment variables required:
     MONGO_URL               — MongoDB connection string
-    CLOUDFLARE_API_TOKEN    — Cloudflare API token with Vectorize permissions
+    CLOUDFLARE_ANALYTICS_TOKEN  — runtime CF token (Vectorize:Edit). Falls
+                                  back to legacy CLOUDFLARE_API_TOKEN.
     CLOUDFLARE_ACCOUNT_ID   — Cloudflare account ID
     GEMINI_API_KEY (or VERTEX_SERVICE_ACCOUNT) — for embedding generation
 
@@ -43,7 +44,10 @@ async def main():
 
     import vectorize_client
     if not vectorize_client.is_configured():
-        logger.error("CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID must be set")
+        logger.error(
+            "CLOUDFLARE_ANALYTICS_TOKEN (or legacy CLOUDFLARE_API_TOKEN) "
+            "and CLOUDFLARE_ACCOUNT_ID must be set"
+        )
         sys.exit(1)
 
     index_info = await vectorize_client.get_index_info()
