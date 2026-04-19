@@ -9,7 +9,32 @@ routes = [
 ]
 
 [vars]
-BACKEND_URL = "https://workspacemockup-sandbox-production-df37.up.railway.app"
+# ---------------------------------------------------------------------------
+# BACKEND_URL — the production Railway backend the edge worker proxies to.
+#
+# DO NOT hard-code a real Railway URL here. wrangler.toml [vars] are
+# DEPLOYED on every `wrangler deploy` and OVERWRITE whatever was set in
+# the Cloudflare dashboard, so a stale value here silently breaks
+# api.syrabit.ai for users until someone re-edits the dashboard.
+#
+# The previous value (`workspacemockup-sandbox-production-df37`) was a
+# stale dev-environment URL pointing at a sandbox project — leaving it
+# in source meant any contributor running `wrangler deploy` from a
+# fresh checkout would have nuked the live api.syrabit.ai backend
+# binding without realising it.
+#
+# How to set the real URL for production:
+#   1. Cloudflare dashboard → Workers & Pages → syrabit-edge → Settings
+#      → Variables and Secrets → add BACKEND_URL as an *encrypted*
+#      variable (encrypted vars are NOT overwritten by wrangler.toml).
+#   2. For local `wrangler dev`, create workers/edge-proxy/.dev.vars
+#      (already in .gitignore via the worker template):
+#        BACKEND_URL=https://your-real-railway-host.up.railway.app
+# ---------------------------------------------------------------------------
+# Set to an invalid placeholder so any accidental deploy that lands on
+# this value fails fast with a clear 502 instead of silently routing
+# real traffic to the wrong host.
+BACKEND_URL = "https://INVALID.set-BACKEND_URL-via-cloudflare-dashboard.invalid"
 # Pages origin used by the worker to serve non-API GETs (the SPA).
 # MUST be the *.pages.dev hostname, not syrabit.ai/www.syrabit.ai —
 # routing through the custom domain would re-enter this same worker
