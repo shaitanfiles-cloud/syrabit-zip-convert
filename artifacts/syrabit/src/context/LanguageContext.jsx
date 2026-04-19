@@ -1,23 +1,19 @@
-import { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { createContext, useContext, useState, useCallback } from 'react';
 
 const LanguageContext = createContext(null);
 
 const STORAGE_KEY = 'syrabit:content_lang';
 
-export function LanguageProvider({ children }) {
-  // IMPORTANT: initialize to a deterministic constant ('en') so the SSR-prerendered
-  // HTML matches the client's first render — otherwise reading localStorage during
-  // initial state causes hydration mismatch (React error #418) on prerendered pages
-  // such as /:board/:classSlug/:subjectSlug/:chapterSlug. Rehydrate from localStorage
-  // in useEffect after mount.
-  const [contentLang, setContentLang] = useState('en');
+function getInitialLang() {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored === 'as' || stored === 'en') return stored;
+  } catch {}
+  return 'en';
+}
 
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored === 'as' || stored === 'en') setContentLang(stored);
-    } catch {}
-  }, []);
+export function LanguageProvider({ children }) {
+  const [contentLang, setContentLang] = useState(getInitialLang);
 
   const switchLang = useCallback((lang) => {
     const val = lang === 'as' ? 'as' : 'en';
