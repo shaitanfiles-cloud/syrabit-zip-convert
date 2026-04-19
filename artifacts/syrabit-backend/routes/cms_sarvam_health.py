@@ -72,26 +72,63 @@ logger = logging.getLogger(__name__)
 _llm_health_cache: dict = {}
 _llm_health_task: asyncio.Task | None = None
 
+# Models to try in order. The probe walks the list and stops at the first
+# success — so the LLM layer is reported "ok" as long as ANY provider in
+# the pool answers. Hardcoding a single provider/model (the previous bug)
+# made the health card flip to "degraded" whenever that one provider had
+# a transient error or rate-limit, even though real chat traffic was fine.
+_LLM_PROBE_MODELS = (
+    "gemini-2.5-flash",
+    "llama-4-scout-17b-16e-instruct",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "sarvam-m",
+)
+
 async def _bg_llm_health_probe():
+    # Wait briefly for providers to register, then enter the loop.
     await asyncio.sleep(5)
     while True:
-        try:
-            _t0 = _time_mod.time()
-            _resp = await call_llm_api(
-                [{"role": "user", "content": "Reply with exactly: ok"}],
-                model="sarvam-m",
-                max_tokens=4,
-            )
-            _lat = int((_time_mod.time() - _t0) * 1000)
-            _st = "ok" if (_resp and len(_resp.strip()) > 0) else "degraded"
-        except Exception:
-            _st = "degraded"
-            _lat = 0
-        _llm_health_cache["data"] = {"status": _st, "latencyMs": _lat}
+        _st = "degraded"
+        _lat = 0
+        _last_err: str | None = None
+        if not _LLM_PROVIDERS:
+            # No providers wired at all → genuinely degraded. Keep latency 0.
+            _llm_health_cache["data"] = {"status": "degraded", "latencyMs": 0,
+                                         "reason": "no providers configured"}
+            await asyncio.sleep(300)
+            continue
+        for _model in _LLM_PROBE_MODELS:
+            try:
+                _t0 = _time_mod.time()
+                _resp = await asyncio.wait_for(
+                    call_llm_api(
+                        [{"role": "user", "content": "Reply with exactly: ok"}],
+                        model=_model,
+                        max_tokens=4,
+                    ),
+                    timeout=8.0,
+                )
+                _lat = int((_time_mod.time() - _t0) * 1000)
+                if _resp and len(_resp.strip()) > 0:
+                    _st = "ok"
+                    break
+            except Exception as exc:
+                _last_err = f"{_model}: {type(exc).__name__}"
+                continue
+        payload = {"status": _st, "latencyMs": _lat}
+        if _st != "ok" and _last_err:
+            payload["reason"] = _last_err
+        _llm_health_cache["data"] = payload
         await asyncio.sleep(300)
 
 def _ensure_llm_health_probe():
     global _llm_health_task
+    # Seed the cache as "ok" immediately when providers are configured so
+    # the first 5 minutes (before the probe loop runs) doesn't show a
+    # spurious "degraded" while everything is actually fine.
+    if "data" not in _llm_health_cache and _LLM_PROVIDERS:
+        _llm_health_cache["data"] = {"status": "ok", "latencyMs": 0,
+                                     "reason": "warming up"}
     if _llm_health_task is None or _llm_health_task.done():
         _llm_health_task = asyncio.ensure_future(_bg_llm_health_probe())
 
