@@ -237,6 +237,40 @@ export const adminTestGA4 = (token) =>
 export const adminGetContentCardViews = (token, days = 0) =>
   axios.get(`${API_BASE}/admin/analytics/content-card-views`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
 
+// ── Ads (Task #551) ─────────────────────────────────────────────────────────
+export const adminGetAdsOverview = (token, days = 30) =>
+  axios.get(`${API_BASE}/admin/ads/overview`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
+
+export const adminListAdEarnings = (token, days = 30, network) =>
+  axios.get(`${API_BASE}/admin/ads/earnings`, {
+    headers: adminHeaders(token), withCredentials: true,
+    params: network ? { days, network } : { days },
+  });
+
+export const adminAddAdEarning = (token, entry) =>
+  axios.post(`${API_BASE}/admin/ads/earnings`, entry, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminDeleteAdEarning = (token, id) =>
+  axios.delete(`${API_BASE}/admin/ads/earnings/${id}`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminUploadAdEarningsCsv = (token, network, file) => {
+  const fd = new FormData();
+  fd.append('network', network);
+  fd.append('file', file);
+  return axios.post(`${API_BASE}/admin/ads/earnings/csv`, fd, {
+    headers: { ...adminHeaders(token), 'Content-Type': 'multipart/form-data' },
+    withCredentials: true,
+  });
+};
+
+export const adminGetAdsenseStatus = (token) =>
+  axios.get(`${API_BASE}/admin/ads/adsense/status`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminAdsenseSync = (token, days = 7) =>
+  axios.post(`${API_BASE}/admin/ads/adsense/sync`, {}, {
+    headers: adminHeaders(token), withCredentials: true, params: { days },
+  });
+
 export const adminGetSettings = (token) =>
   axios.get(`${API_BASE}/admin/settings`, { headers: adminHeaders(token), withCredentials: true });
 

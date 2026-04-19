@@ -28,6 +28,7 @@ const AdminActivityLog   = lazy(() => import('@/components/admin/AdminActivityLo
 const AdminHealth        = lazy(() => import('@/components/admin/AdminHealth'));
 const AdminSeoManager    = lazy(() => import('@/components/admin/AdminSeoManager'));
 const AdminMonetization  = lazy(() => import('@/components/admin/AdminMonetization'));
+const AdminAds           = lazy(() => import('@/components/admin/AdminAds'));
 const AdminVertexPanel   = lazy(() => import('@/components/admin/AdminVertexPanel'));
 const AdminAutomation    = lazy(() => import('@/components/admin/AdminAutomation'));
 const AdminIntelligence  = lazy(() => import('@/components/admin/AdminIntelligence'));
@@ -46,6 +47,7 @@ const SECTIONS = [
   { id: 'feedback',      icon: ThumbsUp,        label: 'Chat Feedback',     group: 'audience' },
   { id: 'analytics',     icon: TrendingUp,      label: 'Analytics',         group: 'insights' },
   { id: 'monetization',  icon: Crown,           label: 'Monetization',      group: 'insights' },
+  { id: 'ads',           icon: BarChart2,       label: 'Ad Revenue',        group: 'insights' },
   { id: 'plans',         icon: CreditCard,      label: 'Plans & Credits',   group: 'insights' },
   { id: 'intelligence',  icon: BarChart2,       label: 'Intelligence',      group: 'insights' },
   { id: 'notifications', icon: Bell,            label: 'Notifications',     group: 'comms'    },
@@ -80,6 +82,7 @@ const SECTION_COMPONENTS = {
   feedback:      AdminFeedback,
   analytics:     AdminAnalytics,
   monetization:  AdminMonetization,
+  ads:           AdminAds,
   plans:         AdminPlans,
   notifications: AdminNotifications,
   apiconfig:     AdminApiConfig,

@@ -27,6 +27,42 @@ const track = (event, properties = {}) => {
   if (typeof event === 'string' && event.startsWith('hydrate_')) {
     try { mirrorHydrateEvent(event, properties); } catch {}
   }
+  // Task #551: mirror ad-viewability pings to /analytics/ad-impression
+  // so the admin Ads dashboard can roll up impressions per network +
+  // placement without a PostHog API integration.
+  if (event === 'ad_slot_viewed') {
+    try { mirrorAdImpression(properties); } catch {}
+  }
+};
+
+let _adMirrorBlocked = false;
+const mirrorAdImpression = (properties) => {
+  if (_adMirrorBlocked) return;
+  if (typeof window === 'undefined') return;
+  if (!properties || !properties.placement || !properties.network) return;
+  try {
+    const apiBase =
+      (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_BACKEND_URL)
+        ? `${import.meta.env.VITE_BACKEND_URL.replace(/\/$/, '')}/api`
+        : '/api';
+    const payload = JSON.stringify({
+      placement: properties.placement,
+      network: properties.network,
+      enabled: properties.enabled === undefined ? null : !!properties.enabled,
+    });
+    const url = `${apiBase}/analytics/ad-impression`;
+    const blob = new Blob([payload], { type: 'application/json' });
+    if (navigator.sendBeacon && navigator.sendBeacon(url, blob)) return;
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload,
+      keepalive: true,
+      credentials: 'omit',
+    }).catch(() => { _adMirrorBlocked = true; });
+  } catch {
+    _adMirrorBlocked = true;
+  }
 };
 
 // Internal: tiny beacon to /api/analytics/hydrate-event. Uses
