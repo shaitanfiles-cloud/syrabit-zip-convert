@@ -1,6 +1,13 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Play, Pause, Scissors, X, Upload, Loader2, AlertTriangle } from 'lucide-react';
-import lamejs from 'lamejs';
+
+let _lamejsPromise = null;
+function loadLamejs() {
+  if (!_lamejsPromise) {
+    _lamejsPromise = import('lamejs').then(m => m.default || m);
+  }
+  return _lamejsPromise;
+}
 
 const MAX_DURATION = 5;
 const WAVEFORM_BARS = 80;
@@ -113,7 +120,8 @@ function floatTo16BitPCM(float32Array) {
   return int16;
 }
 
-function audioBufferToMp3(buffer) {
+async function audioBufferToMp3(buffer) {
+  const lamejs = await loadLamejs();
   const numChannels = buffer.numberOfChannels;
   const sampleRate = buffer.sampleRate;
   const encoder = new lamejs.Mp3Encoder(numChannels, sampleRate, MP3_BITRATE);
@@ -269,7 +277,7 @@ export default function AudioTrimPreview({ file, onConfirm, onCancel, uploading 
     setSizeError(null);
     if (needsTrim) {
       const trimmed = trimAudioBuffer(audioBuffer, trimStart, trimEnd);
-      const blob = audioBufferToMp3(trimmed);
+      const blob = await audioBufferToMp3(trimmed);
       if (blob.size > 500 * 1024) {
         setSizeError(`Trimmed file is ${Math.round(blob.size / 1024)} KB — exceeds the 500 KB limit. Try a shorter selection.`);
         return;
