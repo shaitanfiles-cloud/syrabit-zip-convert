@@ -103,18 +103,40 @@ _PAGES_TOKEN_ENV_NAMES = (
 )
 
 
+_ANALYTICS_LEGACY_WARNED = False
+_PAGES_LEGACY_WARNED = False
+
+
 def _resolve_cf_analytics_token() -> str:
+    global _ANALYTICS_LEGACY_WARNED
     for _name in _ANALYTICS_TOKEN_ENV_NAMES:
         _val = os.environ.get(_name, '').strip()
         if _val:
+            if _name != _ANALYTICS_TOKEN_ENV_NAMES[0] and not _ANALYTICS_LEGACY_WARNED:
+                _ANALYTICS_LEGACY_WARNED = True
+                print(
+                    f"[config] WARNING: CF analytics token resolved from "
+                    f"legacy env {_name!r}; set CLOUDFLARE_ANALYTICS_TOKEN "
+                    f"(Task #534 spec name) to silence this warning.",
+                    flush=True,
+                )
             return _val
     return ''
 
 
 def _resolve_cf_pages_token() -> str:
+    global _PAGES_LEGACY_WARNED
     for _name in _PAGES_TOKEN_ENV_NAMES:
         _val = os.environ.get(_name, '').strip()
         if _val:
+            if _name != _PAGES_TOKEN_ENV_NAMES[0] and not _PAGES_LEGACY_WARNED:
+                _PAGES_LEGACY_WARNED = True
+                print(
+                    f"[config] WARNING: CF Pages token resolved from "
+                    f"legacy env {_name!r}; set CLOUDFLARE_PAGES_TOKEN "
+                    f"(Task #534 spec name) to silence this warning.",
+                    flush=True,
+                )
             return _val
     return ''
 
