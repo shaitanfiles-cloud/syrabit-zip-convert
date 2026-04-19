@@ -2,7 +2,11 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef } f
 import axios from 'axios';
 import { API_BASE, setAuthToken } from '@/utils/api';
 import { Analytics } from '@/utils/analytics';
-import { hydrateAdsOptOutFromServer } from '@/utils/adsConfig';
+import {
+  hydrateAdsOptOutFromServer,
+  setAdsUserPlan,
+  setAdsAuthChecked,
+} from '@/utils/adsConfig';
 
 const AuthContext = createContext(null);
 
@@ -17,6 +21,7 @@ export const AuthProvider = ({ children }) => {
   const justAuthenticated = useRef(false);
 
   const fetchMe = useCallback(async () => {
+    let resolvedUserId = null;
     try {
       const headers = _inMemoryToken
         ? { Authorization: `Bearer ${_inMemoryToken}` }
@@ -28,23 +33,40 @@ export const AuthProvider = ({ children }) => {
       const userData = res.data;
       if (userData && userData.id) {
         setUser(userData);
+        resolvedUserId = userData.id;
         // Task #530: rehydrate the local ad opt-out flag from the
         // server so cookie-restored sessions and signed-in returning
         // users immediately apply their cross-device choice on every
         // ad-bearing route, not just /profile.
         hydrateAdsOptOutFromServer(userData.ads_opt_out);
+        // Task #552: also mirror the resolved plan into the ads
+        // module synchronously here, so the consent gate sees the
+        // paid-plan flag in the same tick we open the ad-auth gate
+        // below — prevents any ad flash for cookie-only paid users.
+        setAdsUserPlan(userData.plan ?? null);
       } else {
         setUser(null);
+        setAdsUserPlan(null);
       }
       justAuthenticated.current = false;
-      return !!(userData && userData.id);
+      return !!resolvedUserId;
     } catch {
       if (!justAuthenticated.current) {
         setUser(null);
+        setAdsUserPlan(null);
       }
       return false;
     } finally {
       setAuthChecked(true);
+      // Task #552: open the ad-auth gate only after the first
+      // `/auth/me` probe has resolved, regardless of whether the
+      // visitor is anonymous or signed in. This guarantees a paid
+      // subscriber on a cookie-only session never sees an ad flash
+      // before their plan hydrates — the no-token branch in the
+      // mount effect defers the probe via `requestIdleCallback`, so
+      // tying ads to `authChecked` (which flips true immediately in
+      // that branch) would race the plan into existence.
+      setAdsAuthChecked(true);
     }
   }, []);
 
@@ -77,6 +99,15 @@ export const AuthProvider = ({ children }) => {
       setTimeout(probe, 600);
     }
   }, [fetchMe]);
+
+  // Mirror the signed-in user's plan into the ads module so paying
+  // subscribers (Starter / Pro) get an ad-free experience on Notes /
+  // PYQ — Task #552. Reset to null on logout / anonymous so the gate
+  // re-opens for downgraded sessions on the same browser tab.
+  useEffect(() => {
+    setAdsUserPlan(user?.plan ?? null);
+  }, [user?.plan]);
+
 
   const _storeToken = (token) => {
     _inMemoryToken = token;

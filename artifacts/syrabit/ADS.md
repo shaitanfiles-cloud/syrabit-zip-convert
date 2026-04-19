@@ -147,7 +147,31 @@ injecting any script. The current policy is:
 2. **Manual opt-out.** A user can set
    `localStorage.setItem('syrabit_ads_optout', '1')` to disable ads
    entirely in their browser (handy for QA and privacy-conscious users).
-3. **Future CMP.** When Syrabit ships a consent-management platform,
+3. **Paid plans → ad-free (Task #552).** Signed-in users on a paid
+   plan (`starter` or `pro`) see no ads on Notes / PYQ. `AuthContext`
+   mirrors the user's plan into the ads module via `setAdsUserPlan()`
+   on every login / signup / `/auth/me` hydrate / logout, and
+   `adsConsentGranted()` returns `false` while a paid plan is active.
+   This suppresses the AdSense Auto Ads loader, the Quge5 multitag,
+   and every `<AdSlot />` (AdPushup, Adsterra, PropellerAds, AdSense
+   per-slot units) without any extra server call. Free-plan users and
+   anonymous visitors continue to see ads as before.
+
+   Two extra guarantees back this up:
+   - **Fail closed during auth hydration.** `adsConsentGranted()`
+     returns `false` until `AuthContext.authChecked` flips true via
+     `setAdsAuthChecked()`, so a returning paid subscriber on a
+     cookie-only session never sees an ad flash before `/auth/me`
+     resolves.
+   - **Reactive teardown.** `setAdsUserPlan()`, `setAdsAuthChecked()`,
+     and `setAdsOptOut()` all dispatch a unified
+     `syrabit:ads-consent-changed` event. `<AdSlot />`,
+     `useAdsenseAutoAds`, and `useQuge5Multitag` listen for it and
+     re-evaluate. When consent flips off mid-session (paid upgrade,
+     opt-out toggle, logout-then-login as a paid user), already-
+     injected scripts are removed from `<head>` and rendered slots
+     collapse without a page reload.
+4. **Future CMP.** When Syrabit ships a consent-management platform,
    wire it into `adsConsentGranted()` — `<AdSlot />` is the single
    caller, so the change stays one-file.
 

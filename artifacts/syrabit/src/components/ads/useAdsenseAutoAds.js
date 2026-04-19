@@ -9,13 +9,20 @@
  *
  * Gating mirrors `useQuge5Multitag` and `<AdSlot />`: production
  * build only AND `adsConsentGranted()` true (which also honours the
- * `syrabit_ads_optout` localStorage flag). Dev builds and opted-out
- * users never see this script.
+ * `syrabit_ads_optout` localStorage flag and the Task #552 paid-plan
+ * gate). Dev builds, opted-out users, and paying subscribers never
+ * see this script.
+ *
+ * Consent is reactive: the hook listens for
+ * `syrabit:ads-consent-changed` and re-evaluates. If consent flips
+ * to false mid-session (e.g. a returning paid subscriber whose
+ * `/auth/me` finally resolved, or a user toggling the privacy
+ * opt-out), the previously injected script tag is removed from
+ * `<head>`. If consent later flips back to true, the script is
+ * re-injected.
  *
  * The script is appended to <head> at most once per page (de-duped by
- * `src` against both an in-module Set and the live DOM). On unmount,
- * the tag we appended is removed so navigating to an ad-free route
- * does not leave AdSense loaded in memory.
+ * `src` against both an in-module Set and the live DOM).
  */
 import { useEffect } from 'react';
 import { adsConsentGranted } from '@/utils/adsConfig';
@@ -25,32 +32,57 @@ const ADSENSE_SRC = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle
 
 const _injected = new Set();
 
+function removeInjectedAdsense() {
+  if (typeof document === 'undefined') return;
+  const tags = document.querySelectorAll(`script[src="${ADSENSE_SRC}"]`);
+  tags.forEach((t) => {
+    try {
+      if (t.parentNode) t.parentNode.removeChild(t);
+    } catch {
+      /* ignore */
+    }
+  });
+  _injected.delete(ADSENSE_SRC);
+}
+
+function injectAdsense() {
+  if (typeof document === 'undefined') return null;
+  if (_injected.has(ADSENSE_SRC)) return null;
+  if (document.querySelector(`script[src="${ADSENSE_SRC}"]`)) {
+    _injected.add(ADSENSE_SRC);
+    return null;
+  }
+  const s = document.createElement('script');
+  s.src = ADSENSE_SRC;
+  s.async = true;
+  s.crossOrigin = 'anonymous';
+  s.setAttribute('data-ad-client', ADSENSE_CLIENT);
+  document.head.appendChild(s);
+  _injected.add(ADSENSE_SRC);
+  return s;
+}
+
 export default function useAdsenseAutoAds() {
   useEffect(() => {
-    if (typeof document === 'undefined') return;
-    if (!adsConsentGranted()) return;
+    if (typeof document === 'undefined') return undefined;
+    let mounted = true;
 
-    if (_injected.has(ADSENSE_SRC)) return;
-    if (document.querySelector(`script[src="${ADSENSE_SRC}"]`)) {
-      _injected.add(ADSENSE_SRC);
-      return;
-    }
+    const apply = () => {
+      if (!mounted) return;
+      if (adsConsentGranted()) {
+        injectAdsense();
+      } else {
+        removeInjectedAdsense();
+      }
+    };
 
-    const s = document.createElement('script');
-    s.src = ADSENSE_SRC;
-    s.async = true;
-    s.crossOrigin = 'anonymous';
-    s.setAttribute('data-ad-client', ADSENSE_CLIENT);
-    document.head.appendChild(s);
-    _injected.add(ADSENSE_SRC);
+    apply();
+    window.addEventListener('syrabit:ads-consent-changed', apply);
 
     return () => {
-      try {
-        if (s.parentNode) s.parentNode.removeChild(s);
-      } catch {
-        /* ignore */
-      }
-      _injected.delete(ADSENSE_SRC);
+      mounted = false;
+      window.removeEventListener('syrabit:ads-consent-changed', apply);
+      removeInjectedAdsense();
     };
   }, []);
 }

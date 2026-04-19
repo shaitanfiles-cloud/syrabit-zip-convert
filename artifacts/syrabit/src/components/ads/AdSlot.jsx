@@ -49,8 +49,15 @@ export default function AdSlot({ placement, className = '', style = {} }) {
 
   // Resolve consent on the client. Avoids SSR/hydration mismatch
   // because `adsConsentGranted()` reads localStorage and import.meta.env.PROD.
+  // Re-evaluates on `syrabit:ads-consent-changed` so that toggling the
+  // privacy opt-out, hydrating a paid plan from `/auth/me` (Task #552),
+  // or logging out flips this slot on/off without a page reload.
   useEffect(() => {
-    setConsentOk(adsConsentGranted());
+    if (typeof window === 'undefined') return undefined;
+    const apply = () => setConsentOk(adsConsentGranted());
+    apply();
+    window.addEventListener('syrabit:ads-consent-changed', apply);
+    return () => window.removeEventListener('syrabit:ads-consent-changed', apply);
   }, []);
 
   // Lazy-load the network script once the slot scrolls near the viewport.

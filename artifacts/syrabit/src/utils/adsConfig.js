@@ -204,6 +204,14 @@ export function setAdsOptOut(optedOut) {
     window.dispatchEvent(
       new CustomEvent('syrabit:ads-optout-changed', { detail: { optedOut } })
     );
+    // Unified consent-change event so `<AdSlot />` and the page-level
+    // hooks can re-evaluate and tear down injected scripts when the
+    // user toggles the privacy opt-out mid-session.
+    window.dispatchEvent(
+      new CustomEvent('syrabit:ads-consent-changed', {
+        detail: { reason: 'optout', optedOut },
+      })
+    );
   } catch {
     /* ignore storage failures */
   }
@@ -255,6 +263,78 @@ export function hydrateAdsOptOutFromServer(serverValue) {
   } catch {
     /* ignore storage failures */
   }
+}
+
+// ── Paid-plan ad-free gate (Task #552) ──────────────────────────────────────
+// Paying subscribers (Starter / Pro) get an ad-free reading experience as
+// a perk of upgrading. `AuthContext` is the single source of truth for the
+// signed-in user's plan; it mirrors the plan into this module via
+// `setAdsUserPlan()` whenever the user state changes (login, signup,
+// /auth/me hydrate, profile refresh, logout). `adsConsentGranted()` then
+// reads the mirrored value with zero extra network calls.
+//
+// The set of "paid" plan keys mirrors the rest of the codebase
+// (Free / Starter / Pro — see ProfilePage / PricingSection / AdminPlans).
+const PAID_PLAN_KEYS = new Set(['starter', 'pro']);
+
+let _userPlan = null;
+// Until AuthContext finishes its first /auth/me probe we don't yet
+// know if the visitor is a paying subscriber. Fail closed so a paid
+// user with a cookie-only session never sees an ad flash before their
+// plan hydrates. AuthContext flips this to `true` via
+// `setAdsAuthChecked(true)` as soon as `authChecked` is true.
+let _authChecked = false;
+
+export function setAdsAuthChecked(checked) {
+  const next = !!checked;
+  if (next === _authChecked) return;
+  _authChecked = next;
+  if (typeof window !== 'undefined') {
+    try {
+      window.dispatchEvent(
+        new CustomEvent('syrabit:ads-consent-changed', {
+          detail: { reason: 'auth-checked', authChecked: _authChecked },
+        })
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/**
+ * Mirror the signed-in user's plan into the ads module so
+ * `adsConsentGranted()` can suppress every ad surface for paying
+ * subscribers without a server round-trip. Pass `null` / `undefined`
+ * for anonymous visitors and on logout.
+ */
+export function setAdsUserPlan(plan) {
+  const next = typeof plan === 'string' ? plan.toLowerCase() : null;
+  if (next === _userPlan) return;
+  _userPlan = next;
+  // Notify already-mounted ad surfaces so they can re-evaluate
+  // `adsConsentGranted()` and tear down any scripts they injected
+  // while the user was anonymous (or hadn't hydrated yet).
+  if (typeof window !== 'undefined') {
+    try {
+      window.dispatchEvent(
+        new CustomEvent('syrabit:ads-consent-changed', {
+          detail: { reason: 'plan', plan: _userPlan },
+        })
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/**
+ * True when the mirrored user plan is one of the paid tiers
+ * (Starter / Pro). Exported for tests and for any future caller that
+ * needs to branch on the same gate that suppresses ads.
+ */
+export function isPaidPlanActive() {
+  return !!(_userPlan && PAID_PLAN_KEYS.has(_userPlan));
 }
 
 // One-time banner that explains the new cross-device sync behaviour to
@@ -317,5 +397,11 @@ export function getAdConfig(placement) {
 export function adsConsentGranted() {
   if (typeof window === 'undefined') return false;
   if (getAdsOptOut()) return false;
+  // Fail closed until auth has been checked, so a returning paid
+  // subscriber whose plan is still hydrating from `/auth/me` never
+  // sees an ad flash on /learn or /pyq — Task #552.
+  if (!_authChecked) return false;
+  // Paid subscribers (Starter / Pro) get an ad-free experience — Task #552.
+  if (isPaidPlanActive()) return false;
   return !!(env && env.PROD);
 }

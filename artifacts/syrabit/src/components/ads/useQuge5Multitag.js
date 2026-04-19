@@ -8,13 +8,17 @@
  *
  * Gating mirrors `<AdSlot />`: production build only AND
  * `adsConsentGranted()` true (which also honours the
- * `syrabit_ads_optout` localStorage flag). Dev builds and opted-out
- * users never see this script.
+ * `syrabit_ads_optout` localStorage flag and the Task #552 paid-plan
+ * gate). Dev builds, opted-out users, and paying subscribers never
+ * see this script.
+ *
+ * Consent is reactive: the hook listens for
+ * `syrabit:ads-consent-changed` and re-evaluates. If consent flips
+ * to false mid-session, the previously injected script tag is removed.
+ * If it later flips back to true, the script is re-injected.
  *
  * The script is appended to <head> at most once per page (de-duped by
- * `src` against both an in-module Set and the live DOM). On unmount,
- * the tag we appended is removed so navigating to an ad-free route
- * does not leave Quge5 loaded in memory.
+ * `src` against both an in-module Set and the live DOM).
  */
 import { useEffect } from 'react';
 import { adsConsentGranted } from '@/utils/adsConfig';
@@ -24,32 +28,57 @@ const QUGE5_ZONE = '231351';
 
 const _injected = new Set();
 
+function removeInjectedQuge5() {
+  if (typeof document === 'undefined') return;
+  const tags = document.querySelectorAll(`script[src="${QUGE5_SRC}"]`);
+  tags.forEach((t) => {
+    try {
+      if (t.parentNode) t.parentNode.removeChild(t);
+    } catch {
+      /* ignore */
+    }
+  });
+  _injected.delete(QUGE5_SRC);
+}
+
+function injectQuge5() {
+  if (typeof document === 'undefined') return null;
+  if (_injected.has(QUGE5_SRC)) return null;
+  if (document.querySelector(`script[src="${QUGE5_SRC}"]`)) {
+    _injected.add(QUGE5_SRC);
+    return null;
+  }
+  const s = document.createElement('script');
+  s.src = QUGE5_SRC;
+  s.async = true;
+  s.setAttribute('data-zone', QUGE5_ZONE);
+  s.setAttribute('data-cfasync', 'false');
+  document.head.appendChild(s);
+  _injected.add(QUGE5_SRC);
+  return s;
+}
+
 export default function useQuge5Multitag() {
   useEffect(() => {
-    if (typeof document === 'undefined') return;
-    if (!adsConsentGranted()) return;
+    if (typeof document === 'undefined') return undefined;
+    let mounted = true;
 
-    if (_injected.has(QUGE5_SRC)) return;
-    if (document.querySelector(`script[src="${QUGE5_SRC}"]`)) {
-      _injected.add(QUGE5_SRC);
-      return;
-    }
+    const apply = () => {
+      if (!mounted) return;
+      if (adsConsentGranted()) {
+        injectQuge5();
+      } else {
+        removeInjectedQuge5();
+      }
+    };
 
-    const s = document.createElement('script');
-    s.src = QUGE5_SRC;
-    s.async = true;
-    s.setAttribute('data-zone', QUGE5_ZONE);
-    s.setAttribute('data-cfasync', 'false');
-    document.head.appendChild(s);
-    _injected.add(QUGE5_SRC);
+    apply();
+    window.addEventListener('syrabit:ads-consent-changed', apply);
 
     return () => {
-      try {
-        if (s.parentNode) s.parentNode.removeChild(s);
-      } catch {
-        /* ignore */
-      }
-      _injected.delete(QUGE5_SRC);
+      mounted = false;
+      window.removeEventListener('syrabit:ads-consent-changed', apply);
+      removeInjectedQuge5();
     };
   }, []);
 }
