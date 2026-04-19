@@ -3,15 +3,15 @@ name: frontend-tests
 # Task #470 — Real CI gate for the frontend.
 #
 # Runs the syrabit web artifact's unit tests + production build on every
-# push and PR. Failure blocks merge to `main` so a green frontend can't
+# push and PR. Failure blocks merge to `master` so a green frontend can't
 # mask a backend regression and vice-versa (each suite has its own
 # required check on the branch protection rule).
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 jobs:
   build-and-test:

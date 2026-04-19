@@ -4,20 +4,20 @@ name: backend-tests
 #
 # Runs `pytest --cov` for the FastAPI backend on every push and PR. The
 # coverage gate is enforced via `pyproject.toml`'s `fail_under = 60` so
-# this workflow fails (and blocks merge to `main`) when:
+# this workflow fails (and blocks merge to `master`) when:
 #   * any test fails, or
 #   * total coverage drops below 60%, or
 #   * coverage drops more than 1 percentage point vs the merge base
 #     (only on PRs — push builds skip the diff check).
 #
-# Configure branch protection on `main` to require this check before
+# Configure branch protection on `master` to require this check before
 # merging.
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 # Least-privilege defaults. The PR-coverage-comment step needs
 # `pull-requests: write`, but on forked PRs GitHub downgrades the
