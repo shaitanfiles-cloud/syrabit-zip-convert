@@ -224,7 +224,7 @@ class SyllabusEmbedder:
         try:
             vec = await asyncio.wait_for(
                 _embed_fn(embed_text_input, task_type="RETRIEVAL_DOCUMENT"),
-                timeout=5.0,
+                timeout=20.0,  # Task #545: was 5.0; bumped so embed retry-with-backoff can land
             )
         except Exception as exc:
             logger.warning(f"Embed chapter failed for {title[:40]}: {exc}")
@@ -660,7 +660,7 @@ class SyllabusEmbedder:
                 try:
                     vec = await asyncio.wait_for(
                         embed_text(embed_text_input, task_type="RETRIEVAL_DOCUMENT"),
-                        timeout=5.0,
+                        timeout=20.0,  # Task #545: was 5.0; bumped so embed retry-with-backoff can land
                     )
                 except Exception as exc:
                     logger.warning(f"Embed failed for {entry['chapter_title'][:40]}: {exc}")
@@ -901,7 +901,7 @@ class SyllabusEmbedder:
             try:
                 vec = await asyncio.wait_for(
                     embed_text_fn(topic_embed_text, task_type="RETRIEVAL_DOCUMENT"),
-                    timeout=5.0,
+                    timeout=20.0,  # Task #545: was 5.0; bumped so embed retry-with-backoff can land
                 )
             except Exception as exc:
                 logger.warning(f"Topic embed failed for {topic_str[:30]}: {exc}")

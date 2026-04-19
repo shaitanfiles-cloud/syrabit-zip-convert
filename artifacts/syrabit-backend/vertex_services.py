@@ -32,11 +32,69 @@ logger = logging.getLogger(__name__)
 
 _embed_http_client: Optional[httpx.AsyncClient] = None
 
+# Bounded concurrency for the embed path (Task #545).
+#
+# Why: previously the embed client had no application-level concurrency
+# bound — only httpx's internal connection-pool semaphore (`max_connections=30`).
+# The syllabus-seed pass fires hundreds of concurrent embed calls, each
+# wrapped in `asyncio.wait_for(..., timeout=5.0)`. When wait_for cancels
+# a task that was blocked waiting for an httpx pool slot, the cancel
+# propagation can leave httpx's internal `_connections` semaphore in an
+# inconsistent state, surfacing as `semaphore released too many times`.
+#
+# Fix: gate embed calls behind our own asyncio.Semaphore _before_ they
+# enter httpx. This caps in-flight requests at a number well under the
+# httpx pool size, so the pool semaphore never reaches a contention
+# state where cancellation can race the release. Configurable via env
+# so we can dial up/down without a redeploy if Vertex changes its quota.
+_EMBED_MAX_CONCURRENT = int(os.environ.get("EMBED_MAX_CONCURRENT", "8"))
+_EMBED_SEMAPHORE: Optional[asyncio.Semaphore] = None
+
+def _get_embed_semaphore() -> asyncio.Semaphore:
+    global _EMBED_SEMAPHORE
+    if _EMBED_SEMAPHORE is None:
+        _EMBED_SEMAPHORE = asyncio.Semaphore(_EMBED_MAX_CONCURRENT)
+    return _EMBED_SEMAPHORE
+
+
 def _get_embed_client() -> httpx.AsyncClient:
     global _embed_http_client
     if _embed_http_client is None or _embed_http_client.is_closed:
-        _embed_http_client = httpx.AsyncClient(timeout=5, http2=True, limits=httpx.Limits(max_connections=30, max_keepalive_connections=15))
+        # Task #545: timeout 5s → 15s. Gemini cold-starts on Vertex AI
+        # routinely take 8–10 s; the previous 5 s budget was tripping
+        # ReadTimeout on every cold call. The outer wait_for in the
+        # syllabus embedder still bounds total time per task.
+        _embed_http_client = httpx.AsyncClient(
+            timeout=15,
+            http2=True,
+            limits=httpx.Limits(max_connections=30, max_keepalive_connections=15),
+        )
     return _embed_http_client
+
+
+# Task #545: retry-with-backoff for embed calls. Mirrors the prerender
+# retry policy. Transient failures = httpx ReadTimeout / ConnectError /
+# RemoteProtocolError, SSL handshake errors (`SSLV3_ALERT_BAD_RECORD_MAC`),
+# 429s, and 5xxs from Vertex/Gemini. We do NOT retry 403s (auth) or 4xxs
+# other than 429 (caller bug).
+_EMBED_RETRY_MAX_ATTEMPTS = int(os.environ.get("EMBED_RETRY_MAX_ATTEMPTS", "3"))
+_EMBED_RETRY_BASE_MS = int(os.environ.get("EMBED_RETRY_BASE_MS", "400"))
+
+
+def _is_transient_embed_error(exc: BaseException) -> bool:
+    """True if the embed error is the kind we should retry."""
+    if isinstance(exc, asyncio.CancelledError):
+        return False
+    msg = str(exc).lower()
+    if any(s in msg for s in (
+        "ssl", "timeout", "timed out", "connection", "remote",
+        "semaphore released too many times",
+        "rate limit", "429", "500", "502", "503", "504",
+    )):
+        return True
+    if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)):
+        return True
+    return False
 
 # ── Model names ───────────────────────────────────────────────────────────────
 # Embeddings flow through Gemini's gemini-embedding-001 at 1024 dimensions —
@@ -160,51 +218,104 @@ def _headers() -> dict:
 _EMBED_DIMENSIONS = 1024
 
 
+async def _post_embed_with_retry(
+    url: str, body: dict, headers: dict, label: str
+) -> Optional[httpx.Response]:
+    """POST to an embed endpoint with retry-with-backoff for transient errors.
+    Returns the final Response (caller decides how to interpret) or None if
+    all attempts exhausted on transient errors. Returns the response on the
+    first non-transient outcome (including 403 and 4xx) so caller can handle
+    auth + 404-fallback cases without retry interference.
+    """
+    c = _get_embed_client()
+    last_exc: Optional[BaseException] = None
+    for attempt in range(1, _EMBED_RETRY_MAX_ATTEMPTS + 1):
+        try:
+            r = await c.post(url, json=body, headers=headers)
+            # Retry only on transient HTTP statuses (429, 5xx).
+            if r.status_code == 429 or 500 <= r.status_code < 600:
+                if attempt == _EMBED_RETRY_MAX_ATTEMPTS:
+                    return r  # let caller see the final non-retried failure
+                wait_ms = _EMBED_RETRY_BASE_MS * (2 ** (attempt - 1))
+                logger.info(
+                    f"gemini embed ({label}) HTTP {r.status_code} attempt "
+                    f"{attempt}/{_EMBED_RETRY_MAX_ATTEMPTS}; retrying in {wait_ms}ms"
+                )
+                await asyncio.sleep(wait_ms / 1000.0)
+                continue
+            return r
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            last_exc = exc
+            if not _is_transient_embed_error(exc) or attempt == _EMBED_RETRY_MAX_ATTEMPTS:
+                # Non-transient OR final attempt: surface as logged failure.
+                logger.warning(f"gemini embed ({label}) failed: {exc}")
+                return None
+            wait_ms = _EMBED_RETRY_BASE_MS * (2 ** (attempt - 1))
+            logger.info(
+                f"gemini embed ({label}) transient {type(exc).__name__} attempt "
+                f"{attempt}/{_EMBED_RETRY_MAX_ATTEMPTS}; retrying in {wait_ms}ms"
+            )
+            await asyncio.sleep(wait_ms / 1000.0)
+    # Defensive — should not reach here, but if we do, log + return None.
+    if last_exc:
+        logger.warning(f"gemini embed ({label}) exhausted retries: {last_exc}")
+    return None
+
+
 async def _embed_one(text: str, task_type: str) -> Optional[List[float]]:
-    """Gemini embedding path. Returns 1024-dim vector when available."""
+    """Gemini embedding path. Returns 1024-dim vector when available.
+    Concurrency-bounded by `_EMBED_SEMAPHORE` and retried with backoff
+    on transient SSL/timeout/rate-limit failures (Task #545).
+    """
     if not _ok() or not text:
         return None
     headers = await _auth_headers()
-    c = _get_embed_client()
 
-    if _SA_CREDS is not None:
-        url  = _embed_url()
-        body = {
-            "instances": [{"content": text[:8000], "task_type": task_type}],
-            "parameters": {"outputDimensionality": _EMBED_DIMENSIONS},
-        }
-        try:
-            r = await c.post(url, json=body, headers=headers)
+    async with _get_embed_semaphore():
+        if _SA_CREDS is not None:
+            url  = _embed_url()
+            body = {
+                "instances": [{"content": text[:8000], "task_type": task_type}],
+                "parameters": {"outputDimensionality": _EMBED_DIMENSIONS},
+            }
+            r = await _post_embed_with_retry(url, body, headers, "Vertex")
+            if r is None:
+                return None
             if r.status_code == 403:
                 _mark_forbidden()
                 return None
-            r.raise_for_status()
-            return r.json()["predictions"][0]["embeddings"]["values"]
-        except Exception as e:
-            logger.warning(f"gemini embed (Vertex) failed: {e}")
-            return None
+            try:
+                r.raise_for_status()
+                return r.json()["predictions"][0]["embeddings"]["values"]
+            except Exception as e:
+                logger.warning(f"gemini embed (Vertex) parse failed: {e}")
+                return None
 
-    for model in (_EMBED_MODEL, "text-embedding-004"):
-        url  = f"{_BASE}/models/{model}:embedContent"
-        body = {
-            "model":   f"models/{model}",
-            "content": {"parts": [{"text": text[:8000]}]},
-            "taskType": task_type,
-            "outputDimensionality": _EMBED_DIMENSIONS,
-        }
-        try:
-            r = await c.post(url, json=body, headers=headers)
+        for model in (_EMBED_MODEL, "text-embedding-004"):
+            url  = f"{_BASE}/models/{model}:embedContent"
+            body = {
+                "model":   f"models/{model}",
+                "content": {"parts": [{"text": text[:8000]}]},
+                "taskType": task_type,
+                "outputDimensionality": _EMBED_DIMENSIONS,
+            }
+            r = await _post_embed_with_retry(url, body, headers, model)
+            if r is None:
+                continue
             if r.status_code == 403:
                 _mark_forbidden()
                 return None
             if r.status_code == 404:
                 continue
-            r.raise_for_status()
-            return r.json()["embedding"]["values"]
-        except Exception as e:
-            logger.warning(f"gemini embed ({model}) failed: {e}")
-            continue
-    return None
+            try:
+                r.raise_for_status()
+                return r.json()["embedding"]["values"]
+            except Exception as e:
+                logger.warning(f"gemini embed ({model}) parse failed: {e}")
+                continue
+        return None
 
 
 async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Optional[List[float]]:
