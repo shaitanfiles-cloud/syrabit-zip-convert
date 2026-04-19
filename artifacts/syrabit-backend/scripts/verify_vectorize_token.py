@@ -360,21 +360,28 @@ def _probe_zone_analytics(client: httpx.Client) -> ProbeResult:
 
 
 def _probe_account_analytics(client: httpx.Client) -> ProbeResult:
+    # NOTE: Despite the function name (kept for backwards-compat with the
+    # probe registry), this query runs at the *zone* scope, not the account
+    # scope. Account-level `httpRequestsAdaptiveGroups` requires Cloudflare
+    # Business or Enterprise plans; Free/Pro can only query the same dataset
+    # zone-scoped. Our production analytics code (cloudflare_client.py,
+    # cf_bot_report.py) already uses zone-scoped queries exclusively, so this
+    # probe accurately mirrors what the app actually requires at runtime:
+    # a token with `Zone Analytics:Read` for the syrabit.ai zone.
     token = _analytics_token()
-    account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
-    skip = None if (token and account_id) else (
-        f"{_ANALYTICS_TOKEN_HINT} / CLOUDFLARE_ACCOUNT_ID not set"
+    zone_id = os.environ.get("CF_ZONE_ID", "").strip() or os.environ.get(
+        "CLOUDFLARE_ZONE_ID", ""
+    ).strip()
+    skip = None if (token and zone_id) else (
+        f"{_ANALYTICS_TOKEN_HINT} / CF_ZONE_ID not set"
     )
     now = datetime.now(timezone.utc)
     since = (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     until = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    # `httpRequestsAdaptiveGroups` at the account scope requires
-    # Account Analytics:Read; if the scope is missing CF returns
-    # `code=10000 Authentication error`.
     query = """
-    query VerifyAccountAnalytics($acct: String!, $since: Time!, $until: Time!) {
+    query VerifyZoneAnalytics($zoneTag: String!, $since: Time!, $until: Time!) {
       viewer {
-        accounts(filter: { accountTag: $acct }) {
+        zones(filter: { zoneTag: $zoneTag }) {
           httpRequestsAdaptiveGroups(
             filter: { datetime_geq: $since, datetime_lt: $until }
             limit: 1
@@ -387,10 +394,10 @@ def _probe_account_analytics(client: httpx.Client) -> ProbeResult:
     """
     return _probe_graphql(
         client,
-        scope="Account Analytics:Read",
+        scope="Zone Analytics:Read (adaptive groups)",
         token=token,
         query=query,
-        variables={"acct": account_id, "since": since, "until": until},
+        variables={"zoneTag": zone_id, "since": since, "until": until},
         skip_reason=skip,
     )
 
