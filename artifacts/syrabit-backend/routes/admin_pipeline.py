@@ -656,43 +656,64 @@ async def admin_generate_chapter_notes(chapter_id: str, admin: dict = Depends(ge
     if not desc_block:
         desc_block = "**Description:** (No additional description provided.)\n"
 
-    prompt = f"""You are an expert academic content writer creating study material for {board_ctx} {class_ctx} students in Assam, India.
+    prompt = f"""You are an exam-focused revision coach writing **last-minute revision notes** for {board_ctx} {class_ctx} students in Assam, India preparing for the {paper_ctx} paper.
 
-Write **topic-wise study notes** for the chapter below.
+Goal: cover the **maximum number of high-yield exam concepts** in the **minimum readable format** so a student revising the night before can score full marks.
 
 **Chapter:** {title}
 **Subject:** {subject_ctx} ({paper_ctx} — {class_ctx})
 {desc_block}
 
-**Syllabus Topics (MANDATORY — every single topic MUST have its own ## section):**
+**Syllabus Topics (MANDATORY — every single topic MUST appear as its own ## section, in the listed order, using the EXACT topic name):**
 {topic_block}{seo_seed_block}
 
 ---
 
-## OUTPUT FORMAT — follow exactly:
+## OUTPUT FORMAT — follow EXACTLY for every topic:
 
-For EACH topic, write under a `## <Topic Name>` heading (use the EXACT topic name from the list):
+```
+## <Exact Topic Name>
 
-a) **Opening definition** (1-2 sentences): Define the concept in bold. Example: "**Ecosystem** is a self-sustaining unit of nature..."
+**Definition:** <one crisp 1-2 line definition with the term in bold. No filler.>
 
-b) **Focused explanation** (5-8 sentences): Cover the concept clearly — definition, characteristics, causes/effects, and significance. Write in clear academic language a first-year student can understand.
+### Core Concept
+<3-5 short sentences max. Cover what it is, why it matters, and how it works. Mention any specific name, year, formula, or classification a student MUST write to score the mark.>
 
-c) **Key Facts** as a `### Key Facts` sub-heading with 4-6 bullet points:
-   - Every bullet starts with a **bold keyword or phrase**
-   - Include definitions, dates, names, formulas, distinctions
+### Must-Know Points
+- **<Keyword/Term>** — <one-line fact, definition, distinction, formula, date, or example>
+- **<Keyword/Term>** — <one-line fact>
+- **<Keyword/Term>** — <one-line fact>
+- **<Keyword/Term>** — <one-line fact>
+- **<Keyword/Term>** — <one-line fact>
+- **<Keyword/Term>** — <one-line fact>
+(6-8 bullets per topic. Every bullet must be EXAM-WORTHY — something a student would lose marks for not knowing.)
 
-IMPORTANT: Key Facts MUST be ### (H3) sub-headings under the topic's ## heading — NOT ## headings themselves.
+### Exam Angle
+- **1-mark:** <typical short-answer / fill-in-the-blank prompt this topic generates>
+- **3-mark:** <typical short-note / "explain briefly" prompt>
+- **5-mark / long:** <typical long-answer prompt or comparison/diagram this topic generates>
+```
 
 ---
 
-## CRITICAL RULES:
-- NO introduction section. NO summary section. NO exam tips. NO extra examples. NO cross-references between topics. Start directly with the first `## <Topic Name>`.
-- Maximum 3-4 lines before the first ## heading. Do NOT write a long introduction paragraph. The very first line of output should ideally be a ## heading.
-- Each topic section must be self-contained — one concept, one definition, one explanation, key facts. Nothing else.
-- Use markdown: `##` for topics, `###` for sub-sections, `**bold**` for key terms, `-` for bullets.
-- NO disclaimers, NO preamble, NO "Here are the notes" intro.
-- Every **bold term** must be a genuinely important academic concept.
-- If a topic involves people, dates, places, or events — name them specifically. No vague references.
+## CONTENT RULES — non-negotiable:
+
+1. **Exam-first, not textbook.** Every sentence must earn its place by helping the student score marks. Cut filler, hedging, repetition.
+2. **Be specific.** Name the people, years, places, frameworks, types, formulas, classifications. "Various scholars believed…" is BANNED. Write "**Henri Fayol (1916)** proposed 14 principles…" instead.
+3. **Use compact lists, not paragraphs**, wherever a list works. Students scan, they don't read.
+4. **Bold every keyword**, technical term, person name, year, framework, and exam term — they double as flashcard pivots.
+5. **Cover ALL the listed topics**, in order, with no missing topic. Each topic must have all four sub-sections (Definition, Core Concept, Must-Know Points, Exam Angle).
+6. **Use AHSEC/SEBA/Degree exam vocabulary**: "explain", "differentiate", "discuss", "state with example", "with diagram", "merits and demerits", etc.
+7. If a topic has standard classifications (types, stages, principles, levels), list them as a numbered or bulleted enumeration — students get marks for naming each one correctly.
+
+## STRUCTURAL RULES — non-negotiable:
+
+- The very first line of output must be `## <First Topic Name>`. Zero introduction, zero preamble, zero "Here are the notes".
+- Headings: `##` only for topic names, `###` only for the four fixed sub-headings (Definition is inline bold, not a heading).
+- Sub-headings appear in this fixed order: **Core Concept → Must-Know Points → Exam Angle**.
+- Use `**bold**` for keywords, `-` for bullets, `1.` `2.` for ordered lists.
+- NO summary, NO conclusion, NO "exam tips" section, NO cross-topic references, NO emoji.
+- Output must be clean markdown — no HTML, no code fences around the whole output.
 """
 
     try:
