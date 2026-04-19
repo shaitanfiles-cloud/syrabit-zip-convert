@@ -226,8 +226,18 @@ else:
 # ── LLM Configuration ─────────────────────────────────────────────────────────
 _GROQ_KEY = os.environ.get('GROQ_API_KEY', '').strip()
 _GROQ_KEY_2 = os.environ.get('GROQ_API_KEY_2', '').strip()
-_GEMINI_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
-_GEMINI_KEY_2 = os.environ.get('GEMINI_API_KEY_2', '').strip()
+# Gemini disabled per user request (2026-04-19). The env vars are still
+# read so secret rotation does not surprise us when the provider is
+# re-enabled, but we force-blank the in-process keys so every
+# `if _GEMINI_KEY:` guard across llm.py / pipeline.py / seo_engine.py
+# skips the gemini provider registration. The fallback chain
+# (cerebras -> groq -> openrouter -> sarvam) remains intact and
+# already absorbs every previous gemini hop. To re-enable, delete the
+# two assignments below.
+_GEMINI_KEY_RAW = os.environ.get('GEMINI_API_KEY', '').strip()
+_GEMINI_KEY_2_RAW = os.environ.get('GEMINI_API_KEY_2', '').strip()
+_GEMINI_KEY = ''
+_GEMINI_KEY_2 = ''
 _XAI_KEY = os.environ.get('XAI_API_KEY', '').strip()
 _OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '').strip()
 _SARVAM_LLM_KEY = os.environ.get('SARVAM_API_KEY', '').strip()
