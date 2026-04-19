@@ -51,7 +51,7 @@ def _get_oai_client(api_key: str, base_url: str) -> _oai.AsyncOpenAI:
         _oai_client_cache[ck] = client
     return client
 
-_LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("LLM_MAX_CONCURRENT", 8)))
+_LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("LLM_MAX_CONCURRENT", 40)))
 _ADMIN_LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("ADMIN_LLM_MAX_CONCURRENT", 6)))
 
 _LLM_PROVIDER_METRICS: list = []
