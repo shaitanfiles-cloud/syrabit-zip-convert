@@ -28,17 +28,33 @@
 set -uo pipefail
 
 ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-}"
-DEPLOY_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
-RUNTIME_TOKEN="${CLOUDFLARE_ANALYTICS_TOKEN:-${CLOUDFLARE_API_TOKEN:-}}"
-PAGES_TOKEN="${CLOUDFLARE_PAGES_TOKEN:-${CF_PAGES_API_TOKEN:-}}"
+
+# Each spec env var is checked for PRESENCE separately from probe success.
+# A legacy fallback that happens to work is still a FAIL because Task #534
+# acceptance requires all four spec-named secrets to exist.
+DEPLOY_TOKEN_SPEC="${CLOUDFLARE_API_TOKEN:-}"
+RUNTIME_TOKEN_SPEC="${CLOUDFLARE_ANALYTICS_TOKEN:-}"
+PAGES_TOKEN_SPEC="${CLOUDFLARE_PAGES_TOKEN:-}"
+
+# Resolved tokens — used only to confirm the probe URL accepts a credential
+# at all (handy when an operator is mid-rotation). Not a substitute for the
+# spec presence check above.
+DEPLOY_TOKEN="${DEPLOY_TOKEN_SPEC:-}"
+RUNTIME_TOKEN="${RUNTIME_TOKEN_SPEC:-${CLOUDFLARE_API_TOKEN:-}}"
+PAGES_TOKEN="${PAGES_TOKEN_SPEC:-${CF_PAGES_API_TOKEN:-}}"
 
 fail=0
 api="https://api.cloudflare.com/client/v4"
 
 probe() {
-  local label="$1" token="$2" url="$3"
-  if [[ -z "$token" ]]; then
-    echo "FAIL  $label    (no token set in env — required by Task #534)"
+  # $1=label  $2=spec_token  $3=resolved_token  $4=url  $5=spec_env_name
+  local label="$1" spec="$2" token="$3" url="$4" spec_name="$5"
+  if [[ -z "$spec" ]]; then
+    if [[ -n "$token" ]]; then
+      echo "FAIL  $label  spec env $spec_name not set (legacy fallback present — set $spec_name to comply with Task #534)"
+    else
+      echo "FAIL  $label  spec env $spec_name not set (no token in env at all)"
+    fi
     fail=1
     return 0
   fi
@@ -47,9 +63,9 @@ probe() {
     -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
     "$url" || echo "000")
   if [[ "$code" =~ ^2 ]]; then
-    echo "OK    $label    HTTP $code"
+    echo "OK    $label  HTTP $code"
   else
-    echo "FAIL  $label    HTTP $code → $(head -c 240 /tmp/cf-verify-body 2>/dev/null)"
+    echo "FAIL  $label  HTTP $code → $(head -c 240 /tmp/cf-verify-body 2>/dev/null)"
     fail=1
   fi
 }
@@ -58,16 +74,21 @@ echo "── Cloudflare token verification (Task #534) ──"
 [[ -z "$ACCOUNT_ID" ]] && { echo "FAIL  CLOUDFLARE_ACCOUNT_ID is not set"; exit 1; }
 
 # 1) Deploy token (CLOUDFLARE_API_TOKEN) — used by Wrangler.
-probe "CLOUDFLARE_API_TOKEN     (deploy/Wrangler)        " \
-      "$DEPLOY_TOKEN" "$api/user/tokens/verify"
+probe "CLOUDFLARE_API_TOKEN       (deploy/Wrangler)     " \
+      "$DEPLOY_TOKEN_SPEC" "$DEPLOY_TOKEN" "$api/user/tokens/verify" \
+      "CLOUDFLARE_API_TOKEN"
 
-# 2) Runtime token — used by backend Vectorize REST.
-probe "CLOUDFLARE_ANALYTICS_TOKEN (runtime/Vectorize)    " \
-      "$RUNTIME_TOKEN" "$api/accounts/$ACCOUNT_ID/vectorize/v2/indexes"
+# 2) Runtime token — backend Vectorize REST. Spec name is REQUIRED.
+probe "CLOUDFLARE_ANALYTICS_TOKEN (runtime/Vectorize)   " \
+      "$RUNTIME_TOKEN_SPEC" "$RUNTIME_TOKEN" \
+      "$api/accounts/$ACCOUNT_ID/vectorize/v2/indexes" \
+      "CLOUDFLARE_ANALYTICS_TOKEN"
 
-# 3) Pages CI token — used by Cloudflare Pages dashboard / wrangler pages.
-probe "CLOUDFLARE_PAGES_TOKEN    (Pages CI)              " \
-      "$PAGES_TOKEN" "$api/accounts/$ACCOUNT_ID/pages/projects"
+# 3) Pages CI token — Pages dashboard / wrangler pages. Spec name is REQUIRED.
+probe "CLOUDFLARE_PAGES_TOKEN     (Pages CI)            " \
+      "$PAGES_TOKEN_SPEC" "$PAGES_TOKEN" \
+      "$api/accounts/$ACCOUNT_ID/pages/projects" \
+      "CLOUDFLARE_PAGES_TOKEN"
 
 rm -f /tmp/cf-verify-body
 echo "──"
