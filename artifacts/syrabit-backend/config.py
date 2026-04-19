@@ -78,23 +78,22 @@ FRONTEND_URL   = os.environ.get('FRONTEND_URL', 'https://syrabit.ai').strip().rs
 # upgrade to the new naming:
 #
 #   Runtime / analytics (Vectorize:Edit, Cache Purge, Analytics:Read):
-#     1. CLOUDFLARE_ANALYTICS_TOKEN  — Task #534 spec name
-#     2. CF_ANALYTICS_API_TOKEN      — legacy name
-#     3. CF_PAGES_API_TOKEN          — same-token shortcut (deploy-scope
-#                                      reused for analytics; logs a warning)
-#     4. CF_API_TOKEN / CLOUDFLARE_API_TOKEN — last-resort fallback
+#     1. CLOUDFLARE_ANALYTICS_TOKEN  — Task #534 spec name (preferred)
+#     2. CF_ANALYTICS_API_TOKEN      — legacy alias (logs warning)
+#     3. CLOUDFLARE_API_TOKEN        — last-resort fallback (logs warning)
+#   Pages-scoped names (CF_PAGES_API_TOKEN) and undifferentiated legacy
+#   names (CF_API_TOKEN) are NOT accepted here — see _runtime_cf_token()
+#   in cloudflare_client.py for the strict runtime policy.
 #
 #   Pages CI (Pages:Edit + Vectorize:Edit):
 #     1. CLOUDFLARE_PAGES_TOKEN      — Task #534 spec name
-#     2. CF_PAGES_API_TOKEN          — legacy name
+#     2. CF_PAGES_API_TOKEN          — legacy alias (logs warning)
 #
 # Wrangler deploy reads CLOUDFLARE_API_TOKEN itself (auto-detect); we don't
 # expose it through this module since the FastAPI process never deploys.
 _ANALYTICS_TOKEN_ENV_NAMES = (
     'CLOUDFLARE_ANALYTICS_TOKEN',
     'CF_ANALYTICS_API_TOKEN',
-    'CF_PAGES_API_TOKEN',
-    'CF_API_TOKEN',
     'CLOUDFLARE_API_TOKEN',
 )
 _PAGES_TOKEN_ENV_NAMES = (

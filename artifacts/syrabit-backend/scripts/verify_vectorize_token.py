@@ -4,24 +4,37 @@ backend needs. Each scope is probed with a minimal, real API call. A 401/403
 (or GraphQL ``code=10000`` "Authentication error") on any probe means the
 token is missing that scope and the deploy is blocked.
 
-Scopes probed
--------------
-* ``Vectorize:Edit``         — ``CLOUDFLARE_API_TOKEN`` upserts+deletes a
-                               throwaway vector against the configured index.
-* ``Zone:Read``              — ``CF_ANALYTICS_API_TOKEN`` reads the zone
-                               object via ``GET /zones/{zone_id}``.
-* ``Zone Analytics:Read``    — ``CF_ANALYTICS_API_TOKEN`` runs a tiny
+Scopes probed (Task #534 env-name precedence)
+---------------------------------------------
+* ``Vectorize:Edit``         — runtime token resolved by ``_runtime_token()``
+                               (``CLOUDFLARE_ANALYTICS_TOKEN`` preferred, falls
+                               back to ``CLOUDFLARE_API_TOKEN``); upserts +
+                               deletes a throwaway vector against the
+                               configured index.
+* ``Zone:Read``              — analytics token resolved by
+                               ``_analytics_token()``
+                               (``CLOUDFLARE_ANALYTICS_TOKEN`` →
+                               ``CF_ANALYTICS_API_TOKEN`` → legacy CF_*);
+                               reads the zone object via
+                               ``GET /zones/{zone_id}``.
+* ``Zone Analytics:Read``    — analytics token runs a tiny
                                ``httpRequests1dGroups`` GraphQL query on
                                the zone.
-* ``Account Analytics:Read`` — ``CF_ANALYTICS_API_TOKEN`` runs a tiny
+* ``Account Analytics:Read`` — analytics token runs a tiny
                                ``httpRequestsAdaptiveGroups`` GraphQL query
                                against the account.
+* ``Pages:Read`` (probe)     — Pages token resolved by ``_pages_token()``
+                               (``CLOUDFLARE_PAGES_TOKEN`` →
+                               ``CF_PAGES_API_TOKEN``); lists Pages projects
+                               on the account so a future Pages-CI rotation
+                               is pre-validated.
 
 Usage (locally or inside the Railway container)::
 
     CLOUDFLARE_API_TOKEN=...        \\
+    CLOUDFLARE_ANALYTICS_TOKEN=...  \\
+    CLOUDFLARE_PAGES_TOKEN=...      \\
     CLOUDFLARE_ACCOUNT_ID=...       \\
-    CF_ANALYTICS_API_TOKEN=...      \\
     CF_ZONE_ID=...                  \\
     python scripts/verify_vectorize_token.py [--predeploy]
 
@@ -206,6 +219,34 @@ def _probe_vectorize_edit(client: httpx.Client) -> ProbeResult:
     return ProbeResult(scope, "ok", f"upsert+cleanup against index '{INDEX}' OK")
 
 
+def _probe_pages_read(client: httpx.Client) -> ProbeResult:
+    """Lists Pages projects on the account. Validates the Pages CI token
+    independently from runtime/analytics so a Pages-token rotation can be
+    pre-flighted by the same script (Task #534)."""
+    scope = "Pages:Read"
+    token = _pages_token()
+    account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+    if not token or not account_id:
+        return ProbeResult(scope, "skipped",
+                           "CLOUDFLARE_PAGES_TOKEN / CF_PAGES_API_TOKEN "
+                           "or CLOUDFLARE_ACCOUNT_ID not set")
+    try:
+        r = client.get(
+            f"https://api.cloudflare.com/client/v4/accounts/{account_id}/pages/projects",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"per_page": 1},
+        )
+    except httpx.HTTPError as exc:
+        return ProbeResult(scope, "transient", f"network/HTTP error: {exc}")
+    if r.status_code in (401, 403):
+        return ProbeResult(scope, "auth_fail",
+                           f"HTTP {r.status_code} on GET /pages/projects — body: {r.text[:240]}")
+    if r.status_code != 200:
+        return ProbeResult(scope, "transient",
+                           f"HTTP {r.status_code} (non-auth) — body: {r.text[:240]}")
+    return ProbeResult(scope, "ok", "GET /pages/projects returned 200")
+
+
 def _probe_zone_read(client: httpx.Client) -> ProbeResult:
     scope = "Zone:Read"
     token = _analytics_token()
@@ -367,6 +408,7 @@ def main() -> int:
 
     probes = [
         _probe_vectorize_edit,
+        _probe_pages_read,
         _probe_zone_read,
         _probe_zone_analytics,
         _probe_account_analytics,
