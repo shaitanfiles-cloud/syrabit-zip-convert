@@ -1169,12 +1169,17 @@ async def _serve_pyq_html(slug: str):
     html_content = doc.get("html_content", "")
     if not html_content:
         raise HTTPException(404, "HTML content not available")
+    safe_title = (
+        doc.get("seo_title", "")[:120]
+        .encode("ascii", "replace")
+        .decode("ascii")
+    )
     return _HTMLResponse(
         content=html_content,
         status_code=200,
         headers={
             "Cache-Control": "public, max-age=86400, s-maxage=604800",
-            "X-PYQ-Title":   doc.get("seo_title", "")[:120],
+            "X-PYQ-Title":   safe_title,
         },
     )
 
