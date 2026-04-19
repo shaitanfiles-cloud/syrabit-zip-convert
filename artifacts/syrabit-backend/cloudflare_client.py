@@ -101,7 +101,7 @@ def _mark_auth_failed(error_msg: str):
             "Create a new Cloudflare API token with scopes: "
             "Account Analytics:Read, Zone Analytics:Read, Zone:Read. "
             "Then update CLOUDFLARE_ANALYTICS_TOKEN (Task #534 spec name; "
-            "legacy alias CF_ANALYTICS_API_TOKEN still accepted) on Railway "
+            "legacy alias CLOUDFLARE_API_TOKEN still accepted) on Railway "
             "and restart the service."
         )
         body = (
@@ -142,7 +142,7 @@ def _mark_auth_ok():
             "Cloudflare analytics token recovered",
             "Cloudflare analytics calls are succeeding again. If you just "
             "rotated CLOUDFLARE_ANALYTICS_TOKEN (or its legacy alias "
-            "CF_ANALYTICS_API_TOKEN), the rotation worked.\n\n"
+            "CLOUDFLARE_API_TOKEN), the rotation worked.\n\n"
             "Channel health: /admin/notifications (Delivery tab)."
         )
 
@@ -169,7 +169,7 @@ def get_auth_status() -> dict:
             "Create a new Cloudflare API token with scopes: "
             "Account Analytics:Read, Zone Analytics:Read, Zone:Read. "
             "Then update CLOUDFLARE_ANALYTICS_TOKEN (Task #534 spec name; "
-            "legacy alias CF_ANALYTICS_API_TOKEN still accepted) on Railway "
+            "legacy alias CLOUDFLARE_API_TOKEN still accepted) on Railway "
             "and restart the service."
         ) if _auth_state["ok"] is False else None,
     }
