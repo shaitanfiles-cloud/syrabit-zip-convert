@@ -288,7 +288,14 @@ export default function LearnPage() {
             </div>
           )}
 
-          {/* Main layout: content + TOC */}
+          {/* Top-of-content ad — Adsterra slot, sits between the subject pill
+              and the article body. First of the maximised /learn placements
+              (Task #542). Collapses to nothing when the env var is unset. */}
+          <div className="mb-6">
+            <AdSlot placement="learn.topOfContent" />
+          </div>
+
+          {/* Main layout: content + TOC + (desktop) sidebar ad */}
           <div className="flex gap-8 items-start">
             {/* Article */}
             <article
@@ -324,7 +331,10 @@ export default function LearnPage() {
               </div>
             </article>
 
-            {/* TOC sidebar */}
+            {/* TOC + sidebar ad (desktop only). The sidebar slot is one of
+                the maximised /learn placements (Task #542) and is
+                deliberately gated to `lg:` so mobile never reserves the
+                600px column. */}
             <aside className="hidden lg:flex flex-col gap-4 w-[260px] shrink-0 sticky top-24 self-start">
               <StickyToc
                 headings={toc}
@@ -333,6 +343,7 @@ export default function LearnPage() {
                 labelIcon={<List size={13} className="text-primary" />}
                 minItems={1}
               />
+              <AdSlot placement="learn.sidebar" />
             </aside>
             {/* Mobile/tablet — TOC only (no sidebar ad to keep CLS < 0.1) */}
             <div className="lg:hidden">
@@ -458,6 +469,17 @@ export default function LearnPage() {
             </div>
           )}
 
+          {/* After-PYQs ad — PropellerAds slot, sits between the Important
+              Questions block and the Flashcards block. Only mounts (and
+              therefore only reserves height) when there were questions to
+              show; rendered unconditionally is fine because <AdSlot />
+              collapses to nothing when its env var is unset. */}
+          {pyqs.length > 0 && (
+            <div className="mt-6">
+              <AdSlot placement="learn.afterPyqs" />
+            </div>
+          )}
+
           {/* Flashcards */}
           {flashcards.length > 0 && (
             <div className="mt-6 rounded-2xl border border-emerald-500/15 overflow-hidden">
@@ -501,6 +523,16 @@ export default function LearnPage() {
                   );
                 })}
               </div>
+            </div>
+          )}
+
+          {/* After-flashcards ad — Adsterra slot, sits between the
+              Flashcards block and the ContinueLearning rail. Mounts
+              only when there were flashcards (matches the parent
+              `flashcards.length > 0` block visually). */}
+          {flashcards.length > 0 && (
+            <div className="mt-6">
+              <AdSlot placement="learn.afterFlashcards" />
             </div>
           )}
 

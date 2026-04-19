@@ -12,14 +12,23 @@ change (env vars + redeploy), not a code change.
 
 ## Routes that DO show ads
 
-| Route             | Component             | Placement keys                                |
-| ----------------- | --------------------- | --------------------------------------------- |
-| `/pyq/:slug`      | `PYQReplicaPage.jsx`  | `pyq.inContent`, `pyq.endOfContent`           |
-| `/learn/:slug`    | `LearnPage.jsx`       | `learn.inContent`, `learn.endOfContent`       |
+Notes (`/learn/:slug`) and PYQ (`/pyq/:slug`) are the **only** monetised
+routes on Syrabit.ai. Both are intentionally ad-dense (Task #542).
+
+| Route          | Component            | Placement keys                                                                                                                                |
+| -------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/pyq/:slug`   | `PYQReplicaPage.jsx` | `pyq.topOfContent`, `pyq.inContent`, `pyq.endOfContent`                                                                                       |
+| `/learn/:slug` | `LearnPage.jsx`      | `learn.topOfContent`, `learn.inContent`, `learn.afterPyqs`, `learn.afterFlashcards`, `learn.endOfContent`, `learn.sidebar` (desktop `lg:` only) |
 
 PYQ pages get **AdPushup / Magnite** demand (premium display). Notes
-pages get **Adsterra** (in-content) and **PropellerAds** (end-of-content)
-as fallback networks.
+pages get **Adsterra** (top / in-content / after-flashcards / sidebar)
+and **PropellerAds** (after-PYQs / end-of-content) as fallback networks.
+
+The `learn.afterPyqs` / `learn.afterFlashcards` slots only mount when the
+parent section (Important Questions / Flashcards) is present, so notes
+without PYQs or flashcards don't render an empty ad rail there. The
+`learn.sidebar` slot is mounted only at the `lg:` breakpoint, so mobile
+and tablet viewports never reserve the 600px column.
 
 ## Routes that are intentionally AD-FREE
 
@@ -57,22 +66,27 @@ nothing — no reserved space, no script tag.
 | ----------------------------------------- | ------------------------------ |
 | `VITE_ADS_ADPUSHUP_SCRIPT_URL`            | Network script URL             |
 | `VITE_ADS_ADPUSHUP_PUBLISHER_ID`          | Publisher ID (optional)        |
+| `VITE_ADS_ADPUSHUP_PYQ_TOP_ZONE`          | `pyq.topOfContent` zone ID     |
 | `VITE_ADS_ADPUSHUP_PYQ_INCONTENT_ZONE`    | `pyq.inContent` zone ID        |
 | `VITE_ADS_ADPUSHUP_PYQ_END_ZONE`          | `pyq.endOfContent` zone ID     |
 
-### Adsterra (Notes / Learn — in-content)
+### Adsterra (Notes / Learn — top, in-content, after-flashcards, sidebar)
 
-| Variable                                  | Used for                       |
-| ----------------------------------------- | ------------------------------ |
-| `VITE_ADS_ADSTERRA_SCRIPT_URL`            | Network script URL             |
-| `VITE_ADS_ADSTERRA_LEARN_INCONTENT_ZONE`  | `learn.inContent` zone ID      |
+| Variable                                          | Used for                              |
+| ------------------------------------------------- | ------------------------------------- |
+| `VITE_ADS_ADSTERRA_SCRIPT_URL`                    | Network script URL                    |
+| `VITE_ADS_ADSTERRA_LEARN_TOP_ZONE`                | `learn.topOfContent` zone ID          |
+| `VITE_ADS_ADSTERRA_LEARN_INCONTENT_ZONE`          | `learn.inContent` zone ID             |
+| `VITE_ADS_ADSTERRA_LEARN_AFTER_FLASHCARDS_ZONE`   | `learn.afterFlashcards` zone ID       |
+| `VITE_ADS_ADSTERRA_LEARN_SIDEBAR_ZONE`            | `learn.sidebar` zone ID (desktop)     |
 
-### PropellerAds (Notes / Learn — end-of-content)
+### PropellerAds (Notes / Learn — after-PYQs, end-of-content)
 
-| Variable                                       | Used for                       |
-| ---------------------------------------------- | ------------------------------ |
-| `VITE_ADS_PROPELLERADS_SCRIPT_URL`             | Network script URL             |
-| `VITE_ADS_PROPELLERADS_LEARN_END_ZONE`         | `learn.endOfContent` zone ID   |
+| Variable                                          | Used for                          |
+| ------------------------------------------------- | --------------------------------- |
+| `VITE_ADS_PROPELLERADS_SCRIPT_URL`                | Network script URL                |
+| `VITE_ADS_PROPELLERADS_LEARN_AFTER_PYQS_ZONE`     | `learn.afterPyqs` zone ID         |
+| `VITE_ADS_PROPELLERADS_LEARN_END_ZONE`            | `learn.endOfContent` zone ID      |
 
 ## Consent + environment gate
 

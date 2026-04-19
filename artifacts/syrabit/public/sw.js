@@ -5,6 +5,13 @@
 // `notificationclick` listeners; our cache logic below handles
 // `install`, `activate`, `fetch`, and `message`. ServiceWorker
 // listeners are additive, so the two co-exist cleanly.
+//
+// Task #542: a second PropellerAds zone (10896932) needs verification
+// from the same SW endpoint. Both zones share the 3nbf4.com domain, so
+// we re-import the upstream worker a second time with `self.options`
+// re-pointed at the new zoneId. The upstream script registers its
+// listeners against the live `self.options.zoneId` at import time, so
+// two sequential imports register two zones from a single /sw.js.
 self.propellerAdsOptions = {
   domain: '3nbf4.com',
   zoneId: 10894781,
@@ -18,7 +25,19 @@ try {
   // misconfig) we still want the PWA cache + offline page to work.
   // Push ads simply won't fire for this user.
   // eslint-disable-next-line no-console
-  console.warn('[sw] PropellerAds importScripts failed:', err && err.message);
+  console.warn('[sw] PropellerAds zone 10894781 importScripts failed:', err && err.message);
+}
+// Second zone (Task #542). Re-point self.options before re-importing.
+self.propellerAdsOptionsZone10896932 = {
+  domain: '3nbf4.com',
+  zoneId: 10896932,
+};
+self.options = self.propellerAdsOptionsZone10896932;
+try {
+  importScripts('https://3nbf4.com/act/files/service-worker.min.js?r=sw-zone-10896932');
+} catch (err) {
+  // eslint-disable-next-line no-console
+  console.warn('[sw] PropellerAds zone 10896932 importScripts failed:', err && err.message);
 }
 // ─────────────────────────────────────────────────────────────────
 

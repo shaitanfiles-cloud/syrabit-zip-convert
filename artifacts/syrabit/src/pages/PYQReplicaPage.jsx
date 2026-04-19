@@ -235,7 +235,14 @@ export default function PYQReplicaPage() {
           {sharing ? 'Sharing…' : 'Share'}
         </button>
       </div>
-      <div style={{ paddingTop: '48px' }}>
+      {/* Top-of-content ad — first paint slot, sits between the share bar
+          and the answer sheet. PYQ pages monetise aggressively (Task #542):
+          this is the only route besides /learn that ships ads at all. */}
+      <div style={{ maxWidth: 880, margin: '8px auto 0', padding: '48px 16px 0' }}>
+        <AdSlot placement="pyq.topOfContent" />
+      </div>
+
+      <div style={{ paddingTop: '16px' }}>
         <div dangerouslySetInnerHTML={{ __html: html }} />
       </div>
 

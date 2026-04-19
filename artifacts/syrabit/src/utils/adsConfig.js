@@ -37,8 +37,19 @@ const NETWORKS = {
 };
 
 // ── Per-placement wiring ─────────────────────────────────────────────────────
+// Notes (`/learn/...`) and PYQ (`/pyq/...`) are the *only* monetised
+// surfaces on Syrabit.ai (Task #542). Both are intentionally ad-dense:
+// top, mid and end slots on PYQ; top, mid, after-PYQs, after-flashcards,
+// end and a desktop sidebar on Notes. All other routes (chat, library,
+// browser, chapter) stay ad-free — see `scripts/verify-no-ads.mjs`.
 const PLACEMENTS = {
-  // PYQ pages — premium display demand (AdPushup / Magnite).
+  // ── PYQ pages — premium display demand (AdPushup / Magnite). ──────────────
+  'pyq.topOfContent': {
+    network: 'adpushup',
+    slotId: env.VITE_ADS_ADPUSHUP_PYQ_TOP_ZONE || '',
+    height: 250,
+    label: 'Advertisement',
+  },
   'pyq.inContent': {
     network: 'adpushup',
     slotId: env.VITE_ADS_ADPUSHUP_PYQ_INCONTENT_ZONE || '',
@@ -52,10 +63,28 @@ const PLACEMENTS = {
     label: 'Advertisement',
   },
 
-  // Notes / Learn pages — fallback networks for lighter, mixed traffic.
+  // ── Notes / Learn pages — Adsterra (in-content) + PropellerAds (end). ─────
+  'learn.topOfContent': {
+    network: 'adsterra',
+    slotId: env.VITE_ADS_ADSTERRA_LEARN_TOP_ZONE || '',
+    height: 250,
+    label: 'Advertisement',
+  },
   'learn.inContent': {
     network: 'adsterra',
     slotId: env.VITE_ADS_ADSTERRA_LEARN_INCONTENT_ZONE || '',
+    height: 250,
+    label: 'Advertisement',
+  },
+  'learn.afterPyqs': {
+    network: 'propellerads',
+    slotId: env.VITE_ADS_PROPELLERADS_LEARN_AFTER_PYQS_ZONE || '',
+    height: 250,
+    label: 'Advertisement',
+  },
+  'learn.afterFlashcards': {
+    network: 'adsterra',
+    slotId: env.VITE_ADS_ADSTERRA_LEARN_AFTER_FLASHCARDS_ZONE || '',
     height: 250,
     label: 'Advertisement',
   },
@@ -63,6 +92,15 @@ const PLACEMENTS = {
     network: 'propellerads',
     slotId: env.VITE_ADS_PROPELLERADS_LEARN_END_ZONE || '',
     height: 250,
+    label: 'Advertisement',
+  },
+  // Desktop-only sidebar skyscraper. The page only mounts this slot at
+  // `lg:` breakpoints, so mobile/tablet viewports never reserve the
+  // 600px column.
+  'learn.sidebar': {
+    network: 'adsterra',
+    slotId: env.VITE_ADS_ADSTERRA_LEARN_SIDEBAR_ZONE || '',
+    height: 600,
     label: 'Advertisement',
   },
 };
