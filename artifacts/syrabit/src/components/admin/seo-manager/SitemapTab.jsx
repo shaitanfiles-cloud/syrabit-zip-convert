@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Loader2, RefreshCw, Map, Sparkles, CheckCircle2, AlertTriangle, Send, Rocket } from 'lucide-react';
 import {
   adminSeoGoogleIndexingStats,

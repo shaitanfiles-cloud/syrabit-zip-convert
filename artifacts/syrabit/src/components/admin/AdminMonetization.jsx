@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell,
+  ResponsiveContainer, BarChart, Bar, Cell,
 } from 'recharts';
 import axios from 'axios';
 import { API_BASE, adminGetPlanConfig } from '@/utils/api';

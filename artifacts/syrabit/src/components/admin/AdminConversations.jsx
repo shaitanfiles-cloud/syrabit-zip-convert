@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Loader2, MessageSquare, BookOpen, Search, Mail, User, Ghost,
-  ChevronRight, Crown, X, Clock, ArrowLeft, Sparkles, SmilePlus, Frown, Meh, TrendingUp, RefreshCw,
+  ChevronRight, Crown, X, Clock, ArrowLeft, Sparkles, TrendingUp, RefreshCw,
 } from 'lucide-react';
 import AdminQuickLinks from './AdminQuickLinks';
 import { adminGetConversations, extractFaqs, conversationsSentiment, syncConversations } from '@/utils/api';

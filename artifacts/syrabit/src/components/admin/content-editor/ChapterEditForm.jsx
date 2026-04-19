@@ -2,7 +2,7 @@ import { useRef, useState, useCallback } from 'react';
 import {
   ArrowLeft, Save, Loader2, Eye, Link2, BarChart3,
   Sparkles, RefreshCw, Layers, LayoutTemplate, Upload,
-  FileText, Globe, Paperclip, CheckCircle, Smartphone, Monitor,
+  FileText, Globe, CheckCircle, Smartphone, Monitor,
   ImagePlus, Languages,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';

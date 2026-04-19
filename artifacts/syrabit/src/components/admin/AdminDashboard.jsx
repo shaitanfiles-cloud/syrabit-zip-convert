@@ -7,7 +7,7 @@ import {
   ArrowRight, PenTool, Settings, Eye, TrendingUp, RefreshCw,
   UserPlus, Globe, Search, Bot, BarChart2, Server, Clock,
   CheckCircle, AlertCircle, AlertTriangle, Wifi, Database, DollarSign, Crown,
-  Layers, Link2, Code2, FileCheck, Target, Cpu, ShieldCheck, Smartphone,
+  Layers, Link2, FileCheck, Target, Cpu, ShieldCheck, Smartphone,
   Volume2, VolumeX, Bell, BellOff, RotateCcw, Upload, Trash2, Music,
 } from 'lucide-react';
 import AudioTrimPreview from './AudioTrimPreview';

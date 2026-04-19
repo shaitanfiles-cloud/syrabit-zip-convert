@@ -1,4 +1,3 @@
-import React from 'react';
 import AdminQuickLinks from './AdminQuickLinks';
 import { Loader2, RefreshCw, Play, BookOpen, CheckCircle2, FileText, Globe, Activity } from 'lucide-react';
 import StatCard from './seo-manager/StatCard';
