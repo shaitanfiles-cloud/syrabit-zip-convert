@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { visualizer } from 'rollup-plugin-visualizer';
 import codemirrorStubPlugin from './vite-plugins/codemirror-stub.js';
+import modulepreloadInjectPlugin from './vite-plugins/modulepreload-inject.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isProd = process.env.NODE_ENV === 'production';
@@ -543,6 +544,10 @@ export default defineConfig(({ mode }) => ({
     // named import resolves to a noop without needing to enumerate
     // exports per package.
     codemirrorStubPlugin(),
+    // Task #535: fold scripts/inject-modulepreload.mjs into the Vite
+    // build so it runs as the bundle is written instead of as a
+    // separate post-build node invocation.
+    modulepreloadInjectPlugin(),
   ],
 
   resolve: {

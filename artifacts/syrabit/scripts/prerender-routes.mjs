@@ -34,6 +34,12 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
+import {
+  loadLibraryBundle,
+  loadTopRoutes,
+  BACKEND as SHARED_BACKEND,
+  FETCH_TIMEOUT_MS as SHARED_TIMEOUT_MS,
+} from "./_prerender-data.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, "..", "dist");
@@ -41,10 +47,7 @@ const distSsrDir = path.resolve(__dirname, "..", "dist-ssr");
 const srcHtml = path.join(distDir, "index.html");
 const ssrEntry = path.join(distSsrDir, "entry-server.js");
 
-const BACKEND =
-  process.env.PRERENDER_BACKEND_URL ||
-  process.env.VITE_BACKEND_URL ||
-  "https://syrabit.ai";
+const BACKEND = SHARED_BACKEND;
 const SUBJECTS_LIMIT = parseInt(
   process.env.PRERENDER_SUBJECTS_LIMIT || "50",
   10,
@@ -73,9 +76,13 @@ function envInt(name, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {})
   return n;
 }
 
-const FETCH_TIMEOUT_MS = envInt("PRERENDER_FETCH_TIMEOUT_MS", 5000, {
-  min: 500, max: 60_000,
-});
+// Task #535: default lowered to 3000 ms (shared with _prerender-data
+// cache loader). Per-request abort — failed fetches do NOT retry.
+const FETCH_TIMEOUT_MS = envInt(
+  "PRERENDER_FETCH_TIMEOUT_MS",
+  SHARED_TIMEOUT_MS,
+  { min: 500, max: 60_000 },
+);
 // Task #522: bounded concurrency for backend fan-out. The previous
 // fully-serial loop (50 subjects × up to 7 fetches each = 350 serial
 // network round-trips, each capped at 8s) could blow past Cloudflare's
@@ -458,15 +465,13 @@ async function main() {
   // Pull the slim library bundle to enumerate subject routes. If the
   // backend is unreachable we soft-fail (logged) instead of breaking
   // the build — Task #382 already ships the SPA shell as a safety net.
-  let bundle = null;
-  try {
-    bundle = await fetchJson(
-      `${BACKEND.replace(/\/$/, "")}/api/content/library-bundle?slim=1`,
-    );
-  } catch (err) {
+  // Task #535: shared cross-script cache. First script in the build
+  // pays the network hop; the rest read from disk.
+  const bundle = await loadLibraryBundle();
+  if (!bundle) {
     console.warn(
-      `[prerender-routes] library bundle fetch failed (${err.message}); ` +
-        `skipping subject + chapter prerender`,
+      "[prerender-routes] library bundle unavailable; " +
+        "skipping subject + chapter prerender (SPA shell will serve)",
     );
     return;
   }
@@ -486,9 +491,8 @@ async function main() {
   const subjectViews = new Map();
   const chapterViews = new Map();
   try {
-    const trafficPayload = await fetchJson(
-      `${BACKEND.replace(/\/$/, "")}/api/analytics/top-routes?days=${TRAFFIC_DAYS}&limit=1000`,
-    );
+    const trafficPayload = await loadTopRoutes(TRAFFIC_DAYS, 1000);
+    if (!trafficPayload) throw new Error("traffic ranking unavailable");
     const list = Array.isArray(trafficPayload?.routes) ? trafficPayload.routes : [];
     for (const row of list) {
       if (!row || typeof row.path !== "string") continue;

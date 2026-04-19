@@ -28,6 +28,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
+import { loadLibraryBundle } from "./_prerender-data.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, "..", "dist");
@@ -42,12 +43,6 @@ const ROUTES = [
   { route: "/browser", outDir: path.join(distDir, "browser") },
 ];
 
-const BACKEND =
-  process.env.PRERENDER_BACKEND_URL ||
-  process.env.VITE_BACKEND_URL ||
-  "https://syrabit.ai";
-
-const FETCH_TIMEOUT_MS = 8000;
 const MAX_PRERENDER_CARDS = 12;
 
 const TITLE =
@@ -66,24 +61,15 @@ function escapeHtml(s = "") {
 }
 
 async function fetchBundle() {
-  const url = `${BACKEND.replace(/\/$/, "")}/api/content/library-bundle?slim=1`;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, {
-      signal: ctrl.signal,
-      headers: { Accept: "application/json" },
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
-  } catch (err) {
+  // Task #535: shared cache — first call this build pays the network
+  // hop, subsequent calls (from prerender-routes etc.) hit disk.
+  const data = await loadLibraryBundle();
+  if (!data) {
     console.warn(
-      `[prerender-library] backend fetch failed (${err.message}); falling back to data-less shell`,
+      "[prerender-library] backend bundle unavailable; falling back to data-less shell",
     );
-    return null;
-  } finally {
-    clearTimeout(timer);
   }
+  return data;
 }
 
 function rewriteHead(html) {

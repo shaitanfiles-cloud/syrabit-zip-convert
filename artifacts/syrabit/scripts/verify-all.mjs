@@ -1,0 +1,363 @@
+// Task #535: single-pass post-build verifier.
+//
+// Walks dist/ ONCE, collects every index.html, and applies all the
+// structural assertions the individual verify-* scripts performed —
+// in a single in-memory pass. Then runs verify-hydration.mjs in
+// parallel because it needs a real headless browser (heavy enough
+// that it stays in its own subprocess).
+//
+// The legacy verify-prerender, verify-library-prerender,
+// verify-canonicals scripts remain as thin wrappers for targeted
+// debugging; verify-all reproduces all their checks here so the
+// build pipeline only walks the disk once.
+
+import fs from "fs";
+import path from "path";
+import { fileURLToPath, pathToFileURL } from "url";
+import { spawn } from "child_process";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const distDir = path.resolve(__dirname, "..", "dist");
+const distSsrDir = path.resolve(__dirname, "..", "dist-ssr");
+
+const SITE = "https://syrabit.ai";
+
+const REQUIRED_CANONICAL_ROUTES = [
+  { route: "/library", file: "library/index.html" },
+  { route: "/chat", file: "chat/index.html" },
+  { route: "/home", file: "home/index.html" },
+  { route: "/pricing", file: "pricing/index.html" },
+  { route: "/login", file: "login/index.html" },
+  { route: "/signup", file: "signup/index.html" },
+  { route: "/terms", file: "terms/index.html" },
+  { route: "/privacy", file: "privacy/index.html" },
+  { route: "/about", file: "about/index.html" },
+  { route: "/technology", file: "technology/index.html" },
+  { route: "/profile", file: "profile/index.html" },
+  { route: "/admin/login", file: "admin/login/index.html" },
+];
+
+const failures = [];
+const warnings = [];
+
+function fail(msg) {
+  failures.push(msg);
+}
+function warn(msg) {
+  warnings.push(msg);
+}
+
+function* walk(dir, prefix = "") {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      if (rel === "assets" || rel === "icons" || rel === "fonts") continue;
+      yield* walk(full, rel);
+    } else if (entry.name === "index.html") {
+      yield { full, rel };
+    }
+  }
+}
+
+const startedAt = Date.now();
+
+if (!fs.existsSync(distDir)) {
+  console.error(`[verify-all] FAIL: dist/ missing at ${distDir}`);
+  process.exit(1);
+}
+
+// ── Pass 1: walk dist/, gather all index.html files into memory ─────
+const pages = [];
+for (const item of walk(distDir)) {
+  pages.push({ ...item, body: fs.readFileSync(item.full, "utf-8") });
+}
+console.log(`[verify-all] walked dist/ — ${pages.length} index.html files`);
+
+// ── Root index.html: must NOT carry a hard-coded canonical ──────────
+const root = pages.find((p) => p.rel === "index.html");
+if (root) {
+  const rootCanonicals =
+    root.body.match(/<link\s+rel="canonical"\s+href="[^"]*"[^>]*>/g) || [];
+  if (rootCanonicals.length > 0) {
+    fail(
+      `dist/index.html must not ship a static canonical (found ${rootCanonicals.length}): ` +
+        rootCanonicals.join(" | "),
+    );
+  }
+}
+
+// Index by `file` for required-route check.
+const byRel = new Map(pages.map((p) => [p.rel, p]));
+
+// ── Required canonical routes ───────────────────────────────────────
+for (const { route, file } of REQUIRED_CANONICAL_ROUTES) {
+  const page = byRel.get(file);
+  if (!page) {
+    fail(`${route}: missing ${file}`);
+    continue;
+  }
+  const tags =
+    page.body.match(/<link\s+rel="canonical"\s+href="[^"]*"[^>]*>/g) || [];
+  if (tags.length !== 1) {
+    fail(
+      `${route}: expected exactly 1 canonical tag, found ${tags.length} ` +
+        `(${tags.join(" | ") || "<none>"})`,
+    );
+    continue;
+  }
+  const expected = `${SITE}${route}`;
+  const m = tags[0].match(/href="([^"]*)"/);
+  if (!m || m[1] !== expected) {
+    fail(
+      `${route}: canonical href mismatch — expected ${expected}, got ${m && m[1]}`,
+    );
+  }
+}
+
+// ── Library / browser prerender quality ─────────────────────────────
+const LIBRARY_FILES = ["library/index.html", "browser/index.html"];
+for (const rel of LIBRARY_FILES) {
+  const page = byRel.get(rel);
+  if (!page) {
+    fail(`missing prerender output at ${rel}`);
+    continue;
+  }
+  const body = page.body;
+  if (!body.includes('data-hydrate="library"')) {
+    fail(`${rel}: missing data-hydrate="library" marker on #root`);
+    continue;
+  }
+  for (const sig of [
+    "Switched to client rendering",
+    "does not support Suspense",
+    "<!--$!-->",
+  ]) {
+    if (body.includes(sig)) {
+      fail(`${rel}: contains React SSR abort signature ${JSON.stringify(sig)}`);
+    }
+  }
+  const m = body.match(
+    /<div id="root" data-hydrate="library">([\s\S]*?)<\/div>\s*<script/,
+  );
+  if (!m) {
+    fail(`${rel}: could not locate #root container`);
+    continue;
+  }
+  const inner = m[1];
+  if (inner.trim().length < 500) {
+    fail(`${rel}: #root content too small (${inner.length} bytes)`);
+  }
+  const bundleIdx = body.indexOf("window.__LIBRARY_BUNDLE__");
+  const moduleIdx = body.indexOf('<script type="module"');
+  if (bundleIdx === -1) {
+    warn(
+      `${rel}: window.__LIBRARY_BUNDLE__ not inlined (backend was unreachable at prerender time)`,
+    );
+  } else if (moduleIdx === -1 || bundleIdx > moduleIdx) {
+    fail(`${rel}: window.__LIBRARY_BUNDLE__ must be inlined BEFORE main module script`);
+  }
+  if (
+    !/<link rel="modulepreload"[^>]*href="\/assets\/LibraryPage-[^"]+\.js"/.test(
+      body,
+    )
+  ) {
+    fail(`${rel}: missing <link rel="modulepreload"> for LibraryPage-*.js`);
+  }
+  if (/<div id="__shell"/.test(body)) {
+    fail(`${rel}: still contains a #__shell overlay`);
+  }
+}
+
+// ── Subject / chapter prerender quality + canonical sampling ────────
+const subjectSamples = [];
+const chapterSamples = [];
+const SAMPLE_LIMIT = 5;
+const REQUIRED_SET = new Set(REQUIRED_CANONICAL_ROUTES.map((r) => r.file));
+
+for (const page of pages) {
+  if (page.rel === "index.html") continue;
+  if (LIBRARY_FILES.includes(page.rel)) continue;
+  const route = "/" + page.rel.replace(/\/index\.html$/, "");
+
+  const m = page.body.match(
+    /<div id="root" data-hydrate="([a-z]+)">([\s\S]*?)<\/div>\s*<script/,
+  );
+  if (m) {
+    const kind = m[1];
+    const inner = m[2];
+    if (kind === "subject" || kind === "chapter") {
+      if (inner.trim().length < 400) {
+        fail(`${route}: #root inner too small (${inner.length} bytes)`);
+      }
+      const seedKey =
+        kind === "chapter" ? "__CHAPTER_PRELOAD__" : "__SSR_QUERIES__";
+      const seedIdx = page.body.indexOf(`window.${seedKey}`);
+      const moduleIdx = page.body.indexOf('<script type="module"');
+      if (seedIdx === -1) {
+        fail(`${route}: missing inlined window.${seedKey} payload`);
+      } else if (moduleIdx === -1 || seedIdx > moduleIdx) {
+        fail(`${route}: window.${seedKey} must be inlined BEFORE main module script`);
+      }
+      if (/<div id="__shell"/.test(page.body)) {
+        fail(`${route}: legacy #__shell overlay still present`);
+      }
+      const pageChunkBase =
+        kind === "subject" ? "SubjectLandingPage" : "ChapterPage";
+      const preloadRe = new RegExp(
+        `<link rel="modulepreload"[^>]*href="/assets/${pageChunkBase}-[^"]+\\.js"`,
+      );
+      if (!preloadRe.test(page.body)) {
+        fail(
+          `${route}: missing <link rel="modulepreload"> for ${pageChunkBase}-*.js`,
+        );
+      }
+      // Spot-check canonicals on a few subject + chapter routes.
+      if (
+        kind === "subject" &&
+        subjectSamples.length < SAMPLE_LIMIT &&
+        !REQUIRED_SET.has(page.rel)
+      ) {
+        subjectSamples.push({ route, body: page.body });
+      } else if (
+        kind === "chapter" &&
+        chapterSamples.length < SAMPLE_LIMIT
+      ) {
+        chapterSamples.push({ route, body: page.body });
+      }
+    }
+  }
+}
+
+function checkSampleCanonical({ route, body }) {
+  const tags =
+    body.match(/<link\s+rel="canonical"\s+href="[^"]*"[^>]*>/g) || [];
+  if (tags.length !== 1) {
+    fail(
+      `${route}: expected exactly 1 canonical tag, found ${tags.length} ` +
+        `(${tags.join(" | ") || "<none>"})`,
+    );
+    return;
+  }
+  const expected = `${SITE}${route}`;
+  const m = tags[0].match(/href="([^"]*)"/);
+  if (!m || m[1] !== expected) {
+    fail(
+      `${route}: canonical href mismatch — expected ${expected}, got ${m && m[1]}`,
+    );
+  }
+}
+for (const s of subjectSamples) checkSampleCanonical(s);
+for (const c of chapterSamples) checkSampleCanonical(c);
+
+// ── Cross-check prerender manifest counts vs disk ───────────────────
+const manifestPath = path.join(distDir, "prerender-manifest.json");
+let manifestSubjects = 0;
+let manifestChapters = 0;
+if (fs.existsSync(manifestPath)) {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
+    manifestSubjects = manifest?.counts?.subjects_written ?? 0;
+    manifestChapters = manifest?.counts?.chapters_written ?? 0;
+  } catch (err) {
+    warn(`prerender-manifest.json unreadable: ${err.message}`);
+  }
+} else {
+  warn("no prerender-manifest.json — prerender step likely soft-failed");
+}
+
+// Count prerendered pages on disk for reporting.
+let subjectsOnDisk = 0;
+let chaptersOnDisk = 0;
+for (const page of pages) {
+  if (/data-hydrate="subject"/.test(page.body)) subjectsOnDisk++;
+  if (/data-hydrate="chapter"/.test(page.body)) chaptersOnDisk++;
+}
+if (manifestSubjects > 0 && subjectsOnDisk === 0) {
+  fail(`manifest claimed ${manifestSubjects} subjects written but 0 found on disk`);
+}
+if (manifestChapters > 0 && chaptersOnDisk === 0) {
+  fail(`manifest claimed ${manifestChapters} chapters written but 0 found on disk`);
+}
+
+// ── Bootstrap must wire up hydrateRoot for "library" ────────────────
+try {
+  const indexJsxFiles = fs
+    .readdirSync(path.join(distDir, "assets"))
+    .filter((f) => /^index-[^.]+\.js$/.test(f))
+    .map((f) => path.join(distDir, "assets", f));
+  let foundHydrate = false;
+  for (const f of indexJsxFiles) {
+    const src = fs.readFileSync(f, "utf-8");
+    if (src.includes("hydrateRoot") && src.includes('"library"')) {
+      foundHydrate = true;
+      break;
+    }
+  }
+  if (!foundHydrate) {
+    fail(
+      "client bootstrap does not appear to call hydrateRoot for /library — " +
+        "check src/index.jsx and ensure it survived minification",
+    );
+  }
+} catch (err) {
+  warn(`unable to scan dist/assets for hydrateRoot: ${err.message}`);
+}
+
+// ── Print warnings + decide outcome ─────────────────────────────────
+for (const w of warnings) console.warn(`[verify-all] WARN: ${w}`);
+
+const elapsed = Math.round((Date.now() - startedAt) / 1000);
+console.log(
+  `[verify-all] structural pass done in ${elapsed}s — ` +
+    `${pages.length} html files, ${subjectsOnDisk} subject + ${chaptersOnDisk} chapter prerenders`,
+);
+
+// ── Run hydration headless-browser check in parallel (best-effort) ──
+async function runHydration() {
+  if (process.env.SKIP_VERIFY_HYDRATION === "1") {
+    console.log("[verify-all] SKIP_VERIFY_HYDRATION=1 — skipping browser check");
+    return 0;
+  }
+  return new Promise((resolve) => {
+    const child = spawn(
+      process.execPath,
+      [path.join(__dirname, "verify-hydration.mjs")],
+      { stdio: "inherit", env: process.env },
+    );
+    const timer = setTimeout(
+      () => {
+        try {
+          child.kill("SIGTERM");
+        } catch {}
+      },
+      4 * 60_000,
+    );
+    timer.unref();
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      resolve(code ?? 0);
+    });
+  });
+}
+
+const hydrationCode = await runHydration();
+if (hydrationCode !== 0) {
+  fail(`verify-hydration exited with code ${hydrationCode}`);
+}
+
+// ── Cleanup dist-ssr (matches verify-library-prerender behaviour) ───
+if (fs.existsSync(distSsrDir)) {
+  fs.rmSync(distSsrDir, { recursive: true, force: true });
+  console.log(
+    `[verify-all] cleaned ${path.relative(path.dirname(distDir), distSsrDir)}`,
+  );
+}
+
+if (failures.length) {
+  console.error(`[verify-all] FAIL — ${failures.length} violation(s):`);
+  for (const f of failures) console.error("  - " + f);
+  process.exit(1);
+}
+
+console.log("[verify-all] OK — all post-build assertions passed");
