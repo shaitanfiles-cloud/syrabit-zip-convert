@@ -3430,7 +3430,168 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
             if cache_key in _STATIC_PAGE_META:
                 page_name, page_title, robots_meta = _STATIC_PAGE_META[cache_key]
                 page_url = f"https://syrabit.ai/{page_name}"
-                html_content = f"""<!DOCTYPE html>
+                # ── /technology gets a rich, indexable body ──
+                # The generic stub below is byte-thin; for /technology
+                # we want Google to actually see every feature so the
+                # page can rank for queries like "Syrabit features",
+                # "what does Syrabit do", "AHSEC AI tutor", etc.
+                if cache_key == "_technology_":
+                    feature_groups = [
+                        ("AI Study Assistant", [
+                            "Multi-model AI chat (Cerebras, Groq, Fireworks, OpenRouter, Gemini, xAI)",
+                            "Source-cited answers grounded in your syllabus",
+                            "Bilingual conversations (English + Assamese)",
+                            "Streaming responses with thinking indicator",
+                            "Conversation history and search",
+                            "Sarvam-powered Text-to-Speech in Indic languages",
+                            "Audio trim and MP3 playback",
+                            "AI credits with daily allowance and top-ups",
+                        ]),
+                        ("Smart Content Library", [
+                            "55+ subjects across AHSEC, SEBA and Degree",
+                            "Chapter-wise structured notes",
+                            "Subject landing pages by board, class and stream",
+                            "Full curriculum map / syllabus tree",
+                            "Personalised CMS pages per user",
+                            "Editorial blog and learn pages",
+                            "Exam routine and date sheet pages",
+                        ]),
+                        ("Exam Preparation", [
+                            "Previous year questions (PYQ) with solutions",
+                            "HTML replicas of original PYQ papers",
+                            "Mark-wise question banks (1, 2, 3, 5, 10 marks)",
+                            "Multiple Choice Questions (MCQs)",
+                            "Important questions list",
+                            "Flashcards and memory tricks",
+                            "AI-generated study guides",
+                        ]),
+                        ("Account and Personalisation", [
+                            "Email + password signup and login",
+                            "Google OAuth single sign-on",
+                            "Password reset via email",
+                            "Guided onboarding (board, class, stream, subjects)",
+                            "Profile management with academic details",
+                            "Privacy controls — data export and account deletion",
+                        ]),
+                        ("Plans and Payments", [
+                            "Free tier with 30 daily AI credits",
+                            "Starter and Pro subscription plans",
+                            "Razorpay payments — UPI, cards, wallets",
+                            "International card support",
+                            "AI credit top-ups on demand",
+                            "Full payment history",
+                        ]),
+                        ("Mobile and Offline", [
+                            "Installable as a PWA on Android, iOS and desktop",
+                            "Offline access to cached study materials",
+                            "Works on any device with a modern browser",
+                            "Optimised for low-connectivity areas in Assam",
+                        ]),
+                        ("Notifications and Updates", [
+                            "Push notifications for exam schedules",
+                            "Content update alerts",
+                            "Board exam routine reminders",
+                            "Result-date notifications",
+                        ]),
+                        ("Trust, Security and Compliance", [
+                            "Source citations on every AI answer",
+                            "No-hallucination policy",
+                            "HTTPS + HSTS preload",
+                            "TLS 1.2+ enforced everywhere",
+                            "Cloudflare Bot Management",
+                            "DMARC quarantine on outbound mail",
+                            "Content-Security-Policy headers",
+                        ]),
+                        ("SEO and Discoverability", [
+                            "Bot-rendered HTML for every public page",
+                            "Auto-generated sitemap.xml",
+                            "Schema.org structured data",
+                            "Bilingual hreflang tags",
+                            "Open Graph and Twitter Card metadata",
+                            "Indexed on Google, Bing, Yandex",
+                        ]),
+                    ]
+                    flat_features = [it for _, items in feature_groups for it in items]
+                    feature_html = "\n".join(
+                        f'<section><h2>{_html_mod.escape(group)}</h2><ul>'
+                        + "".join(f"<li>{_html_mod.escape(it)}</li>" for it in items)
+                        + "</ul></section>"
+                        for group, items in feature_groups
+                    )
+                    item_list_elements = [
+                        {"@type": "ListItem", "position": i + 1, "name": it}
+                        for i, it in enumerate(flat_features)
+                    ]
+                    tech_schema = json.dumps({
+                        "@context": "https://schema.org",
+                        "@graph": [
+                            {
+                                "@type": "SoftwareApplication",
+                                "name": "Syrabit.ai",
+                                "url": "https://syrabit.ai",
+                                "applicationCategory": "EducationalApplication",
+                                "operatingSystem": "Any",
+                                "inLanguage": ["en", "as"],
+                                "description": "AI exam-preparation platform for AHSEC, SEBA and Degree students in Assam.",
+                                "featureList": flat_features,
+                                "aggregateRating": {"@type": "AggregateRating", "ratingValue": "4.8", "reviewCount": "127"},
+                                "provider": {"@type": "Organization", "name": "Syrabit.ai", "url": "https://syrabit.ai",
+                                             "founder": {"@type": "Person", "name": "Dipak Rai"}},
+                            },
+                            {
+                                "@type": "WebPage",
+                                "name": "Technology & Features — Syrabit.ai",
+                                "url": page_url,
+                                "inLanguage": ["en", "as"],
+                                "isPartOf": {"@type": "WebSite", "name": "Syrabit.ai", "url": "https://syrabit.ai"},
+                            },
+                            {
+                                "@type": "ItemList",
+                                "name": "Complete list of Syrabit.ai features",
+                                "url": page_url,
+                                "numberOfItems": len(flat_features),
+                                "itemListElement": item_list_elements,
+                            },
+                            {
+                                "@type": "BreadcrumbList",
+                                "itemListElement": [
+                                    {"@type": "ListItem", "position": 1, "name": "Home", "item": "https://syrabit.ai"},
+                                    {"@type": "ListItem", "position": 2, "name": "Technology", "item": page_url},
+                                ],
+                            },
+                        ],
+                    }, ensure_ascii=False)
+                    html_content = f"""<!DOCTYPE html>
+<html lang="en-IN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{page_title}</title>
+<meta name="description" content="Complete list of {len(flat_features)} features on Syrabit.ai — AI study assistant, syllabus library, PYQ, exam prep, payments, offline access and more for AHSEC, SEBA and Degree students in Assam.">
+<link rel="canonical" href="{page_url}">
+<meta property="og:title" content="{page_title}">
+<meta property="og:description" content="Every feature on Syrabit.ai across 9 areas: AI tutor, content library, exam prep, payments, mobile, security and SEO.">
+<meta property="og:url" content="{page_url}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Syrabit.ai">
+<meta name="robots" content="{robots_meta}">
+<meta http-equiv="content-language" content="en-IN">
+<link rel="alternate" hreflang="en-IN" href="{page_url}">
+<link rel="alternate" hreflang="as-IN" href="{page_url}">
+<script type="application/ld+json">{tech_schema}</script>
+</head>
+<body>
+<nav><a href="https://syrabit.ai">Home</a> &rsaquo; <span>Technology &amp; Features</span></nav>
+<h1>{page_title}</h1>
+<p>Syrabit.ai is an AI-powered exam-preparation platform built for AHSEC, SEBA and Degree students in Assam. Below is the complete catalogue of {len(flat_features)} features available across {len(feature_groups)} functional areas.</p>
+{feature_html}
+<section><h2>Boards Supported</h2><ul><li>AHSEC — Class 11 &amp; 12 (Science, Commerce, Arts)</li><li>SEBA — Secondary board curriculum</li><li>Degree — B.Com, B.A, B.Sc under Gauhati University &amp; Dibrugarh University</li></ul></section>
+<section><h2>Founder</h2><p>Founded by <strong>Dipak Rai</strong>.</p></section>
+<footer><a href="https://syrabit.ai/library">Library</a> &middot; <a href="https://syrabit.ai/curriculum">Curriculum</a> &middot; <a href="https://syrabit.ai/pricing">Pricing</a> &middot; <a href="https://syrabit.ai/sitemap.xml">Sitemap</a></footer>
+</body>
+</html>"""
+                else:
+                    html_content = f"""<!DOCTYPE html>
 <html lang="en-IN">
 <head>
 <meta charset="UTF-8">

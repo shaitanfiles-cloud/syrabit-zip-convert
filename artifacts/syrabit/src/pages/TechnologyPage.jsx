@@ -153,6 +153,218 @@ const CATEGORIES = [
   },
 ];
 
+const FEATURE_CATALOG = {
+  en: [
+    {
+      group: 'AI Study Assistant',
+      items: [
+        'Multi-model AI chat (Cerebras, Groq, Fireworks, OpenRouter, Gemini, xAI)',
+        'Source-cited answers grounded in your syllabus',
+        'Bilingual conversations (English + Assamese)',
+        'Streaming responses with thinking indicator',
+        'Conversation history & search',
+        'Sarvam-powered Text-to-Speech in Indic languages',
+        'Audio trim & MP3 playback',
+        'AI credits with daily allowance + top-ups',
+        'Conversation export & sharing',
+      ],
+    },
+    {
+      group: 'Smart Content Library',
+      items: [
+        '55+ subjects across AHSEC, SEBA & Degree',
+        'Chapter-wise structured notes',
+        'Subject landing pages (board / class / stream)',
+        'Full curriculum map / syllabus tree',
+        'Personalised CMS pages per user',
+        'Editorial blog & learn pages',
+        'Exam routine & date sheet pages',
+        'Popular subjects carousel',
+        'Virtualised browsing for fast scrolling',
+      ],
+    },
+    {
+      group: 'Exam Preparation',
+      items: [
+        'Previous year questions (PYQ) with solutions',
+        'HTML replicas of original PYQ papers',
+        'Mark-wise question banks (1, 2, 3, 5, 10 marks)',
+        'Multiple Choice Questions (MCQs)',
+        'Important questions list',
+        'Flashcards & memory tricks',
+        'AI-generated study guides',
+        'Topic-wise summaries',
+      ],
+    },
+    {
+      group: 'Account & Personalisation',
+      items: [
+        'Email + password signup and login',
+        'Google OAuth single sign-on',
+        'Password reset via email',
+        'Guided onboarding (board, class, stream, subjects)',
+        'Profile management with academic details',
+        'Privacy controls — data export & account deletion',
+      ],
+    },
+    {
+      group: 'Plans & Payments',
+      items: [
+        'Free tier with 30 daily AI credits',
+        'Starter and Pro subscription plans',
+        'Razorpay payments — UPI, cards, wallets',
+        'International card support',
+        'AI credit top-ups on demand',
+        'Full payment history',
+        'Transparent pricing page',
+      ],
+    },
+    {
+      group: 'Mobile & Offline',
+      items: [
+        'Installable as a PWA on Android, iOS & desktop',
+        'Offline access to cached study materials',
+        'Works on any device with a modern browser',
+        'Optimised for low-connectivity areas in Assam',
+      ],
+    },
+    {
+      group: 'Notifications & Updates',
+      items: [
+        'Push notifications for exam schedules',
+        'Content update alerts',
+        'Board exam routine reminders',
+        'Result-date notifications',
+      ],
+    },
+    {
+      group: 'Trust, Security & Compliance',
+      items: [
+        'Source citations on every AI answer',
+        'No-hallucination policy — Syra says when it does not know',
+        'HTTPS + HSTS preload',
+        'TLS 1.2+ enforced everywhere',
+        'Cloudflare Bot Management',
+        'DMARC quarantine on outbound mail',
+        'Content-Security-Policy headers',
+        'Encrypted at rest (Mongo Atlas + Postgres)',
+      ],
+    },
+    {
+      group: 'SEO & Discoverability',
+      items: [
+        'Bot-rendered HTML for every public page',
+        'Auto-generated sitemap.xml',
+        'Schema.org structured data (SoftwareApplication, Article, BreadcrumbList)',
+        'Bilingual hreflang tags',
+        'Open Graph & Twitter Card metadata',
+        'Indexed on Google, Bing, Yandex',
+      ],
+    },
+  ],
+  as: [
+    {
+      group: 'AI অধ্যয়ন সহায়ক',
+      items: [
+        'বহু-মডেল AI চেট (Cerebras, Groq, Fireworks, OpenRouter, Gemini, xAI)',
+        'আপোনাৰ পাঠ্যক্ৰমত ভিত্তি কৰি উৎস-উদ্ধৃত উত্তৰ',
+        'দ্বিভাষিক বাৰ্তালাপ (ইংৰাজী + অসমীয়া)',
+        'চিন্তা সূচকৰ সৈতে ষ্ট্ৰীমিং উত্তৰ',
+        'বাৰ্তালাপৰ ইতিহাস আৰু সন্ধান',
+        'ইণ্ডিক ভাষাত Sarvam-চালিত পাঠ-টু-স্পীচ',
+        'অডিঅ' ট্ৰিম আৰু MP3 প্লে',
+        'দৈনিক ভাট্টাৰ সৈতে AI ক্ৰেডিট + টপ-আপ',
+      ],
+    },
+    {
+      group: 'বিষয়বস্তু পুথিভঁৰাল',
+      items: [
+        'AHSEC, SEBA আৰু ডিগ্ৰী জুৰি ৫৫+ বিষয়',
+        'অধ্যায়ভিত্তিক গাঁথনিগত টোকা',
+        'বিষয় লেণ্ডিং পৃষ্ঠা (বৰ্ড / শ্ৰেণী / শাখা)',
+        'সম্পূৰ্ণ পাঠ্যক্ৰম মেপ',
+        'প্ৰতিজন ব্যৱহাৰকাৰীৰ বাবে ব্যক্তিগতকৃত CMS পৃষ্ঠা',
+        'সম্পাদকীয় ব্লগ আৰু শিক্ষা পৃষ্ঠা',
+        'পৰীক্ষাৰ ৰুটিন পৃষ্ঠা',
+      ],
+    },
+    {
+      group: 'পৰীক্ষাৰ প্ৰস্তুতি',
+      items: [
+        'সমাধানসহ আগৰ বছৰৰ প্ৰশ্ন (PYQ)',
+        'মূল PYQ পেপাৰৰ HTML প্ৰতিলিপি',
+        'নম্বৰভিত্তিক প্ৰশ্ন বেংক (১, ২, ৩, ৫, ১০ নম্বৰ)',
+        'বহু পছন্দৰ প্ৰশ্ন (MCQ)',
+        'গুৰুত্বপূৰ্ণ প্ৰশ্নৰ তালিকা',
+        'ফ্লেচকাৰ্ড আৰু স্মৃতি কৌশল',
+        'AI-সৃষ্ট অধ্যয়ন গাইড',
+      ],
+    },
+    {
+      group: 'একাউণ্ট আৰু ব্যক্তিগতকৰণ',
+      items: [
+        'ইমেইল + পাছৱৰ্ড চাইনআপ আৰু লগইন',
+        'Google OAuth ছিঙ্গল চাইন-অন',
+        'ইমেইলৰ জৰিয়তে পাছৱৰ্ড ৰিছেট',
+        'অনবৰ্ডিং (বৰ্ড, শ্ৰেণী, শাখা, বিষয়)',
+        'প্ৰফাইল ব্যৱস্থাপনা',
+        'গোপনীয়তা নিয়ন্ত্ৰণ — তথ্য ৰপ্তানি আৰু একাউণ্ট মচা',
+      ],
+    },
+    {
+      group: 'পৰিকল্পনা আৰু পৰিশোধ',
+      items: [
+        '৩০ টা দৈনিক AI ক্ৰেডিটৰ সৈতে বিনামূলীয়া স্তৰ',
+        'Starter আৰু Pro চাবস্ক্ৰিপশ্বন',
+        'Razorpay পৰিশোধ — UPI, কাৰ্ড, ৱালেট',
+        'আন্তঃৰাষ্ট্ৰীয় কাৰ্ডৰ সমৰ্থন',
+        'AI ক্ৰেডিট টপ-আপ',
+        'সম্পূৰ্ণ পৰিশোধৰ ইতিহাস',
+      ],
+    },
+    {
+      group: 'মোবাইল আৰু অফলাইন',
+      items: [
+        'এণ্ড্ৰইড, iOS আৰু ডেস্কটপত PWA হিচাপে ইনস্টল কৰিব পৰা',
+        'কেচ কৰা অধ্যয়ন সামগ্ৰীলৈ অফলাইন অভিগম',
+        'যিকোনো ডিভাইচত কাম কৰে',
+      ],
+    },
+    {
+      group: 'জাননী আৰু আপডেট',
+      items: [
+        'পৰীক্ষাৰ সূচীৰ বাবে পুশ্ব জাননী',
+        'বিষয়বস্তু আপডেটৰ সতৰ্কতা',
+        'বৰ্ড পৰীক্ষাৰ ৰুটিনৰ সোঁৱৰণী',
+        'ফলাফলৰ তাৰিখৰ জাননী',
+      ],
+    },
+    {
+      group: 'বিশ্বাস আৰু সুৰক্ষা',
+      items: [
+        'প্ৰতিটো AI উত্তৰত উৎস উদ্ধৃতি',
+        'কোনো হেলুচিনেচন নাই',
+        'HTTPS + HSTS preload',
+        'TLS ১.২+ বলবৎ',
+        'Cloudflare বট ব্যৱস্থাপনা',
+        'বহিৰ্গামী মেইলত DMARC quarantine',
+        'বিষয়বস্তু-সুৰক্ষা-নীতি হেডাৰ',
+      ],
+    },
+    {
+      group: 'SEO আৰু আৱিষ্কাৰ',
+      items: [
+        'প্ৰতিটো ৰাজহুৱা পৃষ্ঠাৰ বাবে বট-ৰেণ্ডাৰ HTML',
+        'স্বয়ংক্ৰিয়ভাৱে সৃষ্ট sitemap.xml',
+        'Schema.org গাঁথনিগত তথ্য',
+        'দ্বিভাষিক hreflang টেগ',
+        'Open Graph আৰু Twitter Card মেটাডাটা',
+        'Google, Bing, Yandex ত সূচীবদ্ধ',
+      ],
+    },
+  ],
+};
+
 const STATS = {
   en: [
     { value: '159', label: 'Platform Features' },
@@ -228,7 +440,14 @@ const _t = {
 };
 
 function getJsonLd(lang) {
-  const featureList = CATEGORIES.map(c => c[lang]?.title || c.en.title);
+  const catalogLang = FEATURE_CATALOG[lang] || FEATURE_CATALOG.en;
+  // Flatten the catalog so Google sees every individual feature
+  // in the SoftwareApplication.featureList — not just 10 categories.
+  const flatFeatures = catalogLang.flatMap(g => g.items);
+  const featureList = [
+    ...CATEGORIES.map(c => c[lang]?.title || c.en.title),
+    ...flatFeatures,
+  ];
   return [
     {
       '@context': 'https://schema.org',
@@ -268,6 +487,20 @@ function getJsonLd(lang) {
         name: 'Syrabit.ai',
         url: 'https://syrabit.ai',
       },
+    },
+    // ItemList schema — Google uses this to render rich list-style
+    // results when a user searches "Syrabit features" or similar.
+    {
+      '@context': 'https://schema.org',
+      '@type': 'ItemList',
+      name: lang === 'as' ? 'Syrabit.ai ৰ সম্পূৰ্ণ বৈশিষ্ট্যৰ তালিকা' : 'Complete list of Syrabit.ai features',
+      url: 'https://syrabit.ai/technology',
+      numberOfItems: catalogLang.flatMap(g => g.items).length,
+      itemListElement: catalogLang.flatMap(g => g.items).map((item, i) => ({
+        '@type': 'ListItem',
+        position: i + 1,
+        name: item,
+      })),
     },
   ];
 }
@@ -341,6 +574,48 @@ export default function TechnologyPage() {
               ))}
             </div>
           </div>
+
+          {/*
+            Complete feature catalog — flat, semantic <ul> markup so
+            Googlebot (and the bot-render pre-pass) sees every
+            individual feature in the HTML and can surface them in
+            search results when someone searches "Syrabit features",
+            "what does Syrabit do", "Syrabit AI tutor", etc.
+          */}
+          <section className="mb-14" aria-labelledby="full-feature-list">
+            <h2 id="full-feature-list" className="text-xl font-semibold text-foreground mb-1">
+              {contentLang === 'as' ? 'সম্পূৰ্ণ বৈশিষ্ট্যৰ তালিকা' : 'Complete Feature List'}
+            </h2>
+            <p className="text-muted-foreground text-sm mb-6">
+              {contentLang === 'as'
+                ? 'Syrabit.ai ৰ ৯ টা ক্ষেত্ৰত উপলব্ধ প্ৰতিটো বৈশিষ্ট্য — ছাত্ৰ-ছাত্ৰী, অভিভাৱক আৰু সন্ধান ইঞ্জিনৰ বাবে।'
+                : 'Every feature available on Syrabit.ai across 9 areas — for students, parents, and search engines.'}
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {(FEATURE_CATALOG[contentLang] || FEATURE_CATALOG.en).map((g, gi) => (
+                <div
+                  key={gi}
+                  className="rounded-xl border border-border/40 bg-card/60 p-5"
+                >
+                  <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
+                    <Sparkles size={14} className="text-violet-500" />
+                    {g.group}
+                  </h3>
+                  <ul className="space-y-1.5">
+                    {g.items.map((item, ii) => (
+                      <li
+                        key={ii}
+                        className="flex items-start gap-2 text-sm text-foreground/70 leading-snug"
+                      >
+                        <ChevronRight size={12} className="mt-1 shrink-0 text-violet-500/60" />
+                        <span>{item}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </section>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-14">
             <div className="rounded-2xl border border-border/40 bg-card/80 p-6">
