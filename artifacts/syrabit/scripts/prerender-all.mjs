@@ -34,25 +34,26 @@ const STEP_BUDGET_MS = (() => {
     : 8 * 60_000 - 5_000;
 })();
 
-// Task #543: concurrency cap. Running all four prerender scripts in
-// parallel was hammering the backend with concurrent subject/chapter
-// fetches, triggering HTTP 429s on api.syrabit.ai (per-tenant rate
-// limit). Lowering the cap to 2 lets the slower content-driven scripts
-// (library + routes) get fair share without competing with each other.
-// Configurable via env so a more permissive backend can opt in.
+// Task #544: concurrency restored to 4 (run all scripts in parallel).
+// The earlier serialization (#543, cap=2) was hiding the real problem
+// — too many routes, not too many concurrent fetches. Now that the
+// route worklist is capped at ~80 (#544: SUBJECTS_LIMIT 50→20,
+// CHAPTERS_PER_SUBJECT 5→3) and _prerender-data.mjs has 429 retry-
+// with-backoff, full parallel fan-out is the fastest stable mode.
 const CONCURRENCY = (() => {
   const raw = process.env.PRERENDER_CONCURRENCY;
   const n = raw ? Number.parseInt(raw, 10) : NaN;
-  return Number.isFinite(n) && n >= 1 && n <= 8 ? n : 2;
+  return Number.isFinite(n) && n >= 1 && n <= 8 ? n : 4;
 })();
 
-// Run the two heavy backend-driven scripts in the FIRST batch and the
-// two light scripts in the SECOND. Prevents library + routes (which
-// both fan out to /api/content/resolve-subject + /api/content/chapter-
-// by-slug) from competing with each other for the rate limit.
+// Single batch — all four scripts run in parallel up to CONCURRENCY.
 const SCRIPT_BATCHES = [
-  ["prerender-library.mjs", "prerender-routes.mjs"],
-  ["prerender-chat.mjs", "prerender-static-routes.mjs"],
+  [
+    "prerender-library.mjs",
+    "prerender-routes.mjs",
+    "prerender-chat.mjs",
+    "prerender-static-routes.mjs",
+  ],
 ];
 
 function runStep(scriptName) {

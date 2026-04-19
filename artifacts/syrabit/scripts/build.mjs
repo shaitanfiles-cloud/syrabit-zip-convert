@@ -29,10 +29,12 @@ const repoRoot = path.resolve(__dirname, "..");
 const BUDGET_MS = (() => {
   const raw = process.env.BUILD_BUDGET_MS;
   const n = raw ? Number.parseInt(raw, 10) : NaN;
-  // Default 8 min, hard floor 2 min, hard ceiling 30 min.
+  // Task #544: default 12 min (was 8 min). Pages free-plan wall is
+  // 20 min; we leave 8 min slack for verifier + precache. Hard floor
+  // 2 min, hard ceiling 30 min.
   return Number.isFinite(n) && n >= 120_000 && n <= 30 * 60_000
     ? n
-    : 8 * 60_000;
+    : 12 * 60_000;
 })();
 
 const overallStart = Date.now();

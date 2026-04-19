@@ -26,10 +26,18 @@
 // traffic data still ships a sensible set of pages.
 //
 // Limits are env-tunable so we can scale up gradually:
-//   PRERENDER_SUBJECTS_LIMIT          (default 50)
-//   PRERENDER_CHAPTERS_PER_SUBJECT    (default 5)
+//   PRERENDER_SUBJECTS_LIMIT          (default 20, was 50 before #544)
+//   PRERENDER_CHAPTERS_PER_SUBJECT    (default 3, was 5 before #544)
 //   PRERENDER_TRAFFIC_DAYS            (default 30)
 //   PRERENDER_BACKEND_URL / VITE_BACKEND_URL  (default https://syrabit.ai)
+//
+// Task #544: defaults lowered to keep the worklist under ~80 routes
+// (20 subjects + 20×3 chapters = 80) so the build finishes inside the
+// 12-min wall budget on Cloudflare Pages. The SPA shell + edge fallback
+// Worker (workers/edge-proxy) already serves real HTML for routes that
+// were NOT prerendered — we lose only the build-time HTML payload, not
+// SEO. Bump these back up only after confirming a faster backend or
+// raising BUILD_BUDGET_MS.
 
 import fs from "fs";
 import path from "path";
@@ -49,11 +57,11 @@ const ssrEntry = path.join(distSsrDir, "entry-server.js");
 
 const BACKEND = SHARED_BACKEND;
 const SUBJECTS_LIMIT = parseInt(
-  process.env.PRERENDER_SUBJECTS_LIMIT || "50",
+  process.env.PRERENDER_SUBJECTS_LIMIT || "20",
   10,
 );
 const CHAPTERS_PER_SUBJECT = parseInt(
-  process.env.PRERENDER_CHAPTERS_PER_SUBJECT || "5",
+  process.env.PRERENDER_CHAPTERS_PER_SUBJECT || "3",
   10,
 );
 const TRAFFIC_DAYS = parseInt(
