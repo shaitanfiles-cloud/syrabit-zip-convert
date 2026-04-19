@@ -197,11 +197,17 @@ def _get_cf_client():
 
 
 def _cfg():
+    # Task #534: prefer the spec name CLOUDFLARE_ANALYTICS_TOKEN. Fall back
+    # through legacy CF_* env vars for backwards compatibility. The runtime
+    # CF token is intentionally separated from the deploy token so a leaked
+    # runtime token cannot be used to deploy or destroy infrastructure.
     return {
         "api_token": (
-            os.getenv("CF_PAGES_API_TOKEN", "").strip()
+            os.getenv("CLOUDFLARE_ANALYTICS_TOKEN", "").strip()
             or os.getenv("CF_ANALYTICS_API_TOKEN", "").strip()
+            or os.getenv("CF_PAGES_API_TOKEN", "").strip()
             or os.getenv("CF_API_TOKEN", "").strip()
+            or os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
         ),
         "zone_id": os.getenv("CF_ZONE_ID", "").strip(),
     }
@@ -758,11 +764,15 @@ _ALL_CONTENT_URLS = list(set(
 
 
 def _purge_cfg():
+    # Task #534: cache-purge is a runtime concern; prefer the spec name
+    # CLOUDFLARE_ANALYTICS_TOKEN. Legacy CF_* names retained as fallback.
     return {
         "api_token": (
-            os.getenv("CF_API_TOKEN", "").strip()
-            or os.getenv("CF_PAGES_API_TOKEN", "").strip()
+            os.getenv("CLOUDFLARE_ANALYTICS_TOKEN", "").strip()
             or os.getenv("CF_ANALYTICS_API_TOKEN", "").strip()
+            or os.getenv("CF_API_TOKEN", "").strip()
+            or os.getenv("CF_PAGES_API_TOKEN", "").strip()
+            or os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
         ),
         "zone_id": os.getenv("CF_ZONE_ID", "").strip(),
     }

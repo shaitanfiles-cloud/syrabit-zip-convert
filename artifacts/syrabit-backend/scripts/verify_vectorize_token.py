@@ -151,11 +151,15 @@ def _classify_cf_errors(payload: dict) -> Optional[str]:
 
 def _probe_vectorize_edit(client: httpx.Client) -> ProbeResult:
     scope = "Vectorize:Edit"
-    token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+    # Task #534: route through the runtime-token resolver so we exercise the
+    # exact code path the backend uses (CLOUDFLARE_ANALYTICS_TOKEN preferred,
+    # legacy CLOUDFLARE_API_TOKEN fallback).
+    token = _runtime_token()
     account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
     if not token or not account_id:
         return ProbeResult(scope, "skipped",
-                           "CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not set")
+                           "CLOUDFLARE_ANALYTICS_TOKEN / CLOUDFLARE_API_TOKEN "
+                           "or CLOUDFLARE_ACCOUNT_ID not set")
 
     test_id = f"verify-token-{uuid.uuid4()}"
     body = json.dumps({

@@ -38,7 +38,8 @@ api="https://api.cloudflare.com/client/v4"
 probe() {
   local label="$1" token="$2" url="$3"
   if [[ -z "$token" ]]; then
-    echo "SKIP  $label    (no token set)"
+    echo "FAIL  $label    (no token set in env — required by Task #534)"
+    fail=1
     return 0
   fi
   local code
