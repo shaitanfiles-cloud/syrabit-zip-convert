@@ -114,10 +114,17 @@ async function main() {
     node(path.join(__dirname, "check-build-env.mjs"), [], { budgetMs: 30_000 }),
   );
 
-  // 2. Ad-policy lint — cheap, fail fast.
+  // 2. Ad-policy lint — cheap, fail fast. Two halves of the same
+  //    contract: verify-no-ads forbids ad imports on guarded routes,
+  //    verify-required-ads asserts every monetised route still
+  //    contains the placement keys ad-ops is paying for (Task #545).
   await record(
     "lint:ads",
     node(path.join(__dirname, "verify-no-ads.mjs"), [], { budgetMs: 30_000 }),
+  );
+  await record(
+    "lint:ads-required",
+    node(path.join(__dirname, "verify-required-ads.mjs"), [], { budgetMs: 30_000 }),
   );
 
   // 3. Client + SSR builds in parallel. They write to dist/ and

@@ -30,6 +30,21 @@ without PYQs or flashcards don't render an empty ad rail there. The
 `learn.sidebar` slot is mounted only at the `lg:` breakpoint, so mobile
 and tablet viewports never reserve the 600px column.
 
+### Build-time guard for required slots (Task #545)
+
+The placement keys above are also enforced *positively* by
+`scripts/verify-required-ads.mjs`, exposed as
+`pnpm --filter @workspace/syrabit run lint:ads-required` and wired
+into `pnpm build` right after `lint:ads`. It hard-fails the build if
+any of the keys above stops appearing as a string literal in its
+owning page file. Removing a slot during a refactor would otherwise
+silently kill ad revenue on that page.
+
+To change the policy:
+
+1. Edit the `REQUIRED` map in `scripts/verify-required-ads.mjs`.
+2. Update the routes table above so the docs match the guard.
+
 ## Routes that are intentionally AD-FREE
 
 These pages must never import `<AdSlot />` or inject an ad script.

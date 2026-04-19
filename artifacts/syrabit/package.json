@@ -50,6 +50,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "lint:ads": "node scripts/verify-no-ads.mjs",
+    "lint:ads-required": "node scripts/verify-required-ads.mjs",
     "verify:jsonld": "node scripts/validate-jsonld.mjs"
   },
   "devDependencies": {
