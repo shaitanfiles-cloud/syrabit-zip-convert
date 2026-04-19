@@ -735,27 +735,31 @@ async def get_chapter_by_slug(board_slug: str, class_slug: str, subject_slug: st
     if not chapter and decoded_slug != chapter_slug:
         chapter = await db.chapters.find_one({"slug": decoded_slug, "subject_id": subj["id"]}, {"_id": 0})
     if not chapter:
-        chapter = None
-        async for c in db.chapters.find({"subject_id": subj["id"]}, {"_id": 0}):
+        # Perf fix (was 1216ms in Railway logs): the original code did THREE
+        # separate cursor scans of db.chapters for the same subject_id —
+        # one streaming async-for and two .to_list(200) calls — even though
+        # they all needed the exact same dataset. Fetch once, match in
+        # memory across all three strategies (NFKC-normalised slug, auto
+        # slug from title, and lenient word-normalised title).
+        all_chapters = await db.chapters.find({"subject_id": subj["id"]}, {"_id": 0}).to_list(200)
+        slug_normalized_words = re.sub(r'-+', ' ', normalized_slug).strip()
+        for c in all_chapters:
             c_slug = (c.get("slug") or "").strip().lower()
             c_slug_normalized = unicodedata.normalize("NFKC", c_slug)
             if c_slug_normalized and c_slug_normalized == normalized_slug:
                 chapter = c
                 break
-    if not chapter:
-        all_chapters = await db.chapters.find({"subject_id": subj["id"]}, {"_id": 0}).to_list(200)
-        for c in all_chapters:
-            title = c.get("title", "")
-            auto_slug = slugify_title(title)
-            if auto_slug == normalized_slug:
-                chapter = c
-                break
+        if not chapter:
+            for c in all_chapters:
+                title = c.get("title", "")
+                if slugify_title(title) == normalized_slug:
+                    chapter = c
+                    break
         if not chapter:
             for c in all_chapters:
                 title = c.get("title", "")
                 title_normalized = re.sub(r'[^\w]+', ' ', title.strip().lower(), flags=re.UNICODE).strip()
-                slug_normalized = re.sub(r'-+', ' ', normalized_slug).strip()
-                if title_normalized == slug_normalized:
+                if title_normalized == slug_normalized_words:
                     chapter = c
                     break
     if not chapter: raise HTTPException(404, "Chapter not found")

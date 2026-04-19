@@ -7677,12 +7677,24 @@ async def related_topics_by_chapter(
         query, {"_id": 0, "id": 1, "title": 1, "slug": 1,
                 "chapter_id": 1, "subject_id": 1}
     ).sort("order", 1).limit(limit).to_list(limit)
+    # Perf fix (was 1866ms in Railway logs): every topic in this response
+    # belongs to the SAME chapter, so the board/class/subject hierarchy is
+    # identical across all of them. Previously we called _resolve_hierarchy()
+    # once per topic, doing 4 sequential Mongo reads × N topics × ~128ms
+    # cross-region RTT = ~2 seconds. Resolve ONCE and reuse.
+    shared_h: dict = {}
+    if topics:
+        shared_h = await _resolve_hierarchy(topics[0]) or {}
+    board_slug = shared_h.get("board_slug", "")
+    class_slug = shared_h.get("class_slug", "")
+    subject_slug = shared_h.get("subject_slug", "")
+    has_hier = bool(board_slug and class_slug and subject_slug)
     enriched = []
     for t in topics:
-        h = await _resolve_hierarchy(t)
-        seo_path = ""
-        if h:
-            seo_path = f"/{h.get('board_slug','')}/{h.get('class_slug','')}/{h.get('subject_slug','')}/{t['slug']}"
+        seo_path = (
+            f"/{board_slug}/{class_slug}/{subject_slug}/{t['slug']}"
+            if has_hier else ""
+        )
         enriched.append({
             "id":       t.get("id"),
             "title":    t.get("title", ""),
