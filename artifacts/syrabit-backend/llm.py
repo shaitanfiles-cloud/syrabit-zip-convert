@@ -192,7 +192,7 @@ if _CEREBRAS_KEY:
     # Upgraded from llama-3.3-70b-versatile (Task #282 T002): Llama-4 Scout
     # is faster on Cerebras (~2600 tok/s vs 2200), has a 10M context window,
     # and noticeably better instruction-following for chat workloads.
-    _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama-4-scout-17b-16e-instruct"})
+    _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama-3.3-70b"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
 if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
@@ -207,7 +207,7 @@ _LLM_PROVIDERS_CHAT: list[dict] = []
 # now leads because Groq's hosted Llama-4 Scout endpoint has been failing
 # 100% in prod (see _SLM_SLOT_CANDIDATES note above).
 if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama-4-scout-17b-16e-instruct"})
+    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama-3.3-70b"})
 if _GROQ_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
 if _OPENROUTER_KEY:
@@ -233,7 +233,7 @@ _MODEL_PROVIDER_MAP = {
     "meta-llama/llama-4-scout": "openrouter",
     "meta-llama/llama-4-scout-17b-16e-instruct": "groq",
     "llama-3.3-70b-versatile": "cerebras",
-    "llama-4-scout-17b-16e-instruct": "cerebras",
+    "llama-3.3-70b": "cerebras",
 }
 
 _MODEL_ALIAS_MAP = {
@@ -252,7 +252,7 @@ _SLM_SLOT_CANDIDATES = [
     # for this model has been intermittently failing (100% fallback rate
     # observed in prod alerts), so Cerebras is now Tier 0 and Groq is
     # the Tier 1 fallback.
-    ("cerebras",    "llama-4-scout-17b-16e-instruct",                    4, 0),
+    ("cerebras",    "llama-3.3-70b",                                     4, 0),
     ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 1),
     ("openrouter",  "meta-llama/llama-4-scout",                          4, 2),
 ]

@@ -124,7 +124,7 @@ def _pick_stage1_providers() -> list:
     if _CEREBRAS_KEY:
         # Stage-1 topic resolver: upgraded to Llama-4 Scout on Cerebras
         # (Task #282 T002) — faster TTFT and better instruction adherence.
-        providers.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama-4-scout-17b-16e-instruct"})
+        providers.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama-3.3-70b"})
     if _GROQ_KEY:
         providers.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
     for p in _LLM_PROVIDERS:

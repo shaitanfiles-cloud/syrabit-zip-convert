@@ -516,6 +516,27 @@ async def supa_get_conversation(conv_id: str, uid: str):
         _redis_cache_conversation(conv_id, uid, result)
     return result
 
+def _coerce_ts(value, default_now: bool = True):
+    """Coerce ISO-8601 string / datetime / None to a datetime suitable for asyncpg.
+
+    asyncpg's timestamptz binding requires a real ``datetime`` instance — passing
+    a string raises ``invalid input for query argument: expected a datetime.date
+    or datetime.datetime instance, got 'str'``. Callers historically stored
+    ``conv['created_at']`` / ``conv['updated_at']`` as ISO strings (because that
+    is how they round-trip through JSON / Mongo / Supabase REST), so we coerce
+    here right before binding.
+    """
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            # fromisoformat handles "2026-04-19T14:31:27.390528+00:00" natively on 3.11+
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc) if default_now else None
+
+
 async def supa_upsert_conversation(conv: dict):
     _invalidate_conv_cache(conv.get("id",""), conv.get("user_id",""))
     _redis_invalidate_conversation(conv.get("id",""), conv.get("user_id",""))
@@ -524,6 +545,8 @@ async def supa_upsert_conversation(conv: dict):
             msgs = json.dumps(conv.get("messages", [])) if isinstance(conv.get("messages"), list) else (conv.get("messages") or "[]")
             _is_anon = conv.get("is_anonymous", False)
             _anon_id = conv.get("anon_id") or None
+            _created_at = _coerce_ts(conv.get("created_at"))
+            _updated_at = _coerce_ts(conv.get("updated_at"))
             async with _deps_mod.pg_pool.acquire() as conn:
                 await conn.execute(
                     """INSERT INTO conversations (id, user_id, title, preview, subject_id, subject_name,
@@ -541,7 +564,7 @@ async def supa_upsert_conversation(conv: dict):
                     conv.get("subject_id"), conv.get("subject_name"),
                     conv.get("starred",False), conv.get("archived",False),
                     msgs, conv.get("tokens",0),
-                    conv.get("created_at",""), conv.get("updated_at",""),
+                    _created_at, _updated_at,
                     _is_anon, _anon_id,
                 )
             _mirror_fields = {"id","user_id","title","preview","subject_id","subject_name","starred","archived","messages","tokens","created_at","updated_at"}
