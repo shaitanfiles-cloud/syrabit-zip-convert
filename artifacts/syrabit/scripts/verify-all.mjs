@@ -6,10 +6,10 @@
 // parallel because it needs a real headless browser (heavy enough
 // that it stays in its own subprocess).
 //
-// The legacy verify-prerender, verify-library-prerender,
-// verify-canonicals scripts remain as thin wrappers for targeted
-// debugging; verify-all reproduces all their checks here so the
-// build pipeline only walks the disk once.
+// The legacy verify-prerender, verify-library-prerender, and
+// verify-canonicals scripts were removed in Task #538 — every
+// assertion they performed is reproduced inline below so the build
+// pipeline only walks the disk once.
 
 import fs from "fs";
 import path from "path";

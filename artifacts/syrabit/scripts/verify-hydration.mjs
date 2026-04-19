@@ -1,6 +1,6 @@
 // Post-build CI assertion for Task #389.
 //
-// verify-prerender.mjs only inspects the prerendered HTML structurally —
+// verify-all.mjs only inspects the prerendered HTML structurally —
 // it cannot detect a React hydration *mismatch*, where the server-rendered
 // DOM and the first client render disagree. React swallows those mismatches
 // at runtime by falling back to a full client render (logging a warning to
@@ -10,7 +10,7 @@
 // This script closes that gap by:
 //   1. Picking one prerendered subject route and one prerendered chapter
 //      route from `dist/` (using the same data-hydrate marker scan as
-//      verify-prerender.mjs).
+//      verify-all.mjs).
 //   2. Serving `dist/` over a local static HTTP server.
 //   3. Loading each route in a real headless Chromium via Playwright.
 //   4. Failing the build if any console message or page error matches the
@@ -19,7 +19,7 @@
 //
 // Soft-fails (warns, exit 0) when there are no prerendered subject or
 // chapter routes to inspect — matches the soft-fail philosophy of
-// scripts/prerender-routes.mjs and scripts/verify-prerender.mjs so a
+// scripts/prerender-routes.mjs and scripts/verify-all.mjs so a
 // transient backend outage on the build host doesn't break deploys.
 
 import fs from "fs";

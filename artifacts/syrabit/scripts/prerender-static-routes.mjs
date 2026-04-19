@@ -258,7 +258,7 @@ function main() {
     `[prerender-static-routes] done — ${written}/${ROUTES.length} static-route stubs written`,
   );
 
-  // Persist a tiny manifest so verify-canonicals.mjs can iterate over
+  // Persist a tiny manifest so verify-all.mjs can iterate over
   // the exact set of routes this script claims to have produced.
   fs.writeFileSync(
     path.join(distDir, "prerender-static-manifest.json"),
