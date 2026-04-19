@@ -62,6 +62,78 @@ Browser → api.syrabit.ai (Cloudflare Worker)
 
 ---
 
+## Cloudflare API tokens — canonical usage matrix (Task #534)
+
+This project uses **two scoped Cloudflare API tokens** plus the account ID.
+The split is deliberate: a leaked runtime token can never deploy or destroy
+infrastructure, and a leaked deploy token is never present in the running
+backend's process memory.
+
+| Env var (canonical name)    | Real-world role                       | Required scopes                                                                              | Used by                                                                                  | Where it lives           |
+| --------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------ |
+| `CLOUDFLARE_API_TOKEN`      | **Runtime** (read + Vectorize writes) | `Vectorize:Edit`, `Cache Purge`, `Zone:Read`                                                 | `vectorize_client.py`, `migrate_vectors.py`, cache-purge calls in `cloudflare_client.py` | Railway env, Replit env  |
+| `CLOUDFLARE_ACCOUNT_ID`     | Account scope                         | n/a (account ID, not a token)                                                                | All Cloudflare REST clients                                                              | Railway env, Replit env  |
+| `CF_ANALYTICS_API_TOKEN`    | **Runtime analytics reads**           | `Zone Analytics:Read`, `Account Analytics:Read` (best effort — Free plan blocks the latter)  | `cloudflare_client.py` GraphQL analytics, `bot_traffic_report.py`                        | Railway env, Replit env  |
+| `CF_PAGES_API_TOKEN`        | **Deploy** (Pages CI + Wrangler)      | `Pages:Edit`, `Workers Scripts:Edit`, `D1:Edit`, `Workers KV Storage:Edit`, `Bot Management:Read`, `Zone Analytics:Read` | Wrangler deploy commands (`wrangler deploy`), Cloudflare Pages auto-build, fallback for analytics if `CF_ANALYTICS_API_TOKEN` is missing | Wrangler local + Pages dashboard env (NEVER on Railway) |
+| `CF_ZONE_ID`                | Zone scope                            | n/a                                                                                          | Analytics + cache purge                                                                  | Railway env, Replit env  |
+
+> **Naming note:** Task #534's spec uses the names `CLOUDFLARE_ANALYTICS_TOKEN`
+> and `CLOUDFLARE_PAGES_TOKEN`. The codebase already uses the equivalent legacy
+> names `CF_ANALYTICS_API_TOKEN` / `CF_PAGES_API_TOKEN`. Both naming schemes
+> resolve to the same token; the legacy names are canonical going forward to
+> avoid a sweeping rename across `cloudflare_client.py`, `config.py`, the
+> verifier, and three test files. If you set the `CLOUDFLARE_*` aliases on
+> Railway, also set the `CF_*` names — the code only reads the `CF_*` names.
+
+### Hard rules
+
+- **Wrangler / Pages CI must use `CF_PAGES_API_TOKEN`** (or set
+  `CLOUDFLARE_API_TOKEN=$CF_PAGES_API_TOKEN` in the local shell only when
+  running `wrangler deploy`). The runtime `CLOUDFLARE_API_TOKEN` baked into
+  Railway does **not** have `Workers Scripts:Edit` and will fail with an
+  Authentication 10000 error if used to deploy.
+- **`CF_PAGES_API_TOKEN` must NEVER be set on Railway** — it would put
+  deploy-grade credentials inside the running FastAPI process. The runtime
+  only ever needs Vectorize + Cache Purge + Analytics.
+- **The backend's Vectorize calls always read `CLOUDFLARE_API_TOKEN`** (no
+  fallback to the deploy token). See `vectorize_client.py:213,228,244`.
+- **Analytics calls prefer `CF_PAGES_API_TOKEN` only inside the worker deploy
+  guide context** (Pages CI builds where the Pages token is present); on
+  Railway the resolution chain in `config.py:83` falls back to
+  `CF_ANALYTICS_API_TOKEN`.
+
+### One-shot scope verifier
+
+```bash
+cd artifacts/syrabit-backend && python3 scripts/verify_vectorize_token.py
+```
+
+Last run (2026-04-19): **3 OK / 0 auth-fail / 1 transient**
+(`Account Analytics:Read` warns with `code: authz` — this is Cloudflare
+Free-plan blocking that endpoint at the account level and is documented as
+permanent until the plan is upgraded; everything else passes).
+
+The verifier exercises exactly the no-op API calls listed in the table above
+(Vectorize upsert+delete against a probe vector, `GET /zones/{id}` for
+Zone:Read, a 1-row GraphQL `httpRequests1mGroups` for Zone Analytics:Read,
+and `httpRequestsAdaptiveGroups` for Account Analytics:Read).
+
+### Wrangler `whoami` snippet
+
+```bash
+# Use the deploy token explicitly (don't rely on stale ~/.wrangler/config)
+CLOUDFLARE_API_TOKEN=$CF_PAGES_API_TOKEN \
+  npx wrangler@3 whoami
+# Should print the email of the token owner and the list of scopes:
+# Pages Write, Workers Scripts Write, D1 Write, Workers KV Storage Write, …
+```
+
+If `wrangler whoami` returns "You are not authenticated", the local Wrangler
+is using a stale OAuth session — pass the token via env as shown above
+instead of `wrangler login`.
+
+---
+
 ## Prerequisites
 
 Before deploying, confirm you have:
