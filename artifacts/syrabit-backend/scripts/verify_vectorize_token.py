@@ -78,6 +78,8 @@ import httpx
 # in priority order so operators don't have to duplicate secrets when the
 # same Cloudflare API token is reused for Pages deploy + analytics access.
 _ANALYTICS_TOKEN_ENV_NAMES = (
+    "CF_PAGES_API_TOKEN",
+    "CLOUDFLARE_PAGES_TOKEN",
     "CLOUDFLARE_ANALYTICS_TOKEN",
     "CF_ANALYTICS_API_TOKEN",
     "CLOUDFLARE_API_TOKEN",

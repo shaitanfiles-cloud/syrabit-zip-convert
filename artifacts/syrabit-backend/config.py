@@ -92,6 +92,8 @@ FRONTEND_URL   = os.environ.get('FRONTEND_URL', 'https://syrabit.ai').strip().rs
 # Wrangler deploy reads CLOUDFLARE_API_TOKEN itself (auto-detect); we don't
 # expose it through this module since the FastAPI process never deploys.
 _ANALYTICS_TOKEN_ENV_NAMES = (
+    'CF_PAGES_API_TOKEN',
+    'CLOUDFLARE_PAGES_TOKEN',
     'CLOUDFLARE_ANALYTICS_TOKEN',
     'CF_ANALYTICS_API_TOKEN',
     'CLOUDFLARE_API_TOKEN',
