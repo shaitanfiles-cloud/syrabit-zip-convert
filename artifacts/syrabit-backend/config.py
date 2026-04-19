@@ -73,7 +73,28 @@ EMAIL_FROM     = os.environ.get('EMAIL_FROM', 'noreply@syrabit.ai').strip()
 FRONTEND_URL   = os.environ.get('FRONTEND_URL', 'https://syrabit.ai').strip().rstrip('/')
 
 # ── Cloudflare Analytics API ─────────────────────────────────────────────────
-CF_ANALYTICS_API_TOKEN = os.environ.get('CF_ANALYTICS_API_TOKEN', '').strip()
+# The analytics token can live under any of these env-var names. We resolve
+# them in priority order so operators don't have to duplicate secrets:
+#   1. CF_PAGES_API_TOKEN     — preferred name when the same token is also
+#                               used for Cloudflare Pages deploy permissions
+#   2. CF_ANALYTICS_API_TOKEN — original/legacy name kept for backwards compat
+#   3. CF_API_TOKEN           — generic catch-all
+_ANALYTICS_TOKEN_ENV_NAMES = (
+    'CF_PAGES_API_TOKEN',
+    'CF_ANALYTICS_API_TOKEN',
+    'CF_API_TOKEN',
+)
+
+
+def _resolve_cf_analytics_token() -> str:
+    for _name in _ANALYTICS_TOKEN_ENV_NAMES:
+        _val = os.environ.get(_name, '').strip()
+        if _val:
+            return _val
+    return ''
+
+
+CF_ANALYTICS_API_TOKEN = _resolve_cf_analytics_token()
 CF_ZONE_ID = os.environ.get('CF_ZONE_ID', '').strip()
 CF_API_TOKEN = os.environ.get('CF_API_TOKEN', '').strip() or CF_ANALYTICS_API_TOKEN
 

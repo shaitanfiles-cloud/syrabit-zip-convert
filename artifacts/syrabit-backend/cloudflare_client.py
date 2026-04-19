@@ -198,7 +198,11 @@ def _get_cf_client():
 
 def _cfg():
     return {
-        "api_token": os.getenv("CF_ANALYTICS_API_TOKEN", "").strip(),
+        "api_token": (
+            os.getenv("CF_PAGES_API_TOKEN", "").strip()
+            or os.getenv("CF_ANALYTICS_API_TOKEN", "").strip()
+            or os.getenv("CF_API_TOKEN", "").strip()
+        ),
         "zone_id": os.getenv("CF_ZONE_ID", "").strip(),
     }
 
@@ -755,7 +759,11 @@ _ALL_CONTENT_URLS = list(set(
 
 def _purge_cfg():
     return {
-        "api_token": os.getenv("CF_API_TOKEN", "").strip() or os.getenv("CF_ANALYTICS_API_TOKEN", "").strip(),
+        "api_token": (
+            os.getenv("CF_API_TOKEN", "").strip()
+            or os.getenv("CF_PAGES_API_TOKEN", "").strip()
+            or os.getenv("CF_ANALYTICS_API_TOKEN", "").strip()
+        ),
         "zone_id": os.getenv("CF_ZONE_ID", "").strip(),
     }
 

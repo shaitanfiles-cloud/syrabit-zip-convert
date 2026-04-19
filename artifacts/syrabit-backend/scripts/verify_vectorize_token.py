@@ -61,6 +61,27 @@ from typing import Optional
 
 import httpx
 
+# The analytics token can live under any of these env var names — we resolve
+# in priority order so operators don't have to duplicate secrets when the
+# same Cloudflare API token is reused for Pages deploy + analytics access.
+_ANALYTICS_TOKEN_ENV_NAMES = (
+    "CF_PAGES_API_TOKEN",
+    "CF_ANALYTICS_API_TOKEN",
+    "CF_API_TOKEN",
+)
+
+
+def _analytics_token() -> str:
+    for _name in _ANALYTICS_TOKEN_ENV_NAMES:
+        _val = os.environ.get(_name, "").strip()
+        if _val:
+            return _val
+    return ""
+
+
+_ANALYTICS_TOKEN_HINT = " / ".join(_ANALYTICS_TOKEN_ENV_NAMES)
+
+
 INDEX = os.environ.get("VECTORIZE_INDEX_NAME", "syllabus-index-v2").strip() or "syllabus-index-v2"
 try:
     DIMS = int(os.environ.get("VECTORIZE_DIMENSIONS", "1024"))
@@ -156,11 +177,11 @@ def _probe_vectorize_edit(client: httpx.Client) -> ProbeResult:
 
 def _probe_zone_read(client: httpx.Client) -> ProbeResult:
     scope = "Zone:Read"
-    token = os.environ.get("CF_ANALYTICS_API_TOKEN", "").strip()
+    token = _analytics_token()
     zone_id = os.environ.get("CF_ZONE_ID", "").strip()
     if not token or not zone_id:
         return ProbeResult(scope, "skipped",
-                           "CF_ANALYTICS_API_TOKEN / CF_ZONE_ID not set")
+                           f"{_ANALYTICS_TOKEN_HINT} / CF_ZONE_ID not set")
     try:
         r = client.get(
             f"https://api.cloudflare.com/client/v4/zones/{zone_id}",
@@ -237,9 +258,9 @@ def _probe_graphql(
 
 
 def _probe_zone_analytics(client: httpx.Client) -> ProbeResult:
-    token = os.environ.get("CF_ANALYTICS_API_TOKEN", "").strip()
+    token = _analytics_token()
     zone_id = os.environ.get("CF_ZONE_ID", "").strip()
-    skip = None if (token and zone_id) else "CF_ANALYTICS_API_TOKEN / CF_ZONE_ID not set"
+    skip = None if (token and zone_id) else f"{_ANALYTICS_TOKEN_HINT} / CF_ZONE_ID not set"
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     query = """
     query VerifyZoneAnalytics($zoneTag: String!, $day: String!) {
@@ -266,10 +287,10 @@ def _probe_zone_analytics(client: httpx.Client) -> ProbeResult:
 
 
 def _probe_account_analytics(client: httpx.Client) -> ProbeResult:
-    token = os.environ.get("CF_ANALYTICS_API_TOKEN", "").strip()
+    token = _analytics_token()
     account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
     skip = None if (token and account_id) else (
-        "CF_ANALYTICS_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not set"
+        f"{_ANALYTICS_TOKEN_HINT} / CLOUDFLARE_ACCOUNT_ID not set"
     )
     now = datetime.now(timezone.utc)
     since = (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
