@@ -213,6 +213,14 @@ export const adminUpdateUserStatus = (token, userId, status) =>
 export const adminUpdateUserPlan = (token, userId, plan) =>
   axios.patch(`${API_BASE}/admin/users/${userId}/plan`, { plan }, { headers: adminHeaders(token), withCredentials: true });
 
+// Task #591: promote a trusted user to the 'educator' role (or revert to 'student').
+export const adminUpdateUserRole = (token, userId, role, reason) =>
+  axios.patch(
+    `${API_BASE}/admin/users/${userId}/role`,
+    { role, ...(reason ? { reason } : {}) },
+    { headers: adminHeaders(token), withCredentials: true },
+  );
+
 export const adminGetConversations = (token) =>
   axios.get(`${API_BASE}/admin/conversations`, { headers: adminHeaders(token), withCredentials: true });
 

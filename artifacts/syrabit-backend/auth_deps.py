@@ -107,7 +107,10 @@ async def get_current_user(
         raise HTTPException(status_code=403, detail="Account banned")
     if user.get("status") == "suspended":
         raise HTTPException(status_code=403, detail="Account suspended")
-    if "role" not in user:
+    # Task #591: role column may exist but be empty string for legacy rows;
+    # treat blank as the default ('admin' for admins, 'student' otherwise) so
+    # the get_educator_user dependency can rely on user["role"] == 'educator'.
+    if not user.get("role"):
         user["role"] = "admin" if user.get("is_admin") else "student"
     return user
 
@@ -133,7 +136,7 @@ async def get_current_user_optional(
             user = await supa_get_user_by_id(user_id)
             if user:
                 _redis_cache_session(user_id, user)
-        if user and "role" not in user:
+        if user and not user.get("role"):
             user["role"] = "admin" if user.get("is_admin") else "student"
         return user if user and user.get("status") not in ["banned", "suspended"] else None
     except:

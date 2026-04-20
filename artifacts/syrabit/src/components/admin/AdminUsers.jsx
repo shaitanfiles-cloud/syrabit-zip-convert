@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Loader2, Search, Ban, CheckCircle, Crown, ChevronDown, AlertTriangle, RefreshCw, TrendingDown, Activity, CreditCard, Plus, Minus, X } from 'lucide-react';
+import { Loader2, Search, Ban, CheckCircle, Crown, ChevronDown, AlertTriangle, RefreshCw, TrendingDown, Activity, CreditCard, Plus, Minus, X, GraduationCap } from 'lucide-react';
 import AdminQuickLinks from './AdminQuickLinks';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { adminGetUsers, adminUpdateUserStatus, adminUpdateUserPlan, churnRisk, adminUpdateUserCredits } from '@/utils/api';
+import { adminGetUsers, adminUpdateUserStatus, adminUpdateUserPlan, adminUpdateUserRole, churnRisk, adminUpdateUserCredits } from '@/utils/api';
 import { toast } from 'sonner';
 
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
@@ -18,6 +18,12 @@ const STATUS_COLORS = {
   active: 'bg-emerald-50 text-emerald-600',
   suspended: 'bg-orange-50 text-orange-600',
   banned: 'bg-red-50 text-red-600',
+};
+
+const ROLE_COLORS = {
+  student: 'bg-gray-100 text-gray-500',
+  educator: 'bg-sky-50 text-sky-600',
+  admin: 'bg-violet-50 text-violet-600',
 };
 
 const RISK_COLORS = {
@@ -198,6 +204,25 @@ export default function AdminUsers({ adminToken, navContext, onNavigate }) {
     } catch { toast.error('Failed to update status'); }
   };
 
+  const handleRoleChange = async (userId, newRole) => {
+    const user = users.find((u) => u.id === userId);
+    const label = user?.name || user?.email || userId;
+    if (newRole === 'educator') {
+      const ok = window.confirm(`Promote ${label} to the educator role?\n\nEducators can self-serve add new educational sites to the allowlist after a safety probe. Only do this for trusted teachers.`);
+      if (!ok) return;
+    }
+    const reason = newRole === 'educator'
+      ? (window.prompt('Optional: short reason / context for the audit log') || '').trim()
+      : '';
+    try {
+      await adminUpdateUserRole(adminToken, userId, newRole, reason || undefined);
+      setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, role: newRole } : u));
+      toast.success(newRole === 'educator' ? `${label} is now an educator` : `${label} reverted to student`);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Failed to update role');
+    }
+  };
+
   const handlePlanChange = async (userId, newPlan) => {
     try {
       await adminUpdateUserPlan(adminToken, userId, newPlan);
@@ -280,6 +305,7 @@ export default function AdminUsers({ adminToken, navContext, onNavigate }) {
               <tr className="border-b border-gray-200 bg-gray-50">
                 <th className="text-left text-gray-500 font-medium px-4 py-3 text-xs">User</th>
                 <th className="text-left text-gray-500 font-medium px-4 py-3 text-xs">Plan</th>
+                <th className="text-left text-gray-500 font-medium px-4 py-3 text-xs">Role</th>
                 <th className="text-left text-gray-500 font-medium px-4 py-3 text-xs">Status</th>
                 <th className="text-left text-gray-500 font-medium px-4 py-3 text-xs">Credits</th>
                 {Object.keys(riskMap).length > 0 && <th className="text-left text-gray-500 font-medium px-4 py-3 text-xs">Churn Risk</th>}
@@ -313,6 +339,49 @@ export default function AdminUsers({ adminToken, navContext, onNavigate }) {
                           ))}
                         </DropdownMenuContent>
                       </DropdownMenu>
+                    </td>
+                    <td className="px-4 py-3">
+                      {(() => {
+                        const effectiveRole = user.role || (user.is_admin ? 'admin' : 'student');
+                        const isAdminUser = effectiveRole === 'admin' || user.is_admin;
+                        if (isAdminUser) {
+                          return (
+                            <span className={`text-xs px-2 py-1 rounded-full inline-flex items-center gap-1 ${ROLE_COLORS.admin}`}>
+                              <Crown size={10} /> admin
+                            </span>
+                          );
+                        }
+                        return (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                title="Change role"
+                                className={`text-xs px-2 py-1 rounded-full inline-flex items-center gap-1 ${ROLE_COLORS[effectiveRole] || ROLE_COLORS.student}`}
+                              >
+                                {effectiveRole === 'educator' ? <GraduationCap size={10} /> : null}
+                                {effectiveRole}
+                                <ChevronDown size={10} />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent className="bg-white border border-gray-200 shadow-lg">
+                              <DropdownMenuItem
+                                className="text-gray-600 focus:bg-gray-50"
+                                onClick={() => handleRoleChange(user.id, 'student')}
+                                disabled={effectiveRole === 'student'}
+                              >
+                                student
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                className="text-sky-600 focus:bg-gray-50"
+                                onClick={() => handleRoleChange(user.id, 'educator')}
+                                disabled={effectiveRole === 'educator'}
+                              >
+                                <GraduationCap size={14} className="mr-2" /> Promote to educator
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        );
+                      })()}
                     </td>
                     <td className="px-4 py-3">
                       <span className={`text-xs px-2 py-1 rounded-full ${STATUS_COLORS[user.status] || STATUS_COLORS.active}`}>

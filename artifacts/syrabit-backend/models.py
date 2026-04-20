@@ -180,6 +180,11 @@ class UserPlanUpdate(BaseModel):
     credits_used: Optional[int] = None
 
 
+class UserRoleUpdate(BaseModel):
+    role: str
+    reason: Optional[str] = None
+
+
 class UserCreditsUpdate(BaseModel):
     action: str = "add"
     amount: Optional[int] = None

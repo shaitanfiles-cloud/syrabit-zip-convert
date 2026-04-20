@@ -61,7 +61,7 @@ def _pg_user_cols():
               credits_used_today, credits_reset_date, created_at,
               google_id, auth_provider,
               consent_dpdp, consent_dpdp_version, consent_dpdp_at,
-              ads_opt_out"""
+              ads_opt_out, role"""
 
 # ── Supabase mirror helper ────────────────────────────────────────────────────
 def _supa_mirror(fn):
@@ -201,6 +201,7 @@ _ALLOWED_USER_COLUMNS = frozenset({
     "consent_dpdp", "consent_dpdp_version", "consent_dpdp_at",
     "is_admin",
     "ads_opt_out",
+    "role",
 })
 
 _ALLOWED_CONV_COLUMNS = frozenset({

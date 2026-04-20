@@ -153,6 +153,9 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT '';
 -- Task #530: cross-device ad opt-out preference. Default FALSE so
 -- existing accounts are not auto-opted-out on first read.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS ads_opt_out BOOLEAN NOT NULL DEFAULT FALSE;
+-- Task #591: persisted role column so admins can promote trusted users to
+-- 'educator' (the get_educator_user dependency already gates on this).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT '';
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,

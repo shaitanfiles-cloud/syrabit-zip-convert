@@ -16,7 +16,7 @@ from models import (
     UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
     ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
     DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
+    UserStatusUpdate, UserPlanUpdate, UserRoleUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
     LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
 )
 from config import (
@@ -49,6 +49,7 @@ from db_ops import (
     supa_count_users,
     supa_get_user_by_id,
     supa_get_users_by_ids,
+    supa_insert_activity_log,
     supa_list_users,
     supa_update_user,
 )
@@ -316,7 +317,9 @@ async def admin_get_users(
     for u in users:
         u.pop("password_hash", None)
         credits_info = await get_user_credits(u)
-        result.append({**u, "credits_used": credits_info["used"], "credits_limit": credits_info["limit"]})
+        # Task #591: surface effective role so the admin UI can show / toggle 'educator'.
+        effective_role = u.get("role") or ("admin" if u.get("is_admin") else "student")
+        result.append({**u, "role": effective_role, "credits_used": credits_info["used"], "credits_limit": credits_info["limit"]})
     return {"users": result, "total": total, "limit": limit, "offset": offset}
 
 async def _sync_push_subscription_role(user_id: str, is_admin: bool):
@@ -361,6 +364,48 @@ async def admin_toggle_user_admin(
     _redis_invalidate_session(user_id)
     await _sync_push_subscription_role(user_id, is_admin)
     return {"message": f"User {'promoted to admin' if is_admin else 'demoted to student'}"}
+
+
+@router.patch("/admin/users/{user_id}/role")
+async def admin_update_user_role(
+    user_id: str,
+    data: UserRoleUpdate,
+    admin: dict = Depends(get_admin_user),
+):
+    """Task #591: promote a trusted user to the 'educator' role (or revert to 'student').
+
+    The educator role unlocks the self-serve allowlist endpoints in routes/edu_browser.py
+    via get_educator_user. Admin role flips remain on /admin/users/{id}/admin.
+    """
+    allowed = {"student", "educator"}
+    new_role = (data.role or "").strip().lower()
+    if new_role not in allowed:
+        raise HTTPException(status_code=400, detail=f"role must be one of: {sorted(allowed)}")
+    user = await supa_get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    prev_role = user.get("role") or ("admin" if user.get("is_admin") else "student")
+    await supa_update_user(user_id, {"role": new_role})
+    _redis_invalidate_session(user_id)
+    try:
+        await supa_insert_activity_log({
+            "id": str(uuid.uuid4()),
+            "action": "admin.user.role_change",
+            "details": json.dumps({
+                "user_id": user_id,
+                "user_email": user.get("email", ""),
+                "previous_role": prev_role,
+                "new_role": new_role,
+                "reason": (data.reason or "").strip()[:500],
+            }),
+            "level": "info",
+            "admin_name": admin.get("name", ""),
+            "admin_email": admin.get("email", ""),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        logger.warning(f"role audit log failed for {user_id}: {e}")
+    return {"message": f"Role set to {new_role}", "role": new_role, "previous_role": prev_role}
 
 
 @router.patch("/admin/users/{user_id}/plan")
