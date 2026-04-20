@@ -293,7 +293,7 @@ class _SmartKeyPool:
         "groq": 30,
         "cerebras": 30,
         "sarvam": 30,
-        "gemini": 30,
+        "gemini": 2000,
         "openrouter": 60,
         "openai": 60,
         "bedrock": 30,
