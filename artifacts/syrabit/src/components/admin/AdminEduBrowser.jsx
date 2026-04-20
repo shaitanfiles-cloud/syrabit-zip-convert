@@ -3,7 +3,7 @@ import axios from 'axios';
 import { toast } from 'sonner';
 import {
   Plus, Trash2, ShieldCheck, ShieldX, RefreshCcw, Loader2,
-  AlertTriangle, Ban, Search, Globe, Info,
+  AlertTriangle, Ban, Search, Globe, Info, Target, TrendingDown, TrendingUp, Minus,
 } from 'lucide-react';
 import { API_BASE } from '@/utils/api';
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
@@ -530,6 +530,113 @@ function BlockedLogTab({ adminToken }) {
   );
 }
 
+function GroundedRecallTile({ adminToken }) {
+  const [state, setState] = useState({ loading: true, data: null, err: null });
+
+  const load = useCallback(async () => {
+    setState((s) => ({ ...s, loading: true }));
+    try {
+      const r = await axios.get(`${API_BASE}/admin/grounded-recall/latest`, {
+        headers: adminHeaders(adminToken),
+        withCredentials: true,
+      });
+      setState({ loading: false, data: r.data || null, err: null });
+    } catch (e) {
+      setState({ loading: false, data: null, err: e?.response?.data?.detail || e.message || 'Failed' });
+    }
+  }, [adminToken]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const { loading, data, err } = state;
+  const latest = data?.latest || null;
+  const baseline = data?.baseline || null;
+  const metrics = latest?.metrics || null;
+
+  const renderMetric = (key) => {
+    if (!metrics) return null;
+    const cur = metrics[key];
+    const base = baseline?.metrics?.[key];
+    let Icon = Minus;
+    let color = 'text-gray-500';
+    if (base != null && cur != null) {
+      const delta = cur - base;
+      if (delta > 0.001) { Icon = TrendingUp; color = 'text-emerald-600'; }
+      else if (delta < -0.001) { Icon = TrendingDown; color = 'text-rose-600'; }
+    }
+    const pct = cur != null ? `${(cur * 100).toFixed(1)}%` : '—';
+    const baseText = base != null ? `baseline ${(base * 100).toFixed(1)}%` : 'no baseline';
+    return (
+      <div key={key} className="flex-1 min-w-[140px] rounded-md border border-gray-200 bg-white px-3 py-2">
+        <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">{key}</div>
+        <div className="flex items-baseline gap-1.5 mt-0.5">
+          <span className="text-lg font-bold text-gray-900">{pct}</span>
+          <Icon size={13} className={color} />
+        </div>
+        <div className="text-[10px] text-gray-400 mt-0.5">{baseText}</div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="rounded-lg border border-violet-100 bg-violet-50/40 p-3">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-1.5">
+          <Target size={14} className="text-violet-600" />
+          <h3 className="text-xs font-bold text-gray-900">Grounded-answer recall</h3>
+          {latest?.started_at && (
+            <span className="text-[11px] text-gray-500">· {_fmtTime(latest.started_at)}</span>
+          )}
+          {latest?.retriever && (
+            <span className="text-[10px] uppercase tracking-wide rounded bg-white border border-gray-200 px-1.5 py-0.5 text-gray-600">
+              {latest.retriever}
+            </span>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={load}
+          className="inline-flex items-center gap-1 text-[11px] text-gray-600 hover:text-gray-900"
+          data-testid="recall-refresh"
+        >
+          <RefreshCcw size={11} /> Refresh
+        </button>
+      </div>
+      {loading ? (
+        <div className="text-xs text-gray-500 flex items-center gap-2">
+          <Loader2 size={12} className="animate-spin" /> Loading…
+        </div>
+      ) : err ? (
+        <div className="text-xs text-rose-600">{err}</div>
+      ) : !latest ? (
+        <div className="text-xs text-gray-600">
+          No benchmark runs yet. Run <code className="bg-white px-1 rounded border border-gray-200">python -m bench.grounded_recall --save-results</code> to populate this tile.
+        </div>
+      ) : (
+        <>
+          <div className="flex flex-wrap gap-2">
+            {['recall@1', 'recall@3', 'recall@5'].map(renderMetric)}
+            <div className="flex-1 min-w-[140px] rounded-md border border-gray-200 bg-white px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">cases · latency</div>
+              <div className="text-lg font-bold text-gray-900 mt-0.5">
+                {latest.total_cases}
+                <span className="ml-1 text-xs font-normal text-gray-500">cases</span>
+              </div>
+              <div className="text-[10px] text-gray-400 mt-0.5">mean {latest.mean_latency_ms?.toFixed?.(0) ?? '—'} ms</div>
+            </div>
+          </div>
+          {baseline && (
+            <p className="text-[11px] text-gray-500 mt-2">
+              Baseline locked on {baseline.recorded_at?.slice(0, 10) || 'unknown'} · {baseline.total_cases} cases.
+              Nightly runs re-publish these numbers.
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function AdminEduBrowser({ adminToken }) {
   const [tab, setTab] = useState('allowlist');
 
@@ -542,6 +649,8 @@ export default function AdminEduBrowser({ adminToken }) {
             Curate which sites Syra can read for students and audit what gets blocked.
           </p>
         </div>
+
+        <GroundedRecallTile adminToken={adminToken} />
 
         <div className="flex items-center gap-1 border-b border-gray-200">
           {[

@@ -1,0 +1,701 @@
+{
+  "version": 1,
+  "description": "Hand-labelled recall benchmark for grounded-answer pipeline. Each case encodes (a) a student query with optional board/class/subject/chapter context, (b) the expected best-matching source identified by domain / url-substring / chapter-slug patterns, and (c) an offline_corpus — the web_results, internal_chapters and page_context that the retriever is *expected* to surface in a healthy system. Offline runs feed the corpus directly into _build_citations to verify ranking; live runs hit real retrievers.",
+  "cases": [
+    {
+      "id": "ahsec-phy-newton-3rd",
+      "query": "State Newton's third law of motion with an example",
+      "context": {"board_name": "AHSEC", "class_name": "11", "subject_name": "Physics", "chapter_name": "Laws of Motion"},
+      "expected": {"domains": ["ncert.nic.in", "wikipedia.org", "khanacademy.org"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Newton's Laws of Motion — NCERT", "url": "https://ncert.nic.in/textbook/pdf/keph105.pdf", "snippet": "Newton's third law: To every action there is always an equal and opposite reaction."},
+          {"title": "Newton's laws of motion - Wikipedia", "url": "https://en.wikipedia.org/wiki/Newton%27s_laws_of_motion", "snippet": "Newton's third law: when one body exerts a force on a second body, the second body simultaneously exerts a force equal in magnitude and opposite in direction."},
+          {"title": "Random blog on physics", "url": "https://example.com/physics-blog", "snippet": "Stuff about physics"}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-chem-mole",
+      "query": "What is Avogadro's number and why is it important?",
+      "context": {"board_name": "AHSEC", "class_name": "11", "subject_name": "Chemistry", "chapter_name": "Some Basic Concepts of Chemistry"},
+      "expected": {"domains": ["ncert.nic.in", "wikipedia.org", "britannica.com"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Avogadro constant - Wikipedia", "url": "https://en.wikipedia.org/wiki/Avogadro_constant", "snippet": "The Avogadro constant is 6.02214076×10^23 mol^-1."},
+          {"title": "Some Basic Concepts of Chemistry — NCERT", "url": "https://ncert.nic.in/textbook/pdf/kech101.pdf", "snippet": "Mole concept and Avogadro's number."},
+          {"title": "Quora discussion", "url": "https://quora.com/avogadro", "snippet": "Answers about the mole"}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-math-limits-def",
+      "query": "Define the limit of a function",
+      "context": {"board_name": "AHSEC", "class_name": "11", "subject_name": "Mathematics", "chapter_name": "Limits and Derivatives"},
+      "expected": {"domains": ["khanacademy.org", "wikipedia.org", "ncert.nic.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Limit of a function - Wikipedia", "url": "https://en.wikipedia.org/wiki/Limit_of_a_function", "snippet": "The limit of f as x approaches c…"},
+          {"title": "Limits intro - Khan Academy", "url": "https://www.khanacademy.org/math/calculus-1/cs1-limits-and-continuity", "snippet": "Introduction to limits."},
+          {"title": "NCERT Limits and Derivatives", "url": "https://ncert.nic.in/textbook/pdf/kemh113.pdf", "snippet": "The concept of limit."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-bio-photosynthesis",
+      "query": "Explain the light-dependent reactions of photosynthesis",
+      "context": {"board_name": "AHSEC", "class_name": "11", "subject_name": "Biology", "chapter_name": "Photosynthesis in Higher Plants"},
+      "expected": {"domains": ["ncert.nic.in", "wikipedia.org", "khanacademy.org", "britannica.com"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Photosynthesis - Wikipedia", "url": "https://en.wikipedia.org/wiki/Photosynthesis", "snippet": "Light reactions occur in thylakoid membranes."},
+          {"title": "NCERT Photosynthesis in Higher Plants", "url": "https://ncert.nic.in/textbook/pdf/kebo113.pdf", "snippet": "Light and dark reactions."},
+          {"title": "Random blog", "url": "https://medium.com/some-blog", "snippet": "blog post"}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "seba-geo-monsoon",
+      "query": "What causes the Indian monsoon?",
+      "context": {"board_name": "SEBA", "class_name": "10", "subject_name": "Geography", "chapter_name": "Climate"},
+      "expected": {"domains": ["ncert.nic.in", "wikipedia.org", "britannica.com"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Monsoon of India - Wikipedia", "url": "https://en.wikipedia.org/wiki/Monsoon_of_India", "snippet": "Driven by differential heating of land and sea."},
+          {"title": "NCERT Climate chapter", "url": "https://ncert.nic.in/textbook/pdf/jess203.pdf", "snippet": "Indian monsoon cause."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "seba-hist-1857",
+      "query": "Why is the Revolt of 1857 important?",
+      "context": {"board_name": "SEBA", "class_name": "10", "subject_name": "History", "chapter_name": "Nationalism in India"},
+      "expected": {"domains": ["ncert.nic.in", "wikipedia.org", "britannica.com"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Indian Rebellion of 1857 - Wikipedia", "url": "https://en.wikipedia.org/wiki/Indian_Rebellion_of_1857", "snippet": "The rebellion started on 10 May 1857 in Meerut."},
+          {"title": "NCERT When People Rebel", "url": "https://ncert.nic.in/textbook/pdf/hess305.pdf", "snippet": "Chapter on 1857."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "page-context-biology",
+      "query": "Summarize this page about mitochondria",
+      "context": {"board_name": "AHSEC", "class_name": "11", "subject_name": "Biology", "page_url": "https://en.wikipedia.org/wiki/Mitochondrion"},
+      "expected": {"url_substrings": ["wikipedia.org/wiki/Mitochondrion"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Cellular respiration", "url": "https://www.khanacademy.org/science/biology/cellular-respiration", "snippet": "ATP production in mitochondria."}
+        ],
+        "internal_chapters": [],
+        "page_context": {"ok": true, "url": "https://en.wikipedia.org/wiki/Mitochondrion", "title": "Mitochondrion", "domain": "en.wikipedia.org", "text": "Mitochondria are organelles found in most eukaryotic cells, responsible for producing most of the cell's ATP through oxidative phosphorylation."}
+      }
+    },
+    {
+      "id": "internal-chapter-ahsec-trig",
+      "query": "Prove sin²θ + cos²θ = 1",
+      "context": {"board_name": "AHSEC", "class_name": "11", "subject_name": "Mathematics", "subject_id": "ahsec-math-11", "chapter_name": "Trigonometric Functions"},
+      "expected": {"chapter_slugs": ["trigonometric-identities"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Pythagorean trigonometric identity - Wikipedia", "url": "https://en.wikipedia.org/wiki/Pythagorean_trigonometric_identity", "snippet": "sin² + cos² = 1."}
+        ],
+        "internal_chapters": [
+          {"id": "ch-1", "subject_id": "ahsec-math-11", "slug": "trigonometric-identities", "title": "Trigonometric Identities", "content": "sin²θ + cos²θ = 1 by Pythagoras theorem applied to the unit circle."}
+        ],
+        "page_context": null
+      }
+    },
+    {
+      "id": "degree-eco-demand",
+      "query": "What is the law of demand?",
+      "context": {"board_name": "Degree", "class_name": "BA1", "subject_name": "Economics", "chapter_name": "Demand Analysis"},
+      "expected": {"domains": ["wikipedia.org", "britannica.com", "khanacademy.org"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Law of demand - Wikipedia", "url": "https://en.wikipedia.org/wiki/Law_of_demand", "snippet": "All else equal, higher price → lower quantity demanded."},
+          {"title": "Law of demand - Britannica", "url": "https://www.britannica.com/money/law-of-demand", "snippet": "Inverse relationship between price and quantity demanded."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "degree-cs-sorting",
+      "query": "Compare quicksort and mergesort time complexity",
+      "context": {"board_name": "Degree", "class_name": "BSc2", "subject_name": "Computer Science", "chapter_name": "Sorting Algorithms"},
+      "expected": {"domains": ["wikipedia.org", "khanacademy.org", "geeksforgeeks.org"], "url_substrings": [".ac.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Quicksort - Wikipedia", "url": "https://en.wikipedia.org/wiki/Quicksort", "snippet": "Average O(n log n), worst O(n²)."},
+          {"title": "Mergesort - Wikipedia", "url": "https://en.wikipedia.org/wiki/Merge_sort", "snippet": "O(n log n) in all cases."},
+          {"title": "IIT Bombay lecture notes", "url": "https://cs.iitb.ac.in/lectures/sorting.pdf", "snippet": "Comparison of sorting algorithms."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-phy-ohms-law",
+      "query": "State Ohm's law and its limitations",
+      "context": {"board_name": "AHSEC", "class_name": "12", "subject_name": "Physics", "chapter_name": "Current Electricity"},
+      "expected": {"domains": ["ncert.nic.in", "wikipedia.org"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Ohm's law - Wikipedia", "url": "https://en.wikipedia.org/wiki/Ohm%27s_law", "snippet": "V = IR at constant temperature."},
+          {"title": "NCERT Current Electricity", "url": "https://ncert.nic.in/textbook/pdf/leph103.pdf", "snippet": "Chapter 3."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-phy-interference",
+      "query": "What is constructive interference?",
+      "context": {"board_name": "AHSEC", "class_name": "12", "subject_name": "Physics", "chapter_name": "Wave Optics"},
+      "expected": {"domains": ["wikipedia.org", "khanacademy.org", "ncert.nic.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Wave interference - Wikipedia", "url": "https://en.wikipedia.org/wiki/Wave_interference", "snippet": "Superposition of waves."},
+          {"title": "NCERT Wave Optics", "url": "https://ncert.nic.in/textbook/pdf/leph110.pdf", "snippet": "Young's double slit."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-chem-electrolysis",
+      "query": "Explain electrolysis with an example",
+      "context": {"board_name": "AHSEC", "class_name": "12", "subject_name": "Chemistry", "chapter_name": "Electrochemistry"},
+      "expected": {"domains": ["wikipedia.org", "britannica.com", "ncert.nic.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Electrolysis - Wikipedia", "url": "https://en.wikipedia.org/wiki/Electrolysis", "snippet": "Passing current through an electrolyte."},
+          {"title": "Electrolysis of water - Britannica", "url": "https://www.britannica.com/science/electrolysis", "snippet": "Water splits to H2 and O2."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-bio-dna-replication",
+      "query": "Describe DNA replication in eukaryotes",
+      "context": {"board_name": "AHSEC", "class_name": "12", "subject_name": "Biology", "chapter_name": "Molecular Basis of Inheritance"},
+      "expected": {"domains": ["wikipedia.org", "khanacademy.org", "ncert.nic.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "DNA replication - Wikipedia", "url": "https://en.wikipedia.org/wiki/DNA_replication", "snippet": "Semi-conservative, requires helicase, polymerase."},
+          {"title": "Khan: DNA replication", "url": "https://www.khanacademy.org/science/biology/dna-as-the-genetic-material/dna-replication/a/dna-replication", "snippet": "Leading and lagging strand."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-math-integration-parts",
+      "query": "Derive integration by parts formula",
+      "context": {"board_name": "AHSEC", "class_name": "12", "subject_name": "Mathematics", "chapter_name": "Integrals"},
+      "expected": {"domains": ["wikipedia.org", "khanacademy.org", "ncert.nic.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Integration by parts - Wikipedia", "url": "https://en.wikipedia.org/wiki/Integration_by_parts", "snippet": "∫u dv = uv − ∫v du."},
+          {"title": "NCERT Integrals", "url": "https://ncert.nic.in/textbook/pdf/lemh107.pdf", "snippet": "Chapter 7 of class 12 maths."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-math-matrices",
+      "query": "What is a singular matrix?",
+      "context": {"board_name": "AHSEC", "class_name": "12", "subject_name": "Mathematics", "chapter_name": "Matrices"},
+      "expected": {"domains": ["wikipedia.org", "khanacademy.org"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Invertible matrix - Wikipedia", "url": "https://en.wikipedia.org/wiki/Invertible_matrix", "snippet": "A singular matrix is one whose determinant is zero."},
+          {"title": "Random tutoring site", "url": "https://example-tutor.com/matrix", "snippet": "Tutorial"}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "seba-sci-acid-base",
+      "query": "Difference between acid and base with examples",
+      "context": {"board_name": "SEBA", "class_name": "10", "subject_name": "Science", "chapter_name": "Acids, Bases and Salts"},
+      "expected": {"domains": ["ncert.nic.in", "wikipedia.org", "khanacademy.org"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Acid - Wikipedia", "url": "https://en.wikipedia.org/wiki/Acid", "snippet": "Substance that donates protons."},
+          {"title": "NCERT Acids Bases and Salts", "url": "https://ncert.nic.in/textbook/pdf/jesc102.pdf", "snippet": "Class 10 chapter."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "seba-sci-metals",
+      "query": "Why is copper used for electrical wiring?",
+      "context": {"board_name": "SEBA", "class_name": "10", "subject_name": "Science", "chapter_name": "Metals and Non-Metals"},
+      "expected": {"domains": ["ncert.nic.in", "wikipedia.org", "britannica.com"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Copper - Wikipedia", "url": "https://en.wikipedia.org/wiki/Copper", "snippet": "High electrical conductivity and ductility."},
+          {"title": "NCERT Metals and Non-Metals", "url": "https://ncert.nic.in/textbook/pdf/jesc103.pdf", "snippet": "Class 10 science."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "seba-sci-human-eye",
+      "query": "How does the human eye work?",
+      "context": {"board_name": "SEBA", "class_name": "10", "subject_name": "Science", "chapter_name": "The Human Eye"},
+      "expected": {"domains": ["ncert.nic.in", "wikipedia.org", "khanacademy.org"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Human eye - Wikipedia", "url": "https://en.wikipedia.org/wiki/Human_eye", "snippet": "Structure and function."},
+          {"title": "NCERT Human Eye", "url": "https://ncert.nic.in/textbook/pdf/jesc111.pdf", "snippet": "Ch 11 class 10."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "seba-math-quadratic",
+      "query": "Derive the quadratic formula",
+      "context": {"board_name": "SEBA", "class_name": "10", "subject_name": "Mathematics", "chapter_name": "Quadratic Equations"},
+      "expected": {"domains": ["wikipedia.org", "khanacademy.org", "ncert.nic.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Quadratic formula - Wikipedia", "url": "https://en.wikipedia.org/wiki/Quadratic_formula", "snippet": "Derivation by completing the square."},
+          {"title": "Khan Academy quadratics", "url": "https://www.khanacademy.org/math/algebra/x2f8bb11595b61c86:quadratic-functions-equations", "snippet": "Quadratic formula."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "seba-math-trig-ratios",
+      "query": "Values of sin, cos, tan at 30, 45, 60 degrees",
+      "context": {"board_name": "SEBA", "class_name": "10", "subject_name": "Mathematics", "chapter_name": "Introduction to Trigonometry"},
+      "expected": {"domains": ["wikipedia.org", "khanacademy.org", "ncert.nic.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Trigonometric ratios - Wikipedia", "url": "https://en.wikipedia.org/wiki/Trigonometric_functions", "snippet": "Standard values."},
+          {"title": "NCERT Intro to Trigonometry", "url": "https://ncert.nic.in/textbook/pdf/jemh108.pdf", "snippet": "Class 10 chapter 8."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "internal-chapter-seba-probability",
+      "query": "What is classical probability?",
+      "context": {"board_name": "SEBA", "class_name": "10", "subject_name": "Mathematics", "subject_id": "seba-math-10", "chapter_name": "Probability"},
+      "expected": {"chapter_slugs": ["probability-basics"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Probability - Wikipedia", "url": "https://en.wikipedia.org/wiki/Probability", "snippet": "Measure of likelihood."}
+        ],
+        "internal_chapters": [
+          {"id": "ch-p", "subject_id": "seba-math-10", "slug": "probability-basics", "title": "Probability Basics", "content": "Classical probability is the ratio of favourable outcomes to total outcomes when all outcomes are equally likely."}
+        ],
+        "page_context": null
+      }
+    },
+    {
+      "id": "page-context-chemistry",
+      "query": "What does this page say about the periodic table?",
+      "context": {"board_name": "AHSEC", "class_name": "11", "subject_name": "Chemistry", "page_url": "https://en.wikipedia.org/wiki/Periodic_table"},
+      "expected": {"url_substrings": ["wikipedia.org/wiki/Periodic_table"]},
+      "offline_corpus": {
+        "web_results": [],
+        "internal_chapters": [],
+        "page_context": {"ok": true, "url": "https://en.wikipedia.org/wiki/Periodic_table", "title": "Periodic table", "domain": "en.wikipedia.org", "text": "The periodic table arranges elements by atomic number. Groups are columns; periods are rows."}
+      }
+    },
+    {
+      "id": "ahsec-english-prose-detective",
+      "query": "Explain the theme of 'The Adventure' by Jayant Narlikar",
+      "context": {"board_name": "AHSEC", "class_name": "11", "subject_name": "English", "chapter_name": "The Adventure"},
+      "expected": {"domains": ["ncert.nic.in", "ahsec.assam.gov.in"], "url_substrings": [".ac.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "The Adventure - NCERT Hornbill", "url": "https://ncert.nic.in/textbook/pdf/kehb107.pdf", "snippet": "Short story by Jayant Narlikar."},
+          {"title": "AHSEC English guidelines", "url": "https://ahsec.assam.gov.in/english-syllabus.pdf", "snippet": "HS first year English."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-history-mughal",
+      "query": "Who was the founder of the Mughal Empire?",
+      "context": {"board_name": "AHSEC", "class_name": "12", "subject_name": "History", "chapter_name": "Kings and Chronicles"},
+      "expected": {"domains": ["wikipedia.org", "britannica.com", "ncert.nic.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Babur - Wikipedia", "url": "https://en.wikipedia.org/wiki/Babur", "snippet": "Founded the Mughal Empire in 1526."},
+          {"title": "Mughal dynasty - Britannica", "url": "https://www.britannica.com/topic/Mughal-dynasty", "snippet": "Founded by Babur."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-polsci-parliament",
+      "query": "How is the Indian Parliament structured?",
+      "context": {"board_name": "AHSEC", "class_name": "11", "subject_name": "Political Science", "chapter_name": "Legislature"},
+      "expected": {"domains": ["ncert.nic.in", "wikipedia.org"], "url_substrings": ["parliamentofindia.nic.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Parliament of India - Wikipedia", "url": "https://en.wikipedia.org/wiki/Parliament_of_India", "snippet": "Bicameral: Lok Sabha and Rajya Sabha."},
+          {"title": "NCERT Indian Constitution at Work", "url": "https://ncert.nic.in/textbook/pdf/keps105.pdf", "snippet": "Legislature chapter."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "degree-math-group-theory",
+      "query": "Define a group and give an example",
+      "context": {"board_name": "Degree", "class_name": "BSc2", "subject_name": "Mathematics", "chapter_name": "Group Theory"},
+      "expected": {"domains": ["wikipedia.org"], "url_substrings": [".ac.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Group (mathematics) - Wikipedia", "url": "https://en.wikipedia.org/wiki/Group_(mathematics)", "snippet": "Set with associative binary op, identity, inverses."},
+          {"title": "IIT lecture notes on groups", "url": "https://math.iitb.ac.in/~seshadri/group-theory.pdf", "snippet": "Definition and examples."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "degree-physics-lagrangian",
+      "query": "What is the Lagrangian in classical mechanics?",
+      "context": {"board_name": "Degree", "class_name": "BSc3", "subject_name": "Physics", "chapter_name": "Classical Mechanics"},
+      "expected": {"domains": ["wikipedia.org"], "url_substrings": [".edu", ".ac.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Lagrangian mechanics - Wikipedia", "url": "https://en.wikipedia.org/wiki/Lagrangian_mechanics", "snippet": "L = T − V where T is kinetic, V is potential."},
+          {"title": "MIT OCW Classical Mechanics", "url": "https://ocw.mit.edu/courses/physics/classical-mechanics", "snippet": "Lagrangian formulation."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-chem-hybridisation",
+      "query": "Explain sp3 hybridisation with methane",
+      "context": {"board_name": "AHSEC", "class_name": "11", "subject_name": "Chemistry", "chapter_name": "Chemical Bonding"},
+      "expected": {"domains": ["wikipedia.org", "ncert.nic.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Orbital hybridisation - Wikipedia", "url": "https://en.wikipedia.org/wiki/Orbital_hybridisation", "snippet": "sp3 hybridisation explains tetrahedral methane."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-bio-mendel",
+      "query": "State Mendel's law of segregation",
+      "context": {"board_name": "AHSEC", "class_name": "12", "subject_name": "Biology", "chapter_name": "Principles of Inheritance"},
+      "expected": {"domains": ["wikipedia.org", "khanacademy.org", "ncert.nic.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Mendelian inheritance - Wikipedia", "url": "https://en.wikipedia.org/wiki/Mendelian_inheritance", "snippet": "Law of segregation: alleles separate during gamete formation."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-bio-immune",
+      "query": "Difference between humoral and cell-mediated immunity",
+      "context": {"board_name": "AHSEC", "class_name": "12", "subject_name": "Biology", "chapter_name": "Human Health and Disease"},
+      "expected": {"domains": ["wikipedia.org", "ncert.nic.in", "khanacademy.org"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Immune system - Wikipedia", "url": "https://en.wikipedia.org/wiki/Immune_system", "snippet": "Humoral via antibodies, cell-mediated via T cells."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "seba-eng-poem",
+      "query": "Summarize the poem 'The Rime of the Ancient Mariner'",
+      "context": {"board_name": "SEBA", "class_name": "10", "subject_name": "English", "chapter_name": "Poems"},
+      "expected": {"domains": ["wikipedia.org", "britannica.com"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "The Rime of the Ancient Mariner - Wikipedia", "url": "https://en.wikipedia.org/wiki/The_Rime_of_the_Ancient_Mariner", "snippet": "Poem by Coleridge."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "internal-first-priority",
+      "query": "What is osmosis?",
+      "context": {"board_name": "SEBA", "class_name": "10", "subject_name": "Science", "subject_id": "seba-sci-10", "chapter_name": "Life Processes"},
+      "expected": {"chapter_slugs": ["osmosis-and-diffusion"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Osmosis - Wikipedia", "url": "https://en.wikipedia.org/wiki/Osmosis", "snippet": "Net movement of solvent across a semipermeable membrane."}
+        ],
+        "internal_chapters": [
+          {"id": "ch-osm", "subject_id": "seba-sci-10", "slug": "osmosis-and-diffusion", "title": "Osmosis and Diffusion", "content": "Osmosis is the spontaneous net movement of solvent molecules through a selectively permeable membrane into a region of higher solute concentration."}
+        ],
+        "page_context": null
+      }
+    },
+    {
+      "id": "page-context-history",
+      "query": "What does this page say about the Mauryan empire?",
+      "context": {"board_name": "SEBA", "class_name": "10", "subject_name": "History", "page_url": "https://en.wikipedia.org/wiki/Maurya_Empire"},
+      "expected": {"url_substrings": ["Maurya_Empire"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Ashoka - Wikipedia", "url": "https://en.wikipedia.org/wiki/Ashoka", "snippet": "Mauryan emperor."}
+        ],
+        "internal_chapters": [],
+        "page_context": {"ok": true, "url": "https://en.wikipedia.org/wiki/Maurya_Empire", "title": "Maurya Empire", "domain": "en.wikipedia.org", "text": "The Maurya Empire was a geographically extensive Iron Age historical power based in Magadha, founded by Chandragupta Maurya in 322 BCE."}
+      }
+    },
+    {
+      "id": "ahsec-phy-capacitance",
+      "query": "Capacitance of a parallel plate capacitor formula",
+      "context": {"board_name": "AHSEC", "class_name": "12", "subject_name": "Physics", "chapter_name": "Electrostatic Potential"},
+      "expected": {"domains": ["wikipedia.org", "ncert.nic.in", "khanacademy.org"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Capacitor - Wikipedia", "url": "https://en.wikipedia.org/wiki/Capacitor", "snippet": "C = ε0 A / d for parallel plates."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-phy-doppler",
+      "query": "Explain the Doppler effect in sound",
+      "context": {"board_name": "AHSEC", "class_name": "11", "subject_name": "Physics", "chapter_name": "Waves"},
+      "expected": {"domains": ["wikipedia.org", "khanacademy.org", "ncert.nic.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Doppler effect - Wikipedia", "url": "https://en.wikipedia.org/wiki/Doppler_effect", "snippet": "Change in frequency due to relative motion."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-chem-equilibrium",
+      "query": "What is Le Chatelier's principle?",
+      "context": {"board_name": "AHSEC", "class_name": "11", "subject_name": "Chemistry", "chapter_name": "Equilibrium"},
+      "expected": {"domains": ["wikipedia.org", "britannica.com", "ncert.nic.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Le Chatelier's principle - Wikipedia", "url": "https://en.wikipedia.org/wiki/Le_Chatelier%27s_principle", "snippet": "Shift opposing the applied stress."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-math-prob-binomial",
+      "query": "Binomial distribution formula",
+      "context": {"board_name": "AHSEC", "class_name": "12", "subject_name": "Mathematics", "chapter_name": "Probability"},
+      "expected": {"domains": ["wikipedia.org", "khanacademy.org"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Binomial distribution - Wikipedia", "url": "https://en.wikipedia.org/wiki/Binomial_distribution", "snippet": "P(X=k) = C(n,k) p^k (1-p)^(n-k)."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "seba-geo-river-systems",
+      "query": "Major river systems of India",
+      "context": {"board_name": "SEBA", "class_name": "9", "subject_name": "Geography", "chapter_name": "Drainage"},
+      "expected": {"domains": ["ncert.nic.in", "wikipedia.org", "britannica.com"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "List of rivers of India - Wikipedia", "url": "https://en.wikipedia.org/wiki/List_of_rivers_of_India", "snippet": "Ganges, Brahmaputra, Godavari, Krishna."},
+          {"title": "NCERT Drainage", "url": "https://ncert.nic.in/textbook/pdf/iess103.pdf", "snippet": "Class 9 geography."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "seba-civics-federal",
+      "query": "What is federalism?",
+      "context": {"board_name": "SEBA", "class_name": "10", "subject_name": "Civics", "chapter_name": "Federalism"},
+      "expected": {"domains": ["ncert.nic.in", "wikipedia.org"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Federalism - Wikipedia", "url": "https://en.wikipedia.org/wiki/Federalism", "snippet": "Division of powers between levels of government."},
+          {"title": "NCERT Federalism", "url": "https://ncert.nic.in/textbook/pdf/jess202.pdf", "snippet": "Class 10 civics."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-eng-figure-of-speech",
+      "query": "Define metaphor with an example",
+      "context": {"board_name": "AHSEC", "class_name": "11", "subject_name": "English", "chapter_name": "Grammar and Composition"},
+      "expected": {"domains": ["wikipedia.org", "britannica.com"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Metaphor - Wikipedia", "url": "https://en.wikipedia.org/wiki/Metaphor", "snippet": "Figure of speech implying comparison."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-acc-double-entry",
+      "query": "What is the double-entry system in accounting?",
+      "context": {"board_name": "AHSEC", "class_name": "11", "subject_name": "Accountancy", "chapter_name": "Theory Base of Accounting"},
+      "expected": {"domains": ["wikipedia.org", "ncert.nic.in", "britannica.com"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Double-entry bookkeeping - Wikipedia", "url": "https://en.wikipedia.org/wiki/Double-entry_bookkeeping", "snippet": "Every transaction affects two accounts."},
+          {"title": "NCERT Financial Accounting I", "url": "https://ncert.nic.in/textbook/pdf/keac101.pdf", "snippet": "Ch on theory base."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-bst-management",
+      "query": "What are the principles of management by Fayol?",
+      "context": {"board_name": "AHSEC", "class_name": "12", "subject_name": "Business Studies", "chapter_name": "Principles of Management"},
+      "expected": {"domains": ["wikipedia.org", "britannica.com", "ncert.nic.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Fayolism - Wikipedia", "url": "https://en.wikipedia.org/wiki/Fayolism", "snippet": "14 principles of management."},
+          {"title": "NCERT Principles of Management", "url": "https://ncert.nic.in/textbook/pdf/lebs102.pdf", "snippet": "Class 12 BST."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "degree-stat-hypothesis",
+      "query": "Explain null hypothesis and p-value",
+      "context": {"board_name": "Degree", "class_name": "BSc2", "subject_name": "Statistics", "chapter_name": "Hypothesis Testing"},
+      "expected": {"domains": ["wikipedia.org", "khanacademy.org"], "url_substrings": [".ac.in", ".edu"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Null hypothesis - Wikipedia", "url": "https://en.wikipedia.org/wiki/Null_hypothesis", "snippet": "Default assumption of no effect."},
+          {"title": "p-value - Wikipedia", "url": "https://en.wikipedia.org/wiki/P-value", "snippet": "Probability under null."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "degree-eng-romantic-age",
+      "query": "Characteristics of the Romantic age in English literature",
+      "context": {"board_name": "Degree", "class_name": "BA1", "subject_name": "English Literature", "chapter_name": "Romantic Period"},
+      "expected": {"domains": ["wikipedia.org", "britannica.com"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Romanticism - Wikipedia", "url": "https://en.wikipedia.org/wiki/Romanticism", "snippet": "Emphasis on emotion and individualism."},
+          {"title": "Romanticism - Britannica", "url": "https://www.britannica.com/art/Romanticism", "snippet": "Artistic, literary, musical movement."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "noisy-corpus-should-still-recall",
+      "query": "Explain recursion with a simple example",
+      "context": {"board_name": "Degree", "class_name": "BSc1", "subject_name": "Computer Science", "chapter_name": "Programming Basics"},
+      "expected": {"domains": ["wikipedia.org", "khanacademy.org", "geeksforgeeks.org"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Random blog", "url": "https://randomblog.com/recursion", "snippet": "Blog spam"},
+          {"title": "Off-topic page", "url": "https://example.com/other", "snippet": "Unrelated"},
+          {"title": "Recursion (computer science) - Wikipedia", "url": "https://en.wikipedia.org/wiki/Recursion_(computer_science)", "snippet": "Function that calls itself."},
+          {"title": "Another blog", "url": "https://anotherblog.com/coding", "snippet": "Stuff"}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "duplicate-urls-dedup",
+      "query": "What is kinetic energy?",
+      "context": {"board_name": "SEBA", "class_name": "9", "subject_name": "Science", "chapter_name": "Work and Energy"},
+      "expected": {"domains": ["wikipedia.org", "ncert.nic.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Kinetic energy - Wikipedia", "url": "https://en.wikipedia.org/wiki/Kinetic_energy", "snippet": "KE = 1/2 mv²."},
+          {"title": "Kinetic energy - Wikipedia (dup)", "url": "https://en.wikipedia.org/wiki/Kinetic_energy", "snippet": "Duplicate should be deduped."},
+          {"title": "NCERT Work and Energy", "url": "https://ncert.nic.in/textbook/pdf/iesc111.pdf", "snippet": "Class 9 chapter."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-geo-soil",
+      "query": "Types of soil found in India",
+      "context": {"board_name": "AHSEC", "class_name": "11", "subject_name": "Geography", "chapter_name": "Natural Vegetation"},
+      "expected": {"domains": ["ncert.nic.in", "wikipedia.org"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Soil types of India - Wikipedia", "url": "https://en.wikipedia.org/wiki/Soil_classification", "snippet": "Alluvial, black, red, laterite."},
+          {"title": "NCERT Fundamentals of Physical Geography", "url": "https://ncert.nic.in/textbook/pdf/kegy106.pdf", "snippet": "Soils chapter."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-psy-memory",
+      "query": "Stages of memory according to Atkinson and Shiffrin",
+      "context": {"board_name": "AHSEC", "class_name": "11", "subject_name": "Psychology", "chapter_name": "Human Memory"},
+      "expected": {"domains": ["wikipedia.org", "britannica.com"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Atkinson–Shiffrin memory model - Wikipedia", "url": "https://en.wikipedia.org/wiki/Atkinson%E2%80%93Shiffrin_memory_model", "snippet": "Sensory, short-term, long-term."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ahsec-socio-family",
+      "query": "What is a joint family?",
+      "context": {"board_name": "AHSEC", "class_name": "11", "subject_name": "Sociology", "chapter_name": "Family, Marriage and Kinship"},
+      "expected": {"domains": ["wikipedia.org", "britannica.com", "ncert.nic.in"]},
+      "offline_corpus": {
+        "web_results": [
+          {"title": "Joint family - Wikipedia", "url": "https://en.wikipedia.org/wiki/Joint_family", "snippet": "Extended family arrangement common in India."}
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    }
+  ]
+}

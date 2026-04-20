@@ -217,4 +217,29 @@ async def admin_blocked_log(limit: int = 200, _admin=Depends(get_admin_user)):
     return {"ok": True, "items": items, "count": len(items)}
 
 
+# ───────────────────────── Admin: grounded-recall bench ─────────────────────────
+
+@router.get("/admin/grounded-recall/latest")
+async def admin_grounded_recall_latest(_admin=Depends(get_admin_user)):
+    """Return the most recent grounded-answer recall benchmark run + baseline.
+
+    The nightly job writes `bench/results/latest.json`; this endpoint
+    surfaces it (plus the committed baseline) so the admin UI can render
+    a retrieval-quality tile without running the bench in-process.
+    """
+    try:
+        from bench.grounded_recall import find_latest_result, load_baseline
+        latest = find_latest_result()
+        baseline = load_baseline()
+        return {
+            "ok": True,
+            "latest": latest,
+            "baseline": baseline,
+            "has_results": latest is not None,
+        }
+    except Exception as e:
+        logger.warning(f"[admin] grounded-recall fetch failed: {e}")
+        return {"ok": False, "error": str(e)[:200], "latest": None, "baseline": None}
+
+
 __all__ = ["router"]
