@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import { log } from '@/utils/logger';
 import AdminQuickLinks from './AdminQuickLinks';
+import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 import {
   Users, MessageSquare, BookOpen, Zap, Loader2, Activity,
   ArrowRight, PenTool, Settings, Eye, TrendingUp, RefreshCw,
@@ -822,6 +823,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         </div>
       </div>
 
+      <SectionErrorBoundary name="System Health">
       {Object.keys(deps).length > 0 && (
         <GlassCard className="p-5">
           <div className="flex items-center gap-2 mb-4">
@@ -855,6 +857,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           </div>
         </GlassCard>
       )}
+      </SectionErrorBoundary>
 
       {data?.conversation_date_range?.oldest && (
         <div className="flex items-center gap-3 p-3 rounded-xl flex-wrap bg-emerald-50 border border-emerald-200">
@@ -880,6 +883,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         <StatCard label="Subjects"        value={data?.total_subjects}       icon={BookOpen}      color="#f59e0b" />
       </div>
 
+      <SectionErrorBoundary name="Revenue">
       {metrics?.revenue && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard
@@ -899,6 +903,8 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
             subLabel="Success Rate" subValue={metrics.bot_render?.success_rate_pct != null ? `${metrics.bot_render.success_rate_pct}%` : '—'} />
         </div>
       )}
+      </SectionErrorBoundary>
+      <SectionErrorBoundary name="Bot Render">
       {metrics.bot_render?.by_page_type && Object.keys(metrics.bot_render.by_page_type).length > 0 && (() => {
         const raw = metrics.bot_render.by_page_type;
         const grouped = {};
@@ -923,7 +929,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         </div>
         );
       })()}
+      </SectionErrorBoundary>
 
+      <SectionErrorBoundary name="AI Health">
       <GlassCard className="p-5">
         <div className="flex items-center gap-2 mb-4 flex-wrap">
           <Globe size={14} style={{ color: '#0891b2' }} />
@@ -1102,7 +1110,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           </div>
         )}
       </GlassCard>
+      </SectionErrorBoundary>
 
+      <SectionErrorBoundary name="Bot Analytics">
       {botAnalytics && (
         <GlassCard className="p-5">
           <div className="flex items-center gap-2 mb-4">
@@ -1219,7 +1229,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           )}
         </GlassCard>
       )}
+      </SectionErrorBoundary>
 
+      <SectionErrorBoundary name="SEO Health Banner">
       {seoHealth?.banner && (
         <div
           className={`rounded-xl border-2 p-4 flex items-start gap-3 ${
@@ -1267,7 +1279,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           </button>
         </div>
       )}
+      </SectionErrorBoundary>
 
+      <SectionErrorBoundary name="SEO Health History">
       {seoHealth?.history && seoHealth.history.length > 0 && (
         <GlassCard className="p-5">
           <div className="flex items-center gap-2 mb-3 flex-wrap">
@@ -1312,12 +1326,14 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           )}
         </GlassCard>
       )}
+      </SectionErrorBoundary>
 
       {/* Task #350: on-call banner — only when the alert loop has
           auto-deep-scanned at least one sitemap in the last hour, so
           the on-call admin sees right away that there's a fresh blast
           radius to triage when they open the dashboard from the alert
           email. */}
+      <SectionErrorBoundary name="SEO Auto Deep Scans">
       {seoAutoDeepScans?.recent_within_hour?.length > 0 && (
         <GlassCard
           className="p-4 border-l-4 border-red-500 bg-red-50/50"
@@ -1346,7 +1362,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           </div>
         </GlassCard>
       )}
+      </SectionErrorBoundary>
 
+      <SectionErrorBoundary name="SEO Sitemap Health">
       <GlassCard className="p-5" data-testid="seo-sitemap-health-card">
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <FileCheck size={16} className="text-cyan-500" />
@@ -1940,8 +1958,10 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           </>
         )}
       </GlassCard>
+      </SectionErrorBoundary>
       
 
+      <SectionErrorBoundary name="Alert History">
       {alertHistory && (
         <GlassCard className="p-5">
           <div className="flex items-center gap-2 mb-4 flex-wrap">
@@ -2934,7 +2954,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           )}
         </GlassCard>
       )}
+      </SectionErrorBoundary>
 
+      <SectionErrorBoundary name="IndexNow Stats">
       {indexNowStats && (
         <GlassCard className="p-5">
           <div className="flex items-center gap-2 mb-4">
@@ -3214,6 +3236,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           )}
         </GlassCard>
       )}
+      </SectionErrorBoundary>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
@@ -3223,6 +3246,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         <StatCard label="Avg Session"  value={vs.avg_session_duration != null ? `${vs.avg_session_duration}s` : '—'} icon={Clock} color="#a78bfa" />
       </div>
 
+      <SectionErrorBoundary name="Chat Health">
       <GlassCard className="p-5">
         <div className="flex items-center gap-2 mb-5">
           <ShieldCheck size={16} className="text-violet-500" />
@@ -3327,7 +3351,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           </div>
         </div>
       </GlassCard>
+      </SectionErrorBoundary>
 
+      <SectionErrorBoundary name="Chat Speed-up">
       <GlassCard className="p-5">
         <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
           <div className="flex items-center gap-2">
@@ -3488,7 +3514,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           );
         })()}
       </GlassCard>
+      </SectionErrorBoundary>
 
+      <SectionErrorBoundary name="Latency & Top Queries">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <GlassCard className="p-5">
           <div className="flex items-center justify-between mb-3">
@@ -3561,7 +3589,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           </p>
         </GlassCard>
       </div>
+      </SectionErrorBoundary>
 
+      <SectionErrorBoundary name="Token Spend">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <GlassCard className="p-5">
           <div className="flex items-center gap-2 mb-3">
@@ -3707,7 +3737,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           </div>
         </GlassCard>
       </div>
+      </SectionErrorBoundary>
 
+      <SectionErrorBoundary name="Plan Distribution">
       {data?.plan_distribution && (
         <GlassCard className="p-5">
           <h3 className="text-gray-500 text-sm font-semibold mb-4">Plan Distribution</h3>
@@ -3734,7 +3766,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           </div>
         </GlassCard>
       )}
+      </SectionErrorBoundary>
 
+      <SectionErrorBoundary name="PWA Stats">
       {pwaStats && (
         <GlassCard className="p-5">
           <div className="flex items-center gap-2 mb-4">
@@ -3794,6 +3828,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           </div>
         </GlassCard>
       )}
+      </SectionErrorBoundary>
 
       <PipelineWidget token={adminToken} />
 
@@ -3816,6 +3851,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         ))}
       </div>
 
+      <SectionErrorBoundary name="Daily Visitors">
       {vs.daily_visitors?.length > 0 && (
         <GlassCard className="p-5">
           <div className="flex items-center justify-between mb-4">
@@ -3858,7 +3894,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           </div>
         </GlassCard>
       )}
+      </SectionErrorBoundary>
 
+      <SectionErrorBoundary name="Recent Activity">
       <GlassCard className="p-5" data-testid="recent-activity">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
@@ -3890,6 +3928,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           </div>
         )}
       </GlassCard>
+      </SectionErrorBoundary>
 
       <AdminQuickLinks links={['content','seomanager','analytics','users','conversations','vertex','monetization']} onNavigate={onNavigate} />
     </div>
