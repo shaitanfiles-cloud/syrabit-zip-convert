@@ -16,10 +16,26 @@ export const CitationChip = memo(function CitationChip({ citation, compact = fal
   const title = citation.title || citation.domain || 'Source';
   const className = `inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ${style.ring} align-baseline`;
 
-  // Inline chips inside answer text shouldn't be focusable buttons with no
-  // action — render them as a <span> instead so keyboard users don't tab
-  // through dozens of no-op controls.
+  // When no onClick handler is provided, make the chip a real anchor to the
+  // source URL (if we have one) so the student can click [1] and jump straight
+  // to the citation. Falls back to a plain <span> if the citation has no URL,
+  // avoiding a focusable no-op control.
   if (!onClick) {
+    if (citation.url) {
+      return (
+        <a
+          href={citation.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`${className} hover:opacity-80 transition-opacity`}
+          title={title}
+          aria-label={`Source ${index}${citation.title ? `: ${citation.title}` : ''} (opens in new tab)`}
+        >
+          {!compact && <Icon className="w-3 h-3" aria-hidden="true" />}
+          <span>{label}</span>
+        </a>
+      );
+    }
     return (
       <span
         className={className}

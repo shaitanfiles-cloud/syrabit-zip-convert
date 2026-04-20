@@ -177,6 +177,12 @@ export function AskPanel({ article, subject, chapter, board, className }) {
             if (ev.from_cache) setFromCache(true);
             continue;
           }
+          // Harden cancel/retry races: if the server emits a message_id on an
+          // event that doesn't match the one we're currently tracking, that
+          // chunk belongs to a stale request we already aborted. Drop it.
+          if (ev.message_id && messageIdRef.current && ev.message_id !== messageIdRef.current) {
+            continue;
+          }
           if (ev.event === 'cancelled') {
             setCancelled(true);
             doneStreaming = true;

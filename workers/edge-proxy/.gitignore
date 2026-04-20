@@ -1,1 +1,4 @@
 .dev.vars
+
+# Miniflare/Wrangler local dev state — never commit
+.wrangler/
