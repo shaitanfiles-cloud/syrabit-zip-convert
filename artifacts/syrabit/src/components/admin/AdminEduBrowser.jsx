@@ -1,0 +1,575 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import axios from 'axios';
+import { toast } from 'sonner';
+import {
+  Plus, Trash2, ShieldCheck, ShieldX, RefreshCcw, Loader2,
+  AlertTriangle, Ban, Search, Globe, Info,
+} from 'lucide-react';
+import { API_BASE } from '@/utils/api';
+import { SectionErrorBoundary } from '@/components/ErrorBoundary';
+
+const adminHeaders = (token) => {
+  const isRealJwt = token && typeof token === 'string' && token.split('.').length === 3;
+  return isRealJwt ? { Authorization: `Bearer ${token}` } : {};
+};
+
+function _fmtTime(ts) {
+  if (!ts) return '—';
+  const n = typeof ts === 'number' ? ts * 1000 : Date.parse(ts);
+  if (!Number.isFinite(n)) return '—';
+  const d = new Date(n);
+  const now = Date.now();
+  const diffMs = now - d.getTime();
+  if (diffMs < 60_000) return 'just now';
+  if (diffMs < 3_600_000) return `${Math.floor(diffMs / 60_000)}m ago`;
+  if (diffMs < 86_400_000) return `${Math.floor(diffMs / 3_600_000)}h ago`;
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+const REASON_STYLE = {
+  not_allowlisted:   { label: 'Not on allowlist',    cls: 'text-amber-700 bg-amber-50 border-amber-200' },
+  operator_blocked:  { label: 'Operator blocked',    cls: 'text-rose-700 bg-rose-50 border-rose-200' },
+  hard_denied:       { label: 'Hard-denied',         cls: 'text-rose-700 bg-rose-50 border-rose-200' },
+  redirect_not_allowed: { label: 'Unsafe redirect',  cls: 'text-amber-700 bg-amber-50 border-amber-200' },
+  robots_disallow:   { label: 'robots.txt disallow', cls: 'text-slate-700 bg-slate-50 border-slate-200' },
+  private_ip:        { label: 'Private/loopback IP', cls: 'text-rose-700 bg-rose-50 border-rose-200' },
+  scheme:            { label: 'Bad URL scheme',      cls: 'text-slate-700 bg-slate-50 border-slate-200' },
+  invalid_url:       { label: 'Invalid URL',         cls: 'text-slate-700 bg-slate-50 border-slate-200' },
+  timeout:           { label: 'Fetch timeout',       cls: 'text-slate-700 bg-slate-50 border-slate-200' },
+  too_large:         { label: 'Too large',           cls: 'text-slate-700 bg-slate-50 border-slate-200' },
+};
+
+function ReasonBadge({ reason }) {
+  const s = REASON_STYLE[reason] || { label: reason || 'unknown', cls: 'text-gray-600 bg-gray-50 border-gray-200' };
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${s.cls}`}>
+      {s.label}
+    </span>
+  );
+}
+
+function StatusBadge({ status }) {
+  if (status === 'blocked') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 border border-rose-200 text-rose-700 px-2 py-0.5 text-[11px] font-semibold">
+        <ShieldX size={11} /> Blocked
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 px-2 py-0.5 text-[11px] font-semibold">
+      <ShieldCheck size={11} /> Allowed
+    </span>
+  );
+}
+
+function AllowlistTab({ adminToken }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [effective, setEffective] = useState(null);
+  const [overrides, setOverrides] = useState([]);
+  const [filter, setFilter] = useState('');
+  const [form, setForm] = useState({ domain: '', status: 'allowed', note: '' });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await axios.get(`${API_BASE}/admin/edu/allowlist`, {
+        headers: adminHeaders(adminToken),
+        withCredentials: true,
+      });
+      setEffective(res.data?.effective || null);
+      setOverrides(Array.isArray(res.data?.overrides) ? res.data.overrides : []);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Could not load allowlist');
+    } finally {
+      setLoading(false);
+    }
+  }, [adminToken]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleAdd = async (e) => {
+    e?.preventDefault?.();
+    const domain = form.domain.trim();
+    if (!domain || domain.length < 3) {
+      toast.error('Enter a domain (e.g. example.com)');
+      return;
+    }
+    setSaving(true);
+    try {
+      await axios.post(`${API_BASE}/admin/edu/allowlist`,
+        { domain, status: form.status, note: form.note?.trim() || '' },
+        { headers: adminHeaders(adminToken), withCredentials: true },
+      );
+      toast.success(`${form.status === 'blocked' ? 'Blocked' : 'Allowed'} ${domain}`);
+      setForm({ domain: '', status: 'allowed', note: '' });
+      await load();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Could not save domain');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (domain) => {
+    if (!confirm(`Remove override for "${domain}"?\nThe domain will fall back to the default rules.`)) return;
+    try {
+      await axios.delete(`${API_BASE}/admin/edu/allowlist/${encodeURIComponent(domain)}`, {
+        headers: adminHeaders(adminToken),
+        withCredentials: true,
+      });
+      toast.success(`Removed ${domain}`);
+      await load();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Could not remove domain');
+    }
+  };
+
+  const filteredOverrides = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return overrides;
+    return overrides.filter((o) =>
+      (o.domain || '').toLowerCase().includes(q) ||
+      (o.note || '').toLowerCase().includes(q) ||
+      (o.actor || '').toLowerCase().includes(q),
+    );
+  }, [overrides, filter]);
+
+  return (
+    <div className="space-y-4">
+      {/* Add override card */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+        <div className="flex items-center justify-between p-4 border-b border-gray-100">
+          <div>
+            <h3 className="text-sm font-bold text-gray-900">Add or override a domain</h3>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Changes take effect within ~60 seconds (allowlist cache TTL).
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={load}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-violet-600 px-2 py-1 rounded-lg hover:bg-gray-50"
+            title="Refresh"
+            disabled={loading}
+          >
+            <RefreshCcw size={13} className={loading ? 'animate-spin' : ''} /> Refresh
+          </button>
+        </div>
+        <form onSubmit={handleAdd} className="p-4 grid grid-cols-1 md:grid-cols-12 gap-3">
+          <div className="md:col-span-5">
+            <label className="block text-[11px] font-semibold text-gray-500 mb-1 uppercase tracking-wide">Domain</label>
+            <div className="relative">
+              <Globe size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" aria-hidden="true" />
+              <input
+                type="text"
+                value={form.domain}
+                onChange={(e) => setForm((f) => ({ ...f, domain: e.target.value }))}
+                placeholder="example.edu.in"
+                spellCheck={false}
+                autoComplete="off"
+                className="w-full h-9 pl-8 pr-3 rounded-lg text-sm text-gray-900 bg-gray-50 border border-gray-200 focus:border-violet-400 focus:bg-white outline-none"
+              />
+            </div>
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-[11px] font-semibold text-gray-500 mb-1 uppercase tracking-wide">Status</label>
+            <select
+              value={form.status}
+              onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}
+              className="w-full h-9 px-2 rounded-lg text-sm text-gray-900 bg-gray-50 border border-gray-200 focus:border-violet-400 focus:bg-white outline-none"
+            >
+              <option value="allowed">Allowed</option>
+              <option value="blocked">Blocked</option>
+            </select>
+          </div>
+          <div className="md:col-span-3">
+            <label className="block text-[11px] font-semibold text-gray-500 mb-1 uppercase tracking-wide">Note (optional)</label>
+            <input
+              type="text"
+              value={form.note}
+              onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))}
+              placeholder="Why is this needed?"
+              maxLength={280}
+              className="w-full h-9 px-3 rounded-lg text-sm text-gray-900 bg-gray-50 border border-gray-200 focus:border-violet-400 focus:bg-white outline-none"
+            />
+          </div>
+          <div className="md:col-span-2 flex items-end">
+            <button
+              type="submit"
+              disabled={saving || !form.domain.trim()}
+              className="w-full h-9 inline-flex items-center justify-center gap-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      {/* Overrides table */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 p-4 border-b border-gray-100">
+          <div>
+            <h3 className="text-sm font-bold text-gray-900">Operator overrides</h3>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Stored in MongoDB — add/remove without a deploy. Total: {overrides.length}
+            </p>
+          </div>
+          <div className="relative">
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" aria-hidden="true" />
+            <input
+              type="search"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Search domain, note, actor…"
+              className="h-8 pl-8 pr-3 rounded-lg text-xs text-gray-900 bg-gray-50 border border-gray-200 focus:border-violet-400 focus:bg-white outline-none w-full md:w-64"
+            />
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-50 text-gray-500">
+              <tr>
+                <th className="text-left font-semibold px-4 py-2 text-[11px] uppercase tracking-wide">Domain</th>
+                <th className="text-left font-semibold px-4 py-2 text-[11px] uppercase tracking-wide">Status</th>
+                <th className="text-left font-semibold px-4 py-2 text-[11px] uppercase tracking-wide">Note</th>
+                <th className="text-left font-semibold px-4 py-2 text-[11px] uppercase tracking-wide">Actor</th>
+                <th className="text-left font-semibold px-4 py-2 text-[11px] uppercase tracking-wide">Updated</th>
+                <th className="text-right font-semibold px-4 py-2 text-[11px] uppercase tracking-wide">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {loading ? (
+                <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400 text-sm">
+                  <Loader2 size={16} className="inline animate-spin mr-2" /> Loading overrides…
+                </td></tr>
+              ) : filteredOverrides.length === 0 ? (
+                <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400 text-sm">
+                  {overrides.length === 0
+                    ? 'No operator overrides yet — the reader is running on the curated base list.'
+                    : 'No matches for your search.'}
+                </td></tr>
+              ) : filteredOverrides.map((o) => (
+                <tr key={o.domain} className="hover:bg-gray-50">
+                  <td className="px-4 py-2.5 font-mono text-xs text-gray-900">{o.domain}</td>
+                  <td className="px-4 py-2.5"><StatusBadge status={o.status} /></td>
+                  <td className="px-4 py-2.5 text-xs text-gray-600 max-w-xs truncate" title={o.note || ''}>{o.note || '—'}</td>
+                  <td className="px-4 py-2.5 text-xs text-gray-500 max-w-[160px] truncate" title={o.actor || ''}>{o.actor || '—'}</td>
+                  <td className="px-4 py-2.5 text-xs text-gray-500">{_fmtTime(o.updated_at)}</td>
+                  <td className="px-4 py-2.5 text-right">
+                    <button
+                      onClick={() => handleDelete(o.domain)}
+                      className="inline-flex items-center gap-1 text-xs font-medium text-rose-600 hover:bg-rose-50 px-2 py-1 rounded-lg"
+                      title="Remove override"
+                    >
+                      <Trash2 size={12} /> Remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Effective allowlist summary */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+        <div className="p-4 border-b border-gray-100">
+          <h3 className="text-sm font-bold text-gray-900">Effective allowlist</h3>
+          <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-1">
+            <Info size={11} /> The reader accepts a URL if its host matches any entry below OR ends with an edu suffix.
+          </p>
+        </div>
+        <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <EffectiveBlock
+            title="Base (baked-in)"
+            items={effective?.base || []}
+            loading={loading && !effective}
+            tone="emerald"
+            hint="Shipped with the release."
+          />
+          <EffectiveBlock
+            title="Operator allowed"
+            items={effective?.operator_allowed || []}
+            loading={loading && !effective}
+            tone="violet"
+            hint="Added by admins above."
+          />
+          <EffectiveBlock
+            title="Operator blocked"
+            items={effective?.operator_blocked || []}
+            loading={loading && !effective}
+            tone="rose"
+            hint="Overrides base — wins on conflict."
+          />
+          <EffectiveBlock
+            title="Hard-denied"
+            items={effective?.hard_denied || []}
+            loading={loading && !effective}
+            tone="slate"
+            hint="Never fetchable — adult/unsafe."
+          />
+          <EffectiveBlock
+            title="Auto-allowed suffixes"
+            items={effective?.edu_suffixes || []}
+            loading={loading && !effective}
+            tone="sky"
+            hint="Any host ending in these is accepted."
+            mono
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const TONE_CLS = {
+  emerald: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  violet:  'bg-violet-50 text-violet-700 border-violet-200',
+  rose:    'bg-rose-50 text-rose-700 border-rose-200',
+  slate:   'bg-slate-50 text-slate-700 border-slate-200',
+  sky:     'bg-sky-50 text-sky-700 border-sky-200',
+};
+
+function EffectiveBlock({ title, items, tone = 'violet', hint, mono = false, loading = false }) {
+  return (
+    <div className="rounded-lg border border-gray-200 overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-200">
+        <span className="text-xs font-semibold text-gray-700">{title}</span>
+        <span className="text-[11px] text-gray-400">{loading ? '—' : items.length}</span>
+      </div>
+      <div className="p-3 flex flex-wrap gap-1.5 max-h-48 overflow-y-auto">
+        {loading ? (
+          <span className="text-[11px] text-gray-400 inline-flex items-center gap-1">
+            <Loader2 size={11} className="animate-spin" /> Loading…
+          </span>
+        ) : items.length === 0 ? (
+          <span className="text-[11px] text-gray-400 italic">None.</span>
+        ) : items.map((d) => (
+          <span
+            key={d}
+            className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[11px] ${mono ? 'font-mono' : ''} ${TONE_CLS[tone]}`}
+          >
+            {d}
+          </span>
+        ))}
+      </div>
+      {hint && <div className="px-3 pb-2 text-[10px] text-gray-400">{hint}</div>}
+    </div>
+  );
+}
+
+function BlockedLogTab({ adminToken }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [limit, setLimit] = useState(200);
+  const [filter, setFilter] = useState('');
+  const [sessionAllowed, setSessionAllowed] = useState(() => new Set());
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await axios.get(`${API_BASE}/admin/edu/blocked-log`, {
+        params: { limit },
+        headers: adminHeaders(adminToken),
+        withCredentials: true,
+      });
+      setItems(Array.isArray(res.data?.items) ? res.data.items : []);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Could not load blocked log');
+    } finally {
+      setLoading(false);
+    }
+  }, [adminToken, limit]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((it) =>
+      (it.domain || '').toLowerCase().includes(q) ||
+      (it.reason || '').toLowerCase().includes(q) ||
+      (it.url || '').toLowerCase().includes(q),
+    );
+  }, [items, filter]);
+
+  const domainSummary = useMemo(() => {
+    const tally = new Map();
+    for (const it of items) {
+      const d = it.domain || '(unknown)';
+      tally.set(d, (tally.get(d) || 0) + 1);
+    }
+    return [...tally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  }, [items]);
+
+  const quickAllow = async (domain) => {
+    if (!domain || domain === '(unknown)') return;
+    if (!confirm(`Add "${domain}" to the allowlist?`)) return;
+    try {
+      await axios.post(`${API_BASE}/admin/edu/allowlist`,
+        { domain, status: 'allowed', note: 'quick-allow from blocked log' },
+        { headers: adminHeaders(adminToken), withCredentials: true },
+      );
+      setSessionAllowed((s) => { const n = new Set(s); n.add(domain); return n; });
+      toast.success(`${domain} allowed — effective within ~60s`);
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Could not allow domain');
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+        <div className="p-4 border-b border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+              <Ban size={14} className="text-rose-500" /> Recent blocks
+            </h3>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Showing {filtered.length} of {items.length} in the last {limit} records.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={limit}
+              onChange={(e) => setLimit(Number(e.target.value))}
+              className="h-8 px-2 rounded-lg text-xs text-gray-700 bg-gray-50 border border-gray-200 focus:border-violet-400 outline-none"
+            >
+              <option value={50}>Last 50</option>
+              <option value={200}>Last 200</option>
+              <option value={500}>Last 500</option>
+              <option value={1000}>Last 1000</option>
+            </select>
+            <div className="relative">
+              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" aria-hidden="true" />
+              <input
+                type="search"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="Filter by domain/reason"
+                className="h-8 pl-8 pr-3 rounded-lg text-xs text-gray-900 bg-gray-50 border border-gray-200 focus:border-violet-400 focus:bg-white outline-none w-48 md:w-64"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={load}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-violet-600 px-2 py-1 rounded-lg hover:bg-gray-50"
+              disabled={loading}
+            >
+              <RefreshCcw size={13} className={loading ? 'animate-spin' : ''} /> Refresh
+            </button>
+          </div>
+        </div>
+
+        {domainSummary.length > 0 && (
+          <div className="px-4 py-3 border-b border-gray-100 bg-amber-50/50">
+            <div className="text-[11px] uppercase font-semibold tracking-wide text-amber-700 mb-2 flex items-center gap-1">
+              <AlertTriangle size={11} /> Top blocked domains
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {domainSummary.map(([d, n]) => (
+                <div key={d} className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-white px-2 py-1">
+                  <span className="font-mono text-[11px] text-gray-700">{d}</span>
+                  <span className="text-[10px] font-semibold text-amber-700">×{n}</span>
+                  {d !== '(unknown)' && (
+                    sessionAllowed.has(d) ? (
+                      <span className="text-[10px] font-semibold text-emerald-600 inline-flex items-center gap-0.5">
+                        <ShieldCheck size={10} /> allowed
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => quickAllow(d)}
+                        className="text-[10px] font-semibold text-violet-600 hover:text-violet-700 hover:underline"
+                        title="Add this domain to the allowlist"
+                      >
+                        allow
+                      </button>
+                    )
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-50 text-gray-500">
+              <tr>
+                <th className="text-left font-semibold px-4 py-2 text-[11px] uppercase tracking-wide">Domain</th>
+                <th className="text-left font-semibold px-4 py-2 text-[11px] uppercase tracking-wide">Reason</th>
+                <th className="text-left font-semibold px-4 py-2 text-[11px] uppercase tracking-wide">URL</th>
+                <th className="text-left font-semibold px-4 py-2 text-[11px] uppercase tracking-wide">When</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {loading ? (
+                <tr><td colSpan={4} className="px-4 py-10 text-center text-gray-400 text-sm">
+                  <Loader2 size={16} className="inline animate-spin mr-2" /> Loading blocks…
+                </td></tr>
+              ) : filtered.length === 0 ? (
+                <tr><td colSpan={4} className="px-4 py-10 text-center text-gray-400 text-sm">
+                  {items.length === 0 ? 'No blocked requests yet.' : 'No matches for your filter.'}
+                </td></tr>
+              ) : filtered.map((it, i) => (
+                <tr key={`${it.ts}_${i}`} className="hover:bg-gray-50">
+                  <td className="px-4 py-2.5 font-mono text-xs text-gray-900">{it.domain || '—'}</td>
+                  <td className="px-4 py-2.5"><ReasonBadge reason={it.reason} /></td>
+                  <td className="px-4 py-2.5 text-xs text-gray-500 max-w-md truncate font-mono" title={it.url || ''}>{it.url || '—'}</td>
+                  <td className="px-4 py-2.5 text-xs text-gray-500 whitespace-nowrap">{_fmtTime(it.ts)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function AdminEduBrowser({ adminToken }) {
+  const [tab, setTab] = useState('allowlist');
+
+  return (
+    <SectionErrorBoundary name="Edu Browser">
+      <div className="space-y-4 max-w-6xl">
+        <div>
+          <h2 className="text-lg font-bold text-gray-900">Educational Browser</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Curate which sites Syra can read for students and audit what gets blocked.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-1 border-b border-gray-200">
+          {[
+            { id: 'allowlist', label: 'Allowlist', icon: ShieldCheck },
+            { id: 'blocked',   label: 'Blocked requests', icon: Ban },
+          ].map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id)}
+              className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border-b-2 transition-colors ${
+                tab === id
+                  ? 'border-violet-500 text-violet-700'
+                  : 'border-transparent text-gray-500 hover:text-gray-800'
+              }`}
+              data-testid={`edu-tab-${id}`}
+            >
+              <Icon size={13} /> {label}
+            </button>
+          ))}
+        </div>
+
+        {tab === 'allowlist' ? (
+          <AllowlistTab adminToken={adminToken} />
+        ) : (
+          <BlockedLogTab adminToken={adminToken} />
+        )}
+      </div>
+    </SectionErrorBoundary>
+  );
+}

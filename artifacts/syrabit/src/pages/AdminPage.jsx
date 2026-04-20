@@ -6,7 +6,7 @@ import {
   Shield, ShieldAlert, Settings, Activity, HeartPulse, LogOut,
   ChevronLeft, ChevronRight, Loader2, Globe,
   Crown, Cpu, Layers, Zap, BarChart2, ThumbsUp,
-  ExternalLink,
+  ExternalLink, ShieldCheck,
 } from 'lucide-react';
 import axios from 'axios';
 import { adminVerify, adminLogout, adminGetSettings, adminGetUnacknowledgedAlertCount, API_BASE } from '@/utils/api';
@@ -35,6 +35,7 @@ const AdminAutomation    = lazy(() => import('@/components/admin/AdminAutomation
 const AdminIntelligence  = lazy(() => import('@/components/admin/AdminIntelligence'));
 const AdminFeedback      = lazy(() => import('@/components/admin/AdminFeedback'));
 const AdminBotSecurity   = lazy(() => import('@/components/admin/AdminBotSecurity'));
+const AdminEduBrowser    = lazy(() => import('@/components/admin/AdminEduBrowser'));
 
 const SECTIONS = [
   { id: 'dashboard',     icon: LayoutDashboard, label: 'Dashboard',        group: 'main'     },
@@ -55,6 +56,7 @@ const SECTIONS = [
   { id: 'apiconfig',     icon: Key,             label: 'API Config',        group: 'system'   },
   { id: 'googleauth',    icon: Shield,          label: 'Google Auth',       group: 'system'   },
   { id: 'settings',      icon: Settings,        label: 'Site Settings',     group: 'system'   },
+  { id: 'edubrowser',    icon: ShieldCheck,     label: 'Edu Browser',       group: 'system'   },
   { id: 'ratelimits',    icon: Shield,          label: 'Rate Limits',       group: 'system'   },
   { id: 'activitylog',   icon: Activity,        label: 'Activity Log',      group: 'system'   },
   { id: 'botsecurity',   icon: ShieldAlert,     label: 'Bot Security',      group: 'system'   },
@@ -92,6 +94,7 @@ const SECTION_COMPONENTS = {
   ratelimits:    AdminRateLimits,
   activitylog:   AdminActivityLog,
   botsecurity:   AdminBotSecurity,
+  edubrowser:    AdminEduBrowser,
   health:        AdminHealth,
   vertex:        AdminVertexPanel,
   intelligence:  AdminIntelligence,
