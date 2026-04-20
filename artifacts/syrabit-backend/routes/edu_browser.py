@@ -24,14 +24,17 @@ from pydantic import BaseModel, Field
 
 import time
 
-from auth_deps import get_admin_user, check_rate_limit, get_current_user_optional
+from auth_deps import (
+    get_admin_user, check_rate_limit, get_current_user_optional,
+    get_educator_user,
+)
 from edu_allowlist import (
     effective_allowlist, list_overrides, upsert_override,
     remove_override, list_blocked_requests, _refresh_overrides_cache,
     BASE_ALLOWLIST, EDU_REQUESTED_SITES_COLLECTION, EDU_USER_STATE_COLLECTION,
-    _normalize_domain, is_allowed_url,
+    _normalize_domain, is_allowed_url, is_domain_hard_blocked,
 )
-from edu_reader import fetch_and_extract, get_reader_stats
+from edu_reader import fetch_and_extract, get_reader_stats, probe_site_safety
 from grounded_answer import stream_grounded_answer, get_grounded_pipeline_stats
 from cache import _redis_hit_count, _redis_miss_count
 from deps import db, is_mongo_available
@@ -90,6 +93,11 @@ class AllowlistUpsertReq(BaseModel):
     domain: str = Field(..., min_length=3, max_length=253)
     status: str = "allowed"  # allowed | blocked
     note: str = ""
+
+
+class EducatorSubmitReq(BaseModel):
+    domain: str = Field(..., min_length=3, max_length=253)
+    note: str = Field("", max_length=280)
 
 
 # ───────────────────────── Public: reader ─────────────────────────
@@ -227,6 +235,103 @@ async def request_site(req: RequestSiteReq, request: Request, user=Depends(get_c
         logger.warning(f"[edu_browser] request-site insert failed: {e}")
         raise HTTPException(status_code=500, detail="storage_failed")
     return {"ok": True, "domain": domain}
+
+
+# ───────────────────────── Educator: self-serve allowlist ─────────────────────
+
+_RATE_EDUCATOR_SUBMIT_PER_USER = 12  # req / hour
+
+
+@router.post("/edu/educator/submit-site")
+async def educator_submit_site(
+    req: EducatorSubmitReq, request: Request, educator=Depends(get_educator_user),
+):
+    """Educator self-serve: submit a domain that auto-approves after a
+    kid-safe + robots.txt safety probe. Admins can always revoke later
+    via the existing allowlist management endpoints.
+    """
+    actor = (educator or {}).get("email", "") or (educator or {}).get("id", "")
+    rl_key = f"edu_edu_submit:{(educator or {}).get('id', _client_ip(request))}"
+    if not check_rate_limit(rl_key, max_requests=_RATE_EDUCATOR_SUBMIT_PER_USER, window_seconds=3600):
+        raise HTTPException(
+            status_code=429,
+            detail=f"Educator submission limit reached ({_RATE_EDUCATOR_SUBMIT_PER_USER}/hour).",
+            headers={"Retry-After": "300"},
+        )
+
+    domain = _normalize_domain(req.domain)
+    if not domain or "." not in domain:
+        raise HTTPException(status_code=400, detail="Invalid domain")
+
+    # Cheap fast-path: if the domain is already allowed (base list, edu
+    # suffix, or an operator_allowed override) we short-circuit without
+    # burning a network fetch.
+    allowed_already, reason_already = await is_allowed_url(f"https://{domain}/")
+    if allowed_already:
+        return {
+            "ok": True,
+            "domain": domain,
+            "status": "already_allowed",
+            "detail": reason_already,
+        }
+
+    # Refuse anything admin has hard-blocked / operator-blocked outright.
+    blocked, why = await is_domain_hard_blocked(domain)
+    if blocked:
+        return JSONResponse(
+            status_code=403,
+            content={"ok": False, "domain": domain, "error": why,
+                     "detail": "Domain is blocked and cannot be auto-approved."},
+        )
+
+    probe = await probe_site_safety(domain)
+    if not probe.get("ok"):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "domain": domain,
+                "error": probe.get("reason", "probe_failed"),
+                "probe": probe,
+                "detail": "Safety probe failed — site was not auto-approved.",
+            },
+        )
+
+    note = req.note.strip()[:240] if req.note else ""
+    auto_note = f"Auto-approved by educator {actor or 'unknown'}"
+    if note:
+        auto_note = f"{auto_note}: {note}"
+    try:
+        entry = await upsert_override(
+            domain,
+            status="allowed",
+            note=auto_note,
+            actor=actor[:120] or "educator",
+            source="educator",
+            extra={
+                "kid_safe_density": probe.get("kid_safe_density"),
+                "http_status": probe.get("http_status"),
+                "robots_ok": probe.get("robots_ok"),
+                "text_chars": probe.get("text_chars"),
+            },
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except RuntimeError as re:
+        raise HTTPException(status_code=503, detail=str(re))
+
+    return {
+        "ok": True,
+        "domain": domain,
+        "status": "auto_approved",
+        "entry": entry,
+        "probe": {
+            "kid_safe": probe.get("kid_safe"),
+            "kid_safe_density": probe.get("kid_safe_density"),
+            "robots_ok": probe.get("robots_ok"),
+            "http_status": probe.get("http_status"),
+        },
+    }
 
 
 # ───────────────────────── Public: per-user state (tabs/bookmarks/history) ────

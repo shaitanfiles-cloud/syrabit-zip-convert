@@ -63,6 +63,27 @@ function StatusBadge({ status }) {
   );
 }
 
+function SourceBadge({ source }) {
+  if (source === 'educator') {
+    return (
+      <span
+        className="inline-flex items-center rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 px-1.5 py-0.5 text-[10px] font-semibold ml-1"
+        title="Auto-approved by an educator after kid-safe + robots.txt probe"
+      >
+        Educator
+      </span>
+    );
+  }
+  if (source === 'system') {
+    return (
+      <span className="inline-flex items-center rounded-full bg-gray-50 border border-gray-200 text-gray-600 px-1.5 py-0.5 text-[10px] font-semibold ml-1">
+        System
+      </span>
+    );
+  }
+  return null;
+}
+
 function AllowlistTab({ adminToken }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -253,7 +274,10 @@ function AllowlistTab({ adminToken }) {
                 </td></tr>
               ) : filteredOverrides.map((o) => (
                 <tr key={o.domain} className="hover:bg-gray-50">
-                  <td className="px-4 py-2.5 font-mono text-xs text-gray-900">{o.domain}</td>
+                  <td className="px-4 py-2.5 font-mono text-xs text-gray-900">
+                    {o.domain}
+                    <SourceBadge source={o.source} />
+                  </td>
                   <td className="px-4 py-2.5"><StatusBadge status={o.status} /></td>
                   <td className="px-4 py-2.5 text-xs text-gray-600 max-w-xs truncate" title={o.note || ''}>{o.note || '—'}</td>
                   <td className="px-4 py-2.5 text-xs text-gray-500 max-w-[160px] truncate" title={o.actor || ''}>{o.actor || '—'}</td>

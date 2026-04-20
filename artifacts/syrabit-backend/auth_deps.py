@@ -139,6 +139,19 @@ async def get_current_user_optional(
     except:
         return None
 
+async def get_educator_user(user=Depends(get_current_user)):
+    """Require the caller to be an educator (or an admin).
+
+    Used by the educator self-serve allowlist flow so verified teachers
+    can admit new educational sites after an automated safety probe
+    passes. Admins always satisfy this dependency.
+    """
+    role = (user or {}).get("role", "")
+    if role == "educator" or role == "admin" or (user or {}).get("is_admin"):
+        return user
+    raise HTTPException(status_code=403, detail="Educator role required")
+
+
 async def get_admin_user(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(security),
     syrabit_admin_session: Optional[str] = Cookie(default=None),

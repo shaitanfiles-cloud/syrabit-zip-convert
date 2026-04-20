@@ -78,8 +78,26 @@ def _normalize_host(host: str) -> str:
     return h
 
 
+import re as _re
+
+# Canonical hostname / FQDN pattern: labels of [a-z0-9-], no leading/trailing
+# hyphen, dot-separated. Max 253 chars. Rejects `@`, `:`, paths, spaces, etc.
+_HOSTNAME_RE = _re.compile(
+    r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$"
+)
+
+
 def _normalize_domain(domain: str) -> str:
-    """Normalise a domain entered via the admin API (strip scheme, path)."""
+    """Normalise a domain entered via an API.
+
+    Strips scheme/path if a full URL was pasted, lower-cases the host,
+    drops `www.`, and then **strictly validates** the result against a
+    canonical FQDN shape. Anything containing userinfo (`user@host`),
+    path (`/`), port (`:`), whitespace, or not matching the FQDN regex
+    is rejected by returning an empty string. This is the choke point
+    for SSRF-via-odd-URL attacks in every write path (admin allowlist,
+    educator submit).
+    """
     raw = (domain or "").strip().lower()
     if not raw:
         return ""
@@ -88,7 +106,15 @@ def _normalize_domain(domain: str) -> str:
             raw = urlparse(raw).hostname or ""
         except Exception:
             return ""
-    return _normalize_host(raw)
+    host = _normalize_host(raw)
+    if not host:
+        return ""
+    # Reject anything that isn't a plain FQDN. We deliberately do not
+    # accept IP literals here — callers that need to probe by IP can do
+    # so through a separate path that runs explicit SSRF checks.
+    if not _HOSTNAME_RE.match(host):
+        return ""
+    return host
 
 
 def _host_matches(host: str, domain: str) -> bool:
@@ -204,14 +230,34 @@ async def list_overrides() -> list[dict]:
         return []
 
 
-async def upsert_override(domain: str, status: str = "allowed", note: str = "", actor: str = "") -> dict:
-    """Add or update a domain override. status ∈ {allowed, blocked}."""
+VALID_SOURCES = ("admin", "educator", "system")
+
+
+async def upsert_override(
+    domain: str,
+    status: str = "allowed",
+    note: str = "",
+    actor: str = "",
+    source: str = "admin",
+    extra: Optional[dict] = None,
+) -> dict:
+    """Add or update a domain override. status ∈ {allowed, blocked}.
+
+    ``source`` records *who* added the override so the admin UI can
+    distinguish human admin decisions from educator self-approvals and
+    future automation. ``extra`` is an optional dict of provenance
+    metadata (e.g. kid-safe score, robots.txt outcome) persisted
+    verbatim for audit.
+    """
     d = _normalize_domain(domain)
     if not d:
         raise ValueError("invalid_domain")
     status = (status or "allowed").lower().strip()
     if status not in ("allowed", "blocked"):
         raise ValueError("invalid_status")
+    src = (source or "admin").lower().strip()
+    if src not in VALID_SOURCES:
+        src = "admin"
     if not await is_mongo_available():
         raise RuntimeError("mongo_unavailable")
     doc = {
@@ -219,8 +265,19 @@ async def upsert_override(domain: str, status: str = "allowed", note: str = "", 
         "status": status,
         "note": note[:280] if note else "",
         "actor": actor[:120] if actor else "",
+        "source": src,
         "updated_at": time.time(),
     }
+    if extra and isinstance(extra, dict):
+        # Clamp any stringy values and keep the dict small.
+        safe_extra: dict = {}
+        for k, v in list(extra.items())[:12]:
+            if isinstance(v, str):
+                safe_extra[str(k)[:40]] = v[:280]
+            elif isinstance(v, (int, float, bool)) or v is None:
+                safe_extra[str(k)[:40]] = v
+        if safe_extra:
+            doc["provenance"] = safe_extra
     await db[EDU_ALLOWLIST_COLLECTION].update_one(
         {"domain": d}, {"$set": doc, "$setOnInsert": {"created_at": time.time()}}, upsert=True,
     )
@@ -289,11 +346,29 @@ def effective_allowlist() -> dict:
     }
 
 
+async def is_domain_hard_blocked(domain: str) -> tuple[bool, str]:
+    """Check whether a domain is on the hard-deny list or has an operator
+    block override. Used by the educator self-approval flow to refuse
+    submissions that an admin has already rejected. Returns (blocked, reason)."""
+    d = _normalize_domain(domain)
+    if not d:
+        return True, "invalid_domain"
+    for bad in HARD_DENYLIST:
+        if _host_matches(d, bad):
+            return True, "hard_denied"
+    await _refresh_overrides_cache()
+    for bad in _OVERRIDES_CACHE["block"]:
+        if _host_matches(d, bad):
+            return True, "operator_blocked"
+    return False, "ok"
+
+
 __all__ = [
-    "BASE_ALLOWLIST", "HARD_DENYLIST",
+    "BASE_ALLOWLIST", "HARD_DENYLIST", "VALID_SOURCES",
     "EDU_ALLOWLIST_COLLECTION", "EDU_BLOCKED_REQUESTS_COLLECTION",
-    "is_allowed_url", "invalidate_cache",
+    "EDU_REQUESTED_SITES_COLLECTION", "EDU_USER_STATE_COLLECTION",
+    "is_allowed_url", "is_domain_hard_blocked", "invalidate_cache",
     "list_overrides", "upsert_override", "remove_override",
     "log_blocked_request", "list_blocked_requests",
-    "effective_allowlist",
+    "effective_allowlist", "_normalize_domain", "_host_matches",
 ]

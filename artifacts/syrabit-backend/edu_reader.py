@@ -129,26 +129,93 @@ def _detect_language(text: str) -> str:
 # ───────────────────────── robots.txt ─────────────────────────
 
 async def _fetch_robots(host: str, scheme: str) -> RobotFileParser | None:
+    """Fetch robots.txt with SSRF-safe redirect handling.
+
+    httpx's `follow_redirects=True` is a common SSRF sink: a hostile
+    site can point `/robots.txt` at an internal IP. We disable auto
+    redirects and manually follow up to 3 hops, re-validating the
+    host against private-IP + hard-deny checks each time.
+    """
+    from edu_allowlist import is_domain_hard_blocked
+
     cached = _robots_cache.get(host)
     now = time.time()
     if cached and (now - cached[0]) < ROBOTS_CACHE_TTL:
         return cached[1]
-    rp = RobotFileParser()
+    rp: RobotFileParser | None = RobotFileParser()
     robots_url = f"{scheme}://{host}/robots.txt"
     try:
-        async with httpx.AsyncClient(timeout=3.0, follow_redirects=True) as client:
-            resp = await client.get(robots_url, headers={"User-Agent": USER_AGENT})
-            if resp.status_code == 200 and resp.text:
+        async with httpx.AsyncClient(timeout=3.0, follow_redirects=False) as client:
+            current = robots_url
+            resp = None
+            for _hop in range(3):
+                resp = await client.get(current, headers={"User-Agent": USER_AGENT})
+                if resp.status_code not in (301, 302, 303, 307, 308):
+                    break
+                loc = resp.headers.get("location")
+                if not loc:
+                    break
+                nxt = urljoin(current, loc)
+                p = urlparse(nxt)
+                if p.scheme not in ("http", "https"):
+                    rp = None
+                    break
+                nh = (p.hostname or "").lower()
+                try:
+                    import ipaddress as _ipa
+                    _ip = _ipa.ip_address(nh)
+                    if _ip.is_private or _ip.is_loopback or _ip.is_link_local or _ip.is_reserved:
+                        rp = None
+                        break
+                except ValueError:
+                    if nh in {"localhost", "0.0.0.0"} or nh.endswith(".local") or nh.endswith(".internal"):
+                        rp = None
+                        break
+                blocked, _why = await is_domain_hard_blocked(nh)
+                if blocked:
+                    rp = None
+                    break
+                current = nxt
+            if rp is not None and resp is not None and resp.status_code == 200 and resp.text:
                 rp.parse(resp.text.splitlines())
             else:
                 # Per RFC 9309: when robots is unreachable / 4xx, default
-                # is to allow. We mirror that.
+                # is to allow. We mirror that (rp = None → allow).
                 rp = None
     except Exception as e:
         logger.debug(f"[edu_reader] robots fetch failed for {host}: {e}")
         rp = None
     _robots_cache[host] = (now, rp)
     return rp
+
+
+async def _resolves_to_public_ip(host: str) -> tuple[bool, str]:
+    """Resolve `host` and ensure no A/AAAA record points at private space.
+
+    Returns `(ok, reason)`. `reason` is ``"ok"`` on success or one of
+    ``"dns_failed"`` / ``"private_ip"``. Callers should fail closed on
+    anything other than ``ok`` to defend against DNS-based SSRF where
+    a public-looking FQDN resolves to a private IP.
+    """
+    import socket as _socket
+    import ipaddress as _ipa
+    try:
+        infos = await asyncio.get_event_loop().getaddrinfo(
+            host, None, type=_socket.SOCK_STREAM,
+        )
+    except Exception:
+        return False, "dns_failed"
+    if not infos:
+        return False, "dns_failed"
+    for _fam, _type, _proto, _canon, sockaddr in infos:
+        addr = sockaddr[0]
+        try:
+            ip = _ipa.ip_address(addr)
+        except ValueError:
+            return False, "dns_failed"
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+            return False, "private_ip"
+    return True, "ok"
 
 
 async def _robots_allows(url: str) -> bool:
@@ -428,7 +495,175 @@ def get_reader_stats() -> dict:
     return {**_reader_metrics, "hit_rate_pct": round(hit_rate, 1)}
 
 
+# ───────────────────────── Educator site-safety probe ─────────────────────────
+#
+# `probe_site_safety` is used by the educator self-approval flow. It
+# performs the same SSRF/robots/fetch guards as `fetch_and_extract`
+# but **bypasses the allowlist** (because we are *deciding* whether to
+# admit the site) and additionally runs a kid-safe lexical score on
+# the extracted text. Hard-deny and private-IP checks still apply.
+
+async def probe_site_safety(domain: str) -> dict:
+    """Run an admission safety probe on a candidate domain.
+
+    Returns::
+
+        {"ok": True/False, "url": <probed>, "reason": <code>,
+         "robots_ok": bool, "http_status": int|None,
+         "kid_safe": bool, "kid_safe_density": float,
+         "kid_safe_hits": list[str], "text_chars": int}
+
+    Failure ``reason`` codes mirror the allowlist vocabulary plus
+    ``unsafe_content`` when the kid-safe lexicon trips.
+    """
+    from edu_allowlist import _normalize_domain, is_domain_hard_blocked
+    from guardrails.web_safety import score_text_kid_safety
+
+    d = _normalize_domain(domain)
+    result: dict = {
+        "ok": False, "url": "", "reason": "invalid_domain",
+        "robots_ok": False, "http_status": None,
+        "kid_safe": False, "kid_safe_density": 0.0,
+        "kid_safe_hits": [], "text_chars": 0,
+    }
+    if not d or "." not in d:
+        return result
+
+    # SSRF / private-IP guard — mirror is_allowed_url's checks.
+    try:
+        import ipaddress
+        ip = ipaddress.ip_address(d)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            result["reason"] = "private_ip"
+            return result
+    except ValueError:
+        if d in {"localhost", "0.0.0.0"} or d.endswith(".local") or d.endswith(".internal"):
+            result["reason"] = "private_ip"
+            return result
+
+    blocked, why = await is_domain_hard_blocked(d)
+    if blocked:
+        result["reason"] = why
+        return result
+
+    # DNS-resolution SSRF guard: a public-looking FQDN could resolve
+    # to an RFC1918 / loopback / link-local address (e.g. 169.254.x
+    # metadata endpoints) and bypass the textual host checks. Resolve
+    # here and reject if any returned IP is non-public.
+    dns_ok, dns_reason = await _resolves_to_public_ip(d)
+    if not dns_ok:
+        result["reason"] = dns_reason
+        return result
+
+    url = f"https://{d}/"
+    result["url"] = url
+
+    robots_ok = await _robots_allows(url)
+    result["robots_ok"] = robots_ok
+    if not robots_ok:
+        result["reason"] = "robots_disallow"
+        return result
+
+    # Manual redirect handling so we can re-validate each hop against
+    # SSRF + hard-deny checks. Without this, `follow_redirects=True`
+    # would silently carry us to a private IP or denied host.
+    try:
+        async with httpx.AsyncClient(
+            timeout=_FETCH_TIMEOUT,
+            follow_redirects=False,
+            limits=httpx.Limits(max_connections=5, max_keepalive_connections=2),
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml;q=0.9",
+                "Accept-Language": "en-IN,en;q=0.9",
+            },
+        ) as client:
+            current_url = url
+            resp = None
+            for _hop in range(5):
+                resp = await client.get(current_url)
+                if resp.status_code not in (301, 302, 303, 307, 308):
+                    break
+                loc = resp.headers.get("location")
+                if not loc:
+                    break
+                next_url = urljoin(current_url, loc)
+                parsed_next = urlparse(next_url)
+                if parsed_next.scheme not in ("http", "https"):
+                    result["reason"] = "bad_redirect_scheme"
+                    return result
+                next_host = (parsed_next.hostname or "").lower()
+                # Re-run SSRF + hard-deny guards on the new host.
+                try:
+                    import ipaddress as _ipa
+                    _ip = _ipa.ip_address(next_host)
+                    if _ip.is_private or _ip.is_loopback or _ip.is_link_local or _ip.is_reserved:
+                        result["reason"] = "redirect_private_ip"
+                        return result
+                except ValueError:
+                    if next_host in {"localhost", "0.0.0.0"} or next_host.endswith(".local") or next_host.endswith(".internal"):
+                        result["reason"] = "redirect_private_ip"
+                        return result
+                r_blocked, r_why = await is_domain_hard_blocked(next_host)
+                if r_blocked:
+                    result["reason"] = f"redirect_{r_why}"
+                    return result
+                current_url = next_url
+            else:
+                result["reason"] = "too_many_redirects"
+                return result
+            result["url"] = current_url
+    except httpx.TimeoutException:
+        result["reason"] = "timeout"
+        return result
+    except Exception as e:
+        result["reason"] = f"fetch_failed:{str(e)[:80]}"
+        return result
+
+    if resp is None:
+        result["reason"] = "fetch_failed:no_response"
+        return result
+
+    result["http_status"] = resp.status_code
+    if resp.status_code != 200:
+        result["reason"] = f"http_{resp.status_code}"
+        return result
+
+    ctype = (resp.headers.get("content-type") or "").lower()
+    if ctype and "html" not in ctype and "xml" not in ctype:
+        result["reason"] = "unsupported_content_type"
+        return result
+
+    body = resp.content
+    if len(body) > _MAX_BYTES:
+        result["reason"] = "too_large"
+        return result
+    try:
+        html_text = body.decode(resp.encoding or "utf-8", errors="replace")
+    except Exception:
+        html_text = body.decode("utf-8", errors="replace")
+
+    extracted = _readability_extract(html_text, base_url=url)
+    text = extracted.get("text") or ""
+    result["text_chars"] = len(text)
+    if len(text) < 80:
+        result["reason"] = "extraction_failed"
+        return result
+
+    safe, density, hits = score_text_kid_safety(text)
+    result["kid_safe"] = bool(safe)
+    result["kid_safe_density"] = round(float(density), 3)
+    result["kid_safe_hits"] = list(hits)[:10]
+    if not safe:
+        result["reason"] = "unsafe_content"
+        return result
+
+    result["ok"] = True
+    result["reason"] = "ok"
+    return result
+
+
 __all__ = [
     "USER_AGENT", "READER_CACHE_PREFIX", "READER_CACHE_TTL",
-    "fetch_and_extract", "get_reader_stats",
+    "fetch_and_extract", "get_reader_stats", "probe_site_safety",
 ]
