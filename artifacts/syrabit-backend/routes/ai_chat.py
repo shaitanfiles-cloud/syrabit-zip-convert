@@ -567,7 +567,18 @@ async def chat(msg: ChatMessage, request: Request, user: Optional[dict] = Depend
     ]
     new_used = 0
     if user_id:
-        conv = await supa_get_conversation(conv_id, user_id)
+        # Optimistic new_used: the precheck at ~L247 already confirmed the
+        # user has remaining credits, so we account for 1 immediately and
+        # fire the real deduction in the background (see _ns_tail_writes
+        # below). Races across concurrent requests can at most let the user
+        # overspend by 1 credit — acceptable for chat.
+        new_used = credits_info["used"] + 1
+
+        # Reuse the conversation prefetched in Phase 0 (line ~294) instead
+        # of re-fetching from Supabase here. That one round-trip is worth
+        # ~100–300ms on the happy path.
+        conv = _prefetched_conv
+        _update_payload = None
         if conv:
             existing_msgs = conv.get("messages", [])
             if isinstance(existing_msgs, str):
@@ -610,23 +621,35 @@ async def chat(msg: ChatMessage, request: Request, user: Optional[dict] = Depend
                 )
                 _existing_meta["followup_context"] = _new_followup
                 _update_payload["metadata"] = _existing_meta
-            await supa_update_conversation(conv_id, user_id, _update_payload)
 
-        deducted = await atomic_deduct_credit(user_id, credits_info["used"], credits_info["limit"])
-        if not deducted:
-            raise HTTPException(status_code=402, detail="Credit limit reached. Upgrade your plan for more.")
-        new_used = credits_info["used"] + 1
-
-        asyncio.create_task(_log_chat_message(
-            user_id=user_id,
-            question=msg.message,
-            raw_ai_answer=answer,
-            subject_id=msg.subject_id,
-            subject_name=msg.subject_name,
-            board_name=ctx_board_name,
-            class_name=ctx_class_name,
-            conversation_id=conv_id,
-        ))
+        # Fire all three tail writes (conversation save, credit deduction,
+        # admin chat log) in parallel in the background. The user's response
+        # is sent immediately; these finish afterwards. Errors are logged
+        # but don't affect the user-visible answer.
+        async def _ns_tail_writes():
+            tasks = []
+            if _update_payload is not None:
+                tasks.append(supa_update_conversation(conv_id, user_id, _update_payload))
+            tasks.append(atomic_deduct_credit(user_id, credits_info["used"], credits_info["limit"]))
+            tasks.append(_log_chat_message(
+                user_id=user_id,
+                question=msg.message,
+                raw_ai_answer=answer,
+                subject_id=msg.subject_id,
+                subject_name=msg.subject_name,
+                board_name=ctx_board_name,
+                class_name=ctx_class_name,
+                conversation_id=conv_id,
+            ))
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for _i, _res in enumerate(results):
+                if isinstance(_res, BaseException):
+                    logger.warning(f"[NON-STREAM] background tail-write task {_i} failed: {_res}")
+                elif _i == (1 if _update_payload is not None else 0) and _res is False:
+                    # atomic_deduct_credit returned False (race: credits already drained
+                    # by a concurrent request). User already has their answer; just log.
+                    logger.warning(f"[NON-STREAM] atomic_deduct_credit race detected for user={user_id} — overspend by 1 credit")
+        asyncio.create_task(_ns_tail_writes())
 
     _ns_total_ms = (_time_mod.time() - _chat_t0) * 1000
     try:
