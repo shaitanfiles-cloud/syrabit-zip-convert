@@ -472,9 +472,15 @@ PLAN_LIMITS = {
     # single classroom behind one NAT shares the same IP — 5/min throttled
     # legitimate students at peak usage. 15/min ≈ one chat every 4s, still
     # well below abuse thresholds.
-    "free":    {"credits_per_day": 30,   "max_tokens": 512,    "document_access": "zero",    "req_per_min": 15, "req_per_min_ip": 60},
-    "starter": {"credits_per_day": 500,  "max_tokens": 768,    "document_access": "limited", "req_per_min": 10, "req_per_min_ip": 90},
-    "pro":     {"credits_per_day": 4000, "max_tokens": 1024,   "document_access": "full",    "req_per_min": 15, "req_per_min_ip": 120},
+    # max_tokens raised: previous caps (512/768/1024) were truncating
+    # step-by-step explanations and solved-example replies mid-sentence
+    # for every plan, especially in Assamese where each word averages
+    # ~2x the tokens of English. New caps comfortably fit a full
+    # textbook-style answer (~700–1500 words) without affecting the
+    # daily credit accounting (1 reply = 1 credit regardless of length).
+    "free":    {"credits_per_day": 30,   "max_tokens": 1024,   "document_access": "zero",    "req_per_min": 15, "req_per_min_ip": 60},
+    "starter": {"credits_per_day": 500,  "max_tokens": 1536,   "document_access": "limited", "req_per_min": 10, "req_per_min_ip": 90},
+    "pro":     {"credits_per_day": 4000, "max_tokens": 2048,   "document_access": "full",    "req_per_min": 15, "req_per_min_ip": 120},
 }
 PLAN_PRICES = {
     "free":    {"price": 0,   "label": "Free",    "description": "30 credits/day · zero document access"},

@@ -1670,6 +1670,17 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 _indic_buffer_mode = bool(_want_translate) and _asm_behaviour() != "off"
                 _indic_pending_chunks: list = []
 
+                # When buffering Assamese, the user otherwise sees a blank
+                # bubble for the entire LLM generation + sanitize window
+                # (multiple seconds), which feels like a hung / truncated
+                # reply. Emit a `translating: true` marker so the existing
+                # frontend handler swaps the empty bubble for the
+                # "Translating to Assamese…" indicator. Cleared
+                # automatically when the first content chunk flushes
+                # client-side (frontend `flushPending` resets the flag).
+                if _indic_buffer_mode:
+                    yield f"data: {json.dumps({'translating': True})}\n\n"
+
                 async for chunk in _active_stream:
                     if '"__provider"' in chunk and chunk.startswith("data: "):
                         try:
