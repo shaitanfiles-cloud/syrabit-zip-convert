@@ -11,6 +11,7 @@ import {
 import axios from 'axios';
 import { adminVerify, adminLogout, adminGetSettings, adminGetUnacknowledgedAlertCount, API_BASE } from '@/utils/api';
 import { toast } from 'sonner';
+import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 
 const AdminDashboard     = lazy(() => import('@/components/admin/AdminDashboard'));
 const AdminRoadmap       = lazy(() => import('@/components/admin/AdminRoadmap'));
@@ -358,19 +359,21 @@ export default function AdminPage() {
         </header>
 
         <main className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'contenthub' ? '' : 'overflow-y-auto p-3 sm:p-4 md:p-6'}`}>
-          <Suspense fallback={
-            <div className="flex items-center justify-center h-40 gap-3">
-              <Loader2 className="w-5 h-5 animate-spin text-violet-500" />
-              <span className="text-sm text-gray-400">Loading section...</span>
-            </div>
-          }>
-            <ActiveComponent
-              adminToken={adminToken}
-              adminName={adminName}
-              onNavigate={handleNavigate}
-              navContext={activeSection === 'users' || activeSection === 'contenthub' || activeSection === 'botsecurity' ? navContext : null}
-            />
-          </Suspense>
+          <SectionErrorBoundary name={activeLabel}>
+            <Suspense fallback={
+              <div className="flex items-center justify-center h-40 gap-3">
+                <Loader2 className="w-5 h-5 animate-spin text-violet-500" />
+                <span className="text-sm text-gray-400">Loading section...</span>
+              </div>
+            }>
+              <ActiveComponent
+                adminToken={adminToken}
+                adminName={adminName}
+                onNavigate={handleNavigate}
+                navContext={activeSection === 'users' || activeSection === 'contenthub' || activeSection === 'botsecurity' ? navContext : null}
+              />
+            </Suspense>
+          </SectionErrorBoundary>
         </main>
       </div>
     </div>

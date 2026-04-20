@@ -3,6 +3,15 @@ import { toast } from 'sonner';
 import { log } from '@/utils/logger';
 import AdminQuickLinks from './AdminQuickLinks';
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
+
+const safeArr = (v) => (Array.isArray(v) ? v : []);
+const safeObj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
+const normalizeChatFallbacks = (d) => (d ? { ...d, daily: safeArr(d.daily) } : null);
+const normalizeLatency = (d) => (d ? { ...d, daily: safeArr(d.daily) } : null);
+const normalizeTokenSpend = (d) => (d ? { ...d, daily: safeArr(d.daily), totals: safeObj(d.totals) } : null);
+const normalizeTopQueries = (d) => (d ? { ...d, top_queries: safeArr(d.top_queries) } : null);
+const normalizeChatSpeedups = (d) => (d ? { ...d, daily: safeArr(d.daily), warm_runs: safeArr(d.warm_runs), totals: safeObj(d.totals) } : null);
+const normalizeVectorStats = (d) => (d ? { ...d, pages: safeObj(d.pages), chapters: safeObj(d.chapters) } : null);
 import {
   Users, MessageSquare, BookOpen, Zap, Loader2, Activity,
   ArrowRight, PenTool, Settings, Eye, TrendingUp, RefreshCw,
@@ -582,11 +591,11 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       if (dashRes.status === 'fulfilled') setData(dashRes.value.data); else { failed.push('overview'); setData(null); }
       if (metricsRes.status === 'fulfilled') setMetrics(metricsRes.value.data); else { failed.push('metrics'); setMetrics(null); }
       if (ragAccRes.status === 'fulfilled') setRagAccuracy(ragAccRes.value.data); else { failed.push('rag'); setRagAccuracy(null); }
-      if (fallbackRes.status === 'fulfilled') setChatFallbacks(fallbackRes.value.data); else { failed.push('fallbacks'); setChatFallbacks(null); }
-      if (vectorRes.status === 'fulfilled') setVectorStats(vectorRes.value.data); else { failed.push('vector'); setVectorStats(null); }
-      if (latencyRes.status === 'fulfilled') setLatency(latencyRes.value.data); else { failed.push('latency'); setLatency(null); }
-      if (queriesRes.status === 'fulfilled') setTopQueries(queriesRes.value.data); else { failed.push('queries'); setTopQueries(null); }
-      if (tokenRes.status === 'fulfilled') setTokenSpend(tokenRes.value.data); else { failed.push('tokens'); setTokenSpend(null); }
+      if (fallbackRes.status === 'fulfilled') setChatFallbacks(normalizeChatFallbacks(fallbackRes.value.data)); else { failed.push('fallbacks'); setChatFallbacks(null); }
+      if (vectorRes.status === 'fulfilled') setVectorStats(normalizeVectorStats(vectorRes.value.data)); else { failed.push('vector'); setVectorStats(null); }
+      if (latencyRes.status === 'fulfilled') setLatency(normalizeLatency(latencyRes.value.data)); else { failed.push('latency'); setLatency(null); }
+      if (queriesRes.status === 'fulfilled') setTopQueries(normalizeTopQueries(queriesRes.value.data)); else { failed.push('queries'); setTopQueries(null); }
+      if (tokenRes.status === 'fulfilled') setTokenSpend(normalizeTokenSpend(tokenRes.value.data)); else { failed.push('tokens'); setTokenSpend(null); }
       if (funnelRes.status === 'fulfilled') setFunnel(funnelRes.value.data); else { failed.push('funnel'); setFunnel(null); }
       if (coverageRes.status === 'fulfilled') setCoverage(coverageRes.value.data); else { failed.push('coverage'); setCoverage(null); }
       if (pwaRes.status === 'fulfilled') setPwaStats(pwaRes.value.data); else { failed.push('pwa'); setPwaStats(null); }
@@ -648,7 +657,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
     setSpeedupLoading(true);
     try {
       const res = await axios.get(`${API_BASE}/admin/chat/speedups?days=${days}`, adminHdr(adminToken));
-      setChatSpeedups(res.data);
+      setChatSpeedups(normalizeChatSpeedups(res.data));
     } catch (e) {
       log.error('Failed to load chat speedups', { error: e.message });
       setChatSpeedups(null);
@@ -3830,7 +3839,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       )}
       </SectionErrorBoundary>
 
-      <PipelineWidget token={adminToken} />
+      <SectionErrorBoundary name="SEO Pipeline">
+        <PipelineWidget token={adminToken} />
+      </SectionErrorBoundary>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {quickActions.map((action) => (
