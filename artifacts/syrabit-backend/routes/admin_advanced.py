@@ -2442,10 +2442,11 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = "", skip_e
         chunk_count = await db.chunks.count_documents({"chapter_id": ch_id})
         embed_ok = False
         try:
-            import vectorize_client
+            from retrievers import get_retriever as _gr
             from syllabus_embedder import _make_vector_id
-            if vectorize_client.is_configured():
-                vecs = await vectorize_client.get_vectors_by_ids([_make_vector_id(ch_id, "chapter")])
+            _r = await _gr()
+            if _r.is_configured():
+                vecs = await _r.get_by_ids([_make_vector_id(ch_id, "chapter")])
                 embed_ok = len(vecs) > 0
         except Exception as _embed_err:
             logger.warning(f"Embedding check failed for {ch_id}: {_embed_err}")
@@ -2509,10 +2510,11 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = "", skip_e
                 r_chunks = await db.chunks.count_documents({"chapter_id": ch_id})
                 r_embed = False
                 try:
-                    import vectorize_client
+                    from retrievers import get_retriever as _gr
                     from syllabus_embedder import _make_vector_id
-                    if vectorize_client.is_configured():
-                        r_vecs = await vectorize_client.get_vectors_by_ids([_make_vector_id(ch_id, "chapter")])
+                    _r = await _gr()
+                    if _r.is_configured():
+                        r_vecs = await _r.get_by_ids([_make_vector_id(ch_id, "chapter")])
                         r_embed = len(r_vecs) > 0
                 except Exception as _r_embed_err:
                     logger.warning(f"Retry embedding check failed for {ch_id}: {_r_embed_err}")

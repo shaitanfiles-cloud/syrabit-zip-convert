@@ -180,6 +180,13 @@ class SyllabusEmbedder:
         self._seed_lock = asyncio.Lock()
         self._seeded = False
 
+
+    async def _get_retriever(self):
+        """Return the active retriever. Routed through the factory so
+        the admin-set runtime override + RAG_RETRIEVER env var apply."""
+        from retrievers import get_retriever as _gr
+        return await _gr()
+
     async def embed_chapter(
         self,
         chapter_id: str,
@@ -195,13 +202,9 @@ class SyllabusEmbedder:
             logger.warning("vertex_services unavailable — skipping chapter embedding")
             return 0
 
-        try:
-            import vectorize_client
-            if not vectorize_client.is_configured():
-                logger.warning("Vectorize not configured — skipping chapter embedding")
-                return 0
-        except ImportError:
-            logger.warning("vectorize_client unavailable — skipping chapter embedding")
+        retriever = await self._get_retriever()
+        if not retriever.is_configured():
+            logger.warning("Vectorize not configured — skipping chapter embedding")
             return 0
 
         db = self._db
@@ -265,17 +268,14 @@ class SyllabusEmbedder:
         )
         vectors_to_upsert.extend(topic_vecs)
 
-        result = await vectorize_client.upsert_vectors(vectors_to_upsert)
+        result = await retriever.upsert(vectors_to_upsert)
         inserted = result.get("upserted", len(vectors_to_upsert))
         logger.info(f"Embedded chapter '{title[:40]}' + {len(topic_vecs)} topics to Vectorize")
         return inserted
 
     async def remove_chapter_embeddings(self, chapter_id: str) -> int:
-        try:
-            import vectorize_client
-            if not vectorize_client.is_configured():
-                return 0
-        except ImportError:
+        retriever = await self._get_retriever()
+        if not retriever.is_configured():
             return 0
 
         ids_to_delete = [_make_vector_id(chapter_id, "chapter")]
@@ -288,7 +288,7 @@ class SyllabusEmbedder:
                     if topic_str:
                         ids_to_delete.append(_make_vector_id(chapter_id, "topic", topic_str))
 
-        deleted = await vectorize_client.delete_vectors(ids_to_delete)
+        deleted = await retriever.delete(ids_to_delete)
         return deleted
 
     async def ensure_seeded(self) -> int:
@@ -313,11 +313,8 @@ class SyllabusEmbedder:
             logger.warning("vertex_services not available — syllabus vector classify skipped")
             return None
 
-        try:
-            import vectorize_client
-            if not vectorize_client.is_configured():
-                return None
-        except ImportError:
+        retriever = await self._get_retriever()
+        if not retriever.is_configured():
             return None
 
         try:
@@ -345,7 +342,7 @@ class SyllabusEmbedder:
             logger.info(f"SyllabusEmbed: reusing cached query embedding for '{query[:40]}'")
 
         mf = {"subject_id": subject_id} if subject_id else None
-        matches = await vectorize_client.query_vectors(
+        matches = await retriever.query(
             vector=q_vec,
             top_k=10,
             metadata_filter=mf,
@@ -353,7 +350,7 @@ class SyllabusEmbedder:
         )
 
         if not matches and subject_id:
-            matches = await vectorize_client.query_vectors(
+            matches = await retriever.query(
                 vector=q_vec,
                 top_k=10,
                 return_metadata=True,
@@ -414,11 +411,8 @@ class SyllabusEmbedder:
         except ImportError:
             return []
 
-        try:
-            import vectorize_client
-            if not vectorize_client.is_configured():
-                return []
-        except ImportError:
+        retriever = await self._get_retriever()
+        if not retriever.is_configured():
             return []
 
         try:
@@ -431,7 +425,7 @@ class SyllabusEmbedder:
         except Exception:
             return []
 
-        matches = await vectorize_client.query_vectors(
+        matches = await retriever.query(
             vector=q_vec,
             top_k=top_n,
             return_metadata=True,
@@ -460,12 +454,9 @@ class SyllabusEmbedder:
         return results
 
     async def full_reseed(self) -> dict:
-        try:
-            import vectorize_client
-            if not vectorize_client.is_configured():
-                return {"error": "Vectorize not configured"}
-        except ImportError:
-            return {"error": "vectorize_client not available"}
+        retriever = await self._get_retriever()
+        if not retriever.is_configured():
+            return {"error": "Vectorize not configured"}
 
         async with self._seed_lock:
             self._seeded = False
@@ -481,20 +472,20 @@ class SyllabusEmbedder:
                         if topic_str:
                             all_ids.append(_make_vector_id(ch_id, "topic", topic_str))
                 if all_ids:
-                    deleted_total += await vectorize_client.delete_vectors(all_ids)
+                    deleted_total += await retriever.delete(all_ids)
                     logger.info(f"full_reseed: deleted {len(all_ids)} known vectors")
 
             stale_rounds = 0
             max_stale_rounds = 200
             while stale_rounds < max_stale_rounds:
-                zero_vec = [0.0] * vectorize_client.VECTORIZE_DIMENSIONS
-                stale = await vectorize_client.query_vectors(
+                zero_vec = [0.0] * retriever.dimensions
+                stale = await retriever.query(
                     vector=zero_vec, top_k=100, return_metadata=False, return_values=False,
                 )
                 if not stale:
                     break
                 stale_ids = [m["id"] for m in stale]
-                await vectorize_client.delete_vectors(stale_ids)
+                await retriever.delete(stale_ids)
                 deleted_total += len(stale_ids)
                 stale_rounds += 1
                 logger.info(f"full_reseed: swept {len(stale_ids)} stale vectors (round {stale_rounds})")
@@ -512,25 +503,22 @@ class SyllabusEmbedder:
         return {"status": "ok", "inserted": inserted, "deleted": deleted_total}
 
     async def stats(self) -> dict:
-        try:
-            import vectorize_client
-            if not vectorize_client.is_configured():
-                return {"error": "Vectorize not configured"}
-        except ImportError:
-            return {"error": "vectorize_client not available"}
+        retriever = await self._get_retriever()
+        if not retriever.is_configured():
+            return {"error": "Vectorize not configured"}
 
-        index_info = await vectorize_client.get_index_info()
-        index_config = await vectorize_client.get_index_config()
+        index_info = await retriever.index_info()
+        index_config = await retriever.index_config()
 
         return {
-            "index_name": vectorize_client.VECTORIZE_INDEX_NAME,
+            "index_name": index_config.get("name", retriever.name),
             "total_vectors": index_info.get("vector_count", 0),
-            "dimensions": index_config.get("dimensions", vectorize_client.VECTORIZE_DIMENSIONS),
+            "dimensions": index_config.get("dimensions", retriever.dimensions),
             "metric": index_config.get("metric", "cosine"),
             "similarity_threshold": SIMILARITY_THRESHOLD,
             "subject_match_bonus": SUBJECT_MATCH_BONUS,
             "subject_mismatch_penalty": SUBJECT_MISMATCH_PENALTY,
-            "backend": "cloudflare_vectorize",
+            "backend": retriever.name,
         }
 
     async def _seed_chapters(self) -> int:
@@ -541,13 +529,9 @@ class SyllabusEmbedder:
             logger.warning(f"Cannot seed — import error: {exc}")
             return 0
 
-        try:
-            import vectorize_client
-            if not vectorize_client.is_configured():
-                logger.warning("Vectorize not configured — skipping seed")
-                return 0
-        except ImportError:
-            logger.warning("vectorize_client not available — skipping seed")
+        retriever = await self._get_retriever()
+        if not retriever.is_configured():
+            logger.warning("Vectorize not configured — skipping seed")
             return 0
 
         boards   = {b["id"]: b for b in SEED_DATA.get("boards", [])}
@@ -634,7 +618,7 @@ class SyllabusEmbedder:
         for i in range(0, len(all_candidate_ids), 100):
             batch_ids = all_candidate_ids[i : i + 100]
             try:
-                found = await vectorize_client.get_vectors_by_ids(batch_ids)
+                found = await retriever.get_by_ids(batch_ids)
                 for v in found:
                     vid = v.get("id") if isinstance(v, dict) else getattr(v, "id", None)
                     if vid:
@@ -711,13 +695,13 @@ class SyllabusEmbedder:
                 vectors_batch.extend(topic_vecs)
 
             if len(vectors_batch) >= 20:
-                result = await vectorize_client.upsert_vectors(vectors_batch)
+                result = await retriever.upsert(vectors_batch)
                 inserted += result.get("upserted", len(vectors_batch))
                 vectors_batch = []
                 logger.info(f"SyllabusEmbedder: {inserted} new embeddings, {skipped} skipped…")
 
         if vectors_batch:
-            result = await vectorize_client.upsert_vectors(vectors_batch)
+            result = await retriever.upsert(vectors_batch)
             inserted += result.get("upserted", len(vectors_batch))
 
         logger.info(
@@ -736,12 +720,9 @@ class SyllabusEmbedder:
         except ImportError as exc:
             return {"status": "error", "reason": f"import error: {exc}"}
 
-        try:
-            import vectorize_client
-            if not vectorize_client.is_configured():
-                return {"status": "error", "reason": "Vectorize not configured"}
-        except ImportError:
-            return {"status": "error", "reason": "vectorize_client not available"}
+        retriever = await self._get_retriever()
+        if not retriever.is_configured():
+            return {"status": "error", "reason": "Vectorize not configured"}
 
         async with self._seed_lock:
             db = self._db
@@ -774,7 +755,7 @@ class SyllabusEmbedder:
                 for i in range(0, len(all_candidate_ids), 100):
                     batch_ids = all_candidate_ids[i : i + 100]
                     try:
-                        found = await vectorize_client.get_vectors_by_ids(batch_ids)
+                        found = await retriever.get_by_ids(batch_ids)
                         for v in found:
                             vid = v.get("id") if isinstance(v, dict) else getattr(v, "id", None)
                             if vid:
@@ -857,13 +838,13 @@ class SyllabusEmbedder:
                         stats["topics_processed"] += len(topic_vecs)
 
                     if len(vectors_batch) >= 20:
-                        await vectorize_client.upsert_vectors(vectors_batch)
+                        await retriever.upsert(vectors_batch)
                         vectors_batch = []
 
                     await asyncio.sleep(0.1)
 
             if vectors_batch:
-                await vectorize_client.upsert_vectors(vectors_batch)
+                await retriever.upsert(vectors_batch)
 
             stats["status"] = "ok"
             logger.info(f"reseed_all complete: {stats}")
