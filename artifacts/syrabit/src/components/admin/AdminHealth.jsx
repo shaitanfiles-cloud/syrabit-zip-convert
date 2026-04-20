@@ -576,6 +576,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                       })}
                     </div>
                   </div>
+                  </SectionErrorBoundary>
                 )}
 
                 {(llmData?.daily?.length > 0) && (

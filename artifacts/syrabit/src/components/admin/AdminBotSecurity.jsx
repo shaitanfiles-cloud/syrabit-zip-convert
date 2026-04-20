@@ -1605,8 +1605,8 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
               </div>
             )}
           </div>
-          </SectionErrorBoundary>
         </GlassCard>
+        </SectionErrorBoundary>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <SectionErrorBoundary name="Top Claimed Bots">
@@ -1883,8 +1883,8 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
           ) : (
             <div className="px-5 pb-5 text-sm text-gray-400">No recent attempts</div>
           )}
-          </SectionErrorBoundary>
         </GlassCard>
+        </SectionErrorBoundary>
 
         {realtime.session_by_bot && Object.keys(realtime.session_by_bot).length > 0 && (
           <SectionErrorBoundary name="Realtime Session Bots">
