@@ -208,31 +208,33 @@ _runtime_token_warned = False
 
 
 def _runtime_token() -> str:
-    """Resolve the runtime Cloudflare token per Task #534 contract.
+    """Resolve the runtime Cloudflare token for Vectorize calls.
 
-    Priority order:
-      1. CLOUDFLARE_ANALYTICS_TOKEN  — Task #534 spec name (analytics-scoped
-         token: Vectorize:Edit + Cache Purge + Analytics:Read)
-      2. CLOUDFLARE_API_TOKEN        — legacy / backwards-compat fallback
+    Priority order (2026-04-20 revision):
+      1. CLOUDFLARE_API_TOKEN        — primary runtime token
+      2. CLOUDFLARE_ANALYTICS_TOKEN  — Task #534 spec name, used when operators
+         provision a scope-minimised token (Vectorize:Edit + Cache Purge +
+         Analytics:Read). Falls back here only if the primary is unset.
 
-    The Vectorize REST and Python SDK calls below all flow through this
-    helper, so the runtime never reaches for a deploy-scoped token by
-    accident. A one-shot warning is emitted if we fall back to the legacy
-    name so operators see the deprecation in the logs.
+    Order was flipped after observing an outage where
+    CLOUDFLARE_ANALYTICS_TOKEN was present but lacked the Vectorize scope —
+    the breaker tripped on every startup even though CLOUDFLARE_API_TOKEN
+    was valid. Preferring the primary token makes the system resilient to
+    a half-provisioned analytics token while still honouring it when the
+    primary is missing.
     """
     global _runtime_token_warned
+    primary = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+    if primary:
+        return primary
     spec = os.environ.get("CLOUDFLARE_ANALYTICS_TOKEN", "").strip()
-    if spec:
-        return spec
-    legacy = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
-    if legacy and not _runtime_token_warned:
+    if spec and not _runtime_token_warned:
         logger.warning(
-            "Vectorize is using legacy CLOUDFLARE_API_TOKEN; set "
-            "CLOUDFLARE_ANALYTICS_TOKEN (Task #534 spec name) to silence "
-            "this warning. Both names resolve to the same value here."
+            "Vectorize is using CLOUDFLARE_ANALYTICS_TOKEN fallback; set "
+            "CLOUDFLARE_API_TOKEN (primary) to silence this warning."
         )
         _runtime_token_warned = True
-    return legacy
+    return spec
 
 
 def _get_cf_client():
