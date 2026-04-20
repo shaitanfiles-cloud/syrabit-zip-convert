@@ -1693,7 +1693,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           </ol>
         </div>
         </SectionErrorBoundary>
-        </SectionErrorBoundary></>)}
+        </>)}
         <AdminQuickLinks links={['apiconfig','settings','dashboard','ratelimits']} onNavigate={onNavigate} />
       </div>
     </SectionErrorBoundary>
