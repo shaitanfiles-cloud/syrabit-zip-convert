@@ -697,3 +697,7 @@ export const adminSeoGoogleSitemapPing = (token) =>
 // Task #563: publish → sub-sitemap → IndexNow → push-log smoke test
 export const adminSeoIndexNowSmoke = (token) =>
   axios.post(`${API_BASE}/admin/seo/indexnow/smoke`, {}, { headers: adminHeaders(token), withCredentials: true });
+
+// Task #564: smoke run history (manual + cron) for the trend strip
+export const adminSeoIndexNowSmokeHistory = (token, limit = 50) =>
+  axios.get(`${API_BASE}/admin/seo/indexnow/smoke/history`, { headers: adminHeaders(token), withCredentials: true, params: { limit } });

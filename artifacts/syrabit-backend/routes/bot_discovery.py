@@ -1417,6 +1417,33 @@ _SMOKE_ALERT_LAST_FIRED: dict = {"ts": 0.0}
 _SMOKE_ALERT_COOLDOWN_S = 6 * 3600
 
 
+async def _persist_smoke_run(summary: dict, source: str) -> None:
+    """Task #564: append a copy of the smoke summary to
+    ``indexnow_smoke_log`` so the admin UI can render a 14-day
+    pass/fail trend. Tagged with the trigger source ("manual" or
+    "cron") and a server-side timestamp so the row is immutable
+    even if the in-summary ``today`` value drifts."""
+    try:
+        from deps import db as real_db, is_mongo_available
+        if not await is_mongo_available():
+            return
+        doc = {
+            "source": source,
+            "ran_at": datetime.now(timezone.utc),
+            "ok": bool(summary.get("ok")),
+            "today": summary.get("today"),
+            "url": summary.get("url") or "",
+            "in_sitemap": bool(summary.get("in_sitemap")),
+            "lastmod_fresh": bool(summary.get("lastmod_fresh")),
+            "push_log_written": bool(summary.get("push_log_written")),
+            "error": summary.get("error"),
+            "summary": summary,
+        }
+        await real_db.indexnow_smoke_log.insert_one(doc)
+    except Exception as exc:
+        logger.debug("Failed to persist smoke run: %s", exc)
+
+
 async def _run_daily_publish_indexnow_smoke():
     """Task #563: invoke ``run_publish_indexnow_smoke()`` and raise an
     admin alert when the publish → Google chain is broken. Runs inside
@@ -1425,6 +1452,7 @@ async def _run_daily_publish_indexnow_smoke():
     try:
         from seo_indexnow_smoke import run_publish_indexnow_smoke
         summary = await run_publish_indexnow_smoke()
+        await _persist_smoke_run(summary, source="cron")
         if summary.get("ok"):
             return
         now = time.time()
@@ -3368,7 +3396,46 @@ async def admin_seo_indexnow_smoke(admin: dict = Depends(get_admin_user)):
     """
     from seo_indexnow_smoke import run_publish_indexnow_smoke
     summary = await run_publish_indexnow_smoke()
+    await _persist_smoke_run(summary, source="manual")
     return summary
+
+
+@router.get("/admin/seo/indexnow/smoke/history")
+async def admin_seo_indexnow_smoke_history(
+    limit: int = Query(50, ge=1, le=200),
+    admin: dict = Depends(get_admin_user),
+):
+    """Task #564: return the most recent smoke runs (manual + cron)
+    persisted by ``_persist_smoke_run`` so the admin UI can render
+    a 14-day pass/fail trend strip beneath the smoke result block."""
+    from deps import db, is_mongo_available
+    if not await is_mongo_available():
+        return {"runs": []}
+    try:
+        cursor = db.indexnow_smoke_log.find(
+            {}, {"_id": 0}
+        ).sort("ran_at", -1).limit(int(limit))
+        rows = await cursor.to_list(int(limit))
+    except Exception as exc:
+        logger.warning("Failed to load smoke history: %s", exc)
+        return {"runs": []}
+    out = []
+    for r in rows:
+        ran_at = r.get("ran_at")
+        if hasattr(ran_at, "isoformat"):
+            ran_at = ran_at.isoformat()
+        out.append({
+            "source": r.get("source") or "unknown",
+            "ran_at": ran_at,
+            "ok": bool(r.get("ok")),
+            "today": r.get("today"),
+            "url": r.get("url") or "",
+            "in_sitemap": bool(r.get("in_sitemap")),
+            "lastmod_fresh": bool(r.get("lastmod_fresh")),
+            "push_log_written": bool(r.get("push_log_written")),
+            "error": r.get("error"),
+        })
+    return {"runs": out}
 
 
 @router.post("/admin/indexnow/resubmit-recent")

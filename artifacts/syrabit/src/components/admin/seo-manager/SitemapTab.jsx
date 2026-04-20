@@ -8,6 +8,7 @@ import {
   adminIndexNowHistory,
   adminSeoGoogleSitemapPing,
   adminSeoIndexNowSmoke,
+  adminSeoIndexNowSmokeHistory,
 } from '@/utils/api';
 
 const INDEXING_FIELDS = [
@@ -317,6 +318,86 @@ function IndexNowBackfillCard({ adminToken }) {
   );
 }
 
+// Task #564: 14-day pass/fail strip for the publish→IndexNow smoke test.
+// Buckets every persisted run by UTC day, then renders one cell per day —
+// green if every run that day passed, red if any failed, gray if none ran.
+// A regression that's intermittent across a week is invisible from a single
+// green/red snapshot but obvious here.
+function SmokeHistoryStrip({ runs }) {
+  const DAYS = 14;
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+
+  const windowStart = new Date(today);
+  windowStart.setUTCDate(today.getUTCDate() - (DAYS - 1));
+
+  const byDay = new Map();
+  let totalRuns = 0;
+  let totalFails = 0;
+  for (const r of runs || []) {
+    if (!r?.ran_at) continue;
+    const d = new Date(r.ran_at);
+    if (isNaN(d.getTime())) continue;
+    const dayStart = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    if (dayStart < windowStart || dayStart > today) continue;
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+    const slot = byDay.get(key) || { pass: 0, fail: 0 };
+    if (r.ok) slot.pass += 1; else { slot.fail += 1; totalFails += 1; }
+    totalRuns += 1;
+    byDay.set(key, slot);
+  }
+
+  const cells = [];
+  for (let i = DAYS - 1; i >= 0; i -= 1) {
+    const d = new Date(today);
+    d.setUTCDate(today.getUTCDate() - i);
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+    const slot = byDay.get(key);
+    let color = '#e5e7eb';
+    let state = 'no runs';
+    if (slot) {
+      if (slot.fail > 0 && slot.pass === 0) { color = '#dc2626'; state = `${slot.fail} failed`; }
+      else if (slot.fail > 0) { color = '#f59e0b'; state = `${slot.pass} passed, ${slot.fail} failed`; }
+      else { color = '#16a34a'; state = `${slot.pass} passed`; }
+    }
+    cells.push({ key, color, state, label: key.slice(5) });
+  }
+
+  return (
+    <div className="rounded-lg border p-3 space-y-2"
+      style={{ background: '#fff', borderColor: '#e5e7eb' }}>
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] font-bold uppercase tracking-wider" style={{ color: '#9ca3af' }}>
+          Smoke trend · last {DAYS} days
+        </p>
+        <p className="text-[11px]" style={{ color: '#9ca3af' }}>
+          {totalRuns === 0
+            ? 'No runs logged yet'
+            : `${totalRuns} run${totalRuns === 1 ? '' : 's'} · ${totalFails} failed`}
+        </p>
+      </div>
+      <div className="flex items-center gap-1">
+        {cells.map(c => (
+          <div key={c.key}
+            title={`${c.key} — ${c.state}`}
+            className="flex-1 h-5 rounded"
+            style={{ background: c.color, minWidth: 8 }} />
+        ))}
+      </div>
+      <div className="flex items-center justify-between text-[10px]" style={{ color: '#9ca3af' }}>
+        <span>{cells[0]?.label}</span>
+        <span className="flex items-center gap-3">
+          <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded" style={{ background: '#16a34a' }} /> pass</span>
+          <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded" style={{ background: '#f59e0b' }} /> mixed</span>
+          <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded" style={{ background: '#dc2626' }} /> fail</span>
+          <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded" style={{ background: '#e5e7eb' }} /> no run</span>
+        </span>
+        <span>{cells[cells.length - 1]?.label}</span>
+      </div>
+    </div>
+  );
+}
+
 // Task #560: Submit & Monitor — manual sitemap ping + URL batch submission
 // + recent submission log. Lets admins push a one-off URL list to IndexNow
 // and verify it actually went out, without waiting for the nightly diff.
@@ -332,6 +413,20 @@ function SubmitMonitorCard({ adminToken }) {
   // Task #563: publish → sub-sitemap → IndexNow → push-log smoke
   const [smokeRunning, setSmokeRunning] = useState(false);
   const [smokeResult, setSmokeResult] = useState(null);
+  // Task #564: persisted smoke runs (manual + cron) for the trend strip
+  const [smokeHistory, setSmokeHistory] = useState([]);
+
+  const loadSmokeHistory = useCallback(async () => {
+    if (!adminToken) return;
+    try {
+      const r = await adminSeoIndexNowSmokeHistory(adminToken, 100);
+      setSmokeHistory(r.data?.runs || []);
+    } catch {
+      // Trend strip is supplementary — never block the panel on a load failure.
+    }
+  }, [adminToken]);
+
+  useEffect(() => { loadSmokeHistory(); }, [loadSmokeHistory]);
 
   const loadHistory = useCallback(async () => {
     if (!adminToken) return;
@@ -379,6 +474,7 @@ function SubmitMonitorCard({ adminToken }) {
       const r = await adminSeoIndexNowSmoke(adminToken);
       setSmokeResult(r.data);
       await loadHistory();
+      await loadSmokeHistory();
     } catch (e) {
       setError(e?.response?.data?.detail || e?.message || 'Smoke test failed');
     } finally {
@@ -496,6 +592,8 @@ function SubmitMonitorCard({ adminToken }) {
           )}
         </div>
       )}
+
+      <SmokeHistoryStrip runs={smokeHistory} />
 
       <div className="space-y-2">
         <label className="text-[11px] font-bold uppercase tracking-wider" style={{ color: '#9ca3af' }}>
