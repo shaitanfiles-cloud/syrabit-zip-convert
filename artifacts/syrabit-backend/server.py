@@ -474,6 +474,16 @@ async def lifespan(app):
                 name="endpoint_timestamp",
             )
 
+            await db.indexnow_smoke_log.create_index(
+                "ran_at",
+                expireAfterSeconds=180 * 24 * 3600,
+                name="ran_at_ttl_180d",
+            )
+            await db.indexnow_smoke_log.create_index(
+                [("ran_at", -1)],
+                name="ran_at_desc",
+            )
+
             await db.collection_size_history.create_index(
                 [("collection", 1), ("date", 1)],
                 unique=True,
