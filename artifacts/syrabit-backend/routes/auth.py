@@ -106,7 +106,7 @@ async def signup(data: UserCreate, response: Response):
     user_out = UserOut(
         id=user_id, name=data.name, email=data.email.lower(),
         plan="free", credits_used=0, credits_limit=user.get("credits_limit", 30),
-        onboarding_done=False, is_admin=False, created_at=now
+        onboarding_done=False, is_admin=False, role="student", created_at=now
     )
     _session_kwargs = dict(key="syrabit_session", value=token, httponly=True, secure=SECURE_COOKIES, samesite=COOKIE_SAMESITE, max_age=JWT_ACCESS_EXPIRE_MINUTES * 60)
     _refresh_kwargs = dict(key="syrabit_refresh", value=refresh, httponly=True, secure=SECURE_COOKIES, samesite=COOKIE_SAMESITE, path="/api/auth/refresh", max_age=JWT_REFRESH_EXPIRE_MINUTES * 60)
@@ -143,6 +143,7 @@ async def login(data: UserLogin, response: Response):
         created_at=user.get("created_at", ""),
         avatar_url=user.get("avatar_url", ""),
         ads_opt_out=bool(user.get("ads_opt_out", False)),
+        role=user.get("role", "admin" if user.get("is_admin") else "student"),
     )
     _session_kwargs = dict(key="syrabit_session", value=token, httponly=True, secure=SECURE_COOKIES, samesite=COOKIE_SAMESITE, max_age=JWT_ACCESS_EXPIRE_MINUTES * 60)
     _refresh_kwargs = dict(key="syrabit_refresh", value=refresh, httponly=True, secure=SECURE_COOKIES, samesite=COOKIE_SAMESITE, path="/api/auth/refresh", max_age=JWT_REFRESH_EXPIRE_MINUTES * 60)
@@ -230,6 +231,7 @@ async def google_auth(data: GoogleAuthRequest, response: Response):
             created_at=existing.get("created_at", ""),
             avatar_url=existing.get("avatar_url", ""),
             ads_opt_out=bool(existing.get("ads_opt_out", False)),
+            role=existing.get("role", "admin" if existing.get("is_admin") else "student"),
         )
     else:
         settings = await supa_get_settings()
@@ -268,7 +270,7 @@ async def google_auth(data: GoogleAuthRequest, response: Response):
         user_out = UserOut(
             id=user_id, name=google_name, email=google_email,
             plan="free", credits_used=0, credits_limit=30,
-            onboarding_done=False, is_admin=False, created_at=now,
+            onboarding_done=False, is_admin=False, role="student", created_at=now,
             avatar_url=google_avatar,
         )
 
@@ -327,6 +329,7 @@ async def get_me(user: Optional[dict] = Depends(get_current_user_optional)):
         created_at=user.get("created_at", ""),
         avatar_url=user.get("avatar_url", ""),
         ads_opt_out=bool(user.get("ads_opt_out", False)),
+        role=user.get("role", "admin" if user.get("is_admin") else "student"),
     )
 
 

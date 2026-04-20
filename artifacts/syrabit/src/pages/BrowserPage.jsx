@@ -25,8 +25,10 @@ import {
   ArrowLeft, ArrowRight, RotateCw, X, Plus, Star, Search, Globe,
   Sparkles, BookmarkPlus, Clock, ShieldAlert, ExternalLink,
   PanelRightClose, PanelRightOpen, Menu, Loader2, Languages,
-  StickyNote, Square, HelpCircle,
+  StickyNote, Square, HelpCircle, GraduationCap, CheckCircle2,
+  AlertTriangle,
 } from 'lucide-react';
+import ModalOverlay from '@/components/ui/ModalOverlay';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { ReadAloudButton } from '@/components/study/ReadAloudButton';
 import { QuizModal } from '@/components/study/QuizModal';
@@ -36,6 +38,7 @@ import { useContentLang } from '@/context/LanguageContext';
 import {
   eduFetchReader, eduGetAllowlist, eduRequestSite, eduCheckUrl,
   eduLoadState, eduSaveState, eduGroundedAnswerUrl, getAnonId,
+  eduEducatorSubmitSite,
 } from '@/utils/api';
 import { toast } from 'sonner';
 
@@ -79,6 +82,21 @@ const T = {
     by: 'by',
     on: 'on',
     minRead: 'min read',
+    educatorSubmit: 'Suggest a site',
+    educatorSubmitTitle: 'Suggest a site for the educational web',
+    educatorSubmitSub: 'As an educator, you can add a domain directly. We run a quick kid-safe + robots.txt probe before auto-approving it for all students.',
+    educatorDomain: 'Domain',
+    educatorDomainPh: 'e.g. example.org',
+    educatorNote: 'Note (optional)',
+    educatorNotePh: 'Why is this site useful for students?',
+    educatorSubmitBtn: 'Submit for review',
+    educatorSubmitting: 'Probing site…',
+    educatorAutoApproved: 'Auto-approved! Students can now open this site.',
+    educatorAlreadyAllowed: 'This site is already on the educational allowlist.',
+    educatorRejected: 'Site was not auto-approved.',
+    educatorReason: 'Reason',
+    educatorOpenNow: 'Open in browser',
+    educatorClose: 'Close',
   },
   as: {
     title: 'চিৰা ব্ৰাউজাৰ',
@@ -118,6 +136,21 @@ const T = {
     by: 'লিখক',
     on: 'প্ৰকাশক',
     minRead: 'মিনিট পঢ়া',
+    educatorSubmit: 'ছাইট পৰামৰ্শ',
+    educatorSubmitTitle: 'শিক্ষাগত ৱেবলৈ এটা ছাইট পৰামৰ্শ দিয়ক',
+    educatorSubmitSub: 'শিক্ষক হিচাপে আপুনি প্ৰত্যক্ষভাৱে এটা ডোমেইন যোগ কৰিব পাৰে। আমি প্ৰথমে কিড-ছেফ আৰু robots.txt পৰীক্ষা কৰোঁ।',
+    educatorDomain: 'ডোমেইন',
+    educatorDomainPh: 'উদাহৰণ: example.org',
+    educatorNote: 'মন্তব্য (ঐচ্ছিক)',
+    educatorNotePh: 'এই ছাইট ছাত্ৰ-ছাত্ৰীৰ বাবে কিয় উপযোগী?',
+    educatorSubmitBtn: 'পৰীক্ষাৰ বাবে পঠাওক',
+    educatorSubmitting: 'ছাইট পৰীক্ষা চলিছে…',
+    educatorAutoApproved: 'অনুমোদিত! এতিয়া ছাত্ৰ-ছাত্ৰীয়ে এই ছাইট খোলিব পাৰিব।',
+    educatorAlreadyAllowed: 'এই ছাইট ইতিমধ্যে অনুমোদিত তালিকাত আছে।',
+    educatorRejected: 'ছাইটটো স্বয়ংক্ৰিয়ভাৱে অনুমোদিত নহল।',
+    educatorReason: 'কাৰণ',
+    educatorOpenNow: 'ব্ৰাউজাৰত খোলক',
+    educatorClose: 'বন্ধ',
   },
 };
 
@@ -757,6 +790,222 @@ function BookmarksPane({ bookmarks, history, onOpen, onRemoveBookmark, onClearHi
   );
 }
 
+// ── EducatorSubmitPanel --------------------------------------------------
+// Educators get a self-serve panel to add new domains to the curated
+// allowlist. Backed by POST /api/edu/educator/submit-site, which runs a
+// kid-safe + robots.txt probe and auto-approves on success. Surfaces
+// the probe outcome so the educator knows whether the site is live for
+// students or got rejected (and why).
+function EducatorSubmitPanel({ open, onClose, lang, onOpenDomain }) {
+  const t = T[lang];
+  const [domain, setDomain] = useState('');
+  const [note, setNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState(null); // {ok, status, domain, detail, error, probe}
+
+  // Reset form on open.
+  useEffect(() => {
+    if (open) {
+      setDomain('');
+      setNote('');
+      setResult(null);
+      setSubmitting(false);
+    }
+  }, [open]);
+
+  const cleanDomain = (raw) => {
+    let s = (raw || '').trim().toLowerCase();
+    s = s.replace(/^https?:\/\//, '').replace(/^www\./, '');
+    s = s.split('/')[0];
+    return s;
+  };
+
+  const submit = async (e) => {
+    e?.preventDefault?.();
+    const d = cleanDomain(domain);
+    if (!d || !d.includes('.')) {
+      toast.error('Please enter a valid domain (e.g. example.org)');
+      return;
+    }
+    setSubmitting(true);
+    setResult(null);
+    try {
+      const res = await eduEducatorSubmitSite(d, note);
+      setResult({ ...(res?.data || {}), httpOk: true });
+      const status = res?.data?.status;
+      if (status === 'auto_approved') toast.success(t.educatorAutoApproved);
+      else if (status === 'already_allowed') toast.success(t.educatorAlreadyAllowed);
+    } catch (err) {
+      const data = err?.response?.data || {};
+      setResult({
+        ...data,
+        httpOk: false,
+        httpStatus: err?.response?.status,
+        detail: data.detail || err.message || 'Submission failed',
+      });
+      if (err?.response?.status === 429) {
+        toast.error(data.detail || 'Rate limit reached. Try again later.');
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Friendly mapping for common probe failure reasons.
+  const friendlyReason = (code) => {
+    if (!code) return null;
+    const map = {
+      unsafe_content: 'The page contained unsafe or non-kid-safe content.',
+      robots_disallow: 'The site\u2019s robots.txt disallows our reader.',
+      probe_failed: 'Could not probe this site (network or server error).',
+      blocked_admin: 'An admin has blocked this domain.',
+      blocked_operator: 'This domain is blocked by site policy.',
+      http_error: 'The site returned an HTTP error.',
+      not_html: 'The site did not return readable HTML.',
+      too_short: 'The page didn\u2019t have enough readable text.',
+      ssrf_blocked: 'The URL is not reachable from the public internet.',
+    };
+    return map[code] || code;
+  };
+
+  const renderResult = () => {
+    if (!result) return null;
+    const status = result.status;
+    const reasonCode = result.error || result?.probe?.reason;
+    if (status === 'auto_approved' || status === 'already_allowed') {
+      return (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-800 dark:bg-emerald-900/30">
+          <div className="flex items-start gap-2">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            <div className="text-sm text-emerald-800 dark:text-emerald-200">
+              <p className="font-medium">
+                {status === 'auto_approved' ? t.educatorAutoApproved : t.educatorAlreadyAllowed}
+              </p>
+              {result.probe && (
+                <ul className="mt-1 space-y-0.5 text-xs text-emerald-700 dark:text-emerald-300">
+                  {typeof result.probe.kid_safe_density === 'number' && (
+                    <li>kid-safe density: {Math.round(result.probe.kid_safe_density * 100)}%</li>
+                  )}
+                  {typeof result.probe.robots_ok === 'boolean' && (
+                    <li>robots.txt: {result.probe.robots_ok ? 'allowed' : 'disallowed'}</li>
+                  )}
+                  {typeof result.probe.http_status === 'number' && (
+                    <li>HTTP: {result.probe.http_status}</li>
+                  )}
+                </ul>
+              )}
+              {result.domain && (
+                <button
+                  type="button"
+                  onClick={() => { onOpenDomain?.(result.domain); onClose?.(); }}
+                  className="mt-2 inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700"
+                >
+                  <ExternalLink className="h-3 w-3" /> {t.educatorOpenNow}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-900/30">
+        <div className="flex items-start gap-2">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <div className="text-sm text-amber-800 dark:text-amber-200">
+            <p className="font-medium">{t.educatorRejected}</p>
+            {result.detail && (
+              <p className="mt-1 text-xs">{result.detail}</p>
+            )}
+            {reasonCode && (
+              <p className="mt-1 text-xs">
+                <span className="font-semibold">{t.educatorReason}:</span>{' '}
+                <span className="font-mono">{reasonCode}</span>
+                {friendlyReason(reasonCode) && (
+                  <span className="ml-1">— {friendlyReason(reasonCode)}</span>
+                )}
+              </p>
+            )}
+            {result.probe && (
+              <ul className="mt-1 space-y-0.5 text-xs">
+                {typeof result.probe.kid_safe_density === 'number' && (
+                  <li>kid-safe density: {Math.round(result.probe.kid_safe_density * 100)}%</li>
+                )}
+                {typeof result.probe.robots_ok === 'boolean' && (
+                  <li>robots.txt: {result.probe.robots_ok ? 'allowed' : 'disallowed'}</li>
+                )}
+                {typeof result.probe.http_status === 'number' && (
+                  <li>HTTP: {result.probe.http_status}</li>
+                )}
+              </ul>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <ModalOverlay
+      open={open}
+      onClose={onClose}
+      title={t.educatorSubmitTitle}
+      description={t.educatorSubmitSub}
+      maxWidth="max-w-md"
+    >
+      <form onSubmit={submit} className="space-y-3">
+        <div>
+          <label className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
+            {t.educatorDomain}
+          </label>
+          <input
+            type="text"
+            value={domain}
+            onChange={(e) => setDomain(e.target.value)}
+            placeholder={t.educatorDomainPh}
+            disabled={submitting}
+            autoFocus
+            className="w-full rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 disabled:opacity-60 dark:border-slate-600 dark:bg-slate-900"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
+            {t.educatorNote}
+          </label>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value.slice(0, 280))}
+            placeholder={t.educatorNotePh}
+            rows={2}
+            disabled={submitting}
+            className="w-full resize-none rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 disabled:opacity-60 dark:border-slate-600 dark:bg-slate-900"
+          />
+          <p className="mt-1 text-right text-[11px] text-slate-400">{note.length}/280</p>
+        </div>
+        {renderResult()}
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            className="rounded-md px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 disabled:opacity-60 dark:text-slate-300 dark:hover:bg-slate-800"
+          >
+            {t.educatorClose}
+          </button>
+          <button
+            type="submit"
+            disabled={submitting || !domain.trim()}
+            className="inline-flex items-center gap-1.5 rounded-md bg-violet-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-60"
+          >
+            {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {submitting ? t.educatorSubmitting : t.educatorSubmitBtn}
+          </button>
+        </div>
+      </form>
+    </ModalOverlay>
+  );
+}
+
 // ── BrowserPage ----------------------------------------------------------
 export default function BrowserPage() {
   const navigate = useNavigate();
@@ -772,6 +1021,10 @@ export default function BrowserPage() {
   const [allowDomains, setAllowDomains] = useState([]);
   const [panelOpen, setPanelOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [educatorOpen, setEducatorOpen] = useState(false);
+  // Educator/admin can self-serve add new domains via a dedicated panel.
+  // Falls back to the shared 'request a site' flow for everyone else.
+  const isEducator = !!(user && (user.role === 'educator' || user.role === 'admin' || user.is_admin));
   const [hydrated, setHydrated] = useState(false);
   const [addressInput, setAddressInput] = useState('');
   // Citations + flash request shared between the side panel and the
@@ -1167,6 +1420,17 @@ export default function BrowserPage() {
             <Star className={`h-4 w-4 ${isBookmarked ? 'fill-current' : ''}`} />
           </button>
 
+          {isEducator && (
+            <button onClick={() => setEducatorOpen(true)}
+              title={t.educatorSubmit}
+              aria-label={t.educatorSubmit}
+              className="inline-flex items-center gap-1 rounded p-1.5 text-violet-600 hover:bg-violet-50 dark:text-violet-300 dark:hover:bg-violet-900/30"
+            >
+              <GraduationCap className="h-4 w-4" />
+              <span className="hidden text-xs font-medium sm:inline">{t.educatorSubmit}</span>
+            </button>
+          )}
+
           <button onClick={() => setPanelOpen((v) => !v)}
             className="rounded p-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
             aria-label={panelOpen ? t.closePanel : t.openPanel}>
@@ -1269,6 +1533,22 @@ export default function BrowserPage() {
         </div>
       </div>
       <HighlightSavePopover sourceUrl={activeTab?.url || ''} sourceTitle={activeTab?.title || ''} />
+      {isEducator && (
+        <EducatorSubmitPanel
+          open={educatorOpen}
+          onClose={() => setEducatorOpen(false)}
+          lang={lang}
+          onOpenDomain={(d) => {
+            const url = `https://${d}`;
+            if (activeTab && !activeTab.url) {
+              loadUrlIntoTab(activeTab.id, url);
+            } else {
+              const id = openNewTab(url);
+              loadUrlIntoTab(id, url);
+            }
+          }}
+        />
+      )}
     </AppLayout>
   );
 }

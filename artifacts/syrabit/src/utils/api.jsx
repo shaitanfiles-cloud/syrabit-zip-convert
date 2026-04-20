@@ -106,6 +106,11 @@ export const eduRequestSite = (domain, reason = '') =>
     headers: anonHeaders(), withCredentials: true,
   });
 
+export const eduEducatorSubmitSite = (domain, note = '') =>
+  axios.post(`${API_BASE}/edu/educator/submit-site`, { domain, note }, {
+    headers: anonHeaders(), withCredentials: true,
+  });
+
 export const eduLoadState = () =>
   axios.get(`${API_BASE}/edu/state`, { headers: anonHeaders(), withCredentials: true });
 
