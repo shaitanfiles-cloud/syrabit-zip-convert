@@ -1759,8 +1759,6 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
           </SectionErrorBoundary>
         </div>
 
-        {/* end of detection-trends grid */}
-
         {blockedIps.length > 0 && (
           <SectionErrorBoundary name="Blocked IPs">
           <GlassCard>

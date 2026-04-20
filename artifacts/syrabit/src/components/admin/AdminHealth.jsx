@@ -1359,7 +1359,9 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                 currently persisted override against the source row's
                 `before` snapshot so an admin can confirm provenance
                 before re-applying an old value. */}
-            {asmRevertPreview && (() => {
+            {asmRevertPreview && (
+              <SectionErrorBoundary name="ASM Revert Preview">
+                {(() => {
               const row = asmRevertPreview;
               const current = asmCfg?.persisted || null;
               const target = row.before || null;
@@ -1459,12 +1461,15 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                   </div>
                 </div>
               );
-            })()}
+                })()}
+              </SectionErrorBoundary>
+            )}
           </div>
           </SectionErrorBoundary>
         )}
 
-        {healthTab === 'infra' && (<><SectionErrorBoundary name="Infrastructure">
+        {healthTab === 'infra' && (<>
+        <SectionErrorBoundary name="System Status Banner">
         <div className={`rounded-2xl p-4 flex items-center gap-3 ${
           loading ? 'bg-gray-50 border border-gray-200' : hasError ? 'bg-red-50 border border-red-200' : 'bg-emerald-50 border border-emerald-200'
         }`}>
@@ -1487,20 +1492,25 @@ export default function AdminHealth({ adminToken, onNavigate }) {
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
+        </SectionErrorBoundary>
 
+        <SectionErrorBoundary name="Live Traffic Stats">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <PeakBadge label="Active Now (5m)" value={current.active_5m ?? 0} color="emerald" />
-          <PeakBadge label="Peak Users (5m)" value={peaks.active_users_5m ?? 0} color="violet" />
-          <PeakBadge label="Current RPS" value={current.rps ?? 0} color="blue" />
-          <PeakBadge label="Peak RPS" value={peaks.rps ?? 0} color="amber" />
+          <PeakBadge label="Active Now (5m)" value={current?.active_5m ?? 0} color="emerald" />
+          <PeakBadge label="Peak Users (5m)" value={peaks?.active_users_5m ?? 0} color="violet" />
+          <PeakBadge label="Current RPS" value={current?.rps ?? 0} color="blue" />
+          <PeakBadge label="Peak RPS" value={peaks?.rps ?? 0} color="amber" />
         </div>
+        </SectionErrorBoundary>
 
+        <SectionErrorBoundary name="Activity Counters">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <PeakBadge label="Active (15m)" value={current.active_15m ?? 0} color="emerald" />
-          <PeakBadge label="Active (60m)" value={current.active_60m ?? 0} color="emerald" />
-          <PeakBadge label="Total Requests" value={current.requests ?? 0} color="blue" />
-          <PeakBadge label="AI Chats" value={current.chats ?? 0} color="violet" />
+          <PeakBadge label="Active (15m)" value={current?.active_15m ?? 0} color="emerald" />
+          <PeakBadge label="Active (60m)" value={current?.active_60m ?? 0} color="emerald" />
+          <PeakBadge label="Total Requests" value={current?.requests ?? 0} color="blue" />
+          <PeakBadge label="AI Chats" value={current?.chats ?? 0} color="violet" />
         </div>
+        </SectionErrorBoundary>
 
         <SectionErrorBoundary name="Active Users Over Time">
         <div className="rounded-xl p-5 bg-white border border-gray-200 shadow-sm">
@@ -1609,6 +1619,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
         </div>
         </SectionErrorBoundary>
 
+        <SectionErrorBoundary name="Dependency Status">
         <div className="space-y-3">
           {(() => {
             const KNOWN_SERVICES = [
@@ -1656,8 +1667,9 @@ export default function AdminHealth({ adminToken, onNavigate }) {
             });
           })()}
         </div>
+        </SectionErrorBoundary>
 
-        <SectionErrorBoundary name="Health Card 1">
+        <SectionErrorBoundary name="Health Endpoint URL">
         <div className="rounded-xl p-4 bg-white border border-gray-200 shadow-sm">
           <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Health Endpoint URL</p>
           <div className="flex items-center gap-2">
@@ -1669,7 +1681,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
         </div>
         </SectionErrorBoundary>
 
-        <SectionErrorBoundary name="Health Card 2">
+        <SectionErrorBoundary name="UptimeRobot Setup">
         <div className="rounded-xl p-4 bg-white border border-gray-200 shadow-sm">
           <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">UptimeRobot Setup</p>
           <ol className="space-y-2">
