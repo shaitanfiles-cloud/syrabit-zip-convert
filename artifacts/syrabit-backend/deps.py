@@ -293,12 +293,14 @@ _sarvam_effective_base = _sarvam_gw_base or SARVAM_BASE_URL
 # credentials"). The gateway simply forwards whatever auth we send, so we
 # must send the real key. Therefore SARVAM_API_KEY and SARVAM_TRANSLATE_KEY
 # MUST remain in the environment.
+_sarvam_sub_key = SARVAM_API_KEY
+_sarvam_translate_sub_key = SARVAM_TRANSLATE_KEY
 _sarvam_headers = {
-    'api-subscription-key': SARVAM_API_KEY,
+    'api-subscription-key': _sarvam_sub_key,
     'Content-Type': 'application/json',
 }
 _sarvam_translate_headers = {
-    'api-subscription-key': SARVAM_TRANSLATE_KEY,
+    'api-subscription-key': _sarvam_translate_sub_key,
     'Content-Type': 'application/json',
 }
 # Still attach the Authenticated-Gateway bearer when routing via CF so the
