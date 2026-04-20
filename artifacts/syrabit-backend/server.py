@@ -116,7 +116,7 @@ from deps import (
 )
 from auth_deps import _rate_limiter_cleanup
 from seed import ensure_seeded
-from db_ops import _supa, supa_insert_activity_log
+from db_ops import supa_insert_activity_log
 from metrics import _bg_health_loop, _alerting_loop
 from routes.bot_discovery import _endpoint_health_alert_loop, _seo_health_alert_loop, _seo_weekly_digest_loop, _cf_bot_report_loop
 from routes.bot_traffic_report import _bot_traffic_report_loop
@@ -125,95 +125,6 @@ from prompts import build_system_prompt, _classify_question
 from syllabus_embedder import SyllabusEmbedder
 
 _syllabus_embedder: Optional[SyllabusEmbedder] = None
-
-
-async def _migrate_supabase_users_to_pg():
-    """One-time background task: copy all Supabase users into PG (upsert, safe to re-run)."""
-    if not deps.pg_pool or not supa:
-        return
-    await asyncio.sleep(2)
-    t0 = asyncio.get_event_loop().time()
-    try:
-        r = await _supa(lambda: supa.table("users").select("*").order("created_at", desc=False).limit(2000).execute())
-        users = r.data or []
-        if not users:
-            logger.info("[migration] Supabase→PG: no users to migrate")
-            return
-        _insert_sql = """INSERT INTO users (id, name, email, password_hash, plan, credits_used,
-                   credits_limit, document_access, onboarding_done, is_admin, status,
-                   bio, phone, avatar_url, saved_subjects, has_free_credits_issued,
-                   board_id, board_name, class_id, class_name, stream_id, stream_name,
-                   created_at)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,$17,$18,$19,$20,$21,$22,$23)
-                   ON CONFLICT (id) DO NOTHING"""
-        imported = 0
-        async with deps.pg_pool.acquire() as conn:
-            for u in users:
-                try:
-                    await conn.execute(
-                        _insert_sql,
-                        u.get("id"), u.get("name",""), u.get("email","").lower(), u.get("password_hash",""),
-                        u.get("plan","free"), u.get("credits_used",0) or 0, u.get("credits_limit",30) or 30,
-                        u.get("document_access","zero"), bool(u.get("onboarding_done",False)),
-                        bool(u.get("is_admin",False)), u.get("status","active") or "active",
-                        u.get("bio","") or "", u.get("phone","") or "", u.get("avatar_url","") or "",
-                        json.dumps(u.get("saved_subjects") or []), bool(u.get("has_free_credits_issued",True)),
-                        u.get("board_id"), u.get("board_name"), u.get("class_id"),
-                        u.get("class_name"), u.get("stream_id"), u.get("stream_name"),
-                        u.get("created_at"),
-                    )
-                    imported += 1
-                except Exception:
-                    pass
-        elapsed = int((asyncio.get_event_loop().time() - t0) * 1000)
-        logger.info(f"[migration] Supabase→PG: processed {len(users)} users, inserted {imported} new rows in {elapsed}ms")
-    except Exception as e:
-        logger.warning(f"[migration] Supabase→PG migration failed: {e}")
-
-
-async def _heal_credits_limit():
-    if not deps.pg_pool:
-        return
-    await asyncio.sleep(8)
-    try:
-        async with deps.pg_pool.acquire() as conn:
-            r = await conn.execute(
-                """UPDATE users
-                      SET credits_limit = CASE plan
-                            WHEN 'pro'     THEN GREATEST(credits_limit, 4000)
-                            WHEN 'starter' THEN GREATEST(credits_limit, 300)
-                            ELSE credits_limit
-                          END
-                    WHERE (plan = 'pro'     AND credits_limit < 4000)
-                       OR (plan = 'starter' AND credits_limit < 300)"""
-            )
-        logger.info(f"[migration] credits_limit heal: {r}")
-    except Exception as e:
-        logger.warning(f"[migration] credits_limit heal failed: {e}")
-
-
-async def _migrate_consent_columns():
-    if not deps.pg_pool:
-        return
-    try:
-        async with deps.pg_pool.acquire() as conn:
-            await conn.execute(
-                """DO $$
-                BEGIN
-                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='consent_dpdp') THEN
-                        ALTER TABLE users ADD COLUMN consent_dpdp BOOLEAN DEFAULT FALSE;
-                    END IF;
-                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='consent_dpdp_version') THEN
-                        ALTER TABLE users ADD COLUMN consent_dpdp_version TEXT;
-                    END IF;
-                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='consent_dpdp_at') THEN
-                        ALTER TABLE users ADD COLUMN consent_dpdp_at TEXT;
-                    END IF;
-                END $$;"""
-            )
-        logger.info("[migration] consent_dpdp columns ensured")
-    except Exception as e:
-        logger.warning(f"[migration] consent columns migration failed: {e}")
 
 
 async def _load_ga4_from_db():
@@ -327,61 +238,6 @@ async def lifespan(app):
             await db.server_hits.create_index([("is_bot", 1), ("ip_hash_stable", 1)])
             await db.server_hits.create_index([("is_bot", 1), ("bot_name", 1)])
             await db.server_hits.create_index([("timestamp", -1)])
-
-            try:
-                from middleware import _SERVER_BOT_RE
-                from pymongo import UpdateOne
-                empty_bot_cursor = db.server_hits.find(
-                    {"is_bot": True, "$or": [{"bot_name": ""}, {"bot_name": {"$exists": False}}]},
-                    {"_id": 1, "user_agent": 1},
-                )
-                _batch = []
-                _total_backfilled = 0
-                _BATCH_SIZE = 500
-                async for doc in empty_bot_cursor:
-                    ua = doc.get("user_agent", "")
-                    m = _SERVER_BOT_RE.search(ua) if ua else None
-                    name = m.group(0).lower() if m else "unknown"
-                    _batch.append(UpdateOne({"_id": doc["_id"]}, {"$set": {"bot_name": name}}))
-                    if len(_batch) >= _BATCH_SIZE:
-                        await db.server_hits.bulk_write(_batch)
-                        _total_backfilled += len(_batch)
-                        _batch = []
-                if _batch:
-                    await db.server_hits.bulk_write(_batch)
-                    _total_backfilled += len(_batch)
-                if _total_backfilled:
-                    logger.info(f"Backfilled bot_name for {_total_backfilled} server_hits records")
-            except Exception as e:
-                logger.warning(f"bot_name backfill skipped: {e}")
-
-            try:
-                from utils import slugify_title as _slugify_title
-                from pymongo import UpdateOne as _SlugUpdateOne
-                _slug_cursor = db.chapters.find(
-                    {"$or": [{"slug": ""}, {"slug": {"$exists": False}}, {"slug": None}]},
-                    {"_id": 1, "title": 1},
-                )
-                _slug_batch = []
-                _slug_total = 0
-                async for doc in _slug_cursor:
-                    title = doc.get("title", "")
-                    if not title:
-                        continue
-                    generated = _slugify_title(title)
-                    if generated:
-                        _slug_batch.append(_SlugUpdateOne({"_id": doc["_id"]}, {"$set": {"slug": generated}}))
-                    if len(_slug_batch) >= 500:
-                        await db.chapters.bulk_write(_slug_batch)
-                        _slug_total += len(_slug_batch)
-                        _slug_batch = []
-                if _slug_batch:
-                    await db.chapters.bulk_write(_slug_batch)
-                    _slug_total += len(_slug_batch)
-                if _slug_total:
-                    logger.info(f"Backfilled slug for {_slug_total} chapters")
-            except Exception as e:
-                logger.warning(f"chapter slug backfill skipped: {e}")
 
             await db.users.create_index("email", unique=True, sparse=True)
             await db.users.create_index("id", unique=True)
@@ -581,13 +437,6 @@ async def lifespan(app):
     except Exception as _eh_err:
         logger.warning("IndexNow endpoint health load skipped: %s", _eh_err)
     _deps_mod._rate_cleanup_task = asyncio.create_task(_rate_limiter_cleanup())
-    if _is_leader:
-        asyncio.create_task(_migrate_supabase_users_to_pg())
-        asyncio.create_task(_heal_credits_limit())
-        try:
-            await asyncio.wait_for(_migrate_consent_columns(), timeout=10)
-        except Exception as _mc_err:
-            logger.warning(f"consent columns migration deferred: {_mc_err}")
     asyncio.create_task(_bg_health_loop())
     asyncio.create_task(_prewarm_library_cache())
     global _syllabus_embedder
