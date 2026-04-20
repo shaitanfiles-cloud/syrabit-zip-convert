@@ -650,7 +650,20 @@ export default defineConfig(({ mode }) => ({
             has('property-information') || has('space-separated-tokens') ||
             has('comma-separated-tokens') || has('html-void-elements') ||
             has('ccount') || has('escape-string-regexp') || has('longest-streak') ||
-            has('markdown-table') || has('html-url-attributes')
+            has('markdown-table') || has('html-url-attributes') ||
+            // hastscript declares `createH(html, ...)` at module scope where
+            // `html` is imported from a sibling sub-module of the same package.
+            // When Vite splits hastscript into its own auto-chunk while
+            // hast-util-* / property-information land in 'markdown', the two
+            // chunks form a cycle (markdown → hastscript → markdown), and the
+            // `import { h as html }` binding is read before the markdown chunk
+            // finishes evaluating its `export const h` line — throwing
+            // "Cannot access 'html' before initialization" on hydration and
+            // surfacing as React #418 in production. Keeping hastscript and
+            // its tightly-coupled siblings in the same chunk eliminates the
+            // cross-chunk cycle.
+            has('hastscript') || has('web-namespaces') ||
+            has('stringify-entities') || has('zwitch')
           ) return 'markdown';
           if (has('lucide-react')) return 'icons';
           if (has('react-syntax-highlighter') || has('refractor') || has('prismjs') || has('highlight.js')) return 'syntax';
