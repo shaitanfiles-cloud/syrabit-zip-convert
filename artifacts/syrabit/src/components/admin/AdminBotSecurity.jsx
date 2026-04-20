@@ -1561,8 +1561,8 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
 
         <SectionErrorBoundary name="TTL Monitor"><TtlMonitorPanel adminToken={adminToken} /></SectionErrorBoundary>
 
+        <SectionErrorBoundary name="Recent Alerts">
         <GlassCard>
-          <SectionErrorBoundary name="Recent Alerts">
           <div className="p-5 pb-2 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
               <TrendingUp size={14} className="text-violet-500" />
@@ -1609,7 +1609,7 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
         </GlassCard>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <SectionErrorBoundary name="Detection Trends">
+          <SectionErrorBoundary name="Top Claimed Bots">
           <GlassCard>
             <div className="p-5 pb-3">
               <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
@@ -1658,7 +1658,9 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
               <div className="px-5 pb-5 text-sm text-gray-400">No spoofed bots detected</div>
             )}
           </GlassCard>
+          </SectionErrorBoundary>
 
+          <SectionErrorBoundary name="Repeat Offender IPs">
           <GlassCard>
             <div className="p-5 pb-3">
               <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
@@ -1757,6 +1759,8 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
           </SectionErrorBoundary>
         </div>
 
+        {/* end of detection-trends grid */}
+
         {blockedIps.length > 0 && (
           <SectionErrorBoundary name="Blocked IPs">
           <GlassCard>
@@ -1830,8 +1834,8 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
           </SectionErrorBoundary>
         )}
 
+        <SectionErrorBoundary name="Bot User Agents">
         <GlassCard>
-          <SectionErrorBoundary name="Bot User Agents">
           <div className="p-5 pb-3 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
               <Clock size={14} className="text-violet-500" />

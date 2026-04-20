@@ -544,16 +544,19 @@ export default function AdminHealth({ adminToken, onNavigate }) {
               <div className="flex justify-center p-10"><RefreshCw size={20} className="animate-spin text-gray-300" /></div>
             ) : llmData ? (
               <>
+                <SectionErrorBoundary name="LLM Cost Stats">
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   {[
-                    { label: `Total Cost (${llmDays}d)`, value: `$${llmData.total_cost_usd || '0.000000'}`, color: 'amber' },
-                    { label: 'Total Cost (INR)', value: `₹${llmData.total_cost_inr || '0.0000'}`, color: 'emerald' },
-                    { label: 'Total Tokens', value: (llmData.total_tokens || 0).toLocaleString(), color: 'violet' },
-                    { label: 'Cost/Page', value: `$${llmData.cost_per_published_page_usd || '0.000000'}`, color: 'blue' },
+                    { label: `Total Cost (${llmDays}d)`, value: `$${llmData?.total_cost_usd || '0.000000'}`, color: 'amber' },
+                    { label: 'Total Cost (INR)', value: `₹${llmData?.total_cost_inr || '0.0000'}`, color: 'emerald' },
+                    { label: 'Total Tokens', value: Number(llmData?.total_tokens || 0).toLocaleString(), color: 'violet' },
+                    { label: 'Cost/Page', value: `$${llmData?.cost_per_published_page_usd || '0.000000'}`, color: 'blue' },
                   ].map(s => <PeakBadge key={s.label} label={s.label} value={s.value} color={s.color} />)}
                 </div>
+                </SectionErrorBoundary>
 
-                {(llmData.by_model?.length > 0) && (
+                {(llmData?.by_model?.length > 0) && (
+                  <SectionErrorBoundary name="Cost by Model">
                   <div className="rounded-xl p-5 bg-white border border-gray-200 shadow-sm">
                     <h3 className="text-sm font-semibold text-gray-900 mb-4">Cost by Model</h3>
                     <div className="space-y-3">
@@ -575,7 +578,8 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                   </div>
                 )}
 
-                {(llmData.daily?.length > 0) && (
+                {(llmData?.daily?.length > 0) && (
+                  <SectionErrorBoundary name="Daily LLM Spend">
                   <div className="rounded-xl p-5 bg-white border border-gray-200 shadow-sm">
                     <h3 className="text-sm font-semibold text-gray-900 mb-4">Daily LLM Spend</h3>
                     <ResponsiveContainer width="100%" height={160}>
@@ -588,9 +592,10 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
+                  </SectionErrorBoundary>
                 )}
 
-                {llmData.total_calls === 0 && (
+                {llmData?.total_calls === 0 && (
                   <div className="text-center py-12 text-gray-400">
                     <DollarSign size={32} className="mx-auto mb-3 opacity-30" />
                     <p className="text-sm">No LLM calls recorded yet — costs will appear here as content is generated</p>
@@ -666,6 +671,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           <div className="space-y-4" data-testid="asm-purity-tab">
             {/* Task #423 — sanitiser-run stats so admins can see whether the
                 override they just set is actually changing live behaviour. */}
+            <SectionErrorBoundary name="ASM Cleanup Activity">
             <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm" data-testid="asm-stats-card">
               <div className="flex items-start justify-between gap-3 mb-4">
                 <div>
@@ -778,10 +784,12 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                 <p className="text-xs text-gray-400 py-6 text-center">Stats unavailable.</p>
               )}
             </div>
+            </SectionErrorBoundary>
 
             {/* Task #428 — drill into individual sanitiser runs so admins
                 can see the exact replies that got translated/stripped/
                 regenerated and tune the threshold from real evidence. */}
+            <SectionErrorBoundary name="ASM Recent Runs">
             <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm" data-testid="asm-runs-card">
               <div className="flex items-start justify-between gap-3 mb-4">
                 <div>
@@ -946,7 +954,9 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                 </p>
               )}
             </div>
+            </SectionErrorBoundary>
 
+            <SectionErrorBoundary name="ASM Configuration">
             <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
               <div className="flex items-start justify-between gap-3 mb-4">
                 <div>
@@ -1040,7 +1050,9 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                 </>
               ) : null}
             </div>
+            </SectionErrorBoundary>
 
+            <SectionErrorBoundary name="ASM Trial Sentence">
             <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
               <h3 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-2">
                 <ShieldCheck size={16} className="text-emerald-500" />
@@ -1092,10 +1104,12 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                 </div>
               )}
             </div>
+            </SectionErrorBoundary>
 
             {/* Task #424 — append-only audit trail of override edits.
                 Read-only here; writes happen via PATCH/DELETE handlers.
                 Task #430 — filter by admin email + date range, paginate. */}
+            <SectionErrorBoundary name="ASM Audit Log">
             <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm" data-testid="asm-audit-card">
               <div className="flex items-start justify-between gap-3 mb-4">
                 <div>
@@ -1338,6 +1352,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                 </div>
               )}
             </div>
+            </SectionErrorBoundary>
 
             {/* Task #441 — side-by-side revert preview. Renders the
                 currently persisted override against the source row's
@@ -1486,6 +1501,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           <PeakBadge label="AI Chats" value={current.chats ?? 0} color="violet" />
         </div>
 
+        <SectionErrorBoundary name="Active Users Over Time">
         <div className="rounded-xl p-5 bg-white border border-gray-200 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
@@ -1556,7 +1572,9 @@ export default function AdminHealth({ adminToken, onNavigate }) {
             </ResponsiveContainer>
           )}
         </div>
+        </SectionErrorBoundary>
 
+        <SectionErrorBoundary name="Requests Per Second">
         <div className="rounded-xl p-5 bg-white border border-gray-200 shadow-sm">
           <div className="flex items-center gap-2 mb-4">
             <TrendingUp size={16} className="text-blue-500" />
@@ -1588,6 +1606,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
             </ResponsiveContainer>
           )}
         </div>
+        </SectionErrorBoundary>
 
         <div className="space-y-3">
           {(() => {
@@ -1637,6 +1656,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           })()}
         </div>
 
+        <SectionErrorBoundary name="Health Card 1">
         <div className="rounded-xl p-4 bg-white border border-gray-200 shadow-sm">
           <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Health Endpoint URL</p>
           <div className="flex items-center gap-2">
@@ -1646,7 +1666,9 @@ export default function AdminHealth({ adminToken, onNavigate }) {
             </button>
           </div>
         </div>
+        </SectionErrorBoundary>
 
+        <SectionErrorBoundary name="Health Card 2">
         <div className="rounded-xl p-4 bg-white border border-gray-200 shadow-sm">
           <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">UptimeRobot Setup</p>
           <ol className="space-y-2">
@@ -1657,6 +1679,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
             ))}
           </ol>
         </div>
+        </SectionErrorBoundary>
         </SectionErrorBoundary></>)}
         <AdminQuickLinks links={['apiconfig','settings','dashboard','ratelimits']} onNavigate={onNavigate} />
       </div>
