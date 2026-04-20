@@ -115,14 +115,35 @@ export const RouteErrorBoundary = ({ children }) => (
   <ErrorBoundary>{children}</ErrorBoundary>
 );
 
+// Shallow-equality check for resetKeys arrays. If the list of values
+// passed by the parent changes between renders, we drop any tripped
+// fallback so a successful re-fetch (or a sub-page switch) clears the
+// boundary without forcing the user to click "Try again" on every card.
+function resetKeysChanged(prev, next) {
+  if (prev === next) return false;
+  if (!Array.isArray(prev) || !Array.isArray(next)) return true;
+  if (prev.length !== next.length) return true;
+  for (let i = 0; i < prev.length; i += 1) {
+    if (!Object.is(prev[i], next[i])) return true;
+  }
+  return false;
+}
+
 export class SectionErrorBoundary extends Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false, error: null, prevResetKeys: props.resetKeys };
   }
 
   static getDerivedStateFromError(error) {
     return { hasError: true, error };
+  }
+
+  static getDerivedStateFromProps(props, state) {
+    if (resetKeysChanged(state.prevResetKeys, props.resetKeys)) {
+      return { hasError: false, error: null, prevResetKeys: props.resetKeys };
+    }
+    return null;
   }
 
   componentDidCatch(error, errorInfo) {

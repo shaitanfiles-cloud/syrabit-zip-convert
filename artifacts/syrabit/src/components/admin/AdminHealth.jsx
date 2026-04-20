@@ -503,7 +503,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   const current = metricsData?.current || {};
 
   return (
-    <SectionErrorBoundary name="Health">
+    <SectionErrorBoundary name="Health" resetKeys={[healthTab]}>
       <div className="space-y-5 max-w-4xl">
         <div className="flex gap-1 p-1 rounded-xl w-fit bg-gray-100">
           {[
@@ -524,7 +524,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
         </div>
 
         {healthTab === 'llm' && (
-          <SectionErrorBoundary name="LLM Cost Tracker">
+          <SectionErrorBoundary name="LLM Cost Tracker" resetKeys={[healthTab]}>
           <div className="space-y-4">
             <div className="flex items-center gap-2 mb-2">
               {[7, 14, 30].map(d => (
@@ -609,7 +609,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
         )}
 
         {healthTab === 'prerender' && (
-          <SectionErrorBoundary name="Prerender Refresh">
+          <SectionErrorBoundary name="Prerender Refresh" resetKeys={[healthTab]}>
           <div className="space-y-4">
             <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
               <div className="flex items-start justify-between gap-3 mb-4">
@@ -668,7 +668,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
         )}
 
         {healthTab === 'asm' && (
-          <SectionErrorBoundary name="Sarvam Purity">
+          <SectionErrorBoundary name="Sarvam Purity" resetKeys={[healthTab]}>
           <div className="space-y-4" data-testid="asm-purity-tab">
             {/* Task #423 — sanitiser-run stats so admins can see whether the
                 override they just set is actually changing live behaviour. */}

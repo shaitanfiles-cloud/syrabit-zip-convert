@@ -1293,6 +1293,12 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
   const [blockTrends, setBlockTrends] = useState([]);
   const [actionLoading, setActionLoading] = useState({});
   const [blockDurationMenu, setBlockDurationMenu] = useState(null);
+  // Task #573 — bumped on every successful refetch so per-card
+  // SectionErrorBoundary instances can drop any stale fallback the
+  // moment fresh data arrives. Without this, a transient API blip
+  // leaves each tripped card showing its inline "Try again" button
+  // even after subsequent refreshes return valid data.
+  const [refreshCounter, setRefreshCounter] = useState(0);
 
   const blockedSet = new Set(
     blockedIps
@@ -1314,6 +1320,7 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
       adminGetBlockTrends(adminToken, 30)
         .then(res => setBlockTrends(res.data?.series || []))
         .catch(() => setBlockTrends([]));
+      setRefreshCounter((n) => n + 1);
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to load spoofed bot data');
     } finally {
@@ -1472,7 +1479,7 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
         </div>
 
         {durationBreakdown && Object.values(durationBreakdown).some(v => v > 0) && (
-          <SectionErrorBoundary name="Block Duration Breakdown">
+          <SectionErrorBoundary name="Block Duration Breakdown" resetKeys={[refreshCounter]}>
           <GlassCard>
             <div className="p-5">
               <div className="flex items-center justify-between mb-4">
@@ -1515,7 +1522,7 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
         )}
 
         {blockTrends.length > 0 && blockTrends.some(d => d['1h'] + d['6h'] + d['24h'] + d['7d'] + d['30d'] + d.permanent > 0) && (
-          <SectionErrorBoundary name="Block Trends">
+          <SectionErrorBoundary name="Block Trends" resetKeys={[refreshCounter]}>
           <GlassCard>
             <div className="p-5 pb-2 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
@@ -1555,13 +1562,13 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
           </SectionErrorBoundary>
         )}
 
-        <SectionErrorBoundary name="Alert Thresholds"><AlertThresholdPanel adminToken={adminToken} navContext={navContext} /></SectionErrorBoundary>
+        <SectionErrorBoundary name="Alert Thresholds" resetKeys={[refreshCounter]}><AlertThresholdPanel adminToken={adminToken} navContext={navContext} /></SectionErrorBoundary>
 
-        <SectionErrorBoundary name="Alert History"><AlertHistoryPanel adminToken={adminToken} /></SectionErrorBoundary>
+        <SectionErrorBoundary name="Alert History" resetKeys={[refreshCounter]}><AlertHistoryPanel adminToken={adminToken} /></SectionErrorBoundary>
 
-        <SectionErrorBoundary name="TTL Monitor"><TtlMonitorPanel adminToken={adminToken} /></SectionErrorBoundary>
+        <SectionErrorBoundary name="TTL Monitor" resetKeys={[refreshCounter]}><TtlMonitorPanel adminToken={adminToken} /></SectionErrorBoundary>
 
-        <SectionErrorBoundary name="Recent Alerts">
+        <SectionErrorBoundary name="Recent Alerts" resetKeys={[refreshCounter]}>
         <GlassCard>
           <div className="p-5 pb-2 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
@@ -1609,7 +1616,7 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
         </SectionErrorBoundary>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <SectionErrorBoundary name="Top Claimed Bots">
+          <SectionErrorBoundary name="Top Claimed Bots" resetKeys={[refreshCounter]}>
           <GlassCard>
             <div className="p-5 pb-3">
               <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
@@ -1660,7 +1667,7 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
           </GlassCard>
           </SectionErrorBoundary>
 
-          <SectionErrorBoundary name="Repeat Offender IPs">
+          <SectionErrorBoundary name="Repeat Offender IPs" resetKeys={[refreshCounter]}>
           <GlassCard>
             <div className="p-5 pb-3">
               <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
@@ -1760,7 +1767,7 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
         </div>
 
         {blockedIps.length > 0 && (
-          <SectionErrorBoundary name="Blocked IPs">
+          <SectionErrorBoundary name="Blocked IPs" resetKeys={[refreshCounter]}>
           <GlassCard>
             <div className="p-5 pb-3">
               <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
@@ -1832,7 +1839,7 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
           </SectionErrorBoundary>
         )}
 
-        <SectionErrorBoundary name="Bot User Agents">
+        <SectionErrorBoundary name="Bot User Agents" resetKeys={[refreshCounter]}>
         <GlassCard>
           <div className="p-5 pb-3 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
@@ -1885,7 +1892,7 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
         </SectionErrorBoundary>
 
         {realtime.session_by_bot && Object.keys(realtime.session_by_bot).length > 0 && (
-          <SectionErrorBoundary name="Realtime Session Bots">
+          <SectionErrorBoundary name="Realtime Session Bots" resetKeys={[refreshCounter]}>
           <GlassCard>
             <div className="p-5 pb-3">
               <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
