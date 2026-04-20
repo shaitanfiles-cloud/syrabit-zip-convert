@@ -1416,6 +1416,155 @@ async def diff_sitemap_against_submitted(source: str = "sitemap_diff") -> dict:
 _SMOKE_ALERT_LAST_FIRED: dict = {"ts": 0.0}
 _SMOKE_ALERT_COOLDOWN_S = 6 * 3600
 
+# Task #565: separate cooldown for the consecutive-days streak alert so it
+# fires at most once per day (the per-cron `publish_indexnow_smoke_failed`
+# alert above uses a 6-hour cooldown for transient failures; the streak
+# alert is for slow regressions and should not pile on top).
+_SMOKE_STREAK_ALERT_LAST_FIRED: dict = {"ts": 0.0}
+_SMOKE_STREAK_ALERT_COOLDOWN_S = 24 * 3600
+_SMOKE_STREAK_THRESHOLD_DAYS = 2
+
+
+async def _evaluate_smoke_failure_streak(
+    threshold_days: int = _SMOKE_STREAK_THRESHOLD_DAYS,
+) -> dict | None:
+    """Task #565: detect a slow regression in the publish→IndexNow smoke
+    chain by looking back ``threshold_days`` UTC days in
+    ``indexnow_smoke_log`` and confirming that *each* of those days has
+    at least one failed run and zero successful runs.
+
+    Returns a per-day breakdown dict if the streak pattern matches (so
+    the caller can build an alert payload), otherwise ``None``. Days
+    with zero recorded runs break the streak — we only alert when the
+    smoke is actively *failing*, not when nothing ran.
+
+    The window includes the *current* UTC day so that the alert fires
+    on the second consecutive failed day (today + yesterday), and a
+    successful run later the same day immediately breaks the streak
+    on the next evaluation.
+    """
+    try:
+        from deps import db as real_db, is_mongo_available
+        if not await is_mongo_available():
+            return None
+        # Inclusive window ending on today's UTC date so a fail on
+        # day -1 + a fail on day 0 (today) trips the alert on day 0
+        # itself. A pass anywhere in the window — including a same-day
+        # recovery after a morning failure — breaks the streak.
+        today = datetime.now(timezone.utc).date()
+        days = [
+            today - timedelta(days=i)
+            for i in range(int(threshold_days))
+        ]
+        start = datetime(
+            days[-1].year, days[-1].month, days[-1].day,
+            tzinfo=timezone.utc,
+        )
+        end_day = today + timedelta(days=1)
+        end = datetime(
+            end_day.year, end_day.month, end_day.day,
+            tzinfo=timezone.utc,
+        )
+        try:
+            cursor = real_db.indexnow_smoke_log.find(
+                {"ran_at": {"$gte": start, "$lt": end}},
+                {"_id": 0, "ran_at": 1, "ok": 1, "url": 1, "error": 1},
+            )
+            rows = await cursor.to_list(1000)
+        except Exception as exc:
+            logger.debug("Streak query failed: %s", exc)
+            return None
+        per_day: dict = {
+            d.isoformat(): {"passes": 0, "failures": 0, "last_url": "", "last_error": None}
+            for d in days
+        }
+        for r in rows:
+            ran_at = r.get("ran_at")
+            if not hasattr(ran_at, "date"):
+                continue
+            key = ran_at.date().isoformat()
+            bucket = per_day.get(key)
+            if bucket is None:
+                continue
+            if r.get("ok"):
+                bucket["passes"] += 1
+            else:
+                bucket["failures"] += 1
+                if r.get("url"):
+                    bucket["last_url"] = r.get("url") or ""
+                if r.get("error"):
+                    bucket["last_error"] = r.get("error")
+        # Streak only matches if every day in the window has ≥1 failure
+        # and 0 passes.
+        for bucket in per_day.values():
+            if bucket["passes"] > 0 or bucket["failures"] == 0:
+                return None
+        return {
+            "threshold_days": int(threshold_days),
+            "window_start": days[-1].isoformat(),
+            "window_end": days[0].isoformat(),
+            "per_day": per_day,
+        }
+    except Exception as exc:
+        logger.debug("Failed to evaluate smoke streak: %s", exc)
+        return None
+
+
+async def _maybe_dispatch_smoke_streak_alert() -> bool:
+    """Task #565: run the streak evaluator and, if it matches, dispatch
+    a single consolidated alert via ``metrics._dispatch_alert`` with a
+    24-hour cooldown so we don't spam on every cron tick. Returns
+    ``True`` if an alert was dispatched, ``False`` otherwise. Safe to
+    call from any code path — all failures are swallowed and logged."""
+    try:
+        breakdown = await _evaluate_smoke_failure_streak()
+        if not breakdown:
+            return False
+        now = time.time()
+        if now - _SMOKE_STREAK_ALERT_LAST_FIRED["ts"] < _SMOKE_STREAK_ALERT_COOLDOWN_S:
+            return False
+        per_day = breakdown["per_day"]
+        # Pick the most recent failed day's URL/error for the headline.
+        last_day_key = breakdown["window_end"]
+        last_bucket = per_day.get(last_day_key, {})
+        last_url = last_bucket.get("last_url") or "n/a"
+        last_error = last_bucket.get("last_error") or "none"
+        day_lines = []
+        for day_key in sorted(per_day.keys(), reverse=True):
+            b = per_day[day_key]
+            day_lines.append(
+                f"  {day_key}: {b['failures']} fail / {b['passes']} pass"
+            )
+        body = (
+            f"Publish→IndexNow smoke has failed for {breakdown['threshold_days']} "
+            f"consecutive UTC days with no successful run in that window. "
+            f"Last URL probed: {last_url}. Last error: {last_error}.\n\n"
+            f"Day breakdown:\n" + "\n".join(day_lines) + "\n\n"
+            f"Open the admin Submit & Monitor tab "
+            f"(/admin → SEO → Submit & Monitor) to investigate."
+        )
+        try:
+            from metrics import _dispatch_alert
+            await _dispatch_alert(
+                "publish_indexnow_smoke_streak_failed",
+                f"Publish → IndexNow smoke failing for "
+                f"{breakdown['threshold_days']} days",
+                body,
+                threshold_snapshot={
+                    "metric": "publish_indexnow_smoke_streak",
+                    "breakdown": breakdown,
+                    "admin_path": "/admin#seo-submit-monitor",
+                },
+            )
+            _SMOKE_STREAK_ALERT_LAST_FIRED["ts"] = now
+            return True
+        except Exception as exc:
+            logger.debug("Failed to dispatch smoke-streak alert: %s", exc)
+            return False
+    except Exception as exc:
+        logger.debug("Smoke-streak evaluator wrapper failed: %s", exc)
+        return False
+
 
 async def _persist_smoke_run(summary: dict, source: str) -> None:
     """Task #564: append a copy of the smoke summary to
@@ -1453,6 +1602,15 @@ async def _run_daily_publish_indexnow_smoke():
         from seo_indexnow_smoke import run_publish_indexnow_smoke
         summary = await run_publish_indexnow_smoke()
         await _persist_smoke_run(summary, source="cron")
+        # Task #565: even on a successful run, evaluate the multi-day
+        # streak — a passing run today does not retroactively cancel a
+        # 2-day failure window from yesterday/the day before, but the
+        # evaluator's "0 passes" guard means a green today *will* break
+        # the streak naturally.
+        try:
+            await _maybe_dispatch_smoke_streak_alert()
+        except Exception as exc:
+            logger.debug("Smoke-streak post-cron check failed: %s", exc)
         if summary.get("ok"):
             return
         now = time.time()
