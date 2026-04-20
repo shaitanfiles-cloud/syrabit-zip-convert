@@ -1,13 +1,15 @@
 {
-  "description": "Baseline metrics for the offline grounded-recall bench. Regenerate with: python -m bench.grounded_recall --save-results --json. The pytest at tests/test_bench_grounded_recall.py gates against these numbers.",
+  "description": "Baseline metrics for the offline grounded-recall bench. Regenerate with: python -m bench.grounded_recall --save-results --json. The pytest at tests/test_bench_grounded_recall.py gates against these numbers. recall@K denominator is positive cases only (excludes adversarial negatives, which are tracked via adversarial_no_match_rate). match_rate is over all cases.",
   "retriever": "offline",
-  "total_cases": 50,
+  "total_cases": 113,
   "recorded_at": "2026-04-20T00:00:00+00:00",
   "metrics": {
-    "recall@1": 0.98,
+    "recall@1": 0.99,
     "recall@3": 1.0,
     "recall@5": 1.0,
-    "match_rate": 1.0
+    "match_rate": 1.0,
+    "adversarial_no_match_rate": 1.0
   },
-  "mean_citation_count": 1.9
+  "mean_citation_count": 1.59
 }
+

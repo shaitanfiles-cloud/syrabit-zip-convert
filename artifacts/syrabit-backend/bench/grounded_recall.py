@@ -80,7 +80,14 @@ class CaseResult:
     matched: bool
     elapsed_ms: int
 
+    is_adversarial: bool = False
+
     def recall_at(self, k: int) -> bool:
+        # Adversarial negatives are "recalled" at any K when the retriever
+        # correctly surfaced *no* matching citation — i.e. matched=True via
+        # the no-match path.
+        if self.is_adversarial:
+            return self.matched
         return self.first_match_rank is not None and self.first_match_rank <= k
 
 
@@ -214,18 +221,26 @@ async def _build_live_citations(case: BenchCase) -> list[dict]:
 # ───────────────────────── Runner ─────────────────────────
 
 def _score_case(case: BenchCase, citations: list[dict], elapsed_ms: int) -> CaseResult:
-    first_match = None
+    is_adversarial = bool(case.expected.get("none"))
+    first_match: Optional[int] = None
     for i, cit in enumerate(citations, start=1):
         if citation_matches_expected(cit, case.expected):
             first_match = i
             break
+    if is_adversarial:
+        # For adversarial negatives the retriever should surface *nothing*.
+        # Reward zero citations as the correct outcome.
+        matched = len(citations) == 0
+    else:
+        matched = first_match is not None
     return CaseResult(
         id=case.id,
         query=case.query,
         citations_count=len(citations),
         first_match_rank=first_match,
-        matched=first_match is not None,
+        matched=matched,
         elapsed_ms=elapsed_ms,
+        is_adversarial=is_adversarial,
     )
 
 
@@ -252,11 +267,22 @@ async def run_benchmark(
         results.append(_score_case(case, citations, elapsed))
 
     total = len(results) or 1
+    # Split positives vs adversarial negatives so recall@K reflects only
+    # the retriever's ability to surface real sources, not its no-match
+    # behaviour on trick queries (which has its own metric).
+    pos_results = [r for r in results if not r.is_adversarial]
+    adv_results = [r for r in results if r.is_adversarial]
+    pos_total = len(pos_results) or 1
+
     metrics: dict[str, float] = {}
     for k in K_VALUES:
-        hits = sum(1 for r in results if r.recall_at(k))
-        metrics[f"recall@{k}"] = round(hits / total, 4)
+        hits = sum(1 for r in pos_results if r.recall_at(k))
+        metrics[f"recall@{k}"] = round(hits / pos_total, 4)
     metrics["match_rate"] = round(sum(1 for r in results if r.matched) / total, 4)
+
+    if adv_results:
+        adv_correct = sum(1 for r in adv_results if r.matched)
+        metrics["adversarial_no_match_rate"] = round(adv_correct / len(adv_results), 4)
 
     mean_cc = round(sum(r.citations_count for r in results) / total, 2)
     mean_lat = round(sum(r.elapsed_ms for r in results) / total, 2)
@@ -274,6 +300,7 @@ async def run_benchmark(
                 "first_match_rank": r.first_match_rank,
                 "matched": r.matched,
                 "elapsed_ms": r.elapsed_ms,
+                "adversarial": r.is_adversarial,
             }
             for r in results
         ],

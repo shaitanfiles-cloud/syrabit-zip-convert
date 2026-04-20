@@ -28,15 +28,43 @@ def _run() -> dict:
 def test_fixture_has_enough_cases():
     from bench.grounded_recall import load_cases
     cases = load_cases()
-    assert len(cases) >= 50, f"expected at least 50 labelled cases, got {len(cases)}"
+    assert len(cases) >= 100, f"expected at least 100 labelled cases, got {len(cases)}"
 
 
 def test_every_case_has_wellformed_expected():
     from bench.grounded_recall import load_cases
     for c in load_cases():
         keys = c.expected
+        if keys.get("none"):
+            # adversarial negative: must NOT also assert positive matchers
+            assert not any(keys.get(k) for k in ("domains", "url_substrings", "chapter_slugs")), \
+                f"case {c.id}: adversarial negative cannot also declare positive matchers"
+            continue
         assert any(keys.get(k) for k in ("domains", "url_substrings", "chapter_slugs")), \
-            f"case {c.id}: expected must include at least one of domains/url_substrings/chapter_slugs"
+            f"case {c.id}: expected must include at least one of domains/url_substrings/chapter_slugs (or none:true for adversarial)"
+
+
+def test_fixture_has_adversarial_negatives():
+    from bench.grounded_recall import load_cases
+    cases = load_cases()
+    adv = [c for c in cases if c.expected.get("none")]
+    # ~10% adversarial negatives
+    assert len(adv) >= max(8, int(0.08 * len(cases))), \
+        f"expected ~10% adversarial negatives, got {len(adv)}/{len(cases)}"
+
+
+def test_score_rewards_correct_no_match():
+    from bench.grounded_recall import BenchCase, _score_case
+    case = BenchCase(id="adv", query="q", context={}, expected={"none": True})
+    # Empty citations → correct.
+    r_empty = _score_case(case, [], 1)
+    assert r_empty.matched is True
+    assert r_empty.is_adversarial is True
+    assert r_empty.recall_at(1) is True
+    # Non-empty citations → incorrect.
+    r_full = _score_case(case, [{"url": "https://en.wikipedia.org/x", "domain": "en.wikipedia.org"}], 1)
+    assert r_full.matched is False
+    assert r_full.recall_at(5) is False
 
 
 def test_recall_matches_baseline_within_tolerance():
