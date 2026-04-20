@@ -30,10 +30,11 @@ from passlib.context import CryptContext
 from fastapi.security import HTTPBearer
 from motor.motor_asyncio import AsyncIOMotorClient
 from config import (
-    MONGO_URL, DB_NAME, SARVAM_API_KEY, SARVAM_TRANSLATE_KEY, SARVAM_BASE_URL,
+    MONGO_URL, DB_NAME, SARVAM_API_KEY, SARVAM_TRANSLATE_KEY, SARVAM_BASE_URL, BYOK_PLACEHOLDER,
     REDIS_URL, REDIS_TOKEN, SUPABASE_URL, SUPABASE_SERVICE_KEY,
     _PG_DSN,
     CF_GATEWAY_ENABLED, get_provider_base_url, cf_gateway_url, _CF_PROVIDER_SLUGS,
+    CF_AI_GATEWAY_TOKEN, CF_CACHE_TTL,
 )
 
 logger = logging.getLogger(__name__)
@@ -282,6 +283,16 @@ _sarvam_pool_limits = httpx.Limits(
 )
 _sarvam_timeout       = httpx.Timeout(connect=3.0, read=30.0, write=10.0, pool=5.0)
 _sarvam_llm_timeout   = httpx.Timeout(connect=3.0, read=60.0, write=10.0, pool=5.0)
+_sarvam_gw_base = cf_gateway_url("sarvam") if (CF_GATEWAY_ENABLED and "sarvam" in _CF_PROVIDER_SLUGS) else None
+_sarvam_effective_base = _sarvam_gw_base or SARVAM_BASE_URL
+# Sarvam auth: use the real env key (SARVAM_API_KEY / SARVAM_TRANSLATE_KEY)
+# ALWAYS. We route through CF's `custom-sarvam` custom provider for caching,
+# analytics, and retries — but CF does NOT support BYOK key-substitution for
+# custom providers (verified 2026-04-20: sending empty api-subscription-key
+# with cf-aig-byok-key:true returns 403 "Invalid or missing authentication
+# credentials"). The gateway simply forwards whatever auth we send, so we
+# must send the real key. Therefore SARVAM_API_KEY and SARVAM_TRANSLATE_KEY
+# MUST remain in the environment.
 _sarvam_headers = {
     'api-subscription-key': SARVAM_API_KEY,
     'Content-Type': 'application/json',
@@ -290,14 +301,27 @@ _sarvam_translate_headers = {
     'api-subscription-key': SARVAM_TRANSLATE_KEY,
     'Content-Type': 'application/json',
 }
-_sarvam_gw_base = cf_gateway_url("sarvam") if (CF_GATEWAY_ENABLED and "sarvam" in _CF_PROVIDER_SLUGS) else None
-_sarvam_effective_base = _sarvam_gw_base or SARVAM_BASE_URL
+# Still attach the Authenticated-Gateway bearer when routing via CF so the
+# gateway itself accepts our request. `cf-aig-cache-ttl` enables CF's
+# response cache; `clear_upstream_auth=False` avoids clobbering the Sarvam
+# api-subscription-key header.
+if _sarvam_gw_base and CF_AI_GATEWAY_TOKEN:
+    _sarvam_headers['cf-aig-authorization'] = f'Bearer {CF_AI_GATEWAY_TOKEN}'
+    _sarvam_headers['cf-aig-cache-ttl'] = str(CF_CACHE_TTL)
+    _sarvam_translate_headers['cf-aig-authorization'] = f'Bearer {CF_AI_GATEWAY_TOKEN}'
+    _sarvam_translate_headers['cf-aig-cache-ttl'] = str(CF_CACHE_TTL)
 sarvam_client: Optional[httpx.AsyncClient] = None
 sarvam_translate_client: Optional[httpx.AsyncClient] = None
 sarvam_llm_client: Optional[httpx.AsyncClient] = None
 sarvam_client_direct: Optional[httpx.AsyncClient] = None
 sarvam_llm_client_direct: Optional[httpx.AsyncClient] = None
-if SARVAM_TRANSLATE_KEY:
+# BYOK mode means the effective Sarvam key is always non-empty (placeholder
+# when env is unset, real key otherwise), so the client initialises even
+# after operators remove SARVAM_API_KEY from secrets. Without BYOK we still
+# gate on the env-provided key to avoid starting a client that would 401.
+_sarvam_translate_ready = bool(SARVAM_TRANSLATE_KEY) or bool(_sarvam_gw_base)
+_sarvam_llm_ready = bool(SARVAM_API_KEY) or bool(_sarvam_gw_base)
+if _sarvam_translate_ready:
     sarvam_translate_client = httpx.AsyncClient(
         base_url=SARVAM_BASE_URL,
         headers=_sarvam_translate_headers,
@@ -306,8 +330,9 @@ if SARVAM_TRANSLATE_KEY:
         http2=True,
         verify=True,
     )
-    logging.getLogger(__name__).info("Sarvam AI translation client ready (priority key)")
-if SARVAM_API_KEY:
+    _tl_via = "BYOK via CF Gateway" if (_sarvam_gw_base and not SARVAM_TRANSLATE_KEY) else "priority key"
+    logging.getLogger(__name__).info(f"Sarvam AI translation client ready ({_tl_via})")
+if _sarvam_llm_ready:
     sarvam_client = httpx.AsyncClient(
         base_url=_sarvam_effective_base,
         headers=_sarvam_headers,

@@ -8,6 +8,7 @@ import logging
 
 from config import (
     CF_CACHE_TTL, is_cf_gateway_up, mark_cf_gateway_down, get_provider_base_url,
+    byok_headers,
 )
 
 _log = logging.getLogger(__name__)
@@ -101,20 +102,15 @@ class LlmChat:
                 yield token
 
     def _cf_cache_headers(self) -> dict | None:
-        # Mirror llm._cf_cache_headers — also send the
-        # cf-aig-authorization bearer when CF_AI_GATEWAY_TOKEN is set,
-        # otherwise an authenticated CF gateway returns 401 on every
-        # streaming call and we waste a round trip per token batch.
-        if not is_cf_gateway_up():
-            return None
-        headers = {"cf-aig-cache-ttl": str(CF_CACHE_TTL)}
-        try:
-            from config import CF_AI_GATEWAY_TOKEN as _tok
-        except Exception:
-            _tok = ""
-        if _tok:
-            headers["cf-aig-authorization"] = f"Bearer {_tok}"
-        return headers
+        # Delegates to config.byok_headers() — includes:
+        #   cf-aig-byok-key:default   (CF substitutes the stored key upstream)
+        #   cf-aig-cache-ttl:<N>      (cache hint)
+        #   cf-aig-authorization:…    (only if Authenticated Gateway is on)
+        # The placeholder api_key passed to AsyncGroq/AsyncOpenAI is ignored
+        # by CF — upstream sees the real BYOK-stored key instead. Returns
+        # None when the gateway is down so openai SDK omits extra_headers.
+        h = byok_headers()
+        return h or None
 
     @staticmethod
     def _is_cf_conn_err(exc: Exception) -> bool:

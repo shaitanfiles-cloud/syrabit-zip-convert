@@ -236,6 +236,61 @@ def get_provider_base_url(provider: str) -> str | None:
         return cf_gateway_url(provider)
     return _DIRECT_PROVIDER_URLS.get(provider)
 
+
+# ── BYOK (Bring-Your-Own-Keys) via Cloudflare AI Gateway ─────────────────────
+# When CF AI Gateway is enabled with BYOK configured in the CF dashboard, the
+# backend no longer needs real provider API keys in its environment. The flow:
+#
+#   1. Backend sends request to gateway URL with:
+#        api_key="byok"                          (placeholder, CF ignores it)
+#        header cf-aig-byok-key: default         (tells CF to substitute)
+#   2. CF AI Gateway replaces the auth with its stored BYOK key for the
+#      provider and forwards the request upstream.
+#   3. Upstream provider sees its real key and responds normally.
+#
+# Removing the provider env vars (GEMINI_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY,
+# OPENROUTER_API_KEY, SARVAM_API_KEY, …) is SAFE once BYOK is wired — the
+# backend sends placeholders and CF does the real auth. Keep the CF gateway
+# env vars themselves (CF_AI_GATEWAY_ACCOUNT_ID, CF_AI_GATEWAY_ID,
+# CF_AI_GATEWAY_TOKEN) — those bootstrap the gateway connection itself.
+BYOK_PLACEHOLDER = "x"  # openai SDK rejects empty api_key; "x" is a harmless dummy
+
+
+def byok_headers(include_ttl: bool = True, clear_upstream_auth: bool = True) -> dict:
+    """Return CF AI Gateway headers for a BYOK request.
+
+    Verified BYOK invocation (2026-04-20 live probe against gateway `syrabit`):
+      - ``Authorization: ''``         → empty upstream auth **mandatory**. If
+        we send a dummy bearer like ``Bearer byok`` CF forwards it raw to
+        upstream and gets 401. BYOK only fires when the upstream auth header
+        is empty (or missing), signalling to CF that it should inject its
+        stored key.
+      - ``cf-aig-byok-key: true``     → opt-in flag. Without it, CF leaves the
+        empty Authorization untouched and upstream 401s.
+      - ``cf-aig-cache-ttl: <N>``     → response cache TTL hint.
+      - ``cf-aig-authorization: …``  → Authenticated-Gateway bearer, only
+        sent when the gateway has auth mode enabled.
+
+    ``clear_upstream_auth=False`` is used by the Sarvam httpx client, which
+    has its own ``api-subscription-key`` header (not ``Authorization``) —
+    that callsite clears it separately.
+
+    Returns ``{}`` when the gateway is down so callers can short-circuit.
+    """
+    if not is_cf_gateway_up():
+        return {}
+    h: dict = {"cf-aig-byok-key": "true"}
+    if clear_upstream_auth:
+        # Empty string overrides the openai/httpx SDK's auto-inserted
+        # ``Authorization: Bearer <api_key>`` header so CF sees no upstream
+        # auth and injects its stored BYOK key.
+        h["Authorization"] = ""
+    if include_ttl:
+        h["cf-aig-cache-ttl"] = str(CF_CACHE_TTL)
+    if CF_AI_GATEWAY_TOKEN:
+        h["cf-aig-authorization"] = f"Bearer {CF_AI_GATEWAY_TOKEN}"
+    return h
+
 import logging as _logging
 _cfg_log = _logging.getLogger(__name__)
 if CF_GATEWAY_ENABLED:
@@ -259,6 +314,23 @@ _SARVAM_LLM_KEY_2 = os.environ.get('SARVAM_API_KEY_2', '').strip()
 _SARVAM_LLM_KEY_3 = os.environ.get('SARVAM_API_KEY_3', '').strip()
 _CEREBRAS_KEY = os.environ.get('CEREBRAS_API_KEY', '').strip()
 _OPENROUTER_KEY = os.environ.get('OPENROUTER_API_KEY', '').strip()
+
+# BYOK fallback: when CF AI Gateway is enabled, any missing provider env key
+# is substituted with the BYOK_PLACEHOLDER so the SmartKeyPool / provider list
+# still builds (downstream callers send placeholder + cf-aig-byok-key header
+# and the gateway substitutes the real key). This is what lets operators
+# safely remove GROQ_API_KEY, GEMINI_API_KEY, CEREBRAS_API_KEY, etc. from
+# production secrets once BYOK is verified in the CF dashboard.
+if CF_GATEWAY_ENABLED:
+    _GROQ_KEY = _GROQ_KEY or BYOK_PLACEHOLDER
+    _GEMINI_KEY = _GEMINI_KEY or BYOK_PLACEHOLDER
+    _CEREBRAS_KEY = _CEREBRAS_KEY or BYOK_PLACEHOLDER
+    _OPENROUTER_KEY = _OPENROUTER_KEY or BYOK_PLACEHOLDER
+    _SARVAM_LLM_KEY = _SARVAM_LLM_KEY or BYOK_PLACEHOLDER
+    # Note: _GROQ_KEY_2 / _GEMINI_KEY_2 / _SARVAM_LLM_KEY_2 / _3 stay empty
+    # if not set — BYOK means CF handles rotation, so a single logical slot
+    # per provider is enough. The pool's secondary-key slots only activate
+    # when operators explicitly set the `*_KEY_2/3` env vars.
 _EXPLICIT_PROVIDER = os.environ.get('LLM_PROVIDER', '').strip().lower()
 _AWS_ACCESS_KEY = os.environ.get('AWS_ACCESS_KEY_ID', '').strip()
 _AWS_SECRET_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY', '').strip()

@@ -34,6 +34,7 @@ from config import (
     _GROQ_KEY, _GROQ_KEY_2, _GEMINI_KEY, _GEMINI_KEY_2, _XAI_KEY, _OPENAI_KEY,
     _SARVAM_LLM_KEY, _SARVAM_LLM_KEY_2, _SARVAM_LLM_KEY_3, _CEREBRAS_KEY, _OPENROUTER_KEY, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
     CF_GATEWAY_ENABLED, CF_CACHE_TTL, is_cf_gateway_up, mark_cf_gateway_down, get_provider_base_url,
+    byok_headers,
 )
 from deps import sarvam_llm_client, sarvam_llm_client_direct, logger as _dep_logger
 from cache import _cache_key
@@ -554,21 +555,14 @@ async def _call_sarvam_llm(messages: list, api_key: str, model: str, max_tokens:
     return result
 
 def _cf_cache_headers() -> dict:
-    # When the AI Gateway is up we always send the cache-ttl hint.
-    # Additionally, if the gateway has Authenticated-Gateway mode
-    # turned on (CF dashboard → AI Gateway → <gw> → Settings) we must
-    # send the bearer token, otherwise CF returns 401 (code 2009) and
-    # we waste a round trip on every LLM call before the direct-URL
-    # fallback kicks in. Token comes from the CF_AI_GATEWAY_TOKEN env
-    # var; absent → header is omitted, which is the correct behaviour
-    # for unauthenticated gateways.
-    if not is_cf_gateway_up():
-        return {}
-    headers = {"cf-aig-cache-ttl": str(CF_CACHE_TTL)}
-    from config import CF_AI_GATEWAY_TOKEN as _tok
-    if _tok:
-        headers["cf-aig-authorization"] = f"Bearer {_tok}"
-    return headers
+    # Delegates to config.byok_headers() which returns:
+    #   cf-aig-byok-key:default   — CF substitutes the stored BYOK key upstream
+    #   cf-aig-cache-ttl:<N>      — cache TTL hint
+    #   cf-aig-authorization:…    — only when Authenticated Gateway mode is on
+    # Returns {} when the gateway is down — callers should raise or continue
+    # without the caching hint. With BYOK active the placeholder api_key in
+    # the openai client is ignored by CF; the stored BYOK key is used instead.
+    return byok_headers()
 
 def _is_cf_connection_error(exc: Exception) -> bool:
     err = str(exc).lower()

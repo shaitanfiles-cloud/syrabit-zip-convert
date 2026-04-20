@@ -58,7 +58,7 @@ Run `pnpm verify` from the repo root to execute the full pre-merge gate. This ru
 - **Authentication:** Supabase, JWT helpers, Google OAuth.
 - **Caching:** Redis, in-memory caching, Cloudflare Worker edge caching.
 - **LLM Providers:** Groq, Cerebras, OpenRouter (for chat); Cerebras, Sarvam, Gemini (for content generation, vision, embeddings).
-- **Cloudflare AI Gateway:** LLM traffic routing, caching, analytics, fallback.
+- **Cloudflare AI Gateway (BYOK):** All LLM traffic is routed through the `syrabit` AI Gateway. Provider keys are stored in the Cloudflare dashboard (BYOK — Bring Your Own Key). The backend sends a dummy `api_key='x'` + `Authorization: ''` + `cf-aig-byok-key: true` headers; CF Gateway substitutes its stored provider key before forwarding upstream. This lets `GROQ_API_KEY`, `GEMINI_API_KEY`, `CEREBRAS_API_KEY`, and `OPENROUTER_API_KEY` be removed from the backend environment entirely. **Exception — Sarvam:** CF does not support BYOK for custom providers, so `SARVAM_API_KEY` / `SARVAM_TRANSLATE_KEY` must remain in env; traffic still routes through `custom-sarvam` gateway slug for caching/analytics.
 - **Payment Gateways:** Razorpay (INR), Stripe (USD).
 - **Email Service:** Resend API.
 - **UI/UX Frameworks:** React, Vite, React Router, Tailwind CSS.
