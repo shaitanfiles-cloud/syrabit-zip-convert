@@ -166,20 +166,25 @@ async def fetch_url_content(url: str, max_chars: int = _MAX_CONTENT_CHARS) -> Op
         return None
 
     try:
+        # Use the hardened reader helper so every redirect hop is
+        # re-validated (private-IP, hard-deny, DNS-resolved-to-private)
+        # rather than just the first one. Mirrors the protections in
+        # `edu_reader.fetch_and_extract`.
+        from edu_reader import _safe_get_with_redirects, _validate_host_for_ssrf
+        host = urlparse(url).hostname or ""
+        host_ok, _why = await _validate_host_for_ssrf(host.lower())
+        if not host_ok:
+            logger.debug(f"URL blocked by SSRF host check: {url[:80]} ({_why})")
+            return None
         async with httpx.AsyncClient(
             headers=_FETCH_HEADERS,
             timeout=httpx.Timeout(connect=5.0, read=8.0, write=5.0, pool=5.0),
             follow_redirects=False,
         ) as client:
-            resp = await client.get(url)
-            if resp.is_redirect:
-                raw_location = resp.headers.get("location", "")
-                redirect_url = urljoin(url, raw_location) if raw_location else ""
-                if redirect_url and _is_safe_url(redirect_url):
-                    resp = await client.get(redirect_url)
-                else:
-                    logger.debug(f"Redirect blocked by safety check: {url[:80]} -> {redirect_url[:80]}")
-                    return None
+            resp, final_url, redirect_reason = await _safe_get_with_redirects(client, url)
+            if redirect_reason != "ok" or resp is None:
+                logger.debug(f"Redirect blocked: {url[:80]} ({redirect_reason})")
+                return None
             resp.raise_for_status()
 
             content_type = resp.headers.get("content-type", "")
@@ -275,19 +280,19 @@ async def fetch_pdf_from_url(url: str, max_chars: int = _MAX_CONTENT_CHARS) -> O
         return None
 
     try:
+        from edu_reader import _safe_get_with_redirects, _validate_host_for_ssrf
+        host = urlparse(url).hostname or ""
+        host_ok, _why = await _validate_host_for_ssrf(host.lower())
+        if not host_ok:
+            return None
         async with httpx.AsyncClient(
             headers=_FETCH_HEADERS,
             timeout=httpx.Timeout(connect=5.0, read=8.0, write=5.0, pool=5.0),
             follow_redirects=False,
         ) as client:
-            resp = await client.get(url)
-            if resp.is_redirect:
-                raw_location = resp.headers.get("location", "")
-                redirect_url = urljoin(url, raw_location) if raw_location else ""
-                if redirect_url and _is_safe_url(redirect_url):
-                    resp = await client.get(redirect_url)
-                else:
-                    return None
+            resp, _final_url, redirect_reason = await _safe_get_with_redirects(client, url)
+            if redirect_reason != "ok" or resp is None:
+                return None
             resp.raise_for_status()
             return await _extract_pdf_text(resp.content, url, max_chars)
     except Exception as e:

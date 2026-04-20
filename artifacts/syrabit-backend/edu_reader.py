@@ -198,6 +198,85 @@ async def _fetch_robots(host: str, scheme: str) -> RobotFileParser | None:
     return rp
 
 
+async def _validate_host_for_ssrf(host: str) -> tuple[bool, str]:
+    """Run the full SSRF-safety check on a single hostname / IP literal.
+
+    Mirrors the per-hop checks used by `probe_site_safety` so that the
+    public reader and grounded-answer fetches are protected by the same
+    rules the educator self-approval probe enforces.
+
+    Returns ``(ok, reason)``. ``reason`` is ``"ok"`` on success, or one
+    of ``no_host``/``private_ip``/``hard_denied``/``operator_blocked``/
+    ``dns_failed`` on rejection.
+    """
+    from edu_allowlist import is_domain_hard_blocked
+    h = (host or "").lower().strip()
+    if not h:
+        return False, "no_host"
+    is_ip_literal = False
+    try:
+        import ipaddress as _ipa
+        ip = _ipa.ip_address(h)
+        is_ip_literal = True
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return False, "private_ip"
+    except ValueError:
+        if h in {"localhost", "0.0.0.0"} or h.endswith(".local") or h.endswith(".internal"):
+            return False, "private_ip"
+    blocked, why = await is_domain_hard_blocked(h)
+    if blocked:
+        return False, why
+    if not is_ip_literal:
+        dns_ok, dns_why = await _resolves_to_public_ip(h)
+        if not dns_ok:
+            return False, dns_why
+    return True, "ok"
+
+
+async def _safe_get_with_redirects(
+    client: "httpx.AsyncClient",
+    url: str,
+    *,
+    max_hops: int = 5,
+    headers: dict | None = None,
+) -> tuple["httpx.Response | None", str, str]:
+    """GET ``url`` with manual redirect handling and per-hop SSRF re-checks.
+
+    httpx's ``follow_redirects=True`` is a known SSRF sink: a hostile
+    upstream can issue a 302 pointing at an internal IP and the client
+    will obediently follow. This helper disables auto-redirects, walks
+    up to ``max_hops`` hops manually, and re-runs the full host
+    validation (private-IP, hard-deny, operator-block, DNS-resolution)
+    on every Location target before issuing the next request.
+
+    Returns ``(response, final_url, reason)`` where ``reason`` is
+    ``"ok"`` on success or an error code (``bad_redirect_scheme`` /
+    ``too_many_redirects`` / ``no_location`` / a value forwarded from
+    `_validate_host_for_ssrf` prefixed with ``redirect_``) on failure.
+    On failure ``response`` may still hold the last successful hop but
+    callers should treat the request as rejected.
+    """
+    current = url
+    resp: "httpx.Response | None" = None
+    for _ in range(max_hops):
+        resp = await client.get(current, headers=headers) if headers else await client.get(current)
+        if resp.status_code not in (301, 302, 303, 307, 308):
+            return resp, current, "ok"
+        loc = resp.headers.get("location")
+        if not loc:
+            return resp, current, "no_location"
+        nxt = urljoin(current, loc)
+        p = urlparse(nxt)
+        if p.scheme not in ("http", "https"):
+            return resp, current, "bad_redirect_scheme"
+        ok, why = await _validate_host_for_ssrf((p.hostname or "").lower())
+        if not ok:
+            return resp, current, f"redirect_{why}"
+        current = nxt
+    return resp, current, "too_many_redirects"
+
+
 async def _resolves_to_public_ip(host: str) -> tuple[bool, str]:
     """Resolve `host` and ensure no A/AAAA record points at private space.
 
@@ -420,13 +499,27 @@ async def fetch_and_extract(
 
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
+
+    # SSRF: even after `is_allowed_url` accepts the host textually, a
+    # public-looking FQDN can resolve to an RFC1918 / loopback / link-
+    # local address (cloud metadata, internal services). Resolve here
+    # and reject before opening any socket. Mirrors the educator probe.
+    host_ok, host_why = await _validate_host_for_ssrf(host)
+    if not host_ok:
+        _reader_metrics["blocked_allowlist"] += 1
+        await log_blocked_request(url, host_why, actor=actor, ip_hash=ip_hash)
+        return {"ok": False, "error": "host_blocked", "detail": host_why, "url": url}
+
     sem = _get_host_lock(host)
 
     async with sem:
         try:
+            # `follow_redirects=False` + `_safe_get_with_redirects` lets
+            # us re-validate the host on every hop. httpx's built-in
+            # redirect follower would happily walk us into a private IP.
             async with httpx.AsyncClient(
                 timeout=_FETCH_TIMEOUT,
-                follow_redirects=True,
+                follow_redirects=False,
                 limits=httpx.Limits(max_connections=20, max_keepalive_connections=5),
                 headers={
                     "User-Agent": USER_AGENT,
@@ -434,7 +527,7 @@ async def fetch_and_extract(
                     "Accept-Language": "en-IN,en;q=0.9",
                 },
             ) as client:
-                resp = await client.get(url)
+                resp, final_url, redirect_reason = await _safe_get_with_redirects(client, url)
         except httpx.TimeoutException:
             _reader_metrics["fetches_failed"] += 1
             return {"ok": False, "error": "timeout", "detail": f"upstream did not respond within {_FETCH_TIMEOUT}s", "url": url}
@@ -442,8 +535,18 @@ async def fetch_and_extract(
             _reader_metrics["fetches_failed"] += 1
             return {"ok": False, "error": "fetch_failed", "detail": str(e)[:200], "url": url}
 
-    final_url = str(resp.url)
-    # Re-check the post-redirect URL — defends against open redirects.
+    if redirect_reason != "ok":
+        _reader_metrics["blocked_allowlist"] += 1
+        await log_blocked_request(url, redirect_reason, actor=actor, ip_hash=ip_hash)
+        return {"ok": False, "error": "redirect_not_allowed", "detail": redirect_reason, "url": final_url or url}
+
+    if resp is None:
+        _reader_metrics["fetches_failed"] += 1
+        return {"ok": False, "error": "fetch_failed", "detail": "no response", "url": url}
+
+    # Re-check the post-redirect URL against the allowlist — defends
+    # against open redirects that walk us off an allowlisted host onto
+    # one we never approved.
     allowed_final, reason_final = await is_allowed_url(final_url)
     if not allowed_final:
         _reader_metrics["blocked_allowlist"] += 1

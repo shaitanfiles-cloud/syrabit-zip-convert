@@ -193,23 +193,43 @@ def _is_safe_url(url: str) -> bool:
 _httpx_client = None
 
 def _get_httpx_client():
+    """Shared async client for grounded-answer web fetches.
+
+    Uses ``follow_redirects=False`` because we walk the redirect chain
+    manually via ``edu_reader._safe_get_with_redirects`` to re-validate
+    every hop against the SSRF rule set (private-IP, hard-deny, DNS
+    resolution). Trusting httpx's auto-follow here would let an upstream
+    302 walk us into a private IP address.
+    """
     global _httpx_client
     if _httpx_client is None:
         import httpx
         _httpx_client = httpx.AsyncClient(
             timeout=3.0,
-            follow_redirects=True,
+            follow_redirects=False,
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
         )
     return _httpx_client
 
 async def _fetch_page_content(url: str, max_chars: int = 3000) -> str:
+    # Delegate to the hardened reader helpers so this path uses the
+    # same SSRF guards as `edu_reader.fetch_and_extract` (DNS-to-private
+    # rejection on the initial host + per-hop redirect re-checks).
+    from edu_reader import _validate_host_for_ssrf, _safe_get_with_redirects
     if not url or not _is_safe_url(url):
         return ""
     try:
+        from urllib.parse import urlparse as _urlparse
+        host = (_urlparse(url).hostname or "").lower()
+        host_ok, _why = await _validate_host_for_ssrf(host)
+        if not host_ok:
+            return ""
         client = _get_httpx_client()
-        resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 SyrabitBot/1.0"})
-        final_url = str(resp.url)
+        resp, final_url, redirect_reason = await _safe_get_with_redirects(
+            client, url, headers={"User-Agent": "Mozilla/5.0 SyrabitBot/1.0"},
+        )
+        if redirect_reason != "ok" or resp is None:
+            return ""
         if not _is_safe_url(final_url):
             return ""
         if resp.status_code != 200:
