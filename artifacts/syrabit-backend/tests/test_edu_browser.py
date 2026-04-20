@@ -133,6 +133,53 @@ def test_citation_builder_dedup_and_numbering():
     assert len(web_cites) == 1 and web_cites[0]["url"] == "https://khan/y"
 
 
+def test_extract_page_spans_picks_query_relevant_sentences():
+    from grounded_answer import _extract_page_spans
+    text = (
+        "Photosynthesis is the process by which plants make food from sunlight. "
+        "It happens mainly in the chloroplasts of leaf cells. "
+        "The Industrial Revolution began in Britain in the 18th century. "
+        "Chlorophyll absorbs light energy and powers the reaction. "
+        "Cats are popular pets across the world."
+    )
+    spans = _extract_page_spans(text, "How does photosynthesis work in plants?")
+    assert spans, "expected at least one matching span"
+    joined = " ".join(spans).lower()
+    assert "photosynthesis" in joined
+    # Off-topic sentence about cats / industrial revolution should not show up.
+    assert not any("cats are popular" in s.lower() for s in spans)
+    assert not any("industrial revolution" in s.lower() for s in spans)
+    # Order must follow original article order.
+    assert spans == sorted(spans, key=lambda s: text.find(s))
+
+
+def test_extract_page_spans_returns_empty_on_no_overlap():
+    from grounded_answer import _extract_page_spans
+    text = "The cat sat on the mat. Dogs bark loudly at strangers."
+    assert _extract_page_spans(text, "quantum chromodynamics renormalization") == []
+    assert _extract_page_spans("", "anything") == []
+    assert _extract_page_spans("any text", "") == []
+
+
+def test_build_citations_attaches_page_spans():
+    from grounded_answer import _build_citations
+    page_text = (
+        "Newton formulated three laws of motion that describe how forces act. "
+        "Apples fall because gravity pulls them toward the Earth. "
+        "His first law is also called the law of inertia. "
+        "Pizza is a popular Italian food."
+    )
+    page = {"ok": True, "title": "Newton", "url": "https://wiki/n", "domain": "wiki", "text": page_text}
+    cites = _build_citations([], [], page, query="What are Newton's laws of motion?")
+    assert cites and cites[0]["type"] == "page"
+    spans = cites[0].get("spans", [])
+    assert spans, "page citation should expose grounding spans"
+    assert all("pizza" not in s.lower() for s in spans)
+    # No query → no spans (back-compat).
+    cites_nq = _build_citations([], [], page)
+    assert cites_nq[0].get("spans", []) == []
+
+
 def test_grounded_pipeline_blocks_injection_query():
     from grounded_answer import stream_grounded_answer
 

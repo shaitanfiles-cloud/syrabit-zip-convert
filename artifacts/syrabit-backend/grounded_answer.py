@@ -28,6 +28,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 from typing import AsyncIterator, Optional
@@ -65,6 +66,59 @@ def get_grounded_pipeline_stats() -> dict:
 
 # ───────────────────────── Citation building ─────────────────────────
 
+_GROUNDING_STOPWORDS = frozenset({
+    "the","a","an","is","are","was","were","be","been","being","of","in","on","to",
+    "for","and","or","but","with","from","by","at","as","that","this","these","those",
+    "it","its","what","why","how","who","whom","when","where","which","do","does","did",
+    "can","could","should","would","will","may","might","must","not","no","i","you","he",
+    "she","they","we","my","your","our","their","me","him","her","us","them","there",
+    "than","then","so","if","into","about","also","over","under","up","down","just",
+    "very","more","most","some","any","all","each","every","such","only","own","same",
+    "too","one","two","three",
+})
+
+# Sentence boundary: punctuation followed by whitespace and a capital / quote / paren.
+_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"'(])")
+
+
+def _query_keywords(query: str) -> set[str]:
+    toks = re.findall(r"[A-Za-z][A-Za-z0-9\-']{2,}", (query or "").lower())
+    return {t for t in toks if t not in _GROUNDING_STOPWORDS}
+
+
+def _extract_page_spans(text: str, query: str, max_spans: int = 5) -> list[str]:
+    """Pick up to ``max_spans`` sentences from ``text`` that best match ``query``.
+
+    Uses a cheap lexical-overlap score (count of distinct query keywords
+    appearing in the sentence). Returns sentences in the order they appear
+    in the article so the frontend can highlight them in reading order.
+    Returns an empty list when no useful match exists.
+    """
+    if not text or not query:
+        return []
+    keywords = _query_keywords(query)
+    if not keywords:
+        return []
+    if len(text) > 60_000:
+        text = text[:60_000]
+    sents = _SENTENCE_RE.split(text)
+    scored: list[tuple[int, int, str]] = []
+    for idx, raw in enumerate(sents):
+        s = raw.strip()
+        if not (20 <= len(s) <= 400):
+            continue
+        slow = s.lower()
+        hits = sum(1 for kw in keywords if kw in slow)
+        if hits == 0:
+            continue
+        scored.append((hits, idx, s))
+    if not scored:
+        return []
+    top = sorted(scored, key=lambda x: (-x[0], x[1]))[:max_spans]
+    top.sort(key=lambda x: x[1])
+    return [s for _, _, s in top]
+
+
 def _stable_citation_key(item: dict) -> str:
     """Deterministic key for de-duping citations across reruns."""
     if "url" in item and item["url"]:
@@ -79,6 +133,7 @@ def _build_citations(
     web_results: list[dict],
     internal_chapters: list[dict],
     page_context: Optional[dict],
+    query: str = "",
 ) -> list[dict]:
     """Return a list of `{"index": N, "type": ..., "title": ..., ...}` dicts.
 
@@ -96,13 +151,16 @@ def _build_citations(
         key = _stable_citation_key(page_context)
         seen[key] = next_idx
         domain = page_context.get("domain") or ""
+        page_text = page_context.get("text") or ""
+        spans = _extract_page_spans(page_text, query) if query else []
         citations.append({
             "index": next_idx,
             "type": "page",
             "title": page_context.get("title", domain or "Current page"),
             "url": page_context.get("url", ""),
             "domain": domain,
-            "snippet": (page_context.get("text") or "")[:240],
+            "snippet": page_text[:240],
+            "spans": spans,
             "anchor": "",
         })
         next_idx += 1
@@ -310,7 +368,7 @@ async def stream_grounded_answer(
             logger.info(f"[grounded_answer] kid-safe filter rejected page {page_ctx.get('url','')}")
             _pipeline_metrics["safety_dropped_web"] += 1
 
-    citations = _build_citations(web_kept, internal, page_payload)
+    citations = _build_citations(web_kept, internal, page_payload, query=query)
 
     # 5. Build prompt (reuse existing builder + append citation block)
     rag_ctx = {

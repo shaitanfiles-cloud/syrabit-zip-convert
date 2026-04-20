@@ -168,28 +168,170 @@ function saveLocalState(state) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
 }
 
+// Walk the rendered article DOM and wrap matching span text in a
+// <mark data-grounding="1"> element so the reader pane visually flags
+// the sentences that grounded Syra's answer. Only matches confined to a
+// single text node are highlighted (good enough for typical paragraph
+// prose and avoids cross-element splice complexity). Returns a Map of
+// `citationIndex -> HTMLElement[]` so callers can scroll/flash later.
+function _highlightGroundingSpans(root, spans) {
+  const map = new Map();
+  if (!root || !spans || !spans.length) return map;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(n) {
+      if (!n.nodeValue || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+      if (n.parentNode && n.parentNode.closest('mark[data-grounding]')) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const textNodes = [];
+  let cur;
+  while ((cur = walker.nextNode())) textNodes.push(cur);
+  // Highlight longer spans first so an enclosing sentence wins over a
+  // shorter sub-phrase from the same citation.
+  const ordered = [...spans].sort((a, b) => b.text.length - a.text.length);
+  // Lookup span in haystack tolerating case + collapsed whitespace.
+  // Returns the [start, end) range *in the original haystack*, or null.
+  const findFlexible = (haystack, needle) => {
+    const direct = haystack.indexOf(needle);
+    if (direct >= 0) return [direct, direct + needle.length];
+    const ci = haystack.toLowerCase().indexOf(needle.toLowerCase());
+    if (ci >= 0) return [ci, ci + needle.length];
+    // Whitespace-tolerant fallback: build a regex from the needle that
+    // treats each whitespace run as `\s+`. Escape regex metachars first.
+    const escaped = needle
+      .trim()
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/\s+/g, '\\s+');
+    try {
+      const re = new RegExp(escaped, 'i');
+      const m = re.exec(haystack);
+      if (m) return [m.index, m.index + m[0].length];
+    } catch { /* malformed needle — skip */ }
+    return null;
+  };
+  for (const span of ordered) {
+    const needle = (span.text || '').trim();
+    if (needle.length < 4) continue;
+    for (let i = 0; i < textNodes.length; i++) {
+      const node = textNodes[i];
+      if (!node.parentNode) continue;
+      const haystack = node.nodeValue;
+      const range = findFlexible(haystack, needle);
+      if (!range) continue;
+      const [start, end] = range;
+      const before = haystack.slice(0, start);
+      const matched = haystack.slice(start, end);
+      const after = haystack.slice(end);
+      const mark = document.createElement('mark');
+      mark.setAttribute('data-grounding', '1');
+      mark.setAttribute('data-citation-index', String(span.citationIndex));
+      mark.setAttribute('data-span-key', span.key);
+      mark.style.cssText =
+        'background: rgba(245,158,11,0.16); color: inherit; border-radius: 2px; ' +
+        'padding: 0 2px; cursor: pointer; transition: background 220ms ease, box-shadow 220ms ease;';
+      mark.textContent = matched;
+      const parent = node.parentNode;
+      if (after) {
+        const afterNode = document.createTextNode(after);
+        parent.insertBefore(afterNode, node.nextSibling);
+        textNodes.splice(i + 1, 0, afterNode);
+      }
+      parent.insertBefore(mark, node.nextSibling);
+      if (before) {
+        node.nodeValue = before;
+      } else {
+        parent.removeChild(node);
+        textNodes.splice(i, 1);
+        i--;
+      }
+      const arr = map.get(span.citationIndex) || [];
+      arr.push(mark);
+      map.set(span.citationIndex, arr);
+      break; // only highlight first occurrence per span
+    }
+  }
+  return map;
+}
+
 // Render the safe HTML returned by the reader-proxy. It's already
 // sanitized server-side, but we still render via a sandboxed div with
 // rel=noopener on links and force target=_blank for outbound clicks.
-function ReaderArticle({ payload, lang }) {
+// `citations` may carry per-citation `spans: [text]` for the page-type
+// citation — those sentences are highlighted inline and scrolled into
+// view when `flashCite` changes.
+function ReaderArticle({ payload, lang, citations, flashCite, onSpanClick }) {
   const ref = useRef(null);
+  const highlightMapRef = useRef(new Map());
   const [quizOpen, setQuizOpen] = useState(false);
   // edu_reader.fetch_and_extract returns the cleaned article body
   // under the `html` key (`content_html` is a legacy alias kept for
   // forward-compat — fall back to either).
   const html = payload?.html || payload?.content_html || '';
+
+  // Render HTML manually (instead of dangerouslySetInnerHTML) so that
+  // re-running the highlight effect on `citations` change doesn't fight
+  // React over the DOM contents.
   useEffect(() => {
     const root = ref.current;
     if (!root) return;
-    const links = root.querySelectorAll('a[href]');
-    links.forEach((a) => {
+    root.innerHTML = html || '';
+    root.querySelectorAll('a[href]').forEach((a) => {
       a.setAttribute('target', '_blank');
       a.setAttribute('rel', 'noopener noreferrer');
     });
     // Strip iframes / scripts defensively (server already does, but
     // belt-and-braces).
     root.querySelectorAll('script,iframe,object,embed').forEach((n) => n.remove());
-  }, [html]);
+
+    const spans = [];
+    (citations || []).forEach((c) => {
+      if (c.type !== 'page' || !Array.isArray(c.spans)) return;
+      c.spans.forEach((text, idx) => {
+        if (typeof text === 'string' && text.trim().length > 3) {
+          spans.push({
+            text: text.trim(),
+            citationIndex: c.index,
+            key: `${c.index}-${idx}`,
+          });
+        }
+      });
+    });
+    highlightMapRef.current = _highlightGroundingSpans(root, spans);
+
+    if (onSpanClick) {
+      root.querySelectorAll('mark[data-grounding]').forEach((m) => {
+        m.addEventListener('click', () => {
+          const ci = Number(m.getAttribute('data-citation-index'));
+          if (Number.isFinite(ci)) onSpanClick(ci);
+        });
+      });
+    }
+  }, [html, citations, onSpanClick]);
+
+  // Scroll-into-view + brief flash when a citation [N] is tapped in the
+  // side panel. Uses a `nonce` so re-clicking the same citation re-fires
+  // the effect.
+  useEffect(() => {
+    if (!flashCite) return;
+    const list = highlightMapRef.current.get(flashCite.citationIndex);
+    if (!list || !list.length) return;
+    list[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    list.forEach((m) => {
+      m.style.background = 'rgba(245,158,11,0.55)';
+      m.style.boxShadow = '0 0 0 3px rgba(245,158,11,0.35)';
+    });
+    const t = setTimeout(() => {
+      list.forEach((m) => {
+        m.style.background = 'rgba(245,158,11,0.16)';
+        m.style.boxShadow = 'none';
+      });
+    }, 1600);
+    return () => clearTimeout(t);
+  }, [flashCite]);
+
   const domain = payload?.domain || hostOf(payload?.url);
   const minutes = readingTime(payload?.text);
   return (
@@ -224,7 +366,6 @@ function ReaderArticle({ payload, lang }) {
         ref={ref}
         data-savable="true"
         className="prose prose-slate max-w-none dark:prose-invert prose-headings:scroll-mt-20 prose-img:rounded-lg prose-a:text-violet-600 prose-a:no-underline hover:prose-a:underline"
-        dangerouslySetInnerHTML={{ __html: html }}
       />
       <QuizModal
         open={quizOpen} onClose={() => setQuizOpen(false)}
@@ -310,7 +451,7 @@ function BlockedView({ url, suggestions, onOpenSuggestion, lang }) {
 }
 
 // ── AskSyraPanel ---------------------------------------------------------
-function AskSyraPanel({ activeTab, lang, onClose }) {
+function AskSyraPanel({ activeTab, lang, onClose, onCitationsChange, onCitationClick }) {
   const t = T[lang];
   const { user } = useAuth();
   const [input, setInput] = useState('');
@@ -324,6 +465,12 @@ function AskSyraPanel({ activeTab, lang, onClose }) {
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [answer]);
+
+  // Mirror the panel's citation list up to BrowserPage so the reader
+  // pane can highlight grounding sentences inline.
+  useEffect(() => {
+    onCitationsChange?.(citations);
+  }, [citations, onCitationsChange]);
 
   const stop = useCallback(() => {
     try { ctrlRef.current?.abort(); } catch {}
@@ -477,19 +624,33 @@ function AskSyraPanel({ activeTab, lang, onClose }) {
               {t.citations}
             </p>
             <ol className="space-y-1.5 text-xs">
-              {citations.map((c) => (
-                <li key={c.index} className="flex items-start gap-1.5">
-                  <span className="font-mono text-violet-600">[{c.index}]</span>
-                  {c.url ? (
-                    <a href={c.url} target="_blank" rel="noopener noreferrer"
-                       className="line-clamp-2 text-violet-700 hover:underline dark:text-violet-300">
-                      {c.title || c.domain || c.url}
-                    </a>
-                  ) : (
-                    <span className="line-clamp-2 text-slate-700 dark:text-slate-300">{c.title}</span>
-                  )}
-                </li>
-              ))}
+              {citations.map((c) => {
+                const hasSpans = c.type === 'page' && Array.isArray(c.spans) && c.spans.length > 0;
+                return (
+                  <li key={c.index} className="flex items-start gap-1.5">
+                    {hasSpans ? (
+                      <button
+                        type="button"
+                        onClick={() => onCitationClick?.(c)}
+                        className="font-mono text-violet-600 hover:text-violet-800 hover:underline dark:text-violet-300"
+                        title={lang === 'as' ? 'প্ৰবন্ধত দেখুৱাওক' : 'Highlight in article'}
+                      >
+                        [{c.index}]
+                      </button>
+                    ) : (
+                      <span className="font-mono text-violet-600 dark:text-violet-300">[{c.index}]</span>
+                    )}
+                    {c.url ? (
+                      <a href={c.url} target="_blank" rel="noopener noreferrer"
+                         className="line-clamp-2 text-violet-700 hover:underline dark:text-violet-300">
+                        {c.title || c.domain || c.url}
+                      </a>
+                    ) : (
+                      <span className="line-clamp-2 text-slate-700 dark:text-slate-300">{c.title}</span>
+                    )}
+                  </li>
+                );
+              })}
             </ol>
           </div>
         )}
@@ -613,6 +774,11 @@ export default function BrowserPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [addressInput, setAddressInput] = useState('');
+  // Citations + flash request shared between the side panel and the
+  // reader pane so the article can highlight grounding sentences and
+  // scroll to them when the user taps a [N] link.
+  const [askCitations, setAskCitations] = useState([]);
+  const [flashCite, setFlashCite] = useState(null);
   const inputRef = useRef(null);
   const lastSavedRef = useRef('');
 
@@ -698,6 +864,25 @@ export default function BrowserPage() {
   useEffect(() => {
     setAddressInput(activeTab?.content?.payload?.url || activeTab?.url || '');
   }, [activeId, activeTab?.url, activeTab?.content?.payload?.url]);
+
+  // Drop the previous answer's grounding highlights when the user
+  // switches tab or loads a different article — they belong to the old
+  // page and are meaningless against the new one.
+  const currentReaderUrl = activeTab?.content?.payload?.url || '';
+  useEffect(() => {
+    setAskCitations([]);
+    setFlashCite(null);
+  }, [activeId, currentReaderUrl]);
+
+  const handleCitationClick = useCallback((c) => {
+    if (!c) return;
+    setFlashCite({ citationIndex: c.index, nonce: Date.now() });
+  }, []);
+
+  const handleSpanClick = useCallback((ci) => {
+    if (!Number.isFinite(ci)) return;
+    setFlashCite({ citationIndex: ci, nonce: Date.now() });
+  }, []);
 
   const updateTab = useCallback((id, patch) => {
     setTabs((prev) => prev.map((tt) => tt.id === id ? { ...tt, ...patch } : tt));
@@ -1030,7 +1215,13 @@ export default function BrowserPage() {
               />
             )}
             {activeTab?.content?.kind === 'reader' && (
-              <ReaderArticle payload={activeTab.content.payload} lang={lang} />
+              <ReaderArticle
+                payload={activeTab.content.payload}
+                lang={lang}
+                citations={askCitations}
+                flashCite={flashCite}
+                onSpanClick={handleSpanClick}
+              />
             )}
             {activeTab?.content?.kind === 'blocked' && (
               <BlockedView
@@ -1055,12 +1246,24 @@ export default function BrowserPage() {
           {/* Side panel (Ask Syra) */}
           {panelOpen && (
             <div className="hidden w-[360px] shrink-0 md:block">
-              <AskSyraPanel activeTab={activeTab} lang={lang} onClose={() => setPanelOpen(false)} />
+              <AskSyraPanel
+                activeTab={activeTab}
+                lang={lang}
+                onClose={() => setPanelOpen(false)}
+                onCitationsChange={setAskCitations}
+                onCitationClick={handleCitationClick}
+              />
             </div>
           )}
           {panelOpen && (
             <div className="absolute inset-y-0 right-0 z-30 w-full max-w-sm bg-white shadow-2xl md:hidden dark:bg-slate-900">
-              <AskSyraPanel activeTab={activeTab} lang={lang} onClose={() => setPanelOpen(false)} />
+              <AskSyraPanel
+                activeTab={activeTab}
+                lang={lang}
+                onClose={() => setPanelOpen(false)}
+                onCitationsChange={setAskCitations}
+                onCitationClick={handleCitationClick}
+              />
             </div>
           )}
         </div>
