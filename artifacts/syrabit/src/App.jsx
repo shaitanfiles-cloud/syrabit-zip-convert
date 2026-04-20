@@ -118,6 +118,7 @@ const PYQReplicaPage         = lazy(() => import("@/pages/PYQReplicaPage"));
 const PersonalizedCmsPage    = lazy(() => import("@/pages/PersonalizedCmsPage"));
 const AboutPage              = lazy(() => import("@/pages/AboutPage"));
 const TechnologyPage         = lazy(() => import("@/pages/TechnologyPage"));
+const BrowsePage             = lazy(() => import("@/pages/BrowsePage"));
 
 // ── Page loading fallback (boot splash) ──────────────────────────────────────
 const PageFallbackContent = () => (
@@ -322,6 +323,7 @@ export function AppRoutes() {
 
       {/* ── Protected routes (require login) ── */}
       <Route path="/chat"              element={<ChatPage />} />
+      <Route path="/read"              element={<BrowsePage />} />
       <Route path="/history"           element={<HistoryPage />} />
       <Route path="/profile"           element={<ProfilePage />} />
 
