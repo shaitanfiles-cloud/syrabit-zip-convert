@@ -44,6 +44,7 @@ export default function HierarchyTree({
   selBoard, setSelBoard, selClass, setSelClass,
   selStream, setSelStream, setSelSubject, setEditView,
   streamNodeLabel, streamPlaceholder,
+  classNodeLabel = 'Classes', classPlaceholder = 'Class',
   onDelete, onCreateBoard, onCreateClass, onCreateStream,
   onUpdateStatus,
 }) {
@@ -68,7 +69,7 @@ export default function HierarchyTree({
 
             {selBoard === b.id && (
               <div className="ml-5 mt-1 space-y-1 border-l border-gray-100 pl-3">
-                <p className="text-[10px] uppercase tracking-wider text-gray-300 px-1 font-semibold">Classes</p>
+                <p className="text-[10px] uppercase tracking-wider text-gray-300 px-1 font-semibold">{classNodeLabel}</p>
                 {filteredClasses.map(c => (
                   <div key={c.id}>
                     <div className="flex items-center group">
@@ -105,7 +106,7 @@ export default function HierarchyTree({
                     )}
                   </div>
                 ))}
-                <InlineCreator placeholder="Class" onCreate={onCreateClass} icon={GraduationCap} color="blue" />
+                <InlineCreator placeholder={classPlaceholder} onCreate={onCreateClass} icon={GraduationCap} color="blue" />
               </div>
             )}
           </div>

@@ -65,6 +65,8 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const isBoardDegree = isDegreeBoard(boardData?.name);
   const streamNodeLabel = isBoardDegree ? 'Courses' : 'Streams';
   const streamPlaceholder = isBoardDegree ? 'Course Type' : 'Stream';
+  const classNodeLabel = isBoardDegree ? 'Semesters' : 'Classes';
+  const classPlaceholder = isBoardDegree ? 'Semester' : 'Class';
   const filteredClasses = selBoard ? classes.filter(c => c.board_id === selBoard) : [];
   const filteredStreams = selClass ? streams.filter(s => s.class_id === selClass) : [];
   const baseSubjects = selStream ? subjects.filter(s => s.stream_id === selStream) : subjects;
@@ -556,6 +558,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                 selBoard={selBoard} setSelBoard={setSelBoard} selClass={selClass} setSelClass={setSelClass}
                 selStream={selStream} setSelStream={setSelStream} setSelSubject={setSelSubject} setEditView={setEditView}
                 streamNodeLabel={streamNodeLabel} streamPlaceholder={streamPlaceholder}
+                classNodeLabel={classNodeLabel} classPlaceholder={classPlaceholder}
                 onDelete={handleDelete} onCreateBoard={handleCreateBoard} onCreateClass={handleCreateClass} onCreateStream={handleCreateStream}
                 onUpdateStatus={handleUpdateHierarchyStatus}
               />
@@ -565,7 +568,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                     <div className="text-center max-w-md">
                       <Layers size={56} className="mx-auto text-gray-200 mb-4" />
                       <h3 className="text-xl font-bold text-gray-900 mb-2">All-in-One Content Manager</h3>
-                      <p className="text-gray-500 text-sm mb-2">Navigate the tree on the left: Board → Class → {streamPlaceholder} → Subject</p>
+                      <p className="text-gray-500 text-sm mb-2">Navigate the tree on the left: Board → {classPlaceholder} → {streamPlaceholder} → Subject</p>
                       <p className="text-gray-400 text-xs">Or use the search bar to find any subject</p>
                     </div>
                   </div>
