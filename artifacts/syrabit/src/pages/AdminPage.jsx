@@ -359,7 +359,7 @@ export default function AdminPage() {
         </header>
 
         <main className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'contenthub' ? '' : 'overflow-y-auto p-3 sm:p-4 md:p-6'}`}>
-          <SectionErrorBoundary name={activeLabel}>
+          <SectionErrorBoundary key={activeSection} name={activeLabel}>
             <Suspense fallback={
               <div className="flex items-center justify-center h-40 gap-3">
                 <Loader2 className="w-5 h-5 animate-spin text-violet-500" />
