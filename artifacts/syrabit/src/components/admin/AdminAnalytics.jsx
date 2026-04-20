@@ -17,6 +17,7 @@ import ConversionsTab from './analytics/ConversionsTab';
 import ContentCardViewsTab from './analytics/ContentCardViewsTab';
 import CloudflareAnalyticsBanner from './analytics/CloudflareAnalyticsBanner';
 
+import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 export default function AdminAnalytics({ adminToken, onNavigate }) {
   const [data, setData]         = useState(null);
   const [funnel, setFunnel]     = useState(null);
@@ -161,93 +162,95 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
   ];
 
   return (
-    <div className="p-6 space-y-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-gray-900 font-semibold text-lg">Analytics</h2>
-          {lastRefresh && (
-            <p className="text-gray-400 text-xs mt-0.5">
-              Updated {Math.floor((Date.now() - lastRefresh) / 1000)}s ago · auto-refreshes every 60s
-            </p>
-          )}
-        </div>
-        <button onClick={() => load(true)} disabled={refreshing}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs text-gray-500 hover:text-gray-700 transition-all bg-white border border-gray-200 shadow-sm">
-          <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} /> Refresh
-        </button>
-      </div>
-
-      {/* Task #456: surfaces last_error / consecutive_failures / blocked_for_seconds
-          plus a one-click "Re-check now" button (POST /admin/analytics/cf-recheck)
-          and a deep-link to https://dash.cloudflare.com/profile/api-tokens with the
-          three required scopes pre-listed. Self-hides when auth_ok=true. */}
-      <CloudflareAnalyticsBanner
-        adminToken={adminToken}
-        onRecheck={() => load(true)}
-      />
-
-      <div className="flex gap-1 flex-wrap rounded-xl p-1 w-fit bg-gray-100">
-        {TABS.map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              tab === t.id
-                ? 'text-white bg-violet-600 shadow-sm'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}>
-            {t.label}
+    <SectionErrorBoundary name="Analytics">
+      <div className="p-6 space-y-5">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-gray-900 font-semibold text-lg">Analytics</h2>
+            {lastRefresh && (
+              <p className="text-gray-400 text-xs mt-0.5">
+                Updated {Math.floor((Date.now() - lastRefresh) / 1000)}s ago · auto-refreshes every 60s
+              </p>
+            )}
+          </div>
+          <button onClick={() => load(true)} disabled={refreshing}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs text-gray-500 hover:text-gray-700 transition-all bg-white border border-gray-200 shadow-sm">
+            <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} /> Refresh
           </button>
-        ))}
+        </div>
+
+        {/* Task #456: surfaces last_error / consecutive_failures / blocked_for_seconds
+            plus a one-click "Re-check now" button (POST /admin/analytics/cf-recheck)
+            and a deep-link to https://dash.cloudflare.com/profile/api-tokens with the
+            three required scopes pre-listed. Self-hides when auth_ok=true. */}
+        <CloudflareAnalyticsBanner
+          adminToken={adminToken}
+          onRecheck={() => load(true)}
+        />
+
+        <div className="flex gap-1 flex-wrap rounded-xl p-1 w-fit bg-gray-100">
+          {TABS.map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                tab === t.id
+                  ? 'text-white bg-violet-600 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {tab === 'overview' && (
+          <OverviewTab data={data} vs={vs} widgetErrors={widgetErrors} load={load}
+            mrr={mrr} predicted={predicted} growth={growth} arpu={arpu} ltv={ltv}
+            cfConnected={data?.cf_connected}
+            overviewDays={overviewDays} setOverviewDays={setOverviewDays}
+            adminToken={adminToken} />
+        )}
+
+        {tab === 'daily' && (
+          <DailyStatsTab dailyDays={dailyDays} setDailyDays={setDailyDays}
+            dailyLoading={dailyLoading} dailyData={dailyData} loadDailyAnalytics={loadDailyAnalytics} />
+        )}
+
+        {tab === 'funnel' && (
+          <FunnelTab funnel={funnel} widgetErrors={widgetErrors} load={load} />
+        )}
+
+        {tab === 'heatmap' && (
+          <HeatmapTab heatmap={heatmap} aiInsight={aiInsight} widgetErrors={widgetErrors} load={load} />
+        )}
+
+        {tab === 'cardviews' && (
+          <ContentCardViewsTab adminToken={adminToken} />
+        )}
+
+        {tab === 'seo' && (
+          <SeoPagesTab data={data} vs={vs} ga4Status={ga4Status}
+            ga4Testing={ga4Testing} ga4TestResult={ga4TestResult}
+            handleGA4Connect={handleGA4Connect} handleGA4Test={handleGA4Test}
+            onNavigate={onNavigate} />
+        )}
+
+        {tab === 'revenue' && (
+          <RevenueTab widgetErrors={widgetErrors} load={load} mrr={mrr} predicted={predicted}
+            growth={growth} arpu={arpu} ltv={ltv} paidUsers={paidUsers}
+            dailyRev={dailyRev} cohortData={cohortData} predict={predict} revenue={revenue} />
+        )}
+
+        {tab === 'predict' && (
+          <PredictionsTab widgetErrors={widgetErrors} load={load} mrr={mrr} predicted={predicted}
+            growth={growth} aiInsight={aiInsight} topSubject={topSubject} predict={predict} />
+        )}
+
+        {tab === 'pages' && (
+          <ConversionsTab pageConvData={pageConvData} pageConvLoading={pageConvLoading}
+            loadPageConversions={loadPageConversions} />
+        )}
+
+        <AdminQuickLinks links={['seomanager','users','conversations','monetization','dashboard']} onNavigate={onNavigate} />
       </div>
-
-      {tab === 'overview' && (
-        <OverviewTab data={data} vs={vs} widgetErrors={widgetErrors} load={load}
-          mrr={mrr} predicted={predicted} growth={growth} arpu={arpu} ltv={ltv}
-          cfConnected={data?.cf_connected}
-          overviewDays={overviewDays} setOverviewDays={setOverviewDays}
-          adminToken={adminToken} />
-      )}
-
-      {tab === 'daily' && (
-        <DailyStatsTab dailyDays={dailyDays} setDailyDays={setDailyDays}
-          dailyLoading={dailyLoading} dailyData={dailyData} loadDailyAnalytics={loadDailyAnalytics} />
-      )}
-
-      {tab === 'funnel' && (
-        <FunnelTab funnel={funnel} widgetErrors={widgetErrors} load={load} />
-      )}
-
-      {tab === 'heatmap' && (
-        <HeatmapTab heatmap={heatmap} aiInsight={aiInsight} widgetErrors={widgetErrors} load={load} />
-      )}
-
-      {tab === 'cardviews' && (
-        <ContentCardViewsTab adminToken={adminToken} />
-      )}
-
-      {tab === 'seo' && (
-        <SeoPagesTab data={data} vs={vs} ga4Status={ga4Status}
-          ga4Testing={ga4Testing} ga4TestResult={ga4TestResult}
-          handleGA4Connect={handleGA4Connect} handleGA4Test={handleGA4Test}
-          onNavigate={onNavigate} />
-      )}
-
-      {tab === 'revenue' && (
-        <RevenueTab widgetErrors={widgetErrors} load={load} mrr={mrr} predicted={predicted}
-          growth={growth} arpu={arpu} ltv={ltv} paidUsers={paidUsers}
-          dailyRev={dailyRev} cohortData={cohortData} predict={predict} revenue={revenue} />
-      )}
-
-      {tab === 'predict' && (
-        <PredictionsTab widgetErrors={widgetErrors} load={load} mrr={mrr} predicted={predicted}
-          growth={growth} aiInsight={aiInsight} topSubject={topSubject} predict={predict} />
-      )}
-
-      {tab === 'pages' && (
-        <ConversionsTab pageConvData={pageConvData} pageConvLoading={pageConvLoading}
-          loadPageConversions={loadPageConversions} />
-      )}
-
-      <AdminQuickLinks links={['seomanager','users','conversations','monetization','dashboard']} onNavigate={onNavigate} />
-    </div>
+    </SectionErrorBoundary>
   );
 }

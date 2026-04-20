@@ -15,6 +15,7 @@ import ConfirmDialog from './content-editor/ConfirmDialog';
 import StatusBadge, { normalizeStatus, STATUS_FILTER_OPTIONS } from './content-editor/StatusBadge';
 import StatusQuickToggle from './content-editor/StatusQuickToggle';
 
+import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 export default function AdminContentEditor({ adminToken, onNavigate, hubContext, onHubContext, onHierarchyChange }) {
   const [boards, setBoards] = useState([]);
   const [classes, setClasses] = useState([]);
@@ -485,253 +486,255 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   if (selSubject) breadcrumb.push({ label: subjectData?.name || selSubject, onClick: () => { setEditView(null); } });
 
   return (
-    <div className="h-full flex flex-col" style={{ background: '#f8f9fc' }}>
-      <>
-        <div className="h-14 border-b border-gray-200 flex items-center justify-between px-6 bg-white">
-          <div className="flex items-center gap-2 min-w-0">
-            {breadcrumb.length > 0 && (
-              <div className="flex items-center gap-1 text-sm text-gray-400 min-w-0 overflow-hidden">
-                {breadcrumb.map((b, i) => (
-                  <span key={i} className="flex items-center gap-1 min-w-0">
-                    <ChevronRight size={12} className="flex-shrink-0" />
-                    <button onClick={b.onClick} className="hover:text-violet-600 truncate max-w-[120px] transition-colors">{b.label}</button>
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="relative flex-shrink-0 w-64">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search all subjects..." className="w-full h-9 pl-8 pr-3 rounded-xl text-sm text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-500/20" data-testid="search-subjects" />
-          </div>
-        </div>
-
-        {searchQuery && searchFiltered ? (
-          <div className="flex-1 overflow-y-auto p-6">
-            <p className="text-sm text-gray-400 mb-4">{searchFiltered.length} subject(s) matching "{searchQuery}"</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {searchFiltered.map(s => (
-                <div
-                  key={s.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => { setSearchQuery(''); const st = streams.find(x => x.id === s.stream_id); if (st) { const cl = classes.find(x => x.id === st.class_id); if (cl) setSelBoard(cl.board_id); setSelClass(st.class_id); } setSelStream(s.stream_id); setSelSubject(s.id); }}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSearchQuery(''); const st = streams.find(x => x.id === s.stream_id); if (st) { const cl = classes.find(x => x.id === st.class_id); if (cl) setSelBoard(cl.board_id); setSelClass(st.class_id); } setSelStream(s.stream_id); setSelSubject(s.id); } }}
-                  className="p-4 rounded-xl border border-gray-200 hover:border-violet-300 bg-white text-left transition-colors shadow-sm cursor-pointer focus:outline-none focus:ring-2 focus:ring-violet-400"
-                  data-testid={`search-result-${s.id}`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-medium text-gray-900 truncate">{s.icon} {s.name}</p>
-                    <StatusQuickToggle
-                      status={s.status}
-                      onChange={(next) => handleSubjectStatusChange(s.id, next)}
-                      testIdPrefix={`search-status-toggle-${s.id}`}
-                    />
-                  </div>
-                  <p className="text-xs text-gray-400 truncate mt-1">{s.description}</p>
+    <SectionErrorBoundary name="Content Editor">
+      <div className="h-full flex flex-col" style={{ background: '#f8f9fc' }}>
+        <>
+          <div className="h-14 border-b border-gray-200 flex items-center justify-between px-6 bg-white">
+            <div className="flex items-center gap-2 min-w-0">
+              {breadcrumb.length > 0 && (
+                <div className="flex items-center gap-1 text-sm text-gray-400 min-w-0 overflow-hidden">
+                  {breadcrumb.map((b, i) => (
+                    <span key={i} className="flex items-center gap-1 min-w-0">
+                      <ChevronRight size={12} className="flex-shrink-0" />
+                      <button onClick={b.onClick} className="hover:text-violet-600 truncate max-w-[120px] transition-colors">{b.label}</button>
+                    </span>
+                  ))}
                 </div>
-              ))}
-              {searchFiltered.length === 0 && <p className="text-gray-400 text-sm col-span-3">No subjects found</p>}
+              )}
+            </div>
+            <div className="relative flex-shrink-0 w-64">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search all subjects..." className="w-full h-9 pl-8 pr-3 rounded-xl text-sm text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-500/20" data-testid="search-subjects" />
             </div>
           </div>
-        ) : editView === 'new-chapter' || editView === 'edit-chapter' ? (
-          <ChapterEditForm
-            editView={editView} editTarget={editTarget} contentForm={contentForm} setContentForm={setContentForm}
-            subjectData={subjectData} saving={saving} chapterStats={chapterStats}
-            onSave={editView === 'edit-chapter' ? handleUpdateChapter : handleCreateChapter}
-            onCancel={() => { setEditView(null); setEditTarget(null); setChapterStats(null); }}
-            onFileAttach={handleFileAttach} uploading={uploading}
-            onAiParse={handleAiParse} aiParsing={aiParsing} onLoadChapterStats={loadChapterStats}
-            editorRef={editorRef} editorKey={editorKey} setEditorKey={setEditorKey}
-            showPreview={showPreview} setShowPreview={setShowPreview}
-            fileInputRef={fileInputRef}
-            adminToken={adminToken} boardId={selBoard} classId={selClass} streamId={selStream}
-          />
-        ) : (
-          <div className="flex-1 flex overflow-hidden">
-            <HierarchyTree
-              boards={boards} filteredClasses={filteredClasses} filteredStreams={filteredStreams}
-              selBoard={selBoard} setSelBoard={setSelBoard} selClass={selClass} setSelClass={setSelClass}
-              selStream={selStream} setSelStream={setSelStream} setSelSubject={setSelSubject} setEditView={setEditView}
-              streamNodeLabel={streamNodeLabel} streamPlaceholder={streamPlaceholder}
-              onDelete={handleDelete} onCreateBoard={handleCreateBoard} onCreateClass={handleCreateClass} onCreateStream={handleCreateStream}
-              onUpdateStatus={handleUpdateHierarchyStatus}
+
+          {searchQuery && searchFiltered ? (
+            <div className="flex-1 overflow-y-auto p-6">
+              <p className="text-sm text-gray-400 mb-4">{searchFiltered.length} subject(s) matching "{searchQuery}"</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {searchFiltered.map(s => (
+                  <div
+                    key={s.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => { setSearchQuery(''); const st = streams.find(x => x.id === s.stream_id); if (st) { const cl = classes.find(x => x.id === st.class_id); if (cl) setSelBoard(cl.board_id); setSelClass(st.class_id); } setSelStream(s.stream_id); setSelSubject(s.id); }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSearchQuery(''); const st = streams.find(x => x.id === s.stream_id); if (st) { const cl = classes.find(x => x.id === st.class_id); if (cl) setSelBoard(cl.board_id); setSelClass(st.class_id); } setSelStream(s.stream_id); setSelSubject(s.id); } }}
+                    className="p-4 rounded-xl border border-gray-200 hover:border-violet-300 bg-white text-left transition-colors shadow-sm cursor-pointer focus:outline-none focus:ring-2 focus:ring-violet-400"
+                    data-testid={`search-result-${s.id}`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-medium text-gray-900 truncate">{s.icon} {s.name}</p>
+                      <StatusQuickToggle
+                        status={s.status}
+                        onChange={(next) => handleSubjectStatusChange(s.id, next)}
+                        testIdPrefix={`search-status-toggle-${s.id}`}
+                      />
+                    </div>
+                    <p className="text-xs text-gray-400 truncate mt-1">{s.description}</p>
+                  </div>
+                ))}
+                {searchFiltered.length === 0 && <p className="text-gray-400 text-sm col-span-3">No subjects found</p>}
+              </div>
+            </div>
+          ) : editView === 'new-chapter' || editView === 'edit-chapter' ? (
+            <ChapterEditForm
+              editView={editView} editTarget={editTarget} contentForm={contentForm} setContentForm={setContentForm}
+              subjectData={subjectData} saving={saving} chapterStats={chapterStats}
+              onSave={editView === 'edit-chapter' ? handleUpdateChapter : handleCreateChapter}
+              onCancel={() => { setEditView(null); setEditTarget(null); setChapterStats(null); }}
+              onFileAttach={handleFileAttach} uploading={uploading}
+              onAiParse={handleAiParse} aiParsing={aiParsing} onLoadChapterStats={loadChapterStats}
+              editorRef={editorRef} editorKey={editorKey} setEditorKey={setEditorKey}
+              showPreview={showPreview} setShowPreview={setShowPreview}
+              fileInputRef={fileInputRef}
+              adminToken={adminToken} boardId={selBoard} classId={selClass} streamId={selStream}
             />
-            <div className="flex-1 overflow-y-auto">
-              {!selStream && !selSubject ? (
-                <div className="flex items-center justify-center h-full">
-                  <div className="text-center max-w-md">
-                    <Layers size={56} className="mx-auto text-gray-200 mb-4" />
-                    <h3 className="text-xl font-bold text-gray-900 mb-2">All-in-One Content Manager</h3>
-                    <p className="text-gray-500 text-sm mb-2">Navigate the tree on the left: Board → Class → {streamPlaceholder} → Subject</p>
-                    <p className="text-gray-400 text-xs">Or use the search bar to find any subject</p>
-                  </div>
-                </div>
-              ) : selStream && !selSubject ? (
-                <div className="p-6 max-w-4xl mx-auto space-y-4">
-                  {renderBulkBar('subjects')}
-                  <div className="mb-2">
-                    <h3 className="text-xl font-bold text-gray-900">{streamData?.icon} {streamData?.name}</h3>
-                    <p className="text-sm text-gray-400">{streamData?.description}</p>
-                  </div>
-                  <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <div className="flex items-center gap-2">
-                      {filteredSubjects.length > 0 && (() => {
-                        const visibleIds = filteredSubjects.map(s => s.id);
-                        const allSel = visibleIds.every(id => selectedSubjectIds.has(id));
-                        const someSel = visibleIds.some(id => selectedSubjectIds.has(id));
-                        return (
-                          <input
-                            type="checkbox"
-                            checked={allSel}
-                            ref={el => { if (el) el.indeterminate = !allSel && someSel; }}
-                            onChange={() => toggleSubjectSelectAll(visibleIds, !allSel)}
-                            className="h-3.5 w-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-400 cursor-pointer"
-                            title={allSel ? 'Clear selection' : 'Select all visible subjects'}
-                            data-testid="subject-select-all"
-                          />
-                        );
-                      })()}
-                      <p className="text-sm font-semibold text-gray-500">Subjects ({filteredSubjects.length}{filteredSubjects.length !== baseSubjects.length ? ` of ${baseSubjects.length}` : ''})</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={subjectStatusFilter}
-                        onChange={(e) => setSubjectStatusFilter(e.target.value)}
-                        className="h-8 px-2 rounded-lg text-xs text-gray-700 bg-white border border-gray-200 outline-none focus:border-violet-400"
-                        data-testid="subject-status-filter"
-                      >
-                        {STATUS_FILTER_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                      </select>
-                      <button
-                        onClick={() => setSubjectSortByStatus(v => !v)}
-                        className={`h-8 px-2 rounded-lg text-xs border transition-colors ${subjectSortByStatus ? 'bg-violet-50 text-violet-600 border-violet-200' : 'bg-white text-gray-500 border-gray-200 hover:text-gray-700'}`}
-                        title="Sort by status (drafts/unpublished first)"
-                        data-testid="subject-sort-status"
-                      >
-                        Sort: status
-                      </button>
+          ) : (
+            <div className="flex-1 flex overflow-hidden">
+              <HierarchyTree
+                boards={boards} filteredClasses={filteredClasses} filteredStreams={filteredStreams}
+                selBoard={selBoard} setSelBoard={setSelBoard} selClass={selClass} setSelClass={setSelClass}
+                selStream={selStream} setSelStream={setSelStream} setSelSubject={setSelSubject} setEditView={setEditView}
+                streamNodeLabel={streamNodeLabel} streamPlaceholder={streamPlaceholder}
+                onDelete={handleDelete} onCreateBoard={handleCreateBoard} onCreateClass={handleCreateClass} onCreateStream={handleCreateStream}
+                onUpdateStatus={handleUpdateHierarchyStatus}
+              />
+              <div className="flex-1 overflow-y-auto">
+                {!selStream && !selSubject ? (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-center max-w-md">
+                      <Layers size={56} className="mx-auto text-gray-200 mb-4" />
+                      <h3 className="text-xl font-bold text-gray-900 mb-2">All-in-One Content Manager</h3>
+                      <p className="text-gray-500 text-sm mb-2">Navigate the tree on the left: Board → Class → {streamPlaceholder} → Subject</p>
+                      <p className="text-gray-400 text-xs">Or use the search bar to find any subject</p>
                     </div>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {filteredSubjects.map(s => (
-                      <div key={s.id} className={`p-4 rounded-xl border bg-white text-left transition-colors group cursor-pointer shadow-sm ${selectedSubjectIds.has(s.id) ? 'border-violet-400 ring-2 ring-violet-200' : 'border-gray-200 hover:border-violet-300'}`} onClick={() => setSelSubject(s.id)}>
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2 min-w-0">
+                ) : selStream && !selSubject ? (
+                  <div className="p-6 max-w-4xl mx-auto space-y-4">
+                    {renderBulkBar('subjects')}
+                    <div className="mb-2">
+                      <h3 className="text-xl font-bold text-gray-900">{streamData?.icon} {streamData?.name}</h3>
+                      <p className="text-sm text-gray-400">{streamData?.description}</p>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="flex items-center gap-2">
+                        {filteredSubjects.length > 0 && (() => {
+                          const visibleIds = filteredSubjects.map(s => s.id);
+                          const allSel = visibleIds.every(id => selectedSubjectIds.has(id));
+                          const someSel = visibleIds.some(id => selectedSubjectIds.has(id));
+                          return (
                             <input
                               type="checkbox"
-                              checked={selectedSubjectIds.has(s.id)}
-                              onClick={(e) => e.stopPropagation()}
-                              onChange={(e) => { e.stopPropagation(); toggleSubjectSelect(s.id); }}
-                              className="h-3.5 w-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-400 cursor-pointer flex-shrink-0"
-                              title="Select subject for bulk actions"
-                              data-testid={`subject-select-${s.id}`}
+                              checked={allSel}
+                              ref={el => { if (el) el.indeterminate = !allSel && someSel; }}
+                              onChange={() => toggleSubjectSelectAll(visibleIds, !allSel)}
+                              className="h-3.5 w-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-400 cursor-pointer"
+                              title={allSel ? 'Clear selection' : 'Select all visible subjects'}
+                              data-testid="subject-select-all"
                             />
-                            <p className="text-sm font-medium text-gray-900 truncate">{s.icon || '📚'} {s.name}</p>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <StatusQuickToggle
-                              status={s.status}
-                              onChange={(next) => handleSubjectStatusChange(s.id, next)}
-                              testIdPrefix={`subject-status-toggle-${s.id}`}
-                            />
-                            <button onClick={(e) => { e.stopPropagation(); setEditingSubject(s.id); setSubjectEditForm({ name: s.name || '', description: s.description || '' }); }} className="p-1 rounded opacity-0 group-hover:opacity-100 text-gray-300 hover:text-violet-600"><Edit2 size={12} /></button>
-                            <button onClick={(e) => { e.stopPropagation(); handleDelete('subject', s.id); }} className="p-1 rounded opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
-                          </div>
-                        </div>
-                        {editingSubject === s.id ? (
-                          <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
-                            <input value={subjectEditForm.name} onChange={(e) => setSubjectEditForm(f => ({ ...f, name: e.target.value }))} className="w-full h-8 px-3 rounded-lg text-sm text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-400" autoFocus />
-                            <input value={subjectEditForm.description} onChange={(e) => setSubjectEditForm(f => ({ ...f, description: e.target.value }))} placeholder="Description" className="w-full h-8 px-3 rounded-lg text-sm text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-400" />
-                            <div className="flex gap-2">
-                              <button onClick={() => setEditingSubject(null)} className="flex-1 h-7 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs">Cancel</button>
-                              <button onClick={handleUpdateSubject} disabled={savingSubject || !subjectEditForm.name.trim()} className="flex-1 h-7 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-xs font-medium disabled:opacity-40 flex items-center justify-center gap-1">
-                                {savingSubject ? <Loader2 size={10} className="animate-spin" /> : null} Save
-                              </button>
+                          );
+                        })()}
+                        <p className="text-sm font-semibold text-gray-500">Subjects ({filteredSubjects.length}{filteredSubjects.length !== baseSubjects.length ? ` of ${baseSubjects.length}` : ''})</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={subjectStatusFilter}
+                          onChange={(e) => setSubjectStatusFilter(e.target.value)}
+                          className="h-8 px-2 rounded-lg text-xs text-gray-700 bg-white border border-gray-200 outline-none focus:border-violet-400"
+                          data-testid="subject-status-filter"
+                        >
+                          {STATUS_FILTER_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                        </select>
+                        <button
+                          onClick={() => setSubjectSortByStatus(v => !v)}
+                          className={`h-8 px-2 rounded-lg text-xs border transition-colors ${subjectSortByStatus ? 'bg-violet-50 text-violet-600 border-violet-200' : 'bg-white text-gray-500 border-gray-200 hover:text-gray-700'}`}
+                          title="Sort by status (drafts/unpublished first)"
+                          data-testid="subject-sort-status"
+                        >
+                          Sort: status
+                        </button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {filteredSubjects.map(s => (
+                        <div key={s.id} className={`p-4 rounded-xl border bg-white text-left transition-colors group cursor-pointer shadow-sm ${selectedSubjectIds.has(s.id) ? 'border-violet-400 ring-2 ring-violet-200' : 'border-gray-200 hover:border-violet-300'}`} onClick={() => setSelSubject(s.id)}>
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <input
+                                type="checkbox"
+                                checked={selectedSubjectIds.has(s.id)}
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={(e) => { e.stopPropagation(); toggleSubjectSelect(s.id); }}
+                                className="h-3.5 w-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-400 cursor-pointer flex-shrink-0"
+                                title="Select subject for bulk actions"
+                                data-testid={`subject-select-${s.id}`}
+                              />
+                              <p className="text-sm font-medium text-gray-900 truncate">{s.icon || '📚'} {s.name}</p>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <StatusQuickToggle
+                                status={s.status}
+                                onChange={(next) => handleSubjectStatusChange(s.id, next)}
+                                testIdPrefix={`subject-status-toggle-${s.id}`}
+                              />
+                              <button onClick={(e) => { e.stopPropagation(); setEditingSubject(s.id); setSubjectEditForm({ name: s.name || '', description: s.description || '' }); }} className="p-1 rounded opacity-0 group-hover:opacity-100 text-gray-300 hover:text-violet-600"><Edit2 size={12} /></button>
+                              <button onClick={(e) => { e.stopPropagation(); handleDelete('subject', s.id); }} className="p-1 rounded opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
                             </div>
                           </div>
-                        ) : (
-                          <>
-                            <p className="text-xs text-gray-400 truncate mt-1">{s.description}</p>
-                            <div className="flex items-center justify-between mt-2">
-                              <p className="text-[10px] text-gray-400">{s.chapter_count || 0} chapters</p>
+                          {editingSubject === s.id ? (
+                            <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
+                              <input value={subjectEditForm.name} onChange={(e) => setSubjectEditForm(f => ({ ...f, name: e.target.value }))} className="w-full h-8 px-3 rounded-lg text-sm text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-400" autoFocus />
+                              <input value={subjectEditForm.description} onChange={(e) => setSubjectEditForm(f => ({ ...f, description: e.target.value }))} placeholder="Description" className="w-full h-8 px-3 rounded-lg text-sm text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-400" />
+                              <div className="flex gap-2">
+                                <button onClick={() => setEditingSubject(null)} className="flex-1 h-7 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs">Cancel</button>
+                                <button onClick={handleUpdateSubject} disabled={savingSubject || !subjectEditForm.name.trim()} className="flex-1 h-7 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-xs font-medium disabled:opacity-40 flex items-center justify-center gap-1">
+                                  {savingSubject ? <Loader2 size={10} className="animate-spin" /> : null} Save
+                                </button>
+                              </div>
                             </div>
-                          </>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                  <InlineCreator placeholder="Subject" onCreate={handleCreateSubject} icon={Layers} color="violet" />
-                </div>
-              ) : selSubject ? (
-                <div className="p-6 max-w-5xl mx-auto space-y-5">
-                  {renderBulkBar('chapters')}
-                  <div className="flex items-start justify-between">
-                    {editingSubject === selSubject ? (
-                      <div className="flex-1 max-w-md space-y-2">
-                        <input value={subjectEditForm.name} onChange={(e) => setSubjectEditForm(f => ({ ...f, name: e.target.value }))} className="w-full h-10 px-4 rounded-xl text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-400 text-lg font-bold" autoFocus />
-                        <input value={subjectEditForm.description} onChange={(e) => setSubjectEditForm(f => ({ ...f, description: e.target.value }))} placeholder="Description" className="w-full h-9 px-4 rounded-xl text-sm text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-400" />
-                        <div className="flex gap-2">
-                          <button onClick={() => setEditingSubject(null)} className="h-8 px-4 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs">Cancel</button>
-                          <button onClick={handleUpdateSubject} disabled={savingSubject || !subjectEditForm.name.trim()} className="h-8 px-4 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-xs font-medium disabled:opacity-40 flex items-center justify-center gap-1">
-                            {savingSubject ? <Loader2 size={10} className="animate-spin" /> : null} Save
-                          </button>
+                          ) : (
+                            <>
+                              <p className="text-xs text-gray-400 truncate mt-1">{s.description}</p>
+                              <div className="flex items-center justify-between mt-2">
+                                <p className="text-[10px] text-gray-400">{s.chapter_count || 0} chapters</p>
+                              </div>
+                            </>
+                          )}
                         </div>
-                      </div>
-                    ) : (
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-xl font-bold text-gray-900">{subjectData?.icon} {subjectData?.name}</h3>
-                          <button onClick={() => { setEditingSubject(selSubject); setSubjectEditForm({ name: subjectData?.name || '', description: subjectData?.description || '' }); }} className="p-1 rounded text-gray-300 hover:text-violet-600"><Edit2 size={14} /></button>
-                        </div>
-                        <p className="text-sm text-gray-400">{subjectData?.description}</p>
-                      </div>
-                    )}
-                    {chapters.length > 0 && (
-                      <button
-                        onClick={handleBulkFormatNotes}
-                        disabled={bulkGenerating || generatingNotes.size > 0}
-                        className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold disabled:opacity-40 transition-all bg-violet-50 text-violet-600 border border-violet-200 hover:bg-violet-100"
-                      >
-                        {bulkGenerating ? <Loader2 size={12} className="animate-spin" /> : <AlignLeft size={12} />}
-                        {bulkGenerating ? 'Formatting...' : 'Format Notes'}
-                      </button>
-                    )}
+                      ))}
+                    </div>
+                    <InlineCreator placeholder="Subject" onCreate={handleCreateSubject} icon={Layers} color="violet" />
                   </div>
-                  <ThumbnailStudio adminToken={adminToken} selSubject={selSubject} subjectData={subjectData} onReload={() => reloadAll()} />
-                  <ChapterList
-                    chapters={filteredChapters} totalChapters={chapters.length}
-                    statusFilter={chapterStatusFilter} setStatusFilter={setChapterStatusFilter}
-                    sortByStatus={chapterSortByStatus} setSortByStatus={setChapterSortByStatus}
-                    chapterAssets={chapterAssets}
-                    generatingNotes={generatingNotes}
-                    onGenerateNotes={handleGenerateNotes} onDeleteChapter={handleDeleteChapter}
-                    onChangeChapterStatus={handleChapterStatusChange}
-                    selectedIds={selectedChapterIds}
-                    onToggleSelect={toggleChapterSelect}
-                    onToggleSelectAll={toggleChapterSelectAll}
-                    onViewChapter={(ch) => setViewerItem(ch)}
-                    onEditChapter={(ch) => { setEditTarget(ch); setContentForm({ title: ch.title, slug: ch.slug || '', description: ch.description || '', content: ch.content || '', content_type: ch.content_type || 'notes', order: ch.order || 1, topics: ch.topics || [], content_as: ch.content_as || '' }); setEditView('edit-chapter'); loadChapterStats(ch.id); }}
-                    selSubject={selSubject} subjectData={subjectData}
-                    onCreateNew={() => { setEditView('new-chapter'); setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: chapters.length + 1, topics: [], content_as: '' }); setChapterStats(null); }}
-                  />
-                </div>
-              ) : null}
+                ) : selSubject ? (
+                  <div className="p-6 max-w-5xl mx-auto space-y-5">
+                    {renderBulkBar('chapters')}
+                    <div className="flex items-start justify-between">
+                      {editingSubject === selSubject ? (
+                        <div className="flex-1 max-w-md space-y-2">
+                          <input value={subjectEditForm.name} onChange={(e) => setSubjectEditForm(f => ({ ...f, name: e.target.value }))} className="w-full h-10 px-4 rounded-xl text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-400 text-lg font-bold" autoFocus />
+                          <input value={subjectEditForm.description} onChange={(e) => setSubjectEditForm(f => ({ ...f, description: e.target.value }))} placeholder="Description" className="w-full h-9 px-4 rounded-xl text-sm text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-400" />
+                          <div className="flex gap-2">
+                            <button onClick={() => setEditingSubject(null)} className="h-8 px-4 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs">Cancel</button>
+                            <button onClick={handleUpdateSubject} disabled={savingSubject || !subjectEditForm.name.trim()} className="h-8 px-4 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-xs font-medium disabled:opacity-40 flex items-center justify-center gap-1">
+                              {savingSubject ? <Loader2 size={10} className="animate-spin" /> : null} Save
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-xl font-bold text-gray-900">{subjectData?.icon} {subjectData?.name}</h3>
+                            <button onClick={() => { setEditingSubject(selSubject); setSubjectEditForm({ name: subjectData?.name || '', description: subjectData?.description || '' }); }} className="p-1 rounded text-gray-300 hover:text-violet-600"><Edit2 size={14} /></button>
+                          </div>
+                          <p className="text-sm text-gray-400">{subjectData?.description}</p>
+                        </div>
+                      )}
+                      {chapters.length > 0 && (
+                        <button
+                          onClick={handleBulkFormatNotes}
+                          disabled={bulkGenerating || generatingNotes.size > 0}
+                          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold disabled:opacity-40 transition-all bg-violet-50 text-violet-600 border border-violet-200 hover:bg-violet-100"
+                        >
+                          {bulkGenerating ? <Loader2 size={12} className="animate-spin" /> : <AlignLeft size={12} />}
+                          {bulkGenerating ? 'Formatting...' : 'Format Notes'}
+                        </button>
+                      )}
+                    </div>
+                    <ThumbnailStudio adminToken={adminToken} selSubject={selSubject} subjectData={subjectData} onReload={() => reloadAll()} />
+                    <ChapterList
+                      chapters={filteredChapters} totalChapters={chapters.length}
+                      statusFilter={chapterStatusFilter} setStatusFilter={setChapterStatusFilter}
+                      sortByStatus={chapterSortByStatus} setSortByStatus={setChapterSortByStatus}
+                      chapterAssets={chapterAssets}
+                      generatingNotes={generatingNotes}
+                      onGenerateNotes={handleGenerateNotes} onDeleteChapter={handleDeleteChapter}
+                      onChangeChapterStatus={handleChapterStatusChange}
+                      selectedIds={selectedChapterIds}
+                      onToggleSelect={toggleChapterSelect}
+                      onToggleSelectAll={toggleChapterSelectAll}
+                      onViewChapter={(ch) => setViewerItem(ch)}
+                      onEditChapter={(ch) => { setEditTarget(ch); setContentForm({ title: ch.title, slug: ch.slug || '', description: ch.description || '', content: ch.content || '', content_type: ch.content_type || 'notes', order: ch.order || 1, topics: ch.topics || [], content_as: ch.content_as || '' }); setEditView('edit-chapter'); loadChapterStats(ch.id); }}
+                      selSubject={selSubject} subjectData={subjectData}
+                      onCreateNew={() => { setEditView('new-chapter'); setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: chapters.length + 1, topics: [], content_as: '' }); setChapterStats(null); }}
+                    />
+                  </div>
+                ) : null}
+              </div>
             </div>
-          </div>
-        )}
-      </>
+          )}
+        </>
 
-      {viewerItem && <ContentViewerPopup item={viewerItem} onClose={() => setViewerItem(null)} />}
-      <ConfirmDialog
-        open={confirmDialog.open}
-        title={confirmDialog.title}
-        message={confirmDialog.message}
-        confirmLabel={confirmDialog.confirmLabel || 'Delete'}
-        destructive={confirmDialog.destructive !== false}
-        onConfirm={confirmDialog.onConfirm || (() => setConfirmDialog(d => ({ ...d, open: false })))}
-        onCancel={confirmDialog.onCancel || (() => setConfirmDialog(d => ({ ...d, open: false })))}
-      />
-    </div>
+        {viewerItem && <ContentViewerPopup item={viewerItem} onClose={() => setViewerItem(null)} />}
+        <ConfirmDialog
+          open={confirmDialog.open}
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          confirmLabel={confirmDialog.confirmLabel || 'Delete'}
+          destructive={confirmDialog.destructive !== false}
+          onConfirm={confirmDialog.onConfirm || (() => setConfirmDialog(d => ({ ...d, open: false })))}
+          onCancel={confirmDialog.onCancel || (() => setConfirmDialog(d => ({ ...d, open: false })))}
+        />
+      </div>
+    </SectionErrorBoundary>
   );
 }

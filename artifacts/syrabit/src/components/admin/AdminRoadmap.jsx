@@ -4,6 +4,7 @@ import AdminQuickLinks from './AdminQuickLinks';
 import { toast } from 'sonner';
 import { adminGetRoadmap, adminCreateRoadmapItem, adminDeleteRoadmapItem, adminUpdateRoadmapItem } from '@/utils/api';
 
+import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 const STATUS_OPTIONS = ['done', 'in-progress', 'next', 'upcoming', 'future'];
 const EFFORT_OPTIONS = ['low', 'medium', 'high'];
 const IMPACT_OPTIONS = ['low', 'medium', 'high', 'critical'];
@@ -220,67 +221,69 @@ export default function AdminRoadmap({ adminToken, onNavigate }) {
   const phaseEntries = Object.entries(phases);
 
   return (
-    <div className="space-y-6 max-w-4xl">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-bold text-gray-900">Product Roadmap</h2>
-          <p className="text-sm text-gray-400 mt-0.5">Development phases and feature status</p>
+    <SectionErrorBoundary name="Roadmap">
+      <div className="space-y-6 max-w-4xl">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-bold text-gray-900">Product Roadmap</h2>
+            <p className="text-sm text-gray-400 mt-0.5">Development phases and feature status</p>
+          </div>
+          <button
+            onClick={() => setShowAdd(!showAdd)}
+            className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white transition-colors"
+          >
+            <Plus size={14} />
+            Add Item
+          </button>
         </div>
-        <button
-          onClick={() => setShowAdd(!showAdd)}
-          className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white transition-colors"
-        >
-          <Plus size={14} />
-          Add Item
-        </button>
-      </div>
 
-      {showAdd && (
-        <AddItemForm
-          adminToken={adminToken}
-          onRefresh={fetchRoadmap}
-          onClose={() => setShowAdd(false)}
-        />
-      )}
+        {showAdd && (
+          <AddItemForm
+            adminToken={adminToken}
+            onRefresh={fetchRoadmap}
+            onClose={() => setShowAdd(false)}
+          />
+        )}
 
-      {loading ? (
-        <div className="text-center py-12 text-gray-400 text-sm">Loading roadmap…</div>
-      ) : phaseEntries.length === 0 ? (
-        <div className="text-center py-12 text-gray-400 text-sm">No roadmap items yet. Click "Add Item" to get started.</div>
-      ) : (
-        phaseEntries.map(([phaseName, steps], idx) => {
-          const style = PHASE_STYLES[idx % PHASE_STYLES.length];
-          const done = steps.filter((s) => s.status === 'done').length;
-          const pct = steps.length > 0 ? Math.round((done / steps.length) * 100) : 0;
-          return (
-            <div key={phaseName} className="rounded-2xl border border-gray-200 overflow-hidden bg-white shadow-sm">
-              <div className="p-4 border-b border-gray-100">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold text-white ${style.bg} ${style.color}`}>{idx}</div>
-                    <h3 className={`font-semibold ${style.color}`}>{phaseName}</h3>
+        {loading ? (
+          <div className="text-center py-12 text-gray-400 text-sm">Loading roadmap…</div>
+        ) : phaseEntries.length === 0 ? (
+          <div className="text-center py-12 text-gray-400 text-sm">No roadmap items yet. Click "Add Item" to get started.</div>
+        ) : (
+          phaseEntries.map(([phaseName, steps], idx) => {
+            const style = PHASE_STYLES[idx % PHASE_STYLES.length];
+            const done = steps.filter((s) => s.status === 'done').length;
+            const pct = steps.length > 0 ? Math.round((done / steps.length) * 100) : 0;
+            return (
+              <div key={phaseName} className="rounded-2xl border border-gray-200 overflow-hidden bg-white shadow-sm">
+                <div className="p-4 border-b border-gray-100">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold text-white ${style.bg} ${style.color}`}>{idx}</div>
+                      <h3 className={`font-semibold ${style.color}`}>{phaseName}</h3>
+                    </div>
+                    <span className="text-xs text-gray-400">{done}/{steps.length} done · {pct}%</span>
                   </div>
-                  <span className="text-xs text-gray-400">{done}/{steps.length} done · {pct}%</span>
+                  <div className="h-1 rounded-full bg-gray-100 overflow-hidden">
+                    <div className="h-full rounded-full bg-violet-500 transition-all" style={{ width: `${pct}%` }} />
+                  </div>
                 </div>
-                <div className="h-1 rounded-full bg-gray-100 overflow-hidden">
-                  <div className="h-full rounded-full bg-violet-500 transition-all" style={{ width: `${pct}%` }} />
+                <div className="p-4 space-y-2">
+                  {steps.map((step) => (
+                    <StepCard
+                      key={step.id || step._id}
+                      step={step}
+                      adminToken={adminToken}
+                      onRefresh={fetchRoadmap}
+                    />
+                  ))}
                 </div>
               </div>
-              <div className="p-4 space-y-2">
-                {steps.map((step) => (
-                  <StepCard
-                    key={step.id || step._id}
-                    step={step}
-                    adminToken={adminToken}
-                    onRefresh={fetchRoadmap}
-                  />
-                ))}
-              </div>
-            </div>
-          );
-        })
-      )}
-      <AdminQuickLinks links={['dashboard','content','analytics']} onNavigate={onNavigate} />
-    </div>
+            );
+          })
+        )}
+        <AdminQuickLinks links={['dashboard','content','analytics']} onNavigate={onNavigate} />
+      </div>
+    </SectionErrorBoundary>
   );
 }

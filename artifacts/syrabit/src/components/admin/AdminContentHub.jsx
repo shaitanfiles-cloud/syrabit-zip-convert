@@ -8,6 +8,7 @@ import axios from 'axios';
 import { API_BASE } from '@/utils/api';
 import { authHeaders } from '@/utils/adminHelpers';
 
+import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 const AdminContentEditor = lazy(() => import('./AdminContentEditor'));
 const AdminCmsDocEditor  = lazy(() => import('./AdminCmsDocEditor'));
 const BlogPublishWizard  = lazy(() => import('./BlogPublishWizard'));
@@ -121,115 +122,117 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate, n
   const activeColor = COLOR_MAP[TABS.find(t => t.id === activeTab)?.color || 'violet'];
 
   return (
-    <div className="h-full flex flex-col" style={{ background: '#f8f9fc' }}>
+    <SectionErrorBoundary name="Content Hub">
+      <div className="h-full flex flex-col" style={{ background: '#f8f9fc' }}>
 
-      <div className="border-b px-4 py-1.5 flex items-center gap-1 flex-wrap"
-        style={{ background: '#ffffff', borderColor: '#e5e7eb' }}>
-        <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mr-2">Workflow</span>
-        {FLOW.map((step, i) => (
-          <span key={i} className="flex items-center gap-1">
-            <button
-              onClick={() => setActiveTab(step.tab)}
-              className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold transition-all ${
-                activeTab === step.tab
-                  ? COLOR_MAP[TABS.find(t => t.id === step.tab)?.color]?.badge
-                  : 'text-gray-400 hover:text-gray-600'
-              }`}
-            >
-              {step.label}
-            </button>
-            {step.arrow && <ArrowRight size={10} className="text-gray-300 flex-shrink-0" />}
-          </span>
-        ))}
-
-        {hubContext.subjectName && (
-          <span className="ml-auto flex items-center gap-1.5 flex-wrap">
-            <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px]"
-              style={{ background: '#f5f3ff', color: '#7c3aed' }}>
-              <span className="text-gray-400">subject:</span>
-              <span className="font-semibold truncate max-w-[120px]">{hubContext.subjectName}</span>
+        <div className="border-b px-4 py-1.5 flex items-center gap-1 flex-wrap"
+          style={{ background: '#ffffff', borderColor: '#e5e7eb' }}>
+          <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mr-2">Workflow</span>
+          {FLOW.map((step, i) => (
+            <span key={i} className="flex items-center gap-1">
               <button
-                onClick={() => setHubContext(EMPTY_CTX)}
-                className="text-gray-400 hover:text-gray-600 ml-0.5"
-                title="Clear context"
-              >×</button>
-            </span>
-          </span>
-        )}
-        {!hubContext.subjectName && (
-          <span className="ml-auto text-[10px] text-gray-400">{boards.length} boards · {subjects.length} subjects</span>
-        )}
-      </div>
-
-      <div className="border-b flex-shrink-0" style={{ borderColor: '#e5e7eb', background: '#ffffff' }}>
-        <div className="flex px-4 gap-1 h-12 items-end">
-          {TABS.map(tab => {
-            const colors = COLOR_MAP[tab.color];
-            const isActive = activeTab === tab.id;
-            const Icon = tab.icon;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 h-10 px-4 rounded-t-lg border-b-2 transition-all text-sm font-medium ${
-                  isActive
-                    ? `${colors.active} bg-gray-50`
-                    : 'border-transparent text-gray-400 hover:text-gray-600 hover:bg-gray-50'
+                onClick={() => setActiveTab(step.tab)}
+                className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold transition-all ${
+                  activeTab === step.tab
+                    ? COLOR_MAP[TABS.find(t => t.id === step.tab)?.color]?.badge
+                    : 'text-gray-400 hover:text-gray-600'
                 }`}
               >
-                <Icon size={14} />
-                <span className="hidden sm:inline">{tab.label}</span>
+                {step.label}
               </button>
-            );
-          })}
+              {step.arrow && <ArrowRight size={10} className="text-gray-300 flex-shrink-0" />}
+            </span>
+          ))}
+
+          {hubContext.subjectName && (
+            <span className="ml-auto flex items-center gap-1.5 flex-wrap">
+              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px]"
+                style={{ background: '#f5f3ff', color: '#7c3aed' }}>
+                <span className="text-gray-400">subject:</span>
+                <span className="font-semibold truncate max-w-[120px]">{hubContext.subjectName}</span>
+                <button
+                  onClick={() => setHubContext(EMPTY_CTX)}
+                  className="text-gray-400 hover:text-gray-600 ml-0.5"
+                  title="Clear context"
+                >×</button>
+              </span>
+            </span>
+          )}
+          {!hubContext.subjectName && (
+            <span className="ml-auto text-[10px] text-gray-400">{boards.length} boards · {subjects.length} subjects</span>
+          )}
         </div>
-      </div>
 
-      <div className="flex-1 overflow-hidden relative">
-        {loading && (
-          <div className="absolute inset-0 flex items-center justify-center z-10" style={{ background: 'rgba(248,249,252,0.80)' }}>
-            <div className="flex items-center gap-2 text-gray-400 text-sm">
-              <Loader2 size={16} className="animate-spin" /> Loading content data…
-            </div>
+        <div className="border-b flex-shrink-0" style={{ borderColor: '#e5e7eb', background: '#ffffff' }}>
+          <div className="flex px-4 gap-1 h-12 items-end">
+            {TABS.map(tab => {
+              const colors = COLOR_MAP[tab.color];
+              const isActive = activeTab === tab.id;
+              const Icon = tab.icon;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center gap-2 h-10 px-4 rounded-t-lg border-b-2 transition-all text-sm font-medium ${
+                    isActive
+                      ? `${colors.active} bg-gray-50`
+                      : 'border-transparent text-gray-400 hover:text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  <Icon size={14} />
+                  <span className="hidden sm:inline">{tab.label}</span>
+                </button>
+              );
+            })}
           </div>
-        )}
+        </div>
 
-        <Suspense fallback={<div className="flex items-center justify-center py-12 text-gray-400 text-sm"><Loader2 size={16} className="animate-spin mr-2" />Loading…</div>}>
-          {activeTab === 'editor' && (
-            <div className="h-full overflow-hidden">
-              <AdminContentEditor
-                adminToken={adminToken}
-                onNavigate={navigate}
-                hubContext={hubContext}
-                onHubContext={setHubContext}
-                onHierarchyChange={reloadHierarchy}
-              />
+        <div className="flex-1 overflow-hidden relative">
+          {loading && (
+            <div className="absolute inset-0 flex items-center justify-center z-10" style={{ background: 'rgba(248,249,252,0.80)' }}>
+              <div className="flex items-center gap-2 text-gray-400 text-sm">
+                <Loader2 size={16} className="animate-spin" /> Loading content data…
+              </div>
             </div>
           )}
 
-          {activeTab === 'cms' && (
-            <div className="h-full overflow-hidden">
-              <AdminCmsDocEditor
-                adminToken={adminToken}
-                onNavigate={navigate}
-                hubContext={hubContext}
-              />
-            </div>
-          )}
+          <Suspense fallback={<div className="flex items-center justify-center py-12 text-gray-400 text-sm"><Loader2 size={16} className="animate-spin mr-2" />Loading…</div>}>
+            {activeTab === 'editor' && (
+              <div className="h-full overflow-hidden">
+                <AdminContentEditor
+                  adminToken={adminToken}
+                  onNavigate={navigate}
+                  hubContext={hubContext}
+                  onHubContext={setHubContext}
+                  onHierarchyChange={reloadHierarchy}
+                />
+              </div>
+            )}
 
-          {activeTab === 'blog' && (
-            <div className="h-full overflow-y-auto">
-              <BlogPublishWizard
-                adminToken={adminToken}
-                onNavigate={navigate}
-                hubContext={hubContext}
-                onHubContext={setHubContext}
-              />
-            </div>
-          )}
-        </Suspense>
+            {activeTab === 'cms' && (
+              <div className="h-full overflow-hidden">
+                <AdminCmsDocEditor
+                  adminToken={adminToken}
+                  onNavigate={navigate}
+                  hubContext={hubContext}
+                />
+              </div>
+            )}
+
+            {activeTab === 'blog' && (
+              <div className="h-full overflow-y-auto">
+                <BlogPublishWizard
+                  adminToken={adminToken}
+                  onNavigate={navigate}
+                  hubContext={hubContext}
+                  onHubContext={setHubContext}
+                />
+              </div>
+            )}
+          </Suspense>
+        </div>
+
       </div>
-
-    </div>
+    </SectionErrorBoundary>
   );
 }

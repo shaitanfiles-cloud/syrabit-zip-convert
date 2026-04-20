@@ -8,6 +8,7 @@ import {
   ResponsiveContainer, Cell, Legend,
 } from 'recharts';
 import { toast } from 'sonner';
+import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 import {
   adminGetAdsOverview, adminListAdEarnings, adminAddAdEarning,
   adminDeleteAdEarning, adminUploadAdEarningsCsv, adminGetAdsenseStatus,
@@ -156,336 +157,338 @@ export default function AdminAds({ adminToken }) {
   ];
 
   return (
-    <div className="p-6 space-y-5">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h2 className="text-gray-900 font-bold text-lg flex items-center gap-2">
-            <BarChart2 size={18} className="text-violet-500" />
-            Ad Revenue
-          </h2>
-          <p className="text-gray-500 text-sm mt-1">
-            Cross-network earnings, fill rate, RPM, and viewability
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <select
-            value={days}
-            onChange={(e) => setDays(parseInt(e.target.value, 10))}
-            className="px-3 py-2 rounded-xl text-xs bg-white border border-gray-200 text-gray-700"
-          >
-            <option value={7}>Last 7 days</option>
-            <option value={30}>Last 30 days</option>
-            <option value={90}>Last 90 days</option>
-          </select>
-          <button
-            onClick={load}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs text-gray-500 hover:text-gray-700 transition-colors bg-white border border-gray-200 shadow-sm"
-          >
-            <RefreshCw size={12} /> Refresh
-          </button>
-        </div>
-      </div>
-
-      <div className="flex gap-1 rounded-xl p-1 w-fit bg-gray-100">
-        {TABS.map(t => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              tab === t.id ? 'bg-violet-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'overview' && overview && (
-        <>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <MetricCard icon={DollarSign} label={`Revenue (${days}d)`} value={totals.revenue_inr} prefix="₹" color="#10b981" />
-            <MetricCard icon={Eye} label={`Viewable Impressions (${days}d)`} value={totals.impressions} color="#3b82f6" />
-            <MetricCard icon={TrendingUp} label="Viewability-adj RPM" value={overallRpm} prefix="₹" color="#8b5cf6" />
-            <MetricCard
-              icon={CheckCircle2}
-              label="AdSense API"
-              value={overview.adsense_configured ? 'Connected' : 'Not configured'}
-              color={overview.adsense_configured ? '#10b981' : '#f59e0b'}
-            />
-          </div>
-
-          <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
-            <h3 className="text-gray-500 text-sm font-medium mb-4">Daily Revenue & Impressions</h3>
-            {overview.daily?.length ? (
-              <ResponsiveContainer width="100%" height={260}>
-                <AreaChart data={overview.daily} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                  <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={d => d?.slice(5)} />
-                  <YAxis yAxisId="rev" tick={{ fill: '#9ca3af', fontSize: 11 }} />
-                  <YAxis yAxisId="imp" orientation="right" tick={{ fill: '#9ca3af', fontSize: 11 }} />
-                  <Tooltip {...LIGHT_TOOLTIP} />
-                  <Legend />
-                  <Area yAxisId="rev" type="monotone" dataKey="revenue_inr" name="Revenue (₹)" stroke="#10b981" fill="rgba(16,185,129,0.15)" strokeWidth={2} />
-                  <Area yAxisId="imp" type="monotone" dataKey="impressions" name="Impressions" stroke="#3b82f6" fill="rgba(59,130,246,0.10)" strokeWidth={2} />
-                </AreaChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="text-center text-sm text-gray-400 py-8">No data yet</div>
-            )}
-          </div>
-
-          <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
-            <h3 className="text-gray-500 text-sm font-medium mb-4">Revenue by Network</h3>
-            {overview.networks?.length ? (
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={overview.networks} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                  <XAxis dataKey="network" tick={{ fill: '#9ca3af', fontSize: 11 }} />
-                  <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
-                  <Tooltip {...LIGHT_TOOLTIP} />
-                  <Bar dataKey="revenue_inr" name="Revenue (₹)" radius={[4, 4, 0, 0]}>
-                    {overview.networks.map((n, i) => (
-                      <Cell key={i} fill={NETWORK_COLORS[n.network] || '#64748b'} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="text-center text-sm text-gray-400 py-8">No data yet</div>
-            )}
-
-            <div className="mt-4 overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-gray-400 text-xs uppercase tracking-wide">
-                    <th className="py-2 pr-3">Network</th>
-                    <th className="py-2 pr-3">Impressions</th>
-                    <th className="py-2 pr-3">Revenue (₹)</th>
-                    <th className="py-2 pr-3">RPM (₹)</th>
-                    <th className="py-2 pr-3">Fill rate</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {overview.networks?.map((n) => (
-                    <tr key={n.network} className="border-t border-gray-100">
-                      <td className="py-2 pr-3 font-medium" style={{ color: NETWORK_COLORS[n.network] || '#374151' }}>
-                        {n.network}
-                      </td>
-                      <td className="py-2 pr-3 text-gray-700">{n.impressions.toLocaleString()}</td>
-                      <td className="py-2 pr-3 text-gray-900 font-semibold">₹{n.revenue_inr.toLocaleString()}</td>
-                      <td className="py-2 pr-3 text-gray-700">₹{n.rpm_inr.toLocaleString()}</td>
-                      <td className="py-2 pr-3 text-gray-700">
-                        {n.fill_rate_pct != null ? `${n.fill_rate_pct}%` : '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
-      )}
-
-      {tab === 'placements' && overview && (
-        <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
-          <h3 className="text-gray-500 text-sm font-medium mb-4">Per Placement</h3>
-          {overview.placements?.length ? (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-gray-400 text-xs uppercase tracking-wide">
-                    <th className="py-2 pr-3">Placement</th>
-                    <th className="py-2 pr-3">Network</th>
-                    <th className="py-2 pr-3">Impressions</th>
-                    <th className="py-2 pr-3">Revenue (₹)</th>
-                    <th className="py-2 pr-3">RPM (₹)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {overview.placements.map((p) => (
-                    <tr key={`${p.network}:${p.placement}`} className="border-t border-gray-100">
-                      <td className="py-2 pr-3 text-gray-900 font-mono text-xs">{p.placement}</td>
-                      <td className="py-2 pr-3" style={{ color: NETWORK_COLORS[p.network] || '#374151' }}>{p.network}</td>
-                      <td className="py-2 pr-3 text-gray-700">{p.impressions.toLocaleString()}</td>
-                      <td className="py-2 pr-3 text-gray-900 font-semibold">₹{p.revenue_inr.toLocaleString()}</td>
-                      <td className="py-2 pr-3 text-gray-700">₹{p.rpm_inr.toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <p className="text-[11px] text-gray-400 mt-3">
-                Revenue rows only appear when an earnings entry includes a <code>placement</code> column;
-                otherwise revenue rolls up at the network level on the Overview tab.
-              </p>
-            </div>
-          ) : (
-            <div className="text-center text-sm text-gray-400 py-8">No placement data yet</div>
-          )}
-        </div>
-      )}
-
-      {tab === 'earnings' && (
-        <div className="space-y-4">
-          <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
-            <h3 className="text-gray-900 font-semibold text-sm mb-3 flex items-center gap-2">
-              <CheckCircle2 size={14} className={adsenseStatus?.configured ? 'text-emerald-500' : 'text-gray-300'} />
-              AdSense Management API
-            </h3>
-            {adsenseStatus?.configured ? (
-              <div className="space-y-2">
-                <p className="text-xs text-gray-500">
-                  Account: <span className="font-mono">{adsenseStatus.account_id}</span>
-                </p>
-                <button
-                  onClick={onSyncAdsense}
-                  disabled={syncing}
-                  className="px-4 py-2 rounded-xl text-sm bg-violet-600 text-white hover:opacity-90 disabled:opacity-50 flex items-center gap-2"
-                >
-                  {syncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                  Sync last {Math.min(days, 30)} days
-                </button>
-              </div>
-            ) : (
-              <div className="text-xs text-gray-500 space-y-2">
-                <div className="flex items-start gap-2">
-                  <AlertCircle size={14} className="text-amber-500 flex-shrink-0 mt-0.5" />
-                  <span>
-                    AdSense API not configured. Set the env vars below to enable automatic earnings sync,
-                    or upload the daily CSV from the AdSense console as a v0 fallback.
-                  </span>
-                </div>
-                <ul className="ml-6 list-disc text-gray-400">
-                  {(adsenseStatus?.missing_env || []).map((k) => (
-                    <li key={k}><code>{k}</code></li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-
-          <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
-            <h3 className="text-gray-900 font-semibold text-sm mb-3 flex items-center gap-2">
-              <Upload size={14} /> CSV upload
-            </h3>
-            <p className="text-xs text-gray-500 mb-3">
-              Columns: <code>date,revenue_inr,impressions,placement</code> (impressions + placement optional).
-              Re-uploads upsert by (network, date, placement).
+    <SectionErrorBoundary name="Ads">
+      <div className="p-6 space-y-5">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h2 className="text-gray-900 font-bold text-lg flex items-center gap-2">
+              <BarChart2 size={18} className="text-violet-500" />
+              Ad Revenue
+            </h2>
+            <p className="text-gray-500 text-sm mt-1">
+              Cross-network earnings, fill rate, RPM, and viewability
             </p>
-            <div className="flex flex-wrap items-center gap-2">
-              <select
-                value={uploadNetwork}
-                onChange={(e) => setUploadNetwork(e.target.value)}
-                className="px-3 py-2 rounded-xl text-sm bg-gray-50 border border-gray-200"
-              >
-                {NETWORKS.map(n => <option key={n} value={n}>{n}</option>)}
-              </select>
-              <input
-                ref={fileRef}
-                type="file"
-                accept=".csv,text/csv"
-                onChange={onUploadCsv}
-                disabled={uploading}
-                className="text-xs"
-              />
-              {uploading && <Loader2 size={14} className="animate-spin text-violet-500" />}
-            </div>
           </div>
-
-          <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
-            <h3 className="text-gray-900 font-semibold text-sm mb-3 flex items-center gap-2">
-              <Plus size={14} /> Add single entry
-            </h3>
-            <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
-              <select
-                value={newEntry.network}
-                onChange={(e) => setNewEntry({ ...newEntry, network: e.target.value })}
-                className="px-3 py-2 rounded-xl text-sm bg-gray-50 border border-gray-200"
-              >
-                {NETWORKS.map(n => <option key={n} value={n}>{n}</option>)}
-              </select>
-              <input
-                type="date"
-                value={newEntry.date}
-                onChange={(e) => setNewEntry({ ...newEntry, date: e.target.value })}
-                className="px-3 py-2 rounded-xl text-sm bg-gray-50 border border-gray-200"
-              />
-              <input
-                type="number" step="0.01" placeholder="Revenue (₹)"
-                value={newEntry.revenue_inr}
-                onChange={(e) => setNewEntry({ ...newEntry, revenue_inr: e.target.value })}
-                className="px-3 py-2 rounded-xl text-sm bg-gray-50 border border-gray-200"
-              />
-              <input
-                type="number" placeholder="Impressions (opt)"
-                value={newEntry.impressions}
-                onChange={(e) => setNewEntry({ ...newEntry, impressions: e.target.value })}
-                className="px-3 py-2 rounded-xl text-sm bg-gray-50 border border-gray-200"
-              />
-              <input
-                type="text" placeholder="Placement (opt)"
-                value={newEntry.placement}
-                onChange={(e) => setNewEntry({ ...newEntry, placement: e.target.value })}
-                className="px-3 py-2 rounded-xl text-sm bg-gray-50 border border-gray-200"
-              />
-            </div>
-            <button
-              onClick={onAddEntry}
-              disabled={adding}
-              className="mt-3 px-4 py-2 rounded-xl text-sm bg-violet-600 text-white hover:opacity-90 disabled:opacity-50 flex items-center gap-2"
+          <div className="flex items-center gap-2">
+            <select
+              value={days}
+              onChange={(e) => setDays(parseInt(e.target.value, 10))}
+              className="px-3 py-2 rounded-xl text-xs bg-white border border-gray-200 text-gray-700"
             >
-              {adding ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} Add
+              <option value={7}>Last 7 days</option>
+              <option value={30}>Last 30 days</option>
+              <option value={90}>Last 90 days</option>
+            </select>
+            <button
+              onClick={load}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs text-gray-500 hover:text-gray-700 transition-colors bg-white border border-gray-200 shadow-sm"
+            >
+              <RefreshCw size={12} /> Refresh
             </button>
           </div>
+        </div>
 
-          <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
-            <h3 className="text-gray-900 font-semibold text-sm mb-3">
-              Recent earnings entries ({earnings.length})
-            </h3>
-            {earnings.length ? (
-              <div className="overflow-x-auto">
+        <div className="flex gap-1 rounded-xl p-1 w-fit bg-gray-100">
+          {TABS.map(t => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                tab === t.id ? 'bg-violet-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {tab === 'overview' && overview && (
+          <>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <MetricCard icon={DollarSign} label={`Revenue (${days}d)`} value={totals.revenue_inr} prefix="₹" color="#10b981" />
+              <MetricCard icon={Eye} label={`Viewable Impressions (${days}d)`} value={totals.impressions} color="#3b82f6" />
+              <MetricCard icon={TrendingUp} label="Viewability-adj RPM" value={overallRpm} prefix="₹" color="#8b5cf6" />
+              <MetricCard
+                icon={CheckCircle2}
+                label="AdSense API"
+                value={overview.adsense_configured ? 'Connected' : 'Not configured'}
+                color={overview.adsense_configured ? '#10b981' : '#f59e0b'}
+              />
+            </div>
+
+            <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
+              <h3 className="text-gray-500 text-sm font-medium mb-4">Daily Revenue & Impressions</h3>
+              {overview.daily?.length ? (
+                <ResponsiveContainer width="100%" height={260}>
+                  <AreaChart data={overview.daily} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                    <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={d => d?.slice(5)} />
+                    <YAxis yAxisId="rev" tick={{ fill: '#9ca3af', fontSize: 11 }} />
+                    <YAxis yAxisId="imp" orientation="right" tick={{ fill: '#9ca3af', fontSize: 11 }} />
+                    <Tooltip {...LIGHT_TOOLTIP} />
+                    <Legend />
+                    <Area yAxisId="rev" type="monotone" dataKey="revenue_inr" name="Revenue (₹)" stroke="#10b981" fill="rgba(16,185,129,0.15)" strokeWidth={2} />
+                    <Area yAxisId="imp" type="monotone" dataKey="impressions" name="Impressions" stroke="#3b82f6" fill="rgba(59,130,246,0.10)" strokeWidth={2} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="text-center text-sm text-gray-400 py-8">No data yet</div>
+              )}
+            </div>
+
+            <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
+              <h3 className="text-gray-500 text-sm font-medium mb-4">Revenue by Network</h3>
+              {overview.networks?.length ? (
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={overview.networks} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                    <XAxis dataKey="network" tick={{ fill: '#9ca3af', fontSize: 11 }} />
+                    <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
+                    <Tooltip {...LIGHT_TOOLTIP} />
+                    <Bar dataKey="revenue_inr" name="Revenue (₹)" radius={[4, 4, 0, 0]}>
+                      {overview.networks.map((n, i) => (
+                        <Cell key={i} fill={NETWORK_COLORS[n.network] || '#64748b'} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="text-center text-sm text-gray-400 py-8">No data yet</div>
+              )}
+
+              <div className="mt-4 overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-gray-400 text-xs uppercase tracking-wide">
-                      <th className="py-2 pr-3">Date</th>
                       <th className="py-2 pr-3">Network</th>
-                      <th className="py-2 pr-3">Placement</th>
-                      <th className="py-2 pr-3">Revenue (₹)</th>
                       <th className="py-2 pr-3">Impressions</th>
-                      <th className="py-2 pr-3">Fill %</th>
-                      <th className="py-2 pr-3">Source</th>
-                      <th className="py-2 pr-3"></th>
+                      <th className="py-2 pr-3">Revenue (₹)</th>
+                      <th className="py-2 pr-3">RPM (₹)</th>
+                      <th className="py-2 pr-3">Fill rate</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {earnings.map((e) => (
-                      <tr key={e._id} className="border-t border-gray-100">
-                        <td className="py-2 pr-3 text-gray-700">{e.date}</td>
-                        <td className="py-2 pr-3" style={{ color: NETWORK_COLORS[e.network] || '#374151' }}>{e.network}</td>
-                        <td className="py-2 pr-3 text-gray-500 text-xs font-mono">{e.placement || '—'}</td>
-                        <td className="py-2 pr-3 text-gray-900 font-semibold">₹{Number(e.revenue_inr || 0).toLocaleString()}</td>
-                        <td className="py-2 pr-3 text-gray-700">{e.impressions ? Number(e.impressions).toLocaleString() : '—'}</td>
-                        <td className="py-2 pr-3 text-gray-700">{e.fill_rate_pct != null ? `${e.fill_rate_pct}%` : '—'}</td>
-                        <td className="py-2 pr-3 text-gray-400 text-xs">{e.source || 'manual'}</td>
-                        <td className="py-2 pr-3">
-                          <button
-                            onClick={() => onDeleteEntry(e._id)}
-                            className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                            title="Delete entry"
-                          >
-                            <Trash2 size={13} />
-                          </button>
+                    {overview.networks?.map((n) => (
+                      <tr key={n.network} className="border-t border-gray-100">
+                        <td className="py-2 pr-3 font-medium" style={{ color: NETWORK_COLORS[n.network] || '#374151' }}>
+                          {n.network}
+                        </td>
+                        <td className="py-2 pr-3 text-gray-700">{n.impressions.toLocaleString()}</td>
+                        <td className="py-2 pr-3 text-gray-900 font-semibold">₹{n.revenue_inr.toLocaleString()}</td>
+                        <td className="py-2 pr-3 text-gray-700">₹{n.rpm_inr.toLocaleString()}</td>
+                        <td className="py-2 pr-3 text-gray-700">
+                          {n.fill_rate_pct != null ? `${n.fill_rate_pct}%` : '—'}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+            </div>
+          </>
+        )}
+
+        {tab === 'placements' && overview && (
+          <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
+            <h3 className="text-gray-500 text-sm font-medium mb-4">Per Placement</h3>
+            {overview.placements?.length ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-gray-400 text-xs uppercase tracking-wide">
+                      <th className="py-2 pr-3">Placement</th>
+                      <th className="py-2 pr-3">Network</th>
+                      <th className="py-2 pr-3">Impressions</th>
+                      <th className="py-2 pr-3">Revenue (₹)</th>
+                      <th className="py-2 pr-3">RPM (₹)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {overview.placements.map((p) => (
+                      <tr key={`${p.network}:${p.placement}`} className="border-t border-gray-100">
+                        <td className="py-2 pr-3 text-gray-900 font-mono text-xs">{p.placement}</td>
+                        <td className="py-2 pr-3" style={{ color: NETWORK_COLORS[p.network] || '#374151' }}>{p.network}</td>
+                        <td className="py-2 pr-3 text-gray-700">{p.impressions.toLocaleString()}</td>
+                        <td className="py-2 pr-3 text-gray-900 font-semibold">₹{p.revenue_inr.toLocaleString()}</td>
+                        <td className="py-2 pr-3 text-gray-700">₹{p.rpm_inr.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="text-[11px] text-gray-400 mt-3">
+                  Revenue rows only appear when an earnings entry includes a <code>placement</code> column;
+                  otherwise revenue rolls up at the network level on the Overview tab.
+                </p>
+              </div>
             ) : (
-              <div className="text-center text-sm text-gray-400 py-8">No entries yet</div>
+              <div className="text-center text-sm text-gray-400 py-8">No placement data yet</div>
             )}
           </div>
-        </div>
-      )}
-    </div>
+        )}
+
+        {tab === 'earnings' && (
+          <div className="space-y-4">
+            <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
+              <h3 className="text-gray-900 font-semibold text-sm mb-3 flex items-center gap-2">
+                <CheckCircle2 size={14} className={adsenseStatus?.configured ? 'text-emerald-500' : 'text-gray-300'} />
+                AdSense Management API
+              </h3>
+              {adsenseStatus?.configured ? (
+                <div className="space-y-2">
+                  <p className="text-xs text-gray-500">
+                    Account: <span className="font-mono">{adsenseStatus.account_id}</span>
+                  </p>
+                  <button
+                    onClick={onSyncAdsense}
+                    disabled={syncing}
+                    className="px-4 py-2 rounded-xl text-sm bg-violet-600 text-white hover:opacity-90 disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {syncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                    Sync last {Math.min(days, 30)} days
+                  </button>
+                </div>
+              ) : (
+                <div className="text-xs text-gray-500 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle size={14} className="text-amber-500 flex-shrink-0 mt-0.5" />
+                    <span>
+                      AdSense API not configured. Set the env vars below to enable automatic earnings sync,
+                      or upload the daily CSV from the AdSense console as a v0 fallback.
+                    </span>
+                  </div>
+                  <ul className="ml-6 list-disc text-gray-400">
+                    {(adsenseStatus?.missing_env || []).map((k) => (
+                      <li key={k}><code>{k}</code></li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
+              <h3 className="text-gray-900 font-semibold text-sm mb-3 flex items-center gap-2">
+                <Upload size={14} /> CSV upload
+              </h3>
+              <p className="text-xs text-gray-500 mb-3">
+                Columns: <code>date,revenue_inr,impressions,placement</code> (impressions + placement optional).
+                Re-uploads upsert by (network, date, placement).
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={uploadNetwork}
+                  onChange={(e) => setUploadNetwork(e.target.value)}
+                  className="px-3 py-2 rounded-xl text-sm bg-gray-50 border border-gray-200"
+                >
+                  {NETWORKS.map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={onUploadCsv}
+                  disabled={uploading}
+                  className="text-xs"
+                />
+                {uploading && <Loader2 size={14} className="animate-spin text-violet-500" />}
+              </div>
+            </div>
+
+            <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
+              <h3 className="text-gray-900 font-semibold text-sm mb-3 flex items-center gap-2">
+                <Plus size={14} /> Add single entry
+              </h3>
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
+                <select
+                  value={newEntry.network}
+                  onChange={(e) => setNewEntry({ ...newEntry, network: e.target.value })}
+                  className="px-3 py-2 rounded-xl text-sm bg-gray-50 border border-gray-200"
+                >
+                  {NETWORKS.map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+                <input
+                  type="date"
+                  value={newEntry.date}
+                  onChange={(e) => setNewEntry({ ...newEntry, date: e.target.value })}
+                  className="px-3 py-2 rounded-xl text-sm bg-gray-50 border border-gray-200"
+                />
+                <input
+                  type="number" step="0.01" placeholder="Revenue (₹)"
+                  value={newEntry.revenue_inr}
+                  onChange={(e) => setNewEntry({ ...newEntry, revenue_inr: e.target.value })}
+                  className="px-3 py-2 rounded-xl text-sm bg-gray-50 border border-gray-200"
+                />
+                <input
+                  type="number" placeholder="Impressions (opt)"
+                  value={newEntry.impressions}
+                  onChange={(e) => setNewEntry({ ...newEntry, impressions: e.target.value })}
+                  className="px-3 py-2 rounded-xl text-sm bg-gray-50 border border-gray-200"
+                />
+                <input
+                  type="text" placeholder="Placement (opt)"
+                  value={newEntry.placement}
+                  onChange={(e) => setNewEntry({ ...newEntry, placement: e.target.value })}
+                  className="px-3 py-2 rounded-xl text-sm bg-gray-50 border border-gray-200"
+                />
+              </div>
+              <button
+                onClick={onAddEntry}
+                disabled={adding}
+                className="mt-3 px-4 py-2 rounded-xl text-sm bg-violet-600 text-white hover:opacity-90 disabled:opacity-50 flex items-center gap-2"
+              >
+                {adding ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} Add
+              </button>
+            </div>
+
+            <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
+              <h3 className="text-gray-900 font-semibold text-sm mb-3">
+                Recent earnings entries ({earnings.length})
+              </h3>
+              {earnings.length ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-gray-400 text-xs uppercase tracking-wide">
+                        <th className="py-2 pr-3">Date</th>
+                        <th className="py-2 pr-3">Network</th>
+                        <th className="py-2 pr-3">Placement</th>
+                        <th className="py-2 pr-3">Revenue (₹)</th>
+                        <th className="py-2 pr-3">Impressions</th>
+                        <th className="py-2 pr-3">Fill %</th>
+                        <th className="py-2 pr-3">Source</th>
+                        <th className="py-2 pr-3"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {earnings.map((e) => (
+                        <tr key={e._id} className="border-t border-gray-100">
+                          <td className="py-2 pr-3 text-gray-700">{e.date}</td>
+                          <td className="py-2 pr-3" style={{ color: NETWORK_COLORS[e.network] || '#374151' }}>{e.network}</td>
+                          <td className="py-2 pr-3 text-gray-500 text-xs font-mono">{e.placement || '—'}</td>
+                          <td className="py-2 pr-3 text-gray-900 font-semibold">₹{Number(e.revenue_inr || 0).toLocaleString()}</td>
+                          <td className="py-2 pr-3 text-gray-700">{e.impressions ? Number(e.impressions).toLocaleString() : '—'}</td>
+                          <td className="py-2 pr-3 text-gray-700">{e.fill_rate_pct != null ? `${e.fill_rate_pct}%` : '—'}</td>
+                          <td className="py-2 pr-3 text-gray-400 text-xs">{e.source || 'manual'}</td>
+                          <td className="py-2 pr-3">
+                            <button
+                              onClick={() => onDeleteEntry(e._id)}
+                              className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                              title="Delete entry"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="text-center text-sm text-gray-400 py-8">No entries yet</div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </SectionErrorBoundary>
   );
 }

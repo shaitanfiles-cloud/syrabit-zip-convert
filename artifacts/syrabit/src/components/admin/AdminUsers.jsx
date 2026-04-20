@@ -7,6 +7,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { adminGetUsers, adminUpdateUserStatus, adminUpdateUserPlan, churnRisk, adminUpdateUserCredits } from '@/utils/api';
 import { toast } from 'sonner';
 
+import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 const PLAN_COLORS = {
   free: 'bg-gray-100 text-gray-500',
   starter: 'bg-violet-50 text-violet-600',
@@ -210,171 +211,173 @@ export default function AdminUsers({ adminToken, navContext, onNavigate }) {
   if (loading && users.length === 0) return <div className="flex justify-center p-10"><Loader2 size={24} className="animate-spin text-violet-500" /></div>;
 
   return (
-    <div className="p-6 space-y-4">
-      {creditsUser && (
-        <CreditsModal
-          user={creditsUser}
-          adminToken={adminToken}
-          onClose={() => setCreditsUser(null)}
-          onUpdated={() => loadUsers(search, 1)}
-        />
-      )}
+    <SectionErrorBoundary name="Users">
+      <div className="p-6 space-y-4">
+        {creditsUser && (
+          <CreditsModal
+            user={creditsUser}
+            adminToken={adminToken}
+            onClose={() => setCreditsUser(null)}
+            onUpdated={() => loadUsers(search, 1)}
+          />
+        )}
 
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <h2 className="text-gray-900 font-semibold text-lg">Users ({users.length}{hasMore ? '+' : ''})</h2>
-        <div className="flex items-center gap-3">
-          <button onClick={loadChurnRisk} disabled={riskLoading}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all bg-red-50 border border-red-200 text-red-600 hover:bg-red-100">
-            {riskLoading ? <Loader2 size={12} className="animate-spin" /> : <TrendingDown size={12} />}
-            Churn Risk
-          </button>
-          <div className="relative w-60">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input placeholder="Search users (server-side)..." value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
-              className="w-full pl-8 h-8 rounded-xl text-sm text-gray-900 placeholder-gray-400 outline-none border border-gray-200 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400" />
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <h2 className="text-gray-900 font-semibold text-lg">Users ({users.length}{hasMore ? '+' : ''})</h2>
+          <div className="flex items-center gap-3">
+            <button onClick={loadChurnRisk} disabled={riskLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all bg-red-50 border border-red-200 text-red-600 hover:bg-red-100">
+              {riskLoading ? <Loader2 size={12} className="animate-spin" /> : <TrendingDown size={12} />}
+              Churn Risk
+            </button>
+            <div className="relative w-60">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input placeholder="Search users (server-side)..." value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
+                className="w-full pl-8 h-8 rounded-xl text-sm text-gray-900 placeholder-gray-400 outline-none border border-gray-200 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400" />
+            </div>
           </div>
         </div>
-      </div>
 
-      {riskData && (
-        <div className="rounded-2xl p-4 bg-red-50 border border-red-200">
-          <div className="flex items-center gap-2 mb-3">
-            <TrendingDown size={15} color="#ef4444" />
-            <span className="font-bold text-gray-900 text-sm">Churn Risk Summary</span>
-          </div>
-          <div className="grid grid-cols-3 gap-3 mb-3">
-            {[
-              { label: 'High Risk', count: riskData.summary.high_risk, color: '#ef4444' },
-              { label: 'Medium Risk', count: riskData.summary.medium_risk, color: '#f59e0b' },
-              { label: 'Low Risk', count: riskData.summary.low_risk, color: '#10b981' },
-            ].map(s => (
-              <div key={s.label} className="rounded-xl p-3 text-center bg-white border border-gray-200">
-                <div className="text-xl font-black" style={{ color: s.color }}>{s.count}</div>
-                <div className="text-[11px] text-gray-400">{s.label}</div>
-              </div>
-            ))}
-          </div>
-          {atRiskUsers.length > 0 && (
-            <div>
-              <p className="text-[11px] font-bold text-red-600 mb-2 uppercase tracking-wide">High Risk Users (take action)</p>
-              {atRiskUsers.slice(0, 5).map(u => (
-                <div key={u.id} className="flex items-center gap-3 py-2 border-b border-gray-200">
-                  <div className="flex-1">
-                    <span className="text-sm text-gray-700 font-semibold">{u.name || u.email}</span>
-                    <span className="text-xs text-gray-400 ml-2">{u.email}</span>
-                  </div>
-                  <div className="text-xs text-gray-400">{u.factors?.join(' · ')}</div>
-                  <RiskBadge risk={u.risk} score={u.risk_score} />
+        {riskData && (
+          <div className="rounded-2xl p-4 bg-red-50 border border-red-200">
+            <div className="flex items-center gap-2 mb-3">
+              <TrendingDown size={15} color="#ef4444" />
+              <span className="font-bold text-gray-900 text-sm">Churn Risk Summary</span>
+            </div>
+            <div className="grid grid-cols-3 gap-3 mb-3">
+              {[
+                { label: 'High Risk', count: riskData.summary.high_risk, color: '#ef4444' },
+                { label: 'Medium Risk', count: riskData.summary.medium_risk, color: '#f59e0b' },
+                { label: 'Low Risk', count: riskData.summary.low_risk, color: '#10b981' },
+              ].map(s => (
+                <div key={s.label} className="rounded-xl p-3 text-center bg-white border border-gray-200">
+                  <div className="text-xl font-black" style={{ color: s.color }}>{s.count}</div>
+                  <div className="text-[11px] text-gray-400">{s.label}</div>
                 </div>
               ))}
             </div>
+            {atRiskUsers.length > 0 && (
+              <div>
+                <p className="text-[11px] font-bold text-red-600 mb-2 uppercase tracking-wide">High Risk Users (take action)</p>
+                {atRiskUsers.slice(0, 5).map(u => (
+                  <div key={u.id} className="flex items-center gap-3 py-2 border-b border-gray-200">
+                    <div className="flex-1">
+                      <span className="text-sm text-gray-700 font-semibold">{u.name || u.email}</span>
+                      <span className="text-xs text-gray-400 ml-2">{u.email}</span>
+                    </div>
+                    <div className="text-xs text-gray-400">{u.factors?.join(' · ')}</div>
+                    <RiskBadge risk={u.risk} score={u.risk_score} />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="rounded-2xl overflow-hidden bg-white border border-gray-200 shadow-sm">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-200 bg-gray-50">
+                <th className="text-left text-gray-500 font-medium px-4 py-3 text-xs">User</th>
+                <th className="text-left text-gray-500 font-medium px-4 py-3 text-xs">Plan</th>
+                <th className="text-left text-gray-500 font-medium px-4 py-3 text-xs">Status</th>
+                <th className="text-left text-gray-500 font-medium px-4 py-3 text-xs">Credits</th>
+                {Object.keys(riskMap).length > 0 && <th className="text-left text-gray-500 font-medium px-4 py-3 text-xs">Churn Risk</th>}
+                <th className="text-left text-gray-500 font-medium px-4 py-3 text-xs">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((user) => {
+                const risk = riskMap[user.id];
+                return (
+                  <tr key={user.id} className="hover:bg-gray-50 transition-colors border-b border-gray-100">
+                    <td className="px-4 py-3">
+                      <div>
+                        <p className="text-gray-700 font-medium">{user.name}</p>
+                        <p className="text-gray-400 text-xs">{user.email}</p>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button className={`text-xs px-2 py-1 rounded-full flex items-center gap-1 ${PLAN_COLORS[user.plan] || PLAN_COLORS.free}`}>
+                            <Crown size={10} /> {user.plan}
+                            <ChevronDown size={10} />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent className="bg-white border border-gray-200 shadow-lg">
+                          {['free', 'starter', 'pro'].map((p) => (
+                            <DropdownMenuItem key={p} className="text-gray-600 focus:bg-gray-50" onClick={() => handlePlanChange(user.id, p)}>
+                              {p}
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`text-xs px-2 py-1 rounded-full ${STATUS_COLORS[user.status] || STATUS_COLORS.active}`}>
+                        {user.status || 'active'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={() => setCreditsUser(user)}
+                        className="flex items-center gap-1.5 text-gray-500 hover:text-violet-600 text-xs transition-colors"
+                        title="Manage credits"
+                      >
+                        <CreditCard size={12} />
+                        {user.credits_used || 0} / {user.credits_limit || 0}
+                      </button>
+                    </td>
+                    {Object.keys(riskMap).length > 0 && (
+                      <td className="px-4 py-3">
+                        {risk ? <RiskBadge risk={risk.risk} score={risk.risk_score} /> : <span className="text-gray-300 text-xs">—</span>}
+                      </td>
+                    )}
+                    <td className="px-4 py-3">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button className="h-7 px-2 text-xs text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors flex items-center gap-1">
+                            Actions <ChevronDown size={10} />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent className="bg-white border border-gray-200 shadow-lg">
+                          <DropdownMenuItem className="text-gray-600 focus:bg-gray-50" onClick={() => setCreditsUser(user)}>
+                            <CreditCard size={14} className="mr-2 text-violet-500" /> Manage Credits
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="text-gray-600 focus:bg-gray-50" onClick={() => handleStatusChange(user.id, 'active')}>
+                            <CheckCircle size={14} className="mr-2 text-emerald-500" /> Set Active
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="text-gray-600 focus:bg-gray-50" onClick={() => handleStatusChange(user.id, 'suspended')}>
+                            Set Suspended
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="text-red-500 focus:bg-gray-50" onClick={() => handleStatusChange(user.id, 'banned')}>
+                            <Ban size={14} className="mr-2" /> Ban User
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {loading && (
+            <div className="flex justify-center p-4">
+              <Loader2 size={16} className="animate-spin text-violet-500" />
+            </div>
+          )}
+          {hasMore && !loading && (
+            <div className="flex justify-center p-4">
+              <button onClick={() => loadUsers(search, page + 1)}
+                className="text-xs text-gray-500 hover:text-violet-600 px-4 py-2 rounded-xl transition-colors border border-gray-200 hover:border-violet-200">
+                Load more users
+              </button>
+            </div>
           )}
         </div>
-      )}
-
-      <div className="rounded-2xl overflow-hidden bg-white border border-gray-200 shadow-sm">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-200 bg-gray-50">
-              <th className="text-left text-gray-500 font-medium px-4 py-3 text-xs">User</th>
-              <th className="text-left text-gray-500 font-medium px-4 py-3 text-xs">Plan</th>
-              <th className="text-left text-gray-500 font-medium px-4 py-3 text-xs">Status</th>
-              <th className="text-left text-gray-500 font-medium px-4 py-3 text-xs">Credits</th>
-              {Object.keys(riskMap).length > 0 && <th className="text-left text-gray-500 font-medium px-4 py-3 text-xs">Churn Risk</th>}
-              <th className="text-left text-gray-500 font-medium px-4 py-3 text-xs">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((user) => {
-              const risk = riskMap[user.id];
-              return (
-                <tr key={user.id} className="hover:bg-gray-50 transition-colors border-b border-gray-100">
-                  <td className="px-4 py-3">
-                    <div>
-                      <p className="text-gray-700 font-medium">{user.name}</p>
-                      <p className="text-gray-400 text-xs">{user.email}</p>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button className={`text-xs px-2 py-1 rounded-full flex items-center gap-1 ${PLAN_COLORS[user.plan] || PLAN_COLORS.free}`}>
-                          <Crown size={10} /> {user.plan}
-                          <ChevronDown size={10} />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent className="bg-white border border-gray-200 shadow-lg">
-                        {['free', 'starter', 'pro'].map((p) => (
-                          <DropdownMenuItem key={p} className="text-gray-600 focus:bg-gray-50" onClick={() => handlePlanChange(user.id, p)}>
-                            {p}
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`text-xs px-2 py-1 rounded-full ${STATUS_COLORS[user.status] || STATUS_COLORS.active}`}>
-                      {user.status || 'active'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <button
-                      onClick={() => setCreditsUser(user)}
-                      className="flex items-center gap-1.5 text-gray-500 hover:text-violet-600 text-xs transition-colors"
-                      title="Manage credits"
-                    >
-                      <CreditCard size={12} />
-                      {user.credits_used || 0} / {user.credits_limit || 0}
-                    </button>
-                  </td>
-                  {Object.keys(riskMap).length > 0 && (
-                    <td className="px-4 py-3">
-                      {risk ? <RiskBadge risk={risk.risk} score={risk.risk_score} /> : <span className="text-gray-300 text-xs">—</span>}
-                    </td>
-                  )}
-                  <td className="px-4 py-3">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button className="h-7 px-2 text-xs text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors flex items-center gap-1">
-                          Actions <ChevronDown size={10} />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent className="bg-white border border-gray-200 shadow-lg">
-                        <DropdownMenuItem className="text-gray-600 focus:bg-gray-50" onClick={() => setCreditsUser(user)}>
-                          <CreditCard size={14} className="mr-2 text-violet-500" /> Manage Credits
-                        </DropdownMenuItem>
-                        <DropdownMenuItem className="text-gray-600 focus:bg-gray-50" onClick={() => handleStatusChange(user.id, 'active')}>
-                          <CheckCircle size={14} className="mr-2 text-emerald-500" /> Set Active
-                        </DropdownMenuItem>
-                        <DropdownMenuItem className="text-gray-600 focus:bg-gray-50" onClick={() => handleStatusChange(user.id, 'suspended')}>
-                          Set Suspended
-                        </DropdownMenuItem>
-                        <DropdownMenuItem className="text-red-500 focus:bg-gray-50" onClick={() => handleStatusChange(user.id, 'banned')}>
-                          <Ban size={14} className="mr-2" /> Ban User
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        {loading && (
-          <div className="flex justify-center p-4">
-            <Loader2 size={16} className="animate-spin text-violet-500" />
-          </div>
-        )}
-        {hasMore && !loading && (
-          <div className="flex justify-center p-4">
-            <button onClick={() => loadUsers(search, page + 1)}
-              className="text-xs text-gray-500 hover:text-violet-600 px-4 py-2 rounded-xl transition-colors border border-gray-200 hover:border-violet-200">
-              Load more users
-            </button>
-          </div>
-        )}
+        <AdminQuickLinks links={['conversations','analytics','notifications','monetization']} onNavigate={onNavigate} />
       </div>
-      <AdminQuickLinks links={['conversations','analytics','notifications','monetization']} onNavigate={onNavigate} />
-    </div>
+    </SectionErrorBoundary>
   );
 }

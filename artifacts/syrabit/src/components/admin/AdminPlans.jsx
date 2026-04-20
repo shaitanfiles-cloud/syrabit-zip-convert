@@ -4,6 +4,7 @@ import AdminQuickLinks from './AdminQuickLinks';
 import { toast } from 'sonner';
 import { adminGetDashboard, adminGetPlanConfig, adminUpdatePlanConfig } from '@/utils/api';
 
+import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 const PLAN_UI = {
   free:    { icon: Zap,      gradient: 'from-gray-500 to-gray-600',     docAccess: 'zero',    docLabel: 'Zero document access',    color: 'text-gray-600'   },
   starter: { icon: Crown,    gradient: 'from-violet-500 to-purple-600', docAccess: 'limited', docLabel: 'Limited document access', color: 'text-violet-600' },
@@ -137,29 +138,31 @@ export default function AdminPlans({ adminToken, onNavigate }) {
   }
 
   return (
-    <div className="space-y-6 max-w-4xl">
-      <div>
-        <h2 className="text-lg font-bold text-gray-900">Plans & Credits</h2>
-        <p className="text-sm text-gray-400 mt-0.5">Configure subscription plans and review revenue metrics</p>
+    <SectionErrorBoundary name="Plans">
+      <div className="space-y-6 max-w-4xl">
+        <div>
+          <h2 className="text-lg font-bold text-gray-900">Plans & Credits</h2>
+          <p className="text-sm text-gray-400 mt-0.5">Configure subscription plans and review revenue metrics</p>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[['Est. Revenue',`₹${estRevenue.toLocaleString()}`,'text-emerald-600'],['Total Users',totalUsers.toLocaleString(),'text-gray-900'],['Paid Users',paidUsers.toLocaleString(),'text-violet-600'],['Credits Issued',creditsIssued.toLocaleString(),'text-amber-600']].map(([label,val,color]) => (
+            <div key={label} className="rounded-xl p-3 bg-white border border-gray-200 shadow-sm">
+              <p className={`text-xl font-bold ${color}`}>{val}</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">{label}</p>
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {Object.entries(PLAN_UI).map(([k, ui]) => (
+            <PlanCard key={k} planKey={k} ui={ui} config={planConfig[k]} dist={dist} onSave={handleSave} saving={saving} />
+          ))}
+        </div>
+        <div className="rounded-xl p-4 bg-violet-50 border border-violet-200">
+          <p className="text-sm text-violet-700 font-medium">Enable live payments</p>
+          <p className="text-xs text-gray-500 mt-1">Configure Razorpay or Stripe credentials in the API Config section to activate real payment checkout and automatic plan upgrades.</p>
+        </div>
+        <AdminQuickLinks links={['monetization','analytics','users','apiconfig']} onNavigate={onNavigate} />
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {[['Est. Revenue',`₹${estRevenue.toLocaleString()}`,'text-emerald-600'],['Total Users',totalUsers.toLocaleString(),'text-gray-900'],['Paid Users',paidUsers.toLocaleString(),'text-violet-600'],['Credits Issued',creditsIssued.toLocaleString(),'text-amber-600']].map(([label,val,color]) => (
-          <div key={label} className="rounded-xl p-3 bg-white border border-gray-200 shadow-sm">
-            <p className={`text-xl font-bold ${color}`}>{val}</p>
-            <p className="text-[10px] text-gray-400 mt-0.5">{label}</p>
-          </div>
-        ))}
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {Object.entries(PLAN_UI).map(([k, ui]) => (
-          <PlanCard key={k} planKey={k} ui={ui} config={planConfig[k]} dist={dist} onSave={handleSave} saving={saving} />
-        ))}
-      </div>
-      <div className="rounded-xl p-4 bg-violet-50 border border-violet-200">
-        <p className="text-sm text-violet-700 font-medium">Enable live payments</p>
-        <p className="text-xs text-gray-500 mt-1">Configure Razorpay or Stripe credentials in the API Config section to activate real payment checkout and automatic plan upgrades.</p>
-      </div>
-      <AdminQuickLinks links={['monetization','analytics','users','apiconfig']} onNavigate={onNavigate} />
-    </div>
+    </SectionErrorBoundary>
   );
 }

@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { adminGetApiConfig, adminUpdateApiConfig, API_BASE } from '@/utils/api';
 import axios from 'axios';
 
+import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 const adminHeaders = (token) => {
   const isRealJwt = token && typeof token === 'string' && token.split('.').length === 3;
   return isRealJwt ? { Authorization: `Bearer ${token}` } : {};
@@ -153,129 +154,131 @@ export default function AdminApiConfig({ adminToken, onNavigate }) {
   }
 
   return (
-    <div className="space-y-4 max-w-3xl">
-      <div>
-        <h2 className="text-lg font-bold text-gray-900">API Configuration</h2>
-        <p className="text-sm text-gray-400 mt-0.5">Configure external service credentials and test connections</p>
-      </div>
-
-      <div className="flex gap-2 flex-wrap">
-        {SERVICES.map(({id, icon: Icon, label, accent}) => {
-          const c = ACCENT[accent];
-          return (
-            <button key={id} onClick={() => { setActive(id); setTestResult(null); }}
-              className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium border transition-all ${active === id ? `${c.bg} ${c.border} ${c.text}` : 'border-gray-200 text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>
-              <Icon size={13} /> {label}
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="rounded-2xl border border-gray-200 overflow-hidden bg-white shadow-sm">
-        <div className={`p-4 border-b ${colors.bg} ${colors.border}`}>
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${colors.bg} border ${colors.border}`}>
-              {ac && <ac.icon size={18} className={colors.text} />}
-            </div>
-            <div>
-              <p className={`font-bold ${colors.text}`}>{ac?.label}</p>
-              <p className="text-xs text-gray-500">{ac?.desc}</p>
-            </div>
-          </div>
+    <SectionErrorBoundary name="API Config">
+      <div className="space-y-4 max-w-3xl">
+        <div>
+          <h2 className="text-lg font-bold text-gray-900">API Configuration</h2>
+          <p className="text-sm text-gray-400 mt-0.5">Configure external service credentials and test connections</p>
         </div>
 
-        <div className="p-4 space-y-4">
-          {active === 'supabase' && (
-            <div className="space-y-3">
-              <p className="text-xs text-gray-500">Connect to Supabase for user accounts and conversation storage. Find credentials in your Supabase dashboard under Settings &gt; API.</p>
-              <div><label className="text-xs text-gray-500 block mb-1" data-testid="label-supabase-url">Project URL</label>
-                <input value={creds.supabaseUrl} onChange={(e) => setCreds((c) => ({...c, supabaseUrl: e.target.value}))} placeholder="https://xxxxx.supabase.co" data-testid="input-supabase-url" className={inputStyle} />
-              </div>
-              <div><label className="text-xs text-gray-500 block mb-1" data-testid="label-supabase-service-key">Service Role Key</label>
-                <SecretInput value={creds.supabaseServiceKey} onChange={(e) => setCreds((c) => ({...c, supabaseServiceKey: e.target.value}))} placeholder="eyJhbGci..." />
-              </div>
-              <div><label className="text-xs text-gray-500 block mb-1" data-testid="label-supabase-anon-key">Anon Key (public)</label>
-                <SecretInput value={creds.supabaseAnonKey} onChange={(e) => setCreds((c) => ({...c, supabaseAnonKey: e.target.value}))} placeholder="eyJhbGci..." />
-              </div>
-            </div>
-          )}
-          {active === 'emergent' && (
-            <div className="space-y-3">
-              <p className="text-xs text-gray-500">Emergent universal API key — powers all admin AI content generation (content hub, SEO, GEO). Highest priority provider; other keys serve as fallbacks.</p>
-              <div><label className="text-xs text-gray-500 block mb-1">EMERGENT_API_KEY</label>
-                <SecretInput value={creds.emergentKey} onChange={(e) => setCreds((c) => ({...c, emergentKey: e.target.value}))} placeholder="em_..." />
-              </div>
-              <div><label className="text-xs text-gray-500 block mb-1">Base URL (optional)</label>
-                <input value={creds.emergentBaseUrl} onChange={(e) => setCreds((c) => ({...c, emergentBaseUrl: e.target.value}))} placeholder="https://api.emergent.sh/v1" className={inputStyle} />
-              </div>
-            </div>
-          )}
-          {active === 'groq' && (
-            <div className="space-y-3">
-              <p className="text-xs text-gray-500">Groq API key is configured as a backend environment variable. Use the field below to override for testing.</p>
-              <div><label className="text-xs text-gray-500 block mb-1">GROQ_API_KEY (optional override)</label>
-                <SecretInput value={creds.groqKey} onChange={(e) => setCreds((c) => ({...c, groqKey: e.target.value}))} placeholder="gsk_..." />
-              </div>
-            </div>
-          )}
-          {active === 'payment' && (
-            <div className="space-y-3">
-              <div><label className="text-xs text-gray-500 block mb-1">Razorpay Key ID</label>
-                <input value={creds.razorpayKeyId} onChange={(e) => setCreds((c) => ({...c, razorpayKeyId: e.target.value}))} placeholder="rzp_live_..." className={inputStyle} />
-              </div>
-              <div><label className="text-xs text-gray-500 block mb-1">Razorpay Key Secret</label>
-                <SecretInput value={creds.razorpayKeySecret} onChange={(e) => setCreds((c) => ({...c, razorpayKeySecret: e.target.value}))} placeholder="secret..." />
-              </div>
-              <div><label className="text-xs text-gray-500 block mb-1">Razorpay Webhook Secret</label>
-                <SecretInput value={creds.razorpayWebhookSecret} onChange={(e) => setCreds((c) => ({...c, razorpayWebhookSecret: e.target.value}))} placeholder="webhook_secret..." />
-              </div>
-            </div>
-          )}
-          {active === 'email' && (
-            <div><label className="text-xs text-gray-500 block mb-1">Resend API Key</label>
-              <SecretInput value={creds.resendKey} onChange={(e) => setCreds((c) => ({...c, resendKey: e.target.value}))} placeholder="re_..." />
-            </div>
-          )}
-          {active === 'push' && (
-            <div><label className="text-xs text-gray-500 block mb-1">OneSignal API Key</label>
-              <SecretInput value={creds.oneSignalKey} onChange={(e) => setCreds((c) => ({...c, oneSignalKey: e.target.value}))} placeholder="os_..." />
-            </div>
-          )}
-          {active === 'analytics' && (
-            <div><label className="text-xs text-gray-500 block mb-1">PostHog API Key</label>
-              <SecretInput value={creds.posthogKey} onChange={(e) => setCreds((c) => ({...c, posthogKey: e.target.value}))} placeholder="phc_..." />
-            </div>
-          )}
-          {active === 'auth' && (
-            <div className="space-y-3">
-              <div><label className="text-xs text-gray-500 block mb-1">Google Client ID</label>
-                <input value={creds.googleClientId} onChange={(e) => setCreds((c) => ({...c, googleClientId: e.target.value}))} placeholder="xxx.apps.googleusercontent.com" className={inputStyle} />
-              </div>
-              <div><label className="text-xs text-gray-500 block mb-1">Google Client Secret</label>
-                <SecretInput value={creds.googleClientSecret} onChange={(e) => setCreds((c) => ({...c, googleClientSecret: e.target.value}))} placeholder="GOCSPX-..." />
-              </div>
-            </div>
-          )}
+        <div className="flex gap-2 flex-wrap">
+          {SERVICES.map(({id, icon: Icon, label, accent}) => {
+            const c = ACCENT[accent];
+            return (
+              <button key={id} onClick={() => { setActive(id); setTestResult(null); }}
+                className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium border transition-all ${active === id ? `${c.bg} ${c.border} ${c.text}` : 'border-gray-200 text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>
+                <Icon size={13} /> {label}
+              </button>
+            );
+          })}
+        </div>
 
-          <div className="flex gap-2 pt-2">
-            <button onClick={handleTest} disabled={testing}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors">
-              {testing ? <Loader2 size={12} className="animate-spin" /> : <TestTube2 size={12} />} Test Connection
-            </button>
-            <button onClick={handleSave} disabled={saving}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold text-white ${colors.btn} transition-colors`}>
-              {saving ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />} Deploy
-            </button>
+        <div className="rounded-2xl border border-gray-200 overflow-hidden bg-white shadow-sm">
+          <div className={`p-4 border-b ${colors.bg} ${colors.border}`}>
+            <div className="flex items-center gap-3">
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${colors.bg} border ${colors.border}`}>
+                {ac && <ac.icon size={18} className={colors.text} />}
+              </div>
+              <div>
+                <p className={`font-bold ${colors.text}`}>{ac?.label}</p>
+                <p className="text-xs text-gray-500">{ac?.desc}</p>
+              </div>
+            </div>
           </div>
 
-          {testResult && (
-            <div className={`rounded-xl p-3 text-xs ${testResult.ok ? 'bg-emerald-50 border border-emerald-200 text-emerald-600' : 'bg-red-50 border border-red-200 text-red-600'}`}>
-              {testResult.ok ? `✓ ${testResult.data}` : `✗ Error: ${testResult.error || testResult.data}`}
+          <div className="p-4 space-y-4">
+            {active === 'supabase' && (
+              <div className="space-y-3">
+                <p className="text-xs text-gray-500">Connect to Supabase for user accounts and conversation storage. Find credentials in your Supabase dashboard under Settings &gt; API.</p>
+                <div><label className="text-xs text-gray-500 block mb-1" data-testid="label-supabase-url">Project URL</label>
+                  <input value={creds.supabaseUrl} onChange={(e) => setCreds((c) => ({...c, supabaseUrl: e.target.value}))} placeholder="https://xxxxx.supabase.co" data-testid="input-supabase-url" className={inputStyle} />
+                </div>
+                <div><label className="text-xs text-gray-500 block mb-1" data-testid="label-supabase-service-key">Service Role Key</label>
+                  <SecretInput value={creds.supabaseServiceKey} onChange={(e) => setCreds((c) => ({...c, supabaseServiceKey: e.target.value}))} placeholder="eyJhbGci..." />
+                </div>
+                <div><label className="text-xs text-gray-500 block mb-1" data-testid="label-supabase-anon-key">Anon Key (public)</label>
+                  <SecretInput value={creds.supabaseAnonKey} onChange={(e) => setCreds((c) => ({...c, supabaseAnonKey: e.target.value}))} placeholder="eyJhbGci..." />
+                </div>
+              </div>
+            )}
+            {active === 'emergent' && (
+              <div className="space-y-3">
+                <p className="text-xs text-gray-500">Emergent universal API key — powers all admin AI content generation (content hub, SEO, GEO). Highest priority provider; other keys serve as fallbacks.</p>
+                <div><label className="text-xs text-gray-500 block mb-1">EMERGENT_API_KEY</label>
+                  <SecretInput value={creds.emergentKey} onChange={(e) => setCreds((c) => ({...c, emergentKey: e.target.value}))} placeholder="em_..." />
+                </div>
+                <div><label className="text-xs text-gray-500 block mb-1">Base URL (optional)</label>
+                  <input value={creds.emergentBaseUrl} onChange={(e) => setCreds((c) => ({...c, emergentBaseUrl: e.target.value}))} placeholder="https://api.emergent.sh/v1" className={inputStyle} />
+                </div>
+              </div>
+            )}
+            {active === 'groq' && (
+              <div className="space-y-3">
+                <p className="text-xs text-gray-500">Groq API key is configured as a backend environment variable. Use the field below to override for testing.</p>
+                <div><label className="text-xs text-gray-500 block mb-1">GROQ_API_KEY (optional override)</label>
+                  <SecretInput value={creds.groqKey} onChange={(e) => setCreds((c) => ({...c, groqKey: e.target.value}))} placeholder="gsk_..." />
+                </div>
+              </div>
+            )}
+            {active === 'payment' && (
+              <div className="space-y-3">
+                <div><label className="text-xs text-gray-500 block mb-1">Razorpay Key ID</label>
+                  <input value={creds.razorpayKeyId} onChange={(e) => setCreds((c) => ({...c, razorpayKeyId: e.target.value}))} placeholder="rzp_live_..." className={inputStyle} />
+                </div>
+                <div><label className="text-xs text-gray-500 block mb-1">Razorpay Key Secret</label>
+                  <SecretInput value={creds.razorpayKeySecret} onChange={(e) => setCreds((c) => ({...c, razorpayKeySecret: e.target.value}))} placeholder="secret..." />
+                </div>
+                <div><label className="text-xs text-gray-500 block mb-1">Razorpay Webhook Secret</label>
+                  <SecretInput value={creds.razorpayWebhookSecret} onChange={(e) => setCreds((c) => ({...c, razorpayWebhookSecret: e.target.value}))} placeholder="webhook_secret..." />
+                </div>
+              </div>
+            )}
+            {active === 'email' && (
+              <div><label className="text-xs text-gray-500 block mb-1">Resend API Key</label>
+                <SecretInput value={creds.resendKey} onChange={(e) => setCreds((c) => ({...c, resendKey: e.target.value}))} placeholder="re_..." />
+              </div>
+            )}
+            {active === 'push' && (
+              <div><label className="text-xs text-gray-500 block mb-1">OneSignal API Key</label>
+                <SecretInput value={creds.oneSignalKey} onChange={(e) => setCreds((c) => ({...c, oneSignalKey: e.target.value}))} placeholder="os_..." />
+              </div>
+            )}
+            {active === 'analytics' && (
+              <div><label className="text-xs text-gray-500 block mb-1">PostHog API Key</label>
+                <SecretInput value={creds.posthogKey} onChange={(e) => setCreds((c) => ({...c, posthogKey: e.target.value}))} placeholder="phc_..." />
+              </div>
+            )}
+            {active === 'auth' && (
+              <div className="space-y-3">
+                <div><label className="text-xs text-gray-500 block mb-1">Google Client ID</label>
+                  <input value={creds.googleClientId} onChange={(e) => setCreds((c) => ({...c, googleClientId: e.target.value}))} placeholder="xxx.apps.googleusercontent.com" className={inputStyle} />
+                </div>
+                <div><label className="text-xs text-gray-500 block mb-1">Google Client Secret</label>
+                  <SecretInput value={creds.googleClientSecret} onChange={(e) => setCreds((c) => ({...c, googleClientSecret: e.target.value}))} placeholder="GOCSPX-..." />
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-2">
+              <button onClick={handleTest} disabled={testing}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors">
+                {testing ? <Loader2 size={12} className="animate-spin" /> : <TestTube2 size={12} />} Test Connection
+              </button>
+              <button onClick={handleSave} disabled={saving}
+                className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold text-white ${colors.btn} transition-colors`}>
+                {saving ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />} Deploy
+              </button>
             </div>
-          )}
+
+            {testResult && (
+              <div className={`rounded-xl p-3 text-xs ${testResult.ok ? 'bg-emerald-50 border border-emerald-200 text-emerald-600' : 'bg-red-50 border border-red-200 text-red-600'}`}>
+                {testResult.ok ? `✓ ${testResult.data}` : `✗ Error: ${testResult.error || testResult.data}`}
+              </div>
+            )}
+          </div>
         </div>
+        <AdminQuickLinks links={['vertex','health','settings','googleauth','ratelimits']} onNavigate={onNavigate} />
       </div>
-      <AdminQuickLinks links={['vertex','health','settings','googleauth','ratelimits']} onNavigate={onNavigate} />
-    </div>
+    </SectionErrorBoundary>
   );
 }

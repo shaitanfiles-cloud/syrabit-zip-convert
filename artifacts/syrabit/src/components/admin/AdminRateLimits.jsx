@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import axios from 'axios';
 import { API_BASE } from '@/utils/api';
 
+import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 const adminHeaders = (token) => {
   const isRealJwt = token && typeof token === 'string' && token.split('.').length === 3;
   return isRealJwt ? { Authorization: `Bearer ${token}` } : {};
@@ -88,38 +89,40 @@ export default function AdminRateLimits({ adminToken, onNavigate }) {
   const budgetColor = budgetPct < 50 ? 'bg-emerald-500' : budgetPct < 80 ? 'bg-amber-500' : 'bg-red-500';
 
   return (
-    <div className="space-y-6 max-w-4xl">
-      <div>
-        <h2 className="text-lg font-bold text-gray-900">Rate Limits</h2>
-        <p className="text-sm text-gray-400 mt-0.5">Tier-based rate policies and daily token budget</p>
-      </div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {[[Cpu,'Active Requests',stats.active_requests,'text-gray-900'],[Zap,'Tokens Today',(stats.tokens_today/1000).toFixed(0)+'K','text-amber-600'],[Globe,'Budget Used',budgetPct.toFixed(1)+'%',budgetPct>80?'text-red-600':'text-emerald-600'],[CheckCircle2,'Cost Mode',stats.cost_degraded?'Degraded':'Normal',stats.cost_degraded?'text-red-600':'text-emerald-600']].map(([Icon,label,val,color]) => (
-          <div key={label} className="rounded-xl p-3 bg-white border border-gray-200 shadow-sm">
-            <Icon size={16} className={`${color} mb-2`} />
-            <p className={`text-xl font-bold ${color}`}>{val}</p>
-            <p className="text-[10px] text-gray-400">{label}</p>
+    <SectionErrorBoundary name="Rate Limits">
+      <div className="space-y-6 max-w-4xl">
+        <div>
+          <h2 className="text-lg font-bold text-gray-900">Rate Limits</h2>
+          <p className="text-sm text-gray-400 mt-0.5">Tier-based rate policies and daily token budget</p>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[[Cpu,'Active Requests',stats.active_requests,'text-gray-900'],[Zap,'Tokens Today',(stats.tokens_today/1000).toFixed(0)+'K','text-amber-600'],[Globe,'Budget Used',budgetPct.toFixed(1)+'%',budgetPct>80?'text-red-600':'text-emerald-600'],[CheckCircle2,'Cost Mode',stats.cost_degraded?'Degraded':'Normal',stats.cost_degraded?'text-red-600':'text-emerald-600']].map(([Icon,label,val,color]) => (
+            <div key={label} className="rounded-xl p-3 bg-white border border-gray-200 shadow-sm">
+              <Icon size={16} className={`${color} mb-2`} />
+              <p className={`text-xl font-bold ${color}`}>{val}</p>
+              <p className="text-[10px] text-gray-400">{label}</p>
+            </div>
+          ))}
+        </div>
+        <div>
+          <div className="flex justify-between text-xs text-gray-500 mb-2">
+            <span>Daily Token Budget</span>
+            <span>{stats.tokens_today.toLocaleString()} / {stats.daily_budget.toLocaleString()}</span>
           </div>
-        ))}
-      </div>
-      <div>
-        <div className="flex justify-between text-xs text-gray-500 mb-2">
-          <span>Daily Token Budget</span>
-          <span>{stats.tokens_today.toLocaleString()} / {stats.daily_budget.toLocaleString()}</span>
+          <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+            <div className={`h-full rounded-full transition-all ${budgetColor}`} style={{ width: `${budgetPct}%` }} />
+          </div>
+          {stats.cost_degraded && (
+            <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
+              <AlertTriangle size={11} /> Model degraded to gemini-1.5-flash (reduced capacity)
+            </p>
+          )}
         </div>
-        <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
-          <div className={`h-full rounded-full transition-all ${budgetColor}`} style={{ width: `${budgetPct}%` }} />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {TIERS.map(({id}) => <TierCard key={id} tier={id} policy={policies[id] || DEFAULT_POLICIES[id]} onSave={handleSave} />)}
         </div>
-        {stats.cost_degraded && (
-          <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
-            <AlertTriangle size={11} /> Model degraded to gemini-1.5-flash (reduced capacity)
-          </p>
-        )}
+        <AdminQuickLinks links={['health','apiconfig','activitylog','settings']} onNavigate={onNavigate} />
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        {TIERS.map(({id}) => <TierCard key={id} tier={id} policy={policies[id] || DEFAULT_POLICIES[id]} onSave={handleSave} />)}
-      </div>
-      <AdminQuickLinks links={['health','apiconfig','activitylog','settings']} onNavigate={onNavigate} />
-    </div>
+    </SectionErrorBoundary>
   );
 }

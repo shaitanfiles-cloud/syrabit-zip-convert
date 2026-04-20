@@ -16,6 +16,7 @@ import FlashcardGeneratorCard from './vertex-panel/FlashcardGeneratorCard';
 import McqGeneratorCard from './vertex-panel/McqGeneratorCard';
 import AdminQuickLinks from './AdminQuickLinks';
 
+import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 const SERVICE_CARDS = [
   { id: 'semantic',   label: 'Semantic Search',    icon: Search,      color: '#3b82f6',  component: SemanticSearchCard },
   { id: 'translate',  label: 'Translation',         icon: Languages,   color: '#10b981',  component: TranslationCard },
@@ -36,46 +37,48 @@ export default function AdminVertexPanel({ token, adminToken, onNavigate }) {
   const ActiveCard = SERVICE_CARDS.find(s => s.id === active)?.component;
 
   return (
-    <div style={{ padding: '0 2px' }}>
-      <StatusHeader token={tk} />
+    <SectionErrorBoundary name="Vertex Studio">
+      <div style={{ padding: '0 2px' }}>
+        <StatusHeader token={tk} />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6, marginBottom: 24 }}>
-        {SERVICE_CARDS.map(s => {
-          const Icon = s.icon;
-          const isActive = active === s.id;
-          return (
-            <button key={s.id} onClick={() => setActive(s.id)}
-              style={{
-                background: isActive ? `${s.color}14` : '#ffffff',
-                border: `1px solid ${isActive ? s.color + '44' : '#e5e7eb'}`,
-                borderRadius: 12, padding: '10px 14px', cursor: 'pointer',
-                display: 'flex', alignItems: 'center', gap: 8, transition: 'all 0.15s',
-                textAlign: 'left', boxShadow: isActive ? 'none' : '0 1px 3px rgba(0,0,0,0.04)',
-              }}>
-              <Icon size={15} color={isActive ? s.color : '#9ca3af'} />
-              <span style={{ fontSize: 12, fontWeight: 700, color: isActive ? s.color : '#6b7280' }}>
-                {s.label}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-
-      {ActiveCard && <ActiveCard token={tk} onNavigate={onNavigate} />}
-
-      <div style={{ marginTop: 24, padding: 16, background: '#f5f3ff', border: '1px solid #e9d5ff', borderRadius: 12 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#7c3aed', marginBottom: 8, textTransform: 'uppercase' }}>Also Available In Other Panels</div>
-        <div style={{ fontSize: 12, color: '#6b7280', lineHeight: 1.8 }}>
-          • <strong style={{ color: '#111827' }}>CMS Editor</strong> — Translate button on any document<br />
-          • <strong style={{ color: '#111827' }}>Content Studio</strong> — Enhance + Quality Score on generated blocks<br />
-          • <strong style={{ color: '#111827' }}>Thumbnail Studio</strong> — Gemini Vision analysis (replaces Groq)<br />
-          • <strong style={{ color: '#111827' }}>Document Upload</strong> — Extract topics/MCQs from AHSEC PDFs<br />
-          • <strong style={{ color: '#111827' }}>Vision OCR</strong> — Scan question paper images (Cloud Vision)<br />
-          • <strong style={{ color: '#111827' }}>NLP Concepts</strong> — Entity &amp; keyword extraction (Cloud Natural Language)<br />
-          • <strong style={{ color: '#111827' }}>Flashcard + MCQ</strong> — Generate student revision material from any chapter
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6, marginBottom: 24 }}>
+          {SERVICE_CARDS.map(s => {
+            const Icon = s.icon;
+            const isActive = active === s.id;
+            return (
+              <button key={s.id} onClick={() => setActive(s.id)}
+                style={{
+                  background: isActive ? `${s.color}14` : '#ffffff',
+                  border: `1px solid ${isActive ? s.color + '44' : '#e5e7eb'}`,
+                  borderRadius: 12, padding: '10px 14px', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', gap: 8, transition: 'all 0.15s',
+                  textAlign: 'left', boxShadow: isActive ? 'none' : '0 1px 3px rgba(0,0,0,0.04)',
+                }}>
+                <Icon size={15} color={isActive ? s.color : '#9ca3af'} />
+                <span style={{ fontSize: 12, fontWeight: 700, color: isActive ? s.color : '#6b7280' }}>
+                  {s.label}
+                </span>
+              </button>
+            );
+          })}
         </div>
+
+        {ActiveCard && <ActiveCard token={tk} onNavigate={onNavigate} />}
+
+        <div style={{ marginTop: 24, padding: 16, background: '#f5f3ff', border: '1px solid #e9d5ff', borderRadius: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#7c3aed', marginBottom: 8, textTransform: 'uppercase' }}>Also Available In Other Panels</div>
+          <div style={{ fontSize: 12, color: '#6b7280', lineHeight: 1.8 }}>
+            • <strong style={{ color: '#111827' }}>CMS Editor</strong> — Translate button on any document<br />
+            • <strong style={{ color: '#111827' }}>Content Studio</strong> — Enhance + Quality Score on generated blocks<br />
+            • <strong style={{ color: '#111827' }}>Thumbnail Studio</strong> — Gemini Vision analysis (replaces Groq)<br />
+            • <strong style={{ color: '#111827' }}>Document Upload</strong> — Extract topics/MCQs from AHSEC PDFs<br />
+            • <strong style={{ color: '#111827' }}>Vision OCR</strong> — Scan question paper images (Cloud Vision)<br />
+            • <strong style={{ color: '#111827' }}>NLP Concepts</strong> — Entity &amp; keyword extraction (Cloud Natural Language)<br />
+            • <strong style={{ color: '#111827' }}>Flashcard + MCQ</strong> — Generate student revision material from any chapter
+          </div>
+        </div>
+        <AdminQuickLinks links={['seomanager','content','analytics','dashboard']} onNavigate={onNavigate} />
       </div>
-      <AdminQuickLinks links={['seomanager','content','analytics','dashboard']} onNavigate={onNavigate} />
-    </div>
+    </SectionErrorBoundary>
   );
 }
