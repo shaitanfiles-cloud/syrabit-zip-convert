@@ -794,6 +794,12 @@ async def get_chapter_by_slug(board_slug: str, class_slug: str, subject_slug: st
         # can populate <meta keywords> with what students actually
         # search for instead of a static template.
         "bing_keywords": chapter.get("bing_keywords") or [],
+        # Unified SEO bundle (meta_title / meta_description / og_* /
+        # twitter_* / geo_tags / jsonld_keywords) produced by the same
+        # monthly refresh loop via `seo_keyword_service`. Empty dict
+        # for chapters that haven't been swept yet — the frontend
+        # falls back to its existing template logic in that case.
+        "seo_bundle": chapter.get("seo_bundle") or {},
     }
     _set_content_cache(ck, result)
     if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"

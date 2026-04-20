@@ -264,6 +264,15 @@ def test_try_run_bing_keyword_refresh_once_happy_path(monkeypatch):
     import bing_keyword_client as bkc
     monkeypatch.setattr(bkc, "fetch_top_keywords", fake_fetch)
 
+    # Audit-and-rewire follow-up: the refresh function now also calls
+    # `seo_keyword_service.enrich_seo_for_seed`. Stub it out here so
+    # this test stays focused on the Bing-keyword loop and doesn't
+    # double-count the shared `stats_coll` MagicMock.
+    import seo_keyword_service as sks
+    async def _noop_enrich(*a, **kw):
+        return {"bundle": None, "source": "stubbed"}
+    monkeypatch.setattr(sks, "enrich_seo_for_seed", _noop_enrich)
+
     stats_coll = MagicMock()
     stats_coll.update_one = AsyncMock()
     db.__getitem__.return_value = stats_coll
@@ -375,6 +384,187 @@ def test_render_chapter_fallback_merges_bing_and_static_terms_dedup(monkeypatch)
     assert line.index("Atom notes") < line.index("Atom MCQ")
     # Case-insensitive dedupe: "Atom notes" must appear exactly once.
     assert line.count("Atom notes") == 1
+
+
+def test_refresh_chapter_persists_seo_bundle_alongside_keywords(monkeypatch):
+    """Audit-and-rewire follow-up: the monthly Bing keyword refresh
+    must also call `seo_keyword_service.enrich_seo_for_seed` and persist
+    the resulting bundle on the chapter doc so the chapter API + bot
+    render middleware can emit Gemini-grade meta tags without a live
+    LLM call per request."""
+    from routes import bot_discovery as bd
+    db = MagicMock()
+    db.chapters.update_one = AsyncMock()
+
+    async def fake_fetch(api_key, seed, **kw):
+        return {
+            "seed": seed, "country": "IN", "language": "en-IN",
+            "keywords": [{"keyword": "atom notes", "impressions": 1200}],
+            "primary": {"Keyword": "atom", "Broad": 800},
+            "cached": False,
+            "fetched_at": "2026-04-20T04:05:00+00:00",
+            "source": "api_fresh",
+        }
+    import bing_keyword_client as bkc
+    monkeypatch.setattr(bkc, "fetch_top_keywords", fake_fetch)
+
+    captured_bing_calls = []
+
+    async def fake_enrich(seed, *, db=None, bing_api_key="", force=False,
+                          now=None, bing_fetcher=None, **_kw):
+        # Audit-and-rewire follow-up: simulate the enricher exercising
+        # the injected `bing_fetcher` so we can prove the production
+        # code passed a passthrough that doesn't re-hit the Bing API.
+        if bing_fetcher is not None:
+            await bing_fetcher(bing_api_key, seed)
+            captured_bing_calls.append(seed)
+        return {
+            "seed": seed,
+            "source": "llm_fresh",
+            "bundle": {
+                "meta_title": "Atom — Class 11 Chemistry | Syrabit.ai",
+                "meta_description": "Atom notes, MCQs and PYQs for AHSEC.",
+                "og_title": "Atom — AHSEC notes",
+                "og_description": "Atom for AHSEC.",
+                "twitter_title": "Atom — AHSEC HS Twitter",
+                "twitter_description": "Atom Twitter blurb for AHSEC.",
+                "twitter_card": "summary_large_image",
+                "geo_tags": {
+                    "geo.region": "IN-AS",
+                    "geo.placename": "Assam, India",
+                    "icbm": "26.2006, 92.9376",
+                    "language": "en-IN",
+                },
+            },
+        }
+    import seo_keyword_service as sks
+    monkeypatch.setattr(sks, "enrich_seo_for_seed", fake_enrich)
+
+    out = _run(bd._refresh_keywords_for_chapter(
+        db, {"id": "ch-1", "title": "Atom"}, "k",
+        now=datetime(2026, 4, 20, 4, 5, tzinfo=timezone.utc),
+    ))
+    assert out["ok"] is True
+    assert out["seo_bundle"] is True
+    db.chapters.update_one.assert_awaited_once()
+    update_doc = db.chapters.update_one.await_args.args[1]["$set"]
+    assert update_doc["bing_keywords"]
+    bundle = update_doc["seo_bundle"]
+    assert bundle["meta_title"].startswith("Atom")
+    assert bundle["geo_tags"]["geo.region"] == "IN-AS"
+    assert update_doc["seo_bundle_source"] == "llm_fresh"
+    assert update_doc["seo_bundle_updated_at"]
+    # Production wired a passthrough `bing_fetcher` so the enricher
+    # never hits the real Bing API again on this same chapter sweep.
+    assert captured_bing_calls == ["Atom"]
+
+
+def test_refresh_chapter_swallows_seo_enrichment_failure(monkeypatch):
+    """If Gemini / suggest fails the refresh must still persist the Bing
+    keywords — a downstream LLM outage cannot be allowed to wipe out
+    the chapter's keyword list."""
+    from routes import bot_discovery as bd
+    db = MagicMock()
+    db.chapters.update_one = AsyncMock()
+
+    async def fake_fetch(api_key, seed, **kw):
+        return {
+            "seed": seed, "country": "IN", "language": "en-IN",
+            "keywords": [{"keyword": "atom mcq", "impressions": 600}],
+            "primary": {"Keyword": "atom", "Broad": 400},
+            "cached": False,
+            "fetched_at": "2026-04-20T04:05:00+00:00",
+            "source": "api_fresh",
+        }
+    import bing_keyword_client as bkc
+    monkeypatch.setattr(bkc, "fetch_top_keywords", fake_fetch)
+
+    async def boom(*a, **kw):
+        raise RuntimeError("gemini 503")
+    import seo_keyword_service as sks
+    monkeypatch.setattr(sks, "enrich_seo_for_seed", boom)
+
+    out = _run(bd._refresh_keywords_for_chapter(
+        db, {"id": "ch-2", "title": "Atom"}, "k",
+        now=datetime(2026, 4, 20, 4, 5, tzinfo=timezone.utc),
+    ))
+    assert out["ok"] is True
+    assert out["seo_bundle"] is False
+    update_doc = db.chapters.update_one.await_args.args[1]["$set"]
+    assert update_doc["bing_keywords"]
+    assert "seo_bundle" not in update_doc
+
+
+def test_render_chapter_fallback_prefers_seo_bundle_when_present(monkeypatch):
+    """When `seo_bundle` is on the chapter doc the bot-render middleware
+    must emit its meta_title / meta_description / og_* / twitter_* /
+    geo.* tags instead of the deterministic template."""
+    from routes.cms_sarvam_health import BotRenderMiddleware
+    _install_render_stubs(monkeypatch, {
+        "title": "Atom",
+        "description": "Short atom desc.",
+        "content": "Body.",
+        "topics": [],
+        "content_as": "",
+        "bing_keywords": [{"keyword": "atom mcq"}],
+        "seo_bundle": {
+            "meta_title": "Atom Class 11 — AHSEC Chemistry",
+            "meta_description": "Atom notes, MCQs and PYQs for AHSEC HS 1st Year.",
+            "og_title": "Atom — AHSEC HS 1st Year",
+            "og_description": "Atom open-graph blurb for AHSEC.",
+            "twitter_title": "Atom — AHSEC HS Twitter",
+            "twitter_description": "Atom Twitter blurb for AHSEC.",
+            "twitter_card": "summary_large_image",
+            # Canonical schema produced by `seo_keyword_service`:
+            # geo_tags uses dotted keys plus `icbm` and `language`.
+            "geo_tags": {
+                "geo.region": "IN-AS",
+                "geo.placename": "Assam, India",
+                "icbm": "26.2006, 92.9376",
+                "language": "en-IN",
+            },
+        },
+    })
+    mw = BotRenderMiddleware(app=MagicMock())
+    html = _run(mw._render_chapter_fallback(
+        "ahsec", "class-11", "chemistry", "atom"))
+
+    assert html is not None
+    assert "Atom Class 11 — AHSEC Chemistry" in html
+    assert "Atom notes, MCQs and PYQs for AHSEC HS 1st Year." in html
+    assert 'property="og:title" content="Atom — AHSEC HS 1st Year"' in html
+    assert 'property="og:description" content="Atom open-graph blurb for AHSEC."' in html
+    assert 'name="twitter:card" content="summary_large_image"' in html
+    # Twitter title/description come from the bundle's twitter_*
+    # fields, not OG.
+    assert 'name="twitter:title" content="Atom — AHSEC HS Twitter"' in html
+    assert 'name="twitter:description" content="Atom Twitter blurb for AHSEC."' in html
+    assert 'name="geo.region" content="IN-AS"' in html
+    # geo.position is derived from ICBM ("lat, lon" -> "lat;lon").
+    assert 'name="geo.position" content="26.2006;92.9376"' in html
+    assert 'name="ICBM" content="26.2006, 92.9376"' in html
+
+
+def test_render_chapter_fallback_handles_missing_seo_bundle(monkeypatch):
+    """No seo_bundle on the chapter doc → fall back to deterministic
+    title/description and emit no geo.* tags. Must not raise."""
+    from routes.cms_sarvam_health import BotRenderMiddleware
+    _install_render_stubs(monkeypatch, {
+        "title": "Atom",
+        "description": "Short atom desc.",
+        "content": "Body.",
+        "topics": [],
+        "content_as": "",
+        "bing_keywords": [{"keyword": "atom mcq"}],
+    })
+    mw = BotRenderMiddleware(app=MagicMock())
+    html = _run(mw._render_chapter_fallback(
+        "ahsec", "class-11", "chemistry", "atom"))
+    assert html is not None
+    assert "Atom" in html
+    assert 'name="geo.region"' not in html
+    # Twitter card still emitted with default value.
+    assert 'name="twitter:card" content="summary_large_image"' in html
 
 
 def test_refresh_chapter_preserves_existing_keywords_on_empty_bing_result(monkeypatch):

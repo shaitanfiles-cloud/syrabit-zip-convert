@@ -5019,6 +5019,34 @@ async def _refresh_keywords_for_chapter(
         "bing_keywords_updated_at": now,
         "bing_keywords_source": source,
     }
+
+    # Task #582 follow-up: piggyback the unified SEO enrichment on the
+    # same monthly sweep so chapter docs always carry an up-to-date
+    # `seo_bundle` (meta_title / meta_description / og_* / twitter_* /
+    # geo_tags / jsonld_keywords). This lets the chapter API + bot
+    # render middleware emit rich SERP metadata without doing a live
+    # Gemini call on every request. Failures are non-fatal: we never
+    # let a Gemini outage block the keyword refresh write.
+    try:
+        from seo_keyword_service import enrich_seo_for_seed
+        # Pass through the Bing result we just fetched so the enricher
+        # doesn't re-hit the Bing API on the same chapter sweep
+        # (and doesn't double-trip the call counter in tests). The
+        # injected fetcher mirrors the real client's contract.
+        async def _passthru_bing(api_key, seed, **kw):
+            return res
+        seo = await enrich_seo_for_seed(
+            title, db=db, bing_api_key=api_key, force=True, now=now,
+            bing_fetcher=_passthru_bing,
+        )
+        bundle = (seo or {}).get("bundle")
+        if bundle:
+            update["seo_bundle"] = bundle
+            update["seo_bundle_source"] = seo.get("source")
+            update["seo_bundle_updated_at"] = now
+    except Exception as exc:
+        logger.info("[Bing keyword refresh] seo enrichment skipped: %s", exc)
+
     try:
         await db.chapters.update_one(
             {"id": chapter.get("id")}, {"$set": update},
@@ -5032,6 +5060,7 @@ async def _refresh_keywords_for_chapter(
         "title": title,
         "keywords": len(keywords),
         "source": source,
+        "seo_bundle": bool(update.get("seo_bundle")),
         "ok": True,
     }
 
