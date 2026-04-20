@@ -84,7 +84,7 @@ export default function AdminConversations({ adminToken, onNavigate }) {
   const loadConversations = (token) => {
     setLoading(true);
     adminGetConversations(token)
-      .then((res) => setConversations(res.data))
+      .then((res) => setConversations(Array.isArray(res?.data) ? res.data : []))
       .catch(() => toast.error('Failed to load conversations'))
       .finally(() => setLoading(false));
   };

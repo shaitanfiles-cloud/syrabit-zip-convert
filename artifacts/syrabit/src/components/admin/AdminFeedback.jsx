@@ -17,8 +17,8 @@ export default function AdminFeedback({ adminToken }) {
         adminGetChatFeedback(adminToken),
         adminGetFeedbackStats(adminToken),
       ]);
-      setFeedback(fbRes.data);
-      setStats(stRes.data);
+      setFeedback(Array.isArray(fbRes?.data) ? fbRes.data : []);
+      setStats(stRes?.data && typeof stRes.data === 'object' ? stRes.data : null);
     } catch (e) {
       console.error('Failed to load feedback', e);
     } finally {

@@ -273,9 +273,9 @@ export default function AdminAds({ adminToken }) {
                         <td className="py-2 pr-3 font-medium" style={{ color: NETWORK_COLORS[n.network] || '#374151' }}>
                           {n.network}
                         </td>
-                        <td className="py-2 pr-3 text-gray-700">{n.impressions.toLocaleString()}</td>
-                        <td className="py-2 pr-3 text-gray-900 font-semibold">₹{n.revenue_inr.toLocaleString()}</td>
-                        <td className="py-2 pr-3 text-gray-700">₹{n.rpm_inr.toLocaleString()}</td>
+                        <td className="py-2 pr-3 text-gray-700">{Number(n.impressions ?? 0).toLocaleString()}</td>
+                        <td className="py-2 pr-3 text-gray-900 font-semibold">₹{Number(n.revenue_inr ?? 0).toLocaleString()}</td>
+                        <td className="py-2 pr-3 text-gray-700">₹{Number(n.rpm_inr ?? 0).toLocaleString()}</td>
                         <td className="py-2 pr-3 text-gray-700">
                           {n.fill_rate_pct != null ? `${n.fill_rate_pct}%` : '—'}
                         </td>
@@ -308,9 +308,9 @@ export default function AdminAds({ adminToken }) {
                       <tr key={`${p.network}:${p.placement}`} className="border-t border-gray-100">
                         <td className="py-2 pr-3 text-gray-900 font-mono text-xs">{p.placement}</td>
                         <td className="py-2 pr-3" style={{ color: NETWORK_COLORS[p.network] || '#374151' }}>{p.network}</td>
-                        <td className="py-2 pr-3 text-gray-700">{p.impressions.toLocaleString()}</td>
-                        <td className="py-2 pr-3 text-gray-900 font-semibold">₹{p.revenue_inr.toLocaleString()}</td>
-                        <td className="py-2 pr-3 text-gray-700">₹{p.rpm_inr.toLocaleString()}</td>
+                        <td className="py-2 pr-3 text-gray-700">{Number(p.impressions ?? 0).toLocaleString()}</td>
+                        <td className="py-2 pr-3 text-gray-900 font-semibold">₹{Number(p.revenue_inr ?? 0).toLocaleString()}</td>
+                        <td className="py-2 pr-3 text-gray-700">₹{Number(p.rpm_inr ?? 0).toLocaleString()}</td>
                       </tr>
                     ))}
                   </tbody>
