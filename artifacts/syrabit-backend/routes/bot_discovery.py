@@ -1413,15 +1413,63 @@ async def diff_sitemap_against_submitted(source: str = "sitemap_diff") -> dict:
     return summary
 
 
+_SMOKE_ALERT_LAST_FIRED: dict = {"ts": 0.0}
+_SMOKE_ALERT_COOLDOWN_S = 6 * 3600
+
+
+async def _run_daily_publish_indexnow_smoke():
+    """Task #563: invoke ``run_publish_indexnow_smoke()`` and raise an
+    admin alert when the publish → Google chain is broken. Runs inside
+    the existing nightly sitemap-diff loop so we don't spawn yet
+    another background task."""
+    try:
+        from seo_indexnow_smoke import run_publish_indexnow_smoke
+        summary = await run_publish_indexnow_smoke()
+        if summary.get("ok"):
+            return
+        now = time.time()
+        if now - _SMOKE_ALERT_LAST_FIRED["ts"] < _SMOKE_ALERT_COOLDOWN_S:
+            return
+        try:
+            from metrics import _dispatch_alert
+            failed_steps = [
+                k for k in ("in_sitemap", "lastmod_fresh", "push_log_written")
+                if not summary.get(k)
+            ]
+            await _dispatch_alert(
+                "publish_indexnow_smoke_failed",
+                "Publish → IndexNow smoke test failed",
+                f"Daily smoke test reports the publish→Google chain is broken. "
+                f"Failed steps: {', '.join(failed_steps) or 'unknown'}. "
+                f"URL probed: {summary.get('url') or 'n/a'}. "
+                f"Error: {summary.get('error') or 'none'}.",
+                threshold_snapshot={
+                    "metric": "publish_indexnow_smoke",
+                    "summary": summary,
+                },
+            )
+            _SMOKE_ALERT_LAST_FIRED["ts"] = now
+        except Exception as exc:
+            logger.debug("Failed to dispatch smoke-test alert: %s", exc)
+    except Exception as exc:
+        logger.warning("Publish→IndexNow smoke run failed: %s", exc)
+
+
 async def _sitemap_indexnow_diff_loop():
     """Background loop: nightly compare the live sitemap against the set of
-    URLs we have already pushed to IndexNow and queue any missing URLs."""
+    URLs we have already pushed to IndexNow and queue any missing URLs.
+    Also runs the publish→IndexNow smoke test so a broken chain raises
+    an admin alert without waiting for someone to click the button."""
     await asyncio.sleep(_SITEMAP_DIFF_INITIAL_DELAY_S)
     while True:
         try:
             await diff_sitemap_against_submitted(source="nightly_sitemap_diff")
         except Exception as exc:
             logger.warning("Sitemap-diff IndexNow loop iteration failed: %s", exc)
+        try:
+            await _run_daily_publish_indexnow_smoke()
+        except Exception as exc:
+            logger.warning("Publish→IndexNow smoke loop iteration failed: %s", exc)
         await asyncio.sleep(_SITEMAP_DIFF_INTERVAL_S)
 
 
@@ -3308,6 +3356,19 @@ async def admin_indexnow_submit_urls(
         "skipped": skipped,
         "endpoint_results": push_results,
     }
+
+
+@router.post("/admin/seo/indexnow/smoke")
+async def admin_seo_indexnow_smoke(admin: dict = Depends(get_admin_user)):
+    """Task #563: run the publish → sub-sitemap → IndexNow → push-log
+    smoke test against the live database and return its per-step
+    pass/fail summary. Powers the "Run smoke test" button on the
+    Submit & Monitor admin panel so the team can self-verify the
+    publish → Google chain whenever a regression is suspected.
+    """
+    from seo_indexnow_smoke import run_publish_indexnow_smoke
+    summary = await run_publish_indexnow_smoke()
+    return summary
 
 
 @router.post("/admin/indexnow/resubmit-recent")

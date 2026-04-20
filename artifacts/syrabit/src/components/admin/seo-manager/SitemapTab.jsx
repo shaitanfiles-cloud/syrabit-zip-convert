@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Loader2, RefreshCw, Map, Sparkles, CheckCircle2, AlertTriangle, Send, Rocket, Bell, ClipboardList } from 'lucide-react';
+import { Loader2, RefreshCw, Map, Sparkles, CheckCircle2, AlertTriangle, Send, Rocket, Bell, ClipboardList, Activity, XCircle } from 'lucide-react';
 import {
   adminSeoGoogleIndexingStats,
   adminIndexNowBackfillStart,
@@ -7,6 +7,7 @@ import {
   adminIndexNowSubmitUrls,
   adminIndexNowHistory,
   adminSeoGoogleSitemapPing,
+  adminSeoIndexNowSmoke,
 } from '@/utils/api';
 
 const INDEXING_FIELDS = [
@@ -328,6 +329,9 @@ function SubmitMonitorCard({ adminToken }) {
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [error, setError] = useState(null);
+  // Task #563: publish → sub-sitemap → IndexNow → push-log smoke
+  const [smokeRunning, setSmokeRunning] = useState(false);
+  const [smokeResult, setSmokeResult] = useState(null);
 
   const loadHistory = useCallback(async () => {
     if (!adminToken) return;
@@ -367,6 +371,21 @@ function SubmitMonitorCard({ adminToken }) {
     }
   };
 
+  const handleSmoke = async () => {
+    setError(null);
+    setSmokeResult(null);
+    setSmokeRunning(true);
+    try {
+      const r = await adminSeoIndexNowSmoke(adminToken);
+      setSmokeResult(r.data);
+      await loadHistory();
+    } catch (e) {
+      setError(e?.response?.data?.detail || e?.message || 'Smoke test failed');
+    } finally {
+      setSmokeRunning(false);
+    }
+  };
+
   const handlePing = async () => {
     setError(null);
     setPingResult(null);
@@ -395,6 +414,13 @@ function SubmitMonitorCard({ adminToken }) {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button onClick={handleSmoke} disabled={smokeRunning || !adminToken}
+            title="Verify the publish → sub-sitemap → IndexNow → push-log chain end-to-end"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-40"
+            style={{ background: '#fff', border: '1px solid #e5e7eb', color: '#4b5563' }}>
+            {smokeRunning ? <Loader2 size={12} className="animate-spin" /> : <Activity size={12} />}
+            Run smoke test
+          </button>
           <button onClick={handlePing} disabled={pinging || !adminToken}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-40"
             style={{ background: '#fff', border: '1px solid #e5e7eb', color: '#4b5563' }}>
@@ -421,6 +447,53 @@ function SubmitMonitorCard({ adminToken }) {
         <div className="text-xs px-2.5 py-2 rounded" style={{ background: 'rgba(22,163,74,0.06)', color: '#166534' }}>
           Google sitemap ping: <span className="font-mono">{pingResult.status || 'sent'}</span>
           {pingResult.http_status ? ` · HTTP ${pingResult.http_status}` : ''}
+        </div>
+      )}
+
+      {smokeResult && (
+        <div className="rounded-lg p-3 text-xs space-y-2"
+          style={{
+            background: smokeResult.ok ? 'rgba(22,163,74,0.06)' : 'rgba(239,68,68,0.06)',
+            border: `1px solid ${smokeResult.ok ? 'rgba(22,163,74,0.25)' : 'rgba(239,68,68,0.25)'}`,
+          }}>
+          <div className="flex items-center justify-between">
+            <p className="font-semibold flex items-center gap-1.5"
+              style={{ color: smokeResult.ok ? '#166534' : '#b91c1c' }}>
+              {smokeResult.ok
+                ? <><CheckCircle2 size={12} /> Publish → Google chain healthy</>
+                : <><XCircle size={12} /> Publish → Google chain broken</>}
+            </p>
+            <span className="font-mono" style={{ color: '#6b7280' }}>{smokeResult.today}</span>
+          </div>
+          {smokeResult.url && (
+            <p className="font-mono truncate" style={{ color: '#374151' }} title={smokeResult.url}>
+              {smokeResult.url}
+            </p>
+          )}
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              { key: 'in_sitemap', label: 'In sub-sitemap' },
+              { key: 'lastmod_fresh', label: "Today's lastmod" },
+              { key: 'push_log_written', label: 'IndexNow logged' },
+            ].map(step => {
+              const passed = !!smokeResult[step.key];
+              return (
+                <div key={step.key}
+                  className="flex items-center gap-1.5 px-2 py-1.5 rounded"
+                  style={{ background: '#fff', border: '1px solid #e5e7eb' }}>
+                  {passed
+                    ? <CheckCircle2 size={12} className="text-green-600 flex-shrink-0" />
+                    : <XCircle size={12} className="text-red-500 flex-shrink-0" />}
+                  <span style={{ color: passed ? '#166534' : '#b91c1c' }}>{step.label}</span>
+                </div>
+              );
+            })}
+          </div>
+          {smokeResult.error && (
+            <p className="font-mono" style={{ color: '#b91c1c' }}>
+              error: {smokeResult.error}
+            </p>
+          )}
         </div>
       )}
 
