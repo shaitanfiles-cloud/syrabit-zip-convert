@@ -91,3 +91,62 @@ Update `_ASM_REFRESH_INTERVAL_SECONDS` in
 `routes/cms_sarvam_health.py`, update the budget number in this
 runbook, and update the `<= 20` assertion in
 `test_propagation_budget_constant_is_within_runbook_promise`.
+
+---
+
+## Nightly grounded-recall regression alert (Task #587)
+
+**Alert type:** `grounded_recall_regression`
+**Trigger:** `recall@5` from the nightly live bench drops more than the
+configured gate vs `bench/fixtures/baseline.json`.
+
+**What it means**
+
+A live run of the grounded-answer pipeline (web search +
+internal-chapter retrieval + citation builder) returned fewer of the
+hand-labelled expected sources than the committed baseline. Students
+are likely seeing weaker citations on at least the queries listed in
+the alert body's "Misses" section.
+
+**Triage**
+
+1. Open the alert email — the body contains the per-metric current vs
+   baseline diff and up to 10 miss IDs/queries. Pull the full report
+   from the admin tile (it reads `bench/results/latest.json`).
+2. Check `bench/results/latest.json` retriever — if it says `live`,
+   the regression came from production retrievers; if `offline`, it
+   came from the CI gate (code regression in
+   `grounded_answer._build_citations`).
+3. Re-run on demand: `python scripts/run_grounded_recall_nightly.py`
+   exits 0 on pass, 2 on gate fail, 3 on runtime error. Use this to
+   confirm the regression persists after a hot fix.
+4. False positive after a deliberate fixture update? Regenerate the
+   baseline with `python -m bench.grounded_recall --save-results
+   --json` and copy the metrics block into
+   `bench/fixtures/baseline.json`.
+
+**Where it runs**
+
+- In-process scheduler: `bench.grounded_recall._grounded_recall_nightly_loop`,
+  wired into `server.py` lifespan. Polls every 5 min, fires once per
+  UTC day inside a ±30 min window around the target hour. Cross-replica
+  dedup via atomic CAS on `db.job_locks` (`_id =
+  grounded_recall_nightly_marker`).
+- External belt-and-suspenders: `.github/workflows/grounded-recall-nightly.yml`
+  runs the offline bench on cron at 04:30 UTC so the citation builder
+  is gated even when the backend is mid-deploy.
+
+**Env vars (all optional)**
+
+| Var | Default | Effect |
+| --- | --- | --- |
+| `GROUNDED_RECALL_NIGHTLY_ENABLED` | `true` | Set to `false` to disable the in-process loop entirely. |
+| `GROUNDED_RECALL_NIGHTLY_HOUR_UTC` | `3` | Target hour (UTC) for the daily run. ±30 min window. |
+| `GROUNDED_RECALL_NIGHTLY_GATE` | `0.05` | Max allowed `recall@5` drop vs baseline before paging. |
+
+**Where it's tested**
+
+- `tests/test_bench_grounded_recall_nightly.py` covers gate pass, gate
+  fail (alert dispatched with metric delta + miss list), missing
+  baseline (no alert spam on first deploy), scheduling window, and
+  cross-replica dedup.

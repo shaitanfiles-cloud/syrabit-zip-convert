@@ -491,6 +491,19 @@ async def lifespan(app):
         asyncio.create_task(_bing_keyword_refresh_loop())
     asyncio.create_task(_seo_health_alert_loop())
     asyncio.create_task(_seo_weekly_digest_loop())
+    # Task #587 — nightly live grounded-recall benchmark + alerting.
+    # Runs once per UTC day (configurable via GROUNDED_RECALL_NIGHTLY_*),
+    # writes bench/results/latest.json so the admin tile reflects the
+    # production retrievers (not the committed offline baseline), and
+    # fires `_dispatch_alert` when recall@5 drops more than the gate
+    # versus the committed baseline. Cross-replica dedup via
+    # db.job_locks atomic CAS so multi-worker deployments do not run
+    # the bench (or page admins) N×.
+    try:
+        from bench.grounded_recall import _grounded_recall_nightly_loop
+        asyncio.create_task(_grounded_recall_nightly_loop())
+    except Exception as _gr_err:
+        logger.warning(f"grounded-recall nightly loop not started: {_gr_err}")
     # Task #458 — daily/weekly auto-publish of SEO pages so the 991 syllabus
     # topics steadily fill in without admin clicks. Cross-replica dedup is
     # handled inside the loop via atomic CAS on db.job_locks, so it does not

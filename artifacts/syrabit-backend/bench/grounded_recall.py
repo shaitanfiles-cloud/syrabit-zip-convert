@@ -399,9 +399,291 @@ if __name__ == "__main__":
     sys.exit(_main_cli())
 
 
+# ───────────────────────── Nightly run + alerting ─────────────────────────
+#
+# Task #587: scheduler that runs the bench against the *live* retrievers
+# once per day, persists ``results/latest.json`` (so the admin tile shows
+# the production number rather than the committed offline baseline), and
+# fires an admin alert when recall@5 drops more than ``gate`` versus the
+# committed baseline.
+#
+# Two entry points:
+#
+#   * ``run_and_alert_live(...)`` — single-shot helper. Used by the
+#     in-process loop below *and* by the standalone CLI / GH Action so a
+#     gate failure path is identical regardless of trigger.
+#   * ``_grounded_recall_nightly_loop()`` — long-running asyncio task
+#     wired into ``server.py`` lifespan. Polls every 5 min; only the
+#     replica that wins an atomic CAS on ``db.job_locks`` actually runs
+#     the bench, so multi-worker deployments don't N×-page or N×-bench.
+
+_GROUNDED_RECALL_LOCK_ID = "grounded_recall_nightly_marker"
+_GROUNDED_RECALL_LAST_RUN_KEY = "last_run_tag"
+_GROUNDED_RECALL_LOOP_SLEEP_S = 5 * 60   # poll every 5 minutes
+_GROUNDED_RECALL_WINDOW_MINUTES = 30     # ±30 min around target hour
+_GROUNDED_RECALL_DEFAULT_GATE = 0.05     # max allowed recall@5 drop
+_GROUNDED_RECALL_DEFAULT_HOUR_UTC = 3    # 03:00 UTC = 08:30 IST
+
+
+def _bench_enabled() -> bool:
+    val = (os.environ.get("GROUNDED_RECALL_NIGHTLY_ENABLED", "true") or "").strip().lower()
+    return val in ("1", "true", "yes", "on")
+
+
+def _bench_target_hour_utc() -> int:
+    try:
+        h = int(os.environ.get("GROUNDED_RECALL_NIGHTLY_HOUR_UTC", str(_GROUNDED_RECALL_DEFAULT_HOUR_UTC)))
+    except (TypeError, ValueError):
+        h = _GROUNDED_RECALL_DEFAULT_HOUR_UTC
+    return max(0, min(h, 23))
+
+
+def _bench_gate() -> float:
+    try:
+        g = float(os.environ.get("GROUNDED_RECALL_NIGHTLY_GATE", str(_GROUNDED_RECALL_DEFAULT_GATE)))
+    except (TypeError, ValueError):
+        g = _GROUNDED_RECALL_DEFAULT_GATE
+    return max(0.0, min(g, 1.0))
+
+
+def _bench_run_tag(now_utc: datetime) -> str:
+    return now_utc.strftime("%Y-%m-%d")
+
+
+def _should_run_grounded_recall_now(now_utc: datetime, last_run_tag: str) -> bool:
+    if not _bench_enabled():
+        return False
+    target_hour = _bench_target_hour_utc()
+    minutes_from_target = (now_utc.hour - target_hour) * 60 + now_utc.minute
+    if abs(minutes_from_target) > _GROUNDED_RECALL_WINDOW_MINUTES:
+        return False
+    return _bench_run_tag(now_utc) != (last_run_tag or "")
+
+
+def _format_alert_body(report: BenchReport, baseline: dict, drop: float, gate: float) -> str:
+    """Plain-text body for the admin alert. The Slack/Email dispatcher
+    wraps this with the rich formatter; we keep the diff + miss list
+    here so the on-call admin sees the same diagnostic info regardless
+    of channel."""
+    cur = report.metrics
+    base = baseline.get("metrics", {}) if baseline else {}
+    lines = [
+        f"Nightly grounded-recall benchmark regressed beyond the {gate:.2%} gate.",
+        "",
+        f"Retriever: {report.retriever}   cases: {report.total_cases}",
+        f"Mean citations/case: {report.mean_citation_count}   mean latency: {report.mean_latency_ms} ms",
+        "",
+        "Metrics (current → baseline, delta):",
+    ]
+    for k in ("recall@1", "recall@3", "recall@5", "match_rate"):
+        cv = cur.get(k)
+        bv = base.get(k)
+        if cv is None or bv is None:
+            continue
+        d = cv - bv
+        sign = "+" if d >= 0 else ""
+        lines.append(f"  {k:12s} {cv:.4f} → {bv:.4f}  ({sign}{d:.4f})")
+    misses = [c for c in report.per_case if not c.get("matched")]
+    if misses:
+        lines.append("")
+        lines.append(f"Misses ({len(misses)}):")
+        for m in misses[:10]:
+            q = (m.get("query") or "")[:80]
+            lines.append(f"  - {m.get('id')}: {q}")
+        if len(misses) > 10:
+            lines.append(f"  … and {len(misses) - 10} more")
+    lines.append("")
+    lines.append("Source: bench/results/latest.json   gate: --gate "
+                 f"{gate} (recall@5 drop > gate triggers this alert).")
+    return "\n".join(lines)
+
+
+async def run_and_alert_live(
+    *,
+    gate: Optional[float] = None,
+    save: bool = True,
+    fixture_path: Path = FIXTURE_PATH,
+    dispatch: Optional[Callable[..., Any]] = None,
+) -> dict:
+    """Run the live bench, save results, and fire an alert on gate failure.
+
+    Returns a dict::
+
+        {
+            "ran": True,
+            "report": <report dict>,
+            "saved_to": "<path or None>",
+            "gate": 0.05,
+            "drop": 0.07,
+            "gate_failed": True,
+            "alert_dispatched": True,
+            "alert_outcomes": {...},  # from metrics._dispatch_alert
+        }
+
+    ``dispatch`` is the alert dispatcher (defaults to
+    ``metrics._dispatch_alert``). Tests inject a stub.
+    """
+    if gate is None:
+        gate = _bench_gate()
+    cases = load_cases(fixture_path)
+    report = await run_benchmark(cases, retriever="live")
+    saved_to: Optional[Path] = None
+    if save:
+        try:
+            saved_to = save_report(report)
+        except Exception as exc:
+            logger.warning(f"[bench.nightly] save_report failed: {exc}")
+
+    baseline = load_baseline() or {}
+    baseline_recall_5 = (baseline.get("metrics") or {}).get("recall@5")
+    cur_recall_5 = report.metrics.get("recall@5")
+    drop = 0.0
+    gate_failed = False
+    if baseline_recall_5 is not None and cur_recall_5 is not None:
+        drop = baseline_recall_5 - cur_recall_5
+        gate_failed = drop > gate
+
+    out: dict = {
+        "ran": True,
+        "report": report.to_dict(),
+        "saved_to": str(saved_to) if saved_to else None,
+        "gate": gate,
+        "drop": round(drop, 4),
+        "gate_failed": gate_failed,
+        "alert_dispatched": False,
+        "alert_outcomes": None,
+    }
+
+    if not gate_failed:
+        return out
+
+    # Lazy import — keeps the module importable from CI without the
+    # full backend dependency graph (e.g. pymongo/resend/etc).
+    if dispatch is None:
+        try:
+            from metrics import _dispatch_alert as dispatch  # type: ignore
+        except Exception as exc:
+            logger.warning(f"[bench.nightly] alert dispatcher unavailable: {exc}")
+            return out
+
+    title = (
+        f"Grounded-recall regression: recall@5 dropped {drop:.4f} "
+        f"(> gate {gate:.2f})"
+    )
+    body = _format_alert_body(report, baseline, drop, gate)
+    threshold_snapshot = {
+        "metric": "recall@5",
+        "value": round(baseline_recall_5 - gate, 4),  # min acceptable
+        "actual": round(cur_recall_5, 4),
+    }
+    try:
+        outcomes = await dispatch(
+            "grounded_recall_regression",
+            title,
+            body,
+            threshold_snapshot=threshold_snapshot,
+            force=False,
+        )
+        out["alert_dispatched"] = True
+        out["alert_outcomes"] = outcomes
+    except Exception as exc:
+        logger.warning(f"[bench.nightly] alert dispatch failed: {exc}")
+    return out
+
+
+async def _claim_grounded_recall_slot(db, cur_tag: str) -> bool:
+    """Atomic CAS on ``db.job_locks[_GROUNDED_RECALL_LOCK_ID]`` so only one
+    replica per day actually runs the bench (mirrors the dedup pattern
+    used by ``_seo_auto_publish_loop``)."""
+    from pymongo.errors import DuplicateKeyError
+    try:
+        res = await db.job_locks.find_one_and_update(
+            {
+                "_id": _GROUNDED_RECALL_LOCK_ID,
+                _GROUNDED_RECALL_LAST_RUN_KEY: {"$ne": cur_tag},
+            },
+            {"$set": {
+                _GROUNDED_RECALL_LAST_RUN_KEY: cur_tag,
+                "claimed_at": datetime.now(timezone.utc).isoformat(),
+            }},
+            upsert=False,
+        )
+        if res is not None:
+            return True
+    except Exception as exc:
+        logger.debug(f"[bench.nightly] CAS update failed: {exc}")
+        return False
+    try:
+        await db.job_locks.insert_one({
+            "_id": _GROUNDED_RECALL_LOCK_ID,
+            _GROUNDED_RECALL_LAST_RUN_KEY: cur_tag,
+            "claimed_at": datetime.now(timezone.utc).isoformat(),
+        })
+        return True
+    except DuplicateKeyError:
+        return False
+    except Exception as exc:
+        logger.debug(f"[bench.nightly] bootstrap insert failed: {exc}")
+        return False
+
+
+async def _try_run_grounded_recall_once(db, now_utc: Optional[datetime] = None) -> dict:
+    """One iteration of the scheduler. Factored out so tests can drive
+    it deterministically without a real wall clock."""
+    now_utc = now_utc or datetime.now(timezone.utc)
+    if not _bench_enabled():
+        return {"ran": False, "reason": "disabled"}
+    try:
+        cfg = await db.job_locks.find_one(
+            {"_id": _GROUNDED_RECALL_LOCK_ID},
+            {"_id": 0, _GROUNDED_RECALL_LAST_RUN_KEY: 1},
+        ) or {}
+    except Exception:
+        cfg = {}
+    last_tag = cfg.get(_GROUNDED_RECALL_LAST_RUN_KEY, "")
+    if not _should_run_grounded_recall_now(now_utc, last_tag):
+        return {"ran": False, "reason": "outside_window_or_dedup"}
+
+    cur_tag = _bench_run_tag(now_utc)
+    if not await _claim_grounded_recall_slot(db, cur_tag):
+        return {"ran": False, "reason": "lost_race"}
+
+    logger.info(f"[bench.nightly] starting live grounded-recall bench tag={cur_tag}")
+    result = await run_and_alert_live(gate=_bench_gate(), save=True)
+    logger.info(
+        "[bench.nightly] finished tag=%s gate_failed=%s drop=%.4f alert_dispatched=%s",
+        cur_tag, result.get("gate_failed"), result.get("drop", 0.0),
+        result.get("alert_dispatched"),
+    )
+    return {"ran": True, "tag": cur_tag, **result}
+
+
+async def _grounded_recall_nightly_loop():
+    """Background loop wired into ``server.py`` lifespan.
+
+    Sleeps a few minutes after boot to let the rest of the app warm up,
+    then polls every ``_GROUNDED_RECALL_LOOP_SLEEP_S``. Cross-replica
+    dedup is handled inside ``_try_run_grounded_recall_once`` so this
+    loop does not need a leader gate.
+    """
+    from deps import db, is_mongo_available  # type: ignore
+    await asyncio.sleep(300)  # let the app warm up
+    while True:
+        try:
+            if await is_mongo_available():
+                await _try_run_grounded_recall_once(db)
+        except Exception as exc:
+            logger.debug(f"[bench.nightly] loop iteration error: {exc}")
+        await asyncio.sleep(_GROUNDED_RECALL_LOOP_SLEEP_S)
+
+
 __all__ = [
     "BenchCase", "CaseResult", "BenchReport",
     "load_cases", "load_baseline", "save_report", "find_latest_result",
     "citation_matches_expected", "run_benchmark",
     "FIXTURE_PATH", "BASELINE_PATH", "RESULTS_DIR", "K_VALUES",
+    "run_and_alert_live", "_grounded_recall_nightly_loop",
+    "_try_run_grounded_recall_once", "_should_run_grounded_recall_now",
+    "_bench_run_tag", "_GROUNDED_RECALL_LOCK_ID",
+    "_GROUNDED_RECALL_LAST_RUN_KEY",
 ]
