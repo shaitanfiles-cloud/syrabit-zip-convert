@@ -60,6 +60,8 @@ HARD_DENYLIST: frozenset = frozenset({
 
 EDU_ALLOWLIST_COLLECTION = "edu_allowlist"
 EDU_BLOCKED_REQUESTS_COLLECTION = "edu_blocked_requests"
+EDU_REQUESTED_SITES_COLLECTION = "edu_requested_sites"
+EDU_USER_STATE_COLLECTION = "edu_user_state"
 
 _OVERRIDES_CACHE: dict[str, set[str]] = {"allow": set(), "block": set()}
 _OVERRIDES_CACHE_TS: float = 0.0

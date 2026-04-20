@@ -22,14 +22,19 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from auth_deps import get_admin_user, check_rate_limit
+import time
+
+from auth_deps import get_admin_user, check_rate_limit, get_current_user_optional
 from edu_allowlist import (
     effective_allowlist, list_overrides, upsert_override,
     remove_override, list_blocked_requests, _refresh_overrides_cache,
+    BASE_ALLOWLIST, EDU_REQUESTED_SITES_COLLECTION, EDU_USER_STATE_COLLECTION,
+    _normalize_domain, is_allowed_url,
 )
 from edu_reader import fetch_and_extract, get_reader_stats
 from grounded_answer import stream_grounded_answer, get_grounded_pipeline_stats
 from cache import _redis_hit_count, _redis_miss_count
+from deps import db, is_mongo_available
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -68,6 +73,17 @@ class GroundedAnswerReq(BaseModel):
     model: str = ""
     max_tokens: int = 1024
     message_id: Optional[str] = None
+
+
+class RequestSiteReq(BaseModel):
+    domain: str = Field(..., min_length=3, max_length=253)
+    reason: str = Field("", max_length=500)
+
+
+class StateSaveReq(BaseModel):
+    tabs: list = Field(default_factory=list)
+    bookmarks: list = Field(default_factory=list)
+    history: list = Field(default_factory=list)
 
 
 class AllowlistUpsertReq(BaseModel):
@@ -161,6 +177,127 @@ async def _watch_disconnect(request: Request, cancel_event: asyncio.Event) -> No
         logger.debug(f"[edu_browser] disconnect watcher: {e}")
 
 
+# ───────────────────────── Public: allowlist & site requests ─────────────────────────
+
+@router.get("/edu/allowlist")
+async def public_allowlist():
+    """Public snapshot of allowed domains for the address-bar UI."""
+    await _refresh_overrides_cache()
+    snap = effective_allowlist()
+    base = sorted(set(snap.get("base", [])) | set(snap.get("operator_allowed", [])))
+    blocked = sorted(set(snap.get("operator_blocked", [])) | set(snap.get("hard_denied", [])))
+    return {
+        "ok": True,
+        "domains": base,
+        "blocked": blocked,
+        "edu_suffixes": snap.get("edu_suffixes", []),
+    }
+
+
+@router.post("/edu/check-url")
+async def public_check_url(payload: dict):
+    """Lightweight allow check used by the browser shell before fetching."""
+    url = (payload or {}).get("url", "")
+    allowed, reason = await is_allowed_url(url)
+    return {"ok": True, "allowed": allowed, "reason": reason}
+
+
+@router.post("/edu/request-site")
+async def request_site(req: RequestSiteReq, request: Request, user=Depends(get_current_user_optional)):
+    ip = _client_ip(request)
+    if not check_rate_limit(f"edu_req_site:{ip}", max_requests=10, window_seconds=300):
+        raise HTTPException(status_code=429, detail="Too many requests; try again later.")
+    domain = _normalize_domain(req.domain)
+    if not domain or "." not in domain:
+        raise HTTPException(status_code=400, detail="Invalid domain")
+    if not await is_mongo_available():
+        raise HTTPException(status_code=503, detail="storage_unavailable")
+    actor = (user or {}).get("email", "") or (user or {}).get("id", "") or _ip_hash(ip)
+    try:
+        await db[EDU_REQUESTED_SITES_COLLECTION].update_one(
+            {"domain": domain},
+            {
+                "$inc": {"count": 1},
+                "$setOnInsert": {"domain": domain, "first_at": time.time()},
+                "$set": {"last_at": time.time(), "last_actor": actor[:120], "last_reason": req.reason[:500]},
+            },
+            upsert=True,
+        )
+    except Exception as e:
+        logger.warning(f"[edu_browser] request-site insert failed: {e}")
+        raise HTTPException(status_code=500, detail="storage_failed")
+    return {"ok": True, "domain": domain}
+
+
+# ───────────────────────── Public: per-user state (tabs/bookmarks/history) ────
+
+_STATE_MAX_TABS = 30
+_STATE_MAX_BOOKMARKS = 200
+_STATE_MAX_HISTORY = 200
+
+
+def _trim_state(payload: StateSaveReq) -> dict:
+    return {
+        "tabs": (payload.tabs or [])[:_STATE_MAX_TABS],
+        "bookmarks": (payload.bookmarks or [])[:_STATE_MAX_BOOKMARKS],
+        "history": (payload.history or [])[:_STATE_MAX_HISTORY],
+    }
+
+
+def _state_actor(request: Request, user) -> tuple[str, str]:
+    if user and user.get("id"):
+        return "user", user["id"]
+    anon = request.headers.get("x-anon-id", "").strip()[:80]
+    if anon:
+        return "anon", anon
+    return "ip", _ip_hash(_client_ip(request))
+
+
+@router.get("/edu/state")
+async def get_state(request: Request, user=Depends(get_current_user_optional)):
+    if not await is_mongo_available():
+        return {"ok": True, "state": None, "stored": False}
+    kind, actor = _state_actor(request, user)
+    try:
+        doc = await db[EDU_USER_STATE_COLLECTION].find_one(
+            {"actor_kind": kind, "actor": actor}, {"_id": 0},
+        )
+    except Exception as e:
+        logger.warning(f"[edu_browser] state load failed: {e}")
+        return {"ok": True, "state": None, "stored": False}
+    return {
+        "ok": True,
+        "state": doc.get("state") if doc else None,
+        "stored": bool(doc),
+        "scope": kind,
+    }
+
+
+@router.post("/edu/state")
+async def save_state(payload: StateSaveReq, request: Request, user=Depends(get_current_user_optional)):
+    ip = _client_ip(request)
+    if not check_rate_limit(f"edu_state:{ip}", max_requests=60, window_seconds=60):
+        raise HTTPException(status_code=429, detail="Save rate limit exceeded.")
+    if not await is_mongo_available():
+        return {"ok": False, "error": "storage_unavailable"}
+    kind, actor = _state_actor(request, user)
+    state = _trim_state(payload)
+    try:
+        await db[EDU_USER_STATE_COLLECTION].update_one(
+            {"actor_kind": kind, "actor": actor},
+            {"$set": {"state": state, "updated_at": time.time(),
+                      "actor_kind": kind, "actor": actor}},
+            upsert=True,
+        )
+    except Exception as e:
+        logger.warning(f"[edu_browser] state save failed: {e}")
+        raise HTTPException(status_code=500, detail="storage_failed")
+    return {"ok": True, "scope": kind, "saved": {
+        "tabs": len(state["tabs"]), "bookmarks": len(state["bookmarks"]),
+        "history": len(state["history"]),
+    }}
+
+
 # ───────────────────────── Public: health ─────────────────────────
 
 @router.get("/edu/health")
@@ -240,6 +377,39 @@ async def admin_grounded_recall_latest(_admin=Depends(get_admin_user)):
     except Exception as e:
         logger.warning(f"[admin] grounded-recall fetch failed: {e}")
         return {"ok": False, "error": str(e)[:200], "latest": None, "baseline": None}
+
+
+# ───────────────────────── Admin: requested-sites review queue ─────────────────────────
+
+@router.get("/admin/edu/requested-sites")
+async def admin_requested_sites(limit: int = 200, _admin=Depends(get_admin_user)):
+    """Review queue for user-submitted "request this site" entries."""
+    if not await is_mongo_available():
+        return {"ok": True, "items": [], "count": 0}
+    try:
+        cur = db[EDU_REQUESTED_SITES_COLLECTION].find(
+            {}, {"_id": 0}
+        ).sort("last_at", -1).limit(max(1, min(limit, 1000)))
+        items = [doc async for doc in cur]
+    except Exception as e:
+        logger.warning(f"[edu_browser] requested-sites list failed: {e}")
+        items = []
+    return {"ok": True, "items": items, "count": len(items)}
+
+
+@router.delete("/admin/edu/requested-sites/{domain}")
+async def admin_dismiss_requested_site(domain: str, _admin=Depends(get_admin_user)):
+    if not await is_mongo_available():
+        raise HTTPException(status_code=503, detail="storage_unavailable")
+    d = _normalize_domain(domain)
+    if not d:
+        raise HTTPException(status_code=400, detail="Invalid domain")
+    try:
+        await db[EDU_REQUESTED_SITES_COLLECTION].delete_one({"domain": d})
+    except Exception as e:
+        logger.warning(f"[edu_browser] requested-sites delete failed: {e}")
+        raise HTTPException(status_code=500, detail="storage_failed")
+    return {"ok": True, "domain": d}
 
 
 __all__ = ["router"]

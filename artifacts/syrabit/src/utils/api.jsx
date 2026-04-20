@@ -89,6 +89,31 @@ export const getChapterTopicSummary = (chapterId) => axios.get(`${WORKER_API}/co
 export const getChapterTopicContent = (chapterId) => axios.get(`${WORKER_API}/content/chapters/${chapterId}/topic-content`);
 export const getTopicPage = (topicId, pageType) => axios.get(`${WORKER_API}/content/topic/${topicId}/page/${pageType}`);
 
+// ── Educational Browser (Task #577) ───────────────────────────────────────
+export const eduFetchReader = (url, opts = {}) =>
+  axios.post(`${API_BASE}/edu/reader/fetch`, { url, bypass_cache: !!opts.bypassCache }, {
+    headers: anonHeaders(), withCredentials: true, timeout: 25000,
+  });
+
+export const eduCheckUrl = (url) =>
+  axios.post(`${API_BASE}/edu/check-url`, { url }, { headers: anonHeaders() });
+
+export const eduGetAllowlist = () =>
+  axios.get(`${API_BASE}/edu/allowlist`);
+
+export const eduRequestSite = (domain, reason = '') =>
+  axios.post(`${API_BASE}/edu/request-site`, { domain, reason }, {
+    headers: anonHeaders(), withCredentials: true,
+  });
+
+export const eduLoadState = () =>
+  axios.get(`${API_BASE}/edu/state`, { headers: anonHeaders(), withCredentials: true });
+
+export const eduSaveState = (state) =>
+  axios.post(`${API_BASE}/edu/state`, state, { headers: anonHeaders(), withCredentials: true });
+
+export const eduGroundedAnswerUrl = () => `${API_BASE}/edu/grounded-answer`;
+
 export const getConversations = () =>
   axios.get(`${API_BASE}/conversations`, authConfig());
 
