@@ -120,6 +120,9 @@ const AboutPage              = lazy(() => import("@/pages/AboutPage"));
 const TechnologyPage         = lazy(() => import("@/pages/TechnologyPage"));
 const BrowsePage             = lazy(() => import("@/pages/BrowsePage"));
 const BrowserPage            = lazy(() => import("@/pages/BrowserPage"));
+const NotebookPage           = lazy(() => import("@/pages/NotebookPage"));
+const FlashcardsPage         = lazy(() => import("@/pages/FlashcardsPage"));
+const GuardianPage           = lazy(() => import("@/pages/GuardianPage"));
 
 // ── Page loading fallback (boot splash) ──────────────────────────────────────
 const PageFallbackContent = () => (
@@ -329,6 +332,11 @@ export function AppRoutes() {
       <Route path="/read"              element={<BrowsePage />} />
       <Route path="/history"           element={<HistoryPage />} />
       <Route path="/profile"           element={<ProfilePage />} />
+
+      {/* ── Educational Browser Phase 3 — study tools ── */}
+      <Route path="/notebook"          element={<NotebookPage />} />
+      <Route path="/flashcards"        element={<FlashcardsPage />} />
+      <Route path="/guardian"          element={<GuardianPage />} />
 
       {/* ── Admin routes ── */}
       <Route path="/admin/login" element={<AdminLoginPage />} />

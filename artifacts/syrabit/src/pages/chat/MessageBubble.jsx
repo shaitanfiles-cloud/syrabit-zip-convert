@@ -1,6 +1,8 @@
 import { useState, useMemo, memo, lazy, Suspense } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCw, Copy, Check, FileText, Globe, ThumbsUp, ThumbsDown, MessageSquare, Share2, Send } from 'lucide-react';
+import { RefreshCw, Copy, Check, FileText, Globe, ThumbsUp, ThumbsDown, MessageSquare, Share2, Send, HelpCircle } from 'lucide-react';
+import { ReadAloudButton } from '@/components/study/ReadAloudButton';
+import { QuizModal } from '@/components/study/QuizModal';
 import { useShare } from '@/hooks/useShare';
 import { postChatFeedback } from '@/utils/api';
 import { log } from '@/utils/logger';
@@ -15,6 +17,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
   const [showComment, setShowComment] = useState(false);
   const [comment, setComment] = useState('');
   const [commentSent, setCommentSent] = useState(false);
+  const [quizOpen, setQuizOpen] = useState(false);
   const { share } = useShare();
   const navigate = useNavigate();
   const isUser = msg.role === 'user';
@@ -236,6 +239,20 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                     >
                       {copied ? <Check size={16} style={{ color: '#047857' }} /> : <Copy size={16} />}
                     </button>
+                    <ReadAloudButton
+                      id={`msg-${msg.id || messageIndex}`}
+                      text={cleanContent || msg.content || ''}
+                      className="!w-11 !h-11 justify-center !p-0"
+                      label=""
+                    />
+                    <button
+                      onClick={() => setQuizOpen(true)}
+                      className="w-11 h-11 rounded-lg flex items-center justify-center hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
+                      title="Quiz me on this answer"
+                      aria-label="Quiz me"
+                    >
+                      <HelpCircle size={16} />
+                    </button>
                     {isLast && onRegenerate && (
                       <button
                         onClick={onRegenerate}
@@ -335,6 +352,13 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
           </div>
         </div>
       )}
+      <QuizModal
+        open={quizOpen} onClose={() => setQuizOpen(false)}
+        context={cleanContent || msg.content || ''}
+        topic="this answer"
+        response_lang={responseLang || 'en'}
+        count={5}
+      />
     </div>
   );
 });

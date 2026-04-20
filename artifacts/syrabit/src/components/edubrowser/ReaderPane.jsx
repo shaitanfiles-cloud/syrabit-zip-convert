@@ -1,5 +1,7 @@
-import { memo, useMemo } from 'react';
-import { ExternalLink, Loader2, AlertTriangle, Globe2 } from 'lucide-react';
+import { memo, useMemo, useState } from 'react';
+import { ExternalLink, Loader2, AlertTriangle, Globe2, HelpCircle } from 'lucide-react';
+import { ReadAloudButton } from '@/components/study/ReadAloudButton';
+import { QuizModal } from '@/components/study/QuizModal';
 
 const ERROR_HINTS = {
   not_allowlisted: {
@@ -43,6 +45,7 @@ function _formatText(text) {
 }
 
 export const ReaderPane = memo(function ReaderPane({ article, loading, error }) {
+  const [quizOpen, setQuizOpen] = useState(false);
   const paragraphs = useMemo(() => _formatText(article?.text), [article?.text]);
 
   if (loading) {
@@ -151,7 +154,23 @@ export const ReaderPane = memo(function ReaderPane({ article, loading, error }) 
         />
       )}
 
-      <div className="prose prose-sm md:prose-base max-w-none text-foreground/90 leading-relaxed">
+      <div className="flex items-center gap-2 mb-3">
+        <ReadAloudButton
+          id={`reader-${article.url || 'page'}`}
+          text={paragraphs.join('\n\n')}
+          label="Read aloud"
+        />
+        <button
+          onClick={() => setQuizOpen(true)}
+          className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+          aria-label="Quiz me on this article"
+        >
+          <HelpCircle className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">Quiz me</span>
+        </button>
+      </div>
+
+      <div data-savable="true" className="prose prose-sm md:prose-base max-w-none text-foreground/90 leading-relaxed">
         {paragraphs.length > 0 ? (
           paragraphs.map((p, i) => (
             <p key={i} className="mb-4 whitespace-pre-wrap">{p}</p>
@@ -160,6 +179,13 @@ export const ReaderPane = memo(function ReaderPane({ article, loading, error }) 
           <p className="text-muted-foreground italic">No readable text extracted.</p>
         )}
       </div>
+
+      <QuizModal
+        open={quizOpen} onClose={() => setQuizOpen(false)}
+        context={paragraphs.slice(0, 12).join('\n\n')}
+        topic={article.title || article.domain || 'this article'}
+        count={6}
+      />
     </article>
   );
 });

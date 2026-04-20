@@ -25,9 +25,12 @@ import {
   ArrowLeft, ArrowRight, RotateCw, X, Plus, Star, Search, Globe,
   Sparkles, BookmarkPlus, Clock, ShieldAlert, ExternalLink,
   PanelRightClose, PanelRightOpen, Menu, Loader2, Languages,
-  StickyNote, Square,
+  StickyNote, Square, HelpCircle,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
+import { ReadAloudButton } from '@/components/study/ReadAloudButton';
+import { QuizModal } from '@/components/study/QuizModal';
+import { HighlightSavePopover } from '@/components/study/HighlightSavePopover';
 import { useAuth } from '@/context/AuthContext';
 import { useContentLang } from '@/context/LanguageContext';
 import {
@@ -170,6 +173,7 @@ function saveLocalState(state) {
 // rel=noopener on links and force target=_blank for outbound clicks.
 function ReaderArticle({ payload, lang }) {
   const ref = useRef(null);
+  const [quizOpen, setQuizOpen] = useState(false);
   // edu_reader.fetch_and_extract returns the cleaned article body
   // under the `html` key (`content_html` is a legacy alias kept for
   // forward-compat — fall back to either).
@@ -206,10 +210,27 @@ function ReaderArticle({ payload, lang }) {
           </a>
         )}
       </div>
+      <div className="mb-3 flex items-center gap-2">
+        <ReadAloudButton id={`browser-${payload?.url || 'page'}`} text={payload?.text || ''} label="Read aloud" />
+        <button
+          onClick={() => setQuizOpen(true)}
+          className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <HelpCircle className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">Quiz me</span>
+        </button>
+      </div>
       <div
         ref={ref}
+        data-savable="true"
         className="prose prose-slate max-w-none dark:prose-invert prose-headings:scroll-mt-20 prose-img:rounded-lg prose-a:text-violet-600 prose-a:no-underline hover:prose-a:underline"
         dangerouslySetInnerHTML={{ __html: html }}
+      />
+      <QuizModal
+        open={quizOpen} onClose={() => setQuizOpen(false)}
+        context={(payload?.text || '').slice(0, 6000)}
+        topic={payload?.title || domain || 'this article'}
+        count={6}
       />
     </article>
   );
@@ -1044,6 +1065,7 @@ export default function BrowserPage() {
           )}
         </div>
       </div>
+      <HighlightSavePopover sourceUrl={activeTab?.url || ''} sourceTitle={activeTab?.title || ''} />
     </AppLayout>
   );
 }

@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import {
   Send, AlertTriangle, Square,
 } from 'lucide-react';
+import { MicButton } from '@/components/study/MicButton';
+import { getTTSLang } from '@/hooks/useTTS';
 
 export function InputBar({
   subject, messages, scopedChapters, input, setInput,
@@ -68,6 +70,15 @@ export function InputBar({
             aria-label="Type your message"
           />
           <div className="flex items-center gap-2 flex-shrink-0">
+            <MicButton
+              language={getTTSLang() === 'as' ? 'as-IN' : 'en-IN'}
+              disabled={isOutOfCredits || isLoading}
+              onTranscript={(text) => {
+                if (!text) return;
+                setInput((prev) => (prev ? prev + ' ' : '') + text);
+                setTimeout(() => adjustTextarea && adjustTextarea(), 0);
+              }}
+            />
             <span className="text-xs text-muted-foreground hidden sm:inline">↵ Enter</span>
             {isLoading ? (
               <button
