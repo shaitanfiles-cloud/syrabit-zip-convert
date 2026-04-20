@@ -32,28 +32,14 @@ export const queryClient = new QueryClient({
 
 // Seed React Query from data baked into the prerendered HTML so the
 // first render on the client matches the server-rendered markup
-// exactly (Task #382 — required for hydrateRoot on /library to skip
-// the loading skeleton and avoid a hydration mismatch).
-//
-// `__LIBRARY_BUNDLE__` is the legacy single-payload hook for /library
-// (kept for back-compat). `__SSR_QUERIES__` is the generalised list
-// used by Task #385 prerendered subject + chapter routes — each entry
-// is `{ key: [...queryKey], data: <payload> }`.
-if (typeof window !== "undefined") {
-  if (window.__LIBRARY_BUNDLE__) {
+// exactly. `__SSR_QUERIES__` is the generalised list used by the
+// prerendered library / subject / chapter routes — each entry is
+// `{ key: [...queryKey], data: <payload> }`.
+if (typeof window !== "undefined" && Array.isArray(window.__SSR_QUERIES__)) {
+  for (const q of window.__SSR_QUERIES__) {
     try {
-      queryClient.setQueryData(
-        ["library-bundle-slim"],
-        window.__LIBRARY_BUNDLE__,
-      );
+      if (q && Array.isArray(q.key)) queryClient.setQueryData(q.key, q.data);
     } catch {}
-  }
-  if (Array.isArray(window.__SSR_QUERIES__)) {
-    for (const q of window.__SSR_QUERIES__) {
-      try {
-        if (q && Array.isArray(q.key)) queryClient.setQueryData(q.key, q.data);
-      } catch {}
-    }
   }
 }
 
@@ -440,21 +426,6 @@ function App() {
     return () => { clearTimeout(fallback); detach(); };
   }, []);
 
-  useEffect(() => {
-    // Emergent badge suppression — CSS rule alone is sufficient. The previous
-    // MutationObserver approach added persistent main-thread cost on every
-    // child-list change to <body>, which hurt mobile TBT. Defer one-time DOM
-    // cleanup to idle so it never blocks paint. (Task #381)
-    const idle = window.requestIdleCallback || ((cb) => setTimeout(cb, 1));
-    const handle = idle(() => {
-      ['#emergent-badge', 'a[href*="emergent.sh"]', '[id*="emergent-badge"]'].forEach((sel) => {
-        document.querySelectorAll(sel).forEach((el) => el.remove());
-      });
-    });
-    return () => {
-      if (window.cancelIdleCallback) window.cancelIdleCallback(handle);
-    };
-  }, []);
   return (
     <AppShell>
       <BrowserRouter>
