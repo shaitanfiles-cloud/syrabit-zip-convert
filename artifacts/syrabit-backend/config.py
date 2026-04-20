@@ -188,6 +188,12 @@ _CF_PROVIDER_SLUGS = {
     "groq":        "groq/openai/v1",
     "xai":         "grok/v1",
     "gemini":      "google-ai-studio/v1beta/openai",
+    # Sarvam: slug has NO /v1 because callers already send
+    # /v1/chat/completions, /translate, /text-to-speech, etc.
+    # CF custom provider forwards {base}/custom-sarvam/<path> → https://api.sarvam.ai/<path>
+    "sarvam":      "custom-sarvam",
+    "cerebras":    "cerebras/v1",
+    "openrouter":  "openrouter/v1",
 }
 
 _DIRECT_PROVIDER_URLS = {
@@ -195,7 +201,11 @@ _DIRECT_PROVIDER_URLS = {
     "groq":        None,
     "xai":         "https://api.x.ai/v1",
     "gemini":      "https://generativelanguage.googleapis.com/v1beta/openai/",
+    # Sarvam direct URL has NO /v1 — callers already supply /v1/chat/completions
+    # and non-LLM endpoints like /translate, /text-to-speech live at root.
     "sarvam":      "https://api.sarvam.ai",
+    "cerebras":    "https://api.cerebras.ai/v1",
+    "openrouter":  "https://openrouter.ai/api/v1",
 }
 
 _cf_gw_healthy = True
@@ -236,18 +246,12 @@ else:
 # ── LLM Configuration ─────────────────────────────────────────────────────────
 _GROQ_KEY = os.environ.get('GROQ_API_KEY', '').strip()
 _GROQ_KEY_2 = os.environ.get('GROQ_API_KEY_2', '').strip()
-# Gemini disabled per user request (2026-04-19). The env vars are still
-# read so secret rotation does not surprise us when the provider is
-# re-enabled, but we force-blank the in-process keys so every
-# `if _GEMINI_KEY:` guard across llm.py / pipeline.py / seo_engine.py
-# skips the gemini provider registration. The fallback chain
-# (cerebras -> groq -> openrouter -> sarvam) remains intact and
-# already absorbs every previous gemini hop. To re-enable, delete the
-# two assignments below.
-_GEMINI_KEY_RAW = os.environ.get('GEMINI_API_KEY', '').strip()
-_GEMINI_KEY_2_RAW = os.environ.get('GEMINI_API_KEY_2', '').strip()
-_GEMINI_KEY = ''
-_GEMINI_KEY_2 = ''
+# Gemini re-enabled (2026-04-20) — AI Studio Tier 1 confirmed (2000 RPM/key),
+# CF AI Gateway BYOK verified working for google-ai-studio provider.
+_GEMINI_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
+_GEMINI_KEY_2 = os.environ.get('GEMINI_API_KEY_2', '').strip()
+_GEMINI_KEY_RAW = _GEMINI_KEY
+_GEMINI_KEY_2_RAW = _GEMINI_KEY_2
 _XAI_KEY = os.environ.get('XAI_API_KEY', '').strip()
 _OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '').strip()
 _SARVAM_LLM_KEY = os.environ.get('SARVAM_API_KEY', '').strip()

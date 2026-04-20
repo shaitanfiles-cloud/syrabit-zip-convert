@@ -645,7 +645,8 @@ async def _call_openai_compat(messages: list, api_key: str, model: str, max_toke
     return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
 
 async def _call_cerebras(messages: list, api_key: str, model: str, max_tokens: int) -> str:
-    client = _get_oai_client(api_key, "https://api.cerebras.ai/v1")
+    base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
+    client = _get_oai_client(api_key, base)
     resp = await client.chat.completions.create(
         model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
     )
@@ -979,7 +980,8 @@ async def _stream_gemini(messages: list, api_key: str, model: str, max_tokens: i
             yield delta.content
 
 async def _stream_cerebras(messages: list, api_key: str, model: str, max_tokens: int):
-    client = _get_oai_client(api_key, "https://api.cerebras.ai/v1")
+    base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
+    client = _get_oai_client(api_key, base)
     stream = await client.chat.completions.create(
         model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
     )

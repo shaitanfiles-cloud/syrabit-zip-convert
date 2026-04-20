@@ -290,9 +290,10 @@ class LlmChat:
 
     async def _call_cerebras(self, messages: list) -> str:
         import openai
+        base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
         client = openai.AsyncOpenAI(
             api_key=self.api_key,
-            base_url="https://api.cerebras.ai/v1"
+            base_url=base,
         )
         response = await client.chat.completions.create(
             model=self._model,
@@ -302,9 +303,10 @@ class LlmChat:
 
     async def _stream_cerebras(self, messages: list, max_tokens: int = 2048):
         import openai
+        base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
         client = openai.AsyncOpenAI(
             api_key=self.api_key,
-            base_url="https://api.cerebras.ai/v1"
+            base_url=base,
         )
         stream = await client.chat.completions.create(
             model=self._model,
