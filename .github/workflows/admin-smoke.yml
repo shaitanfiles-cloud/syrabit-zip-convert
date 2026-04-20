@@ -1,0 +1,82 @@
+name: admin-smoke
+
+# Task #571 — Catch admin dashboard crashes early.
+#
+# Task #567 was a runtime ReferenceError in a single admin widget that
+# fell through the global ErrorBoundary and replaced the dashboard with
+# the "Something went wrong" screen. This job runs the Playwright smoke
+# suite that mounts /admin against mocked admin APIs and asserts:
+#
+#   - the global ErrorBoundary heading is NOT shown
+#   - data-testid="admin-dashboard" IS shown
+#   - no uncaught ReferenceError / TypeError fired during render
+#   - wiping a single metrics endpoint shows the inline "failed to load"
+#     card and does not crash the shell.
+#
+# Triggered on every PR that touches the admin component tree so the next
+# missing-field bug fails CI before it lands.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "artifacts/syrabit/src/components/admin/**"
+      - "artifacts/syrabit/src/pages/AdminPage.jsx"
+      - "artifacts/syrabit/src/pages/AdminLoginPage.jsx"
+      - "artifacts/syrabit/src/components/ErrorBoundary.jsx"
+      - "artifacts/syrabit/tests/admin-**"
+      - "artifacts/syrabit/playwright.config.ts"
+      - ".github/workflows/admin-smoke.yml"
+  pull_request:
+    branches: [master]
+    paths:
+      - "artifacts/syrabit/src/components/admin/**"
+      - "artifacts/syrabit/src/pages/AdminPage.jsx"
+      - "artifacts/syrabit/src/pages/AdminLoginPage.jsx"
+      - "artifacts/syrabit/src/components/ErrorBoundary.jsx"
+      - "artifacts/syrabit/tests/admin-**"
+      - "artifacts/syrabit/playwright.config.ts"
+      - ".github/workflows/admin-smoke.yml"
+
+jobs:
+  admin-smoke:
+    name: Playwright /admin smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Install dependencies (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium + system deps
+        run: pnpm --filter @workspace/syrabit exec playwright install --with-deps chromium
+
+      - name: Run admin dashboard smoke suite
+        run: pnpm --filter @workspace/syrabit run test:e2e
+        env:
+          CI: "true"
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: admin-smoke-playwright-report
+          path: |
+            artifacts/syrabit/playwright-report/
+            artifacts/syrabit/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
