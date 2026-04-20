@@ -1472,6 +1472,7 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
         </div>
 
         {durationBreakdown && Object.values(durationBreakdown).some(v => v > 0) && (
+          <SectionErrorBoundary name="Block Duration Breakdown">
           <GlassCard>
             <div className="p-5">
               <div className="flex items-center justify-between mb-4">
@@ -1510,9 +1511,11 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
               </div>
             </div>
           </GlassCard>
+          </SectionErrorBoundary>
         )}
 
         {blockTrends.length > 0 && blockTrends.some(d => d['1h'] + d['6h'] + d['24h'] + d['7d'] + d['30d'] + d.permanent > 0) && (
+          <SectionErrorBoundary name="Block Trends">
           <GlassCard>
             <div className="p-5 pb-2 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
@@ -1549,15 +1552,17 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
               </ResponsiveContainer>
             </div>
           </GlassCard>
+          </SectionErrorBoundary>
         )}
 
-        <AlertThresholdPanel adminToken={adminToken} navContext={navContext} />
+        <SectionErrorBoundary name="Alert Thresholds"><AlertThresholdPanel adminToken={adminToken} navContext={navContext} /></SectionErrorBoundary>
 
-        <AlertHistoryPanel adminToken={adminToken} />
+        <SectionErrorBoundary name="Alert History"><AlertHistoryPanel adminToken={adminToken} /></SectionErrorBoundary>
 
-        <TtlMonitorPanel adminToken={adminToken} />
+        <SectionErrorBoundary name="TTL Monitor"><TtlMonitorPanel adminToken={adminToken} /></SectionErrorBoundary>
 
         <GlassCard>
+          <SectionErrorBoundary name="Recent Alerts">
           <div className="p-5 pb-2 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
               <TrendingUp size={14} className="text-violet-500" />
@@ -1600,9 +1605,11 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
               </div>
             )}
           </div>
+          </SectionErrorBoundary>
         </GlassCard>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <SectionErrorBoundary name="Detection Trends">
           <GlassCard>
             <div className="p-5 pb-3">
               <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
@@ -1747,9 +1754,11 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
               <div className="px-5 pb-5 text-sm text-gray-400">No repeat offenders found</div>
             )}
           </GlassCard>
+          </SectionErrorBoundary>
         </div>
 
         {blockedIps.length > 0 && (
+          <SectionErrorBoundary name="Blocked IPs">
           <GlassCard>
             <div className="p-5 pb-3">
               <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
@@ -1818,9 +1827,11 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
               </table>
             </div>
           </GlassCard>
+          </SectionErrorBoundary>
         )}
 
         <GlassCard>
+          <SectionErrorBoundary name="Bot User Agents">
           <div className="p-5 pb-3 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
               <Clock size={14} className="text-violet-500" />
@@ -1868,9 +1879,11 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
           ) : (
             <div className="px-5 pb-5 text-sm text-gray-400">No recent attempts</div>
           )}
+          </SectionErrorBoundary>
         </GlassCard>
 
         {realtime.session_by_bot && Object.keys(realtime.session_by_bot).length > 0 && (
+          <SectionErrorBoundary name="Realtime Session Bots">
           <GlassCard>
             <div className="p-5 pb-3">
               <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
@@ -1892,6 +1905,7 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
               </div>
             </div>
           </GlassCard>
+          </SectionErrorBoundary>
         )}
       </div>
     </SectionErrorBoundary>

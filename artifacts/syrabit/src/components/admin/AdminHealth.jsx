@@ -524,6 +524,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
         </div>
 
         {healthTab === 'llm' && (
+          <SectionErrorBoundary name="LLM Cost Tracker">
           <div className="space-y-4">
             <div className="flex items-center gap-2 mb-2">
               {[7, 14, 30].map(d => (
@@ -598,9 +599,11 @@ export default function AdminHealth({ adminToken, onNavigate }) {
               </>
             ) : null}
           </div>
+          </SectionErrorBoundary>
         )}
 
         {healthTab === 'prerender' && (
+          <SectionErrorBoundary name="Prerender Refresh">
           <div className="space-y-4">
             <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
               <div className="flex items-start justify-between gap-3 mb-4">
@@ -655,9 +658,11 @@ export default function AdminHealth({ adminToken, onNavigate }) {
               Admin edits trigger debounced refreshes automatically. “Refresh now” bypasses the debounce/cooldown and fires the Cloudflare Pages deploy hook immediately.
             </p>
           </div>
+          </SectionErrorBoundary>
         )}
 
         {healthTab === 'asm' && (
+          <SectionErrorBoundary name="Sarvam Purity">
           <div className="space-y-4" data-testid="asm-purity-tab">
             {/* Task #423 — sanitiser-run stats so admins can see whether the
                 override they just set is actually changing live behaviour. */}
@@ -1440,9 +1445,10 @@ export default function AdminHealth({ adminToken, onNavigate }) {
               );
             })()}
           </div>
+          </SectionErrorBoundary>
         )}
 
-        {healthTab === 'infra' && (<>
+        {healthTab === 'infra' && (<><SectionErrorBoundary name="Infrastructure">
         <div className={`rounded-2xl p-4 flex items-center gap-3 ${
           loading ? 'bg-gray-50 border border-gray-200' : hasError ? 'bg-red-50 border border-red-200' : 'bg-emerald-50 border border-emerald-200'
         }`}>
@@ -1651,7 +1657,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
             ))}
           </ol>
         </div>
-        </>)}
+        </SectionErrorBoundary></>)}
         <AdminQuickLinks links={['apiconfig','settings','dashboard','ratelimits']} onNavigate={onNavigate} />
       </div>
     </SectionErrorBoundary>
