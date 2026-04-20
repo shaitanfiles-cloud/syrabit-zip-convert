@@ -184,6 +184,14 @@ if _SARVAM_LLM_KEY_2 and _SARVAM_LLM_KEY_2 != _SARVAM_LLM_KEY_3:
     _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY_2, "default_model": "sarvam-m"})
 if _SARVAM_LLM_KEY and _SARVAM_LLM_KEY not in (_SARVAM_LLM_KEY_3, _SARVAM_LLM_KEY_2):
     _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+# Gemini sits BEFORE Groq in the fallback chain so that when all Sarvam keys
+# return 429 (Indic primary exhausted), the next attempt is Gemini 2.5 Flash —
+# which speaks Assamese / Bengali / Hindi natively. Groq's Llama-4 Scout drifts
+# to English/Hinglish for Indic prompts and degrades student-facing quality.
+if _GEMINI_KEY:
+    _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
+if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
+    _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY_2,   "default_model": "gemini-2.5-flash"})
 if _GROQ_KEY:
     _LLM_PROVIDERS.append({"provider": "groq",         "key": _GROQ_KEY,       "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
 if _GROQ_KEY_2 and _GROQ_KEY_2 != _GROQ_KEY:
@@ -193,10 +201,6 @@ if _CEREBRAS_KEY:
     # is faster on Cerebras (~2600 tok/s vs 2200), has a 10M context window,
     # and noticeably better instruction-following for chat workloads.
     _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama-3.3-70b"})
-if _GEMINI_KEY:
-    _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
-if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
-    _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY_2,   "default_model": "gemini-2.5-flash"})
 if _OPENROUTER_KEY:
     _LLM_PROVIDERS.append({"provider": "openrouter",  "key": _OPENROUTER_KEY, "default_model": "deepseek/deepseek-chat-v3-0324"})
 if _OPENAI_KEY and _OPENAI_KEY != 'x':
