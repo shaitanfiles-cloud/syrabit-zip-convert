@@ -204,7 +204,7 @@ class SyllabusEmbedder:
 
         retriever = await self._get_retriever()
         if not retriever.is_configured():
-            logger.warning("Vectorize not configured — skipping chapter embedding")
+            logger.warning(f"Retriever {retriever.name} not configured — skipping chapter embedding")
             return 0
 
         db = self._db
@@ -456,7 +456,7 @@ class SyllabusEmbedder:
     async def full_reseed(self) -> dict:
         retriever = await self._get_retriever()
         if not retriever.is_configured():
-            return {"error": "Vectorize not configured"}
+            return {"error": f"Retriever {retriever.name} not configured"}
 
         async with self._seed_lock:
             self._seeded = False
@@ -505,7 +505,7 @@ class SyllabusEmbedder:
     async def stats(self) -> dict:
         retriever = await self._get_retriever()
         if not retriever.is_configured():
-            return {"error": "Vectorize not configured"}
+            return {"error": f"Retriever {retriever.name} not configured"}
 
         index_info = await retriever.index_info()
         index_config = await retriever.index_config()
@@ -531,7 +531,7 @@ class SyllabusEmbedder:
 
         retriever = await self._get_retriever()
         if not retriever.is_configured():
-            logger.warning("Vectorize not configured — skipping seed")
+            logger.warning(f"Retriever {retriever.name} not configured — skipping seed")
             return 0
 
         boards   = {b["id"]: b for b in SEED_DATA.get("boards", [])}
@@ -722,7 +722,7 @@ class SyllabusEmbedder:
 
         retriever = await self._get_retriever()
         if not retriever.is_configured():
-            return {"status": "error", "reason": "Vectorize not configured"}
+            return {"status": "error", "reason": f"Retriever {retriever.name} not configured"}
 
         async with self._seed_lock:
             db = self._db
