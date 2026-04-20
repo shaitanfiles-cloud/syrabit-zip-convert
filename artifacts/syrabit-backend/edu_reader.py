@@ -161,9 +161,11 @@ async def _fetch_robots(host: str, scheme: str) -> RobotFileParser | None:
                     rp = None
                     break
                 nh = (p.hostname or "").lower()
+                is_ip_literal = False
                 try:
                     import ipaddress as _ipa
                     _ip = _ipa.ip_address(nh)
+                    is_ip_literal = True
                     if _ip.is_private or _ip.is_loopback or _ip.is_link_local or _ip.is_reserved:
                         rp = None
                         break
@@ -175,6 +177,13 @@ async def _fetch_robots(host: str, scheme: str) -> RobotFileParser | None:
                 if blocked:
                     rp = None
                     break
+                # Per-hop DNS guard: reject public-looking redirect hosts
+                # that resolve into private/loopback/link-local space.
+                if not is_ip_literal:
+                    dns_ok, _dns_why = await _resolves_to_public_ip(nh)
+                    if not dns_ok:
+                        rp = None
+                        break
                 current = nxt
             if rp is not None and resp is not None and resp.status_code == 200 and resp.text:
                 rp.parse(resp.text.splitlines())
@@ -594,9 +603,11 @@ async def probe_site_safety(domain: str) -> dict:
                     return result
                 next_host = (parsed_next.hostname or "").lower()
                 # Re-run SSRF + hard-deny guards on the new host.
+                next_is_ip_literal = False
                 try:
                     import ipaddress as _ipa
                     _ip = _ipa.ip_address(next_host)
+                    next_is_ip_literal = True
                     if _ip.is_private or _ip.is_loopback or _ip.is_link_local or _ip.is_reserved:
                         result["reason"] = "redirect_private_ip"
                         return result
@@ -608,6 +619,12 @@ async def probe_site_safety(domain: str) -> dict:
                 if r_blocked:
                     result["reason"] = f"redirect_{r_why}"
                     return result
+                # Per-hop DNS-resolution SSRF guard for public-looking hosts.
+                if not next_is_ip_literal:
+                    dns_ok_hop, dns_why_hop = await _resolves_to_public_ip(next_host)
+                    if not dns_ok_hop:
+                        result["reason"] = f"redirect_{dns_why_hop}"
+                        return result
                 current_url = next_url
             else:
                 result["reason"] = "too_many_redirects"

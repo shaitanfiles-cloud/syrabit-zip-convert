@@ -321,6 +321,56 @@ def test_probe_dns_failure_is_rejected(monkeypatch):
         loop.close()
 
 
+def test_probe_redirect_rejects_public_host_resolving_private(monkeypatch):
+    """Per-hop DNS SSRF: the probe's manual redirect loop must run the
+    DNS-to-public check on every Location target, not just the initial
+    submission. A public-looking hostname that resolves to an internal
+    IP must abort the probe mid-chain."""
+    import edu_reader
+
+    # Initial host resolves public; first redirect host resolves private.
+    resolve_map = {
+        "legit-start.example": (True, "ok"),
+        "sneaky-redirect.example": (False, "private_ip"),
+    }
+    async def fake_resolve(host: str):
+        return resolve_map.get(host, (True, "ok"))
+    monkeypatch.setattr(edu_reader, "_resolves_to_public_ip", fake_resolve)
+
+    async def allow_robots(url: str):
+        return True
+    monkeypatch.setattr(edu_reader, "_robots_allows", allow_robots)
+
+    class _Resp:
+        def __init__(self, status, headers=None, content=b"", url=""):
+            self.status_code = status
+            self.headers = headers or {}
+            self.content = content
+            self.encoding = "utf-8"
+            self.url = url
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            self.kw = kw
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, url, *a, **kw):
+            if url.startswith("https://legit-start.example"):
+                return _Resp(302, {"location": "https://sneaky-redirect.example/"}, b"", url)
+            return _Resp(200, {"content-type": "text/html"},
+                         b"<html><body>" + b"<p>safe content here " * 30 + b"</p></body></html>", url)
+
+    monkeypatch.setattr(edu_reader.httpx, "AsyncClient", _Client)
+
+    loop = asyncio.new_event_loop()
+    try:
+        res = loop.run_until_complete(edu_reader.probe_site_safety("legit-start.example"))
+        assert res["ok"] is False
+        assert res["reason"] == "redirect_private_ip"
+    finally:
+        loop.close()
+
+
 def test_fetch_robots_disables_auto_redirects(monkeypatch):
     """Defence-in-depth: _fetch_robots must use follow_redirects=False
     so a hostile /robots.txt cannot pivot into internal space via a
