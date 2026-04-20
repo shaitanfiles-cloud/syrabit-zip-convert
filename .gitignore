@@ -68,3 +68,9 @@ Thumbs.db
 .cache/
 .local/
 dist-ssr/
+
+# Playwright (Task #571 admin smoke)
+artifacts/syrabit/test-results/
+artifacts/syrabit/playwright-report/
+artifacts/syrabit/blob-report/
+
