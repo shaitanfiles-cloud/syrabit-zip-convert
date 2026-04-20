@@ -1249,44 +1249,46 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 logger.info(f"Think-block fallback: emitting {len(fallback_text)} chars of think content as response")
                 yield f"data: {json.dumps({'content': fallback_text})}\n\n"
 
-    async def _stream_from_provider(p_name: str, p_key: str, p_model: str):
-        """Yield raw tokens from a provider. Raises on failure."""
+    async def _stream_from_provider(p_name: str, p_key: str, p_model: str, msgs: list = None):
+        """Yield raw tokens from a provider. Raises on failure.
+        msgs: optional message list override; defaults to the outer `messages` closure variable."""
+        _msgs = msgs if msgs is not None else messages
         _mt = _clamp_max_tokens(p_model, max_tokens)
         if p_name == "sarvam":
-            _input_est = sum(len(m.get("content", "")) for m in messages) // 4
+            _input_est = sum(len(m.get("content", "")) for m in _msgs) // 4
             _think_overhead = 0 if _indic_mode else SARVAM_THINK_BUFFER
             _sarvam_cap = max(256, 7192 - _input_est - _think_overhead - 100)
             _mt = min(_mt, _sarvam_cap)
-            async for token in _stream_sarvam(messages, p_key, p_model, _mt, response_lang=response_lang):
+            async for token in _stream_sarvam(_msgs, p_key, p_model, _mt, response_lang=response_lang):
                 yield token
         elif p_name == "gemini":
             logger.info(f"LLM stream: provider=gemini, model={p_model}")
-            async for token in _stream_gemini(messages, p_key, p_model, _mt):
+            async for token in _stream_gemini(_msgs, p_key, p_model, _mt):
                 yield token
         elif p_name == "cerebras":
             logger.info(f"LLM stream: provider=cerebras, model={p_model}")
-            async for token in _stream_cerebras(messages, p_key, p_model, _mt):
+            async for token in _stream_cerebras(_msgs, p_key, p_model, _mt):
                 yield token
         elif p_name == "groq":
             logger.info(f"LLM stream: provider=groq, model={p_model}")
-            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "groq", "https://api.groq.com/openai/v1"):
+            async for token in _stream_openai_compat(_msgs, p_key, p_model, _mt, "groq", "https://api.groq.com/openai/v1"):
                 yield token
         elif p_name == "xai":
             logger.info(f"LLM stream: provider=xai, model={p_model}")
-            async for token in _stream_xai(messages, p_key, p_model, _mt):
+            async for token in _stream_xai(_msgs, p_key, p_model, _mt):
                 yield token
         elif p_name == "openrouter":
             logger.info(f"LLM stream: provider=openrouter, model={p_model}")
-            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "openrouter", "https://openrouter.ai/api/v1"):
+            async for token in _stream_openai_compat(_msgs, p_key, p_model, _mt, "openrouter", "https://openrouter.ai/api/v1"):
                 yield token
         elif p_name == "bedrock":
             logger.info(f"LLM stream: provider=bedrock, model={p_model}")
-            async for token in _stream_bedrock(messages, p_model, _mt):
+            async for token in _stream_bedrock(_msgs, p_model, _mt):
                 yield token
         else:
             logger.info(f"LLM stream: provider={p_name}, model={p_model}")
             chat = LlmChat(api_key=p_key or OPENAI_API_KEY, session_id=str(uuid.uuid4())).with_model(p_name, p_model)
-            async for token in chat.stream_messages(messages, max_tokens=_mt):
+            async for token in chat.stream_messages(_msgs, max_tokens=_mt):
                 yield token
 
     # ── Syrabit SLM: concurrent smart pool ──────────────────────────────────────
@@ -1435,6 +1437,10 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     # ── Indic Sarvam with hedged key racing ─────────────────────────────────────
     _SARVAM_TTFT_TIMEOUT = 3.0
     _SARVAM_SLOT_TIMEOUT = 1.2
+    # Exponential backoff delays (seconds) for Sarvam 429 retries before
+    # escalating to the English-LLM fallback chain.
+    _SARVAM_429_BACKOFF = [1.0, 2.0, 4.0]
+    _SARVAM_429_RETRIES = len(_SARVAM_429_BACKOFF)
     if _indic_mode and provider == "sarvam":
         _indic_candidates = []
 
@@ -1449,6 +1455,8 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         for _gk in _gemini_keys_for_indic[:1]:
             _indic_candidates.append({"provider": "gemini", "key": _gk, "model": "gemini-2.5-flash"})
 
+        # _indic_error_types: maps candidate index → "rate_limit" | "other"
+        _indic_error_types: dict = {}
         _indic_q: asyncio.Queue = asyncio.Queue()
 
         async def _indic_producer(_cand, _cand_idx):
@@ -1463,32 +1471,69 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 await _indic_q.put((_cand_idx, "done", None))
             except Exception as _e:
                 _is_rate = any(s in str(_e).lower() for s in ("429", "rate", "quota", "throttl"))
+                _indic_error_types[_cand_idx] = "rate_limit" if _is_rate else "other"
                 logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} failed ({type(_e).__name__}: {str(_e)[:120]}) rate_limit={_is_rate}")
                 await _indic_q.put((_cand_idx, "error", None))
 
-        _indic_tasks = [asyncio.create_task(_indic_producer(c, i)) for i, c in enumerate(_indic_candidates)]
+        async def _run_indic_race(_candidates):
+            """Race _candidates on _indic_q; return (tasks, winner_idx, first_chunk, finished_set)."""
+            _tasks = [asyncio.create_task(_indic_producer(c, i)) for i, c in enumerate(_candidates)]
+            _winner = None
+            _first_chunk = None
+            _finished: set = set()
+            try:
+                _deadline = time.monotonic() + _SARVAM_TTFT_TIMEOUT
+                while _winner is None and len(_finished) < len(_candidates):
+                    _rem = _deadline - time.monotonic()
+                    if _rem <= 0:
+                        break
+                    try:
+                        _sid, _evt, _d = await asyncio.wait_for(_indic_q.get(), timeout=_rem)
+                    except asyncio.TimeoutError:
+                        break
+                    if _evt == "chunk":
+                        _winner = _sid
+                        _first_chunk = _d
+                    elif _evt in ("done", "error"):
+                        _finished.add(_sid)
+            except Exception:
+                pass
+            return _tasks, _winner, _first_chunk, _finished
+
         _race_providers = ", ".join(f"{c['provider']}/{c['model']}" for c in _indic_candidates)
         logger.info(f"[INDIC] Hedged racing {len(_indic_candidates)} candidates for {response_lang}: {_race_providers}")
 
-        _sarvam_winner = None
-        _sarvam_finished: set = set()
+        _indic_tasks, _sarvam_winner, _first_indic_chunk, _sarvam_finished = await _run_indic_race(_indic_candidates)
         _sarvam_race_t0 = time.monotonic()
-        try:
-            _deadline = time.monotonic() + _SARVAM_TTFT_TIMEOUT
-            while _sarvam_winner is None and len(_sarvam_finished) < len(_indic_candidates):
-                _rem = _deadline - time.monotonic()
-                if _rem <= 0:
-                    break
-                try:
-                    _sid, _evt, _data = await asyncio.wait_for(_indic_q.get(), timeout=_rem)
-                except asyncio.TimeoutError:
-                    break
-                if _evt == "chunk":
-                    _sarvam_winner = _sid
-                elif _evt in ("done", "error"):
-                    _sarvam_finished.add(_sid)
-        except Exception:
-            pass
+
+        # ── Sarvam 429 retry with exponential backoff ────────────────────────
+        if _sarvam_winner is None:
+            _sarvam_only_idxs = [i for i, c in enumerate(_indic_candidates) if c["provider"] == "sarvam"]
+            _all_sarvam_rate_limited = bool(_sarvam_only_idxs) and all(
+                _indic_error_types.get(i) == "rate_limit" for i in _sarvam_only_idxs
+            )
+            if _all_sarvam_rate_limited:
+                for _attempt, _backoff_delay in enumerate(_SARVAM_429_BACKOFF):
+                    logger.warning(
+                        f"[INDIC] All Sarvam keys rate-limited (429) for {response_lang}. "
+                        f"Retry {_attempt + 1}/{_SARVAM_429_RETRIES} after {_backoff_delay}s backoff."
+                    )
+                    await asyncio.sleep(_backoff_delay)
+                    # Drain stale queue entries before re-racing
+                    while not _indic_q.empty():
+                        try:
+                            _indic_q.get_nowait()
+                        except Exception:
+                            break
+                    _indic_error_types.clear()
+                    _indic_tasks, _sarvam_winner, _first_indic_chunk, _sarvam_finished = await _run_indic_race(_indic_candidates)
+                    if _sarvam_winner is not None:
+                        logger.info(
+                            f"[INDIC] Sarvam retry {_attempt + 1} succeeded for {response_lang} "
+                            f"(winner: {_indic_candidates[_sarvam_winner]['provider']}/{_indic_candidates[_sarvam_winner]['model']})"
+                        )
+                        break
+                    logger.warning(f"[INDIC] Sarvam retry {_attempt + 1}/{_SARVAM_429_RETRIES} still failed for {response_lang}")
 
         if _sarvam_winner is not None:
             _win_cand = _indic_candidates[_sarvam_winner]
@@ -1499,7 +1544,8 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 if i != _sarvam_winner:
                     t.cancel()
 
-            yield _data
+            if _first_indic_chunk is not None:
+                yield _first_indic_chunk
 
             while True:
                 try:
@@ -1527,6 +1573,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
 
             yield f"data: {json.dumps({'__provider': _win_cand['provider']})}\n\n"
         else:
+            # ── All Sarvam/Gemini candidates exhausted — fall back to English LLMs ──
             for t in _indic_tasks:
                 t.cancel()
             for t in _indic_tasks:
@@ -1534,8 +1581,79 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                     await t
                 except (asyncio.CancelledError, Exception):
                     pass
-            logger.warning(f"[INDIC] All {len(_indic_candidates)} candidates failed/timed out")
-            yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
+
+            _sarvam_only_idxs = [i for i, c in enumerate(_indic_candidates) if c["provider"] == "sarvam"]
+            _all_rate_limited = bool(_sarvam_only_idxs) and all(
+                _indic_error_types.get(i) == "rate_limit" for i in _sarvam_only_idxs
+            )
+            _fail_reason = "rate-limited (429)" if _all_rate_limited else "failed/timed out"
+            logger.warning(
+                f"[INDIC] All {len(_indic_candidates)} candidates {_fail_reason} for {response_lang}. "
+                f"Falling back to English-LLM chain ({[p['provider'] for p in _LLM_PROVIDERS_CHAT]})."
+            )
+
+            # Build a fallback provider list from _LLM_PROVIDERS_CHAT (Cerebras → Groq → OpenRouter).
+            # We ask the model to respond in Assamese if it can, otherwise English is acceptable.
+            _fallback_messages = list(messages)
+            _fallback_sys_note = (
+                "NOTE: The primary Assamese (অসমীয়া) AI service is temporarily unavailable. "
+                "Please respond in Assamese script if you are able to. "
+                "If you cannot write in Assamese, respond clearly in English. "
+                "Do NOT apologise at length — just answer the question directly."
+            )
+            if _fallback_messages and _fallback_messages[0].get("role") == "system":
+                _fallback_messages[0] = {
+                    **_fallback_messages[0],
+                    "content": _fallback_sys_note + "\n\n" + _fallback_messages[0]["content"],
+                }
+            else:
+                _fallback_messages.insert(0, {"role": "system", "content": _fallback_sys_note})
+
+            _fb_succeeded = False
+            for _fb_entry in _LLM_PROVIDERS_CHAT:
+                _fb_prov  = _fb_entry["provider"]
+                _fb_key   = _fb_entry.get("key", "")
+                _fb_model = _fb_entry["default_model"]
+                if not _fb_key:
+                    continue
+                logger.info(
+                    f"[INDIC-FALLBACK] Trying English-LLM fallback: provider={_fb_prov} model={_fb_model} "
+                    f"lang={response_lang} reason={_fail_reason}"
+                )
+                try:
+                    _fb_chunk_n = 0
+                    _fb_t0 = time.monotonic()
+                    async for _fb_chunk in _emit_tokens(_stream_from_provider(_fb_prov, _fb_key, _fb_model, msgs=_fallback_messages)):
+                        if _fb_chunk_n == 0:
+                            _fb_ttft_ms = (time.monotonic() - _fb_t0) * 1000
+                            logger.info(
+                                f"[INDIC-FALLBACK] TTFT={_fb_ttft_ms:.0f}ms provider={_fb_prov} model={_fb_model} "
+                                f"lang={response_lang}"
+                            )
+                        _fb_chunk_n += 1
+                        yield _fb_chunk
+                    _fb_total_ms = (time.monotonic() - _fb_t0) * 1000
+                    _record_llm_call(_fb_prov, _fb_model, _fb_total_ms, True, _fb_chunk_n, True, "indic_fallback")
+                    logger.info(
+                        f"[INDIC-FALLBACK] Completed: provider={_fb_prov} model={_fb_model} "
+                        f"chunks={_fb_chunk_n} total_ms={_fb_total_ms:.0f} lang={response_lang}"
+                    )
+                    yield f"data: {json.dumps({'__provider': _fb_prov, '__indic_fallback': True})}\n\n"
+                    _fb_succeeded = True
+                    break
+                except Exception as _fb_err:
+                    logger.warning(
+                        f"[INDIC-FALLBACK] provider={_fb_prov} model={_fb_model} failed: "
+                        f"{type(_fb_err).__name__}: {str(_fb_err)[:150]}"
+                    )
+                    continue
+
+            if not _fb_succeeded:
+                logger.error(
+                    f"[INDIC-FALLBACK] All fallback providers exhausted for {response_lang}. "
+                    f"Sarvam reason: {_fail_reason}. Fallbacks tried: {[p['provider'] for p in _LLM_PROVIDERS_CHAT]}"
+                )
+                yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
         return
 
     # ── All other models: single provider ───────────────────────────────────────
