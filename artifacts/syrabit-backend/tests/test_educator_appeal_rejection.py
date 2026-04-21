@@ -216,3 +216,29 @@ def test_appeal_proof_helpers_round_trip(monkeypatch):
     assert eb._has_appeal_proof("other-edu", "x.org") is False
     # …and per-domain
     assert eb._has_appeal_proof("edu1", "other.org") is False
+
+
+def test_appeal_proof_fail_open_when_redis_unavailable(monkeypatch):
+    """Documents and locks in the deliberate availability tradeoff:
+    when Redis is not configured / unreachable, _has_appeal_proof
+    returns True so legitimate educators aren't trapped behind a
+    verification step they cannot satisfy. If this behaviour is ever
+    tightened to fail-closed, this test must be updated alongside
+    the policy change."""
+    from routes import edu_browser as eb
+    import deps
+
+    monkeypatch.setattr(deps, "redis_client", None)
+    assert eb._has_appeal_proof("edu1", "x.org") is True
+    # Writing is a no-op but must not raise.
+    eb._record_appeal_proof("edu1", "x.org", "robots_disallow")
+
+    class BrokenRedis:
+        def get(self, _k):
+            raise RuntimeError("redis exploded")
+        def set(self, *_a, **_kw):
+            raise RuntimeError("redis exploded")
+    monkeypatch.setattr(deps, "redis_client", BrokenRedis())
+    # Errors also degrade to fail-open rather than trap the user.
+    assert eb._has_appeal_proof("edu1", "x.org") is True
+    eb._record_appeal_proof("edu1", "x.org", "robots_disallow")  # swallowed
