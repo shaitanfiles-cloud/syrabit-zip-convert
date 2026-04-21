@@ -32,6 +32,92 @@ const SEARCH_BOT_UA = /googlebot|google-extended|googleother|google-inspectionto
 // public api.syrabit.ai hostname if unset.
 const DEFAULT_BACKEND = "https://api.syrabit.ai";
 
+// Task #640: sitemap + feed XML proxy.
+// Root cause of the 2026-04-18 → 2026-04-21 indexing collapse: every
+// /sitemap*.xml URL on syrabit.ai was returning the SPA shell with
+// `Content-Type: text/html` instead of XML. The Pages Worker had no
+// special handling, ASSETS.fetch had no static file, so the SPA
+// fallback served the React shell — which Googlebot / Bingbot
+// validate as a malformed sitemap and silently drop.
+//
+// Fix: when a non-bot or bot request lands on a sitemap or feed URL,
+// proxy it directly to the backend's canonical generator at
+// `/api/seo/<basename>` and force `Content-Type: application/xml`.
+// Cached at the edge for an hour (matches _headers s-maxage).
+const SITEMAP_PATH_RE = /^\/(sitemap[a-z0-9_-]*\.xml|feed\.xml|rss\.xml)$/i;
+
+async function sitemapProxy(request, env, url) {
+  const backend = (env && env.BACKEND_BOT_URL) || DEFAULT_BACKEND;
+  // Map /sitemap-index.xml → /api/seo/sitemap-index.xml, /feed.xml →
+  // /api/seo/feed.xml, etc. The backend's /api/seo/* generators
+  // already emit proper XML with the correct content-type; we only
+  // need to forward and cache.
+  const backendPath = "/api/seo" + url.pathname;
+  const backendUrl = backend + backendPath + url.search;
+  try {
+    const resp = await fetch(backendUrl, {
+      method: request.method,
+      headers: {
+        "User-Agent": request.headers.get("User-Agent") || "",
+        "Accept": "application/xml,text/xml,*/*",
+        "X-Forwarded-For": request.headers.get("CF-Connecting-IP") || "",
+        "X-Sitemap-Proxy": "1",
+      },
+      cf: { cacheTtl: 3600, cacheEverything: true },
+    });
+    if (resp.status === 200) {
+      const headers = new Headers(resp.headers);
+      // Force proper XML content-type even if backend mislabels it.
+      headers.set("Content-Type", "application/xml; charset=utf-8");
+      headers.set(
+        "Cache-Control",
+        "public, max-age=3600, s-maxage=86400, stale-while-revalidate=3600",
+      );
+      headers.set("X-Source", "sitemap-proxy");
+      // Cloudflare Workers' fetch() auto-decompresses response bodies
+      // before exposing them on resp.body, so we MUST strip the
+      // content-encoding / transfer-encoding headers — otherwise the
+      // outer runtime re-applies them on top of an already-decoded
+      // stream and the client sees garbled XML.
+      headers.delete("transfer-encoding");
+      headers.delete("content-encoding");
+      // HEAD parity: never carry a body on a HEAD response (Fetch spec
+      // forbids it; some validators reject sitemaps if HEAD lies about
+      // the body).
+      const body = request.method === "HEAD" ? null : resp.body;
+      return new Response(body, { status: 200, headers });
+    }
+    // Non-200 from backend: do NOT serve the SPA shell — return a
+    // small 503 with a meaningful message so search engines retry
+    // later instead of indexing garbage.
+    const errBody =
+      request.method === "HEAD"
+        ? null
+        : `<?xml version="1.0" encoding="UTF-8"?>\n<!-- sitemap upstream returned ${resp.status} -->\n`;
+    return new Response(errBody, {
+      status: 503,
+      headers: {
+        "Content-Type": "application/xml; charset=utf-8",
+        "Cache-Control": "public, max-age=60",
+        "Retry-After": "300",
+      },
+    });
+  } catch (err) {
+    const errBody =
+      request.method === "HEAD"
+        ? null
+        : `<?xml version="1.0" encoding="UTF-8"?>\n<!-- sitemap upstream unreachable -->\n`;
+    return new Response(errBody, {
+      status: 503,
+      headers: {
+        "Content-Type": "application/xml; charset=utf-8",
+        "Cache-Control": "public, max-age=60",
+        "Retry-After": "300",
+      },
+    });
+  }
+}
+
 // Paths that never need bot rendering — let them go straight to the
 // SPA shell (auth flows, the /chat surface, internal admin, etc.).
 // Anything not listed here gets the bot-render path for bots.
@@ -118,6 +204,18 @@ export default {
     const url = new URL(request.url);
     const ua = request.headers.get("User-Agent") || "";
     const isBot = SEARCH_BOT_UA.test(ua);
+
+    // Task #640: sitemap + feed XML proxy. Run BEFORE bot-render and
+    // BEFORE asset lookup so we never accidentally serve the SPA shell
+    // (text/html) for a sitemap URL — that's what was killing
+    // Googlebot's ability to enumerate any URL on the site.
+    if (
+      (request.method === "GET" || request.method === "HEAD") &&
+      SITEMAP_PATH_RE.test(url.pathname) &&
+      request.headers.get("X-Sitemap-Proxy") !== "1"
+    ) {
+      return sitemapProxy(request, env, url);
+    }
 
     // Loop guard: if this request already carries the X-Bot-Render
     // tag (i.e. it's the backend fetching back through the Pages
