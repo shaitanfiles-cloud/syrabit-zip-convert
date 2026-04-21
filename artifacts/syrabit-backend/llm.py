@@ -11,10 +11,19 @@ _SARVAM_INDIC_MODEL_PREFERENCE = ["sarvam-m", "sarvam-105b"]
 
 
 class LlmResult(str):
-    """String subclass that carries the provider name that produced the result."""
-    def __new__(cls, text, provider="unknown"):
+    """String subclass that carries the provider that produced the result.
+
+    `provider` is the canonical name (e.g. "gemini", "cerebras", "workers-ai").
+    `fallback_reason` is set ONLY when this result came from a fallback tier
+    (Task #636) — it's the short label returned by
+    `providers.workers_ai.classify_primary_error` ("timeout", "http_503",
+    "network", etc) so traces and admin dashboards can attribute the cost
+    to the upstream failure that triggered the fallback.
+    """
+    def __new__(cls, text, provider="unknown", fallback_reason: str = ""):
         obj = str.__new__(cls, text)
         obj.provider = provider
+        obj.fallback_reason = fallback_reason
         return obj
 
 _MODEL_MAX_OUTPUT_TOKENS = {
@@ -768,13 +777,14 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
             )
             _dur = int((_t.perf_counter() - _t0) * 1000)
             if ok and isinstance(value, str) and value:
+                reason = _wai.classify_primary_error(last_err)
                 _record_llm_call("workers-ai", "llama-3.1-8b-instruct", _dur, True,
                                  len(value.split()), True)
                 logger.info(
                     f"llm_call provider=workers-ai model=llama-3.1-8b-instruct "
-                    f"duration_ms={_dur} fallback=true reason={_wai.classify_primary_error(last_err)}"
+                    f"duration_ms={_dur} fallback=true reason={reason}"
                 )
-                return LlmResult(value, provider="workers-ai")
+                return LlmResult(value, provider="workers-ai", fallback_reason=reason)
     except Exception as _wai_err:  # noqa: BLE001
         logger.warning(f"[workers-ai] chat fallback skipped: {type(_wai_err).__name__}: {str(_wai_err)[:150]}")
 

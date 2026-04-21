@@ -101,8 +101,69 @@ _state: Dict[str, _CapState] = {c: _CapState() for c in CAPABILITIES}
 _state_lock = threading.Lock()
 
 
+# Durable kill-switch persistence (MongoDB). The in-memory `_state` is the
+# hot path used by every fallback decision; we sync it from / to the DB so
+# (a) toggles survive restarts and (b) every API instance picks up the
+# new value within `_PERSIST_REFRESH_SEC` of an admin flip.
+_PERSIST_COLLECTION = "admin_workers_ai_killswitch"
+_PERSIST_REFRESH_SEC = 30.0
+_persist_last_load = 0.0
+_persist_lock = threading.Lock()
+
+
+async def _persist_load_if_stale() -> None:
+    """Refresh `_state[*].enabled` from Mongo if our cached copy is older
+    than `_PERSIST_REFRESH_SEC`. Failures are logged and swallowed —
+    we'd rather use the cached/default value than return 500 because
+    the DB is briefly unreachable.
+    """
+    global _persist_last_load
+    if time.time() - _persist_last_load < _PERSIST_REFRESH_SEC:
+        return
+    try:
+        from deps import db as _db
+        if _db is None:
+            return
+        docs = await _db[_PERSIST_COLLECTION].find({}).to_list(length=20)
+        with _state_lock:
+            for d in docs:
+                cap = d.get("capability")
+                if cap in _state:
+                    _state[cap].enabled = bool(d.get("enabled", True))
+            _persist_last_load = time.time()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[workers-ai] kill-switch DB load failed: {type(e).__name__}: {str(e)[:150]}")
+
+
+async def _persist_save(capability: Capability, enabled: bool, actor: str = "") -> None:
+    """Upsert a single capability flip into Mongo so other API instances
+    pick it up on their next `_persist_load_if_stale()` cycle."""
+    try:
+        from deps import db as _db
+        if _db is None:
+            return
+        await _db[_PERSIST_COLLECTION].update_one(
+            {"capability": capability},
+            {"$set": {
+                "capability": capability,
+                "enabled": bool(enabled),
+                "updated_at": time.time(),
+                "actor": actor or "system",
+            }},
+            upsert=True,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[workers-ai] kill-switch DB save failed: {type(e).__name__}: {str(e)[:150]}")
+
+
 def is_enabled(capability: Capability) -> bool:
-    """Worker AI fallback enabled globally AND for this capability."""
+    """Worker AI fallback enabled globally AND for this capability.
+
+    Sync wrapper used by hot paths — does NOT touch the DB. The DB
+    refresh happens out of band in `attempt_fallback()` (which is async)
+    so admins see their toggles take effect within ~30s without slowing
+    every primary-success path.
+    """
     if capability not in _state:
         return False
     if not _enabled_globally():
@@ -110,18 +171,33 @@ def is_enabled(capability: Capability) -> bool:
     return _state[capability].enabled
 
 
-def set_enabled(capability: Capability, enabled: bool) -> bool:
-    """Admin per-capability kill switch. Returns the new value.
+async def set_enabled_async(capability: Capability, enabled: bool, actor: str = "") -> bool:
+    """Admin per-capability kill switch (durable). Returns the new value.
 
-    Returns False (and no-ops) for unknown capabilities so admins can't
-    silently misconfigure.
+    Persists to Mongo so the toggle survives restarts and propagates to
+    other API instances. Returns False (no-op) for unknown capabilities.
     """
     if capability not in _state:
         return False
     with _state_lock:
         _state[capability].enabled = bool(enabled)
+    await _persist_save(capability, enabled, actor)
     logger.info(
-        f"[workers-ai] capability={capability} kill_switch={'on' if enabled else 'off'}"
+        f"[workers-ai] capability={capability} kill_switch={'on' if enabled else 'off'} actor={actor or 'system'}"
+    )
+    return _state[capability].enabled
+
+
+def set_enabled(capability: Capability, enabled: bool) -> bool:
+    """In-memory kill switch toggle. Used by tests and for synchronous
+    contexts; production admin endpoints should use the async variant
+    so the change is durable."""
+    if capability not in _state:
+        return False
+    with _state_lock:
+        _state[capability].enabled = bool(enabled)
+    logger.info(
+        f"[workers-ai] capability={capability} kill_switch={'on' if enabled else 'off'} (memory-only)"
     )
     return _state[capability].enabled
 
@@ -285,6 +361,11 @@ async def attempt_fallback(
     if (ok is False) — we never re-raise here so the existing error
     handling stays in one place upstream.
     """
+    # Refresh durable kill-switch state opportunistically (no-op if cached
+    # within the last 30s). Called here — not in is_enabled() — because
+    # this path is already async and only fires on the slow primary-failure
+    # branch, so we don't add latency to successful primary calls.
+    await _persist_load_if_stale()
     if not is_enabled(capability):
         return False, None, ""
     if not should_fallback(primary_error):

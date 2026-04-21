@@ -49,13 +49,63 @@ _EMBED_MODEL = "disabled-embed-model"
 _EMBED_DIM = 768
 
 
-# ── Embedding API (returns empty so loops skip cleanly) ──────────────────────
+# ── Embedding API ────────────────────────────────────────────────────────────
+# Vertex is disabled in this build, so the historical behaviour was "return
+# empty so loops skip cleanly". Task #636 wires Cloudflare Workers AI
+# (`@cf/baai/bge-base-en-v1.5`, 768-dim) as a transparent fallback so document
+# indexing and RAG queries actually work in production. The fallback is
+# gated by the same kill-switch + secret as the chat fallback; if disabled
+# we revert to the original "return []" so the existing skip-on-empty
+# code paths still work.
 async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> List[float]:
+    if not text or not isinstance(text, str):
+        return []
+    try:
+        from providers import workers_ai as _wai
+        if _wai.is_enabled("embed"):
+            # We synthesise a "primary disabled" exception so attempt_fallback's
+            # policy treats it as retryable. Without this the embed cap stays
+            # idle even though there's no real primary to wait on.
+            class _VertexDisabled(TimeoutError):
+                pass
+            err = _VertexDisabled("vertex_embed_disabled")
+            ok, val, _label = await _wai.attempt_fallback(
+                "embed", err, 0,
+                lambda: _wai.call_embed(text),
+            )
+            if ok and val:
+                # bge-base-en returns a list of vectors even for a single input.
+                vec = val[0] if isinstance(val, list) and val and isinstance(val[0], list) else val
+                return list(vec) if vec else []
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[workers-ai] embed fallback failed: {type(e).__name__}: {str(e)[:150]}")
     _warn_once()
     return []
 
 
 async def embed_batch(texts: List[str]) -> List[List[float]]:
+    texts = [t for t in (texts or []) if t and isinstance(t, str)]
+    if not texts:
+        return []
+    try:
+        from providers import workers_ai as _wai
+        if _wai.is_enabled("embed"):
+            class _VertexDisabled(TimeoutError):
+                pass
+            err = _VertexDisabled("vertex_embed_disabled")
+            ok, val, _label = await _wai.attempt_fallback(
+                "embed", err, 0,
+                lambda: _wai.call_embed(texts),
+            )
+            if ok and isinstance(val, list) and val:
+                # Pad with empty vectors if Workers AI returned fewer rows
+                # than we sent — caller code expects len(out) == len(texts).
+                out = [list(v) if isinstance(v, list) else [] for v in val]
+                while len(out) < len(texts):
+                    out.append([])
+                return out[: len(texts)]
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[workers-ai] embed_batch fallback failed: {type(e).__name__}: {str(e)[:150]}")
     _warn_once()
     return []
 

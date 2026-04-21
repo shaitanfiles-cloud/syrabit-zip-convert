@@ -1739,8 +1739,9 @@ async def workers_ai_kill_switch(payload: dict, admin: dict = Depends(get_admin_
         from providers import workers_ai as _wai
         if cap not in _wai.CAPABILITIES:
             raise HTTPException(status_code=400, detail="invalid_capability")
-        new_val = _wai.set_enabled(cap, enabled)
-        return {"ok": True, "capability": cap, "enabled": new_val}
+        actor = (admin or {}).get("email") or (admin or {}).get("sub") or "admin"
+        new_val = await _wai.set_enabled_async(cap, enabled, actor=actor)
+        return {"ok": True, "capability": cap, "enabled": new_val, "durable": True}
     except HTTPException:
         raise
     except Exception as e:
