@@ -3494,14 +3494,15 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                 const providers = chatSpeedups?.by_provider || [];
                 const fallbacks = chatSpeedups?.provider_fallbacks || [];
                 const fallbackTotal = fallbacks.reduce((s, f) => s + (f.count || 0), 0);
-                // Look up the "happy path" provider and the legacy pool so we
-                // can render the Vertex-vs-legacy comparison the admin cares
-                // about, even if one of them has zero calls in the window
-                // (shows as "—" instead of being hidden).
-                const findProv = (name) => providers.find(p => p.provider === name) || null;
-                const vx = findProv('vertex_gemini');
-                const legacy = findProv('openai/gpt-oss-20b');
-                const ordered = [vx, legacy].filter(Boolean);
+                // Render vertex_gemini and the legacy pool side-by-side
+                // even when one of them has zero calls in the window —
+                // synthesise a zero-row placeholder so the admin always
+                // sees both baselines and "—" in the metric cells. Any
+                // additional providers (e.g. a future third pool) are
+                // appended in whatever order the backend returned them.
+                const zeroRow = (name) => ({ provider: name, calls: 0, avg_ttfb_ms: 0, avg_total_ms: 0, ttfb_samples: 0, total_samples: 0, tokens_per_sec: 0 });
+                const findProv = (name) => providers.find(p => p.provider === name) || zeroRow(name);
+                const ordered = [findProv('vertex_gemini'), findProv('openai/gpt-oss-20b')];
                 providers.forEach(p => {
                   if (p.provider !== 'vertex_gemini' && p.provider !== 'openai/gpt-oss-20b') ordered.push(p);
                 });
