@@ -203,87 +203,159 @@ function saveLocalState(state) {
 
 // Walk the rendered article DOM and wrap matching span text in a
 // <mark data-grounding="1"> element so the reader pane visually flags
-// the sentences that grounded Syra's answer. Only matches confined to a
-// single text node are highlighted (good enough for typical paragraph
-// prose and avoids cross-element splice complexity). Returns a Map of
+// the sentences that grounded Syra's answer.
+//
+// To handle sentences that include inline formatting (`<strong>`,
+// `<em>`, `<a>`, …) we flatten every visible text node into a single
+// haystack — collapsing whitespace runs — and keep a per-character map
+// back to the originating (textNode, offset). When a span matches in
+// the flat string we wrap each affected text-node slice in its own
+// <mark>, so a sentence spanning multiple sibling text nodes still gets
+// highlighted end-to-end. Returns a Map of
 // `citationIndex -> HTMLElement[]` so callers can scroll/flash later.
 function _highlightGroundingSpans(root, spans) {
   const map = new Map();
   if (!root || !spans || !spans.length) return map;
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode(n) {
-      if (!n.nodeValue || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
-      if (n.parentNode && n.parentNode.closest('mark[data-grounding]')) {
-        return NodeFilter.FILTER_REJECT;
+
+  const STYLE =
+    'background: rgba(245,158,11,0.16); color: inherit; border-radius: 2px; ' +
+    'padding: 0 2px; cursor: pointer; transition: background 220ms ease, box-shadow 220ms ease;';
+
+  const collectTextNodes = () => {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(n) {
+        if (!n.nodeValue) return NodeFilter.FILTER_REJECT;
+        if (n.parentNode && n.parentNode.closest('mark[data-grounding]')) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    const out = [];
+    let cur;
+    while ((cur = walker.nextNode())) out.push(cur);
+    return out;
+  };
+
+  // Build a flat haystack of all visible text with whitespace collapsed
+  // to single spaces. `charMap[i]` points at the original text node and
+  // offset that produced flat[i], so we can map a match range back to
+  // concrete DOM positions.
+  const buildFlat = (textNodes) => {
+    let flat = '';
+    const charMap = [];
+    let prevWasSpace = true; // suppress leading whitespace
+    for (const node of textNodes) {
+      const v = node.nodeValue;
+      for (let i = 0; i < v.length; i++) {
+        const ch = v[i];
+        if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f' || ch === '\v') {
+          if (prevWasSpace) continue;
+          flat += ' ';
+          charMap.push({ node, offset: i });
+          prevWasSpace = true;
+        } else {
+          flat += ch;
+          charMap.push({ node, offset: i });
+          prevWasSpace = false;
+        }
       }
-      return NodeFilter.FILTER_ACCEPT;
-    },
-  });
-  const textNodes = [];
-  let cur;
-  while ((cur = walker.nextNode())) textNodes.push(cur);
-  // Highlight longer spans first so an enclosing sentence wins over a
-  // shorter sub-phrase from the same citation.
-  const ordered = [...spans].sort((a, b) => b.text.length - a.text.length);
-  // Lookup span in haystack tolerating case + collapsed whitespace.
-  // Returns the [start, end) range *in the original haystack*, or null.
-  const findFlexible = (haystack, needle) => {
-    const direct = haystack.indexOf(needle);
-    if (direct >= 0) return [direct, direct + needle.length];
-    const ci = haystack.toLowerCase().indexOf(needle.toLowerCase());
-    if (ci >= 0) return [ci, ci + needle.length];
-    // Whitespace-tolerant fallback: build a regex from the needle that
-    // treats each whitespace run as `\s+`. Escape regex metachars first.
-    const escaped = needle
-      .trim()
-      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      .replace(/\s+/g, '\\s+');
+    }
+    return { flat, charMap };
+  };
+
+  const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  const findInFlat = (flat, needle) => {
+    const norm = needle.replace(/\s+/g, ' ').trim();
+    if (!norm) return null;
+    const direct = flat.indexOf(norm);
+    if (direct >= 0) return [direct, direct + norm.length];
+    const ci = flat.toLowerCase().indexOf(norm.toLowerCase());
+    if (ci >= 0) return [ci, ci + norm.length];
     try {
-      const re = new RegExp(escaped, 'i');
-      const m = re.exec(haystack);
+      const re = new RegExp(escapeRe(norm).replace(/ /g, '\\s+'), 'i');
+      const m = re.exec(flat);
       if (m) return [m.index, m.index + m[0].length];
     } catch { /* malformed needle — skip */ }
     return null;
   };
+
+  // Wrap [from, to) of a single text node in a fresh <mark>. The node
+  // is split as needed; returns the new <mark> element (or null).
+  const wrapRange = (node, from, to, span) => {
+    if (!node.parentNode) return null;
+    const v = node.nodeValue;
+    const safeFrom = Math.max(0, Math.min(from, v.length));
+    const safeTo = Math.max(safeFrom, Math.min(to, v.length));
+    if (safeTo <= safeFrom) return null;
+    const before = v.slice(0, safeFrom);
+    const matched = v.slice(safeFrom, safeTo);
+    const after = v.slice(safeTo);
+    const mark = document.createElement('mark');
+    mark.setAttribute('data-grounding', '1');
+    mark.setAttribute('data-citation-index', String(span.citationIndex));
+    mark.setAttribute('data-span-key', span.key);
+    mark.style.cssText = STYLE;
+    mark.textContent = matched;
+    const parent = node.parentNode;
+    if (after) parent.insertBefore(document.createTextNode(after), node.nextSibling);
+    parent.insertBefore(mark, node.nextSibling);
+    if (before) {
+      node.nodeValue = before;
+    } else {
+      parent.removeChild(node);
+    }
+    return mark;
+  };
+
+  // Highlight longer spans first so an enclosing sentence wins over a
+  // shorter sub-phrase from the same citation.
+  const ordered = [...spans].sort((a, b) => b.text.length - a.text.length);
+
   for (const span of ordered) {
     const needle = (span.text || '').trim();
     if (needle.length < 4) continue;
-    for (let i = 0; i < textNodes.length; i++) {
+
+    // Re-walk after every wrap so previously inserted <mark> nodes are
+    // excluded from subsequent matches (and stale text nodes don't
+    // confuse the flat index).
+    const textNodes = collectTextNodes();
+    if (!textNodes.length) continue;
+    const { flat, charMap } = buildFlat(textNodes);
+    const range = findInFlat(flat, needle);
+    if (!range) continue;
+    const [fStart, fEnd] = range;
+    if (fEnd <= fStart) continue;
+    const startPos = charMap[fStart];
+    const endPos = charMap[fEnd - 1];
+    if (!startPos || !endPos) continue;
+
+    // Collect (node, from, to) slices in document order. We carve the
+    // match per-text-node from the start node up to and including the
+    // end node, so inline children between them are wrapped piecewise.
+    const startIdx = textNodes.indexOf(startPos.node);
+    const endIdx = textNodes.indexOf(endPos.node);
+    if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) continue;
+
+    const slices = [];
+    for (let i = startIdx; i <= endIdx; i++) {
       const node = textNodes[i];
-      if (!node.parentNode) continue;
-      const haystack = node.nodeValue;
-      const range = findFlexible(haystack, needle);
-      if (!range) continue;
-      const [start, end] = range;
-      const before = haystack.slice(0, start);
-      const matched = haystack.slice(start, end);
-      const after = haystack.slice(end);
-      const mark = document.createElement('mark');
-      mark.setAttribute('data-grounding', '1');
-      mark.setAttribute('data-citation-index', String(span.citationIndex));
-      mark.setAttribute('data-span-key', span.key);
-      mark.style.cssText =
-        'background: rgba(245,158,11,0.16); color: inherit; border-radius: 2px; ' +
-        'padding: 0 2px; cursor: pointer; transition: background 220ms ease, box-shadow 220ms ease;';
-      mark.textContent = matched;
-      const parent = node.parentNode;
-      if (after) {
-        const afterNode = document.createTextNode(after);
-        parent.insertBefore(afterNode, node.nextSibling);
-        textNodes.splice(i + 1, 0, afterNode);
-      }
-      parent.insertBefore(mark, node.nextSibling);
-      if (before) {
-        node.nodeValue = before;
-      } else {
-        parent.removeChild(node);
-        textNodes.splice(i, 1);
-        i--;
-      }
+      const from = (i === startIdx) ? startPos.offset : 0;
+      const to = (i === endIdx) ? endPos.offset + 1 : node.nodeValue.length;
+      if (to > from) slices.push({ node, from, to });
+    }
+    // Wrap from last to first so earlier slices' offsets stay valid.
+    const marks = [];
+    for (let i = slices.length - 1; i >= 0; i--) {
+      const { node, from, to } = slices[i];
+      const m = wrapRange(node, from, to, span);
+      if (m) marks.unshift(m);
+    }
+    if (marks.length) {
       const arr = map.get(span.citationIndex) || [];
-      arr.push(mark);
+      arr.push(...marks);
       map.set(span.citationIndex, arr);
-      break; // only highlight first occurrence per span
     }
   }
   return map;
