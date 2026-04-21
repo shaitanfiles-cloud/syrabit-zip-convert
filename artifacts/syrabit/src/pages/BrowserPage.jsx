@@ -1387,9 +1387,14 @@ function RecentAppealsList({ items, loading, lang }) {
       </section>
     );
   }
-  const fmt = (iso) => {
-    if (!iso) return '';
-    try { return new Date(iso).toLocaleDateString(lang === 'as' ? 'as-IN' : undefined, { month: 'short', day: 'numeric' }); }
+  const fmt = (ts) => {
+    if (!ts) return '';
+    try {
+      // Backend returns epoch-seconds (time.time()) for appealed_at /
+      // verdict_at. Multiply so new Date() doesn't read 1970-era.
+      const ms = typeof ts === 'number' ? ts * 1000 : ts;
+      return new Date(ms).toLocaleDateString(lang === 'as' ? 'as-IN' : undefined, { month: 'short', day: 'numeric' });
+    }
     catch { return ''; }
   };
   return (
