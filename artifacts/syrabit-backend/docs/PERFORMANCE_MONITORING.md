@@ -166,6 +166,15 @@ working as the product evolves.
 - Notification channel: `#alerts-syrabit` Slack.
 - Auto-close after 5 min healthy.
 
+This policy is codified at
+`scripts/monitoring/chat_p95_latency_alert.json` and applied
+idempotently via `scripts/monitoring/apply_alerts.sh` (see that
+folder's README for the prerequisites). The script can be safely
+re-run as a deploy step. **Note:** the policy targets a custom OTEL
+metric (`syrabit.chat.total_ms`) which today is recorded as a span
+attribute only — wiring a Cloud Monitoring metric exporter is the
+remaining prerequisite for the alert to actually fire.
+
 ### B. Firebase Performance — LCP regression
 
 - Trace: `_app_start` (built-in) + `web_vital_LCP` custom trace.
