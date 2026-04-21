@@ -183,7 +183,7 @@ Code review caught two SEVERE issues, both fixed before commit:
 - **#644** — Re-measure traffic & cache hit rate 24 h after sitemap fix deploys (incl. CF Analytics 14-day rollup, GSC sitemap re-submission confirmation, IndexNow ping verification)
 - **#645** — Stop `/library` from making search engines take a redirect hop (308 → 200)
 - **#646** — Add per-board landing pages so SEBA and AHSEC each get a hub URL
-- **(also raised in this audit)** — Bot-render regression for `/library/` + subject pages serving SPA shell to verified bots; needs backend `/html/<path>` audit. To be filed as a separate follow-up after the sitemap fix is verified live.
+- _(Earlier draft of this doc raised the bot-render regression as a follow-up; that was superseded — the priority-inversion fix was shipped in this same task, see Step 4.)_
 
 ## Drift from the original task spec
 The original task asked for live CF Analytics rollups, post-deploy cache-rate measurements, and Search Console re-submission confirmation in this same task. Those are **time-shifted to follow-up #644** because they only become meaningful 24 h after the sitemap proxy ships. The audit above documents the methodology and the curl scripts that #644 will rerun to compare before/after numbers.
