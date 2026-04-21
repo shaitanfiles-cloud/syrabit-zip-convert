@@ -250,7 +250,7 @@ def test_fail_closed_when_enforce_on_but_config_missing(monkeypatch):
     ("https://syrabit.cloudflareaccess.com/",  "syrabit"),
     ("  syrabit  ",                            "syrabit"),
     ("",                                        ""),
-    ("Syrabit.CloudflareAccess.com",           "Syrabit"),
+    ("Syrabit.CloudflareAccess.com",           "syrabit"),
 ])
 def test_team_domain_normalizer(raw, expected):
     import cf_access

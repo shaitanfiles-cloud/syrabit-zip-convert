@@ -65,9 +65,12 @@ def _normalize_team_domain(raw: str) -> str:
         s = s.split("://", 1)[1]
     # Strip path component if any
     s = s.split("/", 1)[0]
+    # Cloudflare-issued team domains are always lowercase in the JWT
+    # `iss` claim, so normalize to avoid case-mismatch on issuer compare.
+    s = s.lower()
     # Strip the well-known suffix to leave only the team slug
     suffix = ".cloudflareaccess.com"
-    if s.lower().endswith(suffix):
+    if s.endswith(suffix):
         s = s[: -len(suffix)]
     return s
 
@@ -99,19 +102,6 @@ def is_admin_enforcement_enabled() -> bool:
 
 def is_internal_enforcement_enabled() -> bool:
     return bool(_enforce_enabled() and CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD_INTERNAL)
-
-
-def _missing_config(audience: str) -> list[str]:
-    """Return the list of env vars required for enforcement that are unset."""
-    missing = []
-    if not CF_ACCESS_TEAM_DOMAIN:
-        missing.append("CF_ACCESS_TEAM_DOMAIN")
-    if not audience:
-        missing.append(
-            "CF_ACCESS_AUD_ADMIN" if audience is CF_ACCESS_AUD_ADMIN
-            else "CF_ACCESS_AUD_INTERNAL"
-        )
-    return missing
 
 
 # Fire one CRITICAL log line at module import time when enforcement is
