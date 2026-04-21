@@ -9,8 +9,56 @@
  */
 import { useState, useEffect, useCallback } from 'react';
 import { studyApi } from '@/utils/studyApi';
+import { eduGetAllowlist } from '@/utils/api';
 
 const KEY = 'syrabit_strict_mode';
+
+let _allowlistPromise = null;
+let _allowlistData = null;
+
+function _fetchAllowlist() {
+  if (_allowlistData) return Promise.resolve(_allowlistData);
+  if (_allowlistPromise) return _allowlistPromise;
+  _allowlistPromise = eduGetAllowlist()
+    .then((res) => {
+      const d = res?.data || {};
+      _allowlistData = {
+        domains: new Set((d.domains || []).map((x) => String(x).toLowerCase())),
+        eduSuffixes: (d.edu_suffixes || []).map((x) => String(x).toLowerCase()),
+      };
+      return _allowlistData;
+    })
+    .catch(() => {
+      _allowlistPromise = null;
+      return { domains: new Set(), eduSuffixes: [] };
+    });
+  return _allowlistPromise;
+}
+
+function _hostAllowed(host, data) {
+  if (!host || !data) return false;
+  const h = host.toLowerCase().replace(/^www\./, '');
+  if (data.domains.has(h)) return true;
+  for (const d of data.domains) {
+    if (h === d || h.endsWith('.' + d)) return true;
+  }
+  for (const sfx of data.eduSuffixes) {
+    const s = sfx.startsWith('.') ? sfx : '.' + sfx;
+    if (h.endsWith(s)) return true;
+  }
+  return false;
+}
+
+export function useEduAllowlist(enabled) {
+  const [data, setData] = useState(_allowlistData);
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    _fetchAllowlist().then((d) => { if (!cancelled) setData(d); });
+    return () => { cancelled = true; };
+  }, [enabled]);
+  return useCallback((host) => _hostAllowed(host, data), [data]);
+}
 
 let _cache = null;
 const _subs = new Set();

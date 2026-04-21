@@ -2,11 +2,18 @@ import { useMemo, useCallback, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { useStrictMode, useEduAllowlist } from '@/hooks/useStrictMode';
 
 const remarkPlugins = [remarkGfm];
 
+function _hostOf(href) {
+  try { return new URL(href, window.location.origin).hostname; } catch { return ''; }
+}
+
 export const MarkdownContent = memo(function MarkdownContent({ content, streaming, sources }) {
   const navigate = useNavigate();
+  const { strict } = useStrictMode();
+  const isHostAllowed = useEduAllowlist(strict);
 
   const handleInternalClick = useCallback((href) => {
     navigate(href);
@@ -15,7 +22,26 @@ export const MarkdownContent = memo(function MarkdownContent({ content, streamin
   const components = useMemo(() => ({
     a: ({ href, children }) => {
       if (!href) return <span>{children}</span>;
-      if (/^(https?:)?\/\/|^mailto:|^tel:/i.test(href)) {
+      const isExternal = /^(https?:)?\/\/|^mailto:|^tel:/i.test(href);
+      if (isExternal) {
+        if (strict && /^(https?:)?\/\//i.test(href)) {
+          const host = _hostOf(href);
+          if (!isHostAllowed(host)) {
+            return (
+              <span
+                className="inline-source-link inline-source-link--blocked"
+                title={`Strict Mode hid this link to ${host || 'an external site'} because it isn't on the curated allowlist.`}
+                aria-label={`Link hidden by Strict Mode (${host || 'external site'})`}
+              >
+                <span aria-hidden="true" style={{ marginRight: 3 }}>🔒</span>
+                <span>{children}</span>
+                <span style={{ marginLeft: 4, opacity: 0.75, fontSize: '0.85em' }}>
+                  (hidden · Strict Mode)
+                </span>
+              </span>
+            );
+          }
+        }
         return <a href={href} target="_blank" rel="noopener noreferrer" className="inline-source-link">{children}</a>;
       }
       return (
@@ -24,7 +50,7 @@ export const MarkdownContent = memo(function MarkdownContent({ content, streamin
         </button>
       );
     },
-  }), [handleInternalClick]);
+  }), [handleInternalClick, strict, isHostAllowed]);
 
   const processed = useMemo(() => {
     if (!content) return content;

@@ -981,6 +981,16 @@
   text-decoration: none;
 }
 
+.inline-source-link--blocked,
+.inline-source-link--blocked:hover {
+  background: rgba(148,163,184,0.14);
+  color: #475569;
+  border-color: rgba(148,163,184,0.32);
+  cursor: help;
+  text-decoration: line-through;
+  text-decoration-color: rgba(71,85,105,0.5);
+}
+
 /* ══════════════════════════════════════════════════════════════
    BLOG VIEW TAB — WordPress-classic white reading experience
    (SubjectPage Blog View tab only)
