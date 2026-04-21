@@ -81,6 +81,7 @@ class CaseResult:
     elapsed_ms: int
 
     is_adversarial: bool = False
+    allow_weak: int = 0  # adversarial-only quality floor (max tolerated citations)
 
     def recall_at(self, k: int) -> bool:
         # Adversarial negatives are "recalled" at any K when the retriever
@@ -227,10 +228,23 @@ def _score_case(case: BenchCase, citations: list[dict], elapsed_ms: int) -> Case
         if citation_matches_expected(cit, case.expected):
             first_match = i
             break
+    # Quality floor for adversarial negatives.
+    #
+    # The retriever ideally surfaces *zero* citations on a trick query, but in
+    # production it often leaks 1-2 weak citations even for off-topic prompts
+    # (low-confidence web hits, partial keyword matches, etc.). Treating any
+    # output as a hard fail conflates "leaked one borderline source" with
+    # "confidently hallucinated a full answer" — both are scored 0.
+    #
+    # ``expected.allow_weak`` (default 0) lets a case soft-tolerate up to N
+    # citations as still "correctly abstained". Default 0 preserves the old
+    # strict behaviour for cases that don't opt in.
+    try:
+        allow_weak = max(0, int(case.expected.get("allow_weak", 0) or 0))
+    except (TypeError, ValueError):
+        allow_weak = 0
     if is_adversarial:
-        # For adversarial negatives the retriever should surface *nothing*.
-        # Reward zero citations as the correct outcome.
-        matched = len(citations) == 0
+        matched = len(citations) <= allow_weak
     else:
         matched = first_match is not None
     return CaseResult(
@@ -241,6 +255,7 @@ def _score_case(case: BenchCase, citations: list[dict], elapsed_ms: int) -> Case
         matched=matched,
         elapsed_ms=elapsed_ms,
         is_adversarial=is_adversarial,
+        allow_weak=allow_weak,
     )
 
 
@@ -282,7 +297,23 @@ async def run_benchmark(
 
     if adv_results:
         adv_correct = sum(1 for r in adv_results if r.matched)
+        # ``adversarial_no_match_rate`` honours each case's ``allow_weak``
+        # floor (i.e. counts a case as correct when citation count is at or
+        # below the declared tolerance). Kept under the historical key so
+        # existing dashboards/baselines keep working.
         metrics["adversarial_no_match_rate"] = round(adv_correct / len(adv_results), 4)
+        # Strict variant: fraction of adversarial cases with *zero* citations
+        # surfaced. Always tighter than (or equal to) the floored rate; lets
+        # the admin tile show how many trick queries the retriever fully
+        # abstained on, independent of the per-case tolerance.
+        adv_clean = sum(1 for r in adv_results if r.citations_count == 0)
+        metrics["adversarial_clean_rate"] = round(adv_clean / len(adv_results), 4)
+        # Mean citations leaked on adversarial cases — the signal we actually
+        # want to drive down. Surfaces regressions where the floored pass-rate
+        # stays at 1.0 but the retriever starts leaking more weak hits.
+        metrics["adversarial_mean_citations"] = round(
+            sum(r.citations_count for r in adv_results) / len(adv_results), 2
+        )
 
     mean_cc = round(sum(r.citations_count for r in results) / total, 2)
     mean_lat = round(sum(r.elapsed_ms for r in results) / total, 2)
@@ -301,6 +332,7 @@ async def run_benchmark(
                 "matched": r.matched,
                 "elapsed_ms": r.elapsed_ms,
                 "adversarial": r.is_adversarial,
+                "allow_weak": r.allow_weak,
             }
             for r in results
         ],

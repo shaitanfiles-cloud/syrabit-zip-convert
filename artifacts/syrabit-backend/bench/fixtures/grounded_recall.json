@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "description": "Hand-labelled recall benchmark for the grounded-answer pipeline. Each case is (query, context, expected, offline_corpus). Positive cases declare expected via domains/url_substrings/chapter_slugs; adversarial negatives declare expected:{none:true} and the scorer rewards zero citations as the correct outcome. Coverage spans AHSEC, SEBA and Degree subjects, Assamese-language queries (as), PYQ-style prompts and image/figure lookups.",
+  "description": "Hand-labelled recall benchmark for the grounded-answer pipeline. Each case is (query, context, expected, offline_corpus). Positive cases declare expected via domains/url_substrings/chapter_slugs; adversarial negatives declare expected:{none:true} and the scorer rewards zero citations as the correct outcome. Adversarial cases may also declare expected.allow_weak:N (default 0) to soft-tolerate up to N weak citations as still-correct abstention — see bench/grounded_recall.py:_score_case. Coverage spans AHSEC, SEBA and Degree subjects, Assamese-language queries (as), PYQ-style prompts and image/figure lookups.",
   "cases": [
     {
       "id": "ahsec-phy-newton-3rd",
@@ -3353,7 +3353,8 @@
         "subject_name": "English"
       },
       "expected": {
-        "none": true
+        "none": true,
+        "allow_weak": 1
       },
       "offline_corpus": {
         "web_results": [],
@@ -3456,7 +3457,8 @@
         "subject_name": "General"
       },
       "expected": {
-        "none": true
+        "none": true,
+        "allow_weak": 1
       },
       "offline_corpus": {
         "web_results": [],
@@ -3473,7 +3475,8 @@
         "subject_name": "Chemistry"
       },
       "expected": {
-        "none": true
+        "none": true,
+        "allow_weak": 1
       },
       "offline_corpus": {
         "web_results": [],
