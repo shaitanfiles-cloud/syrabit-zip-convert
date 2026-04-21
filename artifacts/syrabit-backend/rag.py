@@ -167,26 +167,21 @@ async def _ddg_search(query: str, max_results: int = 5) -> list:
         return []
 
 
-def _is_safe_url(url: str) -> bool:
+def _is_safe_scheme(url: str) -> bool:
+    """Cheap scheme/host-shape filter.
+
+    The full SSRF rule set (private-IP, hard-deny, DNS-resolved-to-private,
+    per-redirect-hop re-checks) lives in
+    ``edu_reader._validate_host_for_ssrf`` /``_safe_get_with_redirects``
+    and is applied in :func:`_fetch_page_content`. This helper only weeds
+    out obviously-malformed URLs before we spend cycles on them.
+    """
     try:
         from urllib.parse import urlparse
-        import ipaddress
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
             return False
-        host = parsed.hostname or ""
-        if not host:
-            return False
-        try:
-            ip = ipaddress.ip_address(host)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-                return False
-        except ValueError:
-            if host in ("localhost", "127.0.0.1", "0.0.0.0", "::1"):
-                return False
-            if host.endswith(".local") or host.endswith(".internal"):
-                return False
-        return True
+        return bool(parsed.hostname)
     except Exception:
         return False
 
@@ -216,7 +211,7 @@ async def _fetch_page_content(url: str, max_chars: int = 3000) -> str:
     # same SSRF guards as `edu_reader.fetch_and_extract` (DNS-to-private
     # rejection on the initial host + per-hop redirect re-checks).
     from edu_reader import _validate_host_for_ssrf, _safe_get_with_redirects
-    if not url or not _is_safe_url(url):
+    if not url or not _is_safe_scheme(url):
         return ""
     try:
         from urllib.parse import urlparse as _urlparse
@@ -230,7 +225,15 @@ async def _fetch_page_content(url: str, max_chars: int = 3000) -> str:
         )
         if redirect_reason != "ok" or resp is None:
             return ""
-        if not _is_safe_url(final_url):
+        # Defensive: re-validate the post-redirect host. `_safe_get_with_redirects`
+        # already SSRF-checks every hop, but if a future change ever lets a
+        # non-redirect response slip through with a different effective host
+        # (e.g. via client-side proxy), this catches it.
+        if not _is_safe_scheme(final_url):
+            return ""
+        final_host = (_urlparse(final_url).hostname or "").lower()
+        final_ok, _final_why = await _validate_host_for_ssrf(final_host)
+        if not final_ok:
             return ""
         if resp.status_code != 200:
             return ""

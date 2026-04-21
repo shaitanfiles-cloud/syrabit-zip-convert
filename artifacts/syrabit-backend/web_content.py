@@ -1,12 +1,13 @@
 """Syrabit.ai — Web content fetching, extraction, caching & rate limiting."""
-import asyncio, hashlib, io, ipaddress, logging, socket, time
+import asyncio, hashlib, io, logging, time
 from typing import Optional, Dict, Tuple
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse
 
 import httpx
 import cachetools
 
 from deps import redis_client
+from edu_reader import _safe_get_with_redirects, _validate_host_for_ssrf
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +32,6 @@ _FETCH_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.5",
 }
-
-_BLOCKED_HOSTNAMES = {"localhost", "127.0.0.1", "0.0.0.0", "[::1]", "metadata.google.internal", "169.254.169.254"}
 
 _playwright_available: Optional[bool] = None
 
@@ -68,31 +67,20 @@ def _set_cached_content(url: str, text: str):
             pass
 
 
-def _is_safe_url(url: str) -> bool:
+def _is_safe_scheme(url: str) -> bool:
+    """Cheap scheme/host shape check.
+
+    The real SSRF rule set (private-IP, hard-deny, DNS-resolved-to-private,
+    per-redirect-hop re-checks) lives in ``edu_reader._validate_host_for_ssrf``
+    and ``_safe_get_with_redirects``. Every fetch in this module routes
+    through those helpers, so this function only filters obviously-malformed
+    URLs to avoid pointless DNS/socket work.
+    """
     try:
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
             return False
-        hostname = parsed.hostname or ""
-        if not hostname:
-            return False
-        if hostname in _BLOCKED_HOSTNAMES:
-            return False
-        try:
-            addr = ipaddress.ip_address(hostname)
-            if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-                return False
-        except ValueError:
-            try:
-                resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-                for _, _, _, _, sockaddr in resolved:
-                    ip = sockaddr[0]
-                    addr = ipaddress.ip_address(ip)
-                    if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-                        return False
-            except (socket.gaierror, OSError):
-                return False
-        return True
+        return bool(parsed.hostname)
     except Exception:
         return False
 
@@ -152,8 +140,8 @@ async def _render_js_page(url: str, timeout_ms: int = 6000) -> Optional[str]:
 
 
 async def fetch_url_content(url: str, max_chars: int = _MAX_CONTENT_CHARS) -> Optional[str]:
-    if not _is_safe_url(url):
-        logger.debug(f"URL blocked by safety check: {url[:80]}")
+    if not _is_safe_scheme(url):
+        logger.debug(f"URL blocked by scheme check: {url[:80]}")
         return None
 
     cached = _get_cached_content(url)
@@ -170,7 +158,6 @@ async def fetch_url_content(url: str, max_chars: int = _MAX_CONTENT_CHARS) -> Op
         # re-validated (private-IP, hard-deny, DNS-resolved-to-private)
         # rather than just the first one. Mirrors the protections in
         # `edu_reader.fetch_and_extract`.
-        from edu_reader import _safe_get_with_redirects, _validate_host_for_ssrf
         host = urlparse(url).hostname or ""
         host_ok, _why = await _validate_host_for_ssrf(host.lower())
         if not host_ok:
@@ -268,8 +255,8 @@ async def _extract_pdf_text(content: bytes, url: str, max_chars: int) -> Optiona
 
 
 async def fetch_pdf_from_url(url: str, max_chars: int = _MAX_CONTENT_CHARS) -> Optional[str]:
-    if not _is_safe_url(url):
-        logger.debug(f"PDF URL blocked by safety check: {url[:80]}")
+    if not _is_safe_scheme(url):
+        logger.debug(f"PDF URL blocked by scheme check: {url[:80]}")
         return None
 
     cached = _get_cached_content(url)
@@ -280,7 +267,6 @@ async def fetch_pdf_from_url(url: str, max_chars: int = _MAX_CONTENT_CHARS) -> O
         return None
 
     try:
-        from edu_reader import _safe_get_with_redirects, _validate_host_for_ssrf
         host = urlparse(url).hostname or ""
         host_ok, _why = await _validate_host_for_ssrf(host.lower())
         if not host_ok:
@@ -308,7 +294,7 @@ async def enrich_search_results(results: list, max_enrich: int = _MAX_FETCHES_PE
     enrichable = []
     for r in results:
         url = r.get("url", "")
-        if not (url and url.startswith("http") and _is_safe_url(url)):
+        if not (url and url.startswith("http") and _is_safe_scheme(url)):
             continue
         domain = urlparse(url).netloc
         if seen_domains.get(domain, 0) >= 2:
