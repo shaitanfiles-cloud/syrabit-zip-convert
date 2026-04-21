@@ -123,6 +123,16 @@ export const eduEducatorMySubmissions = (limit = 10) =>
     params: { limit }, headers: anonHeaders(), withCredentials: true,
   });
 
+export const eduEducatorRemoveMySubmission = (domain) =>
+  axios.delete(`${API_BASE}/edu/educator/my-submissions/${encodeURIComponent(domain)}`, {
+    headers: anonHeaders(), withCredentials: true,
+  });
+
+export const eduEducatorMyAppeals = (limit = 10) =>
+  axios.get(`${API_BASE}/edu/educator/my-appeals`, {
+    params: { limit }, headers: anonHeaders(), withCredentials: true,
+  });
+
 export const eduLoadState = () =>
   axios.get(`${API_BASE}/edu/state`, { headers: anonHeaders(), withCredentials: true });
 

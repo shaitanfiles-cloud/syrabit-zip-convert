@@ -1177,6 +1177,11 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 if _vertex_first_token:
                     _total_ms = (time.monotonic() - _vertex_t0) * 1000
                     logger.info(f"[VERTEX-PERF] Total={_total_ms:.0f}ms model={VERTEX_GEMINI_MODEL}")
+                    try:
+                        from chat_speedup_metrics import record_provider_call as _rec_prov
+                        _rec_prov("vertex_gemini", ttfb_ms=_ttft_ms, total_ms=_total_ms)
+                    except Exception:
+                        pass
                     yield f"data: {json.dumps({'__provider': 'vertex_gemini'})}\n\n"
                     return
                 # Stream completed without ever yielding a token — treat as
@@ -1192,6 +1197,11 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 logger.warning(f"Vertex Gemini Flash failed before first token: {type(_vx_err).__name__}: {str(_vx_err)[:200]} — falling back to legacy SLM pool")
             # Fall back: rewrite the requested model to the legacy default
             # and continue with the standard resolution path below.
+            try:
+                from chat_speedup_metrics import record_provider_fallback as _rec_fb
+                _rec_fb("vertex_gemini", "openai/gpt-oss-20b")
+            except Exception:
+                pass
             use_model_raw = "openai/gpt-oss-20b"
             model = use_model_raw
 

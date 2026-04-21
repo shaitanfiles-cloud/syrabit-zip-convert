@@ -883,6 +883,41 @@ function GroundedRecallTile({ adminToken }) {
               <div className="text-[10px] text-gray-400 mt-0.5">mean {latest.mean_latency_ms?.toFixed?.(0) ?? '—'} ms</div>
             </div>
           </div>
+          {(metrics?.adversarial_clean_rate != null || metrics?.adversarial_mean_citations != null) && (
+            <div className="mt-2 flex flex-wrap gap-2" data-testid="recall-adversarial-row">
+              {metrics?.adversarial_clean_rate != null && (
+                <div className="flex-1 min-w-[160px] rounded-md border border-amber-200 bg-amber-50/60 px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-wide text-amber-700 font-semibold">
+                    adversarial clean rate
+                  </div>
+                  <div className="text-lg font-bold text-gray-900 mt-0.5">
+                    {(metrics.adversarial_clean_rate * 100).toFixed(1)}%
+                  </div>
+                  <div className="text-[10px] text-gray-500 mt-0.5">
+                    {baseline?.metrics?.adversarial_clean_rate != null
+                      ? `baseline ${(baseline.metrics.adversarial_clean_rate * 100).toFixed(1)}%`
+                      : 'no baseline'}
+                  </div>
+                </div>
+              )}
+              {metrics?.adversarial_mean_citations != null && (
+                <div className="flex-1 min-w-[160px] rounded-md border border-amber-200 bg-amber-50/60 px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-wide text-amber-700 font-semibold">
+                    adversarial mean citations
+                  </div>
+                  <div className="text-lg font-bold text-gray-900 mt-0.5">
+                    {metrics.adversarial_mean_citations.toFixed(2)}
+                  </div>
+                  <div className="text-[10px] text-gray-500 mt-0.5">
+                    {baseline?.metrics?.adversarial_mean_citations != null
+                      ? `baseline ${baseline.metrics.adversarial_mean_citations.toFixed(2)}`
+                      : 'no baseline'}
+                    {' · lower is better'}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {baseline && (
             <p className="text-[11px] text-gray-500 mt-2">
               Baseline locked on {baseline.recorded_at?.slice(0, 10) || 'unknown'} · {baseline.total_cases} cases.

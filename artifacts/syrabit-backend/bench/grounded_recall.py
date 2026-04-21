@@ -560,6 +560,8 @@ def _format_alert_body(
     gate: float,
     *,
     language: Optional[str] = None,
+    recall_gate_failed: bool = True,
+    leak_gate_failed: bool = False,
 ) -> str:
     """Plain-text body for the admin alert. The Slack/Email dispatcher
     wraps this with the rich formatter; we keep the diff + miss list
@@ -567,8 +569,22 @@ def _format_alert_body(
     of channel."""
     cur = report.metrics
     base = baseline.get("metrics", {}) if baseline else {}
+    if recall_gate_failed and leak_gate_failed:
+        headline = (
+            f"Nightly grounded-recall benchmark tripped recall AND leak gates "
+            f"(recall gate {gate:.2%})."
+        )
+    elif leak_gate_failed and not recall_gate_failed:
+        headline = (
+            "Nightly grounded-recall benchmark tripped the adversarial leak "
+            "gate (recall@5 still within bounds)."
+        )
+    else:
+        headline = (
+            f"Nightly grounded-recall benchmark regressed beyond the {gate:.2%} gate."
+        )
     lines = [
-        f"Nightly grounded-recall benchmark regressed beyond the {gate:.2%} gate.",
+        headline,
         "",
         f"Retriever: {report.retriever}   cases: {report.total_cases}",
         f"Mean citations/case: {report.mean_citation_count}   mean latency: {report.mean_latency_ms} ms",
@@ -583,6 +599,21 @@ def _format_alert_body(
         d = cv - bv
         sign = "+" if d >= 0 else ""
         lines.append(f"  {k:12s} {cv:.4f} → {bv:.4f}  ({sign}{d:.4f})")
+    # Adversarial leak signals — surface separately so on-call admins can
+    # see weak-citation leakage even when the floored pass-rate hides it.
+    for k in ("adversarial_clean_rate", "adversarial_mean_citations"):
+        cv = cur.get(k)
+        bv = base.get(k)
+        if cv is None and bv is None:
+            continue
+        cv_s = f"{cv:.4f}" if isinstance(cv, (int, float)) else "n/a"
+        bv_s = f"{bv:.4f}" if isinstance(bv, (int, float)) else "n/a"
+        if isinstance(cv, (int, float)) and isinstance(bv, (int, float)):
+            d = cv - bv
+            sign = "+" if d >= 0 else ""
+            lines.append(f"  {k:30s} {cv_s} → {bv_s}  ({sign}{d:.4f})")
+        else:
+            lines.append(f"  {k:30s} {cv_s} → {bv_s}")
     misses = [c for c in report.per_case if not c.get("matched")]
     if misses:
         lines.append("")
@@ -592,6 +623,20 @@ def _format_alert_body(
             lines.append(f"  - {m.get('id')}: {q}")
         if len(misses) > 10:
             lines.append(f"  … and {len(misses) - 10} more")
+    # Top adversarial leakers — cases that returned the most weak citations
+    # despite being trick queries with no syllabus answer.
+    leakers = [
+        c for c in report.per_case
+        if c.get("adversarial") and (c.get("citations_count") or 0) > 0
+    ]
+    leakers.sort(key=lambda c: c.get("citations_count") or 0, reverse=True)
+    if leakers:
+        lines.append("")
+        lines.append(f"Top adversarial leakers ({len(leakers)}):")
+        for m in leakers[:5]:
+            q = (m.get("query") or "")[:80]
+            n = int(m.get("citations_count") or 0)
+            lines.append(f"  - {m.get('id')} [{n} citations]: {q}")
     lines.append("")
     src_name = _latest_filename(language)
     lines.append(f"Source: bench/results/{src_name}   gate: --gate "
@@ -599,9 +644,20 @@ def _format_alert_body(
     return "\n".join(lines)
 
 
+def _leak_gate() -> float:
+    """Mean extra adversarial citations above baseline that triggers an alert.
+    Default 0.5 — means we tolerate a ~half-citation drift per trick query
+    before paging."""
+    try:
+        return float(os.environ.get("GROUNDED_RECALL_LEAK_GATE", "0.5"))
+    except (TypeError, ValueError):
+        return 0.5
+
+
 async def run_and_alert_live(
     *,
     gate: Optional[float] = None,
+    leak_gate: Optional[float] = None,
     save: bool = True,
     fixture_path: Path = FIXTURE_PATH,
     dispatch: Optional[Callable[..., Any]] = None,
@@ -628,6 +684,8 @@ async def run_and_alert_live(
     """
     if gate is None:
         gate = _bench_gate()
+    if leak_gate is None:
+        leak_gate = _leak_gate()
     lang = (language or "").strip().lower() or None
     cases = load_cases(fixture_path, language=lang)
     if not cases:
@@ -653,13 +711,28 @@ async def run_and_alert_live(
             logger.warning(f"[bench.nightly] save_report failed: {exc}")
 
     baseline = load_baseline(language=lang) or {}
-    baseline_recall_5 = (baseline.get("metrics") or {}).get("recall@5")
+    base_metrics = baseline.get("metrics") or {}
+    baseline_recall_5 = base_metrics.get("recall@5")
     cur_recall_5 = report.metrics.get("recall@5")
     drop = 0.0
-    gate_failed = False
+    recall_gate_failed = False
     if baseline_recall_5 is not None and cur_recall_5 is not None:
         drop = baseline_recall_5 - cur_recall_5
-        gate_failed = drop > gate
+        recall_gate_failed = drop > gate
+
+    # Leak gate — fires when adversarial mean-citations creeps above
+    # baseline + leak_gate even though recall stays high. Catches the
+    # "retriever quietly leaks 2-3 weak citations per trick query" case
+    # that the floored adversarial pass-rate hides.
+    base_leak = base_metrics.get("adversarial_mean_citations")
+    cur_leak = report.metrics.get("adversarial_mean_citations")
+    leak_overshoot = 0.0
+    leak_gate_failed = False
+    if isinstance(base_leak, (int, float)) and isinstance(cur_leak, (int, float)):
+        leak_overshoot = cur_leak - base_leak
+        leak_gate_failed = leak_overshoot > leak_gate
+
+    gate_failed = recall_gate_failed or leak_gate_failed
 
     out: dict = {
         "ran": True,
@@ -667,6 +740,10 @@ async def run_and_alert_live(
         "saved_to": str(saved_to) if saved_to else None,
         "gate": gate,
         "drop": round(drop, 4),
+        "leak_gate": leak_gate,
+        "leak_overshoot": round(leak_overshoot, 4),
+        "leak_gate_failed": leak_gate_failed,
+        "recall_gate_failed": recall_gate_failed,
         "gate_failed": gate_failed,
         "alert_dispatched": False,
         "alert_outcomes": None,
@@ -685,18 +762,42 @@ async def run_and_alert_live(
             return out
 
     lang_label = f" [{lang}]" if lang else ""
-    title = (
-        f"Grounded-recall regression{lang_label}: recall@5 dropped {drop:.4f} "
-        f"(> gate {gate:.2f})"
+    if recall_gate_failed:
+        title = (
+            f"Grounded-recall regression{lang_label}: recall@5 dropped {drop:.4f} "
+            f"(> gate {gate:.2f})"
+        )
+    else:
+        # Pure leak-gate trigger.
+        title = (
+            f"Grounded-recall leak{lang_label}: adversarial mean citations "
+            f"+{leak_overshoot:.2f} (> leak_gate {leak_gate:.2f})"
+        )
+    body = _format_alert_body(
+        report, baseline, drop, gate, language=lang,
+        recall_gate_failed=recall_gate_failed,
+        leak_gate_failed=leak_gate_failed,
     )
-    body = _format_alert_body(report, baseline, drop, gate, language=lang)
+    if leak_gate_failed:
+        body += (
+            f"\n\nLeak gate fired: adversarial_mean_citations went from "
+            f"{base_leak:.4f} to {cur_leak:.4f} "
+            f"(+{leak_overshoot:.4f} > leak_gate {leak_gate:.2f})."
+        )
     if lang:
         body = f"Language subset: {lang}\n\n" + body
-    threshold_snapshot = {
-        "metric": f"recall@5{lang_label}",
-        "value": round(baseline_recall_5 - gate, 4),  # min acceptable
-        "actual": round(cur_recall_5, 4),
-    }
+    if recall_gate_failed:
+        threshold_snapshot = {
+            "metric": f"recall@5{lang_label}",
+            "value": round(baseline_recall_5 - gate, 4),  # min acceptable
+            "actual": round(cur_recall_5, 4),
+        }
+    else:
+        threshold_snapshot = {
+            "metric": f"adversarial_mean_citations{lang_label}",
+            "value": round((base_leak or 0.0) + leak_gate, 4),  # max acceptable
+            "actual": round(cur_leak or 0.0, 4),
+        }
     try:
         outcomes = await dispatch(
             alert_type,

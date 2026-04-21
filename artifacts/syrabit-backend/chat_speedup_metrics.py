@@ -28,6 +28,8 @@ __all__ = [
     "record_ttfb",
     "record_total_latency",
     "record_warm_run",
+    "record_provider_call",
+    "record_provider_fallback",
     "snapshot",
     "load_from_store",
     "flush_to_store",
@@ -75,6 +77,18 @@ _delta: Dict[str, Dict[str, float]] = {}
 _warm_runs: Deque[Dict[str, Any]] = deque(maxlen=_MAX_WARM_RUNS)
 # Warm-run entries recorded since the last flush.
 _warm_runs_pending: Deque[Dict[str, Any]] = deque(maxlen=_MAX_WARM_RUNS)
+
+# Provider-tagged latency tracking (Task #626):
+#   _provider_daily[date][provider] = {
+#       ttfb_ms_sum, ttfb_count, total_ms_sum, total_count, calls
+#   }
+#   _provider_fallbacks[date] = {(from_provider, to_provider): count}
+# In-memory only — survives within a worker but resets on restart. We
+# rely on the fact that providers are called continuously, so a fresh
+# baseline rebuilds within minutes.
+_PROVIDER_NAME_MAX = 32
+_provider_daily: Dict[str, Dict[str, Dict[str, float]]] = {}
+_provider_fallbacks: Dict[str, Dict[str, int]] = {}
 
 
 def _today_key() -> str:
@@ -192,6 +206,56 @@ def record_total_latency(ms: float) -> None:
         d["total_count"] = (d.get("total_count", 0) or 0) + 1
 
 
+def _norm_provider(provider: str) -> str:
+    p = (provider or "").strip().lower()[:_PROVIDER_NAME_MAX]
+    return p or "unknown"
+
+
+def _provider_bucket(date: str, provider: str) -> Dict[str, float]:
+    day = _provider_daily.setdefault(date, {})
+    b = day.get(provider)
+    if b is None:
+        b = {"ttfb_ms_sum": 0.0, "ttfb_count": 0,
+             "total_ms_sum": 0.0, "total_count": 0,
+             "calls": 0}
+        day[provider] = b
+    return b
+
+
+def record_provider_call(provider: str, *, ttfb_ms: float = 0.0, total_ms: float = 0.0) -> None:
+    """Record a per-provider chat completion. Either ttfb_ms, total_ms, or
+    both may be supplied — call once with whichever metrics are available
+    at the call site. ``provider`` should be the same tag emitted as
+    ``__provider`` in the SSE stream (e.g. 'vertex_gemini', 'cerebras')."""
+    p = _norm_provider(provider)
+    with _lock:
+        b = _provider_bucket(_today_key(), p)
+        b["calls"] = (b.get("calls", 0) or 0) + 1
+        if ttfb_ms and ttfb_ms > 0:
+            b["ttfb_ms_sum"] += float(ttfb_ms)
+            b["ttfb_count"] += 1
+        if total_ms and total_ms > 0:
+            b["total_ms_sum"] += float(total_ms)
+            b["total_count"] += 1
+    # Mirror the un-tagged latency counters so existing dashboards keep working.
+    if ttfb_ms and ttfb_ms > 0:
+        record_ttfb(ttfb_ms)
+    if total_ms and total_ms > 0:
+        record_total_latency(total_ms)
+
+
+def record_provider_fallback(from_provider: str, to_provider: str) -> None:
+    """Record a fallback transition (e.g. vertex_gemini → openai/gpt-oss-20b
+    when Vertex fails before first token). The from→to pair is the bucket
+    key so each transition surfaces independently in the dashboard."""
+    src = _norm_provider(from_provider)
+    dst = _norm_provider(to_provider)
+    key = f"{src}->{dst}"
+    with _lock:
+        day = _provider_fallbacks.setdefault(_today_key(), {})
+        day[key] = (day.get(key, 0) or 0) + 1
+
+
 def record_warm_run(result: Dict[str, Any]) -> None:
     """Record a cache-warm run result (from _perform_cache_warm)."""
     entry = {
@@ -276,6 +340,48 @@ def snapshot(days: int = 7) -> Dict[str, Any]:
     spec_used = totals.get("speculative_web_used", 0)
     cache_hits = early + pre_sse
 
+    # ── Per-provider breakdown (Task #626) ─────────────────────────────
+    by_provider: Dict[str, Dict[str, Any]] = {}
+    fallbacks_total: Dict[str, int] = {}
+    with _lock:
+        for d, providers in _provider_daily.items():
+            if d < cutoff:
+                continue
+            for prov, b in providers.items():
+                tgt = by_provider.setdefault(prov, {
+                    "provider": prov,
+                    "calls": 0,
+                    "ttfb_ms_sum": 0.0, "ttfb_count": 0,
+                    "total_ms_sum": 0.0, "total_count": 0,
+                })
+                tgt["calls"] += int(b.get("calls", 0) or 0)
+                tgt["ttfb_ms_sum"] += float(b.get("ttfb_ms_sum", 0.0) or 0.0)
+                tgt["ttfb_count"] += int(b.get("ttfb_count", 0) or 0)
+                tgt["total_ms_sum"] += float(b.get("total_ms_sum", 0.0) or 0.0)
+                tgt["total_count"] += int(b.get("total_count", 0) or 0)
+        for d, transitions in _provider_fallbacks.items():
+            if d < cutoff:
+                continue
+            for k, n in transitions.items():
+                fallbacks_total[k] = fallbacks_total.get(k, 0) + int(n)
+
+    providers_list = []
+    for prov, agg in sorted(by_provider.items()):
+        providers_list.append({
+            "provider": prov,
+            "calls": int(agg["calls"]),
+            "avg_ttfb_ms": _avg(agg["ttfb_ms_sum"], agg["ttfb_count"]),
+            "avg_total_ms": _avg(agg["total_ms_sum"], agg["total_count"]),
+            "ttfb_samples": int(agg["ttfb_count"]),
+            "total_samples": int(agg["total_count"]),
+            "tokens_per_sec": (round(agg["total_count"] / (agg["total_ms_sum"] / 1000.0), 2)
+                               if agg["total_ms_sum"] > 0 else 0.0),
+        })
+    fallbacks_list = [
+        {"transition": k, "count": int(v)}
+        for k, v in sorted(fallbacks_total.items(), key=lambda x: -x[1])
+    ]
+
     return {
         "period_days": days,
         "totals": {
@@ -296,6 +402,8 @@ def snapshot(days: int = 7) -> Dict[str, Any]:
         },
         "daily": daily,
         "warm_runs": list(reversed(warm_runs_snapshot))[:20],
+        "by_provider": providers_list,
+        "provider_fallbacks": fallbacks_list,
         "has_data": chats > 0,
     }
 

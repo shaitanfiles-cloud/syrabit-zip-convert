@@ -41,6 +41,8 @@ import {
   eduEducatorSubmitSite,
   eduEducatorAppealRejection,
   eduEducatorMySubmissions,
+  eduEducatorRemoveMySubmission,
+  eduEducatorMyAppeals,
 } from '@/utils/api';
 import { toast } from 'sonner';
 
@@ -112,6 +114,16 @@ const T = {
     educatorStatusBlocked: 'Blocked',
     educatorKidSafe: 'kid-safe',
     educatorOpen: 'Open',
+    educatorRemove: 'Remove',
+    educatorRemoving: 'Removing…',
+    educatorRemoveConfirm: 'Remove this site from the educational allowlist?',
+    educatorRemoved: 'Removed.',
+    educatorRemoveFailed: 'Could not remove this site. Try again.',
+    educatorAppealsTitle: 'Your recent appeals',
+    educatorAppealsEmpty: 'No appeals yet.',
+    educatorAppealStatusPending: 'Pending review',
+    educatorAppealStatusAllowed: 'Allowed by admin',
+    educatorAppealVerdictAt: 'Verdict',
   },
   as: {
     title: 'চিৰা ব্ৰাউজাৰ',
@@ -179,6 +191,16 @@ const T = {
     educatorStatusBlocked: 'অৱৰোধিত',
     educatorKidSafe: 'কিড-ছেফ',
     educatorOpen: 'খোলক',
+    educatorRemove: 'আঁতৰাওক',
+    educatorRemoving: 'আঁতৰাইছে…',
+    educatorRemoveConfirm: 'এই ছাইট শিক্ষাগত তালিকাৰ পৰা আঁতৰাবনে?',
+    educatorRemoved: 'আঁতৰোৱা হল।',
+    educatorRemoveFailed: 'এই ছাইট আঁতৰাব নোৱাৰিলে। আকৌ চেষ্টা কৰক।',
+    educatorAppealsTitle: 'আপোনাৰ শেহতীয়া আপীলসমূহ',
+    educatorAppealsEmpty: 'এতিয়ালৈকে কোনো আপীল নাই।',
+    educatorAppealStatusPending: 'এডমিনৰ পৰ্যালোচনা বাকী',
+    educatorAppealStatusAllowed: 'এডমিনে অনুমোদন কৰিলে',
+    educatorAppealVerdictAt: 'সিদ্ধান্ত',
   },
 };
 
@@ -906,6 +928,9 @@ function EducatorSubmitPanel({ open, onClose, lang, onOpenDomain }) {
   const [appealed, setAppealed] = useState(false);
   const [history, setHistory] = useState([]); // recent submissions
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [appeals, setAppeals] = useState([]);
+  const [appealsLoading, setAppealsLoading] = useState(false);
+  const [removing, setRemoving] = useState(null); // domain currently being removed
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -919,6 +944,36 @@ function EducatorSubmitPanel({ open, onClose, lang, onOpenDomain }) {
     }
   }, []);
 
+  const loadAppeals = useCallback(async () => {
+    setAppealsLoading(true);
+    try {
+      const { data } = await eduEducatorMyAppeals(10);
+      setAppeals(Array.isArray(data?.items) ? data.items : []);
+    } catch {
+      setAppeals([]);
+    } finally {
+      setAppealsLoading(false);
+    }
+  }, []);
+
+  const removeMySubmission = useCallback(async (domain) => {
+    if (!domain || removing) return;
+    if (!window.confirm(t.educatorRemoveConfirm)) return;
+    setRemoving(domain);
+    try {
+      await eduEducatorRemoveMySubmission(domain);
+      toast.success(t.educatorRemoved);
+      // Optimistically drop the row, then refresh both lists.
+      setHistory((prev) => prev.filter((x) => x.domain !== domain));
+      loadHistory();
+    } catch (err) {
+      const msg = err?.response?.data?.detail || t.educatorRemoveFailed;
+      toast.error(msg);
+    } finally {
+      setRemoving(null);
+    }
+  }, [removing, t, loadHistory]);
+
   // Reset form + load history on open.
   useEffect(() => {
     if (open) {
@@ -929,8 +984,9 @@ function EducatorSubmitPanel({ open, onClose, lang, onOpenDomain }) {
       setAppealing(false);
       setAppealed(false);
       loadHistory();
+      loadAppeals();
     }
-  }, [open, loadHistory]);
+  }, [open, loadHistory, loadAppeals]);
 
   const cleanDomain = (raw) => {
     let s = (raw || '').trim().toLowerCase();
@@ -1187,7 +1243,10 @@ function EducatorSubmitPanel({ open, onClose, lang, onOpenDomain }) {
         loading={historyLoading}
         lang={lang}
         onOpenDomain={(d) => { onOpenDomain?.(d); onClose?.(); }}
+        onRemoveDomain={removeMySubmission}
+        removingDomain={removing}
       />
+      <RecentAppealsList items={appeals} loading={appealsLoading} lang={lang} />
     </ModalOverlay>
   );
 }
@@ -1197,7 +1256,7 @@ function EducatorSubmitPanel({ open, onClose, lang, onOpenDomain }) {
 // from GET /api/edu/educator/my-submissions. Tapping a row opens the
 // domain in the browser. Helps educators track what they've contributed
 // and re-open auto-approved sites quickly.
-function RecentSubmissionsList({ items, loading, lang, onOpenDomain }) {
+function RecentSubmissionsList({ items, loading, lang, onOpenDomain, onRemoveDomain, removingDomain }) {
   const t = T[lang];
   const fmtTime = (ts) => {
     if (!ts || typeof ts !== 'number') return '';
@@ -1238,11 +1297,11 @@ function RecentSubmissionsList({ items, loading, lang, onOpenDomain }) {
             const densityPct = typeof density === 'number'
               ? Math.round(density * 100) : null;
             return (
-              <li key={it.domain}>
+              <li key={it.domain} className="group/row flex items-stretch gap-1">
                 <button
                   type="button"
                   onClick={() => onOpenDomain?.(it.domain)}
-                  className="group flex w-full items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-left transition hover:border-violet-400 hover:bg-violet-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
+                  className="group flex flex-1 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-left transition hover:border-violet-400 hover:bg-violet-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
                   title={t.educatorOpen}
                 >
                   <Globe className="h-3.5 w-3.5 shrink-0 text-violet-500" />
@@ -1272,11 +1331,94 @@ function RecentSubmissionsList({ items, loading, lang, onOpenDomain }) {
                   </div>
                   <ExternalLink className="h-3.5 w-3.5 shrink-0 text-slate-400 group-hover:text-violet-500" />
                 </button>
+                {!blocked && onRemoveDomain && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.preventDefault(); onRemoveDomain(it.domain); }}
+                    disabled={removingDomain === it.domain}
+                    className="shrink-0 rounded-md border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-60 dark:border-rose-900 dark:bg-rose-900/30 dark:text-rose-300"
+                    title={t.educatorRemove}
+                    data-testid={`educator-remove-${it.domain}`}
+                  >
+                    {removingDomain === it.domain ? t.educatorRemoving : t.educatorRemove}
+                  </button>
+                )}
               </li>
             );
           })}
         </ul>
       )}
+    </section>
+  );
+}
+
+// ── RecentAppealsList ----------------------------------------------------
+// Compact list of the educator's recent rejection appeals + verdict
+// (allowed by admin / still pending). Backed by GET /api/edu/educator/
+// my-appeals so the educator never wonders "did the admin look at my
+// appeal yet?".
+function RecentAppealsList({ items, loading, lang }) {
+  const t = T[lang];
+  if (!loading && (!items || items.length === 0)) {
+    return (
+      <section className="mt-4 border-t border-slate-200 pt-4 dark:border-slate-700">
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          {t.educatorAppealsTitle}
+        </h3>
+        <p className="text-xs text-slate-400">{t.educatorAppealsEmpty}</p>
+      </section>
+    );
+  }
+  const fmt = (iso) => {
+    if (!iso) return '';
+    try { return new Date(iso).toLocaleDateString(lang === 'as' ? 'as-IN' : undefined, { month: 'short', day: 'numeric' }); }
+    catch { return ''; }
+  };
+  return (
+    <section className="mt-4 border-t border-slate-200 pt-4 dark:border-slate-700">
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          {t.educatorAppealsTitle}
+        </h3>
+        {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" />}
+      </div>
+      <ul className="max-h-48 space-y-1.5 overflow-y-auto pr-1" data-testid="educator-my-appeals">
+        {(items || []).map((a) => {
+          const allowed = (a.status || '').toLowerCase() === 'allowed';
+          return (
+            <li
+              key={a.domain}
+              className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-900"
+            >
+              <Globe className="h-3.5 w-3.5 shrink-0 text-violet-500" />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <span className="truncate text-xs font-medium text-slate-800 dark:text-slate-100">
+                    {a.domain}
+                  </span>
+                  <span
+                    className={
+                      'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ' + (
+                        allowed
+                          ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+                          : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+                      )
+                    }
+                  >
+                    {allowed ? t.educatorAppealStatusAllowed : t.educatorAppealStatusPending}
+                  </span>
+                </div>
+                <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+                  {fmt(a.appealed_at)}
+                  {allowed && a.verdict_at && (
+                    <span> · {t.educatorAppealVerdictAt}: {fmt(a.verdict_at)}</span>
+                  )}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
     </section>
   );
 }

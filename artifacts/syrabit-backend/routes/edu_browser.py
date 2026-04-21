@@ -439,6 +439,116 @@ async def educator_appeal_rejection(
     }
 
 
+@router.delete("/edu/educator/my-submissions/{domain}")
+async def educator_remove_my_submission(
+    domain: str, educator=Depends(get_educator_user),
+):
+    """Educator self-undo: remove a domain the calling educator added.
+
+    Guard: only entries with ``source=educator`` AND ``actor`` matching
+    the caller's clamped identifier may be removed. Admin-added rows
+    (or another educator's rows) return 404 — the educator never learns
+    they exist via this endpoint, and admin overrides stay untouchable.
+    """
+    if not await is_mongo_available():
+        raise HTTPException(status_code=503, detail="storage_unavailable")
+    raw_actor = (educator or {}).get("email", "") or (educator or {}).get("id", "")
+    actor = raw_actor[:120] if raw_actor else ""
+    if not actor:
+        raise HTTPException(status_code=403, detail="no_actor_identity")
+    d = _normalize_domain(domain)
+    if not d or "." not in d:
+        raise HTTPException(status_code=400, detail="Invalid domain")
+    # Atomic conditional delete — the {source, actor} guard is part of
+    # the delete predicate so a concurrent admin update / promotion of
+    # this domain cannot be raced into removing protected state.
+    # ``deleted_count == 0`` means either (a) no such row, (b) admin
+    # owns it, or (c) another educator owns it. All three collapse to
+    # 404 so the educator never learns which case applied.
+    try:
+        res = await db[EDU_ALLOWLIST_COLLECTION].delete_one({
+            "domain": d, "source": "educator", "actor": actor,
+        })
+    except Exception as e:
+        logger.warning(f"[edu_browser] my-submission remove failed: {e}")
+        raise HTTPException(status_code=500, detail="storage_failed")
+    if not getattr(res, "deleted_count", 0):
+        raise HTTPException(status_code=404, detail="not_found")
+    # Bust the in-memory allowlist cache so the next request sees the
+    # removal immediately (mirrors what `remove_override` does).
+    try:
+        from edu_allowlist import invalidate_cache as _invalidate
+        _invalidate()
+    except Exception:
+        pass
+    logger.info("[edu_browser] educator self-removed domain=%s actor=%s", d, actor[:60])
+    return {"ok": True, "domain": d, "removed": True}
+
+
+@router.get("/edu/educator/my-appeals")
+async def educator_my_appeals(
+    limit: int = 10, educator=Depends(get_educator_user),
+):
+    """Return the calling educator's most recent rejection appeals
+    plus their current verdict.
+
+    Cross-references ``EDU_REQUESTED_SITES_COLLECTION`` (where the
+    appeal queue lives) with ``EDU_ALLOWLIST_COLLECTION`` (where the
+    admin's verdict lands). For each appealed domain still on the
+    queue we report:
+
+      * status='allowed' — admin allowed the domain (override exists)
+      * status='pending' — still queued for admin review
+
+    NOTE: Dismissed appeals (admin clicked Dismiss) are physically
+    deleted from the queue and therefore disappear from this list
+    rather than surfacing as a distinct status. If we ever want a
+    ``dismissed`` verdict surfaced here, we would need to soft-delete
+    the queue row or write a parallel audit collection — out of scope
+    for this endpoint.
+    """
+    if not await is_mongo_available():
+        return {"ok": True, "items": [], "count": 0}
+    raw_actor = (educator or {}).get("email", "") or (educator or {}).get("id", "")
+    actor = raw_actor[:120] if raw_actor else ""
+    if not actor:
+        return {"ok": True, "items": [], "count": 0}
+    limit = max(1, min(50, int(limit or 10)))
+    try:
+        cur = db[EDU_REQUESTED_SITES_COLLECTION].find(
+            {"source": "educator_appeal", "last_actor": actor}, {"_id": 0},
+        ).sort("last_appeal_at", -1).limit(limit)
+        appeals = [doc async for doc in cur]
+    except Exception as e:
+        logger.warning(f"[edu_browser] my-appeals list failed: {e}")
+        appeals = []
+
+    items: list[dict] = []
+    for appeal in appeals:
+        domain = appeal.get("domain") or ""
+        status = "pending"
+        verdict_at = None
+        # Allow verdict: matching override row exists with status=allowed.
+        try:
+            override = await db[EDU_ALLOWLIST_COLLECTION].find_one(
+                {"domain": domain}, {"_id": 0, "status": 1, "updated_at": 1},
+            )
+        except Exception:
+            override = None
+        if override and (override.get("status") or "").lower() == "allowed":
+            status = "allowed"
+            verdict_at = override.get("updated_at")
+        items.append({
+            "domain": domain,
+            "status": status,
+            "appealed_at": appeal.get("last_appeal_at"),
+            "appeal_count": appeal.get("appeal_count", 1),
+            "last_probe": appeal.get("last_probe") or {},
+            "verdict_at": verdict_at,
+        })
+    return {"ok": True, "items": items, "count": len(items)}
+
+
 @router.get("/edu/educator/my-submissions")
 async def educator_my_submissions(
     limit: int = 10, educator=Depends(get_educator_user),

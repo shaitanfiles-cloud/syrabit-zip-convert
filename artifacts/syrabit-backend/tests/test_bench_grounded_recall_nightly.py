@@ -30,8 +30,20 @@ def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
 
 
-def _fake_report(recall_5: float, *, misses: int = 0):
-    """Build a minimal BenchReport whose recall@5 the test controls."""
+def _fake_report(
+    recall_5: float,
+    *,
+    misses: int = 0,
+    adversarial_mean_citations: float = 0.0,
+    adversarial_clean_rate: float = 1.0,
+    adversarial_leakers: int = 0,
+):
+    """Build a minimal BenchReport whose recall@5 the test controls.
+
+    ``adversarial_leakers`` injects N additional ``adversarial=True`` cases
+    that each return 3 weak citations — used to exercise the leak gate /
+    "top adversarial leakers" body section without rebuilding the fixture.
+    """
     from bench.grounded_recall import BenchReport
     per_case = []
     for i in range(20):
@@ -44,15 +56,27 @@ def _fake_report(recall_5: float, *, misses: int = 0):
             "matched": matched,
             "elapsed_ms": 12,
         })
+    for j in range(adversarial_leakers):
+        per_case.append({
+            "id": f"adv-{j:02d}",
+            "query": f"trick query {j}",
+            "citations_count": 3,
+            "first_match_rank": None,
+            "matched": False,
+            "elapsed_ms": 12,
+            "adversarial": True,
+        })
     return BenchReport(
         started_at=datetime.now(timezone.utc).isoformat(),
         retriever="live",
-        total_cases=20,
+        total_cases=20 + adversarial_leakers,
         metrics={
             "recall@1": recall_5 - 0.05,
             "recall@3": recall_5,
             "recall@5": recall_5,
             "match_rate": recall_5,
+            "adversarial_clean_rate": adversarial_clean_rate,
+            "adversarial_mean_citations": adversarial_mean_citations,
         },
         per_case=per_case,
         mean_citation_count=3.0,
@@ -126,6 +150,90 @@ def test_run_and_alert_live_fails_gate_dispatches_alert(monkeypatch, tmp_path):
     snap = kwargs["threshold_snapshot"]
     assert snap["metric"] == "recall@5"
     assert snap["actual"] == pytest.approx(round(regressed, 4), abs=1e-4)
+
+
+def test_run_and_alert_live_leak_gate_fires_even_when_recall_passes(monkeypatch, tmp_path):
+    """Recall@5 stays at baseline but adversarial mean citations creeps up
+    above leak_gate — the alert must still fire and the body must call out
+    the leakers."""
+    from bench import grounded_recall as gr
+
+    baseline = gr.load_baseline()
+    base_r5 = baseline["metrics"]["recall@5"]
+    base_leak = baseline["metrics"].get("adversarial_mean_citations") or 0.0
+
+    async def _fake_run(cases, *, retriever):
+        return _fake_report(
+            base_r5,  # recall passes
+            adversarial_mean_citations=base_leak + 1.5,  # well past 0.5 leak gate
+            adversarial_clean_rate=0.40,
+            adversarial_leakers=3,
+        )
+
+    monkeypatch.setattr(gr, "run_benchmark", _fake_run)
+    monkeypatch.setattr(gr, "save_report",
+                        lambda r, results_dir=None, language=None: tmp_path / "latest.json")
+
+    dispatch = AsyncMock(return_value={"email": {"ok": True}})
+    out = _run(gr.run_and_alert_live(gate=0.05, leak_gate=0.5, dispatch=dispatch))
+
+    assert out["recall_gate_failed"] is False
+    assert out["leak_gate_failed"] is True
+    assert out["gate_failed"] is True
+    assert out["alert_dispatched"] is True
+    dispatch.assert_awaited_once()
+
+    args, kwargs = dispatch.await_args
+    alert_type, title, body = args[0], args[1], args[2]
+    assert alert_type == "grounded_recall_regression"
+    assert "leak" in title.lower()
+    assert "adversarial_mean_citations" in body
+    # Top adversarial leakers section is included so admins can triage.
+    assert "Top adversarial leakers" in body
+    assert "adv-00" in body
+    snap = kwargs["threshold_snapshot"]
+    assert snap["metric"].startswith("adversarial_mean_citations")
+
+
+def test_run_and_alert_live_leak_gate_passes_when_below_overshoot(monkeypatch, tmp_path):
+    """A small adversarial leak that stays under the leak_gate must not
+    page admins (this is the noise floor the gate is designed to absorb)."""
+    from bench import grounded_recall as gr
+
+    baseline = gr.load_baseline()
+    base_r5 = baseline["metrics"]["recall@5"]
+    base_leak = baseline["metrics"].get("adversarial_mean_citations") or 0.0
+
+    async def _fake_run(cases, *, retriever):
+        return _fake_report(
+            base_r5,
+            adversarial_mean_citations=base_leak + 0.1,  # under 0.5 leak gate
+            adversarial_clean_rate=0.95,
+        )
+
+    monkeypatch.setattr(gr, "run_benchmark", _fake_run)
+    monkeypatch.setattr(gr, "save_report",
+                        lambda r, results_dir=None, language=None: tmp_path / "latest.json")
+
+    dispatch = AsyncMock()
+    out = _run(gr.run_and_alert_live(gate=0.05, leak_gate=0.5, dispatch=dispatch))
+
+    assert out["leak_gate_failed"] is False
+    assert out["gate_failed"] is False
+    assert out["alert_dispatched"] is False
+    dispatch.assert_not_called()
+
+
+def test_leak_gate_env_default(monkeypatch):
+    """GROUNDED_RECALL_LEAK_GATE env overrides the default 0.5 floor."""
+    from bench import grounded_recall as gr
+    monkeypatch.delenv("GROUNDED_RECALL_LEAK_GATE", raising=False)
+    assert gr._leak_gate() == 0.5
+    monkeypatch.setenv("GROUNDED_RECALL_LEAK_GATE", "1.25")
+    assert gr._leak_gate() == 1.25
+    # Bad value falls back to default.
+    monkeypatch.setenv("GROUNDED_RECALL_LEAK_GATE", "not-a-number")
+    assert gr._leak_gate() == 0.5
 
 
 def test_run_and_alert_live_does_not_alert_when_baseline_missing(monkeypatch, tmp_path):
