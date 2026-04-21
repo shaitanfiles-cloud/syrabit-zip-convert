@@ -160,6 +160,16 @@ CF_PAGES_DEPLOY_TOKEN = _resolve_cf_pages_token()
 CF_ZONE_ID = os.environ.get('CF_ZONE_ID', '').strip()
 CF_API_TOKEN = os.environ.get('CF_API_TOKEN', '').strip() or CF_ANALYTICS_API_TOKEN
 
+# ── Cloudflare Access / Zero Trust (Task #637) ──────────────────────────────
+# When enforcement is on, every admin / internal request must carry a valid
+# Cf-Access-Jwt-Assertion header signed by the team domain's JWKS and
+# matching one of the configured AUD tags. See ``cf_access.py`` and
+# ``docs/CLOUDFLARE_ZERO_TRUST.md`` for the full handshake.
+CF_ACCESS_TEAM_DOMAIN = os.environ.get('CF_ACCESS_TEAM_DOMAIN', '').strip().rstrip('/')
+CF_ACCESS_AUD_ADMIN = os.environ.get('CF_ACCESS_AUD_ADMIN', '').strip()
+CF_ACCESS_AUD_INTERNAL = os.environ.get('CF_ACCESS_AUD_INTERNAL', '').strip()
+CF_ACCESS_ENFORCE = os.environ.get('CF_ACCESS_ENFORCE', '').strip().lower() in ('1', 'true', 'yes', 'on')
+
 # ── Cloudflare Turnstile ────────────────────────────────────────────────────
 CF_TURNSTILE_SECRET_KEY = os.environ.get('CF_TURNSTILE_SECRET_KEY', '').strip()
 CF_TURNSTILE_ENABLED = bool(CF_TURNSTILE_SECRET_KEY)

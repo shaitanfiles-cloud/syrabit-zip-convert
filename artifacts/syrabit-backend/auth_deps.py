@@ -13,6 +13,7 @@ from config import (
 )
 from deps import security, redis_client, logger as _dep_logger
 from cache import _redis_get_session, _redis_cache_session
+from cf_access import require_cf_access_admin
 
 
 logger = logging.getLogger(__name__)
@@ -158,7 +159,16 @@ async def get_educator_user(user=Depends(get_current_user)):
 async def get_admin_user(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(security),
     syrabit_admin_session: Optional[str] = Cookie(default=None),
+    cf_access_claims: Optional[dict] = Depends(require_cf_access_admin),
 ):
+    """Admin auth = Cloudflare Access (Zero Trust) gate + admin JWT.
+
+    Task #637 layers Cloudflare Access on top of the existing admin JWT so
+    a request must (a) transit the Access proxy on the admin team domain
+    AND (b) carry a valid admin JWT. The CF Access dependency is a no-op
+    until ``CF_ACCESS_ENFORCE=true`` is set in production env, so this
+    change is safe to merge before operators provision Access.
+    """
     token = creds.credentials if creds else syrabit_admin_session
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -166,6 +176,10 @@ async def get_admin_user(
         payload = decode_token(token, secret=ADMIN_JWT_SECRET)
         if not (payload.get("is_admin") or payload.get("role") == "admin"):
             raise HTTPException(status_code=403, detail="Not authorized")
+        if cf_access_claims:
+            # Surface CF Access identity to admin handlers (audit logs).
+            payload["cf_access_email"] = cf_access_claims.get("email")
+            payload["cf_access_sub"] = cf_access_claims.get("sub")
         return payload
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid admin token")
