@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -411,6 +412,113 @@ async def educator_submit_site(
     }
 
 
+# ── Appeal spike alerting (Task #625) ────────────────────────────────────
+#
+# If the safety probe starts mis-classifying a popular site, every
+# educator will hit the rejection card and tap the appeal button. The
+# admin queue silently grows but nobody notices until the Site requests
+# tab is opened. To catch this fast we fire a Slack webhook (and expose
+# an `alerted_at` field for a dashboard banner) once a single domain
+# crosses _APPEAL_SPIKE_THRESHOLD unique appeals.
+#
+# Idempotent: `alerted_at` is set atomically with a conditional update
+# so only one request wins the race. The field is re-armed (cleared)
+# when an admin dismiss → re-appeal cycle brings a domain back into the
+# queue, so a second spike after a dismissal re-alerts.
+
+_APPEAL_SPIKE_THRESHOLD = 5
+_APPEAL_ALERT_WEBHOOK_ENV = "EDU_APPEAL_ALERT_WEBHOOK"
+_APPEAL_ALERT_ADMIN_URL_ENV = "EDU_APPEAL_ALERT_ADMIN_URL"
+
+
+async def _post_slack_webhook(url: str, text: str) -> None:
+    """Best-effort Slack webhook POST. Swallows all errors so alerting
+    trouble never breaks the appeal write path."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(url, json={"text": text})
+    except Exception as e:
+        logger.warning(f"[edu_browser] appeal-spike webhook failed: {e}")
+
+
+def _spawn_appeal_spike_alert(domain: str, appeal_count: int) -> None:
+    """Fire-and-forget Slack alert for a domain whose appeal count
+    crossed the spike threshold. No-op when the webhook env is not set
+    — the UI banner is still driven by the `alerted_at` field on the
+    row, so admins who don't watch Slack still see the spike."""
+    webhook = os.environ.get(_APPEAL_ALERT_WEBHOOK_ENV, "").strip()
+    if not webhook:
+        logger.info(
+            "[edu_browser] appeal-spike detected domain=%s count=%s (no webhook configured)",
+            domain, appeal_count,
+        )
+        return
+    admin_link = os.environ.get(_APPEAL_ALERT_ADMIN_URL_ENV, "").strip()
+    if admin_link:
+        # Link to the requested-sites tab, filtered to the spiking domain.
+        sep = "&" if "?" in admin_link else "?"
+        admin_link = f"{admin_link}{sep}tab=requested&domain={domain}"
+        body = (
+            f":rotating_light: Educator appeals spiking on *{domain}* "
+            f"({appeal_count} appeals). Review: {admin_link}"
+        )
+    else:
+        body = (
+            f":rotating_light: Educator appeals spiking on *{domain}* "
+            f"({appeal_count} appeals). Open the admin Site requests tab."
+        )
+    try:
+        asyncio.create_task(_post_slack_webhook(webhook, body))
+    except RuntimeError:
+        # No running loop (e.g. sync test harness) — log & move on.
+        logger.info(
+            "[edu_browser] appeal-spike alert queued but no loop: domain=%s count=%s",
+            domain, appeal_count,
+        )
+
+
+async def _maybe_alert_appeal_spike(domain: str) -> None:
+    """Atomically claim the right to alert for this spike and fire it.
+
+    Runs after the appeal upsert. Only the request that crosses the
+    threshold AND finds `alerted_at` unset will succeed the conditional
+    update — everyone else sees modified_count==0 and no-ops. This
+    keeps the alert exactly-once per spike cycle (dismiss → re-appeal
+    resets the cycle via ``alerted_at=None`` in the upsert $set).
+    """
+    try:
+        res = await db[EDU_REQUESTED_SITES_COLLECTION].update_one(
+            {
+                "domain": domain,
+                "appeal_count": {"$gte": _APPEAL_SPIKE_THRESHOLD},
+                "dismissed": {"$ne": True},
+                "$or": [
+                    {"alerted_at": None},
+                    {"alerted_at": {"$exists": False}},
+                ],
+            },
+            {"$set": {"alerted_at": time.time()}},
+        )
+    except Exception as e:
+        logger.warning(f"[edu_browser] appeal-spike claim failed: {e}")
+        return
+    if not getattr(res, "modified_count", 0):
+        return
+    try:
+        row = await db[EDU_REQUESTED_SITES_COLLECTION].find_one(
+            {"domain": domain}, {"_id": 0, "appeal_count": 1},
+        )
+    except Exception:
+        row = None
+    count = int((row or {}).get("appeal_count") or _APPEAL_SPIKE_THRESHOLD)
+    logger.warning(
+        "[edu_browser] appeal-spike threshold crossed domain=%s count=%s",
+        domain, count,
+    )
+    _spawn_appeal_spike_alert(domain, count)
+
+
 _RATE_EDUCATOR_APPEAL_PER_USER = 8  # req / hour
 
 
@@ -483,33 +591,54 @@ async def educator_appeal_rejection(
         "http_status": req.probe.get("http_status"),
     }
     now = time.time()
+    # Task #625 — if this row was previously soft-dismissed, clear the
+    # prior spike-alert marker alongside `dismissed` so a second spike
+    # after the dismiss re-alerts. We only clear `alerted_at` on this
+    # specific transition (not on every appeal), otherwise every single
+    # appeal past the threshold would re-fire the alert.
+    try:
+        prior = await db[EDU_REQUESTED_SITES_COLLECTION].find_one(
+            {"domain": domain}, {"_id": 0, "dismissed": 1},
+        )
+    except Exception:
+        prior = None
+    set_fields = {
+        "last_at": now,
+        "last_actor": actor[:120] or "educator",
+        "last_reason": (req.reason or "").strip()[:500]
+            or "Educator vouched: appealed probe rejection",
+        "source": "educator_appeal",
+        "appeal": True,
+        "last_probe": probe_snapshot,
+        "last_appeal_at": now,
+        # Task #623 — a fresh appeal must clear any prior
+        # soft-dismiss so the row re-enters the admin
+        # queue and /my-appeals shows `pending` again.
+        "dismissed": False,
+        "dismissed_at": None,
+    }
+    if prior and prior.get("dismissed"):
+        set_fields["alerted_at"] = None
     try:
         await db[EDU_REQUESTED_SITES_COLLECTION].update_one(
             {"domain": domain},
             {
                 "$inc": {"count": 1, "appeal_count": 1},
                 "$setOnInsert": {"domain": domain, "first_at": now},
-                "$set": {
-                    "last_at": now,
-                    "last_actor": actor[:120] or "educator",
-                    "last_reason": (req.reason or "").strip()[:500]
-                        or "Educator vouched: appealed probe rejection",
-                    "source": "educator_appeal",
-                    "appeal": True,
-                    "last_probe": probe_snapshot,
-                    "last_appeal_at": now,
-                    # Task #623 — a fresh appeal must clear any prior
-                    # soft-dismiss so the row re-enters the admin
-                    # queue and /my-appeals shows `pending` again.
-                    "dismissed": False,
-                    "dismissed_at": None,
-                },
+                "$set": set_fields,
             },
             upsert=True,
         )
     except Exception as e:
         logger.warning(f"[edu_browser] educator appeal insert failed: {e}")
         raise HTTPException(status_code=500, detail="storage_failed")
+    # Task #625 — atomically claim the spike alert if this write
+    # crossed the threshold. Best-effort; alerting failures never
+    # surface to the educator.
+    try:
+        await _maybe_alert_appeal_spike(domain)
+    except Exception as e:
+        logger.debug(f"[edu_browser] appeal-spike check failed: {e}")
     logger.info(
         "[edu_browser] educator appeal queued domain=%s actor=%s probe_reason=%s",
         domain, actor[:60] or "educator", probe_snapshot["reason"],

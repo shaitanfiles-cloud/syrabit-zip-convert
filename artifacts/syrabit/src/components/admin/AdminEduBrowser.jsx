@@ -602,6 +602,20 @@ function RequestedSitesTab({ adminToken }) {
     [items],
   );
 
+  // Task #625 — a domain is "spiking" when 5+ educators have appealed
+  // the same probe rejection. Surface these at the top so admins catch
+  // a regressed safety probe within minutes rather than when someone
+  // happens to open this tab.
+  const APPEAL_SPIKE_THRESHOLD = 5;
+  const spikingDomains = useMemo(
+    () => items.filter((i) =>
+      (i.appeal_count || 0) >= APPEAL_SPIKE_THRESHOLD
+      && (i.source === 'educator_appeal' || i.appeal === true)
+      && !i.dismissed,
+    ),
+    [items],
+  );
+
   const allowDomain = async (domain, note = '') => {
     try {
       await axios.post(`${API_BASE}/admin/edu/allowlist`,
@@ -639,6 +653,46 @@ function RequestedSitesTab({ adminToken }) {
 
   return (
     <div className="space-y-4">
+      {spikingDomains.length > 0 && (
+        <div
+          className="rounded-xl border border-amber-300 bg-amber-50 shadow-sm p-4"
+          data-testid="edu-appeal-spike-banner"
+        >
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 rounded-full bg-amber-100 p-1.5">
+              <Megaphone size={16} className="text-amber-700" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-bold text-amber-900">
+                Educator appeals spiking on {spikingDomains.length === 1
+                  ? '1 domain'
+                  : `${spikingDomains.length} domains`}
+              </div>
+              <p className="text-xs text-amber-800 mt-0.5">
+                {spikingDomains.length === 1
+                  ? `5+ educators have appealed the probe rejection for this domain — the safety probe may be mis-classifying it. Review below.`
+                  : `5+ educators appealed each of these domains — the safety probe may be mis-classifying them. Review below.`}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {spikingDomains.map((it) => (
+                  <button
+                    key={it.domain}
+                    type="button"
+                    onClick={() => { setFilter('appeals'); setSearch(it.domain); }}
+                    className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-white px-2 py-0.5 text-[11px] font-mono text-amber-900 hover:bg-amber-100"
+                    title={`Filter the table to ${it.domain}`}
+                    data-testid={`edu-appeal-spike-chip-${it.domain}`}
+                  >
+                    {it.domain}
+                    <span className="text-amber-600 font-sans">· {it.appeal_count} appeals</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 p-4 border-b border-gray-100">
           <div>

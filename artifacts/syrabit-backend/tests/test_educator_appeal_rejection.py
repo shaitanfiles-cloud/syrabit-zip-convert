@@ -37,12 +37,20 @@ def _app(monkeypatch, *, educator_user, mongo_ok=True, hard_block=(False, "ok"),
 
     class FakeColl:
         async def update_one(self, flt, update, upsert=False):
-            if capture is not None:
+            # Only capture the upsert write (the appeal insert); the
+            # Task #625 post-upsert spike-claim call is a non-upsert
+            # update_one and would otherwise clobber captures of the
+            # original appeal write.
+            if capture is not None and upsert:
                 capture["filter"] = flt
                 capture["update"] = update
                 capture["upsert"] = upsert
-            class R: ...
+            class R:
+                modified_count = 0
             return R()
+
+        async def find_one(self, _flt, _proj=None):
+            return None
 
     class FakeDB(dict):
         def __getitem__(self, key):
@@ -242,3 +250,218 @@ def test_appeal_proof_fail_open_when_redis_unavailable(monkeypatch):
     # Errors also degrade to fail-open rather than trap the user.
     assert eb._has_appeal_proof("edu1", "x.org") is True
     eb._record_appeal_proof("edu1", "x.org", "robots_disallow")  # swallowed
+
+
+# ── Task #625: appeal-spike alerting ─────────────────────────────────────
+#
+# Once _APPEAL_SPIKE_THRESHOLD educators have appealed the same
+# domain, an admin-facing alert should fire exactly once per spike
+# cycle. A subsequent dismiss → re-appeal cycle must re-arm the alert
+# so a second spike on the same domain re-fires.
+
+
+def _spike_app(monkeypatch, *, rows, alert_calls, prior_dismissed=False):
+    """Harness for the appeal endpoint with a FakeDB that simulates
+    the appeal_count / alerted_at lifecycle in-memory so we can
+    exercise the conditional `_maybe_alert_appeal_spike` update."""
+    from auth_deps import get_educator_user
+    from routes import edu_browser as eb
+
+    async def fake_is_hard_blocked(_d):
+        return (False, "ok")
+    monkeypatch.setattr(eb, "is_domain_hard_blocked", fake_is_hard_blocked)
+
+    async def fake_mongo_available():
+        return True
+    monkeypatch.setattr(eb, "is_mongo_available", fake_mongo_available)
+    monkeypatch.setattr(eb, "_has_appeal_proof", lambda _e, _d: True)
+
+    state = {"row": dict(rows) if rows else None, "dismissed_before": prior_dismissed}
+
+    class FakeColl:
+        async def find_one(self, flt, proj=None):
+            row = state["row"]
+            if not row:
+                return None
+            # The spike-check find_one projects appeal_count after the
+            # conditional update; simulate by returning a copy.
+            return dict(row)
+
+        async def update_one(self, flt, update, upsert=False):
+            # Upsert path (the appeal insert): apply $inc + $set.
+            class R:
+                modified_count = 0
+            if upsert:
+                row = state["row"] or {"domain": flt.get("domain")}
+                for k, v in (update.get("$inc") or {}).items():
+                    row[k] = int(row.get(k) or 0) + v
+                for k, v in (update.get("$set") or {}).items():
+                    row[k] = v
+                state["row"] = row
+                R.modified_count = 1
+                return R()
+            # Conditional claim: mimic the MongoDB predicate so we can
+            # check exactly-once semantics.
+            row = state["row"] or {}
+            appeal_count = int(row.get("appeal_count") or 0)
+            alerted = row.get("alerted_at")
+            dismissed = bool(row.get("dismissed"))
+            threshold = (flt.get("appeal_count") or {}).get("$gte", 0)
+            if (
+                row.get("domain") == flt.get("domain")
+                and appeal_count >= threshold
+                and not dismissed
+                and (alerted is None)
+            ):
+                for k, v in (update.get("$set") or {}).items():
+                    row[k] = v
+                state["row"] = row
+                R.modified_count = 1
+            return R()
+
+    class FakeDB(dict):
+        def __getitem__(self, _k):
+            return FakeColl()
+    monkeypatch.setattr(eb, "db", FakeDB())
+
+    # Capture spike alerts synchronously — avoids having to await the
+    # fire-and-forget asyncio task.
+    def fake_spawn(domain, count):
+        alert_calls.append((domain, count))
+    monkeypatch.setattr(eb, "_spawn_appeal_spike_alert", fake_spawn)
+
+    app = FastAPI()
+    app.include_router(eb.router, prefix="/api")
+    app.dependency_overrides[get_educator_user] = lambda: {
+        "id": "spike-educator", "email": "spike@school.in", "role": "educator",
+    }
+    return TestClient(app), state
+
+
+def _post_appeal(client, domain="popular-edu.org"):
+    return client.post("/api/edu/educator/appeal-rejection", json={
+        "domain": domain, "reason": "Probe glitched",
+        "probe": {"reason": "robots_disallow"},
+    })
+
+
+def test_appeal_spike_fires_once_at_threshold(monkeypatch):
+    alerts: list = []
+    # Row already has 4 appeals — this 5th appeal crosses the threshold.
+    client, state = _spike_app(monkeypatch, rows={
+        "domain": "popular-edu.org", "appeal_count": 4, "alerted_at": None,
+    }, alert_calls=alerts)
+    r = _post_appeal(client)
+    assert r.status_code == 200, r.text
+    # Exactly one alert for a threshold-crossing write.
+    assert len(alerts) == 1, alerts
+    assert alerts[0][0] == "popular-edu.org"
+    assert alerts[0][1] >= 5
+    # alerted_at is now claimed.
+    assert state["row"].get("alerted_at") is not None
+
+
+def test_appeal_spike_does_not_refire_while_claimed(monkeypatch):
+    alerts: list = []
+    # Already alerted at count=5; a 6th appeal must NOT re-fire.
+    client, state = _spike_app(monkeypatch, rows={
+        "domain": "popular-edu.org", "appeal_count": 5, "alerted_at": 12345.0,
+    }, alert_calls=alerts)
+    r = _post_appeal(client)
+    assert r.status_code == 200, r.text
+    assert alerts == []
+    # alerted_at timestamp is preserved (not bumped every appeal).
+    assert state["row"].get("alerted_at") == 12345.0
+
+
+def test_appeal_spike_below_threshold_does_not_fire(monkeypatch):
+    alerts: list = []
+    # Row at 3 appeals — 4th is still below threshold (5), no alert.
+    client, _state = _spike_app(monkeypatch, rows={
+        "domain": "quiet-edu.org", "appeal_count": 3, "alerted_at": None,
+    }, alert_calls=alerts)
+    r = _post_appeal(client, domain="quiet-edu.org")
+    assert r.status_code == 200, r.text
+    assert alerts == []
+
+
+def test_appeal_spike_rearms_after_dismiss_reappeal(monkeypatch):
+    # Row was previously dismissed after an earlier spike (alerted_at
+    # set, dismissed=True). A fresh appeal must clear alerted_at via
+    # the prior-dismissed branch so the next threshold crossing fires
+    # again.
+    alerts: list = []
+    client, state = _spike_app(monkeypatch, rows={
+        "domain": "popular-edu.org",
+        "appeal_count": 7,
+        "alerted_at": 100.0,
+        "dismissed": True,
+    }, alert_calls=alerts)
+    r = _post_appeal(client)
+    assert r.status_code == 200, r.text
+    # After re-appeal, the row is un-dismissed AND alerted_at has
+    # been cleared then re-claimed because count (8) still >= 5.
+    assert state["row"]["dismissed"] is False
+    assert state["row"].get("alerted_at") is not None
+    assert state["row"].get("alerted_at") != 100.0
+    assert len(alerts) == 1, alerts
+
+
+def test_appeal_spike_webhook_body_contains_domain(monkeypatch):
+    """When EDU_APPEAL_ALERT_WEBHOOK is set, _spawn posts a message
+    that mentions the spiking domain and count — the observable
+    effect an admin watching Slack would actually see."""
+    import routes.edu_browser as eb
+
+    posted: list = []
+
+    async def fake_post(url, text):
+        posted.append((url, text))
+    monkeypatch.setattr(eb, "_post_slack_webhook", fake_post)
+    monkeypatch.setenv("EDU_APPEAL_ALERT_WEBHOOK", "https://hooks.example/x")
+    monkeypatch.delenv("EDU_APPEAL_ALERT_ADMIN_URL", raising=False)
+
+    # Drive via a dedicated loop so we don't disturb the default
+    # event loop other tests rely on (asyncio.run() closes and
+    # detaches the main-thread loop, which breaks sibling tests
+    # that call asyncio.get_event_loop()).
+    import asyncio as _aio
+
+    async def _drive():
+        eb._spawn_appeal_spike_alert("popular-edu.org", 6)
+        # Let the spawned task run to completion.
+        await _aio.sleep(0)
+
+    prev_loop = None
+    try:
+        prev_loop = _aio.get_event_loop()
+    except RuntimeError:
+        prev_loop = None
+    loop = _aio.new_event_loop()
+    try:
+        _aio.set_event_loop(loop)
+        loop.run_until_complete(_drive())
+    finally:
+        loop.close()
+        _aio.set_event_loop(prev_loop)
+    assert posted, "webhook should have been posted"
+    url, text = posted[0]
+    assert url == "https://hooks.example/x"
+    assert "popular-edu.org" in text
+    assert "6" in text
+
+
+def test_appeal_spike_webhook_skipped_when_env_unset(monkeypatch):
+    """No Slack env → no webhook POST, but no crash either. Admins
+    still get the banner via the `alerted_at` field."""
+    import routes.edu_browser as eb
+
+    posted: list = []
+
+    async def fake_post(url, text):
+        posted.append((url, text))
+    monkeypatch.setattr(eb, "_post_slack_webhook", fake_post)
+    monkeypatch.delenv("EDU_APPEAL_ALERT_WEBHOOK", raising=False)
+
+    eb._spawn_appeal_spike_alert("popular-edu.org", 6)
+    assert posted == []
