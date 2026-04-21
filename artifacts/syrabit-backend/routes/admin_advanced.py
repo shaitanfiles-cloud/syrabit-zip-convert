@@ -3303,6 +3303,51 @@ async def admin_cache_warm(
     return result
 
 
+# ── AI response cache: admin stats + purge ───────────────────────────────────
+# AdminHealth.jsx polls /admin/ai/cache/stats every 30s and exposes a
+# manual "Purge" button that calls /admin/ai/cache/purge?pattern=*. Both
+# delegate straight to the ai_cache module, which already returns a
+# well-shaped dict (see ai_cache.stats() and ai_cache.purge_all()).
+
+@router.get("/admin/ai/cache/stats")
+async def admin_ai_cache_stats(admin: dict = Depends(get_admin_user)):
+    """Return managed (Redis) cache stats + L1 in-memory size for the
+    AdminHealth panel. The FE reads `aiCacheStats.managed.*` (hit_rate,
+    backend, breaker_open, namespace, ttl_seconds, ...) and
+    `aiCacheStats.l1.{size,maxsize}` so we wrap both into one payload."""
+    try:
+        import ai_cache as _ai_cache_mod
+        managed = _ai_cache_mod.stats()
+    except Exception as e:
+        logger.warning(f"admin_ai_cache_stats (managed) failed: {e}")
+        managed = {"error": str(e)[:200]}
+    try:
+        from cache import _ai_response_cache
+        l1 = {
+            "size": len(_ai_response_cache),
+            "maxsize": getattr(_ai_response_cache, "maxsize", None),
+            "ttl": getattr(_ai_response_cache, "ttl", None),
+        }
+    except Exception as e:
+        logger.warning(f"admin_ai_cache_stats (l1) failed: {e}")
+        l1 = {"size": 0, "maxsize": None, "error": str(e)[:200]}
+    return {"managed": managed, "l1": l1}
+
+
+@router.post("/admin/ai/cache/purge")
+async def admin_ai_cache_purge(
+    pattern: str = Query("*", description="Redis SCAN pattern appended to the AI cache namespace; default '*' = all entries"),
+    admin: dict = Depends(get_admin_user),
+):
+    try:
+        import ai_cache as _ai_cache_mod
+        result = await _ai_cache_mod.purge_all(pattern=pattern)
+        return result
+    except Exception as e:
+        logger.warning(f"admin_ai_cache_purge failed: {e}")
+        return {"ok": False, "error": str(e)[:200], "deleted": 0, "l1_cleared": 0}
+
+
 # ── Background auto-warm loop (Task #282 T004) ────────────────────────────────
 # Periodically re-runs the cache warmer so the top common questions always
 # have a near-instant answer waiting in Redis. The loop is registered from
