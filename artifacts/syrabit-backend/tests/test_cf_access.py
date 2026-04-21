@@ -20,7 +20,8 @@ from jwt.algorithms import RSAAlgorithm
 
 
 def run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro) if False else asyncio.run(coro)
+    """Drive an async function from a synchronous pytest body."""
+    return asyncio.run(coro)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -210,6 +211,20 @@ def test_internal_dependency_uses_internal_aud(fake_access):
     with pytest.raises(HTTPException) as ei:
         run(fake_access.module.require_cf_access_internal(req))
     assert ei.value.status_code == 401
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("syrabit",                                "syrabit"),
+    ("syrabit.cloudflareaccess.com",           "syrabit"),
+    ("https://syrabit.cloudflareaccess.com",   "syrabit"),
+    ("https://syrabit.cloudflareaccess.com/",  "syrabit"),
+    ("  syrabit  ",                            "syrabit"),
+    ("",                                        ""),
+    ("Syrabit.CloudflareAccess.com",           "Syrabit"),
+])
+def test_team_domain_normalizer(raw, expected):
+    import cf_access
+    assert cf_access._normalize_team_domain(raw) == expected
 
 
 def test_status_introspection_no_secrets(fake_access):

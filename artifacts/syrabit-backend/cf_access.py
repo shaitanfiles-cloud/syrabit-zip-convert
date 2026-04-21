@@ -45,7 +45,34 @@ from fastapi import HTTPException, Request
 logger = logging.getLogger(__name__)
 
 # ── Configuration (env-driven, no defaults that would silently disable) ──────
-CF_ACCESS_TEAM_DOMAIN = (os.environ.get("CF_ACCESS_TEAM_DOMAIN", "").strip().rstrip("/"))
+def _normalize_team_domain(raw: str) -> str:
+    """Accept any of these forms and reduce to the team slug:
+
+      ``syrabit``                                 → ``syrabit``
+      ``syrabit.cloudflareaccess.com``            → ``syrabit``
+      ``https://syrabit.cloudflareaccess.com``    → ``syrabit``
+      ``https://syrabit.cloudflareaccess.com/``   → ``syrabit``
+
+    Returning the slug (and never the full hostname) means the issuer URL
+    and JWKS URL are always built consistently regardless of how an
+    operator pasted the value into the env file or dashboard.
+    """
+    s = (raw or "").strip().rstrip("/")
+    if not s:
+        return ""
+    # Strip scheme if pasted as full URL
+    if "://" in s:
+        s = s.split("://", 1)[1]
+    # Strip path component if any
+    s = s.split("/", 1)[0]
+    # Strip the well-known suffix to leave only the team slug
+    suffix = ".cloudflareaccess.com"
+    if s.lower().endswith(suffix):
+        s = s[: -len(suffix)]
+    return s
+
+
+CF_ACCESS_TEAM_DOMAIN = _normalize_team_domain(os.environ.get("CF_ACCESS_TEAM_DOMAIN", ""))
 CF_ACCESS_AUD_ADMIN = os.environ.get("CF_ACCESS_AUD_ADMIN", "").strip()
 CF_ACCESS_AUD_INTERNAL = os.environ.get("CF_ACCESS_AUD_INTERNAL", "").strip()
 
