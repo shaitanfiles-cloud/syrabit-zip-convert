@@ -1692,7 +1692,19 @@ export default function AdminHealth({ adminToken, onNavigate }) {
         <div className="rounded-xl p-4 bg-white border border-gray-200 shadow-sm" data-testid="ai-cache-panel">
           <div className="flex items-center justify-between mb-3">
             <div>
-              <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">AI Response Cache</p>
+              <p className="text-xs font-bold text-gray-500 uppercase tracking-wider inline-flex items-center gap-2">
+                AI Response Cache
+                <span
+                  data-testid="ai-cache-breaker-status"
+                  className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono normal-case tracking-normal ${
+                    aiCacheStats?.managed?.breaker_open
+                      ? 'bg-red-50 text-red-600 border border-red-200'
+                      : 'bg-emerald-50 text-emerald-600 border border-emerald-200'
+                  }`}
+                >
+                  Breaker: {aiCacheStats?.managed?.breaker_open ? 'OPEN' : 'CLOSED'}
+                </span>
+              </p>
               <p className="text-[11px] text-gray-400 mt-0.5">
                 Backend: <span className="font-mono text-gray-600">{aiCacheStats?.managed?.backend || '—'}</span>
                 {' · '}TTL: <span className="font-mono text-gray-600">{aiCacheStats?.managed?.ttl_seconds ?? '—'}s</span>
