@@ -233,22 +233,53 @@ export default {
       (backendHost && backendHost === url.host);
 
     // Bot rendering: GET requests from search/AI bot UAs that hit a
-    // non-skip path get the backend-rendered HTML. We do this BEFORE
-    // the asset lookup so bots never see the SPA shell. UA-only
-    // matching here (no IP verification) — the trade-off is some
-    // false positives from spoofed UAs may hit the backend, but the
-    // backend caches /html/* aggressively so the cost is minimal,
-    // and any miss falls through gracefully below.
+    // non-skip path get high-quality HTML. Priority order:
+    //   1) Prerendered static snapshot (dist/<route>/index.html) —
+    //      richest markup, includes JSON-LD, full content, hashed
+    //      asset preloads. Wins whenever it exists.
+    //   2) Backend bot-render proxy (/html/<path>) — fallback for
+    //      dynamically-generated chapter/board URLs that don't have a
+    //      static snapshot.
+    //   3) SPA shell (handled in the asset-pipeline block below).
+    //
+    // Task #640: Earlier the order was inverted (bot-render first,
+    // ASSETS fallback). The backend's /html/<path> handler returned
+    // a generic shell-sized response for prerendered routes like
+    // /library/, which MEANT verified bots received ~30 KB shells
+    // for routes that had perfectly good 70-100 KB prerendered
+    // snapshots sitting in dist/. Flipping the order recovers them.
     if (
       isBot &&
       !wouldLoop &&
       request.method === "GET" &&
       shouldBotRender(url.pathname)
     ) {
+      // 1) Try the static prerender snapshot first. ASSETS.fetch
+      //    returns 404 when no snapshot exists; we only treat HTML
+      //    200s here as a hit — anything else falls through to the
+      //    backend bot-render path so we don't accidentally serve
+      //    JSON, images, or redirects as the canonical HTML.
+      try {
+        const assetResp = await env.ASSETS.fetch(request);
+        if (assetResp.status === 200) {
+          const ct = assetResp.headers.get("content-type") || "";
+          if (ct.includes("text/html") || ct.includes("application/xhtml")) {
+            const headers = new Headers(assetResp.headers);
+            headers.set("X-Source", "prerender");
+            return new Response(assetResp.body, {
+              status: 200,
+              headers,
+            });
+          }
+        }
+      } catch {
+        // Fall through to bot-render on any asset-pipeline error.
+      }
+      // 2) No prerendered snapshot — try the backend bot-render proxy.
       const rendered = await botRender(request, env, url);
       if (rendered) return rendered;
-      // Backend miss → fall through to the asset pipeline so the bot
-      // at least sees a valid 200 (rather than a 5xx).
+      // 3) Backend miss too → fall through to the asset pipeline /
+      //    SPA shell below so the bot at least gets a valid 200.
     }
 
     try {

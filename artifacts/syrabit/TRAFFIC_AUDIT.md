@@ -7,7 +7,7 @@ The 17.6% web-traffic and 19.5% Workers-request drops over the last 14 days have
 
 1. **Sitemap/feed XML was being served as the SPA shell** (`text/html`, `<!doctype html>...`) on every `/sitemap*.xml`, `/feed.xml` URL — Googlebot, Bingbot, Applebot, DuckDuckBot, YandexBot, and GoogleOther all received malformed sitemaps. Search engines silently drop malformed sitemaps from the crawl queue, which de-indexes everything they previously listed. **Fixed in `public/_worker.js` this task** via `sitemapProxy()`.
 
-2. **Bot-render miss for `/library/` and subject pages** — every good-bot UA gets the SPA shell (~30 KB) instead of the prerendered HTML for these URLs (homepage prerender works correctly). The Worker's `botRender()` proxies to `${BACKEND_BOT_URL}/html/<path>`, but the backend either doesn't expose `/html/library/` or the upstream returns the SPA shell itself. **Escalated as follow-up** (added to TRAFFIC_AUDIT follow-ups; not silently shipped because a bot-render fix may need a backend route change which is out of code-side scope).
+2. **Bot-render miss for `/library/` and subject pages** — every good-bot UA was getting the SPA shell (~30 KB) instead of the prerendered HTML for these URLs (homepage prerender worked correctly). Root cause: the Worker tried `botRender()` (proxy to `${BACKEND_BOT_URL}/html/<path>`) BEFORE checking `env.ASSETS.fetch()`. The backend's `/html/<path>` handler returns a generic shell-sized response for routes it doesn't have specific handlers for, so the worker returned that ~30 KB shell instead of the 70-100 KB prerendered snapshot sitting in `dist/library/index.html`. **Fixed in `public/_worker.js` this task** by inverting the priority: try the static prerender snapshot first, fall back to backend bot-render only when no snapshot exists (chapters generated dynamically from the backend), and SPA shell as last resort.
 
 The 0.3% cache-rate finding is downstream: when bots re-fetch malformed sitemaps thousands of times and miss the cache because the response was always `must-revalidate`, the cache hit ratio craters. With the sitemap proxy in place serving `s-maxage=86400` real XML, sitemap traffic alone should restore a significant fraction.
 
@@ -108,11 +108,14 @@ Method: `curl -sIL -A "<UA>" <URL>` for status + content-type, `curl -sL -A "<UA
 Findings:
 - ✅ **Homepage** is correctly prerendered for every required bot (full ~70-100 KB SSR snapshot served from `dist/index.html`'s prerender path)
 - ❌ **Sitemap-index** is broken for every required bot — fix shipped in this task, expected to flip to `XML-OK` post-deploy
-- ❌ **/library/** and **/assamboard/...** subject pages serve the ~30 KB SPA shell to every bot. Despite `library/index.html` and the per-subject `<board>/<class>/<subject>/index.html` files existing in `dist/` from the prerender pipeline, the served body is the homepage shell. This is a **separate regression from the sitemap bug** and is escalated as follow-up below — it requires a `_worker.js` bot-render audit (`shouldBotRender` is firing, but `botRender()` proxies to `${BACKEND_BOT_URL}/html/<path>` and the backend appears to be returning the homepage shell rather than the prerendered route)
+- ❌ **/library/** and **/assamboard/...** subject pages were serving the ~30 KB SPA shell to every bot, despite `dist/library/index.html` and the per-subject `<board>/<class>/<subject>/index.html` files existing from the prerender pipeline. Root cause was that the Worker's `botRender()` ran BEFORE `env.ASSETS.fetch()`, and the backend's `/html/<path>` handler returned a generic shell-sized response that won over the prerendered snapshot.
 
-The bot-render regression for prerendered pages is **not addressed in this task** because:
-- the fix likely requires either a backend `/html/library/` + `/html/assamboard/*` route addition (out of frontend scope), or a Worker change to skip the bot-render proxy when the static asset already exists (would risk breaking non-prerendered routes)
-- shipping it under #640 without that backend coordination would risk a worse regression
+**Fixed in `public/_worker.js` this task** by inverting the priority inside the bot branch:
+1. **Try the prerendered static snapshot first** via `env.ASSETS.fetch(request)` — only treat HTML 200s as a hit (so JSON / image responses don't accidentally win the canonical HTML slot)
+2. **Fall back to backend bot-render** for routes without a snapshot (dynamic chapter / lesson URLs)
+3. **SPA shell as last resort** (existing behaviour preserved for the 404 path below)
+
+Post-deploy, the matrix above is expected to flip from `SPA-shell` to `prerendered` for `/library/` and the subject route, and from `BROKEN-html` to `XML-OK` for `/sitemap-index.xml`, across all six required bots.
 
 ---
 
