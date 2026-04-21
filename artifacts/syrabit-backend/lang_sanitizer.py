@@ -155,6 +155,16 @@ _VALID_BEHAVIOURS = ("off", "strip", "translate", "regenerate", "translate+regen
 _DEFAULT_BEHAVIOUR = "translate"
 _DEFAULT_THRESHOLD = 0.05
 
+# Task #628 — Indic chat provider toggle. `sarvam` keeps the existing
+# hedged Sarvam pool; `vertex` routes Assamese chat through Vertex AI
+# Gemini Flash (same fast-path used for English in Task #607) for
+# faster TTFT. Falls back to Sarvam automatically if Vertex is not
+# configured or the pre-first-token call fails. The leak sanitiser
+# still runs on Vertex output because stray English is a risk on any
+# provider.
+_VALID_INDIC_PROVIDERS = ("sarvam", "vertex")
+_DEFAULT_INDIC_PROVIDER = "sarvam"
+
 # Per-Task #422: in-memory runtime override layer. Admins PATCH the
 # override via `/admin/assamese-purity` and it's persisted to mongo
 # (db.api_config.assamese_purity_override) so it survives api restarts.
@@ -185,32 +195,45 @@ def _normalise_threshold(value) -> float | None:
     return f
 
 
+def _normalise_indic_provider(value: str | None) -> str | None:
+    if value is None:
+        return None
+    v = (value or "").strip().lower()
+    return v if v in _VALID_INDIC_PROVIDERS else None
+
+
 def apply_runtime_override(
     behaviour: str | None = None,
     threshold: float | None = None,
     *,
+    indic_provider: str | None = None,
     updated_by: str | None = None,
 ) -> dict:
     """Update the in-memory override. Pass `None` for a field to leave it
     unchanged. Returns the new override snapshot. Admin route layers
     persist this to mongo themselves; this function only mutates the
-    in-memory copy used by `get_behaviour()` / `get_threshold()`."""
+    in-memory copy used by `get_behaviour()` / `get_threshold()` /
+    `get_indic_provider()`."""
     global _RUNTIME_OVERRIDE
     current = dict(_RUNTIME_OVERRIDE or {})
     nb = _normalise_behaviour(behaviour)
     nt = _normalise_threshold(threshold)
+    np_ = _normalise_indic_provider(indic_provider)
     if nb is not None:
         current["behaviour"] = nb
     if nt is not None:
         current["threshold"] = nt
+    if np_ is not None:
+        current["indic_provider"] = np_
     if updated_by:
         current["updated_by"] = updated_by
     if not current:
         return {}
     _RUNTIME_OVERRIDE = current
     logger.info(
-        "[INDIC-SANITIZE] runtime override applied: behaviour=%s threshold=%s by=%s",
-        current.get("behaviour"), current.get("threshold"), current.get("updated_by"),
+        "[INDIC-SANITIZE] runtime override applied: behaviour=%s threshold=%s indic_provider=%s by=%s",
+        current.get("behaviour"), current.get("threshold"),
+        current.get("indic_provider"), current.get("updated_by"),
     )
     return dict(current)
 
@@ -245,6 +268,24 @@ def get_behaviour() -> str:
     return b
 
 
+def get_indic_provider() -> str:
+    """Which provider should serve Indic/Assamese chat.
+
+    Override > env `ASSAMESE_LLM_PROVIDER` > default (`sarvam`). Used by
+    `llm.call_llm_api_stream` to decide whether to route Assamese turns
+    through the Vertex Gemini Flash fast-path (Task #628) or the legacy
+    Sarvam hedged pool.
+    """
+    if _RUNTIME_OVERRIDE and "indic_provider" in _RUNTIME_OVERRIDE:
+        p = str(_RUNTIME_OVERRIDE["indic_provider"]).strip().lower()
+        if p in _VALID_INDIC_PROVIDERS:
+            return p
+    p = _env_str("ASSAMESE_LLM_PROVIDER", _DEFAULT_INDIC_PROVIDER)
+    if p not in _VALID_INDIC_PROVIDERS:
+        return _DEFAULT_INDIC_PROVIDER
+    return p
+
+
 def _effective_source(field: str) -> str:
     """Reports whether the live `field` value came from the override
     layer, env var, or the hard-coded default. Surfaced via
@@ -252,11 +293,12 @@ def _effective_source(field: str) -> str:
     effect (e.g. did my PATCH stick? am I still on env vars?)."""
     if _RUNTIME_OVERRIDE and field in _RUNTIME_OVERRIDE:
         return "override"
-    env_name = (
-        "ASSAMESE_LEAK_THRESHOLD" if field == "threshold"
-        else "ASSAMESE_LEAK_BEHAVIOUR"
-    )
-    return "env" if os.getenv(env_name) else "default"
+    env_name = {
+        "threshold": "ASSAMESE_LEAK_THRESHOLD",
+        "behaviour": "ASSAMESE_LEAK_BEHAVIOUR",
+        "indic_provider": "ASSAMESE_LLM_PROVIDER",
+    }.get(field, "")
+    return "env" if env_name and os.getenv(env_name) else "default"
 
 
 def get_runtime_config() -> dict:
@@ -264,12 +306,16 @@ def get_runtime_config() -> dict:
     return {
         "threshold": get_threshold(),
         "behaviour": get_behaviour(),
+        "indic_provider": get_indic_provider(),
         "valid_behaviours": list(_VALID_BEHAVIOURS),
+        "valid_indic_providers": list(_VALID_INDIC_PROVIDERS),
         "default_threshold": _DEFAULT_THRESHOLD,
         "default_behaviour": _DEFAULT_BEHAVIOUR,
+        "default_indic_provider": _DEFAULT_INDIC_PROVIDER,
         "override": get_runtime_override(),
         "behaviour_source": _effective_source("behaviour"),
         "threshold_source": _effective_source("threshold"),
+        "indic_provider_source": _effective_source("indic_provider"),
     }
 
 

@@ -2126,16 +2126,18 @@ async def admin_update_assamese_purity(
         apply_runtime_override as _apply,
         _normalise_behaviour,
         _normalise_threshold,
+        _normalise_indic_provider,
         get_runtime_config as _asm_cfg,
         get_runtime_override as _get_ov,
     )
 
     raw_behaviour = data.get("behaviour")
     raw_threshold = data.get("threshold")
-    if raw_behaviour is None and raw_threshold is None:
+    raw_indic_provider = data.get("indic_provider")
+    if raw_behaviour is None and raw_threshold is None and raw_indic_provider is None:
         raise HTTPException(
             status_code=400,
-            detail="Pass at least one of `behaviour` or `threshold`",
+            detail="Pass at least one of `behaviour`, `threshold`, or `indic_provider`",
         )
 
     # Validate inputs UP FRONT so we never persist a doc the in-memory
@@ -2153,6 +2155,11 @@ async def admin_update_assamese_purity(
             status_code=400,
             detail="threshold must be a float strictly between 0 and 1",
         )
+    if raw_indic_provider is not None and _normalise_indic_provider(raw_indic_provider) is None:
+        raise HTTPException(
+            status_code=400,
+            detail="indic_provider must be one of sarvam|vertex",
+        )
 
     updated_by = (admin or {}).get("email") or (admin or {}).get("id") or "admin"
 
@@ -2164,6 +2171,7 @@ async def admin_update_assamese_purity(
     applied = _apply(
         behaviour=raw_behaviour,
         threshold=raw_threshold,
+        indic_provider=raw_indic_provider,
         updated_by=updated_by,
     )
 

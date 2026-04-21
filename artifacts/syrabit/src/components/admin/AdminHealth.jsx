@@ -367,6 +367,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
         setAsmDraft({
           behaviour: cfg.behaviour || '',
           threshold: cfg.threshold != null ? String(cfg.threshold) : '',
+          indic_provider: cfg.indic_provider || '',
         });
         setAsmTestSample(r.data?.test_sample || '');
       })
@@ -386,6 +387,9 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     const t = asmDraft.threshold === '' ? null : Number(asmDraft.threshold);
     if (t != null && Number.isFinite(t) && t !== cfgNow.threshold) {
       body.threshold = t;
+    }
+    if (asmDraft.indic_provider && asmDraft.indic_provider !== cfgNow.indic_provider) {
+      body.indic_provider = asmDraft.indic_provider;
     }
     if (!Object.keys(body).length) {
       toast.info('No changes to save');
@@ -1030,14 +1034,16 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                 <div className="flex justify-center py-10"><RefreshCw size={20} className="animate-spin text-gray-300" /></div>
               ) : asmCfg ? (
                 <>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-5">
                     <PeakBadge label="Active behaviour" value={asmCfg.config?.behaviour || '—'} color="violet" />
                     <PeakBadge label="Active threshold" value={asmCfg.config?.threshold != null ? Number(asmCfg.config.threshold).toFixed(3) : '—'} color="emerald" />
+                    <PeakBadge label="Indic provider" value={asmCfg.config?.indic_provider || '—'} color={asmCfg.config?.indic_provider === 'vertex' ? 'amber' : 'blue'} />
                     <PeakBadge label="Behaviour source" value={asmCfg.config?.behaviour_source || '—'} color={asmCfg.config?.behaviour_source === 'override' ? 'amber' : 'blue'} />
                     <PeakBadge label="Threshold source" value={asmCfg.config?.threshold_source || '—'} color={asmCfg.config?.threshold_source === 'override' ? 'amber' : 'blue'} />
+                    <PeakBadge label="Provider source" value={asmCfg.config?.indic_provider_source || '—'} color={asmCfg.config?.indic_provider_source === 'override' ? 'amber' : 'blue'} />
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
                     <div>
                       <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Behaviour</label>
                       <select
@@ -1063,6 +1069,23 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                         className="w-full text-sm font-mono px-3 py-2 rounded-lg border border-gray-200 focus:border-violet-300 focus:ring-1 focus:ring-violet-200 outline-none"
                         data-testid="input-asm-threshold"
                       />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">
+                        Indic provider
+                        <span className="ml-2 text-[10px] font-normal text-amber-600 normal-case tracking-normal">A/B</span>
+                      </label>
+                      <select
+                        value={asmDraft.indic_provider}
+                        onChange={(e) => setAsmDraft(d => ({ ...d, indic_provider: e.target.value }))}
+                        className="w-full text-sm font-mono px-3 py-2 rounded-lg border border-gray-200 focus:border-violet-300 focus:ring-1 focus:ring-violet-200 outline-none"
+                        data-testid="select-asm-indic-provider"
+                        title="sarvam = existing hedged Sarvam pool · vertex = Gemini Flash fast-path (auto-falls back to sarvam on Vertex failure)"
+                      >
+                        {(asmCfg.config?.valid_indic_providers || ['sarvam', 'vertex']).map(p => (
+                          <option key={p} value={p}>{p}</option>
+                        ))}
+                      </select>
                     </div>
                   </div>
 

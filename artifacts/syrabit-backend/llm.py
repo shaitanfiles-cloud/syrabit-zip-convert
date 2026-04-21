@@ -1152,10 +1152,39 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     # Vertex AI's REST endpoint directly. On any error before the first token
     # is delivered, automatically fall back to the legacy SLM hedged pool by
     # re-routing through the standard resolution path below.
-    if use_model_raw == "vertex/gemini-flash" and not _indic_mode:
+    # Task #628 — Indic (Assamese) admin toggle: when the admin has
+    # flipped the Indic provider to "vertex" AND Vertex is configured,
+    # route Assamese chat through the same Vertex fast-path used for
+    # English below. The leak sanitiser downstream still runs on the
+    # emitted content, so stray English words are cleaned regardless
+    # of provider. On pre-first-token Vertex failure we fall through
+    # to the legacy Sarvam hedged pool below (NOT the English SLM
+    # pool) to preserve Assamese quality.
+    _indic_vertex_active = False
+    if _indic_mode:
+        try:
+            from lang_sanitizer import get_indic_provider as _get_indic_provider
+            _indic_provider_pref = _get_indic_provider()
+        except Exception:
+            _indic_provider_pref = "sarvam"
+        if _indic_provider_pref == "vertex" and _vertex_chat.is_configured():
+            _indic_vertex_active = True
+
+    _use_vertex_fastpath = (
+        (use_model_raw == "vertex/gemini-flash" and not _indic_mode)
+        or _indic_vertex_active
+    )
+    _vertex_fallback_target = (
+        # Indic fallback uses the Sarvam hedged pool (preserves Assamese
+        # quality); English fallback uses the SLM pool.
+        "sarvam-m" if _indic_vertex_active else "openai/gpt-oss-20b"
+    )
+    _vertex_metric_bucket = "vertex_gemini_indic" if _indic_vertex_active else "vertex_gemini"
+
+    if _use_vertex_fastpath:
         if not _vertex_chat.is_configured():
             logger.warning("vertex/gemini-flash requested but VERTEX_PROJECT_ID is not set — falling back to legacy SLM pool")
-            use_model_raw = "openai/gpt-oss-20b"
+            use_model_raw = _vertex_fallback_target
         else:
             _vertex_first_token = False
             _vertex_t0 = time.monotonic()
@@ -1163,10 +1192,34 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 _mt_vx = _clamp_max_tokens(VERTEX_GEMINI_MODEL, max_tokens)
                 _vx_batch = ""
                 _VX_BATCH_SIZE = 2
-                async for token in _stream_vertex_gemini(messages, VERTEX_GEMINI_MODEL, _mt_vx):
+                # For Indic mode, prepend the same strict-Assamese system
+                # preface used by `_stream_sarvam` so Gemini commits to
+                # Assamese script from the first token and we don't rely
+                # on the sanitizer to clean up provider-level leakage.
+                _vx_messages = messages
+                if _indic_vertex_active:
+                    _vx_messages = [dict(m) for m in messages]
+                    _asm_preface = (
+                        "CRITICAL: Reply DIRECTLY in Assamese (অসমীয়া). "
+                        "Do NOT use <think> tags. Do NOT write internal thoughts.\n"
+                        "STRICT LANGUAGE RULES:\n"
+                        "- Every running word MUST be in Assamese script. "
+                        "NO mid-sentence English words.\n"
+                        "- Latin script is allowed ONLY for: pure numbers/dates, "
+                        "scientific units (cm, kg, Hz, °C, eV…), math symbols/equations, "
+                        "code, URLs, well-known proper nouns and acronyms "
+                        "(AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
+                        "- For everyday nouns/verbs, use the Assamese word — "
+                        "do NOT fall back to English.\n\n"
+                    )
+                    if _vx_messages and _vx_messages[0].get("role") == "system":
+                        _vx_messages[0]["content"] = _asm_preface + _vx_messages[0]["content"]
+                    else:
+                        _vx_messages.insert(0, {"role": "system", "content": _asm_preface})
+                async for token in _stream_vertex_gemini(_vx_messages, VERTEX_GEMINI_MODEL, _mt_vx):
                     if not _vertex_first_token:
                         _ttft_ms = (time.monotonic() - _vertex_t0) * 1000
-                        logger.info(f"[VERTEX-PERF] TTFT={_ttft_ms:.0f}ms model={VERTEX_GEMINI_MODEL}")
+                        logger.info(f"[VERTEX-PERF] TTFT={_ttft_ms:.0f}ms model={VERTEX_GEMINI_MODEL} indic={_indic_vertex_active}")
                         _vertex_first_token = True
                     _vx_batch += token
                     if len(_vx_batch) >= _VX_BATCH_SIZE:
@@ -1176,17 +1229,17 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                     yield f"data: {json.dumps({'content': _vx_batch})}\n\n"
                 if _vertex_first_token:
                     _total_ms = (time.monotonic() - _vertex_t0) * 1000
-                    logger.info(f"[VERTEX-PERF] Total={_total_ms:.0f}ms model={VERTEX_GEMINI_MODEL}")
+                    logger.info(f"[VERTEX-PERF] Total={_total_ms:.0f}ms model={VERTEX_GEMINI_MODEL} indic={_indic_vertex_active}")
                     try:
                         from chat_speedup_metrics import record_provider_call as _rec_prov
-                        _rec_prov("vertex_gemini", ttfb_ms=_ttft_ms, total_ms=_total_ms)
+                        _rec_prov(_vertex_metric_bucket, ttfb_ms=_ttft_ms, total_ms=_total_ms)
                     except Exception:
                         pass
-                    yield f"data: {json.dumps({'__provider': 'vertex_gemini'})}\n\n"
+                    yield f"data: {json.dumps({'__provider': _vertex_metric_bucket})}\n\n"
                     return
                 # Stream completed without ever yielding a token — treat as
                 # failure and fall through to legacy.
-                logger.warning("Vertex Gemini Flash returned empty stream — falling back to legacy SLM pool")
+                logger.warning("Vertex Gemini Flash returned empty stream — falling back to legacy pool")
             except Exception as _vx_err:
                 if _vertex_first_token:
                     # We already started streaming to the client; we can't
@@ -1194,16 +1247,17 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                     logger.warning(f"Vertex Gemini Flash mid-stream error: {type(_vx_err).__name__}: {str(_vx_err)[:200]}")
                     yield f"data: {json.dumps({'error': 'AI service interrupted'})}\n\n"
                     return
-                logger.warning(f"Vertex Gemini Flash failed before first token: {type(_vx_err).__name__}: {str(_vx_err)[:200]} — falling back to legacy SLM pool")
+                logger.warning(f"Vertex Gemini Flash failed before first token: {type(_vx_err).__name__}: {str(_vx_err)[:200]} — falling back to legacy pool")
             # Fall back: rewrite the requested model to the legacy default
             # and continue with the standard resolution path below.
             try:
                 from chat_speedup_metrics import record_provider_fallback as _rec_fb
-                _rec_fb("vertex_gemini", "openai/gpt-oss-20b")
+                _rec_fb(_vertex_metric_bucket, _vertex_fallback_target)
             except Exception:
                 pass
-            use_model_raw = "openai/gpt-oss-20b"
+            use_model_raw = _vertex_fallback_target
             model = use_model_raw
+            _indic_vertex_active = False  # Fallback → resolve normally
 
     use_model_resolved = _MODEL_ALIAS_MAP.get(use_model_raw, use_model_raw)
     _prov_list = _LLM_PROVIDERS if _indic_mode else _LLM_PROVIDERS_CHAT
