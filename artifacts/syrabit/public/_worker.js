@@ -32,7 +32,8 @@ const SEARCH_BOT_UA = /googlebot|google-extended|googleother|google-inspectionto
 // public api.syrabit.ai hostname if unset.
 const DEFAULT_BACKEND = "https://api.syrabit.ai";
 
-// Task #640: sitemap + feed XML proxy.
+// Task #640 (extended): sitemap + feed + llms XML/TXT proxy.
+//
 // Root cause of the 2026-04-18 → 2026-04-21 indexing collapse: every
 // /sitemap*.xml URL on syrabit.ai was returning the SPA shell with
 // `Content-Type: text/html` instead of XML. The Pages Worker had no
@@ -40,20 +41,40 @@ const DEFAULT_BACKEND = "https://api.syrabit.ai";
 // fallback served the React shell — which Googlebot / Bingbot
 // validate as a malformed sitemap and silently drop.
 //
-// Fix: when a non-bot or bot request lands on a sitemap or feed URL,
-// proxy it directly to the backend's canonical generator at
-// `/api/seo/<basename>` and force `Content-Type: application/xml`.
-// Cached at the edge for an hour (matches _headers s-maxage).
-const SITEMAP_PATH_RE = /^\/(sitemap[a-z0-9_-]*\.xml|feed\.xml|rss\.xml)$/i;
+// Followup audit also found /feed.xml, /feed/<name>.xml, /llms.txt and
+// /llms-full.txt were excluded by `_routes.json` → bypassed the worker
+// → 404'd against the asset pipeline. Removed those exclusions and
+// extended this proxy to cover them too.
+//
+// Fix: when a request lands on any of these paths, proxy directly to
+// the matching backend route and force the correct Content-Type. Cached
+// at the edge for an hour (matches _headers s-maxage).
+const SEO_PASSTHROUGH_RE =
+  /^\/(sitemap[a-z0-9_-]*\.xml|sitemap-index\.xml|feed\.xml|rss\.xml|feed\/[a-z0-9_-]+\.xml|llms\.txt|llms-full\.txt)$/i;
+
+// Map a public path to the corresponding backend path. Sitemaps live
+// under `/api/seo/` on the backend; feeds and llms are served at the
+// backend root unchanged.
+function backendPathForSeo(pathname) {
+  if (/^\/sitemap[a-z0-9_-]*\.xml$/i.test(pathname)) {
+    return "/api/seo" + pathname;
+  }
+  // /feed.xml, /feed/<name>.xml, /rss.xml, /llms.txt, /llms-full.txt —
+  // backend serves these at the root path, no rewrite needed.
+  return pathname;
+}
+
+function contentTypeForSeo(pathname) {
+  return /\.txt$/i.test(pathname)
+    ? "text/plain; charset=utf-8"
+    : "application/xml; charset=utf-8";
+}
 
 async function sitemapProxy(request, env, url) {
   const backend = (env && env.BACKEND_BOT_URL) || DEFAULT_BACKEND;
-  // Map /sitemap-index.xml → /api/seo/sitemap-index.xml, /feed.xml →
-  // /api/seo/feed.xml, etc. The backend's /api/seo/* generators
-  // already emit proper XML with the correct content-type; we only
-  // need to forward and cache.
-  const backendPath = "/api/seo" + url.pathname;
+  const backendPath = backendPathForSeo(url.pathname);
   const backendUrl = backend + backendPath + url.search;
+  const isXml = !/\.txt$/i.test(url.pathname);
   try {
     const resp = await fetch(backendUrl, {
       method: request.method,
@@ -67,8 +88,9 @@ async function sitemapProxy(request, env, url) {
     });
     if (resp.status === 200) {
       const headers = new Headers(resp.headers);
-      // Force proper XML content-type even if backend mislabels it.
-      headers.set("Content-Type", "application/xml; charset=utf-8");
+      // Force the right content-type even if the backend mislabels it
+      // (e.g. .txt llms passthrough must NOT be served as application/xml).
+      headers.set("Content-Type", contentTypeForSeo(url.pathname));
       headers.set(
         "Cache-Control",
         "public, max-age=3600, s-maxage=86400, stale-while-revalidate=3600",
@@ -90,32 +112,32 @@ async function sitemapProxy(request, env, url) {
     // Non-200 from backend: do NOT serve the SPA shell — return a
     // small 503 with a meaningful message so search engines retry
     // later instead of indexing garbage.
-    const errBody =
-      request.method === "HEAD"
-        ? null
-        : `<?xml version="1.0" encoding="UTF-8"?>\n<!-- sitemap upstream returned ${resp.status} -->\n`;
-    return new Response(errBody, {
-      status: 503,
-      headers: {
-        "Content-Type": "application/xml; charset=utf-8",
-        "Cache-Control": "public, max-age=60",
-        "Retry-After": "300",
-      },
-    });
+    return seoUpstreamError(
+      request,
+      url,
+      isXml,
+      `upstream returned ${resp.status}`,
+    );
   } catch (err) {
-    const errBody =
-      request.method === "HEAD"
-        ? null
-        : `<?xml version="1.0" encoding="UTF-8"?>\n<!-- sitemap upstream unreachable -->\n`;
-    return new Response(errBody, {
-      status: 503,
-      headers: {
-        "Content-Type": "application/xml; charset=utf-8",
-        "Cache-Control": "public, max-age=60",
-        "Retry-After": "300",
-      },
-    });
+    return seoUpstreamError(request, url, isXml, "upstream unreachable");
   }
+}
+
+function seoUpstreamError(request, url, isXml, reason) {
+  let body = null;
+  if (request.method !== "HEAD") {
+    body = isXml
+      ? `<?xml version="1.0" encoding="UTF-8"?>\n<!-- ${reason} -->\n`
+      : `# ${reason}\n`;
+  }
+  return new Response(body, {
+    status: 503,
+    headers: {
+      "Content-Type": contentTypeForSeo(url.pathname),
+      "Cache-Control": "public, max-age=60",
+      "Retry-After": "300",
+    },
+  });
 }
 
 // Paths that never need bot rendering — let them go straight to the

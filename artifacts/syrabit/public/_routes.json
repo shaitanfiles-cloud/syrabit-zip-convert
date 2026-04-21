@@ -1,6 +1,7 @@
 {
   "version": 1,
   "include": ["/*"],
+  "_comment_xml_routes": "Sitemap, feed and llms paths are intentionally NOT in `exclude` — they MUST flow through _worker.js so it can proxy them to the backend (see SEO_PASSTHROUGH_RE). Putting them here would bypass the worker, hit the static asset pipeline, 404, and Googlebot would silently drop the sitemap (the Apr 2026 indexing collapse).",
   "exclude": [
     "/assets/*",
     "/icons/*",
@@ -11,9 +12,6 @@
     "/logo-144.webp",
     "/manifest.json",
     "/robots.txt",
-    "/feed/*",
-    "/llms.txt",
-    "/llms-full.txt",
     "/sw.js",
     "/opengraph.jpg",
     "/cover-bg.webp",
