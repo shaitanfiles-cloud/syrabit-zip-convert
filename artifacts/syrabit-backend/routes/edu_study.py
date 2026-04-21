@@ -45,7 +45,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from auth_deps import get_current_user_optional, check_rate_limit
+from auth_deps import get_current_user, get_current_user_optional, check_rate_limit
 from llm import call_llm_api
 from guardrails.prompt_safety import validate_llm_output
 import deps
@@ -722,6 +722,116 @@ async def guardian_pin_verify(req: PinVerifyReq, request: Request,
         return {"ok": True, "valid": True, "set": False}
     valid = hmac.compare_digest(_hash_pin(req.pin, salt), cur["guardian_pin_hash"])
     return {"ok": True, "valid": valid, "set": True}
+
+
+# ───────────────────────── Anon → user sync ─────────────────────────
+
+@router.post("/edu/sync/claim")
+async def claim_anon_data(request: Request, user=Depends(get_current_user)):
+    """Reassign notes / flashcards / settings created under the caller's
+    anonymous device id (`x-anon-id`) to their now signed-in user id.
+
+    Idempotent: rerunning after a successful claim returns zero counts
+    because the anon rows have already been moved to the user actor.
+    """
+    await _ensure_schema()
+    anon = request.headers.get("x-anon-id", "").strip()[:80]
+    user_id = user.get("id") if isinstance(user, dict) else None
+    if not anon or not user_id or anon == user_id:
+        return {"ok": True, "notes": 0, "flashcards": 0,
+                "settings_merged": False}
+    notes_count = 0
+    cards_count = 0
+    settings_merged = False
+    async with deps.pg_pool.acquire() as conn:
+        async with conn.transaction():
+            notes_res = await conn.execute(
+                "UPDATE edu_notes SET actor_kind='user', actor=$1 "
+                "WHERE actor_kind='anon' AND actor=$2",
+                user_id, anon,
+            )
+            cards_res = await conn.execute(
+                "UPDATE edu_flashcards SET actor_kind='user', actor=$1 "
+                "WHERE actor_kind='anon' AND actor=$2",
+                user_id, anon,
+            )
+            anon_settings = await conn.fetchrow(
+                "SELECT * FROM edu_study_settings "
+                "WHERE actor_kind='anon' AND actor=$1",
+                anon,
+            )
+            if anon_settings:
+                user_settings = await conn.fetchrow(
+                    "SELECT * FROM edu_study_settings "
+                    "WHERE actor_kind='user' AND actor=$1",
+                    user_id,
+                )
+                anon_strict = bool(anon_settings["strict_mode"])
+                anon_streak = int(anon_settings["streak_count"] or 0)
+                anon_last = anon_settings["streak_last_day"]
+                if not user_settings:
+                    # Adopt the anon strict-mode + streak. The guardian
+                    # PIN hash is salted with the anon actor id so it
+                    # would no longer verify after re-salting; drop it
+                    # rather than carry an unusable hash forward.
+                    await conn.execute(
+                        """INSERT INTO edu_study_settings (actor_kind, actor,
+                              strict_mode, guardian_pin_hash, streak_count,
+                              streak_last_day)
+                           VALUES ('user',$1,$2,NULL,$3,$4)""",
+                        user_id, anon_strict, anon_streak, anon_last,
+                    )
+                    settings_merged = True
+                else:
+                    # Merge into existing user settings so signed-out
+                    # changes are not silently lost.
+                    user_strict = bool(user_settings["strict_mode"])
+                    user_streak = int(user_settings["streak_count"] or 0)
+                    user_last = user_settings["streak_last_day"]
+                    # Strict Mode: take the safer (stricter) setting.
+                    merged_strict = user_strict or anon_strict
+                    # Streak: keep the longer chain; tie-break with the
+                    # more recent activity day so the streak's "last
+                    # day" stays accurate for the daily-rollover logic.
+                    if anon_streak > user_streak:
+                        merged_streak, merged_last = anon_streak, anon_last
+                    elif anon_streak < user_streak:
+                        merged_streak, merged_last = user_streak, user_last
+                    else:
+                        merged_streak = user_streak
+                        if user_last and anon_last:
+                            merged_last = max(user_last, anon_last)
+                        else:
+                            merged_last = user_last or anon_last
+                    changed = (
+                        merged_strict != user_strict
+                        or merged_streak != user_streak
+                        or merged_last != user_last
+                    )
+                    if changed:
+                        await conn.execute(
+                            """UPDATE edu_study_settings
+                               SET strict_mode=$1, streak_count=$2,
+                                   streak_last_day=$3, updated_at=NOW()
+                               WHERE actor_kind='user' AND actor=$4""",
+                            merged_strict, merged_streak, merged_last, user_id,
+                        )
+                        settings_merged = True
+                await conn.execute(
+                    "DELETE FROM edu_study_settings "
+                    "WHERE actor_kind='anon' AND actor=$1",
+                    anon,
+                )
+    try:
+        notes_count = int(notes_res.split()[-1])
+    except Exception:
+        notes_count = 0
+    try:
+        cards_count = int(cards_res.split()[-1])
+    except Exception:
+        cards_count = 0
+    return {"ok": True, "notes": notes_count, "flashcards": cards_count,
+            "settings_merged": settings_merged}
 
 
 # ───────────────────────── Voice (STT + status) ─────────────────────────

@@ -100,6 +100,12 @@ export const studyApi = {
       headers: baseHeaders(), body: JSON.stringify({ pin }),
     }).then(_json),
 
+  // Sync anon → user ────────────────────────────────────
+  claimAnonData: () =>
+    fetch(`${API_BASE}/edu/sync/claim`, {
+      method: 'POST', credentials: 'include', headers: baseHeaders(),
+    }).then(_json),
+
   // Voice ───────────────────────────────────────────────
   voiceStatus: () =>
     fetch(`${API_BASE}/edu/voice/status`, { credentials: 'include' }).then(_json),

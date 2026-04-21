@@ -1,6 +1,8 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
+import { toast } from 'sonner';
 import { API_BASE, setAuthToken } from '@/utils/api';
+import { studyApi } from '@/utils/studyApi';
 import { Analytics } from '@/utils/analytics';
 import {
   hydrateAdsOptOutFromServer,
@@ -99,6 +101,53 @@ export const AuthProvider = ({ children }) => {
       setTimeout(probe, 600);
     }
   }, [fetchMe]);
+
+  // Task #592: once a user is signed in, claim any notes / flashcards /
+  // strict-mode settings that were created against this device's anon
+  // id while signed out, and surface a one-time confirmation toast so
+  // the learner sees their offline study items have moved into the
+  // account. The backend endpoint is idempotent (no-op on subsequent
+  // calls because the anon rows have already moved), and the local
+  // flag prevents repeating the network call across page loads.
+  useEffect(() => {
+    if (!user?.id) return;
+    if (typeof window === 'undefined') return;
+    let anonId = '';
+    try { anonId = localStorage.getItem('syrabit_anon_id') || ''; } catch {}
+    if (!anonId || anonId === user.id) return;
+    // The backend is idempotent (zero-rows after the first successful
+    // call), so it's safe to invoke on every sign-in. We only want to
+    // avoid showing the same one-time toast twice in the same browser
+    // session if React re-mounts this provider, which is what the
+    // sessionStorage flag below guards against.
+    const toastFlagKey = `syrabit:claimed_toast:${anonId}->${user.id}`;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await studyApi.claimAnonData();
+        if (cancelled) return;
+        const moved = (res?.notes || 0) + (res?.flashcards || 0)
+          + (res?.settings_merged ? 1 : 0);
+        let alreadyToasted = false;
+        try { alreadyToasted = !!sessionStorage.getItem(toastFlagKey); } catch {}
+        if (moved > 0 && !alreadyToasted) {
+          try { sessionStorage.setItem(toastFlagKey, '1'); } catch {}
+          const parts = [];
+          if (res.notes) parts.push(`${res.notes} note${res.notes === 1 ? '' : 's'}`);
+          if (res.flashcards) parts.push(`${res.flashcards} flashcard${res.flashcards === 1 ? '' : 's'}`);
+          const detail = parts.length
+            ? ` (${parts.join(' & ')})`
+            : '';
+          try {
+            toast.success(`Your offline study items are now synced to your account${detail}.`);
+          } catch {}
+        }
+      } catch {
+        // Silent — sync will be retried on next sign-in (no flag set).
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user?.id]);
 
   // Mirror the signed-in user's plan into the ads module so paying
   // subscribers (Starter / Pro) get an ad-free experience on Notes /
