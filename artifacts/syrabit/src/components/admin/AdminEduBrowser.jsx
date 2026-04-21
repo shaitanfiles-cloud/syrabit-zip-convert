@@ -788,7 +788,7 @@ function RequestedSitesTab({ adminToken }) {
   );
 }
 
-function GroundedRecallTile({ adminToken }) {
+function GroundedRecallTile({ adminToken, language = null, label = 'Grounded-answer recall' }) {
   const [state, setState] = useState({ loading: true, data: null, err: null });
 
   const load = useCallback(async () => {
@@ -797,12 +797,13 @@ function GroundedRecallTile({ adminToken }) {
       const r = await axios.get(`${API_BASE}/admin/grounded-recall/latest`, {
         headers: adminHeaders(adminToken),
         withCredentials: true,
+        params: language ? { language } : undefined,
       });
       setState({ loading: false, data: r.data || null, err: null });
     } catch (e) {
       setState({ loading: false, data: null, err: e?.response?.data?.detail || e.message || 'Failed' });
     }
-  }, [adminToken]);
+  }, [adminToken, language]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -841,7 +842,15 @@ function GroundedRecallTile({ adminToken }) {
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-1.5">
           <Target size={14} className="text-violet-600" />
-          <h3 className="text-xs font-bold text-gray-900">Grounded-answer recall</h3>
+          <h3 className="text-xs font-bold text-gray-900">{label}</h3>
+          {language && (
+            <span
+              className="text-[10px] uppercase tracking-wide rounded bg-violet-100 border border-violet-200 px-1.5 py-0.5 text-violet-700 font-semibold"
+              data-testid={`recall-lang-badge-${language}`}
+            >
+              {language === 'as' ? 'অসমীয়া · as' : language}
+            </span>
+          )}
           {latest?.started_at && (
             <span className="text-[11px] text-gray-500">· {_fmtTime(latest.started_at)}</span>
           )}
@@ -943,7 +952,17 @@ export default function AdminEduBrowser({ adminToken }) {
           </p>
         </div>
 
-        <GroundedRecallTile adminToken={adminToken} />
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+          <GroundedRecallTile
+            adminToken={adminToken}
+            label="Grounded-answer recall · global"
+          />
+          <GroundedRecallTile
+            adminToken={adminToken}
+            language="as"
+            label="Grounded-answer recall · Assamese"
+          />
+        </div>
 
         <div className="flex items-center gap-1 border-b border-gray-200">
           {[
