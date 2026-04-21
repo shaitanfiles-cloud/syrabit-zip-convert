@@ -1,11 +1,16 @@
 name: admin-smoke
 
 # Task #571 — Catch admin dashboard crashes early.
+# Task #614 — Same gate now also runs the Phase-3 study-flows suite
+# (highlight → save, quiz, flashcards, guardian-PIN). The job already
+# invokes `pnpm run test:e2e` which runs every spec under
+# artifacts/syrabit/tests; we just had to expand the path filters so a
+# regression in those flows actually triggers the workflow.
 #
 # Task #567 was a runtime ReferenceError in a single admin widget that
 # fell through the global ErrorBoundary and replaced the dashboard with
-# the "Something went wrong" screen. This job runs the Playwright smoke
-# suite that mounts /admin against mocked admin APIs and asserts:
+# the "Something went wrong" screen. This job runs the Playwright suite
+# that mounts /admin against mocked admin APIs and asserts:
 #
 #   - the global ErrorBoundary heading is NOT shown
 #   - data-testid="admin-dashboard" IS shown
@@ -13,28 +18,51 @@ name: admin-smoke
 #   - wiping a single metrics endpoint shows the inline "failed to load"
 #     card and does not crash the shell.
 #
-# Triggered on every PR that touches the admin component tree so the next
-# missing-field bug fails CI before it lands.
+# It also exercises the four Phase-3 study journeys against fully
+# mocked /api/** routes (no LLM, no Postgres) via the dedicated
+# /__test/study-harness page.
+#
+# Triggered on every PR that touches the admin component tree OR any
+# of the source files the study-flows spec depends on, so the next
+# missing-field / busted-popover bug fails CI before it lands.
 
 on:
   push:
     branches: [master]
     paths:
       - "artifacts/syrabit/src/components/admin/**"
+      - "artifacts/syrabit/src/components/study/**"
+      - "artifacts/syrabit/src/components/ErrorBoundary.jsx"
+      - "artifacts/syrabit/src/hooks/useStrictMode.jsx"
       - "artifacts/syrabit/src/pages/AdminPage.jsx"
       - "artifacts/syrabit/src/pages/AdminLoginPage.jsx"
-      - "artifacts/syrabit/src/components/ErrorBoundary.jsx"
-      - "artifacts/syrabit/tests/admin-**"
+      - "artifacts/syrabit/src/pages/ChapterPage.jsx"
+      - "artifacts/syrabit/src/pages/FlashcardsPage.jsx"
+      - "artifacts/syrabit/src/pages/GuardianPage.jsx"
+      - "artifacts/syrabit/src/pages/NotebookPage.jsx"
+      - "artifacts/syrabit/src/pages/StudyTestHarnessPage.jsx"
+      - "artifacts/syrabit/src/utils/studyApi.js"
+      - "artifacts/syrabit/src/App.jsx"
+      - "artifacts/syrabit/tests/**"
       - "artifacts/syrabit/playwright.config.ts"
       - ".github/workflows/admin-smoke.yml"
   pull_request:
     branches: [master]
     paths:
       - "artifacts/syrabit/src/components/admin/**"
+      - "artifacts/syrabit/src/components/study/**"
+      - "artifacts/syrabit/src/components/ErrorBoundary.jsx"
+      - "artifacts/syrabit/src/hooks/useStrictMode.jsx"
       - "artifacts/syrabit/src/pages/AdminPage.jsx"
       - "artifacts/syrabit/src/pages/AdminLoginPage.jsx"
-      - "artifacts/syrabit/src/components/ErrorBoundary.jsx"
-      - "artifacts/syrabit/tests/admin-**"
+      - "artifacts/syrabit/src/pages/ChapterPage.jsx"
+      - "artifacts/syrabit/src/pages/FlashcardsPage.jsx"
+      - "artifacts/syrabit/src/pages/GuardianPage.jsx"
+      - "artifacts/syrabit/src/pages/NotebookPage.jsx"
+      - "artifacts/syrabit/src/pages/StudyTestHarnessPage.jsx"
+      - "artifacts/syrabit/src/utils/studyApi.js"
+      - "artifacts/syrabit/src/App.jsx"
+      - "artifacts/syrabit/tests/**"
       - "artifacts/syrabit/playwright.config.ts"
       - ".github/workflows/admin-smoke.yml"
 
