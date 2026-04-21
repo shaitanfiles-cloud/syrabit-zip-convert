@@ -46,10 +46,12 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from auth_deps import get_current_user, get_current_user_optional, check_rate_limit
-from llm import call_llm_api
+from llm import call_llm_api, _call_gemini, _GEMINI_KEY, _GEMINI_KEY_2
 from guardrails.prompt_safety import validate_llm_output
 import deps
 from deps import sarvam_client
+import vertex_chat as _vchat
+from db_ops import supa_get_conversation
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -75,6 +77,15 @@ CREATE INDEX IF NOT EXISTS edu_notes_actor_idx ON edu_notes (actor_kind, actor, 
 -- Task #612: stamp the moment an offline note was adopted into a user account
 -- so the UI can render a "synced from this device" badge for the first session.
 ALTER TABLE edu_notes ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
+-- Task #641: NotebookLM-style AI-generated notes. `generated` flag + structured
+-- JSON body (title, summary, outline, key_terms, qa) + citation anchors.
+-- `source_kind` ∈ ('conversation','chapter','highlights'), `source_ref` is the
+-- conversation id / chapter id / comma-joined note ids the AI was grounded on.
+ALTER TABLE edu_notes ADD COLUMN IF NOT EXISTS generated BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE edu_notes ADD COLUMN IF NOT EXISTS structured JSONB;
+ALTER TABLE edu_notes ADD COLUMN IF NOT EXISTS citations JSONB;
+ALTER TABLE edu_notes ADD COLUMN IF NOT EXISTS source_kind TEXT;
+ALTER TABLE edu_notes ADD COLUMN IF NOT EXISTS source_ref TEXT;
 
 CREATE TABLE IF NOT EXISTS edu_flashcards (
     id            TEXT PRIMARY KEY,
@@ -141,6 +152,18 @@ def _strip_md(s: str) -> str:
 
 
 def _note_row_to_dict(row) -> dict:
+    # Task #641: `structured`/`citations` are stored as JSONB and surface as
+    # parsed objects to asyncpg; older rows (or rows from before the column
+    # was added) come back as None — we expose the column only when set so
+    # the frontend can branch on `note.generated`.
+    structured = row["structured"] if "structured" in row.keys() else None
+    citations = row["citations"] if "citations" in row.keys() else None
+    if isinstance(structured, str):
+        try: structured = json.loads(structured)
+        except Exception: structured = None
+    if isinstance(citations, str):
+        try: citations = json.loads(citations)
+        except Exception: citations = None
     return {
         "id": row["id"],
         "text": row["text"],
@@ -151,6 +174,11 @@ def _note_row_to_dict(row) -> dict:
         "created_at": row["created_at"].isoformat(),
         "updated_at": row["updated_at"].isoformat(),
         "claimed_at": row["claimed_at"].isoformat() if row["claimed_at"] else None,
+        "generated": bool(row["generated"]) if "generated" in row.keys() else False,
+        "structured": structured,
+        "citations": citations or [],
+        "source_kind": row["source_kind"] if "source_kind" in row.keys() else None,
+        "source_ref": row["source_ref"] if "source_ref" in row.keys() else None,
     }
 
 
@@ -459,13 +487,649 @@ async def export_notes(request: Request, format: str = "md",
         if r["source_url"]:
             lines.append(f"Source: <{r['source_url']}>")
         lines.append("")
-        lines.append("> " + (r["text"] or "").replace("\n", "\n> "))
-        lines.append("")
+        # Task #641: render the structured body for AI-generated notes so
+        # the export matches the on-screen layout (summary + outline + key
+        # terms + Q&A + citation list). Manual notes still get the legacy
+        # blockquote rendering.
+        structured = None
+        if "generated" in r.keys() and r["generated"] and "structured" in r.keys():
+            structured = r["structured"]
+            if isinstance(structured, str):
+                try: structured = json.loads(structured)
+                except Exception: structured = None
+        if structured:
+            if structured.get("summary"):
+                lines.append(structured["summary"])
+                lines.append("")
+            for sec in structured.get("outline") or []:
+                lines.append(f"### {sec.get('heading', 'Section')}")
+                for p in sec.get("points") or []:
+                    lines.append(f"- {p}")
+                if sec.get("citations"):
+                    lines.append(f"  _Sources: {', '.join(sec['citations'])}_")
+                lines.append("")
+            kts = structured.get("key_terms") or []
+            if kts:
+                lines.append("### Key terms")
+                for kt in kts:
+                    cit = f" _[{', '.join(kt.get('citations') or [])}]_" if kt.get("citations") else ""
+                    lines.append(f"- **{kt.get('term', '')}** — {kt.get('definition', '')}{cit}")
+                lines.append("")
+            qas = structured.get("qa") or []
+            if qas:
+                lines.append("### Q&A")
+                for qa in qas:
+                    cit = f" _[{', '.join(qa.get('citations') or [])}]_" if qa.get("citations") else ""
+                    lines.append(f"- **Q:** {qa.get('q', '')}")
+                    lines.append(f"  **A:** {qa.get('a', '')}{cit}")
+                lines.append("")
+            cits_raw = r["citations"] if "citations" in r.keys() else None
+            if isinstance(cits_raw, str):
+                try: cits_raw = json.loads(cits_raw)
+                except Exception: cits_raw = None
+            if cits_raw:
+                lines.append("**Sources**")
+                for c in cits_raw:
+                    cid = c.get("id", "")
+                    lab = c.get("label", "")
+                    url = c.get("url", "")
+                    if url and url.startswith("/"):
+                        url = f"https://syrabit.ai{url}"
+                    if url:
+                        lines.append(f"- [{cid}] [{lab}]({url})")
+                    else:
+                        lines.append(f"- [{cid}] {lab}")
+                lines.append("")
+        else:
+            lines.append("> " + (r["text"] or "").replace("\n", "\n> "))
+            lines.append("")
     body = "\n".join(lines)
     return StreamingResponse(
         iter([body]), media_type="text/markdown",
         headers={"Content-Disposition": "attachment; filename=syrabit-notebook.md"},
     )
+
+
+# ───────────────────────── Notes Generation (Task #641) ─────────────────────────
+# NotebookLM-style structured notes grounded in the user's own sources
+# (a chat conversation, a published chapter, or saved highlights).
+
+_NOTES_GEN_SYS = """You are an expert NotebookLM-style study-note writer for Indian school
+and college students. You will receive a set of SOURCE PASSAGES, each labelled
+with a stable anchor id like [S1], [S2], … . Your job is to produce a
+well-structured study note that is GROUNDED ONLY in those passages.
+
+Return a STRICT JSON object (no prose, no markdown fences) of the form:
+{
+  "title": "Concise note title (≤ 80 chars)",
+  "summary": "2-4 sentence plain-language summary.",
+  "outline": [
+    {
+      "heading": "Section heading",
+      "points": ["Bullet 1.", "Bullet 2."],
+      "citations": ["S1", "S3"]
+    }
+  ],
+  "key_terms": [
+    {"term": "Term", "definition": "Short definition.", "citations": ["S2"]}
+  ],
+  "qa": [
+    {"q": "Likely exam question", "a": "Concise answer.", "citations": ["S1"]}
+  ]
+}
+
+Rules:
+- Use ONLY information present in the supplied SOURCE PASSAGES. Do NOT invent
+  facts, definitions, dates, or examples that are not in the sources.
+- Every outline section, key term, and Q&A item MUST cite at least one
+  anchor id from the sources (e.g. "S1"). Never cite an anchor that wasn't
+  supplied.
+- Keep each bullet point ≤ 200 characters. 3-7 outline sections, 4-10 key
+  terms, 4-8 Q&A pairs are typical targets — emit fewer if sources are thin.
+- Prefer board-exam-style clarity over academic prose. No first-person.
+- Never reference "Syrabit" or yourself; never include PII or personal opinions."""
+
+
+def _coerce_notes_payload(raw: str) -> dict:
+    """Tolerant JSON parse for the notes generator. Mirrors _coerce_quiz_payload."""
+    txt = (raw or "").strip()
+    if "```" in txt:
+        m = re.search(r"```(?:json)?\s*([\s\S]+?)```", txt)
+        if m:
+            txt = m.group(1).strip()
+    if "{" in txt and "}" in txt:
+        txt = txt[txt.index("{"):txt.rindex("}") + 1]
+    try:
+        return json.loads(txt)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"notes_parse_error: {e}")
+
+
+def _validate_notes_payload(payload: dict, valid_anchors: set[str]) -> dict:
+    """Reject responses missing citations or referencing unknown anchors. Returns
+    a normalised payload with clamped string lengths and de-duplicated citations.
+    Raises HTTPException(502) on hard violations so the user sees a clear error."""
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail="notes_invalid_shape")
+
+    title = str(payload.get("title") or "").strip()[:200]
+    summary = str(payload.get("summary") or "").strip()[:1200]
+    outline_in = payload.get("outline") or []
+    key_terms_in = payload.get("key_terms") or []
+    qa_in = payload.get("qa") or []
+
+    def _clean_citations(raw):
+        if not isinstance(raw, list):
+            return []
+        out, seen = [], set()
+        for c in raw:
+            cid = str(c).strip().upper()
+            if not cid or cid in seen:
+                continue
+            if cid not in valid_anchors:
+                continue
+            seen.add(cid)
+            out.append(cid)
+        return out
+
+    outline = []
+    for sec in outline_in[:8]:
+        if not isinstance(sec, dict):
+            continue
+        cits = _clean_citations(sec.get("citations"))
+        if not cits:
+            continue
+        pts = []
+        for p in (sec.get("points") or [])[:10]:
+            t = str(p).strip()[:300]
+            if t:
+                pts.append(t)
+        if not pts:
+            continue
+        outline.append({
+            "heading": str(sec.get("heading") or "").strip()[:160] or "Section",
+            "points": pts,
+            "citations": cits,
+        })
+
+    key_terms = []
+    for kt in key_terms_in[:14]:
+        if not isinstance(kt, dict):
+            continue
+        cits = _clean_citations(kt.get("citations"))
+        term = str(kt.get("term") or "").strip()[:120]
+        defn = str(kt.get("definition") or "").strip()[:400]
+        if not (term and defn and cits):
+            continue
+        key_terms.append({"term": term, "definition": defn, "citations": cits})
+
+    qa = []
+    for item in qa_in[:10]:
+        if not isinstance(item, dict):
+            continue
+        cits = _clean_citations(item.get("citations"))
+        q = str(item.get("q") or "").strip()[:400]
+        a = str(item.get("a") or "").strip()[:800]
+        if not (q and a and cits):
+            continue
+        qa.append({"q": q, "a": a, "citations": cits})
+
+    if not title:
+        raise HTTPException(status_code=502, detail="notes_missing_title")
+    if not summary:
+        raise HTTPException(status_code=502, detail="notes_missing_summary")
+    if not outline and not qa:
+        # No grounded body at all — almost always means the model ignored
+        # citations or hallucinated anchors. Better to fail loudly than save
+        # an empty note.
+        raise HTTPException(status_code=502, detail="notes_no_cited_content")
+
+    return {
+        "title": title,
+        "summary": summary,
+        "outline": outline,
+        "key_terms": key_terms,
+        "qa": qa,
+    }
+
+
+# ───── Source assemblers ─────
+
+# Cap on raw source characters fed to the LLM. Gemini Flash handles ≫ 12k but
+# longer payloads cost more and rarely improve note quality on focused topics.
+_NOTES_SOURCE_CHAR_CAP = 14000
+_NOTES_PER_ANCHOR_CHAR_CAP = 2400
+
+
+def _truncate(text: str, n: int) -> str:
+    s = (text or "").strip()
+    return s if len(s) <= n else s[:n].rstrip() + "…"
+
+
+def _safe_citation_url(url: str) -> str:
+    """Defense-in-depth: only persist citation URLs that are app-internal
+    (start with single '/') or http(s). Strips javascript:/data:/vbscript:
+    schemes that could fire on click in the rendered note."""
+    s = (url or "").strip()
+    if not s:
+        return ""
+    if s.startswith("/") and not s.startswith("//"):
+        return s
+    if re.match(r"^https?://", s, re.IGNORECASE):
+        return s
+    return ""
+
+
+def _split_chapter_sections(content: str, max_sections: int = 8) -> list[tuple[str, str]]:
+    """Split chapter markdown into (heading, body) tuples by ## headings.
+    Falls back to a single section if no headings are present."""
+    if not content:
+        return []
+    parts: list[tuple[str, str]] = []
+    cur_head = "Overview"
+    cur_buf: list[str] = []
+    for line in content.splitlines():
+        m = re.match(r"^\s{0,3}#{1,3}\s+(.+?)\s*$", line)
+        if m:
+            if cur_buf:
+                parts.append((cur_head, "\n".join(cur_buf).strip()))
+                cur_buf = []
+            cur_head = m.group(1).strip()[:160]
+            continue
+        cur_buf.append(line)
+    if cur_buf:
+        parts.append((cur_head, "\n".join(cur_buf).strip()))
+    parts = [(h, b) for h, b in parts if b and len(b) > 40]
+    return parts[:max_sections] or [("Overview", content.strip())]
+
+
+async def _build_chapter_url(chapter: dict) -> str:
+    """Best-effort full URL like /:board/:class/:stream?/:subject/:chapter.
+    Returns "" if any hop is missing — frontend will then render a label-only
+    citation chip."""
+    try:
+        ch_slug = chapter.get("slug") or ""
+        subj_id = chapter.get("subject_id") or ""
+        if not (ch_slug and subj_id):
+            return ""
+        subj = await deps.db.subjects.find_one(
+            {"id": subj_id},
+            {"_id": 0, "slug": 1, "stream_id": 1, "class_id": 1, "board_id": 1},
+        )
+        if not subj:
+            return ""
+        subj_slug = subj.get("slug") or ""
+        cls_id = subj.get("class_id") or ""
+        board_id = subj.get("board_id") or ""
+        stream_id = subj.get("stream_id") or ""
+        if stream_id and not (cls_id and board_id):
+            stream = await deps.db.streams.find_one({"id": stream_id}, {"_id": 0, "class_id": 1})
+            if stream:
+                cls_id = cls_id or stream.get("class_id") or ""
+        if cls_id and not board_id:
+            cls = await deps.db.classes.find_one({"id": cls_id}, {"_id": 0, "board_id": 1})
+            if cls:
+                board_id = cls.get("board_id") or ""
+        if not (cls_id and board_id and subj_slug):
+            return ""
+        cls = await deps.db.classes.find_one({"id": cls_id}, {"_id": 0, "slug": 1})
+        board = await deps.db.boards.find_one({"id": board_id}, {"_id": 0, "slug": 1})
+        if not (cls and board):
+            return ""
+        cls_slug = cls.get("slug") or ""
+        board_slug = board.get("slug") or ""
+        if not (cls_slug and board_slug):
+            return ""
+        if stream_id:
+            stream = await deps.db.streams.find_one({"id": stream_id}, {"_id": 0, "slug": 1})
+            stream_slug = (stream or {}).get("slug") or ""
+            if stream_slug:
+                return f"/{board_slug}/{cls_slug}/{stream_slug}/{subj_slug}/{ch_slug}"
+        return f"/{board_slug}/{cls_slug}/{subj_slug}/{ch_slug}"
+    except Exception as e:
+        logger.warning(f"[notes-gen] _build_chapter_url failed: {e}")
+        return ""
+
+
+async def _assemble_from_conversation(conv_id: str, user_id: Optional[str]) -> tuple[list, str]:
+    """Pull a conversation's user/assistant turns as anchored sources."""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="signin_required_for_conversation_source")
+    conv = await supa_get_conversation(conv_id, user_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    msgs = conv.get("messages") or []
+    if isinstance(msgs, str):
+        try: msgs = json.loads(msgs)
+        except Exception: msgs = []
+    title = (conv.get("title") or "Chat conversation").strip()[:120]
+    anchors: list[dict] = []
+    total = 0
+    for i, m in enumerate(msgs):
+        role = (m.get("role") or "").lower()
+        if role not in ("user", "assistant"):
+            continue
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        if total >= _NOTES_SOURCE_CHAR_CAP:
+            break
+        body = _truncate(content, _NOTES_PER_ANCHOR_CHAR_CAP)
+        total += len(body)
+        label = ("Question" if role == "user" else "AI answer") + f" #{(i // 2) + 1}"
+        anchors.append({
+            "id": f"S{len(anchors) + 1}",
+            "kind": "message",
+            "label": label,
+            "url": _safe_citation_url(f"/chat?id={conv_id}"),
+            "text": body,
+            "role": role,
+        })
+        if len(anchors) >= 24:
+            break
+    if not anchors:
+        raise HTTPException(status_code=400, detail="conversation_empty")
+    return anchors, title
+
+
+async def _assemble_from_chapter(chapter_id: str) -> tuple[list, str]:
+    if not deps.db:
+        raise HTTPException(status_code=503, detail="storage_unavailable")
+    ch = await deps.db.chapters.find_one(
+        {"id": chapter_id},
+        {"_id": 0, "id": 1, "title": 1, "content": 1, "slug": 1,
+         "subject_id": 1, "description": 1},
+    )
+    if not ch:
+        raise HTTPException(status_code=404, detail="chapter_not_found")
+    chapter_url = await _build_chapter_url(ch)
+    sections = _split_chapter_sections(ch.get("content") or ch.get("description") or "")
+    if not sections:
+        raise HTTPException(status_code=400, detail="chapter_empty")
+    anchors: list[dict] = []
+    total = 0
+    for heading, body in sections:
+        if total >= _NOTES_SOURCE_CHAR_CAP:
+            break
+        clip = _truncate(body, _NOTES_PER_ANCHOR_CHAR_CAP)
+        total += len(clip)
+        anchors.append({
+            "id": f"S{len(anchors) + 1}",
+            "kind": "chapter_section",
+            "label": f"{ch.get('title', 'Chapter')} — {heading}",
+            "url": _safe_citation_url(chapter_url),
+            "text": clip,
+        })
+    return anchors, str(ch.get("title") or "Chapter").strip()[:120]
+
+
+async def _assemble_from_highlights(note_ids: list[str], kind: str, actor: str) -> tuple[list, str]:
+    if not note_ids:
+        raise HTTPException(status_code=400, detail="no_note_ids")
+    note_ids = [str(nid)[:80] for nid in note_ids[:30] if nid]
+    async with deps.pg_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT id, text, source_url, source_title, chapter_ref
+               FROM edu_notes
+               WHERE actor_kind=$1 AND actor=$2 AND id = ANY($3::text[])
+               ORDER BY created_at ASC""",
+            kind, actor, note_ids,
+        )
+    if not rows:
+        raise HTTPException(status_code=404, detail="highlights_not_found")
+    anchors: list[dict] = []
+    total = 0
+    for r in rows:
+        body = (r["text"] or "").strip()
+        if not body:
+            continue
+        if total >= _NOTES_SOURCE_CHAR_CAP:
+            break
+        clip = _truncate(body, _NOTES_PER_ANCHOR_CHAR_CAP)
+        total += len(clip)
+        label = (r["source_title"] or r["chapter_ref"] or "Highlight").strip()[:160] or "Highlight"
+        anchors.append({
+            "id": f"S{len(anchors) + 1}",
+            "kind": "highlight",
+            "label": label,
+            "url": _safe_citation_url(r["source_url"] or ""),
+            "text": clip,
+        })
+    if not anchors:
+        raise HTTPException(status_code=400, detail="highlights_empty")
+    return anchors, "Saved highlights"
+
+
+# ───── Gemini-only caller (no silent fallback) ─────
+
+async def _call_gemini_strict(messages: list, max_tokens: int = 2200) -> str:
+    """Call Gemini ONLY (Vertex first, then API key fallback). Raises
+    HTTPException(502/503) on failure so the user gets a clear error rather
+    than a silent fallback to Cerebras/Groq."""
+    errors: list[str] = []
+
+    # 1) Vertex Gemini Flash (preferred for BYOK / billed paths).
+    if _vchat.is_configured():
+        try:
+            buf: list[str] = []
+            async for tok in _vchat.stream_chat(messages, max_tokens=max_tokens, temperature=0.2):
+                buf.append(tok)
+                if sum(len(b) for b in buf) > 30000:
+                    break
+            txt = "".join(buf).strip()
+            if txt:
+                return txt
+            errors.append("vertex_empty_response")
+        except Exception as e:
+            errors.append(f"vertex:{type(e).__name__}:{str(e)[:140]}")
+            logger.warning(f"[notes-gen] Vertex Gemini failed: {e}")
+
+    # 2) Direct Gemini API key fallback.
+    for key in [k for k in (_GEMINI_KEY, _GEMINI_KEY_2) if k]:
+        try:
+            txt = await _call_gemini(messages, key, "gemini-2.5-flash", max_tokens)
+            if (txt or "").strip():
+                return txt
+            errors.append("gemini_api_empty_response")
+        except Exception as e:
+            errors.append(f"gemini_api:{type(e).__name__}:{str(e)[:140]}")
+            logger.warning(f"[notes-gen] Gemini API key failed: {e}")
+
+    if not errors:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "gemini_unavailable",
+                "message": "Notes generation requires Google Gemini, which is not configured on this server.",
+            },
+        )
+    raise HTTPException(
+        status_code=502,
+        detail={
+            "error": "gemini_failed",
+            "message": "Google Gemini is currently unavailable. Please try again in a few minutes.",
+            "attempts": errors[-3:],
+        },
+    )
+
+
+# ───── Generation route ─────
+
+class NotesGenReq(BaseModel):
+    source_kind: str = Field(..., description="conversation | chapter | highlights")
+    source_id: str = Field("", max_length=120, description="conv_id or chapter_id (when applicable)")
+    note_ids: List[str] = Field(default_factory=list, description="for source_kind='highlights'")
+    response_lang: str = Field("en", max_length=8)
+    custom_focus: str = Field("", max_length=300, description="optional topical focus hint")
+
+
+NOTES_GEN_DAILY_CAP = 20         # per-actor LLM call budget per UTC day
+NOTES_GEN_BURST_CAP = 6          # per-actor 5-min burst
+NOTES_GEN_DAY_WINDOW = 86400
+
+
+def _notes_gen_daily_key(kind: str, actor: str) -> str:
+    return f"edu_notes_gen_day:{kind}:{actor}"
+
+
+@router.post("/edu/notes/generate")
+async def generate_notes(req: NotesGenReq, request: Request,
+                         user=Depends(get_current_user_optional)):
+    """NotebookLM-style grounded notes generator. Calls Gemini with the user's
+    own sources (conversation / chapter / highlights), validates citations,
+    and persists the result through the existing notes table."""
+    await _ensure_schema()
+    kind, actor = _actor(request, user)
+
+    # Burst limit (per 5 min) — protects from accidental double-clicks.
+    if not check_rate_limit(f"edu_notes_gen:{actor}",
+                            max_requests=NOTES_GEN_BURST_CAP,
+                            window_seconds=300):
+        raise HTTPException(status_code=429, detail="Too many generations; try again in a few minutes.")
+    # Per-UTC-day cap (cost control).
+    if not check_rate_limit(_notes_gen_daily_key(kind, actor),
+                            max_requests=NOTES_GEN_DAILY_CAP,
+                            window_seconds=NOTES_GEN_DAY_WINDOW):
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "notes_gen_daily_cap",
+                "limit": NOTES_GEN_DAILY_CAP,
+                "scope": "day",
+                "resets_at": "midnight UTC",
+                "message": (
+                    f"Daily AI-notes limit reached ({NOTES_GEN_DAILY_CAP}/day). "
+                    f"Try again after midnight UTC."
+                ),
+            },
+            headers={"Retry-After": "3600",
+                     "X-RateLimit-Limit": str(NOTES_GEN_DAILY_CAP),
+                     "X-RateLimit-Scope": "day"},
+        )
+
+    sk = (req.source_kind or "").strip().lower()
+    if sk == "conversation":
+        if not req.source_id:
+            raise HTTPException(status_code=400, detail="source_id_required")
+        anchors, source_title = await _assemble_from_conversation(
+            req.source_id, user["id"] if user else None,
+        )
+        source_ref = req.source_id
+    elif sk == "chapter":
+        if not req.source_id:
+            raise HTTPException(status_code=400, detail="source_id_required")
+        anchors, source_title = await _assemble_from_chapter(req.source_id)
+        source_ref = req.source_id
+    elif sk == "highlights":
+        anchors, source_title = await _assemble_from_highlights(req.note_ids, kind, actor)
+        source_ref = ",".join((req.note_ids or [])[:30])
+    else:
+        raise HTTPException(status_code=400, detail="invalid_source_kind")
+
+    valid_anchor_ids = {a["id"] for a in anchors}
+
+    # Build the user message with each anchor labelled and bounded.
+    parts: list[str] = []
+    if req.custom_focus:
+        parts.append(f"Topical focus: {req.custom_focus.strip()[:300]}")
+    if req.response_lang and req.response_lang.lower().startswith("as"):
+        parts.append("Write the title, summary, headings, definitions, and Q&A in Assamese (as-IN).")
+    parts.append(f"Source set: {source_title}")
+    parts.append("")
+    parts.append("--- SOURCE PASSAGES ---")
+    for a in anchors:
+        parts.append(f"[{a['id']}] {a['label']}")
+        parts.append(a["text"])
+        parts.append("")
+    parts.append("--- END SOURCES ---")
+    parts.append("")
+    parts.append("Now produce the JSON note as instructed. Cite anchors only from the list above.")
+
+    messages = [
+        {"role": "system", "content": _NOTES_GEN_SYS},
+        {"role": "user",   "content": "\n".join(parts)},
+    ]
+
+    raw = await _call_gemini_strict(messages, max_tokens=2200)
+
+    payload = _coerce_notes_payload(raw)
+    structured = _validate_notes_payload(payload, valid_anchor_ids)
+
+    # Light safety pass on the flattened generated text.
+    flat_parts = [structured["title"], structured["summary"]]
+    for sec in structured["outline"]:
+        flat_parts.append(sec["heading"])
+        flat_parts.extend(sec["points"])
+    for kt in structured["key_terms"]:
+        flat_parts.append(kt["term"]); flat_parts.append(kt["definition"])
+    for q in structured["qa"]:
+        flat_parts.append(q["q"]); flat_parts.append(q["a"])
+    ok, _why = validate_llm_output(" ".join(flat_parts))
+    if not ok:
+        raise HTTPException(status_code=502, detail="notes_safety_block")
+
+    # Build a plain-text representation so the existing list/search/text
+    # pipeline keeps working unchanged for generated notes.
+    plain_lines = [structured["title"], "", structured["summary"], ""]
+    for sec in structured["outline"]:
+        plain_lines.append(sec["heading"])
+        for p in sec["points"]:
+            plain_lines.append(f"• {p}")
+        plain_lines.append("")
+    if structured["key_terms"]:
+        plain_lines.append("Key terms")
+        for kt in structured["key_terms"]:
+            plain_lines.append(f"• {kt['term']}: {kt['definition']}")
+        plain_lines.append("")
+    if structured["qa"]:
+        plain_lines.append("Q&A")
+        for qa in structured["qa"]:
+            plain_lines.append(f"Q: {qa['q']}")
+            plain_lines.append(f"A: {qa['a']}")
+    plain_text = "\n".join(plain_lines).strip()
+
+    # Citations table: id → {label, url, kind} so the frontend can render
+    # clickable chips without re-querying the source.
+    citations_out = [
+        {"id": a["id"], "kind": a["kind"], "label": a["label"], "url": a["url"]}
+        for a in anchors
+    ]
+
+    nid = str(uuid.uuid4())
+    auto_tag = f"ai-notes" if sk != "conversation" else "ai-notes"
+    sk_tag = f"src-{sk}"
+    tags = _norm_tags([auto_tag, sk_tag])
+    chapter_ref = source_title if sk in ("chapter", "highlights") else ""
+    src_url = ""
+    src_title = structured["title"]
+    if sk == "conversation":
+        src_url = f"/chat?id={req.source_id}"
+        src_title = f"Notes from chat: {source_title}"
+    elif sk == "chapter":
+        # Use the first anchor's url (the chapter URL) when we successfully
+        # built it; falling back to empty keeps the existing renderer happy.
+        src_url = anchors[0].get("url") or ""
+
+    async with deps.pg_pool.acquire() as conn:
+        cnt = await conn.fetchval(
+            "SELECT COUNT(*) FROM edu_notes WHERE actor_kind=$1 AND actor=$2",
+            kind, actor,
+        )
+        if cnt is not None and cnt >= 2000:
+            raise HTTPException(status_code=400, detail="notebook_full")
+        row = await conn.fetchrow(
+            """INSERT INTO edu_notes (
+                  id, actor_kind, actor, text, source_url, source_title,
+                  chapter_ref, tags, generated, structured, citations,
+                  source_kind, source_ref)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE,$9::jsonb,$10::jsonb,$11,$12)
+               RETURNING *""",
+            nid, kind, actor, plain_text, src_url, src_title,
+            chapter_ref, tags,
+            json.dumps(structured), json.dumps(citations_out),
+            sk, source_ref[:300],
+        )
+    return {"ok": True, "note": _note_row_to_dict(row)}
 
 
 # ───────────────────────── Flashcards (SM-2 lite) ─────────────────────────

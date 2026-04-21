@@ -40,6 +40,22 @@ export const studyApi = {
       headers: baseHeaders(), body: JSON.stringify(payload),
     }).then(_json),
 
+  // Notes generation (NotebookLM-style, Gemini-grounded) ───────────────
+  // payload = { source_kind: 'conversation'|'chapter'|'highlights',
+  //             source_id?, note_ids?, response_lang?, custom_focus? }
+  generateNotes: (payload) =>
+    fetch(`${API_BASE}/edu/notes/generate`, {
+      method: 'POST', credentials: 'include',
+      headers: baseHeaders(), body: JSON.stringify(payload),
+    }).then(_json),
+
+  // Lightweight conversation list (signed-in users only — used by the
+  // notes-generation modal to pick a source chat).
+  listMyConversations: () =>
+    fetch(`${API_BASE}/conversations`, {
+      credentials: 'include', headers: baseHeaders(),
+    }).then(_json),
+
   // Notes ───────────────────────────────────────────────
   listNotes: ({ q = '', tag = '', limit = 100, offset = 0 } = {}) => {
     const qs = new URLSearchParams();
