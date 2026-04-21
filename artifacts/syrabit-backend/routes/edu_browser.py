@@ -31,7 +31,8 @@ from auth_deps import (
 from edu_allowlist import (
     effective_allowlist, list_overrides, upsert_override,
     remove_override, list_blocked_requests, _refresh_overrides_cache,
-    BASE_ALLOWLIST, EDU_REQUESTED_SITES_COLLECTION, EDU_USER_STATE_COLLECTION,
+    BASE_ALLOWLIST, EDU_ALLOWLIST_COLLECTION, EDU_REQUESTED_SITES_COLLECTION,
+    EDU_USER_STATE_COLLECTION,
     _normalize_domain, is_allowed_url, is_domain_hard_blocked,
 )
 from edu_reader import fetch_and_extract, get_reader_stats, probe_site_safety
@@ -436,6 +437,37 @@ async def educator_appeal_rejection(
         "status": "queued",
         "source": "educator_appeal",
     }
+
+
+@router.get("/edu/educator/my-submissions")
+async def educator_my_submissions(
+    limit: int = 10, educator=Depends(get_educator_user),
+):
+    """Return the calling educator's most recent self-serve submissions.
+
+    Filters the shared allowlist collection by ``source=educator`` and the
+    educator's clamped actor identifier (email or id, the same value the
+    submit endpoint records). The panel uses this to show educators a
+    short history of what they've previously added — domain, current
+    status, when it was approved, and the kid-safe density measured by
+    the probe.
+    """
+    if not await is_mongo_available():
+        return {"ok": True, "items": [], "count": 0}
+    raw_actor = (educator or {}).get("email", "") or (educator or {}).get("id", "")
+    actor = raw_actor[:120] if raw_actor else ""
+    if not actor:
+        return {"ok": True, "items": [], "count": 0}
+    limit = max(1, min(50, int(limit or 10)))
+    try:
+        cur = db[EDU_ALLOWLIST_COLLECTION].find(
+            {"source": "educator", "actor": actor}, {"_id": 0},
+        ).sort("updated_at", -1).limit(limit)
+        items = [doc async for doc in cur]
+    except Exception as e:
+        logger.warning(f"[edu_browser] my-submissions list failed: {e}")
+        items = []
+    return {"ok": True, "items": items, "count": len(items)}
 
 
 # ───────────────────────── Public: per-user state (tabs/bookmarks/history) ────

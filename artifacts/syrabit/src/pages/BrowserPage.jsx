@@ -40,6 +40,7 @@ import {
   eduLoadState, eduSaveState, eduGroundedAnswerUrl, getAnonId,
   eduEducatorSubmitSite,
   eduEducatorAppealRejection,
+  eduEducatorMySubmissions,
 } from '@/utils/api';
 import { toast } from 'sonner';
 
@@ -104,6 +105,13 @@ const T = {
     educatorAppealQueued: 'Queued for admin review.',
     educatorAppealFailed: 'Could not send the appeal. Try again.',
     educatorClose: 'Close',
+    educatorRecent: 'Your recent submissions',
+    educatorRecentEmpty: 'You haven\u2019t submitted any sites yet.',
+    educatorRecentLoading: 'Loading your submissions\u2026',
+    educatorStatusAllowed: 'Approved',
+    educatorStatusBlocked: 'Blocked',
+    educatorKidSafe: 'kid-safe',
+    educatorOpen: 'Open',
   },
   as: {
     title: 'চিৰা ব্ৰাউজাৰ',
@@ -164,6 +172,13 @@ const T = {
     educatorAppealQueued: 'এডমিনৰ পৰ্যালোচনাৰ বাবে কতাৰত।',
     educatorAppealFailed: 'অনুৰোধ পঠিয়াব নোৱাৰিলে। আকৌ চেষ্টা কৰক।',
     educatorClose: 'বন্ধ',
+    educatorRecent: 'আপোনাৰ শেহতীয়া পঠোৱাসমূহ',
+    educatorRecentEmpty: 'আপুনি এতিয়ালৈকে কোনো ছাইট পঠোৱা নাই।',
+    educatorRecentLoading: 'আপোনাৰ পঠোৱাসমূহ লোড হৈ আছে…',
+    educatorStatusAllowed: 'অনুমোদিত',
+    educatorStatusBlocked: 'অৱৰোধিত',
+    educatorKidSafe: 'কিড-ছেফ',
+    educatorOpen: 'খোলক',
   },
 };
 
@@ -889,8 +904,22 @@ function EducatorSubmitPanel({ open, onClose, lang, onOpenDomain }) {
   const [result, setResult] = useState(null); // {ok, status, domain, detail, error, probe}
   const [appealing, setAppealing] = useState(false);
   const [appealed, setAppealed] = useState(false);
+  const [history, setHistory] = useState([]); // recent submissions
+  const [historyLoading, setHistoryLoading] = useState(false);
 
-  // Reset form on open.
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const { data } = await eduEducatorMySubmissions(10);
+      setHistory(Array.isArray(data?.items) ? data.items : []);
+    } catch {
+      setHistory([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  // Reset form + load history on open.
   useEffect(() => {
     if (open) {
       setDomain('');
@@ -899,8 +928,9 @@ function EducatorSubmitPanel({ open, onClose, lang, onOpenDomain }) {
       setSubmitting(false);
       setAppealing(false);
       setAppealed(false);
+      loadHistory();
     }
-  }, [open]);
+  }, [open, loadHistory]);
 
   const cleanDomain = (raw) => {
     let s = (raw || '').trim().toLowerCase();
@@ -926,6 +956,8 @@ function EducatorSubmitPanel({ open, onClose, lang, onOpenDomain }) {
       const status = res?.data?.status;
       if (status === 'auto_approved') toast.success(t.educatorAutoApproved);
       else if (status === 'already_allowed') toast.success(t.educatorAlreadyAllowed);
+      // Refresh recent submissions so the new entry shows up immediately.
+      loadHistory();
     } catch (err) {
       const data = err?.response?.data || {};
       setResult({
@@ -1150,7 +1182,102 @@ function EducatorSubmitPanel({ open, onClose, lang, onOpenDomain }) {
           </button>
         </div>
       </form>
+      <RecentSubmissionsList
+        items={history}
+        loading={historyLoading}
+        lang={lang}
+        onOpenDomain={(d) => { onOpenDomain?.(d); onClose?.(); }}
+      />
     </ModalOverlay>
+  );
+}
+
+// ── RecentSubmissionsList ------------------------------------------------
+// Compact list of the educator's last ~10 self-serve submissions, fetched
+// from GET /api/edu/educator/my-submissions. Tapping a row opens the
+// domain in the browser. Helps educators track what they've contributed
+// and re-open auto-approved sites quickly.
+function RecentSubmissionsList({ items, loading, lang, onOpenDomain }) {
+  const t = T[lang];
+  const fmtTime = (ts) => {
+    if (!ts || typeof ts !== 'number') return '';
+    try {
+      const d = new Date(ts * 1000);
+      const now = Date.now();
+      const diffMs = now - d.getTime();
+      const day = 86400000;
+      if (diffMs < day) {
+        const h = Math.max(1, Math.round(diffMs / 3600000));
+        return lang === 'as' ? `${h} ঘণ্টা আগত` : `${h}h ago`;
+      }
+      if (diffMs < 7 * day) {
+        const days = Math.round(diffMs / day);
+        return lang === 'as' ? `${days} দিন আগত` : `${days}d ago`;
+      }
+      return d.toLocaleDateString(lang === 'as' ? 'as-IN' : undefined, {
+        year: 'numeric', month: 'short', day: 'numeric',
+      });
+    } catch { return ''; }
+  };
+  return (
+    <section className="mt-5 border-t border-slate-200 pt-4 dark:border-slate-700">
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          {t.educatorRecent}
+        </h3>
+        {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" />}
+      </div>
+      {!loading && items.length === 0 && (
+        <p className="text-xs text-slate-400">{t.educatorRecentEmpty}</p>
+      )}
+      {items.length > 0 && (
+        <ul className="max-h-56 space-y-1.5 overflow-y-auto pr-1">
+          {items.map((it) => {
+            const blocked = (it.status || '').toLowerCase() === 'blocked';
+            const density = it?.provenance?.kid_safe_density;
+            const densityPct = typeof density === 'number'
+              ? Math.round(density * 100) : null;
+            return (
+              <li key={it.domain}>
+                <button
+                  type="button"
+                  onClick={() => onOpenDomain?.(it.domain)}
+                  className="group flex w-full items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-left transition hover:border-violet-400 hover:bg-violet-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
+                  title={t.educatorOpen}
+                >
+                  <Globe className="h-3.5 w-3.5 shrink-0 text-violet-500" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate text-xs font-medium text-slate-800 dark:text-slate-100">
+                        {it.domain}
+                      </span>
+                      <span
+                        className={
+                          'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ' + (
+                            blocked
+                              ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300'
+                              : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+                          )
+                        }
+                      >
+                        {blocked ? t.educatorStatusBlocked : t.educatorStatusAllowed}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                      <span>{fmtTime(it.updated_at)}</span>
+                      {densityPct !== null && (
+                        <span>· {densityPct}% {t.educatorKidSafe}</span>
+                      )}
+                    </div>
+                  </div>
+                  <ExternalLink className="h-3.5 w-3.5 shrink-0 text-slate-400 group-hover:text-violet-500" />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }
 

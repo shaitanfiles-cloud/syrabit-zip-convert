@@ -118,6 +118,11 @@ export const eduEducatorAppealRejection = (domain, reason = '', probe = null, pr
     { headers: anonHeaders(), withCredentials: true },
   );
 
+export const eduEducatorMySubmissions = (limit = 10) =>
+  axios.get(`${API_BASE}/edu/educator/my-submissions`, {
+    params: { limit }, headers: anonHeaders(), withCredentials: true,
+  });
+
 export const eduLoadState = () =>
   axios.get(`${API_BASE}/edu/state`, { headers: anonHeaders(), withCredentials: true });
 
