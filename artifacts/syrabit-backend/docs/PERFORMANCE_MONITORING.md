@@ -49,6 +49,18 @@ GCP_PROJECT_ID=syrabit-prod
 DEPLOYMENT_ENV=production
 ```
 
+**Authentication for the Cloud Trace exporter:**
+- **Cloud Run (recommended):** no JSON key — grant the runtime service
+  account `roles/cloudtrace.agent` and the exporter picks up Application
+  Default Credentials automatically.
+- **Railway / other non-GCP hosts:** paste the full SA-key JSON (from
+  GCP Console → IAM → Service Accounts → Keys → Add Key → JSON) into
+  one env var: `GOOGLE_APPLICATION_CREDENTIALS_JSON`. The full file
+  must be included — `type`, `project_id`, `private_key_id`,
+  `private_key`, `client_email`, `client_id`, `token_uri`, etc. The
+  exporter will refuse to start if any required field is missing and
+  will log exactly which one to re-paste.
+
 For non-GCP backends (e.g. Honeycomb), use:
 
 ```

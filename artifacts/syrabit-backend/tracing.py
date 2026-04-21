@@ -67,6 +67,58 @@ def is_tracing_enabled() -> bool:
     return _ENABLED
 
 
+def _load_sa_credentials_from_env_json():
+    """Parse a Google service-account JSON from `GOOGLE_APPLICATION_CREDENTIALS_JSON`.
+
+    Returns a `google.oauth2.service_account.Credentials` instance, or None
+    if the env var is unset, the JSON is unparseable, or google-auth is not
+    installed. Tolerant of common copy-paste mistakes (leading/trailing
+    whitespace, missing outer braces, trailing comma).
+    """
+    raw = (os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON", "") or "").strip()
+    if not raw:
+        return None
+    import json as _json
+    info = None
+    try:
+        info = _json.loads(raw)
+    except _json.JSONDecodeError:
+        # Tolerate: user pasted the inside of the JSON file without the
+        # outer `{` and `}` (a recurring footgun on most secret-manager UIs).
+        s = raw
+        if not s.startswith("{"):
+            s = "{" + s
+        if not s.rstrip().endswith("}"):
+            s = s.rstrip().rstrip(",") + "}"
+        try:
+            info = _json.loads(s)
+        except Exception as exc:
+            logger.warning("[tracing] GOOGLE_APPLICATION_CREDENTIALS_JSON unparseable: %s", exc)
+            return None
+    if not isinstance(info, dict):
+        logger.warning(
+            "[tracing] GOOGLE_APPLICATION_CREDENTIALS_JSON parsed as %s, expected JSON object",
+            type(info).__name__,
+        )
+        return None
+    required = ("type", "project_id", "private_key", "client_email")
+    missing = [f for f in required if not info.get(f)]
+    if missing:
+        logger.warning(
+            "[tracing] GOOGLE_APPLICATION_CREDENTIALS_JSON missing required field(s): %s — re-paste the FULL JSON file",
+            ", ".join(missing),
+        )
+        return None
+    try:
+        from google.oauth2 import service_account  # type: ignore
+        return service_account.Credentials.from_service_account_info(
+            info, scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+    except Exception as exc:
+        logger.warning("[tracing] could not build SA credentials from env JSON: %s", exc)
+        return None
+
+
 def init_tracing(app: Any) -> bool:
     """Idempotent initialization. Returns True on successful wire-up.
 
@@ -146,8 +198,26 @@ def init_tracing(app: Any) -> bool:
         else:
             try:
                 from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
-                exporter = CloudTraceSpanExporter(project_id=project)
-                logger.info("[tracing] using Cloud Trace exporter for project=%s", project)
+                # On Cloud Run, the runtime service account provides
+                # Application Default Credentials automatically — just grant
+                # it `roles/cloudtrace.agent` and no JSON key is needed.
+                # Outside Cloud Run (Railway, local prod, etc.) we accept a
+                # `GOOGLE_APPLICATION_CREDENTIALS_JSON` env var carrying the
+                # full SA-key JSON content, since most of those platforms
+                # cannot mount a file for `GOOGLE_APPLICATION_CREDENTIALS`.
+                creds = _load_sa_credentials_from_env_json()
+                if creds is not None:
+                    exporter = CloudTraceSpanExporter(project_id=project, credentials=creds)
+                    logger.info(
+                        "[tracing] using Cloud Trace exporter for project=%s (SA from env JSON)",
+                        project,
+                    )
+                else:
+                    exporter = CloudTraceSpanExporter(project_id=project)
+                    logger.info(
+                        "[tracing] using Cloud Trace exporter for project=%s (ADC)",
+                        project,
+                    )
             except Exception as exc:
                 logger.warning(
                     "[tracing] Cloud Trace exporter unavailable (%s) — falling back to console",
