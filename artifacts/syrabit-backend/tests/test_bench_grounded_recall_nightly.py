@@ -78,7 +78,7 @@ def test_run_and_alert_live_passes_gate_does_not_alert(monkeypatch, tmp_path):
     monkeypatch.setattr(gr, "run_benchmark", _fake_run)
     monkeypatch.setattr(gr, "RESULTS_DIR", tmp_path)
     monkeypatch.setattr(gr, "save_report",
-                        lambda r, results_dir=None: tmp_path / "latest.json")
+                        lambda r, results_dir=None, language=None: tmp_path / "latest.json")
 
     dispatch = AsyncMock()
     out = _run(gr.run_and_alert_live(gate=0.05, dispatch=dispatch))
@@ -102,7 +102,7 @@ def test_run_and_alert_live_fails_gate_dispatches_alert(monkeypatch, tmp_path):
 
     monkeypatch.setattr(gr, "run_benchmark", _fake_run)
     monkeypatch.setattr(gr, "save_report",
-                        lambda r, results_dir=None: tmp_path / "latest.json")
+                        lambda r, results_dir=None, language=None: tmp_path / "latest.json")
 
     dispatch = AsyncMock(return_value={"email": {"ok": True}})
     out = _run(gr.run_and_alert_live(gate=0.05, dispatch=dispatch))
@@ -137,9 +137,9 @@ def test_run_and_alert_live_does_not_alert_when_baseline_missing(monkeypatch, tm
         return _fake_report(0.10)  # would be a huge drop if baseline existed
 
     monkeypatch.setattr(gr, "run_benchmark", _fake_run)
-    monkeypatch.setattr(gr, "load_baseline", lambda path=None: None)
+    monkeypatch.setattr(gr, "load_baseline", lambda path=None, language=None: None)
     monkeypatch.setattr(gr, "save_report",
-                        lambda r, results_dir=None: tmp_path / "latest.json")
+                        lambda r, results_dir=None, language=None: tmp_path / "latest.json")
 
     dispatch = AsyncMock()
     out = _run(gr.run_and_alert_live(gate=0.05, dispatch=dispatch))
@@ -229,7 +229,9 @@ def test_cross_replica_dedup_only_one_winner(monkeypatch, tmp_path):
 
     runs = {"count": 0}
 
-    async def _fake_run_and_alert(*, gate=None, save=True, fixture_path=None, dispatch=None):
+    async def _fake_run_and_alert(*, gate=None, save=True, fixture_path=None,
+                                  dispatch=None, language=None,
+                                  alert_type="grounded_recall_regression"):
         runs["count"] += 1
         return {"ran": True, "gate_failed": False, "drop": 0.0,
                 "alert_dispatched": False, "report": {}, "saved_to": None,

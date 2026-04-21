@@ -504,6 +504,16 @@ async def lifespan(app):
         asyncio.create_task(_grounded_recall_nightly_loop())
     except Exception as _gr_err:
         logger.warning(f"grounded-recall nightly loop not started: {_gr_err}")
+    # Task #599 — Assamese-language live-retriever nightly subset.
+    # Catches as.wikipedia / NCERT-Assamese coverage drops that the
+    # global bench masks (8 cases vs >100 → one Assamese miss is well
+    # inside the global gate). Independent lock + baseline_as.json +
+    # alert_type so it does not interfere with the global nightly.
+    try:
+        from bench.grounded_recall import _grounded_recall_assamese_nightly_loop
+        asyncio.create_task(_grounded_recall_assamese_nightly_loop())
+    except Exception as _gr_as_err:
+        logger.warning(f"grounded-recall Assamese nightly loop not started: {_gr_as_err}")
     # Task #458 — daily/weekly auto-publish of SEO pages so the 991 syllabus
     # topics steadily fill in without admin clicks. Cross-replica dedup is
     # handled inside the loop via atomic CAS on db.job_locks, so it does not

@@ -462,19 +462,28 @@ async def admin_blocked_log(limit: int = 200, _admin=Depends(get_admin_user)):
 # ───────────────────────── Admin: grounded-recall bench ─────────────────────────
 
 @router.get("/admin/grounded-recall/latest")
-async def admin_grounded_recall_latest(_admin=Depends(get_admin_user)):
+async def admin_grounded_recall_latest(
+    language: str | None = None,
+    _admin=Depends(get_admin_user),
+):
     """Return the most recent grounded-answer recall benchmark run + baseline.
 
-    The nightly job writes `bench/results/latest.json`; this endpoint
-    surfaces it (plus the committed baseline) so the admin UI can render
-    a retrieval-quality tile without running the bench in-process.
+    The nightly job writes `bench/results/latest.json` (global) and
+    `bench/results/latest_<lang>.json` (per-language subsets, e.g.
+    Assamese — Task #599); this endpoint surfaces them (plus the
+    matching committed baseline) so the admin UI can render a
+    retrieval-quality tile without running the bench in-process.
+
+    Pass ``?language=as`` to read the Assamese-only subset.
     """
     try:
         from bench.grounded_recall import find_latest_result, load_baseline
-        latest = find_latest_result()
-        baseline = load_baseline()
+        lang = (language or "").strip().lower() or None
+        latest = find_latest_result(language=lang)
+        baseline = load_baseline(language=lang)
         return {
             "ok": True,
+            "language": lang,
             "latest": latest,
             "baseline": baseline,
             "has_results": latest is not None,

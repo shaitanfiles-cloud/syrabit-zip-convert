@@ -343,34 +343,61 @@ async def run_benchmark(
 
 # ───────────────────────── Fixture / baseline I/O ─────────────────────────
 
-def load_cases(path: Path = FIXTURE_PATH) -> list[BenchCase]:
+def load_cases(path: Path = FIXTURE_PATH, *, language: Optional[str] = None) -> list[BenchCase]:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    return [BenchCase.from_dict(c) for c in data["cases"]]
+    cases = [BenchCase.from_dict(c) for c in data["cases"]]
+    if language:
+        lang = language.lower()
+        cases = [c for c in cases if (c.context or {}).get("language", "").lower() == lang]
+    return cases
 
 
-def load_baseline(path: Path = BASELINE_PATH) -> Optional[dict]:
-    if not path.exists():
+def _baseline_path_for(language: Optional[str]) -> Path:
+    if not language:
+        return BASELINE_PATH
+    return _BENCH_DIR / "fixtures" / f"baseline_{language.lower()}.json"
+
+
+def load_baseline(path: Optional[Path] = None, *, language: Optional[str] = None) -> Optional[dict]:
+    p = path if path is not None else _baseline_path_for(language)
+    if not p.exists():
         return None
-    with open(path, "r", encoding="utf-8") as f:
+    with open(p, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def save_report(report: BenchReport, results_dir: Path = RESULTS_DIR) -> Path:
+def _latest_filename(language: Optional[str]) -> str:
+    if not language:
+        return "latest.json"
+    return f"latest_{language.lower()}.json"
+
+
+def save_report(
+    report: BenchReport,
+    results_dir: Path = RESULTS_DIR,
+    *,
+    language: Optional[str] = None,
+) -> Path:
     results_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    filename = results_dir / f"grounded_recall-{report.retriever}-{ts}.json"
+    lang_tag = f"-{language.lower()}" if language else ""
+    filename = results_dir / f"grounded_recall-{report.retriever}{lang_tag}-{ts}.json"
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(report.to_dict(), f, indent=2)
-    # also update "latest.json" for easy admin read
-    latest = results_dir / "latest.json"
+    # also update "latest[ _<lang>].json" for easy admin read
+    latest = results_dir / _latest_filename(language)
     with open(latest, "w", encoding="utf-8") as f:
         json.dump(report.to_dict(), f, indent=2)
     return filename
 
 
-def find_latest_result(results_dir: Path = RESULTS_DIR) -> Optional[dict]:
-    latest = results_dir / "latest.json"
+def find_latest_result(
+    results_dir: Path = RESULTS_DIR,
+    *,
+    language: Optional[str] = None,
+) -> Optional[dict]:
+    latest = results_dir / _latest_filename(language)
     if latest.exists():
         with open(latest, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -412,20 +439,27 @@ def _main_cli() -> int:
     parser = argparse.ArgumentParser(description="Grounded-answer recall benchmark")
     parser.add_argument("--live", action="store_true", help="Use live retrievers instead of the offline corpus")
     parser.add_argument("--fixture", default=str(FIXTURE_PATH))
+    parser.add_argument("--language", default=None, help="Filter to cases whose context.language matches (e.g. 'as' for Assamese)")
     parser.add_argument("--save-results", action="store_true", help="Archive results to bench/results/")
-    parser.add_argument("--compare-baseline", action="store_true", help="Compare against bench/fixtures/baseline.json")
+    parser.add_argument("--compare-baseline", action="store_true", help="Compare against bench/fixtures/baseline[ _<lang>].json")
     parser.add_argument("--gate", type=float, default=None, help="Exit non-zero if recall@5 drops below baseline by more than GATE")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON to stdout")
     args = parser.parse_args()
 
-    cases = load_cases(Path(args.fixture))
+    language = (args.language or "").strip().lower() or None
+    cases = load_cases(Path(args.fixture), language=language)
+    if not cases:
+        print(
+            f"No cases matched filter language={language!r}", file=sys.stderr
+        )
+        return 1
     retriever = "live" if args.live else "offline"
     report = asyncio.run(run_benchmark(cases, retriever=retriever))
 
-    baseline = load_baseline() if args.compare_baseline or args.gate is not None else None
+    baseline = load_baseline(language=language) if args.compare_baseline or args.gate is not None else None
 
     if args.save_results:
-        saved = save_report(report)
+        saved = save_report(report, language=language)
         print(f"Saved results → {saved}", file=sys.stderr)
 
     if args.json:
@@ -519,7 +553,14 @@ def _should_run_grounded_recall_now(now_utc: datetime, last_run_tag: str) -> boo
     return _bench_run_tag(now_utc) != (last_run_tag or "")
 
 
-def _format_alert_body(report: BenchReport, baseline: dict, drop: float, gate: float) -> str:
+def _format_alert_body(
+    report: BenchReport,
+    baseline: dict,
+    drop: float,
+    gate: float,
+    *,
+    language: Optional[str] = None,
+) -> str:
     """Plain-text body for the admin alert. The Slack/Email dispatcher
     wraps this with the rich formatter; we keep the diff + miss list
     here so the on-call admin sees the same diagnostic info regardless
@@ -552,7 +593,8 @@ def _format_alert_body(report: BenchReport, baseline: dict, drop: float, gate: f
         if len(misses) > 10:
             lines.append(f"  … and {len(misses) - 10} more")
     lines.append("")
-    lines.append("Source: bench/results/latest.json   gate: --gate "
+    src_name = _latest_filename(language)
+    lines.append(f"Source: bench/results/{src_name}   gate: --gate "
                  f"{gate} (recall@5 drop > gate triggers this alert).")
     return "\n".join(lines)
 
@@ -563,6 +605,8 @@ async def run_and_alert_live(
     save: bool = True,
     fixture_path: Path = FIXTURE_PATH,
     dispatch: Optional[Callable[..., Any]] = None,
+    language: Optional[str] = None,
+    alert_type: str = "grounded_recall_regression",
 ) -> dict:
     """Run the live bench, save results, and fire an alert on gate failure.
 
@@ -584,16 +628,31 @@ async def run_and_alert_live(
     """
     if gate is None:
         gate = _bench_gate()
-    cases = load_cases(fixture_path)
+    lang = (language or "").strip().lower() or None
+    cases = load_cases(fixture_path, language=lang)
+    if not cases:
+        logger.warning(f"[bench.nightly] no cases matched language={lang!r}")
+        return {
+            "ran": False,
+            "reason": "no_cases_for_language",
+            "language": lang,
+            "report": None,
+            "saved_to": None,
+            "gate": gate,
+            "drop": 0.0,
+            "gate_failed": False,
+            "alert_dispatched": False,
+            "alert_outcomes": None,
+        }
     report = await run_benchmark(cases, retriever="live")
     saved_to: Optional[Path] = None
     if save:
         try:
-            saved_to = save_report(report)
+            saved_to = save_report(report, language=lang)
         except Exception as exc:
             logger.warning(f"[bench.nightly] save_report failed: {exc}")
 
-    baseline = load_baseline() or {}
+    baseline = load_baseline(language=lang) or {}
     baseline_recall_5 = (baseline.get("metrics") or {}).get("recall@5")
     cur_recall_5 = report.metrics.get("recall@5")
     drop = 0.0
@@ -625,19 +684,22 @@ async def run_and_alert_live(
             logger.warning(f"[bench.nightly] alert dispatcher unavailable: {exc}")
             return out
 
+    lang_label = f" [{lang}]" if lang else ""
     title = (
-        f"Grounded-recall regression: recall@5 dropped {drop:.4f} "
+        f"Grounded-recall regression{lang_label}: recall@5 dropped {drop:.4f} "
         f"(> gate {gate:.2f})"
     )
-    body = _format_alert_body(report, baseline, drop, gate)
+    body = _format_alert_body(report, baseline, drop, gate, language=lang)
+    if lang:
+        body = f"Language subset: {lang}\n\n" + body
     threshold_snapshot = {
-        "metric": "recall@5",
+        "metric": f"recall@5{lang_label}",
         "value": round(baseline_recall_5 - gate, 4),  # min acceptable
         "actual": round(cur_recall_5, 4),
     }
     try:
         outcomes = await dispatch(
-            "grounded_recall_regression",
+            alert_type,
             title,
             body,
             threshold_snapshot=threshold_snapshot,
@@ -650,15 +712,20 @@ async def run_and_alert_live(
     return out
 
 
-async def _claim_grounded_recall_slot(db, cur_tag: str) -> bool:
-    """Atomic CAS on ``db.job_locks[_GROUNDED_RECALL_LOCK_ID]`` so only one
-    replica per day actually runs the bench (mirrors the dedup pattern
-    used by ``_seo_auto_publish_loop``)."""
+async def _claim_grounded_recall_slot(
+    db, cur_tag: str, *, lock_id: str = _GROUNDED_RECALL_LOCK_ID
+) -> bool:
+    """Atomic CAS on ``db.job_locks[lock_id]`` so only one replica per
+    day actually runs the bench (mirrors the dedup pattern used by
+    ``_seo_auto_publish_loop``). The ``lock_id`` parameter lets us run
+    multiple independent nightly bench schedules (e.g. global + an
+    Assamese-only subset, Task #599) without them stepping on each
+    other's slot."""
     from pymongo.errors import DuplicateKeyError
     try:
         res = await db.job_locks.find_one_and_update(
             {
-                "_id": _GROUNDED_RECALL_LOCK_ID,
+                "_id": lock_id,
                 _GROUNDED_RECALL_LAST_RUN_KEY: {"$ne": cur_tag},
             },
             {"$set": {
@@ -674,7 +741,7 @@ async def _claim_grounded_recall_slot(db, cur_tag: str) -> bool:
         return False
     try:
         await db.job_locks.insert_one({
-            "_id": _GROUNDED_RECALL_LOCK_ID,
+            "_id": lock_id,
             _GROUNDED_RECALL_LAST_RUN_KEY: cur_tag,
             "claimed_at": datetime.now(timezone.utc).isoformat(),
         })
@@ -686,15 +753,29 @@ async def _claim_grounded_recall_slot(db, cur_tag: str) -> bool:
         return False
 
 
-async def _try_run_grounded_recall_once(db, now_utc: Optional[datetime] = None) -> dict:
+async def _try_run_grounded_recall_once(
+    db,
+    now_utc: Optional[datetime] = None,
+    *,
+    language: Optional[str] = None,
+    lock_id: str = _GROUNDED_RECALL_LOCK_ID,
+    gate: Optional[float] = None,
+    alert_type: str = "grounded_recall_regression",
+    log_prefix: str = "[bench.nightly]",
+) -> dict:
     """One iteration of the scheduler. Factored out so tests can drive
-    it deterministically without a real wall clock."""
+    it deterministically without a real wall clock.
+
+    ``language`` / ``lock_id`` / ``alert_type`` let the same machinery
+    drive multiple independent nightly schedules — e.g. the global bench
+    plus an Assamese-only subset (Task #599) that gates against its own
+    baseline file and pages on its own alert channel."""
     now_utc = now_utc or datetime.now(timezone.utc)
     if not _bench_enabled():
         return {"ran": False, "reason": "disabled"}
     try:
         cfg = await db.job_locks.find_one(
-            {"_id": _GROUNDED_RECALL_LOCK_ID},
+            {"_id": lock_id},
             {"_id": 0, _GROUNDED_RECALL_LAST_RUN_KEY: 1},
         ) or {}
     except Exception:
@@ -704,17 +785,27 @@ async def _try_run_grounded_recall_once(db, now_utc: Optional[datetime] = None) 
         return {"ran": False, "reason": "outside_window_or_dedup"}
 
     cur_tag = _bench_run_tag(now_utc)
-    if not await _claim_grounded_recall_slot(db, cur_tag):
+    if not await _claim_grounded_recall_slot(db, cur_tag, lock_id=lock_id):
         return {"ran": False, "reason": "lost_race"}
 
-    logger.info(f"[bench.nightly] starting live grounded-recall bench tag={cur_tag}")
-    result = await run_and_alert_live(gate=_bench_gate(), save=True)
+    eff_gate = gate if gate is not None else _bench_gate()
     logger.info(
-        "[bench.nightly] finished tag=%s gate_failed=%s drop=%.4f alert_dispatched=%s",
-        cur_tag, result.get("gate_failed"), result.get("drop", 0.0),
+        f"{log_prefix} starting live grounded-recall bench tag={cur_tag} "
+        f"language={language or 'all'} gate={eff_gate}"
+    )
+    result = await run_and_alert_live(
+        gate=eff_gate,
+        save=True,
+        language=language,
+        alert_type=alert_type,
+    )
+    logger.info(
+        "%s finished tag=%s language=%s gate_failed=%s drop=%.4f alert_dispatched=%s",
+        log_prefix, cur_tag, language or "all",
+        result.get("gate_failed"), result.get("drop", 0.0),
         result.get("alert_dispatched"),
     )
-    return {"ran": True, "tag": cur_tag, **result}
+    return {"ran": True, "tag": cur_tag, "language": language, **result}
 
 
 async def _grounded_recall_nightly_loop():
@@ -736,6 +827,94 @@ async def _grounded_recall_nightly_loop():
         await asyncio.sleep(_GROUNDED_RECALL_LOOP_SLEEP_S)
 
 
+# ───────────────────────── Assamese (`as`) nightly subset (Task #599) ─────
+#
+# The full bench masks language-specific regressions: Assamese has only
+# ~8 cases out of >100, so a complete failure on the Assamese subset
+# moves recall@5 by a fraction of a percent overall — well inside the
+# global gate. We therefore run a second nightly job that filters to
+# ``context.language == "as"`` cases against the *live* retrievers, gates
+# them against their own committed baseline (``baseline_as.json``), and
+# fires an alert via its own channel ID so on-call admins notice when
+# as.wikipedia / NCERT-Assamese stops surfacing for Asomiya queries.
+#
+# Configuration (env):
+#   GROUNDED_RECALL_AS_NIGHTLY_ENABLED   default: true
+#   GROUNDED_RECALL_AS_NIGHTLY_GATE      default: 0.15 (more slack — only
+#                                                       8 cases, one miss
+#                                                       moves recall@5 by
+#                                                       0.125)
+#   The window/hour and enabled flag fall back to the global bench
+#   settings so operators can disable both at once if needed.
+
+_GROUNDED_RECALL_AS_LOCK_ID = "grounded_recall_nightly_marker_as"
+_GROUNDED_RECALL_AS_DEFAULT_GATE = 0.15
+_GROUNDED_RECALL_AS_LANGUAGE = "as"
+_GROUNDED_RECALL_AS_ALERT_TYPE = "grounded_recall_regression_as"
+
+
+def _bench_as_enabled() -> bool:
+    val = (os.environ.get("GROUNDED_RECALL_AS_NIGHTLY_ENABLED", "true") or "").strip().lower()
+    if val not in ("1", "true", "yes", "on"):
+        return False
+    # Respect the global kill-switch — if the operator turned the whole
+    # nightly bench off, the Assamese subset goes silent too.
+    return _bench_enabled()
+
+
+def _bench_as_gate() -> float:
+    try:
+        g = float(os.environ.get(
+            "GROUNDED_RECALL_AS_NIGHTLY_GATE",
+            str(_GROUNDED_RECALL_AS_DEFAULT_GATE),
+        ))
+    except (TypeError, ValueError):
+        g = _GROUNDED_RECALL_AS_DEFAULT_GATE
+    return max(0.0, min(g, 1.0))
+
+
+async def _try_run_grounded_recall_assamese_once(
+    db, now_utc: Optional[datetime] = None
+) -> dict:
+    """Assamese-subset variant of ``_try_run_grounded_recall_once``.
+
+    Independent lock, independent baseline, independent gate so the
+    Asomiya nightly never blocks (or is masked by) the global bench."""
+    if not _bench_as_enabled():
+        return {"ran": False, "reason": "disabled"}
+    return await _try_run_grounded_recall_once(
+        db,
+        now_utc=now_utc,
+        language=_GROUNDED_RECALL_AS_LANGUAGE,
+        lock_id=_GROUNDED_RECALL_AS_LOCK_ID,
+        gate=_bench_as_gate(),
+        alert_type=_GROUNDED_RECALL_AS_ALERT_TYPE,
+        log_prefix="[bench.nightly.as]",
+    )
+
+
+async def _grounded_recall_assamese_nightly_loop():
+    """Background loop for the Assamese-language subset (Task #599).
+
+    Same poll cadence as the global loop; staggered start so the two
+    nightly bench runs don't slam the live retrievers in the same
+    minute. Cross-replica dedup is handled by the per-language lock
+    inside ``_try_run_grounded_recall_assamese_once``.
+    """
+    from deps import db, is_mongo_available  # type: ignore
+    # Boot warm-up (5 min) + stagger another 5 min after the global
+    # loop so the two nightly bench runs don't double-hit the live
+    # search/scrape pipelines in the same minute.
+    await asyncio.sleep(300 + 5 * 60)
+    while True:
+        try:
+            if await is_mongo_available():
+                await _try_run_grounded_recall_assamese_once(db)
+        except Exception as exc:
+            logger.debug(f"[bench.nightly.as] loop iteration error: {exc}")
+        await asyncio.sleep(_GROUNDED_RECALL_LOOP_SLEEP_S)
+
+
 __all__ = [
     "BenchCase", "CaseResult", "BenchReport",
     "load_cases", "load_baseline", "save_report", "find_latest_result",
@@ -745,4 +924,10 @@ __all__ = [
     "_try_run_grounded_recall_once", "_should_run_grounded_recall_now",
     "_bench_run_tag", "_GROUNDED_RECALL_LOCK_ID",
     "_GROUNDED_RECALL_LAST_RUN_KEY",
+    # Assamese-subset nightly (Task #599)
+    "_grounded_recall_assamese_nightly_loop",
+    "_try_run_grounded_recall_assamese_once",
+    "_GROUNDED_RECALL_AS_LOCK_ID",
+    "_GROUNDED_RECALL_AS_LANGUAGE",
+    "_GROUNDED_RECALL_AS_ALERT_TYPE",
 ]
