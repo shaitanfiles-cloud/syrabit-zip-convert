@@ -16,6 +16,9 @@ __all__ = [
     "LLM_MODEL", "LLM_PROVIDER",
     "MONGO_URL", "OPENAI_API_KEY", "PLAN_LIMITS",
     "REDIS_AI_CACHE_TTL", "REDIS_TOKEN", "REDIS_URL",
+    "MEMORYSTORE_REDIS_URL", "REDIS_AI_CACHE_NAMESPACE",
+    "REDIS_AI_CACHE_MAX_ENTRY_BYTES",
+    "REDIS_AI_CACHE_CONNECT_TIMEOUT_MS", "REDIS_AI_CACHE_OP_TIMEOUT_MS",
     "ROOT_DIR",
     "SARVAM_API_KEY", "SARVAM_BASE_URL", "SARVAM_THINK_BUFFER",
     "SARVAM_TRANSLATE_KEY",
@@ -408,12 +411,27 @@ if not _upstash_url.startswith('http') and _upstash_token.startswith('http'):
     _upstash_url, _upstash_token = _upstash_token, _upstash_url
 REDIS_URL   = _upstash_url if _upstash_url.startswith('http') else _fallback_url
 REDIS_TOKEN = _upstash_token
-REDIS_AI_CACHE_TTL = 3600
-REDIS_CASUAL_CACHE_TTL = 300
+REDIS_AI_CACHE_TTL = int(os.environ.get('REDIS_AI_CACHE_TTL', '3600') or '3600')
+REDIS_CASUAL_CACHE_TTL = int(os.environ.get('REDIS_CASUAL_CACHE_TTL', '300') or '300')
 REDIS_CHAT_CACHE_TTL = 600
 REDIS_SEARCH_CACHE_TTL = 300
 REDIS_SESSION_CACHE_TTL = 1800
 REDIS_RATE_WINDOW = 60
+
+# ── Memorystore-backed AI response cache (Task #609) ────────────────────────
+# Single configurable Redis URL — Google Memorystore preferred, any
+# Redis-compatible endpoint (rediss:// for TLS, redis:// otherwise) accepted.
+# When unset, the AI cache falls back to the existing Upstash REST client and
+# finally to the in-memory L1 cache. All values can be tuned per environment
+# without code changes.
+MEMORYSTORE_REDIS_URL = (
+    os.environ.get('MEMORYSTORE_REDIS_URL', '').strip().strip('"').strip("'")
+    or os.environ.get('AI_CACHE_REDIS_URL', '').strip().strip('"').strip("'")
+)
+REDIS_AI_CACHE_NAMESPACE = (os.environ.get('REDIS_AI_CACHE_NAMESPACE', 'ai_cache').strip() or 'ai_cache')
+REDIS_AI_CACHE_MAX_ENTRY_BYTES = int(os.environ.get('REDIS_AI_CACHE_MAX_ENTRY_BYTES', str(64 * 1024)) or 64 * 1024)
+REDIS_AI_CACHE_CONNECT_TIMEOUT_MS = int(os.environ.get('REDIS_AI_CACHE_CONNECT_TIMEOUT_MS', '200') or '200')
+REDIS_AI_CACHE_OP_TIMEOUT_MS = int(os.environ.get('REDIS_AI_CACHE_OP_TIMEOUT_MS', '150') or '150')
 
 # ── Slow-query logging ────────────────────────────────────────────────────────
 SLOW_QUERY_THRESHOLD_MS = float(os.environ.get("SLOW_QUERY_THRESHOLD_MS", "200"))

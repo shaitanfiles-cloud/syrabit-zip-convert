@@ -1612,6 +1612,42 @@ async def prometheus_metrics():
         f'# TYPE syrabit_redis_misses counter',
         f'syrabit_redis_misses {_redis_miss_count}',
     ]
+    # Task #609 — managed AI response cache metrics (Memorystore preferred).
+    try:
+        import ai_cache as _ai_cache_mod
+        _ac = _ai_cache_mod.stats()
+        _backend_safe = str(_ac.get("backend", "unknown")).replace('"', '\\"')
+        lines.extend([
+            f'# HELP syrabit_ai_cache_hits Managed AI response cache hits',
+            f'# TYPE syrabit_ai_cache_hits counter',
+            f'syrabit_ai_cache_hits{{backend="{_backend_safe}"}} {_ac.get("hits", 0)}',
+            f'# HELP syrabit_ai_cache_misses Managed AI response cache misses',
+            f'# TYPE syrabit_ai_cache_misses counter',
+            f'syrabit_ai_cache_misses{{backend="{_backend_safe}"}} {_ac.get("misses", 0)}',
+            f'# HELP syrabit_ai_cache_errors Managed AI response cache errors',
+            f'# TYPE syrabit_ai_cache_errors counter',
+            f'syrabit_ai_cache_errors{{backend="{_backend_safe}"}} {_ac.get("errors", 0)}',
+            f'# HELP syrabit_ai_cache_hit_rate Managed AI response cache hit rate (0-1)',
+            f'# TYPE syrabit_ai_cache_hit_rate gauge',
+            f'syrabit_ai_cache_hit_rate {_ac.get("hit_rate", 0)}',
+            f'# HELP syrabit_ai_cache_bytes_stored Total bytes stored to managed AI cache (cumulative)',
+            f'# TYPE syrabit_ai_cache_bytes_stored counter',
+            f'syrabit_ai_cache_bytes_stored {_ac.get("bytes_stored", 0)}',
+            f'# HELP syrabit_ai_cache_oversize_skipped Entries dropped because they exceeded REDIS_AI_CACHE_MAX_ENTRY_BYTES',
+            f'# TYPE syrabit_ai_cache_oversize_skipped counter',
+            f'syrabit_ai_cache_oversize_skipped {_ac.get("entries_skipped_oversize", 0)}',
+            f'# HELP syrabit_ai_cache_avg_saved_ms Average LLM latency saved per cache hit (ms)',
+            f'# TYPE syrabit_ai_cache_avg_saved_ms gauge',
+            f'syrabit_ai_cache_avg_saved_ms {_ac.get("avg_saved_latency_ms", 0)}',
+            f'# HELP syrabit_ai_cache_total_saved_ms Estimated total LLM latency saved by cache (ms)',
+            f'# TYPE syrabit_ai_cache_total_saved_ms counter',
+            f'syrabit_ai_cache_total_saved_ms {_ac.get("estimated_total_saved_ms", 0)}',
+            f'# HELP syrabit_ai_cache_breaker_open Circuit breaker state (1=open, 0=closed)',
+            f'# TYPE syrabit_ai_cache_breaker_open gauge',
+            f'syrabit_ai_cache_breaker_open {1 if _ac.get("breaker_open") else 0}',
+        ])
+    except Exception as _ai_cache_metrics_err:
+        logger.debug(f"ai_cache metrics unavailable: {_ai_cache_metrics_err}")
     batch_stats = _llm_batcher.stats
     lines.extend([
         f'# HELP syrabit_llm_batched Total LLM requests processed via batcher',
@@ -1637,12 +1673,44 @@ async def prometheus_metrics():
 
 @router.get("/ai/cache/stats")
 async def get_cache_stats(admin: dict = Depends(get_admin_user)):
-    """Return cache statistics (admin only)."""
+    """Return AI response cache statistics (admin only).
+
+    Includes the in-memory L1 tier *and* the managed Memorystore-backed AI
+    cache (Task #609): backend, hit/miss/error counters, hit rate, configured
+    TTL & max-entry size, bytes stored, and the saved-latency metrics that
+    quantify how much LLM time the cache has eliminated."""
+    try:
+        import ai_cache as _ai_cache_mod
+        managed = _ai_cache_mod.stats()
+    except Exception as e:
+        managed = {"backend": "unavailable", "error": str(e)[:200]}
     return {
-        "size": len(_ai_response_cache),
-        "maxsize": _ai_response_cache.maxsize,
-        "ttl": _ai_response_cache.ttl
+        "l1": {
+            "size": len(_ai_response_cache),
+            "maxsize": _ai_response_cache.maxsize,
+            "ttl": _ai_response_cache.ttl,
+        },
+        "managed": managed,
     }
+
+
+@router.post("/ai/cache/purge")
+async def purge_ai_cache(
+    pattern: str = "*",
+    admin: dict = Depends(get_admin_user),
+):
+    """Purge AI response cache entries (admin only).
+
+    `pattern` is appended after the configured `<namespace>:` prefix and
+    defaults to `*` (purge everything in the namespace). Also clears the
+    in-memory L1 cache so a stale entry can't re-leak from this worker.
+    """
+    try:
+        import ai_cache as _ai_cache_mod
+        result = await _ai_cache_mod.purge_all(pattern=pattern)
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200], "deleted": 0}
+    return result
 
 @router.get("/metrics/history")
 async def metrics_history(minutes: int = 60, admin: dict = Depends(get_admin_user)):

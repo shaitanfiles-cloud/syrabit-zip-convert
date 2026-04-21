@@ -628,6 +628,15 @@ async def lifespan(app):
     except Exception as _asm_load_err:
         logger.warning(f"[INDIC-SANITIZE] startup override load failed: {_asm_load_err}")
 
+    # Task #609 — initialise the managed AI response cache. Safe no-op when
+    # MEMORYSTORE_REDIS_URL is unset; the cache transparently falls back to
+    # the existing Upstash REST client and finally to the in-memory L1.
+    try:
+        import ai_cache as _ai_cache
+        await _ai_cache.init_async_client()
+    except Exception as _ai_cache_err:
+        logger.warning(f"ai_cache init failed (continuing with fallback): {_ai_cache_err}")
+
     logger.info("Syrabit.ai API started")
     if sarvam_client:
         logger.info("Sarvam AI client ready")
@@ -643,6 +652,11 @@ async def lifespan(app):
         await asyncio.to_thread(_speedup.flush_to_store)
     except Exception as _sp_shutdown_err:
         logger.warning(f"chat_speedup_metrics shutdown flush failed: {_sp_shutdown_err}")
+    try:
+        import ai_cache as _ai_cache_close
+        await _ai_cache_close.close_async_client()
+    except Exception:
+        pass
     if _deps_mod._rate_cleanup_task:
         _deps_mod._rate_cleanup_task.cancel()
     if sarvam_client:

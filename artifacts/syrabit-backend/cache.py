@@ -1,10 +1,20 @@
 """Syrabit.ai — Redis + in-memory caching helpers."""
-import asyncio, hashlib, json, logging, time
+import asyncio, hashlib, json, logging, os, time
 from typing import Optional, Dict, Any
 import cachetools
 from deps import redis_client
 
 logger = logging.getLogger(__name__)
+
+# Lazy import — ai_cache imports from us indirectly via the legacy fallback
+# path, so we resolve it on demand inside the AI-cache helpers below to keep
+# import order safe.
+def _ai_cache_mod():
+    try:
+        import ai_cache as _m
+        return _m
+    except Exception:
+        return None
 
 REDIS_ANON_CONV_TTL = 604800
 
@@ -13,6 +23,8 @@ __all__ = [
     "REDIS_CASUAL_CACHE_TTL",
     "REDIS_CHAT_CACHE_TTL", "REDIS_CONTENT_PREFIX", "REDIS_RATE_WINDOW",
     "REDIS_SEARCH_CACHE_TTL", "REDIS_SESSION_CACHE_TTL",
+    "build_ai_cache_key", "ai_cache_aget", "ai_cache_aset",
+    "ai_cache_record_hit_saved_latency",
     "_ai_response_cache", "_cache_key", "_content_cache",
     "_embedding_cache", "_embedding_cache_key", "_query_embed_cache",
     "_content_card_cache", "_content_card_cache_key", "_conv_cache", "_conv_cache_key",
@@ -87,9 +99,24 @@ def _embedding_cache_key(text: str, task_type: str) -> str:
     raw = f"{text[:200].strip().lower()}|{task_type}"
     return hashlib.md5(raw.encode()).hexdigest()
 
-REDIS_AI_CACHE_TTL = 3600
-REDIS_CASUAL_CACHE_TTL = 300
-REDIS_CHAT_CACHE_TTL = 600
+# Task #609 — TTLs are env-tunable; defaults preserved for back-compat.
+# Pulled from config.py so any change to the env vars is picked up without
+# having to keep two copies in sync. Importing here (instead of at module
+# top) avoids a circular import from modules that import constants from
+# `cache` during config load.
+try:
+    from config import (
+        REDIS_AI_CACHE_TTL as _CFG_AI_TTL,
+        REDIS_CASUAL_CACHE_TTL as _CFG_CASUAL_TTL,
+        REDIS_CHAT_CACHE_TTL as _CFG_CHAT_TTL,
+    )
+    REDIS_AI_CACHE_TTL = int(_CFG_AI_TTL)
+    REDIS_CASUAL_CACHE_TTL = int(_CFG_CASUAL_TTL)
+    REDIS_CHAT_CACHE_TTL = int(_CFG_CHAT_TTL)
+except Exception:
+    REDIS_AI_CACHE_TTL = int(os.environ.get('REDIS_AI_CACHE_TTL', '3600') or '3600')
+    REDIS_CASUAL_CACHE_TTL = int(os.environ.get('REDIS_CASUAL_CACHE_TTL', '300') or '300')
+    REDIS_CHAT_CACHE_TTL = int(os.environ.get('REDIS_CHAT_CACHE_TTL', '600') or '600')
 REDIS_SEARCH_CACHE_TTL = 300
 REDIS_SESSION_CACHE_TTL = 1800
 REDIS_RATE_WINDOW = 60
@@ -120,9 +147,26 @@ async def _redis_get_async(prefix: str, key: str) -> Optional[str]:
     return await loop.run_in_executor(None, _redis_get, prefix, key)
 
 async def _redis_get_ai_cache_async(key: str) -> Optional[str]:
+    """Async AI-cache GET. Routes through the managed Memorystore client when
+    initialised, falling back to the legacy Upstash REST helper otherwise."""
+    mod = _ai_cache_mod()
+    if mod is not None and getattr(mod, "_async_pool", None) is not None:
+        return await mod.aget(key)
     return await _redis_get_async("ai_cache", key)
 
 def _redis_set(prefix: str, key: str, value: str, ttl: int):
+    # AI-cache writes go through the managed module when available so the
+    # Memorystore namespace, max-entry guard, and metrics all apply.
+    if prefix == "ai_cache":
+        mod = _ai_cache_mod()
+        if mod is not None and getattr(mod, "_async_pool", None) is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(mod.aset(key, value, int(ttl)))
+                return
+            except RuntimeError:
+                # No running loop — fall through to sync path
+                pass
     if redis_client:
         try:
             redis_client.set(f"{prefix}:{key}", value, ex=ttl)
@@ -138,6 +182,52 @@ def _redis_del(prefix: str, key: str):
 
 def _redis_get_ai_cache(key: str) -> Optional[str]:
     return _redis_get("ai_cache", key)
+
+
+def build_ai_cache_key(*, model: str, prompt: str, retrieval=None,
+                       language: str = "", scope: str = "") -> str:
+    """Public, delegating shim for the managed AI cache key builder."""
+    mod = _ai_cache_mod()
+    if mod is not None:
+        return mod.build_ai_cache_key(model=model, prompt=prompt,
+                                      retrieval=retrieval, language=language,
+                                      scope=scope)
+    # Lightweight degraded fallback (no model/retrieval scope) — should never
+    # happen in practice because ai_cache is importable whenever cache.py is.
+    raw = f"{model}|{(prompt or '').strip().lower()}|{language}|{scope}"
+    return hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest()[:40]
+
+
+async def ai_cache_aget(key: str) -> Optional[str]:
+    mod = _ai_cache_mod()
+    if mod is not None:
+        return await mod.aget(key)
+    return await _redis_get_ai_cache_async(key)
+
+
+async def ai_cache_aset(key: str, value: str, ttl: int, *, saved_ms: float = 0.0) -> bool:
+    mod = _ai_cache_mod()
+    if mod is not None:
+        return await mod.aset(key, value, int(ttl), saved_ms=saved_ms)
+    _redis_set("ai_cache", key, value, int(ttl))
+    return True
+
+
+def ai_cache_record_hit_saved_latency(ms: float) -> None:
+    mod = _ai_cache_mod()
+    if mod is not None:
+        mod.record_hit_saved_latency(ms)
+
+
+def ai_cache_expected_saved_ms() -> float:
+    """Returns rolling-avg LLM latency a hit would have avoided (ms)."""
+    mod = _ai_cache_mod()
+    if mod is not None:
+        try:
+            return float(mod.expected_saved_ms())
+        except Exception:
+            return 0.0
+    return 0.0
 
 
 def _redis_cache_conversation(conv_id: str, user_id: str, conv_data: dict):

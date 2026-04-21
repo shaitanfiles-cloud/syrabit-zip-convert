@@ -44,6 +44,11 @@ from cache import (
     _redis_set,
     _syllabus_cache,
     _syllabus_cache_key,
+    build_ai_cache_key,
+    ai_cache_aget,
+    ai_cache_aset,
+    ai_cache_record_hit_saved_latency,
+    ai_cache_expected_saved_ms,
 )
 from auth_deps import (
     get_current_user, get_admin_user, create_access_token, create_refresh_token,
@@ -501,29 +506,38 @@ async def chat(msg: ChatMessage, request: Request, user: Optional[dict] = Depend
 
     messages = [{"role": "system", "content": system_prompt}] + history_messages + [{"role": "user", "content": msg.message}]
 
-    # ── Cache check (Non-streaming) — Redis first, in-memory fallback ───────
+    # ── Cache check (Non-streaming) — managed AI cache (Memorystore) ────────
     is_casual = _detected_intent in ("casual", "general")
-    cache_key = _cache_key(msg.message, subject_id=msg.subject_id or "", board_id=ctx_board_id or "", conversation_id="" if is_casual else (conv_id or ""))
+    _ns_model = msg.model or "meta-llama/llama-4-scout-17b-16e-instruct"
+    cache_key = build_ai_cache_key(
+        model=_ns_model,
+        prompt=msg.message,
+        retrieval=rag_ctx,
+        scope="" if is_casual else (conv_id or ""),
+    )
     _cache_ttl = REDIS_CASUAL_CACHE_TTL if is_casual else REDIS_AI_CACHE_TTL
     answer = None
     _ns_cache_hit = False
+    _ns_cache_t0 = _time_mod.time()
 
-    answer = _redis_get_ai_cache(cache_key)
+    answer = await ai_cache_aget(cache_key)
     if answer:
         _ns_cache_hit = True
-        logger.info(f"Redis cache HIT: {cache_key}")
+        ai_cache_record_hit_saved_latency(ai_cache_expected_saved_ms())
+        logger.info(f"AI cache HIT (managed): {cache_key}")
     elif cache_key in _ai_response_cache:
         answer = _ai_response_cache[cache_key]
         _ns_cache_hit = True
-        logger.info(f"Memory cache HIT: {cache_key}")
+        ai_cache_record_hit_saved_latency(ai_cache_expected_saved_ms())
+        logger.info(f"AI cache HIT (L1): {cache_key}")
 
     if answer is None:
         _t_llm_start = _time_mod.time()
         try:
-            answer = await call_llm_api_chat(messages, model=msg.model or "meta-llama/llama-4-scout-17b-16e-instruct", max_tokens=max_tokens)
-            _redis_set("ai_cache", cache_key, answer, _cache_ttl)
-            if not redis_client:
-                _ai_response_cache[cache_key] = answer
+            answer = await call_llm_api_chat(messages, model=_ns_model, max_tokens=max_tokens)
+            _llm_elapsed_ms = (_time_mod.time() - _t_llm_start) * 1000
+            await ai_cache_aset(cache_key, answer, _cache_ttl, saved_ms=_llm_elapsed_ms)
+            _ai_response_cache[cache_key] = answer
             _t_llm_done = _time_mod.time()
             logger.info(f"[NON-STREAM][TIMING] LLM call: {_t_llm_done - _t_llm_start:.3f}s | Cache MISS → stored (ttl={_cache_ttl}s): {cache_key}")
         except HTTPException:
@@ -936,10 +950,27 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
     _cache_msg_key_early = f"{msg.message}::lang={_resp_lang}" if _want_translate else msg.message
     _early_is_casual = _stream_intent in ("casual", "general")
-    _cache_key_early = _cache_key(_cache_msg_key_early, subject_id=msg.subject_id or "", board_id=msg.board_id or "", conversation_id="" if _early_is_casual else (msg.conversation_id or ""))
-    _early_cached_answer = _redis_get_ai_cache(_cache_key_early)
-    if not _early_cached_answer and _cache_key_early in _ai_response_cache:
-        _early_cached_answer = _ai_response_cache[_cache_key_early]
+    # Early-cache lookup runs BEFORE RAG resolution, so the cache key cannot
+    # include a retrieval fingerprint. To preserve the requirement that
+    # "changing retrieval context produces a fresh answer" (Task #609), we
+    # only consult the early cache for intents that are intrinsically
+    # retrieval-independent (casual / small-talk). Anything that may use
+    # RAG falls through to the post-RAG, fingerprinted cache below.
+    _early_model = msg.model or "stream-default"
+    _cache_key_early = build_ai_cache_key(
+        model=_early_model,
+        prompt=_cache_msg_key_early,
+        retrieval=None,
+        language=_resp_lang or "",
+        scope=f"early-casual|{msg.subject_id or ''}|{msg.board_id or ''}",
+    )
+    _early_cached_answer = None
+    if _early_is_casual:
+        _early_cached_answer = await ai_cache_aget(_cache_key_early)
+        if not _early_cached_answer and _cache_key_early in _ai_response_cache:
+            _early_cached_answer = _ai_response_cache[_cache_key_early]
+        if _early_cached_answer:
+            ai_cache_record_hit_saved_latency(ai_cache_expected_saved_ms())
     if _early_cached_answer:
         logger.info(f"[STREAM] EARLY cache HIT — skipping all preprocessing (key={_cache_key_early})")
         _speedup.record_early_cache_hit()
@@ -1592,15 +1623,24 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
     _cache_is_casual = _stream_intent in ("casual", "general")
     _cache_msg_key = f"{msg.message}::lang={_resp_lang}" if _want_translate else msg.message
-    _cache_key_val = _cache_key(_cache_msg_key, subject_id=msg.subject_id or "", board_id=ctx_board_id or "", conversation_id="" if _cache_is_casual else (conv_id or ""))
+    _stream_model_for_key = msg.model or "stream-default"
+    _cache_key_val = build_ai_cache_key(
+        model=_stream_model_for_key,
+        prompt=_cache_msg_key,
+        retrieval=rag_ctx,
+        language=_resp_lang or "",
+        scope=f"{ctx_board_id or ''}|" + ("" if _cache_is_casual else (conv_id or "")),
+    )
     _cache_ttl_val = REDIS_CASUAL_CACHE_TTL if _cache_is_casual else REDIS_AI_CACHE_TTL
     _cached_answer = _ai_response_cache.get(_cache_key_val)
     if _cached_answer:
-        logger.info(f"Memory cache HIT (pre-SSE): {_cache_key_val}")
+        ai_cache_record_hit_saved_latency(ai_cache_expected_saved_ms())
+        logger.info(f"AI cache HIT (pre-SSE, L1): {_cache_key_val}")
     else:
-        _cached_answer = await _redis_get_ai_cache_async(_cache_key_val)
+        _cached_answer = await ai_cache_aget(_cache_key_val)
         if _cached_answer:
-            logger.info(f"Redis cache HIT (pre-SSE): {_cache_key_val}")
+            ai_cache_record_hit_saved_latency(ai_cache_expected_saved_ms())
+            logger.info(f"AI cache HIT (pre-SSE, managed): {_cache_key_val}")
     if _cached_answer:
         try:
             _speedup.record_pre_sse_cache_hit()
@@ -1857,9 +1897,29 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 if full_response:
                     answer_str = "".join(full_response)
                     if answer_str:
-                        _redis_set("ai_cache", _cache_key_val, answer_str, _cache_ttl_val)
-                        if not redis_client:
-                            _ai_response_cache[_cache_key_val] = answer_str
+                        try:
+                            _stream_elapsed_ms = (_time_mod.time() - _stream_t0) * 1000
+                        except Exception:
+                            _stream_elapsed_ms = 0.0
+                        await ai_cache_aset(
+                            _cache_key_val, answer_str, _cache_ttl_val,
+                            saved_ms=_stream_elapsed_ms,
+                        )
+                        # Also write through the early-cache key for casual /
+                        # small-talk intents only — the early path never
+                        # consults the RAG fingerprint, so populating it for
+                        # retrieval-bound intents could later return stale
+                        # answers when the corpus changes (Task #609).
+                        if _early_is_casual:
+                            try:
+                                await ai_cache_aset(
+                                    _cache_key_early, answer_str, _cache_ttl_val,
+                                    saved_ms=_stream_elapsed_ms,
+                                )
+                            except Exception:
+                                pass
+                            _ai_response_cache[_cache_key_early] = answer_str
+                        _ai_response_cache[_cache_key_val] = answer_str
                         logger.info(f"Cache MISS → stored (STREAM, ttl={_cache_ttl_val}s): {_cache_key_val}")
 
             # Yield DONE immediately — DB writes happen in background

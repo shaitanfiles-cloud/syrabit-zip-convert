@@ -180,6 +180,52 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   const [prerenderLoading, setPrerenderLoading] = useState(false);
   const [prerenderTriggering, setPrerenderTriggering] = useState(false);
 
+  // Task #609 — managed AI response cache stats + admin purge controls.
+  const [aiCacheStats, setAiCacheStats] = useState(null);
+  const [aiCacheLoading, setAiCacheLoading] = useState(false);
+  const [aiCachePurging, setAiCachePurging] = useState(false);
+
+  const loadAiCacheStats = useCallback(() => {
+    setAiCacheLoading(true);
+    axios.get(`${API_BASE}/admin/ai/cache/stats`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setAiCacheStats(r.data))
+      .catch(() => setAiCacheStats(null))
+      .finally(() => setAiCacheLoading(false));
+  }, [adminToken]);
+
+  const purgeAiCache = useCallback(async () => {
+    if (!window.confirm('Purge all AI response cache entries? Active users will see one slow LLM call before the cache repopulates.')) {
+      return;
+    }
+    setAiCachePurging(true);
+    try {
+      const r = await axios.post(`${API_BASE}/admin/ai/cache/purge`, null, {
+        params: { pattern: '*' },
+        headers: adminHeaders(adminToken), withCredentials: true,
+      });
+      const d = r.data || {};
+      if (d.ok === false) {
+        toast.error(`Purge failed: ${d.error || 'unknown error'}`);
+      } else {
+        toast.success(`Purged ${d.deleted ?? 0} cache entries (L1: ${d.l1_cleared ?? 0})`);
+      }
+      loadAiCacheStats();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Purge failed');
+    } finally {
+      setAiCachePurging(false);
+    }
+  }, [adminToken, loadAiCacheStats]);
+
+  useEffect(() => {
+    if (!adminToken) return;
+    loadAiCacheStats();
+    const id = setInterval(loadAiCacheStats, 30000);
+    return () => clearInterval(id);
+  }, [adminToken, loadAiCacheStats]);
+
   // Task #422 — Assamese purity admin override controls.
   const [asmCfg, setAsmCfg] = useState(null);
   const [asmLoading, setAsmLoading] = useState(false);
@@ -1616,6 +1662,69 @@ export default function AdminHealth({ adminToken, onNavigate }) {
               </AreaChart>
             </ResponsiveContainer>
           )}
+        </div>
+        </SectionErrorBoundary>
+
+        <SectionErrorBoundary name="AI Response Cache">
+        <div className="rounded-xl p-4 bg-white border border-gray-200 shadow-sm" data-testid="ai-cache-panel">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">AI Response Cache</p>
+              <p className="text-[11px] text-gray-400 mt-0.5">
+                Backend: <span className="font-mono text-gray-600">{aiCacheStats?.managed?.backend || '—'}</span>
+                {' · '}TTL: <span className="font-mono text-gray-600">{aiCacheStats?.managed?.ttl_seconds ?? '—'}s</span>
+                {' · '}Max entry: <span className="font-mono text-gray-600">{aiCacheStats?.managed?.max_entry_bytes ?? '—'}B</span>
+                {' · '}Namespace: <span className="font-mono text-gray-600">{aiCacheStats?.managed?.namespace || '—'}</span>
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={loadAiCacheStats}
+                disabled={aiCacheLoading}
+                className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 inline-flex items-center gap-1.5"
+                data-testid="button-ai-cache-refresh"
+              >
+                <RotateCw size={12} className={aiCacheLoading ? 'animate-spin' : ''} /> Refresh
+              </button>
+              <button
+                onClick={purgeAiCache}
+                disabled={aiCachePurging}
+                className="text-xs px-3 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 disabled:opacity-50"
+                data-testid="button-ai-cache-purge"
+              >
+                {aiCachePurging ? 'Purging…' : 'Purge all'}
+              </button>
+            </div>
+          </div>
+          {aiCacheStats?.managed?.breaker_open && (
+            <div className="mb-3 text-xs px-3 py-2 rounded-lg bg-red-50 text-red-700 border border-red-200 inline-flex items-center gap-2">
+              <AlertTriangle size={12} /> Circuit breaker OPEN — cache temporarily disabled. Last error:
+              <span className="font-mono">{aiCacheStats?.managed?.last_error || 'unknown'}</span>
+            </div>
+          )}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { label: 'Hit rate', value: aiCacheStats?.managed?.hit_rate != null ? `${(aiCacheStats.managed.hit_rate * 100).toFixed(1)}%` : '—' },
+              { label: 'Hits', value: aiCacheStats?.managed?.hits ?? '—' },
+              { label: 'Misses', value: aiCacheStats?.managed?.misses ?? '—' },
+              { label: 'Errors', value: aiCacheStats?.managed?.errors ?? '—' },
+              { label: 'Bytes stored', value: aiCacheStats?.managed?.bytes_stored ?? '—' },
+              { label: 'Oversize skipped', value: aiCacheStats?.managed?.entries_skipped_oversize ?? '—' },
+              { label: 'Avg saved / hit (ms)', value: aiCacheStats?.managed?.avg_saved_latency_ms ?? '—' },
+              { label: 'Total saved (s)', value: aiCacheStats?.managed?.estimated_total_saved_ms != null
+                  ? (aiCacheStats.managed.estimated_total_saved_ms / 1000).toFixed(1)
+                  : '—' },
+            ].map((m) => (
+              <div key={m.label} className="rounded-lg bg-gray-50 border border-gray-100 p-2">
+                <div className="text-[10px] text-gray-400 uppercase tracking-wider">{m.label}</div>
+                <div className="text-sm font-semibold text-gray-800 font-mono">{m.value}</div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 text-[10px] text-gray-400">
+            L1 in-memory: <span className="font-mono">{aiCacheStats?.l1?.size ?? 0}/{aiCacheStats?.l1?.maxsize ?? '—'}</span>
+            {' · '}Last purge: <span className="font-mono">{aiCacheStats?.managed?.purge_count ?? 0}×</span>
+          </div>
         </div>
         </SectionErrorBoundary>
 

@@ -43,7 +43,11 @@ from edu_reader import fetch_and_extract
 from guardrails.web_safety import filter_web_results, score_text_kid_safety, redact_text
 from guardrails.prompt_safety import evaluate_prompt_safety, validate_llm_output
 from llm import call_llm_api_stream
-from cache import _redis_get_ai_cache_async, _redis_set, REDIS_AI_CACHE_TTL
+from cache import (
+    _redis_get_ai_cache_async, _redis_set, REDIS_AI_CACHE_TTL,
+    build_ai_cache_key, ai_cache_aget, ai_cache_aset,
+    ai_cache_record_hit_saved_latency, ai_cache_expected_saved_ms,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -314,9 +318,31 @@ def _build_citation_prompt(citations: list[dict]) -> str:
 
 # ───────────────────────── Cache helpers ─────────────────────────
 
-def _query_cache_key(query: str, page_url: str, subject_id: str, chapter_name: str) -> str:
-    raw = f"{query.strip().lower()}|{page_url.strip().lower()}|{subject_id}|{chapter_name.strip().lower()}"
-    return GROUNDED_CACHE_PREFIX + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+def _query_cache_key(
+    query: str,
+    page_url: str,
+    subject_id: str,
+    chapter_name: str,
+    *,
+    model: str = "grounded",
+    response_lang: str = "",
+) -> str:
+    """Deterministic AI-cache key for grounded answers.
+
+    Delegates to the shared `build_ai_cache_key` helper so that grounded
+    responses live in the same Memorystore namespace as chat responses
+    (Task #609) and benefit from the same purge/stats/circuit-breaker
+    machinery. The page URL + subject + chapter together act as the
+    retrieval fingerprint for this pipeline.
+    """
+    retrieval_fp = f"{page_url.strip().lower()}|{subject_id}|{chapter_name.strip().lower()}"
+    return build_ai_cache_key(
+        model=model or "grounded",
+        prompt=query,
+        retrieval=retrieval_fp,
+        language=response_lang or "",
+        scope="grounded",
+    )
 
 
 # ───────────────────────── Public streaming API ─────────────────────────
@@ -370,9 +396,14 @@ async def stream_grounded_answer(
         return
 
     # 2. Cache check (very cheap repeat-question optimisation)
-    cache_key = _query_cache_key(query, page_url, subject_id, chapter_name)
-    cached_blob = await _redis_get_ai_cache_async(cache_key)
+    cache_key = _query_cache_key(
+        query, page_url, subject_id, chapter_name,
+        model=model or "grounded", response_lang=response_lang or "",
+    )
+    _grounded_cache_t0 = time.perf_counter()
+    cached_blob = await ai_cache_aget(cache_key)
     if cached_blob:
+        ai_cache_record_hit_saved_latency(ai_cache_expected_saved_ms())
         try:
             cached = json.loads(cached_blob if isinstance(cached_blob, str) else cached_blob.decode("utf-8"))
             _pipeline_metrics["cache_hits"] += 1
@@ -534,10 +565,11 @@ async def stream_grounded_answer(
 
     if answer:
         try:
-            _redis_set(
-                "ai_cache", cache_key,
+            await ai_cache_aset(
+                cache_key,
                 json.dumps({"answer": answer, "citations": citations}),
                 REDIS_AI_CACHE_TTL,
+                saved_ms=float(elapsed_ms),
             )
         except Exception as e:
             logger.debug(f"[grounded_answer] cache write failed: {e}")
