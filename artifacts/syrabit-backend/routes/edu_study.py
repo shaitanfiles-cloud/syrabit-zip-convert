@@ -711,6 +711,13 @@ async def guardian_pin_verify(req: PinVerifyReq, request: Request,
                               user=Depends(get_current_user_optional)):
     await _ensure_schema()
     kind, actor = _actor(request, user)
+    # Task #594: rate-limit PIN verify per actor so an attacker can't
+    # brute-force a 4-digit PIN (10⁴ space) in seconds. 8 attempts per
+    # 5 minutes is well above any legitimate guardian flow but caps a
+    # brute-force run at a few attempts per window.
+    if not check_rate_limit(f"edu_pin_verify:{kind}:{actor}",
+                            max_requests=8, window_seconds=300):
+        raise HTTPException(status_code=429, detail="pin_verify_rate_limited")
     salt = f"{kind}:{actor}"
     async with deps.pg_pool.acquire() as conn:
         cur = await conn.fetchrow(

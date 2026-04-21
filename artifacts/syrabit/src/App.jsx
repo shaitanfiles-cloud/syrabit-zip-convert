@@ -109,6 +109,7 @@ const BrowserPage            = lazy(() => import("@/pages/BrowserPage"));
 const NotebookPage           = lazy(() => import("@/pages/NotebookPage"));
 const FlashcardsPage         = lazy(() => import("@/pages/FlashcardsPage"));
 const GuardianPage           = lazy(() => import("@/pages/GuardianPage"));
+const StudyTestHarnessPage   = lazy(() => import("@/pages/StudyTestHarnessPage"));
 
 // ── Page loading fallback (boot splash) ──────────────────────────────────────
 const PageFallbackContent = () => (
@@ -323,6 +324,16 @@ export function AppRoutes() {
       <Route path="/notebook"          element={<NotebookPage />} />
       <Route path="/flashcards"        element={<FlashcardsPage />} />
       <Route path="/guardian"          element={<GuardianPage />} />
+
+      {/* ── Test-only harness for the Phase-3 study e2e suite (Task #594).
+            Gated on `import.meta.env.DEV` so it ships only in the dev
+            (Vite) bundle that Playwright targets — not in production
+            builds. This keeps the test surface invisible to real
+            users while still letting the e2e suite drive the
+            highlight + quiz flow against a deterministic fixture. ── */}
+      {import.meta.env.DEV && (
+        <Route path="/__test/study-harness" element={<StudyTestHarnessPage />} />
+      )}
 
       {/* ── Admin routes ── */}
       <Route path="/admin/login" element={<AdminLoginPage />} />
