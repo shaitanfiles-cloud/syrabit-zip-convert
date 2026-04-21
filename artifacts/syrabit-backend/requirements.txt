@@ -51,8 +51,12 @@ cloudflare>=4.3.0
 
 # ── Observability (Task #610) — OpenTelemetry distributed tracing ──────────
 # All optional at runtime: tracing.py degrades to no-op if these are absent.
-opentelemetry-api>=1.27.0
-opentelemetry-sdk>=1.27.0
-opentelemetry-instrumentation-fastapi>=0.48b0
-opentelemetry-instrumentation-httpx>=0.48b0
-opentelemetry-exporter-gcp-trace>=1.7.0
+# OpenTelemetry — pinned to a known-good combination (Task #634).
+# API/SDK 1.27.0 ↔ instrumentation 0.48b0 ↔ gcp-trace exporter 1.7.0.
+# These are paired releases — bump them together or the instrumentation
+# stack will fail to import. Verified resolvable via `pip install --dry-run`.
+opentelemetry-api==1.27.0
+opentelemetry-sdk==1.27.0
+opentelemetry-instrumentation-fastapi==0.48b0
+opentelemetry-instrumentation-httpx==0.48b0
+opentelemetry-exporter-gcp-trace==1.7.0
