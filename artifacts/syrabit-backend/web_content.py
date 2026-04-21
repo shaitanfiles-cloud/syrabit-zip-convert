@@ -7,7 +7,7 @@ import httpx
 import cachetools
 
 from deps import redis_client
-from edu_reader import _safe_get_with_redirects, _validate_host_for_ssrf
+from url_safety import safe_get_with_redirects, validate_host_for_ssrf
 
 logger = logging.getLogger(__name__)
 
@@ -71,10 +71,10 @@ def _is_safe_scheme(url: str) -> bool:
     """Cheap scheme/host shape check.
 
     The real SSRF rule set (private-IP, hard-deny, DNS-resolved-to-private,
-    per-redirect-hop re-checks) lives in ``edu_reader._validate_host_for_ssrf``
-    and ``_safe_get_with_redirects``. Every fetch in this module routes
-    through those helpers, so this function only filters obviously-malformed
-    URLs to avoid pointless DNS/socket work.
+    per-redirect-hop re-checks) lives in ``url_safety.validate_host_for_ssrf``
+    and ``url_safety.safe_get_with_redirects``. Every fetch in this module
+    routes through those helpers, so this function only filters obviously-
+    malformed URLs to avoid pointless DNS/socket work.
     """
     try:
         parsed = urlparse(url)
@@ -159,7 +159,7 @@ async def fetch_url_content(url: str, max_chars: int = _MAX_CONTENT_CHARS) -> Op
         # rather than just the first one. Mirrors the protections in
         # `edu_reader.fetch_and_extract`.
         host = urlparse(url).hostname or ""
-        host_ok, _why = await _validate_host_for_ssrf(host.lower())
+        host_ok, _why = await validate_host_for_ssrf(host.lower())
         if not host_ok:
             logger.debug(f"URL blocked by SSRF host check: {url[:80]} ({_why})")
             return None
@@ -168,7 +168,7 @@ async def fetch_url_content(url: str, max_chars: int = _MAX_CONTENT_CHARS) -> Op
             timeout=httpx.Timeout(connect=5.0, read=8.0, write=5.0, pool=5.0),
             follow_redirects=False,
         ) as client:
-            resp, final_url, redirect_reason = await _safe_get_with_redirects(client, url)
+            resp, final_url, redirect_reason = await safe_get_with_redirects(client, url)
             if redirect_reason != "ok" or resp is None:
                 logger.debug(f"Redirect blocked: {url[:80]} ({redirect_reason})")
                 return None
@@ -268,7 +268,7 @@ async def fetch_pdf_from_url(url: str, max_chars: int = _MAX_CONTENT_CHARS) -> O
 
     try:
         host = urlparse(url).hostname or ""
-        host_ok, _why = await _validate_host_for_ssrf(host.lower())
+        host_ok, _why = await validate_host_for_ssrf(host.lower())
         if not host_ok:
             return None
         async with httpx.AsyncClient(
@@ -276,7 +276,7 @@ async def fetch_pdf_from_url(url: str, max_chars: int = _MAX_CONTENT_CHARS) -> O
             timeout=httpx.Timeout(connect=5.0, read=8.0, write=5.0, pool=5.0),
             follow_redirects=False,
         ) as client:
-            resp, _final_url, redirect_reason = await _safe_get_with_redirects(client, url)
+            resp, _final_url, redirect_reason = await safe_get_with_redirects(client, url)
             if redirect_reason != "ok" or resp is None:
                 return None
             resp.raise_for_status()

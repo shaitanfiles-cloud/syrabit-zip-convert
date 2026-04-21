@@ -33,6 +33,11 @@ import httpx
 
 from edu_allowlist import is_allowed_url, log_blocked_request
 from deps import redis_client
+from url_safety import (
+    resolves_to_public_ip as _resolves_to_public_ip,
+    safe_get_with_redirects as _safe_get_with_redirects,
+    validate_host_for_ssrf as _validate_host_for_ssrf,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -196,114 +201,6 @@ async def _fetch_robots(host: str, scheme: str) -> RobotFileParser | None:
         rp = None
     _robots_cache[host] = (now, rp)
     return rp
-
-
-async def _validate_host_for_ssrf(host: str) -> tuple[bool, str]:
-    """Run the full SSRF-safety check on a single hostname / IP literal.
-
-    Mirrors the per-hop checks used by `probe_site_safety` so that the
-    public reader and grounded-answer fetches are protected by the same
-    rules the educator self-approval probe enforces.
-
-    Returns ``(ok, reason)``. ``reason`` is ``"ok"`` on success, or one
-    of ``no_host``/``private_ip``/``hard_denied``/``operator_blocked``/
-    ``dns_failed`` on rejection.
-    """
-    from edu_allowlist import is_domain_hard_blocked
-    h = (host or "").lower().strip()
-    if not h:
-        return False, "no_host"
-    is_ip_literal = False
-    try:
-        import ipaddress as _ipa
-        ip = _ipa.ip_address(h)
-        is_ip_literal = True
-        if (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
-            return False, "private_ip"
-    except ValueError:
-        if h in {"localhost", "0.0.0.0"} or h.endswith(".local") or h.endswith(".internal"):
-            return False, "private_ip"
-    blocked, why = await is_domain_hard_blocked(h)
-    if blocked:
-        return False, why
-    if not is_ip_literal:
-        dns_ok, dns_why = await _resolves_to_public_ip(h)
-        if not dns_ok:
-            return False, dns_why
-    return True, "ok"
-
-
-async def _safe_get_with_redirects(
-    client: "httpx.AsyncClient",
-    url: str,
-    *,
-    max_hops: int = 5,
-    headers: dict | None = None,
-) -> tuple["httpx.Response | None", str, str]:
-    """GET ``url`` with manual redirect handling and per-hop SSRF re-checks.
-
-    httpx's ``follow_redirects=True`` is a known SSRF sink: a hostile
-    upstream can issue a 302 pointing at an internal IP and the client
-    will obediently follow. This helper disables auto-redirects, walks
-    up to ``max_hops`` hops manually, and re-runs the full host
-    validation (private-IP, hard-deny, operator-block, DNS-resolution)
-    on every Location target before issuing the next request.
-
-    Returns ``(response, final_url, reason)`` where ``reason`` is
-    ``"ok"`` on success or an error code (``bad_redirect_scheme`` /
-    ``too_many_redirects`` / ``no_location`` / a value forwarded from
-    `_validate_host_for_ssrf` prefixed with ``redirect_``) on failure.
-    On failure ``response`` may still hold the last successful hop but
-    callers should treat the request as rejected.
-    """
-    current = url
-    resp: "httpx.Response | None" = None
-    for _ in range(max_hops):
-        resp = await client.get(current, headers=headers) if headers else await client.get(current)
-        if resp.status_code not in (301, 302, 303, 307, 308):
-            return resp, current, "ok"
-        loc = resp.headers.get("location")
-        if not loc:
-            return resp, current, "no_location"
-        nxt = urljoin(current, loc)
-        p = urlparse(nxt)
-        if p.scheme not in ("http", "https"):
-            return resp, current, "bad_redirect_scheme"
-        ok, why = await _validate_host_for_ssrf((p.hostname or "").lower())
-        if not ok:
-            return resp, current, f"redirect_{why}"
-        current = nxt
-    return resp, current, "too_many_redirects"
-
-
-async def _resolves_to_public_ip(host: str) -> tuple[bool, str]:
-    """Resolve `host` and ensure no A/AAAA record points at private space.
-
-    Returns `(ok, reason)`. `reason` is ``"ok"`` on success or one of
-    ``"dns_failed"`` / ``"private_ip"``. Callers should fail closed on
-    anything other than ``ok`` to defend against DNS-based SSRF where
-    a public-looking FQDN resolves to a private IP.
-    """
-    import socket as _socket
-    import ipaddress as _ipa
-    try:
-        infos = await asyncio.get_event_loop().getaddrinfo(
-            host, None, type=_socket.SOCK_STREAM,
-        )
-    except Exception:
-        return False, "dns_failed"
-    if not infos:
-        return False, "dns_failed"
-    for _fam, _type, _proto, _canon, sockaddr in infos:
-        addr = sockaddr[0]
-        try:
-            ip = _ipa.ip_address(addr)
-        except ValueError:
-            return False, "dns_failed"
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
-            return False, "private_ip"
-    return True, "ok"
 
 
 async def _robots_allows(url: str) -> bool:

@@ -172,7 +172,7 @@ def _is_safe_scheme(url: str) -> bool:
 
     The full SSRF rule set (private-IP, hard-deny, DNS-resolved-to-private,
     per-redirect-hop re-checks) lives in
-    ``edu_reader._validate_host_for_ssrf`` /``_safe_get_with_redirects``
+    ``url_safety.validate_host_for_ssrf`` / ``safe_get_with_redirects``
     and is applied in :func:`_fetch_page_content`. This helper only weeds
     out obviously-malformed URLs before we spend cycles on them.
     """
@@ -191,7 +191,7 @@ def _get_httpx_client():
     """Shared async client for grounded-answer web fetches.
 
     Uses ``follow_redirects=False`` because we walk the redirect chain
-    manually via ``edu_reader._safe_get_with_redirects`` to re-validate
+    manually via ``url_safety.safe_get_with_redirects`` to re-validate
     every hop against the SSRF rule set (private-IP, hard-deny, DNS
     resolution). Trusting httpx's auto-follow here would let an upstream
     302 walk us into a private IP address.
@@ -207,32 +207,32 @@ def _get_httpx_client():
     return _httpx_client
 
 async def _fetch_page_content(url: str, max_chars: int = 3000) -> str:
-    # Delegate to the hardened reader helpers so this path uses the
-    # same SSRF guards as `edu_reader.fetch_and_extract` (DNS-to-private
-    # rejection on the initial host + per-hop redirect re-checks).
-    from edu_reader import _validate_host_for_ssrf, _safe_get_with_redirects
+    # Delegate to the shared SSRF guards so this path uses the same
+    # rules as `edu_reader.fetch_and_extract` (DNS-to-private rejection
+    # on the initial host + per-hop redirect re-checks).
+    from url_safety import validate_host_for_ssrf, safe_get_with_redirects
     if not url or not _is_safe_scheme(url):
         return ""
     try:
         from urllib.parse import urlparse as _urlparse
         host = (_urlparse(url).hostname or "").lower()
-        host_ok, _why = await _validate_host_for_ssrf(host)
+        host_ok, _why = await validate_host_for_ssrf(host)
         if not host_ok:
             return ""
         client = _get_httpx_client()
-        resp, final_url, redirect_reason = await _safe_get_with_redirects(
+        resp, final_url, redirect_reason = await safe_get_with_redirects(
             client, url, headers={"User-Agent": "Mozilla/5.0 SyrabitBot/1.0"},
         )
         if redirect_reason != "ok" or resp is None:
             return ""
-        # Defensive: re-validate the post-redirect host. `_safe_get_with_redirects`
+        # Defensive: re-validate the post-redirect host. `safe_get_with_redirects`
         # already SSRF-checks every hop, but if a future change ever lets a
         # non-redirect response slip through with a different effective host
         # (e.g. via client-side proxy), this catches it.
         if not _is_safe_scheme(final_url):
             return ""
         final_host = (_urlparse(final_url).hostname or "").lower()
-        final_ok, _final_why = await _validate_host_for_ssrf(final_host)
+        final_ok, _final_why = await validate_host_for_ssrf(final_host)
         if not final_ok:
             return ""
         if resp.status_code != 200:
