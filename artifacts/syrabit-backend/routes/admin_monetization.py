@@ -86,6 +86,10 @@ DEFAULT_API_CONFIG = {
     "analytics":   {"posthog_key": ""},
     "google_auth": {"client_id": "", "client_secret": "", "enabled": False},
     "supabase":    {"url": "", "service_key": "", "anon_key": ""},
+    # Task #607: active chat model for the user-facing chat stream.
+    # "vertex/gemini-flash" → Vertex AI Gemini Flash (low-TTFT)
+    # "openai/gpt-oss-20b"  → legacy hedged SLM pool (auto-fallback)
+    "chat_model":  {"default": "vertex/gemini-flash"},
 }
 
 @router.get("/admin/api-config")

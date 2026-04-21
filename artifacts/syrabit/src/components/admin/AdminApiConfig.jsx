@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Key, Zap, CreditCard, Mail, Bell, BarChart3, Shield, CheckCircle2, Eye, EyeOff, TestTube2, Loader2, Database } from 'lucide-react';
+import { Key, Zap, CreditCard, Mail, Bell, BarChart3, Shield, CheckCircle2, Eye, EyeOff, TestTube2, Loader2, Database, Cpu } from 'lucide-react';
 import AdminQuickLinks from './AdminQuickLinks';
 import { toast } from 'sonner';
 import { adminGetApiConfig, adminUpdateApiConfig, API_BASE } from '@/utils/api';
@@ -12,6 +12,7 @@ const adminHeaders = (token) => {
 };
 
 const SERVICES = [
+  { id: 'chat_model', icon: Cpu,     label: 'Chat Model',       accent: 'violet', desc: 'Active LLM provider for the user-facing chat (Vertex Gemini Flash / Legacy SLM)' },
   { id: 'emergent',icon: Zap,        label: 'Emergent AI',      accent: 'amber',  desc: 'Universal LLM key — highest priority' },
   { id: 'groq',    icon: Zap,        label: 'Groq AI',          accent: 'violet', desc: 'Llama 3.1 — AI brain' },
   { id: 'supabase',icon: Database,   label: 'Supabase',         accent: 'cyan',   desc: 'Users & conversations DB' },
@@ -50,7 +51,7 @@ const inputStyle = "w-full h-9 px-3 rounded-xl text-sm text-gray-900 font-mono o
 
 export default function AdminApiConfig({ adminToken, onNavigate }) {
   const [active, setActive] = useState('groq');
-  const [creds, setCreds] = useState({ emergentKey: '', emergentBaseUrl: '', groqKey: '', supabaseUrl: '', supabaseServiceKey: '', supabaseAnonKey: '', razorpayKeyId: '', razorpayKeySecret: '', razorpayWebhookSecret: '', resendKey: '', oneSignalKey: '', posthogKey: '', googleClientId: '', googleClientSecret: '' });
+  const [creds, setCreds] = useState({ chatModelDefault: 'vertex/gemini-flash', emergentKey: '', emergentBaseUrl: '', groqKey: '', supabaseUrl: '', supabaseServiceKey: '', supabaseAnonKey: '', razorpayKeyId: '', razorpayKeySecret: '', razorpayWebhookSecret: '', resendKey: '', oneSignalKey: '', posthogKey: '', googleClientId: '', googleClientSecret: '' });
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -61,6 +62,7 @@ export default function AdminApiConfig({ adminToken, onNavigate }) {
       .then((res) => {
         const cfg = res.data;
         setCreds({
+          chatModelDefault: cfg.chat_model?.default || 'vertex/gemini-flash',
           emergentKey: cfg.emergent?.key || '',
           emergentBaseUrl: cfg.emergent?.base_url || '',
           groqKey: cfg.groq?.key || '',
@@ -85,6 +87,7 @@ export default function AdminApiConfig({ adminToken, onNavigate }) {
   const colors = ACCENT[ac?.accent || 'violet'];
 
   const buildPayload = () => ({
+    chat_model: { default: creds.chatModelDefault },
     emergent: { key: creds.emergentKey, base_url: creds.emergentBaseUrl },
     groq: { key: creds.groqKey },
     supabase: { url: creds.supabaseUrl, service_key: creds.supabaseServiceKey, anon_key: creds.supabaseAnonKey },
@@ -120,6 +123,11 @@ export default function AdminApiConfig({ adminToken, onNavigate }) {
       if (active === 'supabase') {
         const res = await adminAxios('post', '/admin/supabase/test', { url: creds.supabaseUrl, service_key: creds.supabaseServiceKey });
         setTestResult({ ok: res.data.ok, data: res.data.message, error: res.data.error });
+      } else if (active === 'chat_model') {
+        const res = await adminAxios('get', '/health');
+        const llmStatus = res.data?.dependencies?.llm?.status;
+        const llmOk = llmStatus === 'ok';
+        setTestResult({ ok: llmOk, data: llmOk ? `Chat default = ${creds.chatModelDefault}; LLM service healthy` : `LLM status: ${llmStatus || 'unknown'}` });
       } else if (active === 'emergent') {
         const hasKey = !!creds.emergentKey;
         setTestResult({ ok: hasKey, data: hasKey ? 'Emergent API key is configured (used for admin AI generation)' : 'No Emergent API key configured — other providers will be used as fallback' });
@@ -199,6 +207,33 @@ export default function AdminApiConfig({ adminToken, onNavigate }) {
                 <div><label className="text-xs text-gray-500 block mb-1" data-testid="label-supabase-anon-key">Anon Key (public)</label>
                   <SecretInput value={creds.supabaseAnonKey} onChange={(e) => setCreds((c) => ({...c, supabaseAnonKey: e.target.value}))} placeholder="eyJhbGci..." />
                 </div>
+              </div>
+            )}
+            {active === 'chat_model' && (
+              <div className="space-y-3">
+                <p className="text-xs text-gray-500">
+                  Choose which provider powers the user-facing chat stream.
+                  Vertex AI Gemini Flash gives the lowest first-token latency.
+                  If the active provider fails before the first token is sent,
+                  the backend automatically falls back to the legacy SLM pool —
+                  citations, guardrails and rate limits are preserved either way.
+                </p>
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1" data-testid="label-chat-model-default">Active chat model</label>
+                  <select
+                    value={creds.chatModelDefault}
+                    onChange={(e) => setCreds((c) => ({...c, chatModelDefault: e.target.value}))}
+                    data-testid="select-chat-model-default"
+                    className={inputStyle}
+                  >
+                    <option value="vertex/gemini-flash">Vertex AI — Gemini Flash (recommended, lowest TTFT)</option>
+                    <option value="openai/gpt-oss-20b">Legacy — Syrabit SLM (Cerebras / Groq / OpenRouter pool)</option>
+                  </select>
+                </div>
+                <p className="text-[11px] text-gray-400">
+                  Vertex requires <code className="font-mono">VERTEX_PROJECT_ID</code> and either Application Default Credentials
+                  or <code className="font-mono">VERTEX_SERVICE_ACCOUNT_JSON</code> set in the backend env.
+                </p>
               </div>
             )}
             {active === 'emergent' && (

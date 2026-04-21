@@ -35,7 +35,9 @@ from config import (
     _SARVAM_LLM_KEY, _SARVAM_LLM_KEY_2, _SARVAM_LLM_KEY_3, _CEREBRAS_KEY, _OPENROUTER_KEY, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
     CF_GATEWAY_ENABLED, CF_CACHE_TTL, is_cf_gateway_up, mark_cf_gateway_down, get_provider_base_url,
     byok_headers,
+    VERTEX_GEMINI_MODEL,
 )
+import vertex_chat as _vertex_chat
 from deps import sarvam_llm_client, sarvam_llm_client_direct, logger as _dep_logger
 from cache import _cache_key
 
@@ -973,6 +975,19 @@ async def _stream_gemini(messages: list, api_key: str, model: str, max_tokens: i
         if delta and delta.content:
             yield delta.content
 
+async def _stream_vertex_gemini(messages: list, model: str, max_tokens: int):
+    """Token-by-token streaming from Vertex AI Gemini Flash (Task #607).
+
+    Uses google-auth + Vertex `streamGenerateContent` REST endpoint.
+    Raises on misconfiguration / network errors so the caller can fall
+    back to the legacy hedged SLM pool.
+    """
+    async for token in _vertex_chat.stream_chat(
+        messages, model=model, max_tokens=max_tokens, temperature=0.1,
+    ):
+        yield token
+
+
 async def _stream_cerebras(messages: list, api_key: str, model: str, max_tokens: int):
     base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
     client = _get_oai_client(api_key, base)
@@ -1131,6 +1146,55 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             logger.warning(f"[INDIC] No Sarvam model available from preference chain, using default")
 
     use_model_raw = model or LLM_MODEL
+
+    # ── Vertex AI Gemini Flash fast-path (Task #607) ──────────────────────────
+    # When the requested model resolves to Vertex Gemini Flash, stream through
+    # Vertex AI's REST endpoint directly. On any error before the first token
+    # is delivered, automatically fall back to the legacy SLM hedged pool by
+    # re-routing through the standard resolution path below.
+    if use_model_raw == "vertex/gemini-flash" and not _indic_mode:
+        if not _vertex_chat.is_configured():
+            logger.warning("vertex/gemini-flash requested but VERTEX_PROJECT_ID is not set — falling back to legacy SLM pool")
+            use_model_raw = "openai/gpt-oss-20b"
+        else:
+            _vertex_first_token = False
+            _vertex_t0 = time.monotonic()
+            try:
+                _mt_vx = _clamp_max_tokens(VERTEX_GEMINI_MODEL, max_tokens)
+                _vx_batch = ""
+                _VX_BATCH_SIZE = 2
+                async for token in _stream_vertex_gemini(messages, VERTEX_GEMINI_MODEL, _mt_vx):
+                    if not _vertex_first_token:
+                        _ttft_ms = (time.monotonic() - _vertex_t0) * 1000
+                        logger.info(f"[VERTEX-PERF] TTFT={_ttft_ms:.0f}ms model={VERTEX_GEMINI_MODEL}")
+                        _vertex_first_token = True
+                    _vx_batch += token
+                    if len(_vx_batch) >= _VX_BATCH_SIZE:
+                        yield f"data: {json.dumps({'content': _vx_batch})}\n\n"
+                        _vx_batch = ""
+                if _vx_batch:
+                    yield f"data: {json.dumps({'content': _vx_batch})}\n\n"
+                if _vertex_first_token:
+                    _total_ms = (time.monotonic() - _vertex_t0) * 1000
+                    logger.info(f"[VERTEX-PERF] Total={_total_ms:.0f}ms model={VERTEX_GEMINI_MODEL}")
+                    yield f"data: {json.dumps({'__provider': 'vertex_gemini'})}\n\n"
+                    return
+                # Stream completed without ever yielding a token — treat as
+                # failure and fall through to legacy.
+                logger.warning("Vertex Gemini Flash returned empty stream — falling back to legacy SLM pool")
+            except Exception as _vx_err:
+                if _vertex_first_token:
+                    # We already started streaming to the client; we can't
+                    # silently restart. Emit error and stop.
+                    logger.warning(f"Vertex Gemini Flash mid-stream error: {type(_vx_err).__name__}: {str(_vx_err)[:200]}")
+                    yield f"data: {json.dumps({'error': 'AI service interrupted'})}\n\n"
+                    return
+                logger.warning(f"Vertex Gemini Flash failed before first token: {type(_vx_err).__name__}: {str(_vx_err)[:200]} — falling back to legacy SLM pool")
+            # Fall back: rewrite the requested model to the legacy default
+            # and continue with the standard resolution path below.
+            use_model_raw = "openai/gpt-oss-20b"
+            model = use_model_raw
+
     use_model_resolved = _MODEL_ALIAS_MAP.get(use_model_raw, use_model_raw)
     _prov_list = _LLM_PROVIDERS if _indic_mode else _LLM_PROVIDERS_CHAT
     provider, key = _resolve_provider_for_model(use_model_resolved, _prov_list)

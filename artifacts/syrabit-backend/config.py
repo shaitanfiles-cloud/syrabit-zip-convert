@@ -315,6 +315,25 @@ _SARVAM_LLM_KEY_3 = os.environ.get('SARVAM_API_KEY_3', '').strip()
 _CEREBRAS_KEY = os.environ.get('CEREBRAS_API_KEY', '').strip()
 _OPENROUTER_KEY = os.environ.get('OPENROUTER_API_KEY', '').strip()
 
+# ── Vertex AI Gemini Flash chat (Task #607) ─────────────────────────────────
+# When VERTEX_PROJECT_ID is set, the chat path can route through Vertex AI's
+# Gemini Flash streaming endpoint for lower TTFT. Auth is via Application
+# Default Credentials (GOOGLE_APPLICATION_CREDENTIALS pointing at a SA JSON)
+# or the inline VERTEX_SERVICE_ACCOUNT_JSON blob. See vertex_chat.py.
+VERTEX_PROJECT_ID = os.environ.get('VERTEX_PROJECT_ID', '').strip()
+VERTEX_LOCATION = os.environ.get('VERTEX_LOCATION', 'us-central1').strip() or 'us-central1'
+VERTEX_GEMINI_MODEL = os.environ.get('VERTEX_GEMINI_MODEL', 'gemini-2.5-flash').strip() or 'gemini-2.5-flash'
+# CHAT_DEFAULT_MODEL is a *system-wide* default consulted by the chat route
+# when the client does not pin a specific model. Admin UI can override this
+# at runtime (db.api_config.chat_model.default), which takes precedence.
+# Accepted values:
+#   "vertex/gemini-flash"  — Vertex AI Gemini Flash (preferred when configured)
+#   "openai/gpt-oss-20b"   — Legacy hedged SLM pool (Cerebras/Groq/OpenRouter)
+CHAT_DEFAULT_MODEL = os.environ.get(
+    'CHAT_DEFAULT_MODEL',
+    'vertex/gemini-flash' if VERTEX_PROJECT_ID else 'openai/gpt-oss-20b',
+).strip()
+
 # BYOK fallback: when CF AI Gateway is enabled, any missing provider env key
 # is substituted with the BYOK_PLACEHOLDER so the SmartKeyPool / provider list
 # still builds (downstream callers send placeholder + cf-aig-byok-key header

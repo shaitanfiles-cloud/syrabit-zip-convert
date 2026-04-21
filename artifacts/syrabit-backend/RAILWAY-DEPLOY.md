@@ -76,6 +76,16 @@ railway variables set SARVAM_API_KEY="xxx"
 railway variables set SARVAM_API_KEY_2="xxx"
 railway variables set OPENROUTER_API_KEY="sk-or-xxx"
 
+# Vertex AI Gemini Flash chat (Task #607) — recommended for low TTFT.
+# Auth on Railway is via the inline JSON blob below (raw service-account
+# key, single-line). Once VERTEX_PROJECT_ID is set the chat stream uses
+# Vertex by default; the legacy SLM pool above is the automatic fallback.
+railway variables set VERTEX_PROJECT_ID="your-gcp-project"
+railway variables set VERTEX_LOCATION="us-central1"
+railway variables set VERTEX_GEMINI_MODEL="gemini-2.5-flash"
+railway variables set VERTEX_SERVICE_ACCOUNT_JSON='{"type":"service_account",...}'
+railway variables set CHAT_DEFAULT_MODEL="vertex/gemini-flash"
+
 # Payments & Email
 railway variables set RAZORPAY_KEY_ID="rzp_live_xxx"
 railway variables set RAZORPAY_KEY_SECRET="xxx"

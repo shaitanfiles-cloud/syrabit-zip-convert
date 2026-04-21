@@ -1679,7 +1679,27 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 _output_violation = False
                 _tune_buf = {"total": "", "chars": 0}
 
-                _stream_model = None if _want_translate else (msg.model or "openai/gpt-oss-20b")
+                # Resolve default chat model (Task #607): admin override in
+                # db.api_config.chat_model.default → env CHAT_DEFAULT_MODEL →
+                # legacy SLM. Indic (translate) flow keeps None so the existing
+                # Sarvam hedged path wins.
+                if _want_translate:
+                    _stream_model = None
+                elif msg.model:
+                    _stream_model = msg.model
+                else:
+                    _stream_model = "openai/gpt-oss-20b"
+                    try:
+                        _api_cfg = await db.api_config.find_one({}, {"_id": 0, "chat_model": 1})
+                        _admin_default = ((_api_cfg or {}).get("chat_model") or {}).get("default")
+                        if _admin_default and isinstance(_admin_default, str):
+                            _stream_model = _admin_default.strip() or _stream_model
+                        else:
+                            from config import CHAT_DEFAULT_MODEL as _CHAT_DEFAULT_MODEL
+                            if _CHAT_DEFAULT_MODEL:
+                                _stream_model = _CHAT_DEFAULT_MODEL
+                    except Exception as _e_cfg:
+                        logger.debug(f"chat_model config lookup failed: {_e_cfg}")
                 _active_stream = call_llm_api_stream(messages_payload, model=_stream_model, max_tokens=max_tokens, intent=_stream_intent, response_lang=_resp_lang)
 
                 # For Assamese (Indic) responses we buffer the entire LLM
