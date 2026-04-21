@@ -1220,113 +1220,117 @@ async def generate_notes(req: NotesGenReq, request: Request,
 
     valid_anchor_ids = {a["id"] for a in anchors}
 
-    # Build the user message with each anchor labelled and bounded.
-    parts: list[str] = []
-    if req.custom_focus:
-        parts.append(f"Topical focus: {req.custom_focus.strip()[:300]}")
-    if req.response_lang and req.response_lang.lower().startswith("as"):
-        parts.append("Write the title, summary, headings, definitions, and Q&A in Assamese (as-IN).")
-    parts.append(f"Source set: {source_title}")
-    parts.append("")
-    parts.append("--- SOURCE PASSAGES ---")
-    for a in anchors:
-        parts.append(f"[{a['id']}] {a['label']}")
-        parts.append(a["text"])
-        parts.append("")
-    parts.append("--- END SOURCES ---")
-    parts.append("")
-    parts.append("Now produce the JSON note as instructed. Cite anchors only from the list above.")
-
-    messages = [
-        {"role": "system", "content": _NOTES_GEN_SYS},
-        {"role": "user",   "content": "\n".join(parts)},
-    ]
-
+    # From this point on, ANY non-success exit must refund credits. Track
+    # success and run `_refund_credits()` in a `finally` block to guarantee
+    # coverage across LLM errors, safety blocks, notebook_full, DB errors,
+    # and unexpected exceptions alike.
+    success = False
     try:
+        # Build the user message with each anchor labelled and bounded.
+        parts: list[str] = []
+        if req.custom_focus:
+            parts.append(f"Topical focus: {req.custom_focus.strip()[:300]}")
+        if req.response_lang and req.response_lang.lower().startswith("as"):
+            parts.append("Write the title, summary, headings, definitions, and Q&A in Assamese (as-IN).")
+        parts.append(f"Source set: {source_title}")
+        parts.append("")
+        parts.append("--- SOURCE PASSAGES ---")
+        for a in anchors:
+            parts.append(f"[{a['id']}] {a['label']}")
+            parts.append(a["text"])
+            parts.append("")
+        parts.append("--- END SOURCES ---")
+        parts.append("")
+        parts.append("Now produce the JSON note as instructed. Cite anchors only from the list above.")
+
+        messages = [
+            {"role": "system", "content": _NOTES_GEN_SYS},
+            {"role": "user",   "content": "\n".join(parts)},
+        ]
+
         raw = await _call_gemini_strict(messages, max_tokens=2200)
         payload = _coerce_notes_payload(raw)
         structured = _validate_notes_payload(payload, valid_anchor_ids)
-    except HTTPException:
-        # Refund credits on any LLM/parse/validation failure so users aren't
-        # charged for empty or unsafe responses.
-        await _refund_credits()
-        raise
 
-    # Light safety pass on the flattened generated text.
-    flat_parts = [structured["title"], structured["summary"]]
-    for sec in structured["outline"]:
-        flat_parts.append(sec["heading"])
-        flat_parts.extend(sec["points"])
-    for kt in structured["key_terms"]:
-        flat_parts.append(kt["term"]); flat_parts.append(kt["definition"])
-    for q in structured["qa"]:
-        flat_parts.append(q["q"]); flat_parts.append(q["a"])
-    ok, _why = validate_llm_output(" ".join(flat_parts))
-    if not ok:
-        raise HTTPException(status_code=502, detail="notes_safety_block")
-
-    # Build a plain-text representation so the existing list/search/text
-    # pipeline keeps working unchanged for generated notes.
-    plain_lines = [structured["title"], "", structured["summary"], ""]
-    for sec in structured["outline"]:
-        plain_lines.append(sec["heading"])
-        for p in sec["points"]:
-            plain_lines.append(f"• {p}")
-        plain_lines.append("")
-    if structured["key_terms"]:
-        plain_lines.append("Key terms")
+        # Light safety pass on the flattened generated text.
+        flat_parts = [structured["title"], structured["summary"]]
+        for sec in structured["outline"]:
+            flat_parts.append(sec["heading"])
+            flat_parts.extend(sec["points"])
         for kt in structured["key_terms"]:
-            plain_lines.append(f"• {kt['term']}: {kt['definition']}")
-        plain_lines.append("")
-    if structured["qa"]:
-        plain_lines.append("Q&A")
-        for qa in structured["qa"]:
-            plain_lines.append(f"Q: {qa['q']}")
-            plain_lines.append(f"A: {qa['a']}")
-    plain_text = "\n".join(plain_lines).strip()
+            flat_parts.append(kt["term"]); flat_parts.append(kt["definition"])
+        for q in structured["qa"]:
+            flat_parts.append(q["q"]); flat_parts.append(q["a"])
+        ok, _why = validate_llm_output(" ".join(flat_parts))
+        if not ok:
+            raise HTTPException(status_code=502, detail="notes_safety_block")
 
-    # Citations table: id → {label, url, kind} so the frontend can render
-    # clickable chips without re-querying the source.
-    citations_out = [
-        {"id": a["id"], "kind": a["kind"], "label": a["label"], "url": a["url"]}
-        for a in anchors
-    ]
+        # Build a plain-text representation so the existing list/search/text
+        # pipeline keeps working unchanged for generated notes.
+        plain_lines = [structured["title"], "", structured["summary"], ""]
+        for sec in structured["outline"]:
+            plain_lines.append(sec["heading"])
+            for p in sec["points"]:
+                plain_lines.append(f"• {p}")
+            plain_lines.append("")
+        if structured["key_terms"]:
+            plain_lines.append("Key terms")
+            for kt in structured["key_terms"]:
+                plain_lines.append(f"• {kt['term']}: {kt['definition']}")
+            plain_lines.append("")
+        if structured["qa"]:
+            plain_lines.append("Q&A")
+            for qa in structured["qa"]:
+                plain_lines.append(f"Q: {qa['q']}")
+                plain_lines.append(f"A: {qa['a']}")
+        plain_text = "\n".join(plain_lines).strip()
 
-    nid = str(uuid.uuid4())
-    auto_tag = f"ai-notes" if sk != "conversation" else "ai-notes"
-    sk_tag = f"src-{sk}"
-    tags = _norm_tags([auto_tag, sk_tag])
-    chapter_ref = source_title if sk in ("chapter", "highlights") else ""
-    src_url = ""
-    src_title = structured["title"]
-    if sk == "conversation":
-        src_url = f"/chat?id={req.source_id}"
-        src_title = f"Notes from chat: {source_title}"
-    elif sk == "chapter":
-        # Use the first anchor's url (the chapter URL) when we successfully
-        # built it; falling back to empty keeps the existing renderer happy.
-        src_url = anchors[0].get("url") or ""
+        # Citations table: id → {label, url, kind} so the frontend can render
+        # clickable chips without re-querying the source.
+        citations_out = [
+            {"id": a["id"], "kind": a["kind"], "label": a["label"], "url": a["url"]}
+            for a in anchors
+        ]
 
-    async with deps.pg_pool.acquire() as conn:
-        cnt = await conn.fetchval(
-            "SELECT COUNT(*) FROM edu_notes WHERE actor_kind=$1 AND actor=$2",
-            kind, actor,
-        )
-        if cnt is not None and cnt >= 2000:
-            raise HTTPException(status_code=400, detail="notebook_full")
-        row = await conn.fetchrow(
-            """INSERT INTO edu_notes (
-                  id, actor_kind, actor, text, source_url, source_title,
-                  chapter_ref, tags, generated, structured, citations,
-                  source_kind, source_ref)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE,$9::jsonb,$10::jsonb,$11,$12)
-               RETURNING *""",
-            nid, kind, actor, plain_text, src_url, src_title,
-            chapter_ref, tags,
-            json.dumps(structured), json.dumps(citations_out),
-            sk, source_ref[:300],
-        )
-    return {"ok": True, "note": _note_row_to_dict(row)}
+        nid = str(uuid.uuid4())
+        auto_tag = f"ai-notes" if sk != "conversation" else "ai-notes"
+        sk_tag = f"src-{sk}"
+        tags = _norm_tags([auto_tag, sk_tag])
+        chapter_ref = source_title if sk in ("chapter", "highlights") else ""
+        src_url = ""
+        src_title = structured["title"]
+        if sk == "conversation":
+            src_url = f"/chat?id={req.source_id}"
+            src_title = f"Notes from chat: {source_title}"
+        elif sk == "chapter":
+            # Use the first anchor's url (the chapter URL) when we successfully
+            # built it; falling back to empty keeps the existing renderer happy.
+            src_url = anchors[0].get("url") or ""
+
+        async with deps.pg_pool.acquire() as conn:
+            cnt = await conn.fetchval(
+                "SELECT COUNT(*) FROM edu_notes WHERE actor_kind=$1 AND actor=$2",
+                kind, actor,
+            )
+            if cnt is not None and cnt >= 2000:
+                raise HTTPException(status_code=400, detail="notebook_full")
+            row = await conn.fetchrow(
+                """INSERT INTO edu_notes (
+                      id, actor_kind, actor, text, source_url, source_title,
+                      chapter_ref, tags, generated, structured, citations,
+                      source_kind, source_ref)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE,$9::jsonb,$10::jsonb,$11,$12)
+                   RETURNING *""",
+                nid, kind, actor, plain_text, src_url, src_title,
+                chapter_ref, tags,
+                json.dumps(structured), json.dumps(citations_out),
+                sk, source_ref[:300],
+            )
+        success = True
+        return {"ok": True, "note": _note_row_to_dict(row)}
+    finally:
+        if not success:
+            await _refund_credits()
 
 
 # ───────────────────────── Flashcards (SM-2 lite) ─────────────────────────

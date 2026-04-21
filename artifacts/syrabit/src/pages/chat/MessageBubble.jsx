@@ -110,7 +110,10 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
 
   return (
     <div
-      className={`group ${isUser ? 'flex flex-col items-end mb-2' : 'mb-3'}`}
+      // Stable id `m{messageIndex}` lets AI-notes citation chips deep-link
+      // back to the originating chat message via `/chat?id=…#m<idx>`.
+      id={typeof messageIndex === 'number' ? `m${messageIndex}` : undefined}
+      className={`group scroll-mt-20 ${isUser ? 'flex flex-col items-end mb-2' : 'mb-3'}`}
       data-testid="chat-message-bubble"
     >
       {isUser && (

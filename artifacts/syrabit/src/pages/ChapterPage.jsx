@@ -644,15 +644,32 @@ export default function ChapterPage() {
       return '';
     };
     const counters = {};
-    const toId = (children) => {
+    // Slug must mirror backend `_slugify_heading` so AI-notes deep-links
+    // (`#sec-<slug>`) land on the matching heading.
+    const toSlug = (children) => {
       const raw = extractText(children).toLowerCase();
       const baseId = raw.replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
       counters[baseId] = (counters[baseId] || 0) + 1;
       return counters[baseId] > 1 ? `${baseId}-${counters[baseId]}` : baseId;
     };
+    const headingProps = (children) => {
+      const slug = toSlug(children);
+      // Emit BOTH `<slug>` (legacy in-page TOC) and `sec-<slug>` (AI-notes
+      // citations) so existing links keep working.
+      return { id: slug, 'data-sec-id': `sec-${slug}` };
+    };
+    const SecHeading = ({ tag: Tag, children, ...props }) => {
+      const { id, 'data-sec-id': secId } = headingProps(children);
+      return (
+        <>
+          <span id={secId} className="block scroll-mt-20" aria-hidden="true" />
+          <Tag id={id} className="scroll-mt-20" {...props}>{children}</Tag>
+        </>
+      );
+    };
     return {
-      h2: ({ children, ...props }) => <h2 id={toId(children)} className="scroll-mt-20" {...props}>{children}</h2>,
-      h3: ({ children, ...props }) => <h3 id={toId(children)} className="scroll-mt-20" {...props}>{children}</h3>,
+      h2: ({ children, ...props }) => <SecHeading tag="h2" {...props}>{children}</SecHeading>,
+      h3: ({ children, ...props }) => <SecHeading tag="h3" {...props}>{children}</SecHeading>,
     };
   }, [displayContent]);
 
