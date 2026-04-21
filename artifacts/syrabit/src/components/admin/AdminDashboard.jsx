@@ -264,7 +264,7 @@ function ChartTooltip({ active, payload, label }) {
   );
 }
 
-export default function AdminDashboard({ adminToken, onNavigate }) {
+export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
   const [data, setData] = useState(null);
   const [metrics, setMetrics] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -672,6 +672,22 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
     const interval = setInterval(() => loadChatSpeedups(speedupDays), 60000);
     return () => clearInterval(interval);
   }, [loadChatSpeedups, speedupDays]);
+
+  // Task #626 — Chat Model config tab deep-links here with
+  // { scrollTo: 'chat-speedup-providers' } to land the admin on the
+  // per-provider comparison. Wait a tick so the card has mounted
+  // (Suspense/lazy can delay paint), then scroll it into view.
+  useEffect(() => {
+    const target = navContext?.scrollTo;
+    if (!target || typeof document === 'undefined') return;
+    const t = setTimeout(() => {
+      const el = document.getElementById(target);
+      if (el && typeof el.scrollIntoView === 'function') {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [navContext]);
 
   if (loading) {
     return (
@@ -3371,7 +3387,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
             <span className="text-xs text-gray-400">cache &amp; speculative-web impact</span>
           </div>
           <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
-            {[7, 14, 30].map(d => (
+            {[{d: 1, label: '24h'}, {d: 7, label: '7d'}, {d: 14, label: '14d'}, {d: 30, label: '30d'}].map(({d, label}) => (
               <button
                 key={d}
                 onClick={() => setSpeedupDays(d)}
@@ -3383,7 +3399,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                 }`}
                 data-testid={`speedup-period-${d}`}
               >
-                {d}d
+                {label}
               </button>
             ))}
             {speedupLoading && <Loader2 size={11} className="animate-spin text-gray-400 ml-1" />}
@@ -3472,6 +3488,107 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                   )}
                 </div>
               </div>
+
+              {/* ─── Per-provider TTFT / total / token-rate (Task #626) ───────── */}
+              {(() => {
+                const providers = chatSpeedups?.by_provider || [];
+                const fallbacks = chatSpeedups?.provider_fallbacks || [];
+                const fallbackTotal = fallbacks.reduce((s, f) => s + (f.count || 0), 0);
+                // Look up the "happy path" provider and the legacy pool so we
+                // can render the Vertex-vs-legacy comparison the admin cares
+                // about, even if one of them has zero calls in the window
+                // (shows as "—" instead of being hidden).
+                const findProv = (name) => providers.find(p => p.provider === name) || null;
+                const vx = findProv('vertex_gemini');
+                const legacy = findProv('openai/gpt-oss-20b');
+                const ordered = [vx, legacy].filter(Boolean);
+                providers.forEach(p => {
+                  if (p.provider !== 'vertex_gemini' && p.provider !== 'openai/gpt-oss-20b') ordered.push(p);
+                });
+                return (
+                  <div
+                    id="chat-speedup-providers"
+                    className="rounded-xl border border-violet-100 bg-violet-50/30 overflow-hidden scroll-mt-24"
+                    data-testid="chat-speedup-providers"
+                  >
+                    <div className="flex items-center justify-between px-3 py-2 border-b border-violet-100">
+                      <span className="text-xs text-gray-600 font-medium">Per-provider chat speed</span>
+                      <span className="text-xs text-gray-400">
+                        Vertex Gemini vs legacy SLM pool · {ordered.length} provider{ordered.length === 1 ? '' : 's'}
+                      </span>
+                    </div>
+                    {ordered.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center h-[110px] text-gray-400 text-xs gap-1">
+                        <span>No provider-tagged samples in window</span>
+                        <span className="text-xs text-gray-300">Populates once Vertex or legacy streams a chat</span>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs" data-testid="speedup-provider-table">
+                          <thead className="bg-violet-100/40 text-gray-500">
+                            <tr>
+                              <th className="text-left px-3 py-1.5 font-medium">Provider</th>
+                              <th className="text-right px-3 py-1.5 font-medium">Calls</th>
+                              <th className="text-right px-3 py-1.5 font-medium">Avg TTFT ms</th>
+                              <th className="text-right px-3 py-1.5 font-medium">Avg total ms</th>
+                              <th className="text-right px-3 py-1.5 font-medium">Tokens / sec</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {ordered.map(p => {
+                              const isVx = p.provider === 'vertex_gemini';
+                              return (
+                                <tr key={p.provider} className="border-t border-violet-100/50">
+                                  <td className="px-3 py-1.5 font-mono text-gray-700">
+                                    <span className={`inline-block w-1.5 h-1.5 rounded-full mr-2 ${isVx ? 'bg-violet-500' : 'bg-blue-500'}`} />
+                                    {p.provider}
+                                    {isVx && <span className="ml-1.5 text-[10px] text-violet-500 font-sans">happy path</span>}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-right text-gray-700">{p.calls ?? 0}</td>
+                                  <td className="px-3 py-1.5 text-right" style={{ color: '#3b82f6' }}>
+                                    {p.ttfb_samples ? `${p.avg_ttfb_ms}` : '—'}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-right text-gray-600">
+                                    {p.total_samples ? `${p.avg_total_ms}` : '—'}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-right text-gray-600">
+                                    {p.tokens_per_sec ? p.tokens_per_sec.toFixed(2) : '—'}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between px-3 py-2 border-t border-violet-100 bg-white/50">
+                      <span className="text-xs text-gray-500 font-medium">
+                        Fallbacks (Vertex → legacy)
+                      </span>
+                      <span
+                        className={`text-xs font-semibold ${fallbackTotal > 0 ? 'text-amber-600' : 'text-emerald-600'}`}
+                        data-testid="speedup-fallback-total"
+                      >
+                        {fallbackTotal} in window
+                      </span>
+                    </div>
+                    {fallbacks.length > 0 ? (
+                      <div className="px-3 py-2 space-y-1" data-testid="speedup-fallback-list">
+                        {fallbacks.map(f => (
+                          <div key={f.transition} className="flex items-center justify-between text-xs">
+                            <span className="font-mono text-gray-600">{f.transition}</span>
+                            <span className="text-amber-600 font-medium">{f.count}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="px-3 py-2 text-xs text-gray-400">
+                        No fallbacks recorded — Vertex served every chat in this window.
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               <div className="rounded-xl border border-gray-100 bg-gray-50 overflow-hidden">
                 <div className="flex items-center justify-between px-3 py-2 border-b border-gray-100">

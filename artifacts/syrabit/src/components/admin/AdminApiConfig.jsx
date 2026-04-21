@@ -234,6 +234,19 @@ export default function AdminApiConfig({ adminToken, onNavigate }) {
                   Vertex requires <code className="font-mono">VERTEX_PROJECT_ID</code> and either Application Default Credentials
                   or <code className="font-mono">VERTEX_SERVICE_ACCOUNT_JSON</code> set in the backend env.
                 </p>
+                {/* Task #626 — deep-link to the Chat Speed-up card so
+                    the admin can see whether Vertex is actually faster
+                    than legacy in production before switching. */}
+                {typeof onNavigate === 'function' && (
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('dashboard', { scrollTo: 'chat-speedup-providers' })}
+                    data-testid="link-chat-provider-comparison"
+                    className="inline-flex items-center gap-1 text-xs font-medium text-violet-600 hover:text-violet-700 hover:underline"
+                  >
+                    View Vertex vs legacy comparison →
+                  </button>
+                )}
               </div>
             )}
             {active === 'emergent' && (

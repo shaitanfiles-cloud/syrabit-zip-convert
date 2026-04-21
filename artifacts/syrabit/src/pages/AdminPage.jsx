@@ -373,7 +373,7 @@ export default function AdminPage() {
                 adminToken={adminToken}
                 adminName={adminName}
                 onNavigate={handleNavigate}
-                navContext={activeSection === 'users' || activeSection === 'contenthub' || activeSection === 'botsecurity' ? navContext : null}
+                navContext={activeSection === 'users' || activeSection === 'contenthub' || activeSection === 'botsecurity' || activeSection === 'dashboard' ? navContext : null}
               />
             </Suspense>
           </SectionErrorBoundary>
