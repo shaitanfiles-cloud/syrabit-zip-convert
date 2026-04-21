@@ -4,7 +4,7 @@
  * Pulls due cards, shows the front, lets the learner self-rate Again/
  * Hard/Good/Easy, and posts the result. Streak banner across the top.
  */
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Loader2, Flame, Sparkles, RotateCw, ChevronRight, Trophy,
@@ -31,7 +31,11 @@ export default function FlashcardsPage() {
   const [streak, setStreak] = useState({ current_streak: 0, best_streak: 0, today: 0 });
   const [building, setBuilding] = useState(false);
   const [reviewed, setReviewed] = useState(0);
-  const [seenAt, setSeenAt] = useState(() => getClaimSeenAt());
+  // Snapshot the per-surface high-water mark at mount; only advance it
+  // on unmount so badges remain visible the entire time the page is
+  // open, regardless of "Reload deck" / build-more cycles.
+  const [seenAt] = useState(() => getClaimSeenAt('cards'));
+  const maxClaimedRef = useRef('');
 
   const load = useCallback(() => {
     setLoading(true);
@@ -48,21 +52,16 @@ export default function FlashcardsPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // First-session-only "Recently synced" badge: once any claimed card
-  // has been on screen, persist the high-water mark so the badge does
-  // not return on the next page load (Task #612).
   useEffect(() => {
-    if (loading) return;
-    const maxClaimed = cards.reduce(
-      (m, c) => (c.claimed_at && c.claimed_at > m ? c.claimed_at : m), '');
-    if (maxClaimed && maxClaimed > seenAt) {
-      const t = setTimeout(() => {
-        markClaimSeen(maxClaimed);
-        setSeenAt(maxClaimed);
-      }, 1500);
-      return () => clearTimeout(t);
-    }
-  }, [loading, cards, seenAt]);
+    const m = cards.reduce(
+      (acc, c) => (c.claimed_at && c.claimed_at > acc ? c.claimed_at : acc),
+      maxClaimedRef.current);
+    maxClaimedRef.current = m;
+  }, [cards]);
+
+  useEffect(() => () => {
+    if (maxClaimedRef.current) markClaimSeen('cards', maxClaimedRef.current);
+  }, []);
 
   const card = cards[idx];
   const cardRecentlySynced = card && isRecentlyClaimed(card.claimed_at, seenAt);

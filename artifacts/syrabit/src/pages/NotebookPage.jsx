@@ -4,7 +4,7 @@
  * Lets the learner search, filter by tag, edit, delete, and export their
  * notes (markdown / CSV). Each note links back to its source page.
  */
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Search, Tag as TagIcon, Trash2, Download, ExternalLink,
@@ -120,7 +120,12 @@ export default function NotebookPage() {
   const [q, setQ] = useState('');
   const [tag, setTag] = useState('');
   const [building, setBuilding] = useState(false);
-  const [seenAt, setSeenAt] = useState(() => getClaimSeenAt());
+  // Snapshot the per-surface high-water mark at mount so the badge
+  // stays visible the entire time the page is open. The mark is only
+  // advanced when the page unmounts, hiding the badge on the user's
+  // next visit (their "first session" on this surface has ended).
+  const [seenAt] = useState(() => getClaimSeenAt('notes'));
+  const maxClaimedRef = useRef('');
 
   const load = useCallback(() => {
     setLoading(true);
@@ -132,20 +137,16 @@ export default function NotebookPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Once any "Recently synced" badges are visible, mark them as seen so
-  // they disappear on the next page load (first-session-only badge).
   useEffect(() => {
-    if (loading) return;
-    const maxClaimed = notes.reduce(
-      (m, n) => (n.claimed_at && n.claimed_at > m ? n.claimed_at : m), '');
-    if (maxClaimed && maxClaimed > seenAt) {
-      const t = setTimeout(() => {
-        markClaimSeen(maxClaimed);
-        setSeenAt(maxClaimed);
-      }, 1500);
-      return () => clearTimeout(t);
-    }
-  }, [loading, notes, seenAt]);
+    const m = notes.reduce(
+      (acc, n) => (n.claimed_at && n.claimed_at > acc ? n.claimed_at : acc),
+      maxClaimedRef.current);
+    maxClaimedRef.current = m;
+  }, [notes]);
+
+  useEffect(() => () => {
+    if (maxClaimedRef.current) markClaimSeen('notes', maxClaimedRef.current);
+  }, []);
 
   const allTags = useMemo(() => {
     const s = new Set();
