@@ -753,6 +753,31 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
             last_err = e
             logger.warning(f"LLM fallback failed ({fallback['provider']}/{fb_model}): {type(e).__name__}: {str(e)[:150]}")
 
+    # Task #636 — last-resort Workers AI fallback. Only reached after every
+    # configured primary+fallback Cerebras/Gemini/etc provider has failed.
+    # Policy is strict (timeout/5xx/429/quota only) so 4xx bad-input bugs
+    # still surface as 503 instead of being silently masked by a different
+    # model's looser parser.
+    try:
+        from providers import workers_ai as _wai
+        if _wai.is_enabled("chat") and last_err is not None and _wai.should_fallback(last_err):
+            _t0 = _t.perf_counter()
+            ok, value, label = await _wai.attempt_fallback(
+                "chat", last_err, 0,
+                lambda: _wai.call_chat(messages, max_tokens=max_tokens, temperature=0.3),
+            )
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            if ok and isinstance(value, str) and value:
+                _record_llm_call("workers-ai", "llama-3.1-8b-instruct", _dur, True,
+                                 len(value.split()), True)
+                logger.info(
+                    f"llm_call provider=workers-ai model=llama-3.1-8b-instruct "
+                    f"duration_ms={_dur} fallback=true reason={_wai.classify_primary_error(last_err)}"
+                )
+                return LlmResult(value, provider="workers-ai")
+    except Exception as _wai_err:  # noqa: BLE001
+        logger.warning(f"[workers-ai] chat fallback skipped: {type(_wai_err).__name__}: {str(_wai_err)[:150]}")
+
     logger.error(f"All LLM providers exhausted. Last error: {last_err}")
     raise HTTPException(status_code=503, detail="AI service temporarily unavailable. Please try again.")
 

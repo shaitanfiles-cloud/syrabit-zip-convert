@@ -38,6 +38,20 @@ interface Env {
    * non-Cloud-Run backends — the worker just skips the header.
    */
   BACKEND_ORIGIN_SECRET?: string;
+  /**
+   * Task #636 — Workers AI binding for the auto-fallback fan-out. The
+   * routes in `handleAiFallback` call `env.AI.run(model, payload)` only
+   * after the FastAPI backend has decided its primary provider failed
+   * with a retryable error. The binding is omitted in `wrangler dev`
+   * unless --remote or [ai] is configured; routes return 503 in that
+   * case so the backend just propagates the original primary error.
+   */
+  AI?: { run(model: string, payload: unknown): Promise<unknown> };
+  /**
+   * Shared secret with the FastAPI backend, sent as `X-Edge-AI-Secret`
+   * on every /api/ai/fallback/* call. Without it the routes 401.
+   */
+  EDGE_AI_FALLBACK_SECRET?: string;
 }
 
 const KV_BINDINGS = ["RATE_LIMIT", "BOT_HTML_CACHE"] as const;
@@ -1300,6 +1314,194 @@ export async function handleBotContentRequest(
   return new Response(htmlBody, { status: 200, headers });
 }
 
+// ─── Task #636: Workers AI fallback fan-out ────────────────────────────────
+// The FastAPI backend posts here only after its primary provider has
+// failed with a retryable error (timeout / 5xx / 429 / quota). The
+// shapes are normalised so the backend can call a single client and
+// not care about Workers AI's per-model quirks.
+const WORKERS_AI_MODELS = {
+  chat: "@cf/meta/llama-3.1-8b-instruct",
+  embed: "@cf/baai/bge-base-en-v1.5",
+  stt: "@cf/openai/whisper",
+  tts: "@cf/myshell-ai/melotts",
+} as const;
+type AiCapability = keyof typeof WORKERS_AI_MODELS;
+
+interface AiFallbackResultMeta {
+  capability: AiCapability;
+  model: string;
+  duration_ms: number;
+  edge_colo: string;
+}
+
+function aiFallbackResponse(
+  body: Record<string, unknown>,
+  cors: Record<string, string>,
+  status = 200,
+): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      ...cors,
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+      "X-Source": "workers-ai-fallback",
+    },
+  });
+}
+
+async function handleAiFallback(
+  request: Request,
+  env: Env,
+  cors: Record<string, string>,
+  capability: AiCapability,
+): Promise<Response> {
+  const provided = request.headers.get("X-Edge-AI-Secret") || "";
+  if (
+    !env.EDGE_AI_FALLBACK_SECRET ||
+    provided !== env.EDGE_AI_FALLBACK_SECRET
+  ) {
+    return aiFallbackResponse(
+      { ok: false, error: "unauthorized", capability },
+      cors,
+      401,
+    );
+  }
+  if (!env.AI || typeof env.AI.run !== "function") {
+    return aiFallbackResponse(
+      { ok: false, error: "ai_binding_missing", capability },
+      cors,
+      503,
+    );
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return aiFallbackResponse(
+      { ok: false, error: "invalid_json", capability },
+      cors,
+      400,
+    );
+  }
+
+  const model = WORKERS_AI_MODELS[capability];
+  const colo =
+    (request as unknown as { cf?: { colo?: string } }).cf?.colo || "unknown";
+  const t0 = Date.now();
+
+  try {
+    let payload: Record<string, unknown>;
+    if (capability === "chat") {
+      const messages = Array.isArray(body.messages) ? body.messages : null;
+      if (!messages || messages.length === 0) {
+        return aiFallbackResponse(
+          { ok: false, error: "messages_required", capability },
+          cors,
+          400,
+        );
+      }
+      payload = {
+        messages,
+        max_tokens: typeof body.max_tokens === "number" ? body.max_tokens : 1024,
+        temperature:
+          typeof body.temperature === "number" ? body.temperature : 0.3,
+      };
+    } else if (capability === "embed") {
+      const text = body.text;
+      if (!text || (typeof text !== "string" && !Array.isArray(text))) {
+        return aiFallbackResponse(
+          { ok: false, error: "text_required", capability },
+          cors,
+          400,
+        );
+      }
+      payload = { text };
+    } else if (capability === "tts") {
+      const prompt =
+        typeof body.text === "string"
+          ? (body.text as string)
+          : typeof body.prompt === "string"
+            ? (body.prompt as string)
+            : "";
+      if (!prompt) {
+        return aiFallbackResponse(
+          { ok: false, error: "text_required", capability },
+          cors,
+          400,
+        );
+      }
+      payload = {
+        prompt: prompt.slice(0, 1000),
+        lang: typeof body.lang === "string" ? body.lang : "en",
+      };
+    } else {
+      // stt
+      const audioB64 = typeof body.audio_base64 === "string" ? body.audio_base64 : "";
+      if (!audioB64) {
+        return aiFallbackResponse(
+          { ok: false, error: "audio_base64_required", capability },
+          cors,
+          400,
+        );
+      }
+      // Workers AI whisper expects a Uint8Array.
+      const binary = atob(audioB64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      payload = { audio: Array.from(bytes) };
+    }
+
+    const out = (await env.AI.run(model, payload)) as Record<string, unknown> &
+      { response?: string; data?: number[][] };
+
+    const meta: AiFallbackResultMeta = {
+      capability,
+      model,
+      duration_ms: Date.now() - t0,
+      edge_colo: colo,
+    };
+
+    let normalised: Record<string, unknown>;
+    if (capability === "chat") {
+      normalised = { text: typeof out.response === "string" ? out.response : "" };
+    } else if (capability === "embed") {
+      normalised = { vectors: Array.isArray(out.data) ? out.data : [] };
+    } else if (capability === "tts") {
+      // melotts returns { audio: number[] } in its WAV bytes form.
+      const audio = (out as { audio?: number[] }).audio || [];
+      const buf = new Uint8Array(audio);
+      let bin = "";
+      for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]);
+      normalised = { audio_base64: btoa(bin), format: "wav" };
+    } else {
+      normalised = { text: typeof out.text === "string" ? out.text : "" };
+    }
+
+    console.log(
+      `[workers-ai-fallback] capability=${capability} model=${model} ` +
+      `duration_ms=${meta.duration_ms} colo=${colo} ok=true`,
+    );
+    return aiFallbackResponse(
+      { ok: true, provider: "workers-ai", meta, ...normalised },
+      cors,
+    );
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "unknown";
+    const dur = Date.now() - t0;
+    console.warn(
+      `[workers-ai-fallback] capability=${capability} model=${model} ` +
+      `duration_ms=${dur} colo=${colo} ok=false err=${msg.slice(0, 200)}`,
+    );
+    return aiFallbackResponse(
+      { ok: false, provider: "workers-ai", error: msg.slice(0, 300), capability },
+      cors,
+      502,
+    );
+  }
+}
+
 async function handleScheduledSync(env: Env): Promise<void> {
   if (!env.CONTENT_DB || !env.BACKEND_URL) return;
 
@@ -1374,6 +1576,20 @@ export default {
             "X-Source": "edge",
           },
         }
+      );
+    }
+
+    // Task #636 — Workers AI fallback fan-out. Backend POSTs here only
+    // after a primary-provider failure. POST-only; CORS preflight is
+    // handled above by the OPTIONS branch.
+    if (request.method === "POST" && pathname.startsWith("/api/ai/fallback/")) {
+      const cap = pathname.slice("/api/ai/fallback/".length);
+      if (cap === "chat" || cap === "embed" || cap === "tts" || cap === "stt") {
+        return handleAiFallback(request, env, cors, cap);
+      }
+      return new Response(
+        JSON.stringify({ ok: false, error: "unknown_capability" }),
+        { status: 404, headers: { ...cors, "Content-Type": "application/json" } },
       );
     }
 

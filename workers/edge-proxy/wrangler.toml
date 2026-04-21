@@ -50,6 +50,27 @@ PAGES_ORIGIN = "https://syrabit-zip-convert.pages.dev"
 # The same value MUST be set as ORIGIN_SHARED_SECRET on the Cloud Run
 # service (Secret Manager binding — see CLOUDRUN-DEPLOY.md).
 
+# Task #636 — Workers AI binding for the auto-fallback fan-out at
+# /api/ai/fallback/{chat,embed,tts,stt}. The backend hits these routes
+# only when the primary provider (Vertex/Gemini for chat & embed,
+# Sarvam for TTS/STT) times out, returns 5xx/429, or hits a quota.
+# Models used:
+#   chat  → @cf/meta/llama-3.1-8b-instruct
+#   embed → @cf/baai/bge-base-en-v1.5
+#   stt   → @cf/openai/whisper
+#   tts   → @cf/myshell-ai/melotts
+# Workers AI billing is per-account; no extra secret needed because the
+# binding is implicit.
+[ai]
+binding = "AI"
+
+# Shared secret the FastAPI backend sends as `X-Edge-AI-Secret` on every
+# /api/ai/fallback/* call. Without it the routes reject with 401 — this
+# stops randoms from burning Workers AI quota by hitting api.syrabit.ai
+# directly. Set via `wrangler secret put EDGE_AI_FALLBACK_SECRET` and the
+# *same* value as WORKERS_AI_FALLBACK_SECRET on the Cloud Run / Railway
+# backend (see providers/workers_ai.py).
+
 [[kv_namespaces]]
 binding = "RATE_LIMIT"
 id = "3ee723af8e82480eb6d4855b0ca09f69"

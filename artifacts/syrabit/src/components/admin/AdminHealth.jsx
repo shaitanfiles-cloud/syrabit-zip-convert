@@ -226,6 +226,40 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     return () => clearInterval(id);
   }, [adminToken, loadAiCacheStats]);
 
+  // Task #636 — Workers AI fallback admin panel state. Polled every
+  // 30s on the same cadence as the other health widgets. The
+  // kill-switch toggles are per-capability so an outage in one model
+  // doesn't force us to disable the entire safety net.
+  const [waiStatus, setWaiStatus] = useState(null);
+  const [waiToggling, setWaiToggling] = useState('');
+  const loadWorkersAi = useCallback(() => {
+    axios.get(`${API_BASE}/admin/workers-ai/status`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setWaiStatus(r.data))
+      .catch(() => setWaiStatus(null));
+  }, [adminToken]);
+  const toggleWorkersAi = useCallback(async (capability, enabled) => {
+    setWaiToggling(capability);
+    try {
+      await axios.post(`${API_BASE}/admin/workers-ai/kill-switch`,
+        { capability, enabled },
+        { headers: adminHeaders(adminToken), withCredentials: true });
+      toast.success(`Workers AI ${capability}: ${enabled ? 'enabled' : 'disabled'}`);
+      loadWorkersAi();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Toggle failed');
+    } finally {
+      setWaiToggling('');
+    }
+  }, [adminToken, loadWorkersAi]);
+  useEffect(() => {
+    if (!adminToken) return;
+    loadWorkersAi();
+    const id = setInterval(loadWorkersAi, 30000);
+    return () => clearInterval(id);
+  }, [adminToken, loadWorkersAi]);
+
   // Task #422 — Assamese purity admin override controls.
   const [asmCfg, setAsmCfg] = useState(null);
   const [asmLoading, setAsmLoading] = useState(false);
@@ -561,6 +595,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
             { id: 'llm',       label: 'LLM Cost Tracker' },
             { id: 'prerender', label: 'Prerender Refresh' },
             { id: 'asm',       label: 'Sarvam Purity' },
+            { id: 'workers-ai',label: 'Workers AI Fallback' },
           ].map(t => (
             <button key={t.id} onClick={() => setHealthTab(t.id)}
               className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${
@@ -1534,6 +1569,108 @@ export default function AdminHealth({ adminToken, onNavigate }) {
               </SectionErrorBoundary>
             )}
           </div>
+          </SectionErrorBoundary>
+        )}
+
+        {healthTab === 'workers-ai' && (
+          <SectionErrorBoundary name="Workers AI Fallback">
+            <div className="space-y-4">
+              <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
+                <div className="flex items-start justify-between mb-4">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900">Workers AI Fallback</h3>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Cloudflare Workers AI auto-fallback for chat / embed / TTS / STT.
+                      Activates only after the primary provider fails with a retryable
+                      error (timeout / 5xx / 429 / quota). 4xx bad-input failures
+                      always surface to the caller.
+                    </p>
+                  </div>
+                  <button onClick={loadWorkersAi}
+                    className="px-3 py-1.5 rounded-lg text-xs border border-gray-200 text-gray-500 hover:text-gray-700">
+                    ↻ Refresh
+                  </button>
+                </div>
+
+                {!waiStatus ? (
+                  <div className="text-xs text-gray-400 py-4">Loading…</div>
+                ) : !waiStatus.ok ? (
+                  <div className="text-xs text-red-500 py-4">
+                    Status unavailable: {waiStatus.error || 'unknown'}
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+                      <div className="rounded-lg p-3 bg-gray-50 border border-gray-100">
+                        <div className="text-[10px] uppercase text-gray-400 font-semibold">Master switch</div>
+                        <div className={`text-sm font-semibold ${waiStatus.enabled_globally ? 'text-emerald-600' : 'text-gray-400'}`}>
+                          {waiStatus.enabled_globally ? 'Enabled' : 'Disabled'}
+                        </div>
+                      </div>
+                      <div className="rounded-lg p-3 bg-gray-50 border border-gray-100">
+                        <div className="text-[10px] uppercase text-gray-400 font-semibold">Shared secret</div>
+                        <div className={`text-sm font-semibold ${waiStatus.secret_configured ? 'text-emerald-600' : 'text-red-500'}`}>
+                          {waiStatus.secret_configured ? 'Configured' : 'Missing'}
+                        </div>
+                      </div>
+                      <div className="rounded-lg p-3 bg-gray-50 border border-gray-100 col-span-2 sm:col-span-1">
+                        <div className="text-[10px] uppercase text-gray-400 font-semibold">Edge URL</div>
+                        <div className="text-xs font-mono text-gray-600 truncate" title={waiStatus.edge_url}>
+                          {waiStatus.edge_url || '—'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="overflow-hidden rounded-xl border border-gray-100">
+                      <table className="w-full text-xs">
+                        <thead className="bg-gray-50 text-gray-500">
+                          <tr>
+                            <th className="text-left px-3 py-2 font-semibold">Capability</th>
+                            <th className="text-left px-3 py-2 font-semibold">Last fallback</th>
+                            <th className="text-left px-3 py-2 font-semibold">24h ok / fail</th>
+                            <th className="text-left px-3 py-2 font-semibold">Last reason</th>
+                            <th className="text-right px-3 py-2 font-semibold">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {Object.entries(waiStatus.capabilities || {}).map(([cap, c]) => (
+                            <tr key={cap} className="border-t border-gray-100">
+                              <td className="px-3 py-2 font-mono text-gray-700">{cap}</td>
+                              <td className="px-3 py-2 text-gray-500">
+                                {c.last_fallback_at
+                                  ? new Date(c.last_fallback_at * 1000).toLocaleString()
+                                  : <span className="text-gray-300">never</span>}
+                              </td>
+                              <td className="px-3 py-2">
+                                <span className="text-emerald-600 font-semibold">{c.successes_24h ?? 0}</span>
+                                <span className="text-gray-300"> / </span>
+                                <span className="text-red-500 font-semibold">{c.failures_24h ?? 0}</span>
+                              </td>
+                              <td className="px-3 py-2 text-gray-500 font-mono">
+                                {c.last_primary_error || <span className="text-gray-300">—</span>}
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                <button
+                                  onClick={() => toggleWorkersAi(cap, !c.enabled)}
+                                  disabled={waiToggling === cap}
+                                  className={`px-3 py-1 rounded-md text-[11px] font-semibold ${
+                                    c.enabled
+                                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                                      : 'bg-gray-100 text-gray-500 border border-gray-200 hover:bg-gray-200'
+                                  } disabled:opacity-50`}
+                                >
+                                  {waiToggling === cap ? '…' : (c.enabled ? 'Enabled' : 'Disabled')}
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
           </SectionErrorBoundary>
         )}
 

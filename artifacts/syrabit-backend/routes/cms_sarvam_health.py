@@ -1712,6 +1712,41 @@ async def purge_ai_cache(
         return {"ok": False, "error": str(e)[:200], "deleted": 0}
     return result
 
+# ─── Task #636: Workers AI fallback admin endpoints ──────────────────────
+@router.get("/admin/workers-ai/status")
+async def workers_ai_status(admin: dict = Depends(get_admin_user)):
+    """Workers AI fallback health snapshot (admin only).
+
+    Used by AdminHealth.jsx to render reachability, last-fallback time,
+    and 24h success/failure counts per capability."""
+    try:
+        from providers import workers_ai as _wai
+        return {"ok": True, **_wai.snapshot()}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+@router.post("/admin/workers-ai/kill-switch")
+async def workers_ai_kill_switch(payload: dict, admin: dict = Depends(get_admin_user)):
+    """Toggle the per-capability kill switch (admin only).
+
+    Body: `{"capability": "chat"|"embed"|"tts"|"stt", "enabled": bool}`.
+    Affects only this process — by design, so a flip can be tested
+    against a single instance before wider rollout via env var."""
+    cap = (payload or {}).get("capability", "")
+    enabled = bool((payload or {}).get("enabled", True))
+    try:
+        from providers import workers_ai as _wai
+        if cap not in _wai.CAPABILITIES:
+            raise HTTPException(status_code=400, detail="invalid_capability")
+        new_val = _wai.set_enabled(cap, enabled)
+        return {"ok": True, "capability": cap, "enabled": new_val}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
 @router.get("/metrics/history")
 async def metrics_history(minutes: int = 60, admin: dict = Depends(get_admin_user)):
     """Return time-series metrics history for graphing (admin only)."""
@@ -2840,6 +2875,8 @@ async def sarvam_tts(data: dict):
         "speech_sample_rate": data.get("speech_sample_rate", 22050),
         "enable_preprocessing": False,
     }
+    import time as _t_tts
+    _tts_t0 = _t_tts.perf_counter()
     try:
         resp = await sarvam_client.post("/text-to-speech", json=payload)
         resp.raise_for_status()
@@ -2857,9 +2894,47 @@ async def sarvam_tts(data: dict):
         return out
     except httpx.HTTPStatusError as e:
         logger.error(f"Sarvam TTS error {e.response.status_code} [{lang}]")
+        # Task #636 — Workers AI fallback for retryable upstream failures.
+        _primary_ms = int((_t_tts.perf_counter() - _tts_t0) * 1000)
+        try:
+            from providers import workers_ai as _wai
+            if _wai.is_enabled("tts") and _wai.should_fallback(e):
+                ok, val, _ = await _wai.attempt_fallback(
+                    "tts", e, _primary_ms,
+                    lambda: _wai.call_tts(text, lang=lang.split("-")[0] if lang else "en"),
+                )
+                if ok and val and val.get("audio_base64"):
+                    out = {
+                        "audio_base64": val["audio_base64"],
+                        "language": lang,
+                        "format": val.get("format", "wav"),
+                        "sample_rate": payload["speech_sample_rate"],
+                        "provider": "workers-ai",
+                    }
+                    return out
+        except Exception as _wai_err:  # noqa: BLE001
+            logger.warning(f"[workers-ai] tts fallback skipped: {type(_wai_err).__name__}: {str(_wai_err)[:150]}")
         raise HTTPException(status_code=e.response.status_code, detail="Sarvam TTS failed")
     except Exception as e:
         logger.error(f"Sarvam TTS exception: {type(e).__name__} [{lang}]")
+        _primary_ms = int((_t_tts.perf_counter() - _tts_t0) * 1000)
+        try:
+            from providers import workers_ai as _wai
+            if _wai.is_enabled("tts") and _wai.should_fallback(e):
+                ok, val, _ = await _wai.attempt_fallback(
+                    "tts", e, _primary_ms,
+                    lambda: _wai.call_tts(text, lang=lang.split("-")[0] if lang else "en"),
+                )
+                if ok and val and val.get("audio_base64"):
+                    return {
+                        "audio_base64": val["audio_base64"],
+                        "language": lang,
+                        "format": val.get("format", "wav"),
+                        "sample_rate": payload["speech_sample_rate"],
+                        "provider": "workers-ai",
+                    }
+        except Exception as _wai_err:  # noqa: BLE001
+            logger.warning(f"[workers-ai] tts fallback skipped: {type(_wai_err).__name__}: {str(_wai_err)[:150]}")
         raise HTTPException(status_code=502, detail="Sarvam AI unreachable")
 
 @router.post("/sarvam/transliterate")

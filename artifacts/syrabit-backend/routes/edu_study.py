@@ -932,14 +932,44 @@ async def edu_stt(audio: UploadFile = File(...), language: str = Form("en-IN"),
     files = {"file": (audio.filename or "speech.wav",
                       body, audio.content_type or "audio/wav")}
     data = {"language_code": language or "en-IN", "model": "saaras:v2"}
+    import time as _t_stt
+    _stt_t0 = _t_stt.perf_counter()
+    primary_err: Exception | None = None
     try:
         resp = await sarvam_client.post("/speech-to-text", files=files, data=data)
     except Exception as e:
         logger.warning(f"[edu_stt] sarvam call failed: {e}")
-        raise HTTPException(status_code=502, detail="stt_provider_failed")
-    if resp.status_code >= 400:
+        primary_err = e
+        resp = None
+    if resp is not None and resp.status_code >= 400:
         logger.warning(f"[edu_stt] provider {resp.status_code}: {resp.text[:300]}")
-        raise HTTPException(status_code=502, detail="stt_provider_error")
+        # Synthesise an HTTPStatusError so the policy can decide if it's retryable.
+        try:
+            resp.raise_for_status()
+        except Exception as e:
+            primary_err = e
+
+    if primary_err is not None:
+        # Task #636 — Workers AI Whisper fallback for retryable failures.
+        try:
+            from providers import workers_ai as _wai
+            if _wai.is_enabled("stt") and _wai.should_fallback(primary_err):
+                import base64 as _b64
+                audio_b64 = _b64.b64encode(body).decode("ascii")
+                _primary_ms = int((_t_stt.perf_counter() - _stt_t0) * 1000)
+                ok, val, _ = await _wai.attempt_fallback(
+                    "stt", primary_err, _primary_ms,
+                    lambda: _wai.call_stt(audio_b64),
+                )
+                if ok and isinstance(val, str):
+                    return {"ok": True, "text": val, "language": language,
+                            "provider": "workers-ai"}
+        except Exception as _wai_err:  # noqa: BLE001
+            logger.warning(f"[workers-ai] stt fallback skipped: {type(_wai_err).__name__}: {str(_wai_err)[:150]}")
+        # Original error class is preserved by raising the original 502.
+        raise HTTPException(status_code=502,
+                            detail="stt_provider_failed" if resp is None else "stt_provider_error")
+
     payload = resp.json()
     text = payload.get("transcript") or payload.get("text") or ""
     return {"ok": True, "text": text, "language": payload.get("language_code", language)}
