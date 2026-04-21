@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 
 
 def _app(monkeypatch, *, educator_user, mongo_ok=True, hard_block=(False, "ok"),
-         capture=None):
+         capture=None, has_proof=True):
     from auth_deps import get_educator_user
     from routes import edu_browser as eb
 
@@ -30,6 +30,10 @@ def _app(monkeypatch, *, educator_user, mongo_ok=True, hard_block=(False, "ok"),
     async def fake_mongo_available():
         return mongo_ok
     monkeypatch.setattr(eb, "is_mongo_available", fake_mongo_available)
+
+    # Task #624 proof gate — tests default to True (behaves like
+    # redis-down fail-open) so existing happy-path tests stay green.
+    monkeypatch.setattr(eb, "_has_appeal_proof", lambda _e, _d: bool(has_proof))
 
     class FakeColl:
         async def update_one(self, flt, update, upsert=False):
@@ -158,3 +162,57 @@ def test_educator_appeal_requires_educator_role(monkeypatch):
     r = client.post("/api/edu/educator/appeal-rejection",
                     json={"domain": "ok-domain.org"})
     assert r.status_code == 403
+
+
+# ── Task #624: proof-of-prior-rejection contract ─────────────────────────
+#
+# /educator/appeal-rejection must refuse domains the calling educator
+# never probed via /educator/submit-site. The contract is enforced by
+# a 1-hour Redis marker written on probe failure; the appeal endpoint
+# rejects with HTTP 400 + a clear "no_recent_rejection" detail if
+# the marker is missing.
+
+
+def test_educator_appeal_without_proof_is_rejected(monkeypatch):
+    # has_proof=False simulates the attacker case: educator calls the
+    # appeal endpoint directly without ever hitting the rejection card
+    # in the UI.
+    client = _app(
+        monkeypatch,
+        educator_user={"id": "proof-negative", "email": "noproof@school.in",
+                       "role": "educator"},
+        has_proof=False,
+    )
+    r = client.post("/api/edu/educator/appeal-rejection", json={
+        "domain": "never-probed.org",
+        "probe": {},
+    })
+    assert r.status_code == 400, r.text
+    assert "no_recent_rejection" in r.json()["detail"]
+
+
+def test_appeal_proof_helpers_round_trip(monkeypatch):
+    """Unit-level check that the Redis-backed proof write/read pair
+    sees each other when a fake redis_client is installed — guards
+    against accidentally regressing the key format."""
+    from routes import edu_browser as eb
+    import deps
+
+    class FakeRedis:
+        def __init__(self):
+            self.store = {}
+        def set(self, k, v, ex=None):
+            self.store[k] = v
+        def get(self, k):
+            return self.store.get(k)
+
+    fake = FakeRedis()
+    monkeypatch.setattr(deps, "redis_client", fake)
+
+    assert eb._has_appeal_proof("edu1", "x.org") is False
+    eb._record_appeal_proof("edu1", "x.org", "robots_disallow")
+    assert eb._has_appeal_proof("edu1", "x.org") is True
+    # Proof is scoped per-educator
+    assert eb._has_appeal_proof("other-edu", "x.org") is False
+    # …and per-domain
+    assert eb._has_appeal_proof("edu1", "other.org") is False

@@ -47,6 +47,61 @@ _RATE_READER_PER_IP = 30  # req / 60s
 _RATE_GROUNDED_PER_IP = 12  # req / 60s
 
 
+# ── Appeal-proof contract (Task #624) ────────────────────────────────────
+#
+# To stop a motivated educator from calling /educator/appeal-rejection
+# directly to spam the admin queue with domains they never tried, we
+# require a short-lived per-(educator, domain) "recently rejected by
+# probe" marker. The marker is written by /educator/submit-site when
+# the safety probe fails and expires after an hour.
+#
+# Fail-open on Redis unavailability — if the proof store is down we
+# degrade to the previous behaviour (rate-limit + educator-role auth)
+# rather than trap legitimate educators behind a verification step
+# they cannot clear.
+
+_APPEAL_PROOF_TTL = 3600  # 1 hour
+
+
+def _appeal_proof_key(educator_id: str, domain: str) -> str:
+    return f"edu_appeal_proof:{(educator_id or 'unknown')[:80]}:{domain}"
+
+
+def _record_appeal_proof(educator_id: str, domain: str, reason: str) -> None:
+    """Remember that `educator_id` hit a real probe rejection on
+    `domain` within the past hour, so a subsequent appeal can verify
+    the contract."""
+    if not educator_id or not domain:
+        return
+    try:
+        from deps import redis_client
+        if redis_client is None:
+            return
+        redis_client.set(
+            _appeal_proof_key(educator_id, domain),
+            (reason or "probe_failed")[:80],
+            ex=_APPEAL_PROOF_TTL,
+        )
+    except Exception as e:
+        logger.debug(f"[edu_browser] appeal-proof record failed: {e}")
+
+
+def _has_appeal_proof(educator_id: str, domain: str) -> bool:
+    """True if `educator_id` submitted `domain` and saw a probe
+    rejection within the last hour. Fail-open when Redis is not
+    configured / errors so outages don't block legitimate appeals."""
+    if not educator_id or not domain:
+        return False
+    try:
+        from deps import redis_client
+        if redis_client is None:
+            return True  # degraded mode — don't trap users
+        return redis_client.get(_appeal_proof_key(educator_id, domain)) is not None
+    except Exception as e:
+        logger.debug(f"[edu_browser] appeal-proof check failed: {e}")
+        return True
+
+
 def _client_ip(request: Request) -> str:
     fwd = request.headers.get("x-forwarded-for", "")
     if fwd:
@@ -302,6 +357,12 @@ async def educator_submit_site(
 
     probe = await probe_site_safety(domain)
     if not probe.get("ok"):
+        # Task #624 — stash proof of this rejection so the educator
+        # can follow up with /educator/appeal-rejection within the
+        # next hour. Without this marker the appeal endpoint refuses
+        # the request, preventing API-level spam of un-probed domains.
+        educator_id = (educator or {}).get("id", "") or (educator or {}).get("email", "") or actor
+        _record_appeal_proof(educator_id, domain, probe.get("reason", "probe_failed"))
         return JSONResponse(
             status_code=400,
             content={
@@ -379,6 +440,23 @@ async def educator_appeal_rejection(
     domain = _normalize_domain(req.domain)
     if not domain or "." not in domain:
         raise HTTPException(status_code=400, detail="Invalid domain")
+
+    # Task #624 — require proof that this educator actually hit a
+    # probe rejection on this domain within the last hour via
+    # /educator/submit-site. Blocks API-level spam of un-probed
+    # domains while the frontend-only "only show appeal after
+    # rejection" contract remains a defence-in-depth layer. Fails
+    # open if Redis is unavailable (see _has_appeal_proof).
+    educator_id_proof = (educator or {}).get("id", "") or (educator or {}).get("email", "") or actor
+    if not _has_appeal_proof(educator_id_proof, domain):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "no_recent_rejection — submit this domain via "
+                "/educator/submit-site first; we only accept appeals "
+                "for a real probe rejection within the last hour."
+            ),
+        )
 
     # Hard-blocked / operator-blocked domains can't be reviewed in via
     # an appeal — they need an explicit admin decision through the
