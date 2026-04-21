@@ -40,6 +40,13 @@ def _reset_ai_cache():
     ai_cache._stats.bytes_stored = 0
     ai_cache._stats.entries_skipped_oversize = 0
     ai_cache._stats.last_error = ""
+    ai_cache._stats.purge_count = 0
+    ai_cache._stats.last_purge_ts = 0.0
+    ai_cache._stats.saved_latency_ms_total = 0.0
+    ai_cache._stats.saved_latency_samples = 0
+    ai_cache._stats.observed_miss_latency_ms_total = 0.0
+    ai_cache._stats.observed_miss_latency_samples = 0
+    ai_cache._stats.errors = 0
     yield
     ai_cache._async_pool = None
     ai_cache._breaker_failures = 0
@@ -198,3 +205,115 @@ def test_purge_all_scans_namespace_and_returns_deleted_count():
     # Pattern includes the configured namespace prefix.
     first_scan = pool.scan.await_args_list[0]
     assert first_scan.kwargs["match"].startswith(f"{ai_cache.REDIS_AI_CACHE_NAMESPACE}:")
+
+
+# ── Namespace prefixing ────────────────────────────────────────────────
+
+def test_full_key_applies_configured_namespace():
+    """Every cache write/read must be scoped to ``REDIS_AI_CACHE_NAMESPACE``
+    so an admin purge can SCAN-delete only this app's keys without
+    touching unrelated tenants on a shared Redis."""
+    import ai_cache
+    raw = ai_cache.build_ai_cache_key(model="m", prompt="hi", language="en")
+    full = ai_cache._full_key(raw)
+    assert full == f"{ai_cache.REDIS_AI_CACHE_NAMESPACE}:{raw}"
+    assert full.startswith(f"{ai_cache.REDIS_AI_CACHE_NAMESPACE}:")
+
+
+# ── Integration tests (fakeredis) ──────────────────────────────────────
+#
+# These exercise aget/aset/purge_all end-to-end against an in-memory
+# Redis-compatible server (fakeredis), so we lock in real protocol
+# semantics — TTL, SCAN cursoring, namespace isolation — instead of
+# just verifying call shapes against a mock.
+
+fakeredis = pytest.importorskip("fakeredis")
+
+
+@pytest.fixture
+def fake_redis_pool():
+    """Provide a fakeredis async client wired into ai_cache as the active pool."""
+    import ai_cache
+    from fakeredis import aioredis as fake_aioredis
+    pool = fake_aioredis.FakeRedis(decode_responses=True)
+    ai_cache._async_pool = pool
+    yield pool
+    _run(pool.aclose() if hasattr(pool, "aclose") else pool.close())
+    ai_cache._async_pool = None
+
+
+def test_integration_aset_then_aget_round_trip(fake_redis_pool):
+    """aset stores under the namespaced key; aget retrieves the exact
+    payload and increments hit/miss counters accordingly."""
+    import ai_cache
+
+    key = ai_cache.build_ai_cache_key(model="m", prompt="round-trip", language="en")
+    payload = '{"answer":"forty-two"}'
+
+    miss = _run(ai_cache.aget(key))
+    assert miss is None
+    assert ai_cache._stats.misses == 1
+    assert ai_cache._stats.hits == 0
+
+    ok = _run(ai_cache.aset(key, payload, ttl=120, saved_ms=850.0))
+    assert ok is True
+    assert ai_cache._stats.entries_stored == 1
+    assert ai_cache._stats.bytes_stored == len(payload.encode("utf-8"))
+
+    hit = _run(ai_cache.aget(key))
+    assert hit == payload
+    assert ai_cache._stats.hits == 1
+    assert ai_cache._stats.misses == 1  # unchanged
+
+    # Stored under the namespaced key — verify directly.
+    raw = _run(fake_redis_pool.get(ai_cache._full_key(key)))
+    assert raw == payload
+
+
+def test_integration_purge_all_deletes_only_namespaced_keys(fake_redis_pool):
+    """purge_all SCAN-deletes everything under the namespace and leaves
+    foreign keys (other tenants) untouched."""
+    import ai_cache
+
+    # Seed three of our keys + one foreign key on the same Redis.
+    keys = []
+    for i in range(3):
+        k = ai_cache.build_ai_cache_key(model="m", prompt=f"q-{i}", language="en")
+        _run(ai_cache.aset(k, f"v-{i}", ttl=60))
+        keys.append(k)
+    _run(fake_redis_pool.set("other_tenant:keep_me", "do-not-touch"))
+
+    out = _run(ai_cache.purge_all())
+    assert out["ok"] is True
+    assert out["deleted"] == 3
+    assert ai_cache._stats.purge_count == 1
+
+    # All our entries gone; the foreign key survived.
+    for k in keys:
+        assert _run(fake_redis_pool.get(ai_cache._full_key(k))) is None
+    assert _run(fake_redis_pool.get("other_tenant:keep_me")) == "do-not-touch"
+
+
+def test_integration_stats_reports_hit_rate_and_saved_latency(fake_redis_pool):
+    """Two misses then a successful set + hit should produce hit_rate=1/3
+    and a non-zero estimated_total_saved_ms via observed-miss latency."""
+    import ai_cache
+
+    k1 = ai_cache.build_ai_cache_key(model="m", prompt="a", language="en")
+    k2 = ai_cache.build_ai_cache_key(model="m", prompt="b", language="en")
+    _run(ai_cache.aget(k1))   # miss
+    _run(ai_cache.aget(k2))   # miss
+    _run(ai_cache.aset(k1, "value-a", ttl=60, saved_ms=600.0))
+    val = _run(ai_cache.aget(k1))   # hit
+    assert val == "value-a"
+
+    snap = ai_cache.stats()
+    assert snap["hits"] == 1
+    assert snap["misses"] == 2
+    assert snap["hit_rate"] == round(1 / 3, 4)
+    assert snap["entries_stored"] == 1
+    assert snap["bytes_stored"] == len("value-a".encode("utf-8"))
+    # Hit count > saved-latency samples → estimator falls back to
+    # observed-miss latency to credit the un-instrumented hit.
+    assert snap["estimated_total_saved_ms"] >= 600.0
+    assert snap["breaker_open"] is False

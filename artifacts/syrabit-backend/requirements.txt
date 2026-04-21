@@ -13,6 +13,7 @@ asyncpg==0.31.0
 supabase==2.28.0
 upstash-redis==1.7.0
 redis>=5.0.1
+fakeredis>=2.20  # Task #631 — in-memory Redis for ai_cache integration tests
 
 openai==2.29.0
 google-auth==2.49.1
