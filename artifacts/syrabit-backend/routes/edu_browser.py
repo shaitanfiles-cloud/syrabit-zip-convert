@@ -456,9 +456,17 @@ def _spawn_appeal_spike_alert(domain: str, appeal_count: int) -> None:
         return
     admin_link = os.environ.get(_APPEAL_ALERT_ADMIN_URL_ENV, "").strip()
     if admin_link:
-        # Link to the requested-sites tab, filtered to the spiking domain.
+        # Link to the requested-sites tab, filtered to the spiking
+        # domain. The AdminEduBrowser component reads `tab` and
+        # `domain` from the URL on mount and switches to the
+        # requested-sites tab with the domain pre-filled in the
+        # filter box. `quote` is belt-and-braces: _normalize_domain
+        # already rejects anything that would need escaping.
+        from urllib.parse import quote
         sep = "&" if "?" in admin_link else "?"
-        admin_link = f"{admin_link}{sep}tab=requested&domain={domain}"
+        admin_link = (
+            f"{admin_link}{sep}tab=requested&domain={quote(domain, safe='')}"
+        )
         body = (
             f":rotating_light: Educator appeals spiking on *{domain}* "
             f"({appeal_count} appeals). Review: {admin_link}"

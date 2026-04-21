@@ -555,11 +555,15 @@ function BlockedLogTab({ adminToken }) {
   );
 }
 
-function RequestedSitesTab({ adminToken }) {
+function RequestedSitesTab({ adminToken, initialDomain = '' }) {
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState([]);
-  const [filter, setFilter] = useState('all'); // all | appeals
-  const [search, setSearch] = useState('');
+  // When this tab is entered via a deep-link (?tab=requested&domain=X)
+  // from a Slack appeal-spike alert, prefilter to the appeals view
+  // and preload the domain into the search box so the admin lands on
+  // exactly the row that fired the alert.
+  const [filter, setFilter] = useState(() => (initialDomain ? 'appeals' : 'all')); // all | appeals
+  const [search, setSearch] = useState(() => initialDomain || '');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -993,8 +997,30 @@ function GroundedRecallTile({ adminToken, language = null, label = 'Grounded-ans
   );
 }
 
+// Task #625 — parse `?tab=requested&domain=<d>` from the URL so a
+// Slack appeal-spike alert can deep-link admins straight to the Site
+// requests tab filtered to the spiking domain. Exported as a pure
+// function on `search` so it's testable without a DOM.
+export function parseAdminEduDeepLink(search) {
+  try {
+    const params = new URLSearchParams(search || '');
+    const rawTab = (params.get('tab') || '').toLowerCase();
+    const tab = rawTab === 'requested' || rawTab === 'allowlist' || rawTab === 'blocked' ? rawTab : null;
+    const domain = (params.get('domain') || '').slice(0, 253);
+    return { tab, domain };
+  } catch (_) {
+    return { tab: null, domain: '' };
+  }
+}
+
+function _readDeepLink() {
+  if (typeof window === 'undefined' || !window.location) return { tab: null, domain: '' };
+  return parseAdminEduDeepLink(window.location.search || '');
+}
+
 export default function AdminEduBrowser({ adminToken }) {
-  const [tab, setTab] = useState('allowlist');
+  const deep = useMemo(_readDeepLink, []);
+  const [tab, setTab] = useState(deep.tab || 'allowlist');
 
   return (
     <SectionErrorBoundary name="Edu Browser">
@@ -1053,7 +1079,7 @@ export default function AdminEduBrowser({ adminToken }) {
         {tab === 'allowlist' ? (
           <AllowlistTab adminToken={adminToken} />
         ) : tab === 'requested' ? (
-          <RequestedSitesTab adminToken={adminToken} />
+          <RequestedSitesTab adminToken={adminToken} initialDomain={deep.domain} />
         ) : (
           <BlockedLogTab adminToken={adminToken} />
         )}
