@@ -690,6 +690,18 @@ async def lifespan(app):
 
 
 app = FastAPI(title="Syrabit.ai API", version="2.0.0", lifespan=lifespan)
+
+# Task #610 — OpenTelemetry distributed tracing. Wired immediately after
+# FastAPI() so the auto-instrumentor can register its ASGI middleware
+# before any other middleware is added (excluded URLs cover health/metrics).
+# No-op when TRACING_ENABLED is unset, so dev / Railway origins are
+# unaffected. See tracing.py for env contract.
+try:
+    from tracing import init_tracing as _init_tracing
+    _init_tracing(app)
+except Exception as _trc_err:
+    logger.warning(f"[tracing] init_tracing failed (non-fatal): {_trc_err}")
+
 app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
@@ -1243,8 +1255,8 @@ app.add_middleware(
     allow_origins=CORS_ORIGINS,
     allow_origin_regex=CORS_ORIGIN_REGEX,
     allow_methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "x-anon-id"],
-    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After", "X-Request-Id"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "x-anon-id", "x-turnstile-token", "traceparent", "tracestate", "baggage"],
+    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After", "X-Request-Id", "traceparent"],
     max_age=600,
 )
 # Task #365: Outermost layer — convert HEAD → GET before any other

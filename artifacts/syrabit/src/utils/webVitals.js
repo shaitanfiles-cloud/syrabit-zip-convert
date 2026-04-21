@@ -1,4 +1,5 @@
 import { onCLS, onINP, onLCP, onFCP, onTTFB } from 'web-vitals';
+import { initFirebasePerf, reportWebVitalToPerf } from './firebasePerf';
 
 function sendToPostHog(metric) {
   try {
@@ -32,10 +33,18 @@ function sendToGA4(metric) {
 function reportMetric(metric) {
   sendToPostHog(metric);
   sendToGA4(metric);
+  // Task #610 — Firebase Performance Monitoring sink. No-op until
+  // initFirebasePerf() resolves (production + configured + sampled-in).
+  reportWebVitalToPerf(metric);
 }
 
 export function initWebVitals() {
   if (import.meta.env.DEV) return;
+  // Kick off Firebase Perf init in parallel; the web-vitals callbacks below
+  // fire later (LCP/INP) so the SDK has time to load before the first
+  // metric arrives. If init fails / is gated off, reportWebVitalToPerf
+  // becomes a no-op.
+  initFirebasePerf();
   onCLS(reportMetric);
   onINP(reportMetric);
   onLCP(reportMetric);

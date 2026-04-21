@@ -47,3 +47,11 @@ py-vapid==1.9.4
 PyPDF2==3.0.1
 stripe>=9.0.0
 cloudflare>=4.3.0
+
+# ── Observability (Task #610) — OpenTelemetry distributed tracing ──────────
+# All optional at runtime: tracing.py degrades to no-op if these are absent.
+opentelemetry-api>=1.27.0
+opentelemetry-sdk>=1.27.0
+opentelemetry-instrumentation-fastapi>=0.48b0
+opentelemetry-instrumentation-httpx>=0.48b0
+opentelemetry-exporter-gcp-trace>=1.7.0

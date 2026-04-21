@@ -355,7 +355,7 @@ function getCorsHeaders(origin: string | null): Record<string, string> | null {
   return {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept, Origin, X-Requested-With, x-anon-id, x-turnstile-token",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept, Origin, X-Requested-With, x-anon-id, x-turnstile-token, traceparent, tracestate, baggage",
     "Access-Control-Expose-Headers": "X-RateLimit-Limit, X-RateLimit-Remaining, Retry-After, X-Request-Id, X-Source",
     "Access-Control-Allow-Credentials": "true",
     "Access-Control-Max-Age": "600",

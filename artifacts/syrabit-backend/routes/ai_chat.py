@@ -76,6 +76,12 @@ from rag import (
     web_search_with_fallback,
 )
 from prompts import _classify_intent, classify_intent, _is_out_of_scope_response, extract_semester_number
+from tracing import (
+    record_chat_attrs,
+    record_first_token,
+    get_current_trace_id,
+    emit_phase_span,
+)
 from followup_context import detect_followup, build_followup_context, merge_followup_into_query
 from pipeline import should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query, get_instant_response
 
@@ -847,6 +853,22 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     safe_prompt, fallback_msg, guardrail_tag = evaluate_prompt_safety(msg.message)
     _stream_intent, _stream_db_category = classify_intent(msg.message)
 
+    # Task #610 — annotate the auto-created request span so chat traces are
+    # filterable by intent / model / auth-mode / message length in Cloud Trace.
+    # No-op when TRACING_ENABLED is unset.
+    try:
+        record_chat_attrs(**{
+            "syrabit.chat.intent": _stream_intent or "",
+            "syrabit.chat.model": (msg.model or "default"),
+            "syrabit.chat.is_anon": bool(is_anon),
+            "syrabit.chat.has_subject": bool(msg.subject_id or msg.subject_name),
+            "syrabit.chat.has_card_context": bool(msg.card_context),
+            "syrabit.chat.message_chars": len(msg.message or ""),
+            "syrabit.chat.response_lang": (msg.response_lang or "en"),
+        })
+    except Exception:
+        pass
+
     credits_info = None
     if not is_anon:
         credits_info = await get_user_credits(user)
@@ -933,8 +955,28 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 pass
         logger.info(f"[STREAM] INSTANT casual fast-path: '{msg.message[:30]}' → {len(_instant_s)} chars (0 LLM calls)")
         _speedup.record_instant_fastpath()
-        _speedup.record_ttfb((_time_mod.time() - _stream_t0) * 1000)
-        _speedup.record_total_latency((_time_mod.time() - _stream_t0) * 1000)
+        _instant_ms = (_time_mod.time() - _stream_t0) * 1000
+        _speedup.record_ttfb(_instant_ms)
+        _speedup.record_total_latency(_instant_ms)
+        try:
+            record_first_token(_instant_ms, source="instant")
+            record_chat_attrs(**{
+                "syrabit.chat.path": "instant",
+                "syrabit.chat.total_ms": _instant_ms,
+                "syrabit.chat.retrieval_ms": 0.0,
+            })
+            # Task #610 — instant fast-path has no retrieval/LLM, just
+            # emit a single post_processing-equivalent span so the
+            # request still shows a child for consistency in dashboards.
+            _t_now_inst = _time_mod.time()
+            emit_phase_span(
+                "chat.post_processing",
+                _stream_t0,
+                _t_now_inst,
+                **{"syrabit.chat.path": "instant"},
+            )
+        except Exception:
+            pass
         async def _instant_stream():
             nonlocal _instant_s
             yield f"data: {json.dumps({'conversation_id': msg.conversation_id or '', 'rag_source': 'none', 'rag_quality': 'none', 'rag_chunks': 0})}\n\n"
@@ -1018,6 +1060,25 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 _speedup.record_ttfb(_ttfb_early_ms)
             except Exception:
                 pass
+            try:
+                record_first_token(_ttfb_early_ms, source="early-cache")
+                record_chat_attrs(**{
+                    "syrabit.chat.path": "early-cache",
+                    "syrabit.chat.retrieval_ms": _ttfb_early_ms,
+                })
+                # Task #610 — early-cache short path: retrieval = the
+                # whole window from request start through cache hit.
+                emit_phase_span(
+                    "chat.retrieval",
+                    _stream_t0,
+                    _time_mod.time(),
+                    **{
+                        "syrabit.chat.path": "early-cache",
+                        "syrabit.chat.cached": True,
+                    },
+                )
+            except Exception:
+                pass
             # Sanitise cached Assamese replies before emission so legacy
             # leaky cache entries (written before this filter existed) do
             # not reach the user. Uses the same async pipeline as the
@@ -1076,6 +1137,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 _final_ms_e = (_time_mod.time() - _stream_t0) * 1000
                 _record_chat_latency(_final_ms_e)
                 _speedup.record_total_latency(_final_ms_e)
+                record_chat_attrs(**{"syrabit.chat.total_ms": _final_ms_e})
             except Exception:
                 pass
         if not is_anon and credits_info:
@@ -1667,6 +1729,18 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                     _speedup.record_ttfb(_ttfb_cache_ms)
                 except Exception:
                     pass
+                try:
+                    record_first_token(_ttfb_cache_ms, source="cache")
+                    # Cache-hit short-circuit: retrieval == cache-lookup
+                    # window. Set retrieval_ms here so the attribute is
+                    # present on all 4 SSE paths (instant / early-cache
+                    # / cache / main).
+                    record_chat_attrs(**{
+                        "syrabit.chat.path": "cache",
+                        "syrabit.chat.retrieval_ms": _ttfb_cache_ms,
+                    })
+                except Exception:
+                    pass
                 # Defensive sanitisation of cached Assamese answers — older
                 # cache entries may have been written before the leakage
                 # filter existed. Re-run the strip if the response was meant
@@ -1740,6 +1814,19 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                                 _stream_model = _CHAT_DEFAULT_MODEL
                     except Exception as _e_cfg:
                         logger.debug(f"chat_model config lookup failed: {_e_cfg}")
+                # Task #610 — phase span boundaries.
+                # Retrieval = everything from request start through the
+                # moment we hand the prompt to the LLM (Phase 0+1+2,
+                # cache lookup, prompt build). Captured so we can emit
+                # an explicit `chat.retrieval` child span at the end of
+                # the request alongside `chat.llm_call` and
+                # `chat.post_processing`.
+                _t_llm_start = _time_mod.time()
+                _retrieval_ms = (_t_llm_start - _stream_t0) * 1000.0
+                try:
+                    record_chat_attrs(**{"syrabit.chat.retrieval_ms": _retrieval_ms})
+                except Exception:
+                    pass
                 _active_stream = call_llm_api_stream(messages_payload, model=_stream_model, max_tokens=max_tokens, intent=_stream_intent, response_lang=_resp_lang)
 
                 # For Assamese (Indic) responses we buffer the entire LLM
@@ -1781,6 +1868,12 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                                 _speedup.record_ttfb(_ttfb_llm_ms)
                             except Exception:
                                 pass
+                            try:
+                                # Task #610 — chat span: first-token milestone
+                                record_first_token(_ttfb_llm_ms, source="llm")
+                                record_chat_attrs(**{"syrabit.chat.provider": _stream_provider or "unknown"})
+                            except Exception:
+                                pass
                             _first_token_logged = True
                         try:
                             data = json.loads(chunk[6:])
@@ -1808,6 +1901,10 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                     _bp_count += 1
                     if _bp_count % 40 == 0:
                         await asyncio.sleep(0)
+                # Task #610 — mark end of LLM streaming phase. Anything
+                # after this point (Indic sanitize, cache write, persist,
+                # log fan-out) is `chat.post_processing`.
+                _t_llm_end = _time_mod.time()
                 if _output_violation:
                     full_response.clear()
                     _fallback = "I need to stop here — my response was heading in a direction that doesn't align with my guidelines. Please try rephrasing your question."
@@ -1994,6 +2091,76 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 _final_total_ms = (_time_mod.time() - _stream_t0) * 1000
                 _record_chat_latency(_final_total_ms)
                 _speedup.record_total_latency(_final_total_ms)
+                # Preserve the path label set earlier by the cache-hit
+                # branch (`cache`) — only attribute as `main` for true
+                # non-cached LLM responses, otherwise the request-span
+                # path breakdown (instant/cache/early-cache/main) ends
+                # up double-counting cache hits as `main`.
+                _final_attrs = {
+                    "syrabit.chat.total_ms": _final_total_ms,
+                    "syrabit.chat.cached": bool(cached_answer),
+                    "syrabit.chat.web_used": bool(web_search_used),
+                    "syrabit.chat.rag_source": rag_source_saved or "none",
+                }
+                if not cached_answer:
+                    _final_attrs["syrabit.chat.path"] = "main"
+                record_chat_attrs(**_final_attrs)
+            except Exception:
+                pass
+
+            # Task #610 — emit explicit phase spans so retrieval, LLM
+            # and post-processing each show up as a distinct child of
+            # the request span in Cloud Trace. Wall-clock timestamps
+            # are captured at known phase boundaries above; this block
+            # converts them into proper OTel spans (no-op when tracing
+            # is disabled).
+            try:
+                _t_done = _time_mod.time()
+                if cached_answer:
+                    # Cache-hit short-circuit: no LLM phase, retrieval
+                    # spans the entire pre-yield window.
+                    emit_phase_span(
+                        "chat.retrieval",
+                        _stream_t0,
+                        _t_done,
+                        **{
+                            "syrabit.chat.path": "cache",
+                            "syrabit.chat.rag_source": rag_source_saved or "none",
+                            "syrabit.chat.cached": True,
+                        },
+                    )
+                else:
+                    _ts_llm_start = locals().get("_t_llm_start", _stream_t0)
+                    _ts_llm_end = locals().get("_t_llm_end", _ts_llm_start)
+                    emit_phase_span(
+                        "chat.retrieval",
+                        _stream_t0,
+                        _ts_llm_start,
+                        **{
+                            "syrabit.chat.rag_source": rag_source_saved or "none",
+                            "syrabit.chat.web_used": bool(web_search_used),
+                            "syrabit.chat.rag_chunks": int(rag_chunks_count or 0),
+                        },
+                    )
+                    emit_phase_span(
+                        "chat.llm_call",
+                        _ts_llm_start,
+                        _ts_llm_end,
+                        **{
+                            "syrabit.chat.model": str(msg.model or "openai/gpt-oss-20b"),
+                            "syrabit.chat.provider": locals().get("_stream_provider", "unknown") or "unknown",
+                            "syrabit.chat.intent": _stream_intent,
+                        },
+                    )
+                    emit_phase_span(
+                        "chat.post_processing",
+                        _ts_llm_end,
+                        _t_done,
+                        **{
+                            "syrabit.chat.indic_buffered": bool(locals().get("_indic_buffer_mode", False)),
+                            "syrabit.chat.output_violation": bool(locals().get("_output_violation", False)),
+                        },
+                    )
             except Exception:
                 pass
 

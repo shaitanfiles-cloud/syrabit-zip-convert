@@ -18,6 +18,7 @@ import { InputBar } from './chat/InputBar';
 import { ModelSelector, MODELS } from './chat/ModelSelector';
 import { useTurnstile } from '@/hooks/useTurnstile';
 import { Analytics } from '@/utils/analytics';
+import { startTrace, makeTraceparent } from '@/utils/firebasePerf';
 // React 19 hoists <title>/<meta>/<link> to <head> from anywhere in the
 // tree without the SSR/client mismatch react-helmet-async causes. Use
 // native tags directly. (Removes React error #418 on prerendered /chat.)
@@ -264,8 +265,31 @@ export default function ChatPage() {
       card_context: cardContext || null, document_id: documentId || null,
       response_lang: responseLang !== 'en' ? responseLang : undefined,
     };
+    // Task #610 — Firebase Performance custom traces + W3C trace propagation.
+    // `chat_send_total` covers the full send→done lifecycle; `chat_send_first_token`
+    // is stopped the moment the first SSE content event lands. Both are no-ops
+    // when Firebase Perf is disabled / unsampled, so the chat path stays free.
+    const _perfTotal = startTrace('chat_send_total', {
+      model: model || 'default',
+      auth: user ? 'user' : 'anon',
+      has_subject: subjectId ? '1' : '0',
+    });
+    const _perfFirstToken = startTrace('chat_send_first_token', {
+      model: model || 'default',
+      auth: user ? 'user' : 'anon',
+    });
+    let _firstTokenStopped = false;
+    const _stopFirstToken = () => {
+      if (_firstTokenStopped) return;
+      _firstTokenStopped = true;
+      try { _perfFirstToken.stop(); } catch {}
+    };
+    const _tp = makeTraceparent();
     try {
       const fetchHeaders = { 'Content-Type': 'application/json' };
+      if (_tp && _tp.traceparent) {
+        fetchHeaders['traceparent'] = _tp.traceparent;
+      }
       if (!user) {
         fetchHeaders['x-anon-id'] = getAnonId();
         const _tsToken = await getTurnstileToken();
@@ -362,6 +386,8 @@ export default function ChatPage() {
           }
           if (meta.hasError) continue;
           if (parsed.content) {
+            // Task #610 — first content chunk = first-token milestone.
+            _stopFirstToken();
             pendingChunk += parsed.content;
             if (!fullContent) flushPending();
             else if (!flushTimer) flushTimer = setTimeout(flushPending, FLUSH_INTERVAL);
@@ -394,10 +420,17 @@ export default function ChatPage() {
       setSyncState('idle');
     } catch (err) {
       if (err.name === 'AbortError') return;
+      try { _perfTotal.putAttribute('error', '1'); } catch {}
       toast.error(err.message || 'Failed to get AI response');
       setMessages((prev) => prev.filter((m) => m.id !== aiMsgId));
       setSyncState('offline');
-    } finally { setIsLoading(false); }
+    } finally {
+      setIsLoading(false);
+      // Task #610 — close any open Firebase Perf traces. Safe to call
+      // multiple times; stub stop() is a no-op when Perf is disabled.
+      try { _stopFirstToken(); } catch {}
+      try { _perfTotal.stop(); } catch {}
+    }
   };
 
   const handleRegenerate = useCallback(() => {
