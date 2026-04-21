@@ -515,13 +515,18 @@ async def lifespan(app):
     # in the same minute.
     try:
         from bench.grounded_recall import (
-            _grounded_recall_assamese_nightly_loop,
-            _grounded_recall_bengali_nightly_loop,
-            _grounded_recall_hindi_nightly_loop,
+            PER_LANGUAGE_NIGHTLY_SUBSETS,
+            per_language_nightly_loops,
         )
-        asyncio.create_task(_grounded_recall_assamese_nightly_loop())
-        asyncio.create_task(_grounded_recall_bengali_nightly_loop())
-        asyncio.create_task(_grounded_recall_hindi_nightly_loop())
+        # Iterate the registry so adding a language (tagged fixtures +
+        # baseline_<code>.json) is a one-line change in grounded_recall.py
+        # — no risk of the server.py wiring drifting out of sync.
+        for _lang, _loop in per_language_nightly_loops().items():
+            asyncio.create_task(_loop())
+        logger.info(
+            "grounded-recall per-language nightly loops started: %s",
+            ",".join(PER_LANGUAGE_NIGHTLY_SUBSETS),
+        )
     except Exception as _gr_lang_err:
         logger.warning(f"grounded-recall per-language nightly loops not started: {_gr_lang_err}")
     # Task #458 — daily/weekly auto-publish of SEO pages so the 991 syllabus

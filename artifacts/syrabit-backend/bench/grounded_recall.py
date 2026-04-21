@@ -1075,6 +1075,33 @@ _grounded_recall_assamese_nightly_loop = _make_language_nightly_loop("as", stagg
 _grounded_recall_bengali_nightly_loop = _make_language_nightly_loop("bn", stagger_minutes=10)
 _grounded_recall_hindi_nightly_loop = _make_language_nightly_loop("hi", stagger_minutes=15)
 
+# Single-source-of-truth registry used by server.py lifespan — adding
+# a new language means adding one entry here (plus the fixture +
+# baseline file) and nothing needs to change in server.py.
+_PER_LANGUAGE_NIGHTLY_LOOPS: dict[str, "callable"] = {
+    "as": _grounded_recall_assamese_nightly_loop,
+    "bn": _grounded_recall_bengali_nightly_loop,
+    "hi": _grounded_recall_hindi_nightly_loop,
+}
+
+
+def per_language_nightly_loops() -> dict[str, "callable"]:
+    """Return the {language_code: loop_coroutine_factory} registry.
+
+    Kept as a function (not a bare dict export) so future callers can
+    rebuild the mapping dynamically if needed, and so a typo in the
+    registered codes shows up as a test failure rather than silently
+    leaving a language without a nightly loop.
+    """
+    missing = [lang for lang in PER_LANGUAGE_NIGHTLY_SUBSETS
+               if lang not in _PER_LANGUAGE_NIGHTLY_LOOPS]
+    if missing:
+        raise RuntimeError(
+            f"PER_LANGUAGE_NIGHTLY_SUBSETS declares {missing!r} but no "
+            f"nightly loop was registered in _PER_LANGUAGE_NIGHTLY_LOOPS"
+        )
+    return dict(_PER_LANGUAGE_NIGHTLY_LOOPS)
+
 
 __all__ = [
     "BenchCase", "CaseResult", "BenchReport",
