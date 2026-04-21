@@ -2716,6 +2716,406 @@
       }
     },
     {
+      "id": "ben-phy-newton-third-law",
+      "query": "নিউটনের তৃতীয় গতিসূত্র কী?",
+      "context": {
+        "board_name": "AHSEC",
+        "class_name": "11",
+        "subject_name": "Physics",
+        "chapter_name": "Laws of Motion",
+        "language": "bn"
+      },
+      "expected": {
+        "domains": [
+          "wikipedia.org",
+          "ncert.nic.in"
+        ],
+        "url_substrings": [
+          "bn.wikipedia",
+          "/bn/"
+        ]
+      },
+      "offline_corpus": {
+        "web_results": [
+          {
+            "title": "নিউটনের গতিসূত্র - Wikipedia (বাংলা)",
+            "url": "https://bn.wikipedia.org/wiki/নিউটনের_গতিসূত্র",
+            "snippet": "প্রত্যেক ক্রিয়ার একটি সমান ও বিপরীতমুখী প্রতিক্রিয়া থাকে।"
+          },
+          {
+            "title": "NCERT chapter",
+            "url": "https://ncert.nic.in/textbook/pdf/keph105.pdf",
+            "snippet": "Newton's laws."
+          }
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ben-bio-photosynthesis",
+      "query": "সালোকসংশ্লেষণ কী?",
+      "context": {
+        "board_name": "AHSEC",
+        "class_name": "11",
+        "subject_name": "Biology",
+        "chapter_name": "Photosynthesis",
+        "language": "bn"
+      },
+      "expected": {
+        "domains": [
+          "wikipedia.org"
+        ],
+        "url_substrings": [
+          "bn.wikipedia",
+          "/bn/"
+        ]
+      },
+      "offline_corpus": {
+        "web_results": [
+          {
+            "title": "সালোকসংশ্লেষণ - Wikipedia",
+            "url": "https://bn.wikipedia.org/wiki/সালোকসংশ্লেষণ",
+            "snippet": "সবুজ উদ্ভিদ সূর্যের আলো থেকে শক্তি নিয়ে খাদ্য প্রস্তুত করে।"
+          }
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ben-hist-1857-revolt",
+      "query": "১৮৫৭ সালের বিদ্রোহের গুরুত্ব কী?",
+      "context": {
+        "board_name": "SEBA",
+        "class_name": "10",
+        "subject_name": "History",
+        "chapter_name": "Nationalism in India",
+        "language": "bn"
+      },
+      "expected": {
+        "domains": [
+          "wikipedia.org",
+          "ncert.nic.in"
+        ]
+      },
+      "offline_corpus": {
+        "web_results": [
+          {
+            "title": "১৮৫৭ সালের সিপাহী বিদ্রোহ - Wikipedia",
+            "url": "https://bn.wikipedia.org/wiki/১৮৫৭_সালের_সিপাহী_বিদ্রোহ",
+            "snippet": "ব্রিটিশ শাসনের বিরুদ্ধে প্রথম বৃহৎ সশস্ত্র অভ্যুত্থান।"
+          },
+          {
+            "title": "NCERT chapter",
+            "url": "https://ncert.nic.in/textbook/pdf/hess305.pdf",
+            "snippet": "Revolt of 1857."
+          }
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ben-geo-monsoon",
+      "query": "ভারতে মৌসুমী বায়ুর কারণ কী?",
+      "context": {
+        "board_name": "SEBA",
+        "class_name": "10",
+        "subject_name": "Geography",
+        "chapter_name": "Climate",
+        "language": "bn"
+      },
+      "expected": {
+        "domains": [
+          "wikipedia.org",
+          "ncert.nic.in"
+        ]
+      },
+      "offline_corpus": {
+        "web_results": [
+          {
+            "title": "মৌসুমী বায়ু - Wikipedia",
+            "url": "https://bn.wikipedia.org/wiki/মৌসুমী_বায়ু",
+            "snippet": "স্থলভাগ ও সমুদ্রের উত্তাপের পার্থক্যে সৃষ্ট ঋতুভিত্তিক বায়ুপ্রবাহ।"
+          },
+          {
+            "title": "NCERT chapter",
+            "url": "https://ncert.nic.in/textbook/pdf/jess204.pdf",
+            "snippet": "Climate of India."
+          }
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ben-math-trigonometry",
+      "query": "ত্রিকোণমিতির মৌলিক অনুপাত কী কী?",
+      "context": {
+        "board_name": "SEBA",
+        "class_name": "10",
+        "subject_name": "Mathematics",
+        "chapter_name": "Introduction to Trigonometry",
+        "language": "bn"
+      },
+      "expected": {
+        "domains": [
+          "wikipedia.org",
+          "ncert.nic.in"
+        ]
+      },
+      "offline_corpus": {
+        "web_results": [
+          {
+            "title": "ত্রিকোণমিতি - Wikipedia",
+            "url": "https://bn.wikipedia.org/wiki/ত্রিকোণমিতি",
+            "snippet": "সাইন, কোসাইন, ট্যানজেন্ট — সমকোণী ত্রিভুজের বাহুর অনুপাত।"
+          },
+          {
+            "title": "NCERT chapter",
+            "url": "https://ncert.nic.in/textbook/pdf/jemh108.pdf",
+            "snippet": "Trigonometric ratios."
+          }
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "ben-sci-acid-base",
+      "query": "অ্যাসিড ও ক্ষারের মধ্যে পার্থক্য কী?",
+      "context": {
+        "board_name": "SEBA",
+        "class_name": "10",
+        "subject_name": "Science",
+        "chapter_name": "Acids Bases and Salts",
+        "language": "bn"
+      },
+      "expected": {
+        "domains": [
+          "wikipedia.org",
+          "ncert.nic.in"
+        ]
+      },
+      "offline_corpus": {
+        "web_results": [
+          {
+            "title": "অ্যাসিড - Wikipedia",
+            "url": "https://bn.wikipedia.org/wiki/অ্যাসিড",
+            "snippet": "প্রোটন দানকারী যৌগ।"
+          },
+          {
+            "title": "NCERT chapter",
+            "url": "https://ncert.nic.in/textbook/pdf/jesc102.pdf",
+            "snippet": "Acids and bases."
+          }
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "hin-phy-newton-third-law",
+      "query": "न्यूटन का तीसरा गति नियम क्या है?",
+      "context": {
+        "board_name": "AHSEC",
+        "class_name": "11",
+        "subject_name": "Physics",
+        "chapter_name": "Laws of Motion",
+        "language": "hi"
+      },
+      "expected": {
+        "domains": [
+          "wikipedia.org",
+          "ncert.nic.in"
+        ],
+        "url_substrings": [
+          "hi.wikipedia",
+          "/hi/"
+        ]
+      },
+      "offline_corpus": {
+        "web_results": [
+          {
+            "title": "न्यूटन के गति नियम - Wikipedia (हिन्दी)",
+            "url": "https://hi.wikipedia.org/wiki/न्यूटन_के_गति_नियम",
+            "snippet": "प्रत्येक क्रिया की एक समान एवं विपरीत प्रतिक्रिया होती है।"
+          },
+          {
+            "title": "NCERT chapter",
+            "url": "https://ncert.nic.in/textbook/pdf/keph105.pdf",
+            "snippet": "Newton's laws."
+          }
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "hin-bio-photosynthesis",
+      "query": "प्रकाश संश्लेषण क्या है?",
+      "context": {
+        "board_name": "AHSEC",
+        "class_name": "11",
+        "subject_name": "Biology",
+        "chapter_name": "Photosynthesis",
+        "language": "hi"
+      },
+      "expected": {
+        "domains": [
+          "wikipedia.org"
+        ],
+        "url_substrings": [
+          "hi.wikipedia",
+          "/hi/"
+        ]
+      },
+      "offline_corpus": {
+        "web_results": [
+          {
+            "title": "प्रकाश संश्लेषण - Wikipedia",
+            "url": "https://hi.wikipedia.org/wiki/प्रकाश_संश्लेषण",
+            "snippet": "हरित पादप सूर्य के प्रकाश से ऊर्जा लेकर भोजन बनाते हैं।"
+          }
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "hin-hist-1857-revolt",
+      "query": "1857 के विद्रोह का महत्व क्या है?",
+      "context": {
+        "board_name": "SEBA",
+        "class_name": "10",
+        "subject_name": "History",
+        "chapter_name": "Nationalism in India",
+        "language": "hi"
+      },
+      "expected": {
+        "domains": [
+          "wikipedia.org",
+          "ncert.nic.in"
+        ]
+      },
+      "offline_corpus": {
+        "web_results": [
+          {
+            "title": "1857 का भारतीय विद्रोह - Wikipedia",
+            "url": "https://hi.wikipedia.org/wiki/1857_का_भारतीय_विद्रोह",
+            "snippet": "ब्रिटिश शासन के विरुद्ध पहला बड़ा सशस्त्र विद्रोह।"
+          },
+          {
+            "title": "NCERT chapter",
+            "url": "https://ncert.nic.in/textbook/pdf/hess305.pdf",
+            "snippet": "Revolt of 1857."
+          }
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "hin-geo-monsoon",
+      "query": "भारत में मानसून का कारण क्या है?",
+      "context": {
+        "board_name": "SEBA",
+        "class_name": "10",
+        "subject_name": "Geography",
+        "chapter_name": "Climate",
+        "language": "hi"
+      },
+      "expected": {
+        "domains": [
+          "wikipedia.org",
+          "ncert.nic.in"
+        ]
+      },
+      "offline_corpus": {
+        "web_results": [
+          {
+            "title": "मानसून - Wikipedia",
+            "url": "https://hi.wikipedia.org/wiki/मानसून",
+            "snippet": "स्थल और समुद्र के तापमान अंतर से उत्पन्न मौसमी पवन।"
+          },
+          {
+            "title": "NCERT chapter",
+            "url": "https://ncert.nic.in/textbook/pdf/jess204.pdf",
+            "snippet": "Climate of India."
+          }
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "hin-math-trigonometry",
+      "query": "त्रिकोणमिति के मौलिक अनुपात क्या हैं?",
+      "context": {
+        "board_name": "SEBA",
+        "class_name": "10",
+        "subject_name": "Mathematics",
+        "chapter_name": "Introduction to Trigonometry",
+        "language": "hi"
+      },
+      "expected": {
+        "domains": [
+          "wikipedia.org",
+          "ncert.nic.in"
+        ]
+      },
+      "offline_corpus": {
+        "web_results": [
+          {
+            "title": "त्रिकोणमिति - Wikipedia",
+            "url": "https://hi.wikipedia.org/wiki/त्रिकोणमिति",
+            "snippet": "साइन, कोसाइन, टैन्जेंट — समकोण त्रिभुज की भुजाओं के अनुपात।"
+          },
+          {
+            "title": "NCERT chapter",
+            "url": "https://ncert.nic.in/textbook/pdf/jemh108.pdf",
+            "snippet": "Trigonometric ratios."
+          }
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
+      "id": "hin-sci-acid-base",
+      "query": "अम्ल और क्षार में क्या अंतर है?",
+      "context": {
+        "board_name": "SEBA",
+        "class_name": "10",
+        "subject_name": "Science",
+        "chapter_name": "Acids Bases and Salts",
+        "language": "hi"
+      },
+      "expected": {
+        "domains": [
+          "wikipedia.org",
+          "ncert.nic.in"
+        ]
+      },
+      "offline_corpus": {
+        "web_results": [
+          {
+            "title": "अम्ल - Wikipedia",
+            "url": "https://hi.wikipedia.org/wiki/अम्ल",
+            "snippet": "प्रोटॉन दान करने वाला यौगिक।"
+          },
+          {
+            "title": "NCERT chapter",
+            "url": "https://ncert.nic.in/textbook/pdf/jesc102.pdf",
+            "snippet": "Acids and bases."
+          }
+        ],
+        "internal_chapters": [],
+        "page_context": null
+      }
+    },
+    {
       "id": "pyq-ahsec-phy-2023-q5",
       "query": "AHSEC 2023 Physics Q5: A particle moves in a circle of radius r with constant speed v. Derive an expression for centripetal acceleration.",
       "context": {

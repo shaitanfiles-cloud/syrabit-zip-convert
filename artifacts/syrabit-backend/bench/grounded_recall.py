@@ -928,92 +928,152 @@ async def _grounded_recall_nightly_loop():
         await asyncio.sleep(_GROUNDED_RECALL_LOOP_SLEEP_S)
 
 
-# ───────────────────────── Assamese (`as`) nightly subset (Task #599) ─────
+# ──────────────── Per-language nightly subsets (Tasks #599 / #618) ────────
 #
-# The full bench masks language-specific regressions: Assamese has only
-# ~8 cases out of >100, so a complete failure on the Assamese subset
-# moves recall@5 by a fraction of a percent overall — well inside the
-# global gate. We therefore run a second nightly job that filters to
-# ``context.language == "as"`` cases against the *live* retrievers, gates
-# them against their own committed baseline (``baseline_as.json``), and
-# fires an alert via its own channel ID so on-call admins notice when
-# as.wikipedia / NCERT-Assamese stops surfacing for Asomiya queries.
+# The full bench masks language-specific regressions: each Indian-language
+# subset has only ~5–8 cases out of >100, so a complete failure on any
+# one subset moves the global recall@5 by a fraction of a percent —
+# well inside the global gate. We therefore spawn a second nightly
+# loop per language that filters to ``context.language == "<code>"``,
+# gates against its own committed baseline (``baseline_<code>.json``),
+# and fires an alert via its own channel so on-call admins notice when
+# (e.g.) as.wikipedia stops surfacing for Assamese queries or
+# hi.wikipedia falls out of the index for Hindi queries.
 #
-# Configuration (env):
-#   GROUNDED_RECALL_AS_NIGHTLY_ENABLED   default: true
-#   GROUNDED_RECALL_AS_NIGHTLY_GATE      default: 0.15 (more slack — only
-#                                                       8 cases, one miss
-#                                                       moves recall@5 by
-#                                                       0.125)
-#   The window/hour and enabled flag fall back to the global bench
-#   settings so operators can disable both at once if needed.
+# Configuration is per-language via env:
+#   GROUNDED_RECALL_<CODE>_NIGHTLY_ENABLED   default: true
+#   GROUNDED_RECALL_<CODE>_NIGHTLY_GATE      default: 0.15 (more slack —
+#                                                          small N means
+#                                                          one miss moves
+#                                                          recall@5 by
+#                                                          ~0.125)
+#   The enabled flag falls back to the global bench kill-switch so
+#   operators can disable every nightly run at once if needed.
 
-_GROUNDED_RECALL_AS_LOCK_ID = "grounded_recall_nightly_marker_as"
-_GROUNDED_RECALL_AS_DEFAULT_GATE = 0.15
-_GROUNDED_RECALL_AS_LANGUAGE = "as"
-_GROUNDED_RECALL_AS_ALERT_TYPE = "grounded_recall_regression_as"
+_PER_LANGUAGE_DEFAULT_GATE = 0.15
+
+# Languages that ship with tagged fixture cases + committed baseline.
+# Keep this list in sync with ``bench/fixtures/baseline_<code>.json``
+# and the lifespan registrations in ``server.py``.
+PER_LANGUAGE_NIGHTLY_SUBSETS: tuple[str, ...] = ("as", "bn", "hi")
 
 
-def _bench_as_enabled() -> bool:
-    val = (os.environ.get("GROUNDED_RECALL_AS_NIGHTLY_ENABLED", "true") or "").strip().lower()
+def _bench_language_enabled(language: str) -> bool:
+    env_key = f"GROUNDED_RECALL_{language.upper()}_NIGHTLY_ENABLED"
+    val = (os.environ.get(env_key, "true") or "").strip().lower()
     if val not in ("1", "true", "yes", "on"):
         return False
     # Respect the global kill-switch — if the operator turned the whole
-    # nightly bench off, the Assamese subset goes silent too.
+    # nightly bench off, the per-language subsets go silent too.
     return _bench_enabled()
 
 
-def _bench_as_gate() -> float:
+def _bench_language_gate(language: str) -> float:
+    env_key = f"GROUNDED_RECALL_{language.upper()}_NIGHTLY_GATE"
     try:
-        g = float(os.environ.get(
-            "GROUNDED_RECALL_AS_NIGHTLY_GATE",
-            str(_GROUNDED_RECALL_AS_DEFAULT_GATE),
-        ))
+        g = float(os.environ.get(env_key, str(_PER_LANGUAGE_DEFAULT_GATE)))
     except (TypeError, ValueError):
-        g = _GROUNDED_RECALL_AS_DEFAULT_GATE
+        g = _PER_LANGUAGE_DEFAULT_GATE
     return max(0.0, min(g, 1.0))
+
+
+def _language_lock_id(language: str) -> str:
+    return f"grounded_recall_nightly_marker_{language.lower()}"
+
+
+def _language_alert_type(language: str) -> str:
+    return f"grounded_recall_regression_{language.lower()}"
+
+
+async def _try_run_grounded_recall_language_once(
+    db,
+    language: str,
+    now_utc: Optional[datetime] = None,
+) -> dict:
+    """Per-language variant of ``_try_run_grounded_recall_once``.
+
+    Independent lock + baseline + gate per language so no subset ever
+    blocks (or is masked by) the global bench or another language's
+    nightly run.
+    """
+    lang = language.lower()
+    if not _bench_language_enabled(lang):
+        # Match the shape of the global bench's disabled return so
+        # existing callers/tests can compare against a literal dict.
+        return {"ran": False, "reason": "disabled"}
+    return await _try_run_grounded_recall_once(
+        db,
+        now_utc=now_utc,
+        language=lang,
+        lock_id=_language_lock_id(lang),
+        gate=_bench_language_gate(lang),
+        alert_type=_language_alert_type(lang),
+        log_prefix=f"[bench.nightly.{lang}]",
+    )
+
+
+def _make_language_nightly_loop(language: str, stagger_minutes: int):
+    """Build a nightly background loop bound to one language subset.
+
+    ``stagger_minutes`` offsets boot so the per-language loops don't
+    slam the live retrievers in the same minute as the global bench
+    (or each other). Cross-replica dedup is handled by the per-language
+    lock inside ``_try_run_grounded_recall_language_once``.
+    """
+    lang = language.lower()
+
+    async def _loop():
+        from deps import db, is_mongo_available  # type: ignore
+        await asyncio.sleep(300 + stagger_minutes * 60)
+        while True:
+            try:
+                if await is_mongo_available():
+                    await _try_run_grounded_recall_language_once(db, lang)
+            except Exception as exc:
+                logger.debug(f"[bench.nightly.{lang}] loop iteration error: {exc}")
+            await asyncio.sleep(_GROUNDED_RECALL_LOOP_SLEEP_S)
+
+    _loop.__name__ = f"_grounded_recall_{lang}_nightly_loop"
+    _loop.__doc__ = (
+        f"Background loop for the '{lang}'-language subset "
+        f"(Tasks #599 / #618). Staggered +{stagger_minutes}m after boot."
+    )
+    return _loop
+
+
+# Backward-compat exports — keep the Assamese-specific names that
+# existing callers (server.py lifespan, tests) import. These were the
+# public symbols before the factory refactor.
+_GROUNDED_RECALL_AS_LOCK_ID = _language_lock_id("as")
+_GROUNDED_RECALL_AS_LANGUAGE = "as"
+_GROUNDED_RECALL_AS_ALERT_TYPE = _language_alert_type("as")
+_GROUNDED_RECALL_AS_DEFAULT_GATE = _PER_LANGUAGE_DEFAULT_GATE
+
+
+def _bench_as_enabled() -> bool:
+    """Back-compat wrapper — Assamese shortcut for the generic
+    ``_bench_language_enabled`` check. Kept for existing tests."""
+    return _bench_language_enabled("as")
+
+
+def _bench_as_gate() -> float:
+    """Back-compat wrapper for the Assamese nightly gate."""
+    return _bench_language_gate("as")
 
 
 async def _try_run_grounded_recall_assamese_once(
     db, now_utc: Optional[datetime] = None
 ) -> dict:
-    """Assamese-subset variant of ``_try_run_grounded_recall_once``.
-
-    Independent lock, independent baseline, independent gate so the
-    Asomiya nightly never blocks (or is masked by) the global bench."""
-    if not _bench_as_enabled():
-        return {"ran": False, "reason": "disabled"}
-    return await _try_run_grounded_recall_once(
-        db,
-        now_utc=now_utc,
-        language=_GROUNDED_RECALL_AS_LANGUAGE,
-        lock_id=_GROUNDED_RECALL_AS_LOCK_ID,
-        gate=_bench_as_gate(),
-        alert_type=_GROUNDED_RECALL_AS_ALERT_TYPE,
-        log_prefix="[bench.nightly.as]",
-    )
+    return await _try_run_grounded_recall_language_once(db, "as", now_utc=now_utc)
 
 
-async def _grounded_recall_assamese_nightly_loop():
-    """Background loop for the Assamese-language subset (Task #599).
+_grounded_recall_assamese_nightly_loop = _make_language_nightly_loop("as", stagger_minutes=5)
 
-    Same poll cadence as the global loop; staggered start so the two
-    nightly bench runs don't slam the live retrievers in the same
-    minute. Cross-replica dedup is handled by the per-language lock
-    inside ``_try_run_grounded_recall_assamese_once``.
-    """
-    from deps import db, is_mongo_available  # type: ignore
-    # Boot warm-up (5 min) + stagger another 5 min after the global
-    # loop so the two nightly bench runs don't double-hit the live
-    # search/scrape pipelines in the same minute.
-    await asyncio.sleep(300 + 5 * 60)
-    while True:
-        try:
-            if await is_mongo_available():
-                await _try_run_grounded_recall_assamese_once(db)
-        except Exception as exc:
-            logger.debug(f"[bench.nightly.as] loop iteration error: {exc}")
-        await asyncio.sleep(_GROUNDED_RECALL_LOOP_SLEEP_S)
+# Bengali (`bn`) and Hindi (`hi`) nightly subsets (Task #618). Each
+# gets its own boot stagger so three extra retriever runs don't pile
+# up in the same minute.
+_grounded_recall_bengali_nightly_loop = _make_language_nightly_loop("bn", stagger_minutes=10)
+_grounded_recall_hindi_nightly_loop = _make_language_nightly_loop("hi", stagger_minutes=15)
 
 
 __all__ = [
@@ -1025,10 +1085,17 @@ __all__ = [
     "_try_run_grounded_recall_once", "_should_run_grounded_recall_now",
     "_bench_run_tag", "_GROUNDED_RECALL_LOCK_ID",
     "_GROUNDED_RECALL_LAST_RUN_KEY",
+    # Per-language factory (Task #618)
+    "PER_LANGUAGE_NIGHTLY_SUBSETS",
+    "_try_run_grounded_recall_language_once",
+    "_make_language_nightly_loop",
     # Assamese-subset nightly (Task #599)
     "_grounded_recall_assamese_nightly_loop",
     "_try_run_grounded_recall_assamese_once",
     "_GROUNDED_RECALL_AS_LOCK_ID",
     "_GROUNDED_RECALL_AS_LANGUAGE",
     "_GROUNDED_RECALL_AS_ALERT_TYPE",
+    # Bengali / Hindi nightlies (Task #618)
+    "_grounded_recall_bengali_nightly_loop",
+    "_grounded_recall_hindi_nightly_loop",
 ]

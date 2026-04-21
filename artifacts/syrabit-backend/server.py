@@ -504,16 +504,26 @@ async def lifespan(app):
         asyncio.create_task(_grounded_recall_nightly_loop())
     except Exception as _gr_err:
         logger.warning(f"grounded-recall nightly loop not started: {_gr_err}")
-    # Task #599 — Assamese-language live-retriever nightly subset.
-    # Catches as.wikipedia / NCERT-Assamese coverage drops that the
-    # global bench masks (8 cases vs >100 → one Assamese miss is well
-    # inside the global gate). Independent lock + baseline_as.json +
-    # alert_type so it does not interfere with the global nightly.
+    # Tasks #599 / #618 — per-language live-retriever nightly subsets.
+    # Each Indian-language subset has only ~5–8 tagged cases vs >100
+    # globally, so a total coverage drop on e.g. as.wikipedia or
+    # hi.wikipedia barely moves the global recall@5 and never trips
+    # the global gate. Each subset owns its lock + baseline_<code>.json
+    # + alert_type so it cannot interfere with (or be masked by) the
+    # global nightly or another language. Boot staggers inside each
+    # loop prevent all three from double-hitting the live retrievers
+    # in the same minute.
     try:
-        from bench.grounded_recall import _grounded_recall_assamese_nightly_loop
+        from bench.grounded_recall import (
+            _grounded_recall_assamese_nightly_loop,
+            _grounded_recall_bengali_nightly_loop,
+            _grounded_recall_hindi_nightly_loop,
+        )
         asyncio.create_task(_grounded_recall_assamese_nightly_loop())
-    except Exception as _gr_as_err:
-        logger.warning(f"grounded-recall Assamese nightly loop not started: {_gr_as_err}")
+        asyncio.create_task(_grounded_recall_bengali_nightly_loop())
+        asyncio.create_task(_grounded_recall_hindi_nightly_loop())
+    except Exception as _gr_lang_err:
+        logger.warning(f"grounded-recall per-language nightly loops not started: {_gr_lang_err}")
     # Task #458 — daily/weekly auto-publish of SEO pages so the 991 syllabus
     # topics steadily fill in without admin clicks. Cross-replica dedup is
     # handled inside the loop via atomic CAS on db.job_locks, so it does not

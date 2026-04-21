@@ -962,6 +962,16 @@ export default function AdminEduBrowser({ adminToken }) {
             language="as"
             label="Grounded-answer recall · Assamese"
           />
+          <GroundedRecallTile
+            adminToken={adminToken}
+            language="bn"
+            label="Grounded-answer recall · Bengali"
+          />
+          <GroundedRecallTile
+            adminToken={adminToken}
+            language="hi"
+            label="Grounded-answer recall · Hindi"
+          />
         </div>
 
         <div className="flex items-center gap-1 border-b border-gray-200">
