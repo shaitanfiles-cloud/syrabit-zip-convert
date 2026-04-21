@@ -8,6 +8,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import { useContentLang } from '@/context/LanguageContext';
 import { getConversation, getAnonConversation, getSubject, getChapters, API_BASE, apiClient, getAnonId } from '@/utils/api';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { toast } from 'sonner';
@@ -404,19 +405,37 @@ export default function ChatPage() {
     if (lastUser) { setMessages((prev) => prev.slice(0, -1)); sendMsg(lastUser.content); }
   }, [messages]); // eslint-disable-line
 
-  const defaultPrompts = subject
-    ? [
-        `Explain the key concepts of ${subject.name}`,
-        `What are the most important topics in ${subject.name} for exams?`,
-        `Give me a solved example from ${subject.name}`,
-        `What are common mistakes students make in ${subject.name}?`,
-      ]
-    : [
-        'Explain this concept step by step',
-        'Give me an exam-ready answer',
-        'Show me a solved example',
-        'What are the key points to remember?',
-      ];
+  const { contentLang } = useContentLang();
+  const defaultPrompts = (() => {
+    if (subject) {
+      return contentLang === 'as'
+        ? [
+            `${subject.name}ৰ মূল ধাৰণাবোৰ বুজাই দিয়ক`,
+            `পৰীক্ষাৰ বাবে ${subject.name}ৰ আটাইতকৈ গুৰুত্বপূৰ্ণ বিষয়বোৰ কি?`,
+            `${subject.name}ৰ এটা সমাধান কৰা উদাহৰণ দিয়ক`,
+            `${subject.name}ত ছাত্ৰ-ছাত্ৰীয়ে কৰা সাধাৰণ ভুলবোৰ কি?`,
+          ]
+        : [
+            `Explain the key concepts of ${subject.name}`,
+            `What are the most important topics in ${subject.name} for exams?`,
+            `Give me a solved example from ${subject.name}`,
+            `What are common mistakes students make in ${subject.name}?`,
+          ];
+    }
+    return contentLang === 'as'
+      ? [
+          'এই ধাৰণাটো ধাপে ধাপে বুজাই দিয়ক',
+          'পৰীক্ষাৰ বাবে সাজু এটা উত্তৰ দিয়ক',
+          'এটা সমাধান কৰা উদাহৰণ দেখুৱাওক',
+          'মনত ৰাখিবলগীয়া মুখ্য কথাবোৰ কি?',
+        ]
+      : [
+          'Explain this concept step by step',
+          'Give me an exam-ready answer',
+          'Show me a solved example',
+          'What are the key points to remember?',
+        ];
+  })();
 
   return (
     <>

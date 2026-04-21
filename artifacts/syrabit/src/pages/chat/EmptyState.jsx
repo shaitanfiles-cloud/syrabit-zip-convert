@@ -1,9 +1,34 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BookOpen } from 'lucide-react';
+import { useContentLang } from '@/context/LanguageContext';
+
+// Static EmptyState copy for the chat page. Assamese strings are picked
+// up only after `LanguageProvider` hydrates from localStorage (post-
+// mount), which matches the SSR-safe pattern in LanguageContext.
+const EMPTY_STATE_T = {
+  en: {
+    askAboutSubject: (name) => `Ask me about ${name}`,
+    headingLine1: "Hi! I'm Syra — Educational Browser",
+    headingLine2: 'For Assam Board Students',
+    subjectSubtitle: 'Syllabus-first answers powered by web search.',
+    documentSubtitle: 'Document loaded as primary source. Ask any question.',
+    browseSyllabus: 'Browse Syllabus →',
+  },
+  as: {
+    askAboutSubject: (name) => `${name} বিষয়ে সুধক`,
+    headingLine1: 'নমস্কাৰ! মই চিৰা — শৈক্ষিক ব্ৰাউজাৰ',
+    headingLine2: 'আছাম ব’ৰ্ডৰ ছাত্ৰ-ছাত্ৰীৰ বাবে',
+    subjectSubtitle: 'ৱেব সন্ধানৰ সহায়ত পাঠ্যক্ৰম-প্ৰথম উত্তৰ।',
+    documentSubtitle: 'ডকুমেণ্ট প্ৰাথমিক উৎস হিচাপে লোড হৈছে। যিকোনো প্ৰশ্ন সুধক।',
+    browseSyllabus: 'পাঠ্যক্ৰম চাওক →',
+  },
+};
 
 export function EmptyState({ subject, documentId, defaultPrompts, setInput, textareaRef }) {
   const navigate = useNavigate();
+  const { contentLang } = useContentLang();
+  const t = EMPTY_STATE_T[contentLang] || EMPTY_STATE_T.en;
   // Defer URL-search-param-dependent text until after hydration. The SSR
   // snapshot is rendered for /chat with no query string, so reading
   // `documentId` here on the first client render would drift if the user
@@ -32,13 +57,13 @@ export function EmptyState({ subject, documentId, defaultPrompts, setInput, text
           className="text-foreground mb-1.5 shimmer-text"
           style={{ fontSize: '1.2rem', fontWeight: 700 }}
         >
-          {subject ? `Ask me about ${subject.name}` : <>Hi! I'm Syra — Educational Browser<br />For Assam Board Students</>}
+          {subject ? t.askAboutSubject(subject.name) : <>{t.headingLine1}<br />{t.headingLine2}</>}
         </h2>
         <p className="text-muted-foreground text-sm max-w-sm mx-auto">
           {showDocumentText
-            ? 'Document loaded as primary source. Ask any question.'
+            ? t.documentSubtitle
             : subject
-            ? 'Syllabus-first answers powered by web search.'
+            ? t.subjectSubtitle
             : ''
           }
         </p>
@@ -55,7 +80,7 @@ export function EmptyState({ subject, documentId, defaultPrompts, setInput, text
           }}
         >
           <BookOpen size={15} />
-          Browse Syllabus →
+          {t.browseSyllabus}
         </button>
       )}
 
