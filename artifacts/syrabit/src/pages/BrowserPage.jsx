@@ -123,6 +123,7 @@ const T = {
     educatorAppealsEmpty: 'No appeals yet.',
     educatorAppealStatusPending: 'Pending review',
     educatorAppealStatusAllowed: 'Allowed by admin',
+    educatorAppealStatusDismissed: 'Dismissed by admin',
     educatorAppealVerdictAt: 'Verdict',
   },
   as: {
@@ -200,6 +201,7 @@ const T = {
     educatorAppealsEmpty: 'এতিয়ালৈকে কোনো আপীল নাই।',
     educatorAppealStatusPending: 'এডমিনৰ পৰ্যালোচনা বাকী',
     educatorAppealStatusAllowed: 'এডমিনে অনুমোদন কৰিলে',
+    educatorAppealStatusDismissed: 'এডমিনে নাকচ কৰিলে',
     educatorAppealVerdictAt: 'সিদ্ধান্ত',
   },
 };
@@ -1400,10 +1402,24 @@ function RecentAppealsList({ items, loading, lang }) {
       </div>
       <ul className="max-h-48 space-y-1.5 overflow-y-auto pr-1" data-testid="educator-my-appeals">
         {(items || []).map((a) => {
-          const allowed = (a.status || '').toLowerCase() === 'allowed';
+          const status = (a.status || 'pending').toLowerCase();
+          const badgeClass =
+            status === 'allowed'
+              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+              : status === 'dismissed'
+                ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300'
+                : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300';
+          const badgeLabel =
+            status === 'allowed'
+              ? t.educatorAppealStatusAllowed
+              : status === 'dismissed'
+                ? t.educatorAppealStatusDismissed
+                : t.educatorAppealStatusPending;
+          const hasVerdict = (status === 'allowed' || status === 'dismissed') && a.verdict_at;
           return (
             <li
               key={a.domain}
+              data-status={status}
               className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-900"
             >
               <Globe className="h-3.5 w-3.5 shrink-0 text-violet-500" />
@@ -1412,21 +1428,13 @@ function RecentAppealsList({ items, loading, lang }) {
                   <span className="truncate text-xs font-medium text-slate-800 dark:text-slate-100">
                     {a.domain}
                   </span>
-                  <span
-                    className={
-                      'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ' + (
-                        allowed
-                          ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
-                          : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
-                      )
-                    }
-                  >
-                    {allowed ? t.educatorAppealStatusAllowed : t.educatorAppealStatusPending}
+                  <span className={'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ' + badgeClass}>
+                    {badgeLabel}
                   </span>
                 </div>
                 <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
                   {fmt(a.appealed_at)}
-                  {allowed && a.verdict_at && (
+                  {hasVerdict && (
                     <span> · {t.educatorAppealVerdictAt}: {fmt(a.verdict_at)}</span>
                   )}
                 </div>

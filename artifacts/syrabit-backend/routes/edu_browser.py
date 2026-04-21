@@ -494,18 +494,16 @@ async def educator_my_appeals(
 
     Cross-references ``EDU_REQUESTED_SITES_COLLECTION`` (where the
     appeal queue lives) with ``EDU_ALLOWLIST_COLLECTION`` (where the
-    admin's verdict lands). For each appealed domain still on the
-    queue we report:
+    admin's verdict lands). For each appealed domain we report:
 
-      * status='allowed' — admin allowed the domain (override exists)
-      * status='pending' — still queued for admin review
+      * status='allowed'   — admin allowed the domain (override exists)
+      * status='dismissed' — admin explicitly dismissed the appeal
+                             (``dismissed=true`` soft-delete flag)
+      * status='pending'   — still queued for admin review
 
-    NOTE: Dismissed appeals (admin clicked Dismiss) are physically
-    deleted from the queue and therefore disappear from this list
-    rather than surfacing as a distinct status. If we ever want a
-    ``dismissed`` verdict surfaced here, we would need to soft-delete
-    the queue row or write a parallel audit collection — out of scope
-    for this endpoint.
+    Soft-dismissed rows are surfaced here (rather than disappearing
+    from the list) so educators see the actual outcome of their
+    appeal instead of silently re-trying the same domain.
     """
     if not await is_mongo_available():
         return {"ok": True, "items": [], "count": 0}
@@ -515,6 +513,9 @@ async def educator_my_appeals(
         return {"ok": True, "items": [], "count": 0}
     limit = max(1, min(50, int(limit or 10)))
     try:
+        # Include both pending and soft-dismissed rows — the admin's
+        # dismiss action only flips the `dismissed` flag, so both
+        # statuses live on the same row.
         cur = db[EDU_REQUESTED_SITES_COLLECTION].find(
             {"source": "educator_appeal", "last_actor": actor}, {"_id": 0},
         ).sort("last_appeal_at", -1).limit(limit)
@@ -528,7 +529,8 @@ async def educator_my_appeals(
         domain = appeal.get("domain") or ""
         status = "pending"
         verdict_at = None
-        # Allow verdict: matching override row exists with status=allowed.
+        # Allow verdict wins over dismiss (admin can allow after a
+        # prior dismiss), then dismiss, then pending.
         try:
             override = await db[EDU_ALLOWLIST_COLLECTION].find_one(
                 {"domain": domain}, {"_id": 0, "status": 1, "updated_at": 1},
@@ -538,6 +540,9 @@ async def educator_my_appeals(
         if override and (override.get("status") or "").lower() == "allowed":
             status = "allowed"
             verdict_at = override.get("updated_at")
+        elif appeal.get("dismissed"):
+            status = "dismissed"
+            verdict_at = appeal.get("dismissed_at")
         items.append({
             "domain": domain,
             "status": status,
@@ -743,12 +748,18 @@ async def admin_grounded_recall_latest(
 
 @router.get("/admin/edu/requested-sites")
 async def admin_requested_sites(limit: int = 200, _admin=Depends(get_admin_user)):
-    """Review queue for user-submitted "request this site" entries."""
+    """Review queue for user-submitted "request this site" entries.
+
+    Soft-dismissed rows (``dismissed=true``) are filtered out so the
+    admin queue only shows items that still need action. Task #623
+    keeps those rows in the collection so the educator who filed the
+    appeal can see the ``dismissed`` verdict on /my-appeals.
+    """
     if not await is_mongo_available():
         return {"ok": True, "items": [], "count": 0}
     try:
         cur = db[EDU_REQUESTED_SITES_COLLECTION].find(
-            {}, {"_id": 0}
+            {"dismissed": {"$ne": True}}, {"_id": 0}
         ).sort("last_at", -1).limit(max(1, min(limit, 1000)))
         items = [doc async for doc in cur]
     except Exception as e:
@@ -759,13 +770,31 @@ async def admin_requested_sites(limit: int = 200, _admin=Depends(get_admin_user)
 
 @router.delete("/admin/edu/requested-sites/{domain}")
 async def admin_dismiss_requested_site(domain: str, _admin=Depends(get_admin_user)):
+    """Admin dismiss of a queued request / educator appeal.
+
+    Task #623 — we now **soft-delete** educator appeals (mark
+    ``dismissed=true`` + ``dismissed_at`` timestamp) instead of hard-
+    deleting the row, so the originating educator can see an explicit
+    "dismissed by admin" verdict on GET /edu/educator/my-appeals.
+    Non-appeal rows (plain /request-site submissions) still hard-
+    delete because no educator is waiting on a verdict for those.
+    """
     if not await is_mongo_available():
         raise HTTPException(status_code=503, detail="storage_unavailable")
     d = _normalize_domain(domain)
     if not d:
         raise HTTPException(status_code=400, detail="Invalid domain")
     try:
-        await db[EDU_REQUESTED_SITES_COLLECTION].delete_one({"domain": d})
+        existing = await db[EDU_REQUESTED_SITES_COLLECTION].find_one(
+            {"domain": d}, {"_id": 0, "source": 1},
+        )
+        if existing and (existing.get("source") or "") == "educator_appeal":
+            await db[EDU_REQUESTED_SITES_COLLECTION].update_one(
+                {"domain": d},
+                {"$set": {"dismissed": True, "dismissed_at": time.time()}},
+            )
+        else:
+            await db[EDU_REQUESTED_SITES_COLLECTION].delete_one({"domain": d})
     except Exception as e:
         logger.warning(f"[edu_browser] requested-sites delete failed: {e}")
         raise HTTPException(status_code=500, detail="storage_failed")
