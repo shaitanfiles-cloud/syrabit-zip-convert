@@ -988,6 +988,22 @@ function EducatorSubmitPanel({ open, onClose, lang, onOpenDomain }) {
     }
   }, [open, loadHistory, loadAppeals]);
 
+  // Task #623 — poll my-appeals every 60s while the panel is open so
+  // an admin's verdict (allow / dismiss) lands in the UI within ~1
+  // minute without the educator having to close and re-open the panel.
+  // Pauses automatically when the tab is hidden to avoid burning
+  // requests on a background tab.
+  useEffect(() => {
+    if (!open) return undefined;
+    const POLL_MS = 60_000;
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      loadAppeals();
+    };
+    const id = setInterval(tick, POLL_MS);
+    return () => clearInterval(id);
+  }, [open, loadAppeals]);
+
   const cleanDomain = (raw) => {
     let s = (raw || '').trim().toLowerCase();
     s = s.replace(/^https?:\/\//, '').replace(/^www\./, '');
