@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Loader2, Search, Ban, CheckCircle, Crown, ChevronDown, AlertTriangle, RefreshCw, TrendingDown, Activity, CreditCard, Plus, Minus, X, GraduationCap } from 'lucide-react';
+import { Loader2, Search, Ban, CheckCircle, Crown, ChevronDown, AlertTriangle, RefreshCw, TrendingDown, Activity, CreditCard, Plus, Minus, X, GraduationCap, Trophy } from 'lucide-react';
 import AdminQuickLinks from './AdminQuickLinks';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { adminGetUsers, adminUpdateUserStatus, adminUpdateUserPlan, adminUpdateUserRole, churnRisk, adminUpdateUserCredits } from '@/utils/api';
+import { adminGetUsers, adminUpdateUserStatus, adminUpdateUserPlan, adminUpdateUserRole, churnRisk, adminUpdateUserCredits, adminGetQuizQuota, adminResetQuizQuota } from '@/utils/api';
 import { toast } from 'sonner';
 
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
@@ -223,6 +223,38 @@ export default function AdminUsers({ adminToken, navContext, onNavigate }) {
     }
   };
 
+  const handleResetQuizQuota = async (user) => {
+    // Task #615: clear today's quiz-quota counter for this user.
+    const label = user.name || user.email || user.id;
+    const ok = window.confirm(`Reset today's quiz quota for ${label}?\n\nThis lets the student generate quizzes again right away. The action is audit-logged.`);
+    if (!ok) return;
+    try {
+      const r = await adminResetQuizQuota(adminToken, user.id);
+      const cleared = r?.data?.cleared ?? 0;
+      const limit   = r?.data?.limit;
+      toast.success(
+        cleared > 0
+          ? `Cleared ${cleared}/${limit} quiz calls for ${label}`
+          : `Quota was already at 0/${limit ?? '—'}`
+      );
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Failed to reset quiz quota');
+    }
+  };
+
+  const handleViewQuizQuota = async (user) => {
+    try {
+      const r = await adminGetQuizQuota(adminToken, user.id);
+      const { used, limit, remaining } = r?.data || {};
+      toast.info(
+        `Quiz quota for ${user.name || user.email}: ${used}/${limit} used today (${remaining} remaining; resets at midnight UTC)`,
+        { duration: 6000 },
+      );
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Failed to read quiz quota');
+    }
+  };
+
   const handlePlanChange = async (userId, newPlan) => {
     try {
       await adminUpdateUserPlan(adminToken, userId, newPlan);
@@ -413,6 +445,12 @@ export default function AdminUsers({ adminToken, navContext, onNavigate }) {
                         <DropdownMenuContent className="bg-white border border-gray-200 shadow-lg">
                           <DropdownMenuItem className="text-gray-600 focus:bg-gray-50" onClick={() => setCreditsUser(user)}>
                             <CreditCard size={14} className="mr-2 text-violet-500" /> Manage Credits
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="text-gray-600 focus:bg-gray-50" onClick={() => handleViewQuizQuota(user)}>
+                            <Trophy size={14} className="mr-2 text-amber-500" /> View Quiz Quota
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="text-gray-600 focus:bg-gray-50" onClick={() => handleResetQuizQuota(user)}>
+                            <RefreshCw size={14} className="mr-2 text-amber-500" /> Reset Quiz Quota
                           </DropdownMenuItem>
                           <DropdownMenuItem className="text-gray-600 focus:bg-gray-50" onClick={() => handleStatusChange(user.id, 'active')}>
                             <CheckCircle size={14} className="mr-2 text-emerald-500" /> Set Active

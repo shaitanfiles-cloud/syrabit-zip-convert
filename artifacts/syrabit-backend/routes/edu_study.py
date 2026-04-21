@@ -195,12 +195,48 @@ def _coerce_quiz_payload(raw: str) -> dict:
         raise HTTPException(status_code=502, detail=f"quiz_parse_error: {e}")
 
 
+QUIZ_DAILY_CAP = 200          # Task #615: per-actor LLM call budget per UTC day.
+QUIZ_DAY_WINDOW_SEC = 86400
+
+
+def _quiz_daily_key(kind: str, actor: str) -> str:
+    """Stable rl2 key for the per-actor daily quiz cap. Kept in one place
+    so the admin read/reset endpoints derive the exact same string."""
+    return f"edu_quiz_day:{kind}:{actor}"
+
+
 @router.post("/edu/quiz/generate")
 async def quiz_generate(req: QuizGenReq, request: Request,
                         user=Depends(get_current_user_optional)):
     ip = _client_ip(request)
     if not check_rate_limit(f"edu_quiz:{ip}", max_requests=15, window_seconds=300):
         raise HTTPException(status_code=429, detail="Too many quiz requests; try again later.")
+    # Task #615: even within the per-IP burst limit, cap the absolute number
+    # of LLM-backed quiz generations any single actor (signed-in user OR
+    # device anon-id, falling back to a salted IP hash) can request per UTC
+    # day. This bounds worst-case spend for grinders behind the burst limit.
+    kind, actor = _actor(request, user)
+    if not check_rate_limit(_quiz_daily_key(kind, actor),
+                            max_requests=QUIZ_DAILY_CAP,
+                            window_seconds=QUIZ_DAY_WINDOW_SEC):
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "quiz_daily_cap",
+                "limit": QUIZ_DAILY_CAP,
+                "scope": "day",
+                "resets_at": "midnight UTC",
+                "message": (
+                    f"Daily quiz limit reached ({QUIZ_DAILY_CAP}/day). "
+                    f"Try again after midnight UTC."
+                ),
+            },
+            headers={
+                "Retry-After": "3600",
+                "X-RateLimit-Limit": str(QUIZ_DAILY_CAP),
+                "X-RateLimit-Scope": "day",
+            },
+        )
     ctx_text = (req.context or "").strip()
     if not ctx_text and not req.topic:
         raise HTTPException(status_code=400, detail="context or topic required")

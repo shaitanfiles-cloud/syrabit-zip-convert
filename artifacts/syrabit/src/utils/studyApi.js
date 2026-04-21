@@ -12,9 +12,21 @@ const baseHeaders = () => ({
 async function _json(res) {
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    const e = new Error(err.detail || err.error || `HTTP ${res.status}`);
+    // Backend may return `detail` as either a string (legacy) or a dict
+    // (Task #615 quota errors include {error, limit, message, ...}).
+    let message;
+    let code;
+    if (err.detail && typeof err.detail === 'object') {
+      message = err.detail.message || err.detail.error || `HTTP ${res.status}`;
+      code = err.detail.error || null;
+    } else {
+      message = err.detail || err.error || `HTTP ${res.status}`;
+      code = typeof err.detail === 'string' ? err.detail : null;
+    }
+    const e = new Error(message);
     e.status = res.status;
-    e.code = err.detail;
+    e.code = code;
+    e.detail = err.detail;
     throw e;
   }
   return res.json();

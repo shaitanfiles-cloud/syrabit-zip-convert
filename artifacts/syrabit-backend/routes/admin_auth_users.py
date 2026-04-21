@@ -42,6 +42,7 @@ from auth_deps import (
     get_current_user, get_admin_user, create_access_token, create_refresh_token,
     create_token, decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
     get_current_user_optional, JWTError,
+    get_rate_limit_count, reset_rate_limit,
 )
 from db_ops import (
     _pg_rows,
@@ -448,6 +449,83 @@ async def admin_update_user_credits(user_id: str, data: UserCreditsUpdate, admin
         update["credits_used_today"] = max(0, credits_used_today - amount)
     await supa_update_user(user_id, update)
     return {"message": "Credits updated", **update}
+
+# ───────────────── Task #615: per-user quiz quota ─────────────────
+# Mirror the constants & key shape from routes/edu_study.py so the admin
+# read/reset surface targets the exact same rate-limit bucket the
+# /edu/quiz/generate endpoint enforces. Imported lazily to avoid a
+# circular import through the FastAPI router registry.
+
+def _quiz_quota_meta(user: dict) -> tuple[str, int, int]:
+    """Returns (rl_key, daily_cap, window_seconds) for the given user row."""
+    from routes.edu_study import (
+        QUIZ_DAILY_CAP, QUIZ_DAY_WINDOW_SEC, _quiz_daily_key,
+    )
+    # Signed-in users always count under kind='user' regardless of which
+    # device they used, matching what _actor() returns when a JWT is present.
+    return (
+        _quiz_daily_key("user", user["id"]),
+        QUIZ_DAILY_CAP,
+        QUIZ_DAY_WINDOW_SEC,
+    )
+
+
+def _seconds_to_utc_midnight() -> int:
+    now = datetime.now(timezone.utc)
+    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return int((tomorrow - now).total_seconds())
+
+
+@router.get("/admin/users/{user_id}/quiz-quota")
+async def admin_get_user_quiz_quota(user_id: str, admin: dict = Depends(get_admin_user)):
+    """Read the current UTC-day quiz quota counter for a single user.
+
+    Lets operators see whether a complaining student is genuinely capped
+    (vs. hitting a different error) without having to inspect Redis directly.
+    """
+    user = await supa_get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    rl_key, cap, window = _quiz_quota_meta(user)
+    used = get_rate_limit_count(rl_key, window)
+    return {
+        "user_id": user_id,
+        "used": used,
+        "limit": cap,
+        "remaining": max(0, cap - used),
+        "scope": "day",
+        "resets_in_seconds": _seconds_to_utc_midnight(),
+        "resets_at": "midnight UTC",
+    }
+
+
+@router.post("/admin/users/{user_id}/quiz-quota/reset")
+async def admin_reset_user_quiz_quota(user_id: str, admin: dict = Depends(get_admin_user)):
+    """Clear today's quiz-quota counter for a user. Audited."""
+    user = await supa_get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    rl_key, cap, window = _quiz_quota_meta(user)
+    cleared = reset_rate_limit(rl_key, window)
+    try:
+        await supa_insert_activity_log({
+            "id": str(uuid.uuid4()),
+            "action": "admin.user.quiz_quota_reset",
+            "details": json.dumps({
+                "user_id": user_id,
+                "user_email": user.get("email", ""),
+                "cleared_count": cleared,
+                "limit": cap,
+            }),
+            "level": "info",
+            "admin_name": admin.get("name", ""),
+            "admin_email": admin.get("email", ""),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        logger.warning(f"quiz quota reset audit log failed for {user_id}: {e}")
+    return {"message": "Quiz quota reset", "cleared": cleared, "limit": cap}
+
 
 @router.post("/admin/sync-conversations")
 async def admin_sync_conversations(admin: dict = Depends(get_admin_user)):

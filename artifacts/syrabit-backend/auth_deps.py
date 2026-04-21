@@ -174,14 +174,26 @@ async def get_admin_user(
 # RATE LIMITER — sliding window, per user/IP
 # ─────────────────────────────────────────────
 _rate_windows: Dict[str, List[float]] = {}
+# Task #615: remember the widest window any caller has used for a key so
+# the periodic cleanup does not GC daily-quota buckets after only a couple
+# minutes of idle time (which would silently reset a 24h cap in fallback
+# mode whenever Redis is unavailable).
+_rate_window_horizon: Dict[str, int] = {}
 
 async def _rate_limiter_cleanup():
     while True:
         await asyncio.sleep(300)
         now = datetime.now(timezone.utc).timestamp()
-        stale = [k for k, v in _rate_windows.items() if not v or v[-1] < now - 120]
+        stale: list[str] = []
+        for k, v in _rate_windows.items():
+            horizon = _rate_window_horizon.get(k, 120)
+            # Keep the bucket alive while any timestamp could still be
+            # inside its declared window (plus a small grace period).
+            if not v or v[-1] < now - horizon - 60:
+                stale.append(k)
         for k in stale:
-            del _rate_windows[k]
+            _rate_windows.pop(k, None)
+            _rate_window_horizon.pop(k, None)
 
 def _check_rate_limit_memory(key: str, max_requests: int, window_seconds: int) -> bool:
     """In-memory sliding window rate limiter."""
@@ -189,6 +201,9 @@ def _check_rate_limit_memory(key: str, max_requests: int, window_seconds: int) -
     window_start = now - window_seconds
     if key not in _rate_windows:
         _rate_windows[key] = []
+    # Track the widest window seen so the GC doesn't prune long-window keys.
+    if window_seconds > _rate_window_horizon.get(key, 0):
+        _rate_window_horizon[key] = window_seconds
     _rate_windows[key] = [t for t in _rate_windows[key] if t > window_start]
     if len(_rate_windows[key]) >= max_requests:
         return False
@@ -211,6 +226,43 @@ def check_rate_limit(key: str, max_requests: int = 100, window_seconds: int = 60
         except Exception as e:
             logger.debug(f"Redis rate limit failed, falling back to memory: {e}")
     return _check_rate_limit_memory(key, max_requests, window_seconds)
+
+
+def get_rate_limit_count(key: str, window_seconds: int) -> int:
+    """Best-effort read of the *current* fixed-window count for a rl2 key.
+
+    Used by the admin quiz-quota tile so operators can see how much of a
+    user's daily quota is consumed without burning another increment.
+    Returns 0 if the bucket is missing or the backend is unreachable.
+    """
+    if redis_client:
+        try:
+            redis_key = f"rl2:{key}:{int(time.time() // window_seconds)}"
+            v = redis_client.get(redis_key)
+            return int(v) if v is not None else 0
+        except Exception as e:
+            logger.debug(f"Redis rate limit read failed, falling back to memory: {e}")
+    bucket = _rate_windows.get(key) or []
+    cutoff = datetime.now(timezone.utc).timestamp() - window_seconds
+    return sum(1 for t in bucket if t > cutoff)
+
+
+def reset_rate_limit(key: str, window_seconds: int) -> int:
+    """Drop the *current-window* counter for a rl2 key. Returns the count
+    that was cleared (best-effort)."""
+    cleared = 0
+    if redis_client:
+        try:
+            redis_key = f"rl2:{key}:{int(time.time() // window_seconds)}"
+            v = redis_client.get(redis_key)
+            cleared = int(v) if v is not None else 0
+            redis_client.delete(redis_key)
+        except Exception as e:
+            logger.debug(f"Redis rate limit reset failed: {e}")
+    if key in _rate_windows:
+        cleared = max(cleared, len(_rate_windows[key]))
+        _rate_windows[key] = []
+    return cleared
 
 async def rate_limit_chat(user: dict = Depends(get_current_user)):
     """Dependency: plan-aware chat rate limiting (Free 5, Starter 10, Pro 15 req/min)."""

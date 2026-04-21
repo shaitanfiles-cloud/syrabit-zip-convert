@@ -30,7 +30,21 @@ export function QuizModal({
     setAnswers([]); setDone(false);
     studyApi.generateQuiz({ context, topic, chapter_ref, subject_name, count, response_lang })
       .then((res) => setQuestions(res.questions || []))
-      .catch((e) => setError(e.message || 'Failed to generate quiz'))
+      .catch((e) => {
+        // Task #615: render the per-actor daily cap with a friendlier copy
+        // than a generic toast so students understand it is a daily reset,
+        // not a transient burst limit they should retry against.
+        if (e?.code === 'quiz_daily_cap') {
+          const limit = e?.detail?.limit;
+          setError(
+            limit
+              ? `Daily quiz limit reached (${limit}/day). Try again tomorrow — your quota resets at midnight UTC.`
+              : 'Daily quiz limit reached. Try again tomorrow.'
+          );
+        } else {
+          setError(e.message || 'Failed to generate quiz');
+        }
+      })
       .finally(() => setLoading(false));
   }, [context, topic, chapter_ref, subject_name, count, response_lang]);
 

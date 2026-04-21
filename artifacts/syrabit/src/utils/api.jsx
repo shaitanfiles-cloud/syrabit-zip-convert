@@ -645,6 +645,13 @@ export const cmsAiSuggest = (token, text, action, subject = '', topic = '') =>
 export const adminUpdateUserCredits = (token, userId, data) =>
   axios.patch(`${API_BASE}/admin/users/${userId}/credits`, data, { headers: adminHeaders(token), withCredentials: true });
 
+// Task #615 — admin read/reset of the per-user daily quiz quota.
+export const adminGetQuizQuota = (token, userId) =>
+  axios.get(`${API_BASE}/admin/users/${userId}/quiz-quota`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminResetQuizQuota = (token, userId) =>
+  axios.post(`${API_BASE}/admin/users/${userId}/quiz-quota/reset`, {}, { headers: adminHeaders(token), withCredentials: true });
+
 // ── Personalized CMS ────────────────────────────────────────────────────────
 export const cmsPersonalize = (body) =>
   apiClient().post('/cms/personalize', body);
