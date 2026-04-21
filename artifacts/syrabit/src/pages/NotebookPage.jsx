@@ -14,9 +14,10 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { PageTitle } from '@/components/PageTitle';
 import { studyApi } from '@/utils/studyApi';
 import PinResetBanner from '@/components/PinResetBanner';
+import { getClaimSeenAt, markClaimSeen, isRecentlyClaimed } from '@/utils/claimSeen';
 import { toast } from 'sonner';
 
-function NoteCard({ note, onChange, onDelete }) {
+function NoteCard({ note, onChange, onDelete, recentlySynced }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(note.text);
   const [tags, setTags] = useState((note.tags || []).join(', '));
@@ -53,6 +54,11 @@ function NoteCard({ note, onChange, onDelete }) {
         </>
       ) : (
         <>
+          {recentlySynced && (
+            <div className="mb-2 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20">
+              <Sparkles className="w-3 h-3" /> Recently synced
+            </div>
+          )}
           <p className="text-sm leading-relaxed whitespace-pre-wrap">{note.text}</p>
           {note.tags?.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1.5">
@@ -114,6 +120,7 @@ export default function NotebookPage() {
   const [q, setQ] = useState('');
   const [tag, setTag] = useState('');
   const [building, setBuilding] = useState(false);
+  const [seenAt, setSeenAt] = useState(() => getClaimSeenAt());
 
   const load = useCallback(() => {
     setLoading(true);
@@ -124,6 +131,21 @@ export default function NotebookPage() {
   }, [q, tag]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Once any "Recently synced" badges are visible, mark them as seen so
+  // they disappear on the next page load (first-session-only badge).
+  useEffect(() => {
+    if (loading) return;
+    const maxClaimed = notes.reduce(
+      (m, n) => (n.claimed_at && n.claimed_at > m ? n.claimed_at : m), '');
+    if (maxClaimed && maxClaimed > seenAt) {
+      const t = setTimeout(() => {
+        markClaimSeen(maxClaimed);
+        setSeenAt(maxClaimed);
+      }, 1500);
+      return () => clearTimeout(t);
+    }
+  }, [loading, notes, seenAt]);
 
   const allTags = useMemo(() => {
     const s = new Set();
@@ -224,7 +246,10 @@ export default function NotebookPage() {
         ) : (
           <div className="grid gap-3">
             {notes.map((n) => (
-              <NoteCard key={n.id} note={n} onChange={onChange} onDelete={onDelete} />
+              <NoteCard
+                key={n.id} note={n} onChange={onChange} onDelete={onDelete}
+                recentlySynced={isRecentlyClaimed(n.claimed_at, seenAt)}
+              />
             ))}
           </div>
         )}

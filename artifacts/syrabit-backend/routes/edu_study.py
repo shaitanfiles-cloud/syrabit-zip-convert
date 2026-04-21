@@ -72,6 +72,9 @@ CREATE TABLE IF NOT EXISTS edu_notes (
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS edu_notes_actor_idx ON edu_notes (actor_kind, actor, created_at DESC);
+-- Task #612: stamp the moment an offline note was adopted into a user account
+-- so the UI can render a "synced from this device" badge for the first session.
+ALTER TABLE edu_notes ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS edu_flashcards (
     id            TEXT PRIMARY KEY,
@@ -88,6 +91,7 @@ CREATE TABLE IF NOT EXISTS edu_flashcards (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS edu_flashcards_due_idx ON edu_flashcards (actor_kind, actor, due_at);
+ALTER TABLE edu_flashcards ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS edu_study_settings (
     actor_kind        TEXT NOT NULL,
@@ -146,6 +150,7 @@ def _note_row_to_dict(row) -> dict:
         "tags": list(row["tags"] or []),
         "created_at": row["created_at"].isoformat(),
         "updated_at": row["updated_at"].isoformat(),
+        "claimed_at": row["claimed_at"].isoformat() if row["claimed_at"] else None,
     }
 
 
@@ -480,6 +485,7 @@ def _flashcard_row_to_dict(row) -> dict:
         "repetitions": int(row["repetitions"]),
         "due_at": row["due_at"].isoformat(),
         "last_reviewed": row["last_reviewed"].isoformat() if row["last_reviewed"] else None,
+        "claimed_at": row["claimed_at"].isoformat() if row["claimed_at"] else None,
     }
 
 
@@ -790,12 +796,14 @@ async def claim_anon_data(request: Request, user=Depends(get_current_user)):
     async with deps.pg_pool.acquire() as conn:
         async with conn.transaction():
             notes_res = await conn.execute(
-                "UPDATE edu_notes SET actor_kind='user', actor=$1 "
+                "UPDATE edu_notes SET actor_kind='user', actor=$1, "
+                "claimed_at=NOW() "
                 "WHERE actor_kind='anon' AND actor=$2",
                 user_id, anon,
             )
             cards_res = await conn.execute(
-                "UPDATE edu_flashcards SET actor_kind='user', actor=$1 "
+                "UPDATE edu_flashcards SET actor_kind='user', actor=$1, "
+                "claimed_at=NOW() "
                 "WHERE actor_kind='anon' AND actor=$2",
                 user_id, anon,
             )

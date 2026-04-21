@@ -13,6 +13,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { PageTitle } from '@/components/PageTitle';
 import { studyApi } from '@/utils/studyApi';
 import PinResetBanner from '@/components/PinResetBanner';
+import { getClaimSeenAt, markClaimSeen, isRecentlyClaimed } from '@/utils/claimSeen';
 import { toast } from 'sonner';
 
 const QUALITY = [
@@ -30,6 +31,7 @@ export default function FlashcardsPage() {
   const [streak, setStreak] = useState({ current_streak: 0, best_streak: 0, today: 0 });
   const [building, setBuilding] = useState(false);
   const [reviewed, setReviewed] = useState(0);
+  const [seenAt, setSeenAt] = useState(() => getClaimSeenAt());
 
   const load = useCallback(() => {
     setLoading(true);
@@ -46,7 +48,24 @@ export default function FlashcardsPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // First-session-only "Recently synced" badge: once any claimed card
+  // has been on screen, persist the high-water mark so the badge does
+  // not return on the next page load (Task #612).
+  useEffect(() => {
+    if (loading) return;
+    const maxClaimed = cards.reduce(
+      (m, c) => (c.claimed_at && c.claimed_at > m ? c.claimed_at : m), '');
+    if (maxClaimed && maxClaimed > seenAt) {
+      const t = setTimeout(() => {
+        markClaimSeen(maxClaimed);
+        setSeenAt(maxClaimed);
+      }, 1500);
+      return () => clearTimeout(t);
+    }
+  }, [loading, cards, seenAt]);
+
   const card = cards[idx];
+  const cardRecentlySynced = card && isRecentlyClaimed(card.claimed_at, seenAt);
 
   const grade = async (quality) => {
     if (!card) return;
@@ -139,6 +158,11 @@ export default function FlashcardsPage() {
               Card {idx + 1} of {cards.length}
             </div>
             <div className="rounded-2xl border border-border/60 bg-card shadow-sm min-h-[260px] p-6 flex flex-col">
+              {cardRecentlySynced && (
+                <div className="self-start mb-2 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20">
+                  <Sparkles className="w-3 h-3" /> Recently synced
+                </div>
+              )}
               <div className="flex-1 text-base whitespace-pre-wrap leading-relaxed">
                 <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
                   {showBack ? 'Answer' : 'Prompt'}
