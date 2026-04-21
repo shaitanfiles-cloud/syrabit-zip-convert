@@ -473,7 +473,46 @@ function ga4Plugin() {
         }
         return html.replace('<!--GA4_TAG-->', '');
       }
-      const tag = `<!-- Google Analytics 4 -->\n    <script async src="https://www.googletagmanager.com/gtag/js?id=${id}"></script>\n    <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','${id}',{send_page_view:false});</script>`;
+      // Task #639: defer the gtag.js network fetch until AFTER the
+      // largest-contentful-paint entry fires (with a 5 s hard fallback
+      // for headless / no-LCP environments). The legacy `<script async
+      // src=…/gtag/js>` in the document head still competed with the
+      // entry chunk for bandwidth + main-thread time during the
+      // critical render window, costing ~50–80 ms of TBT and pushing
+      // mobile LCP past the 2.5 s budget. The dataLayer + gtag stub
+      // is initialised synchronously so call sites in
+      // src/utils/{usePageTracking,webVitals}.js can queue events
+      // immediately — once gtag.js loads, the queued commands flush.
+      const tag = [
+        `<!-- Google Analytics 4 (LCP-deferred) — Task #639 -->`,
+        `    <script>`,
+        `      window.dataLayer=window.dataLayer||[];`,
+        `      function gtag(){dataLayer.push(arguments);}`,
+        `      window.gtag=gtag;`,
+        `      gtag('js',new Date());`,
+        `      gtag('config','${id}',{send_page_view:false});`,
+        `      (function(){`,
+        `        var loaded=false,po=null,timer=null;`,
+        `        function load(){`,
+        `          if(loaded)return;loaded=true;`,
+        `          var s=document.createElement('script');`,
+        `          s.src='https://www.googletagmanager.com/gtag/js?id=${id}';`,
+        `          s.async=true;document.head.appendChild(s);`,
+        `          if(po){try{po.disconnect()}catch(e){}}`,
+        `          if(timer){clearTimeout(timer);timer=null;}`,
+        `        }`,
+        `        if('PerformanceObserver' in window){`,
+        `          try{`,
+        `            po=new PerformanceObserver(function(list){`,
+        `              if(list.getEntries().length){setTimeout(load,250);}`,
+        `            });`,
+        `            po.observe({type:'largest-contentful-paint',buffered:true});`,
+        `          }catch(e){}`,
+        `        }`,
+        `        timer=setTimeout(load,5000);`,
+        `      })();`,
+        `    </script>`,
+      ].join('\n');
       return html.replace('<!--GA4_TAG-->', tag);
     },
   };
@@ -690,20 +729,29 @@ export default defineConfig(({ mode }) => ({
             has('react-hot-toast') || has('sonner') || has('cmdk') ||
             has('class-variance-authority') || has('clsx') || has('tailwind-merge')
           ) return 'ui-utils';
+          // Task #639: split the legacy `vendor` chunk into router /
+          // query / radix groups so the prerendered /library page
+          // only modulepreloads what it actually needs (router +
+          // query). Radix + floating-ui only load on routes that
+          // statically import a Dialog/Popover/Sheet (chat, login,
+          // forms, admin) — none of which are on the /library
+          // critical path. Cuts ~150 kB of speculative downloads
+          // off mobile first paint.
           if (
             has('react-router') || has('react-router-dom') ||
-            id.includes('/node_modules/@remix-run/') ||
-            id.includes('/node_modules/@tanstack/') ||
+            id.includes('/node_modules/@remix-run/')
+          ) return 'router';
+          if (id.includes('/node_modules/@tanstack/')) return 'query';
+          if (
             id.includes('/node_modules/@radix-ui/') ||
-            // Radix UI peer deps — keep them in vendor so the catch-all
-            // below doesn't promote them to separate preloaded chunks
-            // and inflate the initial-load request count.
             has('@floating-ui/core') || has('@floating-ui/dom') ||
             has('@floating-ui/react-dom') || has('@floating-ui/utils') ||
             has('aria-hidden') || has('react-remove-scroll') ||
             has('react-remove-scroll-bar') || has('react-style-singleton') ||
             has('use-callback-ref') || has('use-sidecar') ||
-            has('get-nonce') || has('detect-node-es') ||
+            has('get-nonce') || has('detect-node-es')
+          ) return 'radix';
+          if (
             has('react-fast-compare') || has('shallowequal') ||
             has('invariant') || has('tslib') || has('web-vitals')
           ) return 'vendor';

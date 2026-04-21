@@ -11,7 +11,14 @@
 import fs from "fs";
 import path from "path";
 
-const TARGETS = ["react-dom", "vendor"];
+// Task #639: targets are the chunks every prerendered route needs on
+// the critical path. The legacy `vendor` chunk was split into router
+// (react-router) + query (@tanstack) + radix (@radix-ui + floating-ui
+// + react-remove-scroll). Radix is intentionally NOT preloaded — it
+// only loads on chat/dialog/form routes that statically import a
+// Radix component, and adding it to the base preload set was costing
+// ~150 kB of speculative downloads on /library mobile first paint.
+const TARGETS = ["react-dom", "router", "query"];
 
 export default function modulepreloadInjectPlugin() {
   return {

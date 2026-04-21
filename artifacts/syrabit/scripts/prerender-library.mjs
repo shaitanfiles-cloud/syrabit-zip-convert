@@ -231,6 +231,20 @@ async function main() {
     /StickyToc/,         // chapter TOC chunk (if present)
     /^badge-/,           // chat badge chunk (if present)
     /^skeleton-/,        // shared skeleton loader
+    // Task #639: chunks that LibraryPage does not statically import.
+    // Without these, Vite emits modulepreload hints inherited from
+    // the entry chunk for code paths used by other routes (admin
+    // tables, dialog/popover ancestry, charts, etc.) and the browser
+    // burns a full RTT downloading them on /library mobile first paint.
+    /^radix-/i,          // dialog/popover/sheet primitives — chat/login/forms only
+    /^vendor-/i,         // residual vendor (web-vitals, tslib) — non-critical
+    /^charts-/i,         // recharts/d3 — admin analytics only
+    /^Admin/,            // any admin-only chunk
+    /^Login/,            // login page chunk
+    /^Signup/,           // signup chunk
+    /^Pricing/,          // pricing chunk
+    /Editor/,            // CMS editor chunks
+    /^dep-axios/,        // axios is loaded lazily via the api wrapper
   ];
   baseHtml = baseHtml.replace(
     /\s*<link rel="modulepreload"[^>]*href="\/assets\/([^"]+)"[^>]*>/g,
