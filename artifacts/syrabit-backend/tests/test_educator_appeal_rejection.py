@@ -92,6 +92,29 @@ def test_educator_appeal_happy_path(monkeypatch):
     assert upd["$inc"] == {"count": 1, "appeal_count": 1}
 
 
+def test_educator_reappeal_clears_dismissal(monkeypatch):
+    # Regression for Task #623: if admin previously dismissed an appeal
+    # (soft-delete), a brand-new appeal on the same domain must CLEAR
+    # dismissed / dismissed_at so the row re-enters the admin queue
+    # and /my-appeals shows `pending` again instead of staying stuck
+    # on "Dismissed by admin".
+    captured = {}
+    client = _app(
+        monkeypatch,
+        educator_user={"id": "reappeal-test-user", "email": "reappeal@school.in", "role": "educator"},
+        capture=captured,
+    )
+    r = client.post("/api/edu/educator/appeal-rejection", json={
+        "domain": "previously-dismissed.org",
+        "reason": "Re-appealing with more context",
+        "probe": {"reason": "robots_disallow", "kid_safe": True},
+    })
+    assert r.status_code == 200, r.text
+    set_fields = captured["update"]["$set"]
+    assert set_fields["dismissed"] is False
+    assert set_fields["dismissed_at"] is None
+
+
 def test_educator_appeal_rejects_hard_blocked(monkeypatch):
     client = _app(
         monkeypatch,

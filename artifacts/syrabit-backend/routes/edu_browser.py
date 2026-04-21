@@ -420,6 +420,11 @@ async def educator_appeal_rejection(
                     "appeal": True,
                     "last_probe": probe_snapshot,
                     "last_appeal_at": now,
+                    # Task #623 — a fresh appeal must clear any prior
+                    # soft-dismiss so the row re-enters the admin
+                    # queue and /my-appeals shows `pending` again.
+                    "dismissed": False,
+                    "dismissed_at": None,
                 },
             },
             upsert=True,
