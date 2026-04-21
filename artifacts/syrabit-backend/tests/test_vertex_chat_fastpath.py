@@ -147,8 +147,18 @@ def test_vertex_fastpath_happy_path_emits_provider_tag(monkeypatch):
 
 def test_vertex_fastpath_pre_first_token_failure_falls_back(monkeypatch):
     """Vertex raises before any token → silently fall back to legacy
-    SLM pool. Client should see no error event tagged to Vertex and
-    the fallback metric must increment."""
+    SLM pool and the user still gets a real answer. This is the core
+    promise of the fast-path (Task #627): a Vertex outage must be
+    invisible to the user. We assert all three guarantees in one
+    test:
+
+      - Client receives usable ``content`` tokens from the legacy
+        provider (chat continuity preserved).
+      - No ``__provider: vertex_gemini`` leaks to the client (because
+        Vertex didn't actually serve this turn).
+      - ``provider_fallbacks["vertex_gemini->openai/gpt-oss-20b"]``
+        increments so admins can observe the degradation.
+    """
     import llm
     import vertex_chat
 
@@ -158,10 +168,59 @@ def test_vertex_fastpath_pre_first_token_failure_falls_back(monkeypatch):
         _async_gen_that_raises(RuntimeError("boom: vertex 503")),
     )
 
-    # Stub the legacy resolver so we know the fallback was reached
-    # without executing a real HTTP request. Returning ``("", "")`` makes
-    # the function emit ``LLM API key not configured`` and exit cleanly —
-    # that's all we need to prove control flow reached the legacy path.
+    # Route the legacy path through a valid-looking provider + key
+    # and keep the resolved model pass-through so no real network
+    # call is required.
+    monkeypatch.setattr(llm, "_resolve_provider_for_model",
+                        lambda model, providers: ("cerebras", "fake_cerebras_key"))
+    monkeypatch.setattr(llm, "_safe_model_for_provider",
+                        lambda model, provider, providers: model)
+
+    # Pretend the legacy Cerebras-compatible stream works and returns a
+    # coherent reply. The content reconstructed on the client side is
+    # the real proof that "chat keeps working when Gemini Flash fails".
+    async def _fake_legacy_stream(messages, api_key, model, max_tokens):
+        for tok in ("Sure", ", ", "here", " is ", "your ", "answer."):
+            yield tok
+    monkeypatch.setattr(llm, "_stream_cerebras", _fake_legacy_stream)
+
+    msgs = [{"role": "user", "content": "hi"}]
+    chunks = _run(_collect(llm.call_llm_api_stream(
+        msgs, model="vertex/gemini-flash", response_lang="english",
+    )))
+    events = _parse_sse(chunks)
+
+    # 1) User still gets a real answer.
+    contents = [e["content"] for e in events if "content" in e]
+    assert contents, "Legacy fallback produced no content"
+    assert "".join(contents) == "Sure, here is your answer."
+    # 2) No vertex tag leaks to the client on fallback.
+    providers = [e.get("__provider") for e in events if "__provider" in e]
+    assert "vertex_gemini" not in providers
+    # 3) No `error` event was surfaced — the fallback was invisible.
+    assert not any("error" in e for e in events)
+
+    # 4) Fallback metric recorded so admins can see the event.
+    import chat_speedup_metrics as csm
+    snap = csm.snapshot(days=1)
+    fb = {f["transition"]: f["count"] for f in snap["provider_fallbacks"]}
+    assert fb.get("vertex_gemini->openai/gpt-oss-20b") == 1
+
+
+def test_vertex_fastpath_fallback_with_no_legacy_key_emits_config_error(monkeypatch):
+    """Negative-case companion to the happy fallback test above:
+    when Vertex pre-fails AND the legacy pool has no API key, we
+    must surface ``LLM API key not configured`` instead of silently
+    streaming nothing. Guards against a future refactor that might
+    swallow the legacy key-missing branch."""
+    import llm
+    import vertex_chat
+
+    monkeypatch.setattr(vertex_chat, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        vertex_chat, "stream_chat",
+        _async_gen_that_raises(RuntimeError("boom: vertex 503")),
+    )
     monkeypatch.setattr(llm, "_resolve_provider_for_model",
                         lambda model, providers: ("", ""))
 
@@ -171,13 +230,10 @@ def test_vertex_fastpath_pre_first_token_failure_falls_back(monkeypatch):
     )))
     events = _parse_sse(chunks)
 
-    # Vertex's provider tag must NOT leak to the client on fallback.
-    providers = [e.get("__provider") for e in events if "__provider" in e]
-    assert "vertex_gemini" not in providers
-    # Fallback reached the legacy key-not-configured branch.
-    assert any("error" in e for e in events)
-
-    # Fallback metric recorded.
+    errors = [e["error"] for e in events if "error" in e]
+    assert errors and "not configured" in errors[-1].lower()
+    # Fallback metric still fires because we DID route to the legacy
+    # pool — the failure was further downstream.
     import chat_speedup_metrics as csm
     snap = csm.snapshot(days=1)
     fb = {f["transition"]: f["count"] for f in snap["provider_fallbacks"]}
