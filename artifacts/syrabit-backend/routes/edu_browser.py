@@ -413,7 +413,8 @@ async def educator_appeal_rejection(
                 "$set": {
                     "last_at": now,
                     "last_actor": actor[:120] or "educator",
-                    "last_reason": (req.reason or "")[:500],
+                    "last_reason": (req.reason or "").strip()[:500]
+                        or "Educator vouched: appealed probe rejection",
                     "source": "educator_appeal",
                     "appeal": True,
                     "last_probe": probe_snapshot,
