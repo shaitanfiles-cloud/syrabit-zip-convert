@@ -16,6 +16,8 @@ import {
 import { AppLayout } from '@/components/layout/AppLayout';
 import { PageTitle } from '@/components/PageTitle';
 import { studyApi } from '@/utils/studyApi';
+import { useLibraryBundleSlim } from '@/hooks/useContent';
+import { apiClient } from '@/utils/api';
 import PinResetBanner from '@/components/PinResetBanner';
 import { getClaimSeenAt, markClaimSeen, isRecentlyClaimed } from '@/utils/claimSeen';
 import { toast } from 'sonner';
@@ -309,8 +311,140 @@ function NoteCard({ note, onChange, onDelete, recentlySynced, selected, onToggle
 const SOURCE_TABS = [
   { key: 'conversation', label: 'Recent chat', icon: MessageSquare },
   { key: 'chapter',      label: 'Chapter',     icon: BookOpen },
+  { key: 'subject',      label: 'Subject',     icon: BookOpen },
   { key: 'highlights',   label: 'Highlights',  icon: ListChecks },
 ];
+
+/* Cascading board → class → stream → subject → (chapter) picker. The
+ * `mode` prop selects whether we surface the chapter dropdown
+ * (mode='chapter') or stop at subject (mode='subject'). Returns the
+ * picked id via onPick. */
+function LibraryPicker({ mode, onPick, value }) {
+  const { data: bundle, isLoading: bundleLoading } = useLibraryBundleSlim();
+  const [boardId, setBoardId] = useState('');
+  const [classId, setClassId] = useState('');
+  const [streamId, setStreamId] = useState('');
+  const [subjectId, setSubjectId] = useState('');
+  const [chapters, setChapters] = useState([]);
+  const [chaptersLoading, setChaptersLoading] = useState(false);
+  const [chapterId, setChapterId] = useState('');
+
+  const boards = bundle?.boards || [];
+  const classes = useMemo(
+    () => (bundle?.classes || []).filter((c) => !boardId || c.board_id === boardId),
+    [bundle, boardId],
+  );
+  const streams = useMemo(
+    () => (bundle?.streams || []).filter((s) => !classId || s.class_id === classId),
+    [bundle, classId],
+  );
+  const subjects = useMemo(() => {
+    const all = bundle?.subjects || [];
+    if (streams.length > 0) {
+      return all.filter((s) => s.stream_id && s.stream_id === streamId);
+    }
+    // Subjects whose stream's class matches (subjects always belong to a
+    // stream in the slim bundle, so derive the class via the stream).
+    if (!classId) return [];
+    const classStreamIds = new Set(
+      (bundle?.streams || []).filter((s) => s.class_id === classId).map((s) => s.id),
+    );
+    return all.filter((s) => classStreamIds.has(s.stream_id));
+  }, [bundle, classId, streamId, streams]);
+
+  // Auto-pick first available step so the user can complete the picker
+  // with minimal clicks; they can always change it.
+  useEffect(() => { if (boards.length === 1) setBoardId(boards[0].id); }, [boards]);
+  useEffect(() => {
+    if (boardId && classes.length && !classes.find((c) => c.id === classId)) {
+      setClassId(''); setStreamId(''); setSubjectId(''); setChapterId('');
+    }
+  }, [boardId]); // eslint-disable-line
+  useEffect(() => {
+    if (classId && !streams.find((s) => s.id === streamId)) {
+      setStreamId(''); setSubjectId(''); setChapterId('');
+    }
+  }, [classId]); // eslint-disable-line
+  useEffect(() => { setSubjectId(''); setChapterId(''); }, [streamId]);
+
+  // Load chapters once a subject is picked, but only in chapter mode.
+  useEffect(() => {
+    setChapterId('');
+    setChapters([]);
+    if (mode !== 'chapter' || !subjectId) return;
+    setChaptersLoading(true);
+    apiClient().get(`/content/chapters/${subjectId}`)
+      .then((r) => setChapters(r.data?.chapters || r.data || []))
+      .catch(() => setChapters([]))
+      .finally(() => setChaptersLoading(false));
+  }, [subjectId, mode]);
+
+  // Surface the picked id upward.
+  useEffect(() => {
+    if (mode === 'subject') onPick(subjectId);
+    else onPick(chapterId);
+  }, [chapterId, subjectId, mode]); // eslint-disable-line
+
+  if (bundleLoading) {
+    return (
+      <div className="text-xs text-muted-foreground inline-flex items-center gap-1">
+        <Loader2 className="w-3 h-3 animate-spin" /> Loading library…
+      </div>
+    );
+  }
+
+  const selectCls =
+    'w-full text-sm rounded-lg border border-border/60 bg-background px-3 py-2';
+
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <select className={selectCls} value={boardId}
+              onChange={(e) => setBoardId(e.target.value)}>
+        <option value="">Board…</option>
+        {boards.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+      </select>
+      <select className={selectCls} value={classId}
+              onChange={(e) => setClassId(e.target.value)} disabled={!boardId}>
+        <option value="">Class…</option>
+        {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+      </select>
+      {streams.length > 0 && (
+        <select className={selectCls} value={streamId}
+                onChange={(e) => setStreamId(e.target.value)}>
+          <option value="">Stream…</option>
+          {streams.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+      )}
+      <select
+        className={selectCls + (streams.length === 0 ? ' col-span-2' : '')}
+        value={subjectId}
+        onChange={(e) => setSubjectId(e.target.value)}
+        disabled={!classId || (streams.length > 0 && !streamId)}
+      >
+        <option value="">Subject…</option>
+        {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+      </select>
+      {mode === 'chapter' && (
+        <select
+          className={selectCls + ' col-span-2'}
+          value={chapterId}
+          onChange={(e) => setChapterId(e.target.value)}
+          disabled={!subjectId || chaptersLoading}
+        >
+          <option value="">
+            {chaptersLoading ? 'Loading chapters…'
+              : !subjectId ? 'Pick a subject first…'
+              : chapters.length === 0 ? 'No chapters yet'
+              : 'Chapter…'}
+          </option>
+          {chapters.map((ch) => (
+            <option key={ch.id} value={ch.id}>{ch.title || ch.name || ch.slug}</option>
+          ))}
+        </select>
+      )}
+    </div>
+  );
+}
 
 function GenerateNotesModal({ open, onClose, onGenerated, selectedNoteIds, allNotes }) {
   const [tab, setTab] = useState('conversation');
@@ -318,7 +452,7 @@ function GenerateNotesModal({ open, onClose, onGenerated, selectedNoteIds, allNo
   const [loadingConvs, setLoadingConvs] = useState(false);
   const [convErr, setConvErr] = useState('');
   const [convId, setConvId] = useState('');
-  const [chapterId, setChapterId] = useState('');
+  const [pickerId, setPickerId] = useState(''); // chapter or subject id from LibraryPicker
   const [focus, setFocus] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -359,11 +493,11 @@ function GenerateNotesModal({ open, onClose, onGenerated, selectedNoteIds, allNo
       if (!convId) { setErr('Pick a conversation.'); return; }
       payload.source_id = convId;
     } else if (tab === 'chapter') {
-      if (!chapterId.trim()) {
-        setErr('Paste a chapter id (you can find it on the chapter page URL).');
-        return;
-      }
-      payload.source_id = chapterId.trim();
+      if (!pickerId) { setErr('Pick a chapter from the library.'); return; }
+      payload.source_id = pickerId;
+    } else if (tab === 'subject') {
+      if (!pickerId) { setErr('Pick a subject from the library.'); return; }
+      payload.source_id = pickerId;
     } else if (tab === 'highlights') {
       const ids = (selectedNoteIds || []).filter(
         (id) => !allNotes.find((n) => n.id === id && n.generated),
@@ -458,15 +592,18 @@ function GenerateNotesModal({ open, onClose, onGenerated, selectedNoteIds, allNo
 
           {tab === 'chapter' && (
             <div className="space-y-1.5">
-              <label className="text-xs font-medium">Chapter id</label>
-              <input
-                value={chapterId}
-                onChange={(e) => setChapterId(e.target.value)}
-                placeholder="e.g. ch_abc123 (open a chapter and copy from URL/admin)"
-                className="w-full text-sm rounded-lg border border-border/60 bg-background px-3 py-2 font-mono"
-              />
+              <label className="text-xs font-medium">Pick a chapter from your library</label>
+              <LibraryPicker mode="chapter" onPick={setPickerId} />
+            </div>
+          )}
+
+          {tab === 'subject' && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium">Pick a subject from your library</label>
+              <LibraryPicker mode="subject" onPick={setPickerId} />
               <p className="text-[11px] text-muted-foreground">
-                Tip: open the chapter in the library, then copy its id from the address bar.
+                We’ll pull the top sections from each chapter under this subject and ground the
+                note in them.
               </p>
             </div>
           )}

@@ -45,13 +45,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from auth_deps import get_current_user, get_current_user_optional, check_rate_limit
+from auth_deps import get_current_user, get_current_user_optional, check_rate_limit, get_user_credits
 from llm import call_llm_api, _call_gemini, _GEMINI_KEY, _GEMINI_KEY_2
 from guardrails.prompt_safety import validate_llm_output
 import deps
 from deps import sarvam_client
 import vertex_chat as _vchat
-from db_ops import supa_get_conversation
+from db_ops import supa_get_conversation, atomic_deduct_credit
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -463,13 +463,30 @@ async def export_notes(request: Request, format: str = "md",
     if fmt == "csv":
         buf = io.StringIO()
         w = csv.writer(buf)
+        # Task #641: include the structured-note + citations columns so AI
+        # notes export with full fidelity (downstream tools / spreadsheets
+        # can parse the JSON without losing data).
         w.writerow(["created_at", "text", "source_title", "source_url",
-                    "chapter_ref", "tags"])
+                    "chapter_ref", "tags", "generated", "source_kind",
+                    "structured_json", "citations_json"])
         for r in rows:
+            keys = r.keys()
+            generated = bool(r["generated"]) if "generated" in keys else False
+            structured_v = r["structured"] if "structured" in keys else None
+            if structured_v is not None and not isinstance(structured_v, str):
+                structured_v = json.dumps(structured_v)
+            citations_v = r["citations"] if "citations" in keys else None
+            if citations_v is not None and not isinstance(citations_v, str):
+                citations_v = json.dumps(citations_v)
+            sk_v = r["source_kind"] if "source_kind" in keys else ""
             w.writerow([
                 r["created_at"].isoformat(), r["text"], r["source_title"] or "",
                 r["source_url"] or "", r["chapter_ref"] or "",
                 ",".join(r["tags"] or []),
+                "1" if generated else "0",
+                sk_v or "",
+                structured_v or "",
+                citations_v or "",
             ])
         return StreamingResponse(
             iter([buf.getvalue()]), media_type="text/csv",
@@ -720,6 +737,15 @@ def _safe_citation_url(url: str) -> str:
     return ""
 
 
+def _slugify_heading(s: str) -> str:
+    """Stable URL-fragment slug for a chapter section heading. Used to
+    build deep-link anchors like /…/chapter#sec-photosynthesis-equation."""
+    s = (s or "").lower().strip()
+    s = re.sub(r"[^\w\s-]", "", s)
+    s = re.sub(r"[\s_-]+", "-", s).strip("-")
+    return s[:80] or "section"
+
+
 def _split_chapter_sections(content: str, max_sections: int = 8) -> list[tuple[str, str]]:
     """Split chapter markdown into (heading, body) tuples by ## headings.
     Falls back to a single section if no headings are present."""
@@ -792,7 +818,11 @@ async def _build_chapter_url(chapter: dict) -> str:
 
 
 async def _assemble_from_conversation(conv_id: str, user_id: Optional[str]) -> tuple[list, str]:
-    """Pull a conversation's user/assistant turns as anchored sources."""
+    """Pull a conversation's user/assistant turns AND any RAG chunks attached
+    to assistant turns. Each anchor carries:
+      - a stable per-message URL fragment (#m{index})
+      - origin metadata (message_index, role, kind) so future deep-link
+        navigation knows exactly which message/chunk to scroll to."""
     if not user_id:
         raise HTTPException(status_code=401, detail="signin_required_for_conversation_source")
     conv = await supa_get_conversation(conv_id, user_id)
@@ -805,6 +835,7 @@ async def _assemble_from_conversation(conv_id: str, user_id: Optional[str]) -> t
     title = (conv.get("title") or "Chat conversation").strip()[:120]
     anchors: list[dict] = []
     total = 0
+    base_url = f"/chat?id={conv_id}"
     for i, m in enumerate(msgs):
         role = (m.get("role") or "").lower()
         if role not in ("user", "assistant"):
@@ -821,11 +852,45 @@ async def _assemble_from_conversation(conv_id: str, user_id: Optional[str]) -> t
             "id": f"S{len(anchors) + 1}",
             "kind": "message",
             "label": label,
-            "url": _safe_citation_url(f"/chat?id={conv_id}"),
+            "url": _safe_citation_url(f"{base_url}#m{i}"),
             "text": body,
             "role": role,
+            "ref": {"conv_id": conv_id, "message_index": i},
         })
-        if len(anchors) >= 24:
+        # Pull RAG passages that grounded this assistant turn so the model
+        # can cite original source material — not just our prior answer.
+        if role == "assistant" and total < _NOTES_SOURCE_CHAR_CAP:
+            snippets: list[str] = []
+            snip = (m.get("rag_chunk_snippet") or "").strip()
+            if snip:
+                snippets.append(snip)
+            srcs = m.get("sources") or []
+            if isinstance(srcs, list):
+                for s in srcs[:6]:
+                    if isinstance(s, dict):
+                        t = (s.get("snippet") or s.get("text") or s.get("content") or "").strip()
+                        if t:
+                            snippets.append(t)
+                    elif isinstance(s, str) and s.strip():
+                        snippets.append(s.strip())
+            for k, sn in enumerate(snippets[:4]):
+                if total >= _NOTES_SOURCE_CHAR_CAP:
+                    break
+                clip = _truncate(sn, _NOTES_PER_ANCHOR_CHAR_CAP)
+                total += len(clip)
+                src_obj = srcs[k] if isinstance(srcs, list) and k < len(srcs) and isinstance(srcs[k], dict) else {}
+                src_url = _safe_citation_url(src_obj.get("url") or f"{base_url}#m{i}")
+                src_label = (src_obj.get("title") or src_obj.get("source") or
+                             f"Source for AI answer #{(i // 2) + 1}").strip()[:160]
+                anchors.append({
+                    "id": f"S{len(anchors) + 1}",
+                    "kind": "rag_chunk",
+                    "label": src_label,
+                    "url": src_url,
+                    "text": clip,
+                    "ref": {"conv_id": conv_id, "message_index": i, "chunk_index": k},
+                })
+        if len(anchors) >= 28:
             break
     if not anchors:
         raise HTTPException(status_code=400, detail="conversation_empty")
@@ -848,19 +913,76 @@ async def _assemble_from_chapter(chapter_id: str) -> tuple[list, str]:
         raise HTTPException(status_code=400, detail="chapter_empty")
     anchors: list[dict] = []
     total = 0
-    for heading, body in sections:
+    for sec_idx, (heading, body) in enumerate(sections):
         if total >= _NOTES_SOURCE_CHAR_CAP:
             break
         clip = _truncate(body, _NOTES_PER_ANCHOR_CHAR_CAP)
         total += len(clip)
+        # Stable per-section anchor: …/chapter#sec-photosynthesis
+        sec_slug = _slugify_heading(heading)
+        sec_url = _safe_citation_url(f"{chapter_url}#sec-{sec_slug}") if chapter_url else ""
         anchors.append({
             "id": f"S{len(anchors) + 1}",
             "kind": "chapter_section",
             "label": f"{ch.get('title', 'Chapter')} — {heading}",
-            "url": _safe_citation_url(chapter_url),
+            "url": sec_url,
             "text": clip,
+            "ref": {
+                "chapter_id": chapter_id,
+                "section_index": sec_idx,
+                "section_slug": sec_slug,
+            },
         })
     return anchors, str(ch.get("title") or "Chapter").strip()[:120]
+
+
+async def _assemble_from_subject(subject_id: str) -> tuple[list, str]:
+    """Pull top sections from each chapter of a subject. Useful for "make
+    me notes for the whole Photosynthesis subject"-style requests."""
+    if not deps.db:
+        raise HTTPException(status_code=503, detail="storage_unavailable")
+    subj = await deps.db.subjects.find_one({"id": subject_id}, {"_id": 0, "name": 1})
+    if not subj:
+        raise HTTPException(status_code=404, detail="subject_not_found")
+    chapters_cur = deps.db.chapters.find(
+        {"subject_id": subject_id},
+        {"_id": 0, "id": 1, "title": 1, "content": 1, "slug": 1,
+         "subject_id": 1, "description": 1, "order": 1},
+    ).sort("order", 1)
+    chapters = await chapters_cur.to_list(length=20)
+    if not chapters:
+        raise HTTPException(status_code=400, detail="subject_has_no_chapters")
+    anchors: list[dict] = []
+    total = 0
+    for ch in chapters:
+        chapter_url = await _build_chapter_url(ch)
+        sections = _split_chapter_sections(ch.get("content") or ch.get("description") or "",
+                                           max_sections=3)
+        for sec_idx, (heading, body) in enumerate(sections):
+            if total >= _NOTES_SOURCE_CHAR_CAP:
+                break
+            clip = _truncate(body, _NOTES_PER_ANCHOR_CHAR_CAP)
+            total += len(clip)
+            sec_slug = _slugify_heading(heading)
+            sec_url = _safe_citation_url(f"{chapter_url}#sec-{sec_slug}") if chapter_url else ""
+            anchors.append({
+                "id": f"S{len(anchors) + 1}",
+                "kind": "chapter_section",
+                "label": f"{ch.get('title', 'Chapter')} — {heading}",
+                "url": sec_url,
+                "text": clip,
+                "ref": {
+                    "subject_id": subject_id,
+                    "chapter_id": ch.get("id"),
+                    "section_index": sec_idx,
+                    "section_slug": sec_slug,
+                },
+            })
+        if total >= _NOTES_SOURCE_CHAR_CAP:
+            break
+    if not anchors:
+        raise HTTPException(status_code=400, detail="subject_chapters_empty")
+    return anchors, str(subj.get("name") or "Subject").strip()[:120]
 
 
 async def _assemble_from_highlights(note_ids: list[str], kind: str, actor: str) -> tuple[list, str]:
@@ -956,8 +1078,8 @@ async def _call_gemini_strict(messages: list, max_tokens: int = 2200) -> str:
 # ───── Generation route ─────
 
 class NotesGenReq(BaseModel):
-    source_kind: str = Field(..., description="conversation | chapter | highlights")
-    source_id: str = Field("", max_length=120, description="conv_id or chapter_id (when applicable)")
+    source_kind: str = Field(..., description="conversation | chapter | subject | highlights")
+    source_id: str = Field("", max_length=120, description="conv_id, chapter_id, or subject_id")
     note_ids: List[str] = Field(default_factory=list, description="for source_kind='highlights'")
     response_lang: str = Field("en", max_length=8)
     custom_focus: str = Field("", max_length=300, description="optional topical focus hint")
@@ -966,6 +1088,7 @@ class NotesGenReq(BaseModel):
 NOTES_GEN_DAILY_CAP = 20         # per-actor LLM call budget per UTC day
 NOTES_GEN_BURST_CAP = 6          # per-actor 5-min burst
 NOTES_GEN_DAY_WINDOW = 86400
+NOTES_GEN_CREDIT_COST = 2        # AI notes are heavier than a chat turn
 
 
 def _notes_gen_daily_key(kind: str, actor: str) -> str:
@@ -974,10 +1097,13 @@ def _notes_gen_daily_key(kind: str, actor: str) -> str:
 
 @router.post("/edu/notes/generate")
 async def generate_notes(req: NotesGenReq, request: Request,
-                         user=Depends(get_current_user_optional)):
+                         user=Depends(get_current_user)):
     """NotebookLM-style grounded notes generator. Calls Gemini with the user's
-    own sources (conversation / chapter / highlights), validates citations,
-    and persists the result through the existing notes table."""
+    own sources (conversation / chapter / subject / highlights), validates
+    citations, and persists the result through the existing notes table.
+
+    Costs `NOTES_GEN_CREDIT_COST` credits from the user's daily allowance.
+    Sign-in is required so credits and ownership can be enforced."""
     await _ensure_schema()
     kind, actor = _actor(request, user)
 
@@ -986,7 +1112,7 @@ async def generate_notes(req: NotesGenReq, request: Request,
                             max_requests=NOTES_GEN_BURST_CAP,
                             window_seconds=300):
         raise HTTPException(status_code=429, detail="Too many generations; try again in a few minutes.")
-    # Per-UTC-day cap (cost control).
+    # Per-UTC-day cap (cost control on top of credits).
     if not check_rate_limit(_notes_gen_daily_key(kind, actor),
                             max_requests=NOTES_GEN_DAILY_CAP,
                             window_seconds=NOTES_GEN_DAY_WINDOW):
@@ -1007,6 +1133,23 @@ async def generate_notes(req: NotesGenReq, request: Request,
                      "X-RateLimit-Scope": "day"},
         )
 
+    # Credit pre-check (mirrors /ai/chat/stream): refuse if remaining < cost.
+    credits = await get_user_credits(user)
+    remaining = int(credits.get("remaining") or 0)
+    if remaining < NOTES_GEN_CREDIT_COST:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "insufficient_credits",
+                "cost": NOTES_GEN_CREDIT_COST,
+                "remaining": remaining,
+                "message": (
+                    f"This action costs {NOTES_GEN_CREDIT_COST} credits but you have "
+                    f"{remaining} remaining today. Resets at midnight UTC."
+                ),
+            },
+        )
+
     sk = (req.source_kind or "").strip().lower()
     if sk == "conversation":
         if not req.source_id:
@@ -1020,11 +1163,60 @@ async def generate_notes(req: NotesGenReq, request: Request,
             raise HTTPException(status_code=400, detail="source_id_required")
         anchors, source_title = await _assemble_from_chapter(req.source_id)
         source_ref = req.source_id
+    elif sk == "subject":
+        if not req.source_id:
+            raise HTTPException(status_code=400, detail="source_id_required")
+        anchors, source_title = await _assemble_from_subject(req.source_id)
+        source_ref = req.source_id
     elif sk == "highlights":
         anchors, source_title = await _assemble_from_highlights(req.note_ids, kind, actor)
         source_ref = ",".join((req.note_ids or [])[:30])
     else:
         raise HTTPException(status_code=400, detail="invalid_source_kind")
+
+    # Atomic credit deduction *after* sources resolve but *before* the LLM
+    # call. Mirrors the chat stream pattern: deduct first, refund on a
+    # downstream failure so users aren't charged for a failed generation.
+    used_now = int(credits.get("used") or 0)
+    limit_now = int(credits.get("limit") or 0)
+    deducted = 0
+    for _ in range(NOTES_GEN_CREDIT_COST):
+        ok = await atomic_deduct_credit(user["id"], used_now, limit_now)
+        if not ok:
+            break
+        used_now += 1
+        deducted += 1
+    if deducted < NOTES_GEN_CREDIT_COST:
+        # Race lost — refund anything we managed to take.
+        if deducted > 0:
+            try:
+                async with deps.pg_pool.acquire() as conn:
+                    await conn.execute(
+                        """UPDATE users SET credits_used_today = GREATEST(0, credits_used_today - $1),
+                                            credits_used = GREATEST(0, credits_used - $1)
+                           WHERE id=$2""",
+                        deducted, user["id"],
+                    )
+            except Exception as e:
+                logger.warning(f"[notes-gen] credit refund failed: {e}")
+        raise HTTPException(
+            status_code=402,
+            detail={"error": "insufficient_credits",
+                    "message": "Daily credit limit reached during generation."},
+        )
+
+    async def _refund_credits():
+        """Best-effort refund used when generation fails after deduction."""
+        try:
+            async with deps.pg_pool.acquire() as conn:
+                await conn.execute(
+                    """UPDATE users SET credits_used_today = GREATEST(0, credits_used_today - $1),
+                                        credits_used = GREATEST(0, credits_used - $1)
+                       WHERE id=$2""",
+                    NOTES_GEN_CREDIT_COST, user["id"],
+                )
+        except Exception as e:
+            logger.warning(f"[notes-gen] credit refund failed: {e}")
 
     valid_anchor_ids = {a["id"] for a in anchors}
 
@@ -1050,10 +1242,15 @@ async def generate_notes(req: NotesGenReq, request: Request,
         {"role": "user",   "content": "\n".join(parts)},
     ]
 
-    raw = await _call_gemini_strict(messages, max_tokens=2200)
-
-    payload = _coerce_notes_payload(raw)
-    structured = _validate_notes_payload(payload, valid_anchor_ids)
+    try:
+        raw = await _call_gemini_strict(messages, max_tokens=2200)
+        payload = _coerce_notes_payload(raw)
+        structured = _validate_notes_payload(payload, valid_anchor_ids)
+    except HTTPException:
+        # Refund credits on any LLM/parse/validation failure so users aren't
+        # charged for empty or unsafe responses.
+        await _refund_credits()
+        raise
 
     # Light safety pass on the flattened generated text.
     flat_parts = [structured["title"], structured["summary"]]
