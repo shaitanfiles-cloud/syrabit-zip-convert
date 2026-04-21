@@ -36,6 +36,20 @@ const CACHED_API_PATTERNS = [
   /^\/api\/seo\//,
 ];
 
+// Paths the SW MUST NOT serve from cache, even though they sit under
+// `/api/seo/`. These flow through the Pages worker proxy which sets
+// long edge TTLs already, and serving a stale sitemap from a service
+// worker breaks crawler discovery (a sitemap from yesterday can hide
+// today's new chapters from Googlebot until the SW's 1h TTL expires).
+const SW_BYPASS_PATTERNS = [
+  /^\/api\/seo\/sitemap[a-z0-9_-]*\.xml$/i,
+  /^\/(sitemap[a-z0-9_-]*\.xml|sitemap-index\.xml|feed\.xml|rss\.xml)$/i,
+  /^\/feed\/[a-z0-9_-]+\.xml$/i,
+  /^\/llms(-full)?\.txt$/i,
+  /^\/robots\.txt$/i,
+  /^\/\.well-known\//i,
+];
+
 const API_CACHE_TTL = 3600 * 1000;
 const RUNTIME_CACHE_MAX = 200;
 const API_CACHE_MAX = 100;
@@ -92,6 +106,12 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Sitemaps, RSS/Atom feeds, llms.txt, robots.txt and /.well-known/* must
+  // never be served from the SW cache — these are crawler-facing surfaces
+  // where staleness directly hurts indexing. The Pages worker proxy already
+  // sets a 1h edge TTL for them, which is enough.
+  if (isSwBypass(url.pathname)) return;
+
   if (url.pathname.startsWith('/api/')) {
     if (isStreamingApi(url.pathname)) return;
 
@@ -130,6 +150,10 @@ function isStreamingApi(pathname) {
 
 function isCacheableApi(pathname) {
   return CACHED_API_PATTERNS.some((p) => p.test(pathname));
+}
+
+function isSwBypass(pathname) {
+  return SW_BYPASS_PATTERNS.some((p) => p.test(pathname));
 }
 
 async function navigationHandler(event) {

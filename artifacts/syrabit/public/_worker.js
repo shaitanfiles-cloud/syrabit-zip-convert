@@ -50,24 +50,25 @@ const DEFAULT_BACKEND = "https://api.syrabit.ai";
 // the matching backend route and force the correct Content-Type. Cached
 // at the edge for an hour (matches _headers s-maxage).
 const SEO_PASSTHROUGH_RE =
-  /^\/(sitemap[a-z0-9_-]*\.xml|sitemap-index\.xml|feed\.xml|rss\.xml|feed\/[a-z0-9_-]+\.xml|llms\.txt|llms-full\.txt)$/i;
+  /^\/(sitemap[a-z0-9_-]*\.xml|sitemap-index\.xml|feed\.xml|rss\.xml|feed\/[a-z0-9_-]+\.xml|llms\.txt|llms-full\.txt|robots\.txt|\.well-known\/ai-plugin\.json|[a-f0-9]{32}\.txt|[a-z0-9_-]*indexnow[a-z0-9_-]*\.txt)$/i;
 
 // Map a public path to the corresponding backend path. Sitemaps live
-// under `/api/seo/` on the backend; feeds and llms are served at the
-// backend root unchanged.
+// under `/api/seo/` on the backend; feeds, llms, robots, .well-known
+// and IndexNow keys are served at the backend root unchanged.
 function backendPathForSeo(pathname) {
   if (/^\/sitemap[a-z0-9_-]*\.xml$/i.test(pathname)) {
     return "/api/seo" + pathname;
   }
-  // /feed.xml, /feed/<name>.xml, /rss.xml, /llms.txt, /llms-full.txt —
-  // backend serves these at the root path, no rewrite needed.
+  // /feed.xml, /feed/<name>.xml, /rss.xml, /llms.txt, /llms-full.txt,
+  // /robots.txt, /.well-known/ai-plugin.json, /<key>-indexnow-<…>.txt
+  // — backend serves all of these at the root path, no rewrite needed.
   return pathname;
 }
 
 function contentTypeForSeo(pathname) {
-  return /\.txt$/i.test(pathname)
-    ? "text/plain; charset=utf-8"
-    : "application/xml; charset=utf-8";
+  if (/\.json$/i.test(pathname)) return "application/json; charset=utf-8";
+  if (/\.txt$/i.test(pathname)) return "text/plain; charset=utf-8";
+  return "application/xml; charset=utf-8";
 }
 
 async function sitemapProxy(request, env, url) {
@@ -233,7 +234,7 @@ export default {
     // Googlebot's ability to enumerate any URL on the site.
     if (
       (request.method === "GET" || request.method === "HEAD") &&
-      SITEMAP_PATH_RE.test(url.pathname) &&
+      SEO_PASSTHROUGH_RE.test(url.pathname) &&
       request.headers.get("X-Sitemap-Proxy") !== "1"
     ) {
       return sitemapProxy(request, env, url);

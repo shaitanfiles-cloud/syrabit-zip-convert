@@ -38,6 +38,25 @@
 /sitemap*.xml
   Cache-Control: public, max-age=3600, s-maxage=86400, stale-while-revalidate=3600
 
+/feed.xml
+  Cache-Control: public, max-age=3600, s-maxage=86400, stale-while-revalidate=3600
+  Content-Type: application/rss+xml; charset=utf-8
+
+/feed/*.xml
+  Cache-Control: public, max-age=3600, s-maxage=86400, stale-while-revalidate=3600
+  Content-Type: application/rss+xml; charset=utf-8
+
+/llms.txt
+  Cache-Control: public, max-age=3600, s-maxage=86400, stale-while-revalidate=3600
+  Content-Type: text/plain; charset=utf-8
+
+/llms-full.txt
+  Cache-Control: public, max-age=3600, s-maxage=86400, stale-while-revalidate=3600
+  Content-Type: text/plain; charset=utf-8
+
+/.well-known/*
+  Cache-Control: public, max-age=86400, s-maxage=86400, stale-while-revalidate=3600
+
 /api/content/*
   Cache-Control: public, max-age=60, s-maxage=300, stale-while-revalidate=600
 

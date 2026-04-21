@@ -175,6 +175,7 @@ const CACHEABLE_PREFIXES = [
   "/api/cms/articles",
   "/api/flashcards/",
   "/api/content/syllabus/",
+  "/api/edu/allowlist",
 ];
 
 const CACHE_TTL: Record<string, number> = {
@@ -198,6 +199,7 @@ const CACHE_TTL: Record<string, number> = {
   "/api/flashcards/": 3600,
   "/api/sitemap": 86400,
   "/api/robots.txt": 86400,
+  "/api/edu/allowlist": 86400,
 };
 
 const USER_SPECIFIC_PREFIXES = [
