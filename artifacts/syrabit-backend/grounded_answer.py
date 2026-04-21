@@ -119,6 +119,66 @@ def _extract_page_spans(text: str, query: str, max_spans: int = 5) -> list[str]:
     return [s for _, _, s in top]
 
 
+def _extract_overlap_spans(page_text: str, snippet: str, max_spans: int = 3) -> list[str]:
+    """Find sentences in ``page_text`` that contain verbatim multi-word
+    phrases also present in ``snippet``.
+
+    Used so that web/internal citations whose body text overlaps the
+    article on the open page can be linked to the same in-article
+    highlight UI as the page-type citation. We scan the snippet for
+    4-6 word windows that contain at least one non-stopword, check
+    each window for a case-insensitive match in the page text, and
+    return the unique containing sentences (in reading order).
+    Returns an empty list when no useful overlap exists.
+    """
+    if not page_text or not snippet:
+        return []
+    if len(page_text) > 60_000:
+        page_text = page_text[:60_000]
+    page_lower = page_text.lower()
+    words = re.findall(r"[A-Za-z][A-Za-z0-9\-']*", snippet)
+    if len(words) < 4:
+        return []
+    seen_phrase: set[str] = set()
+    candidates: list[str] = []
+    # Prefer longer (more specific) windows first.
+    for n in (6, 5, 4):
+        if len(words) < n:
+            continue
+        for i in range(len(words) - n + 1):
+            window = words[i:i + n]
+            if not any(w.lower() not in _GROUNDING_STOPWORDS for w in window):
+                continue
+            phrase = " ".join(window)
+            plow = phrase.lower()
+            if plow in seen_phrase:
+                continue
+            seen_phrase.add(plow)
+            if plow in page_lower:
+                candidates.append(phrase)
+    if not candidates:
+        return []
+    sents = _SENTENCE_RE.split(page_text)
+    chosen: list[tuple[int, str]] = []
+    chosen_idxs: set[int] = set()
+    for cand in candidates:
+        clow = cand.lower()
+        for idx, raw in enumerate(sents):
+            if idx in chosen_idxs:
+                continue
+            s = raw.strip()
+            if not (20 <= len(s) <= 400):
+                continue
+            if clow in s.lower():
+                chosen.append((idx, s))
+                chosen_idxs.add(idx)
+                break
+        if len(chosen) >= max_spans:
+            break
+    chosen.sort(key=lambda x: x[0])
+    return [s for _, s in chosen]
+
+
 def _stable_citation_key(item: dict) -> str:
     """Deterministic key for de-duping citations across reruns."""
     if "url" in item and item["url"]:
@@ -147,19 +207,23 @@ def _build_citations(
     seen: dict[str, int] = {}
     next_idx = 1
 
+    # Cache the open-page text once so we can also surface in-article
+    # overlap highlights for web/internal citations whose snippets quote
+    # the page verbatim.
+    page_text_for_overlap = ""
     if page_context and page_context.get("ok") and page_context.get("text"):
+        page_text_for_overlap = page_context.get("text") or ""
         key = _stable_citation_key(page_context)
         seen[key] = next_idx
         domain = page_context.get("domain") or ""
-        page_text = page_context.get("text") or ""
-        spans = _extract_page_spans(page_text, query) if query else []
+        spans = _extract_page_spans(page_text_for_overlap, query) if query else []
         citations.append({
             "index": next_idx,
             "type": "page",
             "title": page_context.get("title", domain or "Current page"),
             "url": page_context.get("url", ""),
             "domain": domain,
-            "snippet": page_text[:240],
+            "snippet": page_text_for_overlap[:240],
             "spans": spans,
             "anchor": "",
         })
@@ -173,13 +237,19 @@ def _build_citations(
         if key in seen:
             continue
         seen[key] = next_idx
+        snippet = (ch.get("content") or "")[:240]
+        overlap = (
+            _extract_overlap_spans(page_text_for_overlap, ch.get("content") or "")
+            if page_text_for_overlap else []
+        )
         citations.append({
             "index": next_idx,
             "type": "chapter",
             "title": ch.get("title", "Untitled chapter"),
             "url": f"/learn/{ch.get('slug', '')}" if ch.get("slug") else "",
             "domain": "syrabit.ai",
-            "snippet": (ch.get("content") or "")[:240],
+            "snippet": snippet,
+            "spans": overlap,
             "anchor": ch.get("slug", ""),
         })
         next_idx += 1
@@ -199,13 +269,19 @@ def _build_citations(
                 domain = domain[4:]
         except Exception:
             pass
+        web_snippet = (r.get("snippet") or r.get("body") or "")
+        overlap = (
+            _extract_overlap_spans(page_text_for_overlap, web_snippet)
+            if page_text_for_overlap else []
+        )
         citations.append({
             "index": next_idx,
             "type": "web",
             "title": r.get("title", domain or "Web result"),
             "url": url,
             "domain": domain,
-            "snippet": (r.get("snippet") or r.get("body") or "")[:240],
+            "snippet": web_snippet[:240],
+            "spans": overlap,
             "anchor": "",
         })
         next_idx += 1

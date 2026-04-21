@@ -180,6 +180,54 @@ def test_build_citations_attaches_page_spans():
     assert cites_nq[0].get("spans", []) == []
 
 
+def test_extract_overlap_spans_finds_verbatim_quotes():
+    from grounded_answer import _extract_overlap_spans
+    page_text = (
+        "Newton formulated three laws of motion that describe how forces act. "
+        "Apples fall because gravity pulls them toward the Earth. "
+        "His work laid the foundation for classical mechanics. "
+        "Pizza is a popular Italian food."
+    )
+    snippet = (
+        "Sir Isaac Newton famously formulated three laws of motion that "
+        "are the cornerstone of classical physics."
+    )
+    spans = _extract_overlap_spans(page_text, snippet)
+    assert spans, "expected overlap span when snippet quotes the page"
+    assert any("three laws of motion" in s.lower() for s in spans)
+    assert all("pizza" not in s.lower() for s in spans)
+    # No overlap → no spans.
+    assert _extract_overlap_spans(page_text, "completely unrelated content here") == []
+    assert _extract_overlap_spans("", "anything") == []
+    assert _extract_overlap_spans("text", "") == []
+
+
+def test_build_citations_attaches_overlap_spans_to_web_and_chapter():
+    from grounded_answer import _build_citations
+    page_text = (
+        "Photosynthesis is the process by which plants make food from sunlight. "
+        "It happens mainly in the chloroplasts of leaf cells. "
+        "Chlorophyll absorbs light energy and powers the reaction."
+    )
+    page = {"ok": True, "title": "Photosynthesis", "url": "https://wiki/p", "domain": "wiki", "text": page_text}
+    internal = [{
+        "title": "Plants & Sunlight", "slug": "plants-sun", "subject_id": "bio",
+        "content": "Plants make food from sunlight using chlorophyll in their leaves.",
+    }]
+    web = [{
+        "title": "Khan: Photosynthesis", "url": "https://khan/p",
+        "snippet": "Chloroplasts of leaf cells contain chlorophyll which captures light.",
+    }]
+    cites = _build_citations(web, internal, page, query="how does photosynthesis work")
+    by_type = {c["type"]: c for c in cites}
+    assert by_type["chapter"].get("spans"), "chapter citation should expose overlap spans"
+    assert by_type["web"].get("spans"), "web citation should expose overlap spans"
+    # Without a page context, no overlap spans on chapter/web (back-compat).
+    cites_no_page = _build_citations(web, internal, None)
+    for c in cites_no_page:
+        assert c.get("spans", []) == []
+
+
 def test_grounded_pipeline_blocks_injection_query():
     from grounded_answer import stream_grounded_answer
 

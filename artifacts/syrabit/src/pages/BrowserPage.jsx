@@ -321,7 +321,7 @@ function ReaderArticle({ payload, lang, citations, flashCite, onSpanClick }) {
 
     const spans = [];
     (citations || []).forEach((c) => {
-      if (c.type !== 'page' || !Array.isArray(c.spans)) return;
+      if (!Array.isArray(c.spans)) return;
       c.spans.forEach((text, idx) => {
         if (typeof text === 'string' && text.trim().length > 3) {
           spans.push({
@@ -658,7 +658,7 @@ function AskSyraPanel({ activeTab, lang, onClose, onCitationsChange, onCitationC
             </p>
             <ol className="space-y-1.5 text-xs">
               {citations.map((c) => {
-                const hasSpans = c.type === 'page' && Array.isArray(c.spans) && c.spans.length > 0;
+                const hasSpans = Array.isArray(c.spans) && c.spans.length > 0;
                 return (
                   <li key={c.index} className="flex items-start gap-1.5">
                     {hasSpans ? (
