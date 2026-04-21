@@ -1,10 +1,10 @@
-import { useState, useMemo, memo, lazy, Suspense } from 'react';
+import { useState, useMemo, useCallback, memo, lazy, Suspense } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCw, Copy, Check, FileText, Globe, ThumbsUp, ThumbsDown, MessageSquare, Share2, Send, HelpCircle } from 'lucide-react';
+import { RefreshCw, Copy, Check, FileText, Globe, ThumbsUp, ThumbsDown, MessageSquare, Share2, Send, HelpCircle, ShieldAlert, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { ReadAloudButton } from '@/components/study/ReadAloudButton';
 import { QuizModal } from '@/components/study/QuizModal';
 import { useShare } from '@/hooks/useShare';
-import { postChatFeedback } from '@/utils/api';
+import { postChatFeedback, eduRequestSite } from '@/utils/api';
 import { log } from '@/utils/logger';
 import { toast } from 'sonner';
 import { ThinkingIndicator } from './ThinkingIndicator';
@@ -18,6 +18,36 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
   const [comment, setComment] = useState('');
   const [commentSent, setCommentSent] = useState(false);
   const [quizOpen, setQuizOpen] = useState(false);
+  // Strict-Mode "review hidden links" surface — populated by
+  // MarkdownContent's onHiddenLinks callback after each render.
+  const [hiddenLinks, setHiddenLinks] = useState([]);
+  const [hiddenOpen, setHiddenOpen] = useState(false);
+  const [requestState, setRequestState] = useState({}); // host -> 'pending'|'sent'|'failed'
+
+  const handleHiddenLinks = useCallback((items) => {
+    setHiddenLinks(items || []);
+  }, []);
+
+  const requestHiddenSite = useCallback(async (host) => {
+    if (!host || requestState[host] === 'pending' || requestState[host] === 'sent') return;
+    setRequestState((p) => ({ ...p, [host]: 'pending' }));
+    try {
+      await eduRequestSite(host, 'Requested from chat hidden-link review');
+      setRequestState((p) => ({ ...p, [host]: 'sent' }));
+      toast.success(`Requested ${host} for review`);
+    } catch (e) {
+      const status = e?.response?.status;
+      // 429 = rate-limited; treat as informational, not a hard fail.
+      if (status === 429) {
+        setRequestState((p) => ({ ...p, [host]: 'failed' }));
+        toast.error('Too many requests. Try again in a few minutes.');
+      } else {
+        setRequestState((p) => ({ ...p, [host]: 'failed' }));
+        toast.error('Could not send request. Try again.');
+      }
+      log('hidden-link-request-error', e);
+    }
+  }, [requestState]);
   const { share } = useShare();
   const navigate = useNavigate();
   const isUser = msg.role === 'user';
@@ -135,8 +165,80 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
 
             {msg.content && (
               <Suspense fallback={<div className="md-content-light" style={{ fontSize: '0.9375rem' }}>{cleanContent}</div>}>
-                <MarkdownContent content={cleanContent} streaming={!!msg.streaming} sources={msg.sources} />
+                <MarkdownContent
+                  content={cleanContent}
+                  streaming={!!msg.streaming}
+                  sources={msg.sources}
+                  onHiddenLinks={handleHiddenLinks}
+                />
               </Suspense>
+            )}
+
+            {!msg.streaming && hiddenLinks.length > 0 && (
+              <div
+                className="mt-2 rounded-lg border border-amber-300/40 bg-amber-50/60 dark:bg-amber-900/10"
+                data-testid="strict-mode-hidden-links"
+              >
+                <button
+                  type="button"
+                  onClick={() => setHiddenOpen((v) => !v)}
+                  className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left"
+                  aria-expanded={hiddenOpen}
+                  aria-controls={`hidden-links-${msg.id || messageIndex}`}
+                >
+                  <span className="flex items-center gap-1.5 text-[12.5px] font-medium text-amber-800 dark:text-amber-200">
+                    <ShieldAlert size={14} />
+                    {hiddenLinks.length === 1
+                      ? '1 link hidden by Strict Mode'
+                      : `${hiddenLinks.length} links hidden by Strict Mode`}
+                  </span>
+                  <span className="flex items-center gap-1 text-[11.5px] text-amber-700/80 dark:text-amber-300/80">
+                    Review
+                    {hiddenOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                  </span>
+                </button>
+                {hiddenOpen && (
+                  <ul
+                    id={`hidden-links-${msg.id || messageIndex}`}
+                    className="px-3 pb-2 space-y-1.5"
+                  >
+                    {hiddenLinks.map((it) => {
+                      const st = requestState[it.host];
+                      return (
+                        <li
+                          key={`${it.host}|${it.href}`}
+                          className="flex items-center justify-between gap-2 text-[12px]"
+                        >
+                          <span className="min-w-0 flex-1 truncate">
+                            <span className="font-mono text-foreground/90">{it.host || 'external site'}</span>
+                            {it.text && (
+                              <span className="ml-1 text-muted-foreground">— {it.text}</span>
+                            )}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => requestHiddenSite(it.host)}
+                            disabled={st === 'pending' || st === 'sent' || !it.host}
+                            className={`shrink-0 inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11.5px] font-medium transition-colors ${
+                              st === 'sent'
+                                ? 'bg-emerald-600/15 text-emerald-700 dark:text-emerald-300 cursor-default'
+                                : 'bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-60'
+                            }`}
+                            aria-label={st === 'sent' ? `Already requested ${it.host}` : `Request review for ${it.host}`}
+                          >
+                            {st === 'pending' && <Loader2 size={11} className="animate-spin" />}
+                            {st === 'sent'
+                              ? 'Requested'
+                              : st === 'pending'
+                                ? 'Sending…'
+                                : 'Request site'}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
             )}
 
             {!msg.streaming && msg.content && (() => {

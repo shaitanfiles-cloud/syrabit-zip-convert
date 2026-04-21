@@ -1,4 +1,4 @@
-import { useMemo, useCallback, memo } from 'react';
+import { useMemo, useCallback, memo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -10,7 +10,7 @@ function _hostOf(href) {
   try { return new URL(href, window.location.origin).hostname; } catch { return ''; }
 }
 
-export const MarkdownContent = memo(function MarkdownContent({ content, streaming, sources }) {
+export const MarkdownContent = memo(function MarkdownContent({ content, streaming, sources, onHiddenLinks }) {
   const navigate = useNavigate();
   const { strict } = useStrictMode();
   const isHostAllowed = useEduAllowlist(strict);
@@ -87,6 +87,42 @@ export const MarkdownContent = memo(function MarkdownContent({ content, streamin
       return url ? `[${title}](${url})` : `**${title}**`;
     });
   }, [content, sources, streaming]);
+
+  // Hidden-link extraction for the guardian "review hidden links"
+  // affordance. We derive the list deterministically from `processed`
+  // (instead of mutating a ref during ReactMarkdown render) so the
+  // value is commit-stable under React 19 concurrent rendering and
+  // does not depend on ReactMarkdown's renderer firing in any
+  // particular order.
+  //
+  // Grouping is by host because the downstream "Request site"
+  // action is host-level — one row per host is what the user
+  // actually has to act on. We keep the first href/text seen so
+  // the row can show a representative link label.
+  const hiddenLinks = useMemo(() => {
+    if (!strict || !processed || streaming) return [];
+    const out = new Map(); // host -> {host, href, text}
+    const consider = (href, text) => {
+      if (!href) return;
+      if (!/^https?:\/\//i.test(href)) return;
+      const host = (_hostOf(href) || '').toLowerCase();
+      if (!host || isHostAllowed(host)) return;
+      if (!out.has(host)) out.set(host, { host, href, text: text || href });
+    };
+    // [text](url) — the dominant case for AI-generated answers.
+    const md = /\[([^\]]+?)\]\((https?:\/\/[^\s)]+)\)/g;
+    let m;
+    while ((m = md.exec(processed)) !== null) consider(m[2], m[1]);
+    // Bare https URLs (remark-gfm autolinks them too).
+    const bare = /(?<![("\w])(https?:\/\/[^\s)<>"']+)/g;
+    while ((m = bare.exec(processed)) !== null) consider(m[1], m[1]);
+    return Array.from(out.values());
+  }, [processed, streaming, strict, isHostAllowed]);
+
+  useEffect(() => {
+    if (!onHiddenLinks) return;
+    onHiddenLinks(hiddenLinks);
+  }, [hiddenLinks, onHiddenLinks]);
 
   return (
     <div className="md-content-light" style={{ fontSize: '0.9375rem' }}>
