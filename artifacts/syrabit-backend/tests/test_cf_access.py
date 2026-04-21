@@ -10,10 +10,13 @@ Covers:
 import asyncio
 import base64
 import importlib
+import sys
 import time
+from types import SimpleNamespace
 
 import jwt as pyjwt
 import pytest
+from fastapi import HTTPException
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
@@ -211,6 +214,33 @@ def test_internal_dependency_uses_internal_aud(fake_access):
     with pytest.raises(HTTPException) as ei:
         run(fake_access.module.require_cf_access_internal(req))
     assert ei.value.status_code == 401
+
+
+def test_fail_closed_when_enforce_on_but_config_missing(monkeypatch):
+    """ENFORCE=true with no team domain / AUD must refuse with 503,
+    not silently fall through to admin-JWT-only acceptance."""
+    monkeypatch.setenv("CF_ACCESS_ENFORCE", "true")
+    monkeypatch.setenv("CF_ACCESS_TEAM_DOMAIN", "")
+    monkeypatch.setenv("CF_ACCESS_AUD_ADMIN", "")
+    monkeypatch.setenv("CF_ACCESS_AUD_INTERNAL", "")
+    sys.modules.pop("cf_access", None)
+    import cf_access as misconf
+
+    # Even with no token at all, the verifier must refuse rather than no-op.
+    req = SimpleNamespace(headers={}, cookies={})
+    with pytest.raises(HTTPException) as ei:
+        run(misconf.require_cf_access_admin(req))
+    assert ei.value.status_code == 503
+    assert "misconfigured" in ei.value.detail.lower()
+
+    with pytest.raises(HTTPException) as ei2:
+        run(misconf.require_cf_access_internal(req))
+    assert ei2.value.status_code == 503
+
+    # And the convenience flag must report disabled (because config is incomplete)
+    # so callers can't accidentally treat enforcement as active.
+    assert misconf.is_admin_enforcement_enabled() is False
+    assert misconf.is_internal_enforcement_enabled() is False
 
 
 @pytest.mark.parametrize("raw,expected", [

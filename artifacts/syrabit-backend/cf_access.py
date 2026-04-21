@@ -88,11 +88,44 @@ def _enforce_enabled() -> bool:
 
 
 def is_admin_enforcement_enabled() -> bool:
+    """True when admin enforcement is configured AND complete.
+
+    Used purely to decide *whether the verifier runs*. The fail-closed
+    branch for "enforce on but config incomplete" is handled separately
+    in ``require_cf_access_admin`` so it returns 503 instead of silently
+    no-opping."""
     return bool(_enforce_enabled() and CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD_ADMIN)
 
 
 def is_internal_enforcement_enabled() -> bool:
     return bool(_enforce_enabled() and CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD_INTERNAL)
+
+
+def _missing_config(audience: str) -> list[str]:
+    """Return the list of env vars required for enforcement that are unset."""
+    missing = []
+    if not CF_ACCESS_TEAM_DOMAIN:
+        missing.append("CF_ACCESS_TEAM_DOMAIN")
+    if not audience:
+        missing.append(
+            "CF_ACCESS_AUD_ADMIN" if audience is CF_ACCESS_AUD_ADMIN
+            else "CF_ACCESS_AUD_INTERNAL"
+        )
+    return missing
+
+
+# Fire one CRITICAL log line at module import time when enforcement is
+# turned on but required config is missing — operators see this in startup
+# logs even before the first protected request arrives.
+if _enforce_enabled() and not (CF_ACCESS_TEAM_DOMAIN and (CF_ACCESS_AUD_ADMIN or CF_ACCESS_AUD_INTERNAL)):
+    logger.critical(
+        "CF_ACCESS_ENFORCE=true but required config is missing — "
+        "team_domain=%r admin_aud=%r internal_aud=%r. "
+        "Protected endpoints will fail-closed (503) until env is fixed.",
+        CF_ACCESS_TEAM_DOMAIN,
+        bool(CF_ACCESS_AUD_ADMIN),
+        bool(CF_ACCESS_AUD_INTERNAL),
+    )
 
 
 def _certs_url() -> str:
@@ -267,13 +300,46 @@ async def _require(request: Request, audiences: list[str], label: str) -> dict:
         ) from exc
 
 
+def _fail_closed_if_misconfigured(audience: str, label: str):
+    """When the operator has set ``CF_ACCESS_ENFORCE=true`` but the
+    accompanying config is incomplete, refuse the request with 503.
+
+    Without this check the dependency would silently no-op (because
+    ``is_*_enforcement_enabled()`` requires both the team domain and the
+    AUD), turning a misconfiguration into a security bypass: callers
+    would still satisfy the admin JWT and reach protected routes with
+    no Access challenge in front of them. Failing closed surfaces the
+    misconfiguration loudly instead.
+    """
+    if not _enforce_enabled():
+        return
+    missing = []
+    if not CF_ACCESS_TEAM_DOMAIN:
+        missing.append("CF_ACCESS_TEAM_DOMAIN")
+    if not audience:
+        missing.append(
+            "CF_ACCESS_AUD_ADMIN" if label == "admin" else "CF_ACCESS_AUD_INTERNAL"
+        )
+    if missing:
+        logger.critical(
+            f"CF Access {label} request refused — enforcement on but "
+            f"missing config: {', '.join(missing)}"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"Cloudflare Access misconfigured ({label}); refusing to fail-open",
+        )
+
+
 async def require_cf_access_admin(request: Request) -> Optional[dict]:
     """FastAPI dependency for admin-tier Access app.
 
     No-op when enforcement is disabled (dev / pre-rollout). Production
     sets ``CF_ACCESS_ENFORCE=true`` along with ``CF_ACCESS_TEAM_DOMAIN``
-    and ``CF_ACCESS_AUD_ADMIN``.
+    and ``CF_ACCESS_AUD_ADMIN``. If enforcement is on but config is
+    incomplete, the request is refused with 503 (fail-closed).
     """
+    _fail_closed_if_misconfigured(CF_ACCESS_AUD_ADMIN, "admin")
     if not is_admin_enforcement_enabled():
         return None
     return await _require(request, [CF_ACCESS_AUD_ADMIN], "admin")
@@ -282,6 +348,7 @@ async def require_cf_access_admin(request: Request) -> Optional[dict]:
 async def require_cf_access_internal(request: Request) -> Optional[dict]:
     """FastAPI dependency for internal-tier Access app (operations,
     feature-flags, kill switches, anything ops-only)."""
+    _fail_closed_if_misconfigured(CF_ACCESS_AUD_INTERNAL, "internal")
     if not is_internal_enforcement_enabled():
         return None
     return await _require(request, [CF_ACCESS_AUD_INTERNAL], "internal")
