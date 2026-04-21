@@ -16,6 +16,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { PageTitle } from '@/components/PageTitle';
 import { studyApi } from '@/utils/studyApi';
 import { useStrictMode } from '@/hooks/useStrictMode';
+import PinResetBanner, { pinResetClear } from '@/components/PinResetBanner';
 import { toast } from 'sonner';
 
 export default function GuardianPage() {
@@ -61,6 +62,7 @@ export default function GuardianPage() {
       await studyApi.setPin(newPin, currentPin);
       toast.success('PIN updated');
       setCurrentPin(''); setNewPin(''); setConfirmPin('');
+      pinResetClear();
       refresh();
     } catch (e) {
       toast.error(e.message || 'Could not update PIN');
@@ -79,6 +81,8 @@ export default function GuardianPage() {
             Configure Strict Mode and a 4–8 digit PIN that protects these settings.
           </p>
         </header>
+
+        <PinResetBanner variant="full" />
 
         <section className="rounded-2xl border border-border/60 bg-card p-5">
           <div className="flex items-start justify-between gap-4">

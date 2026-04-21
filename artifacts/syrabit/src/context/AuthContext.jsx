@@ -3,6 +3,7 @@ import axios from 'axios';
 import { toast } from 'sonner';
 import { API_BASE, setAuthToken } from '@/utils/api';
 import { studyApi } from '@/utils/studyApi';
+import { pinResetMarkNeeded } from '@/utils/pinReset';
 import { Analytics } from '@/utils/analytics';
 import {
   hydrateAdsOptOutFromServer,
@@ -128,6 +129,14 @@ export const AuthProvider = ({ children }) => {
         if (cancelled) return;
         const moved = (res?.notes || 0) + (res?.flashcards || 0)
           + (res?.settings_merged ? 1 : 0);
+        // Task #611: the PIN hash from the anonymous session is salted
+        // with the device id and can no longer be verified once the
+        // actor flips to the user. Persist a local flag so the
+        // Guardian / Notebook / Flashcards pages can prompt the parent
+        // to set a new PIN after sign-in.
+        if (res?.pin_dropped) {
+          try { pinResetMarkNeeded(); } catch {}
+        }
         let alreadyToasted = false;
         try { alreadyToasted = !!sessionStorage.getItem(toastFlagKey); } catch {}
         if (moved > 0 && !alreadyToasted) {

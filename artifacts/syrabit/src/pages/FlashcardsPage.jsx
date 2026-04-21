@@ -12,6 +12,7 @@ import {
 import { AppLayout } from '@/components/layout/AppLayout';
 import { PageTitle } from '@/components/PageTitle';
 import { studyApi } from '@/utils/studyApi';
+import PinResetBanner from '@/components/PinResetBanner';
 import { toast } from 'sonner';
 
 const QUALITY = [
@@ -75,6 +76,7 @@ export default function FlashcardsPage() {
     <AppLayout>
       <PageTitle title="Flashcards · Syrabit.ai" />
       <div className="max-w-2xl mx-auto px-4 py-6">
+        <div className="mb-3"><PinResetBanner /></div>
         <header className="mb-5">
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <Sparkles className="w-6 h-6 text-primary" /> Flashcards

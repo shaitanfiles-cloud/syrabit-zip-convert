@@ -13,6 +13,7 @@ import {
 import { AppLayout } from '@/components/layout/AppLayout';
 import { PageTitle } from '@/components/PageTitle';
 import { studyApi } from '@/utils/studyApi';
+import PinResetBanner from '@/components/PinResetBanner';
 import { toast } from 'sonner';
 
 function NoteCard({ note, onChange, onDelete }) {
@@ -153,6 +154,7 @@ export default function NotebookPage() {
     <AppLayout>
       <PageTitle title="Notebook · Syrabit.ai" />
       <div className="max-w-4xl mx-auto px-4 py-6">
+        <div className="mb-3"><PinResetBanner /></div>
         <header className="flex items-start justify-between gap-3 mb-5">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">

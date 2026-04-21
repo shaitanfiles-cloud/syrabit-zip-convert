@@ -750,6 +750,7 @@ async def claim_anon_data(request: Request, user=Depends(get_current_user)):
     notes_count = 0
     cards_count = 0
     settings_merged = False
+    pin_dropped = False
     async with deps.pg_pool.acquire() as conn:
         async with conn.transaction():
             notes_res = await conn.execute(
@@ -767,6 +768,7 @@ async def claim_anon_data(request: Request, user=Depends(get_current_user)):
                 "WHERE actor_kind='anon' AND actor=$1",
                 anon,
             )
+            anon_had_pin = bool(anon_settings and anon_settings["guardian_pin_hash"])
             if anon_settings:
                 user_settings = await conn.fetchrow(
                     "SELECT * FROM edu_study_settings "
@@ -829,6 +831,21 @@ async def claim_anon_data(request: Request, user=Depends(get_current_user)):
                     "WHERE actor_kind='anon' AND actor=$1",
                     anon,
                 )
+            # Task #611: signal to the client that the parental PIN
+            # could not be migrated. The PIN hash is salted with the
+            # actor id, so a hash created under the anon device id
+            # can never be verified once the actor flips to the user.
+            # Surface this so the UI can prompt the parent to set a
+            # new PIN, instead of silently leaving Strict Mode without
+            # a usable lock.
+            if anon_had_pin:
+                final = await conn.fetchrow(
+                    "SELECT strict_mode, guardian_pin_hash FROM edu_study_settings "
+                    "WHERE actor_kind='user' AND actor=$1",
+                    user_id,
+                )
+                if final and bool(final["strict_mode"]) and not final["guardian_pin_hash"]:
+                    pin_dropped = True
     try:
         notes_count = int(notes_res.split()[-1])
     except Exception:
@@ -838,7 +855,7 @@ async def claim_anon_data(request: Request, user=Depends(get_current_user)):
     except Exception:
         cards_count = 0
     return {"ok": True, "notes": notes_count, "flashcards": cards_count,
-            "settings_merged": settings_merged}
+            "settings_merged": settings_merged, "pin_dropped": pin_dropped}
 
 
 # ───────────────────────── Voice (STT + status) ─────────────────────────
