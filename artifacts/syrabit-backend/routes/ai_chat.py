@@ -704,8 +704,20 @@ async def chat(msg: ChatMessage, request: Request, user: Optional[dict] = Depend
     except Exception:
         pass
 
+    # Task #636 — surface provider/fallback attribution in chat metadata so
+    # the frontend (and any API consumer) can tell when a response came
+    # from the Workers AI fallback tier instead of the configured primary.
+    # `answer` is serialized as a string by FastAPI, so the LlmResult's
+    # provider/fallback_reason attributes are otherwise dropped.
+    _meta_provider = getattr(answer, "provider", None) or "unknown"
+    _meta_reason = getattr(answer, "fallback_reason", "") or ""
     return {
         "answer": answer,
+        "meta": {
+            "provider": _meta_provider,
+            "fallback_reason": _meta_reason,
+            "fallback": bool(_meta_reason) or _meta_provider == "workers-ai",
+        },
         "conversation_id": conv_id,
         "credits_remaining": max(0, credits_info["remaining"] - 1) if not is_anon else None,
         "credits_used": new_used if not is_anon else None,
@@ -2058,6 +2070,19 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 "ctx_board_slug": _src_board_slug,
                 "ctx_class_slug": _src_class_slug,
                 "ctx_subject_slug": _src_subject_slug,
+                # Task #636 — fallback attribution mirrors the non-stream
+                # `meta` block. `_stream_provider` is captured from the
+                # in-band `__provider` SSE marker (see line ~1859); when
+                # it ends up "workers-ai" the response came from the
+                # last-resort edge tier. `fallback_reason` is reserved
+                # for when streaming gains its own WAI fallback path
+                # (currently empty since stream rotation handles its
+                # own primary failover internally).
+                "meta": {
+                    "provider": locals().get("_stream_provider", "unknown") or "unknown",
+                    "fallback_reason": "",
+                    "fallback": locals().get("_stream_provider", "") == "workers-ai",
+                },
             }
             if content_card_meta:
                 done_payload["content_card_name"] = content_card_meta.get("card_name", "")

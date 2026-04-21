@@ -75,8 +75,22 @@ class _CapState:
     last_primary_error: str = ""
     last_primary_latency_ms: int = 0
     last_fallback_latency_ms: int = 0
-    # rolling 24h event log (capped) for the admin panel
+    # Rolling event log (capped) — used purely for the "recent activity"
+    # list in the admin UI. NOT used for 24h counts: under load the cap
+    # would silently truncate so we'd undercount fallbacks. Accurate
+    # totals come from the time-bucketed `hourly` map below.
     events: Deque[dict] = field(default_factory=lambda: deque(maxlen=200))
+    # Hour-bucketed counters for accurate 24h totals. Keyed by epoch
+    # hour (int(time.time() // 3600)) → {"ok": int, "fail": int}. Bounded
+    # at 25 entries (current hour + 24 prior) by `_prune_hourly()` so
+    # memory is O(1) regardless of fallback volume.
+    hourly: Dict[int, dict] = field(default_factory=dict)
+
+    def _prune_hourly(self, now_hr: int) -> None:
+        cutoff = now_hr - 24
+        stale = [h for h in self.hourly if h < cutoff]
+        for h in stale:
+            self.hourly.pop(h, None)
 
     def record(self, *, ok: bool, primary_error: str, primary_ms: int,
                fallback_ms: int, error: str = "") -> None:
@@ -95,6 +109,10 @@ class _CapState:
             "fallback_ms": fallback_ms,
             "error": error,
         })
+        now_hr = int(now // 3600)
+        bucket = self.hourly.setdefault(now_hr, {"ok": 0, "fail": 0})
+        bucket["ok" if ok else "fail"] += 1
+        self._prune_hourly(now_hr)
 
 
 _state: Dict[str, _CapState] = {c: _CapState() for c in CAPABILITIES}
@@ -208,7 +226,8 @@ def snapshot() -> dict:
     Counts are derived on-demand from the rolling event log so the data
     structure never gets out of sync with itself.
     """
-    cutoff = time.time() - 86400.0
+    now_hr = int(time.time() // 3600)
+    cutoff_hr = now_hr - 24
     out: Dict[str, Any] = {
         "enabled_globally": _enabled_globally(),
         "edge_url": _edge_url(),
@@ -217,7 +236,10 @@ def snapshot() -> dict:
     }
     for cap, st in _state.items():
         with _state_lock:
-            recent = [e for e in st.events if e["ts"] >= cutoff]
+            # Accurate 24h counts come from hourly buckets — `events`
+            # deque is capped and may have evicted entries under load.
+            ok_24h = sum(b.get("ok", 0) for h, b in st.hourly.items() if h > cutoff_hr)
+            fail_24h = sum(b.get("fail", 0) for h, b in st.hourly.items() if h > cutoff_hr)
         out["capabilities"][cap] = {
             "enabled": st.enabled,
             "last_fallback_at": st.last_fallback_at or None,
@@ -226,9 +248,9 @@ def snapshot() -> dict:
             "last_primary_error": st.last_primary_error or None,
             "last_primary_latency_ms": st.last_primary_latency_ms or None,
             "last_fallback_latency_ms": st.last_fallback_latency_ms or None,
-            "fallbacks_24h": len(recent),
-            "successes_24h": sum(1 for e in recent if e["ok"]),
-            "failures_24h": sum(1 for e in recent if not e["ok"]),
+            "fallbacks_24h": ok_24h + fail_24h,
+            "successes_24h": ok_24h,
+            "failures_24h": fail_24h,
         }
     return out
 

@@ -693,6 +693,11 @@ async def _call_single_provider(messages: list, provider: str, api_key: str, mod
 
 async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 1024, provider_list=None) -> str:
     import time as _t
+    # Wall-clock start of the whole primary-rotation loop. Used so the
+    # Workers AI fallback path (Task #636) can attribute the *real*
+    # cumulative primary latency (instead of 0) when we eventually give
+    # up and call the edge.
+    _loop_t0 = _t.perf_counter()
     providers = _LLM_PROVIDERS if provider_list is None else provider_list
     use_model = _MODEL_ALIAS_MAP.get(model or LLM_MODEL, model or LLM_MODEL)
     primary_provider, primary_key = _resolve_provider_for_model(use_model, providers)
@@ -770,9 +775,13 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
     try:
         from providers import workers_ai as _wai
         if _wai.is_enabled("chat") and last_err is not None and _wai.should_fallback(last_err):
+            # Real cumulative primary-loop latency (all rotations combined),
+            # so the admin panel and structured logs attribute the actual
+            # wait the user incurred before we gave up on the primaries.
+            _primary_total_ms = int((_t.perf_counter() - _loop_t0) * 1000)
             _t0 = _t.perf_counter()
             ok, value, label = await _wai.attempt_fallback(
-                "chat", last_err, 0,
+                "chat", last_err, _primary_total_ms,
                 lambda: _wai.call_chat(messages, max_tokens=max_tokens, temperature=0.3),
             )
             _dur = int((_t.perf_counter() - _t0) * 1000)
