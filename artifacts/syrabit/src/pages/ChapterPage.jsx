@@ -3,6 +3,7 @@ import { useParams, Link, useSearchParams } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import MarkdownRenderer from '@/components/MarkdownRenderer';
 import { slugifyHeading } from '@/utils/slugifyHeading';
+import { useHashScroll } from '@/hooks/useHashScroll';
 import {
   BookOpen, ArrowLeft, ChevronRight, Home, Share2, RefreshCw,
   Clock, Hash, Sparkles, FileText, HelpCircle, ChevronDown,
@@ -251,6 +252,10 @@ export default function ChapterPage() {
   );
   const [data, setData] = useState(initialChapterData);
   const [loading, setLoading] = useState(!initialChapterData);
+  // Once chapter content is rendered, jump to the `#sec-<slug>` (or any
+  // legacy in-page TOC anchor) the URL is asking for. AI-notes citation
+  // chips depend on this to deep-link straight to the cited section.
+  useHashScroll(!loading && !!data);
   const [error, setError] = useState(null);
   const skipFirstFetchRef = useRef(!!initialChapterData);
   const [pyqData, setPyqData] = useState(null);

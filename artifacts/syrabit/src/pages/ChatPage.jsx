@@ -27,6 +27,7 @@ import { startTrace, makeTraceparent } from '@/utils/firebasePerf';
 // element on /chat — renders in the SSR snapshot and on the very first
 // client paint, instead of waiting for an async chunk. (Task #387)
 import { EmptyState } from './chat/EmptyState';
+import { useHashScroll } from '@/hooks/useHashScroll';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AD POLICY: /chat is intentionally AD-FREE. Do NOT import <AdSlot /> or any
@@ -52,6 +53,9 @@ export default function ChatPage() {
   const [scopedChapters, setScopedChapters] = useState([]);
   const [credits, setCredits]             = useState({ used: user?.credits_used || 0, limit: user?.credits_limit ?? null });
   const [syncState, setSyncState]         = useState('idle');
+  // Once a conversation has loaded its messages, scroll to a `#m<index>`
+  // hash if the URL carries one (set by AI-notes citation deep-links).
+  useHashScroll(messages.length > 0 && syncState !== 'syncing');
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [copiedMsgId, setCopiedMsgId]     = useState(null);
   // IMPORTANT: initialize to a deterministic constant ('en') and rehydrate
