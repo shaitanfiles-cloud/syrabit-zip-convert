@@ -12,11 +12,12 @@
 // `git checkout cc3dd2a2 -- artifacts/syrabit/public/sw.js`.
 // ─────────────────────────────────────────────────────────────────
 
-// Bumped to v13 (2026-04-19) to force `activate` on all returning
-// visitors so the PropellerAds importScripts disappears from their
-// installed SW immediately on next page load instead of waiting for
-// the browser's normal 24h SW update window.
-const CACHE_VERSION = '13';
+// Bumped to v14 (2026-04-21) to force `activate` on all returning
+// visitors so the new SW_BYPASS_PATTERNS list (sitemaps, RSS/Atom
+// feeds, llms.txt, robots.txt, /.well-known/*) takes effect immediately
+// — without this bump, returning visitors would keep serving stale
+// crawler-facing surfaces from the v13 cache until natural expiry.
+const CACHE_VERSION = '14';
 const STATIC_CACHE = 'syrabit-static-v' + CACHE_VERSION;
 const RUNTIME_CACHE = 'syrabit-runtime-v' + CACHE_VERSION;
 const API_CACHE = 'syrabit-api-v' + CACHE_VERSION;
