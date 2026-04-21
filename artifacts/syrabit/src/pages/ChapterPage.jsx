@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } fro
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import MarkdownRenderer from '@/components/MarkdownRenderer';
+import { slugifyHeading } from '@/utils/slugifyHeading';
 import {
   BookOpen, ArrowLeft, ChevronRight, Home, Share2, RefreshCw,
   Clock, Hash, Sparkles, FileText, HelpCircle, ChevronDown,
@@ -643,27 +644,33 @@ export default function ChapterPage() {
       if (node?.props?.children) return extractText(node.props.children);
       return '';
     };
+    // Legacy in-page-TOC slug (counters disambiguate duplicate headings).
     const counters = {};
-    // Slug must mirror backend `_slugify_heading` so AI-notes deep-links
-    // (`#sec-<slug>`) land on the matching heading.
-    const toSlug = (children) => {
+    const toLegacyId = (children) => {
       const raw = extractText(children).toLowerCase();
       const baseId = raw.replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
       counters[baseId] = (counters[baseId] || 0) + 1;
       return counters[baseId] > 1 ? `${baseId}-${counters[baseId]}` : baseId;
     };
-    const headingProps = (children) => {
-      const slug = toSlug(children);
-      // Emit BOTH `<slug>` (legacy in-page TOC) and `sec-<slug>` (AI-notes
-      // citations) so existing links keep working.
-      return { id: slug, 'data-sec-id': `sec-${slug}` };
-    };
+    // Track which `sec-<slug>` anchors have already been emitted: backend
+    // `_slugify_heading` doesn't disambiguate duplicates, so the first
+    // occurrence of each slug owns the anchor (matching browser behavior
+    // when multiple ids collide).
+    const emittedSecIds = new Set();
     const SecHeading = ({ tag: Tag, children, ...props }) => {
-      const { id, 'data-sec-id': secId } = headingProps(children);
+      const legacyId = toLegacyId(children);
+      // `slugifyHeading` mirrors backend exactly (Unicode-aware, 80-char
+      // cap, "section" fallback) so citation URLs like `#sec-…` resolve.
+      const secSlug = slugifyHeading(extractText(children));
+      const secId = `sec-${secSlug}`;
+      const shouldEmitSecAnchor = !emittedSecIds.has(secId);
+      if (shouldEmitSecAnchor) emittedSecIds.add(secId);
       return (
         <>
-          <span id={secId} className="block scroll-mt-20" aria-hidden="true" />
-          <Tag id={id} className="scroll-mt-20" {...props}>{children}</Tag>
+          {shouldEmitSecAnchor && (
+            <span id={secId} className="block scroll-mt-20" aria-hidden="true" />
+          )}
+          <Tag id={legacyId} className="scroll-mt-20" {...props}>{children}</Tag>
         </>
       );
     };
