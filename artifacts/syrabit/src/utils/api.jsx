@@ -111,6 +111,13 @@ export const eduEducatorSubmitSite = (domain, note = '') =>
     headers: anonHeaders(), withCredentials: true,
   });
 
+export const eduEducatorAppealRejection = (domain, reason = '', probe = null, probeError = '') =>
+  axios.post(
+    `${API_BASE}/edu/educator/appeal-rejection`,
+    { domain, reason, probe: probe || {}, probe_error: probeError || '' },
+    { headers: anonHeaders(), withCredentials: true },
+  );
+
 export const eduLoadState = () =>
   axios.get(`${API_BASE}/edu/state`, { headers: anonHeaders(), withCredentials: true });
 

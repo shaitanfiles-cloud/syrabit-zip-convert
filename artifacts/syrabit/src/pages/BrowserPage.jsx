@@ -39,6 +39,7 @@ import {
   eduFetchReader, eduGetAllowlist, eduRequestSite, eduCheckUrl,
   eduLoadState, eduSaveState, eduGroundedAnswerUrl, getAnonId,
   eduEducatorSubmitSite,
+  eduEducatorAppealRejection,
 } from '@/utils/api';
 import { toast } from 'sonner';
 
@@ -96,6 +97,12 @@ const T = {
     educatorRejected: 'Site was not auto-approved.',
     educatorReason: 'Reason',
     educatorOpenNow: 'Open in browser',
+    educatorAppealHelp: 'Think this is wrong? An admin will take a second look.',
+    educatorAppealCta: 'Ask admin to review',
+    educatorAppealSending: 'Sending…',
+    educatorAppealSent: 'Sent for admin review.',
+    educatorAppealQueued: 'Queued for admin review.',
+    educatorAppealFailed: 'Could not send the appeal. Try again.',
     educatorClose: 'Close',
   },
   as: {
@@ -150,6 +157,12 @@ const T = {
     educatorRejected: 'ছাইটটো স্বয়ংক্ৰিয়ভাৱে অনুমোদিত নহল।',
     educatorReason: 'কাৰণ',
     educatorOpenNow: 'ব্ৰাউজাৰত খোলক',
+    educatorAppealHelp: 'এইটো ভুল বুলি ভাবে নেকি? এজন এডমিনে পুনৰ চাব।',
+    educatorAppealCta: 'এডমিনক চাবলৈ অনুৰোধ কৰক',
+    educatorAppealSending: 'পঠিয়াইছে…',
+    educatorAppealSent: 'এডমিনক পৰ্যালোচনাৰ বাবে পঠাইছে।',
+    educatorAppealQueued: 'এডমিনৰ পৰ্যালোচনাৰ বাবে কতাৰত।',
+    educatorAppealFailed: 'অনুৰোধ পঠিয়াব নোৱাৰিলে। আকৌ চেষ্টা কৰক।',
     educatorClose: 'বন্ধ',
   },
 };
@@ -874,6 +887,8 @@ function EducatorSubmitPanel({ open, onClose, lang, onOpenDomain }) {
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState(null); // {ok, status, domain, detail, error, probe}
+  const [appealing, setAppealing] = useState(false);
+  const [appealed, setAppealed] = useState(false);
 
   // Reset form on open.
   useEffect(() => {
@@ -882,6 +897,8 @@ function EducatorSubmitPanel({ open, onClose, lang, onOpenDomain }) {
       setNote('');
       setResult(null);
       setSubmitting(false);
+      setAppealing(false);
+      setAppealed(false);
     }
   }, [open]);
 
@@ -901,6 +918,8 @@ function EducatorSubmitPanel({ open, onClose, lang, onOpenDomain }) {
     }
     setSubmitting(true);
     setResult(null);
+    setAppealed(false);
+    setAppealing(false);
     try {
       const res = await eduEducatorSubmitSite(d, note);
       setResult({ ...(res?.data || {}), httpOk: true });
@@ -980,11 +999,43 @@ function EducatorSubmitPanel({ open, onClose, lang, onOpenDomain }) {
         </div>
       );
     }
+    const appealableDomain = result.domain || cleanDomain(domain);
+    // Only show the appeal CTA when we actually have a probe-driven
+    // rejection — i.e. the server returned a probe payload or a known
+    // probe-failure reason code. Validation/rate-limit/SSRF errors are
+    // not appealable since there was no probe to challenge.
+    const probeRejected = !!result.probe || [
+      'unsafe_content', 'robots_disallow', 'probe_failed',
+      'http_error', 'not_html', 'too_short',
+    ].includes(reasonCode);
+    const canAppeal = !!appealableDomain && probeRejected
+      && reasonCode !== 'blocked_admin' && reasonCode !== 'blocked_operator';
+
+    const submitAppeal = async () => {
+      if (!appealableDomain || appealing || appealed) return;
+      setAppealing(true);
+      try {
+        await eduEducatorAppealRejection(
+          appealableDomain,
+          note?.trim() || '',
+          result.probe || {},
+          reasonCode || '',
+        );
+        setAppealed(true);
+        toast.success(t.educatorAppealSent);
+      } catch (err) {
+        const data = err?.response?.data || {};
+        toast.error(data.detail || t.educatorAppealFailed);
+      } finally {
+        setAppealing(false);
+      }
+    };
+
     return (
       <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-900/30">
         <div className="flex items-start gap-2">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
-          <div className="text-sm text-amber-800 dark:text-amber-200">
+          <div className="text-sm text-amber-800 dark:text-amber-200 w-full">
             <p className="font-medium">{t.educatorRejected}</p>
             {result.detail && (
               <p className="mt-1 text-xs">{result.detail}</p>
@@ -1010,6 +1061,31 @@ function EducatorSubmitPanel({ open, onClose, lang, onOpenDomain }) {
                   <li>HTTP: {result.probe.http_status}</li>
                 )}
               </ul>
+            )}
+            {canAppeal && (
+              <div className="mt-2 border-t border-amber-200 pt-2 dark:border-amber-800">
+                {appealed ? (
+                  <p className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> {t.educatorAppealQueued}
+                  </p>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                      {t.educatorAppealHelp}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={submitAppeal}
+                      disabled={appealing}
+                      data-testid="educator-appeal-btn"
+                      className="self-start inline-flex items-center gap-1 rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-60"
+                    >
+                      {appealing && <Loader2 className="h-3 w-3 animate-spin" />}
+                      {appealing ? t.educatorAppealSending : t.educatorAppealCta}
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </div>

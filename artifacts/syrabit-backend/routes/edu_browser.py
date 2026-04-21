@@ -100,6 +100,21 @@ class EducatorSubmitReq(BaseModel):
     note: str = Field("", max_length=280)
 
 
+class EducatorAppealReq(BaseModel):
+    """Educator appeal of a probe rejection.
+
+    Sent from the rejection card of EducatorSubmitPanel when the
+    educator believes the safety probe was wrong (e.g. transient
+    robots.txt block, mis-classified kid-safe density). The probe
+    outcome the educator saw is captured verbatim so the admin can
+    triage without re-running the probe.
+    """
+    domain: str = Field(..., min_length=3, max_length=253)
+    reason: str = Field("", max_length=500)
+    probe: dict = Field(default_factory=dict)
+    probe_error: str = Field("", max_length=80)
+
+
 # ───────────────────────── Public: reader ─────────────────────────
 
 @router.post("/edu/reader/fetch")
@@ -331,6 +346,94 @@ async def educator_submit_site(
             "robots_ok": probe.get("robots_ok"),
             "http_status": probe.get("http_status"),
         },
+    }
+
+
+_RATE_EDUCATOR_APPEAL_PER_USER = 8  # req / hour
+
+
+@router.post("/edu/educator/appeal-rejection")
+async def educator_appeal_rejection(
+    req: EducatorAppealReq, request: Request, educator=Depends(get_educator_user),
+):
+    """Queue a probe-rejected domain for manual admin review.
+
+    Used when an educator hits the rejection card in
+    EducatorSubmitPanel and believes the safety probe was wrong (a
+    transient robots.txt block, a mis-classified page, etc.). Writes
+    to ``EDU_REQUESTED_SITES_COLLECTION`` with ``source=educator_appeal``
+    and the captured probe outcome so an admin can triage without
+    re-running the probe. Idempotent per domain — repeat appeals just
+    bump the counter and refresh the latest probe snapshot.
+    """
+    actor = (educator or {}).get("email", "") or (educator or {}).get("id", "")
+    rl_key = f"edu_edu_appeal:{(educator or {}).get('id', _client_ip(request))}"
+    if not check_rate_limit(rl_key, max_requests=_RATE_EDUCATOR_APPEAL_PER_USER, window_seconds=3600):
+        raise HTTPException(
+            status_code=429,
+            detail=f"Educator appeal limit reached ({_RATE_EDUCATOR_APPEAL_PER_USER}/hour).",
+            headers={"Retry-After": "300"},
+        )
+
+    domain = _normalize_domain(req.domain)
+    if not domain or "." not in domain:
+        raise HTTPException(status_code=400, detail="Invalid domain")
+
+    # Hard-blocked / operator-blocked domains can't be reviewed in via
+    # an appeal — they need an explicit admin decision through the
+    # allowlist editor, not a queued request.
+    blocked, why = await is_domain_hard_blocked(domain)
+    if blocked:
+        return JSONResponse(
+            status_code=403,
+            content={"ok": False, "domain": domain, "error": why,
+                     "detail": "Domain is permanently blocked and cannot be appealed."},
+        )
+
+    if not await is_mongo_available():
+        raise HTTPException(status_code=503, detail="storage_unavailable")
+
+    # Snapshot only the fields we care about — never echo the full
+    # request blob into mongo (could leak unexpected client-supplied
+    # keys into the admin UI).
+    probe_snapshot = {
+        "reason": (req.probe_error or req.probe.get("reason") or "")[:80],
+        "kid_safe": req.probe.get("kid_safe"),
+        "kid_safe_density": req.probe.get("kid_safe_density"),
+        "robots_ok": req.probe.get("robots_ok"),
+        "http_status": req.probe.get("http_status"),
+    }
+    now = time.time()
+    try:
+        await db[EDU_REQUESTED_SITES_COLLECTION].update_one(
+            {"domain": domain},
+            {
+                "$inc": {"count": 1, "appeal_count": 1},
+                "$setOnInsert": {"domain": domain, "first_at": now},
+                "$set": {
+                    "last_at": now,
+                    "last_actor": actor[:120] or "educator",
+                    "last_reason": (req.reason or "")[:500],
+                    "source": "educator_appeal",
+                    "appeal": True,
+                    "last_probe": probe_snapshot,
+                    "last_appeal_at": now,
+                },
+            },
+            upsert=True,
+        )
+    except Exception as e:
+        logger.warning(f"[edu_browser] educator appeal insert failed: {e}")
+        raise HTTPException(status_code=500, detail="storage_failed")
+    logger.info(
+        "[edu_browser] educator appeal queued domain=%s actor=%s probe_reason=%s",
+        domain, actor[:60] or "educator", probe_snapshot["reason"],
+    )
+    return {
+        "ok": True,
+        "domain": domain,
+        "status": "queued",
+        "source": "educator_appeal",
     }
 
 

@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import {
   Plus, Trash2, ShieldCheck, ShieldX, RefreshCcw, Loader2,
   AlertTriangle, Ban, Search, Globe, Info, Target, TrendingDown, TrendingUp, Minus,
+  Inbox, Megaphone, CheckCircle2,
 } from 'lucide-react';
 import { API_BASE } from '@/utils/api';
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
@@ -554,6 +555,239 @@ function BlockedLogTab({ adminToken }) {
   );
 }
 
+function RequestedSitesTab({ adminToken }) {
+  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState([]);
+  const [filter, setFilter] = useState('all'); // all | appeals
+  const [search, setSearch] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await axios.get(`${API_BASE}/admin/edu/requested-sites`, {
+        headers: adminHeaders(adminToken),
+        withCredentials: true,
+        params: { limit: 200 },
+      });
+      const list = Array.isArray(res.data?.items) ? res.data.items : (Array.isArray(res.data) ? res.data : []);
+      setItems(list);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Could not load requested sites');
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [adminToken]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = useMemo(() => {
+    let out = items;
+    if (filter === 'appeals') {
+      out = out.filter((i) => i.source === 'educator_appeal' || i.appeal === true);
+    }
+    const q = search.trim().toLowerCase();
+    if (q) {
+      out = out.filter((i) =>
+        (i.domain || '').toLowerCase().includes(q) ||
+        (i.last_actor || '').toLowerCase().includes(q) ||
+        (i.last_reason || '').toLowerCase().includes(q),
+      );
+    }
+    return out;
+  }, [items, filter, search]);
+
+  const appealCount = useMemo(
+    () => items.filter((i) => i.source === 'educator_appeal' || i.appeal === true).length,
+    [items],
+  );
+
+  const allowDomain = async (domain, note = '') => {
+    try {
+      await axios.post(`${API_BASE}/admin/edu/allowlist`,
+        { domain, status: 'allowed', note: note?.slice(0, 280) || 'Approved from educator appeal' },
+        { headers: adminHeaders(adminToken), withCredentials: true },
+      );
+      // Best-effort: clear it from the requested-sites queue so the
+      // pending count and appeal badge stop showing stale work.
+      try {
+        await axios.delete(`${API_BASE}/admin/edu/requested-sites/${encodeURIComponent(domain)}`, {
+          headers: adminHeaders(adminToken), withCredentials: true,
+        });
+      } catch (_) {
+        // Non-fatal — the allowlist write is what matters.
+      }
+      toast.success(`Allowed ${domain}`);
+      await load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Could not allow domain');
+    }
+  };
+
+  const dismissRequest = async (domain) => {
+    if (!confirm(`Dismiss request for "${domain}" without allowing?`)) return;
+    try {
+      await axios.delete(`${API_BASE}/admin/edu/requested-sites/${encodeURIComponent(domain)}`, {
+        headers: adminHeaders(adminToken), withCredentials: true,
+      });
+      toast.success(`Dismissed ${domain}`);
+      await load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Could not dismiss request');
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 p-4 border-b border-gray-100">
+          <div>
+            <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+              <Inbox size={14} className="text-violet-500" /> Site requests &amp; educator appeals
+            </h3>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {items.length} pending · {appealCount} educator appeal{appealCount === 1 ? '' : 's'}.
+              Educator appeals come from the rejection card and include the probe outcome they saw.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="h-8 px-2 rounded-lg text-xs text-gray-700 bg-gray-50 border border-gray-200 focus:border-violet-400 outline-none"
+              data-testid="edu-requested-filter"
+            >
+              <option value="all">All requests</option>
+              <option value="appeals">Educator appeals only</option>
+            </select>
+            <div className="relative">
+              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" aria-hidden="true" />
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Filter by domain/actor"
+                className="h-8 pl-8 pr-3 rounded-lg text-xs text-gray-900 bg-gray-50 border border-gray-200 focus:border-violet-400 focus:bg-white outline-none w-48 md:w-64"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={load}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-violet-600 px-2 py-1 rounded-lg hover:bg-gray-50"
+              disabled={loading}
+            >
+              <RefreshCcw size={13} className={loading ? 'animate-spin' : ''} /> Refresh
+            </button>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-50 text-gray-500">
+              <tr>
+                <th className="text-left font-semibold px-4 py-2 text-[11px] uppercase tracking-wide">Domain</th>
+                <th className="text-left font-semibold px-4 py-2 text-[11px] uppercase tracking-wide">Source</th>
+                <th className="text-left font-semibold px-4 py-2 text-[11px] uppercase tracking-wide">Last reason</th>
+                <th className="text-left font-semibold px-4 py-2 text-[11px] uppercase tracking-wide">Probe</th>
+                <th className="text-left font-semibold px-4 py-2 text-[11px] uppercase tracking-wide">Requests</th>
+                <th className="text-left font-semibold px-4 py-2 text-[11px] uppercase tracking-wide">When</th>
+                <th className="text-right font-semibold px-4 py-2 text-[11px] uppercase tracking-wide">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {loading ? (
+                <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400 text-sm">
+                  <Loader2 size={16} className="inline animate-spin mr-2" /> Loading requests…
+                </td></tr>
+              ) : filtered.length === 0 ? (
+                <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400 text-sm">
+                  {items.length === 0 ? 'No site requests yet.' : 'No matches for your filter.'}
+                </td></tr>
+              ) : filtered.map((it, i) => {
+                const isAppeal = it.source === 'educator_appeal' || it.appeal === true;
+                const probe = it.last_probe || {};
+                return (
+                  <tr key={`${it.domain}_${i}`} className="hover:bg-gray-50 align-top">
+                    <td className="px-4 py-2.5 font-mono text-xs text-gray-900">
+                      {it.domain || '—'}
+                      <SourceBadge source={it.source} />
+                    </td>
+                    <td className="px-4 py-2.5 text-xs">
+                      {isAppeal ? (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200 text-amber-800 px-1.5 py-0.5 text-[10px] font-semibold"
+                          title="Educator appealed a probe rejection"
+                          data-testid="edu-appeal-badge"
+                        >
+                          <Megaphone size={10} /> Educator appeal
+                        </span>
+                      ) : (
+                        <span className="text-gray-500">{it.source || 'student'}</span>
+                      )}
+                      {it.last_actor && (
+                        <div className="text-[11px] text-gray-400 mt-0.5 truncate max-w-[180px]" title={it.last_actor}>
+                          {it.last_actor}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-gray-600 max-w-xs">
+                      <div className="truncate" title={it.last_reason || ''}>{it.last_reason || '—'}</div>
+                    </td>
+                    <td className="px-4 py-2.5 text-[11px] text-gray-500 whitespace-nowrap">
+                      {probe.reason ? <div className="font-mono">{probe.reason}</div> : null}
+                      {typeof probe.kid_safe_density === 'number' && (
+                        <div>kid-safe: {(probe.kid_safe_density * 100).toFixed(0)}%</div>
+                      )}
+                      {typeof probe.robots_ok === 'boolean' && (
+                        <div>robots: {probe.robots_ok ? 'ok' : 'block'}</div>
+                      )}
+                      {typeof probe.http_status === 'number' && (
+                        <div>HTTP {probe.http_status}</div>
+                      )}
+                      {!probe.reason && typeof probe.kid_safe_density !== 'number'
+                        && typeof probe.robots_ok !== 'boolean'
+                        && typeof probe.http_status !== 'number' && '—'}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-gray-700 whitespace-nowrap">
+                      <div>{it.count ?? 1}×</div>
+                      {it.appeal_count ? (
+                        <div className="text-[10px] text-amber-700">{it.appeal_count} appeal{it.appeal_count === 1 ? '' : 's'}</div>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-gray-500 whitespace-nowrap">
+                      {_fmtTime(it.last_at || it.first_at)}
+                    </td>
+                    <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                      <div className="inline-flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => allowDomain(it.domain, it.last_reason)}
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:text-emerald-800 px-2 py-1 rounded-md hover:bg-emerald-50"
+                          title="Add to allowlist and clear from queue"
+                        >
+                          <CheckCircle2 size={12} /> Allow
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => dismissRequest(it.domain)}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-rose-700 px-2 py-1 rounded-md hover:bg-rose-50"
+                          title="Dismiss without allowing"
+                        >
+                          <Trash2 size={12} /> Dismiss
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function GroundedRecallTile({ adminToken }) {
   const [state, setState] = useState({ loading: true, data: null, err: null });
 
@@ -679,6 +913,7 @@ export default function AdminEduBrowser({ adminToken }) {
         <div className="flex items-center gap-1 border-b border-gray-200">
           {[
             { id: 'allowlist', label: 'Allowlist', icon: ShieldCheck },
+            { id: 'requested', label: 'Site requests', icon: Inbox },
             { id: 'blocked',   label: 'Blocked requests', icon: Ban },
           ].map(({ id, label, icon: Icon }) => (
             <button
@@ -699,6 +934,8 @@ export default function AdminEduBrowser({ adminToken }) {
 
         {tab === 'allowlist' ? (
           <AllowlistTab adminToken={adminToken} />
+        ) : tab === 'requested' ? (
+          <RequestedSitesTab adminToken={adminToken} />
         ) : (
           <BlockedLogTab adminToken={adminToken} />
         )}
