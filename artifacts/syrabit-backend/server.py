@@ -1205,13 +1205,24 @@ class HeadAsGetMiddleware:
         await self.app(new_scope, receive, _send)
 
 
-from middleware import SecurityHeadersMiddleware, GlobalRateLimitMiddleware, ServerSideTrackingMiddleware
+from middleware import (
+    SecurityHeadersMiddleware,
+    GlobalRateLimitMiddleware,
+    ServerSideTrackingMiddleware,
+    OriginSharedSecretMiddleware,
+)
 from routes.cms_sarvam_health import CmsNoIndexMiddleware, BotRenderMiddleware
 app.add_middleware(CmsNoIndexMiddleware)
 app.add_middleware(BotRenderMiddleware)
 app.add_middleware(ServerSideTrackingMiddleware)
 app.add_middleware(GlobalRateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+# Task #606: When deployed on Cloud Run behind Cloudflare, require the
+# shared-secret header injected by the edge worker so direct hits to the
+# Cloud Run URL (e.g. `https://syrabit-backend-xyz.a.run.app/api/...`) are
+# rejected. No-op when ORIGIN_SHARED_SECRET env var is unset, so the
+# Railway origin keeps working until cutover.
+app.add_middleware(OriginSharedSecretMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=_CORS_ALLOW_CREDENTIALS,

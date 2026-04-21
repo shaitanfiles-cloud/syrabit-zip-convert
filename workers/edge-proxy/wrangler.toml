@@ -41,6 +41,14 @@ BACKEND_URL = "https://workspacemockup-sandbox-production-df37.up.railway.app"
 PAGES_ORIGIN = "https://syrabit-zip-convert.pages.dev"
 # D1_SYNC_SECRET must be set via Wrangler secret (not committed to source control):
 #   wrangler secret put D1_SYNC_SECRET
+#
+# Task #606 — BACKEND_ORIGIN_SECRET: shared secret the worker injects on
+# every backend fetch as `X-Origin-Auth`. Required when BACKEND_URL points
+# at the Cloud Run service (the Cloud Run app rejects requests without it
+# via OriginSharedSecretMiddleware). Set via:
+#   wrangler secret put BACKEND_ORIGIN_SECRET
+# The same value MUST be set as ORIGIN_SHARED_SECRET on the Cloud Run
+# service (Secret Manager binding — see CLOUDRUN-DEPLOY.md).
 
 [[kv_namespaces]]
 binding = "RATE_LIMIT"

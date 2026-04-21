@@ -1,5 +1,14 @@
 # Syrabit.ai — Deployment Architecture
 
+> **Task #606 — Cloud Run as the production API origin.** A second backend
+> origin is being stood up on Google Cloud Run. The full runbook
+> (one-time GCP setup, Cloud Build pipeline, parallel-validation, and
+> cutover) lives at
+> [`artifacts/syrabit-backend/CLOUDRUN-DEPLOY.md`](../artifacts/syrabit-backend/CLOUDRUN-DEPLOY.md).
+> Cloudflare (DNS, WAF, edge worker) stays in front — only the upstream
+> origin moves. Until cutover, Railway and Cloud Run run in parallel
+> behind the same Cloudflare worker.
+
 ## Architecture Overview
 
 ```

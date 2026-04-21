@@ -29,6 +29,15 @@ interface Env {
   KV_WARNING_PCT?: string;
   /** Override per-op daily quotas as a JSON string. */
   KV_QUOTA?: string;
+  /**
+   * Task #606: Shared secret injected as `X-Origin-Auth` on every backend
+   * fetch when the worker is forwarding to a Cloud Run origin. The Cloud
+   * Run service rejects requests without it (see
+   * `OriginSharedSecretMiddleware` in artifacts/syrabit-backend/middleware.py).
+   * Set via `wrangler secret put BACKEND_ORIGIN_SECRET`. Leave unset for
+   * non-Cloud-Run backends — the worker just skips the header.
+   */
+  BACKEND_ORIGIN_SECRET?: string;
 }
 
 const KV_BINDINGS = ["RATE_LIMIT", "BOT_HTML_CACHE"] as const;
@@ -430,6 +439,14 @@ async function proxyToBackend(
 ): Promise<Response> {
   const backendUrl = `${env.BACKEND_URL}${pathname}${search}`;
   const proxyHeaders = buildProxyHeaders(request, clientIp);
+  // Task #606: Authenticated origin pull for the Cloud Run backend.
+  // Without this header, the FastAPI `OriginSharedSecretMiddleware`
+  // returns 403 — which is what stops anyone from bypassing
+  // Cloudflare's WAF / rate limit / cache by hitting the
+  // `*.run.app` URL directly. No-op if the secret isn't bound.
+  if (env.BACKEND_ORIGIN_SECRET) {
+    proxyHeaders.set("X-Origin-Auth", env.BACKEND_ORIGIN_SECRET);
+  }
 
   try {
     const backendResp = await fetch(backendUrl, {

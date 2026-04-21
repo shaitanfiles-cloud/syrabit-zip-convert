@@ -76,6 +76,68 @@ _CSP_VALUE = (
 )
 
 
+_ORIGIN_SHARED_SECRET = os.environ.get("ORIGIN_SHARED_SECRET", "").strip()
+_ORIGIN_AUTH_HEADER = os.environ.get("ORIGIN_SHARED_SECRET_HEADER", "X-Origin-Auth").strip() or "X-Origin-Auth"
+# Paths that must remain reachable without the shared-secret header so Cloud
+# Run's own startup/liveness probes keep working. Kept deliberately tiny:
+# /docs and /openapi.json used to be open during early bring-up but were
+# removed so the *.run.app URL exposes nothing more than health to the
+# unauthenticated public — every other endpoint requires the edge-injected
+# header when ORIGIN_SHARED_SECRET is set.
+_ORIGIN_AUTH_OPEN_PATHS = (
+    "/api/health",
+    "/health",
+)
+
+
+class OriginSharedSecretMiddleware:
+    """Reject requests that did not flow through the Cloudflare edge worker.
+
+    When ``ORIGIN_SHARED_SECRET`` is set in the environment, every non-open
+    request must carry a matching header (default ``X-Origin-Auth``). The
+    edge worker injects this header on every backend fetch. This is the
+    application-layer equivalent of authenticated origin pull and is what
+    keeps the Cloud Run URL from being directly reachable by the public
+    internet (in addition to the Cloud Run ingress allowlist).
+
+    Disabled (no enforcement, no overhead) when the env var is empty so the
+    backend keeps working unchanged on the legacy Railway origin until the
+    cutover is complete.
+    """
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http" or not _ORIGIN_SHARED_SECRET:
+            await self.app(scope, receive, send)
+            return
+        method = scope.get("method", "GET")
+        if method == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        if any(path == p or path.startswith(p) for p in _ORIGIN_AUTH_OPEN_PATHS):
+            await self.app(scope, receive, send)
+            return
+        # Header lookup: scope["headers"] is a list of (bytes, bytes) tuples.
+        wanted = _ORIGIN_AUTH_HEADER.lower().encode("latin-1")
+        provided = b""
+        for k, v in scope.get("headers", []):
+            if k == wanted:
+                provided = v
+                break
+        if provided and provided.decode("latin-1", "ignore") == _ORIGIN_SHARED_SECRET:
+            await self.app(scope, receive, send)
+            return
+        from fastapi.responses import JSONResponse
+        resp = JSONResponse(
+            status_code=403,
+            content={"detail": "Direct origin access denied — must traverse the edge worker."},
+        )
+        await resp(scope, receive, send)
+
+
 class SecurityHeadersMiddleware:
     def __init__(self, app: ASGIApp):
         self.app = app
