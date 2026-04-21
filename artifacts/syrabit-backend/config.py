@@ -434,9 +434,35 @@ REDIS_RATE_WINDOW = 60
 # When unset, the AI cache falls back to the existing Upstash REST client and
 # finally to the in-memory L1 cache. All values can be tuned per environment
 # without code changes.
+def _extract_redis_url(raw: str) -> str:
+    """Defensive parser for MEMORYSTORE_REDIS_URL.
+
+    Two common copy-paste mistakes are corrected here so a single bad
+    secret doesn't silently degrade the entire AI cache to memory_only:
+
+    1. Operators paste the full Upstash "Connect → Redis CLI" line,
+       e.g. ``redis-cli --tls -u rediss://default:TOKEN@host:6379``.
+       We extract the substring starting with ``redis://`` /
+       ``rediss://`` / ``unix://``.
+    2. Operators paste an Upstash URL with ``redis://`` (plain TCP)
+       instead of ``rediss://`` (TLS). Upstash *requires* TLS and
+       closes plain connections immediately. We auto-upgrade any
+       ``redis://*.upstash.io`` URL to ``rediss://``.
+    """
+    raw = (raw or '').strip().strip('"').strip("'")
+    if not raw:
+        return ''
+    import re as _re
+    m = _re.search(r'\b(?:rediss?|unix)://\S+', raw)
+    url = m.group(0) if m else raw
+    if url.startswith('redis://') and 'upstash.io' in url:
+        url = 'rediss://' + url[len('redis://'):]
+    return url
+
+
 MEMORYSTORE_REDIS_URL = (
-    os.environ.get('MEMORYSTORE_REDIS_URL', '').strip().strip('"').strip("'")
-    or os.environ.get('AI_CACHE_REDIS_URL', '').strip().strip('"').strip("'")
+    _extract_redis_url(os.environ.get('MEMORYSTORE_REDIS_URL', ''))
+    or _extract_redis_url(os.environ.get('AI_CACHE_REDIS_URL', ''))
 )
 REDIS_AI_CACHE_NAMESPACE = (os.environ.get('REDIS_AI_CACHE_NAMESPACE', 'ai_cache').strip() or 'ai_cache')
 REDIS_AI_CACHE_MAX_ENTRY_BYTES = int(os.environ.get('REDIS_AI_CACHE_MAX_ENTRY_BYTES', str(64 * 1024)) or 64 * 1024)
