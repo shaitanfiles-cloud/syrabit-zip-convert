@@ -233,3 +233,46 @@ def test_indic_vertex_failure_falls_back_to_sarvam_not_english_slm(monkeypatch):
         f"expected vertex_gemini_indic->sarvam-m in fallbacks; got {fbs}"
     )
     assert fbs["vertex_gemini_indic->sarvam-m"] == 1
+
+
+def test_indic_provider_survives_worker_reconcile(monkeypatch):
+    """Persisted ``indic_provider`` override must be restored when a
+    fresh worker boots (or the periodic refresher runs against a doc
+    written by a sibling worker). Without this, an admin PATCH sets
+    ``vertex`` on one worker but new workers silently revert to
+    ``sarvam`` and Assamese traffic splits across providers — the
+    core A/B contract breaks.
+
+    Simulates the reconciliation path used by the 15s refresher and
+    by ``server.py`` lifespan on API boot.
+    """
+    import lang_sanitizer as ls
+    import routes.cms_sarvam_health as cms
+
+    ls.clear_runtime_override()
+    assert ls.get_indic_provider() in ("sarvam", "vertex")
+
+    async def _fake_loader():
+        return {
+            "behaviour": "translate",
+            "threshold": 0.05,
+            "indic_provider": "vertex",
+            "updated_by": "sibling-worker",
+        }
+
+    monkeypatch.setattr(
+        cms, "_load_persisted_assamese_purity_override", _fake_loader
+    )
+
+    _run(cms.apply_persisted_assamese_purity_override())
+
+    assert ls.get_indic_provider() == "vertex", (
+        "Persisted indic_provider=vertex was written by a sibling "
+        "worker but this worker reconciled to default — "
+        "apply_persisted_assamese_purity_override must forward the "
+        "indic_provider field to apply_runtime_override."
+    )
+    cfg = ls.get_runtime_config()
+    assert cfg.get("indic_provider") == "vertex"
+
+    ls.clear_runtime_override()

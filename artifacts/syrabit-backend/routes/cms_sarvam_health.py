@@ -2041,6 +2041,7 @@ async def apply_persisted_assamese_purity_override() -> None:
             applied = _apply(
                 behaviour=ov.get("behaviour"),
                 threshold=ov.get("threshold"),
+                indic_provider=ov.get("indic_provider"),
                 updated_by=ov.get("updated_by"),
             )
             logger.info(
