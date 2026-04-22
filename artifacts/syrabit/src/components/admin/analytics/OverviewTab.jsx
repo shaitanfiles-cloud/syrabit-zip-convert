@@ -10,6 +10,7 @@ import {
 import { Card, Stat, TT, fmt, fmtInr } from './shared';
 import { adminGetHydrateStats, adminAcknowledgeAlert,
   adminGetReviewPromptStats,
+  adminGetReviewPromptBaselineNoise,
   adminGetReviewPromptByReasonTrend } from '@/utils/api';
 
 const TIME_RANGES = [
@@ -40,6 +41,12 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
   const [reviewPrompt, setReviewPrompt] = useState(null);
   const [reviewPromptLoading, setReviewPromptLoading] = useState(false);
   const [reviewPromptError, setReviewPromptError] = useState(false);
+  // Task #681 — per-reason baseline noise snapshot. Fetched in parallel
+  // with the funnel rollup so the tile can render the noise band next
+  // to each row without an extra round-trip on toggle. A failed fetch
+  // is non-fatal: the funnel still renders, the noise columns just
+  // show "—".
+  const [reviewBaseline, setReviewBaseline] = useState(null);
   const loadReviewPrompt = async () => {
     setReviewPromptLoading(true);
     setReviewPromptError(false);
@@ -47,11 +54,22 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
       // Task #659: 7-day window so per-reason deltas are true
       // week-over-week (vs the prior 7 days), matching the weekly
       // digest email's semantics.
-      const r = await adminGetReviewPromptStats(adminToken, 7);
-      setReviewPrompt(r.data);
+      const [statsRes, baselineRes] = await Promise.allSettled([
+        adminGetReviewPromptStats(adminToken, 7),
+        adminGetReviewPromptBaselineNoise(adminToken, 7),
+      ]);
+      if (statsRes.status === 'fulfilled') {
+        setReviewPrompt(statsRes.value.data);
+      } else {
+        throw statsRes.reason;
+      }
+      setReviewBaseline(
+        baselineRes.status === 'fulfilled' ? baselineRes.value.data : null,
+      );
     } catch {
       setReviewPromptError(true);
       setReviewPrompt(null);
+      setReviewBaseline(null);
     } finally {
       setReviewPromptLoading(false);
     }
@@ -135,6 +153,7 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
 
       <ReviewPromptFunnelCard
         stats={reviewPrompt}
+        baseline={reviewBaseline}
         loading={reviewPromptLoading}
         error={reviewPromptError}
         onRetry={loadReviewPrompt}
@@ -579,7 +598,102 @@ function ReviewPromptReasonTrend({ adminToken, reason }) {
   );
 }
 
-function ReviewPromptReasonRow({ row, expanded, onToggle }) {
+// Task #681 — render the per-reason noise band (μ ± σ pp over N
+// baseline weeks) and the current week's z-score. Pure presentation;
+// the numbers come straight from
+// `/admin/analytics/review-prompt-stats/baseline-noise`. Returns the
+// three table cells in render order so the row component can drop
+// them inline with its existing columns.
+function ReviewPromptBaselineCells({ noise }) {
+  if (!noise) {
+    return (
+      <>
+        <td className="text-right text-gray-400 px-3.5 py-2">—</td>
+        <td className="text-right text-gray-400 px-3.5 py-2">—</td>
+        <td className="text-right text-gray-400 px-3.5 py-2">—</td>
+      </>
+    );
+  }
+  const mean = noise.baseline_mean_ctr_pct;
+  const stddev = noise.baseline_stddev_pp;
+  const z = noise.current_z_score;
+  const weeks = noise.baseline_weeks_used || 0;
+
+  // Mean cell — null when fewer than 2 qualifying baseline weeks; show
+  // "n/a" with a tooltip so admins know the row exists but the
+  // baseline is too thin to summarise.
+  let meanCell;
+  if (mean == null) {
+    meanCell = (
+      <span
+        className="text-gray-400"
+        title={`Need ≥2 baseline weeks above the min-shown gate; have ${weeks}`}
+      >
+        n/a
+      </span>
+    );
+  } else {
+    meanCell = (
+      <span
+        className="text-gray-700"
+        title={`Baseline mean over ${weeks} qualifying week(s)`}
+      >
+        {mean.toFixed(1)}%
+      </span>
+    );
+  }
+
+  // Stddev cell — same gating as mean.
+  let stddevCell;
+  if (stddev == null) {
+    stddevCell = <span className="text-gray-400">—</span>;
+  } else {
+    stddevCell = (
+      <span
+        className="text-gray-700"
+        title="Sample stddev (Bessel-corrected) — same formula the auto-tuned alert uses"
+      >
+        ±{stddev.toFixed(1)} pp
+      </span>
+    );
+  }
+
+  // z-score cell — colour-coded so an admin can spot a cold/hot week
+  // at a glance. Note: the auto-tuned alert gates on the WoW pp drop
+  // (vs prev week) exceeding sigma_mult × stddev — z here is a quick
+  // visual proxy for "how far from normal is this week", not the
+  // exact alert decision.
+  let zCell;
+  if (z == null) {
+    zCell = <span className="text-gray-400">—</span>;
+  } else {
+    const abs = Math.abs(z);
+    let cls = 'text-gray-500';
+    if (z <= -2) cls = 'text-rose-600 font-semibold';
+    else if (z < -1) cls = 'text-amber-600';
+    else if (z >= 2) cls = 'text-emerald-600 font-semibold';
+    else if (z > 1) cls = 'text-emerald-500';
+    const sign = z > 0 ? '+' : '';
+    zCell = (
+      <span
+        className={cls}
+        title={`Current CTR is ${abs.toFixed(2)}σ ${z < 0 ? 'below' : 'above'} the baseline mean`}
+      >
+        {sign}{z.toFixed(2)}σ
+      </span>
+    );
+  }
+
+  return (
+    <>
+      <td className="text-right font-mono px-3.5 py-2">{meanCell}</td>
+      <td className="text-right font-mono px-3.5 py-2">{stddevCell}</td>
+      <td className="text-right font-mono px-3.5 py-2">{zCell}</td>
+    </>
+  );
+}
+
+function ReviewPromptReasonRow({ row, noise, expanded, onToggle }) {
   const status = row?.status;
   const shownDelta = row?.shown_delta;
   const ctrDelta = row?.ctr_delta_pct;
@@ -642,11 +756,12 @@ function ReviewPromptReasonRow({ row, expanded, onToggle }) {
       </td>
       <td className="text-right font-mono px-3.5 py-2">{shownDeltaCell}</td>
       <td className="text-right font-mono px-3.5 py-2">{ctrDeltaCell}</td>
+      <ReviewPromptBaselineCells noise={noise} />
     </tr>
   );
 }
 
-function ReviewPromptFunnelCard({ stats, loading, error, onRetry, adminToken }) {
+function ReviewPromptFunnelCard({ stats, baseline, loading, error, onRetry, adminToken }) {
   const [expandedReason, setExpandedReason] = useState(null);
   if (loading && !stats) {
     return (
@@ -668,6 +783,21 @@ function ReviewPromptFunnelCard({ stats, loading, error, onRetry, adminToken }) 
   const dismissRate = s.dismiss_rate_pct;
   const byReason = Array.isArray(s.by_reason) ? s.by_reason : [];
   const isEmpty = shown === 0 && clicked === 0 && dismissed === 0;
+  // Task #681 — per-reason baseline noise lookup. Object keyed by
+  // reason name so each row pulls its noise band in O(1).
+  const noiseByReason = (baseline && baseline.by_reason) || {};
+  const baselineWeeks = baseline?.baseline_weeks ?? null;
+  const sigmaMult = baseline?.sigma_mult ?? null;
+  const minShown = baseline?.min_shown ?? null;
+  const handleOpenSigmaSetting = () => {
+    // AdminDashboard owns the Alert Settings panel state; dispatching a
+    // window event keeps OverviewTab decoupled from the parent's
+    // internals while still giving admins a single click from "I see
+    // a noisy reason" to "let me tune the sigma multiplier".
+    try {
+      window.dispatchEvent(new CustomEvent('syrabit:open-alert-sigma-setting'));
+    } catch {}
+  };
 
   return (
     <Card
@@ -716,7 +846,7 @@ function ReviewPromptFunnelCard({ stats, loading, error, onRetry, adminToken }) 
             <div className="rounded-xl border border-gray-200 bg-gray-50 mt-4 overflow-hidden">
               <div className="px-3.5 py-2 border-b border-gray-200">
                 <p className="text-gray-500 text-xs font-medium">
-                  By trigger reason · Δ vs prev week
+                  By trigger reason · Δ vs prev week · noise band
                 </p>
               </div>
               <table className="w-full text-xs">
@@ -729,6 +859,26 @@ function ReviewPromptFunnelCard({ stats, loading, error, onRetry, adminToken }) 
                     <th className="text-right font-medium px-3.5 py-2">CTR</th>
                     <th className="text-right font-medium px-3.5 py-2">Δ Shown</th>
                     <th className="text-right font-medium px-3.5 py-2">Δ CTR</th>
+                    <th
+                      className="text-right font-medium px-3.5 py-2"
+                      title={baselineWeeks
+                        ? `Baseline mean CTR over the last ${baselineWeeks} qualifying weeks (each ≥ ${minShown ?? 0} shown).`
+                        : 'Baseline mean CTR over the configured rolling window.'}
+                    >
+                      Baseline μ
+                    </th>
+                    <th
+                      className="text-right font-medium px-3.5 py-2"
+                      title="Sample stddev of weekly CTR (Bessel-corrected) — same noise band the auto-tuned alert uses."
+                    >
+                      σ (pp)
+                    </th>
+                    <th
+                      className="text-right font-medium px-3.5 py-2"
+                      title="Current 7d CTR distance from the baseline mean, in stddev units. The auto-tuned alert fires when the week-over-week pp drop exceeds sigma × stddev (and the absolute pp floor) — z is a quick proxy for how far this week is from normal."
+                    >
+                      z (this wk)
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -739,6 +889,7 @@ function ReviewPromptFunnelCard({ stats, loading, error, onRetry, adminToken }) 
                       <Fragment key={`reason-${i}-${reasonKey}`}>
                         <ReviewPromptReasonRow
                           row={row}
+                          noise={noiseByReason[reasonKey] || null}
                           expanded={isExpanded}
                           onToggle={() => setExpandedReason(
                             isExpanded ? null : reasonKey
@@ -746,7 +897,7 @@ function ReviewPromptFunnelCard({ stats, loading, error, onRetry, adminToken }) 
                         />
                         {isExpanded && (
                           <tr className="bg-white">
-                            <td colSpan={7} className="p-0">
+                            <td colSpan={10} className="p-0">
                               <ReviewPromptReasonTrend
                                 adminToken={adminToken}
                                 reason={reasonKey}
@@ -759,6 +910,35 @@ function ReviewPromptFunnelCard({ stats, loading, error, onRetry, adminToken }) 
                   })}
                 </tbody>
               </table>
+              {/* Task #681 — legend explains the noise band the rightmost
+                  three columns render and links straight to the
+                  Alert Settings sigma knob (so admins who spot a
+                  jittery reason can tune the multiplier without
+                  hunting through the alert panel). */}
+              <div className="px-3.5 py-2 border-t border-gray-200 bg-white text-[11px] text-gray-500 leading-relaxed">
+                <p>
+                  <span className="font-medium text-gray-600">Noise band:</span>{' '}
+                  μ is the mean per-reason CTR over the last{' '}
+                  <span className="text-gray-700">{baselineWeeks ?? '—'}</span> baseline
+                  week(s) where shown ≥ <span className="text-gray-700">{minShown ?? '—'}</span>;
+                  σ is the sample stddev (in pp). z shows how far this week's CTR
+                  sits from μ in σ units — a quick read on volatility. The
+                  auto-tuned collapse alert fires when the week-over-week CTR
+                  drop exceeds the absolute pp floor AND is also larger than{' '}
+                  <span className="text-gray-700">
+                    {sigmaMult == null ? '—' : sigmaMult.toFixed(1)}× σ
+                  </span>{' '}
+                  for that reason.{' '}
+                  <button
+                    type="button"
+                    onClick={handleOpenSigmaSetting}
+                    className="text-violet-600 hover:text-violet-700 underline underline-offset-2"
+                    title="Jump to the Reason CTR Sigma Multiplier in the Alert Settings panel"
+                  >
+                    Tune sigma multiplier →
+                  </button>
+                </p>
+              </div>
             </div>
           )}
         </>

@@ -404,6 +404,195 @@ async def admin_review_prompt_by_reason_trend(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Task #681 — surface per-reason baseline noise on the admin tile.
+#
+# The auto-tuned collapse alert (Task #670) computes a per-reason CTR
+# mean + rolling stddev over the last N weeks and adds a sigma gate on
+# top of the absolute pp drop. Until now those numbers were only
+# rendered in the alert body — admins had no way to eyeball the noise
+# band ahead of an alert (or to tune the sigma multiplier with
+# confidence). This endpoint exposes the same baseline rollup as a
+# read-only snapshot the dashboard funnel tile renders alongside each
+# trigger reason.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def _compute_review_prompt_reason_baseline(
+    *,
+    window_days: int = 7,
+) -> Dict[str, Any]:
+    """Return the per-reason baseline noise snapshot the admin tile renders.
+
+    Computes — without firing any alert — the same per-reason mean
+    CTR + sample-stddev that the auto-tuned collapse alert uses
+    (Task #670), plus the current week's CTR and z-score so admins can
+    eyeball volatility at a glance.
+
+    Shape::
+
+        {
+          "window_days": int,
+          "baseline_weeks": int,        # configured baseline length
+          "min_shown": int,             # sample-size gate per week
+          "sigma_mult": float,          # current sigma multiplier
+          "by_reason": {
+            "<reason>": {
+              "baseline_weeks_used": int,
+              "baseline_mean_ctr_pct": float | None,
+              "baseline_stddev_pp": float | None,
+              "current_ctr_pct": float | None,
+              "current_shown": int,
+              "current_z_score": float | None,
+              "sigma_threshold_pp": float | None,
+            },
+            ...
+          },
+        }
+
+    A reason whose baseline has fewer than 2 qualifying weekly samples
+    (after the ``min_shown`` gate) gets ``baseline_mean_ctr_pct`` /
+    ``baseline_stddev_pp`` / ``current_z_score`` = ``None`` so the UI
+    can render an "insufficient data" pill instead of a misleading
+    point estimate. The mean / stddev are computed with the same
+    Bessel-corrected formula the alert path uses so the tile and the
+    alert body never show drifting numbers.
+    """
+    (
+        min_shown,
+        _drop_pp,
+        sigma_mult,
+        baseline_weeks,
+    ) = _effective_review_prompt_reason_drop_thresholds()
+    empty: Dict[str, Any] = {
+        "window_days": window_days,
+        "baseline_weeks": baseline_weeks,
+        "min_shown": min_shown,
+        "sigma_mult": sigma_mult,
+        "by_reason": {},
+    }
+    if not await is_mongo_available():
+        return empty
+    try:
+        await _ensure_review_prompt_indexes()
+        now_dt = datetime.now(timezone.utc)
+        curr_start = now_dt - timedelta(days=window_days)
+        curr = await _aggregate_review_prompt_window(curr_start, now_dt)
+        baseline_windows: List[Dict[str, Any]] = []
+        for i in range(baseline_weeks):
+            w_until = curr_start - timedelta(days=window_days * i)
+            w_since = w_until - timedelta(days=window_days)
+            baseline_windows.append(
+                await _aggregate_review_prompt_window(w_since, w_until)
+            )
+    except Exception as exc:
+        logger.debug(f"review-prompt baseline snapshot failed: {exc}")
+        return empty
+
+    # Index baseline weeks by reason so we can pluck per-reason samples
+    # in one pass — same shape the alert evaluator builds.
+    baseline_by_reason: Dict[str, List[Dict[str, int]]] = {}
+    for w in baseline_windows:
+        for r in (w.get("by_reason") or []):
+            reason = str(r.get("reason") or "unknown")
+            baseline_by_reason.setdefault(reason, []).append({
+                "shown": int(r.get("shown") or 0),
+                "clicked": int(r.get("clicked") or 0),
+            })
+
+    curr_by_reason: Dict[str, Dict[str, int]] = {
+        str(r.get("reason") or "unknown"): {
+            "shown": int(r.get("shown") or 0),
+            "clicked": int(r.get("clicked") or 0),
+        }
+        for r in (curr.get("by_reason") or [])
+    }
+
+    out: Dict[str, Dict[str, Any]] = {}
+    # Walk the union of reasons seen in either the current or any
+    # baseline window so reasons that only fired historically (and the
+    # ops team is now looking for) still surface in the snapshot.
+    all_reasons = set(curr_by_reason) | set(baseline_by_reason)
+    for reason in all_reasons:
+        baseline_ctrs: List[float] = []
+        for sample in baseline_by_reason.get(reason, []):
+            s_shown = sample["shown"]
+            if s_shown < min_shown:
+                continue
+            baseline_ctrs.append((sample["clicked"] / s_shown) * 100)
+        baseline_mean = baseline_stddev = None
+        sigma_threshold_pp = None
+        if len(baseline_ctrs) >= 2:
+            baseline_mean = sum(baseline_ctrs) / len(baseline_ctrs)
+            var = sum(
+                (x - baseline_mean) ** 2 for x in baseline_ctrs
+            ) / (len(baseline_ctrs) - 1)
+            baseline_stddev = math.sqrt(var)
+            if sigma_mult > 0 and baseline_stddev > 0:
+                sigma_threshold_pp = sigma_mult * baseline_stddev
+
+        c = curr_by_reason.get(reason, {})
+        c_shown = int(c.get("shown") or 0)
+        c_clicked = int(c.get("clicked") or 0)
+        current_ctr = (c_clicked / c_shown) * 100 if c_shown > 0 else None
+        # z-score is only meaningful when we have a non-zero stddev AND
+        # a current CTR — anything else collapses to None so the UI
+        # doesn't divide by zero or compare against a missing point.
+        current_z = None
+        if (
+            current_ctr is not None
+            and baseline_mean is not None
+            and baseline_stddev is not None
+            and baseline_stddev > 0
+        ):
+            current_z = (current_ctr - baseline_mean) / baseline_stddev
+
+        out[reason] = {
+            "baseline_weeks_used": len(baseline_ctrs),
+            "baseline_mean_ctr_pct": (
+                round(baseline_mean, 2) if baseline_mean is not None else None
+            ),
+            "baseline_stddev_pp": (
+                round(baseline_stddev, 2)
+                if baseline_stddev is not None else None
+            ),
+            "current_ctr_pct": (
+                round(current_ctr, 2) if current_ctr is not None else None
+            ),
+            "current_shown": c_shown,
+            "current_z_score": (
+                round(current_z, 2) if current_z is not None else None
+            ),
+            "sigma_threshold_pp": (
+                round(sigma_threshold_pp, 2)
+                if sigma_threshold_pp is not None else None
+            ),
+        }
+
+    return {
+        "window_days": window_days,
+        "baseline_weeks": baseline_weeks,
+        "min_shown": min_shown,
+        "sigma_mult": sigma_mult,
+        "by_reason": out,
+    }
+
+
+@router.get("/admin/analytics/review-prompt-stats/baseline-noise")
+async def admin_review_prompt_baseline_noise(
+    window_days: int = Query(7, ge=1, le=30),
+    admin: dict = Depends(get_admin_user),
+):
+    """Per-reason baseline mean CTR + stddev + current z-score.
+
+    Powers the noise band the funnel tile renders next to each trigger
+    reason. The numbers come from the same baseline aggregation the
+    auto-tuned collapse alert (Task #670) uses, so the tile and the
+    alert body can never drift.
+    """
+    return await _compute_review_prompt_reason_baseline(window_days=window_days)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Task #656 — alert ops when the review-prompt CTR collapses
 #
 # Background loop modeled on `routes.analytics._hydrate_alert_loop`. Every

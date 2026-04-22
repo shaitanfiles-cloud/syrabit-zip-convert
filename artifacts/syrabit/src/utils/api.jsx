@@ -280,6 +280,15 @@ export const adminGetHydrateStats = (token, days = 7) =>
 export const adminGetReviewPromptStats = (token, days = 30) =>
   axios.get(`${API_BASE}/admin/analytics/review-prompt-stats`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
 
+// Task #681: per-reason baseline mean CTR + stddev + current z-score
+// (the same noise band the auto-tuned collapse alert uses, surfaced
+// next to each row so admins can eyeball volatility ahead of an alert).
+export const adminGetReviewPromptBaselineNoise = (token, windowDays = 7) =>
+  axios.get(
+    `${API_BASE}/admin/analytics/review-prompt-stats/baseline-noise`,
+    { headers: adminHeaders(token), withCredentials: true, params: { window_days: windowDays } },
+  );
+
 // Task #662: per-reason 8-week trend (drill-down sparkline)
 // Task #673: optional `compare` reason overlays a second series on the
 // same chart so admins can spot whether a CTR dip is reason-specific.

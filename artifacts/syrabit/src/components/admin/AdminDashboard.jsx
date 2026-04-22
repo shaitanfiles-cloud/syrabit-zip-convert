@@ -759,6 +759,35 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
     setAlertSettingsOpen(prev => !prev);
   };
 
+  // Task #681 — the review-prompt funnel tile (in OverviewTab) renders
+  // a baseline-noise legend whose "Tune sigma multiplier" link expects
+  // to land the admin directly on the Reason CTR Sigma Multiplier
+  // input. We listen on a window event (decoupled from OverviewTab's
+  // props) and pop the Alert Settings panel + scroll-and-focus the
+  // sigma input.
+  useEffect(() => {
+    const onOpenSigma = () => {
+      if (!alertSettings) loadAlertSettings();
+      setAlertSettingsOpen(true);
+      // Defer to the next paint so the panel is in the DOM before we
+      // try to scroll/focus the input.
+      setTimeout(() => {
+        const el = document.getElementById('alert-reason-ctr-sigma-input');
+        if (el) {
+          try {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } catch {
+            el.scrollIntoView();
+          }
+          try { el.focus({ preventScroll: true }); } catch { el.focus(); }
+        }
+      }, 50);
+    };
+    window.addEventListener('syrabit:open-alert-sigma-setting', onOpenSigma);
+    return () => window.removeEventListener('syrabit:open-alert-sigma-setting', onOpenSigma);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alertSettings]);
+
   const handleResetAlertSettings = () => {
     if (alertSettings?.defaults) {
       setAlertSettingsDraft({
@@ -2288,8 +2317,9 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                   />
                 </div>
                 <div>
-                  <label className="text-[10px] text-gray-500 font-medium block mb-1" title="Per-reason CTR-collapse alert: required multiple of the per-reason rolling stddev the WoW drop must additionally exceed (auto-tunes the threshold from baseline noise so volatile reasons don't page on ordinary swings). Set to 0 to disable the sigma gate and rely only on the absolute pp floor.">Reason CTR Sigma Multiplier</label>
+                  <label htmlFor="alert-reason-ctr-sigma-input" className="text-[10px] text-gray-500 font-medium block mb-1" title="Per-reason CTR-collapse alert: required multiple of the per-reason rolling stddev the WoW drop must additionally exceed (auto-tunes the threshold from baseline noise so volatile reasons don't page on ordinary swings). Set to 0 to disable the sigma gate and rely only on the absolute pp floor.">Reason CTR Sigma Multiplier</label>
                   <input
+                    id="alert-reason-ctr-sigma-input"
                     type="number"
                     step="0.1"
                     min="0"

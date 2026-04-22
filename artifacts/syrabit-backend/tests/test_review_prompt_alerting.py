@@ -539,3 +539,78 @@ def test_admin_threshold_overrides_take_effect():
     snap = alerts[0]["threshold_snapshot"]
     assert snap["min_shown"] == 20
     assert snap["value"] == 5.0
+
+
+# ------------- Task #681: per-reason baseline noise snapshot -----------------
+
+def test_baseline_noise_snapshot_returns_empty_when_mongo_down():
+    """Helper must return the (empty-but-shaped) snapshot when Mongo is
+    unavailable so the admin tile can still render with sensible
+    defaults."""
+    with patch.object(arp, "is_mongo_available", AsyncMock(return_value=False)):
+        snap = asyncio.run(arp._compute_review_prompt_reason_baseline(window_days=7))
+    assert snap["by_reason"] == {}
+    assert snap["window_days"] == 7
+    assert snap["baseline_weeks"] == arp.REVIEW_PROMPT_REASON_CTR_BASELINE_WEEKS
+
+
+def test_baseline_noise_snapshot_computes_mean_stddev_and_zscore():
+    """Happy path: snapshot exposes per-reason μ, σ (Bessel-corrected),
+    current CTR, and z-score using the SAME baseline aggregation the
+    auto-tuned alert uses — so the tile and alert can never drift."""
+    # Tight baseline (20%, 19%, 21%, 20%) → μ ≈ 20%, σ < 1 pp.
+    # Current week CTR = 200/2 = 1% → z ≈ -19σ-ish, very cold.
+    curr = [_reason_row("answer_helpful", 200, 2)]
+    weekly = [
+        [_reason_row("answer_helpful", 200, 40)],   # 20%
+        [_reason_row("answer_helpful", 200, 38)],   # 19%
+        [_reason_row("answer_helpful", 200, 42)],   # 21%
+        [_reason_row("answer_helpful", 200, 40)],   # 20%
+    ]
+    with _patch_baseline_weeks(curr, weekly), \
+         patch.object(arp, "is_mongo_available", AsyncMock(return_value=True)):
+        snap = asyncio.run(
+            arp._compute_review_prompt_reason_baseline(window_days=7)
+        )
+    rec = snap["by_reason"]["answer_helpful"]
+    assert rec["baseline_weeks_used"] == 4
+    assert abs(rec["baseline_mean_ctr_pct"] - 20.0) < 0.5
+    assert rec["baseline_stddev_pp"] is not None
+    assert rec["baseline_stddev_pp"] > 0
+    assert rec["current_shown"] == 200
+    assert rec["current_ctr_pct"] == 1.0
+    # z must be strongly negative because the current week is far below μ.
+    assert rec["current_z_score"] is not None
+    assert rec["current_z_score"] < -5
+    assert rec["sigma_threshold_pp"] is not None
+    # Snapshot also surfaces the active config so the tile legend can
+    # explain the noise band without a second round-trip.
+    assert snap["baseline_weeks"] == arp.REVIEW_PROMPT_REASON_CTR_BASELINE_WEEKS
+    assert snap["sigma_mult"] == arp.REVIEW_PROMPT_REASON_CTR_DROP_SIGMA
+    assert snap["min_shown"] == arp.REVIEW_PROMPT_REASON_CTR_MIN_SHOWN
+
+
+def test_baseline_noise_snapshot_marks_thin_baseline_as_none():
+    """When fewer than 2 baseline weeks clear the min-shown gate the
+    helper must report μ / σ / z as None (so the UI shows 'n/a')
+    instead of a misleading point estimate."""
+    curr = [_reason_row("answer_helpful", 200, 30)]
+    # Only one week clears the 30-shown gate; the rest are below it.
+    weekly = [
+        [_reason_row("answer_helpful", 200, 40)],
+        [_reason_row("answer_helpful", 5, 1)],
+        [_reason_row("answer_helpful", 5, 1)],
+        [_reason_row("answer_helpful", 5, 1)],
+    ]
+    with _patch_baseline_weeks(curr, weekly), \
+         patch.object(arp, "is_mongo_available", AsyncMock(return_value=True)):
+        snap = asyncio.run(
+            arp._compute_review_prompt_reason_baseline(window_days=7)
+        )
+    rec = snap["by_reason"]["answer_helpful"]
+    assert rec["baseline_weeks_used"] == 1
+    assert rec["baseline_mean_ctr_pct"] is None
+    assert rec["baseline_stddev_pp"] is None
+    assert rec["current_z_score"] is None
+    # Current CTR is still surfaced even with a thin baseline.
+    assert rec["current_ctr_pct"] == 15.0
