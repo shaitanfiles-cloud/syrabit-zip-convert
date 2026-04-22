@@ -277,12 +277,17 @@ async def _vertex_periodic_probe_loop() -> None:
         except Exception as exc:
             reason = f"vertex health_check raised: {exc!r}"
 
+        # Compute the next consecutive_failures BEFORE writing to the
+        # cache so the admin dashboard always shows the freshest count
+        # (including the failure we just observed).
+        next_consecutive = 0 if ok else consecutive_failures + 1
         vertex_health_cache.record(
             ok,
             reason=None if ok else reason,
             auth_mode=result.get("auth_mode") if isinstance(result, dict) else None,
             via_cf_gateway=result.get("via_cf_gateway") if isinstance(result, dict) else None,
             source="periodic",
+            consecutive_failures=next_consecutive,
         )
 
         if ok:

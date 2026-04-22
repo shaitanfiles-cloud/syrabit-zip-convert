@@ -178,5 +178,79 @@ def test_periodic_probe_writes_to_cache():
         if isinstance(node, ast.AsyncFunctionDef) and node.name == "_vertex_periodic_probe_loop":
             body = ast.unparse(node)
             assert "vertex_health_cache.record(" in body
+            # Task #689 — periodic probe must forward consecutive_failures
+            # so the admin dashboard tile can show the count without
+            # waiting for the email/Slack alert threshold to trip.
+            assert "consecutive_failures=" in body
             return
     pytest.fail("_vertex_periodic_probe_loop not found in server.py")
+
+
+# ---------------------------------------------------------------------------
+# Task #689 — admin dashboard snapshot
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_snapshot_unknown_when_no_probe_run():
+    snap = vertex_health_cache.dashboard_snapshot()
+    assert snap["status"] == "unknown"
+    assert snap["consecutive_failures"] == 0
+    assert snap["last_check_ts"] is None
+    assert snap["probe_interval_s"] > 0
+
+
+def test_dashboard_snapshot_ok_after_healthy_probe():
+    vertex_health_cache.record(
+        True, auth_mode="byok", via_cf_gateway=True, source="periodic"
+    )
+    snap = vertex_health_cache.dashboard_snapshot()
+    assert snap["status"] == "ok"
+    assert snap["consecutive_failures"] == 0
+    assert snap["auth_mode"] == "byok"
+    assert snap["via_cf_gateway"] is True
+    assert snap["source"] == "periodic"
+    assert snap["last_check_ts"] is not None
+
+
+def test_dashboard_snapshot_tracks_consecutive_failures_when_unspecified():
+    """When the probe loop omits the count, the cache must auto-derive
+    it (success → 0, failure → previous + 1) so admin dashboards never
+    see a stuck or misleading count."""
+    vertex_health_cache.record(False, reason="boom", source="periodic")
+    vertex_health_cache.record(False, reason="boom again", source="periodic")
+    snap = vertex_health_cache.dashboard_snapshot()
+    assert snap["status"] == "unhealthy"
+    assert snap["consecutive_failures"] == 2
+    assert snap["reason"] == "boom again"
+
+    # A success must reset the counter.
+    vertex_health_cache.record(True, source="periodic")
+    snap = vertex_health_cache.dashboard_snapshot()
+    assert snap["status"] == "ok"
+    assert snap["consecutive_failures"] == 0
+
+
+def test_dashboard_snapshot_uses_explicit_consecutive_failures():
+    """The periodic probe loop in server.py passes its own counter; the
+    cache must respect it instead of double-counting."""
+    vertex_health_cache.record(
+        False, reason="x", source="periodic", consecutive_failures=5
+    )
+    assert vertex_health_cache.dashboard_snapshot()["consecutive_failures"] == 5
+    vertex_health_cache.record(
+        False, reason="x", source="periodic", consecutive_failures=6
+    )
+    assert vertex_health_cache.dashboard_snapshot()["consecutive_failures"] == 6
+
+
+def test_admin_probe_status_route_registered():
+    """The admin tile depends on GET /admin/vertex/probe-status returning
+    the cache snapshot. Verify the route is defined and reads from
+    vertex_health_cache.dashboard_snapshot."""
+    route_src = (
+        pathlib.Path(__file__).resolve().parent.parent
+        / "routes"
+        / "cms_sarvam_health.py"
+    ).read_text(encoding="utf-8")
+    assert '"/admin/vertex/probe-status"' in route_src
+    assert "dashboard_snapshot" in route_src

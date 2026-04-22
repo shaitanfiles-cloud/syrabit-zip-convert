@@ -341,6 +341,12 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
   // see read/write counters & quota % at a glance and react before a
   // KV outage starts dropping pages and the analytics beacon.
   const [kvHealth, setKvHealth] = useState(null);
+  // Task #689 — Cached state of the periodic Gemini health probe
+  // (Task #677). ``null`` while loading; ``{ status, last_check_ts,
+  // reason, consecutive_failures, ... }`` once the backend responds.
+  // Surfaced as a tile so admins can see *current* probe state without
+  // grepping logs and waiting for the email/Slack alert.
+  const [vertexProbe, setVertexProbe] = useState(null);
   // Task #470 — Latest GitHub Actions run for the backend + frontend
   // workflows. ``null`` while loading; ``{ configured: false, ... }``
   // when GITHUB_REPO isn't set; ``{ configured: true, runs: {...} }``
@@ -435,6 +441,16 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       setCiStatus(ciRes.data || null);
     } catch {
       setCiStatus({ configured: false, reason: 'Backend unreachable' });
+    }
+    // Task #689 — cached state of the periodic Gemini health probe.
+    try {
+      const vpRes = await axios.get(
+        `${API_BASE}/admin/vertex/probe-status`,
+        adminHdr(adminToken),
+      );
+      setVertexProbe(vpRes.data || null);
+    } catch {
+      setVertexProbe({ status: 'unknown', reason: 'Backend unreachable' });
     }
   }, [adminToken]);
 
@@ -2528,6 +2544,93 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                     )}
                   </ul>
                 )}
+              </div>
+
+              {/* Task #689 — Cached Gemini health probe state. Surfaces
+                  the periodic probe (Task #677) result without grepping
+                  logs and without spending a Vertex API call on every
+                  dashboard refresh. */}
+              <div className="mb-3 pb-3 border-b border-gray-200" data-testid="notif-prefs-vertex-probe">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[10px] text-gray-500 font-medium">
+                    Gemini upstream — periodic health probe
+                  </label>
+                  {vertexProbe?.last_check_ts ? (
+                    <span className="text-[10px] text-gray-400" data-testid="notif-prefs-vertex-probe-checked">
+                      checked {new Date(vertexProbe.last_check_ts * 1000).toLocaleTimeString()}
+                    </span>
+                  ) : null}
+                </div>
+                {vertexProbe === null ? (
+                  <div className="text-[10px] text-gray-400">Loading…</div>
+                ) : (() => {
+                  const status = vertexProbe.status || 'unknown';
+                  const pillCls =
+                    status === 'ok' ? 'bg-emerald-100 text-emerald-700 ring-emerald-200'
+                    : status === 'unhealthy' ? 'bg-red-100 text-red-700 ring-red-200'
+                    : status === 'stale' ? 'bg-amber-100 text-amber-700 ring-amber-200'
+                    : 'bg-gray-100 text-gray-600 ring-gray-200';
+                  const cf = vertexProbe.consecutive_failures || 0;
+                  const ageS = typeof vertexProbe.age_s === 'number' ? vertexProbe.age_s : null;
+                  const fmtAge = (s) => {
+                    if (s == null) return '—';
+                    if (s < 60) return `${Math.round(s)}s ago`;
+                    if (s < 3600) return `${Math.round(s / 60)}m ago`;
+                    return `${(s / 3600).toFixed(1)}h ago`;
+                  };
+                  return (
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span
+                          className={`text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded ring-1 ${pillCls}`}
+                          data-testid="notif-prefs-vertex-probe-status"
+                        >
+                          {status}
+                        </span>
+                        <span className="text-[11px] text-gray-600" data-testid="notif-prefs-vertex-probe-age">
+                          last probe {fmtAge(ageS)}
+                          {vertexProbe.source ? ` (${vertexProbe.source})` : ''}
+                        </span>
+                        {cf > 0 && (
+                          <span
+                            className="text-[10px] font-semibold text-red-700"
+                            data-testid="notif-prefs-vertex-probe-consecutive"
+                          >
+                            {cf} consecutive failure{cf === 1 ? '' : 's'}
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 gap-1 text-[10px] text-gray-500">
+                        <div>
+                          auth: <span className="font-mono text-gray-700">{vertexProbe.auth_mode || '—'}</span>
+                        </div>
+                        <div>
+                          via CF gateway:{' '}
+                          <span className="font-mono text-gray-700">
+                            {vertexProbe.via_cf_gateway === true ? 'yes'
+                              : vertexProbe.via_cf_gateway === false ? 'no' : '—'}
+                          </span>
+                        </div>
+                        <div className="col-span-2 text-[10px] text-gray-400">
+                          probe interval {vertexProbe.probe_interval_s || '—'}s · stale after {vertexProbe.ttl_s || '—'}s
+                        </div>
+                      </div>
+                      {vertexProbe.reason && status !== 'ok' && (
+                        <div
+                          className="text-[10px] text-red-700 mt-1 break-words"
+                          data-testid="notif-prefs-vertex-probe-reason"
+                        >
+                          Last failure: {vertexProbe.reason}
+                        </div>
+                      )}
+                      {status === 'unknown' && !vertexProbe.last_check_ts && (
+                        <div className="text-[10px] text-gray-500 mt-1">
+                          The startup probe has not completed yet — refresh in a few seconds.
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="mb-3 pb-3 border-b border-gray-200" data-testid="notif-prefs-kv-health">

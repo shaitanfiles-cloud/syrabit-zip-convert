@@ -5171,6 +5171,20 @@ async def vertex_health(admin: dict = Depends(get_admin_user)):
     return await vertex_services.health_check()
 
 
+@router.get("/admin/vertex/probe-status")
+async def vertex_probe_status(admin: dict = Depends(get_admin_user)):
+    """Task #689 — Return the cached state of the periodic Gemini health
+    probe (Task #677). Read-only: this does *not* trigger a fresh probe
+    (use ``/admin/vertex/health`` for that). Surfaces last-checked
+    timestamp, ok/fail, last reason, consecutive failure count and the
+    derived ``status`` (``ok`` / ``unknown`` / ``stale`` / ``unhealthy``)
+    so the admin dashboard can render a "Gemini upstream" tile without
+    spending a Vertex API call on every dashboard refresh.
+    """
+    import vertex_health_cache
+    return vertex_health_cache.dashboard_snapshot()
+
+
 @router.post("/admin/vertex/translate")
 async def vertex_translate(
     text: str = Body(...),
