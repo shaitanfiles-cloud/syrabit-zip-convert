@@ -17,6 +17,7 @@ because a UI regression broke the prompt CTA / `writeReviewUrl`).
 """
 import asyncio
 import logging
+import math
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -333,6 +334,15 @@ REVIEW_PROMPT_ALERT_INTERVAL_S = 30 * 60       # poll every 30 min
 # ``metrics._ALERT_THRESHOLDS``.
 REVIEW_PROMPT_REASON_CTR_DROP_PP = 5.0     # min pp drop WoW to alert
 REVIEW_PROMPT_REASON_CTR_MIN_SHOWN = 30    # min shown in BOTH windows
+# Task #670 — auto-tune the per-reason collapse threshold from baseline
+# noise. ``REVIEW_PROMPT_REASON_CTR_DROP_SIGMA`` is the multiple of the
+# per-reason rolling stddev the WoW drop must additionally exceed; the
+# stddev is computed over the last ``REVIEW_PROMPT_REASON_CTR_BASELINE_WEEKS``
+# weeks (excluding the current week). When stddev is 0 or <2 weekly
+# samples qualify, the sigma gate is skipped so the alert degrades to
+# the original absolute-pp check.
+REVIEW_PROMPT_REASON_CTR_DROP_SIGMA = 2.0
+REVIEW_PROMPT_REASON_CTR_BASELINE_WEEKS = 4
 _REVIEW_PROMPT_DASHBOARD_URL = (
     "https://syrabit.ai/admin/dashboard?tab=overview#review-prompt-funnel"
 )
@@ -461,13 +471,21 @@ async def _evaluate_review_prompt_ctr_alerts(
 
 
 def _effective_review_prompt_reason_drop_thresholds() -> tuple:
-    """Return ``(min_shown, drop_pp)`` for the per-reason CTR-collapse
-    alert, applying admin overrides from ``metrics._ALERT_THRESHOLDS``
-    on top of the module-level defaults. Mirrors the resolution pattern
-    used by ``_effective_review_prompt_thresholds``.
+    """Return ``(min_shown, drop_pp, sigma_mult, baseline_weeks)`` for
+    the per-reason CTR-collapse alert, applying admin overrides from
+    ``metrics._ALERT_THRESHOLDS`` on top of the module-level defaults.
+    Mirrors the resolution pattern used by
+    ``_effective_review_prompt_thresholds``.
+
+    Task #670: ``sigma_mult`` and ``baseline_weeks`` drive the
+    auto-tuned noise gate layered on top of the absolute pp floor.
+    A non-positive ``sigma_mult`` or ``baseline_weeks < 2`` disables
+    the sigma gate so the alert degrades to absolute-pp-only.
     """
     min_shown = REVIEW_PROMPT_REASON_CTR_MIN_SHOWN
     drop_pp = REVIEW_PROMPT_REASON_CTR_DROP_PP
+    sigma_mult = REVIEW_PROMPT_REASON_CTR_DROP_SIGMA
+    baseline_weeks = REVIEW_PROMPT_REASON_CTR_BASELINE_WEEKS
     try:
         from metrics import _ALERT_THRESHOLDS
         try:
@@ -482,9 +500,23 @@ def _effective_review_prompt_reason_drop_thresholds() -> tuple:
             ))
         except (TypeError, ValueError):
             pass
+        try:
+            sigma_mult = float(_ALERT_THRESHOLDS.get(
+                "review_prompt_reason_ctr_drop_sigma", sigma_mult,
+            ))
+        except (TypeError, ValueError):
+            pass
+        try:
+            baseline_weeks = int(float(_ALERT_THRESHOLDS.get(
+                "review_prompt_reason_ctr_baseline_weeks", baseline_weeks,
+            )))
+        except (TypeError, ValueError):
+            pass
     except Exception:
         pass
-    return min_shown, drop_pp
+    if baseline_weeks < 1:
+        baseline_weeks = 1
+    return min_shown, drop_pp, sigma_mult, baseline_weeks
 
 
 async def _evaluate_review_prompt_reason_ctr_drop_alerts(
@@ -516,25 +548,53 @@ async def _evaluate_review_prompt_reason_ctr_drop_alerts(
     if not await is_mongo_available():
         return []
 
-    min_shown, drop_pp = _effective_review_prompt_reason_drop_thresholds()
+    (
+        min_shown,
+        drop_pp,
+        sigma_mult,
+        baseline_weeks,
+    ) = _effective_review_prompt_reason_drop_thresholds()
     now_dt = datetime.now(timezone.utc)
     curr_start = now_dt - timedelta(days=window_days)
-    prev_start = now_dt - timedelta(days=window_days * 2)
 
+    # Task #670: pull ``baseline_weeks`` prior weekly windows (each
+    # ``window_days`` long, ending at ``curr_start``) so we can compute
+    # the per-reason CTR mean + stddev that drives the auto-tuned
+    # noise gate. The most recent of these IS the "prev" window the
+    # WoW delta is computed against — keeps the sample shape
+    # consistent and avoids a redundant aggregation call.
     try:
         curr = await _aggregate_review_prompt_window(curr_start, now_dt)
-        prev = await _aggregate_review_prompt_window(prev_start, curr_start)
+        baseline_windows: List[Dict[str, Any]] = []
+        for i in range(baseline_weeks):
+            w_until = curr_start - timedelta(days=window_days * i)
+            w_since = w_until - timedelta(days=window_days)
+            baseline_windows.append(
+                await _aggregate_review_prompt_window(w_since, w_until)
+            )
     except Exception as exc:
         logger.debug(f"reason-ctr-drop window aggregation failed: {exc}")
         return []
 
+    # Index each baseline week's by_reason rows by reason name so we
+    # can pluck per-reason samples in one pass below.
+    baseline_by_reason: Dict[str, List[Dict[str, int]]] = {}
+    for w in baseline_windows:
+        for r in (w.get("by_reason") or []):
+            reason = str(r.get("reason") or "unknown")
+            baseline_by_reason.setdefault(reason, []).append({
+                "shown": int(r.get("shown") or 0),
+                "clicked": int(r.get("clicked") or 0),
+            })
+
+    # Most-recent baseline week is the WoW comparison ("prev") window.
     prev_map: Dict[str, Dict[str, int]] = {
         str(r.get("reason") or "unknown"): {
             "shown": int(r.get("shown") or 0),
             "clicked": int(r.get("clicked") or 0),
         }
-        for r in (prev.get("by_reason") or [])
-    }
+        for r in (baseline_windows[0].get("by_reason") or [])
+    } if baseline_windows else {}
 
     flagged: List[Dict[str, Any]] = []
     for row in (curr.get("by_reason") or []):
@@ -544,15 +604,46 @@ async def _evaluate_review_prompt_reason_ctr_drop_alerts(
         prev_row = prev_map.get(reason, {})
         p_shown = int(prev_row.get("shown") or 0)
         p_clicked = int(prev_row.get("clicked") or 0)
-        # Sample-size gate on BOTH windows — protects against pages on
-        # the noise of a barely-fired reason.
+        # Sample-size gate on BOTH WoW windows — protects against
+        # pages on the noise of a barely-fired reason.
         if c_shown < min_shown or p_shown < min_shown:
             continue
         c_ctr = (c_clicked / c_shown) * 100
         p_ctr = (p_clicked / p_shown) * 100
         delta_pp = round(c_ctr - p_ctr, 2)
-        if delta_pp > -drop_pp:  # not a deep enough collapse
+        # Absolute-pp floor — required leg of the AND.
+        if delta_pp > -drop_pp:
             continue
+
+        # Auto-tuned sigma gate: collect per-reason weekly CTRs from
+        # the baseline windows that clear the same min_shown bar, then
+        # require the absolute drop magnitude to also exceed
+        # ``sigma_mult`` × stddev. Skipped when stddev is 0 / not
+        # enough samples / sigma_mult <= 0 — the alert then degrades
+        # cleanly to the original absolute-only behaviour.
+        baseline_ctrs: List[float] = []
+        for sample in baseline_by_reason.get(reason, []):
+            s_shown = sample["shown"]
+            if s_shown < min_shown:
+                continue
+            baseline_ctrs.append((sample["clicked"] / s_shown) * 100)
+        baseline_mean = baseline_stddev = None
+        sigma_threshold_pp = None
+        if len(baseline_ctrs) >= 2:
+            baseline_mean = sum(baseline_ctrs) / len(baseline_ctrs)
+            # Sample stddev (Bessel-corrected) — matches what an admin
+            # eyeballing the weekly digest would compute.
+            var = sum(
+                (x - baseline_mean) ** 2 for x in baseline_ctrs
+            ) / (len(baseline_ctrs) - 1)
+            baseline_stddev = math.sqrt(var)
+            if sigma_mult > 0 and baseline_stddev > 0:
+                sigma_threshold_pp = sigma_mult * baseline_stddev
+                # ``-delta_pp`` is the drop magnitude in pp; require
+                # it to clear the noise-scaled bar too.
+                if (-delta_pp) < sigma_threshold_pp:
+                    continue
+
         flagged.append({
             "reason": reason,
             "curr_shown": c_shown,
@@ -562,6 +653,17 @@ async def _evaluate_review_prompt_reason_ctr_drop_alerts(
             "prev_clicked": p_clicked,
             "prev_ctr_pct": round(p_ctr, 2),
             "delta_pp": delta_pp,
+            "baseline_weeks_used": len(baseline_ctrs),
+            "baseline_mean_ctr_pct": (
+                round(baseline_mean, 2) if baseline_mean is not None else None
+            ),
+            "baseline_stddev_pp": (
+                round(baseline_stddev, 2) if baseline_stddev is not None else None
+            ),
+            "sigma_threshold_pp": (
+                round(sigma_threshold_pp, 2)
+                if sigma_threshold_pp is not None else None
+            ),
         })
 
     if not flagged:
@@ -577,17 +679,37 @@ async def _evaluate_review_prompt_reason_ctr_drop_alerts(
 
     reason_lines: List[str] = []
     for r in flagged:
+        # Append a "(noise: μ X% ± Y pp)" tail when we had enough
+        # baseline samples to compute it — gives the on-call engineer
+        # immediate context for whether this is a true regression or
+        # a normally-volatile reason that finally cleared the bar.
+        noise_tail = ""
+        if (
+            r.get("baseline_stddev_pp") is not None
+            and r.get("baseline_mean_ctr_pct") is not None
+        ):
+            noise_tail = (
+                f"; baseline μ {r['baseline_mean_ctr_pct']:.1f}% "
+                f"± {r['baseline_stddev_pp']:.1f} pp over "
+                f"{r['baseline_weeks_used']}w"
+            )
         reason_lines.append(
             f"  · {r['reason']}: CTR {r['prev_ctr_pct']:.1f}% → "
             f"{r['curr_ctr_pct']:.1f}% ({r['delta_pp']:+.1f} pp, "
             f"{r['curr_clicked']}/{r['curr_shown']} this week, "
-            f"{r['prev_clicked']}/{r['prev_shown']} prev)"
+            f"{r['prev_clicked']}/{r['prev_shown']} prev{noise_tail})"
+        )
+    sigma_clause = ""
+    if sigma_mult > 0:
+        sigma_clause = (
+            f" AND ≥ {sigma_mult:.1f}× the per-reason rolling stddev "
+            f"({baseline_weeks}-week baseline)"
         )
     body_lines = [
         (
             f"{len(flagged)} review-prompt trigger reason(s) saw a "
-            f"CTR drop ≥ {drop_pp:.1f} pp week-over-week with ≥ "
-            f"{min_shown} shown events in both windows:"
+            f"CTR drop ≥ {drop_pp:.1f} pp week-over-week{sigma_clause} "
+            f"with ≥ {min_shown} shown events in both windows:"
         ),
         *reason_lines,
         (
@@ -615,6 +737,8 @@ async def _evaluate_review_prompt_reason_ctr_drop_alerts(
             "value": -drop_pp,
             "min_shown": min_shown,
             "window_days": window_days,
+            "sigma_mult": sigma_mult,
+            "baseline_weeks": baseline_weeks,
             "reasons": flagged,
         },
     }]

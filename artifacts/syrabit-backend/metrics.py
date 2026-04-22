@@ -319,6 +319,19 @@ _ALERT_THRESHOLDS_DEFAULT = {
     # before they wash out the aggregate ``review_prompt_ctr_low``.
     "review_prompt_reason_ctr_drop_pp": 5.0,
     "review_prompt_reason_ctr_min_shown": 30,
+    # Task #670: auto-tune the per-reason CTR collapse threshold from
+    # baseline noise. The evaluator computes the per-reason CTR mean +
+    # sample stddev across the last
+    # ``review_prompt_reason_ctr_baseline_weeks`` weeks (excluding the
+    # current week) and additionally requires the WoW drop to exceed
+    # ``review_prompt_reason_ctr_drop_sigma`` × stddev before paging.
+    # A volatile reason whose CTR routinely swings ±10 pp won't trip on
+    # an ordinary 6 pp dip; a rock-steady reason will page on a much
+    # smaller absolute move once it clears the absolute pp floor. When
+    # stddev is 0 or < 2 weekly samples are available, the sigma gate
+    # is skipped so behaviour matches the original absolute-only check.
+    "review_prompt_reason_ctr_drop_sigma": 2.0,
+    "review_prompt_reason_ctr_baseline_weeks": 4,
     # Task #432: page on-call when this worker's Assamese-purity override
     # refresh loop hasn't ticked successfully in this many seconds. The
     # poll cadence is 15s so 60s == 4 missed ticks before paging.

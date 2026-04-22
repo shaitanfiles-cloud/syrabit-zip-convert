@@ -379,6 +379,144 @@ def test_reason_drop_admin_threshold_overrides_take_effect():
     assert snap["value"] == -3.0
 
 
+# ------------- Task #670: auto-tuned per-reason sigma gate -------------------
+
+def _patch_baseline_weeks(curr_by_reason, weekly_by_reason):
+    """Stub ``_aggregate_review_prompt_window`` so each baseline week
+    returns a DIFFERENT ``by_reason`` rollup — needed to exercise the
+    rolling-stddev path. ``weekly_by_reason`` is indexed week-back:
+    index 0 == most recent baseline week (the WoW "prev" window),
+    index 1 == one week before that, etc.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        days=arp.REVIEW_PROMPT_ALERT_WINDOW_DAYS - 1,
+    )
+    week = timedelta(days=arp.REVIEW_PROMPT_ALERT_WINDOW_DAYS)
+    curr_start = datetime.now(timezone.utc) - week
+
+    async def _fake_agg(since, until):
+        if until >= cutoff:
+            return {"totals": {}, "by_reason": list(curr_by_reason)}
+        # Map ``until`` back to which baseline week it represents.
+        # Week 0 has until ≈ curr_start, week 1 has until ≈ curr_start - 7d, ...
+        delta_days = (curr_start - until).total_seconds() / 86400.0
+        idx = int(round(delta_days / arp.REVIEW_PROMPT_ALERT_WINDOW_DAYS))
+        idx = max(0, min(idx, len(weekly_by_reason) - 1))
+        return {"totals": {}, "by_reason": list(weekly_by_reason[idx])}
+
+    return patch.object(arp, "_aggregate_review_prompt_window", _fake_agg)
+
+
+def test_reason_drop_sigma_gate_suppresses_within_noise():
+    """A 6 pp WoW drop on a reason whose baseline routinely swings
+    ±10 pp must NOT page once the auto-tuned sigma gate is in effect —
+    the absolute floor alone would have fired."""
+    arp._REVIEW_PROMPT_ALERT_LAST_FIRED.clear()
+    # curr: 200/30 = 15%; prev (week 0): 200/42 = 21% → -6 pp delta,
+    # past the 5 pp absolute floor.
+    curr = [_reason_row("answer_helpful", 200, 30)]
+    # Baseline weeks: 21%, 8%, 28%, 12% — mean ≈ 17.25%, stddev ≈ 9 pp.
+    # 2× stddev ≈ 18 pp, so -6 pp drop is well within noise.
+    weekly = [
+        [_reason_row("answer_helpful", 200, 42)],   # 21%
+        [_reason_row("answer_helpful", 200, 16)],   #  8%
+        [_reason_row("answer_helpful", 200, 56)],   # 28%
+        [_reason_row("answer_helpful", 200, 24)],   # 12%
+    ]
+    with _patch_baseline_weeks(curr, weekly), \
+         patch.object(arp, "is_mongo_available", AsyncMock(return_value=True)):
+        alerts = asyncio.run(
+            arp._evaluate_review_prompt_reason_ctr_drop_alerts(now_ts=1000.0)
+        )
+    assert alerts == []
+
+
+def test_reason_drop_sigma_gate_allows_when_drop_exceeds_noise():
+    """When the WoW drop dwarfs the baseline stddev, the sigma gate
+    must still let the alert through."""
+    arp._REVIEW_PROMPT_ALERT_LAST_FIRED.clear()
+    # curr: 200/4 = 2%; prev (week 0): 200/40 = 20% → -18 pp delta.
+    curr = [_reason_row("answer_helpful", 200, 4)]
+    # Tight baseline: 20%, 19%, 21%, 20% — stddev < 1 pp, so 2× stddev
+    # is tiny and a -18 pp drop blows right through.
+    weekly = [
+        [_reason_row("answer_helpful", 200, 40)],   # 20%
+        [_reason_row("answer_helpful", 200, 38)],   # 19%
+        [_reason_row("answer_helpful", 200, 42)],   # 21%
+        [_reason_row("answer_helpful", 200, 40)],   # 20%
+    ]
+    with _patch_baseline_weeks(curr, weekly), \
+         patch.object(arp, "is_mongo_available", AsyncMock(return_value=True)):
+        alerts = asyncio.run(
+            arp._evaluate_review_prompt_reason_ctr_drop_alerts(now_ts=1000.0)
+        )
+    assert len(alerts) == 1
+    snap_reason = alerts[0]["threshold_snapshot"]["reasons"][0]
+    # Baseline stats are surfaced for the on-call engineer.
+    assert snap_reason["baseline_weeks_used"] == 4
+    assert snap_reason["baseline_mean_ctr_pct"] is not None
+    assert snap_reason["baseline_stddev_pp"] is not None
+    assert snap_reason["sigma_threshold_pp"] is not None
+    snap = alerts[0]["threshold_snapshot"]
+    assert snap["sigma_mult"] == arp.REVIEW_PROMPT_REASON_CTR_DROP_SIGMA
+    assert snap["baseline_weeks"] == arp.REVIEW_PROMPT_REASON_CTR_BASELINE_WEEKS
+
+
+def test_reason_drop_sigma_disabled_via_admin_override():
+    """Setting ``review_prompt_reason_ctr_drop_sigma`` to 0 from the
+    Alert Settings panel must disable the noise gate — the alert then
+    reverts to the original absolute-pp-only behaviour."""
+    arp._REVIEW_PROMPT_ALERT_LAST_FIRED.clear()
+    # Same noisy baseline as the suppression test, but admin disabled
+    # the sigma gate so the -6 pp drop should now page.
+    curr = [_reason_row("answer_helpful", 200, 30)]
+    weekly = [
+        [_reason_row("answer_helpful", 200, 42)],
+        [_reason_row("answer_helpful", 200, 16)],
+        [_reason_row("answer_helpful", 200, 56)],
+        [_reason_row("answer_helpful", 200, 24)],
+    ]
+    import metrics as _m
+    saved = dict(_m._ALERT_THRESHOLDS)
+    try:
+        _m._ALERT_THRESHOLDS["review_prompt_reason_ctr_drop_sigma"] = 0.0
+        with _patch_baseline_weeks(curr, weekly), \
+             patch.object(arp, "is_mongo_available", AsyncMock(return_value=True)):
+            alerts = asyncio.run(
+                arp._evaluate_review_prompt_reason_ctr_drop_alerts(now_ts=1000.0)
+            )
+    finally:
+        _m._ALERT_THRESHOLDS.clear()
+        _m._ALERT_THRESHOLDS.update(saved)
+    assert len(alerts) == 1
+    assert alerts[0]["threshold_snapshot"]["sigma_mult"] == 0.0
+
+
+def test_reason_drop_sigma_gate_skipped_when_baseline_too_thin():
+    """If too few baseline weeks have enough volume to compute a
+    stddev, the alert must still be allowed to fire on the absolute
+    floor alone — otherwise newly-popular reasons would never page."""
+    arp._REVIEW_PROMPT_ALERT_LAST_FIRED.clear()
+    curr = [_reason_row("answer_helpful", 200, 4)]   # 2%
+    # Only the most recent baseline week clears min_shown — every
+    # earlier week is below the gate, so we can't compute a stddev.
+    weekly = [
+        [_reason_row("answer_helpful", 200, 40)],   # 20%, qualifies
+        [_reason_row("answer_helpful", 5, 1)],      # too small
+        [_reason_row("answer_helpful", 5, 1)],
+        [_reason_row("answer_helpful", 5, 1)],
+    ]
+    with _patch_baseline_weeks(curr, weekly), \
+         patch.object(arp, "is_mongo_available", AsyncMock(return_value=True)):
+        alerts = asyncio.run(
+            arp._evaluate_review_prompt_reason_ctr_drop_alerts(now_ts=1000.0)
+        )
+    assert len(alerts) == 1
+    snap_reason = alerts[0]["threshold_snapshot"]["reasons"][0]
+    assert snap_reason["baseline_stddev_pp"] is None
+    assert snap_reason["sigma_threshold_pp"] is None
+
+
 def test_admin_threshold_overrides_take_effect():
     """Admin-tuned thresholds in metrics._ALERT_THRESHOLDS must override
     the module-level defaults (the whole point of the editable knobs)."""

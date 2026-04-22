@@ -2245,6 +2245,18 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                     className="w-full text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white focus:ring-1 focus:ring-violet-300 focus:border-violet-300 outline-none"
                   />
                 </div>
+                <div>
+                  <label className="text-[10px] text-gray-500 font-medium block mb-1" title="Per-reason CTR-collapse alert: required multiple of the per-reason rolling stddev the WoW drop must additionally exceed (auto-tunes the threshold from baseline noise so volatile reasons don't page on ordinary swings). Set to 0 to disable the sigma gate and rely only on the absolute pp floor.">Reason CTR Sigma Multiplier</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="10"
+                    value={alertSettingsDraft.thresholds.review_prompt_reason_ctr_drop_sigma ?? ''}
+                    onChange={e => setAlertSettingsDraft(prev => ({ ...prev, thresholds: { ...prev.thresholds, review_prompt_reason_ctr_drop_sigma: parseFloat(e.target.value) || 0 } }))}
+                    className="w-full text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white focus:ring-1 focus:ring-violet-300 focus:border-violet-300 outline-none"
+                  />
+                </div>
               </div>
               <div className="flex items-center gap-4 pt-2 border-t border-gray-200">
                 <label className="flex items-center gap-2 cursor-pointer">
