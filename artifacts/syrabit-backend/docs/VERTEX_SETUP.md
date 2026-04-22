@@ -72,6 +72,43 @@ Expect `auth_mode` in
 If `auth_mode` is `disabled`, no credential is configured. Check Railway
 env vars and confirm SA JSON is valid (single-line, no smart quotes).
 
+## Migrating Railway → CF AI Gateway BYOK (Task #666)
+
+Goal: stop storing `GEMINI_API_KEY` in Railway and let Cloudflare AI
+Gateway inject the key from its own vault. Single source of truth, single
+place to rotate, per-route spend limits + analytics from CF.
+
+Pre-flight:
+- `CF_AI_GATEWAY_ACCOUNT_ID` and `CF_AI_GATEWAY_ID=syrabit` already set in
+  Railway env (they bootstrap the gateway URL — keep them).
+- `CF_AI_GATEWAY_BYOK` is `1` by default, no change needed.
+
+Steps:
+1. **Cloudflare dashboard** → AI Gateway → `syrabit` → *Bring Your Own
+   Keys* → add a binding for provider `google-ai-studio` and paste the
+   current `GEMINI_API_KEY`. Save.
+2. **Railway** → backend service → Variables → delete `GEMINI_API_KEY`
+   (and `GEMINI_API_KEY_2` if present). Do **not** delete
+   `CF_AI_GATEWAY_*`.
+3. Redeploy. Watch the boot log for
+   `vertex_services: ready auth_mode=cf_ai_gateway_byok …`.
+4. As an admin, hit `GET /admin/cms/sarvam-health/vertex/health`. Expect
+   `auth_mode: "cf_ai_gateway_byok"`, `byok: true`, `embeddings: true`,
+   `generation: true`, `embed_dimensions: 1024`.
+
+Rollback: re-add `GEMINI_API_KEY=AIza…` to Railway and redeploy. The
+API-key path (`google_ai_studio_api_key`) takes priority over BYOK at
+import time, so the next boot returns to the old behavior with no code
+change.
+
+Notes:
+- `vertex_chat.py` (streaming chat) uses Vertex AI service-account
+  credentials (`VERTEX_SERVICE_ACCOUNT_JSON`), not `GEMINI_API_KEY` — it
+  is unaffected by this migration.
+- The startup LLM key diagnostic in `server.py` will show
+  `GEMINI_API_KEY: NOT SET` after the migration. That is expected; auth
+  is now coming from Cloudflare.
+
 ## Embedding contract
 
 `embed_text` returns `Optional[List[float]]` — a 1024-dim vector
