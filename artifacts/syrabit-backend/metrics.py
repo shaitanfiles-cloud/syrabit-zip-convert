@@ -331,6 +331,12 @@ _NOTIFICATION_CHANNELS_DEFAULT = {
     # stale-build alerts. Email + persisted alerts + browser push are
     # unaffected when False — only the Slack/Discord webhook is muted.
     "hydrate_slack_enabled": True,
+    # Task #660: separate recipient list for the Monday review-prompt
+    # weekly digest (distinct from the incident-alert ``email`` channel).
+    # Stored as a list of trimmed lowercase emails. Empty list → fall
+    # back to ``email`` then ``ALERT_EMAIL`` so behaviour is unchanged
+    # for existing installs that haven't configured the new field.
+    "review_prompt_digest_emails": [],
 }
 # Alert types treated as "SEO incidents" for the Slack webhook toggle.
 _SEO_WEBHOOK_ALERT_TYPES = ("seo_health_degraded", "seo_url_spike")
@@ -401,6 +407,29 @@ async def _load_alert_settings():
                 new_channels["seo_slack_enabled"] = channels["seo_slack_enabled"]
             if isinstance(channels.get("hydrate_slack_enabled"), bool):
                 new_channels["hydrate_slack_enabled"] = channels["hydrate_slack_enabled"]
+            # Task #660: review-prompt digest recipient list. Accept a
+            # list (preferred) or a comma-separated string for tolerance
+            # with older configs / hand-edited DB rows. Filter out blanks
+            # and dedupe while preserving order so the saved list stays
+            # stable across reloads.
+            raw_digest = channels.get("review_prompt_digest_emails")
+            if isinstance(raw_digest, str):
+                raw_digest = [p for p in raw_digest.split(",")]
+            if isinstance(raw_digest, list):
+                seen: set = set()
+                cleaned: list = []
+                for entry in raw_digest:
+                    if not isinstance(entry, str):
+                        continue
+                    e = entry.strip()
+                    if not e or "@" not in e:
+                        continue
+                    key = e.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    cleaned.append(e)
+                new_channels["review_prompt_digest_emails"] = cleaned
         _ALERT_THRESHOLDS = new_thresholds
         _alert_expiration = new_expiration
         _notification_channels = new_channels

@@ -9,7 +9,7 @@ import {
   LineChart, Line, BarChart, Bar, AreaChart, Area, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts';
-import { adminGetSpoofedBots, adminGetBlockedIps, adminGetBlockTrends, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings, adminTestAlertDelivery, adminGetTtlMonitor, adminGetCollectionSizeHistory, adminGetAlerts, adminAcknowledgeAlert, adminAcknowledgeAllAlerts, adminBackfillThresholds } from '@/utils/api';
+import { adminGetSpoofedBots, adminGetBlockedIps, adminGetBlockTrends, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings, adminTestAlertDelivery, adminGetTtlMonitor, adminGetCollectionSizeHistory, adminGetAlerts, adminAcknowledgeAlert, adminAcknowledgeAllAlerts, adminBackfillThresholds, adminSendReviewPromptWeeklyDigest } from '@/utils/api';
 import { Database, Activity, CheckCircle2, XCircle } from 'lucide-react';
 
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
@@ -167,7 +167,14 @@ function ChannelStatusPanel({ status, testing, testResult, testError, onTest }) 
 
 function AlertThresholdPanel({ adminToken, navContext }) {
   const [settings, setSettings] = useState(null);
-  const [form, setForm] = useState({ spoof_rpm: 50, auto_block_threshold: 100, auto_block_expiry_hours: 168, collection_growth_per_day: 500, email: '', webhook_url: '', seo_slack_enabled: true, hydrate_slack_enabled: true });
+  const [form, setForm] = useState({ spoof_rpm: 50, auto_block_threshold: 100, auto_block_expiry_hours: 168, collection_growth_per_day: 500, email: '', webhook_url: '', seo_slack_enabled: true, hydrate_slack_enabled: true, review_prompt_digest_emails: '' });
+  // Task #660: dedicated "send me a test" state for the weekly
+  // review-prompt digest, distinct from the synthetic-alert
+  // test-delivery flow above so admins can verify the digest send path
+  // end-to-end without firing a synthetic CTR-low alert.
+  const [digestSending, setDigestSending] = useState(false);
+  const [digestResult, setDigestResult] = useState(null);
+  const [digestError, setDigestError] = useState(null);
   const [defaults, setDefaults] = useState(null);
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -247,6 +254,13 @@ function AlertThresholdPanel({ adminToken, navContext }) {
           webhook_url: d.notification_channels?.webhook_url ?? '',
           seo_slack_enabled: d.notification_channels?.seo_slack_enabled ?? true,
           hydrate_slack_enabled: d.notification_channels?.hydrate_slack_enabled ?? true,
+          // Task #660: render the persisted list as a comma-separated
+          // string in the textarea — matches how admins typically paste
+          // multiple addresses and round-trips back through the same
+          // parser on save.
+          review_prompt_digest_emails: Array.isArray(d.notification_channels?.review_prompt_digest_emails)
+            ? d.notification_channels.review_prompt_digest_emails.join(', ')
+            : (d.notification_channels?.review_prompt_digest_emails ?? ''),
         });
       } catch {
         setSettingsError('Failed to load alert settings');
@@ -297,6 +311,16 @@ function AlertThresholdPanel({ adminToken, navContext }) {
       if (!value) return null;
       if (!value.startsWith('http://') && !value.startsWith('https://')) return 'Must start with http:// or https://';
       try { new URL(value); } catch { return 'Enter a valid URL'; }
+      return null;
+    }
+    if (field === 'review_prompt_digest_emails') {
+      if (!value) return null;
+      const parts = String(value).split(',').map(p => p.trim()).filter(Boolean);
+      for (const p of parts) {
+        if (!p.includes('@') || !p.includes('.')) {
+          return `Invalid email: ${p}`;
+        }
+      }
       return null;
     }
     return null;
@@ -351,6 +375,7 @@ function AlertThresholdPanel({ adminToken, navContext }) {
     errors.collection_growth_per_day = validateField('collection_growth_per_day', form.collection_growth_per_day);
     errors.email = validateField('email', form.email);
     errors.webhook_url = validateField('webhook_url', form.webhook_url);
+    errors.review_prompt_digest_emails = validateField('review_prompt_digest_emails', form.review_prompt_digest_emails);
     const cleaned = {};
     for (const [k, v] of Object.entries(errors)) { if (v) cleaned[k] = v; }
     setFieldErrors(cleaned);
@@ -377,6 +402,13 @@ function AlertThresholdPanel({ adminToken, navContext }) {
           webhook_url: form.webhook_url.trim(),
           seo_slack_enabled: !!form.seo_slack_enabled,
           hydrate_slack_enabled: !!form.hydrate_slack_enabled,
+          // Task #660: send the digest list as an array so the backend
+          // doesn't have to re-split (it accepts both, but the array
+          // form has no ambiguity around literal commas in a name).
+          review_prompt_digest_emails: String(form.review_prompt_digest_emails || '')
+            .split(',')
+            .map(p => p.trim())
+            .filter(Boolean),
         },
       });
       setFieldErrors({});
@@ -390,6 +422,28 @@ function AlertThresholdPanel({ adminToken, navContext }) {
       else if (!Object.keys(fields).length) setSettingsError('Failed to save settings');
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Task #660: "send me a test now" — exercises the digest send path
+  // end-to-end. We post the *current* draft list (parsed from the
+  // textarea, before save) so admins can validate a new recipient
+  // without having to commit it first.
+  const handleSendDigestTest = async () => {
+    setDigestSending(true);
+    setDigestError(null);
+    setDigestResult(null);
+    try {
+      const drafted = String(form.review_prompt_digest_emails || '')
+        .split(',').map(p => p.trim()).filter(Boolean);
+      const res = await adminSendReviewPromptWeeklyDigest(adminToken, {
+        to: drafted.length ? drafted : null,
+      });
+      setDigestResult(res.data || null);
+    } catch (err) {
+      setDigestError(err.response?.data?.detail || err.message || 'Failed to send test digest');
+    } finally {
+      setDigestSending(false);
     }
   };
 
@@ -419,6 +473,9 @@ function AlertThresholdPanel({ adminToken, navContext }) {
         webhook_url: defaults.notification_channels?.webhook_url ?? '',
         seo_slack_enabled: defaults.notification_channels?.seo_slack_enabled ?? true,
         hydrate_slack_enabled: defaults.notification_channels?.hydrate_slack_enabled ?? true,
+        review_prompt_digest_emails: Array.isArray(defaults.notification_channels?.review_prompt_digest_emails)
+          ? defaults.notification_channels.review_prompt_digest_emails.join(', ')
+          : '',
       });
       setFieldErrors({});
       setSettingsError(null);
@@ -651,6 +708,69 @@ function AlertThresholdPanel({ adminToken, navContext }) {
                 </span>
               </span>
             </label>
+
+            {/* Task #660: dedicated recipient list + "send me a test
+                now" button for the Monday review-prompt weekly digest.
+                Distinct from the incident-alert email above so ops can
+                fan-out the digest to product / growth / support without
+                spamming everyone with every CTR-low alert. */}
+            <div className="mt-4 border-t border-dashed border-gray-200 pt-4">
+              <label className="block text-[11px] font-medium text-gray-600 mb-1 flex items-center gap-1.5">
+                <Mail size={11} className="text-gray-400" />
+                Review-prompt weekly digest recipients
+              </label>
+              <textarea
+                rows={2}
+                placeholder="ops@example.com, growth@example.com"
+                value={form.review_prompt_digest_emails}
+                onChange={(e) => handleFieldChange('review_prompt_digest_emails', e.target.value)}
+                className={`w-full text-sm border rounded-lg px-3 py-2 bg-white text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 ${
+                  fieldErrors.review_prompt_digest_emails
+                    ? 'border-red-300 focus:ring-red-200 focus:border-red-300'
+                    : 'border-gray-200 focus:ring-violet-200 focus:border-violet-300'
+                }`}
+              />
+              {fieldErrors.review_prompt_digest_emails ? (
+                <p className="text-[11px] text-red-500 mt-1">{fieldErrors.review_prompt_digest_emails}</p>
+              ) : (
+                <p className="text-[10px] text-gray-400 mt-1">
+                  Comma-separated. Receives the Monday review-prompt summary email. Leave blank to fall back to the alert email above.
+                </p>
+              )}
+              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={handleSendDigestTest}
+                  disabled={digestSending || !!fieldErrors.review_prompt_digest_emails}
+                  className="text-[11px] font-medium px-3 py-1.5 rounded-lg border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
+                >
+                  {digestSending ? <Loader2 size={11} className="animate-spin" /> : <Mail size={11} />}
+                  {digestSending ? 'Sending test…' : 'Send me a test now'}
+                </button>
+                {digestResult && (
+                  digestResult.sent ? (
+                    <span className="text-[11px] text-emerald-700 inline-flex items-center gap-1">
+                      <CheckCircle2 size={11} />
+                      Sent to {(digestResult.recipients || []).join(', ') || digestResult.to}
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-amber-700 inline-flex items-center gap-1">
+                      <AlertTriangle size={11} />
+                      Not sent — {digestResult.reason || 'unknown'}
+                      {digestResult.recipients && digestResult.recipients.length
+                        ? ` (would target: ${digestResult.recipients.join(', ')})`
+                        : ''}
+                    </span>
+                  )
+                )}
+                {digestError && (
+                  <span className="text-[11px] text-red-600 inline-flex items-center gap-1">
+                    <AlertTriangle size={11} />
+                    {digestError}
+                  </span>
+                )}
+              </div>
+            </div>
 
             {/* Task #418: Per-channel last-success status + test delivery button. */}
             <ChannelStatusPanel

@@ -721,6 +721,20 @@ export const adminUpdateAlertSettings = (token, data) =>
 export const adminTestAlertDelivery = (token) =>
   axios.post(`${API_BASE}/admin/alert-settings/test-delivery`, {}, { headers: adminHeaders(token), withCredentials: true });
 
+// Task #660: manually trigger the weekly review-prompt digest send (or
+// preview the rendered HTML / resolved recipient list). When `to` is
+// supplied, it overrides the persisted recipient list so admins can
+// "send me a test now" without first saving the field.
+export const adminSendReviewPromptWeeklyDigest = (token, { to = null, previewOnly = false } = {}) => {
+  const params = previewOnly ? { preview_only: true } : {};
+  const body = to ? { to } : {};
+  return axios.post(
+    `${API_BASE}/admin/analytics/review-prompt-weekly-digest/send`,
+    body,
+    { headers: adminHeaders(token), withCredentials: true, params },
+  );
+};
+
 export const adminGetAlerts = (token, { limit = 50, acknowledged, type, date_from, date_to, include_synthetic } = {}) => {
   const params = { limit };
   if (acknowledged !== undefined && acknowledged !== null) params.acknowledged = acknowledged;

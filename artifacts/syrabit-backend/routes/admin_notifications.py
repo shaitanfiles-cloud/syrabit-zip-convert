@@ -1034,6 +1034,51 @@ async def admin_update_alert_settings(
         if not isinstance(hyd_val, bool):
             raise HTTPException(status_code=400, detail="hydrate_slack_enabled must be a boolean")
         validated_channels["hydrate_slack_enabled"] = hyd_val
+    # Task #660: separate recipient list for the Monday review-prompt
+    # weekly digest, distinct from the incident-alert ``email`` channel.
+    # Accept either an array of strings or a comma-separated string so
+    # the admin UI can post whichever is convenient. Empty entries are
+    # dropped, addresses are deduped case-insensitively while preserving
+    # order, and any obviously-bogus value (no ``@``) is rejected with a
+    # specific error so the form can show it inline.
+    if "review_prompt_digest_emails" in notification_channels:
+        raw_list = notification_channels["review_prompt_digest_emails"]
+        if isinstance(raw_list, str):
+            parts = [p.strip() for p in raw_list.split(",")]
+        elif isinstance(raw_list, list):
+            parts = []
+            for item in raw_list:
+                if item is None:
+                    continue
+                if not isinstance(item, str):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="review_prompt_digest_emails entries must be strings",
+                    )
+                parts.append(item.strip())
+        elif raw_list is None:
+            parts = []
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="review_prompt_digest_emails must be a list or comma-separated string",
+            )
+        seen_dg: set = set()
+        cleaned_dg: list = []
+        for entry in parts:
+            if not entry:
+                continue
+            if "@" not in entry:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid review-prompt digest recipient: {entry!r}",
+                )
+            key = entry.lower()
+            if key in seen_dg:
+                continue
+            seen_dg.add(key)
+            cleaned_dg.append(entry)
+        validated_channels["review_prompt_digest_emails"] = cleaned_dg
     try:
         existing = await db.api_config.find_one({}, {"_id": 0})
         if existing is None:

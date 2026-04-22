@@ -879,32 +879,104 @@ async def _gather_review_prompt_weekly_digest_inputs(
     )
 
 
+def _resolve_review_prompt_digest_recipients(
+    override: Optional[Any] = None,
+) -> List[str]:
+    """Return the ordered, deduped list of recipients for the weekly
+    review-prompt digest.
+
+    Resolution order (Task #660):
+      1. ``override`` (str / list / comma-separated) — used by the manual
+         "send me a test" button so admins can target an arbitrary
+         address without first persisting it.
+      2. ``metrics._notification_channels["review_prompt_digest_emails"]``
+         — the dedicated digest list configured from the admin
+         notifications panel.
+      3. ``metrics._notification_channels["email"]`` — the legacy
+         single-admin alert email, kept as a fallback so existing
+         installs that haven't configured the new field keep working.
+      4. ``ALERT_EMAIL`` env var — last-ditch fallback.
+
+    Anything obviously bogus (no ``@``, blank, non-string) is dropped
+    and addresses are deduped case-insensitively while preserving order.
+    """
+    candidates: List[str] = []
+
+    def _extend(raw: Any) -> None:
+        if raw is None:
+            return
+        if isinstance(raw, str):
+            for part in raw.split(","):
+                p = part.strip()
+                if p:
+                    candidates.append(p)
+        elif isinstance(raw, (list, tuple, set)):
+            for item in raw:
+                if isinstance(item, str):
+                    p = item.strip()
+                    if p:
+                        candidates.append(p)
+
+    if override is not None:
+        _extend(override)
+    if not candidates:
+        try:
+            from metrics import _notification_channels
+            _extend(_notification_channels.get("review_prompt_digest_emails"))
+            if not candidates:
+                _extend(_notification_channels.get("email"))
+        except Exception:
+            pass
+    if not candidates:
+        _extend(os.environ.get("ALERT_EMAIL", ""))
+
+    seen: set = set()
+    cleaned: List[str] = []
+    for c in candidates:
+        if "@" not in c:
+            continue
+        key = c.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(c)
+    return cleaned
+
+
 async def _send_review_prompt_weekly_digest_email(
-    stats: Dict[str, Any], *, to: Optional[str] = None,
+    stats: Dict[str, Any], *, to: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Send the rendered digest via Resend. Returns
-    ``{sent, to, reason?, subject?}`` so the loop and the manual-trigger
-    endpoint can surface the outcome.
+    ``{sent, to, recipients, reason?, subject?}`` so the loop and the
+    manual-trigger / test-send endpoints can surface the outcome.
+
+    ``to`` may be ``None`` (use the configured recipient list), a single
+    address string, a comma-separated string, or a list of addresses
+    (Task #660 — admin-configurable recipient list distinct from the
+    incident-alert email channel).
     """
     if not stats:
-        return {"sent": False, "to": "", "reason": "no_stats"}
+        return {"sent": False, "to": "", "recipients": [], "reason": "no_stats"}
     try:
-        from metrics import _notification_channels, _load_alert_settings
+        from metrics import _load_alert_settings
         try:
             await _load_alert_settings()
         except Exception:
             pass
-        admin_email = (
-            to or _notification_channels.get("email")
-            or os.environ.get("ALERT_EMAIL", "")
-        ).strip()
     except Exception:
-        admin_email = (to or os.environ.get("ALERT_EMAIL", "")).strip()
+        pass
+    recipients = _resolve_review_prompt_digest_recipients(to)
     resend_key = os.environ.get("RESEND_API_KEY", "").strip()
-    if not admin_email:
-        return {"sent": False, "to": "", "reason": "no_admin_email"}
+    if not recipients:
+        return {"sent": False, "to": "", "recipients": [], "reason": "no_admin_email"}
+    # Preserve legacy single-string ``to`` field for callers / tests that
+    # only inspected the first recipient (the digest used to be 1:1).
+    primary = recipients[0]
     if not resend_key:
-        return {"sent": False, "to": admin_email, "reason": "no_resend_key"}
+        return {
+            "sent": False, "to": primary, "recipients": recipients,
+            "reason": "no_resend_key",
+        }
     try:
         from email_templates import EMAIL_FROM as _from
     except Exception:
@@ -924,19 +996,22 @@ async def _send_review_prompt_weekly_digest_email(
         _resend_sdk.api_key = resend_key
         _resend_sdk.Emails.send({
             "from": _from,
-            "to": [admin_email],
+            "to": list(recipients),
             "subject": subject,
             "html": html,
         })
         logger.info(
-            f"[review-prompt digest] sent → {admin_email} "
+            f"[review-prompt digest] sent → {', '.join(recipients)} "
             f"({stats.get('iso_week','')})"
         )
-        return {"sent": True, "to": admin_email, "subject": subject}
+        return {
+            "sent": True, "to": primary, "recipients": recipients,
+            "subject": subject,
+        }
     except Exception as exc:
         logger.warning(f"[review-prompt digest] Resend send failed: {exc}")
         return {
-            "sent": False, "to": admin_email,
+            "sent": False, "to": primary, "recipients": recipients,
             "reason": f"send_error:{type(exc).__name__}",
         }
 
@@ -1043,6 +1118,7 @@ async def _review_prompt_weekly_digest_loop():
 
 @router.post("/admin/analytics/review-prompt-weekly-digest/send")
 async def admin_review_prompt_weekly_digest_send(
+    body: Optional[Dict[str, Any]] = Body(None),
     preview_only: bool = Query(
         False,
         description="If true, return the rendered stats/HTML without sending the email.",
@@ -1052,15 +1128,34 @@ async def admin_review_prompt_weekly_digest_send(
     """Manually trigger (or preview) the weekly review-prompt digest.
     Useful for QA and for catching up after an outage. Does not advance
     the ISO-week dedup marker so the regular Monday send still happens.
+
+    Optional JSON body:
+      ``{"to": "ops@example.com" | ["a@x", "b@y"]}`` overrides the
+      configured recipient list — used by the admin "send me a test
+      now" button so admins can sanity-check delivery before saving the
+      list (Task #660).
     """
+    override_to: Optional[Any] = None
+    if isinstance(body, dict):
+        override_to = body.get("to")
     stats = await _gather_review_prompt_weekly_digest_inputs()
     html = _format_review_prompt_weekly_digest_html(stats) if stats else ""
     if preview_only:
-        return {"sent": False, "preview": True, "stats": stats, "html": html}
-    result = await _send_review_prompt_weekly_digest_email(stats)
+        # Surface the resolved recipient list so the admin UI can show
+        # who *would* receive a non-preview send without actually firing
+        # email — useful for confirming the configured list is valid.
+        return {
+            "sent": False,
+            "preview": True,
+            "stats": stats,
+            "html": html,
+            "recipients": _resolve_review_prompt_digest_recipients(override_to),
+        }
+    result = await _send_review_prompt_weekly_digest_email(stats, to=override_to)
     return {
         "sent": result.get("sent", False),
         "to": result.get("to", ""),
+        "recipients": result.get("recipients", []),
         "reason": result.get("reason"),
         "subject": result.get("subject"),
         "stats": stats,

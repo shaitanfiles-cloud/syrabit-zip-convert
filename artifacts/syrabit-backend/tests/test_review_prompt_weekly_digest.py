@@ -397,7 +397,10 @@ def test_send_email_skipped_without_resend_key(monkeypatch):
 
 def test_send_email_returns_no_stats_when_called_with_empty_dict():
     result = asyncio.run(arp._send_review_prompt_weekly_digest_email({}))
-    assert result == {"sent": False, "to": "", "reason": "no_stats"}
+    assert result["sent"] is False
+    assert result["to"] == ""
+    assert result["reason"] == "no_stats"
+    assert result.get("recipients") == []
 
 
 # ── Stats-route ↔ digest aggregation parity ─────────────────────────────────
