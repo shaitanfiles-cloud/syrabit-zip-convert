@@ -1,14 +1,16 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { TrendingUp, Eye, Users, DollarSign, Zap, Target,
   AlertTriangle, Calendar, ShieldCheck, RefreshCw,
-  AlertOctagon, Star, MousePointerClick, XCircle } from 'lucide-react';
+  AlertOctagon, Star, MousePointerClick, XCircle,
+  ChevronDown, ChevronRight } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, BarChart, Bar,
+  ResponsiveContainer, BarChart, Bar, ComposedChart, Line,
 } from 'recharts';
 import { Card, Stat, TT, fmt, fmtInr } from './shared';
 import { adminGetHydrateStats, adminAcknowledgeAlert,
-  adminGetReviewPromptStats } from '@/utils/api';
+  adminGetReviewPromptStats,
+  adminGetReviewPromptByReasonTrend } from '@/utils/api';
 
 const TIME_RANGES = [
   { value: 1,  label: 'Today' },
@@ -136,6 +138,7 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
         loading={reviewPromptLoading}
         error={reviewPromptError}
         onRetry={loadReviewPrompt}
+        adminToken={adminToken}
       />
 
       <Card title={`Daily Visitors — ${rangeLabel}`} empty={!hasDailyCf} emptyMsg={cfEmptyMsg}>
@@ -413,7 +416,94 @@ function HydrateAlertBadge({ alert, acking, ackError, onAcknowledge }) {
 // columns. Reasons that newly appeared / disappeared in the current
 // window get a "new" / "gone" pill so ops can spot which surface is
 // responsible for an overall CTR swing instead of guessing.
-function ReviewPromptReasonRow({ row }) {
+function ReviewPromptReasonTrend({ adminToken, reason }) {
+  const [trend, setTrend] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      setLoading(true);
+      setError(false);
+      try {
+        const r = await adminGetReviewPromptByReasonTrend(adminToken, reason, 8);
+        if (!cancelled) setTrend(r.data);
+      } catch {
+        if (!cancelled) {
+          setError(true);
+          setTrend(null);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [adminToken, reason]);
+
+  if (loading) {
+    return <p className="text-gray-500 text-xs py-3 px-3.5">Loading 8-week trend…</p>;
+  }
+  if (error) {
+    return <p className="text-rose-600 text-xs py-3 px-3.5">Failed to load trend.</p>;
+  }
+  const buckets = Array.isArray(trend?.buckets) ? trend.buckets : [];
+  if (buckets.length === 0) {
+    return <p className="text-gray-500 text-xs py-3 px-3.5">No data for this reason in the last 8 weeks.</p>;
+  }
+  const chartData = buckets.map(b => {
+    const d = b?.week_end ? new Date(b.week_end) : null;
+    const label = d
+      ? `${d.getUTCMonth() + 1}/${d.getUTCDate()}`
+      : '—';
+    return {
+      label,
+      shown: b.shown || 0,
+      clicked: b.clicked || 0,
+      ctr_pct: b.ctr_pct == null ? null : Number(b.ctr_pct),
+    };
+  });
+  const totalShown = chartData.reduce((a, b) => a + b.shown, 0);
+  const totalClicked = chartData.reduce((a, b) => a + b.clicked, 0);
+  const overallCtr = totalShown > 0
+    ? Math.round((totalClicked / totalShown) * 1000) / 10
+    : null;
+
+  return (
+    <div className="px-3.5 py-3 bg-white border-t border-gray-200">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-gray-600 text-xs font-medium">
+          8-week trend · <span className="font-mono text-gray-700">{reason}</span>
+        </p>
+        <p className="text-gray-500 text-[11px]">
+          Σ {totalShown.toLocaleString()} shown · {totalClicked.toLocaleString()} clicked ·
+          {' '}CTR {overallCtr == null ? '—' : `${overallCtr}%`}
+        </p>
+      </div>
+      <ResponsiveContainer width="100%" height={170}>
+        <ComposedChart data={chartData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+          <XAxis dataKey="label" tick={{ fill: '#6b7280', fontSize: 10 }} />
+          <YAxis yAxisId="left" tick={{ fill: '#6b7280', fontSize: 10 }} />
+          <YAxis yAxisId="right" orientation="right"
+            tick={{ fill: '#6b7280', fontSize: 10 }}
+            tickFormatter={(v) => `${v}%`} />
+          <Tooltip {...TT} />
+          <Bar yAxisId="left" dataKey="shown" name="Shown"
+            fill="rgba(124,58,237,0.25)" />
+          <Bar yAxisId="left" dataKey="clicked" name="Clicked"
+            fill="#10b981" />
+          <Line yAxisId="right" type="monotone" dataKey="ctr_pct" name="CTR %"
+            stroke="#06b6d4" strokeWidth={2} dot={{ r: 2 }}
+            connectNulls={false} />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function ReviewPromptReasonRow({ row, expanded, onToggle }) {
   const status = row?.status;
   const shownDelta = row?.shown_delta;
   const ctrDelta = row?.ctr_delta_pct;
@@ -455,9 +545,18 @@ function ReviewPromptReasonRow({ row }) {
   }
 
   return (
-    <tr className="border-t border-gray-200">
-      <td className="text-left text-gray-700 px-3.5 py-2 truncate" title={row.reason}>
-        {row.reason || '—'}
+    <tr
+      className="border-t border-gray-200 cursor-pointer hover:bg-gray-100 transition-colors"
+      onClick={onToggle}
+      title="Click to view 8-week trend"
+    >
+      <td className="text-left text-gray-700 px-3.5 py-2 truncate">
+        <span className="inline-flex items-center gap-1">
+          {expanded
+            ? <ChevronDown size={12} className="text-gray-400" />
+            : <ChevronRight size={12} className="text-gray-400" />}
+          <span className="truncate" title={row.reason}>{row.reason || '—'}</span>
+        </span>
       </td>
       <td className="text-right text-gray-700 font-mono px-3.5 py-2">{row.shown}</td>
       <td className="text-right text-gray-700 font-mono px-3.5 py-2">{row.clicked}</td>
@@ -471,7 +570,8 @@ function ReviewPromptReasonRow({ row }) {
   );
 }
 
-function ReviewPromptFunnelCard({ stats, loading, error, onRetry }) {
+function ReviewPromptFunnelCard({ stats, loading, error, onRetry, adminToken }) {
+  const [expandedReason, setExpandedReason] = useState(null);
   if (loading && !stats) {
     return (
       <Card title="Google Review Prompt Funnel (7d)">
@@ -556,9 +656,31 @@ function ReviewPromptFunnelCard({ stats, loading, error, onRetry }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {byReason.map((row, i) => (
-                    <ReviewPromptReasonRow key={i} row={row} />
-                  ))}
+                  {byReason.map((row, i) => {
+                    const reasonKey = row?.reason || 'unknown';
+                    const isExpanded = expandedReason === reasonKey;
+                    return (
+                      <Fragment key={`reason-${i}-${reasonKey}`}>
+                        <ReviewPromptReasonRow
+                          row={row}
+                          expanded={isExpanded}
+                          onToggle={() => setExpandedReason(
+                            isExpanded ? null : reasonKey
+                          )}
+                        />
+                        {isExpanded && (
+                          <tr className="bg-white">
+                            <td colSpan={7} className="p-0">
+                              <ReviewPromptReasonTrend
+                                adminToken={adminToken}
+                                reason={reasonKey}
+                              />
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

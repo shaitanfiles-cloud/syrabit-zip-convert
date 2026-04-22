@@ -280,6 +280,14 @@ export const adminGetHydrateStats = (token, days = 7) =>
 export const adminGetReviewPromptStats = (token, days = 30) =>
   axios.get(`${API_BASE}/admin/analytics/review-prompt-stats`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
 
+// Task #662: per-reason 8-week trend (drill-down sparkline)
+export const adminGetReviewPromptByReasonTrend = (token, reason, weeks = 8) =>
+  axios.get(`${API_BASE}/admin/analytics/review-prompt-stats/by-reason-trend`, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+    params: { reason, weeks },
+  });
+
 export const adminGetRevenue = (token, days = 30) =>
   axios.get(`${API_BASE}/admin/analytics/revenue`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
 

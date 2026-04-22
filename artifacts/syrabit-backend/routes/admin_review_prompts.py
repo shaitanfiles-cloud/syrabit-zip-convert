@@ -253,6 +253,56 @@ async def admin_review_prompt_stats(
         return empty
 
 
+# ─────────────────────────────────────────────
+# Task #662 — per-reason 8-week trend (drill-down)
+# ─────────────────────────────────────────────
+@router.get("/admin/analytics/review-prompt-stats/by-reason-trend")
+async def admin_review_prompt_by_reason_trend(
+    reason: str = Query(..., min_length=1, max_length=64),
+    weeks: int = Query(8, ge=1, le=26),
+    admin: dict = Depends(get_admin_user),
+):
+    """Weekly shown / clicked / CTR buckets for a single trigger reason.
+
+    Powers the inline sparkline that expands when an admin clicks a
+    reason row in the review-prompt funnel tile. Buckets are rolling
+    7-day windows aligned to ``now`` so the most-recent bucket matches
+    the totals the tile already displays. Oldest bucket first.
+    """
+    reason_clean = (reason or "").strip()[:64] or "unknown"
+    empty = {"reason": reason_clean, "weeks": weeks, "buckets": []}
+    if not await is_mongo_available():
+        return empty
+    try:
+        await _ensure_review_prompt_indexes()
+        now = datetime.now(timezone.utc)
+        buckets: List[Dict[str, Any]] = []
+        for i in range(weeks - 1, -1, -1):
+            end = now - timedelta(days=7 * i)
+            start = end - timedelta(days=7)
+            agg = await _aggregate_review_prompt_window(start, end)
+            row = next(
+                (r for r in agg["by_reason"]
+                 if (r.get("reason") or "unknown") == reason_clean),
+                {},
+            )
+            shown = int(row.get("shown") or 0)
+            clicked = int(row.get("clicked") or 0)
+            dismissed = int(row.get("dismissed") or 0)
+            buckets.append({
+                "week_start": start.isoformat(),
+                "week_end": end.isoformat(),
+                "shown": shown,
+                "clicked": clicked,
+                "dismissed": dismissed,
+                "ctr_pct": _ctr(clicked, shown),
+            })
+        return {"reason": reason_clean, "weeks": weeks, "buckets": buckets}
+    except Exception as e:
+        logger.warning(f"review-prompt by-reason-trend query failed: {e}")
+        return empty
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Task #656 — alert ops when the review-prompt CTR collapses
 #
