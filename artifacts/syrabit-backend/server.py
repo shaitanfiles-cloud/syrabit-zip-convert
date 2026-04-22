@@ -208,6 +208,93 @@ async def _vertex_startup_probe() -> None:
         )
 
 
+_VERTEX_PROBE_INTERVAL_S = max(
+    30, int(os.environ.get("VERTEX_PROBE_INTERVAL_S", "600") or 600)
+)
+_VERTEX_PROBE_FAILURE_THRESHOLD = 2
+
+
+async def _vertex_periodic_probe_loop() -> None:
+    """Task #677 — keep watching Gemini *after* boot.
+
+    The startup probe (Task #667) only catches credential / gateway
+    misconfig at deploy time. If Gemini fails mid-day (revoked key, AI
+    Gateway throttling, regional outage) nothing notices until users
+    start hitting 502s. This loop calls ``vertex_services.health_check()``
+    every ``VERTEX_PROBE_INTERVAL_S`` seconds (default 600s) and routes
+    consecutive failures (>=2) through ``metrics._dispatch_alert`` so
+    on-call gets paged the same way ``_seo_health_alert_loop`` already
+    pages them.
+
+    Alert fires exactly once per failure run: on the transition to 2
+    consecutive failures we dispatch, then suppress further dispatches
+    until a success resets the counter. The same alert type also goes
+    through the existing 30-min cooldown in ``_dispatch_alert`` as a
+    secondary guard.
+    """
+    consecutive_failures = 0
+    alerted_for_run = False
+    await asyncio.sleep(_VERTEX_PROBE_INTERVAL_S)
+    while True:
+        ok = False
+        reason = ""
+        try:
+            import vertex_services
+            result = await asyncio.wait_for(
+                vertex_services.health_check(), timeout=10.0
+            )
+            embed_ok = bool(result.get("embeddings"))
+            gen_ok = bool(result.get("generation"))
+            ok = embed_ok and gen_ok
+            if not ok:
+                reason = result.get("reason") or (
+                    f"embeddings={embed_ok} generation={gen_ok} "
+                    f"auth_mode={result.get('auth_mode')!r} "
+                    f"via_cf_gateway={result.get('via_cf_gateway')!r}"
+                )
+        except asyncio.TimeoutError:
+            reason = "timed out after 10s — upstream (Vertex / AI Gateway) unreachable or hung."
+        except Exception as exc:
+            reason = f"vertex health_check raised: {exc!r}"
+
+        if ok:
+            consecutive_failures = 0
+            alerted_for_run = False
+        else:
+            consecutive_failures += 1
+            logger.error(
+                f"[PERIODIC-PROBE] Gemini self-check FAILED "
+                f"(consecutive={consecutive_failures}): {reason}"
+            )
+            if (
+                consecutive_failures >= _VERTEX_PROBE_FAILURE_THRESHOLD
+                and not alerted_for_run
+            ):
+                alerted_for_run = True
+                try:
+                    from metrics import _dispatch_alert
+                    await _dispatch_alert(
+                        "vertex_health_degraded",
+                        "Gemini / Vertex health check failing",
+                        f"vertex_services.health_check() failed "
+                        f"{consecutive_failures} consecutive times "
+                        f"(probe interval: {_VERTEX_PROBE_INTERVAL_S}s). "
+                        f"Last reason: {reason}",
+                        threshold_snapshot={
+                            "metric": "vertex_consecutive_failures",
+                            "value": _VERTEX_PROBE_FAILURE_THRESHOLD,
+                            "actual": consecutive_failures,
+                            "interval_s": _VERTEX_PROBE_INTERVAL_S,
+                        },
+                    )
+                except Exception as dispatch_err:
+                    logger.error(
+                        f"[PERIODIC-PROBE] _dispatch_alert raised: {dispatch_err!r}"
+                    )
+
+        await asyncio.sleep(_VERTEX_PROBE_INTERVAL_S)
+
+
 @asynccontextmanager
 async def lifespan(app):
     import deps as _deps_mod
@@ -716,6 +803,14 @@ async def lifespan(app):
     # surfaces in the deploy logs as a single ERROR line within seconds —
     # before any user-facing 502.
     asyncio.create_task(_vertex_startup_probe())
+
+    # Task #677 — periodic Gemini health probe. The startup probe only
+    # catches misconfig at boot; this loop reruns health_check() every
+    # VERTEX_PROBE_INTERVAL_S (default 600s) and dispatches an alert via
+    # the same email/Slack pipeline as _seo_health_alert_loop on >=2
+    # consecutive failures, so mid-day Vertex outages page on-call
+    # instead of waiting for users to hit 502s.
+    asyncio.create_task(_vertex_periodic_probe_loop())
 
     logger.info("Syrabit.ai API started")
     if sarvam_client:
