@@ -45,6 +45,18 @@ Browser → api.syrabit.ai (Cloudflare Worker)
 > done
 > # Expected: 200, 200, 405 (405 = POST-only handler reachable)
 >
+> # 3a. Task #672/#685 -- canonical /sitemap.xml alias must stay live for
+> #     crawlers (Google, Bing). The edge worker rewrites it internally to
+> #     /api/seo/sitemap-index.xml. A unit test in
+> #     workers/edge-proxy/tests/sitemap-alias.test.ts guards the handler
+> #     shape, but verify the live edge after every deploy too:
+> curl -sI https://syrabit.ai/sitemap.xml | grep -i "HTTP\|content-type"
+> #   HTTP/2 200
+> #   content-type: application/xml; charset=utf-8
+> curl -s  https://syrabit.ai/sitemap.xml | head -c 120
+> #   <?xml version="1.0" encoding="UTF-8"?>
+> #   <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"> ...
+>
 > # 4. Confirm backend exposes no zip/convert/epub endpoints
 > curl -s https://workspacesyrabit-production-0ddc.up.railway.app/openapi.json \
 >   | python3 -c "import sys,json; d=json.load(sys.stdin); \
