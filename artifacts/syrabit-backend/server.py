@@ -483,6 +483,12 @@ async def lifespan(app):
     if _is_leader:
         from routes.admin_review_prompts import _review_prompt_alert_loop
         asyncio.create_task(_review_prompt_alert_loop())
+    # Task #655 — weekly review-prompt summary email (Monday ~09:00 IST).
+    # Leader-gated so multiple replicas don't double-fire; the loop also
+    # holds an atomic per-ISO-week lock as a belt-and-braces guard.
+    if _is_leader:
+        from routes.admin_review_prompts import _review_prompt_weekly_digest_loop
+        asyncio.create_task(_review_prompt_weekly_digest_loop())
     if _is_leader:
         from routes.bot_discovery import _sitemap_indexnow_diff_loop
         asyncio.create_task(_sitemap_indexnow_diff_loop())
