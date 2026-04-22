@@ -80,7 +80,25 @@ function ReviewCard({ review }) {
   );
 }
 
-export default function GoogleReviewsSection({ heading = 'What students say', subheading = '' }) {
+function filterReviewsByKeywords(reviews, keywords) {
+  if (!Array.isArray(reviews) || reviews.length === 0) return reviews || [];
+  const kws = (Array.isArray(keywords) ? keywords : [keywords])
+    .filter(k => typeof k === 'string' && k.trim().length >= 3)
+    .map(k => k.toLowerCase().trim());
+  if (kws.length === 0) return reviews;
+  const matches = reviews.filter(r => {
+    const text = (r && r.text ? String(r.text) : '').toLowerCase();
+    if (!text) return false;
+    return kws.some(k => text.includes(k));
+  });
+  return matches.length > 0 ? matches : reviews;
+}
+
+export default function GoogleReviewsSection({
+  heading = 'What students say',
+  subheading = '',
+  keywords = null,
+}) {
   const { data, loading } = useGoogleReviews();
 
   if (loading) {
@@ -101,6 +119,7 @@ export default function GoogleReviewsSection({ heading = 'What students say', su
     return null;
   }
 
+  const filteredReviews = filterReviewsByKeywords(data.reviews, keywords);
   const avg = formatAvg(data.averageRating);
   const total = Number(data.totalCount || 0);
   const writeReviewUrl = data.writeReviewUrl || data.googleUrl || '';
@@ -140,7 +159,7 @@ export default function GoogleReviewsSection({ heading = 'What students say', su
         </div>
 
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {data.reviews.slice(0, 6).map((r, i) => (
+          {filteredReviews.slice(0, 6).map((r, i) => (
             <ReviewCard key={i} review={r} />
           ))}
         </div>

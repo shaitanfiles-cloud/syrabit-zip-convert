@@ -280,6 +280,7 @@ export default function PYQReplicaPage() {
 
       <GoogleReviewsSection
         subheading={`Real Google reviews from students preparing with Syrabit.ai${pyqMeta.subject ? ' for ' + pyqMeta.subject : ''}.`}
+        keywords={[pyqMeta.subject, pyqMeta.board, pyqMeta.class_name, 'pyq', 'previous year', 'question paper'].filter(Boolean)}
       />
       <ReviewsAggregateRatingJsonLd
         id="pyq-google-reviews-jsonld"

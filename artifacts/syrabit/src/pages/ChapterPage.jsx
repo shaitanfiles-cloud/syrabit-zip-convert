@@ -984,6 +984,7 @@ export default function ChapterPage() {
 
         <GoogleReviewsSection
           subheading={`Real Google reviews from students using Syrabit.ai for ${subjectName} ${className} notes.`}
+          keywords={[subjectName, chapterTitle, className].filter(Boolean)}
         />
         <ReviewsAggregateRatingJsonLd
           id="chapter-google-reviews-jsonld"
