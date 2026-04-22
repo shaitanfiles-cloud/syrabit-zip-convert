@@ -1,50 +1,22 @@
 """
-Vertex AI / Gemini-powered services for Syrabit.ai (Task #663 — restored).
+Vertex AI / Gemini-powered services for Syrabit.ai.
 
-Restored from commit cedd1e06^ on 2026-04-22 after the disabled stub
-(2026-04-19) left every Gemini-backed feature returning HTTP 502 in
-production. The user has now provisioned Gemini/Vertex credentials at
-the Cloudflare AI Gateway layer, so this module additionally routes
-its requests through the gateway when one is configured.
+Three auth modes detected at import time:
+  A) Vertex AI service-account JSON  → VERTEX_SERVICE_ACCOUNT (or
+     GEMINI_API_KEY containing JSON), uses {region}-aiplatform.googleapis.com.
+  B) Google AI Studio API key        → GEMINI_API_KEY=AIza..., uses
+     generativelanguage.googleapis.com.
+  C) BYOK via CF AI Gateway          → no local credential, but
+     CF_AI_GATEWAY_ACCOUNT_ID + CF_AI_GATEWAY_ID set with a BYOK binding.
 
-Three auth modes, detected at import time in priority order:
-  A) Vertex AI service-account JSON (VERTEX_SERVICE_ACCOUNT or
-     GEMINI_API_KEY containing a JSON blob) → OAuth bearer +
-     {region}-aiplatform.googleapis.com endpoints.
-  B) Google AI Studio API key (GEMINI_API_KEY=AIza…) → x-goog-api-key
-     + generativelanguage.googleapis.com endpoints.
-  C) BYOK via Cloudflare AI Gateway (no local credential at all but
-     CF_AI_GATEWAY_ACCOUNT_ID + CF_AI_GATEWAY_ID set, with a BYOK
-     binding configured for google-ai-studio in the dashboard).
+When CF_AI_GATEWAY_ACCOUNT_ID + CF_AI_GATEWAY_ID are configured, every
+call is routed through the gateway by URL rewriting plus
+cf-aig-authorization / cf-aig-cache-ttl headers.
 
-When CF_AI_GATEWAY_ACCOUNT_ID + CF_AI_GATEWAY_ID are configured, all
-calls (regardless of which auth mode is active) are routed through
-  https://gateway.ai.cloudflare.com/v1/{ACCT}/{GW}/google-ai-studio/...
-or
-  https://gateway.ai.cloudflare.com/v1/{ACCT}/{GW}/google-vertex-ai/...
-so we get the gateway's logging / caching / spend-control / BYOK
-substitution.
-
-Embeddings continue to fall back to Cloudflare Workers AI when the
-primary path errors transiently — same safety net as Task #636. We
-prefer real Gemini embeddings (1024-dim gemini-embedding-001 to match
-syllabus-index-v2) but a transient outage degrades to 768-dim
-bge-base-en-v1.5 rather than crashing the seed loop.
-
-Services exposed:
-  1.  Text Embeddings    — semantic search across topics & pages
-  2.  Translation        — Assamese + other regional language translation
-  3.  Vision Analysis    — image / PDF page analysis via Gemini Vision
-  3b. Vision OCR         — clean text extraction from question papers
-  3c. NLP Key Concepts   — entity / definition / difficulty extraction
-  3d. Flashcard Generator
-  3e. MCQ Generator
-  4.  Content Enhancer   — improve auto-generated notes / MCQs
-  5.  Quality Scorer     — score content before publishing
-  6.  Topic Suggester    — fill syllabus gaps with AI suggestions
-  7.  SEO Meta Generator
-  8.  Content Gap Finder
-  9.  Long Doc Reader    — Gemini 1.5 Pro for textbook PDFs
+Services: embeddings, semantic_search, translate, analyze_image,
+ocr_image, extract_key_concepts, generate_flashcards, generate_mcqs,
+enhance_content, score_content, suggest_topics, generate_seo_meta,
+find_content_gaps, extract_from_document, health_check.
 """
 
 import os
@@ -59,9 +31,6 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # ── Cloudflare AI Gateway (optional) ─────────────────────────────────────────
-# Read directly from env (not from config.py) so this module never imports
-# the rest of the FastAPI bootstrap surface — keeps it usable from offline
-# scripts like scripts/ingest_vertex_index.py.
 _CF_ACCT = os.environ.get("CF_AI_GATEWAY_ACCOUNT_ID", "").strip()
 _CF_GW   = os.environ.get("CF_AI_GATEWAY_ID", "").strip()
 _CF_TOK  = os.environ.get("CF_AI_GATEWAY_TOKEN", "").strip()
@@ -71,11 +40,6 @@ _CF_GW_BASE = (
     if (_CF_ACCT and _CF_GW) else ""
 )
 _CF_GW_ENABLED = bool(_CF_GW_BASE)
-
-# Whether the CF AI Gateway has a BYOK binding for google-ai-studio /
-# google-vertex-ai. When true and we have no local credential, we still
-# attempt requests — CF will inject its stored key. Default ON when the
-# gateway is enabled and the user hasn't explicitly disabled BYOK.
 _CF_GW_BYOK = (
     _CF_GW_ENABLED
     and os.environ.get("CF_AI_GATEWAY_BYOK", "1").strip().lower() not in ("0", "false", "no", "off")
@@ -84,10 +48,6 @@ _CF_GW_BYOK = (
 
 # ── HTTP client (embed path) ────────────────────────────────────────────────
 _embed_http_client: Optional[httpx.AsyncClient] = None
-
-# Bounded concurrency for the embed path (Task #545). See original module
-# header for why this matters — short version: prevents httpx pool semaphore
-# from desynchronising under wait_for-driven cancellation pressure.
 _EMBED_MAX_CONCURRENT = int(os.environ.get("EMBED_MAX_CONCURRENT", "8"))
 _EMBED_SEMAPHORE: Optional[asyncio.Semaphore] = None
 
@@ -143,30 +103,22 @@ _KEY_RAW = (
     or os.getenv("GEMINI_API_KEY", "").strip()
 )
 
-# Mode A: Vertex AI service account
 _SA_CREDS         = None
 _VERTEX_PROJECT   = os.environ.get("VERTEX_PROJECT_ID", "").strip()
 _VERTEX_LOCATION  = os.environ.get("VERTEX_LOCATION", "us-central1").strip() or "us-central1"
 _VERTEX_BASE      = ""
+_API_KEY: str     = ""
+_USE_BYOK: bool   = False
 
-# Mode B: simple API key
-_API_KEY: str = ""
-
-# Mode C: BYOK (no local creds, CF Gateway injects)
-_USE_BYOK: bool = False
-
-# Direct (non-gateway) endpoints
 _BASE    = "https://generativelanguage.googleapis.com/v1beta"
 _BASE_V1 = "https://generativelanguage.googleapis.com/v1"
 
-GEMINI_KEY = _KEY_RAW  # legacy export for any external readers
+GEMINI_KEY = _KEY_RAW
 
 if _KEY_RAW.startswith("{"):
     try:
         from google.oauth2 import service_account as _sa_mod
         _sa_info = json.loads(_KEY_RAW)
-        # An explicit VERTEX_PROJECT_ID env var overrides the project_id in
-        # the SA blob — handy when one SA is shared across projects.
         if not _VERTEX_PROJECT:
             _VERTEX_PROJECT = _sa_info.get("project_id", "")
         _SA_CREDS = _sa_mod.Credentials.from_service_account_info(
@@ -179,21 +131,16 @@ if _KEY_RAW.startswith("{"):
             f"/publishers/google/models"
         )
     except Exception as _sa_err:
-        logger.error(f"vertex_services: Failed to parse service-account JSON — {_sa_err}")
+        logger.error(f"vertex_services: failed to parse service-account JSON — {_sa_err}")
         _SA_CREDS = None
 elif _KEY_RAW:
     _API_KEY = _KEY_RAW
 elif _CF_GW_BYOK:
-    # No local credential, but the gateway can inject one. We still need
-    # a project / location for the Vertex URL path if the BYOK is
-    # configured against google-vertex-ai. Default to AI-Studio mode
-    # (which doesn't need a project id) when none is provided.
     _USE_BYOK = True
 
-_GEMINI_FORBIDDEN = False  # set on permanent 403 from upstream
+_GEMINI_FORBIDDEN = False
 
 
-# ── Startup banner ──────────────────────────────────────────────────────────
 def _auth_mode_label() -> str:
     if _SA_CREDS is not None:
         return "vertex_ai_service_account"
@@ -206,35 +153,34 @@ def _auth_mode_label() -> str:
 
 _AUTH_MODE = _auth_mode_label()
 
+# Fail-loud: when no credentials are available, log at ERROR so the
+# misconfiguration is visible in deploy logs (the previous WARNING
+# made an entire stub-mode regression silent for days).
 if _AUTH_MODE == "disabled":
-    # Loud at WARN — unlike the old stub which logged INFO and silently
-    # broke every dependent feature. Operators searching for "vertex" in
-    # production logs will now see this immediately.
-    logger.warning(
-        "vertex_services: NO credentials available (set VERTEX_SERVICE_ACCOUNT or "
+    logger.error(
+        "vertex_services: NO credentials configured. Set VERTEX_SERVICE_ACCOUNT or "
         "GEMINI_API_KEY, or configure CF_AI_GATEWAY_ACCOUNT_ID + CF_AI_GATEWAY_ID "
-        "with a BYOK binding) — every Gemini-backed feature will return None / 503"
+        "with a BYOK binding. Every Gemini-backed feature will return None / 503."
     )
-else:
-    _gw_note = ""
-    if _CF_GW_ENABLED:
-        _gw_note = (
-            f" [routing via Cloudflare AI Gateway "
-            f"acct={_CF_ACCT[:6]}…/{_CF_GW}, byok={'yes' if _USE_BYOK or _CF_GW_BYOK else 'no'}]"
+    if os.environ.get("VERTEX_REQUIRED", "").strip().lower() in ("1", "true", "yes", "on"):
+        # Opt-in hard-fail for deploys that want boot to error rather
+        # than start in a degraded state.
+        raise RuntimeError(
+            "vertex_services: VERTEX_REQUIRED=1 but no credentials are configured."
         )
+else:
+    _gw_note = (
+        f" via_cf_gateway=acct={_CF_ACCT[:6]}…/{_CF_GW}"
+        if _CF_GW_ENABLED else ""
+    )
     logger.info(
-        f"vertex_services: ready — auth_mode={_AUTH_MODE} "
+        f"vertex_services: ready auth_mode={_AUTH_MODE} "
         f"embed_model={_EMBED_MODEL} gen_model={_GEN_MODEL} "
         f"project={_VERTEX_PROJECT or 'n/a'}{_gw_note}"
     )
 
 
 def _ok() -> bool:
-    """True when this module can attempt a real call.
-
-    BYOK mode is "OK" because CF will inject the credential downstream;
-    we don't need a local key to make the request fly.
-    """
     if _GEMINI_FORBIDDEN:
         return False
     return bool(_API_KEY) or _SA_CREDS is not None or _USE_BYOK
@@ -246,49 +192,26 @@ def _mark_forbidden() -> None:
         _GEMINI_FORBIDDEN = True
         logger.error(
             "Gemini upstream returned 403 Forbidden — credential is invalid or the "
-            "model is not accessible. Disabling Gemini calls for this session. "
-            "Check VERTEX_SERVICE_ACCOUNT / GEMINI_API_KEY or the CF AI Gateway "
-            "BYOK binding."
+            "model is not accessible. Disabling Gemini calls for this session."
         )
 
 
 # ── URL + headers (gateway-aware) ───────────────────────────────────────────
 def _gw_extra_headers() -> dict:
-    """Headers the gateway needs (auth + caching + BYOK opt-in).
-
-    Returns {} when the gateway isn't configured so callers can
-    unconditionally splat the result into their headers dict.
-    """
     if not _CF_GW_ENABLED:
         return {}
     h: dict = {"cf-aig-cache-ttl": str(_CF_TTL)}
     if _CF_TOK:
-        # Authenticated Gateway bearer (separate from the upstream
-        # provider auth, which lives in Authorization / x-goog-api-key).
         h["cf-aig-authorization"] = f"Bearer {_CF_TOK}"
     if _USE_BYOK:
-        # Tell CF to substitute its stored credential for this provider.
-        # We MUST send empty Authorization (not "Bearer x") for BYOK to
-        # fire — verified live against gateway `syrabit` 2026-04-20.
         h["cf-aig-byok-key"] = "true"
     return h
 
 
 def _wrap_gateway(url: str) -> str:
-    """Rewrite a direct Google endpoint URL to go through the CF AI Gateway.
-
-    Maps:
-      https://generativelanguage.googleapis.com/v1beta/<rest>
-        → {gw}/google-ai-studio/v1beta/<rest>
-      https://{region}-aiplatform.googleapis.com/v1/<rest>
-        → {gw}/google-vertex-ai/v1/<rest>
-
-    When the gateway isn't enabled, returns the URL unchanged.
-    """
     if not _CF_GW_ENABLED:
         return url
     if "generativelanguage.googleapis.com" in url:
-        # Path component after the host
         idx = url.find(".com/")
         if idx == -1:
             return url
@@ -304,7 +227,6 @@ def _wrap_gateway(url: str) -> str:
 
 
 async def _auth_headers() -> dict:
-    """Upstream provider auth + gateway headers, merged."""
     base: dict
     if _SA_CREDS is not None:
         from google.auth.transport.requests import Request as _GReq
@@ -317,14 +239,13 @@ async def _auth_headers() -> dict:
     elif _API_KEY:
         base = {"Content-Type": "application/json", "x-goog-api-key": _API_KEY}
     else:
-        # BYOK mode — empty upstream auth so CF injects its stored key.
+        # BYOK: empty upstream auth so CF injects its stored key.
         base = {"Content-Type": "application/json", "Authorization": ""}
     base.update(_gw_extra_headers())
     return base
 
 
 def _gen_url(model: str) -> str:
-    """Resolve the generateContent URL for the active auth mode."""
     if _SA_CREDS is not None:
         url = f"{_VERTEX_BASE}/{model}:generateContent"
     else:
@@ -333,7 +254,6 @@ def _gen_url(model: str) -> str:
 
 
 def _embed_url() -> str:
-    """Resolve the Gemini embedding URL for the active auth mode."""
     if _SA_CREDS is not None:
         url = f"{_VERTEX_BASE}/{_EMBED_MODEL}:predict"
     else:
@@ -342,17 +262,15 @@ def _embed_url() -> str:
 
 
 def _alt_embed_url(model: str) -> str:
-    """Fallback embed URL builder for the API-key model walk."""
     return _wrap_gateway(f"{_BASE}/models/{model}:embedContent")
 
 
 def _headers() -> dict:
-    """Sync header helper kept for any legacy API-key callsites."""
     return {"Content-Type": "application/json", "x-goog-api-key": _API_KEY}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. TEXT EMBEDDINGS  — gemini-embedding-001 @ 1024 dims, with Workers AI fallback
+# 1. TEXT EMBEDDINGS  — gemini-embedding-001 @ 1024 dims
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -393,8 +311,7 @@ async def _post_embed_with_retry(
     return None
 
 
-async def _embed_one_primary(text: str, task_type: str) -> Optional[List[float]]:
-    """Primary Gemini embedding path (no fallback)."""
+async def _embed_one(text: str, task_type: str) -> Optional[List[float]]:
     if not _ok() or not text:
         return None
     headers = await _auth_headers()
@@ -419,8 +336,6 @@ async def _embed_one_primary(text: str, task_type: str) -> Optional[List[float]]
                 logger.warning(f"gemini embed (Vertex) parse failed: {e}")
                 return None
 
-        # API-key OR BYOK mode — same endpoint shape, walk a list of
-        # model names so a 404 on the new id falls back to the old one.
         for model in (_EMBED_MODEL, "text-embedding-004"):
             url  = _alt_embed_url(model)
             body = {
@@ -446,47 +361,16 @@ async def _embed_one_primary(text: str, task_type: str) -> Optional[List[float]]
         return None
 
 
-async def _embed_with_workers_ai_fallback(text: str) -> Optional[List[float]]:
-    """Workers AI safety-net invoked only when the primary Gemini path
-    has already returned None. Mirrors the policy from the previous
-    stub so chunk-indexing keeps moving during Vertex outages.
-
-    Note dimensionality difference: Workers AI bge-base-en-v1.5 emits
-    768-dim vectors, while Vectorize syllabus-index-v2 expects 1024.
-    Callers that mix both must dimension-check before upserting; the
-    syllabus_embedder already does so via `_current_embed_model`.
-    """
-    if not text:
-        return None
-    try:
-        from providers import workers_ai as _wai
-        if not _wai.is_enabled("embed"):
-            return None
-        class _VertexFailed(TimeoutError):
-            pass
-        ok, val, _ = await _wai.attempt_fallback(
-            "embed", _VertexFailed("vertex_primary_failed"), 0,
-            lambda: _wai.call_embed(text),
-        )
-        if ok and val:
-            vec = val[0] if isinstance(val, list) and val and isinstance(val[0], list) else val
-            return list(vec) if vec else None
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"[workers-ai] embed fallback failed: {type(e).__name__}: {str(e)[:150]}")
-    return None
-
-
 async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Optional[List[float]]:
-    """Return an embedding vector or None on failure.
+    """Return a 1024-dim Gemini embedding vector, or None on failure.
 
-    Tries Gemini primary path first (preserving the historical 1024-dim
-    contract); falls through to Workers AI on transient failure when
-    the per-capability kill-switch is enabled.
+    Returns None (not a 768-dim fallback) on every failure path so
+    Vectorize syllabus-index-v2 (1024-dim) never receives a
+    dimension-mismatched vector. Callers must handle None.
     """
     if not text:
         return None
 
-    # Local LRU cache (process-resident; safe across modes)
     try:
         from cache import _embedding_cache, _embedding_cache_key
         _ek = _embedding_cache_key(text, task_type)
@@ -497,10 +381,7 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Option
         _ek = None
         _embedding_cache = None  # type: ignore[assignment]
 
-    vec = await _embed_one_primary(text, task_type)
-    if vec is None:
-        vec = await _embed_with_workers_ai_fallback(text)
-
+    vec = await _embed_one(text, task_type)
     try:
         if _ek and vec and _embedding_cache is not None:
             _embedding_cache[_ek] = vec
@@ -510,10 +391,7 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Option
 
 
 async def embed_batch(texts: List[str], task_type: str = "RETRIEVAL_DOCUMENT") -> List[Optional[List[float]]]:
-    """Embed a batch of texts. Returns one Optional[List[float]] per input
-    (preserves input ordering — None marks an item that couldn't be
-    embedded so callers can skip it without realigning).
-    """
+    """Embed a batch. Returns one Optional[List[float]] per input."""
     if not texts:
         return []
     results = await asyncio.gather(*[embed_text(t, task_type) for t in texts])
@@ -531,9 +409,6 @@ def cosine_similarity(a: List[float], b: List[float]) -> float:
 
 async def semantic_search(query: str, candidates: List[Dict], text_key: str = "title",
                            top_k: int = 10) -> List[Dict]:
-    """Rank `candidates` by cosine similarity to `query`. Each candidate
-    must carry `text_key`. Returns the top-k items with a `score` field.
-    """
     if not _ok() or not candidates:
         return candidates[:top_k]
 
@@ -586,7 +461,7 @@ async def translate_structured(content: dict, fields: List[str], target_lang: st
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. VISION ANALYSIS  (Gemini Vision)
+# 3. VISION ANALYSIS
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -643,7 +518,7 @@ async def analyze_thumbnail(image_bytes: bytes, subject: str = "", topic: str = 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3b. VISION OCR  (replaces Cloud Vision)
+# 3b. VISION OCR
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -662,7 +537,7 @@ async def ocr_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
     )
     raw = await analyze_image(image_bytes, mime_type=mime_type, prompt=prompt)
     if not raw:
-        return {"error": "OCR failed — Gemini returned no content"}
+        return {"error": "OCR failed"}
     try:
         cleaned = raw.strip()
         if cleaned.startswith("```"):
@@ -813,13 +688,9 @@ async def score_content(content: str, page_type: str = "notes",
     prompt = (
         f"Score this {page_type} content about '{topic}' ({subject}) for AssamBoard students.\n"
         f"Return a JSON with:\n"
-        f"  accuracy (0-10): factual correctness\n"
-        f"  completeness (0-10): topic coverage\n"
-        f"  clarity (0-10): easy to understand\n"
-        f"  exam_relevance (0-10): useful for board exams\n"
-        f"  overall (0-10): weighted average\n"
-        f"  issues (list of strings): specific problems found\n"
-        f"  strengths (list of strings): what's good\n"
+        f"  accuracy (0-10), completeness (0-10), clarity (0-10),\n"
+        f"  exam_relevance (0-10), overall (0-10),\n"
+        f"  issues (list of strings), strengths (list of strings)\n"
         f"Return ONLY valid JSON.\n\nCONTENT:\n{content[:3000]}"
     )
     raw = await _generate(prompt, max_tokens=512)
@@ -877,11 +748,8 @@ async def generate_seo_meta(topic: str, subject: str, class_name: str,
         f"  Page type: {page_type}\n  Board: {board}\n"
         f"{'Content preview: ' + content_preview[:500] if content_preview else ''}\n\n"
         f"Return JSON with:\n"
-        f"  title (max 60 chars, include topic + board + class)\n"
-        f"  meta_description (max 160 chars, includes call-to-action)\n"
-        f"  keywords (list of 8-12 strings)\n"
-        f"  og_title (Open Graph title, can be slightly longer)\n"
-        f"  og_description (2 sentences, benefit-focused)\n"
+        f"  title (max 60 chars), meta_description (max 160 chars),\n"
+        f"  keywords (list of 8-12 strings), og_title, og_description,\n"
         f"  schema_name (for JSON-LD)\n"
         f"Return ONLY valid JSON."
     )
@@ -911,9 +779,9 @@ async def find_content_gaps(published_slugs: List[str],
         f"Subjects covered: {', '.join(subjects[:10])}\n"
         f"Published pages count: {len(published_slugs)}\n\n"
         f"Return a JSON array of top 10 gaps with:\n"
-        f"  query (string), gap_type (missing_topic/incomplete_coverage/wrong_level),\n"
-        f"  priority (high/medium), suggested_action (string),\n"
-        f"  estimated_monthly_searches (number)\n"
+        f"  query, gap_type (missing_topic/incomplete_coverage/wrong_level),\n"
+        f"  priority (high/medium), suggested_action,\n"
+        f"  estimated_monthly_searches\n"
         f"Return ONLY valid JSON array."
     )
     raw = await _generate(prompt, max_tokens=1024)
@@ -1010,10 +878,7 @@ async def health_check() -> dict:
         return {
             "ok": False,
             "auth_mode": _AUTH_MODE,
-            "reason": (
-                "No credential available. Set VERTEX_SERVICE_ACCOUNT or GEMINI_API_KEY, "
-                "or configure CF_AI_GATEWAY_ACCOUNT_ID + CF_AI_GATEWAY_ID with a BYOK binding."
-            ),
+            "reason": "No credential available (set VERTEX_SERVICE_ACCOUNT, GEMINI_API_KEY, or CF AI Gateway BYOK).",
         }
     test = await embed_text("test", task_type="SEMANTIC_SIMILARITY")
     gen_test = await _generate("Reply with just the word: OK", max_tokens=5)
@@ -1025,6 +890,7 @@ async def health_check() -> dict:
         "project": _VERTEX_PROJECT or None,
         "location": _VERTEX_LOCATION,
         "embeddings": test is not None,
+        "embed_dimensions": len(test) if test else 0,
         "generation": gen_test is not None and "OK" in (gen_test or ""),
         "models": {
             "generation": _GEN_MODEL,
@@ -1032,11 +898,4 @@ async def health_check() -> dict:
             "vision":     _VISION_MODEL,
             "long_doc":   _PRO_MODEL,
         },
-        "services": [
-            "text_embeddings", "semantic_search", "translation",
-            "vision_analysis", "vision_ocr", "nlp_key_concepts",
-            "flashcards", "mcqs", "content_enhancer", "quality_scorer",
-            "topic_suggester", "seo_meta_generator", "content_gap_finder",
-            "long_doc_reader",
-        ],
     }
