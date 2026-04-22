@@ -18,7 +18,7 @@ import {
   UserPlus, Globe, Search, Bot, BarChart2, Server, Clock,
   CheckCircle, AlertCircle, AlertTriangle, Wifi, Database, DollarSign, Crown,
   Layers, Link2, FileCheck, Target, Cpu, ShieldCheck, Smartphone,
-  Volume2, VolumeX, Bell, BellOff, RotateCcw, Upload, Trash2, Music,
+  Volume2, VolumeX, Bell, BellOff, RotateCcw, Upload, Trash2, Music, X,
 } from 'lucide-react';
 import AudioTrimPreview from './AudioTrimPreview';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
@@ -316,6 +316,7 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
   // the last hour.
   const [seoAutoDeepScans, setSeoAutoDeepScans] = useState(null);
   const [alertFilter, setAlertFilter] = useState('all');
+  const [alertReasonFilter, setAlertReasonFilter] = useState('');
   // Task #426: hide synthetic test alerts (from "Test alert delivery" button)
   // by default; admins can opt in via the "Show test alerts" toggle.
   const [showSyntheticAlerts, setShowSyntheticAlerts] = useState(false);
@@ -2043,6 +2044,46 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                 <option value="unacknowledged">Unacknowledged</option>
                 <option value="acknowledged">Acknowledged</option>
               </select>
+              {(() => {
+                const reasonSet = new Set();
+                (alertHistory.alerts || []).forEach(a => {
+                  if (a?.type === 'review_prompt_reason_ctr_drop' && Array.isArray(a?.threshold_snapshot?.reasons)) {
+                    a.threshold_snapshot.reasons.forEach(r => {
+                      const name = (r && typeof r === 'object') ? (r.reason ?? '') : String(r ?? '');
+                      if (name) reasonSet.add(name);
+                    });
+                  }
+                });
+                const reasons = Array.from(reasonSet).sort();
+                if (reasons.length === 0 && !alertReasonFilter) return null;
+                return (
+                  <select
+                    className="text-[10px] border border-gray-200 rounded-md px-2 py-1 bg-white text-gray-600"
+                    value={alertReasonFilter}
+                    onChange={e => setAlertReasonFilter(e.target.value)}
+                    title="Filter alert history to alerts whose reason snapshot contains this trigger reason"
+                  >
+                    <option value="">All reasons</option>
+                    {reasons.map(r => (
+                      <option key={r} value={r}>{r}</option>
+                    ))}
+                    {alertReasonFilter && !reasons.includes(alertReasonFilter) && (
+                      <option value={alertReasonFilter}>{alertReasonFilter}</option>
+                    )}
+                  </select>
+                );
+              })()}
+              {alertReasonFilter && (
+                <button
+                  type="button"
+                  onClick={() => setAlertReasonFilter('')}
+                  className="text-[10px] px-2 py-1 rounded-md bg-violet-50 text-violet-700 border border-violet-200 hover:bg-violet-100 transition-colors font-medium flex items-center gap-1"
+                  title="Clear reason filter"
+                >
+                  Reason: {alertReasonFilter}
+                  <X size={10} />
+                </button>
+              )}
               <label
                 className="flex items-center gap-1 text-[10px] text-gray-600 px-2 py-1 rounded-md border border-gray-200 bg-white cursor-pointer select-none hover:bg-gray-50"
                 title="Include synthetic alerts produced by the Test alert delivery button"
@@ -2915,8 +2956,16 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
           <div className="space-y-2 max-h-[400px] overflow-y-auto">
             {alertHistory.alerts
               .filter(a => {
-                if (alertFilter === 'unacknowledged') return !a.acknowledged;
-                if (alertFilter === 'acknowledged') return a.acknowledged;
+                if (alertFilter === 'unacknowledged' && a.acknowledged) return false;
+                if (alertFilter === 'acknowledged' && !a.acknowledged) return false;
+                if (alertReasonFilter) {
+                  const reasons = Array.isArray(a?.threshold_snapshot?.reasons) ? a.threshold_snapshot.reasons : [];
+                  const hit = reasons.some(r => {
+                    const name = (r && typeof r === 'object') ? (r.reason ?? '') : String(r ?? '');
+                    return name === alertReasonFilter;
+                  });
+                  if (!hit) return false;
+                }
                 return true;
               })
               .map((alert) => {
@@ -2982,28 +3031,37 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                         <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                           <span className={`text-[10px] font-medium ${alert.acknowledged ? 'text-gray-400' : 'text-gray-500'}`}>Reasons:</span>
                           {alert.threshold_snapshot.reasons.map((r, idx) => {
-                            const reasonName = (r && typeof r === 'object') ? (r.reason ?? 'unknown') : String(r);
+                            const rawName = (r && typeof r === 'object') ? (r.reason ?? '') : String(r ?? '');
+                            const reasonName = rawName || '';
+                            const displayName = reasonName || 'unknown';
                             const deltaPp = (r && typeof r === 'object' && r.delta_pp != null) ? Number(r.delta_pp) : null;
                             const title = deltaPp != null
-                              ? `${reasonName}: ${r.prev_ctr_pct ?? '?'}% → ${r.curr_ctr_pct ?? '?'}% (${deltaPp >= 0 ? '+' : ''}${deltaPp.toFixed(1)} pp)`
-                              : reasonName;
+                              ? `${displayName}: ${r.prev_ctr_pct ?? '?'}% → ${r.curr_ctr_pct ?? '?'}% (${deltaPp >= 0 ? '+' : ''}${deltaPp.toFixed(1)} pp)`
+                              : displayName;
+                            const isActive = !!reasonName && alertReasonFilter === reasonName;
+                            const clickable = !!reasonName;
                             return (
-                              <span
+                              <button
+                                type="button"
                                 key={`${alert._id}-reason-${idx}`}
-                                title={title}
-                                className={`text-[10px] px-1.5 py-0.5 rounded font-medium border ${
-                                  alert.acknowledged
-                                    ? 'bg-gray-100 border-gray-200 text-gray-400'
-                                    : 'bg-red-100 border-red-200 text-red-700'
+                                title={clickable ? `${title} — click to ${isActive ? 'clear' : 'filter by this reason'}` : title}
+                                disabled={!clickable}
+                                onClick={() => clickable && setAlertReasonFilter(isActive ? '' : reasonName)}
+                                className={`text-[10px] px-1.5 py-0.5 rounded font-medium border transition-colors ${clickable ? 'cursor-pointer' : 'cursor-default'} ${
+                                  isActive
+                                    ? 'bg-violet-100 border-violet-300 text-violet-800 ring-1 ring-violet-300'
+                                    : alert.acknowledged
+                                      ? 'bg-gray-100 border-gray-200 text-gray-400 hover:bg-gray-200'
+                                      : 'bg-red-100 border-red-200 text-red-700 hover:bg-red-200'
                                 }`}
                               >
-                                {reasonName}
+                                {displayName}
                                 {deltaPp != null && (
-                                  <span className={`ml-1 ${alert.acknowledged ? 'text-gray-400' : 'text-red-500'}`}>
+                                  <span className={`ml-1 ${isActive ? 'text-violet-600' : alert.acknowledged ? 'text-gray-400' : 'text-red-500'}`}>
                                     ({deltaPp >= 0 ? '+' : ''}{deltaPp.toFixed(1)} pp)
                                   </span>
                                 )}
-                              </span>
+                              </button>
                             );
                           })}
                         </div>
@@ -3034,11 +3092,33 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
               })}
 
             {alertHistory.alerts.filter(a => {
-              if (alertFilter === 'unacknowledged') return !a.acknowledged;
-              if (alertFilter === 'acknowledged') return a.acknowledged;
+              if (alertFilter === 'unacknowledged' && a.acknowledged) return false;
+              if (alertFilter === 'acknowledged' && !a.acknowledged) return false;
+              if (alertReasonFilter) {
+                const reasons = Array.isArray(a?.threshold_snapshot?.reasons) ? a.threshold_snapshot.reasons : [];
+                const hit = reasons.some(r => {
+                  const name = (r && typeof r === 'object') ? (r.reason ?? '') : String(r ?? '');
+                  return name === alertReasonFilter;
+                });
+                if (!hit) return false;
+              }
               return true;
             }).length === 0 && (
-              <p className="text-center text-[11px] text-gray-400 py-4">No alerts matching this filter</p>
+              <p className="text-center text-[11px] text-gray-400 py-4">
+                No alerts matching this filter
+                {alertReasonFilter && (
+                  <>
+                    {' '}
+                    <button
+                      type="button"
+                      onClick={() => setAlertReasonFilter('')}
+                      className="underline text-violet-600 hover:text-violet-700"
+                    >
+                      Clear reason filter
+                    </button>
+                  </>
+                )}
+              </p>
             )}
           </div>
           )}
