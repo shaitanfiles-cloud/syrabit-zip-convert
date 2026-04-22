@@ -302,6 +302,13 @@ _ALERT_THRESHOLDS_DEFAULT = {
     "hydrate_failure_per_hour": 50,
     "hydrate_recovery_min_rate_pct": 50.0,
     "hydrate_recovery_min_attempts": 10,
+    # Task #656: review-prompt CTR floor alert. Fires when, over the last
+    # 7d, ``review_prompt_shown`` >= ``review_prompt_ctr_min_shown`` AND
+    # ``ctr_pct`` < ``review_prompt_ctr_floor_pct``. Modeled on the
+    # hydrate_recovery_low pair above so admins can tune both knobs from
+    # the existing Alert Settings panel without a deploy.
+    "review_prompt_ctr_min_shown": 50,
+    "review_prompt_ctr_floor_pct": 5.0,
     # Task #432: page on-call when this worker's Assamese-purity override
     # refresh loop hasn't ticked successfully in this many seconds. The
     # poll cadence is 15s so 60s == 4 missed ticks before paging.

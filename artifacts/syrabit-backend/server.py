@@ -475,6 +475,14 @@ async def lifespan(app):
     if _is_leader:
         from routes.analytics import _hydrate_alert_loop
         asyncio.create_task(_hydrate_alert_loop())
+    # Task #656 — periodically check review_prompt_events and fire admin
+    # alerts (email + webhook + persisted) when the 7-day click-through
+    # rate collapses below the configured floor (UI regression /
+    # `writeReviewUrl` broken). Leader-gated so we don't double-fire
+    # across replicas.
+    if _is_leader:
+        from routes.admin_review_prompts import _review_prompt_alert_loop
+        asyncio.create_task(_review_prompt_alert_loop())
     if _is_leader:
         from routes.bot_discovery import _sitemap_indexnow_diff_loop
         asyncio.create_task(_sitemap_indexnow_diff_loop())

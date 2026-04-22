@@ -7,8 +7,17 @@ rate, per-reason breakdown) without depending on the PostHog API.
 
 Mirrors the pattern already used for hydrate-event (`/analytics/hydrate-event`)
 and ad-impression (`/analytics/ad-impression`) ingest.
+
+Task #656 — also exposes a background alert loop
+(`_review_prompt_alert_loop`) modeled on
+`routes.analytics._hydrate_alert_loop` that fires
+`review_prompt_ctr_low` via `metrics._dispatch_alert` when the 7-day
+click-through rate collapses below an admin-configurable floor (e.g.
+because a UI regression broke the prompt CTA / `writeReviewUrl`).
 """
+import asyncio
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -202,3 +211,202 @@ async def admin_review_prompt_stats(
     except Exception as e:
         logger.warning(f"review-prompt-stats query failed: {e}")
         return empty
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Task #656 — alert ops when the review-prompt CTR collapses
+#
+# Background loop modeled on `routes.analytics._hydrate_alert_loop`. Every
+# `REVIEW_PROMPT_ALERT_INTERVAL_S` we aggregate the last 7 days of
+# `review_prompt_events` and fire a `review_prompt_ctr_low` alert via
+# `metrics._dispatch_alert` when:
+#
+#   shown >= REVIEW_PROMPT_CTR_MIN_SHOWN  AND  ctr_pct < REVIEW_PROMPT_CTR_FLOOR_PCT
+#
+# Both knobs are admin-tunable from the Alert Settings panel — they live
+# in `metrics._ALERT_THRESHOLDS_DEFAULT` so the existing GET/PUT
+# `/admin/alert-settings` endpoints already surface and persist them.
+#
+# The constants below are *defaults* (mirroring the
+# `HYDRATE_FAILURE_THRESHOLD` pattern) and are exported so the test suite
+# can pin values without coupling to the saved admin config.
+# ─────────────────────────────────────────────────────────────────────────────
+
+REVIEW_PROMPT_CTR_MIN_SHOWN = 50           # min shown events in window
+REVIEW_PROMPT_CTR_FLOOR_PCT = 5.0          # ctr_pct < this → alert
+REVIEW_PROMPT_ALERT_WINDOW_DAYS = 7
+REVIEW_PROMPT_ALERT_COOLDOWN_S = 6 * 60 * 60   # 6 h per incident
+REVIEW_PROMPT_ALERT_INTERVAL_S = 30 * 60       # poll every 30 min
+_REVIEW_PROMPT_DASHBOARD_URL = (
+    "https://syrabit.ai/admin/dashboard?tab=overview#review-prompt-funnel"
+)
+
+_REVIEW_PROMPT_ALERT_LAST_FIRED: Dict[str, float] = {}
+
+
+def _effective_review_prompt_thresholds() -> tuple:
+    """Return ``(min_shown, floor_pct)`` using admin-configured values from
+    ``metrics._ALERT_THRESHOLDS``, falling back to module-level defaults
+    on missing / invalid entries. Mirrors
+    ``routes.analytics._effective_hydrate_thresholds``.
+    """
+    min_shown = REVIEW_PROMPT_CTR_MIN_SHOWN
+    floor_pct = REVIEW_PROMPT_CTR_FLOOR_PCT
+    try:
+        from metrics import _ALERT_THRESHOLDS
+        try:
+            min_shown = int(float(_ALERT_THRESHOLDS.get(
+                "review_prompt_ctr_min_shown", min_shown,
+            )))
+        except (TypeError, ValueError):
+            pass
+        try:
+            floor_pct = float(_ALERT_THRESHOLDS.get(
+                "review_prompt_ctr_floor_pct", floor_pct,
+            ))
+        except (TypeError, ValueError):
+            pass
+    except Exception:
+        pass
+    return min_shown, floor_pct
+
+
+async def _gather_review_prompt_alert_window(
+    window_days: int = REVIEW_PROMPT_ALERT_WINDOW_DAYS,
+) -> Dict[str, Any]:
+    """Aggregate the last `window_days` of review-prompt telemetry into the
+    counters required by the threshold check. Always returns a stable
+    shape; on Mongo failure returns zeros so the alert loop just no-ops.
+    """
+    out: Dict[str, Any] = {
+        "since": datetime.now(timezone.utc) - timedelta(days=window_days),
+        "window_days": window_days,
+        "shown": 0,
+        "clicked": 0,
+        "dismissed": 0,
+        "ctr_pct": None,
+    }
+    if not await is_mongo_available():
+        return out
+    try:
+        coll = db.review_prompt_events
+        base = {"created_at": {"$gte": out["since"]}}
+        totals: Dict[str, int] = {e: 0 for e in _REVIEW_PROMPT_VALID_EVENTS}
+        cur = coll.aggregate([
+            {"$match": {**base, "event": {"$in": list(_REVIEW_PROMPT_VALID_EVENTS)}}},
+            {"$group": {"_id": "$event", "count": {"$sum": 1}}},
+        ])
+        async for row in cur:
+            ev = row.get("_id")
+            if ev in totals:
+                totals[ev] = int(row.get("count") or 0)
+        out["shown"] = totals["review_prompt_shown"]
+        out["clicked"] = totals["review_prompt_clicked"]
+        out["dismissed"] = totals["review_prompt_dismissed"]
+        if out["shown"] > 0:
+            out["ctr_pct"] = round((out["clicked"] / out["shown"]) * 100, 1)
+    except Exception as e:
+        logger.debug(f"review-prompt alert window aggregation failed: {e}")
+    return out
+
+
+async def _evaluate_review_prompt_ctr_alerts(
+    now_ts: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """Pure helper used by the loop and tests. Returns the list of alerts
+    that *should* be dispatched right now (after cooldown checks). Does
+    NOT mutate ``_REVIEW_PROMPT_ALERT_LAST_FIRED`` — the loop is
+    responsible for marking cooldown only after a successful dispatch
+    (so a transient Resend/webhook failure doesn't suppress the next
+    alert for the cooldown window).
+    Each entry is the kwargs dict for ``metrics._dispatch_alert``.
+    """
+    if now_ts is None:
+        now_ts = time.time()
+    snap = await _gather_review_prompt_alert_window()
+    alerts: List[Dict[str, Any]] = []
+    min_shown, floor_pct = _effective_review_prompt_thresholds()
+
+    shown = int(snap.get("shown") or 0)
+    clicked = int(snap.get("clicked") or 0)
+    ctr = snap.get("ctr_pct")
+
+    if shown < min_shown or ctr is None or ctr >= floor_pct:
+        return alerts
+
+    last = _REVIEW_PROMPT_ALERT_LAST_FIRED.get("review_prompt_ctr_low")
+    if last is not None and (now_ts - last) < REVIEW_PROMPT_ALERT_COOLDOWN_S:
+        return alerts
+
+    body_lines = [
+        f"Review-prompt click-through rate is {ctr:.1f}% "
+        f"({clicked}/{shown}) over the last "
+        f"{REVIEW_PROMPT_ALERT_WINDOW_DAYS}d, below the "
+        f"{floor_pct:.1f}% floor with ≥ {min_shown} shown events.",
+        "Likely a UI regression — check that `writeReviewUrl` still "
+        "resolves and the prompt CTA is reachable.",
+        f"Dashboard: {_REVIEW_PROMPT_DASHBOARD_URL}",
+    ]
+    alerts.append({
+        "alert_type": "review_prompt_ctr_low",
+        "title": "Review-prompt CTR dropped below floor",
+        "body": "\n".join(body_lines),
+        "threshold_snapshot": {
+            "metric": "review_prompt_ctr_pct",
+            "value": floor_pct,
+            "actual": ctr,
+            "shown": shown,
+            "clicked": clicked,
+            "min_shown": min_shown,
+            "window_days": REVIEW_PROMPT_ALERT_WINDOW_DAYS,
+        },
+    })
+    return alerts
+
+
+async def _review_prompt_alert_loop():
+    """Background loop: poll review_prompt_events and fire admin alerts
+    when the 7-day CTR falls below the configured floor. Modeled on
+    ``routes.analytics._hydrate_alert_loop`` — best-effort, swallows its
+    own errors so a flaky Mongo can't kill the task.
+    """
+    # Stagger start so we don't pile onto the boot-time burst alongside
+    # the other alert loops.
+    await asyncio.sleep(180)
+    while True:
+        try:
+            # Refresh persisted alert settings BEFORE evaluation so admin
+            # threshold changes take effect within the next tick — same
+            # pattern the hydrate / metrics alert loops use.
+            try:
+                from metrics import _load_alert_settings
+                await _load_alert_settings()
+            except Exception:
+                pass
+            alerts = await _evaluate_review_prompt_ctr_alerts()
+            if alerts:
+                try:
+                    from metrics import _dispatch_alert, _alert_last_fired
+                    for a in alerts:
+                        # Bypass the shared 30-min metrics cooldown — we
+                        # already gate ourselves at REVIEW_PROMPT_ALERT_COOLDOWN_S.
+                        _alert_last_fired.pop(a["alert_type"], None)
+                        try:
+                            await _dispatch_alert(
+                                a["alert_type"], a["title"], a["body"],
+                                threshold_snapshot=a.get("threshold_snapshot"),
+                            )
+                        except Exception as dexc:
+                            # Don't advance our cooldown on failure — let
+                            # the next tick retry.
+                            logger.warning(
+                                f"review-prompt alert {a['alert_type']} dispatch "
+                                f"failed; will retry next tick: {dexc}"
+                            )
+                            continue
+                        _REVIEW_PROMPT_ALERT_LAST_FIRED[a["alert_type"]] = time.time()
+                except Exception as exc:
+                    logger.warning(f"review-prompt alert dispatch failed: {exc}")
+        except Exception as exc:
+            logger.debug(f"review-prompt alert loop error: {exc}")
+        await asyncio.sleep(REVIEW_PROMPT_ALERT_INTERVAL_S)
