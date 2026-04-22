@@ -8,7 +8,7 @@ enhancement, SEO meta, gap analysis, and the long-document reader.
 
 | Mode | Trigger env var |
 |------|-----------------|
-| Vertex AI service account | `VERTEX_SERVICE_ACCOUNT` (or `GEMINI_API_KEY` containing JSON) |
+| Vertex AI service account | `VERTEX_SERVICE_ACCOUNT` (or `GEMINI_API_KEY` containing JSON). The streaming chat module `vertex_chat.py` additionally accepts `VERTEX_SERVICE_ACCOUNT_JSON` as an alias. |
 | Google AI Studio API key  | `GEMINI_API_KEY=AIza…` |
 | BYOK via CF AI Gateway    | `CF_AI_GATEWAY_ACCOUNT_ID` + `CF_AI_GATEWAY_ID` (no local creds) |
 
@@ -47,8 +47,18 @@ EMBED_MAX_CONCURRENT=8                # in-flight embed cap
 EMBED_RETRY_MAX_ATTEMPTS=3
 EMBED_RETRY_BASE_MS=400
 CF_AI_GATEWAY_CACHE_TTL=3600
-VERTEX_REQUIRED=1                     # raise on boot if no creds
+VERTEX_REQUIRED=1                     # raise on boot if no creds (default: log ERROR + degrade)
+WORKERS_AI_EMBED_MODEL=...            # Workers AI fallback model (must be 1024-dim to be used)
 ```
+
+## Boot semantics
+
+- Default behavior with no credentials: log a single `ERROR` line at
+  startup and degrade — every Gemini call returns `None` and routes
+  return 503. The app still boots so unrelated routes keep working.
+- Hard-fail behavior: set `VERTEX_REQUIRED=1`. Import raises
+  `RuntimeError` so Railway/Gunicorn marks the worker failed and the
+  deploy is rejected.
 
 ## Verifying
 
@@ -65,6 +75,11 @@ env vars and confirm SA JSON is valid (single-line, no smart quotes).
 ## Embedding contract
 
 `embed_text` returns `Optional[List[float]]` — a 1024-dim vector
-(`gemini-embedding-001`) or `None` on failure. Vectorize
-`syllabus-index-v2` is 1024-dim; this module never returns a
-dimension-mismatched fallback. Callers must handle `None`.
+(`gemini-embedding-001`) or `None` on failure. On Gemini failure it
+attempts the Workers AI fallback (Task #636) but the fallback is
+dimension-gated: only vectors matching the 1024-dim Vectorize
+`syllabus-index-v2` contract are returned. The default Workers AI
+embed model is 768-dim (`bge-base-en-v1.5`), so the fallback path is
+exercised but currently always returns `None` — set
+`WORKERS_AI_EMBED_MODEL` to a 1024-dim model on Cloudflare to make it
+actually carry traffic. Callers must handle `None`.

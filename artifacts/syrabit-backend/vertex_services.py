@@ -361,12 +361,55 @@ async def _embed_one(text: str, task_type: str) -> Optional[List[float]]:
         return None
 
 
+async def _workers_ai_fallback(text: str) -> Optional[List[float]]:
+    """Workers AI safety net (Task #636). Only returns a vector when its
+    dimension matches `_EMBED_DIMENSIONS` so the 1024-dim Vectorize
+    index never receives a dimension-mismatched embedding. The current
+    Workers AI default (bge-base-en-v1.5) emits 768-dim, so in the
+    default deployment this path attempts the fallback (and surfaces
+    failure metrics in providers.workers_ai) but returns None — which
+    callers already handle. Set `WORKERS_AI_EMBED_MODEL` to a
+    1024-compatible model on Cloudflare to actually use the fallback.
+    """
+    if not text:
+        return None
+    try:
+        from providers import workers_ai as _wai
+        if not _wai.is_enabled("embed"):
+            return None
+        class _VertexFailed(TimeoutError):
+            pass
+        ok, val, _ = await _wai.attempt_fallback(
+            "embed", _VertexFailed("vertex_primary_failed"), 0,
+            lambda: _wai.call_embed(text),
+        )
+        if not ok or not val:
+            return None
+        vec = val[0] if isinstance(val, list) and val and isinstance(val[0], list) else val
+        if not vec:
+            return None
+        if len(vec) != _EMBED_DIMENSIONS:
+            logger.warning(
+                f"workers-ai fallback returned {len(vec)}-dim vector; "
+                f"Vectorize index expects {_EMBED_DIMENSIONS}. Dropping to None "
+                "to preserve dimension safety. Set WORKERS_AI_EMBED_MODEL to a "
+                f"{_EMBED_DIMENSIONS}-dim model to enable the fallback."
+            )
+            return None
+        return list(vec)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"workers-ai embed fallback failed: {type(e).__name__}: {str(e)[:150]}")
+        return None
+
+
 async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Optional[List[float]]:
     """Return a 1024-dim Gemini embedding vector, or None on failure.
 
-    Returns None (not a 768-dim fallback) on every failure path so
-    Vectorize syllabus-index-v2 (1024-dim) never receives a
-    dimension-mismatched vector. Callers must handle None.
+    Tries Gemini primary path first; if it fails, attempts the Workers
+    AI fallback (Task #636 safety net). The fallback is dimension-gated
+    — only vectors matching `_EMBED_DIMENSIONS` (1024) are returned so
+    Vectorize syllabus-index-v2 never receives a dim-mismatched vector.
+    Callers must handle None.
     """
     if not text:
         return None
@@ -382,6 +425,9 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Option
         _embedding_cache = None  # type: ignore[assignment]
 
     vec = await _embed_one(text, task_type)
+    if vec is None:
+        vec = await _workers_ai_fallback(text)
+
     try:
         if _ek and vec and _embedding_cache is not None:
             _embedding_cache[_ek] = vec
