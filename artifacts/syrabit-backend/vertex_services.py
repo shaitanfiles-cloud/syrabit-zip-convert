@@ -90,10 +90,13 @@ def _is_transient_embed_error(exc: BaseException) -> bool:
 
 
 # ── Models ──────────────────────────────────────────────────────────────────
+# Generation/vision/long-doc models can be overridden via env. Embedding
+# model is locked to gemini-embedding-001 because Vectorize
+# syllabus-index-v2 expects 1024-dim vectors from this exact model.
 _EMBED_MODEL  = "gemini-embedding-001"
-_GEN_MODEL    = "gemini-2.5-flash"
-_PRO_MODEL    = "gemini-2.5-flash"
-_VISION_MODEL = "gemini-2.5-flash"
+_GEN_MODEL    = os.environ.get("VERTEX_GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+_PRO_MODEL    = os.environ.get("VERTEX_GEMINI_PRO_MODEL", _GEN_MODEL).strip() or _GEN_MODEL
+_VISION_MODEL = os.environ.get("VERTEX_GEMINI_VISION_MODEL", _GEN_MODEL).strip() or _GEN_MODEL
 _EMBED_DIMENSIONS = 1024
 
 
@@ -928,16 +931,21 @@ async def health_check() -> dict:
         }
     test = await embed_text("test", task_type="SEMANTIC_SIMILARITY")
     gen_test = await _generate("Reply with just the word: OK", max_tokens=5)
+    embed_ok = test is not None and len(test) == _EMBED_DIMENSIONS
+    gen_ok = gen_test is not None and "OK" in (gen_test or "")
+    # `ok` reflects actual probe success (not just credential presence)
+    # so health dashboards can't show green when calls are silently
+    # failing upstream.
     return {
-        "ok": True,
+        "ok": embed_ok and gen_ok,
         "auth_mode": _AUTH_MODE,
         "via_cf_gateway": _CF_GW_ENABLED,
         "byok": _USE_BYOK,
         "project": _VERTEX_PROJECT or None,
         "location": _VERTEX_LOCATION,
-        "embeddings": test is not None,
+        "embeddings": embed_ok,
         "embed_dimensions": len(test) if test else 0,
-        "generation": gen_test is not None and "OK" in (gen_test or ""),
+        "generation": gen_ok,
         "models": {
             "generation": _GEN_MODEL,
             "embedding":  _EMBED_MODEL,
