@@ -215,6 +215,12 @@ const BYPASS_PREFIXES = [
 const RATE_LIMIT_RPM = 120;
 const BOT_RATE_LIMIT_RPM = 1200;
 const RATE_LIMIT_WINDOW_S = 60;
+const AI_RATE_LIMIT_RPM = 30;
+const AI_RATE_LIMIT_PREFIXES = ["/api/ai/chat", "/api/ai/generate", "/api/ai/grounded", "/api/ai/explain", "/api/ai/quiz", "/api/ai/summarize", "/api/chat"];
+function isAiPath(p: string): boolean {
+  if (p.startsWith("/api/ai/fallback/")) return false;
+  return AI_RATE_LIMIT_PREFIXES.some((x) => p.startsWith(x)) || (p.startsWith("/api/ai/") && !p.startsWith("/api/ai/fallback/"));
+}
 
 const SEARCH_BOT_UA = /googlebot|google-extended|bingbot|yandexbot|duckduckbot|slurp|applebot|chatgpt-user|oai-searchbot|perplexitybot|claudebot|meta-externalagent/i;
 
@@ -399,6 +405,26 @@ function isBypass(pathname: string): boolean {
 
 function isUserSpecific(pathname: string): boolean {
   return USER_SPECIFIC_PREFIXES.some((p) => pathname.startsWith(p));
+}
+
+async function checkRateLimitKey(
+  key: string,
+  kv: KVNamespace,
+  limit: number
+): Promise<{ allowed: boolean; remaining: number }> {
+  const now = Math.floor(Date.now() / 1000);
+  const windowStart = now - RATE_LIMIT_WINDOW_S;
+  try {
+    const raw = await kv.get(key);
+    let timestamps: number[] = raw ? JSON.parse(raw) : [];
+    timestamps = timestamps.filter((t) => t > windowStart);
+    if (timestamps.length >= limit) return { allowed: false, remaining: 0 };
+    timestamps.push(now);
+    await kv.put(key, JSON.stringify(timestamps), { expirationTtl: RATE_LIMIT_WINDOW_S * 2 });
+    return { allowed: true, remaining: limit - timestamps.length };
+  } catch {
+    return { allowed: true, remaining: limit };
+  }
 }
 
 async function checkRateLimit(
@@ -1626,6 +1652,26 @@ export default {
     const isApiRoute = pathname.startsWith("/api/");
 
     if (!isSearchBot && isApiRoute) {
+      if (isAiPath(pathname)) {
+        const aiKey = `rl:ai:${clientIp}`;
+        const aiRl = await checkRateLimitKey(aiKey, env.RATE_LIMIT, AI_RATE_LIMIT_RPM);
+        if (!aiRl.allowed) {
+          return new Response(
+            JSON.stringify({ detail: "AI rate limit exceeded. Please slow down." }),
+            {
+              status: 429,
+              headers: {
+                ...cors,
+                "Content-Type": "application/json",
+                "Retry-After": String(RATE_LIMIT_WINDOW_S),
+                "X-RateLimit-Limit": String(AI_RATE_LIMIT_RPM),
+                "X-RateLimit-Remaining": "0",
+                "X-RateLimit-Scope": "ai",
+              },
+            }
+          );
+        }
+      }
       const rl = await checkRateLimit(clientIp, env.RATE_LIMIT, RATE_LIMIT_RPM);
       remaining = rl.remaining;
       if (!rl.allowed) {
