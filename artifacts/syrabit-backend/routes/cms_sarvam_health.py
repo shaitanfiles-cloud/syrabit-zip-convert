@@ -5183,7 +5183,16 @@ async def vertex_translate(
         raise HTTPException(status_code=400, detail="text is required")
     result = await vertex_services.translate(text, target_lang=target_lang, source_lang=source_lang)
     if result is None:
-        raise HTTPException(status_code=503, detail="Translation failed — check GEMINI_API_KEY")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Translation failed — Gemini auth now flows through the Cloudflare AI Gateway BYOK "
+                "binding (google-ai-studio / google-vertex-ai). Verify CF_AI_GATEWAY_ACCOUNT_ID, "
+                "CF_AI_GATEWAY_ID and the BYOK binding in the CF dashboard, then check "
+                "/admin/cms/sarvam-health/vertex/health. See docs/VERTEX_SETUP.md "
+                "'Migrating Railway → CF AI Gateway BYOK (Task #666)'."
+            ),
+        )
     return {"translated": result, "target_lang": target_lang, "source_lang": source_lang}
 
 

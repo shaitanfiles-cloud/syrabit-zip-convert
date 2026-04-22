@@ -586,7 +586,14 @@ async def admin_pyq_agentic_process(
 
     if not ocr_result_raw:
         await _db["pyq_uploads"].update_one({"id": pyq_id}, {"$set": {"processing_status": "ocr_error"}})
-        raise HTTPException(502, "Gemini OCR returned empty response — check GEMINI_API_KEY")
+        raise HTTPException(
+            502,
+            "Gemini OCR returned empty response — Gemini auth is served via the Cloudflare AI "
+            "Gateway BYOK binding (google-ai-studio). Check the BYOK binding + "
+            "CF_AI_GATEWAY_ACCOUNT_ID/CF_AI_GATEWAY_ID, then hit "
+            "/admin/cms/sarvam-health/vertex/health. See docs/VERTEX_SETUP.md "
+            "'Migrating Railway → CF AI Gateway BYOK (Task #666)'.",
+        )
 
     # Parse OCR JSON
     try:
@@ -972,7 +979,13 @@ async def admin_pyq_html_replica(
 
     ocr_result_raw = await vertex_services.analyze_image(raw, mime_type=mime, prompt=ocr_prompt, max_output_tokens=8192)
     if not ocr_result_raw:
-        raise HTTPException(502, "Gemini OCR failed — check GEMINI_API_KEY")
+        raise HTTPException(
+            502,
+            "Gemini OCR failed — Gemini auth is served via the Cloudflare AI Gateway BYOK binding "
+            "(google-ai-studio). Check the BYOK binding + CF_AI_GATEWAY_ACCOUNT_ID/CF_AI_GATEWAY_ID, "
+            "then hit /admin/cms/sarvam-health/vertex/health. See docs/VERTEX_SETUP.md "
+            "'Migrating Railway → CF AI Gateway BYOK (Task #666)'.",
+        )
 
     # Parse JSON from Gemini response
     try:
