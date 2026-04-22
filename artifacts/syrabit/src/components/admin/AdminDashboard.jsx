@@ -740,6 +740,38 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
     return () => clearTimeout(t);
   }, [navContext]);
 
+  // Task #681 — the review-prompt funnel tile (in OverviewTab) renders
+  // a baseline-noise legend whose "Tune sigma multiplier" link expects
+  // to land the admin directly on the Reason CTR Sigma Multiplier
+  // input. We listen on a window event (decoupled from OverviewTab's
+  // props) and pop the Alert Settings panel + scroll-and-focus the
+  // sigma input. Hoisted above the `if (loading)` early return below
+  // so the hook order stays stable across loading → loaded transitions
+  // (otherwise React throws "Rendered more hooks than during the
+  // previous render" once `loading` flips to false).
+  useEffect(() => {
+    const onOpenSigma = () => {
+      if (!alertSettings) loadAlertSettings();
+      setAlertSettingsOpen(true);
+      // Defer to the next paint so the panel is in the DOM before we
+      // try to scroll/focus the input.
+      setTimeout(() => {
+        const el = document.getElementById('alert-reason-ctr-sigma-input');
+        if (el) {
+          try {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } catch {
+            el.scrollIntoView();
+          }
+          try { el.focus({ preventScroll: true }); } catch { el.focus(); }
+        }
+      }, 50);
+    };
+    window.addEventListener('syrabit:open-alert-sigma-setting', onOpenSigma);
+    return () => window.removeEventListener('syrabit:open-alert-sigma-setting', onOpenSigma);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alertSettings]);
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center p-16 gap-3">
@@ -807,35 +839,6 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
     if (!alertSettings) loadAlertSettings();
     setAlertSettingsOpen(prev => !prev);
   };
-
-  // Task #681 — the review-prompt funnel tile (in OverviewTab) renders
-  // a baseline-noise legend whose "Tune sigma multiplier" link expects
-  // to land the admin directly on the Reason CTR Sigma Multiplier
-  // input. We listen on a window event (decoupled from OverviewTab's
-  // props) and pop the Alert Settings panel + scroll-and-focus the
-  // sigma input.
-  useEffect(() => {
-    const onOpenSigma = () => {
-      if (!alertSettings) loadAlertSettings();
-      setAlertSettingsOpen(true);
-      // Defer to the next paint so the panel is in the DOM before we
-      // try to scroll/focus the input.
-      setTimeout(() => {
-        const el = document.getElementById('alert-reason-ctr-sigma-input');
-        if (el) {
-          try {
-            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          } catch {
-            el.scrollIntoView();
-          }
-          try { el.focus({ preventScroll: true }); } catch { el.focus(); }
-        }
-      }, 50);
-    };
-    window.addEventListener('syrabit:open-alert-sigma-setting', onOpenSigma);
-    return () => window.removeEventListener('syrabit:open-alert-sigma-setting', onOpenSigma);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [alertSettings]);
 
   const handleResetAlertSettings = () => {
     if (alertSettings?.defaults) {
