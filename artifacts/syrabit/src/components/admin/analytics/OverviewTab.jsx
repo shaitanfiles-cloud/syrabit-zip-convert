@@ -917,7 +917,21 @@ function ReviewPromptBaselineCells({ noise }) {
   );
 }
 
-function ReviewPromptReasonRow({ row, noise, expanded, onToggle }) {
+// Task #695 — compute the σ/μ ratio for a reason. ``null`` when the
+// baseline is too thin (mean missing, stddev missing, or mean ≤ 0 —
+// dividing by a near-zero baseline mean would explode and isn't
+// meaningful triage signal anyway). Exported via module-level scope
+// so the funnel card can sort by it without re-running the math.
+function _reviewPromptVolatilityRatio(noise) {
+  if (!noise) return null;
+  const mean = noise.baseline_mean_ctr_pct;
+  const stddev = noise.baseline_stddev_pp;
+  if (mean == null || stddev == null) return null;
+  if (mean <= 0) return null;
+  return stddev / mean;
+}
+
+function ReviewPromptReasonRow({ row, noise, expanded, onToggle, volatilityThreshold }) {
   const status = row?.status;
   const shownDelta = row?.shown_delta;
   const ctrDelta = row?.ctr_delta_pct;
@@ -970,6 +984,23 @@ function ReviewPromptReasonRow({ row, noise, expanded, onToggle }) {
             ? <ChevronDown size={12} className="text-gray-400" />
             : <ChevronRight size={12} className="text-gray-400" />}
           <span className="truncate" title={row.reason}>{row.reason || '—'}</span>
+          {(() => {
+            // Task #695 — flag rows whose σ/μ ratio exceeds the
+            // admin-tunable volatility threshold so triage can spot
+            // jittery reasons before they false-positive an alert.
+            const ratio = _reviewPromptVolatilityRatio(noise);
+            if (ratio == null) return null;
+            if (!(volatilityThreshold > 0)) return null;
+            if (ratio < volatilityThreshold) return null;
+            return (
+              <span
+                className="inline-block px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-semibold text-[10px] uppercase tracking-wide"
+                title={`σ/μ = ${ratio.toFixed(2)} (≥ ${volatilityThreshold.toFixed(2)} threshold) — high week-to-week variance, likely to false-positive the auto-tuned alert. Consider raising the sigma multiplier.`}
+              >
+                volatile
+              </span>
+            );
+          })()}
         </span>
       </td>
       <td className="text-right text-gray-700 font-mono px-3.5 py-2">{row.shown}</td>
@@ -985,8 +1016,56 @@ function ReviewPromptReasonRow({ row, noise, expanded, onToggle }) {
   );
 }
 
+// Task #695 — localStorage keys for the sort + threshold knobs so an
+// admin's preference survives a refresh. Stored as plain strings to
+// keep parsing trivial and forward-compatible.
+const REVIEW_PROMPT_SORT_KEY = 'syrabit:review-prompt-funnel:sort';
+const REVIEW_PROMPT_VOL_THRESHOLD_KEY = 'syrabit:review-prompt-funnel:vol-threshold';
+const REVIEW_PROMPT_VOL_THRESHOLD_DEFAULT = 0.5;
+const REVIEW_PROMPT_SORT_OPTIONS = [
+  { value: 'shown', label: 'Shown' },
+  { value: 'absz', label: '|z|' },
+  { value: 'sigmaratio', label: 'σ/μ' },
+];
+
 function ReviewPromptFunnelCard({ stats, baseline, loading, error, onRetry, adminToken }) {
   const [expandedReason, setExpandedReason] = useState(null);
+  // Task #695 — sort toggle + volatility threshold. Default sort is
+  // 'shown' so today's behaviour (most-fired first) doesn't regress
+  // for admins who haven't opted in. Lazy initialiser reads
+  // localStorage once on mount; SSR-guarded.
+  const [sortMode, setSortMode] = useState(() => {
+    if (typeof window === 'undefined') return 'shown';
+    try {
+      const v = window.localStorage.getItem(REVIEW_PROMPT_SORT_KEY);
+      if (v && REVIEW_PROMPT_SORT_OPTIONS.some(o => o.value === v)) return v;
+    } catch {}
+    return 'shown';
+  });
+  const [volatilityThreshold, setVolatilityThreshold] = useState(() => {
+    if (typeof window === 'undefined') return REVIEW_PROMPT_VOL_THRESHOLD_DEFAULT;
+    try {
+      const raw = window.localStorage.getItem(REVIEW_PROMPT_VOL_THRESHOLD_KEY);
+      if (raw != null) {
+        const parsed = parseFloat(raw);
+        if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+      }
+    } catch {}
+    return REVIEW_PROMPT_VOL_THRESHOLD_DEFAULT;
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try { window.localStorage.setItem(REVIEW_PROMPT_SORT_KEY, sortMode); } catch {}
+  }, [sortMode]);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(
+        REVIEW_PROMPT_VOL_THRESHOLD_KEY,
+        String(volatilityThreshold),
+      );
+    } catch {}
+  }, [volatilityThreshold]);
   if (loading && !stats) {
     return (
       <Card title="Google Review Prompt Funnel (7d)">
@@ -1005,7 +1084,7 @@ function ReviewPromptFunnelCard({ stats, baseline, loading, error, onRetry, admi
   const dismissed = s.dismissed || 0;
   const ctr = s.ctr_pct;
   const dismissRate = s.dismiss_rate_pct;
-  const byReason = Array.isArray(s.by_reason) ? s.by_reason : [];
+  const byReasonRaw = Array.isArray(s.by_reason) ? s.by_reason : [];
   const isEmpty = shown === 0 && clicked === 0 && dismissed === 0;
   // Task #681 — per-reason baseline noise lookup. Object keyed by
   // reason name so each row pulls its noise band in O(1).
@@ -1013,6 +1092,36 @@ function ReviewPromptFunnelCard({ stats, baseline, loading, error, onRetry, admi
   const baselineWeeks = baseline?.baseline_weeks ?? null;
   const sigmaMult = baseline?.sigma_mult ?? null;
   const minShown = baseline?.min_shown ?? null;
+  // Task #695 — apply the chosen sort. ``shown`` (default) preserves
+  // the existing order. ``absz`` highlights reasons whose current
+  // week is furthest from baseline (alert-likely). ``sigmaratio``
+  // highlights structurally jittery reasons (high σ/μ — most likely
+  // to false-positive). Reasons missing the relevant metric sink to
+  // the bottom so they don't crowd out actionable rows.
+  const byReason = (() => {
+    if (sortMode === 'shown') return byReasonRaw;
+    const decorated = byReasonRaw.map((row, i) => {
+      const noise = noiseByReason[row?.reason || 'unknown'] || null;
+      let key = null;
+      if (sortMode === 'absz') {
+        const z = noise?.current_z_score;
+        key = z == null ? null : Math.abs(z);
+      } else if (sortMode === 'sigmaratio') {
+        key = _reviewPromptVolatilityRatio(noise);
+      }
+      return { row, i, key };
+    });
+    decorated.sort((a, b) => {
+      const aMissing = a.key == null;
+      const bMissing = b.key == null;
+      if (aMissing && bMissing) return a.i - b.i;
+      if (aMissing) return 1;
+      if (bMissing) return -1;
+      if (b.key !== a.key) return b.key - a.key;
+      return a.i - b.i;
+    });
+    return decorated.map(d => d.row);
+  })();
   const handleOpenSigmaSetting = () => {
     // AdminDashboard owns the Alert Settings panel state; dispatching a
     // window event keeps OverviewTab decoupled from the parent's
@@ -1068,10 +1177,49 @@ function ReviewPromptFunnelCard({ stats, baseline, loading, error, onRetry, admi
 
           {byReason.length > 0 && (
             <div className="rounded-xl border border-gray-200 bg-gray-50 mt-4 overflow-hidden">
-              <div className="px-3.5 py-2 border-b border-gray-200">
+              <div className="px-3.5 py-2 border-b border-gray-200 flex items-center justify-between gap-2 flex-wrap">
                 <p className="text-gray-500 text-xs font-medium">
                   By trigger reason · Δ vs prev week · noise band
                 </p>
+                {/* Task #695 — sort toggle + admin-tunable volatility
+                    threshold. Stored in localStorage so the choice
+                    persists across refreshes. Default sort 'shown'
+                    matches today's behaviour. */}
+                <div className="flex items-center gap-3 text-[11px] text-gray-500">
+                  <label className="inline-flex items-center gap-1">
+                    <span>Sort:</span>
+                    <select
+                      value={sortMode}
+                      onChange={(e) => setSortMode(e.target.value)}
+                      className="px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-700"
+                      title="Sort by raw shown count, |z| (furthest from baseline this week), or σ/μ (structurally noisy)."
+                    >
+                      {REVIEW_PROMPT_SORT_OPTIONS.map(opt => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="inline-flex items-center gap-1">
+                    <span title="Reasons whose σ/μ ratio meets or exceeds this threshold get a 'volatile' pill.">
+                      Volatile σ/μ ≥
+                    </span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.05"
+                      value={volatilityThreshold}
+                      onChange={(e) => {
+                        const parsed = parseFloat(e.target.value);
+                        setVolatilityThreshold(
+                          Number.isFinite(parsed) && parsed >= 0
+                            ? parsed
+                            : REVIEW_PROMPT_VOL_THRESHOLD_DEFAULT,
+                        );
+                      }}
+                      className="w-14 px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-700 font-mono"
+                    />
+                  </label>
+                </div>
               </div>
               <table className="w-full text-xs">
                 <thead>
@@ -1118,6 +1266,7 @@ function ReviewPromptFunnelCard({ stats, baseline, loading, error, onRetry, admi
                           onToggle={() => setExpandedReason(
                             isExpanded ? null : reasonKey
                           )}
+                          volatilityThreshold={volatilityThreshold}
                         />
                         {isExpanded && (
                           <tr className="bg-white">
