@@ -143,22 +143,84 @@ async def admin_review_prompt_stats(
         clicked = int(totals.get("clicked") or 0)
         dismissed = int(totals.get("dismissed") or 0)
 
+        # Task #659 — also pull the immediately-preceding equal-sized
+        # window so we can surface per-reason week-over-week deltas
+        # (shown count + CTR) on the admin tile. Reasons that newly
+        # appeared / disappeared get a `status` flag so ops can see
+        # them at a glance.
+        prev_until = since
+        prev_since = since - (now - since)
+        prev_agg = await _aggregate_review_prompt_window(prev_since, prev_until)
+        prev_by_reason_map: Dict[str, Dict[str, int]] = {
+            (row.get("reason") or "unknown"): {
+                "shown": int(row.get("shown") or 0),
+                "clicked": int(row.get("clicked") or 0),
+                "dismissed": int(row.get("dismissed") or 0),
+            }
+            for row in prev_agg["by_reason"]
+        }
+
         # Decorate the by-reason rows with per-reason CTR + dismiss-rate
         # (the shared helper returns raw counts only).
         by_reason: List[Dict[str, Any]] = []
+        seen_reasons: set = set()
         for row in agg["by_reason"]:
+            reason = row.get("reason") or "unknown"
+            seen_reasons.add(reason)
             r_shown = int(row.get("shown") or 0)
             r_clicked = int(row.get("clicked") or 0)
             r_dismissed = int(row.get("dismissed") or 0)
+            prev = prev_by_reason_map.get(reason, {})
+            p_shown = int(prev.get("shown") or 0)
+            p_clicked = int(prev.get("clicked") or 0)
+            p_ctr = _ctr(p_clicked, p_shown)
+            r_ctr = _ctr(r_clicked, r_shown)
+            ctr_delta = (
+                round(r_ctr - p_ctr, 1)
+                if (r_ctr is not None and p_ctr is not None) else None
+            )
+            if p_shown == 0 and p_clicked == 0:
+                status = "new"
+            else:
+                status = "active"
             by_reason.append({
-                "reason": row.get("reason") or "unknown",
+                "reason": reason,
                 "shown": r_shown,
                 "clicked": r_clicked,
                 "dismissed": r_dismissed,
-                "ctr_pct": _ctr(r_clicked, r_shown),
+                "ctr_pct": r_ctr,
                 "dismiss_rate_pct": _ctr(r_dismissed, r_shown),
+                "prev_shown": p_shown,
+                "prev_clicked": p_clicked,
+                "prev_ctr_pct": p_ctr,
+                "shown_delta": r_shown - p_shown,
+                "ctr_delta_pct": ctr_delta,
+                "status": status,
             })
-        # Sort by shown desc so the most-fired surfaces appear first.
+        # Reasons that fired last week but are gone this week — surface
+        # them too so a regression that silenced a trigger is obvious.
+        for reason, prev in prev_by_reason_map.items():
+            if reason in seen_reasons:
+                continue
+            p_shown = int(prev.get("shown") or 0)
+            p_clicked = int(prev.get("clicked") or 0)
+            p_ctr = _ctr(p_clicked, p_shown)
+            by_reason.append({
+                "reason": reason,
+                "shown": 0,
+                "clicked": 0,
+                "dismissed": 0,
+                "ctr_pct": None,
+                "dismiss_rate_pct": None,
+                "prev_shown": p_shown,
+                "prev_clicked": p_clicked,
+                "prev_ctr_pct": p_ctr,
+                "shown_delta": -p_shown,
+                "ctr_delta_pct": None,
+                "status": "gone",
+            })
+        # Sort by shown desc so the most-fired surfaces appear first;
+        # gone reasons sink to the bottom because their shown == 0.
         by_reason.sort(key=lambda r: (r["shown"], r["clicked"]), reverse=True)
 
         # Recent events for spot-checks — kept inline because the digest
@@ -461,6 +523,7 @@ def _compose_review_prompt_weekly_digest(
     curr_totals: Dict[str, int],
     curr_by_reason: List[Dict[str, Any]],
     prev_totals: Dict[str, int],
+    prev_by_reason: Optional[List[Dict[str, Any]]] = None,
     *,
     now: Optional[datetime] = None,
     dashboard_url: str = _REVIEW_PROMPT_DIGEST_DASHBOARD_URL,
@@ -503,18 +566,68 @@ def _compose_review_prompt_weekly_digest(
         else:
             ctr_trend = "flat"
 
-    # Normalise + sort by-reason; compute per-reason CTR.
+    # Normalise + sort by-reason; compute per-reason CTR + WoW deltas
+    # (Task #659) so the digest table can show which trigger reason
+    # is responsible for the swing instead of just the overall CTR.
+    prev_by_reason_map: Dict[str, Dict[str, int]] = {}
+    for row in prev_by_reason or []:
+        prev_by_reason_map[str(row.get("reason") or "unknown")] = {
+            "shown": int(row.get("shown") or 0),
+            "clicked": int(row.get("clicked") or 0),
+            "dismissed": int(row.get("dismissed") or 0),
+        }
+
     by_reason: List[Dict[str, Any]] = []
+    seen_reasons: set = set()
     for row in curr_by_reason or []:
+        reason = str(row.get("reason") or "unknown")
+        seen_reasons.add(reason)
         r_shown = int(row.get("shown") or 0)
         r_clicked = int(row.get("clicked") or 0)
         r_dismissed = int(row.get("dismissed") or 0)
+        prev = prev_by_reason_map.get(reason, {})
+        p_shown = int(prev.get("shown") or 0)
+        p_clicked = int(prev.get("clicked") or 0)
+        p_ctr = _ctr_pct_or_none(p_clicked, p_shown)
+        r_ctr = _ctr_pct_or_none(r_clicked, r_shown)
+        ctr_delta = (
+            round(r_ctr - p_ctr, 1)
+            if (r_ctr is not None and p_ctr is not None) else None
+        )
+        status = "new" if (p_shown == 0 and p_clicked == 0) else "active"
         by_reason.append({
-            "reason": str(row.get("reason") or "unknown"),
+            "reason": reason,
             "shown": r_shown,
             "clicked": r_clicked,
             "dismissed": r_dismissed,
-            "ctr_pct": _ctr_pct_or_none(r_clicked, r_shown),
+            "ctr_pct": r_ctr,
+            "prev_shown": p_shown,
+            "prev_clicked": p_clicked,
+            "prev_ctr_pct": p_ctr,
+            "shown_delta": r_shown - p_shown,
+            "ctr_delta_pct": ctr_delta,
+            "status": status,
+        })
+    # Reasons that fired last week but disappeared this week — call them
+    # out so a regression that silenced a trigger surface is visible.
+    for reason, prev in prev_by_reason_map.items():
+        if reason in seen_reasons:
+            continue
+        p_shown = int(prev.get("shown") or 0)
+        p_clicked = int(prev.get("clicked") or 0)
+        p_ctr = _ctr_pct_or_none(p_clicked, p_shown)
+        by_reason.append({
+            "reason": reason,
+            "shown": 0,
+            "clicked": 0,
+            "dismissed": 0,
+            "ctr_pct": None,
+            "prev_shown": p_shown,
+            "prev_clicked": p_clicked,
+            "prev_ctr_pct": p_ctr,
+            "shown_delta": -p_shown,
+            "ctr_delta_pct": None,
+            "status": "gone",
         })
     by_reason.sort(key=lambda r: (r["shown"], r["clicked"]), reverse=True)
 
@@ -582,6 +695,39 @@ def _format_review_prompt_weekly_digest_html(stats: Dict[str, Any]) -> str:
     else:
         top_html = "<span style='color:#94a3b8'>no events recorded</span>"
 
+    def _fmt_shown_delta(row: Dict[str, Any]) -> str:
+        status = row.get("status")
+        if status == "new":
+            return (
+                "<span style='color:#16a34a;font-weight:bold'>new</span>"
+            )
+        if status == "gone":
+            return (
+                "<span style='color:#c0392b;font-weight:bold'>gone</span>"
+            )
+        d = row.get("shown_delta")
+        if d is None:
+            return "<span style='color:#475569'>n/a</span>"
+        if d > 0:
+            return f"<span style='color:#16a34a'>+{int(d):,}</span>"
+        if d < 0:
+            return f"<span style='color:#c0392b'>{int(d):,}</span>"
+        return "<span style='color:#475569'>0</span>"
+
+    def _fmt_ctr_delta(row: Dict[str, Any]) -> str:
+        status = row.get("status")
+        if status in ("new", "gone"):
+            # CTR delta isn't meaningful when one side is missing.
+            return "<span style='color:#94a3b8'>—</span>"
+        d = row.get("ctr_delta_pct")
+        if d is None:
+            return "<span style='color:#475569'>n/a</span>"
+        if d > 0:
+            return f"<span style='color:#16a34a;font-weight:bold'>▲ +{d:.1f} pp</span>"
+        if d < 0:
+            return f"<span style='color:#c0392b;font-weight:bold'>▼ {d:.1f} pp</span>"
+        return "<span style='color:#475569'>▬ 0.0 pp</span>"
+
     by_reason = stats.get("by_reason") or []
     rows_html: List[str] = []
     for row in by_reason[:8]:
@@ -593,6 +739,8 @@ def _format_review_prompt_weekly_digest_html(stats: Dict[str, Any]) -> str:
             f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{int(row.get('clicked') or 0)}</td>"
             f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{int(row.get('dismissed') or 0)}</td>"
             f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'><b>{r_ctr}</b></td>"
+            f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{_fmt_shown_delta(row)}</td>"
+            f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{_fmt_ctr_delta(row)}</td>"
             "</tr>"
         )
     by_reason_table = (
@@ -603,6 +751,8 @@ def _format_review_prompt_weekly_digest_html(stats: Dict[str, Any]) -> str:
         "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Clicked</th>"
         "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Dismissed</th>"
         "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>CTR</th>"
+        "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Δ shown vs prev week</th>"
+        "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Δ CTR vs prev week</th>"
         "</tr>"
         + "".join(rows_html)
         + "</table>"
@@ -724,6 +874,7 @@ async def _gather_review_prompt_weekly_digest_inputs(
     prev = await _aggregate_review_prompt_window(prev_start, curr_start)
     return _compose_review_prompt_weekly_digest(
         curr["totals"], curr["by_reason"], prev["totals"],
+        prev_by_reason=prev["by_reason"],
         now=_now, window_days=window_days,
     )
 

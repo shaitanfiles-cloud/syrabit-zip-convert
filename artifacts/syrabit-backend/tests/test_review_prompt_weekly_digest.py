@@ -76,6 +76,74 @@ def test_compose_trend_down_when_ctr_drops():
     assert stats["ctr_trend"] == "down"
 
 
+def test_compose_per_reason_wow_delta_active_reason():
+    """Active reason — both windows have data; per-reason delta computed."""
+    stats = arp._compose_review_prompt_weekly_digest(
+        {"shown": 100, "clicked": 10, "dismissed": 0},
+        [{"reason": "answer_helpful", "shown": 100, "clicked": 10, "dismissed": 0}],
+        {"shown": 80, "clicked": 16, "dismissed": 0},
+        prev_by_reason=[{"reason": "answer_helpful",
+                         "shown": 80, "clicked": 16, "dismissed": 0}],
+    )
+    row = stats["by_reason"][0]
+    assert row["reason"] == "answer_helpful"
+    assert row["status"] == "active"
+    assert row["prev_shown"] == 80
+    assert row["prev_clicked"] == 16
+    assert row["prev_ctr_pct"] == 20.0
+    assert row["ctr_pct"] == 10.0
+    assert row["ctr_delta_pct"] == -10.0
+    assert row["shown_delta"] == 20
+
+
+def test_compose_per_reason_marks_new_and_gone_reasons():
+    """New reasons (no prev data) tagged 'new'; reasons that disappear
+    this week are still surfaced with status 'gone' so ops can spot a
+    silenced trigger."""
+    stats = arp._compose_review_prompt_weekly_digest(
+        {"shown": 50, "clicked": 5, "dismissed": 0},
+        [{"reason": "session_end", "shown": 50, "clicked": 5, "dismissed": 0}],
+        {"shown": 40, "clicked": 4, "dismissed": 0},
+        prev_by_reason=[{"reason": "answer_helpful",
+                         "shown": 40, "clicked": 4, "dismissed": 0}],
+    )
+    by_reason = {r["reason"]: r for r in stats["by_reason"]}
+    assert by_reason["session_end"]["status"] == "new"
+    assert by_reason["session_end"]["prev_shown"] == 0
+    assert by_reason["session_end"]["ctr_delta_pct"] is None
+    assert by_reason["answer_helpful"]["status"] == "gone"
+    assert by_reason["answer_helpful"]["shown"] == 0
+    assert by_reason["answer_helpful"]["prev_shown"] == 40
+    assert by_reason["answer_helpful"]["shown_delta"] == -40
+    assert by_reason["answer_helpful"]["ctr_delta_pct"] is None
+
+
+def test_format_html_renders_per_reason_wow_columns():
+    """The digest email table must include the new Δ-vs-prev-week
+    columns and clearly label new/gone reasons."""
+    stats = arp._compose_review_prompt_weekly_digest(
+        {"shown": 150, "clicked": 15, "dismissed": 0},
+        [
+            {"reason": "answer_helpful", "shown": 100, "clicked": 10, "dismissed": 0},
+            {"reason": "session_end",    "shown": 50,  "clicked": 5,  "dismissed": 0},
+        ],
+        {"shown": 80, "clicked": 16, "dismissed": 0},
+        prev_by_reason=[
+            {"reason": "answer_helpful", "shown": 80, "clicked": 16, "dismissed": 0},
+            {"reason": "chapter_engaged", "shown": 30, "clicked": 3, "dismissed": 0},
+        ],
+    )
+    html = arp._format_review_prompt_weekly_digest_html(stats)
+    assert "Δ shown vs prev week" in html
+    assert "Δ CTR vs prev week" in html
+    # session_end is brand new this window.
+    assert ">new<" in html
+    # chapter_engaged was around last week but disappeared.
+    assert ">gone<" in html
+    # answer_helpful CTR fell from 20% → 10% → -10.0 pp delta rendered.
+    assert "-10.0 pp" in html
+
+
 def test_compose_trend_flat_when_prev_ctr_unavailable():
     stats = arp._compose_review_prompt_weekly_digest(
         {"shown": 100, "clicked": 5, "dismissed": 10},
@@ -440,3 +508,35 @@ def test_stats_route_and_digest_share_aggregation_for_same_window():
             key=lambda r: r["reason"],
         )
     assert _norm(stats_route["by_reason"]) == _norm(digest["by_reason"])
+
+
+def test_stats_route_per_reason_includes_wow_delta_columns():
+    """The admin tile must surface per-reason WoW deltas (Task #659):
+    `prev_shown`, `prev_ctr_pct`, `shown_delta`, `ctr_delta_pct`,
+    and `status` so ops can pinpoint which trigger reason regressed
+    instead of just seeing the overall CTR swing.
+    """
+    fixture_by_reason = [
+        {"reason": "answer_helpful", "shown": 100, "clicked": 10, "dismissed": 0},
+    ]
+    fake = _fake_event_db(
+        totals_shown=100, totals_clicked=10, totals_dismissed=0,
+        by_reason=fixture_by_reason,
+    )
+    with patch.object(arp, "db", fake), \
+         patch.object(arp, "is_mongo_available", AsyncMock(return_value=True)), \
+         patch.object(arp, "_ensure_review_prompt_indexes", AsyncMock()):
+        stats_route = asyncio.run(arp.admin_review_prompt_stats(
+            days=7, admin={"id": "admin"},
+        ))
+    rows = stats_route["by_reason"]
+    assert len(rows) == 1
+    row = rows[0]
+    # The fake doesn't filter by date so the prev window mirrors the
+    # current — ensures the deltas are wired through end-to-end.
+    assert row["prev_shown"] == 100
+    assert row["prev_clicked"] == 10
+    assert row["prev_ctr_pct"] == 10.0
+    assert row["shown_delta"] == 0
+    assert row["ctr_delta_pct"] == 0.0
+    assert row["status"] == "active"

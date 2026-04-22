@@ -42,7 +42,10 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
     setReviewPromptLoading(true);
     setReviewPromptError(false);
     try {
-      const r = await adminGetReviewPromptStats(adminToken, 30);
+      // Task #659: 7-day window so per-reason deltas are true
+      // week-over-week (vs the prior 7 days), matching the weekly
+      // digest email's semantics.
+      const r = await adminGetReviewPromptStats(adminToken, 7);
       setReviewPrompt(r.data);
     } catch {
       setReviewPromptError(true);
@@ -406,17 +409,79 @@ function HydrateAlertBadge({ alert, acking, ackError, onAcknowledge }) {
 // breakdown so the team can see which surfaces (quiz_high_score,
 // chapter_engaged, etc.) actually convert to Google review clicks.
 // ─────────────────────────────────────────────────────────────────────
+// Task #659 — single per-reason row, including week-over-week delta
+// columns. Reasons that newly appeared / disappeared in the current
+// window get a "new" / "gone" pill so ops can spot which surface is
+// responsible for an overall CTR swing instead of guessing.
+function ReviewPromptReasonRow({ row }) {
+  const status = row?.status;
+  const shownDelta = row?.shown_delta;
+  const ctrDelta = row?.ctr_delta_pct;
+
+  let shownDeltaCell;
+  if (status === 'new') {
+    shownDeltaCell = (
+      <span className="inline-block px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-semibold text-[10px] uppercase tracking-wide">
+        new
+      </span>
+    );
+  } else if (status === 'gone') {
+    shownDeltaCell = (
+      <span className="inline-block px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 font-semibold text-[10px] uppercase tracking-wide">
+        gone
+      </span>
+    );
+  } else if (shownDelta == null) {
+    shownDeltaCell = <span className="text-gray-400">—</span>;
+  } else if (shownDelta > 0) {
+    shownDeltaCell = <span className="text-emerald-600">+{shownDelta.toLocaleString()}</span>;
+  } else if (shownDelta < 0) {
+    shownDeltaCell = <span className="text-rose-600">{shownDelta.toLocaleString()}</span>;
+  } else {
+    shownDeltaCell = <span className="text-gray-500">0</span>;
+  }
+
+  let ctrDeltaCell;
+  if (status === 'new' || status === 'gone') {
+    ctrDeltaCell = <span className="text-gray-400">—</span>;
+  } else if (ctrDelta == null) {
+    ctrDeltaCell = <span className="text-gray-400">n/a</span>;
+  } else if (ctrDelta > 0) {
+    ctrDeltaCell = <span className="text-emerald-600">▲ +{ctrDelta.toFixed(1)} pp</span>;
+  } else if (ctrDelta < 0) {
+    ctrDeltaCell = <span className="text-rose-600">▼ {ctrDelta.toFixed(1)} pp</span>;
+  } else {
+    ctrDeltaCell = <span className="text-gray-500">▬ 0.0 pp</span>;
+  }
+
+  return (
+    <tr className="border-t border-gray-200">
+      <td className="text-left text-gray-700 px-3.5 py-2 truncate" title={row.reason}>
+        {row.reason || '—'}
+      </td>
+      <td className="text-right text-gray-700 font-mono px-3.5 py-2">{row.shown}</td>
+      <td className="text-right text-gray-700 font-mono px-3.5 py-2">{row.clicked}</td>
+      <td className="text-right text-gray-700 font-mono px-3.5 py-2">{row.dismissed}</td>
+      <td className="text-right text-gray-700 font-mono px-3.5 py-2">
+        {row.ctr_pct == null ? '—' : `${row.ctr_pct}%`}
+      </td>
+      <td className="text-right font-mono px-3.5 py-2">{shownDeltaCell}</td>
+      <td className="text-right font-mono px-3.5 py-2">{ctrDeltaCell}</td>
+    </tr>
+  );
+}
+
 function ReviewPromptFunnelCard({ stats, loading, error, onRetry }) {
   if (loading && !stats) {
     return (
-      <Card title="Google Review Prompt Funnel (30d)">
+      <Card title="Google Review Prompt Funnel (7d)">
         <p className="text-gray-600 text-sm text-center py-6">Loading…</p>
       </Card>
     );
   }
   if (error) {
     return (
-      <Card title="Google Review Prompt Funnel (30d)" error onRetry={onRetry} />
+      <Card title="Google Review Prompt Funnel (7d)" error onRetry={onRetry} />
     );
   }
   const s = stats || {};
@@ -430,7 +495,7 @@ function ReviewPromptFunnelCard({ stats, loading, error, onRetry }) {
 
   return (
     <Card
-      title="Google Review Prompt Funnel (30d)"
+      title="Google Review Prompt Funnel (7d)"
       action={
         <button
           onClick={onRetry}
@@ -474,7 +539,9 @@ function ReviewPromptFunnelCard({ stats, loading, error, onRetry }) {
           {byReason.length > 0 && (
             <div className="rounded-xl border border-gray-200 bg-gray-50 mt-4 overflow-hidden">
               <div className="px-3.5 py-2 border-b border-gray-200">
-                <p className="text-gray-500 text-xs font-medium">By trigger reason</p>
+                <p className="text-gray-500 text-xs font-medium">
+                  By trigger reason · Δ vs prev week
+                </p>
               </div>
               <table className="w-full text-xs">
                 <thead>
@@ -484,21 +551,13 @@ function ReviewPromptFunnelCard({ stats, loading, error, onRetry }) {
                     <th className="text-right font-medium px-3.5 py-2">Clicked</th>
                     <th className="text-right font-medium px-3.5 py-2">Dismissed</th>
                     <th className="text-right font-medium px-3.5 py-2">CTR</th>
+                    <th className="text-right font-medium px-3.5 py-2">Δ Shown</th>
+                    <th className="text-right font-medium px-3.5 py-2">Δ CTR</th>
                   </tr>
                 </thead>
                 <tbody>
                   {byReason.map((row, i) => (
-                    <tr key={i} className="border-t border-gray-200">
-                      <td className="text-left text-gray-700 px-3.5 py-2 truncate" title={row.reason}>
-                        {row.reason || '—'}
-                      </td>
-                      <td className="text-right text-gray-700 font-mono px-3.5 py-2">{row.shown}</td>
-                      <td className="text-right text-gray-700 font-mono px-3.5 py-2">{row.clicked}</td>
-                      <td className="text-right text-gray-700 font-mono px-3.5 py-2">{row.dismissed}</td>
-                      <td className="text-right text-gray-700 font-mono px-3.5 py-2">
-                        {row.ctr_pct == null ? '—' : `${row.ctr_pct}%`}
-                      </td>
-                    </tr>
+                    <ReviewPromptReasonRow key={i} row={row} />
                   ))}
                 </tbody>
               </table>
