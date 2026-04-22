@@ -1164,6 +1164,7 @@ def _compose_review_prompt_weekly_digest(
     now: Optional[datetime] = None,
     dashboard_url: str = _REVIEW_PROMPT_DIGEST_DASHBOARD_URL,
     window_days: int = REVIEW_PROMPT_WEEKLY_DIGEST_WINDOW_DAYS,
+    baseline: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Pure aggregator: turn raw per-window event counts into the digest
     payload consumed by ``_format_review_prompt_weekly_digest_html`` and
@@ -1267,6 +1268,29 @@ def _compose_review_prompt_weekly_digest(
         })
     by_reason.sort(key=lambda r: (r["shown"], r["clicked"]), reverse=True)
 
+    # Task #694 — fold per-reason baseline noise (μ% / σ pp / current
+    # week's z-score) into the rows so the email matches the dashboard
+    # noise band. ``baseline`` is the snapshot from
+    # ``_compute_review_prompt_reason_baseline`` (or ``None`` if the
+    # caller couldn't compute it — e.g. Mongo down). Reasons whose
+    # baseline has fewer than 2 qualifying weekly samples come back
+    # with mean / stddev / z = ``None`` so the email renders an
+    # explicit "n/a" instead of a misleading point estimate.
+    baseline_by_reason: Dict[str, Dict[str, Any]] = {}
+    if isinstance(baseline, dict):
+        baseline_by_reason = baseline.get("by_reason") or {}
+    for row in by_reason:
+        b = baseline_by_reason.get(row["reason"]) or {}
+        row["baseline_mean_ctr_pct"] = b.get("baseline_mean_ctr_pct")
+        row["baseline_stddev_pp"] = b.get("baseline_stddev_pp")
+        row["baseline_z_score"] = b.get("current_z_score")
+        row["baseline_weeks_used"] = b.get("baseline_weeks_used", 0)
+    baseline_meta = {
+        "baseline_weeks": (baseline or {}).get("baseline_weeks"),
+        "min_shown": (baseline or {}).get("min_shown"),
+        "sigma_mult": (baseline or {}).get("sigma_mult"),
+    } if isinstance(baseline, dict) else None
+
     # Top trigger reason = highest shown count in the window. Tie-broken
     # by clicked (already enforced by the sort above).
     top_reason = by_reason[0] if by_reason and by_reason[0]["shown"] > 0 else None
@@ -1289,6 +1313,7 @@ def _compose_review_prompt_weekly_digest(
         "ctr_trend": ctr_trend,
         "top_reason": top_reason,
         "by_reason": by_reason,
+        "baseline_meta": baseline_meta,
         "dashboard_url": dashboard_url,
     }
 
@@ -1364,6 +1389,41 @@ def _format_review_prompt_weekly_digest_html(stats: Dict[str, Any]) -> str:
             return f"<span style='color:#c0392b;font-weight:bold'>▼ {d:.1f} pp</span>"
         return "<span style='color:#475569'>▬ 0.0 pp</span>"
 
+    # Task #694 — render baseline noise columns next to the raw counts
+    # so recipients can answer "is this a real regression?" without
+    # opening the dashboard. The numbers come from the same helper
+    # the dashboard funnel tile uses, so the email and the dashboard
+    # never show drifting figures.
+    def _fmt_baseline_mean(row: Dict[str, Any]) -> str:
+        m = row.get("baseline_mean_ctr_pct")
+        if m is None:
+            return "<span style='color:#94a3b8'>n/a</span>"
+        return f"{m:.1f}%"
+
+    def _fmt_baseline_stddev(row: Dict[str, Any]) -> str:
+        s = row.get("baseline_stddev_pp")
+        if s is None:
+            return "<span style='color:#94a3b8'>n/a</span>"
+        return f"±{s:.1f} pp"
+
+    def _fmt_baseline_z(row: Dict[str, Any]) -> str:
+        z = row.get("baseline_z_score")
+        if z is None:
+            return "<span style='color:#94a3b8'>n/a</span>"
+        # Match the dashboard band: |z| ≥ sigma_mult is "outside the
+        # noise band" and worth a closer look. Color downside (drop)
+        # red, upside green, in-band gray.
+        meta = stats.get("baseline_meta") or {}
+        thr = float(meta.get("sigma_mult") or 2.0)
+        if z <= -thr:
+            color = "#c0392b"; weight = "bold"
+        elif z >= thr:
+            color = "#16a34a"; weight = "bold"
+        else:
+            color = "#475569"; weight = "normal"
+        sign = "+" if z > 0 else ""
+        return f"<span style='color:{color};font-weight:{weight}'>{sign}{z:.1f}σ</span>"
+
     by_reason = stats.get("by_reason") or []
     rows_html: List[str] = []
     for row in by_reason[:8]:
@@ -1375,24 +1435,47 @@ def _format_review_prompt_weekly_digest_html(stats: Dict[str, Any]) -> str:
             f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{int(row.get('clicked') or 0)}</td>"
             f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{int(row.get('dismissed') or 0)}</td>"
             f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'><b>{r_ctr}</b></td>"
+            f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{_fmt_baseline_mean(row)}</td>"
+            f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{_fmt_baseline_stddev(row)}</td>"
+            f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{_fmt_baseline_z(row)}</td>"
             f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{_fmt_shown_delta(row)}</td>"
             f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{_fmt_ctr_delta(row)}</td>"
             "</tr>"
         )
     by_reason_table = (
-        "<table style='border-collapse:collapse;width:100%;font-size:13px;margin:8px 0 18px'>"
+        "<table style='border-collapse:collapse;width:100%;font-size:13px;margin:8px 0 6px'>"
         "<tr style='background:#f3f4f6'>"
         "<th style='text-align:left;padding:6px 10px;border:1px solid #e2e8f0'>Trigger reason</th>"
         "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Shown</th>"
         "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Clicked</th>"
         "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Dismissed</th>"
         "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>CTR</th>"
+        "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Baseline μ</th>"
+        "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>σ (noise)</th>"
+        "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>This week z</th>"
         "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Δ shown vs prev week</th>"
         "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Δ CTR vs prev week</th>"
         "</tr>"
         + "".join(rows_html)
         + "</table>"
     ) if rows_html else "<p style='color:#94a3b8;font-size:13px'>No per-reason breakdown — no events fired this week.</p>"
+
+    # Task #694 — short legend explaining the noise band, mirroring
+    # the dashboard funnel tile so the wording is identical.
+    meta = stats.get("baseline_meta") or {}
+    bw = meta.get("baseline_weeks")
+    sm = meta.get("sigma_mult")
+    if rows_html and bw is not None and sm is not None:
+        baseline_legend_html = (
+            "<p style='color:#64748b;font-size:11px;margin:0 0 18px'>"
+            f"Baseline μ / σ are the per-reason mean CTR and standard deviation across the prior {int(bw)} weeks. "
+            f"<b>z</b> is how many σ this week sits from that baseline — anything outside ±{float(sm):.1f}σ "
+            "(red drop / green spike) is outside the expected noise band. "
+            "Reasons without enough history show \u201cn/a\u201d."
+            "</p>"
+        )
+    else:
+        baseline_legend_html = ""
 
     return (
         "<div style='font-family:sans-serif;max-width:560px;margin:auto;padding:24px;color:#0f172a'>"
@@ -1419,6 +1502,7 @@ def _format_review_prompt_weekly_digest_html(stats: Dict[str, Any]) -> str:
         "</table>"
         "<h3 style='color:#0f172a;margin:16px 0 6px;font-size:14px'>Per-reason breakdown</h3>"
         f"{by_reason_table}"
+        f"{baseline_legend_html}"
         f"<p style='margin:18px 0'><a href='{dashboard}' style='display:inline-block;background:#7c3aed;"
         "color:white;text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:600;font-size:14px'>"
         "Open review-prompt funnel</a></p>"
@@ -1508,10 +1592,23 @@ async def _gather_review_prompt_weekly_digest_inputs(
 
     curr = await _aggregate_review_prompt_window(curr_start, _now)
     prev = await _aggregate_review_prompt_window(prev_start, curr_start)
+    # Task #694 — pull the per-reason baseline noise snapshot so the
+    # digest table can render μ% / σ pp / z alongside the raw counts.
+    # We swallow exceptions here so a baseline aggregation failure
+    # never blocks the digest itself; rows just fall back to the
+    # ``baseline_weeks_used=0`` / "n/a" path.
+    try:
+        baseline_snapshot = await _compute_review_prompt_reason_baseline(
+            window_days=window_days
+        )
+    except Exception as exc:
+        logger.debug(f"weekly digest baseline snapshot failed: {exc}")
+        baseline_snapshot = None
     return _compose_review_prompt_weekly_digest(
         curr["totals"], curr["by_reason"], prev["totals"],
         prev_by_reason=prev["by_reason"],
         now=_now, window_days=window_days,
+        baseline=baseline_snapshot,
     )
 
 

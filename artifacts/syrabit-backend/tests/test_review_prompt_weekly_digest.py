@@ -185,6 +185,164 @@ def test_format_html_includes_key_metrics_and_dashboard_link():
     assert arp._REVIEW_PROMPT_DIGEST_DASHBOARD_URL in html
 
 
+# ── Task #694 — baseline noise on the per-reason digest rows ─────────────
+
+
+def _baseline_snapshot(by_reason: dict, *, sigma_mult: float = 2.0,
+                       baseline_weeks: int = 4, min_shown: int = 50) -> dict:
+    """Helper: build a baseline snapshot in the shape that
+    ``_compute_review_prompt_reason_baseline`` returns, so the digest
+    composer/formatter can be exercised without touching Mongo."""
+    return {
+        "window_days": 7,
+        "baseline_weeks": baseline_weeks,
+        "min_shown": min_shown,
+        "sigma_mult": sigma_mult,
+        "by_reason": by_reason,
+    }
+
+
+def test_compose_merges_populated_baseline_into_per_reason_rows():
+    """Populated-baseline path — every per-reason row picks up
+    ``baseline_mean_ctr_pct``, ``baseline_stddev_pp`` and
+    ``baseline_z_score`` from the snapshot and the response carries
+    ``baseline_meta`` so the formatter can render the legend."""
+    baseline = _baseline_snapshot({
+        "answer_helpful": {
+            "baseline_weeks_used": 4,
+            "baseline_mean_ctr_pct": 8.0,
+            "baseline_stddev_pp": 1.5,
+            "current_ctr_pct": 12.0,
+            "current_shown": 150,
+            "current_z_score": 2.67,
+            "sigma_threshold_pp": 3.0,
+        },
+    })
+    stats = arp._compose_review_prompt_weekly_digest(
+        {"shown": 150, "clicked": 18, "dismissed": 0},
+        [{"reason": "answer_helpful", "shown": 150, "clicked": 18, "dismissed": 0}],
+        {"shown": 100, "clicked": 8, "dismissed": 0},
+        baseline=baseline,
+    )
+    row = next(r for r in stats["by_reason"] if r["reason"] == "answer_helpful")
+    assert row["baseline_mean_ctr_pct"] == 8.0
+    assert row["baseline_stddev_pp"] == 1.5
+    assert row["baseline_z_score"] == 2.67
+    assert row["baseline_weeks_used"] == 4
+    assert stats["baseline_meta"] == {
+        "baseline_weeks": 4,
+        "min_shown": 50,
+        "sigma_mult": 2.0,
+    }
+
+
+def test_compose_thin_baseline_falls_back_to_none_per_row():
+    """Thin-baseline path — a reason with fewer than 2 qualifying
+    weekly samples comes back with ``None`` for mean / stddev / z so
+    the email can render an explicit "n/a" instead of a misleading
+    point estimate."""
+    baseline = _baseline_snapshot({
+        "answer_helpful": {
+            "baseline_weeks_used": 1,           # below the 2-sample gate
+            "baseline_mean_ctr_pct": None,
+            "baseline_stddev_pp": None,
+            "current_ctr_pct": 12.0,
+            "current_shown": 150,
+            "current_z_score": None,
+            "sigma_threshold_pp": None,
+        },
+    })
+    stats = arp._compose_review_prompt_weekly_digest(
+        {"shown": 150, "clicked": 18, "dismissed": 0},
+        [{"reason": "answer_helpful", "shown": 150, "clicked": 18, "dismissed": 0}],
+        {"shown": 0, "clicked": 0, "dismissed": 0},
+        baseline=baseline,
+    )
+    row = stats["by_reason"][0]
+    assert row["baseline_mean_ctr_pct"] is None
+    assert row["baseline_stddev_pp"] is None
+    assert row["baseline_z_score"] is None
+    assert row["baseline_weeks_used"] == 1
+
+
+def test_compose_without_baseline_keeps_legacy_shape():
+    """Backwards-compat: callers that don't pass a baseline (e.g. an
+    older test) get rows with ``baseline_*`` keys present but None,
+    and ``baseline_meta`` is None — the formatter must still render
+    without a legend."""
+    stats = arp._compose_review_prompt_weekly_digest(
+        {"shown": 100, "clicked": 10, "dismissed": 0},
+        [{"reason": "x", "shown": 100, "clicked": 10, "dismissed": 0}],
+        {"shown": 0, "clicked": 0, "dismissed": 0},
+    )
+    row = stats["by_reason"][0]
+    assert row["baseline_mean_ctr_pct"] is None
+    assert row["baseline_stddev_pp"] is None
+    assert row["baseline_z_score"] is None
+    assert stats["baseline_meta"] is None
+
+
+def test_format_html_renders_baseline_columns_and_legend_when_populated():
+    baseline = _baseline_snapshot({
+        "answer_helpful": {
+            "baseline_weeks_used": 4,
+            "baseline_mean_ctr_pct": 8.0,
+            "baseline_stddev_pp": 1.5,
+            "current_ctr_pct": 12.0,
+            "current_shown": 150,
+            "current_z_score": 2.67,
+            "sigma_threshold_pp": 3.0,
+        },
+    }, sigma_mult=2.0, baseline_weeks=4)
+    stats = arp._compose_review_prompt_weekly_digest(
+        {"shown": 150, "clicked": 18, "dismissed": 0},
+        [{"reason": "answer_helpful", "shown": 150, "clicked": 18, "dismissed": 0}],
+        {"shown": 0, "clicked": 0, "dismissed": 0},
+        baseline=baseline,
+    )
+    html = arp._format_review_prompt_weekly_digest_html(stats)
+    # New columns appear in the per-reason table header.
+    assert "Baseline μ" in html
+    assert "σ (noise)" in html
+    assert "This week z" in html
+    # Per-reason values render with the right formatting.
+    assert "8.0%" in html               # baseline mean
+    assert "±1.5 pp" in html            # baseline stddev
+    assert "+2.7σ" in html              # current week z-score
+    # Legend explains the noise band, parameterised on the snapshot.
+    assert "prior 4 weeks" in html
+    assert "±2.0σ" in html
+    # Outside-band z-scores get the alert color (drop=red, spike=green).
+    # 2.67σ is a positive spike → green color used elsewhere in the file.
+    assert "#16a34a" in html
+
+
+def test_format_html_renders_na_for_thin_baseline_and_omits_legend():
+    baseline = _baseline_snapshot({
+        "answer_helpful": {
+            "baseline_weeks_used": 1,
+            "baseline_mean_ctr_pct": None,
+            "baseline_stddev_pp": None,
+            "current_ctr_pct": 12.0,
+            "current_shown": 150,
+            "current_z_score": None,
+            "sigma_threshold_pp": None,
+        },
+    })
+    stats = arp._compose_review_prompt_weekly_digest(
+        {"shown": 150, "clicked": 18, "dismissed": 0},
+        [{"reason": "answer_helpful", "shown": 150, "clicked": 18, "dismissed": 0}],
+        {"shown": 0, "clicked": 0, "dismissed": 0},
+        baseline=baseline,
+    )
+    html = arp._format_review_prompt_weekly_digest_html(stats)
+    # Thin-baseline cells render as explicit "n/a" pills.
+    assert html.count("n/a") >= 3
+    # Legend renders even when individual rows are thin (the snapshot
+    # itself carries the band parameters).
+    assert "prior" in html and "weeks" in html
+
+
 def test_format_html_handles_empty_window_gracefully():
     stats = arp._compose_review_prompt_weekly_digest(
         {"shown": 0, "clicked": 0, "dismissed": 0}, [],
