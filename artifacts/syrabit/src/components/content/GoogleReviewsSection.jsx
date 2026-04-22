@@ -6,7 +6,7 @@ import { API_BASE } from '@/utils/api';
 
 let _reviewsPromise = null;
 let _reviewsCache = null;
-function fetchReviewsOnce() {
+export function fetchReviewsOnce() {
   if (_reviewsCache) return Promise.resolve(_reviewsCache);
   if (_reviewsPromise) return _reviewsPromise;
   _reviewsPromise = fetch(`${API_BASE}/reviews/google`, { credentials: 'omit' })

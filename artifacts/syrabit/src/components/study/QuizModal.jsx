@@ -9,6 +9,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { X, Check, AlertCircle, Loader2, RotateCcw, Trophy } from 'lucide-react';
 import { studyApi } from '@/utils/studyApi';
 import { toast } from 'sonner';
+import { requestReviewPrompt } from '@/components/ReviewPrompt';
 
 export function QuizModal({
   open, onClose,
@@ -60,7 +61,18 @@ export function QuizModal({
   };
   const next = () => {
     setReveal(false); setPicked(null);
-    if (idx + 1 >= questions.length) { setDone(true); return; }
+    if (idx + 1 >= questions.length) {
+      setDone(true);
+      // Task #652: nudge happy students (>=70% score) to leave a Google
+      // review. ReviewPrompt enforces its own 30-day throttling and
+      // dismissal rules, so this is safe to fire on every win.
+      const finalScore = answers.filter(a => a.correct).length;
+      const total = questions.length || 1;
+      if (finalScore / total >= 0.7) {
+        try { requestReviewPrompt('quiz_high_score'); } catch {}
+      }
+      return;
+    }
     setIdx(idx + 1);
   };
 

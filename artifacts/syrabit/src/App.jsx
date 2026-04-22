@@ -10,6 +10,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { HelmetProvider } from "react-helmet-async";
 import Analytics from "@/utils/analytics";
 const PWAInstallPrompt = lazy(() => import("@/components/PWAInstallPrompt"));
+const ReviewPrompt = lazy(() => import("@/components/ReviewPrompt"));
 const LazyToaster = lazy(() => import("sonner").then(m => ({ default: m.Toaster })));
 // Only GlobalSeo is lazy — HelmetProvider must wrap the entire app so that
 // per-page <PageMeta>/Helmet usage on Library, Chapter, Pricing, etc. still
@@ -373,6 +374,7 @@ export function AppShell({ children, ssr = false, helmetContext }) {
             </LanguageProvider>
           </AuthProvider>
           {showDeferred ? <Suspense fallback={null}><PWAInstallPrompt /></Suspense> : null}
+          {showDeferred ? <Suspense fallback={null}><ReviewPrompt /></Suspense> : null}
         </QueryClientProvider>
       </ErrorBoundary>
     </HelmetProvider>
