@@ -147,3 +147,97 @@ def test_health_inner_includes_vertex_block_and_uses_flag():
             )
             return
     pytest.fail("_health_inner not found in cms_sarvam_health.py")
+
+
+# ---------------------------------------------------------------------------
+# End-to-end /health integration — actually call _health_inner with the
+# heavy deps mocked, then assert the JSON shape and the aggregate flip.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def health_inner_module(monkeypatch):
+    """Import the route module and mock the non-vertex dependencies so
+    ``_health_inner`` runs end-to-end without needing live Mongo / PG /
+    Redis. Restores the cache between tests."""
+    if str(BACKEND_DIR) not in sys.path:
+        sys.path.insert(0, str(BACKEND_DIR))
+    from routes import cms_sarvam_health as mod
+    import vertex_health_cache
+
+    async def _mongo_ok():
+        return True
+
+    class _FakeBoards:
+        async def find_one(self, *a, **kw):
+            return None
+
+    class _FakeApiCfg:
+        async def find_one(self, *a, **kw):
+            return {}
+
+    class _FakeDB:
+        boards = _FakeBoards()
+        api_config = _FakeApiCfg()
+
+    monkeypatch.setattr(mod, "is_mongo_available", _mongo_ok, raising=False)
+    monkeypatch.setattr(mod, "db", _FakeDB(), raising=False)
+    monkeypatch.setattr(mod, "redis_client", None, raising=False)
+    monkeypatch.setattr(mod, "supa", None, raising=False)
+    monkeypatch.setattr(mod.deps, "pg_pool", None, raising=False)
+    # Skip the LLM probe seeding (avoids touching providers / asyncio state).
+    monkeypatch.setattr(mod, "_ensure_llm_health_probe", lambda: None, raising=False)
+    monkeypatch.setattr(mod, "_LLM_PROVIDERS", [], raising=False)
+    monkeypatch.setattr(
+        mod, "get_bot_render_metrics", lambda: {}, raising=False
+    )
+
+    vertex_health_cache.reset()
+    yield mod
+    vertex_health_cache.reset()
+
+
+def _run(coro):
+    import asyncio
+    return asyncio.get_event_loop().run_until_complete(coro) if False else asyncio.run(coro)
+
+
+def test_health_endpoint_includes_vertex_block_when_healthy(health_inner_module):
+    """End-to-end: a healthy cached probe must surface under
+    ``dependencies.vertex`` with status='ok' on the actual /health
+    JSON payload."""
+    import vertex_health_cache
+    vertex_health_cache.record(
+        True, auth_mode="byok", via_cf_gateway=True, source="periodic"
+    )
+    resp = _run(health_inner_module._health_inner())
+    assert "vertex" in resp["dependencies"], (
+        f"vertex key missing from /health dependencies: {resp['dependencies']}"
+    )
+    vx = resp["dependencies"]["vertex"]
+    assert vx["status"] == "ok"
+    assert vx["auth_mode"] == "byok"
+    assert vx["via_cf_gateway"] is True
+
+
+def test_health_endpoint_flips_degraded_when_vertex_unhealthy(health_inner_module):
+    """End-to-end: an unhealthy cached probe must drag the aggregate
+    ``status`` to ``degraded`` even when Mongo / PG are fine."""
+    import vertex_health_cache
+    vertex_health_cache.record(
+        False,
+        reason="key revoked",
+        auth_mode="byok",
+        via_cf_gateway=True,
+        source="periodic",
+        consecutive_failures=4,
+    )
+    resp = _run(health_inner_module._health_inner())
+    vx = resp["dependencies"]["vertex"]
+    assert vx["status"] == "unhealthy"
+    assert vx["reason"] == "key revoked"
+    assert vx["consecutive_failures"] == 4
+    assert resp["status"] == "degraded", (
+        f"aggregate /health.status must be 'degraded' when vertex is "
+        f"unhealthy; got {resp['status']!r} (mongo/pg were mocked OK)"
+    )
