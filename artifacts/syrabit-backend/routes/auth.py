@@ -47,6 +47,7 @@ from db_ops import (
     supa_update_user_password,
 )
 from llm import call_llm_api, call_llm_api_stream
+from turnstile_verify import require_turnstile
 import email_templates
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.post("/auth/signup")
-async def signup(data: UserCreate, response: Response):
+async def signup(data: UserCreate, request: Request, response: Response):
+    await require_turnstile(request)
     existing = await supa_get_user(data.email.lower())
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -118,7 +120,8 @@ async def signup(data: UserCreate, response: Response):
     return {"access_token": token, "token_type": "bearer", "user": user_out.dict()}
 
 @router.post("/auth/login", response_model=TokenOut)
-async def login(data: UserLogin, response: Response):
+async def login(data: UserLogin, request: Request, response: Response):
+    await require_turnstile(request)
     user = await supa_get_user(data.email.lower())
     pw_hash = user.get("password_hash", "") if user else ""
     if not user or not pw_hash or not await asyncio.to_thread(pwd_ctx.verify, data.password, pw_hash):
