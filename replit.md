@@ -58,7 +58,7 @@ Run `pnpm verify` from the repo root to execute the full pre-merge gate. This ru
 
 - **Databases:** PostgreSQL, MongoDB, Cloudflare D1.
 - **Authentication:** Supabase, JWT helpers, Google OAuth.
-- **Caching:** Redis, in-memory caching, Cloudflare Worker edge caching.
+- **Caching:** Cloudflare AI Gateway (upstream LLM cache, 3600s TTL), edge worker KV bindings (`RATE_LIMIT`, `BOT_HTML_CACHE`), per-worker in-memory L1 cache. Upstash Redis was removed 2026-04 — `redis_client` is now permanently `None` and call sites fall through to non-cached paths. To re-enable a managed L2 (e.g. GCP Memorystore on Cloud Run), un-pin `MEMORYSTORE_REDIS_URL` in `config.py:472`.
 - **LLM Providers:** Groq, Cerebras, OpenRouter (for chat); Cerebras, Sarvam, Gemini (for content generation, vision, embeddings).
 - **Cloudflare AI Gateway (BYOK):** All LLM traffic is routed through the `syrabit` AI Gateway. Provider keys are stored in the Cloudflare dashboard (BYOK — Bring Your Own Key). The backend sends a dummy `api_key='x'` + `Authorization: ''` + `cf-aig-byok-key: true` headers; CF Gateway substitutes its stored provider key before forwarding upstream. This lets `GROQ_API_KEY`, `GEMINI_API_KEY`, `CEREBRAS_API_KEY`, and `OPENROUTER_API_KEY` be removed from the backend environment entirely. **Exception — Sarvam:** CF does not support BYOK for custom providers, so `SARVAM_API_KEY` / `SARVAM_TRANSLATE_KEY` must remain in env; traffic still routes through `custom-sarvam` gateway slug for caching/analytics.
 - **Payment Gateways:** Razorpay (INR), Stripe (USD).

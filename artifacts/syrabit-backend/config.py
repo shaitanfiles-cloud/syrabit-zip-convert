@@ -412,15 +412,14 @@ SARVAM_API_KEY_2 = os.environ.get('SARVAM_API_KEY_2', '').strip()
 SARVAM_TRANSLATE_KEY = SARVAM_API_KEY or SARVAM_API_KEY_2
 SARVAM_BASE_URL = 'https://api.sarvam.ai'
 
-# ── Redis (Upstash) ──────────────────────────────────────────────────────────
-_upstash_url   = os.environ.get('UPSTASH_REDIS_REST_URL', '').strip().strip('"').strip("'")
-_upstash_token = os.environ.get('UPSTASH_REDIS_REST_TOKEN', '').strip().strip('"').strip("'")
-_fallback_url  = os.environ.get('REDIS_URL', '').strip().strip('"').strip("'")
-# Auto-detect swap: if URL doesn't start with http but TOKEN does, swap them
-if not _upstash_url.startswith('http') and _upstash_token.startswith('http'):
-    _upstash_url, _upstash_token = _upstash_token, _upstash_url
-REDIS_URL   = _upstash_url if _upstash_url.startswith('http') else _fallback_url
-REDIS_TOKEN = _upstash_token
+# ── Distributed cache (legacy compatibility shim) ────────────────────────────
+# Upstash REST has been removed (2026-04). LLM upstream caching now lives at
+# Cloudflare AI Gateway (cache_ttl=3600s, configured in CF_CACHE_TTL above)
+# and rate limiting moved to the edge worker's KV binding (RATE_LIMIT). These
+# constants stay as empty strings so legacy callers that import them keep
+# working — every call site already guards with `if REDIS_URL:` / `if redis_client:`.
+REDIS_URL   = ''
+REDIS_TOKEN = ''
 REDIS_AI_CACHE_TTL = int(os.environ.get('REDIS_AI_CACHE_TTL', '3600') or '3600')
 REDIS_CASUAL_CACHE_TTL = int(os.environ.get('REDIS_CASUAL_CACHE_TTL', '300') or '300')
 REDIS_CHAT_CACHE_TTL = 600
@@ -460,10 +459,14 @@ def _extract_redis_url(raw: str) -> str:
     return url
 
 
-MEMORYSTORE_REDIS_URL = (
-    _extract_redis_url(os.environ.get('MEMORYSTORE_REDIS_URL', ''))
-    or _extract_redis_url(os.environ.get('AI_CACHE_REDIS_URL', ''))
-)
+# MEMORYSTORE_REDIS_URL intentionally pinned to empty (2026-04).
+# Cloudflare AI Gateway handles upstream LLM cache (cache_ttl=3600s).
+# Edge worker's RATE_LIMIT KV binding handles distributed rate limiting.
+# Per-worker L1 in-memory cache handles hot-path dedupe.
+# To re-enable a managed Redis L2 in the future (e.g. GCP Memorystore on
+# Cloud Run), restore the line below and ensure the secret is reachable:
+#   MEMORYSTORE_REDIS_URL = _extract_redis_url(os.environ.get('MEMORYSTORE_REDIS_URL', ''))
+MEMORYSTORE_REDIS_URL = ''
 REDIS_AI_CACHE_NAMESPACE = (os.environ.get('REDIS_AI_CACHE_NAMESPACE', 'ai_cache').strip() or 'ai_cache')
 REDIS_AI_CACHE_MAX_ENTRY_BYTES = int(os.environ.get('REDIS_AI_CACHE_MAX_ENTRY_BYTES', str(64 * 1024)) or 64 * 1024)
 REDIS_AI_CACHE_CONNECT_TIMEOUT_MS = int(os.environ.get('REDIS_AI_CACHE_CONNECT_TIMEOUT_MS', '200') or '200')

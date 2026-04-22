@@ -1,24 +1,25 @@
-"""Syrabit.ai — Managed AI response cache (Memorystore Redis preferred).
+"""Syrabit.ai — Managed AI response cache.
 
-Task #609. Provides a single configurable Redis-backed AI response cache with:
+Provides a process-local L1 in-memory cache plus an optional managed Redis L2.
 
-  * Single env-driven URL (`MEMORYSTORE_REDIS_URL`) for managed Memorystore or
-    any Redis-compatible endpoint (rediss:// for TLS, redis:// otherwise).
-  * Falls back to the existing Upstash REST client if Memorystore is not
-    configured, and degrades cleanly to in-memory only if neither is reachable.
+Architecture (post-2026-04 Cloudflare-only refactor):
+
+  * **L1 (always on)**: per-worker `cachetools.TTLCache` keyed by namespace+key.
+    Survives the lifetime of a single gunicorn worker. Bounded by entry count
+    AND each value's byte size (oversize payloads are dropped, not truncated,
+    so we never serve a half-cached answer).
+  * **L2 (optional)**: env-driven `MEMORYSTORE_REDIS_URL` (any Redis-compatible
+    endpoint — `rediss://` for TLS, `redis://` otherwise). Currently unset —
+    Cloudflare AI Gateway handles upstream LLM caching with its own 3600s TTL,
+    so an L2 here is redundant for the LLM use case. Re-enable for cross-worker
+    dedupe (e.g. on Cloud Run with Memorystore) by setting the env var.
   * Deterministic, namespaced keys scoped to model + normalized prompt +
     retrieval fingerprint + language + scope.
-  * Configurable TTL and max-entry size — oversize payloads are dropped, not
-    truncated, so we never serve a half-cached answer.
   * Built-in metrics: hits, misses, errors, bytes_stored, hit_rate,
     saved-latency (avg + total estimated).
-  * Lightweight circuit breaker so a flapping Redis cannot stall the chat
+  * Lightweight circuit breaker so a flapping L2 cannot stall the chat
     request path; all aget/aset calls are timeout-bounded.
   * Admin purge of the full AI namespace + stats snapshot for observability.
-
-The legacy `_redis_get_ai_cache` / `_redis_set("ai_cache", ...)` helpers in
-`cache.py` continue to work; they delegate here when this module is the
-active backend so the existing call sites benefit immediately.
 """
 from __future__ import annotations
 
@@ -29,6 +30,8 @@ import logging
 import re
 import time
 from typing import Any, Dict, Optional
+
+from cachetools import TTLCache
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +131,12 @@ def _record_success() -> None:
 _async_pool: Optional["aioredis.Redis"] = None
 _backend = "uninitialized"
 
+# ── L1 in-memory cache (always on; bounded LRU+TTL) ────────────────────────
+# 2048 entries × 64KB max = ~128MB worst case per worker. Real usage is far
+# smaller because most cached values are short LLM responses (~1-4KB each).
+_L1_MAX_ENTRIES = 2048
+_l1: TTLCache = TTLCache(maxsize=_L1_MAX_ENTRIES, ttl=REDIS_AI_CACHE_TTL)
+
 
 def active_backend() -> str:
     return _backend
@@ -136,21 +145,13 @@ def active_backend() -> str:
 def _detect_initial_backend() -> str:
     if aioredis and MEMORYSTORE_REDIS_URL:
         return "memorystore"
-    return _detect_fallback_backend()
+    return "memory_only"
 
 
 def _detect_fallback_backend() -> str:
-    """Pick the best non-Memorystore backend currently usable.
-
-    Used both for the initial selection (when Memorystore isn't configured)
-    AND for graceful degradation when a configured Memorystore endpoint is
-    unreachable at startup."""
-    try:
-        from deps import redis_client as _rc
-        if _rc is not None:
-            return "upstash_rest"
-    except Exception:
-        pass
+    """Last-resort backend when a configured Memorystore endpoint is
+    unreachable at startup. Upstash REST has been removed (2026-04) — LLM
+    upstream caching now lives at Cloudflare AI Gateway."""
     return "memory_only"
 
 
@@ -181,14 +182,18 @@ async def init_async_client() -> str:
             logger.info("ai_cache: Memorystore Redis ready (%s, ns=%s)", _safe_url, REDIS_AI_CACHE_NAMESPACE)
             return _backend
         except Exception as e:
-            logger.warning("ai_cache: Memorystore unreachable, falling back: %s", e)
+            logger.warning("ai_cache: Memorystore unreachable, falling back to memory_only: %s", e)
             _async_pool = None
-            # Memorystore is configured but down — degrade to Upstash REST
-            # if present, then memory-only as a last resort.
             chosen = _detect_fallback_backend()
     _backend = chosen
-    logger.info("ai_cache: backend=%s (ttl=%ss, max_entry=%dB)",
-                _backend, REDIS_AI_CACHE_TTL, REDIS_AI_CACHE_MAX_ENTRY_BYTES)
+    if _backend == "memory_only" and not MEMORYSTORE_REDIS_URL:
+        logger.info(
+            "ai_cache: backend=L1_only (per-worker TTLCache, maxsize=%d, ttl=%ds; Cloudflare AI Gateway handles upstream LLM cache, edge KV handles rate limiting)",
+            _L1_MAX_ENTRIES, REDIS_AI_CACHE_TTL,
+        )
+    else:
+        logger.info("ai_cache: backend=%s (ttl=%ss, max_entry=%dB)",
+                    _backend, REDIS_AI_CACHE_TTL, REDIS_AI_CACHE_MAX_ENTRY_BYTES)
     return _backend
 
 
@@ -297,18 +302,13 @@ async def aget(key: str) -> Optional[str]:
         except Exception as e:
             _record_failure(f"get:{e}")
             return None
-    # Legacy Upstash REST fallback (sync) — wrapped in executor.
-    try:
-        from cache import _redis_get_ai_cache as _legacy_get
-        val = await asyncio.get_event_loop().run_in_executor(None, _legacy_get, key)
-        if val is None:
-            _stats.misses += 1
-        else:
-            _stats.hits += 1
-        return val
-    except Exception as e:
-        _record_failure(f"legacy_get:{e}")
+    # L1-only path (no L2 configured). Process-local TTL cache.
+    val = _l1.get(_full_key(key))
+    if val is None:
+        _stats.misses += 1
         return None
+    _stats.hits += 1
+    return val
 
 
 async def aset(
@@ -351,12 +351,9 @@ async def aset(
         except Exception as e:
             _record_failure(f"set:{e}")
             return False
-    # Legacy fallback
+    # L1-only path (no L2 configured). Process-local TTL cache.
     try:
-        from cache import _redis_set as _legacy_set
-        await asyncio.get_event_loop().run_in_executor(
-            None, _legacy_set, "ai_cache", key, payload, int(ttl),
-        )
+        _l1[_full_key(key)] = payload
         _stats.entries_stored += 1
         _stats.bytes_stored += sz
         if saved_ms > 0:
@@ -395,6 +392,10 @@ async def purge_all(pattern: str = "*") -> Dict[str, Any]:
     Also clears the in-memory L1 cache so a stale entry can't re-leak."""
     deleted = 0
     full_pattern = f"{REDIS_AI_CACHE_NAMESPACE}:{pattern}"
+    # Always clear the L1 cache first so a stale entry can't re-leak.
+    l1_cleared = len(_l1)
+    _l1.clear()
+    deleted += l1_cleared
     if _async_pool is not None:
         try:
             cursor = 0

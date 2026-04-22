@@ -18,10 +18,6 @@ try:
 except ImportError:
     _asyncpg = None
 try:
-    from upstash_redis import Redis as _UpstashRedis
-except ImportError:
-    _UpstashRedis = None
-try:
     from supabase import create_client as _create_supa
 except ImportError:
     _create_supa = None
@@ -31,7 +27,7 @@ from fastapi.security import HTTPBearer
 from motor.motor_asyncio import AsyncIOMotorClient
 from config import (
     MONGO_URL, DB_NAME, SARVAM_API_KEY, SARVAM_TRANSLATE_KEY, SARVAM_BASE_URL, BYOK_PLACEHOLDER,
-    REDIS_URL, REDIS_TOKEN, SUPABASE_URL, SUPABASE_SERVICE_KEY,
+    SUPABASE_URL, SUPABASE_SERVICE_KEY,
     _PG_DSN,
     CF_GATEWAY_ENABLED, get_provider_base_url, cf_gateway_url, _CF_PROVIDER_SLUGS,
     CF_AI_GATEWAY_TOKEN, CF_CACHE_TTL,
@@ -40,13 +36,6 @@ from config import (
 logger = logging.getLogger(__name__)
 
 redis_client: Optional[Any] = None
-try:
-    if _UpstashRedis and REDIS_URL and REDIS_TOKEN:
-        redis_client = _UpstashRedis(url=REDIS_URL, token=REDIS_TOKEN)
-        redis_client.ping()
-except Exception as _redis_err:
-    redis_client = None
-    logging.getLogger(__name__).warning(f"Redis ping failed: {_redis_err}")
 
 # MongoDB with fast timeout — wrapped so bad URLs don't crash startup
 try:
