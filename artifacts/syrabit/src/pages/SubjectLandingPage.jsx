@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useResolveSubject, useChapters } from '@/hooks/useContent';
 import ContinueLearning from '@/components/content/ContinueLearning';
+import GoogleReviewsSection, { ReviewsAggregateRatingJsonLd } from '@/components/content/GoogleReviewsSection';
 import { MobileNavSwitch } from '@/components/layout/MobileNavSwitch';
 import { useContentLang } from '@/context/LanguageContext';
 import { seoRelatedByChapter } from '@/utils/api';
@@ -330,6 +331,16 @@ export default function SubjectLandingPage() {
             </div>
           </div>
         )}
+
+        <GoogleReviewsSection
+          subheading={`Real Google reviews from students using Syrabit.ai for ${boardName} ${className} ${subjectName}.`}
+          keywords={[subjectName, boardName, className].filter(Boolean)}
+        />
+        <ReviewsAggregateRatingJsonLd
+          id="subject-google-reviews-jsonld"
+          name={`Syrabit.ai — ${subjectName}`}
+          url={`https://syrabit.ai${basePath}`}
+        />
 
         <nav className="mt-10 pt-6 border-t border-border/30" aria-label="Site navigation">
           <div className="flex flex-wrap gap-4 justify-center text-xs text-muted-foreground">

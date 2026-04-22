@@ -8,6 +8,7 @@ import { useContentLang } from '@/context/LanguageContext';
 import LangToggle from '@/components/ui/LangToggle';
 import HeroSection from './landing/HeroSection';
 import PopularSubjects from './landing/PopularSubjects';
+import GoogleReviewsSection, { ReviewsAggregateRatingJsonLd } from '@/components/content/GoogleReviewsSection';
 const FeaturesGrid = lazy(() => import('./landing/FeaturesGrid'));
 const PricingSection = lazy(() => import('./landing/PricingSection'));
 const PlatformSection = lazy(() => import('./landing/PlatformSection'));
@@ -126,6 +127,14 @@ export default function LandingPage() {
           <PricingSection contentLang={contentLang} />
         </div>
       </Suspense>
+      <GoogleReviewsSection
+        subheading="Real Google reviews from students using Syrabit.ai across Assam."
+      />
+      <ReviewsAggregateRatingJsonLd
+        id="home-google-reviews-jsonld"
+        name="Syrabit.ai"
+        url="https://syrabit.ai/"
+      />
       <Suspense fallback={<div style={{ minHeight: '480px' }} aria-hidden />}>
         <div style={{ minHeight: '480px' }}>
           <TestimonialsFooter year={year} contentLang={contentLang} />
