@@ -276,6 +276,10 @@ export const adminGetCfOverview = (token, range = '7d') =>
 export const adminGetHydrateStats = (token, days = 7) =>
   axios.get(`${API_BASE}/admin/analytics/hydrate-stats`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
 
+// Task #654: Google review prompt funnel tile
+export const adminGetReviewPromptStats = (token, days = 30) =>
+  axios.get(`${API_BASE}/admin/analytics/review-prompt-stats`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
+
 export const adminGetRevenue = (token, days = 30) =>
   axios.get(`${API_BASE}/admin/analytics/revenue`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
 

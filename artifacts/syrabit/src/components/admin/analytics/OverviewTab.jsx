@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import { TrendingUp, Eye, Users, DollarSign, Zap, Target,
   AlertTriangle, Calendar, ShieldCheck, RefreshCw,
-  AlertOctagon } from 'lucide-react';
+  AlertOctagon, Star, MousePointerClick, XCircle } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, BarChart, Bar,
 } from 'recharts';
 import { Card, Stat, TT, fmt, fmtInr } from './shared';
-import { adminGetHydrateStats, adminAcknowledgeAlert } from '@/utils/api';
+import { adminGetHydrateStats, adminAcknowledgeAlert,
+  adminGetReviewPromptStats } from '@/utils/api';
 
 const TIME_RANGES = [
   { value: 1,  label: 'Today' },
@@ -34,8 +35,27 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
       setHydrateLoading(false);
     }
   };
+  const [reviewPrompt, setReviewPrompt] = useState(null);
+  const [reviewPromptLoading, setReviewPromptLoading] = useState(false);
+  const [reviewPromptError, setReviewPromptError] = useState(false);
+  const loadReviewPrompt = async () => {
+    setReviewPromptLoading(true);
+    setReviewPromptError(false);
+    try {
+      const r = await adminGetReviewPromptStats(adminToken, 30);
+      setReviewPrompt(r.data);
+    } catch {
+      setReviewPromptError(true);
+      setReviewPrompt(null);
+    } finally {
+      setReviewPromptLoading(false);
+    }
+  };
   useEffect(() => {
-    if (adminToken) loadHydrate();
+    if (adminToken) {
+      loadHydrate();
+      loadReviewPrompt();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adminToken]);
   const hasDailySignup = data?.daily_signups?.some(d => d.count > 0);
@@ -106,6 +126,13 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
         error={hydrateError}
         onRetry={loadHydrate}
         adminToken={adminToken}
+      />
+
+      <ReviewPromptFunnelCard
+        stats={reviewPrompt}
+        loading={reviewPromptLoading}
+        error={reviewPromptError}
+        onRetry={loadReviewPrompt}
       />
 
       <Card title={`Daily Visitors — ${rangeLabel}`} empty={!hasDailyCf} emptyMsg={cfEmptyMsg}>
@@ -370,5 +397,115 @@ function HydrateAlertBadge({ alert, acking, ackError, onAcknowledge }) {
         {acking ? 'Acknowledging…' : 'Acknowledge'}
       </button>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Task #654: Google review-prompt funnel tile. Shows shown / clicked /
+// dismissed totals, click-through rate, and a per-trigger-reason
+// breakdown so the team can see which surfaces (quiz_high_score,
+// chapter_engaged, etc.) actually convert to Google review clicks.
+// ─────────────────────────────────────────────────────────────────────
+function ReviewPromptFunnelCard({ stats, loading, error, onRetry }) {
+  if (loading && !stats) {
+    return (
+      <Card title="Google Review Prompt Funnel (30d)">
+        <p className="text-gray-600 text-sm text-center py-6">Loading…</p>
+      </Card>
+    );
+  }
+  if (error) {
+    return (
+      <Card title="Google Review Prompt Funnel (30d)" error onRetry={onRetry} />
+    );
+  }
+  const s = stats || {};
+  const shown = s.shown || 0;
+  const clicked = s.clicked || 0;
+  const dismissed = s.dismissed || 0;
+  const ctr = s.ctr_pct;
+  const dismissRate = s.dismiss_rate_pct;
+  const byReason = Array.isArray(s.by_reason) ? s.by_reason : [];
+  const isEmpty = shown === 0 && clicked === 0 && dismissed === 0;
+
+  return (
+    <Card
+      title="Google Review Prompt Funnel (30d)"
+      action={
+        <button
+          onClick={onRetry}
+          className="text-xs text-gray-600 hover:text-gray-700 px-2 py-0.5 rounded-lg flex items-center gap-1"
+        >
+          <RefreshCw size={10} /> Refresh
+        </button>
+      }
+    >
+      {isEmpty ? (
+        <div className="flex items-center gap-3 py-4">
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center"
+            style={{ background: 'rgba(124,58,237,0.10)' }}>
+            <Star size={16} className="text-violet-500" />
+          </div>
+          <div>
+            <p className="text-gray-700 text-sm font-medium">No review prompts fired yet</p>
+            <p className="text-gray-500 text-xs mt-0.5">
+              Counters will populate once engaged students hit a happy moment (quiz, chapter read).
+            </p>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <Stat icon={Star} label="Prompts shown"
+              value={shown.toLocaleString()} color="#7c3aed"
+              sub="happy-moment triggers" />
+            <Stat icon={MousePointerClick} label="Clicked through"
+              value={clicked.toLocaleString()} color="#10b981"
+              sub="opened Google review form" />
+            <Stat icon={ShieldCheck} label="Click-through rate"
+              value={ctr == null ? '—' : `${ctr}%`}
+              color="#06b6d4"
+              sub="closest proxy for Google reviews" />
+            <Stat icon={XCircle} label="Dismissed"
+              value={dismissed.toLocaleString()} color="#f59e0b"
+              sub={dismissRate == null ? 'no shown events' : `${dismissRate}% dismiss rate`} />
+          </div>
+
+          {byReason.length > 0 && (
+            <div className="rounded-xl border border-gray-200 bg-gray-50 mt-4 overflow-hidden">
+              <div className="px-3.5 py-2 border-b border-gray-200">
+                <p className="text-gray-500 text-xs font-medium">By trigger reason</p>
+              </div>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-gray-500">
+                    <th className="text-left font-medium px-3.5 py-2">Reason</th>
+                    <th className="text-right font-medium px-3.5 py-2">Shown</th>
+                    <th className="text-right font-medium px-3.5 py-2">Clicked</th>
+                    <th className="text-right font-medium px-3.5 py-2">Dismissed</th>
+                    <th className="text-right font-medium px-3.5 py-2">CTR</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {byReason.map((row, i) => (
+                    <tr key={i} className="border-t border-gray-200">
+                      <td className="text-left text-gray-700 px-3.5 py-2 truncate" title={row.reason}>
+                        {row.reason || '—'}
+                      </td>
+                      <td className="text-right text-gray-700 font-mono px-3.5 py-2">{row.shown}</td>
+                      <td className="text-right text-gray-700 font-mono px-3.5 py-2">{row.clicked}</td>
+                      <td className="text-right text-gray-700 font-mono px-3.5 py-2">{row.dismissed}</td>
+                      <td className="text-right text-gray-700 font-mono px-3.5 py-2">
+                        {row.ctr_pct == null ? '—' : `${row.ctr_pct}%`}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </Card>
   );
 }

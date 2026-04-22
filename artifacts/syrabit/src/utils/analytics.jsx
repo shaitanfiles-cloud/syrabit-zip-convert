@@ -33,6 +33,40 @@ const track = (event, properties = {}) => {
   if (event === 'ad_slot_viewed') {
     try { mirrorAdImpression(properties); } catch {}
   }
+  // Task #654: mirror review-prompt funnel events to our backend so the
+  // admin dashboard can render shown / clicked / dismissed counts +
+  // CTR + per-reason breakdown without a PostHog API integration.
+  if (typeof event === 'string' && event.startsWith('review_prompt_')) {
+    try { mirrorReviewPromptEvent(event, properties); } catch {}
+  }
+};
+
+let _reviewPromptMirrorBlocked = false;
+const mirrorReviewPromptEvent = (event, properties) => {
+  if (_reviewPromptMirrorBlocked) return;
+  if (typeof window === 'undefined') return;
+  try {
+    const apiBase =
+      (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_BACKEND_URL)
+        ? `${import.meta.env.VITE_BACKEND_URL.replace(/\/$/, '')}/api`
+        : '/api';
+    const payload = JSON.stringify({
+      event,
+      reason: (properties && properties.reason) || null,
+    });
+    const url = `${apiBase}/analytics/review-prompt-event`;
+    const blob = new Blob([payload], { type: 'application/json' });
+    if (navigator.sendBeacon && navigator.sendBeacon(url, blob)) return;
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload,
+      keepalive: true,
+      credentials: 'omit',
+    }).catch(() => { _reviewPromptMirrorBlocked = true; });
+  } catch {
+    _reviewPromptMirrorBlocked = true;
+  }
 };
 
 let _adMirrorBlocked = false;

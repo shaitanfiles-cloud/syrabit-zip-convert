@@ -787,6 +787,7 @@ from routes.admin_benchmark import router as admin_benchmark_router
 from routes.admin_kv_health import router as admin_kv_health_router
 from routes.admin_ci_status import router as admin_ci_status_router
 from routes.admin_ads import router as admin_ads_router
+from routes.admin_review_prompts import router as admin_review_prompts_router
 from routes.edu_browser import router as edu_browser_router
 from routes.edu_study import router as edu_study_router
 from routes.admin_seo_keywords import router as admin_seo_keywords_router
@@ -812,6 +813,7 @@ api.include_router(admin_benchmark_router)
 api.include_router(admin_kv_health_router)
 api.include_router(admin_ci_status_router)
 api.include_router(admin_ads_router)
+api.include_router(admin_review_prompts_router)
 api.include_router(edu_browser_router)
 api.include_router(edu_study_router)
 api.include_router(admin_seo_keywords_router)
