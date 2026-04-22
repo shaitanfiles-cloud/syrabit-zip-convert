@@ -291,6 +291,38 @@ async def _vertex_periodic_probe_loop() -> None:
         )
 
         if ok:
+            # Task #690 — auto-recovery notification. If we already paged
+            # on-call for this failure run (``alerted_for_run`` was set
+            # the moment we crossed the failure threshold), close the
+            # loop with a single "all clear" message so admins don't
+            # have to grep logs to know the outage ended. We force=True
+            # so the recovery message is not silenced by the 30-min
+            # alert cooldown that the matching ``vertex_health_degraded``
+            # may have just consumed.
+            if alerted_for_run:
+                try:
+                    from metrics import _dispatch_alert
+                    await _dispatch_alert(
+                        "vertex_health_recovered",
+                        "Gemini / Vertex health recovered",
+                        f"vertex_services.health_check() is healthy again "
+                        f"after a sustained failure run "
+                        f"(probe interval: {_VERTEX_PROBE_INTERVAL_S}s). "
+                        f"This closes the matching vertex_health_degraded "
+                        f"alert — no on-call action needed.",
+                        threshold_snapshot={
+                            "metric": "vertex_consecutive_failures",
+                            "value": _VERTEX_PROBE_FAILURE_THRESHOLD,
+                            "actual": 0,
+                            "interval_s": _VERTEX_PROBE_INTERVAL_S,
+                        },
+                        force=True,
+                    )
+                except Exception as recovery_err:
+                    logger.error(
+                        f"[PERIODIC-PROBE] recovery _dispatch_alert "
+                        f"raised: {recovery_err!r}"
+                    )
             consecutive_failures = 0
             alerted_for_run = False
         else:

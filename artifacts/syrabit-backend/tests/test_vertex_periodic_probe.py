@@ -258,12 +258,15 @@ def test_loop_resets_after_recovery_and_can_fire_again(monkeypatch):
     """After a success resets the counter, a *new* sustained failure run
     is allowed to fire a fresh alert. This guards against a single
     flapping outage masking a follow-up real outage.
+
+    Task #690 also added an auto-recovery alert on the success that
+    closes a fired run, so each cycle is fire→recover.
     """
     dispatch_calls: list[dict] = []
     seq = iter([
         {"embeddings": False, "generation": True, "reason": "outage-1"},
         {"embeddings": False, "generation": True, "reason": "outage-1"},  # alert #1
-        {"embeddings": True, "generation": True},                          # reset
+        {"embeddings": True, "generation": True},                          # recovery #1
         {"embeddings": False, "generation": True, "reason": "outage-2"},
         {"embeddings": False, "generation": True, "reason": "outage-2"},  # alert #2
     ])
@@ -274,9 +277,145 @@ def test_loop_resets_after_recovery_and_can_fire_again(monkeypatch):
     loop_fn, _ = _extract_loop(flapping, dispatch_calls, monkeypatch, max_iterations=6)
     _run(loop_fn())
 
-    assert len(dispatch_calls) == 2, (
-        f"Expected one alert per distinct failure run; got "
-        f"{len(dispatch_calls)}: {dispatch_calls}"
+    types_fired = [c["alert_type"] for c in dispatch_calls]
+    assert types_fired == [
+        "vertex_health_degraded",
+        "vertex_health_recovered",
+        "vertex_health_degraded",
+    ], f"Expected fire→recover→fire across two outages, got {types_fired}"
+
+
+# ---------------------------------------------------------------------------
+# Task #690 — Auto-recovery notification
+# ---------------------------------------------------------------------------
+
+
+def test_loop_dispatches_recovery_alert_after_fired_alert(monkeypatch):
+    """fire → recover → recovery alert dispatched exactly once.
+
+    Sequence: 2 failures (page on-call) → 1 success (close the loop with
+    a single ``vertex_health_recovered`` message) → another success
+    (must NOT re-send the recovery message; the run is already closed).
+    """
+    dispatch_calls: list[dict] = []
+    seq = iter([
+        {"embeddings": False, "generation": True, "reason": "outage"},
+        {"embeddings": False, "generation": True, "reason": "outage"},  # alert fires
+        {"embeddings": True, "generation": True},                        # recovery fires
+        {"embeddings": True, "generation": True},                        # silent
+    ])
+
+    async def flapping():
+        return next(seq)
+
+    loop_fn, _ = _extract_loop(flapping, dispatch_calls, monkeypatch, max_iterations=5)
+    _run(loop_fn())
+
+    types_fired = [c["alert_type"] for c in dispatch_calls]
+    assert types_fired == ["vertex_health_degraded", "vertex_health_recovered"], (
+        f"Expected exactly fire→recover, got {types_fired}"
+    )
+    recovery = dispatch_calls[1]
+    assert recovery["threshold_snapshot"]["actual"] == 0
+    assert recovery["threshold_snapshot"]["metric"] == "vertex_consecutive_failures"
+    assert "healthy again" in recovery["body"].lower()
+
+
+def test_loop_does_not_dispatch_recovery_when_no_alert_fired(monkeypatch):
+    """A single transient failure followed by recovery must NOT send a
+    "recovered" message — there was nothing to recover from from the
+    on-call's perspective (no degraded alert was ever sent).
+    """
+    dispatch_calls: list[dict] = []
+    seq = iter([
+        {"embeddings": False, "generation": True, "reason": "blip"},  # 1 failure (no page)
+        {"embeddings": True, "generation": True},                      # recover silently
+        {"embeddings": True, "generation": True},
+    ])
+
+    async def flaky():
+        return next(seq)
+
+    loop_fn, _ = _extract_loop(flaky, dispatch_calls, monkeypatch, max_iterations=4)
+    _run(loop_fn())
+
+    assert dispatch_calls == [], (
+        f"No alert was fired, so no recovery should be sent; got {dispatch_calls}"
+    )
+
+
+def test_loop_recovery_does_not_repeat_on_sustained_health(monkeypatch):
+    """After fire → recover → recover → recover, recovery must dispatch
+    exactly once. Flag must clear so a *second* outage cycle still
+    triggers its own fire→recover pair.
+    """
+    dispatch_calls: list[dict] = []
+    seq = iter([
+        {"embeddings": False, "generation": True, "reason": "outage-1"},
+        {"embeddings": False, "generation": True, "reason": "outage-1"},  # alert #1
+        {"embeddings": True, "generation": True},                          # recovery #1
+        {"embeddings": True, "generation": True},                          # silent
+        {"embeddings": False, "generation": True, "reason": "outage-2"},
+        {"embeddings": False, "generation": True, "reason": "outage-2"},  # alert #2
+        {"embeddings": True, "generation": True},                          # recovery #2
+    ])
+
+    async def flapping():
+        return next(seq)
+
+    loop_fn, _ = _extract_loop(flapping, dispatch_calls, monkeypatch, max_iterations=8)
+    _run(loop_fn())
+
+    types_fired = [c["alert_type"] for c in dispatch_calls]
+    assert types_fired == [
+        "vertex_health_degraded",
+        "vertex_health_recovered",
+        "vertex_health_degraded",
+        "vertex_health_recovered",
+    ], f"Expected two fire→recover cycles, got {types_fired}"
+
+
+def test_recovery_alert_uses_force_to_bypass_cooldown(monkeypatch):
+    """The matching ``vertex_health_degraded`` may have just consumed
+    the 30-min cooldown; the recovery message must bypass it (force=True)
+    or admins might wait half an hour for the all-clear.
+    """
+    dispatch_calls: list[dict] = []
+    seq = iter([
+        {"embeddings": False, "generation": True, "reason": "outage"},
+        {"embeddings": False, "generation": True, "reason": "outage"},
+        {"embeddings": True, "generation": True},
+    ])
+
+    async def flapping():
+        return next(seq)
+
+    loop_fn, _ = _extract_loop(flapping, dispatch_calls, monkeypatch, max_iterations=4)
+
+    # Override _extract_loop's fake dispatch to also capture ``force``.
+    # Must run AFTER _extract_loop or its monkeypatch.setitem will
+    # win the ``metrics`` slot in sys.modules.
+    import sys, types
+    mmod = types.ModuleType("metrics")
+
+    async def _fake_dispatch(alert_type, title, body, threshold_snapshot=None,
+                             force=False, mark_synthetic=False):
+        dispatch_calls.append({
+            "alert_type": alert_type,
+            "force": force,
+        })
+        return {}
+
+    mmod._dispatch_alert = _fake_dispatch  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "metrics", mmod)
+
+    _run(loop_fn())
+
+    # First call is the degraded alert (force defaults to False), second
+    # is the recovery (must be force=True).
+    by_type = {c["alert_type"]: c for c in dispatch_calls if "force" in c}
+    assert by_type["vertex_health_recovered"]["force"] is True, (
+        f"Recovery must use force=True to bypass cooldown; got {dispatch_calls}"
     )
 
 
