@@ -261,6 +261,7 @@ async def admin_review_prompt_stats(
 async def admin_review_prompt_by_reason_trend(
     reason: str = Query(..., min_length=1, max_length=64),
     weeks: int = Query(8, ge=1, le=26),
+    compare: Optional[str] = Query(None, max_length=64),
     admin: dict = Depends(get_admin_user),
 ):
     """Weekly shown / clicked / CTR buckets for a single trigger reason.
@@ -269,19 +270,48 @@ async def admin_review_prompt_by_reason_trend(
     reason row in the review-prompt funnel tile. Buckets are rolling
     7-day windows aligned to ``now`` so the most-recent bucket matches
     the totals the tile already displays. Oldest bucket first.
+
+    Task #673 — when ``compare`` is supplied (and differs from
+    ``reason``), the same weekly windows are also bucketed for that
+    second reason so the admin UI can overlay both series on one
+    chart. ``available_reasons`` is the deduped, sorted list of
+    reasons that fired ≥1 event during the requested window — the
+    picker uses it to avoid offering empty options.
     """
     reason_clean = (reason or "").strip()[:64] or "unknown"
-    empty = {"reason": reason_clean, "weeks": weeks, "buckets": []}
+    # ``compare`` may be the FastAPI ``Query`` sentinel when called
+    # directly from tests — coerce non-str inputs to None defensively.
+    compare_clean = (compare.strip()[:64] or None) if isinstance(compare, str) else None
+    if compare_clean == reason_clean:
+        # Comparing a reason to itself adds no information — treat as
+        # "no compare" so the response is unambiguous downstream.
+        compare_clean = None
+    empty = {
+        "reason": reason_clean,
+        "weeks": weeks,
+        "buckets": [],
+        "compare_reason": compare_clean,
+        "compare_buckets": [],
+        "available_reasons": [],
+    }
     if not await is_mongo_available():
         return empty
     try:
         await _ensure_review_prompt_indexes()
         now = datetime.now(timezone.utc)
         buckets: List[Dict[str, Any]] = []
+        compare_buckets: List[Dict[str, Any]] = []
+        available_reasons: set = set()
         for i in range(weeks - 1, -1, -1):
             end = now - timedelta(days=7 * i)
             start = end - timedelta(days=7)
             agg = await _aggregate_review_prompt_window(start, end)
+            for r in agg["by_reason"]:
+                rname = (r.get("reason") or "unknown")
+                if (int(r.get("shown") or 0)
+                        + int(r.get("clicked") or 0)
+                        + int(r.get("dismissed") or 0)) > 0:
+                    available_reasons.add(rname)
             row = next(
                 (r for r in agg["by_reason"]
                  if (r.get("reason") or "unknown") == reason_clean),
@@ -298,7 +328,36 @@ async def admin_review_prompt_by_reason_trend(
                 "dismissed": dismissed,
                 "ctr_pct": _ctr(clicked, shown),
             })
-        return {"reason": reason_clean, "weeks": weeks, "buckets": buckets}
+            if compare_clean:
+                row2 = next(
+                    (r for r in agg["by_reason"]
+                     if (r.get("reason") or "unknown") == compare_clean),
+                    {},
+                )
+                c_shown = int(row2.get("shown") or 0)
+                c_clicked = int(row2.get("clicked") or 0)
+                c_dismissed = int(row2.get("dismissed") or 0)
+                compare_buckets.append({
+                    "week_start": start.isoformat(),
+                    "week_end": end.isoformat(),
+                    "shown": c_shown,
+                    "clicked": c_clicked,
+                    "dismissed": c_dismissed,
+                    "ctr_pct": _ctr(c_clicked, c_shown),
+                })
+        # Always include the primary reason itself so the row that
+        # opened the panel never disappears from the picker, even if
+        # all of its events landed in a single bucket that the loop's
+        # sample shape happens to drop.
+        available_reasons.add(reason_clean)
+        return {
+            "reason": reason_clean,
+            "weeks": weeks,
+            "buckets": buckets,
+            "compare_reason": compare_clean,
+            "compare_buckets": compare_buckets,
+            "available_reasons": sorted(available_reasons),
+        }
     except Exception as e:
         logger.warning(f"review-prompt by-reason-trend query failed: {e}")
         return empty

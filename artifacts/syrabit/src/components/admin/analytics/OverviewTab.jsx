@@ -417,6 +417,10 @@ function HydrateAlertBadge({ alert, acking, ackError, onAcknowledge }) {
 // window get a "new" / "gone" pill so ops can spot which surface is
 // responsible for an overall CTR swing instead of guessing.
 function ReviewPromptReasonTrend({ adminToken, reason }) {
+  // Task #673 — admins can overlay a second trigger reason's CTR /
+  // shown line onto the same chart to spot whether a regression is
+  // unique to one reason or shared across surfaces.
+  const [compare, setCompare] = useState('');
   const [trend, setTrend] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -427,7 +431,9 @@ function ReviewPromptReasonTrend({ adminToken, reason }) {
       setLoading(true);
       setError(false);
       try {
-        const r = await adminGetReviewPromptByReasonTrend(adminToken, reason, 8);
+        const r = await adminGetReviewPromptByReasonTrend(
+          adminToken, reason, 8, compare || null,
+        );
         if (!cancelled) setTrend(r.data);
       } catch {
         if (!cancelled) {
@@ -440,9 +446,9 @@ function ReviewPromptReasonTrend({ adminToken, reason }) {
     };
     run();
     return () => { cancelled = true; };
-  }, [adminToken, reason]);
+  }, [adminToken, reason, compare]);
 
-  if (loading) {
+  if (loading && !trend) {
     return <p className="text-gray-500 text-xs py-3 px-3.5">Loading 8-week trend…</p>;
   }
   if (error) {
@@ -452,16 +458,30 @@ function ReviewPromptReasonTrend({ adminToken, reason }) {
   if (buckets.length === 0) {
     return <p className="text-gray-500 text-xs py-3 px-3.5">No data for this reason in the last 8 weeks.</p>;
   }
-  const chartData = buckets.map(b => {
+  const compareBuckets = Array.isArray(trend?.compare_buckets) ? trend.compare_buckets : [];
+  const compareReason = trend?.compare_reason || '';
+  const availableReasons = Array.isArray(trend?.available_reasons)
+    ? trend.available_reasons
+    : [];
+  // Picker only lists reasons that fired ≥1 event in the window AND
+  // aren't the primary row that was just expanded — that one's already
+  // the baseline series.
+  const pickable = availableReasons.filter(r => r && r !== reason);
+
+  const chartData = buckets.map((b, i) => {
     const d = b?.week_end ? new Date(b.week_end) : null;
     const label = d
       ? `${d.getUTCMonth() + 1}/${d.getUTCDate()}`
       : '—';
+    const cb = compareBuckets[i] || {};
     return {
       label,
       shown: b.shown || 0,
       clicked: b.clicked || 0,
       ctr_pct: b.ctr_pct == null ? null : Number(b.ctr_pct),
+      compare_shown: cb.shown || 0,
+      compare_clicked: cb.clicked || 0,
+      compare_ctr_pct: cb.ctr_pct == null ? null : Number(cb.ctr_pct),
     };
   });
   const totalShown = chartData.reduce((a, b) => a + b.shown, 0);
@@ -469,18 +489,58 @@ function ReviewPromptReasonTrend({ adminToken, reason }) {
   const overallCtr = totalShown > 0
     ? Math.round((totalClicked / totalShown) * 1000) / 10
     : null;
+  const totalCompareShown = chartData.reduce((a, b) => a + b.compare_shown, 0);
+  const totalCompareClicked = chartData.reduce((a, b) => a + b.compare_clicked, 0);
+  const overallCompareCtr = totalCompareShown > 0
+    ? Math.round((totalCompareClicked / totalCompareShown) * 1000) / 10
+    : null;
 
   return (
     <div className="px-3.5 py-3 bg-white border-t border-gray-200">
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center justify-between mb-2 gap-3 flex-wrap">
         <p className="text-gray-600 text-xs font-medium">
           8-week trend · <span className="font-mono text-gray-700">{reason}</span>
+          {compareReason && (
+            <>
+              {' '}vs{' '}
+              <span className="font-mono text-amber-600">{compareReason}</span>
+            </>
+          )}
         </p>
-        <p className="text-gray-500 text-[11px]">
-          Σ {totalShown.toLocaleString()} shown · {totalClicked.toLocaleString()} clicked ·
-          {' '}CTR {overallCtr == null ? '—' : `${overallCtr}%`}
-        </p>
+        <div className="flex items-center gap-2 text-[11px] text-gray-500">
+          <label className="flex items-center gap-1.5">
+            <span className="text-gray-500">Compare to</span>
+            <select
+              value={compare}
+              onChange={(e) => setCompare(e.target.value)}
+              className="bg-white border border-gray-300 rounded px-1.5 py-0.5 text-[11px] text-gray-700 focus:outline-none focus:border-violet-400 max-w-[180px]"
+              disabled={pickable.length === 0}
+              title={pickable.length === 0
+                ? 'No other reasons have data in the last 8 weeks'
+                : 'Overlay another reason'}
+            >
+              <option value="">— none —</option>
+              {pickable.map(r => (
+                <option key={r} value={r}>{r}</option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
+      <p className="text-gray-500 text-[11px] mb-2">
+        <span className="text-cyan-600">●</span>{' '}
+        {reason}: Σ {totalShown.toLocaleString()} shown · {totalClicked.toLocaleString()} clicked ·
+        {' '}CTR {overallCtr == null ? '—' : `${overallCtr}%`}
+        {compareReason && (
+          <>
+            {'  ·  '}
+            <span className="text-amber-500">●</span>{' '}
+            {compareReason}: Σ {totalCompareShown.toLocaleString()} shown ·
+            {' '}{totalCompareClicked.toLocaleString()} clicked ·
+            {' '}CTR {overallCompareCtr == null ? '—' : `${overallCompareCtr}%`}
+          </>
+        )}
+      </p>
       <ResponsiveContainer width="100%" height={170}>
         <ComposedChart data={chartData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
@@ -490,13 +550,29 @@ function ReviewPromptReasonTrend({ adminToken, reason }) {
             tick={{ fill: '#6b7280', fontSize: 10 }}
             tickFormatter={(v) => `${v}%`} />
           <Tooltip {...TT} />
-          <Bar yAxisId="left" dataKey="shown" name="Shown"
+          <Bar yAxisId="left" dataKey="shown" name={`${reason} shown`}
             fill="rgba(124,58,237,0.25)" />
-          <Bar yAxisId="left" dataKey="clicked" name="Clicked"
+          <Bar yAxisId="left" dataKey="clicked" name={`${reason} clicked`}
             fill="#10b981" />
-          <Line yAxisId="right" type="monotone" dataKey="ctr_pct" name="CTR %"
+          <Line yAxisId="right" type="monotone" dataKey="ctr_pct"
+            name={`${reason} CTR %`}
             stroke="#06b6d4" strokeWidth={2} dot={{ r: 2 }}
             connectNulls={false} />
+          {compareReason && (
+            <>
+              <Bar yAxisId="left" dataKey="compare_shown"
+                name={`${compareReason} shown`}
+                fill="rgba(245,158,11,0.25)" />
+              <Bar yAxisId="left" dataKey="compare_clicked"
+                name={`${compareReason} clicked`}
+                fill="#f59e0b" />
+              <Line yAxisId="right" type="monotone" dataKey="compare_ctr_pct"
+                name={`${compareReason} CTR %`}
+                stroke="#f97316" strokeWidth={2}
+                strokeDasharray="4 3" dot={{ r: 2 }}
+                connectNulls={false} />
+            </>
+          )}
         </ComposedChart>
       </ResponsiveContainer>
     </div>

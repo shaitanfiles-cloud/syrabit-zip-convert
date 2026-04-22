@@ -281,12 +281,17 @@ export const adminGetReviewPromptStats = (token, days = 30) =>
   axios.get(`${API_BASE}/admin/analytics/review-prompt-stats`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
 
 // Task #662: per-reason 8-week trend (drill-down sparkline)
-export const adminGetReviewPromptByReasonTrend = (token, reason, weeks = 8) =>
-  axios.get(`${API_BASE}/admin/analytics/review-prompt-stats/by-reason-trend`, {
+// Task #673: optional `compare` reason overlays a second series on the
+// same chart so admins can spot whether a CTR dip is reason-specific.
+export const adminGetReviewPromptByReasonTrend = (token, reason, weeks = 8, compare = null) => {
+  const params = { reason, weeks };
+  if (compare) params.compare = compare;
+  return axios.get(`${API_BASE}/admin/analytics/review-prompt-stats/by-reason-trend`, {
     headers: adminHeaders(token),
     withCredentials: true,
-    params: { reason, weeks },
+    params,
   });
+};
 
 export const adminGetRevenue = (token, days = 30) =>
   axios.get(`${API_BASE}/admin/analytics/revenue`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
