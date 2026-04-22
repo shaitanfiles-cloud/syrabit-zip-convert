@@ -166,7 +166,13 @@ async def google_client_id():
 
 
 @router.post("/auth/google")
-async def google_auth(data: GoogleAuthRequest, response: Response):
+async def google_auth(data: GoogleAuthRequest, request: Request, response: Response):
+    # Task #697 — gate the Google sign-in endpoint behind the same
+    # Turnstile check as `/auth/login` and `/auth/signup` so the only
+    # password-free auth path isn't an unprotected automation surface.
+    # `require_turnstile` is a no-op when CF_TURNSTILE_ENABLED is
+    # False, preserving today's dev/local behaviour.
+    await require_turnstile(request)
     from config import GOOGLE_CLIENT_ID
 
     if not GOOGLE_CLIENT_ID:

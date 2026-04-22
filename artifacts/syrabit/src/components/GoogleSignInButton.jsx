@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { useTurnstile } from '@/hooks/useTurnstile';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
@@ -20,6 +21,15 @@ export default function GoogleSignInButton({ mode = 'login' }) {
   const [clientId, setClientId] = useState(null);
   const [gsiReady, setGsiReady] = useState(false);
   const { googleLogin } = useAuth();
+  // Task #697 — obtain a Turnstile token before posting the Google
+  // credential so /auth/google sees the same bot-check the
+  // email/password flow already enforces.
+  const {
+    getToken: getTurnstileToken,
+    ready: turnstileReady,
+    enabled: turnstileEnabled,
+    reset: resetTurnstile,
+  } = useTurnstile();
   const navigate = useNavigate();
   const callbackRef = useRef(null);
   const mountedRef = useRef(true);
@@ -29,7 +39,11 @@ export default function GoogleSignInButton({ mode = 'login' }) {
     if (!mountedRef.current) return;
     setLoading(true);
     try {
-      const user = await googleLogin(response.credential);
+      let turnstileToken = '';
+      if (turnstileEnabled) {
+        turnstileToken = await getTurnstileToken();
+      }
+      const user = await googleLogin(response.credential, turnstileToken);
       if (!mountedRef.current) return;
       toast.success(mode === 'signup' ? 'Account created! Welcome!' : 'Welcome back!');
       if (!user.onboarding_done) {
@@ -39,6 +53,9 @@ export default function GoogleSignInButton({ mode = 'login' }) {
       }
     } catch (err) {
       if (!mountedRef.current) return;
+      // Reset the Turnstile widget so a fresh challenge is solved on
+      // the next attempt — mirrors the email/password retry path.
+      try { resetTurnstile(); } catch {}
       const detail = err.response?.data?.detail || 'Google sign-in failed. Please try again.';
       toast.error(detail);
     } finally {
@@ -110,6 +127,10 @@ export default function GoogleSignInButton({ mode = 'login' }) {
 
   const handleClick = () => {
     if (!gsiReady || loading) return;
+    // Task #697 — when Turnstile is enabled but the widget hasn't
+    // loaded yet, hold the click; the button is also visually
+    // disabled below so this is just defence in depth.
+    if (turnstileEnabled && !turnstileReady) return;
     try {
       window.google.accounts.id.prompt((notification) => {
         if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
@@ -128,7 +149,7 @@ export default function GoogleSignInButton({ mode = 'login' }) {
       <button
         type="button"
         onClick={handleClick}
-        disabled={loading || !gsiReady}
+        disabled={loading || !gsiReady || (turnstileEnabled && !turnstileReady)}
         className="w-full flex items-center justify-center gap-3 h-11 rounded-xl text-sm font-semibold transition-all duration-150 active:scale-[0.97] disabled:opacity-60"
         style={{
           background: 'hsl(var(--muted) / 0.5)',
