@@ -72,6 +72,43 @@ logger = logging.getLogger(__name__)
 _llm_health_cache: dict = {}
 _llm_health_task: asyncio.Task | None = None
 
+
+def _vertex_block_for_health() -> tuple[dict, bool]:
+    """Task #691 — produce the ``vertex`` block surfaced under
+    ``/health → dependencies`` and decide whether vertex should drag
+    the aggregate ``status`` to ``degraded``.
+
+    Returns ``(block, ok)`` where:
+
+    * ``block`` carries ``status`` (one of ``ok / unhealthy / stale /
+      unknown``), ``age_s``, ``auth_mode``, ``via_cf_gateway`` and the
+      last failure ``reason`` — the same fields the admin dashboard
+      tile (Task #689) renders.
+    * ``ok`` is ``True`` unless the cached probe is actively
+      ``unhealthy`` or ``stale``. ``unknown`` (no probe has completed
+      since boot) is treated as non-degrading so a fresh rollout
+      doesn't flap the page yellow for the first probe interval.
+    """
+    try:
+        import vertex_health_cache
+        snap = vertex_health_cache.dashboard_snapshot()
+    except Exception as exc:
+        return (
+            {"status": "unknown", "reason": f"cache unavailable: {exc!r}"},
+            True,
+        )
+    status = snap.get("status") or "unknown"
+    block = {
+        "status": status,
+        "age_s": snap.get("age_s"),
+        "auth_mode": snap.get("auth_mode"),
+        "via_cf_gateway": snap.get("via_cf_gateway"),
+        "consecutive_failures": snap.get("consecutive_failures") or 0,
+        "reason": snap.get("reason"),
+    }
+    ok = status not in ("unhealthy", "stale")
+    return block, ok
+
 # Models to try in order. The probe walks the list and stops at the first
 # success — so the LLM layer is reported "ok" as long as ANY provider in
 # the pool answers. Hardcoding a single provider/model (the previous bug)
@@ -1472,7 +1509,15 @@ async def _health_inner():
             llm_status = "degraded"
             llm_latency = 0
 
-    critical_ok = kv_ok and pg_ok
+    # Task #691 — fold the cached Vertex/Gemini health probe (Task #678)
+    # into /health so on-call has a single page instead of remembering
+    # to also poll /healthz/ai. ``unknown`` (probe hasn't run yet) is
+    # treated as non-degrading to avoid flapping right after boot;
+    # ``unhealthy`` and ``stale`` flip the aggregate status to
+    # ``degraded`` the same way Mongo / Postgres outages do.
+    vertex_block, vertex_ok = _vertex_block_for_health()
+
+    critical_ok = kv_ok and pg_ok and vertex_ok
     overall = "ok" if critical_ok else "degraded"
 
     from rag import _chat_latencies
@@ -1512,6 +1557,7 @@ async def _health_inner():
             },
             "supabase": {"status": "ok" if supa else "not_configured"},
             "razorpay": {"status": rp_status},
+            "vertex": vertex_block,
             "bot_render": get_bot_render_metrics(),
         },
         "chat_latency": {
