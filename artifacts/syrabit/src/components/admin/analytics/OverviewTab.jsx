@@ -524,6 +524,25 @@ function ReviewPromptReasonTrend({ adminToken, reason }) {
     return () => { cancelled = true; };
   }, [adminToken, reason, compare]);
 
+  // Task #686 — sanitise a stale stored value: if the persisted
+  // comparison reason no longer appears in this row's pickable list
+  // (e.g., it stopped firing in the last 8 weeks, or the backend
+  // pruned it), drop it so the controlled <select> always has a
+  // matching <option> and we never fire a useless compare API call.
+  // This effect is hoisted above the conditional returns below to
+  // keep the hook order stable across renders.
+  useEffect(() => {
+    if (!trend || !compare) return;
+    const reasons = Array.isArray(trend.available_reasons)
+      ? trend.available_reasons
+      : [];
+    const isPickable = reasons.includes(compare) && compare !== reason;
+    if (!isPickable) {
+      setCompare('');
+      writeStoredCompareReason('');
+    }
+  }, [trend, compare, reason]);
+
   if (loading && !trend) {
     return <p className="text-gray-500 text-xs py-3 px-3.5">Loading 8-week trend…</p>;
   }
@@ -543,21 +562,6 @@ function ReviewPromptReasonTrend({ adminToken, reason }) {
   // aren't the primary row that was just expanded — that one's already
   // the baseline series.
   const pickable = availableReasons.filter(r => r && r !== reason);
-
-  // Task #686 — sanitise a stale stored value: if the persisted
-  // comparison reason no longer appears in this row's pickable list
-  // (e.g., it stopped firing in the last 8 weeks, or the backend
-  // pruned it), drop it so the controlled <select> always has a
-  // matching <option> and we never fire a useless compare API call.
-  // Only act once the trend payload has actually loaded — otherwise
-  // we'd wipe a perfectly valid selection during the initial render.
-  useEffect(() => {
-    if (!trend || !compare) return;
-    if (!pickable.includes(compare)) {
-      setCompare('');
-      writeStoredCompareReason('');
-    }
-  }, [trend, compare, pickable]);
 
   const chartData = buckets.map((b, i) => {
     const d = b?.week_end ? new Date(b.week_end) : null;
