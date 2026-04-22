@@ -420,7 +420,7 @@ SARVAM_BASE_URL = 'https://api.sarvam.ai'
 # working — every call site already guards with `if REDIS_URL:` / `if redis_client:`.
 REDIS_URL   = ''
 REDIS_TOKEN = ''
-REDIS_AI_CACHE_TTL = int(os.environ.get('REDIS_AI_CACHE_TTL', '3600') or '3600')
+REDIS_AI_CACHE_TTL = int(os.environ.get('REDIS_AI_CACHE_TTL', '7200') or '7200')
 REDIS_CASUAL_CACHE_TTL = int(os.environ.get('REDIS_CASUAL_CACHE_TTL', '300') or '300')
 REDIS_CHAT_CACHE_TTL = 600
 REDIS_SEARCH_CACHE_TTL = 300

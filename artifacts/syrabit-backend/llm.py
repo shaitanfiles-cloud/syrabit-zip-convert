@@ -49,6 +49,8 @@ from config import (
 import vertex_chat as _vertex_chat
 from deps import sarvam_llm_client, sarvam_llm_client_direct, logger as _dep_logger
 from cache import _cache_key
+import ai_cache
+from ai_cache import build_ai_cache_key
 
 logger = logging.getLogger(__name__)
 
@@ -527,7 +529,19 @@ def _pick_sarvam_client():
 async def _call_sarvam_llm(messages: list, api_key: str, model: str, max_tokens: int) -> str:
     """Non-streaming call to Sarvam LLM — reuses persistent sarvam_llm_client (zero TCP overhead).
     Adds SARVAM_THINK_BUFFER so the <think> block never consumes the user's answer budget.
-    Falls back to direct client if CF gateway returns connection error or 401."""
+    Falls back to direct client if CF gateway returns connection error or 401.
+    Wraps the API call with L1 TTLCache so repeated Assamese prompts are served
+    from memory (<1ms) instead of hitting the Sarvam API (100-140ms)."""
+    # ── Cache lookup ────────────────────────────────────────────────────────
+    prompt = messages[-1]["content"] if messages else ""
+    cache_key = build_ai_cache_key(model=model, prompt=prompt, language="as")
+    cached = await ai_cache.aget(cache_key)
+    if cached is not None:
+        ai_cache.record_hit_saved_latency(120.0)  # conservative estimate; real avg is 100-140ms
+        logger.info(f"sarvam_cache HIT model={model} key={cache_key[:12]}…")
+        return cached
+
+    # ── Cache miss — call Sarvam API ────────────────────────────────────────
     api_max = max_tokens + SARVAM_THINK_BUFFER
     payload = {
         "model": model,
@@ -539,6 +553,7 @@ async def _call_sarvam_llm(messages: list, api_key: str, model: str, max_tokens:
     client = _pick_sarvam_client()
     if client is None:
         raise HTTPException(status_code=503, detail="Sarvam LLM client not initialised")
+    _t0 = time.perf_counter()
     try:
         resp = await client.post("/v1/chat/completions", json=payload)
         resp.raise_for_status()
@@ -556,6 +571,7 @@ async def _call_sarvam_llm(messages: list, api_key: str, model: str, max_tokens:
             resp.raise_for_status()
         else:
             raise
+    duration_ms = (time.perf_counter() - _t0) * 1000
     data = resp.json()
     choice = data["choices"][0]["message"]
     content = choice.get("content") or ""
@@ -563,6 +579,8213 @@ async def _call_sarvam_llm(messages: list, api_key: str, model: str, max_tokens:
     result = content if content else reasoning
     result = re.sub(r'<think>.*?</think>', '', result, flags=re.DOTALL).strip()
     result = re.sub(r'<think>.*$', '', result, flags=re.DOTALL).strip()
+
+
+    # ── Populate cache for future hits ──────────────────────────────────────
+    if result:
+        await ai_cache.aset(cache_key, result, saved_ms=duration_ms)
+        logger.info(f"sarvam_cache SET model={model} key={cache_key[:12]}… duration_ms={duration_ms:.0f}")
+
+    return result
+
+
+def _cf_cache_headers() -> dict:
+    # Delegates to config.byok_headers() which returns:
+    #   cf-aig-byok-key:default   — CF substitutes the stored BYOK key upstream
+    #   cf-aig-cache-ttl:<N>      — cache TTL hint
+    #   cf-aig-authorization:…    — only when Authenticated Gateway mode is on
+    # Returns {} when the gateway is down — callers should raise or continue
+    # without the caching hint. With BYOK active the placeholder api_key in
+    # the openai client is ignored by CF; the stored BYOK key is used instead.
+    return byok_headers()
+
+
+def _is_cf_connection_error(exc: Exception) -> bool:
+    err = str(exc).lower()
+    return "connect" in err or "timeout" in err or "unreachable" in err or "dns" in err
+
+def _handle_cf_connection_error(exc: Exception) -> None:
+    if _is_cf_connection_error(exc):
+        mark_cf_gateway_down()
+        logger.warning(f"Cloudflare AI Gateway connection error — falling back to direct URLs for 5 min: {type(exc).__name__}")
+
+def _handle_cf_gateway_auth_error(exc: Exception) -> None:
+    mark_cf_gateway_down()
+    logger.warning(f"Cloudflare AI Gateway 401 auth error — falling back to direct URLs for 5 min: {type(exc).__name__}: {str(exc)[:200]}")
+
+async def _call_gemini(messages: list, api_key: str, model: str, max_tokens: int) -> str:
+    """Non-streaming call to Google Gemini via its OpenAI-compatible endpoint."""
+    direct_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    base = get_provider_base_url("gemini") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        resp = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            extra_headers=_cf_cache_headers() or None,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_openai_compat(messages: list, api_key: str, model: str, max_tokens: int, provider: str, fallback_base: str) -> str:
+    """Non-streaming call via an OpenAI-compatible provider (OpenAI, xAI, Fireworks)."""
+    base = get_provider_base_url(provider) or fallback_base
+    client = _get_oai_client(api_key, base)
+    try:
+        resp = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            extra_headers=_cf_cache_headers() or None,
+        )
+    except _oai.APIConnectionError as e:
+        if base != fallback_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != fallback_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_cerebras(messages: list, api_key: str, model: str, max_tokens: int) -> str:
+    base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
+    client = _get_oai_client(api_key, base)
+    resp = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+    )
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_single_provider(messages: list, provider: str, api_key: str, model: str, max_tokens: int) -> str:
+    max_tokens = _clamp_max_tokens(model, max_tokens)
+    if provider == "sarvam":
+        return await _call_sarvam_llm(messages, api_key, model, max_tokens)
+    if provider == "gemini":
+        return await _call_gemini(messages, api_key, model, max_tokens)
+    if provider == "cerebras":
+        return await _call_cerebras(messages, api_key, model, max_tokens)
+    if provider == "groq":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "groq", "https://api.groq.com/openai/v1")
+    if provider == "xai":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "xai", "https://api.x.ai/v1")
+    if provider == "openrouter":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "openrouter", "https://openrouter.ai/api/v1")
+
+    system_msg = ""
+    user_msg = ""
+    for m in messages:
+        if m["role"] == "system":
+            system_msg = m["content"]
+        elif m["role"] == "user":
+            user_msg = m["content"]
+
+    chat = LlmChat(
+        api_key=api_key,
+        session_id=str(uuid.uuid4()),
+        system_message=system_msg or "You are a helpful AI tutor.",
+    ).with_model(provider, model)
+
+    response = await chat.send_message(UserMessage(text=user_msg))
+    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+    return response
+
+async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 1024, provider_list=None) -> str:
+    import time as _t
+    # Wall-clock start of the whole primary-rotation loop. Used so the
+    # Workers AI fallback path (Task #636) can attribute the *real*
+    # cumulative primary latency (instead of 0) when we eventually give
+    # up and call the edge.
+    _loop_t0 = _t.perf_counter()
+    providers = _LLM_PROVIDERS if provider_list is None else provider_list
+    use_model = _MODEL_ALIAS_MAP.get(model or LLM_MODEL, model or LLM_MODEL)
+    primary_provider, primary_key = _resolve_provider_for_model(use_model, providers)
+
+    if not primary_key and not providers:
+        raise HTTPException(status_code=503, detail="LLM API key not configured")
+
+    tried: set = set()
+    last_err = None
+
+    _is_content = provider_list is _LLM_PROVIDERS_CONTENT
+    _is_chat = provider_list is _LLM_PROVIDERS_CHAT
+    _PROVIDER_TIMEOUT = 30.0 if _is_content else (4.0 if _is_chat else 6.0)
+
+    provider, key = primary_provider, primary_key
+    try_model = _safe_model_for_provider(use_model, provider, providers)
+    if try_model != use_model:
+        logger.info(f"Model '{use_model}' not compatible with {provider} → using '{try_model}'")
+    try:
+        tried.add((provider, try_model, id(key) if key else 0))
+        _t0 = _t.perf_counter()
+        result = await asyncio.wait_for(
+            _call_single_provider(messages, provider, key, try_model, max_tokens),
+            timeout=_PROVIDER_TIMEOUT,
+        )
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        tok = len(result.split())
+        _record_llm_call(provider, try_model, _dur, True, tok, False)
+        logger.info(f"llm_call provider={provider} model={try_model} duration_ms={_dur} tokens_approx={tok}")
+        return LlmResult(result, provider=provider)
+    except asyncio.TimeoutError:
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        _record_llm_call(provider, try_model, _dur, False, 0, False, "Timeout")
+        last_err = TimeoutError(f"{provider}/{try_model} timed out after {_PROVIDER_TIMEOUT}s")
+        logger.warning(f"LLM primary TIMEOUT ({provider}/{try_model}): {_dur}ms > {_PROVIDER_TIMEOUT}s limit")
+    except Exception as e:
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        _record_llm_call(provider, try_model, _dur, False, 0, False, type(e).__name__)
+        last_err = e
+        logger.warning(f"LLM primary failed ({provider}/{try_model}): {type(e).__name__}: {str(e)[:150]}")
+
+    for fallback in providers:
+        fb_model = fallback["default_model"]
+        fb_key_id = id(fallback["key"]) if fallback.get("key") else 0
+        if (fallback["provider"], fb_model, fb_key_id) in tried:
+            continue
+        tried.add((fallback["provider"], fb_model, fb_key_id))
+        try:
+            _t0 = _t.perf_counter()
+            result = await asyncio.wait_for(
+                _call_single_provider(messages, fallback["provider"], fallback["key"], fb_model, max_tokens),
+                timeout=_PROVIDER_TIMEOUT,
+            )
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            tok = len(result.split())
+            _record_llm_call(fallback["provider"], fb_model, _dur, True, tok, True)
+            logger.info(f"llm_call provider={fallback['provider']} model={fb_model} duration_ms={_dur} tokens_approx={tok} fallback=true")
+            return LlmResult(result, provider=fallback["provider"])
+        except asyncio.TimeoutError:
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, "Timeout")
+            last_err = TimeoutError(f"{fallback['provider']}/{fb_model} timed out after {_PROVIDER_TIMEOUT}s")
+            logger.warning(f"LLM fallback TIMEOUT ({fallback['provider']}/{fb_model}): {_dur}ms > {_PROVIDER_TIMEOUT}s limit")
+        except Exception as e:
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, type(e).__name__)
+            last_err = e
+            logger.warning(f"LLM fallback failed ({fallback['provider']}/{fb_model}): {type(e).__name__}: {str(e)[:150]}")
+
+    # Task #636 — last-resort Workers AI fallback. Only reached after every
+    # configured primary+fallback Cerebras/Gemini/etc provider has failed.
+    # Policy is strict (timeout/5xx/429/quota only) so 4xx bad-input bugs
+    # still surface as 503 instead of being silently masked by a different
+    # model's looser parser.
+    try:
+        from providers import workers_ai as _wai
+        if _wai.is_enabled("chat") and last_err is not None and _wai.should_fallback(last_err):
+            # Real cumulative primary-loop latency (all rotations combined),
+            # so the admin panel and structured logs attribute the actual
+            # wait the user incurred before we gave up on the primaries.
+            _primary_total_ms = int((_t.perf_counter() - _loop_t0) * 1000)
+            _t0 = _t.perf_counter()
+            ok, value, label = await _wai.attempt_fallback(
+                "chat", last_err, _primary_total_ms,
+                lambda: _wai.call_chat(messages, max_tokens=max_tokens, temperature=0.3),
+            )
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            if ok and isinstance(value, str) and value:
+                reason = _wai.classify_primary_error(last_err)
+                _record_llm_call("workers-ai", "llama-3.1-8b-instruct", _dur, True,
+                                 len(value.split()), True)
+                logger.info(
+                    f"llm_call provider=workers-ai model=llama-3.1-8b-instruct "
+                    f"duration_ms={_dur} fallback=true reason={reason}"
+                )
+                return LlmResult(value, provider="workers-ai", fallback_reason=reason)
+    except Exception as _wai_err:  # noqa: BLE001
+        logger.warning(f"[workers-ai] chat fallback skipped: {type(_wai_err).__name__}: {str(_wai_err)[:150]}")
+
+    logger.error(f"All LLM providers exhausted. Last error: {last_err}")
+    raise HTTPException(status_code=503, detail="AI service temporarily unavailable. Please try again.")
+
+async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048) -> str:
+    """Smart-batched LLM call: deduplicates identical requests, limits concurrency.
+    Uses all providers including Emergent (admin content generation)."""
+    return await _llm_batcher.call(messages, model, max_tokens)
+
+_LLM_PROVIDERS_CONTENT: list[dict] = []
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "qwen-3-235b-a22b-instruct-2507"})
+if _SARVAM_LLM_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+if _GEMINI_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
+if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
+
+logger.info(
+    f"Admin content providers (quality-first order): "
+    f"{[p['provider'] + '/' + p['default_model'] for p in _LLM_PROVIDERS_CONTENT]}"
+)
+
+async def call_llm_api_content(messages: list, model: str = None, max_tokens: int = 3072) -> str:
+    """LLM call for admin content generation — Cerebras preferred (qwen-3-235b, fast + high quality),
+    Sarvam secondary (sarvam-m), Gemini 2.5 Flash last resort.
+    Uses dedicated content batcher with 300ms batch window (vs 5ms for chat).
+    Retries with exponential backoff instead of instant failover."""
+    if model is None and _LLM_PROVIDERS_CONTENT:
+        model = _LLM_PROVIDERS_CONTENT[0]["default_model"]
+    return await _content_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CONTENT, use_admin_sem=True)
+
+
+async def call_llm_api_content_with_retry(
+    messages: list, model: str = None, max_tokens: int = 3072,
+    validate_fn=None,
+) -> str:
+    """Content LLM call with retry-with-backoff and optional output validation.
+    
+    validate_fn: optional callable(result_str) -> bool. If it returns False,
+    the result is treated as a failure and retried.
+    """
+    last_err = None
+    for attempt in range(_CONTENT_RETRY_MAX):
+        try:
+            result = await call_llm_api_content(messages, model, max_tokens)
+            if validate_fn is not None and not validate_fn(result):
+                logger.warning(
+                    f"Content LLM output failed validation (attempt {attempt + 1}/{_CONTENT_RETRY_MAX})"
+                )
+                last_err = ValueError("Output failed validation")
+                if attempt < _CONTENT_RETRY_MAX - 1:
+                    backoff = _CONTENT_RETRY_BACKOFF[min(attempt, len(_CONTENT_RETRY_BACKOFF) - 1)]
+                    logger.info(f"Content retry backoff: waiting {backoff}s before attempt {attempt + 2}")
+                    await asyncio.sleep(backoff)
+                continue
+            return result
+        except Exception as e:
+            last_err = e
+            logger.warning(
+                f"Content LLM call failed (attempt {attempt + 1}/{_CONTENT_RETRY_MAX}): "
+                f"{type(e).__name__}: {str(e)[:150]}"
+            )
+            if attempt < _CONTENT_RETRY_MAX - 1:
+                backoff = _CONTENT_RETRY_BACKOFF[min(attempt, len(_CONTENT_RETRY_BACKOFF) - 1)]
+                logger.info(f"Content retry backoff: waiting {backoff}s before attempt {attempt + 2}")
+                await asyncio.sleep(backoff)
+    raise last_err or HTTPException(status_code=503, detail="Content generation failed after retries")
+
+async def call_llm_api_chat(messages: list, model: str = None, max_tokens: int = 2048) -> str:
+    """LLM call for student chat — excludes Emergent provider (admin-only)."""
+    return await _llm_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CHAT)
+
+
+_THINK_BUDGET_HINT = "/think in one sentence. Answer immediately.\n"
+
+def _inject_think_budget(messages: list) -> list:
+    """Prepend a concise reasoning directive to the system message so sarvam-m
+    spends fewer tokens in its <think> block, reducing TTFT significantly."""
+    out = []
+    injected = False
+    for m in messages:
+        if m.get("role") == "system" and not injected:
+            out.append({**m, "content": _THINK_BUDGET_HINT + m["content"]})
+            injected = True
+        else:
+            out.append(m)
+    if not injected:
+        out.insert(0, {"role": "system", "content": _THINK_BUDGET_HINT})
+    return out
+
+async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: int, *, response_lang: str = ""):
+    """Token-by-token SSE streaming from Sarvam — reuses persistent sarvam_llm_client (zero TCP overhead).
+    For Indic languages: skips think budget injection and think buffer to reduce TTFT.
+    For English: adds SARVAM_THINK_BUFFER so <think> reasoning never crowds out the answer budget.
+    Falls back to direct client if CF gateway connection fails.
+    """
+    _indic = _is_indic_lang(response_lang)
+    if _indic:
+        api_max = max_tokens + 100
+        patched = [dict(m) for m in messages]
+        if patched and patched[0].get("role") == "system":
+            patched[0]["content"] = (
+                "CRITICAL: Do NOT use <think> tags. Do NOT write internal thoughts. "
+                "Do NOT start with 'Okay' or 'Let me'. "
+                "Reply DIRECTLY in Assamese (অসমীয়া). Start your answer immediately.\n"
+                "STRICT LANGUAGE RULES:\n"
+                "- Every running word MUST be in Assamese script. NO mid-sentence English words.\n"
+                "- NEVER emit partial English fragments such as 'me uses', 'terms', 'ssible',\n"
+                "  'ble', 'tion', 'ssing'. If you start a word in English, you MUST switch\n"
+                "  back to Assamese for the rest of that sentence.\n"
+                "- Latin script is allowed ONLY for: pure numbers/dates, scientific units\n"
+                "  (cm, kg, Hz, °C, eV…), math symbols/equations, code, URLs, well-known\n"
+                "  proper nouns and acronyms (AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
+                "- For everyday nouns/verbs, use the Assamese word — do NOT fall back to English.\n"
+                "BAD vs GOOD examples (follow the pattern, do not copy text):\n"
+                "  BAD : 'উৰুকা me uses ssible terms চমুকৈ ক'লে…'\n"
+                "  GOOD: 'উৰুকা চমুকৈ ক'লে অসমৰ এক প্ৰিয় উৎসৱ।'\n"
+                "  BAD : 'জল 100°C ত boil হয়।'\n"
+                "  GOOD: 'পানী 100°C ত উতলে।'\n"
+                "  BAD : 'Newton ৰ first law explains inertia।'\n"
+                "  GOOD: 'Newton ৰ গতিৰ প্ৰথম সূত্ৰে জড়তা ব্যাখ্যা কৰে।'\n"
+            ) + patched[0]["content"]
+        logger.info(f"[SARVAM-INDIC] No-think mode for {response_lang} — model={model}, api_max={api_max}")
+    else:
+        api_max = max_tokens + SARVAM_THINK_BUFFER
+        patched = _inject_think_budget(messages)
+    _SARVAM_LANG_CODE_MAP = {"as": "as-IN"}
+    payload = {
+        "model": model,
+        "messages": patched,
+        "max_tokens": api_max,
+        "temperature": 0.05 if _indic else 0.1,
+        "top_p": 0.9 if _indic else 0.95,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+        "stream": True,
+    }
+    if _indic:
+        payload["thinking"] = {"enabled": False}
+        if response_lang in _SARVAM_LANG_CODE_MAP:
+            payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
+    elif response_lang in _SARVAM_LANG_CODE_MAP:
+        payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
+    client = _pick_sarvam_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Sarvam LLM client not initialised")
+
+    async def _do_stream(c):
+        async with c.stream("POST", "/v1/chat/completions", json=payload) as resp:
+            if resp.status_code >= 400:
+                body = await resp.aread()
+                logger.error(f"Sarvam {resp.status_code} error body: {body.decode()[:500]}")
+                resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                raw = line[5:].strip()
+                if raw == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(raw)
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
+                    token = delta.get("content") or ""
+                    if token:
+                        yield token
+                except Exception:
+                    continue
+
+    try:
+        async for token in _do_stream(client):
+            yield token
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        if sarvam_llm_client_direct is not None and client is not sarvam_llm_client_direct:
+            _handle_cf_connection_error(e)
+            async for token in _do_stream(sarvam_llm_client_direct):
+                yield token
+        else:
+            raise
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401 and sarvam_llm_client_direct is not None and client is not sarvam_llm_client_direct:
+            _handle_cf_gateway_auth_error(e)
+            async for token in _do_stream(sarvam_llm_client_direct):
+                yield token
+        else:
+            raise
+
+async def _stream_gemini(messages: list, api_key: str, model: str, max_tokens: int):
+    """Token-by-token streaming from Google Gemini via its OpenAI-compatible endpoint."""
+    direct_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    base = get_provider_base_url("gemini") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_vertex_gemini(messages: list, model: str, max_tokens: int):
+    """Token-by-token streaming from Vertex AI Gemini Flash (Task #607).
+
+    Uses google-auth + Vertex `streamGenerateContent` REST endpoint.
+    Raises on misconfiguration / network errors so the caller can fall
+    back to the legacy hedged SLM pool.
+    """
+    async for token in _vertex_chat.stream_chat(
+        messages, model=model, max_tokens=max_tokens, temperature=0.1,
+    ):
+        yield token
+
+
+async def _stream_cerebras(messages: list, api_key: str, model: str, max_tokens: int):
+    base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
+    client = _get_oai_client(api_key, base)
+    stream = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+    )
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_xai(messages: list, api_key: str, model: str, max_tokens: int):
+    """Token-by-token streaming from xAI Grok via its OpenAI-compatible endpoint."""
+    direct_base = "https://api.x.ai/v1"
+    base = get_provider_base_url("xai") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_openai_compat(messages: list, api_key: str, model: str, max_tokens: int, provider: str, fallback_base: str):
+    """Token-by-token streaming from any OpenAI-compatible provider."""
+    base = get_provider_base_url(provider) or fallback_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != fallback_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != fallback_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_bedrock(messages: list, model: str, max_tokens: int):
+    """Token-by-token streaming from Amazon Bedrock via Converse streaming API.
+    boto3 is synchronous — runs in a thread pool; tokens passed back via asyncio.Queue.
+    Supports Amazon Nova family (nova-micro, nova-lite, nova-pro) and any Converse-compatible model.
+    """
+    if not _AWS_ACCESS_KEY or not _AWS_SECRET_KEY:
+        raise ValueError("AWS credentials not configured (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)")
+
+    # Convert OpenAI-format messages to Bedrock Converse format
+    system_parts = []
+    converse_messages = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if role == "system":
+            system_parts.append({"text": content})
+        else:
+            converse_messages.append({"role": role, "content": [{"text": content}]})
+
+    loop = asyncio.get_event_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def _sync_stream():
+        try:
+            import boto3 as _boto3
+            client = _boto3.client(
+                "bedrock-runtime",
+                region_name=_AWS_REGION,
+                aws_access_key_id=_AWS_ACCESS_KEY,
+                aws_secret_access_key=_AWS_SECRET_KEY,
+            )
+            kwargs = dict(
+                modelId=model,
+                messages=converse_messages,
+                inferenceConfig={"maxTokens": max_tokens, "temperature": 0.1},
+            )
+            if system_parts:
+                kwargs["system"] = system_parts
+            resp = client.converse_stream(**kwargs)
+            for event in resp["stream"]:
+                if "contentBlockDelta" in event:
+                    text = event["contentBlockDelta"].get("delta", {}).get("text", "")
+                    if text:
+                        loop.call_soon_threadsafe(queue.put_nowait, text)
+            loop.call_soon_threadsafe(queue.put_nowait, None)   # sentinel → done
+        except Exception as exc:
+            loop.call_soon_threadsafe(queue.put_nowait, exc)
+
+    loop.run_in_executor(None, _sync_stream)
+
+    while True:
+        item = await queue.get()
+        if item is None:
+            break
+        if isinstance(item, Exception):
+            raise item
+        yield item
+
+
+async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int = 2048, intent: str = "", response_lang: str = ""):
+    """
+    Real token-by-token streaming from the LLM provider.
+    Uses native streaming APIs for instant first-token delivery.
+    Supports: Sarvam, Groq, Fireworks, Gemini, Cerebras, xAI, Bedrock.
+    'openai/gpt-oss-20b' triggers the smart SLM pool (Fireworks/Groq/Cerebras/Gemini).
+    When response_lang is an Indic code (as/hi/etc), optimized Sarvam routing is applied.
+    """
+    _indic_mode = _is_indic_lang(response_lang)
+    _stream_t0 = time.monotonic()
+
+    if _indic_mode:
+        _resolved_indic_model = None
+        for _pref_model in _SARVAM_INDIC_MODEL_PREFERENCE:
+            _prov, _pkey = _resolve_provider_for_model(_pref_model, _LLM_PROVIDERS)
+            if _prov == "sarvam" and _pkey:
+                _resolved_indic_model = _pref_model
+                break
+        if _resolved_indic_model:
+            model = _resolved_indic_model
+            logger.info(f"[INDIC] Auto-selected Sarvam model '{model}' for {response_lang} response")
+        else:
+            logger.warning(f"[INDIC] No Sarvam model available from preference chain, using default")
+
+    use_model_raw = model or LLM_MODEL
+
+    # ── Vertex AI Gemini Flash fast-path (Task #607) ──────────────────────────
+    # When the requested model resolves to Vertex Gemini Flash, stream through
+    # Vertex AI's REST endpoint directly. On any error before the first token
+    # is delivered, automatically fall back to the legacy SLM hedged pool by
+    # re-routing through the standard resolution path below.
+    # Task #628 — Indic (Assamese) admin toggle: when the admin has
+    # flipped the Indic provider to "vertex" AND Vertex is configured,
+    # route Assamese chat through the same Vertex fast-path used for
+    # English below. The leak sanitiser downstream still runs on the
+    # emitted content, so stray English words are cleaned regardless
+    # of provider. On pre-first-token Vertex failure we fall through
+    # to the legacy Sarvam hedged pool below (NOT the English SLM
+    # pool) to preserve Assamese quality.
+    _indic_vertex_active = False
+    if _indic_mode:
+        try:
+            from lang_sanitizer import get_indic_provider as _get_indic_provider
+            _indic_provider_pref = _get_indic_provider()
+        except Exception:
+            _indic_provider_pref = "sarvam"
+        if _indic_provider_pref == "vertex" and _vertex_chat.is_configured():
+            _indic_vertex_active = True
+
+    _use_vertex_fastpath = (
+        (use_model_raw == "vertex/gemini-flash" and not _indic_mode)
+        or _indic_vertex_active
+    )
+    _vertex_fallback_target = (
+        # Indic fallback uses the Sarvam hedged pool (preserves Assamese
+        # quality); English fallback uses the SLM pool.
+        "sarvam-m" if _indic_vertex_active else "openai/gpt-oss-20b"
+    )
+    _vertex_metric_bucket = "vertex_gemini_indic" if _indic_vertex_active else "vertex_gemini"
+
+    if _use_vertex_fastpath:
+        if not _vertex_chat.is_configured():
+            logger.warning("vertex/gemini-flash requested but VERTEX_PROJECT_ID is not set — falling back to legacy SLM pool")
+            use_model_raw = _vertex_fallback_target
+        else:
+            _vertex_first_token = False
+            _vertex_t0 = time.monotonic()
+            try:
+                _mt_vx = _clamp_max_tokens(VERTEX_GEMINI_MODEL, max_tokens)
+                _vx_batch = ""
+                _VX_BATCH_SIZE = 2
+                # For Indic mode, prepend the same strict-Assamese system
+                # preface used by `_stream_sarvam` so Gemini commits to
+                # Assamese script from the first token and we don't rely
+                # on the sanitizer to clean up provider-level leakage.
+                _vx_messages = messages
+                if _indic_vertex_active:
+                    _vx_messages = [dict(m) for m in messages]
+                    _asm_preface = (
+                        "CRITICAL: Reply DIRECTLY in Assamese (অসমীয়া). "
+                        "Do NOT use <think> tags. Do NOT write internal thoughts.\n"
+                        "STRICT LANGUAGE RULES:\n"
+                        "- Every running word MUST be in Assamese script. "
+                        "NO mid-sentence English words.\n"
+                        "- Latin script is allowed ONLY for: pure numbers/dates, "
+                        "scientific units (cm, kg, Hz, °C, eV…), math symbols/equations, "
+                        "code, URLs, well-known proper nouns and acronyms "
+                        "(AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
+                        "- For everyday nouns/verbs, use the Assamese word — "
+                        "do NOT fall back to English.\n\n"
+                    )
+                    if _vx_messages and _vx_messages[0].get("role") == "system":
+                        _vx_messages[0]["content"] = _asm_preface + _vx_messages[0]["content"]
+                    else:
+                        _vx_messages.insert(0, {"role": "system", "content": _asm_preface})
+                async for token in _stream_vertex_gemini(_vx_messages, VERTEX_GEMINI_MODEL, _mt_vx):
+                    if not _vertex_first_token:
+                        _ttft_ms = (time.monotonic() - _vertex_t0) * 1000
+                        logger.info(f"[VERTEX-PERF] TTFT={_ttft_ms:.0f}ms model={VERTEX_GEMINI_MODEL} indic={_indic_vertex_active}")
+                        _vertex_first_token = True
+                    _vx_batch += token
+                    if len(_vx_batch) >= _VX_BATCH_SIZE:
+                        yield f"data: {json.dumps({'content': _vx_batch})}\n\n"
+                        _vx_batch = ""
+                if _vx_batch:
+                    yield f"data: {json.dumps({'content': _vx_batch})}\n\n"
+                if _vertex_first_token:
+                    _total_ms = (time.monotonic() - _vertex_t0) * 1000
+                    logger.info(f"[VERTEX-PERF] Total={_total_ms:.0f}ms model={VERTEX_GEMINI_MODEL} indic={_indic_vertex_active}")
+                    try:
+                        from chat_speedup_metrics import record_provider_call as _rec_prov
+                        _rec_prov(_vertex_metric_bucket, ttfb_ms=_ttft_ms, total_ms=_total_ms)
+                    except Exception:
+                        pass
+                    yield f"data: {json.dumps({'__provider': _vertex_metric_bucket})}\n\n"
+                    return
+                # Stream completed without ever yielding a token — treat as
+                # failure and fall through to legacy.
+                logger.warning("Vertex Gemini Flash returned empty stream — falling back to legacy pool")
+            except Exception as _vx_err:
+                if _vertex_first_token:
+                    # We already started streaming to the client; we can't
+                    # silently restart. Emit error and stop.
+                    logger.warning(f"Vertex Gemini Flash mid-stream error: {type(_vx_err).__name__}: {str(_vx_err)[:200]}")
+                    yield f"data: {json.dumps({'error': 'AI service interrupted'})}\n\n"
+                    return
+                logger.warning(f"Vertex Gemini Flash failed before first token: {type(_vx_err).__name__}: {str(_vx_err)[:200]} — falling back to legacy pool")
+            # Fall back: rewrite the requested model to the legacy default
+            # and continue with the standard resolution path below.
+            try:
+                from chat_speedup_metrics import record_provider_fallback as _rec_fb
+                _rec_fb(_vertex_metric_bucket, _vertex_fallback_target)
+            except Exception:
+                pass
+            use_model_raw = _vertex_fallback_target
+            model = use_model_raw
+            _indic_vertex_active = False  # Fallback → resolve normally
+
+    use_model_resolved = _MODEL_ALIAS_MAP.get(use_model_raw, use_model_raw)
+    _prov_list = _LLM_PROVIDERS if _indic_mode else _LLM_PROVIDERS_CHAT
+    provider, key = _resolve_provider_for_model(use_model_resolved, _prov_list)
+    if use_model_raw != use_model_resolved:
+        logger.info(f"Model alias '{use_model_raw}' → '{use_model_resolved}' ({provider})")
+    use_model = _safe_model_for_provider(use_model_resolved, provider, _prov_list)
+    if use_model != use_model_resolved:
+        logger.info(f"Model '{use_model_resolved}' not compatible with {provider} → using '{use_model}'")
+
+    if not key and provider != "sarvam":
+        yield f"data: {json.dumps({'error': 'LLM API key not configured'})}\n\n"
+        return
+
+    in_think = False
+    buf = ""
+
+    _SSE_BATCH = 2    # flush every 2 chars — near-instant token delivery
+
+    async def _emit_tokens(token_source):
+        nonlocal in_think, buf
+        import re as _re
+        _CLOSE_KEEP = len('</think>') - 1   # 7
+        think_done  = False
+        batch       = ""
+        _visible_text = ""
+        _think_buf  = []
+
+        async for token in token_source:
+            if think_done:
+                cleaned = _re.sub(r'<think>[\s\S]*?</think>', '', token)
+                if cleaned:
+                    batch += cleaned
+                    if len(batch) >= _SSE_BATCH:
+                        _visible_text += batch
+                        yield f"data: {json.dumps({'content': batch})}\n\n"
+                        batch = ""
+                continue
+
+            buf += token
+            while buf:
+                if in_think:
+                    close_idx = buf.find('</think>')
+                    if close_idx != -1:
+                        _think_buf.append(buf[:close_idx])
+                        buf = buf[close_idx + 8:]
+                        in_think   = False
+                        think_done = True
+                        if buf:
+                            batch += buf
+                            buf = ""
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                        break
+                    else:
+                        if len(buf) > _CLOSE_KEEP:
+                            _think_buf.append(buf[:-_CLOSE_KEEP])
+                            buf = buf[-_CLOSE_KEEP:]
+                        break
+                else:
+                    open_idx = buf.find('<think>')
+                    if open_idx != -1:
+                        before = buf[:open_idx]
+                        if before:
+                            batch += before
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                        buf      = buf[open_idx + 7:]
+                        in_think = True
+                    elif buf.endswith(('<', '<t', '<th', '<thi', '<thin', '<think')):
+                        partial_start = buf.rfind('<')
+                        candidate     = buf[partial_start:]
+                        if '<think>'[:len(candidate)] == candidate:
+                            before = buf[:partial_start]
+                            if before:
+                                batch += before
+                                if len(batch) >= _SSE_BATCH:
+                                    _visible_text += batch
+                                    yield f"data: {json.dumps({'content': batch})}\n\n"
+                                    batch = ""
+                            buf = candidate
+                            break
+                        else:
+                            batch += buf
+                            buf    = ""
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                    else:
+                        batch += buf
+                        buf    = ""
+                        if len(batch) >= _SSE_BATCH:
+                            _visible_text += batch
+                            yield f"data: {json.dumps({'content': batch})}\n\n"
+                            batch = ""
+                        break
+
+        if batch and not in_think:
+            _visible_text += batch
+            yield f"data: {json.dumps({'content': batch})}\n\n"
+        if buf and not in_think:
+            _visible_text += buf
+            yield f"data: {json.dumps({'content': buf})}\n\n"
+
+        if not _visible_text.strip() and (in_think or think_done):
+            fallback_text = "".join(_think_buf)
+            if in_think and buf:
+                fallback_text += buf
+            fallback_text = _re.sub(r'</?think\s*/?>', '', fallback_text).strip()
+            fallback_text = _re.sub(r'</?\w*$', '', fallback_text).strip()
+            if fallback_text and len(fallback_text) > 5:
+                logger.info(f"Think-block fallback: emitting {len(fallback_text)} chars of think content as response")
+                yield f"data: {json.dumps({'content': fallback_text})}\n\n"
+
+    async def _stream_from_provider(p_name: str, p_key: str, p_model: str):
+        """Yield raw tokens from a provider. Raises on failure."""
+        _mt = _clamp_max_tokens(p_model, max_tokens)
+        if p_name == "sarvam":
+            _input_est = sum(len(m.get("content", "")) for m in messages) // 4
+            _think_overhead = 0 if _indic_mode else SARVAM_THINK_BUFFER
+            _sarvam_cap = max(256, 7192 - _input_est - _think_overhead - 100)
+            _mt = min(_mt, _sarvam_cap)
+            async for token in _stream_sarvam(messages, p_key, p_model, _mt, response_lang=response_lang):
+                yield token
+        elif p_name == "gemini":
+            logger.info(f"LLM stream: provider=gemini, model={p_model}")
+            async for token in _stream_gemini(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "cerebras":
+            logger.info(f"LLM stream: provider=cerebras, model={p_model}")
+            async for token in _stream_cerebras(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "groq":
+            logger.info(f"LLM stream: provider=groq, model={p_model}")
+            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "groq", "https://api.groq.com/openai/v1"):
+                yield token
+        elif p_name == "xai":
+            logger.info(f"LLM stream: provider=xai, model={p_model}")
+            async for token in _stream_xai(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "openrouter":
+            logger.info(f"LLM stream: provider=openrouter, model={p_model}")
+            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "openrouter", "https://openrouter.ai/api/v1"):
+                yield token
+        elif p_name == "bedrock":
+            logger.info(f"LLM stream: provider=bedrock, model={p_model}")
+            async for token in _stream_bedrock(messages, p_model, _mt):
+                yield token
+        else:
+            logger.info(f"LLM stream: provider={p_name}, model={p_model}")
+            chat = LlmChat(api_key=p_key or OPENAI_API_KEY, session_id=str(uuid.uuid4())).with_model(p_name, p_model)
+            async for token in chat.stream_messages(messages, max_tokens=_mt):
+                yield token
+
+    # ── Syrabit SLM: concurrent smart pool ──────────────────────────────────────
+    # pick() returns the fastest available slot (by speed tier) with spare capacity.
+    # async with slot["sem"] lets up to max_concurrent requests run in parallel.
+    # Tokens are yielded in real-time as they arrive (true streaming).
+    # TTFT timeout ensures fast failover when a provider is unresponsive.
+    _SLM_SLOT_TIMEOUT = 0.7    # max seconds between any two tokens mid-stream
+    _SLM_TTFT_TIMEOUT = 0.8    # max seconds to wait for FIRST token from a slot
+
+    _SLM_PROVIDER_MAX_INPUT_CHARS = {
+        "cerebras": 24000,
+        "sarvam": 12000,
+        "groq": 100000,
+        "gemini": 500000,
+        "openrouter": 200000,
+        "openai": 80000,
+        "bedrock": 40000,
+    }
+
+    if use_model_raw == "openai/gpt-oss-20b":
+        _active_pool = _slm_pool
+        _input_chars = sum(len(m.get("content", "")) for m in messages)
+
+        _skipped_slots: set = set()
+        _candidates = []
+        for _ in range(len(_active_pool.all_slots)):
+            slot = _active_pool.pick(_skipped_slots)
+            if slot is None:
+                break
+            p_name = slot["provider"]
+            _max_chars = _SLM_PROVIDER_MAX_INPUT_CHARS.get(p_name, 80000)
+            if _input_chars > _max_chars:
+                logger.info(f"SLM pool: skipping {p_name}/{slot['model']} — input too large ({_input_chars} chars > {_max_chars} limit)")
+                _skipped_slots.add(id(slot))
+                continue
+            _candidates.append(slot)
+            _skipped_slots.add(id(slot))
+            if len(_candidates) >= 2:
+                break
+
+        if _candidates:
+            _effective_ttft = min(1.2, _SLM_TTFT_TIMEOUT + (0.2 if _input_chars > 8000 else 0.0))
+            _hedged_q: asyncio.Queue = asyncio.Queue()
+            _hedged_errors: dict = {}
+
+            async def _hedged_producer(_slot, _slot_idx):
+                _pn, _pk, _pm = _slot["provider"], _slot["key"], _slot["model"]
+                try:
+                    async with _slot["sem"]:
+                        _chunk_count = 0
+                        async for chunk in _emit_tokens(_stream_from_provider(_pn, _pk, _pm)):
+                            _chunk_count += 1
+                            await _hedged_q.put((_slot_idx, "chunk", chunk))
+                        if _chunk_count == 0:
+                            logger.warning(f"SLM hedged: {_pn}/{_pm} 0 chunks")
+                        await _hedged_q.put((_slot_idx, "done", None))
+                except Exception as exc:
+                    _hedged_errors[_slot_idx] = exc
+                    logger.warning(f"SLM hedged: {_pn}/{_pm} error: {type(exc).__name__}: {str(exc)[:200]}")
+                    await _hedged_q.put((_slot_idx, "error", None))
+
+            _hedged_tasks = [asyncio.create_task(_hedged_producer(s, i)) for i, s in enumerate(_candidates)]
+            if len(_candidates) > 1:
+                _race_desc = " vs ".join(f"{s['provider']}/{s['model']}" for s in _candidates)
+                logger.info(f"SLM hedged: racing {_race_desc}")
+
+            _winner = None
+            _finished_slots: set = set()
+            try:
+                _deadline = time.monotonic() + _effective_ttft
+                while _winner is None and len(_finished_slots) < len(_candidates):
+                    _remaining = _deadline - time.monotonic()
+                    if _remaining <= 0:
+                        break
+                    try:
+                        _sid, _evt, _data = await asyncio.wait_for(_hedged_q.get(), timeout=_remaining)
+                    except asyncio.TimeoutError:
+                        break
+                    if _evt == "chunk":
+                        _winner = _sid
+                    elif _evt in ("done", "error"):
+                        _finished_slots.add(_sid)
+                        if _evt == "error":
+                            _slm_pool.mark_err(_candidates[_sid])
+            except Exception:
+                pass
+
+            if _winner is not None:
+                _win_slot = _candidates[_winner]
+                _slm_pool.mark_ok(_win_slot)
+                _win_pname = _win_slot["provider"]
+                _win_model = _win_slot["model"]
+                if len(_candidates) > 1:
+                    logger.info(f"SLM hedged: winner={_win_pname}/{_win_model}")
+
+                for i, t in enumerate(_hedged_tasks):
+                    if i != _winner:
+                        t.cancel()
+
+                yield _data
+
+                _tokens_yielded = 1
+                while True:
+                    try:
+                        _sid, _evt, _chunk = await asyncio.wait_for(_hedged_q.get(), timeout=_SLM_SLOT_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        _slm_pool.mark_err(_win_slot)
+                        logger.warning(f"SLM hedged: {_win_pname}/{_win_model} stalled mid-stream after {_SLM_SLOT_TIMEOUT}s ({_tokens_yielded} tokens yielded)")
+                        break
+                    if _sid != _winner:
+                        continue
+                    if _evt == "chunk":
+                        yield _chunk
+                        _tokens_yielded += 1
+                    else:
+                        if _winner in _hedged_errors and _tokens_yielded <= 1:
+                            _slm_pool.mark_err(_win_slot)
+                        break
+
+                _hedged_tasks[_winner].cancel()
+                for t in _hedged_tasks:
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+                yield f"data: {json.dumps({'__provider': _win_pname})}\n\n"
+                return
+            else:
+                for t in _hedged_tasks:
+                    t.cancel()
+                for t in _hedged_tasks:
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                for i, s in enumerate(_candidates):
+                    if i not in _finished_slots:
+                        _slm_pool.mark_err(s)
+                        logger.warning(f"SLM hedged: {s['provider']}/{s['model']} TTFT timeout after {_effective_ttft}s")
+
+        yield f"data: {json.dumps({'error': 'All AI providers temporarily unavailable'})}\n\n"
+        return
+
+    # ── Indic Sarvam with hedged key racing ─────────────────────────────────────
+    _SARVAM_TTFT_TIMEOUT = 3.0
+    _SARVAM_SLOT_TIMEOUT = 1.2
+    if _indic_mode and provider == "sarvam":
+        _indic_candidates = []
+
+        _sarvam_keys = [p["key"] for p in _prov_list if p["provider"] == "sarvam"]
+        if key not in _sarvam_keys:
+            _sarvam_keys.insert(0, key)
+        _sarvam_keys = list(dict.fromkeys(_sarvam_keys))
+        for _sk in _sarvam_keys:
+            _indic_candidates.append({"provider": "sarvam", "key": _sk, "model": use_model})
+
+        _gemini_keys_for_indic = [p["key"] for p in _LLM_PROVIDERS if p["provider"] == "gemini" and p.get("key")]
+        for _gk in _gemini_keys_for_indic[:1]:
+            _indic_candidates.append({"provider": "gemini", "key": _gk, "model": "gemini-2.5-flash"})
+
+        _indic_q: asyncio.Queue = asyncio.Queue()
+
+        async def _indic_producer(_cand, _cand_idx):
+            _cprov, _ckey, _cmodel = _cand["provider"], _cand["key"], _cand["model"]
+            try:
+                _cn = 0
+                async for chunk in _emit_tokens(_stream_from_provider(_cprov, _ckey, _cmodel)):
+                    _cn += 1
+                    await _indic_q.put((_cand_idx, "chunk", chunk))
+                if _cn == 0:
+                    logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} returned 0 chunks")
+                await _indic_q.put((_cand_idx, "done", None))
+            except Exception as _e:
+                _is_rate = any(s in str(_e).lower() for s in ("429", "rate", "quota", "throttl"))
+                logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} failed ({type(_e).__name__}: {str(_e)[:120]}) rate_limit={_is_rate}")
+                await _indic_q.put((_cand_idx, "error", None))
+
+        _indic_tasks = [asyncio.create_task(_indic_producer(c, i)) for i, c in enumerate(_indic_candidates)]
+        _race_providers = ", ".join(f"{c['provider']}/{c['model']}" for c in _indic_candidates)
+        logger.info(f"[INDIC] Hedged racing {len(_indic_candidates)} candidates for {response_lang}: {_race_providers}")
+
+        _sarvam_winner = None
+        _sarvam_finished: set = set()
+        _sarvam_race_t0 = time.monotonic()
+        try:
+            _deadline = time.monotonic() + _SARVAM_TTFT_TIMEOUT
+            while _sarvam_winner is None and len(_sarvam_finished) < len(_indic_candidates):
+                _rem = _deadline - time.monotonic()
+                if _rem <= 0:
+                    break
+                try:
+                    _sid, _evt, _data = await asyncio.wait_for(_indic_q.get(), timeout=_rem)
+                except asyncio.TimeoutError:
+                    break
+                if _evt == "chunk":
+                    _sarvam_winner = _sid
+                elif _evt in ("done", "error"):
+                    _sarvam_finished.add(_sid)
+        except Exception:
+            pass
+
+        if _sarvam_winner is not None:
+            _win_cand = _indic_candidates[_sarvam_winner]
+            _ttft_ms = (time.monotonic() - _sarvam_race_t0) * 1000
+            logger.info(f"[INDIC-PERF] TTFT={_ttft_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']} idx={_sarvam_winner}")
+
+            for i, t in enumerate(_indic_tasks):
+                if i != _sarvam_winner:
+                    t.cancel()
+
+            yield _data
+
+            while True:
+                try:
+                    _sid, _evt, _chunk = await asyncio.wait_for(_indic_q.get(), timeout=_SARVAM_SLOT_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning(f"[INDIC] {_win_cand['provider']}/{_win_cand['model']} stalled mid-stream")
+                    break
+                if _sid != _sarvam_winner:
+                    continue
+                if _evt == "chunk":
+                    yield _chunk
+                else:
+                    break
+
+            _total_ms = (time.monotonic() - _sarvam_race_t0) * 1000
+            logger.info(f"[INDIC-PERF] Total={_total_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']}")
+
+            for t in _indic_tasks:
+                t.cancel()
+            for t in _indic_tasks:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            yield f"data: {json.dumps({'__provider': _win_cand['provider']})}\n\n"
+        else:
+            for t in _indic_tasks:
+                t.cancel()
+            for t in _indic_tasks:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+            logger.warning(f"[INDIC] All {len(_indic_candidates)} candidates failed/timed out")
+            yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
+        return
+
+    # ── All other models: single provider ───────────────────────────────────────
+    try:
+        _chunk_n = 0
+        async for chunk in _emit_tokens(_stream_from_provider(provider, key, use_model)):
+            if _chunk_n == 0:
+                _ttft_ms = (time.monotonic() - _stream_t0) * 1000
+                logger.info(f"[EN-PERF] TTFT={_ttft_ms:.0f}ms model={use_model} provider={provider}")
+            _chunk_n += 1
+            yield chunk
+        _total_ms = (time.monotonic() - _stream_t0) * 1000
+        logger.info(f"[EN-PERF] Total={_total_ms:.0f}ms chunks={_chunk_n} model={use_model} provider={provider}")
+        yield f"data: {json.dumps({'__provider': provider})}\n\n"
+    except HTTPException as http_err:
+        yield f"data: {json.dumps({'error': str(http_err.detail)})}\n\n"
+    except Exception as e:
+        logger.error(f"LLM streaming error: {type(e).__name__}: {str(e)[:200]}")
+        yield f"data: {json.dumps({'error': 'AI service temporarily unavailable'})}\n\n"
+, '', result, flags=re.DOTALL).strip()
+
+    # ── Populate cache for future hits ──────────────────────────────────────
+    if result:
+        await ai_cache.aset(cache_key, result, saved_ms=duration_ms)
+        logger.info(f"sarvam_cache SET model={model} key={cache_key[:12]}… duration_ms={duration_ms:.0f}")
+
+    return result
+
+def _cf_cache_headers() -> dict:
+    # Delegates to config.byok_headers() which returns:
+    #   cf-aig-byok-key:default   — CF substitutes the stored BYOK key upstream
+    #   cf-aig-cache-ttl:<N>      — cache TTL hint
+    #   cf-aig-authorization:…    — only when Authenticated Gateway mode is on
+    # Returns {} when the gateway is down — callers should raise or continue
+    # without the caching hint. With BYOK active the placeholder api_key in
+    # the openai client is ignored by CF; the stored BYOK key is used instead.
+    return byok_headers()
+
+def _is_cf_connection_error(exc: Exception) -> bool:
+    err = str(exc).lower()
+    return "connect" in err or "timeout" in err or "unreachable" in err or "dns" in err
+
+def _handle_cf_connection_error(exc: Exception) -> None:
+    if _is_cf_connection_error(exc):
+        mark_cf_gateway_down()
+        logger.warning(f"Cloudflare AI Gateway connection error — falling back to direct URLs for 5 min: {type(exc).__name__}")
+
+def _handle_cf_gateway_auth_error(exc: Exception) -> None:
+    mark_cf_gateway_down()
+    logger.warning(f"Cloudflare AI Gateway 401 auth error — falling back to direct URLs for 5 min: {type(exc).__name__}: {str(exc)[:200]}")
+
+async def _call_gemini(messages: list, api_key: str, model: str, max_tokens: int) -> str:
+    """Non-streaming call to Google Gemini via its OpenAI-compatible endpoint."""
+    direct_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    base = get_provider_base_url("gemini") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        resp = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            extra_headers=_cf_cache_headers() or None,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_openai_compat(messages: list, api_key: str, model: str, max_tokens: int, provider: str, fallback_base: str) -> str:
+    """Non-streaming call via an OpenAI-compatible provider (OpenAI, xAI, Fireworks)."""
+    base = get_provider_base_url(provider) or fallback_base
+    client = _get_oai_client(api_key, base)
+    try:
+        resp = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            extra_headers=_cf_cache_headers() or None,
+        )
+    except _oai.APIConnectionError as e:
+        if base != fallback_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != fallback_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_cerebras(messages: list, api_key: str, model: str, max_tokens: int) -> str:
+    base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
+    client = _get_oai_client(api_key, base)
+    resp = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+    )
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_single_provider(messages: list, provider: str, api_key: str, model: str, max_tokens: int) -> str:
+    max_tokens = _clamp_max_tokens(model, max_tokens)
+    if provider == "sarvam":
+        return await _call_sarvam_llm(messages, api_key, model, max_tokens)
+    if provider == "gemini":
+        return await _call_gemini(messages, api_key, model, max_tokens)
+    if provider == "cerebras":
+        return await _call_cerebras(messages, api_key, model, max_tokens)
+    if provider == "groq":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "groq", "https://api.groq.com/openai/v1")
+    if provider == "xai":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "xai", "https://api.x.ai/v1")
+    if provider == "openrouter":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "openrouter", "https://openrouter.ai/api/v1")
+
+    system_msg = ""
+    user_msg = ""
+    for m in messages:
+        if m["role"] == "system":
+            system_msg = m["content"]
+        elif m["role"] == "user":
+            user_msg = m["content"]
+
+    chat = LlmChat(
+        api_key=api_key,
+        session_id=str(uuid.uuid4()),
+        system_message=system_msg or "You are a helpful AI tutor.",
+    ).with_model(provider, model)
+
+    response = await chat.send_message(UserMessage(text=user_msg))
+    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+    return response
+
+async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 1024, provider_list=None) -> str:
+    import time as _t
+    # Wall-clock start of the whole primary-rotation loop. Used so the
+    # Workers AI fallback path (Task #636) can attribute the *real*
+    # cumulative primary latency (instead of 0) when we eventually give
+    # up and call the edge.
+    _loop_t0 = _t.perf_counter()
+    providers = _LLM_PROVIDERS if provider_list is None else provider_list
+    use_model = _MODEL_ALIAS_MAP.get(model or LLM_MODEL, model or LLM_MODEL)
+    primary_provider, primary_key = _resolve_provider_for_model(use_model, providers)
+
+    if not primary_key and not providers:
+        raise HTTPException(status_code=503, detail="LLM API key not configured")
+
+    tried: set = set()
+    last_err = None
+
+    _is_content = provider_list is _LLM_PROVIDERS_CONTENT
+    _is_chat = provider_list is _LLM_PROVIDERS_CHAT
+    _PROVIDER_TIMEOUT = 30.0 if _is_content else (4.0 if _is_chat else 6.0)
+
+    provider, key = primary_provider, primary_key
+    try_model = _safe_model_for_provider(use_model, provider, providers)
+    if try_model != use_model:
+        logger.info(f"Model '{use_model}' not compatible with {provider} → using '{try_model}'")
+    try:
+        tried.add((provider, try_model, id(key) if key else 0))
+        _t0 = _t.perf_counter()
+        result = await asyncio.wait_for(
+            _call_single_provider(messages, provider, key, try_model, max_tokens),
+            timeout=_PROVIDER_TIMEOUT,
+        )
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        tok = len(result.split())
+        _record_llm_call(provider, try_model, _dur, True, tok, False)
+        logger.info(f"llm_call provider={provider} model={try_model} duration_ms={_dur} tokens_approx={tok}")
+        return LlmResult(result, provider=provider)
+    except asyncio.TimeoutError:
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        _record_llm_call(provider, try_model, _dur, False, 0, False, "Timeout")
+        last_err = TimeoutError(f"{provider}/{try_model} timed out after {_PROVIDER_TIMEOUT}s")
+        logger.warning(f"LLM primary TIMEOUT ({provider}/{try_model}): {_dur}ms > {_PROVIDER_TIMEOUT}s limit")
+    except Exception as e:
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        _record_llm_call(provider, try_model, _dur, False, 0, False, type(e).__name__)
+        last_err = e
+        logger.warning(f"LLM primary failed ({provider}/{try_model}): {type(e).__name__}: {str(e)[:150]}")
+
+    for fallback in providers:
+        fb_model = fallback["default_model"]
+        fb_key_id = id(fallback["key"]) if fallback.get("key") else 0
+        if (fallback["provider"], fb_model, fb_key_id) in tried:
+            continue
+        tried.add((fallback["provider"], fb_model, fb_key_id))
+        try:
+            _t0 = _t.perf_counter()
+            result = await asyncio.wait_for(
+                _call_single_provider(messages, fallback["provider"], fallback["key"], fb_model, max_tokens),
+                timeout=_PROVIDER_TIMEOUT,
+            )
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            tok = len(result.split())
+            _record_llm_call(fallback["provider"], fb_model, _dur, True, tok, True)
+            logger.info(f"llm_call provider={fallback['provider']} model={fb_model} duration_ms={_dur} tokens_approx={tok} fallback=true")
+            return LlmResult(result, provider=fallback["provider"])
+        except asyncio.TimeoutError:
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, "Timeout")
+            last_err = TimeoutError(f"{fallback['provider']}/{fb_model} timed out after {_PROVIDER_TIMEOUT}s")
+            logger.warning(f"LLM fallback TIMEOUT ({fallback['provider']}/{fb_model}): {_dur}ms > {_PROVIDER_TIMEOUT}s limit")
+        except Exception as e:
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, type(e).__name__)
+            last_err = e
+            logger.warning(f"LLM fallback failed ({fallback['provider']}/{fb_model}): {type(e).__name__}: {str(e)[:150]}")
+
+    # Task #636 — last-resort Workers AI fallback. Only reached after every
+    # configured primary+fallback Cerebras/Gemini/etc provider has failed.
+    # Policy is strict (timeout/5xx/429/quota only) so 4xx bad-input bugs
+    # still surface as 503 instead of being silently masked by a different
+    # model's looser parser.
+    try:
+        from providers import workers_ai as _wai
+        if _wai.is_enabled("chat") and last_err is not None and _wai.should_fallback(last_err):
+            # Real cumulative primary-loop latency (all rotations combined),
+            # so the admin panel and structured logs attribute the actual
+            # wait the user incurred before we gave up on the primaries.
+            _primary_total_ms = int((_t.perf_counter() - _loop_t0) * 1000)
+            _t0 = _t.perf_counter()
+            ok, value, label = await _wai.attempt_fallback(
+                "chat", last_err, _primary_total_ms,
+                lambda: _wai.call_chat(messages, max_tokens=max_tokens, temperature=0.3),
+            )
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            if ok and isinstance(value, str) and value:
+                reason = _wai.classify_primary_error(last_err)
+                _record_llm_call("workers-ai", "llama-3.1-8b-instruct", _dur, True,
+                                 len(value.split()), True)
+                logger.info(
+                    f"llm_call provider=workers-ai model=llama-3.1-8b-instruct "
+                    f"duration_ms={_dur} fallback=true reason={reason}"
+                )
+                return LlmResult(value, provider="workers-ai", fallback_reason=reason)
+    except Exception as _wai_err:  # noqa: BLE001
+        logger.warning(f"[workers-ai] chat fallback skipped: {type(_wai_err).__name__}: {str(_wai_err)[:150]}")
+
+    logger.error(f"All LLM providers exhausted. Last error: {last_err}")
+    raise HTTPException(status_code=503, detail="AI service temporarily unavailable. Please try again.")
+
+async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048) -> str:
+    """Smart-batched LLM call: deduplicates identical requests, limits concurrency.
+    Uses all providers including Emergent (admin content generation)."""
+    return await _llm_batcher.call(messages, model, max_tokens)
+
+_LLM_PROVIDERS_CONTENT: list[dict] = []
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "qwen-3-235b-a22b-instruct-2507"})
+if _SARVAM_LLM_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+if _GEMINI_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
+if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
+
+logger.info(
+    f"Admin content providers (quality-first order): "
+    f"{[p['provider'] + '/' + p['default_model'] for p in _LLM_PROVIDERS_CONTENT]}"
+)
+
+async def call_llm_api_content(messages: list, model: str = None, max_tokens: int = 3072) -> str:
+    """LLM call for admin content generation — Cerebras preferred (qwen-3-235b, fast + high quality),
+    Sarvam secondary (sarvam-m), Gemini 2.5 Flash last resort.
+    Uses dedicated content batcher with 300ms batch window (vs 5ms for chat).
+    Retries with exponential backoff instead of instant failover."""
+    if model is None and _LLM_PROVIDERS_CONTENT:
+        model = _LLM_PROVIDERS_CONTENT[0]["default_model"]
+    return await _content_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CONTENT, use_admin_sem=True)
+
+
+async def call_llm_api_content_with_retry(
+    messages: list, model: str = None, max_tokens: int = 3072,
+    validate_fn=None,
+) -> str:
+    """Content LLM call with retry-with-backoff and optional output validation.
+    
+    validate_fn: optional callable(result_str) -> bool. If it returns False,
+    the result is treated as a failure and retried.
+    """
+    last_err = None
+    for attempt in range(_CONTENT_RETRY_MAX):
+        try:
+            result = await call_llm_api_content(messages, model, max_tokens)
+            if validate_fn is not None and not validate_fn(result):
+                logger.warning(
+                    f"Content LLM output failed validation (attempt {attempt + 1}/{_CONTENT_RETRY_MAX})"
+                )
+                last_err = ValueError("Output failed validation")
+                if attempt < _CONTENT_RETRY_MAX - 1:
+                    backoff = _CONTENT_RETRY_BACKOFF[min(attempt, len(_CONTENT_RETRY_BACKOFF) - 1)]
+                    logger.info(f"Content retry backoff: waiting {backoff}s before attempt {attempt + 2}")
+                    await asyncio.sleep(backoff)
+                continue
+            return result
+        except Exception as e:
+            last_err = e
+            logger.warning(
+                f"Content LLM call failed (attempt {attempt + 1}/{_CONTENT_RETRY_MAX}): "
+                f"{type(e).__name__}: {str(e)[:150]}"
+            )
+            if attempt < _CONTENT_RETRY_MAX - 1:
+                backoff = _CONTENT_RETRY_BACKOFF[min(attempt, len(_CONTENT_RETRY_BACKOFF) - 1)]
+                logger.info(f"Content retry backoff: waiting {backoff}s before attempt {attempt + 2}")
+                await asyncio.sleep(backoff)
+    raise last_err or HTTPException(status_code=503, detail="Content generation failed after retries")
+
+async def call_llm_api_chat(messages: list, model: str = None, max_tokens: int = 2048) -> str:
+    """LLM call for student chat — excludes Emergent provider (admin-only)."""
+    return await _llm_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CHAT)
+
+
+_THINK_BUDGET_HINT = "/think in one sentence. Answer immediately.\n"
+
+def _inject_think_budget(messages: list) -> list:
+    """Prepend a concise reasoning directive to the system message so sarvam-m
+    spends fewer tokens in its <think> block, reducing TTFT significantly."""
+    out = []
+    injected = False
+    for m in messages:
+        if m.get("role") == "system" and not injected:
+            out.append({**m, "content": _THINK_BUDGET_HINT + m["content"]})
+            injected = True
+        else:
+            out.append(m)
+    if not injected:
+        out.insert(0, {"role": "system", "content": _THINK_BUDGET_HINT})
+    return out
+
+async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: int, *, response_lang: str = ""):
+    """Token-by-token SSE streaming from Sarvam — reuses persistent sarvam_llm_client (zero TCP overhead).
+    For Indic languages: skips think budget injection and think buffer to reduce TTFT.
+    For English: adds SARVAM_THINK_BUFFER so <think> reasoning never crowds out the answer budget.
+    Falls back to direct client if CF gateway connection fails.
+    """
+    _indic = _is_indic_lang(response_lang)
+    if _indic:
+        api_max = max_tokens + 100
+        patched = [dict(m) for m in messages]
+        if patched and patched[0].get("role") == "system":
+            patched[0]["content"] = (
+                "CRITICAL: Do NOT use <think> tags. Do NOT write internal thoughts. "
+                "Do NOT start with 'Okay' or 'Let me'. "
+                "Reply DIRECTLY in Assamese (অসমীয়া). Start your answer immediately.\n"
+                "STRICT LANGUAGE RULES:\n"
+                "- Every running word MUST be in Assamese script. NO mid-sentence English words.\n"
+                "- NEVER emit partial English fragments such as 'me uses', 'terms', 'ssible',\n"
+                "  'ble', 'tion', 'ssing'. If you start a word in English, you MUST switch\n"
+                "  back to Assamese for the rest of that sentence.\n"
+                "- Latin script is allowed ONLY for: pure numbers/dates, scientific units\n"
+                "  (cm, kg, Hz, °C, eV…), math symbols/equations, code, URLs, well-known\n"
+                "  proper nouns and acronyms (AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
+                "- For everyday nouns/verbs, use the Assamese word — do NOT fall back to English.\n"
+                "BAD vs GOOD examples (follow the pattern, do not copy text):\n"
+                "  BAD : 'উৰুকা me uses ssible terms চমুকৈ ক'লে…'\n"
+                "  GOOD: 'উৰুকা চমুকৈ ক'লে অসমৰ এক প্ৰিয় উৎসৱ।'\n"
+                "  BAD : 'জল 100°C ত boil হয়।'\n"
+                "  GOOD: 'পানী 100°C ত উতলে।'\n"
+                "  BAD : 'Newton ৰ first law explains inertia।'\n"
+                "  GOOD: 'Newton ৰ গতিৰ প্ৰথম সূত্ৰে জড়তা ব্যাখ্যা কৰে।'\n"
+            ) + patched[0]["content"]
+        logger.info(f"[SARVAM-INDIC] No-think mode for {response_lang} — model={model}, api_max={api_max}")
+    else:
+        api_max = max_tokens + SARVAM_THINK_BUFFER
+        patched = _inject_think_budget(messages)
+    _SARVAM_LANG_CODE_MAP = {"as": "as-IN"}
+    payload = {
+        "model": model,
+        "messages": patched,
+        "max_tokens": api_max,
+        "temperature": 0.05 if _indic else 0.1,
+        "top_p": 0.9 if _indic else 0.95,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+        "stream": True,
+    }
+    if _indic:
+        payload["thinking"] = {"enabled": False}
+        if response_lang in _SARVAM_LANG_CODE_MAP:
+            payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
+    elif response_lang in _SARVAM_LANG_CODE_MAP:
+        payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
+    client = _pick_sarvam_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Sarvam LLM client not initialised")
+
+    async def _do_stream(c):
+        async with c.stream("POST", "/v1/chat/completions", json=payload) as resp:
+            if resp.status_code >= 400:
+                body = await resp.aread()
+                logger.error(f"Sarvam {resp.status_code} error body: {body.decode()[:500]}")
+                resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                raw = line[5:].strip()
+                if raw == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(raw)
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
+                    token = delta.get("content") or ""
+                    if token:
+                        yield token
+                except Exception:
+                    continue
+
+    try:
+        async for token in _do_stream(client):
+            yield token
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        if sarvam_llm_client_direct is not None and client is not sarvam_llm_client_direct:
+            _handle_cf_connection_error(e)
+            async for token in _do_stream(sarvam_llm_client_direct):
+                yield token
+        else:
+            raise
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401 and sarvam_llm_client_direct is not None and client is not sarvam_llm_client_direct:
+            _handle_cf_gateway_auth_error(e)
+            async for token in _do_stream(sarvam_llm_client_direct):
+                yield token
+        else:
+            raise
+
+async def _stream_gemini(messages: list, api_key: str, model: str, max_tokens: int):
+    """Token-by-token streaming from Google Gemini via its OpenAI-compatible endpoint."""
+    direct_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    base = get_provider_base_url("gemini") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_vertex_gemini(messages: list, model: str, max_tokens: int):
+    """Token-by-token streaming from Vertex AI Gemini Flash (Task #607).
+
+    Uses google-auth + Vertex `streamGenerateContent` REST endpoint.
+    Raises on misconfiguration / network errors so the caller can fall
+    back to the legacy hedged SLM pool.
+    """
+    async for token in _vertex_chat.stream_chat(
+        messages, model=model, max_tokens=max_tokens, temperature=0.1,
+    ):
+        yield token
+
+
+async def _stream_cerebras(messages: list, api_key: str, model: str, max_tokens: int):
+    base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
+    client = _get_oai_client(api_key, base)
+    stream = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+    )
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_xai(messages: list, api_key: str, model: str, max_tokens: int):
+    """Token-by-token streaming from xAI Grok via its OpenAI-compatible endpoint."""
+    direct_base = "https://api.x.ai/v1"
+    base = get_provider_base_url("xai") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_openai_compat(messages: list, api_key: str, model: str, max_tokens: int, provider: str, fallback_base: str):
+    """Token-by-token streaming from any OpenAI-compatible provider."""
+    base = get_provider_base_url(provider) or fallback_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != fallback_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != fallback_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_bedrock(messages: list, model: str, max_tokens: int):
+    """Token-by-token streaming from Amazon Bedrock via Converse streaming API.
+    boto3 is synchronous — runs in a thread pool; tokens passed back via asyncio.Queue.
+    Supports Amazon Nova family (nova-micro, nova-lite, nova-pro) and any Converse-compatible model.
+    """
+    if not _AWS_ACCESS_KEY or not _AWS_SECRET_KEY:
+        raise ValueError("AWS credentials not configured (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)")
+
+    # Convert OpenAI-format messages to Bedrock Converse format
+    system_parts = []
+    converse_messages = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if role == "system":
+            system_parts.append({"text": content})
+        else:
+            converse_messages.append({"role": role, "content": [{"text": content}]})
+
+    loop = asyncio.get_event_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def _sync_stream():
+        try:
+            import boto3 as _boto3
+            client = _boto3.client(
+                "bedrock-runtime",
+                region_name=_AWS_REGION,
+                aws_access_key_id=_AWS_ACCESS_KEY,
+                aws_secret_access_key=_AWS_SECRET_KEY,
+            )
+            kwargs = dict(
+                modelId=model,
+                messages=converse_messages,
+                inferenceConfig={"maxTokens": max_tokens, "temperature": 0.1},
+            )
+            if system_parts:
+                kwargs["system"] = system_parts
+            resp = client.converse_stream(**kwargs)
+            for event in resp["stream"]:
+                if "contentBlockDelta" in event:
+                    text = event["contentBlockDelta"].get("delta", {}).get("text", "")
+                    if text:
+                        loop.call_soon_threadsafe(queue.put_nowait, text)
+            loop.call_soon_threadsafe(queue.put_nowait, None)   # sentinel → done
+        except Exception as exc:
+            loop.call_soon_threadsafe(queue.put_nowait, exc)
+
+    loop.run_in_executor(None, _sync_stream)
+
+    while True:
+        item = await queue.get()
+        if item is None:
+            break
+        if isinstance(item, Exception):
+            raise item
+        yield item
+
+
+async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int = 2048, intent: str = "", response_lang: str = ""):
+    """
+    Real token-by-token streaming from the LLM provider.
+    Uses native streaming APIs for instant first-token delivery.
+    Supports: Sarvam, Groq, Fireworks, Gemini, Cerebras, xAI, Bedrock.
+    'openai/gpt-oss-20b' triggers the smart SLM pool (Fireworks/Groq/Cerebras/Gemini).
+    When response_lang is an Indic code (as/hi/etc), optimized Sarvam routing is applied.
+    """
+    _indic_mode = _is_indic_lang(response_lang)
+    _stream_t0 = time.monotonic()
+
+    if _indic_mode:
+        _resolved_indic_model = None
+        for _pref_model in _SARVAM_INDIC_MODEL_PREFERENCE:
+            _prov, _pkey = _resolve_provider_for_model(_pref_model, _LLM_PROVIDERS)
+            if _prov == "sarvam" and _pkey:
+                _resolved_indic_model = _pref_model
+                break
+        if _resolved_indic_model:
+            model = _resolved_indic_model
+            logger.info(f"[INDIC] Auto-selected Sarvam model '{model}' for {response_lang} response")
+        else:
+            logger.warning(f"[INDIC] No Sarvam model available from preference chain, using default")
+
+    use_model_raw = model or LLM_MODEL
+
+    # ── Vertex AI Gemini Flash fast-path (Task #607) ──────────────────────────
+    # When the requested model resolves to Vertex Gemini Flash, stream through
+    # Vertex AI's REST endpoint directly. On any error before the first token
+    # is delivered, automatically fall back to the legacy SLM hedged pool by
+    # re-routing through the standard resolution path below.
+    # Task #628 — Indic (Assamese) admin toggle: when the admin has
+    # flipped the Indic provider to "vertex" AND Vertex is configured,
+    # route Assamese chat through the same Vertex fast-path used for
+    # English below. The leak sanitiser downstream still runs on the
+    # emitted content, so stray English words are cleaned regardless
+    # of provider. On pre-first-token Vertex failure we fall through
+    # to the legacy Sarvam hedged pool below (NOT the English SLM
+    # pool) to preserve Assamese quality.
+    _indic_vertex_active = False
+    if _indic_mode:
+        try:
+            from lang_sanitizer import get_indic_provider as _get_indic_provider
+            _indic_provider_pref = _get_indic_provider()
+        except Exception:
+            _indic_provider_pref = "sarvam"
+        if _indic_provider_pref == "vertex" and _vertex_chat.is_configured():
+            _indic_vertex_active = True
+
+    _use_vertex_fastpath = (
+        (use_model_raw == "vertex/gemini-flash" and not _indic_mode)
+        or _indic_vertex_active
+    )
+    _vertex_fallback_target = (
+        # Indic fallback uses the Sarvam hedged pool (preserves Assamese
+        # quality); English fallback uses the SLM pool.
+        "sarvam-m" if _indic_vertex_active else "openai/gpt-oss-20b"
+    )
+    _vertex_metric_bucket = "vertex_gemini_indic" if _indic_vertex_active else "vertex_gemini"
+
+    if _use_vertex_fastpath:
+        if not _vertex_chat.is_configured():
+            logger.warning("vertex/gemini-flash requested but VERTEX_PROJECT_ID is not set — falling back to legacy SLM pool")
+            use_model_raw = _vertex_fallback_target
+        else:
+            _vertex_first_token = False
+            _vertex_t0 = time.monotonic()
+            try:
+                _mt_vx = _clamp_max_tokens(VERTEX_GEMINI_MODEL, max_tokens)
+                _vx_batch = ""
+                _VX_BATCH_SIZE = 2
+                # For Indic mode, prepend the same strict-Assamese system
+                # preface used by `_stream_sarvam` so Gemini commits to
+                # Assamese script from the first token and we don't rely
+                # on the sanitizer to clean up provider-level leakage.
+                _vx_messages = messages
+                if _indic_vertex_active:
+                    _vx_messages = [dict(m) for m in messages]
+                    _asm_preface = (
+                        "CRITICAL: Reply DIRECTLY in Assamese (অসমীয়া). "
+                        "Do NOT use <think> tags. Do NOT write internal thoughts.\n"
+                        "STRICT LANGUAGE RULES:\n"
+                        "- Every running word MUST be in Assamese script. "
+                        "NO mid-sentence English words.\n"
+                        "- Latin script is allowed ONLY for: pure numbers/dates, "
+                        "scientific units (cm, kg, Hz, °C, eV…), math symbols/equations, "
+                        "code, URLs, well-known proper nouns and acronyms "
+                        "(AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
+                        "- For everyday nouns/verbs, use the Assamese word — "
+                        "do NOT fall back to English.\n\n"
+                    )
+                    if _vx_messages and _vx_messages[0].get("role") == "system":
+                        _vx_messages[0]["content"] = _asm_preface + _vx_messages[0]["content"]
+                    else:
+                        _vx_messages.insert(0, {"role": "system", "content": _asm_preface})
+                async for token in _stream_vertex_gemini(_vx_messages, VERTEX_GEMINI_MODEL, _mt_vx):
+                    if not _vertex_first_token:
+                        _ttft_ms = (time.monotonic() - _vertex_t0) * 1000
+                        logger.info(f"[VERTEX-PERF] TTFT={_ttft_ms:.0f}ms model={VERTEX_GEMINI_MODEL} indic={_indic_vertex_active}")
+                        _vertex_first_token = True
+                    _vx_batch += token
+                    if len(_vx_batch) >= _VX_BATCH_SIZE:
+                        yield f"data: {json.dumps({'content': _vx_batch})}\n\n"
+                        _vx_batch = ""
+                if _vx_batch:
+                    yield f"data: {json.dumps({'content': _vx_batch})}\n\n"
+                if _vertex_first_token:
+                    _total_ms = (time.monotonic() - _vertex_t0) * 1000
+                    logger.info(f"[VERTEX-PERF] Total={_total_ms:.0f}ms model={VERTEX_GEMINI_MODEL} indic={_indic_vertex_active}")
+                    try:
+                        from chat_speedup_metrics import record_provider_call as _rec_prov
+                        _rec_prov(_vertex_metric_bucket, ttfb_ms=_ttft_ms, total_ms=_total_ms)
+                    except Exception:
+                        pass
+                    yield f"data: {json.dumps({'__provider': _vertex_metric_bucket})}\n\n"
+                    return
+                # Stream completed without ever yielding a token — treat as
+                # failure and fall through to legacy.
+                logger.warning("Vertex Gemini Flash returned empty stream — falling back to legacy pool")
+            except Exception as _vx_err:
+                if _vertex_first_token:
+                    # We already started streaming to the client; we can't
+                    # silently restart. Emit error and stop.
+                    logger.warning(f"Vertex Gemini Flash mid-stream error: {type(_vx_err).__name__}: {str(_vx_err)[:200]}")
+                    yield f"data: {json.dumps({'error': 'AI service interrupted'})}\n\n"
+                    return
+                logger.warning(f"Vertex Gemini Flash failed before first token: {type(_vx_err).__name__}: {str(_vx_err)[:200]} — falling back to legacy pool")
+            # Fall back: rewrite the requested model to the legacy default
+            # and continue with the standard resolution path below.
+            try:
+                from chat_speedup_metrics import record_provider_fallback as _rec_fb
+                _rec_fb(_vertex_metric_bucket, _vertex_fallback_target)
+            except Exception:
+                pass
+            use_model_raw = _vertex_fallback_target
+            model = use_model_raw
+            _indic_vertex_active = False  # Fallback → resolve normally
+
+    use_model_resolved = _MODEL_ALIAS_MAP.get(use_model_raw, use_model_raw)
+    _prov_list = _LLM_PROVIDERS if _indic_mode else _LLM_PROVIDERS_CHAT
+    provider, key = _resolve_provider_for_model(use_model_resolved, _prov_list)
+    if use_model_raw != use_model_resolved:
+        logger.info(f"Model alias '{use_model_raw}' → '{use_model_resolved}' ({provider})")
+    use_model = _safe_model_for_provider(use_model_resolved, provider, _prov_list)
+    if use_model != use_model_resolved:
+        logger.info(f"Model '{use_model_resolved}' not compatible with {provider} → using '{use_model}'")
+
+    if not key and provider != "sarvam":
+        yield f"data: {json.dumps({'error': 'LLM API key not configured'})}\n\n"
+        return
+
+    in_think = False
+    buf = ""
+
+    _SSE_BATCH = 2    # flush every 2 chars — near-instant token delivery
+
+    async def _emit_tokens(token_source):
+        nonlocal in_think, buf
+        import re as _re
+        _CLOSE_KEEP = len('</think>') - 1   # 7
+        think_done  = False
+        batch       = ""
+        _visible_text = ""
+        _think_buf  = []
+
+        async for token in token_source:
+            if think_done:
+                cleaned = _re.sub(r'<think>[\s\S]*?</think>', '', token)
+                if cleaned:
+                    batch += cleaned
+                    if len(batch) >= _SSE_BATCH:
+                        _visible_text += batch
+                        yield f"data: {json.dumps({'content': batch})}\n\n"
+                        batch = ""
+                continue
+
+            buf += token
+            while buf:
+                if in_think:
+                    close_idx = buf.find('</think>')
+                    if close_idx != -1:
+                        _think_buf.append(buf[:close_idx])
+                        buf = buf[close_idx + 8:]
+                        in_think   = False
+                        think_done = True
+                        if buf:
+                            batch += buf
+                            buf = ""
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                        break
+                    else:
+                        if len(buf) > _CLOSE_KEEP:
+                            _think_buf.append(buf[:-_CLOSE_KEEP])
+                            buf = buf[-_CLOSE_KEEP:]
+                        break
+                else:
+                    open_idx = buf.find('<think>')
+                    if open_idx != -1:
+                        before = buf[:open_idx]
+                        if before:
+                            batch += before
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                        buf      = buf[open_idx + 7:]
+                        in_think = True
+                    elif buf.endswith(('<', '<t', '<th', '<thi', '<thin', '<think')):
+                        partial_start = buf.rfind('<')
+                        candidate     = buf[partial_start:]
+                        if '<think>'[:len(candidate)] == candidate:
+                            before = buf[:partial_start]
+                            if before:
+                                batch += before
+                                if len(batch) >= _SSE_BATCH:
+                                    _visible_text += batch
+                                    yield f"data: {json.dumps({'content': batch})}\n\n"
+                                    batch = ""
+                            buf = candidate
+                            break
+                        else:
+                            batch += buf
+                            buf    = ""
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                    else:
+                        batch += buf
+                        buf    = ""
+                        if len(batch) >= _SSE_BATCH:
+                            _visible_text += batch
+                            yield f"data: {json.dumps({'content': batch})}\n\n"
+                            batch = ""
+                        break
+
+        if batch and not in_think:
+            _visible_text += batch
+            yield f"data: {json.dumps({'content': batch})}\n\n"
+        if buf and not in_think:
+            _visible_text += buf
+            yield f"data: {json.dumps({'content': buf})}\n\n"
+
+        if not _visible_text.strip() and (in_think or think_done):
+            fallback_text = "".join(_think_buf)
+            if in_think and buf:
+                fallback_text += buf
+            fallback_text = _re.sub(r'</?think\s*/?>', '', fallback_text).strip()
+            fallback_text = _re.sub(r'</?\w*$', '', fallback_text).strip()
+            if fallback_text and len(fallback_text) > 5:
+                logger.info(f"Think-block fallback: emitting {len(fallback_text)} chars of think content as response")
+                yield f"data: {json.dumps({'content': fallback_text})}\n\n"
+
+    async def _stream_from_provider(p_name: str, p_key: str, p_model: str):
+        """Yield raw tokens from a provider. Raises on failure."""
+        _mt = _clamp_max_tokens(p_model, max_tokens)
+        if p_name == "sarvam":
+            _input_est = sum(len(m.get("content", "")) for m in messages) // 4
+            _think_overhead = 0 if _indic_mode else SARVAM_THINK_BUFFER
+            _sarvam_cap = max(256, 7192 - _input_est - _think_overhead - 100)
+            _mt = min(_mt, _sarvam_cap)
+            async for token in _stream_sarvam(messages, p_key, p_model, _mt, response_lang=response_lang):
+                yield token
+        elif p_name == "gemini":
+            logger.info(f"LLM stream: provider=gemini, model={p_model}")
+            async for token in _stream_gemini(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "cerebras":
+            logger.info(f"LLM stream: provider=cerebras, model={p_model}")
+            async for token in _stream_cerebras(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "groq":
+            logger.info(f"LLM stream: provider=groq, model={p_model}")
+            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "groq", "https://api.groq.com/openai/v1"):
+                yield token
+        elif p_name == "xai":
+            logger.info(f"LLM stream: provider=xai, model={p_model}")
+            async for token in _stream_xai(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "openrouter":
+            logger.info(f"LLM stream: provider=openrouter, model={p_model}")
+            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "openrouter", "https://openrouter.ai/api/v1"):
+                yield token
+        elif p_name == "bedrock":
+            logger.info(f"LLM stream: provider=bedrock, model={p_model}")
+            async for token in _stream_bedrock(messages, p_model, _mt):
+                yield token
+        else:
+            logger.info(f"LLM stream: provider={p_name}, model={p_model}")
+            chat = LlmChat(api_key=p_key or OPENAI_API_KEY, session_id=str(uuid.uuid4())).with_model(p_name, p_model)
+            async for token in chat.stream_messages(messages, max_tokens=_mt):
+                yield token
+
+    # ── Syrabit SLM: concurrent smart pool ──────────────────────────────────────
+    # pick() returns the fastest available slot (by speed tier) with spare capacity.
+    # async with slot["sem"] lets up to max_concurrent requests run in parallel.
+    # Tokens are yielded in real-time as they arrive (true streaming).
+    # TTFT timeout ensures fast failover when a provider is unresponsive.
+    _SLM_SLOT_TIMEOUT = 0.7    # max seconds between any two tokens mid-stream
+    _SLM_TTFT_TIMEOUT = 0.8    # max seconds to wait for FIRST token from a slot
+
+    _SLM_PROVIDER_MAX_INPUT_CHARS = {
+        "cerebras": 24000,
+        "sarvam": 12000,
+        "groq": 100000,
+        "gemini": 500000,
+        "openrouter": 200000,
+        "openai": 80000,
+        "bedrock": 40000,
+    }
+
+    if use_model_raw == "openai/gpt-oss-20b":
+        _active_pool = _slm_pool
+        _input_chars = sum(len(m.get("content", "")) for m in messages)
+
+        _skipped_slots: set = set()
+        _candidates = []
+        for _ in range(len(_active_pool.all_slots)):
+            slot = _active_pool.pick(_skipped_slots)
+            if slot is None:
+                break
+            p_name = slot["provider"]
+            _max_chars = _SLM_PROVIDER_MAX_INPUT_CHARS.get(p_name, 80000)
+            if _input_chars > _max_chars:
+                logger.info(f"SLM pool: skipping {p_name}/{slot['model']} — input too large ({_input_chars} chars > {_max_chars} limit)")
+                _skipped_slots.add(id(slot))
+                continue
+            _candidates.append(slot)
+            _skipped_slots.add(id(slot))
+            if len(_candidates) >= 2:
+                break
+
+        if _candidates:
+            _effective_ttft = min(1.2, _SLM_TTFT_TIMEOUT + (0.2 if _input_chars > 8000 else 0.0))
+            _hedged_q: asyncio.Queue = asyncio.Queue()
+            _hedged_errors: dict = {}
+
+            async def _hedged_producer(_slot, _slot_idx):
+                _pn, _pk, _pm = _slot["provider"], _slot["key"], _slot["model"]
+                try:
+                    async with _slot["sem"]:
+                        _chunk_count = 0
+                        async for chunk in _emit_tokens(_stream_from_provider(_pn, _pk, _pm)):
+                            _chunk_count += 1
+                            await _hedged_q.put((_slot_idx, "chunk", chunk))
+                        if _chunk_count == 0:
+                            logger.warning(f"SLM hedged: {_pn}/{_pm} 0 chunks")
+                        await _hedged_q.put((_slot_idx, "done", None))
+                except Exception as exc:
+                    _hedged_errors[_slot_idx] = exc
+                    logger.warning(f"SLM hedged: {_pn}/{_pm} error: {type(exc).__name__}: {str(exc)[:200]}")
+                    await _hedged_q.put((_slot_idx, "error", None))
+
+            _hedged_tasks = [asyncio.create_task(_hedged_producer(s, i)) for i, s in enumerate(_candidates)]
+            if len(_candidates) > 1:
+                _race_desc = " vs ".join(f"{s['provider']}/{s['model']}" for s in _candidates)
+                logger.info(f"SLM hedged: racing {_race_desc}")
+
+            _winner = None
+            _finished_slots: set = set()
+            try:
+                _deadline = time.monotonic() + _effective_ttft
+                while _winner is None and len(_finished_slots) < len(_candidates):
+                    _remaining = _deadline - time.monotonic()
+                    if _remaining <= 0:
+                        break
+                    try:
+                        _sid, _evt, _data = await asyncio.wait_for(_hedged_q.get(), timeout=_remaining)
+                    except asyncio.TimeoutError:
+                        break
+                    if _evt == "chunk":
+                        _winner = _sid
+                    elif _evt in ("done", "error"):
+                        _finished_slots.add(_sid)
+                        if _evt == "error":
+                            _slm_pool.mark_err(_candidates[_sid])
+            except Exception:
+                pass
+
+            if _winner is not None:
+                _win_slot = _candidates[_winner]
+                _slm_pool.mark_ok(_win_slot)
+                _win_pname = _win_slot["provider"]
+                _win_model = _win_slot["model"]
+                if len(_candidates) > 1:
+                    logger.info(f"SLM hedged: winner={_win_pname}/{_win_model}")
+
+                for i, t in enumerate(_hedged_tasks):
+                    if i != _winner:
+                        t.cancel()
+
+                yield _data
+
+                _tokens_yielded = 1
+                while True:
+                    try:
+                        _sid, _evt, _chunk = await asyncio.wait_for(_hedged_q.get(), timeout=_SLM_SLOT_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        _slm_pool.mark_err(_win_slot)
+                        logger.warning(f"SLM hedged: {_win_pname}/{_win_model} stalled mid-stream after {_SLM_SLOT_TIMEOUT}s ({_tokens_yielded} tokens yielded)")
+                        break
+                    if _sid != _winner:
+                        continue
+                    if _evt == "chunk":
+                        yield _chunk
+                        _tokens_yielded += 1
+                    else:
+                        if _winner in _hedged_errors and _tokens_yielded <= 1:
+                            _slm_pool.mark_err(_win_slot)
+                        break
+
+                _hedged_tasks[_winner].cancel()
+                for t in _hedged_tasks:
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+                yield f"data: {json.dumps({'__provider': _win_pname})}\n\n"
+                return
+            else:
+                for t in _hedged_tasks:
+                    t.cancel()
+                for t in _hedged_tasks:
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                for i, s in enumerate(_candidates):
+                    if i not in _finished_slots:
+                        _slm_pool.mark_err(s)
+                        logger.warning(f"SLM hedged: {s['provider']}/{s['model']} TTFT timeout after {_effective_ttft}s")
+
+        yield f"data: {json.dumps({'error': 'All AI providers temporarily unavailable'})}\n\n"
+        return
+
+    # ── Indic Sarvam with hedged key racing ─────────────────────────────────────
+    _SARVAM_TTFT_TIMEOUT = 3.0
+    _SARVAM_SLOT_TIMEOUT = 1.2
+    if _indic_mode and provider == "sarvam":
+        _indic_candidates = []
+
+        _sarvam_keys = [p["key"] for p in _prov_list if p["provider"] == "sarvam"]
+        if key not in _sarvam_keys:
+            _sarvam_keys.insert(0, key)
+        _sarvam_keys = list(dict.fromkeys(_sarvam_keys))
+        for _sk in _sarvam_keys:
+            _indic_candidates.append({"provider": "sarvam", "key": _sk, "model": use_model})
+
+        _gemini_keys_for_indic = [p["key"] for p in _LLM_PROVIDERS if p["provider"] == "gemini" and p.get("key")]
+        for _gk in _gemini_keys_for_indic[:1]:
+            _indic_candidates.append({"provider": "gemini", "key": _gk, "model": "gemini-2.5-flash"})
+
+        _indic_q: asyncio.Queue = asyncio.Queue()
+
+        async def _indic_producer(_cand, _cand_idx):
+            _cprov, _ckey, _cmodel = _cand["provider"], _cand["key"], _cand["model"]
+            try:
+                _cn = 0
+                async for chunk in _emit_tokens(_stream_from_provider(_cprov, _ckey, _cmodel)):
+                    _cn += 1
+                    await _indic_q.put((_cand_idx, "chunk", chunk))
+                if _cn == 0:
+                    logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} returned 0 chunks")
+                await _indic_q.put((_cand_idx, "done", None))
+            except Exception as _e:
+                _is_rate = any(s in str(_e).lower() for s in ("429", "rate", "quota", "throttl"))
+                logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} failed ({type(_e).__name__}: {str(_e)[:120]}) rate_limit={_is_rate}")
+                await _indic_q.put((_cand_idx, "error", None))
+
+        _indic_tasks = [asyncio.create_task(_indic_producer(c, i)) for i, c in enumerate(_indic_candidates)]
+        _race_providers = ", ".join(f"{c['provider']}/{c['model']}" for c in _indic_candidates)
+        logger.info(f"[INDIC] Hedged racing {len(_indic_candidates)} candidates for {response_lang}: {_race_providers}")
+
+        _sarvam_winner = None
+        _sarvam_finished: set = set()
+        _sarvam_race_t0 = time.monotonic()
+        try:
+            _deadline = time.monotonic() + _SARVAM_TTFT_TIMEOUT
+            while _sarvam_winner is None and len(_sarvam_finished) < len(_indic_candidates):
+                _rem = _deadline - time.monotonic()
+                if _rem <= 0:
+                    break
+                try:
+                    _sid, _evt, _data = await asyncio.wait_for(_indic_q.get(), timeout=_rem)
+                except asyncio.TimeoutError:
+                    break
+                if _evt == "chunk":
+                    _sarvam_winner = _sid
+                elif _evt in ("done", "error"):
+                    _sarvam_finished.add(_sid)
+        except Exception:
+            pass
+
+        if _sarvam_winner is not None:
+            _win_cand = _indic_candidates[_sarvam_winner]
+            _ttft_ms = (time.monotonic() - _sarvam_race_t0) * 1000
+            logger.info(f"[INDIC-PERF] TTFT={_ttft_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']} idx={_sarvam_winner}")
+
+            for i, t in enumerate(_indic_tasks):
+                if i != _sarvam_winner:
+                    t.cancel()
+
+            yield _data
+
+            while True:
+                try:
+                    _sid, _evt, _chunk = await asyncio.wait_for(_indic_q.get(), timeout=_SARVAM_SLOT_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning(f"[INDIC] {_win_cand['provider']}/{_win_cand['model']} stalled mid-stream")
+                    break
+                if _sid != _sarvam_winner:
+                    continue
+                if _evt == "chunk":
+                    yield _chunk
+                else:
+                    break
+
+            _total_ms = (time.monotonic() - _sarvam_race_t0) * 1000
+            logger.info(f"[INDIC-PERF] Total={_total_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']}")
+
+            for t in _indic_tasks:
+                t.cancel()
+            for t in _indic_tasks:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            yield f"data: {json.dumps({'__provider': _win_cand['provider']})}\n\n"
+        else:
+            for t in _indic_tasks:
+                t.cancel()
+            for t in _indic_tasks:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+            logger.warning(f"[INDIC] All {len(_indic_candidates)} candidates failed/timed out")
+            yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
+        return
+
+    # ── All other models: single provider ───────────────────────────────────────
+    try:
+        _chunk_n = 0
+        async for chunk in _emit_tokens(_stream_from_provider(provider, key, use_model)):
+            if _chunk_n == 0:
+                _ttft_ms = (time.monotonic() - _stream_t0) * 1000
+                logger.info(f"[EN-PERF] TTFT={_ttft_ms:.0f}ms model={use_model} provider={provider}")
+            _chunk_n += 1
+            yield chunk
+        _total_ms = (time.monotonic() - _stream_t0) * 1000
+        logger.info(f"[EN-PERF] Total={_total_ms:.0f}ms chunks={_chunk_n} model={use_model} provider={provider}")
+        yield f"data: {json.dumps({'__provider': provider})}\n\n"
+    except HTTPException as http_err:
+        yield f"data: {json.dumps({'error': str(http_err.detail)})}\n\n"
+    except Exception as e:
+        logger.error(f"LLM streaming error: {type(e).__name__}: {str(e)[:200]}")
+        yield f"data: {json.dumps({'error': 'AI service temporarily unavailable'})}\n\n"
+, '', result, flags=re.DOTALL).strip()
+
+    # ── Populate cache for future hits ──────────────────────────────────────
+    if result:
+        await ai_cache.aset(cache_key, result, saved_ms=duration_ms)
+        logger.info(f"sarvam_cache SET model={model} key={cache_key[:12]}… duration_ms={duration_ms:.0f}")
+
+    return result
+
+def _cf_cache_headers() -> dict:
+    # Delegates to config.byok_headers() which returns:
+    #   cf-aig-byok-key:default   — CF substitutes the stored BYOK key upstream
+    #   cf-aig-cache-ttl:<N>      — cache TTL hint
+    #   cf-aig-authorization:…    — only when Authenticated Gateway mode is on
+    # Returns {} when the gateway is down — callers should raise or continue
+    # without the caching hint. With BYOK active the placeholder api_key in
+    # the openai client is ignored by CF; the stored BYOK key is used instead.
+    return byok_headers()
+
+def _is_cf_connection_error(exc: Exception) -> bool:
+    err = str(exc).lower()
+    return "connect" in err or "timeout" in err or "unreachable" in err or "dns" in err
+
+def _handle_cf_connection_error(exc: Exception) -> None:
+    if _is_cf_connection_error(exc):
+        mark_cf_gateway_down()
+        logger.warning(f"Cloudflare AI Gateway connection error — falling back to direct URLs for 5 min: {type(exc).__name__}")
+
+def _handle_cf_gateway_auth_error(exc: Exception) -> None:
+    mark_cf_gateway_down()
+    logger.warning(f"Cloudflare AI Gateway 401 auth error — falling back to direct URLs for 5 min: {type(exc).__name__}: {str(exc)[:200]}")
+
+async def _call_gemini(messages: list, api_key: str, model: str, max_tokens: int) -> str:
+    """Non-streaming call to Google Gemini via its OpenAI-compatible endpoint."""
+    direct_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    base = get_provider_base_url("gemini") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        resp = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            extra_headers=_cf_cache_headers() or None,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_openai_compat(messages: list, api_key: str, model: str, max_tokens: int, provider: str, fallback_base: str) -> str:
+    """Non-streaming call via an OpenAI-compatible provider (OpenAI, xAI, Fireworks)."""
+    base = get_provider_base_url(provider) or fallback_base
+    client = _get_oai_client(api_key, base)
+    try:
+        resp = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            extra_headers=_cf_cache_headers() or None,
+        )
+    except _oai.APIConnectionError as e:
+        if base != fallback_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != fallback_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_cerebras(messages: list, api_key: str, model: str, max_tokens: int) -> str:
+    base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
+    client = _get_oai_client(api_key, base)
+    resp = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+    )
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_single_provider(messages: list, provider: str, api_key: str, model: str, max_tokens: int) -> str:
+    max_tokens = _clamp_max_tokens(model, max_tokens)
+    if provider == "sarvam":
+        return await _call_sarvam_llm(messages, api_key, model, max_tokens)
+    if provider == "gemini":
+        return await _call_gemini(messages, api_key, model, max_tokens)
+    if provider == "cerebras":
+        return await _call_cerebras(messages, api_key, model, max_tokens)
+    if provider == "groq":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "groq", "https://api.groq.com/openai/v1")
+    if provider == "xai":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "xai", "https://api.x.ai/v1")
+    if provider == "openrouter":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "openrouter", "https://openrouter.ai/api/v1")
+
+    system_msg = ""
+    user_msg = ""
+    for m in messages:
+        if m["role"] == "system":
+            system_msg = m["content"]
+        elif m["role"] == "user":
+            user_msg = m["content"]
+
+    chat = LlmChat(
+        api_key=api_key,
+        session_id=str(uuid.uuid4()),
+        system_message=system_msg or "You are a helpful AI tutor.",
+    ).with_model(provider, model)
+
+    response = await chat.send_message(UserMessage(text=user_msg))
+    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+    return response
+
+async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 1024, provider_list=None) -> str:
+    import time as _t
+    # Wall-clock start of the whole primary-rotation loop. Used so the
+    # Workers AI fallback path (Task #636) can attribute the *real*
+    # cumulative primary latency (instead of 0) when we eventually give
+    # up and call the edge.
+    _loop_t0 = _t.perf_counter()
+    providers = _LLM_PROVIDERS if provider_list is None else provider_list
+    use_model = _MODEL_ALIAS_MAP.get(model or LLM_MODEL, model or LLM_MODEL)
+    primary_provider, primary_key = _resolve_provider_for_model(use_model, providers)
+
+    if not primary_key and not providers:
+        raise HTTPException(status_code=503, detail="LLM API key not configured")
+
+    tried: set = set()
+    last_err = None
+
+    _is_content = provider_list is _LLM_PROVIDERS_CONTENT
+    _is_chat = provider_list is _LLM_PROVIDERS_CHAT
+    _PROVIDER_TIMEOUT = 30.0 if _is_content else (4.0 if _is_chat else 6.0)
+
+    provider, key = primary_provider, primary_key
+    try_model = _safe_model_for_provider(use_model, provider, providers)
+    if try_model != use_model:
+        logger.info(f"Model '{use_model}' not compatible with {provider} → using '{try_model}'")
+    try:
+        tried.add((provider, try_model, id(key) if key else 0))
+        _t0 = _t.perf_counter()
+        result = await asyncio.wait_for(
+            _call_single_provider(messages, provider, key, try_model, max_tokens),
+            timeout=_PROVIDER_TIMEOUT,
+        )
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        tok = len(result.split())
+        _record_llm_call(provider, try_model, _dur, True, tok, False)
+        logger.info(f"llm_call provider={provider} model={try_model} duration_ms={_dur} tokens_approx={tok}")
+        return LlmResult(result, provider=provider)
+    except asyncio.TimeoutError:
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        _record_llm_call(provider, try_model, _dur, False, 0, False, "Timeout")
+        last_err = TimeoutError(f"{provider}/{try_model} timed out after {_PROVIDER_TIMEOUT}s")
+        logger.warning(f"LLM primary TIMEOUT ({provider}/{try_model}): {_dur}ms > {_PROVIDER_TIMEOUT}s limit")
+    except Exception as e:
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        _record_llm_call(provider, try_model, _dur, False, 0, False, type(e).__name__)
+        last_err = e
+        logger.warning(f"LLM primary failed ({provider}/{try_model}): {type(e).__name__}: {str(e)[:150]}")
+
+    for fallback in providers:
+        fb_model = fallback["default_model"]
+        fb_key_id = id(fallback["key"]) if fallback.get("key") else 0
+        if (fallback["provider"], fb_model, fb_key_id) in tried:
+            continue
+        tried.add((fallback["provider"], fb_model, fb_key_id))
+        try:
+            _t0 = _t.perf_counter()
+            result = await asyncio.wait_for(
+                _call_single_provider(messages, fallback["provider"], fallback["key"], fb_model, max_tokens),
+                timeout=_PROVIDER_TIMEOUT,
+            )
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            tok = len(result.split())
+            _record_llm_call(fallback["provider"], fb_model, _dur, True, tok, True)
+            logger.info(f"llm_call provider={fallback['provider']} model={fb_model} duration_ms={_dur} tokens_approx={tok} fallback=true")
+            return LlmResult(result, provider=fallback["provider"])
+        except asyncio.TimeoutError:
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, "Timeout")
+            last_err = TimeoutError(f"{fallback['provider']}/{fb_model} timed out after {_PROVIDER_TIMEOUT}s")
+            logger.warning(f"LLM fallback TIMEOUT ({fallback['provider']}/{fb_model}): {_dur}ms > {_PROVIDER_TIMEOUT}s limit")
+        except Exception as e:
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, type(e).__name__)
+            last_err = e
+            logger.warning(f"LLM fallback failed ({fallback['provider']}/{fb_model}): {type(e).__name__}: {str(e)[:150]}")
+
+    # Task #636 — last-resort Workers AI fallback. Only reached after every
+    # configured primary+fallback Cerebras/Gemini/etc provider has failed.
+    # Policy is strict (timeout/5xx/429/quota only) so 4xx bad-input bugs
+    # still surface as 503 instead of being silently masked by a different
+    # model's looser parser.
+    try:
+        from providers import workers_ai as _wai
+        if _wai.is_enabled("chat") and last_err is not None and _wai.should_fallback(last_err):
+            # Real cumulative primary-loop latency (all rotations combined),
+            # so the admin panel and structured logs attribute the actual
+            # wait the user incurred before we gave up on the primaries.
+            _primary_total_ms = int((_t.perf_counter() - _loop_t0) * 1000)
+            _t0 = _t.perf_counter()
+            ok, value, label = await _wai.attempt_fallback(
+                "chat", last_err, _primary_total_ms,
+                lambda: _wai.call_chat(messages, max_tokens=max_tokens, temperature=0.3),
+            )
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            if ok and isinstance(value, str) and value:
+                reason = _wai.classify_primary_error(last_err)
+                _record_llm_call("workers-ai", "llama-3.1-8b-instruct", _dur, True,
+                                 len(value.split()), True)
+                logger.info(
+                    f"llm_call provider=workers-ai model=llama-3.1-8b-instruct "
+                    f"duration_ms={_dur} fallback=true reason={reason}"
+                )
+                return LlmResult(value, provider="workers-ai", fallback_reason=reason)
+    except Exception as _wai_err:  # noqa: BLE001
+        logger.warning(f"[workers-ai] chat fallback skipped: {type(_wai_err).__name__}: {str(_wai_err)[:150]}")
+
+    logger.error(f"All LLM providers exhausted. Last error: {last_err}")
+    raise HTTPException(status_code=503, detail="AI service temporarily unavailable. Please try again.")
+
+async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048) -> str:
+    """Smart-batched LLM call: deduplicates identical requests, limits concurrency.
+    Uses all providers including Emergent (admin content generation)."""
+    return await _llm_batcher.call(messages, model, max_tokens)
+
+_LLM_PROVIDERS_CONTENT: list[dict] = []
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "qwen-3-235b-a22b-instruct-2507"})
+if _SARVAM_LLM_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+if _GEMINI_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
+if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
+
+logger.info(
+    f"Admin content providers (quality-first order): "
+    f"{[p['provider'] + '/' + p['default_model'] for p in _LLM_PROVIDERS_CONTENT]}"
+)
+
+async def call_llm_api_content(messages: list, model: str = None, max_tokens: int = 3072) -> str:
+    """LLM call for admin content generation — Cerebras preferred (qwen-3-235b, fast + high quality),
+    Sarvam secondary (sarvam-m), Gemini 2.5 Flash last resort.
+    Uses dedicated content batcher with 300ms batch window (vs 5ms for chat).
+    Retries with exponential backoff instead of instant failover."""
+    if model is None and _LLM_PROVIDERS_CONTENT:
+        model = _LLM_PROVIDERS_CONTENT[0]["default_model"]
+    return await _content_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CONTENT, use_admin_sem=True)
+
+
+async def call_llm_api_content_with_retry(
+    messages: list, model: str = None, max_tokens: int = 3072,
+    validate_fn=None,
+) -> str:
+    """Content LLM call with retry-with-backoff and optional output validation.
+    
+    validate_fn: optional callable(result_str) -> bool. If it returns False,
+    the result is treated as a failure and retried.
+    """
+    last_err = None
+    for attempt in range(_CONTENT_RETRY_MAX):
+        try:
+            result = await call_llm_api_content(messages, model, max_tokens)
+            if validate_fn is not None and not validate_fn(result):
+                logger.warning(
+                    f"Content LLM output failed validation (attempt {attempt + 1}/{_CONTENT_RETRY_MAX})"
+                )
+                last_err = ValueError("Output failed validation")
+                if attempt < _CONTENT_RETRY_MAX - 1:
+                    backoff = _CONTENT_RETRY_BACKOFF[min(attempt, len(_CONTENT_RETRY_BACKOFF) - 1)]
+                    logger.info(f"Content retry backoff: waiting {backoff}s before attempt {attempt + 2}")
+                    await asyncio.sleep(backoff)
+                continue
+            return result
+        except Exception as e:
+            last_err = e
+            logger.warning(
+                f"Content LLM call failed (attempt {attempt + 1}/{_CONTENT_RETRY_MAX}): "
+                f"{type(e).__name__}: {str(e)[:150]}"
+            )
+            if attempt < _CONTENT_RETRY_MAX - 1:
+                backoff = _CONTENT_RETRY_BACKOFF[min(attempt, len(_CONTENT_RETRY_BACKOFF) - 1)]
+                logger.info(f"Content retry backoff: waiting {backoff}s before attempt {attempt + 2}")
+                await asyncio.sleep(backoff)
+    raise last_err or HTTPException(status_code=503, detail="Content generation failed after retries")
+
+async def call_llm_api_chat(messages: list, model: str = None, max_tokens: int = 2048) -> str:
+    """LLM call for student chat — excludes Emergent provider (admin-only)."""
+    return await _llm_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CHAT)
+
+
+_THINK_BUDGET_HINT = "/think in one sentence. Answer immediately.\n"
+
+def _inject_think_budget(messages: list) -> list:
+    """Prepend a concise reasoning directive to the system message so sarvam-m
+    spends fewer tokens in its <think> block, reducing TTFT significantly."""
+    out = []
+    injected = False
+    for m in messages:
+        if m.get("role") == "system" and not injected:
+            out.append({**m, "content": _THINK_BUDGET_HINT + m["content"]})
+            injected = True
+        else:
+            out.append(m)
+    if not injected:
+        out.insert(0, {"role": "system", "content": _THINK_BUDGET_HINT})
+    return out
+
+async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: int, *, response_lang: str = ""):
+    """Token-by-token SSE streaming from Sarvam — reuses persistent sarvam_llm_client (zero TCP overhead).
+    For Indic languages: skips think budget injection and think buffer to reduce TTFT.
+    For English: adds SARVAM_THINK_BUFFER so <think> reasoning never crowds out the answer budget.
+    Falls back to direct client if CF gateway connection fails.
+    """
+    _indic = _is_indic_lang(response_lang)
+    if _indic:
+        api_max = max_tokens + 100
+        patched = [dict(m) for m in messages]
+        if patched and patched[0].get("role") == "system":
+            patched[0]["content"] = (
+                "CRITICAL: Do NOT use <think> tags. Do NOT write internal thoughts. "
+                "Do NOT start with 'Okay' or 'Let me'. "
+                "Reply DIRECTLY in Assamese (অসমীয়া). Start your answer immediately.\n"
+                "STRICT LANGUAGE RULES:\n"
+                "- Every running word MUST be in Assamese script. NO mid-sentence English words.\n"
+                "- NEVER emit partial English fragments such as 'me uses', 'terms', 'ssible',\n"
+                "  'ble', 'tion', 'ssing'. If you start a word in English, you MUST switch\n"
+                "  back to Assamese for the rest of that sentence.\n"
+                "- Latin script is allowed ONLY for: pure numbers/dates, scientific units\n"
+                "  (cm, kg, Hz, °C, eV…), math symbols/equations, code, URLs, well-known\n"
+                "  proper nouns and acronyms (AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
+                "- For everyday nouns/verbs, use the Assamese word — do NOT fall back to English.\n"
+                "BAD vs GOOD examples (follow the pattern, do not copy text):\n"
+                "  BAD : 'উৰুকা me uses ssible terms চমুকৈ ক'লে…'\n"
+                "  GOOD: 'উৰুকা চমুকৈ ক'লে অসমৰ এক প্ৰিয় উৎসৱ।'\n"
+                "  BAD : 'জল 100°C ত boil হয়।'\n"
+                "  GOOD: 'পানী 100°C ত উতলে।'\n"
+                "  BAD : 'Newton ৰ first law explains inertia।'\n"
+                "  GOOD: 'Newton ৰ গতিৰ প্ৰথম সূত্ৰে জড়তা ব্যাখ্যা কৰে।'\n"
+            ) + patched[0]["content"]
+        logger.info(f"[SARVAM-INDIC] No-think mode for {response_lang} — model={model}, api_max={api_max}")
+    else:
+        api_max = max_tokens + SARVAM_THINK_BUFFER
+        patched = _inject_think_budget(messages)
+    _SARVAM_LANG_CODE_MAP = {"as": "as-IN"}
+    payload = {
+        "model": model,
+        "messages": patched,
+        "max_tokens": api_max,
+        "temperature": 0.05 if _indic else 0.1,
+        "top_p": 0.9 if _indic else 0.95,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+        "stream": True,
+    }
+    if _indic:
+        payload["thinking"] = {"enabled": False}
+        if response_lang in _SARVAM_LANG_CODE_MAP:
+            payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
+    elif response_lang in _SARVAM_LANG_CODE_MAP:
+        payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
+    client = _pick_sarvam_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Sarvam LLM client not initialised")
+
+    async def _do_stream(c):
+        async with c.stream("POST", "/v1/chat/completions", json=payload) as resp:
+            if resp.status_code >= 400:
+                body = await resp.aread()
+                logger.error(f"Sarvam {resp.status_code} error body: {body.decode()[:500]}")
+                resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                raw = line[5:].strip()
+                if raw == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(raw)
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
+                    token = delta.get("content") or ""
+                    if token:
+                        yield token
+                except Exception:
+                    continue
+
+    try:
+        async for token in _do_stream(client):
+            yield token
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        if sarvam_llm_client_direct is not None and client is not sarvam_llm_client_direct:
+            _handle_cf_connection_error(e)
+            async for token in _do_stream(sarvam_llm_client_direct):
+                yield token
+        else:
+            raise
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401 and sarvam_llm_client_direct is not None and client is not sarvam_llm_client_direct:
+            _handle_cf_gateway_auth_error(e)
+            async for token in _do_stream(sarvam_llm_client_direct):
+                yield token
+        else:
+            raise
+
+async def _stream_gemini(messages: list, api_key: str, model: str, max_tokens: int):
+    """Token-by-token streaming from Google Gemini via its OpenAI-compatible endpoint."""
+    direct_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    base = get_provider_base_url("gemini") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_vertex_gemini(messages: list, model: str, max_tokens: int):
+    """Token-by-token streaming from Vertex AI Gemini Flash (Task #607).
+
+    Uses google-auth + Vertex `streamGenerateContent` REST endpoint.
+    Raises on misconfiguration / network errors so the caller can fall
+    back to the legacy hedged SLM pool.
+    """
+    async for token in _vertex_chat.stream_chat(
+        messages, model=model, max_tokens=max_tokens, temperature=0.1,
+    ):
+        yield token
+
+
+async def _stream_cerebras(messages: list, api_key: str, model: str, max_tokens: int):
+    base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
+    client = _get_oai_client(api_key, base)
+    stream = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+    )
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_xai(messages: list, api_key: str, model: str, max_tokens: int):
+    """Token-by-token streaming from xAI Grok via its OpenAI-compatible endpoint."""
+    direct_base = "https://api.x.ai/v1"
+    base = get_provider_base_url("xai") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_openai_compat(messages: list, api_key: str, model: str, max_tokens: int, provider: str, fallback_base: str):
+    """Token-by-token streaming from any OpenAI-compatible provider."""
+    base = get_provider_base_url(provider) or fallback_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != fallback_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != fallback_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_bedrock(messages: list, model: str, max_tokens: int):
+    """Token-by-token streaming from Amazon Bedrock via Converse streaming API.
+    boto3 is synchronous — runs in a thread pool; tokens passed back via asyncio.Queue.
+    Supports Amazon Nova family (nova-micro, nova-lite, nova-pro) and any Converse-compatible model.
+    """
+    if not _AWS_ACCESS_KEY or not _AWS_SECRET_KEY:
+        raise ValueError("AWS credentials not configured (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)")
+
+    # Convert OpenAI-format messages to Bedrock Converse format
+    system_parts = []
+    converse_messages = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if role == "system":
+            system_parts.append({"text": content})
+        else:
+            converse_messages.append({"role": role, "content": [{"text": content}]})
+
+    loop = asyncio.get_event_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def _sync_stream():
+        try:
+            import boto3 as _boto3
+            client = _boto3.client(
+                "bedrock-runtime",
+                region_name=_AWS_REGION,
+                aws_access_key_id=_AWS_ACCESS_KEY,
+                aws_secret_access_key=_AWS_SECRET_KEY,
+            )
+            kwargs = dict(
+                modelId=model,
+                messages=converse_messages,
+                inferenceConfig={"maxTokens": max_tokens, "temperature": 0.1},
+            )
+            if system_parts:
+                kwargs["system"] = system_parts
+            resp = client.converse_stream(**kwargs)
+            for event in resp["stream"]:
+                if "contentBlockDelta" in event:
+                    text = event["contentBlockDelta"].get("delta", {}).get("text", "")
+                    if text:
+                        loop.call_soon_threadsafe(queue.put_nowait, text)
+            loop.call_soon_threadsafe(queue.put_nowait, None)   # sentinel → done
+        except Exception as exc:
+            loop.call_soon_threadsafe(queue.put_nowait, exc)
+
+    loop.run_in_executor(None, _sync_stream)
+
+    while True:
+        item = await queue.get()
+        if item is None:
+            break
+        if isinstance(item, Exception):
+            raise item
+        yield item
+
+
+async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int = 2048, intent: str = "", response_lang: str = ""):
+    """
+    Real token-by-token streaming from the LLM provider.
+    Uses native streaming APIs for instant first-token delivery.
+    Supports: Sarvam, Groq, Fireworks, Gemini, Cerebras, xAI, Bedrock.
+    'openai/gpt-oss-20b' triggers the smart SLM pool (Fireworks/Groq/Cerebras/Gemini).
+    When response_lang is an Indic code (as/hi/etc), optimized Sarvam routing is applied.
+    """
+    _indic_mode = _is_indic_lang(response_lang)
+    _stream_t0 = time.monotonic()
+
+    if _indic_mode:
+        _resolved_indic_model = None
+        for _pref_model in _SARVAM_INDIC_MODEL_PREFERENCE:
+            _prov, _pkey = _resolve_provider_for_model(_pref_model, _LLM_PROVIDERS)
+            if _prov == "sarvam" and _pkey:
+                _resolved_indic_model = _pref_model
+                break
+        if _resolved_indic_model:
+            model = _resolved_indic_model
+            logger.info(f"[INDIC] Auto-selected Sarvam model '{model}' for {response_lang} response")
+        else:
+            logger.warning(f"[INDIC] No Sarvam model available from preference chain, using default")
+
+    use_model_raw = model or LLM_MODEL
+
+    # ── Vertex AI Gemini Flash fast-path (Task #607) ──────────────────────────
+    # When the requested model resolves to Vertex Gemini Flash, stream through
+    # Vertex AI's REST endpoint directly. On any error before the first token
+    # is delivered, automatically fall back to the legacy SLM hedged pool by
+    # re-routing through the standard resolution path below.
+    # Task #628 — Indic (Assamese) admin toggle: when the admin has
+    # flipped the Indic provider to "vertex" AND Vertex is configured,
+    # route Assamese chat through the same Vertex fast-path used for
+    # English below. The leak sanitiser downstream still runs on the
+    # emitted content, so stray English words are cleaned regardless
+    # of provider. On pre-first-token Vertex failure we fall through
+    # to the legacy Sarvam hedged pool below (NOT the English SLM
+    # pool) to preserve Assamese quality.
+    _indic_vertex_active = False
+    if _indic_mode:
+        try:
+            from lang_sanitizer import get_indic_provider as _get_indic_provider
+            _indic_provider_pref = _get_indic_provider()
+        except Exception:
+            _indic_provider_pref = "sarvam"
+        if _indic_provider_pref == "vertex" and _vertex_chat.is_configured():
+            _indic_vertex_active = True
+
+    _use_vertex_fastpath = (
+        (use_model_raw == "vertex/gemini-flash" and not _indic_mode)
+        or _indic_vertex_active
+    )
+    _vertex_fallback_target = (
+        # Indic fallback uses the Sarvam hedged pool (preserves Assamese
+        # quality); English fallback uses the SLM pool.
+        "sarvam-m" if _indic_vertex_active else "openai/gpt-oss-20b"
+    )
+    _vertex_metric_bucket = "vertex_gemini_indic" if _indic_vertex_active else "vertex_gemini"
+
+    if _use_vertex_fastpath:
+        if not _vertex_chat.is_configured():
+            logger.warning("vertex/gemini-flash requested but VERTEX_PROJECT_ID is not set — falling back to legacy SLM pool")
+            use_model_raw = _vertex_fallback_target
+        else:
+            _vertex_first_token = False
+            _vertex_t0 = time.monotonic()
+            try:
+                _mt_vx = _clamp_max_tokens(VERTEX_GEMINI_MODEL, max_tokens)
+                _vx_batch = ""
+                _VX_BATCH_SIZE = 2
+                # For Indic mode, prepend the same strict-Assamese system
+                # preface used by `_stream_sarvam` so Gemini commits to
+                # Assamese script from the first token and we don't rely
+                # on the sanitizer to clean up provider-level leakage.
+                _vx_messages = messages
+                if _indic_vertex_active:
+                    _vx_messages = [dict(m) for m in messages]
+                    _asm_preface = (
+                        "CRITICAL: Reply DIRECTLY in Assamese (অসমীয়া). "
+                        "Do NOT use <think> tags. Do NOT write internal thoughts.\n"
+                        "STRICT LANGUAGE RULES:\n"
+                        "- Every running word MUST be in Assamese script. "
+                        "NO mid-sentence English words.\n"
+                        "- Latin script is allowed ONLY for: pure numbers/dates, "
+                        "scientific units (cm, kg, Hz, °C, eV…), math symbols/equations, "
+                        "code, URLs, well-known proper nouns and acronyms "
+                        "(AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
+                        "- For everyday nouns/verbs, use the Assamese word — "
+                        "do NOT fall back to English.\n\n"
+                    )
+                    if _vx_messages and _vx_messages[0].get("role") == "system":
+                        _vx_messages[0]["content"] = _asm_preface + _vx_messages[0]["content"]
+                    else:
+                        _vx_messages.insert(0, {"role": "system", "content": _asm_preface})
+                async for token in _stream_vertex_gemini(_vx_messages, VERTEX_GEMINI_MODEL, _mt_vx):
+                    if not _vertex_first_token:
+                        _ttft_ms = (time.monotonic() - _vertex_t0) * 1000
+                        logger.info(f"[VERTEX-PERF] TTFT={_ttft_ms:.0f}ms model={VERTEX_GEMINI_MODEL} indic={_indic_vertex_active}")
+                        _vertex_first_token = True
+                    _vx_batch += token
+                    if len(_vx_batch) >= _VX_BATCH_SIZE:
+                        yield f"data: {json.dumps({'content': _vx_batch})}\n\n"
+                        _vx_batch = ""
+                if _vx_batch:
+                    yield f"data: {json.dumps({'content': _vx_batch})}\n\n"
+                if _vertex_first_token:
+                    _total_ms = (time.monotonic() - _vertex_t0) * 1000
+                    logger.info(f"[VERTEX-PERF] Total={_total_ms:.0f}ms model={VERTEX_GEMINI_MODEL} indic={_indic_vertex_active}")
+                    try:
+                        from chat_speedup_metrics import record_provider_call as _rec_prov
+                        _rec_prov(_vertex_metric_bucket, ttfb_ms=_ttft_ms, total_ms=_total_ms)
+                    except Exception:
+                        pass
+                    yield f"data: {json.dumps({'__provider': _vertex_metric_bucket})}\n\n"
+                    return
+                # Stream completed without ever yielding a token — treat as
+                # failure and fall through to legacy.
+                logger.warning("Vertex Gemini Flash returned empty stream — falling back to legacy pool")
+            except Exception as _vx_err:
+                if _vertex_first_token:
+                    # We already started streaming to the client; we can't
+                    # silently restart. Emit error and stop.
+                    logger.warning(f"Vertex Gemini Flash mid-stream error: {type(_vx_err).__name__}: {str(_vx_err)[:200]}")
+                    yield f"data: {json.dumps({'error': 'AI service interrupted'})}\n\n"
+                    return
+                logger.warning(f"Vertex Gemini Flash failed before first token: {type(_vx_err).__name__}: {str(_vx_err)[:200]} — falling back to legacy pool")
+            # Fall back: rewrite the requested model to the legacy default
+            # and continue with the standard resolution path below.
+            try:
+                from chat_speedup_metrics import record_provider_fallback as _rec_fb
+                _rec_fb(_vertex_metric_bucket, _vertex_fallback_target)
+            except Exception:
+                pass
+            use_model_raw = _vertex_fallback_target
+            model = use_model_raw
+            _indic_vertex_active = False  # Fallback → resolve normally
+
+    use_model_resolved = _MODEL_ALIAS_MAP.get(use_model_raw, use_model_raw)
+    _prov_list = _LLM_PROVIDERS if _indic_mode else _LLM_PROVIDERS_CHAT
+    provider, key = _resolve_provider_for_model(use_model_resolved, _prov_list)
+    if use_model_raw != use_model_resolved:
+        logger.info(f"Model alias '{use_model_raw}' → '{use_model_resolved}' ({provider})")
+    use_model = _safe_model_for_provider(use_model_resolved, provider, _prov_list)
+    if use_model != use_model_resolved:
+        logger.info(f"Model '{use_model_resolved}' not compatible with {provider} → using '{use_model}'")
+
+    if not key and provider != "sarvam":
+        yield f"data: {json.dumps({'error': 'LLM API key not configured'})}\n\n"
+        return
+
+    in_think = False
+    buf = ""
+
+    _SSE_BATCH = 2    # flush every 2 chars — near-instant token delivery
+
+    async def _emit_tokens(token_source):
+        nonlocal in_think, buf
+        import re as _re
+        _CLOSE_KEEP = len('</think>') - 1   # 7
+        think_done  = False
+        batch       = ""
+        _visible_text = ""
+        _think_buf  = []
+
+        async for token in token_source:
+            if think_done:
+                cleaned = _re.sub(r'<think>[\s\S]*?</think>', '', token)
+                if cleaned:
+                    batch += cleaned
+                    if len(batch) >= _SSE_BATCH:
+                        _visible_text += batch
+                        yield f"data: {json.dumps({'content': batch})}\n\n"
+                        batch = ""
+                continue
+
+            buf += token
+            while buf:
+                if in_think:
+                    close_idx = buf.find('</think>')
+                    if close_idx != -1:
+                        _think_buf.append(buf[:close_idx])
+                        buf = buf[close_idx + 8:]
+                        in_think   = False
+                        think_done = True
+                        if buf:
+                            batch += buf
+                            buf = ""
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                        break
+                    else:
+                        if len(buf) > _CLOSE_KEEP:
+                            _think_buf.append(buf[:-_CLOSE_KEEP])
+                            buf = buf[-_CLOSE_KEEP:]
+                        break
+                else:
+                    open_idx = buf.find('<think>')
+                    if open_idx != -1:
+                        before = buf[:open_idx]
+                        if before:
+                            batch += before
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                        buf      = buf[open_idx + 7:]
+                        in_think = True
+                    elif buf.endswith(('<', '<t', '<th', '<thi', '<thin', '<think')):
+                        partial_start = buf.rfind('<')
+                        candidate     = buf[partial_start:]
+                        if '<think>'[:len(candidate)] == candidate:
+                            before = buf[:partial_start]
+                            if before:
+                                batch += before
+                                if len(batch) >= _SSE_BATCH:
+                                    _visible_text += batch
+                                    yield f"data: {json.dumps({'content': batch})}\n\n"
+                                    batch = ""
+                            buf = candidate
+                            break
+                        else:
+                            batch += buf
+                            buf    = ""
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                    else:
+                        batch += buf
+                        buf    = ""
+                        if len(batch) >= _SSE_BATCH:
+                            _visible_text += batch
+                            yield f"data: {json.dumps({'content': batch})}\n\n"
+                            batch = ""
+                        break
+
+        if batch and not in_think:
+            _visible_text += batch
+            yield f"data: {json.dumps({'content': batch})}\n\n"
+        if buf and not in_think:
+            _visible_text += buf
+            yield f"data: {json.dumps({'content': buf})}\n\n"
+
+        if not _visible_text.strip() and (in_think or think_done):
+            fallback_text = "".join(_think_buf)
+            if in_think and buf:
+                fallback_text += buf
+            fallback_text = _re.sub(r'</?think\s*/?>', '', fallback_text).strip()
+            fallback_text = _re.sub(r'</?\w*$', '', fallback_text).strip()
+            if fallback_text and len(fallback_text) > 5:
+                logger.info(f"Think-block fallback: emitting {len(fallback_text)} chars of think content as response")
+                yield f"data: {json.dumps({'content': fallback_text})}\n\n"
+
+    async def _stream_from_provider(p_name: str, p_key: str, p_model: str):
+        """Yield raw tokens from a provider. Raises on failure."""
+        _mt = _clamp_max_tokens(p_model, max_tokens)
+        if p_name == "sarvam":
+            _input_est = sum(len(m.get("content", "")) for m in messages) // 4
+            _think_overhead = 0 if _indic_mode else SARVAM_THINK_BUFFER
+            _sarvam_cap = max(256, 7192 - _input_est - _think_overhead - 100)
+            _mt = min(_mt, _sarvam_cap)
+            async for token in _stream_sarvam(messages, p_key, p_model, _mt, response_lang=response_lang):
+                yield token
+        elif p_name == "gemini":
+            logger.info(f"LLM stream: provider=gemini, model={p_model}")
+            async for token in _stream_gemini(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "cerebras":
+            logger.info(f"LLM stream: provider=cerebras, model={p_model}")
+            async for token in _stream_cerebras(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "groq":
+            logger.info(f"LLM stream: provider=groq, model={p_model}")
+            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "groq", "https://api.groq.com/openai/v1"):
+                yield token
+        elif p_name == "xai":
+            logger.info(f"LLM stream: provider=xai, model={p_model}")
+            async for token in _stream_xai(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "openrouter":
+            logger.info(f"LLM stream: provider=openrouter, model={p_model}")
+            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "openrouter", "https://openrouter.ai/api/v1"):
+                yield token
+        elif p_name == "bedrock":
+            logger.info(f"LLM stream: provider=bedrock, model={p_model}")
+            async for token in _stream_bedrock(messages, p_model, _mt):
+                yield token
+        else:
+            logger.info(f"LLM stream: provider={p_name}, model={p_model}")
+            chat = LlmChat(api_key=p_key or OPENAI_API_KEY, session_id=str(uuid.uuid4())).with_model(p_name, p_model)
+            async for token in chat.stream_messages(messages, max_tokens=_mt):
+                yield token
+
+    # ── Syrabit SLM: concurrent smart pool ──────────────────────────────────────
+    # pick() returns the fastest available slot (by speed tier) with spare capacity.
+    # async with slot["sem"] lets up to max_concurrent requests run in parallel.
+    # Tokens are yielded in real-time as they arrive (true streaming).
+    # TTFT timeout ensures fast failover when a provider is unresponsive.
+    _SLM_SLOT_TIMEOUT = 0.7    # max seconds between any two tokens mid-stream
+    _SLM_TTFT_TIMEOUT = 0.8    # max seconds to wait for FIRST token from a slot
+
+    _SLM_PROVIDER_MAX_INPUT_CHARS = {
+        "cerebras": 24000,
+        "sarvam": 12000,
+        "groq": 100000,
+        "gemini": 500000,
+        "openrouter": 200000,
+        "openai": 80000,
+        "bedrock": 40000,
+    }
+
+    if use_model_raw == "openai/gpt-oss-20b":
+        _active_pool = _slm_pool
+        _input_chars = sum(len(m.get("content", "")) for m in messages)
+
+        _skipped_slots: set = set()
+        _candidates = []
+        for _ in range(len(_active_pool.all_slots)):
+            slot = _active_pool.pick(_skipped_slots)
+            if slot is None:
+                break
+            p_name = slot["provider"]
+            _max_chars = _SLM_PROVIDER_MAX_INPUT_CHARS.get(p_name, 80000)
+            if _input_chars > _max_chars:
+                logger.info(f"SLM pool: skipping {p_name}/{slot['model']} — input too large ({_input_chars} chars > {_max_chars} limit)")
+                _skipped_slots.add(id(slot))
+                continue
+            _candidates.append(slot)
+            _skipped_slots.add(id(slot))
+            if len(_candidates) >= 2:
+                break
+
+        if _candidates:
+            _effective_ttft = min(1.2, _SLM_TTFT_TIMEOUT + (0.2 if _input_chars > 8000 else 0.0))
+            _hedged_q: asyncio.Queue = asyncio.Queue()
+            _hedged_errors: dict = {}
+
+            async def _hedged_producer(_slot, _slot_idx):
+                _pn, _pk, _pm = _slot["provider"], _slot["key"], _slot["model"]
+                try:
+                    async with _slot["sem"]:
+                        _chunk_count = 0
+                        async for chunk in _emit_tokens(_stream_from_provider(_pn, _pk, _pm)):
+                            _chunk_count += 1
+                            await _hedged_q.put((_slot_idx, "chunk", chunk))
+                        if _chunk_count == 0:
+                            logger.warning(f"SLM hedged: {_pn}/{_pm} 0 chunks")
+                        await _hedged_q.put((_slot_idx, "done", None))
+                except Exception as exc:
+                    _hedged_errors[_slot_idx] = exc
+                    logger.warning(f"SLM hedged: {_pn}/{_pm} error: {type(exc).__name__}: {str(exc)[:200]}")
+                    await _hedged_q.put((_slot_idx, "error", None))
+
+            _hedged_tasks = [asyncio.create_task(_hedged_producer(s, i)) for i, s in enumerate(_candidates)]
+            if len(_candidates) > 1:
+                _race_desc = " vs ".join(f"{s['provider']}/{s['model']}" for s in _candidates)
+                logger.info(f"SLM hedged: racing {_race_desc}")
+
+            _winner = None
+            _finished_slots: set = set()
+            try:
+                _deadline = time.monotonic() + _effective_ttft
+                while _winner is None and len(_finished_slots) < len(_candidates):
+                    _remaining = _deadline - time.monotonic()
+                    if _remaining <= 0:
+                        break
+                    try:
+                        _sid, _evt, _data = await asyncio.wait_for(_hedged_q.get(), timeout=_remaining)
+                    except asyncio.TimeoutError:
+                        break
+                    if _evt == "chunk":
+                        _winner = _sid
+                    elif _evt in ("done", "error"):
+                        _finished_slots.add(_sid)
+                        if _evt == "error":
+                            _slm_pool.mark_err(_candidates[_sid])
+            except Exception:
+                pass
+
+            if _winner is not None:
+                _win_slot = _candidates[_winner]
+                _slm_pool.mark_ok(_win_slot)
+                _win_pname = _win_slot["provider"]
+                _win_model = _win_slot["model"]
+                if len(_candidates) > 1:
+                    logger.info(f"SLM hedged: winner={_win_pname}/{_win_model}")
+
+                for i, t in enumerate(_hedged_tasks):
+                    if i != _winner:
+                        t.cancel()
+
+                yield _data
+
+                _tokens_yielded = 1
+                while True:
+                    try:
+                        _sid, _evt, _chunk = await asyncio.wait_for(_hedged_q.get(), timeout=_SLM_SLOT_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        _slm_pool.mark_err(_win_slot)
+                        logger.warning(f"SLM hedged: {_win_pname}/{_win_model} stalled mid-stream after {_SLM_SLOT_TIMEOUT}s ({_tokens_yielded} tokens yielded)")
+                        break
+                    if _sid != _winner:
+                        continue
+                    if _evt == "chunk":
+                        yield _chunk
+                        _tokens_yielded += 1
+                    else:
+                        if _winner in _hedged_errors and _tokens_yielded <= 1:
+                            _slm_pool.mark_err(_win_slot)
+                        break
+
+                _hedged_tasks[_winner].cancel()
+                for t in _hedged_tasks:
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+                yield f"data: {json.dumps({'__provider': _win_pname})}\n\n"
+                return
+            else:
+                for t in _hedged_tasks:
+                    t.cancel()
+                for t in _hedged_tasks:
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                for i, s in enumerate(_candidates):
+                    if i not in _finished_slots:
+                        _slm_pool.mark_err(s)
+                        logger.warning(f"SLM hedged: {s['provider']}/{s['model']} TTFT timeout after {_effective_ttft}s")
+
+        yield f"data: {json.dumps({'error': 'All AI providers temporarily unavailable'})}\n\n"
+        return
+
+    # ── Indic Sarvam with hedged key racing ─────────────────────────────────────
+    _SARVAM_TTFT_TIMEOUT = 3.0
+    _SARVAM_SLOT_TIMEOUT = 1.2
+    if _indic_mode and provider == "sarvam":
+        _indic_candidates = []
+
+        _sarvam_keys = [p["key"] for p in _prov_list if p["provider"] == "sarvam"]
+        if key not in _sarvam_keys:
+            _sarvam_keys.insert(0, key)
+        _sarvam_keys = list(dict.fromkeys(_sarvam_keys))
+        for _sk in _sarvam_keys:
+            _indic_candidates.append({"provider": "sarvam", "key": _sk, "model": use_model})
+
+        _gemini_keys_for_indic = [p["key"] for p in _LLM_PROVIDERS if p["provider"] == "gemini" and p.get("key")]
+        for _gk in _gemini_keys_for_indic[:1]:
+            _indic_candidates.append({"provider": "gemini", "key": _gk, "model": "gemini-2.5-flash"})
+
+        _indic_q: asyncio.Queue = asyncio.Queue()
+
+        async def _indic_producer(_cand, _cand_idx):
+            _cprov, _ckey, _cmodel = _cand["provider"], _cand["key"], _cand["model"]
+            try:
+                _cn = 0
+                async for chunk in _emit_tokens(_stream_from_provider(_cprov, _ckey, _cmodel)):
+                    _cn += 1
+                    await _indic_q.put((_cand_idx, "chunk", chunk))
+                if _cn == 0:
+                    logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} returned 0 chunks")
+                await _indic_q.put((_cand_idx, "done", None))
+            except Exception as _e:
+                _is_rate = any(s in str(_e).lower() for s in ("429", "rate", "quota", "throttl"))
+                logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} failed ({type(_e).__name__}: {str(_e)[:120]}) rate_limit={_is_rate}")
+                await _indic_q.put((_cand_idx, "error", None))
+
+        _indic_tasks = [asyncio.create_task(_indic_producer(c, i)) for i, c in enumerate(_indic_candidates)]
+        _race_providers = ", ".join(f"{c['provider']}/{c['model']}" for c in _indic_candidates)
+        logger.info(f"[INDIC] Hedged racing {len(_indic_candidates)} candidates for {response_lang}: {_race_providers}")
+
+        _sarvam_winner = None
+        _sarvam_finished: set = set()
+        _sarvam_race_t0 = time.monotonic()
+        try:
+            _deadline = time.monotonic() + _SARVAM_TTFT_TIMEOUT
+            while _sarvam_winner is None and len(_sarvam_finished) < len(_indic_candidates):
+                _rem = _deadline - time.monotonic()
+                if _rem <= 0:
+                    break
+                try:
+                    _sid, _evt, _data = await asyncio.wait_for(_indic_q.get(), timeout=_rem)
+                except asyncio.TimeoutError:
+                    break
+                if _evt == "chunk":
+                    _sarvam_winner = _sid
+                elif _evt in ("done", "error"):
+                    _sarvam_finished.add(_sid)
+        except Exception:
+            pass
+
+        if _sarvam_winner is not None:
+            _win_cand = _indic_candidates[_sarvam_winner]
+            _ttft_ms = (time.monotonic() - _sarvam_race_t0) * 1000
+            logger.info(f"[INDIC-PERF] TTFT={_ttft_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']} idx={_sarvam_winner}")
+
+            for i, t in enumerate(_indic_tasks):
+                if i != _sarvam_winner:
+                    t.cancel()
+
+            yield _data
+
+            while True:
+                try:
+                    _sid, _evt, _chunk = await asyncio.wait_for(_indic_q.get(), timeout=_SARVAM_SLOT_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning(f"[INDIC] {_win_cand['provider']}/{_win_cand['model']} stalled mid-stream")
+                    break
+                if _sid != _sarvam_winner:
+                    continue
+                if _evt == "chunk":
+                    yield _chunk
+                else:
+                    break
+
+            _total_ms = (time.monotonic() - _sarvam_race_t0) * 1000
+            logger.info(f"[INDIC-PERF] Total={_total_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']}")
+
+            for t in _indic_tasks:
+                t.cancel()
+            for t in _indic_tasks:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            yield f"data: {json.dumps({'__provider': _win_cand['provider']})}\n\n"
+        else:
+            for t in _indic_tasks:
+                t.cancel()
+            for t in _indic_tasks:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+            logger.warning(f"[INDIC] All {len(_indic_candidates)} candidates failed/timed out")
+            yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
+        return
+
+    # ── All other models: single provider ───────────────────────────────────────
+    try:
+        _chunk_n = 0
+        async for chunk in _emit_tokens(_stream_from_provider(provider, key, use_model)):
+            if _chunk_n == 0:
+                _ttft_ms = (time.monotonic() - _stream_t0) * 1000
+                logger.info(f"[EN-PERF] TTFT={_ttft_ms:.0f}ms model={use_model} provider={provider}")
+            _chunk_n += 1
+            yield chunk
+        _total_ms = (time.monotonic() - _stream_t0) * 1000
+        logger.info(f"[EN-PERF] Total={_total_ms:.0f}ms chunks={_chunk_n} model={use_model} provider={provider}")
+        yield f"data: {json.dumps({'__provider': provider})}\n\n"
+    except HTTPException as http_err:
+        yield f"data: {json.dumps({'error': str(http_err.detail)})}\n\n"
+    except Exception as e:
+        logger.error(f"LLM streaming error: {type(e).__name__}: {str(e)[:200]}")
+        yield f"data: {json.dumps({'error': 'AI service temporarily unavailable'})}\n\n"
+, '', result, flags=re.DOTALL).strip()
+
+    # ── Populate cache for future hits ──────────────────────────────────────
+    if result:
+        await ai_cache.aset(cache_key, result, saved_ms=duration_ms)
+        logger.info(f"sarvam_cache SET model={model} key={cache_key[:12]}… duration_ms={duration_ms:.0f}")
+
+    return result
+
+def _cf_cache_headers() -> dict:
+    # Delegates to config.byok_headers() which returns:
+    #   cf-aig-byok-key:default   — CF substitutes the stored BYOK key upstream
+    #   cf-aig-cache-ttl:<N>      — cache TTL hint
+    #   cf-aig-authorization:…    — only when Authenticated Gateway mode is on
+    # Returns {} when the gateway is down — callers should raise or continue
+    # without the caching hint. With BYOK active the placeholder api_key in
+    # the openai client is ignored by CF; the stored BYOK key is used instead.
+    return byok_headers()
+
+def _is_cf_connection_error(exc: Exception) -> bool:
+    err = str(exc).lower()
+    return "connect" in err or "timeout" in err or "unreachable" in err or "dns" in err
+
+def _handle_cf_connection_error(exc: Exception) -> None:
+    if _is_cf_connection_error(exc):
+        mark_cf_gateway_down()
+        logger.warning(f"Cloudflare AI Gateway connection error — falling back to direct URLs for 5 min: {type(exc).__name__}")
+
+def _handle_cf_gateway_auth_error(exc: Exception) -> None:
+    mark_cf_gateway_down()
+    logger.warning(f"Cloudflare AI Gateway 401 auth error — falling back to direct URLs for 5 min: {type(exc).__name__}: {str(exc)[:200]}")
+
+async def _call_gemini(messages: list, api_key: str, model: str, max_tokens: int) -> str:
+    """Non-streaming call to Google Gemini via its OpenAI-compatible endpoint."""
+    direct_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    base = get_provider_base_url("gemini") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        resp = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            extra_headers=_cf_cache_headers() or None,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_openai_compat(messages: list, api_key: str, model: str, max_tokens: int, provider: str, fallback_base: str) -> str:
+    """Non-streaming call via an OpenAI-compatible provider (OpenAI, xAI, Fireworks)."""
+    base = get_provider_base_url(provider) or fallback_base
+    client = _get_oai_client(api_key, base)
+    try:
+        resp = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            extra_headers=_cf_cache_headers() or None,
+        )
+    except _oai.APIConnectionError as e:
+        if base != fallback_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != fallback_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_cerebras(messages: list, api_key: str, model: str, max_tokens: int) -> str:
+    base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
+    client = _get_oai_client(api_key, base)
+    resp = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+    )
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_single_provider(messages: list, provider: str, api_key: str, model: str, max_tokens: int) -> str:
+    max_tokens = _clamp_max_tokens(model, max_tokens)
+    if provider == "sarvam":
+        return await _call_sarvam_llm(messages, api_key, model, max_tokens)
+    if provider == "gemini":
+        return await _call_gemini(messages, api_key, model, max_tokens)
+    if provider == "cerebras":
+        return await _call_cerebras(messages, api_key, model, max_tokens)
+    if provider == "groq":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "groq", "https://api.groq.com/openai/v1")
+    if provider == "xai":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "xai", "https://api.x.ai/v1")
+    if provider == "openrouter":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "openrouter", "https://openrouter.ai/api/v1")
+
+    system_msg = ""
+    user_msg = ""
+    for m in messages:
+        if m["role"] == "system":
+            system_msg = m["content"]
+        elif m["role"] == "user":
+            user_msg = m["content"]
+
+    chat = LlmChat(
+        api_key=api_key,
+        session_id=str(uuid.uuid4()),
+        system_message=system_msg or "You are a helpful AI tutor.",
+    ).with_model(provider, model)
+
+    response = await chat.send_message(UserMessage(text=user_msg))
+    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+    return response
+
+async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 1024, provider_list=None) -> str:
+    import time as _t
+    # Wall-clock start of the whole primary-rotation loop. Used so the
+    # Workers AI fallback path (Task #636) can attribute the *real*
+    # cumulative primary latency (instead of 0) when we eventually give
+    # up and call the edge.
+    _loop_t0 = _t.perf_counter()
+    providers = _LLM_PROVIDERS if provider_list is None else provider_list
+    use_model = _MODEL_ALIAS_MAP.get(model or LLM_MODEL, model or LLM_MODEL)
+    primary_provider, primary_key = _resolve_provider_for_model(use_model, providers)
+
+    if not primary_key and not providers:
+        raise HTTPException(status_code=503, detail="LLM API key not configured")
+
+    tried: set = set()
+    last_err = None
+
+    _is_content = provider_list is _LLM_PROVIDERS_CONTENT
+    _is_chat = provider_list is _LLM_PROVIDERS_CHAT
+    _PROVIDER_TIMEOUT = 30.0 if _is_content else (4.0 if _is_chat else 6.0)
+
+    provider, key = primary_provider, primary_key
+    try_model = _safe_model_for_provider(use_model, provider, providers)
+    if try_model != use_model:
+        logger.info(f"Model '{use_model}' not compatible with {provider} → using '{try_model}'")
+    try:
+        tried.add((provider, try_model, id(key) if key else 0))
+        _t0 = _t.perf_counter()
+        result = await asyncio.wait_for(
+            _call_single_provider(messages, provider, key, try_model, max_tokens),
+            timeout=_PROVIDER_TIMEOUT,
+        )
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        tok = len(result.split())
+        _record_llm_call(provider, try_model, _dur, True, tok, False)
+        logger.info(f"llm_call provider={provider} model={try_model} duration_ms={_dur} tokens_approx={tok}")
+        return LlmResult(result, provider=provider)
+    except asyncio.TimeoutError:
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        _record_llm_call(provider, try_model, _dur, False, 0, False, "Timeout")
+        last_err = TimeoutError(f"{provider}/{try_model} timed out after {_PROVIDER_TIMEOUT}s")
+        logger.warning(f"LLM primary TIMEOUT ({provider}/{try_model}): {_dur}ms > {_PROVIDER_TIMEOUT}s limit")
+    except Exception as e:
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        _record_llm_call(provider, try_model, _dur, False, 0, False, type(e).__name__)
+        last_err = e
+        logger.warning(f"LLM primary failed ({provider}/{try_model}): {type(e).__name__}: {str(e)[:150]}")
+
+    for fallback in providers:
+        fb_model = fallback["default_model"]
+        fb_key_id = id(fallback["key"]) if fallback.get("key") else 0
+        if (fallback["provider"], fb_model, fb_key_id) in tried:
+            continue
+        tried.add((fallback["provider"], fb_model, fb_key_id))
+        try:
+            _t0 = _t.perf_counter()
+            result = await asyncio.wait_for(
+                _call_single_provider(messages, fallback["provider"], fallback["key"], fb_model, max_tokens),
+                timeout=_PROVIDER_TIMEOUT,
+            )
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            tok = len(result.split())
+            _record_llm_call(fallback["provider"], fb_model, _dur, True, tok, True)
+            logger.info(f"llm_call provider={fallback['provider']} model={fb_model} duration_ms={_dur} tokens_approx={tok} fallback=true")
+            return LlmResult(result, provider=fallback["provider"])
+        except asyncio.TimeoutError:
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, "Timeout")
+            last_err = TimeoutError(f"{fallback['provider']}/{fb_model} timed out after {_PROVIDER_TIMEOUT}s")
+            logger.warning(f"LLM fallback TIMEOUT ({fallback['provider']}/{fb_model}): {_dur}ms > {_PROVIDER_TIMEOUT}s limit")
+        except Exception as e:
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, type(e).__name__)
+            last_err = e
+            logger.warning(f"LLM fallback failed ({fallback['provider']}/{fb_model}): {type(e).__name__}: {str(e)[:150]}")
+
+    # Task #636 — last-resort Workers AI fallback. Only reached after every
+    # configured primary+fallback Cerebras/Gemini/etc provider has failed.
+    # Policy is strict (timeout/5xx/429/quota only) so 4xx bad-input bugs
+    # still surface as 503 instead of being silently masked by a different
+    # model's looser parser.
+    try:
+        from providers import workers_ai as _wai
+        if _wai.is_enabled("chat") and last_err is not None and _wai.should_fallback(last_err):
+            # Real cumulative primary-loop latency (all rotations combined),
+            # so the admin panel and structured logs attribute the actual
+            # wait the user incurred before we gave up on the primaries.
+            _primary_total_ms = int((_t.perf_counter() - _loop_t0) * 1000)
+            _t0 = _t.perf_counter()
+            ok, value, label = await _wai.attempt_fallback(
+                "chat", last_err, _primary_total_ms,
+                lambda: _wai.call_chat(messages, max_tokens=max_tokens, temperature=0.3),
+            )
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            if ok and isinstance(value, str) and value:
+                reason = _wai.classify_primary_error(last_err)
+                _record_llm_call("workers-ai", "llama-3.1-8b-instruct", _dur, True,
+                                 len(value.split()), True)
+                logger.info(
+                    f"llm_call provider=workers-ai model=llama-3.1-8b-instruct "
+                    f"duration_ms={_dur} fallback=true reason={reason}"
+                )
+                return LlmResult(value, provider="workers-ai", fallback_reason=reason)
+    except Exception as _wai_err:  # noqa: BLE001
+        logger.warning(f"[workers-ai] chat fallback skipped: {type(_wai_err).__name__}: {str(_wai_err)[:150]}")
+
+    logger.error(f"All LLM providers exhausted. Last error: {last_err}")
+    raise HTTPException(status_code=503, detail="AI service temporarily unavailable. Please try again.")
+
+async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048) -> str:
+    """Smart-batched LLM call: deduplicates identical requests, limits concurrency.
+    Uses all providers including Emergent (admin content generation)."""
+    return await _llm_batcher.call(messages, model, max_tokens)
+
+_LLM_PROVIDERS_CONTENT: list[dict] = []
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "qwen-3-235b-a22b-instruct-2507"})
+if _SARVAM_LLM_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+if _GEMINI_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
+if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
+
+logger.info(
+    f"Admin content providers (quality-first order): "
+    f"{[p['provider'] + '/' + p['default_model'] for p in _LLM_PROVIDERS_CONTENT]}"
+)
+
+async def call_llm_api_content(messages: list, model: str = None, max_tokens: int = 3072) -> str:
+    """LLM call for admin content generation — Cerebras preferred (qwen-3-235b, fast + high quality),
+    Sarvam secondary (sarvam-m), Gemini 2.5 Flash last resort.
+    Uses dedicated content batcher with 300ms batch window (vs 5ms for chat).
+    Retries with exponential backoff instead of instant failover."""
+    if model is None and _LLM_PROVIDERS_CONTENT:
+        model = _LLM_PROVIDERS_CONTENT[0]["default_model"]
+    return await _content_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CONTENT, use_admin_sem=True)
+
+
+async def call_llm_api_content_with_retry(
+    messages: list, model: str = None, max_tokens: int = 3072,
+    validate_fn=None,
+) -> str:
+    """Content LLM call with retry-with-backoff and optional output validation.
+    
+    validate_fn: optional callable(result_str) -> bool. If it returns False,
+    the result is treated as a failure and retried.
+    """
+    last_err = None
+    for attempt in range(_CONTENT_RETRY_MAX):
+        try:
+            result = await call_llm_api_content(messages, model, max_tokens)
+            if validate_fn is not None and not validate_fn(result):
+                logger.warning(
+                    f"Content LLM output failed validation (attempt {attempt + 1}/{_CONTENT_RETRY_MAX})"
+                )
+                last_err = ValueError("Output failed validation")
+                if attempt < _CONTENT_RETRY_MAX - 1:
+                    backoff = _CONTENT_RETRY_BACKOFF[min(attempt, len(_CONTENT_RETRY_BACKOFF) - 1)]
+                    logger.info(f"Content retry backoff: waiting {backoff}s before attempt {attempt + 2}")
+                    await asyncio.sleep(backoff)
+                continue
+            return result
+        except Exception as e:
+            last_err = e
+            logger.warning(
+                f"Content LLM call failed (attempt {attempt + 1}/{_CONTENT_RETRY_MAX}): "
+                f"{type(e).__name__}: {str(e)[:150]}"
+            )
+            if attempt < _CONTENT_RETRY_MAX - 1:
+                backoff = _CONTENT_RETRY_BACKOFF[min(attempt, len(_CONTENT_RETRY_BACKOFF) - 1)]
+                logger.info(f"Content retry backoff: waiting {backoff}s before attempt {attempt + 2}")
+                await asyncio.sleep(backoff)
+    raise last_err or HTTPException(status_code=503, detail="Content generation failed after retries")
+
+async def call_llm_api_chat(messages: list, model: str = None, max_tokens: int = 2048) -> str:
+    """LLM call for student chat — excludes Emergent provider (admin-only)."""
+    return await _llm_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CHAT)
+
+
+_THINK_BUDGET_HINT = "/think in one sentence. Answer immediately.\n"
+
+def _inject_think_budget(messages: list) -> list:
+    """Prepend a concise reasoning directive to the system message so sarvam-m
+    spends fewer tokens in its <think> block, reducing TTFT significantly."""
+    out = []
+    injected = False
+    for m in messages:
+        if m.get("role") == "system" and not injected:
+            out.append({**m, "content": _THINK_BUDGET_HINT + m["content"]})
+            injected = True
+        else:
+            out.append(m)
+    if not injected:
+        out.insert(0, {"role": "system", "content": _THINK_BUDGET_HINT})
+    return out
+
+async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: int, *, response_lang: str = ""):
+    """Token-by-token SSE streaming from Sarvam — reuses persistent sarvam_llm_client (zero TCP overhead).
+    For Indic languages: skips think budget injection and think buffer to reduce TTFT.
+    For English: adds SARVAM_THINK_BUFFER so <think> reasoning never crowds out the answer budget.
+    Falls back to direct client if CF gateway connection fails.
+    """
+    _indic = _is_indic_lang(response_lang)
+    if _indic:
+        api_max = max_tokens + 100
+        patched = [dict(m) for m in messages]
+        if patched and patched[0].get("role") == "system":
+            patched[0]["content"] = (
+                "CRITICAL: Do NOT use <think> tags. Do NOT write internal thoughts. "
+                "Do NOT start with 'Okay' or 'Let me'. "
+                "Reply DIRECTLY in Assamese (অসমীয়া). Start your answer immediately.\n"
+                "STRICT LANGUAGE RULES:\n"
+                "- Every running word MUST be in Assamese script. NO mid-sentence English words.\n"
+                "- NEVER emit partial English fragments such as 'me uses', 'terms', 'ssible',\n"
+                "  'ble', 'tion', 'ssing'. If you start a word in English, you MUST switch\n"
+                "  back to Assamese for the rest of that sentence.\n"
+                "- Latin script is allowed ONLY for: pure numbers/dates, scientific units\n"
+                "  (cm, kg, Hz, °C, eV…), math symbols/equations, code, URLs, well-known\n"
+                "  proper nouns and acronyms (AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
+                "- For everyday nouns/verbs, use the Assamese word — do NOT fall back to English.\n"
+                "BAD vs GOOD examples (follow the pattern, do not copy text):\n"
+                "  BAD : 'উৰুকা me uses ssible terms চমুকৈ ক'লে…'\n"
+                "  GOOD: 'উৰুকা চমুকৈ ক'লে অসমৰ এক প্ৰিয় উৎসৱ।'\n"
+                "  BAD : 'জল 100°C ত boil হয়।'\n"
+                "  GOOD: 'পানী 100°C ত উতলে।'\n"
+                "  BAD : 'Newton ৰ first law explains inertia।'\n"
+                "  GOOD: 'Newton ৰ গতিৰ প্ৰথম সূত্ৰে জড়তা ব্যাখ্যা কৰে।'\n"
+            ) + patched[0]["content"]
+        logger.info(f"[SARVAM-INDIC] No-think mode for {response_lang} — model={model}, api_max={api_max}")
+    else:
+        api_max = max_tokens + SARVAM_THINK_BUFFER
+        patched = _inject_think_budget(messages)
+    _SARVAM_LANG_CODE_MAP = {"as": "as-IN"}
+    payload = {
+        "model": model,
+        "messages": patched,
+        "max_tokens": api_max,
+        "temperature": 0.05 if _indic else 0.1,
+        "top_p": 0.9 if _indic else 0.95,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+        "stream": True,
+    }
+    if _indic:
+        payload["thinking"] = {"enabled": False}
+        if response_lang in _SARVAM_LANG_CODE_MAP:
+            payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
+    elif response_lang in _SARVAM_LANG_CODE_MAP:
+        payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
+    client = _pick_sarvam_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Sarvam LLM client not initialised")
+
+    async def _do_stream(c):
+        async with c.stream("POST", "/v1/chat/completions", json=payload) as resp:
+            if resp.status_code >= 400:
+                body = await resp.aread()
+                logger.error(f"Sarvam {resp.status_code} error body: {body.decode()[:500]}")
+                resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                raw = line[5:].strip()
+                if raw == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(raw)
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
+                    token = delta.get("content") or ""
+                    if token:
+                        yield token
+                except Exception:
+                    continue
+
+    try:
+        async for token in _do_stream(client):
+            yield token
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        if sarvam_llm_client_direct is not None and client is not sarvam_llm_client_direct:
+            _handle_cf_connection_error(e)
+            async for token in _do_stream(sarvam_llm_client_direct):
+                yield token
+        else:
+            raise
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401 and sarvam_llm_client_direct is not None and client is not sarvam_llm_client_direct:
+            _handle_cf_gateway_auth_error(e)
+            async for token in _do_stream(sarvam_llm_client_direct):
+                yield token
+        else:
+            raise
+
+async def _stream_gemini(messages: list, api_key: str, model: str, max_tokens: int):
+    """Token-by-token streaming from Google Gemini via its OpenAI-compatible endpoint."""
+    direct_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    base = get_provider_base_url("gemini") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_vertex_gemini(messages: list, model: str, max_tokens: int):
+    """Token-by-token streaming from Vertex AI Gemini Flash (Task #607).
+
+    Uses google-auth + Vertex `streamGenerateContent` REST endpoint.
+    Raises on misconfiguration / network errors so the caller can fall
+    back to the legacy hedged SLM pool.
+    """
+    async for token in _vertex_chat.stream_chat(
+        messages, model=model, max_tokens=max_tokens, temperature=0.1,
+    ):
+        yield token
+
+
+async def _stream_cerebras(messages: list, api_key: str, model: str, max_tokens: int):
+    base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
+    client = _get_oai_client(api_key, base)
+    stream = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+    )
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_xai(messages: list, api_key: str, model: str, max_tokens: int):
+    """Token-by-token streaming from xAI Grok via its OpenAI-compatible endpoint."""
+    direct_base = "https://api.x.ai/v1"
+    base = get_provider_base_url("xai") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_openai_compat(messages: list, api_key: str, model: str, max_tokens: int, provider: str, fallback_base: str):
+    """Token-by-token streaming from any OpenAI-compatible provider."""
+    base = get_provider_base_url(provider) or fallback_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != fallback_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != fallback_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_bedrock(messages: list, model: str, max_tokens: int):
+    """Token-by-token streaming from Amazon Bedrock via Converse streaming API.
+    boto3 is synchronous — runs in a thread pool; tokens passed back via asyncio.Queue.
+    Supports Amazon Nova family (nova-micro, nova-lite, nova-pro) and any Converse-compatible model.
+    """
+    if not _AWS_ACCESS_KEY or not _AWS_SECRET_KEY:
+        raise ValueError("AWS credentials not configured (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)")
+
+    # Convert OpenAI-format messages to Bedrock Converse format
+    system_parts = []
+    converse_messages = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if role == "system":
+            system_parts.append({"text": content})
+        else:
+            converse_messages.append({"role": role, "content": [{"text": content}]})
+
+    loop = asyncio.get_event_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def _sync_stream():
+        try:
+            import boto3 as _boto3
+            client = _boto3.client(
+                "bedrock-runtime",
+                region_name=_AWS_REGION,
+                aws_access_key_id=_AWS_ACCESS_KEY,
+                aws_secret_access_key=_AWS_SECRET_KEY,
+            )
+            kwargs = dict(
+                modelId=model,
+                messages=converse_messages,
+                inferenceConfig={"maxTokens": max_tokens, "temperature": 0.1},
+            )
+            if system_parts:
+                kwargs["system"] = system_parts
+            resp = client.converse_stream(**kwargs)
+            for event in resp["stream"]:
+                if "contentBlockDelta" in event:
+                    text = event["contentBlockDelta"].get("delta", {}).get("text", "")
+                    if text:
+                        loop.call_soon_threadsafe(queue.put_nowait, text)
+            loop.call_soon_threadsafe(queue.put_nowait, None)   # sentinel → done
+        except Exception as exc:
+            loop.call_soon_threadsafe(queue.put_nowait, exc)
+
+    loop.run_in_executor(None, _sync_stream)
+
+    while True:
+        item = await queue.get()
+        if item is None:
+            break
+        if isinstance(item, Exception):
+            raise item
+        yield item
+
+
+async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int = 2048, intent: str = "", response_lang: str = ""):
+    """
+    Real token-by-token streaming from the LLM provider.
+    Uses native streaming APIs for instant first-token delivery.
+    Supports: Sarvam, Groq, Fireworks, Gemini, Cerebras, xAI, Bedrock.
+    'openai/gpt-oss-20b' triggers the smart SLM pool (Fireworks/Groq/Cerebras/Gemini).
+    When response_lang is an Indic code (as/hi/etc), optimized Sarvam routing is applied.
+    """
+    _indic_mode = _is_indic_lang(response_lang)
+    _stream_t0 = time.monotonic()
+
+    if _indic_mode:
+        _resolved_indic_model = None
+        for _pref_model in _SARVAM_INDIC_MODEL_PREFERENCE:
+            _prov, _pkey = _resolve_provider_for_model(_pref_model, _LLM_PROVIDERS)
+            if _prov == "sarvam" and _pkey:
+                _resolved_indic_model = _pref_model
+                break
+        if _resolved_indic_model:
+            model = _resolved_indic_model
+            logger.info(f"[INDIC] Auto-selected Sarvam model '{model}' for {response_lang} response")
+        else:
+            logger.warning(f"[INDIC] No Sarvam model available from preference chain, using default")
+
+    use_model_raw = model or LLM_MODEL
+
+    # ── Vertex AI Gemini Flash fast-path (Task #607) ──────────────────────────
+    # When the requested model resolves to Vertex Gemini Flash, stream through
+    # Vertex AI's REST endpoint directly. On any error before the first token
+    # is delivered, automatically fall back to the legacy SLM hedged pool by
+    # re-routing through the standard resolution path below.
+    # Task #628 — Indic (Assamese) admin toggle: when the admin has
+    # flipped the Indic provider to "vertex" AND Vertex is configured,
+    # route Assamese chat through the same Vertex fast-path used for
+    # English below. The leak sanitiser downstream still runs on the
+    # emitted content, so stray English words are cleaned regardless
+    # of provider. On pre-first-token Vertex failure we fall through
+    # to the legacy Sarvam hedged pool below (NOT the English SLM
+    # pool) to preserve Assamese quality.
+    _indic_vertex_active = False
+    if _indic_mode:
+        try:
+            from lang_sanitizer import get_indic_provider as _get_indic_provider
+            _indic_provider_pref = _get_indic_provider()
+        except Exception:
+            _indic_provider_pref = "sarvam"
+        if _indic_provider_pref == "vertex" and _vertex_chat.is_configured():
+            _indic_vertex_active = True
+
+    _use_vertex_fastpath = (
+        (use_model_raw == "vertex/gemini-flash" and not _indic_mode)
+        or _indic_vertex_active
+    )
+    _vertex_fallback_target = (
+        # Indic fallback uses the Sarvam hedged pool (preserves Assamese
+        # quality); English fallback uses the SLM pool.
+        "sarvam-m" if _indic_vertex_active else "openai/gpt-oss-20b"
+    )
+    _vertex_metric_bucket = "vertex_gemini_indic" if _indic_vertex_active else "vertex_gemini"
+
+    if _use_vertex_fastpath:
+        if not _vertex_chat.is_configured():
+            logger.warning("vertex/gemini-flash requested but VERTEX_PROJECT_ID is not set — falling back to legacy SLM pool")
+            use_model_raw = _vertex_fallback_target
+        else:
+            _vertex_first_token = False
+            _vertex_t0 = time.monotonic()
+            try:
+                _mt_vx = _clamp_max_tokens(VERTEX_GEMINI_MODEL, max_tokens)
+                _vx_batch = ""
+                _VX_BATCH_SIZE = 2
+                # For Indic mode, prepend the same strict-Assamese system
+                # preface used by `_stream_sarvam` so Gemini commits to
+                # Assamese script from the first token and we don't rely
+                # on the sanitizer to clean up provider-level leakage.
+                _vx_messages = messages
+                if _indic_vertex_active:
+                    _vx_messages = [dict(m) for m in messages]
+                    _asm_preface = (
+                        "CRITICAL: Reply DIRECTLY in Assamese (অসমীয়া). "
+                        "Do NOT use <think> tags. Do NOT write internal thoughts.\n"
+                        "STRICT LANGUAGE RULES:\n"
+                        "- Every running word MUST be in Assamese script. "
+                        "NO mid-sentence English words.\n"
+                        "- Latin script is allowed ONLY for: pure numbers/dates, "
+                        "scientific units (cm, kg, Hz, °C, eV…), math symbols/equations, "
+                        "code, URLs, well-known proper nouns and acronyms "
+                        "(AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
+                        "- For everyday nouns/verbs, use the Assamese word — "
+                        "do NOT fall back to English.\n\n"
+                    )
+                    if _vx_messages and _vx_messages[0].get("role") == "system":
+                        _vx_messages[0]["content"] = _asm_preface + _vx_messages[0]["content"]
+                    else:
+                        _vx_messages.insert(0, {"role": "system", "content": _asm_preface})
+                async for token in _stream_vertex_gemini(_vx_messages, VERTEX_GEMINI_MODEL, _mt_vx):
+                    if not _vertex_first_token:
+                        _ttft_ms = (time.monotonic() - _vertex_t0) * 1000
+                        logger.info(f"[VERTEX-PERF] TTFT={_ttft_ms:.0f}ms model={VERTEX_GEMINI_MODEL} indic={_indic_vertex_active}")
+                        _vertex_first_token = True
+                    _vx_batch += token
+                    if len(_vx_batch) >= _VX_BATCH_SIZE:
+                        yield f"data: {json.dumps({'content': _vx_batch})}\n\n"
+                        _vx_batch = ""
+                if _vx_batch:
+                    yield f"data: {json.dumps({'content': _vx_batch})}\n\n"
+                if _vertex_first_token:
+                    _total_ms = (time.monotonic() - _vertex_t0) * 1000
+                    logger.info(f"[VERTEX-PERF] Total={_total_ms:.0f}ms model={VERTEX_GEMINI_MODEL} indic={_indic_vertex_active}")
+                    try:
+                        from chat_speedup_metrics import record_provider_call as _rec_prov
+                        _rec_prov(_vertex_metric_bucket, ttfb_ms=_ttft_ms, total_ms=_total_ms)
+                    except Exception:
+                        pass
+                    yield f"data: {json.dumps({'__provider': _vertex_metric_bucket})}\n\n"
+                    return
+                # Stream completed without ever yielding a token — treat as
+                # failure and fall through to legacy.
+                logger.warning("Vertex Gemini Flash returned empty stream — falling back to legacy pool")
+            except Exception as _vx_err:
+                if _vertex_first_token:
+                    # We already started streaming to the client; we can't
+                    # silently restart. Emit error and stop.
+                    logger.warning(f"Vertex Gemini Flash mid-stream error: {type(_vx_err).__name__}: {str(_vx_err)[:200]}")
+                    yield f"data: {json.dumps({'error': 'AI service interrupted'})}\n\n"
+                    return
+                logger.warning(f"Vertex Gemini Flash failed before first token: {type(_vx_err).__name__}: {str(_vx_err)[:200]} — falling back to legacy pool")
+            # Fall back: rewrite the requested model to the legacy default
+            # and continue with the standard resolution path below.
+            try:
+                from chat_speedup_metrics import record_provider_fallback as _rec_fb
+                _rec_fb(_vertex_metric_bucket, _vertex_fallback_target)
+            except Exception:
+                pass
+            use_model_raw = _vertex_fallback_target
+            model = use_model_raw
+            _indic_vertex_active = False  # Fallback → resolve normally
+
+    use_model_resolved = _MODEL_ALIAS_MAP.get(use_model_raw, use_model_raw)
+    _prov_list = _LLM_PROVIDERS if _indic_mode else _LLM_PROVIDERS_CHAT
+    provider, key = _resolve_provider_for_model(use_model_resolved, _prov_list)
+    if use_model_raw != use_model_resolved:
+        logger.info(f"Model alias '{use_model_raw}' → '{use_model_resolved}' ({provider})")
+    use_model = _safe_model_for_provider(use_model_resolved, provider, _prov_list)
+    if use_model != use_model_resolved:
+        logger.info(f"Model '{use_model_resolved}' not compatible with {provider} → using '{use_model}'")
+
+    if not key and provider != "sarvam":
+        yield f"data: {json.dumps({'error': 'LLM API key not configured'})}\n\n"
+        return
+
+    in_think = False
+    buf = ""
+
+    _SSE_BATCH = 2    # flush every 2 chars — near-instant token delivery
+
+    async def _emit_tokens(token_source):
+        nonlocal in_think, buf
+        import re as _re
+        _CLOSE_KEEP = len('</think>') - 1   # 7
+        think_done  = False
+        batch       = ""
+        _visible_text = ""
+        _think_buf  = []
+
+        async for token in token_source:
+            if think_done:
+                cleaned = _re.sub(r'<think>[\s\S]*?</think>', '', token)
+                if cleaned:
+                    batch += cleaned
+                    if len(batch) >= _SSE_BATCH:
+                        _visible_text += batch
+                        yield f"data: {json.dumps({'content': batch})}\n\n"
+                        batch = ""
+                continue
+
+            buf += token
+            while buf:
+                if in_think:
+                    close_idx = buf.find('</think>')
+                    if close_idx != -1:
+                        _think_buf.append(buf[:close_idx])
+                        buf = buf[close_idx + 8:]
+                        in_think   = False
+                        think_done = True
+                        if buf:
+                            batch += buf
+                            buf = ""
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                        break
+                    else:
+                        if len(buf) > _CLOSE_KEEP:
+                            _think_buf.append(buf[:-_CLOSE_KEEP])
+                            buf = buf[-_CLOSE_KEEP:]
+                        break
+                else:
+                    open_idx = buf.find('<think>')
+                    if open_idx != -1:
+                        before = buf[:open_idx]
+                        if before:
+                            batch += before
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                        buf      = buf[open_idx + 7:]
+                        in_think = True
+                    elif buf.endswith(('<', '<t', '<th', '<thi', '<thin', '<think')):
+                        partial_start = buf.rfind('<')
+                        candidate     = buf[partial_start:]
+                        if '<think>'[:len(candidate)] == candidate:
+                            before = buf[:partial_start]
+                            if before:
+                                batch += before
+                                if len(batch) >= _SSE_BATCH:
+                                    _visible_text += batch
+                                    yield f"data: {json.dumps({'content': batch})}\n\n"
+                                    batch = ""
+                            buf = candidate
+                            break
+                        else:
+                            batch += buf
+                            buf    = ""
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                    else:
+                        batch += buf
+                        buf    = ""
+                        if len(batch) >= _SSE_BATCH:
+                            _visible_text += batch
+                            yield f"data: {json.dumps({'content': batch})}\n\n"
+                            batch = ""
+                        break
+
+        if batch and not in_think:
+            _visible_text += batch
+            yield f"data: {json.dumps({'content': batch})}\n\n"
+        if buf and not in_think:
+            _visible_text += buf
+            yield f"data: {json.dumps({'content': buf})}\n\n"
+
+        if not _visible_text.strip() and (in_think or think_done):
+            fallback_text = "".join(_think_buf)
+            if in_think and buf:
+                fallback_text += buf
+            fallback_text = _re.sub(r'</?think\s*/?>', '', fallback_text).strip()
+            fallback_text = _re.sub(r'</?\w*$', '', fallback_text).strip()
+            if fallback_text and len(fallback_text) > 5:
+                logger.info(f"Think-block fallback: emitting {len(fallback_text)} chars of think content as response")
+                yield f"data: {json.dumps({'content': fallback_text})}\n\n"
+
+    async def _stream_from_provider(p_name: str, p_key: str, p_model: str):
+        """Yield raw tokens from a provider. Raises on failure."""
+        _mt = _clamp_max_tokens(p_model, max_tokens)
+        if p_name == "sarvam":
+            _input_est = sum(len(m.get("content", "")) for m in messages) // 4
+            _think_overhead = 0 if _indic_mode else SARVAM_THINK_BUFFER
+            _sarvam_cap = max(256, 7192 - _input_est - _think_overhead - 100)
+            _mt = min(_mt, _sarvam_cap)
+            async for token in _stream_sarvam(messages, p_key, p_model, _mt, response_lang=response_lang):
+                yield token
+        elif p_name == "gemini":
+            logger.info(f"LLM stream: provider=gemini, model={p_model}")
+            async for token in _stream_gemini(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "cerebras":
+            logger.info(f"LLM stream: provider=cerebras, model={p_model}")
+            async for token in _stream_cerebras(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "groq":
+            logger.info(f"LLM stream: provider=groq, model={p_model}")
+            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "groq", "https://api.groq.com/openai/v1"):
+                yield token
+        elif p_name == "xai":
+            logger.info(f"LLM stream: provider=xai, model={p_model}")
+            async for token in _stream_xai(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "openrouter":
+            logger.info(f"LLM stream: provider=openrouter, model={p_model}")
+            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "openrouter", "https://openrouter.ai/api/v1"):
+                yield token
+        elif p_name == "bedrock":
+            logger.info(f"LLM stream: provider=bedrock, model={p_model}")
+            async for token in _stream_bedrock(messages, p_model, _mt):
+                yield token
+        else:
+            logger.info(f"LLM stream: provider={p_name}, model={p_model}")
+            chat = LlmChat(api_key=p_key or OPENAI_API_KEY, session_id=str(uuid.uuid4())).with_model(p_name, p_model)
+            async for token in chat.stream_messages(messages, max_tokens=_mt):
+                yield token
+
+    # ── Syrabit SLM: concurrent smart pool ──────────────────────────────────────
+    # pick() returns the fastest available slot (by speed tier) with spare capacity.
+    # async with slot["sem"] lets up to max_concurrent requests run in parallel.
+    # Tokens are yielded in real-time as they arrive (true streaming).
+    # TTFT timeout ensures fast failover when a provider is unresponsive.
+    _SLM_SLOT_TIMEOUT = 0.7    # max seconds between any two tokens mid-stream
+    _SLM_TTFT_TIMEOUT = 0.8    # max seconds to wait for FIRST token from a slot
+
+    _SLM_PROVIDER_MAX_INPUT_CHARS = {
+        "cerebras": 24000,
+        "sarvam": 12000,
+        "groq": 100000,
+        "gemini": 500000,
+        "openrouter": 200000,
+        "openai": 80000,
+        "bedrock": 40000,
+    }
+
+    if use_model_raw == "openai/gpt-oss-20b":
+        _active_pool = _slm_pool
+        _input_chars = sum(len(m.get("content", "")) for m in messages)
+
+        _skipped_slots: set = set()
+        _candidates = []
+        for _ in range(len(_active_pool.all_slots)):
+            slot = _active_pool.pick(_skipped_slots)
+            if slot is None:
+                break
+            p_name = slot["provider"]
+            _max_chars = _SLM_PROVIDER_MAX_INPUT_CHARS.get(p_name, 80000)
+            if _input_chars > _max_chars:
+                logger.info(f"SLM pool: skipping {p_name}/{slot['model']} — input too large ({_input_chars} chars > {_max_chars} limit)")
+                _skipped_slots.add(id(slot))
+                continue
+            _candidates.append(slot)
+            _skipped_slots.add(id(slot))
+            if len(_candidates) >= 2:
+                break
+
+        if _candidates:
+            _effective_ttft = min(1.2, _SLM_TTFT_TIMEOUT + (0.2 if _input_chars > 8000 else 0.0))
+            _hedged_q: asyncio.Queue = asyncio.Queue()
+            _hedged_errors: dict = {}
+
+            async def _hedged_producer(_slot, _slot_idx):
+                _pn, _pk, _pm = _slot["provider"], _slot["key"], _slot["model"]
+                try:
+                    async with _slot["sem"]:
+                        _chunk_count = 0
+                        async for chunk in _emit_tokens(_stream_from_provider(_pn, _pk, _pm)):
+                            _chunk_count += 1
+                            await _hedged_q.put((_slot_idx, "chunk", chunk))
+                        if _chunk_count == 0:
+                            logger.warning(f"SLM hedged: {_pn}/{_pm} 0 chunks")
+                        await _hedged_q.put((_slot_idx, "done", None))
+                except Exception as exc:
+                    _hedged_errors[_slot_idx] = exc
+                    logger.warning(f"SLM hedged: {_pn}/{_pm} error: {type(exc).__name__}: {str(exc)[:200]}")
+                    await _hedged_q.put((_slot_idx, "error", None))
+
+            _hedged_tasks = [asyncio.create_task(_hedged_producer(s, i)) for i, s in enumerate(_candidates)]
+            if len(_candidates) > 1:
+                _race_desc = " vs ".join(f"{s['provider']}/{s['model']}" for s in _candidates)
+                logger.info(f"SLM hedged: racing {_race_desc}")
+
+            _winner = None
+            _finished_slots: set = set()
+            try:
+                _deadline = time.monotonic() + _effective_ttft
+                while _winner is None and len(_finished_slots) < len(_candidates):
+                    _remaining = _deadline - time.monotonic()
+                    if _remaining <= 0:
+                        break
+                    try:
+                        _sid, _evt, _data = await asyncio.wait_for(_hedged_q.get(), timeout=_remaining)
+                    except asyncio.TimeoutError:
+                        break
+                    if _evt == "chunk":
+                        _winner = _sid
+                    elif _evt in ("done", "error"):
+                        _finished_slots.add(_sid)
+                        if _evt == "error":
+                            _slm_pool.mark_err(_candidates[_sid])
+            except Exception:
+                pass
+
+            if _winner is not None:
+                _win_slot = _candidates[_winner]
+                _slm_pool.mark_ok(_win_slot)
+                _win_pname = _win_slot["provider"]
+                _win_model = _win_slot["model"]
+                if len(_candidates) > 1:
+                    logger.info(f"SLM hedged: winner={_win_pname}/{_win_model}")
+
+                for i, t in enumerate(_hedged_tasks):
+                    if i != _winner:
+                        t.cancel()
+
+                yield _data
+
+                _tokens_yielded = 1
+                while True:
+                    try:
+                        _sid, _evt, _chunk = await asyncio.wait_for(_hedged_q.get(), timeout=_SLM_SLOT_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        _slm_pool.mark_err(_win_slot)
+                        logger.warning(f"SLM hedged: {_win_pname}/{_win_model} stalled mid-stream after {_SLM_SLOT_TIMEOUT}s ({_tokens_yielded} tokens yielded)")
+                        break
+                    if _sid != _winner:
+                        continue
+                    if _evt == "chunk":
+                        yield _chunk
+                        _tokens_yielded += 1
+                    else:
+                        if _winner in _hedged_errors and _tokens_yielded <= 1:
+                            _slm_pool.mark_err(_win_slot)
+                        break
+
+                _hedged_tasks[_winner].cancel()
+                for t in _hedged_tasks:
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+                yield f"data: {json.dumps({'__provider': _win_pname})}\n\n"
+                return
+            else:
+                for t in _hedged_tasks:
+                    t.cancel()
+                for t in _hedged_tasks:
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                for i, s in enumerate(_candidates):
+                    if i not in _finished_slots:
+                        _slm_pool.mark_err(s)
+                        logger.warning(f"SLM hedged: {s['provider']}/{s['model']} TTFT timeout after {_effective_ttft}s")
+
+        yield f"data: {json.dumps({'error': 'All AI providers temporarily unavailable'})}\n\n"
+        return
+
+    # ── Indic Sarvam with hedged key racing ─────────────────────────────────────
+    _SARVAM_TTFT_TIMEOUT = 3.0
+    _SARVAM_SLOT_TIMEOUT = 1.2
+    if _indic_mode and provider == "sarvam":
+        _indic_candidates = []
+
+        _sarvam_keys = [p["key"] for p in _prov_list if p["provider"] == "sarvam"]
+        if key not in _sarvam_keys:
+            _sarvam_keys.insert(0, key)
+        _sarvam_keys = list(dict.fromkeys(_sarvam_keys))
+        for _sk in _sarvam_keys:
+            _indic_candidates.append({"provider": "sarvam", "key": _sk, "model": use_model})
+
+        _gemini_keys_for_indic = [p["key"] for p in _LLM_PROVIDERS if p["provider"] == "gemini" and p.get("key")]
+        for _gk in _gemini_keys_for_indic[:1]:
+            _indic_candidates.append({"provider": "gemini", "key": _gk, "model": "gemini-2.5-flash"})
+
+        _indic_q: asyncio.Queue = asyncio.Queue()
+
+        async def _indic_producer(_cand, _cand_idx):
+            _cprov, _ckey, _cmodel = _cand["provider"], _cand["key"], _cand["model"]
+            try:
+                _cn = 0
+                async for chunk in _emit_tokens(_stream_from_provider(_cprov, _ckey, _cmodel)):
+                    _cn += 1
+                    await _indic_q.put((_cand_idx, "chunk", chunk))
+                if _cn == 0:
+                    logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} returned 0 chunks")
+                await _indic_q.put((_cand_idx, "done", None))
+            except Exception as _e:
+                _is_rate = any(s in str(_e).lower() for s in ("429", "rate", "quota", "throttl"))
+                logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} failed ({type(_e).__name__}: {str(_e)[:120]}) rate_limit={_is_rate}")
+                await _indic_q.put((_cand_idx, "error", None))
+
+        _indic_tasks = [asyncio.create_task(_indic_producer(c, i)) for i, c in enumerate(_indic_candidates)]
+        _race_providers = ", ".join(f"{c['provider']}/{c['model']}" for c in _indic_candidates)
+        logger.info(f"[INDIC] Hedged racing {len(_indic_candidates)} candidates for {response_lang}: {_race_providers}")
+
+        _sarvam_winner = None
+        _sarvam_finished: set = set()
+        _sarvam_race_t0 = time.monotonic()
+        try:
+            _deadline = time.monotonic() + _SARVAM_TTFT_TIMEOUT
+            while _sarvam_winner is None and len(_sarvam_finished) < len(_indic_candidates):
+                _rem = _deadline - time.monotonic()
+                if _rem <= 0:
+                    break
+                try:
+                    _sid, _evt, _data = await asyncio.wait_for(_indic_q.get(), timeout=_rem)
+                except asyncio.TimeoutError:
+                    break
+                if _evt == "chunk":
+                    _sarvam_winner = _sid
+                elif _evt in ("done", "error"):
+                    _sarvam_finished.add(_sid)
+        except Exception:
+            pass
+
+        if _sarvam_winner is not None:
+            _win_cand = _indic_candidates[_sarvam_winner]
+            _ttft_ms = (time.monotonic() - _sarvam_race_t0) * 1000
+            logger.info(f"[INDIC-PERF] TTFT={_ttft_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']} idx={_sarvam_winner}")
+
+            for i, t in enumerate(_indic_tasks):
+                if i != _sarvam_winner:
+                    t.cancel()
+
+            yield _data
+
+            while True:
+                try:
+                    _sid, _evt, _chunk = await asyncio.wait_for(_indic_q.get(), timeout=_SARVAM_SLOT_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning(f"[INDIC] {_win_cand['provider']}/{_win_cand['model']} stalled mid-stream")
+                    break
+                if _sid != _sarvam_winner:
+                    continue
+                if _evt == "chunk":
+                    yield _chunk
+                else:
+                    break
+
+            _total_ms = (time.monotonic() - _sarvam_race_t0) * 1000
+            logger.info(f"[INDIC-PERF] Total={_total_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']}")
+
+            for t in _indic_tasks:
+                t.cancel()
+            for t in _indic_tasks:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            yield f"data: {json.dumps({'__provider': _win_cand['provider']})}\n\n"
+        else:
+            for t in _indic_tasks:
+                t.cancel()
+            for t in _indic_tasks:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+            logger.warning(f"[INDIC] All {len(_indic_candidates)} candidates failed/timed out")
+            yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
+        return
+
+    # ── All other models: single provider ───────────────────────────────────────
+    try:
+        _chunk_n = 0
+        async for chunk in _emit_tokens(_stream_from_provider(provider, key, use_model)):
+            if _chunk_n == 0:
+                _ttft_ms = (time.monotonic() - _stream_t0) * 1000
+                logger.info(f"[EN-PERF] TTFT={_ttft_ms:.0f}ms model={use_model} provider={provider}")
+            _chunk_n += 1
+            yield chunk
+        _total_ms = (time.monotonic() - _stream_t0) * 1000
+        logger.info(f"[EN-PERF] Total={_total_ms:.0f}ms chunks={_chunk_n} model={use_model} provider={provider}")
+        yield f"data: {json.dumps({'__provider': provider})}\n\n"
+    except HTTPException as http_err:
+        yield f"data: {json.dumps({'error': str(http_err.detail)})}\n\n"
+    except Exception as e:
+        logger.error(f"LLM streaming error: {type(e).__name__}: {str(e)[:200]}")
+        yield f"data: {json.dumps({'error': 'AI service temporarily unavailable'})}\n\n"
+, '', result, flags=re.DOTALL).strip()
+
+    # ── Populate cache for future hits ──────────────────────────────────────
+    if result:
+        await ai_cache.aset(cache_key, result, saved_ms=duration_ms)
+        logger.info(f"sarvam_cache SET model={model} key={cache_key[:12]}… duration_ms={duration_ms:.0f}")
+
+    return result
+
+def _cf_cache_headers() -> dict:
+    # Delegates to config.byok_headers() which returns:
+    #   cf-aig-byok-key:default   — CF substitutes the stored BYOK key upstream
+    #   cf-aig-cache-ttl:<N>      — cache TTL hint
+    #   cf-aig-authorization:…    — only when Authenticated Gateway mode is on
+    # Returns {} when the gateway is down — callers should raise or continue
+    # without the caching hint. With BYOK active the placeholder api_key in
+    # the openai client is ignored by CF; the stored BYOK key is used instead.
+    return byok_headers()
+
+
+def _is_cf_connection_error(exc: Exception) -> bool:
+    err = str(exc).lower()
+    return "connect" in err or "timeout" in err or "unreachable" in err or "dns" in err
+
+def _handle_cf_connection_error(exc: Exception) -> None:
+    if _is_cf_connection_error(exc):
+        mark_cf_gateway_down()
+        logger.warning(f"Cloudflare AI Gateway connection error — falling back to direct URLs for 5 min: {type(exc).__name__}")
+
+def _handle_cf_gateway_auth_error(exc: Exception) -> None:
+    mark_cf_gateway_down()
+    logger.warning(f"Cloudflare AI Gateway 401 auth error — falling back to direct URLs for 5 min: {type(exc).__name__}: {str(exc)[:200]}")
+
+async def _call_gemini(messages: list, api_key: str, model: str, max_tokens: int) -> str:
+    """Non-streaming call to Google Gemini via its OpenAI-compatible endpoint."""
+    direct_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    base = get_provider_base_url("gemini") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        resp = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            extra_headers=_cf_cache_headers() or None,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_openai_compat(messages: list, api_key: str, model: str, max_tokens: int, provider: str, fallback_base: str) -> str:
+    """Non-streaming call via an OpenAI-compatible provider (OpenAI, xAI, Fireworks)."""
+    base = get_provider_base_url(provider) or fallback_base
+    client = _get_oai_client(api_key, base)
+    try:
+        resp = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            extra_headers=_cf_cache_headers() or None,
+        )
+    except _oai.APIConnectionError as e:
+        if base != fallback_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != fallback_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_cerebras(messages: list, api_key: str, model: str, max_tokens: int) -> str:
+    base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
+    client = _get_oai_client(api_key, base)
+    resp = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+    )
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_single_provider(messages: list, provider: str, api_key: str, model: str, max_tokens: int) -> str:
+    max_tokens = _clamp_max_tokens(model, max_tokens)
+    if provider == "sarvam":
+        return await _call_sarvam_llm(messages, api_key, model, max_tokens)
+    if provider == "gemini":
+        return await _call_gemini(messages, api_key, model, max_tokens)
+    if provider == "cerebras":
+        return await _call_cerebras(messages, api_key, model, max_tokens)
+    if provider == "groq":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "groq", "https://api.groq.com/openai/v1")
+    if provider == "xai":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "xai", "https://api.x.ai/v1")
+    if provider == "openrouter":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "openrouter", "https://openrouter.ai/api/v1")
+
+    system_msg = ""
+    user_msg = ""
+    for m in messages:
+        if m["role"] == "system":
+            system_msg = m["content"]
+        elif m["role"] == "user":
+            user_msg = m["content"]
+
+    chat = LlmChat(
+        api_key=api_key,
+        session_id=str(uuid.uuid4()),
+        system_message=system_msg or "You are a helpful AI tutor.",
+    ).with_model(provider, model)
+
+    response = await chat.send_message(UserMessage(text=user_msg))
+    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+    return response
+
+async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 1024, provider_list=None) -> str:
+    import time as _t
+    # Wall-clock start of the whole primary-rotation loop. Used so the
+    # Workers AI fallback path (Task #636) can attribute the *real*
+    # cumulative primary latency (instead of 0) when we eventually give
+    # up and call the edge.
+    _loop_t0 = _t.perf_counter()
+    providers = _LLM_PROVIDERS if provider_list is None else provider_list
+    use_model = _MODEL_ALIAS_MAP.get(model or LLM_MODEL, model or LLM_MODEL)
+    primary_provider, primary_key = _resolve_provider_for_model(use_model, providers)
+
+    if not primary_key and not providers:
+        raise HTTPException(status_code=503, detail="LLM API key not configured")
+
+    tried: set = set()
+    last_err = None
+
+    _is_content = provider_list is _LLM_PROVIDERS_CONTENT
+    _is_chat = provider_list is _LLM_PROVIDERS_CHAT
+    _PROVIDER_TIMEOUT = 30.0 if _is_content else (4.0 if _is_chat else 6.0)
+
+    provider, key = primary_provider, primary_key
+    try_model = _safe_model_for_provider(use_model, provider, providers)
+    if try_model != use_model:
+        logger.info(f"Model '{use_model}' not compatible with {provider} → using '{try_model}'")
+    try:
+        tried.add((provider, try_model, id(key) if key else 0))
+        _t0 = _t.perf_counter()
+        result = await asyncio.wait_for(
+            _call_single_provider(messages, provider, key, try_model, max_tokens),
+            timeout=_PROVIDER_TIMEOUT,
+        )
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        tok = len(result.split())
+        _record_llm_call(provider, try_model, _dur, True, tok, False)
+        logger.info(f"llm_call provider={provider} model={try_model} duration_ms={_dur} tokens_approx={tok}")
+        return LlmResult(result, provider=provider)
+    except asyncio.TimeoutError:
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        _record_llm_call(provider, try_model, _dur, False, 0, False, "Timeout")
+        last_err = TimeoutError(f"{provider}/{try_model} timed out after {_PROVIDER_TIMEOUT}s")
+        logger.warning(f"LLM primary TIMEOUT ({provider}/{try_model}): {_dur}ms > {_PROVIDER_TIMEOUT}s limit")
+    except Exception as e:
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        _record_llm_call(provider, try_model, _dur, False, 0, False, type(e).__name__)
+        last_err = e
+        logger.warning(f"LLM primary failed ({provider}/{try_model}): {type(e).__name__}: {str(e)[:150]}")
+
+    for fallback in providers:
+        fb_model = fallback["default_model"]
+        fb_key_id = id(fallback["key"]) if fallback.get("key") else 0
+        if (fallback["provider"], fb_model, fb_key_id) in tried:
+            continue
+        tried.add((fallback["provider"], fb_model, fb_key_id))
+        try:
+            _t0 = _t.perf_counter()
+            result = await asyncio.wait_for(
+                _call_single_provider(messages, fallback["provider"], fallback["key"], fb_model, max_tokens),
+                timeout=_PROVIDER_TIMEOUT,
+            )
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            tok = len(result.split())
+            _record_llm_call(fallback["provider"], fb_model, _dur, True, tok, True)
+            logger.info(f"llm_call provider={fallback['provider']} model={fb_model} duration_ms={_dur} tokens_approx={tok} fallback=true")
+            return LlmResult(result, provider=fallback["provider"])
+        except asyncio.TimeoutError:
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, "Timeout")
+            last_err = TimeoutError(f"{fallback['provider']}/{fb_model} timed out after {_PROVIDER_TIMEOUT}s")
+            logger.warning(f"LLM fallback TIMEOUT ({fallback['provider']}/{fb_model}): {_dur}ms > {_PROVIDER_TIMEOUT}s limit")
+        except Exception as e:
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, type(e).__name__)
+            last_err = e
+            logger.warning(f"LLM fallback failed ({fallback['provider']}/{fb_model}): {type(e).__name__}: {str(e)[:150]}")
+
+    # Task #636 — last-resort Workers AI fallback. Only reached after every
+    # configured primary+fallback Cerebras/Gemini/etc provider has failed.
+    # Policy is strict (timeout/5xx/429/quota only) so 4xx bad-input bugs
+    # still surface as 503 instead of being silently masked by a different
+    # model's looser parser.
+    try:
+        from providers import workers_ai as _wai
+        if _wai.is_enabled("chat") and last_err is not None and _wai.should_fallback(last_err):
+            # Real cumulative primary-loop latency (all rotations combined),
+            # so the admin panel and structured logs attribute the actual
+            # wait the user incurred before we gave up on the primaries.
+            _primary_total_ms = int((_t.perf_counter() - _loop_t0) * 1000)
+            _t0 = _t.perf_counter()
+            ok, value, label = await _wai.attempt_fallback(
+                "chat", last_err, _primary_total_ms,
+                lambda: _wai.call_chat(messages, max_tokens=max_tokens, temperature=0.3),
+            )
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            if ok and isinstance(value, str) and value:
+                reason = _wai.classify_primary_error(last_err)
+                _record_llm_call("workers-ai", "llama-3.1-8b-instruct", _dur, True,
+                                 len(value.split()), True)
+                logger.info(
+                    f"llm_call provider=workers-ai model=llama-3.1-8b-instruct "
+                    f"duration_ms={_dur} fallback=true reason={reason}"
+                )
+                return LlmResult(value, provider="workers-ai", fallback_reason=reason)
+    except Exception as _wai_err:  # noqa: BLE001
+        logger.warning(f"[workers-ai] chat fallback skipped: {type(_wai_err).__name__}: {str(_wai_err)[:150]}")
+
+    logger.error(f"All LLM providers exhausted. Last error: {last_err}")
+    raise HTTPException(status_code=503, detail="AI service temporarily unavailable. Please try again.")
+
+async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048) -> str:
+    """Smart-batched LLM call: deduplicates identical requests, limits concurrency.
+    Uses all providers including Emergent (admin content generation)."""
+    return await _llm_batcher.call(messages, model, max_tokens)
+
+_LLM_PROVIDERS_CONTENT: list[dict] = []
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "qwen-3-235b-a22b-instruct-2507"})
+if _SARVAM_LLM_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+if _GEMINI_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
+if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
+
+logger.info(
+    f"Admin content providers (quality-first order): "
+    f"{[p['provider'] + '/' + p['default_model'] for p in _LLM_PROVIDERS_CONTENT]}"
+)
+
+async def call_llm_api_content(messages: list, model: str = None, max_tokens: int = 3072) -> str:
+    """LLM call for admin content generation — Cerebras preferred (qwen-3-235b, fast + high quality),
+    Sarvam secondary (sarvam-m), Gemini 2.5 Flash last resort.
+    Uses dedicated content batcher with 300ms batch window (vs 5ms for chat).
+    Retries with exponential backoff instead of instant failover."""
+    if model is None and _LLM_PROVIDERS_CONTENT:
+        model = _LLM_PROVIDERS_CONTENT[0]["default_model"]
+    return await _content_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CONTENT, use_admin_sem=True)
+
+
+async def call_llm_api_content_with_retry(
+    messages: list, model: str = None, max_tokens: int = 3072,
+    validate_fn=None,
+) -> str:
+    """Content LLM call with retry-with-backoff and optional output validation.
+    
+    validate_fn: optional callable(result_str) -> bool. If it returns False,
+    the result is treated as a failure and retried.
+    """
+    last_err = None
+    for attempt in range(_CONTENT_RETRY_MAX):
+        try:
+            result = await call_llm_api_content(messages, model, max_tokens)
+            if validate_fn is not None and not validate_fn(result):
+                logger.warning(
+                    f"Content LLM output failed validation (attempt {attempt + 1}/{_CONTENT_RETRY_MAX})"
+                )
+                last_err = ValueError("Output failed validation")
+                if attempt < _CONTENT_RETRY_MAX - 1:
+                    backoff = _CONTENT_RETRY_BACKOFF[min(attempt, len(_CONTENT_RETRY_BACKOFF) - 1)]
+                    logger.info(f"Content retry backoff: waiting {backoff}s before attempt {attempt + 2}")
+                    await asyncio.sleep(backoff)
+                continue
+            return result
+        except Exception as e:
+            last_err = e
+            logger.warning(
+                f"Content LLM call failed (attempt {attempt + 1}/{_CONTENT_RETRY_MAX}): "
+                f"{type(e).__name__}: {str(e)[:150]}"
+            )
+            if attempt < _CONTENT_RETRY_MAX - 1:
+                backoff = _CONTENT_RETRY_BACKOFF[min(attempt, len(_CONTENT_RETRY_BACKOFF) - 1)]
+                logger.info(f"Content retry backoff: waiting {backoff}s before attempt {attempt + 2}")
+                await asyncio.sleep(backoff)
+    raise last_err or HTTPException(status_code=503, detail="Content generation failed after retries")
+
+async def call_llm_api_chat(messages: list, model: str = None, max_tokens: int = 2048) -> str:
+    """LLM call for student chat — excludes Emergent provider (admin-only)."""
+    return await _llm_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CHAT)
+
+
+_THINK_BUDGET_HINT = "/think in one sentence. Answer immediately.\n"
+
+def _inject_think_budget(messages: list) -> list:
+    """Prepend a concise reasoning directive to the system message so sarvam-m
+    spends fewer tokens in its <think> block, reducing TTFT significantly."""
+    out = []
+    injected = False
+    for m in messages:
+        if m.get("role") == "system" and not injected:
+            out.append({**m, "content": _THINK_BUDGET_HINT + m["content"]})
+            injected = True
+        else:
+            out.append(m)
+    if not injected:
+        out.insert(0, {"role": "system", "content": _THINK_BUDGET_HINT})
+    return out
+
+async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: int, *, response_lang: str = ""):
+    """Token-by-token SSE streaming from Sarvam — reuses persistent sarvam_llm_client (zero TCP overhead).
+    For Indic languages: skips think budget injection and think buffer to reduce TTFT.
+    For English: adds SARVAM_THINK_BUFFER so <think> reasoning never crowds out the answer budget.
+    Falls back to direct client if CF gateway connection fails.
+    """
+    _indic = _is_indic_lang(response_lang)
+    if _indic:
+        api_max = max_tokens + 100
+        patched = [dict(m) for m in messages]
+        if patched and patched[0].get("role") == "system":
+            patched[0]["content"] = (
+                "CRITICAL: Do NOT use <think> tags. Do NOT write internal thoughts. "
+                "Do NOT start with 'Okay' or 'Let me'. "
+                "Reply DIRECTLY in Assamese (অসমীয়া). Start your answer immediately.\n"
+                "STRICT LANGUAGE RULES:\n"
+                "- Every running word MUST be in Assamese script. NO mid-sentence English words.\n"
+                "- NEVER emit partial English fragments such as 'me uses', 'terms', 'ssible',\n"
+                "  'ble', 'tion', 'ssing'. If you start a word in English, you MUST switch\n"
+                "  back to Assamese for the rest of that sentence.\n"
+                "- Latin script is allowed ONLY for: pure numbers/dates, scientific units\n"
+                "  (cm, kg, Hz, °C, eV…), math symbols/equations, code, URLs, well-known\n"
+                "  proper nouns and acronyms (AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
+                "- For everyday nouns/verbs, use the Assamese word — do NOT fall back to English.\n"
+                "BAD vs GOOD examples (follow the pattern, do not copy text):\n"
+                "  BAD : 'উৰুকা me uses ssible terms চমুকৈ ক'লে…'\n"
+                "  GOOD: 'উৰুকা চমুকৈ ক'লে অসমৰ এক প্ৰিয় উৎসৱ।'\n"
+                "  BAD : 'জল 100°C ত boil হয়।'\n"
+                "  GOOD: 'পানী 100°C ত উতলে।'\n"
+                "  BAD : 'Newton ৰ first law explains inertia।'\n"
+                "  GOOD: 'Newton ৰ গতিৰ প্ৰথম সূত্ৰে জড়তা ব্যাখ্যা কৰে।'\n"
+            ) + patched[0]["content"]
+        logger.info(f"[SARVAM-INDIC] No-think mode for {response_lang} — model={model}, api_max={api_max}")
+    else:
+        api_max = max_tokens + SARVAM_THINK_BUFFER
+        patched = _inject_think_budget(messages)
+    _SARVAM_LANG_CODE_MAP = {"as": "as-IN"}
+    payload = {
+        "model": model,
+        "messages": patched,
+        "max_tokens": api_max,
+        "temperature": 0.05 if _indic else 0.1,
+        "top_p": 0.9 if _indic else 0.95,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+        "stream": True,
+    }
+    if _indic:
+        payload["thinking"] = {"enabled": False}
+        if response_lang in _SARVAM_LANG_CODE_MAP:
+            payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
+    elif response_lang in _SARVAM_LANG_CODE_MAP:
+        payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
+    client = _pick_sarvam_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Sarvam LLM client not initialised")
+
+    async def _do_stream(c):
+        async with c.stream("POST", "/v1/chat/completions", json=payload) as resp:
+            if resp.status_code >= 400:
+                body = await resp.aread()
+                logger.error(f"Sarvam {resp.status_code} error body: {body.decode()[:500]}")
+                resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                raw = line[5:].strip()
+                if raw == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(raw)
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
+                    token = delta.get("content") or ""
+                    if token:
+                        yield token
+                except Exception:
+                    continue
+
+    try:
+        async for token in _do_stream(client):
+            yield token
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        if sarvam_llm_client_direct is not None and client is not sarvam_llm_client_direct:
+            _handle_cf_connection_error(e)
+            async for token in _do_stream(sarvam_llm_client_direct):
+                yield token
+        else:
+            raise
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401 and sarvam_llm_client_direct is not None and client is not sarvam_llm_client_direct:
+            _handle_cf_gateway_auth_error(e)
+            async for token in _do_stream(sarvam_llm_client_direct):
+                yield token
+        else:
+            raise
+
+async def _stream_gemini(messages: list, api_key: str, model: str, max_tokens: int):
+    """Token-by-token streaming from Google Gemini via its OpenAI-compatible endpoint."""
+    direct_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    base = get_provider_base_url("gemini") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_vertex_gemini(messages: list, model: str, max_tokens: int):
+    """Token-by-token streaming from Vertex AI Gemini Flash (Task #607).
+
+    Uses google-auth + Vertex `streamGenerateContent` REST endpoint.
+    Raises on misconfiguration / network errors so the caller can fall
+    back to the legacy hedged SLM pool.
+    """
+    async for token in _vertex_chat.stream_chat(
+        messages, model=model, max_tokens=max_tokens, temperature=0.1,
+    ):
+        yield token
+
+
+async def _stream_cerebras(messages: list, api_key: str, model: str, max_tokens: int):
+    base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
+    client = _get_oai_client(api_key, base)
+    stream = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+    )
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_xai(messages: list, api_key: str, model: str, max_tokens: int):
+    """Token-by-token streaming from xAI Grok via its OpenAI-compatible endpoint."""
+    direct_base = "https://api.x.ai/v1"
+    base = get_provider_base_url("xai") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_openai_compat(messages: list, api_key: str, model: str, max_tokens: int, provider: str, fallback_base: str):
+    """Token-by-token streaming from any OpenAI-compatible provider."""
+    base = get_provider_base_url(provider) or fallback_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != fallback_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != fallback_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_bedrock(messages: list, model: str, max_tokens: int):
+    """Token-by-token streaming from Amazon Bedrock via Converse streaming API.
+    boto3 is synchronous — runs in a thread pool; tokens passed back via asyncio.Queue.
+    Supports Amazon Nova family (nova-micro, nova-lite, nova-pro) and any Converse-compatible model.
+    """
+    if not _AWS_ACCESS_KEY or not _AWS_SECRET_KEY:
+        raise ValueError("AWS credentials not configured (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)")
+
+    # Convert OpenAI-format messages to Bedrock Converse format
+    system_parts = []
+    converse_messages = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if role == "system":
+            system_parts.append({"text": content})
+        else:
+            converse_messages.append({"role": role, "content": [{"text": content}]})
+
+    loop = asyncio.get_event_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def _sync_stream():
+        try:
+            import boto3 as _boto3
+            client = _boto3.client(
+                "bedrock-runtime",
+                region_name=_AWS_REGION,
+                aws_access_key_id=_AWS_ACCESS_KEY,
+                aws_secret_access_key=_AWS_SECRET_KEY,
+            )
+            kwargs = dict(
+                modelId=model,
+                messages=converse_messages,
+                inferenceConfig={"maxTokens": max_tokens, "temperature": 0.1},
+            )
+            if system_parts:
+                kwargs["system"] = system_parts
+            resp = client.converse_stream(**kwargs)
+            for event in resp["stream"]:
+                if "contentBlockDelta" in event:
+                    text = event["contentBlockDelta"].get("delta", {}).get("text", "")
+                    if text:
+                        loop.call_soon_threadsafe(queue.put_nowait, text)
+            loop.call_soon_threadsafe(queue.put_nowait, None)   # sentinel → done
+        except Exception as exc:
+            loop.call_soon_threadsafe(queue.put_nowait, exc)
+
+    loop.run_in_executor(None, _sync_stream)
+
+    while True:
+        item = await queue.get()
+        if item is None:
+            break
+        if isinstance(item, Exception):
+            raise item
+        yield item
+
+
+async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int = 2048, intent: str = "", response_lang: str = ""):
+    """
+    Real token-by-token streaming from the LLM provider.
+    Uses native streaming APIs for instant first-token delivery.
+    Supports: Sarvam, Groq, Fireworks, Gemini, Cerebras, xAI, Bedrock.
+    'openai/gpt-oss-20b' triggers the smart SLM pool (Fireworks/Groq/Cerebras/Gemini).
+    When response_lang is an Indic code (as/hi/etc), optimized Sarvam routing is applied.
+    """
+    _indic_mode = _is_indic_lang(response_lang)
+    _stream_t0 = time.monotonic()
+
+    if _indic_mode:
+        _resolved_indic_model = None
+        for _pref_model in _SARVAM_INDIC_MODEL_PREFERENCE:
+            _prov, _pkey = _resolve_provider_for_model(_pref_model, _LLM_PROVIDERS)
+            if _prov == "sarvam" and _pkey:
+                _resolved_indic_model = _pref_model
+                break
+        if _resolved_indic_model:
+            model = _resolved_indic_model
+            logger.info(f"[INDIC] Auto-selected Sarvam model '{model}' for {response_lang} response")
+        else:
+            logger.warning(f"[INDIC] No Sarvam model available from preference chain, using default")
+
+    use_model_raw = model or LLM_MODEL
+
+    # ── Vertex AI Gemini Flash fast-path (Task #607) ──────────────────────────
+    # When the requested model resolves to Vertex Gemini Flash, stream through
+    # Vertex AI's REST endpoint directly. On any error before the first token
+    # is delivered, automatically fall back to the legacy SLM hedged pool by
+    # re-routing through the standard resolution path below.
+    # Task #628 — Indic (Assamese) admin toggle: when the admin has
+    # flipped the Indic provider to "vertex" AND Vertex is configured,
+    # route Assamese chat through the same Vertex fast-path used for
+    # English below. The leak sanitiser downstream still runs on the
+    # emitted content, so stray English words are cleaned regardless
+    # of provider. On pre-first-token Vertex failure we fall through
+    # to the legacy Sarvam hedged pool below (NOT the English SLM
+    # pool) to preserve Assamese quality.
+    _indic_vertex_active = False
+    if _indic_mode:
+        try:
+            from lang_sanitizer import get_indic_provider as _get_indic_provider
+            _indic_provider_pref = _get_indic_provider()
+        except Exception:
+            _indic_provider_pref = "sarvam"
+        if _indic_provider_pref == "vertex" and _vertex_chat.is_configured():
+            _indic_vertex_active = True
+
+    _use_vertex_fastpath = (
+        (use_model_raw == "vertex/gemini-flash" and not _indic_mode)
+        or _indic_vertex_active
+    )
+    _vertex_fallback_target = (
+        # Indic fallback uses the Sarvam hedged pool (preserves Assamese
+        # quality); English fallback uses the SLM pool.
+        "sarvam-m" if _indic_vertex_active else "openai/gpt-oss-20b"
+    )
+    _vertex_metric_bucket = "vertex_gemini_indic" if _indic_vertex_active else "vertex_gemini"
+
+    if _use_vertex_fastpath:
+        if not _vertex_chat.is_configured():
+            logger.warning("vertex/gemini-flash requested but VERTEX_PROJECT_ID is not set — falling back to legacy SLM pool")
+            use_model_raw = _vertex_fallback_target
+        else:
+            _vertex_first_token = False
+            _vertex_t0 = time.monotonic()
+            try:
+                _mt_vx = _clamp_max_tokens(VERTEX_GEMINI_MODEL, max_tokens)
+                _vx_batch = ""
+                _VX_BATCH_SIZE = 2
+                # For Indic mode, prepend the same strict-Assamese system
+                # preface used by `_stream_sarvam` so Gemini commits to
+                # Assamese script from the first token and we don't rely
+                # on the sanitizer to clean up provider-level leakage.
+                _vx_messages = messages
+                if _indic_vertex_active:
+                    _vx_messages = [dict(m) for m in messages]
+                    _asm_preface = (
+                        "CRITICAL: Reply DIRECTLY in Assamese (অসমীয়া). "
+                        "Do NOT use <think> tags. Do NOT write internal thoughts.\n"
+                        "STRICT LANGUAGE RULES:\n"
+                        "- Every running word MUST be in Assamese script. "
+                        "NO mid-sentence English words.\n"
+                        "- Latin script is allowed ONLY for: pure numbers/dates, "
+                        "scientific units (cm, kg, Hz, °C, eV…), math symbols/equations, "
+                        "code, URLs, well-known proper nouns and acronyms "
+                        "(AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
+                        "- For everyday nouns/verbs, use the Assamese word — "
+                        "do NOT fall back to English.\n\n"
+                    )
+                    if _vx_messages and _vx_messages[0].get("role") == "system":
+                        _vx_messages[0]["content"] = _asm_preface + _vx_messages[0]["content"]
+                    else:
+                        _vx_messages.insert(0, {"role": "system", "content": _asm_preface})
+                async for token in _stream_vertex_gemini(_vx_messages, VERTEX_GEMINI_MODEL, _mt_vx):
+                    if not _vertex_first_token:
+                        _ttft_ms = (time.monotonic() - _vertex_t0) * 1000
+                        logger.info(f"[VERTEX-PERF] TTFT={_ttft_ms:.0f}ms model={VERTEX_GEMINI_MODEL} indic={_indic_vertex_active}")
+                        _vertex_first_token = True
+                    _vx_batch += token
+                    if len(_vx_batch) >= _VX_BATCH_SIZE:
+                        yield f"data: {json.dumps({'content': _vx_batch})}\n\n"
+                        _vx_batch = ""
+                if _vx_batch:
+                    yield f"data: {json.dumps({'content': _vx_batch})}\n\n"
+                if _vertex_first_token:
+                    _total_ms = (time.monotonic() - _vertex_t0) * 1000
+                    logger.info(f"[VERTEX-PERF] Total={_total_ms:.0f}ms model={VERTEX_GEMINI_MODEL} indic={_indic_vertex_active}")
+                    try:
+                        from chat_speedup_metrics import record_provider_call as _rec_prov
+                        _rec_prov(_vertex_metric_bucket, ttfb_ms=_ttft_ms, total_ms=_total_ms)
+                    except Exception:
+                        pass
+                    yield f"data: {json.dumps({'__provider': _vertex_metric_bucket})}\n\n"
+                    return
+                # Stream completed without ever yielding a token — treat as
+                # failure and fall through to legacy.
+                logger.warning("Vertex Gemini Flash returned empty stream — falling back to legacy pool")
+            except Exception as _vx_err:
+                if _vertex_first_token:
+                    # We already started streaming to the client; we can't
+                    # silently restart. Emit error and stop.
+                    logger.warning(f"Vertex Gemini Flash mid-stream error: {type(_vx_err).__name__}: {str(_vx_err)[:200]}")
+                    yield f"data: {json.dumps({'error': 'AI service interrupted'})}\n\n"
+                    return
+                logger.warning(f"Vertex Gemini Flash failed before first token: {type(_vx_err).__name__}: {str(_vx_err)[:200]} — falling back to legacy pool")
+            # Fall back: rewrite the requested model to the legacy default
+            # and continue with the standard resolution path below.
+            try:
+                from chat_speedup_metrics import record_provider_fallback as _rec_fb
+                _rec_fb(_vertex_metric_bucket, _vertex_fallback_target)
+            except Exception:
+                pass
+            use_model_raw = _vertex_fallback_target
+            model = use_model_raw
+            _indic_vertex_active = False  # Fallback → resolve normally
+
+    use_model_resolved = _MODEL_ALIAS_MAP.get(use_model_raw, use_model_raw)
+    _prov_list = _LLM_PROVIDERS if _indic_mode else _LLM_PROVIDERS_CHAT
+    provider, key = _resolve_provider_for_model(use_model_resolved, _prov_list)
+    if use_model_raw != use_model_resolved:
+        logger.info(f"Model alias '{use_model_raw}' → '{use_model_resolved}' ({provider})")
+    use_model = _safe_model_for_provider(use_model_resolved, provider, _prov_list)
+    if use_model != use_model_resolved:
+        logger.info(f"Model '{use_model_resolved}' not compatible with {provider} → using '{use_model}'")
+
+    if not key and provider != "sarvam":
+        yield f"data: {json.dumps({'error': 'LLM API key not configured'})}\n\n"
+        return
+
+    in_think = False
+    buf = ""
+
+    _SSE_BATCH = 2    # flush every 2 chars — near-instant token delivery
+
+    async def _emit_tokens(token_source):
+        nonlocal in_think, buf
+        import re as _re
+        _CLOSE_KEEP = len('</think>') - 1   # 7
+        think_done  = False
+        batch       = ""
+        _visible_text = ""
+        _think_buf  = []
+
+        async for token in token_source:
+            if think_done:
+                cleaned = _re.sub(r'<think>[\s\S]*?</think>', '', token)
+                if cleaned:
+                    batch += cleaned
+                    if len(batch) >= _SSE_BATCH:
+                        _visible_text += batch
+                        yield f"data: {json.dumps({'content': batch})}\n\n"
+                        batch = ""
+                continue
+
+            buf += token
+            while buf:
+                if in_think:
+                    close_idx = buf.find('</think>')
+                    if close_idx != -1:
+                        _think_buf.append(buf[:close_idx])
+                        buf = buf[close_idx + 8:]
+                        in_think   = False
+                        think_done = True
+                        if buf:
+                            batch += buf
+                            buf = ""
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                        break
+                    else:
+                        if len(buf) > _CLOSE_KEEP:
+                            _think_buf.append(buf[:-_CLOSE_KEEP])
+                            buf = buf[-_CLOSE_KEEP:]
+                        break
+                else:
+                    open_idx = buf.find('<think>')
+                    if open_idx != -1:
+                        before = buf[:open_idx]
+                        if before:
+                            batch += before
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                        buf      = buf[open_idx + 7:]
+                        in_think = True
+                    elif buf.endswith(('<', '<t', '<th', '<thi', '<thin', '<think')):
+                        partial_start = buf.rfind('<')
+                        candidate     = buf[partial_start:]
+                        if '<think>'[:len(candidate)] == candidate:
+                            before = buf[:partial_start]
+                            if before:
+                                batch += before
+                                if len(batch) >= _SSE_BATCH:
+                                    _visible_text += batch
+                                    yield f"data: {json.dumps({'content': batch})}\n\n"
+                                    batch = ""
+                            buf = candidate
+                            break
+                        else:
+                            batch += buf
+                            buf    = ""
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                    else:
+                        batch += buf
+                        buf    = ""
+                        if len(batch) >= _SSE_BATCH:
+                            _visible_text += batch
+                            yield f"data: {json.dumps({'content': batch})}\n\n"
+                            batch = ""
+                        break
+
+        if batch and not in_think:
+            _visible_text += batch
+            yield f"data: {json.dumps({'content': batch})}\n\n"
+        if buf and not in_think:
+            _visible_text += buf
+            yield f"data: {json.dumps({'content': buf})}\n\n"
+
+        if not _visible_text.strip() and (in_think or think_done):
+            fallback_text = "".join(_think_buf)
+            if in_think and buf:
+                fallback_text += buf
+            fallback_text = _re.sub(r'</?think\s*/?>', '', fallback_text).strip()
+            fallback_text = _re.sub(r'</?\w*$', '', fallback_text).strip()
+            if fallback_text and len(fallback_text) > 5:
+                logger.info(f"Think-block fallback: emitting {len(fallback_text)} chars of think content as response")
+                yield f"data: {json.dumps({'content': fallback_text})}\n\n"
+
+    async def _stream_from_provider(p_name: str, p_key: str, p_model: str):
+        """Yield raw tokens from a provider. Raises on failure."""
+        _mt = _clamp_max_tokens(p_model, max_tokens)
+        if p_name == "sarvam":
+            _input_est = sum(len(m.get("content", "")) for m in messages) // 4
+            _think_overhead = 0 if _indic_mode else SARVAM_THINK_BUFFER
+            _sarvam_cap = max(256, 7192 - _input_est - _think_overhead - 100)
+            _mt = min(_mt, _sarvam_cap)
+            async for token in _stream_sarvam(messages, p_key, p_model, _mt, response_lang=response_lang):
+                yield token
+        elif p_name == "gemini":
+            logger.info(f"LLM stream: provider=gemini, model={p_model}")
+            async for token in _stream_gemini(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "cerebras":
+            logger.info(f"LLM stream: provider=cerebras, model={p_model}")
+            async for token in _stream_cerebras(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "groq":
+            logger.info(f"LLM stream: provider=groq, model={p_model}")
+            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "groq", "https://api.groq.com/openai/v1"):
+                yield token
+        elif p_name == "xai":
+            logger.info(f"LLM stream: provider=xai, model={p_model}")
+            async for token in _stream_xai(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "openrouter":
+            logger.info(f"LLM stream: provider=openrouter, model={p_model}")
+            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "openrouter", "https://openrouter.ai/api/v1"):
+                yield token
+        elif p_name == "bedrock":
+            logger.info(f"LLM stream: provider=bedrock, model={p_model}")
+            async for token in _stream_bedrock(messages, p_model, _mt):
+                yield token
+        else:
+            logger.info(f"LLM stream: provider={p_name}, model={p_model}")
+            chat = LlmChat(api_key=p_key or OPENAI_API_KEY, session_id=str(uuid.uuid4())).with_model(p_name, p_model)
+            async for token in chat.stream_messages(messages, max_tokens=_mt):
+                yield token
+
+    # ── Syrabit SLM: concurrent smart pool ──────────────────────────────────────
+    # pick() returns the fastest available slot (by speed tier) with spare capacity.
+    # async with slot["sem"] lets up to max_concurrent requests run in parallel.
+    # Tokens are yielded in real-time as they arrive (true streaming).
+    # TTFT timeout ensures fast failover when a provider is unresponsive.
+    _SLM_SLOT_TIMEOUT = 0.7    # max seconds between any two tokens mid-stream
+    _SLM_TTFT_TIMEOUT = 0.8    # max seconds to wait for FIRST token from a slot
+
+    _SLM_PROVIDER_MAX_INPUT_CHARS = {
+        "cerebras": 24000,
+        "sarvam": 12000,
+        "groq": 100000,
+        "gemini": 500000,
+        "openrouter": 200000,
+        "openai": 80000,
+        "bedrock": 40000,
+    }
+
+    if use_model_raw == "openai/gpt-oss-20b":
+        _active_pool = _slm_pool
+        _input_chars = sum(len(m.get("content", "")) for m in messages)
+
+        _skipped_slots: set = set()
+        _candidates = []
+        for _ in range(len(_active_pool.all_slots)):
+            slot = _active_pool.pick(_skipped_slots)
+            if slot is None:
+                break
+            p_name = slot["provider"]
+            _max_chars = _SLM_PROVIDER_MAX_INPUT_CHARS.get(p_name, 80000)
+            if _input_chars > _max_chars:
+                logger.info(f"SLM pool: skipping {p_name}/{slot['model']} — input too large ({_input_chars} chars > {_max_chars} limit)")
+                _skipped_slots.add(id(slot))
+                continue
+            _candidates.append(slot)
+            _skipped_slots.add(id(slot))
+            if len(_candidates) >= 2:
+                break
+
+        if _candidates:
+            _effective_ttft = min(1.2, _SLM_TTFT_TIMEOUT + (0.2 if _input_chars > 8000 else 0.0))
+            _hedged_q: asyncio.Queue = asyncio.Queue()
+            _hedged_errors: dict = {}
+
+            async def _hedged_producer(_slot, _slot_idx):
+                _pn, _pk, _pm = _slot["provider"], _slot["key"], _slot["model"]
+                try:
+                    async with _slot["sem"]:
+                        _chunk_count = 0
+                        async for chunk in _emit_tokens(_stream_from_provider(_pn, _pk, _pm)):
+                            _chunk_count += 1
+                            await _hedged_q.put((_slot_idx, "chunk", chunk))
+                        if _chunk_count == 0:
+                            logger.warning(f"SLM hedged: {_pn}/{_pm} 0 chunks")
+                        await _hedged_q.put((_slot_idx, "done", None))
+                except Exception as exc:
+                    _hedged_errors[_slot_idx] = exc
+                    logger.warning(f"SLM hedged: {_pn}/{_pm} error: {type(exc).__name__}: {str(exc)[:200]}")
+                    await _hedged_q.put((_slot_idx, "error", None))
+
+            _hedged_tasks = [asyncio.create_task(_hedged_producer(s, i)) for i, s in enumerate(_candidates)]
+            if len(_candidates) > 1:
+                _race_desc = " vs ".join(f"{s['provider']}/{s['model']}" for s in _candidates)
+                logger.info(f"SLM hedged: racing {_race_desc}")
+
+            _winner = None
+            _finished_slots: set = set()
+            try:
+                _deadline = time.monotonic() + _effective_ttft
+                while _winner is None and len(_finished_slots) < len(_candidates):
+                    _remaining = _deadline - time.monotonic()
+                    if _remaining <= 0:
+                        break
+                    try:
+                        _sid, _evt, _data = await asyncio.wait_for(_hedged_q.get(), timeout=_remaining)
+                    except asyncio.TimeoutError:
+                        break
+                    if _evt == "chunk":
+                        _winner = _sid
+                    elif _evt in ("done", "error"):
+                        _finished_slots.add(_sid)
+                        if _evt == "error":
+                            _slm_pool.mark_err(_candidates[_sid])
+            except Exception:
+                pass
+
+            if _winner is not None:
+                _win_slot = _candidates[_winner]
+                _slm_pool.mark_ok(_win_slot)
+                _win_pname = _win_slot["provider"]
+                _win_model = _win_slot["model"]
+                if len(_candidates) > 1:
+                    logger.info(f"SLM hedged: winner={_win_pname}/{_win_model}")
+
+                for i, t in enumerate(_hedged_tasks):
+                    if i != _winner:
+                        t.cancel()
+
+                yield _data
+
+                _tokens_yielded = 1
+                while True:
+                    try:
+                        _sid, _evt, _chunk = await asyncio.wait_for(_hedged_q.get(), timeout=_SLM_SLOT_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        _slm_pool.mark_err(_win_slot)
+                        logger.warning(f"SLM hedged: {_win_pname}/{_win_model} stalled mid-stream after {_SLM_SLOT_TIMEOUT}s ({_tokens_yielded} tokens yielded)")
+                        break
+                    if _sid != _winner:
+                        continue
+                    if _evt == "chunk":
+                        yield _chunk
+                        _tokens_yielded += 1
+                    else:
+                        if _winner in _hedged_errors and _tokens_yielded <= 1:
+                            _slm_pool.mark_err(_win_slot)
+                        break
+
+                _hedged_tasks[_winner].cancel()
+                for t in _hedged_tasks:
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+                yield f"data: {json.dumps({'__provider': _win_pname})}\n\n"
+                return
+            else:
+                for t in _hedged_tasks:
+                    t.cancel()
+                for t in _hedged_tasks:
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                for i, s in enumerate(_candidates):
+                    if i not in _finished_slots:
+                        _slm_pool.mark_err(s)
+                        logger.warning(f"SLM hedged: {s['provider']}/{s['model']} TTFT timeout after {_effective_ttft}s")
+
+        yield f"data: {json.dumps({'error': 'All AI providers temporarily unavailable'})}\n\n"
+        return
+
+    # ── Indic Sarvam with hedged key racing ─────────────────────────────────────
+    _SARVAM_TTFT_TIMEOUT = 3.0
+    _SARVAM_SLOT_TIMEOUT = 1.2
+    if _indic_mode and provider == "sarvam":
+        _indic_candidates = []
+
+        _sarvam_keys = [p["key"] for p in _prov_list if p["provider"] == "sarvam"]
+        if key not in _sarvam_keys:
+            _sarvam_keys.insert(0, key)
+        _sarvam_keys = list(dict.fromkeys(_sarvam_keys))
+        for _sk in _sarvam_keys:
+            _indic_candidates.append({"provider": "sarvam", "key": _sk, "model": use_model})
+
+        _gemini_keys_for_indic = [p["key"] for p in _LLM_PROVIDERS if p["provider"] == "gemini" and p.get("key")]
+        for _gk in _gemini_keys_for_indic[:1]:
+            _indic_candidates.append({"provider": "gemini", "key": _gk, "model": "gemini-2.5-flash"})
+
+        _indic_q: asyncio.Queue = asyncio.Queue()
+
+        async def _indic_producer(_cand, _cand_idx):
+            _cprov, _ckey, _cmodel = _cand["provider"], _cand["key"], _cand["model"]
+            try:
+                _cn = 0
+                async for chunk in _emit_tokens(_stream_from_provider(_cprov, _ckey, _cmodel)):
+                    _cn += 1
+                    await _indic_q.put((_cand_idx, "chunk", chunk))
+                if _cn == 0:
+                    logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} returned 0 chunks")
+                await _indic_q.put((_cand_idx, "done", None))
+            except Exception as _e:
+                _is_rate = any(s in str(_e).lower() for s in ("429", "rate", "quota", "throttl"))
+                logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} failed ({type(_e).__name__}: {str(_e)[:120]}) rate_limit={_is_rate}")
+                await _indic_q.put((_cand_idx, "error", None))
+
+        _indic_tasks = [asyncio.create_task(_indic_producer(c, i)) for i, c in enumerate(_indic_candidates)]
+        _race_providers = ", ".join(f"{c['provider']}/{c['model']}" for c in _indic_candidates)
+        logger.info(f"[INDIC] Hedged racing {len(_indic_candidates)} candidates for {response_lang}: {_race_providers}")
+
+        _sarvam_winner = None
+        _sarvam_finished: set = set()
+        _sarvam_race_t0 = time.monotonic()
+        try:
+            _deadline = time.monotonic() + _SARVAM_TTFT_TIMEOUT
+            while _sarvam_winner is None and len(_sarvam_finished) < len(_indic_candidates):
+                _rem = _deadline - time.monotonic()
+                if _rem <= 0:
+                    break
+                try:
+                    _sid, _evt, _data = await asyncio.wait_for(_indic_q.get(), timeout=_rem)
+                except asyncio.TimeoutError:
+                    break
+                if _evt == "chunk":
+                    _sarvam_winner = _sid
+                elif _evt in ("done", "error"):
+                    _sarvam_finished.add(_sid)
+        except Exception:
+            pass
+
+        if _sarvam_winner is not None:
+            _win_cand = _indic_candidates[_sarvam_winner]
+            _ttft_ms = (time.monotonic() - _sarvam_race_t0) * 1000
+            logger.info(f"[INDIC-PERF] TTFT={_ttft_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']} idx={_sarvam_winner}")
+
+            for i, t in enumerate(_indic_tasks):
+                if i != _sarvam_winner:
+                    t.cancel()
+
+            yield _data
+
+            while True:
+                try:
+                    _sid, _evt, _chunk = await asyncio.wait_for(_indic_q.get(), timeout=_SARVAM_SLOT_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning(f"[INDIC] {_win_cand['provider']}/{_win_cand['model']} stalled mid-stream")
+                    break
+                if _sid != _sarvam_winner:
+                    continue
+                if _evt == "chunk":
+                    yield _chunk
+                else:
+                    break
+
+            _total_ms = (time.monotonic() - _sarvam_race_t0) * 1000
+            logger.info(f"[INDIC-PERF] Total={_total_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']}")
+
+            for t in _indic_tasks:
+                t.cancel()
+            for t in _indic_tasks:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            yield f"data: {json.dumps({'__provider': _win_cand['provider']})}\n\n"
+        else:
+            for t in _indic_tasks:
+                t.cancel()
+            for t in _indic_tasks:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+            logger.warning(f"[INDIC] All {len(_indic_candidates)} candidates failed/timed out")
+            yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
+        return
+
+    # ── All other models: single provider ───────────────────────────────────────
+    try:
+        _chunk_n = 0
+        async for chunk in _emit_tokens(_stream_from_provider(provider, key, use_model)):
+            if _chunk_n == 0:
+                _ttft_ms = (time.monotonic() - _stream_t0) * 1000
+                logger.info(f"[EN-PERF] TTFT={_ttft_ms:.0f}ms model={use_model} provider={provider}")
+            _chunk_n += 1
+            yield chunk
+        _total_ms = (time.monotonic() - _stream_t0) * 1000
+        logger.info(f"[EN-PERF] Total={_total_ms:.0f}ms chunks={_chunk_n} model={use_model} provider={provider}")
+        yield f"data: {json.dumps({'__provider': provider})}\n\n"
+    except HTTPException as http_err:
+        yield f"data: {json.dumps({'error': str(http_err.detail)})}\n\n"
+    except Exception as e:
+        logger.error(f"LLM streaming error: {type(e).__name__}: {str(e)[:200]}")
+        yield f"data: {json.dumps({'error': 'AI service temporarily unavailable'})}\n\n"
+, '', result, flags=re.DOTALL).strip()
+
+    # ── Populate cache for future hits ──────────────────────────────────────
+    if result:
+        await ai_cache.aset(cache_key, result, saved_ms=duration_ms)
+        logger.info(f"sarvam_cache SET model={model} key={cache_key[:12]}… duration_ms={duration_ms:.0f}")
+
+    return result
+
+def _cf_cache_headers() -> dict:
+    # Delegates to config.byok_headers() which returns:
+    #   cf-aig-byok-key:default   — CF substitutes the stored BYOK key upstream
+    #   cf-aig-cache-ttl:<N>      — cache TTL hint
+    #   cf-aig-authorization:…    — only when Authenticated Gateway mode is on
+    # Returns {} when the gateway is down — callers should raise or continue
+    # without the caching hint. With BYOK active the placeholder api_key in
+    # the openai client is ignored by CF; the stored BYOK key is used instead.
+    return byok_headers()
+
+def _is_cf_connection_error(exc: Exception) -> bool:
+    err = str(exc).lower()
+    return "connect" in err or "timeout" in err or "unreachable" in err or "dns" in err
+
+def _handle_cf_connection_error(exc: Exception) -> None:
+    if _is_cf_connection_error(exc):
+        mark_cf_gateway_down()
+        logger.warning(f"Cloudflare AI Gateway connection error — falling back to direct URLs for 5 min: {type(exc).__name__}")
+
+def _handle_cf_gateway_auth_error(exc: Exception) -> None:
+    mark_cf_gateway_down()
+    logger.warning(f"Cloudflare AI Gateway 401 auth error — falling back to direct URLs for 5 min: {type(exc).__name__}: {str(exc)[:200]}")
+
+async def _call_gemini(messages: list, api_key: str, model: str, max_tokens: int) -> str:
+    """Non-streaming call to Google Gemini via its OpenAI-compatible endpoint."""
+    direct_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    base = get_provider_base_url("gemini") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        resp = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            extra_headers=_cf_cache_headers() or None,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_openai_compat(messages: list, api_key: str, model: str, max_tokens: int, provider: str, fallback_base: str) -> str:
+    """Non-streaming call via an OpenAI-compatible provider (OpenAI, xAI, Fireworks)."""
+    base = get_provider_base_url(provider) or fallback_base
+    client = _get_oai_client(api_key, base)
+    try:
+        resp = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            extra_headers=_cf_cache_headers() or None,
+        )
+    except _oai.APIConnectionError as e:
+        if base != fallback_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != fallback_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_cerebras(messages: list, api_key: str, model: str, max_tokens: int) -> str:
+    base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
+    client = _get_oai_client(api_key, base)
+    resp = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+    )
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_single_provider(messages: list, provider: str, api_key: str, model: str, max_tokens: int) -> str:
+    max_tokens = _clamp_max_tokens(model, max_tokens)
+    if provider == "sarvam":
+        return await _call_sarvam_llm(messages, api_key, model, max_tokens)
+    if provider == "gemini":
+        return await _call_gemini(messages, api_key, model, max_tokens)
+    if provider == "cerebras":
+        return await _call_cerebras(messages, api_key, model, max_tokens)
+    if provider == "groq":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "groq", "https://api.groq.com/openai/v1")
+    if provider == "xai":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "xai", "https://api.x.ai/v1")
+    if provider == "openrouter":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "openrouter", "https://openrouter.ai/api/v1")
+
+    system_msg = ""
+    user_msg = ""
+    for m in messages:
+        if m["role"] == "system":
+            system_msg = m["content"]
+        elif m["role"] == "user":
+            user_msg = m["content"]
+
+    chat = LlmChat(
+        api_key=api_key,
+        session_id=str(uuid.uuid4()),
+        system_message=system_msg or "You are a helpful AI tutor.",
+    ).with_model(provider, model)
+
+    response = await chat.send_message(UserMessage(text=user_msg))
+    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+    return response
+
+async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 1024, provider_list=None) -> str:
+    import time as _t
+    # Wall-clock start of the whole primary-rotation loop. Used so the
+    # Workers AI fallback path (Task #636) can attribute the *real*
+    # cumulative primary latency (instead of 0) when we eventually give
+    # up and call the edge.
+    _loop_t0 = _t.perf_counter()
+    providers = _LLM_PROVIDERS if provider_list is None else provider_list
+    use_model = _MODEL_ALIAS_MAP.get(model or LLM_MODEL, model or LLM_MODEL)
+    primary_provider, primary_key = _resolve_provider_for_model(use_model, providers)
+
+    if not primary_key and not providers:
+        raise HTTPException(status_code=503, detail="LLM API key not configured")
+
+    tried: set = set()
+    last_err = None
+
+    _is_content = provider_list is _LLM_PROVIDERS_CONTENT
+    _is_chat = provider_list is _LLM_PROVIDERS_CHAT
+    _PROVIDER_TIMEOUT = 30.0 if _is_content else (4.0 if _is_chat else 6.0)
+
+    provider, key = primary_provider, primary_key
+    try_model = _safe_model_for_provider(use_model, provider, providers)
+    if try_model != use_model:
+        logger.info(f"Model '{use_model}' not compatible with {provider} → using '{try_model}'")
+    try:
+        tried.add((provider, try_model, id(key) if key else 0))
+        _t0 = _t.perf_counter()
+        result = await asyncio.wait_for(
+            _call_single_provider(messages, provider, key, try_model, max_tokens),
+            timeout=_PROVIDER_TIMEOUT,
+        )
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        tok = len(result.split())
+        _record_llm_call(provider, try_model, _dur, True, tok, False)
+        logger.info(f"llm_call provider={provider} model={try_model} duration_ms={_dur} tokens_approx={tok}")
+        return LlmResult(result, provider=provider)
+    except asyncio.TimeoutError:
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        _record_llm_call(provider, try_model, _dur, False, 0, False, "Timeout")
+        last_err = TimeoutError(f"{provider}/{try_model} timed out after {_PROVIDER_TIMEOUT}s")
+        logger.warning(f"LLM primary TIMEOUT ({provider}/{try_model}): {_dur}ms > {_PROVIDER_TIMEOUT}s limit")
+    except Exception as e:
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        _record_llm_call(provider, try_model, _dur, False, 0, False, type(e).__name__)
+        last_err = e
+        logger.warning(f"LLM primary failed ({provider}/{try_model}): {type(e).__name__}: {str(e)[:150]}")
+
+    for fallback in providers:
+        fb_model = fallback["default_model"]
+        fb_key_id = id(fallback["key"]) if fallback.get("key") else 0
+        if (fallback["provider"], fb_model, fb_key_id) in tried:
+            continue
+        tried.add((fallback["provider"], fb_model, fb_key_id))
+        try:
+            _t0 = _t.perf_counter()
+            result = await asyncio.wait_for(
+                _call_single_provider(messages, fallback["provider"], fallback["key"], fb_model, max_tokens),
+                timeout=_PROVIDER_TIMEOUT,
+            )
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            tok = len(result.split())
+            _record_llm_call(fallback["provider"], fb_model, _dur, True, tok, True)
+            logger.info(f"llm_call provider={fallback['provider']} model={fb_model} duration_ms={_dur} tokens_approx={tok} fallback=true")
+            return LlmResult(result, provider=fallback["provider"])
+        except asyncio.TimeoutError:
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, "Timeout")
+            last_err = TimeoutError(f"{fallback['provider']}/{fb_model} timed out after {_PROVIDER_TIMEOUT}s")
+            logger.warning(f"LLM fallback TIMEOUT ({fallback['provider']}/{fb_model}): {_dur}ms > {_PROVIDER_TIMEOUT}s limit")
+        except Exception as e:
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, type(e).__name__)
+            last_err = e
+            logger.warning(f"LLM fallback failed ({fallback['provider']}/{fb_model}): {type(e).__name__}: {str(e)[:150]}")
+
+    # Task #636 — last-resort Workers AI fallback. Only reached after every
+    # configured primary+fallback Cerebras/Gemini/etc provider has failed.
+    # Policy is strict (timeout/5xx/429/quota only) so 4xx bad-input bugs
+    # still surface as 503 instead of being silently masked by a different
+    # model's looser parser.
+    try:
+        from providers import workers_ai as _wai
+        if _wai.is_enabled("chat") and last_err is not None and _wai.should_fallback(last_err):
+            # Real cumulative primary-loop latency (all rotations combined),
+            # so the admin panel and structured logs attribute the actual
+            # wait the user incurred before we gave up on the primaries.
+            _primary_total_ms = int((_t.perf_counter() - _loop_t0) * 1000)
+            _t0 = _t.perf_counter()
+            ok, value, label = await _wai.attempt_fallback(
+                "chat", last_err, _primary_total_ms,
+                lambda: _wai.call_chat(messages, max_tokens=max_tokens, temperature=0.3),
+            )
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            if ok and isinstance(value, str) and value:
+                reason = _wai.classify_primary_error(last_err)
+                _record_llm_call("workers-ai", "llama-3.1-8b-instruct", _dur, True,
+                                 len(value.split()), True)
+                logger.info(
+                    f"llm_call provider=workers-ai model=llama-3.1-8b-instruct "
+                    f"duration_ms={_dur} fallback=true reason={reason}"
+                )
+                return LlmResult(value, provider="workers-ai", fallback_reason=reason)
+    except Exception as _wai_err:  # noqa: BLE001
+        logger.warning(f"[workers-ai] chat fallback skipped: {type(_wai_err).__name__}: {str(_wai_err)[:150]}")
+
+    logger.error(f"All LLM providers exhausted. Last error: {last_err}")
+    raise HTTPException(status_code=503, detail="AI service temporarily unavailable. Please try again.")
+
+async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048) -> str:
+    """Smart-batched LLM call: deduplicates identical requests, limits concurrency.
+    Uses all providers including Emergent (admin content generation)."""
+    return await _llm_batcher.call(messages, model, max_tokens)
+
+_LLM_PROVIDERS_CONTENT: list[dict] = []
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "qwen-3-235b-a22b-instruct-2507"})
+if _SARVAM_LLM_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+if _GEMINI_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
+if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
+
+logger.info(
+    f"Admin content providers (quality-first order): "
+    f"{[p['provider'] + '/' + p['default_model'] for p in _LLM_PROVIDERS_CONTENT]}"
+)
+
+async def call_llm_api_content(messages: list, model: str = None, max_tokens: int = 3072) -> str:
+    """LLM call for admin content generation — Cerebras preferred (qwen-3-235b, fast + high quality),
+    Sarvam secondary (sarvam-m), Gemini 2.5 Flash last resort.
+    Uses dedicated content batcher with 300ms batch window (vs 5ms for chat).
+    Retries with exponential backoff instead of instant failover."""
+    if model is None and _LLM_PROVIDERS_CONTENT:
+        model = _LLM_PROVIDERS_CONTENT[0]["default_model"]
+    return await _content_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CONTENT, use_admin_sem=True)
+
+
+async def call_llm_api_content_with_retry(
+    messages: list, model: str = None, max_tokens: int = 3072,
+    validate_fn=None,
+) -> str:
+    """Content LLM call with retry-with-backoff and optional output validation.
+    
+    validate_fn: optional callable(result_str) -> bool. If it returns False,
+    the result is treated as a failure and retried.
+    """
+    last_err = None
+    for attempt in range(_CONTENT_RETRY_MAX):
+        try:
+            result = await call_llm_api_content(messages, model, max_tokens)
+            if validate_fn is not None and not validate_fn(result):
+                logger.warning(
+                    f"Content LLM output failed validation (attempt {attempt + 1}/{_CONTENT_RETRY_MAX})"
+                )
+                last_err = ValueError("Output failed validation")
+                if attempt < _CONTENT_RETRY_MAX - 1:
+                    backoff = _CONTENT_RETRY_BACKOFF[min(attempt, len(_CONTENT_RETRY_BACKOFF) - 1)]
+                    logger.info(f"Content retry backoff: waiting {backoff}s before attempt {attempt + 2}")
+                    await asyncio.sleep(backoff)
+                continue
+            return result
+        except Exception as e:
+            last_err = e
+            logger.warning(
+                f"Content LLM call failed (attempt {attempt + 1}/{_CONTENT_RETRY_MAX}): "
+                f"{type(e).__name__}: {str(e)[:150]}"
+            )
+            if attempt < _CONTENT_RETRY_MAX - 1:
+                backoff = _CONTENT_RETRY_BACKOFF[min(attempt, len(_CONTENT_RETRY_BACKOFF) - 1)]
+                logger.info(f"Content retry backoff: waiting {backoff}s before attempt {attempt + 2}")
+                await asyncio.sleep(backoff)
+    raise last_err or HTTPException(status_code=503, detail="Content generation failed after retries")
+
+async def call_llm_api_chat(messages: list, model: str = None, max_tokens: int = 2048) -> str:
+    """LLM call for student chat — excludes Emergent provider (admin-only)."""
+    return await _llm_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CHAT)
+
+
+_THINK_BUDGET_HINT = "/think in one sentence. Answer immediately.\n"
+
+def _inject_think_budget(messages: list) -> list:
+    """Prepend a concise reasoning directive to the system message so sarvam-m
+    spends fewer tokens in its <think> block, reducing TTFT significantly."""
+    out = []
+    injected = False
+    for m in messages:
+        if m.get("role") == "system" and not injected:
+            out.append({**m, "content": _THINK_BUDGET_HINT + m["content"]})
+            injected = True
+        else:
+            out.append(m)
+    if not injected:
+        out.insert(0, {"role": "system", "content": _THINK_BUDGET_HINT})
+    return out
+
+async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: int, *, response_lang: str = ""):
+    """Token-by-token SSE streaming from Sarvam — reuses persistent sarvam_llm_client (zero TCP overhead).
+    For Indic languages: skips think budget injection and think buffer to reduce TTFT.
+    For English: adds SARVAM_THINK_BUFFER so <think> reasoning never crowds out the answer budget.
+    Falls back to direct client if CF gateway connection fails.
+    """
+    _indic = _is_indic_lang(response_lang)
+    if _indic:
+        api_max = max_tokens + 100
+        patched = [dict(m) for m in messages]
+        if patched and patched[0].get("role") == "system":
+            patched[0]["content"] = (
+                "CRITICAL: Do NOT use <think> tags. Do NOT write internal thoughts. "
+                "Do NOT start with 'Okay' or 'Let me'. "
+                "Reply DIRECTLY in Assamese (অসমীয়া). Start your answer immediately.\n"
+                "STRICT LANGUAGE RULES:\n"
+                "- Every running word MUST be in Assamese script. NO mid-sentence English words.\n"
+                "- NEVER emit partial English fragments such as 'me uses', 'terms', 'ssible',\n"
+                "  'ble', 'tion', 'ssing'. If you start a word in English, you MUST switch\n"
+                "  back to Assamese for the rest of that sentence.\n"
+                "- Latin script is allowed ONLY for: pure numbers/dates, scientific units\n"
+                "  (cm, kg, Hz, °C, eV…), math symbols/equations, code, URLs, well-known\n"
+                "  proper nouns and acronyms (AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
+                "- For everyday nouns/verbs, use the Assamese word — do NOT fall back to English.\n"
+                "BAD vs GOOD examples (follow the pattern, do not copy text):\n"
+                "  BAD : 'উৰুকা me uses ssible terms চমুকৈ ক'লে…'\n"
+                "  GOOD: 'উৰুকা চমুকৈ ক'লে অসমৰ এক প্ৰিয় উৎসৱ।'\n"
+                "  BAD : 'জল 100°C ত boil হয়।'\n"
+                "  GOOD: 'পানী 100°C ত উতলে।'\n"
+                "  BAD : 'Newton ৰ first law explains inertia।'\n"
+                "  GOOD: 'Newton ৰ গতিৰ প্ৰথম সূত্ৰে জড়তা ব্যাখ্যা কৰে।'\n"
+            ) + patched[0]["content"]
+        logger.info(f"[SARVAM-INDIC] No-think mode for {response_lang} — model={model}, api_max={api_max}")
+    else:
+        api_max = max_tokens + SARVAM_THINK_BUFFER
+        patched = _inject_think_budget(messages)
+    _SARVAM_LANG_CODE_MAP = {"as": "as-IN"}
+    payload = {
+        "model": model,
+        "messages": patched,
+        "max_tokens": api_max,
+        "temperature": 0.05 if _indic else 0.1,
+        "top_p": 0.9 if _indic else 0.95,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+        "stream": True,
+    }
+    if _indic:
+        payload["thinking"] = {"enabled": False}
+        if response_lang in _SARVAM_LANG_CODE_MAP:
+            payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
+    elif response_lang in _SARVAM_LANG_CODE_MAP:
+        payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
+    client = _pick_sarvam_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Sarvam LLM client not initialised")
+
+    async def _do_stream(c):
+        async with c.stream("POST", "/v1/chat/completions", json=payload) as resp:
+            if resp.status_code >= 400:
+                body = await resp.aread()
+                logger.error(f"Sarvam {resp.status_code} error body: {body.decode()[:500]}")
+                resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                raw = line[5:].strip()
+                if raw == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(raw)
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
+                    token = delta.get("content") or ""
+                    if token:
+                        yield token
+                except Exception:
+                    continue
+
+    try:
+        async for token in _do_stream(client):
+            yield token
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        if sarvam_llm_client_direct is not None and client is not sarvam_llm_client_direct:
+            _handle_cf_connection_error(e)
+            async for token in _do_stream(sarvam_llm_client_direct):
+                yield token
+        else:
+            raise
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401 and sarvam_llm_client_direct is not None and client is not sarvam_llm_client_direct:
+            _handle_cf_gateway_auth_error(e)
+            async for token in _do_stream(sarvam_llm_client_direct):
+                yield token
+        else:
+            raise
+
+async def _stream_gemini(messages: list, api_key: str, model: str, max_tokens: int):
+    """Token-by-token streaming from Google Gemini via its OpenAI-compatible endpoint."""
+    direct_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    base = get_provider_base_url("gemini") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_vertex_gemini(messages: list, model: str, max_tokens: int):
+    """Token-by-token streaming from Vertex AI Gemini Flash (Task #607).
+
+    Uses google-auth + Vertex `streamGenerateContent` REST endpoint.
+    Raises on misconfiguration / network errors so the caller can fall
+    back to the legacy hedged SLM pool.
+    """
+    async for token in _vertex_chat.stream_chat(
+        messages, model=model, max_tokens=max_tokens, temperature=0.1,
+    ):
+        yield token
+
+
+async def _stream_cerebras(messages: list, api_key: str, model: str, max_tokens: int):
+    base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
+    client = _get_oai_client(api_key, base)
+    stream = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+    )
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_xai(messages: list, api_key: str, model: str, max_tokens: int):
+    """Token-by-token streaming from xAI Grok via its OpenAI-compatible endpoint."""
+    direct_base = "https://api.x.ai/v1"
+    base = get_provider_base_url("xai") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_openai_compat(messages: list, api_key: str, model: str, max_tokens: int, provider: str, fallback_base: str):
+    """Token-by-token streaming from any OpenAI-compatible provider."""
+    base = get_provider_base_url(provider) or fallback_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != fallback_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != fallback_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_bedrock(messages: list, model: str, max_tokens: int):
+    """Token-by-token streaming from Amazon Bedrock via Converse streaming API.
+    boto3 is synchronous — runs in a thread pool; tokens passed back via asyncio.Queue.
+    Supports Amazon Nova family (nova-micro, nova-lite, nova-pro) and any Converse-compatible model.
+    """
+    if not _AWS_ACCESS_KEY or not _AWS_SECRET_KEY:
+        raise ValueError("AWS credentials not configured (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)")
+
+    # Convert OpenAI-format messages to Bedrock Converse format
+    system_parts = []
+    converse_messages = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if role == "system":
+            system_parts.append({"text": content})
+        else:
+            converse_messages.append({"role": role, "content": [{"text": content}]})
+
+    loop = asyncio.get_event_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def _sync_stream():
+        try:
+            import boto3 as _boto3
+            client = _boto3.client(
+                "bedrock-runtime",
+                region_name=_AWS_REGION,
+                aws_access_key_id=_AWS_ACCESS_KEY,
+                aws_secret_access_key=_AWS_SECRET_KEY,
+            )
+            kwargs = dict(
+                modelId=model,
+                messages=converse_messages,
+                inferenceConfig={"maxTokens": max_tokens, "temperature": 0.1},
+            )
+            if system_parts:
+                kwargs["system"] = system_parts
+            resp = client.converse_stream(**kwargs)
+            for event in resp["stream"]:
+                if "contentBlockDelta" in event:
+                    text = event["contentBlockDelta"].get("delta", {}).get("text", "")
+                    if text:
+                        loop.call_soon_threadsafe(queue.put_nowait, text)
+            loop.call_soon_threadsafe(queue.put_nowait, None)   # sentinel → done
+        except Exception as exc:
+            loop.call_soon_threadsafe(queue.put_nowait, exc)
+
+    loop.run_in_executor(None, _sync_stream)
+
+    while True:
+        item = await queue.get()
+        if item is None:
+            break
+        if isinstance(item, Exception):
+            raise item
+        yield item
+
+
+async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int = 2048, intent: str = "", response_lang: str = ""):
+    """
+    Real token-by-token streaming from the LLM provider.
+    Uses native streaming APIs for instant first-token delivery.
+    Supports: Sarvam, Groq, Fireworks, Gemini, Cerebras, xAI, Bedrock.
+    'openai/gpt-oss-20b' triggers the smart SLM pool (Fireworks/Groq/Cerebras/Gemini).
+    When response_lang is an Indic code (as/hi/etc), optimized Sarvam routing is applied.
+    """
+    _indic_mode = _is_indic_lang(response_lang)
+    _stream_t0 = time.monotonic()
+
+    if _indic_mode:
+        _resolved_indic_model = None
+        for _pref_model in _SARVAM_INDIC_MODEL_PREFERENCE:
+            _prov, _pkey = _resolve_provider_for_model(_pref_model, _LLM_PROVIDERS)
+            if _prov == "sarvam" and _pkey:
+                _resolved_indic_model = _pref_model
+                break
+        if _resolved_indic_model:
+            model = _resolved_indic_model
+            logger.info(f"[INDIC] Auto-selected Sarvam model '{model}' for {response_lang} response")
+        else:
+            logger.warning(f"[INDIC] No Sarvam model available from preference chain, using default")
+
+    use_model_raw = model or LLM_MODEL
+
+    # ── Vertex AI Gemini Flash fast-path (Task #607) ──────────────────────────
+    # When the requested model resolves to Vertex Gemini Flash, stream through
+    # Vertex AI's REST endpoint directly. On any error before the first token
+    # is delivered, automatically fall back to the legacy SLM hedged pool by
+    # re-routing through the standard resolution path below.
+    # Task #628 — Indic (Assamese) admin toggle: when the admin has
+    # flipped the Indic provider to "vertex" AND Vertex is configured,
+    # route Assamese chat through the same Vertex fast-path used for
+    # English below. The leak sanitiser downstream still runs on the
+    # emitted content, so stray English words are cleaned regardless
+    # of provider. On pre-first-token Vertex failure we fall through
+    # to the legacy Sarvam hedged pool below (NOT the English SLM
+    # pool) to preserve Assamese quality.
+    _indic_vertex_active = False
+    if _indic_mode:
+        try:
+            from lang_sanitizer import get_indic_provider as _get_indic_provider
+            _indic_provider_pref = _get_indic_provider()
+        except Exception:
+            _indic_provider_pref = "sarvam"
+        if _indic_provider_pref == "vertex" and _vertex_chat.is_configured():
+            _indic_vertex_active = True
+
+    _use_vertex_fastpath = (
+        (use_model_raw == "vertex/gemini-flash" and not _indic_mode)
+        or _indic_vertex_active
+    )
+    _vertex_fallback_target = (
+        # Indic fallback uses the Sarvam hedged pool (preserves Assamese
+        # quality); English fallback uses the SLM pool.
+        "sarvam-m" if _indic_vertex_active else "openai/gpt-oss-20b"
+    )
+    _vertex_metric_bucket = "vertex_gemini_indic" if _indic_vertex_active else "vertex_gemini"
+
+    if _use_vertex_fastpath:
+        if not _vertex_chat.is_configured():
+            logger.warning("vertex/gemini-flash requested but VERTEX_PROJECT_ID is not set — falling back to legacy SLM pool")
+            use_model_raw = _vertex_fallback_target
+        else:
+            _vertex_first_token = False
+            _vertex_t0 = time.monotonic()
+            try:
+                _mt_vx = _clamp_max_tokens(VERTEX_GEMINI_MODEL, max_tokens)
+                _vx_batch = ""
+                _VX_BATCH_SIZE = 2
+                # For Indic mode, prepend the same strict-Assamese system
+                # preface used by `_stream_sarvam` so Gemini commits to
+                # Assamese script from the first token and we don't rely
+                # on the sanitizer to clean up provider-level leakage.
+                _vx_messages = messages
+                if _indic_vertex_active:
+                    _vx_messages = [dict(m) for m in messages]
+                    _asm_preface = (
+                        "CRITICAL: Reply DIRECTLY in Assamese (অসমীয়া). "
+                        "Do NOT use <think> tags. Do NOT write internal thoughts.\n"
+                        "STRICT LANGUAGE RULES:\n"
+                        "- Every running word MUST be in Assamese script. "
+                        "NO mid-sentence English words.\n"
+                        "- Latin script is allowed ONLY for: pure numbers/dates, "
+                        "scientific units (cm, kg, Hz, °C, eV…), math symbols/equations, "
+                        "code, URLs, well-known proper nouns and acronyms "
+                        "(AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
+                        "- For everyday nouns/verbs, use the Assamese word — "
+                        "do NOT fall back to English.\n\n"
+                    )
+                    if _vx_messages and _vx_messages[0].get("role") == "system":
+                        _vx_messages[0]["content"] = _asm_preface + _vx_messages[0]["content"]
+                    else:
+                        _vx_messages.insert(0, {"role": "system", "content": _asm_preface})
+                async for token in _stream_vertex_gemini(_vx_messages, VERTEX_GEMINI_MODEL, _mt_vx):
+                    if not _vertex_first_token:
+                        _ttft_ms = (time.monotonic() - _vertex_t0) * 1000
+                        logger.info(f"[VERTEX-PERF] TTFT={_ttft_ms:.0f}ms model={VERTEX_GEMINI_MODEL} indic={_indic_vertex_active}")
+                        _vertex_first_token = True
+                    _vx_batch += token
+                    if len(_vx_batch) >= _VX_BATCH_SIZE:
+                        yield f"data: {json.dumps({'content': _vx_batch})}\n\n"
+                        _vx_batch = ""
+                if _vx_batch:
+                    yield f"data: {json.dumps({'content': _vx_batch})}\n\n"
+                if _vertex_first_token:
+                    _total_ms = (time.monotonic() - _vertex_t0) * 1000
+                    logger.info(f"[VERTEX-PERF] Total={_total_ms:.0f}ms model={VERTEX_GEMINI_MODEL} indic={_indic_vertex_active}")
+                    try:
+                        from chat_speedup_metrics import record_provider_call as _rec_prov
+                        _rec_prov(_vertex_metric_bucket, ttfb_ms=_ttft_ms, total_ms=_total_ms)
+                    except Exception:
+                        pass
+                    yield f"data: {json.dumps({'__provider': _vertex_metric_bucket})}\n\n"
+                    return
+                # Stream completed without ever yielding a token — treat as
+                # failure and fall through to legacy.
+                logger.warning("Vertex Gemini Flash returned empty stream — falling back to legacy pool")
+            except Exception as _vx_err:
+                if _vertex_first_token:
+                    # We already started streaming to the client; we can't
+                    # silently restart. Emit error and stop.
+                    logger.warning(f"Vertex Gemini Flash mid-stream error: {type(_vx_err).__name__}: {str(_vx_err)[:200]}")
+                    yield f"data: {json.dumps({'error': 'AI service interrupted'})}\n\n"
+                    return
+                logger.warning(f"Vertex Gemini Flash failed before first token: {type(_vx_err).__name__}: {str(_vx_err)[:200]} — falling back to legacy pool")
+            # Fall back: rewrite the requested model to the legacy default
+            # and continue with the standard resolution path below.
+            try:
+                from chat_speedup_metrics import record_provider_fallback as _rec_fb
+                _rec_fb(_vertex_metric_bucket, _vertex_fallback_target)
+            except Exception:
+                pass
+            use_model_raw = _vertex_fallback_target
+            model = use_model_raw
+            _indic_vertex_active = False  # Fallback → resolve normally
+
+    use_model_resolved = _MODEL_ALIAS_MAP.get(use_model_raw, use_model_raw)
+    _prov_list = _LLM_PROVIDERS if _indic_mode else _LLM_PROVIDERS_CHAT
+    provider, key = _resolve_provider_for_model(use_model_resolved, _prov_list)
+    if use_model_raw != use_model_resolved:
+        logger.info(f"Model alias '{use_model_raw}' → '{use_model_resolved}' ({provider})")
+    use_model = _safe_model_for_provider(use_model_resolved, provider, _prov_list)
+    if use_model != use_model_resolved:
+        logger.info(f"Model '{use_model_resolved}' not compatible with {provider} → using '{use_model}'")
+
+    if not key and provider != "sarvam":
+        yield f"data: {json.dumps({'error': 'LLM API key not configured'})}\n\n"
+        return
+
+    in_think = False
+    buf = ""
+
+    _SSE_BATCH = 2    # flush every 2 chars — near-instant token delivery
+
+    async def _emit_tokens(token_source):
+        nonlocal in_think, buf
+        import re as _re
+        _CLOSE_KEEP = len('</think>') - 1   # 7
+        think_done  = False
+        batch       = ""
+        _visible_text = ""
+        _think_buf  = []
+
+        async for token in token_source:
+            if think_done:
+                cleaned = _re.sub(r'<think>[\s\S]*?</think>', '', token)
+                if cleaned:
+                    batch += cleaned
+                    if len(batch) >= _SSE_BATCH:
+                        _visible_text += batch
+                        yield f"data: {json.dumps({'content': batch})}\n\n"
+                        batch = ""
+                continue
+
+            buf += token
+            while buf:
+                if in_think:
+                    close_idx = buf.find('</think>')
+                    if close_idx != -1:
+                        _think_buf.append(buf[:close_idx])
+                        buf = buf[close_idx + 8:]
+                        in_think   = False
+                        think_done = True
+                        if buf:
+                            batch += buf
+                            buf = ""
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                        break
+                    else:
+                        if len(buf) > _CLOSE_KEEP:
+                            _think_buf.append(buf[:-_CLOSE_KEEP])
+                            buf = buf[-_CLOSE_KEEP:]
+                        break
+                else:
+                    open_idx = buf.find('<think>')
+                    if open_idx != -1:
+                        before = buf[:open_idx]
+                        if before:
+                            batch += before
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                        buf      = buf[open_idx + 7:]
+                        in_think = True
+                    elif buf.endswith(('<', '<t', '<th', '<thi', '<thin', '<think')):
+                        partial_start = buf.rfind('<')
+                        candidate     = buf[partial_start:]
+                        if '<think>'[:len(candidate)] == candidate:
+                            before = buf[:partial_start]
+                            if before:
+                                batch += before
+                                if len(batch) >= _SSE_BATCH:
+                                    _visible_text += batch
+                                    yield f"data: {json.dumps({'content': batch})}\n\n"
+                                    batch = ""
+                            buf = candidate
+                            break
+                        else:
+                            batch += buf
+                            buf    = ""
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                    else:
+                        batch += buf
+                        buf    = ""
+                        if len(batch) >= _SSE_BATCH:
+                            _visible_text += batch
+                            yield f"data: {json.dumps({'content': batch})}\n\n"
+                            batch = ""
+                        break
+
+        if batch and not in_think:
+            _visible_text += batch
+            yield f"data: {json.dumps({'content': batch})}\n\n"
+        if buf and not in_think:
+            _visible_text += buf
+            yield f"data: {json.dumps({'content': buf})}\n\n"
+
+        if not _visible_text.strip() and (in_think or think_done):
+            fallback_text = "".join(_think_buf)
+            if in_think and buf:
+                fallback_text += buf
+            fallback_text = _re.sub(r'</?think\s*/?>', '', fallback_text).strip()
+            fallback_text = _re.sub(r'</?\w*$', '', fallback_text).strip()
+            if fallback_text and len(fallback_text) > 5:
+                logger.info(f"Think-block fallback: emitting {len(fallback_text)} chars of think content as response")
+                yield f"data: {json.dumps({'content': fallback_text})}\n\n"
+
+    async def _stream_from_provider(p_name: str, p_key: str, p_model: str):
+        """Yield raw tokens from a provider. Raises on failure."""
+        _mt = _clamp_max_tokens(p_model, max_tokens)
+        if p_name == "sarvam":
+            _input_est = sum(len(m.get("content", "")) for m in messages) // 4
+            _think_overhead = 0 if _indic_mode else SARVAM_THINK_BUFFER
+            _sarvam_cap = max(256, 7192 - _input_est - _think_overhead - 100)
+            _mt = min(_mt, _sarvam_cap)
+            async for token in _stream_sarvam(messages, p_key, p_model, _mt, response_lang=response_lang):
+                yield token
+        elif p_name == "gemini":
+            logger.info(f"LLM stream: provider=gemini, model={p_model}")
+            async for token in _stream_gemini(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "cerebras":
+            logger.info(f"LLM stream: provider=cerebras, model={p_model}")
+            async for token in _stream_cerebras(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "groq":
+            logger.info(f"LLM stream: provider=groq, model={p_model}")
+            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "groq", "https://api.groq.com/openai/v1"):
+                yield token
+        elif p_name == "xai":
+            logger.info(f"LLM stream: provider=xai, model={p_model}")
+            async for token in _stream_xai(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "openrouter":
+            logger.info(f"LLM stream: provider=openrouter, model={p_model}")
+            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "openrouter", "https://openrouter.ai/api/v1"):
+                yield token
+        elif p_name == "bedrock":
+            logger.info(f"LLM stream: provider=bedrock, model={p_model}")
+            async for token in _stream_bedrock(messages, p_model, _mt):
+                yield token
+        else:
+            logger.info(f"LLM stream: provider={p_name}, model={p_model}")
+            chat = LlmChat(api_key=p_key or OPENAI_API_KEY, session_id=str(uuid.uuid4())).with_model(p_name, p_model)
+            async for token in chat.stream_messages(messages, max_tokens=_mt):
+                yield token
+
+    # ── Syrabit SLM: concurrent smart pool ──────────────────────────────────────
+    # pick() returns the fastest available slot (by speed tier) with spare capacity.
+    # async with slot["sem"] lets up to max_concurrent requests run in parallel.
+    # Tokens are yielded in real-time as they arrive (true streaming).
+    # TTFT timeout ensures fast failover when a provider is unresponsive.
+    _SLM_SLOT_TIMEOUT = 0.7    # max seconds between any two tokens mid-stream
+    _SLM_TTFT_TIMEOUT = 0.8    # max seconds to wait for FIRST token from a slot
+
+    _SLM_PROVIDER_MAX_INPUT_CHARS = {
+        "cerebras": 24000,
+        "sarvam": 12000,
+        "groq": 100000,
+        "gemini": 500000,
+        "openrouter": 200000,
+        "openai": 80000,
+        "bedrock": 40000,
+    }
+
+    if use_model_raw == "openai/gpt-oss-20b":
+        _active_pool = _slm_pool
+        _input_chars = sum(len(m.get("content", "")) for m in messages)
+
+        _skipped_slots: set = set()
+        _candidates = []
+        for _ in range(len(_active_pool.all_slots)):
+            slot = _active_pool.pick(_skipped_slots)
+            if slot is None:
+                break
+            p_name = slot["provider"]
+            _max_chars = _SLM_PROVIDER_MAX_INPUT_CHARS.get(p_name, 80000)
+            if _input_chars > _max_chars:
+                logger.info(f"SLM pool: skipping {p_name}/{slot['model']} — input too large ({_input_chars} chars > {_max_chars} limit)")
+                _skipped_slots.add(id(slot))
+                continue
+            _candidates.append(slot)
+            _skipped_slots.add(id(slot))
+            if len(_candidates) >= 2:
+                break
+
+        if _candidates:
+            _effective_ttft = min(1.2, _SLM_TTFT_TIMEOUT + (0.2 if _input_chars > 8000 else 0.0))
+            _hedged_q: asyncio.Queue = asyncio.Queue()
+            _hedged_errors: dict = {}
+
+            async def _hedged_producer(_slot, _slot_idx):
+                _pn, _pk, _pm = _slot["provider"], _slot["key"], _slot["model"]
+                try:
+                    async with _slot["sem"]:
+                        _chunk_count = 0
+                        async for chunk in _emit_tokens(_stream_from_provider(_pn, _pk, _pm)):
+                            _chunk_count += 1
+                            await _hedged_q.put((_slot_idx, "chunk", chunk))
+                        if _chunk_count == 0:
+                            logger.warning(f"SLM hedged: {_pn}/{_pm} 0 chunks")
+                        await _hedged_q.put((_slot_idx, "done", None))
+                except Exception as exc:
+                    _hedged_errors[_slot_idx] = exc
+                    logger.warning(f"SLM hedged: {_pn}/{_pm} error: {type(exc).__name__}: {str(exc)[:200]}")
+                    await _hedged_q.put((_slot_idx, "error", None))
+
+            _hedged_tasks = [asyncio.create_task(_hedged_producer(s, i)) for i, s in enumerate(_candidates)]
+            if len(_candidates) > 1:
+                _race_desc = " vs ".join(f"{s['provider']}/{s['model']}" for s in _candidates)
+                logger.info(f"SLM hedged: racing {_race_desc}")
+
+            _winner = None
+            _finished_slots: set = set()
+            try:
+                _deadline = time.monotonic() + _effective_ttft
+                while _winner is None and len(_finished_slots) < len(_candidates):
+                    _remaining = _deadline - time.monotonic()
+                    if _remaining <= 0:
+                        break
+                    try:
+                        _sid, _evt, _data = await asyncio.wait_for(_hedged_q.get(), timeout=_remaining)
+                    except asyncio.TimeoutError:
+                        break
+                    if _evt == "chunk":
+                        _winner = _sid
+                    elif _evt in ("done", "error"):
+                        _finished_slots.add(_sid)
+                        if _evt == "error":
+                            _slm_pool.mark_err(_candidates[_sid])
+            except Exception:
+                pass
+
+            if _winner is not None:
+                _win_slot = _candidates[_winner]
+                _slm_pool.mark_ok(_win_slot)
+                _win_pname = _win_slot["provider"]
+                _win_model = _win_slot["model"]
+                if len(_candidates) > 1:
+                    logger.info(f"SLM hedged: winner={_win_pname}/{_win_model}")
+
+                for i, t in enumerate(_hedged_tasks):
+                    if i != _winner:
+                        t.cancel()
+
+                yield _data
+
+                _tokens_yielded = 1
+                while True:
+                    try:
+                        _sid, _evt, _chunk = await asyncio.wait_for(_hedged_q.get(), timeout=_SLM_SLOT_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        _slm_pool.mark_err(_win_slot)
+                        logger.warning(f"SLM hedged: {_win_pname}/{_win_model} stalled mid-stream after {_SLM_SLOT_TIMEOUT}s ({_tokens_yielded} tokens yielded)")
+                        break
+                    if _sid != _winner:
+                        continue
+                    if _evt == "chunk":
+                        yield _chunk
+                        _tokens_yielded += 1
+                    else:
+                        if _winner in _hedged_errors and _tokens_yielded <= 1:
+                            _slm_pool.mark_err(_win_slot)
+                        break
+
+                _hedged_tasks[_winner].cancel()
+                for t in _hedged_tasks:
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+                yield f"data: {json.dumps({'__provider': _win_pname})}\n\n"
+                return
+            else:
+                for t in _hedged_tasks:
+                    t.cancel()
+                for t in _hedged_tasks:
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                for i, s in enumerate(_candidates):
+                    if i not in _finished_slots:
+                        _slm_pool.mark_err(s)
+                        logger.warning(f"SLM hedged: {s['provider']}/{s['model']} TTFT timeout after {_effective_ttft}s")
+
+        yield f"data: {json.dumps({'error': 'All AI providers temporarily unavailable'})}\n\n"
+        return
+
+    # ── Indic Sarvam with hedged key racing ─────────────────────────────────────
+    _SARVAM_TTFT_TIMEOUT = 3.0
+    _SARVAM_SLOT_TIMEOUT = 1.2
+    if _indic_mode and provider == "sarvam":
+        _indic_candidates = []
+
+        _sarvam_keys = [p["key"] for p in _prov_list if p["provider"] == "sarvam"]
+        if key not in _sarvam_keys:
+            _sarvam_keys.insert(0, key)
+        _sarvam_keys = list(dict.fromkeys(_sarvam_keys))
+        for _sk in _sarvam_keys:
+            _indic_candidates.append({"provider": "sarvam", "key": _sk, "model": use_model})
+
+        _gemini_keys_for_indic = [p["key"] for p in _LLM_PROVIDERS if p["provider"] == "gemini" and p.get("key")]
+        for _gk in _gemini_keys_for_indic[:1]:
+            _indic_candidates.append({"provider": "gemini", "key": _gk, "model": "gemini-2.5-flash"})
+
+        _indic_q: asyncio.Queue = asyncio.Queue()
+
+        async def _indic_producer(_cand, _cand_idx):
+            _cprov, _ckey, _cmodel = _cand["provider"], _cand["key"], _cand["model"]
+            try:
+                _cn = 0
+                async for chunk in _emit_tokens(_stream_from_provider(_cprov, _ckey, _cmodel)):
+                    _cn += 1
+                    await _indic_q.put((_cand_idx, "chunk", chunk))
+                if _cn == 0:
+                    logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} returned 0 chunks")
+                await _indic_q.put((_cand_idx, "done", None))
+            except Exception as _e:
+                _is_rate = any(s in str(_e).lower() for s in ("429", "rate", "quota", "throttl"))
+                logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} failed ({type(_e).__name__}: {str(_e)[:120]}) rate_limit={_is_rate}")
+                await _indic_q.put((_cand_idx, "error", None))
+
+        _indic_tasks = [asyncio.create_task(_indic_producer(c, i)) for i, c in enumerate(_indic_candidates)]
+        _race_providers = ", ".join(f"{c['provider']}/{c['model']}" for c in _indic_candidates)
+        logger.info(f"[INDIC] Hedged racing {len(_indic_candidates)} candidates for {response_lang}: {_race_providers}")
+
+        _sarvam_winner = None
+        _sarvam_finished: set = set()
+        _sarvam_race_t0 = time.monotonic()
+        try:
+            _deadline = time.monotonic() + _SARVAM_TTFT_TIMEOUT
+            while _sarvam_winner is None and len(_sarvam_finished) < len(_indic_candidates):
+                _rem = _deadline - time.monotonic()
+                if _rem <= 0:
+                    break
+                try:
+                    _sid, _evt, _data = await asyncio.wait_for(_indic_q.get(), timeout=_rem)
+                except asyncio.TimeoutError:
+                    break
+                if _evt == "chunk":
+                    _sarvam_winner = _sid
+                elif _evt in ("done", "error"):
+                    _sarvam_finished.add(_sid)
+        except Exception:
+            pass
+
+        if _sarvam_winner is not None:
+            _win_cand = _indic_candidates[_sarvam_winner]
+            _ttft_ms = (time.monotonic() - _sarvam_race_t0) * 1000
+            logger.info(f"[INDIC-PERF] TTFT={_ttft_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']} idx={_sarvam_winner}")
+
+            for i, t in enumerate(_indic_tasks):
+                if i != _sarvam_winner:
+                    t.cancel()
+
+            yield _data
+
+            while True:
+                try:
+                    _sid, _evt, _chunk = await asyncio.wait_for(_indic_q.get(), timeout=_SARVAM_SLOT_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning(f"[INDIC] {_win_cand['provider']}/{_win_cand['model']} stalled mid-stream")
+                    break
+                if _sid != _sarvam_winner:
+                    continue
+                if _evt == "chunk":
+                    yield _chunk
+                else:
+                    break
+
+            _total_ms = (time.monotonic() - _sarvam_race_t0) * 1000
+            logger.info(f"[INDIC-PERF] Total={_total_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']}")
+
+            for t in _indic_tasks:
+                t.cancel()
+            for t in _indic_tasks:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            yield f"data: {json.dumps({'__provider': _win_cand['provider']})}\n\n"
+        else:
+            for t in _indic_tasks:
+                t.cancel()
+            for t in _indic_tasks:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+            logger.warning(f"[INDIC] All {len(_indic_candidates)} candidates failed/timed out")
+            yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
+        return
+
+    # ── All other models: single provider ───────────────────────────────────────
+    try:
+        _chunk_n = 0
+        async for chunk in _emit_tokens(_stream_from_provider(provider, key, use_model)):
+            if _chunk_n == 0:
+                _ttft_ms = (time.monotonic() - _stream_t0) * 1000
+                logger.info(f"[EN-PERF] TTFT={_ttft_ms:.0f}ms model={use_model} provider={provider}")
+            _chunk_n += 1
+            yield chunk
+        _total_ms = (time.monotonic() - _stream_t0) * 1000
+        logger.info(f"[EN-PERF] Total={_total_ms:.0f}ms chunks={_chunk_n} model={use_model} provider={provider}")
+        yield f"data: {json.dumps({'__provider': provider})}\n\n"
+    except HTTPException as http_err:
+        yield f"data: {json.dumps({'error': str(http_err.detail)})}\n\n"
+    except Exception as e:
+        logger.error(f"LLM streaming error: {type(e).__name__}: {str(e)[:200]}")
+        yield f"data: {json.dumps({'error': 'AI service temporarily unavailable'})}\n\n"
+, '', result, flags=re.DOTALL).strip()
+
+    # ── Populate cache for future hits ──────────────────────────────────────
+    if result:
+        await ai_cache.aset(cache_key, result, saved_ms=duration_ms)
+        logger.info(f"sarvam_cache SET model={model} key={cache_key[:12]}… duration_ms={duration_ms:.0f}")
+
+    return result
+
+def _cf_cache_headers() -> dict:
+    # Delegates to config.byok_headers() which returns:
+    #   cf-aig-byok-key:default   — CF substitutes the stored BYOK key upstream
+    #   cf-aig-cache-ttl:<N>      — cache TTL hint
+    #   cf-aig-authorization:…    — only when Authenticated Gateway mode is on
+    # Returns {} when the gateway is down — callers should raise or continue
+    # without the caching hint. With BYOK active the placeholder api_key in
+    # the openai client is ignored by CF; the stored BYOK key is used instead.
+    return byok_headers()
+
+def _is_cf_connection_error(exc: Exception) -> bool:
+    err = str(exc).lower()
+    return "connect" in err or "timeout" in err or "unreachable" in err or "dns" in err
+
+def _handle_cf_connection_error(exc: Exception) -> None:
+    if _is_cf_connection_error(exc):
+        mark_cf_gateway_down()
+        logger.warning(f"Cloudflare AI Gateway connection error — falling back to direct URLs for 5 min: {type(exc).__name__}")
+
+def _handle_cf_gateway_auth_error(exc: Exception) -> None:
+    mark_cf_gateway_down()
+    logger.warning(f"Cloudflare AI Gateway 401 auth error — falling back to direct URLs for 5 min: {type(exc).__name__}: {str(exc)[:200]}")
+
+async def _call_gemini(messages: list, api_key: str, model: str, max_tokens: int) -> str:
+    """Non-streaming call to Google Gemini via its OpenAI-compatible endpoint."""
+    direct_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    base = get_provider_base_url("gemini") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        resp = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            extra_headers=_cf_cache_headers() or None,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_openai_compat(messages: list, api_key: str, model: str, max_tokens: int, provider: str, fallback_base: str) -> str:
+    """Non-streaming call via an OpenAI-compatible provider (OpenAI, xAI, Fireworks)."""
+    base = get_provider_base_url(provider) or fallback_base
+    client = _get_oai_client(api_key, base)
+    try:
+        resp = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            extra_headers=_cf_cache_headers() or None,
+        )
+    except _oai.APIConnectionError as e:
+        if base != fallback_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != fallback_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_cerebras(messages: list, api_key: str, model: str, max_tokens: int) -> str:
+    base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
+    client = _get_oai_client(api_key, base)
+    resp = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+    )
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_single_provider(messages: list, provider: str, api_key: str, model: str, max_tokens: int) -> str:
+    max_tokens = _clamp_max_tokens(model, max_tokens)
+    if provider == "sarvam":
+        return await _call_sarvam_llm(messages, api_key, model, max_tokens)
+    if provider == "gemini":
+        return await _call_gemini(messages, api_key, model, max_tokens)
+    if provider == "cerebras":
+        return await _call_cerebras(messages, api_key, model, max_tokens)
+    if provider == "groq":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "groq", "https://api.groq.com/openai/v1")
+    if provider == "xai":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "xai", "https://api.x.ai/v1")
+    if provider == "openrouter":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "openrouter", "https://openrouter.ai/api/v1")
+
+    system_msg = ""
+    user_msg = ""
+    for m in messages:
+        if m["role"] == "system":
+            system_msg = m["content"]
+        elif m["role"] == "user":
+            user_msg = m["content"]
+
+    chat = LlmChat(
+        api_key=api_key,
+        session_id=str(uuid.uuid4()),
+        system_message=system_msg or "You are a helpful AI tutor.",
+    ).with_model(provider, model)
+
+    response = await chat.send_message(UserMessage(text=user_msg))
+    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+    return response
+
+async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 1024, provider_list=None) -> str:
+    import time as _t
+    # Wall-clock start of the whole primary-rotation loop. Used so the
+    # Workers AI fallback path (Task #636) can attribute the *real*
+    # cumulative primary latency (instead of 0) when we eventually give
+    # up and call the edge.
+    _loop_t0 = _t.perf_counter()
+    providers = _LLM_PROVIDERS if provider_list is None else provider_list
+    use_model = _MODEL_ALIAS_MAP.get(model or LLM_MODEL, model or LLM_MODEL)
+    primary_provider, primary_key = _resolve_provider_for_model(use_model, providers)
+
+    if not primary_key and not providers:
+        raise HTTPException(status_code=503, detail="LLM API key not configured")
+
+    tried: set = set()
+    last_err = None
+
+    _is_content = provider_list is _LLM_PROVIDERS_CONTENT
+    _is_chat = provider_list is _LLM_PROVIDERS_CHAT
+    _PROVIDER_TIMEOUT = 30.0 if _is_content else (4.0 if _is_chat else 6.0)
+
+    provider, key = primary_provider, primary_key
+    try_model = _safe_model_for_provider(use_model, provider, providers)
+    if try_model != use_model:
+        logger.info(f"Model '{use_model}' not compatible with {provider} → using '{try_model}'")
+    try:
+        tried.add((provider, try_model, id(key) if key else 0))
+        _t0 = _t.perf_counter()
+        result = await asyncio.wait_for(
+            _call_single_provider(messages, provider, key, try_model, max_tokens),
+            timeout=_PROVIDER_TIMEOUT,
+        )
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        tok = len(result.split())
+        _record_llm_call(provider, try_model, _dur, True, tok, False)
+        logger.info(f"llm_call provider={provider} model={try_model} duration_ms={_dur} tokens_approx={tok}")
+        return LlmResult(result, provider=provider)
+    except asyncio.TimeoutError:
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        _record_llm_call(provider, try_model, _dur, False, 0, False, "Timeout")
+        last_err = TimeoutError(f"{provider}/{try_model} timed out after {_PROVIDER_TIMEOUT}s")
+        logger.warning(f"LLM primary TIMEOUT ({provider}/{try_model}): {_dur}ms > {_PROVIDER_TIMEOUT}s limit")
+    except Exception as e:
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        _record_llm_call(provider, try_model, _dur, False, 0, False, type(e).__name__)
+        last_err = e
+        logger.warning(f"LLM primary failed ({provider}/{try_model}): {type(e).__name__}: {str(e)[:150]}")
+
+    for fallback in providers:
+        fb_model = fallback["default_model"]
+        fb_key_id = id(fallback["key"]) if fallback.get("key") else 0
+        if (fallback["provider"], fb_model, fb_key_id) in tried:
+            continue
+        tried.add((fallback["provider"], fb_model, fb_key_id))
+        try:
+            _t0 = _t.perf_counter()
+            result = await asyncio.wait_for(
+                _call_single_provider(messages, fallback["provider"], fallback["key"], fb_model, max_tokens),
+                timeout=_PROVIDER_TIMEOUT,
+            )
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            tok = len(result.split())
+            _record_llm_call(fallback["provider"], fb_model, _dur, True, tok, True)
+            logger.info(f"llm_call provider={fallback['provider']} model={fb_model} duration_ms={_dur} tokens_approx={tok} fallback=true")
+            return LlmResult(result, provider=fallback["provider"])
+        except asyncio.TimeoutError:
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, "Timeout")
+            last_err = TimeoutError(f"{fallback['provider']}/{fb_model} timed out after {_PROVIDER_TIMEOUT}s")
+            logger.warning(f"LLM fallback TIMEOUT ({fallback['provider']}/{fb_model}): {_dur}ms > {_PROVIDER_TIMEOUT}s limit")
+        except Exception as e:
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, type(e).__name__)
+            last_err = e
+            logger.warning(f"LLM fallback failed ({fallback['provider']}/{fb_model}): {type(e).__name__}: {str(e)[:150]}")
+
+    # Task #636 — last-resort Workers AI fallback. Only reached after every
+    # configured primary+fallback Cerebras/Gemini/etc provider has failed.
+    # Policy is strict (timeout/5xx/429/quota only) so 4xx bad-input bugs
+    # still surface as 503 instead of being silently masked by a different
+    # model's looser parser.
+    try:
+        from providers import workers_ai as _wai
+        if _wai.is_enabled("chat") and last_err is not None and _wai.should_fallback(last_err):
+            # Real cumulative primary-loop latency (all rotations combined),
+            # so the admin panel and structured logs attribute the actual
+            # wait the user incurred before we gave up on the primaries.
+            _primary_total_ms = int((_t.perf_counter() - _loop_t0) * 1000)
+            _t0 = _t.perf_counter()
+            ok, value, label = await _wai.attempt_fallback(
+                "chat", last_err, _primary_total_ms,
+                lambda: _wai.call_chat(messages, max_tokens=max_tokens, temperature=0.3),
+            )
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            if ok and isinstance(value, str) and value:
+                reason = _wai.classify_primary_error(last_err)
+                _record_llm_call("workers-ai", "llama-3.1-8b-instruct", _dur, True,
+                                 len(value.split()), True)
+                logger.info(
+                    f"llm_call provider=workers-ai model=llama-3.1-8b-instruct "
+                    f"duration_ms={_dur} fallback=true reason={reason}"
+                )
+                return LlmResult(value, provider="workers-ai", fallback_reason=reason)
+    except Exception as _wai_err:  # noqa: BLE001
+        logger.warning(f"[workers-ai] chat fallback skipped: {type(_wai_err).__name__}: {str(_wai_err)[:150]}")
+
+    logger.error(f"All LLM providers exhausted. Last error: {last_err}")
+    raise HTTPException(status_code=503, detail="AI service temporarily unavailable. Please try again.")
+
+async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048) -> str:
+    """Smart-batched LLM call: deduplicates identical requests, limits concurrency.
+    Uses all providers including Emergent (admin content generation)."""
+    return await _llm_batcher.call(messages, model, max_tokens)
+
+_LLM_PROVIDERS_CONTENT: list[dict] = []
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "qwen-3-235b-a22b-instruct-2507"})
+if _SARVAM_LLM_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+if _GEMINI_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
+if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
+
+logger.info(
+    f"Admin content providers (quality-first order): "
+    f"{[p['provider'] + '/' + p['default_model'] for p in _LLM_PROVIDERS_CONTENT]}"
+)
+
+async def call_llm_api_content(messages: list, model: str = None, max_tokens: int = 3072) -> str:
+    """LLM call for admin content generation — Cerebras preferred (qwen-3-235b, fast + high quality),
+    Sarvam secondary (sarvam-m), Gemini 2.5 Flash last resort.
+    Uses dedicated content batcher with 300ms batch window (vs 5ms for chat).
+    Retries with exponential backoff instead of instant failover."""
+    if model is None and _LLM_PROVIDERS_CONTENT:
+        model = _LLM_PROVIDERS_CONTENT[0]["default_model"]
+    return await _content_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CONTENT, use_admin_sem=True)
+
+
+async def call_llm_api_content_with_retry(
+    messages: list, model: str = None, max_tokens: int = 3072,
+    validate_fn=None,
+) -> str:
+    """Content LLM call with retry-with-backoff and optional output validation.
+    
+    validate_fn: optional callable(result_str) -> bool. If it returns False,
+    the result is treated as a failure and retried.
+    """
+    last_err = None
+    for attempt in range(_CONTENT_RETRY_MAX):
+        try:
+            result = await call_llm_api_content(messages, model, max_tokens)
+            if validate_fn is not None and not validate_fn(result):
+                logger.warning(
+                    f"Content LLM output failed validation (attempt {attempt + 1}/{_CONTENT_RETRY_MAX})"
+                )
+                last_err = ValueError("Output failed validation")
+                if attempt < _CONTENT_RETRY_MAX - 1:
+                    backoff = _CONTENT_RETRY_BACKOFF[min(attempt, len(_CONTENT_RETRY_BACKOFF) - 1)]
+                    logger.info(f"Content retry backoff: waiting {backoff}s before attempt {attempt + 2}")
+                    await asyncio.sleep(backoff)
+                continue
+            return result
+        except Exception as e:
+            last_err = e
+            logger.warning(
+                f"Content LLM call failed (attempt {attempt + 1}/{_CONTENT_RETRY_MAX}): "
+                f"{type(e).__name__}: {str(e)[:150]}"
+            )
+            if attempt < _CONTENT_RETRY_MAX - 1:
+                backoff = _CONTENT_RETRY_BACKOFF[min(attempt, len(_CONTENT_RETRY_BACKOFF) - 1)]
+                logger.info(f"Content retry backoff: waiting {backoff}s before attempt {attempt + 2}")
+                await asyncio.sleep(backoff)
+    raise last_err or HTTPException(status_code=503, detail="Content generation failed after retries")
+
+async def call_llm_api_chat(messages: list, model: str = None, max_tokens: int = 2048) -> str:
+    """LLM call for student chat — excludes Emergent provider (admin-only)."""
+    return await _llm_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CHAT)
+
+
+_THINK_BUDGET_HINT = "/think in one sentence. Answer immediately.\n"
+
+def _inject_think_budget(messages: list) -> list:
+    """Prepend a concise reasoning directive to the system message so sarvam-m
+    spends fewer tokens in its <think> block, reducing TTFT significantly."""
+    out = []
+    injected = False
+    for m in messages:
+        if m.get("role") == "system" and not injected:
+            out.append({**m, "content": _THINK_BUDGET_HINT + m["content"]})
+            injected = True
+        else:
+            out.append(m)
+    if not injected:
+        out.insert(0, {"role": "system", "content": _THINK_BUDGET_HINT})
+    return out
+
+async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: int, *, response_lang: str = ""):
+    """Token-by-token SSE streaming from Sarvam — reuses persistent sarvam_llm_client (zero TCP overhead).
+    For Indic languages: skips think budget injection and think buffer to reduce TTFT.
+    For English: adds SARVAM_THINK_BUFFER so <think> reasoning never crowds out the answer budget.
+    Falls back to direct client if CF gateway connection fails.
+    """
+    _indic = _is_indic_lang(response_lang)
+    if _indic:
+        api_max = max_tokens + 100
+        patched = [dict(m) for m in messages]
+        if patched and patched[0].get("role") == "system":
+            patched[0]["content"] = (
+                "CRITICAL: Do NOT use <think> tags. Do NOT write internal thoughts. "
+                "Do NOT start with 'Okay' or 'Let me'. "
+                "Reply DIRECTLY in Assamese (অসমীয়া). Start your answer immediately.\n"
+                "STRICT LANGUAGE RULES:\n"
+                "- Every running word MUST be in Assamese script. NO mid-sentence English words.\n"
+                "- NEVER emit partial English fragments such as 'me uses', 'terms', 'ssible',\n"
+                "  'ble', 'tion', 'ssing'. If you start a word in English, you MUST switch\n"
+                "  back to Assamese for the rest of that sentence.\n"
+                "- Latin script is allowed ONLY for: pure numbers/dates, scientific units\n"
+                "  (cm, kg, Hz, °C, eV…), math symbols/equations, code, URLs, well-known\n"
+                "  proper nouns and acronyms (AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
+                "- For everyday nouns/verbs, use the Assamese word — do NOT fall back to English.\n"
+                "BAD vs GOOD examples (follow the pattern, do not copy text):\n"
+                "  BAD : 'উৰুকা me uses ssible terms চমুকৈ ক'লে…'\n"
+                "  GOOD: 'উৰুকা চমুকৈ ক'লে অসমৰ এক প্ৰিয় উৎসৱ।'\n"
+                "  BAD : 'জল 100°C ত boil হয়।'\n"
+                "  GOOD: 'পানী 100°C ত উতলে।'\n"
+                "  BAD : 'Newton ৰ first law explains inertia।'\n"
+                "  GOOD: 'Newton ৰ গতিৰ প্ৰথম সূত্ৰে জড়তা ব্যাখ্যা কৰে।'\n"
+            ) + patched[0]["content"]
+        logger.info(f"[SARVAM-INDIC] No-think mode for {response_lang} — model={model}, api_max={api_max}")
+    else:
+        api_max = max_tokens + SARVAM_THINK_BUFFER
+        patched = _inject_think_budget(messages)
+    _SARVAM_LANG_CODE_MAP = {"as": "as-IN"}
+    payload = {
+        "model": model,
+        "messages": patched,
+        "max_tokens": api_max,
+        "temperature": 0.05 if _indic else 0.1,
+        "top_p": 0.9 if _indic else 0.95,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+        "stream": True,
+    }
+    if _indic:
+        payload["thinking"] = {"enabled": False}
+        if response_lang in _SARVAM_LANG_CODE_MAP:
+            payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
+    elif response_lang in _SARVAM_LANG_CODE_MAP:
+        payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
+    client = _pick_sarvam_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Sarvam LLM client not initialised")
+
+    async def _do_stream(c):
+        async with c.stream("POST", "/v1/chat/completions", json=payload) as resp:
+            if resp.status_code >= 400:
+                body = await resp.aread()
+                logger.error(f"Sarvam {resp.status_code} error body: {body.decode()[:500]}")
+                resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                raw = line[5:].strip()
+                if raw == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(raw)
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
+                    token = delta.get("content") or ""
+                    if token:
+                        yield token
+                except Exception:
+                    continue
+
+    try:
+        async for token in _do_stream(client):
+            yield token
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        if sarvam_llm_client_direct is not None and client is not sarvam_llm_client_direct:
+            _handle_cf_connection_error(e)
+            async for token in _do_stream(sarvam_llm_client_direct):
+                yield token
+        else:
+            raise
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401 and sarvam_llm_client_direct is not None and client is not sarvam_llm_client_direct:
+            _handle_cf_gateway_auth_error(e)
+            async for token in _do_stream(sarvam_llm_client_direct):
+                yield token
+        else:
+            raise
+
+async def _stream_gemini(messages: list, api_key: str, model: str, max_tokens: int):
+    """Token-by-token streaming from Google Gemini via its OpenAI-compatible endpoint."""
+    direct_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    base = get_provider_base_url("gemini") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_vertex_gemini(messages: list, model: str, max_tokens: int):
+    """Token-by-token streaming from Vertex AI Gemini Flash (Task #607).
+
+    Uses google-auth + Vertex `streamGenerateContent` REST endpoint.
+    Raises on misconfiguration / network errors so the caller can fall
+    back to the legacy hedged SLM pool.
+    """
+    async for token in _vertex_chat.stream_chat(
+        messages, model=model, max_tokens=max_tokens, temperature=0.1,
+    ):
+        yield token
+
+
+async def _stream_cerebras(messages: list, api_key: str, model: str, max_tokens: int):
+    base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
+    client = _get_oai_client(api_key, base)
+    stream = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+    )
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_xai(messages: list, api_key: str, model: str, max_tokens: int):
+    """Token-by-token streaming from xAI Grok via its OpenAI-compatible endpoint."""
+    direct_base = "https://api.x.ai/v1"
+    base = get_provider_base_url("xai") or direct_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_openai_compat(messages: list, api_key: str, model: str, max_tokens: int, provider: str, fallback_base: str):
+    """Token-by-token streaming from any OpenAI-compatible provider."""
+    base = get_provider_base_url(provider) or fallback_base
+    client = _get_oai_client(api_key, base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != fallback_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != fallback_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_bedrock(messages: list, model: str, max_tokens: int):
+    """Token-by-token streaming from Amazon Bedrock via Converse streaming API.
+    boto3 is synchronous — runs in a thread pool; tokens passed back via asyncio.Queue.
+    Supports Amazon Nova family (nova-micro, nova-lite, nova-pro) and any Converse-compatible model.
+    """
+    if not _AWS_ACCESS_KEY or not _AWS_SECRET_KEY:
+        raise ValueError("AWS credentials not configured (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)")
+
+    # Convert OpenAI-format messages to Bedrock Converse format
+    system_parts = []
+    converse_messages = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if role == "system":
+            system_parts.append({"text": content})
+        else:
+            converse_messages.append({"role": role, "content": [{"text": content}]})
+
+    loop = asyncio.get_event_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def _sync_stream():
+        try:
+            import boto3 as _boto3
+            client = _boto3.client(
+                "bedrock-runtime",
+                region_name=_AWS_REGION,
+                aws_access_key_id=_AWS_ACCESS_KEY,
+                aws_secret_access_key=_AWS_SECRET_KEY,
+            )
+            kwargs = dict(
+                modelId=model,
+                messages=converse_messages,
+                inferenceConfig={"maxTokens": max_tokens, "temperature": 0.1},
+            )
+            if system_parts:
+                kwargs["system"] = system_parts
+            resp = client.converse_stream(**kwargs)
+            for event in resp["stream"]:
+                if "contentBlockDelta" in event:
+                    text = event["contentBlockDelta"].get("delta", {}).get("text", "")
+                    if text:
+                        loop.call_soon_threadsafe(queue.put_nowait, text)
+            loop.call_soon_threadsafe(queue.put_nowait, None)   # sentinel → done
+        except Exception as exc:
+            loop.call_soon_threadsafe(queue.put_nowait, exc)
+
+    loop.run_in_executor(None, _sync_stream)
+
+    while True:
+        item = await queue.get()
+        if item is None:
+            break
+        if isinstance(item, Exception):
+            raise item
+        yield item
+
+
+async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int = 2048, intent: str = "", response_lang: str = ""):
+    """
+    Real token-by-token streaming from the LLM provider.
+    Uses native streaming APIs for instant first-token delivery.
+    Supports: Sarvam, Groq, Fireworks, Gemini, Cerebras, xAI, Bedrock.
+    'openai/gpt-oss-20b' triggers the smart SLM pool (Fireworks/Groq/Cerebras/Gemini).
+    When response_lang is an Indic code (as/hi/etc), optimized Sarvam routing is applied.
+    """
+    _indic_mode = _is_indic_lang(response_lang)
+    _stream_t0 = time.monotonic()
+
+    if _indic_mode:
+        _resolved_indic_model = None
+        for _pref_model in _SARVAM_INDIC_MODEL_PREFERENCE:
+            _prov, _pkey = _resolve_provider_for_model(_pref_model, _LLM_PROVIDERS)
+            if _prov == "sarvam" and _pkey:
+                _resolved_indic_model = _pref_model
+                break
+        if _resolved_indic_model:
+            model = _resolved_indic_model
+            logger.info(f"[INDIC] Auto-selected Sarvam model '{model}' for {response_lang} response")
+        else:
+            logger.warning(f"[INDIC] No Sarvam model available from preference chain, using default")
+
+    use_model_raw = model or LLM_MODEL
+
+    # ── Vertex AI Gemini Flash fast-path (Task #607) ──────────────────────────
+    # When the requested model resolves to Vertex Gemini Flash, stream through
+    # Vertex AI's REST endpoint directly. On any error before the first token
+    # is delivered, automatically fall back to the legacy SLM hedged pool by
+    # re-routing through the standard resolution path below.
+    # Task #628 — Indic (Assamese) admin toggle: when the admin has
+    # flipped the Indic provider to "vertex" AND Vertex is configured,
+    # route Assamese chat through the same Vertex fast-path used for
+    # English below. The leak sanitiser downstream still runs on the
+    # emitted content, so stray English words are cleaned regardless
+    # of provider. On pre-first-token Vertex failure we fall through
+    # to the legacy Sarvam hedged pool below (NOT the English SLM
+    # pool) to preserve Assamese quality.
+    _indic_vertex_active = False
+    if _indic_mode:
+        try:
+            from lang_sanitizer import get_indic_provider as _get_indic_provider
+            _indic_provider_pref = _get_indic_provider()
+        except Exception:
+            _indic_provider_pref = "sarvam"
+        if _indic_provider_pref == "vertex" and _vertex_chat.is_configured():
+            _indic_vertex_active = True
+
+    _use_vertex_fastpath = (
+        (use_model_raw == "vertex/gemini-flash" and not _indic_mode)
+        or _indic_vertex_active
+    )
+    _vertex_fallback_target = (
+        # Indic fallback uses the Sarvam hedged pool (preserves Assamese
+        # quality); English fallback uses the SLM pool.
+        "sarvam-m" if _indic_vertex_active else "openai/gpt-oss-20b"
+    )
+    _vertex_metric_bucket = "vertex_gemini_indic" if _indic_vertex_active else "vertex_gemini"
+
+    if _use_vertex_fastpath:
+        if not _vertex_chat.is_configured():
+            logger.warning("vertex/gemini-flash requested but VERTEX_PROJECT_ID is not set — falling back to legacy SLM pool")
+            use_model_raw = _vertex_fallback_target
+        else:
+            _vertex_first_token = False
+            _vertex_t0 = time.monotonic()
+            try:
+                _mt_vx = _clamp_max_tokens(VERTEX_GEMINI_MODEL, max_tokens)
+                _vx_batch = ""
+                _VX_BATCH_SIZE = 2
+                # For Indic mode, prepend the same strict-Assamese system
+                # preface used by `_stream_sarvam` so Gemini commits to
+                # Assamese script from the first token and we don't rely
+                # on the sanitizer to clean up provider-level leakage.
+                _vx_messages = messages
+                if _indic_vertex_active:
+                    _vx_messages = [dict(m) for m in messages]
+                    _asm_preface = (
+                        "CRITICAL: Reply DIRECTLY in Assamese (অসমীয়া). "
+                        "Do NOT use <think> tags. Do NOT write internal thoughts.\n"
+                        "STRICT LANGUAGE RULES:\n"
+                        "- Every running word MUST be in Assamese script. "
+                        "NO mid-sentence English words.\n"
+                        "- Latin script is allowed ONLY for: pure numbers/dates, "
+                        "scientific units (cm, kg, Hz, °C, eV…), math symbols/equations, "
+                        "code, URLs, well-known proper nouns and acronyms "
+                        "(AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
+                        "- For everyday nouns/verbs, use the Assamese word — "
+                        "do NOT fall back to English.\n\n"
+                    )
+                    if _vx_messages and _vx_messages[0].get("role") == "system":
+                        _vx_messages[0]["content"] = _asm_preface + _vx_messages[0]["content"]
+                    else:
+                        _vx_messages.insert(0, {"role": "system", "content": _asm_preface})
+                async for token in _stream_vertex_gemini(_vx_messages, VERTEX_GEMINI_MODEL, _mt_vx):
+                    if not _vertex_first_token:
+                        _ttft_ms = (time.monotonic() - _vertex_t0) * 1000
+                        logger.info(f"[VERTEX-PERF] TTFT={_ttft_ms:.0f}ms model={VERTEX_GEMINI_MODEL} indic={_indic_vertex_active}")
+                        _vertex_first_token = True
+                    _vx_batch += token
+                    if len(_vx_batch) >= _VX_BATCH_SIZE:
+                        yield f"data: {json.dumps({'content': _vx_batch})}\n\n"
+                        _vx_batch = ""
+                if _vx_batch:
+                    yield f"data: {json.dumps({'content': _vx_batch})}\n\n"
+                if _vertex_first_token:
+                    _total_ms = (time.monotonic() - _vertex_t0) * 1000
+                    logger.info(f"[VERTEX-PERF] Total={_total_ms:.0f}ms model={VERTEX_GEMINI_MODEL} indic={_indic_vertex_active}")
+                    try:
+                        from chat_speedup_metrics import record_provider_call as _rec_prov
+                        _rec_prov(_vertex_metric_bucket, ttfb_ms=_ttft_ms, total_ms=_total_ms)
+                    except Exception:
+                        pass
+                    yield f"data: {json.dumps({'__provider': _vertex_metric_bucket})}\n\n"
+                    return
+                # Stream completed without ever yielding a token — treat as
+                # failure and fall through to legacy.
+                logger.warning("Vertex Gemini Flash returned empty stream — falling back to legacy pool")
+            except Exception as _vx_err:
+                if _vertex_first_token:
+                    # We already started streaming to the client; we can't
+                    # silently restart. Emit error and stop.
+                    logger.warning(f"Vertex Gemini Flash mid-stream error: {type(_vx_err).__name__}: {str(_vx_err)[:200]}")
+                    yield f"data: {json.dumps({'error': 'AI service interrupted'})}\n\n"
+                    return
+                logger.warning(f"Vertex Gemini Flash failed before first token: {type(_vx_err).__name__}: {str(_vx_err)[:200]} — falling back to legacy pool")
+            # Fall back: rewrite the requested model to the legacy default
+            # and continue with the standard resolution path below.
+            try:
+                from chat_speedup_metrics import record_provider_fallback as _rec_fb
+                _rec_fb(_vertex_metric_bucket, _vertex_fallback_target)
+            except Exception:
+                pass
+            use_model_raw = _vertex_fallback_target
+            model = use_model_raw
+            _indic_vertex_active = False  # Fallback → resolve normally
+
+    use_model_resolved = _MODEL_ALIAS_MAP.get(use_model_raw, use_model_raw)
+    _prov_list = _LLM_PROVIDERS if _indic_mode else _LLM_PROVIDERS_CHAT
+    provider, key = _resolve_provider_for_model(use_model_resolved, _prov_list)
+    if use_model_raw != use_model_resolved:
+        logger.info(f"Model alias '{use_model_raw}' → '{use_model_resolved}' ({provider})")
+    use_model = _safe_model_for_provider(use_model_resolved, provider, _prov_list)
+    if use_model != use_model_resolved:
+        logger.info(f"Model '{use_model_resolved}' not compatible with {provider} → using '{use_model}'")
+
+    if not key and provider != "sarvam":
+        yield f"data: {json.dumps({'error': 'LLM API key not configured'})}\n\n"
+        return
+
+    in_think = False
+    buf = ""
+
+    _SSE_BATCH = 2    # flush every 2 chars — near-instant token delivery
+
+    async def _emit_tokens(token_source):
+        nonlocal in_think, buf
+        import re as _re
+        _CLOSE_KEEP = len('</think>') - 1   # 7
+        think_done  = False
+        batch       = ""
+        _visible_text = ""
+        _think_buf  = []
+
+        async for token in token_source:
+            if think_done:
+                cleaned = _re.sub(r'<think>[\s\S]*?</think>', '', token)
+                if cleaned:
+                    batch += cleaned
+                    if len(batch) >= _SSE_BATCH:
+                        _visible_text += batch
+                        yield f"data: {json.dumps({'content': batch})}\n\n"
+                        batch = ""
+                continue
+
+            buf += token
+            while buf:
+                if in_think:
+                    close_idx = buf.find('</think>')
+                    if close_idx != -1:
+                        _think_buf.append(buf[:close_idx])
+                        buf = buf[close_idx + 8:]
+                        in_think   = False
+                        think_done = True
+                        if buf:
+                            batch += buf
+                            buf = ""
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                        break
+                    else:
+                        if len(buf) > _CLOSE_KEEP:
+                            _think_buf.append(buf[:-_CLOSE_KEEP])
+                            buf = buf[-_CLOSE_KEEP:]
+                        break
+                else:
+                    open_idx = buf.find('<think>')
+                    if open_idx != -1:
+                        before = buf[:open_idx]
+                        if before:
+                            batch += before
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                        buf      = buf[open_idx + 7:]
+                        in_think = True
+                    elif buf.endswith(('<', '<t', '<th', '<thi', '<thin', '<think')):
+                        partial_start = buf.rfind('<')
+                        candidate     = buf[partial_start:]
+                        if '<think>'[:len(candidate)] == candidate:
+                            before = buf[:partial_start]
+                            if before:
+                                batch += before
+                                if len(batch) >= _SSE_BATCH:
+                                    _visible_text += batch
+                                    yield f"data: {json.dumps({'content': batch})}\n\n"
+                                    batch = ""
+                            buf = candidate
+                            break
+                        else:
+                            batch += buf
+                            buf    = ""
+                            if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                    else:
+                        batch += buf
+                        buf    = ""
+                        if len(batch) >= _SSE_BATCH:
+                            _visible_text += batch
+                            yield f"data: {json.dumps({'content': batch})}\n\n"
+                            batch = ""
+                        break
+
+        if batch and not in_think:
+            _visible_text += batch
+            yield f"data: {json.dumps({'content': batch})}\n\n"
+        if buf and not in_think:
+            _visible_text += buf
+            yield f"data: {json.dumps({'content': buf})}\n\n"
+
+        if not _visible_text.strip() and (in_think or think_done):
+            fallback_text = "".join(_think_buf)
+            if in_think and buf:
+                fallback_text += buf
+            fallback_text = _re.sub(r'</?think\s*/?>', '', fallback_text).strip()
+            fallback_text = _re.sub(r'</?\w*$', '', fallback_text).strip()
+            if fallback_text and len(fallback_text) > 5:
+                logger.info(f"Think-block fallback: emitting {len(fallback_text)} chars of think content as response")
+                yield f"data: {json.dumps({'content': fallback_text})}\n\n"
+
+    async def _stream_from_provider(p_name: str, p_key: str, p_model: str):
+        """Yield raw tokens from a provider. Raises on failure."""
+        _mt = _clamp_max_tokens(p_model, max_tokens)
+        if p_name == "sarvam":
+            _input_est = sum(len(m.get("content", "")) for m in messages) // 4
+            _think_overhead = 0 if _indic_mode else SARVAM_THINK_BUFFER
+            _sarvam_cap = max(256, 7192 - _input_est - _think_overhead - 100)
+            _mt = min(_mt, _sarvam_cap)
+            async for token in _stream_sarvam(messages, p_key, p_model, _mt, response_lang=response_lang):
+                yield token
+        elif p_name == "gemini":
+            logger.info(f"LLM stream: provider=gemini, model={p_model}")
+            async for token in _stream_gemini(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "cerebras":
+            logger.info(f"LLM stream: provider=cerebras, model={p_model}")
+            async for token in _stream_cerebras(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "groq":
+            logger.info(f"LLM stream: provider=groq, model={p_model}")
+            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "groq", "https://api.groq.com/openai/v1"):
+                yield token
+        elif p_name == "xai":
+            logger.info(f"LLM stream: provider=xai, model={p_model}")
+            async for token in _stream_xai(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "openrouter":
+            logger.info(f"LLM stream: provider=openrouter, model={p_model}")
+            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "openrouter", "https://openrouter.ai/api/v1"):
+                yield token
+        elif p_name == "bedrock":
+            logger.info(f"LLM stream: provider=bedrock, model={p_model}")
+            async for token in _stream_bedrock(messages, p_model, _mt):
+                yield token
+        else:
+            logger.info(f"LLM stream: provider={p_name}, model={p_model}")
+            chat = LlmChat(api_key=p_key or OPENAI_API_KEY, session_id=str(uuid.uuid4())).with_model(p_name, p_model)
+            async for token in chat.stream_messages(messages, max_tokens=_mt):
+                yield token
+
+    # ── Syrabit SLM: concurrent smart pool ──────────────────────────────────────
+    # pick() returns the fastest available slot (by speed tier) with spare capacity.
+    # async with slot["sem"] lets up to max_concurrent requests run in parallel.
+    # Tokens are yielded in real-time as they arrive (true streaming).
+    # TTFT timeout ensures fast failover when a provider is unresponsive.
+    _SLM_SLOT_TIMEOUT = 0.7    # max seconds between any two tokens mid-stream
+    _SLM_TTFT_TIMEOUT = 0.8    # max seconds to wait for FIRST token from a slot
+
+    _SLM_PROVIDER_MAX_INPUT_CHARS = {
+        "cerebras": 24000,
+        "sarvam": 12000,
+        "groq": 100000,
+        "gemini": 500000,
+        "openrouter": 200000,
+        "openai": 80000,
+        "bedrock": 40000,
+    }
+
+    if use_model_raw == "openai/gpt-oss-20b":
+        _active_pool = _slm_pool
+        _input_chars = sum(len(m.get("content", "")) for m in messages)
+
+        _skipped_slots: set = set()
+        _candidates = []
+        for _ in range(len(_active_pool.all_slots)):
+            slot = _active_pool.pick(_skipped_slots)
+            if slot is None:
+                break
+            p_name = slot["provider"]
+            _max_chars = _SLM_PROVIDER_MAX_INPUT_CHARS.get(p_name, 80000)
+            if _input_chars > _max_chars:
+                logger.info(f"SLM pool: skipping {p_name}/{slot['model']} — input too large ({_input_chars} chars > {_max_chars} limit)")
+                _skipped_slots.add(id(slot))
+                continue
+            _candidates.append(slot)
+            _skipped_slots.add(id(slot))
+            if len(_candidates) >= 2:
+                break
+
+        if _candidates:
+            _effective_ttft = min(1.2, _SLM_TTFT_TIMEOUT + (0.2 if _input_chars > 8000 else 0.0))
+            _hedged_q: asyncio.Queue = asyncio.Queue()
+            _hedged_errors: dict = {}
+
+            async def _hedged_producer(_slot, _slot_idx):
+                _pn, _pk, _pm = _slot["provider"], _slot["key"], _slot["model"]
+                try:
+                    async with _slot["sem"]:
+                        _chunk_count = 0
+                        async for chunk in _emit_tokens(_stream_from_provider(_pn, _pk, _pm)):
+                            _chunk_count += 1
+                            await _hedged_q.put((_slot_idx, "chunk", chunk))
+                        if _chunk_count == 0:
+                            logger.warning(f"SLM hedged: {_pn}/{_pm} 0 chunks")
+                        await _hedged_q.put((_slot_idx, "done", None))
+                except Exception as exc:
+                    _hedged_errors[_slot_idx] = exc
+                    logger.warning(f"SLM hedged: {_pn}/{_pm} error: {type(exc).__name__}: {str(exc)[:200]}")
+                    await _hedged_q.put((_slot_idx, "error", None))
+
+            _hedged_tasks = [asyncio.create_task(_hedged_producer(s, i)) for i, s in enumerate(_candidates)]
+            if len(_candidates) > 1:
+                _race_desc = " vs ".join(f"{s['provider']}/{s['model']}" for s in _candidates)
+                logger.info(f"SLM hedged: racing {_race_desc}")
+
+            _winner = None
+            _finished_slots: set = set()
+            try:
+                _deadline = time.monotonic() + _effective_ttft
+                while _winner is None and len(_finished_slots) < len(_candidates):
+                    _remaining = _deadline - time.monotonic()
+                    if _remaining <= 0:
+                        break
+                    try:
+                        _sid, _evt, _data = await asyncio.wait_for(_hedged_q.get(), timeout=_remaining)
+                    except asyncio.TimeoutError:
+                        break
+                    if _evt == "chunk":
+                        _winner = _sid
+                    elif _evt in ("done", "error"):
+                        _finished_slots.add(_sid)
+                        if _evt == "error":
+                            _slm_pool.mark_err(_candidates[_sid])
+            except Exception:
+                pass
+
+            if _winner is not None:
+                _win_slot = _candidates[_winner]
+                _slm_pool.mark_ok(_win_slot)
+                _win_pname = _win_slot["provider"]
+                _win_model = _win_slot["model"]
+                if len(_candidates) > 1:
+                    logger.info(f"SLM hedged: winner={_win_pname}/{_win_model}")
+
+                for i, t in enumerate(_hedged_tasks):
+                    if i != _winner:
+                        t.cancel()
+
+                yield _data
+
+                _tokens_yielded = 1
+                while True:
+                    try:
+                        _sid, _evt, _chunk = await asyncio.wait_for(_hedged_q.get(), timeout=_SLM_SLOT_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        _slm_pool.mark_err(_win_slot)
+                        logger.warning(f"SLM hedged: {_win_pname}/{_win_model} stalled mid-stream after {_SLM_SLOT_TIMEOUT}s ({_tokens_yielded} tokens yielded)")
+                        break
+                    if _sid != _winner:
+                        continue
+                    if _evt == "chunk":
+                        yield _chunk
+                        _tokens_yielded += 1
+                    else:
+                        if _winner in _hedged_errors and _tokens_yielded <= 1:
+                            _slm_pool.mark_err(_win_slot)
+                        break
+
+                _hedged_tasks[_winner].cancel()
+                for t in _hedged_tasks:
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+                yield f"data: {json.dumps({'__provider': _win_pname})}\n\n"
+                return
+            else:
+                for t in _hedged_tasks:
+                    t.cancel()
+                for t in _hedged_tasks:
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                for i, s in enumerate(_candidates):
+                    if i not in _finished_slots:
+                        _slm_pool.mark_err(s)
+                        logger.warning(f"SLM hedged: {s['provider']}/{s['model']} TTFT timeout after {_effective_ttft}s")
+
+        yield f"data: {json.dumps({'error': 'All AI providers temporarily unavailable'})}\n\n"
+        return
+
+    # ── Indic Sarvam with hedged key racing ─────────────────────────────────────
+    _SARVAM_TTFT_TIMEOUT = 3.0
+    _SARVAM_SLOT_TIMEOUT = 1.2
+    if _indic_mode and provider == "sarvam":
+        _indic_candidates = []
+
+        _sarvam_keys = [p["key"] for p in _prov_list if p["provider"] == "sarvam"]
+        if key not in _sarvam_keys:
+            _sarvam_keys.insert(0, key)
+        _sarvam_keys = list(dict.fromkeys(_sarvam_keys))
+        for _sk in _sarvam_keys:
+            _indic_candidates.append({"provider": "sarvam", "key": _sk, "model": use_model})
+
+        _gemini_keys_for_indic = [p["key"] for p in _LLM_PROVIDERS if p["provider"] == "gemini" and p.get("key")]
+        for _gk in _gemini_keys_for_indic[:1]:
+            _indic_candidates.append({"provider": "gemini", "key": _gk, "model": "gemini-2.5-flash"})
+
+        _indic_q: asyncio.Queue = asyncio.Queue()
+
+        async def _indic_producer(_cand, _cand_idx):
+            _cprov, _ckey, _cmodel = _cand["provider"], _cand["key"], _cand["model"]
+            try:
+                _cn = 0
+                async for chunk in _emit_tokens(_stream_from_provider(_cprov, _ckey, _cmodel)):
+                    _cn += 1
+                    await _indic_q.put((_cand_idx, "chunk", chunk))
+                if _cn == 0:
+                    logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} returned 0 chunks")
+                await _indic_q.put((_cand_idx, "done", None))
+            except Exception as _e:
+                _is_rate = any(s in str(_e).lower() for s in ("429", "rate", "quota", "throttl"))
+                logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} failed ({type(_e).__name__}: {str(_e)[:120]}) rate_limit={_is_rate}")
+                await _indic_q.put((_cand_idx, "error", None))
+
+        _indic_tasks = [asyncio.create_task(_indic_producer(c, i)) for i, c in enumerate(_indic_candidates)]
+        _race_providers = ", ".join(f"{c['provider']}/{c['model']}" for c in _indic_candidates)
+        logger.info(f"[INDIC] Hedged racing {len(_indic_candidates)} candidates for {response_lang}: {_race_providers}")
+
+        _sarvam_winner = None
+        _sarvam_finished: set = set()
+        _sarvam_race_t0 = time.monotonic()
+        try:
+            _deadline = time.monotonic() + _SARVAM_TTFT_TIMEOUT
+            while _sarvam_winner is None and len(_sarvam_finished) < len(_indic_candidates):
+                _rem = _deadline - time.monotonic()
+                if _rem <= 0:
+                    break
+                try:
+                    _sid, _evt, _data = await asyncio.wait_for(_indic_q.get(), timeout=_rem)
+                except asyncio.TimeoutError:
+                    break
+                if _evt == "chunk":
+                    _sarvam_winner = _sid
+                elif _evt in ("done", "error"):
+                    _sarvam_finished.add(_sid)
+        except Exception:
+            pass
+
+        if _sarvam_winner is not None:
+            _win_cand = _indic_candidates[_sarvam_winner]
+            _ttft_ms = (time.monotonic() - _sarvam_race_t0) * 1000
+            logger.info(f"[INDIC-PERF] TTFT={_ttft_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']} idx={_sarvam_winner}")
+
+            for i, t in enumerate(_indic_tasks):
+                if i != _sarvam_winner:
+                    t.cancel()
+
+            yield _data
+
+            while True:
+                try:
+                    _sid, _evt, _chunk = await asyncio.wait_for(_indic_q.get(), timeout=_SARVAM_SLOT_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning(f"[INDIC] {_win_cand['provider']}/{_win_cand['model']} stalled mid-stream")
+                    break
+                if _sid != _sarvam_winner:
+                    continue
+                if _evt == "chunk":
+                    yield _chunk
+                else:
+                    break
+
+            _total_ms = (time.monotonic() - _sarvam_race_t0) * 1000
+            logger.info(f"[INDIC-PERF] Total={_total_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']}")
+
+            for t in _indic_tasks:
+                t.cancel()
+            for t in _indic_tasks:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            yield f"data: {json.dumps({'__provider': _win_cand['provider']})}\n\n"
+        else:
+            for t in _indic_tasks:
+                t.cancel()
+            for t in _indic_tasks:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+            logger.warning(f"[INDIC] All {len(_indic_candidates)} candidates failed/timed out")
+            yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
+        return
+
+    # ── All other models: single provider ───────────────────────────────────────
+    try:
+        _chunk_n = 0
+        async for chunk in _emit_tokens(_stream_from_provider(provider, key, use_model)):
+            if _chunk_n == 0:
+                _ttft_ms = (time.monotonic() - _stream_t0) * 1000
+                logger.info(f"[EN-PERF] TTFT={_ttft_ms:.0f}ms model={use_model} provider={provider}")
+            _chunk_n += 1
+            yield chunk
+        _total_ms = (time.monotonic() - _stream_t0) * 1000
+        logger.info(f"[EN-PERF] Total={_total_ms:.0f}ms chunks={_chunk_n} model={use_model} provider={provider}")
+        yield f"data: {json.dumps({'__provider': provider})}\n\n"
+    except HTTPException as http_err:
+        yield f"data: {json.dumps({'error': str(http_err.detail)})}\n\n"
+    except Exception as e:
+        logger.error(f"LLM streaming error: {type(e).__name__}: {str(e)[:200]}")
+        yield f"data: {json.dumps({'error': 'AI service temporarily unavailable'})}\n\n"
+, '', result, flags=re.DOTALL).strip()
+
+    # ── Populate cache for future hits ──────────────────────────────────────
+    if result:
+        await ai_cache.aset(cache_key, result, saved_ms=duration_ms)
+        logger.info(f"sarvam_cache SET model={model} key={cache_key[:12]}… duration_ms={duration_ms:.0f}")
+
     return result
 
 def _cf_cache_headers() -> dict:
