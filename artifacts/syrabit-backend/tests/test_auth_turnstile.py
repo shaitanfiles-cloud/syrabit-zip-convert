@@ -65,6 +65,10 @@ def _login_body():
     return {"email": "test@example.com", "password": "hunter2hunter2"}
 
 
+def _reset_request_body():
+    return {"email": "test@example.com"}
+
+
 # ──────────────────────────────────────────────────────────────────
 # Disabled (dev/local) — Turnstile must be a no-op on both routes
 # ──────────────────────────────────────────────────────────────────
@@ -213,3 +217,99 @@ def test_login_missing_token_rejected_when_enabled(monkeypatch):
     assert resp.status_code == 400
     assert resp.json().get("detail") == "turnstile_failed"
     fake_verify.assert_not_called()
+
+
+# ──────────────────────────────────────────────────────────────────
+# Task #684 — /auth/reset-request must gate on Turnstile too,
+# since each call triggers a Resend transactional email and bots
+# can otherwise burn quota / spam inboxes.
+# ──────────────────────────────────────────────────────────────────
+def _stub_reset_deps(auth_mod, *, user_exists: bool = True):
+    auth_mod.supa_get_user_for_reset = AsyncMock(
+        return_value=({"email": "test@example.com"} if user_exists else None)
+    )
+    auth_mod.supa_create_password_reset = AsyncMock(return_value=None)
+    auth_mod._send_password_reset_email = AsyncMock(return_value=None)
+    return auth_mod._send_password_reset_email
+
+
+def test_reset_request_skips_turnstile_when_disabled():
+    from fastapi.testclient import TestClient
+    import turnstile_verify as tv_mod
+
+    tv_mod.CF_TURNSTILE_ENABLED = False
+
+    app, auth_mod = _build_auth_app()
+    send_mock = _stub_reset_deps(auth_mod)
+
+    client = TestClient(app)
+    resp = client.post("/api/auth/reset-request", json=_reset_request_body())
+    assert resp.status_code == 200, resp.text
+    assert "reset link" in resp.json().get("message", "").lower()
+    send_mock.assert_awaited_once()
+
+
+def test_reset_request_happy_path_with_valid_token(monkeypatch):
+    from fastapi.testclient import TestClient
+    import turnstile_verify as tv_mod
+
+    tv_mod.CF_TURNSTILE_ENABLED = True
+    monkeypatch.setattr(
+        tv_mod, "verify_turnstile_token", AsyncMock(return_value=True)
+    )
+
+    app, auth_mod = _build_auth_app()
+    send_mock = _stub_reset_deps(auth_mod)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/auth/reset-request",
+        json=_reset_request_body(),
+        headers={"x-turnstile-token": "tok-from-widget"},
+    )
+    assert resp.status_code == 200, resp.text
+    send_mock.assert_awaited_once()
+
+
+def test_reset_request_tampered_token_rejected(monkeypatch):
+    """Invalid (tampered) token → 400 turnstile_failed and the
+    Resend email must NOT be sent."""
+    from fastapi.testclient import TestClient
+    import turnstile_verify as tv_mod
+
+    tv_mod.CF_TURNSTILE_ENABLED = True
+    monkeypatch.setattr(
+        tv_mod, "verify_turnstile_token", AsyncMock(return_value=False)
+    )
+
+    app, auth_mod = _build_auth_app()
+    send_mock = _stub_reset_deps(auth_mod)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/auth/reset-request",
+        json=_reset_request_body(),
+        headers={"x-turnstile-token": "tampered"},
+    )
+    assert resp.status_code == 400
+    assert resp.json().get("detail") == "turnstile_failed"
+    send_mock.assert_not_called()
+
+
+def test_reset_request_missing_token_rejected_when_enabled(monkeypatch):
+    from fastapi.testclient import TestClient
+    import turnstile_verify as tv_mod
+
+    tv_mod.CF_TURNSTILE_ENABLED = True
+    fake_verify = AsyncMock(return_value=True)
+    monkeypatch.setattr(tv_mod, "verify_turnstile_token", fake_verify)
+
+    app, auth_mod = _build_auth_app()
+    send_mock = _stub_reset_deps(auth_mod)
+
+    client = TestClient(app)
+    resp = client.post("/api/auth/reset-request", json=_reset_request_body())
+    assert resp.status_code == 400
+    assert resp.json().get("detail") == "turnstile_failed"
+    fake_verify.assert_not_called()
+    send_mock.assert_not_called()

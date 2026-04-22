@@ -293,7 +293,8 @@ async def _send_password_reset_email(email: str, token: str):
     await email_templates.send_password_reset(email=email, token=token, reset_url=reset_url)
 
 @router.post("/auth/reset-request")
-async def reset_request(data: PasswordResetReq):
+async def reset_request(data: PasswordResetReq, request: Request):
+    await require_turnstile(request)
     user = await supa_get_user_for_reset(data.email.lower())
     if user:
         token = str(uuid.uuid4())
