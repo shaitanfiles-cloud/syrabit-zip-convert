@@ -7,8 +7,11 @@ helpers (``_gather_review_prompt_alert_window``,
 loop in production.
 """
 import asyncio
+import contextlib
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from tests._deps_stub import install_deps_stub  # noqa: E402
 
@@ -614,3 +617,294 @@ def test_baseline_noise_snapshot_marks_thin_baseline_as_none():
     assert rec["current_z_score"] is None
     # Current CTR is still surfaced even with a thin baseline.
     assert rec["current_ctr_pct"] == 15.0
+
+
+# ------------- Task #682: integration test against real Mongo aggregation -----
+
+# These tests stand up an in-memory Motor-compatible client
+# (``mongomock_motor``) and seed ``review_prompt_events`` so the noise
+# gate exercises the *actual* ``$match`` / ``$group`` pipelines in
+# ``_aggregate_review_prompt_window``. The unit tests above stub
+# ``_aggregate_review_prompt_window`` directly — a regression in the
+# real aggregation (e.g. timezone slippage at week boundaries, wrong
+# ``$gte`` / ``$lt`` semantics, by-reason / by-event grouping bugs)
+# would silently pass them while breaking production. This file fills
+# that gap.
+
+mongomock_motor = pytest.importorskip("mongomock_motor")
+
+
+def _seed_event(reason, event, when):
+    """Shape one ``review_prompt_events`` document. ``when`` should be
+    a tz-aware ``datetime`` so it round-trips through Mongo's BSON
+    layer with the same UTC instant the production writer emits."""
+    return {"event": event, "reason": reason, "created_at": when}
+
+
+def _seed_bucket(reason, when, *, shown, clicked, dismissed=0):
+    """Generate ``shown + clicked + dismissed`` event docs for a single
+    (reason, week) cell. All events are stamped at ``when`` — exact
+    timestamp doesn't matter to the rollup as long as it lands in the
+    correct ``[since, until)`` window, which is the whole point.
+    """
+    docs = []
+    for _ in range(shown):
+        docs.append(_seed_event(reason, "review_prompt_shown", when))
+    for _ in range(clicked):
+        docs.append(_seed_event(reason, "review_prompt_clicked", when))
+    for _ in range(dismissed):
+        docs.append(_seed_event(reason, "review_prompt_dismissed", when))
+    return docs
+
+
+@contextlib.contextmanager
+def _frozen_now(now_dt):
+    """Pin ``arp.datetime.now(timezone.utc)`` to ``now_dt`` so the
+    week-boundary math in ``_evaluate_review_prompt_reason_ctr_drop_alerts``
+    is reproducible. We subclass ``datetime`` and patch the symbol the
+    module imported (``arp.datetime``); the real
+    ``_aggregate_review_prompt_window`` doesn't call ``datetime.now``
+    itself, so the patch only affects the evaluator.
+    """
+    real_dt = arp.datetime
+
+    class _FrozenDateTime(real_dt):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return now_dt.replace(tzinfo=None)
+            return now_dt.astimezone(tz)
+
+    with patch.object(arp, "datetime", _FrozenDateTime):
+        yield
+
+
+async def _seed_collection(coll, docs):
+    if docs:
+        await coll.insert_many(docs)
+
+
+def _run_with_real_mongo(now_dt, docs, body):
+    """Wire up an in-memory mongomock_motor db, seed ``docs`` into
+    ``review_prompt_events``, install it as ``arp.db``, and run the
+    async ``body(db)`` coroutine factory under a frozen clock.
+    """
+    client = mongomock_motor.AsyncMongoMockClient()
+    db_obj = client["syrabit_test"]
+
+    async def _go():
+        await _seed_collection(db_obj.review_prompt_events, docs)
+        with patch.object(arp, "db", db_obj), \
+             patch.object(arp, "is_mongo_available",
+                          AsyncMock(return_value=True)), \
+             _frozen_now(now_dt):
+            return await body(db_obj)
+
+    return asyncio.run(_go())
+
+
+def _five_bucket_seed(now_dt, *, window_days=7):
+    """Seed five contiguous weekly buckets (curr + 4 baselines) plus
+    boundary-straddling events on either side of ``curr_start``.
+
+    Layout (CTR shown):
+      curr   (now-7d, now)        answer_helpful 50/1  = 2%
+      week 0 (now-14d, now-7d)    answer_helpful 50/10 = 20%
+      week 1 (now-21d, now-14d)   answer_helpful 50/10 = 20%
+      week 2 (now-28d, now-21d)   answer_helpful 50/10 = 20%
+      week 3 (now-35d, now-28d)   answer_helpful 50/10 = 20%
+      session_end stays flat at 20% in every bucket — must NOT alert.
+      first_visit only appears in curr — must fail the per-reason
+      sample-size gate on the baseline side and stay out of the alert.
+
+    Boundary docs:
+      • One ``answer_helpful`` shown stamped at exactly ``curr_start``
+        (the ``$gte`` edge of the curr window) — must land in curr.
+      • One ``answer_helpful`` shown stamped at ``curr_start - 1µs``
+        (the ``$lt`` edge of week 0) — must land in week 0, never in
+        curr. These two extra events are reflected in the expected
+        per-bucket totals below so an off-by-one in week-boundary
+        math would change the asserted CTRs.
+
+    Outside the 35-day window we drop a stale event that must be
+    excluded from every aggregation; if the ``$gte since`` clause
+    leaks, week 3 will pick it up.
+    """
+    week = timedelta(days=window_days)
+    curr_start = now_dt - week
+    docs = []
+
+    # Curr week (mid-bucket timestamp = now - 1 day).
+    curr_mid = now_dt - timedelta(days=1)
+    docs += _seed_bucket("answer_helpful", curr_mid, shown=49, clicked=1)
+    docs += _seed_bucket("session_end", curr_mid, shown=50, clicked=10)
+    docs += _seed_bucket("first_visit", curr_mid, shown=50, clicked=1)
+
+    # Boundary: exactly at curr_start → curr ($gte).
+    docs.append(_seed_event(
+        "answer_helpful", "review_prompt_shown", curr_start,
+    ))
+    # Boundary: 1µs before curr_start → week 0 ($lt curr_start).
+    docs.append(_seed_event(
+        "answer_helpful",
+        "review_prompt_shown",
+        curr_start - timedelta(microseconds=1),
+    ))
+
+    # Baseline weeks. Each week's mid-bucket ts is week_start + 3.5d so
+    # we're nowhere near the edges except for the explicit boundary
+    # docs above.
+    # Slightly varied baseline clicks (20/18/22/20%) so stddev > 0 and
+    # the production code emits a real sigma_threshold_pp instead of
+    # skipping the noise gate. Curr collapses to 2% which still blows
+    # past 2σ comfortably.
+    baseline_clicks_for_helpful = [10, 9, 11, 10]
+    for i in range(4):
+        w_until = curr_start - timedelta(days=window_days * i)
+        w_since = w_until - week
+        w_mid = w_since + timedelta(days=window_days // 2)
+        clk = baseline_clicks_for_helpful[i]
+        # answer_helpful: shown=49 (week 0 gets +1 from the boundary
+        # doc above for a clean 50), clicked varies per week.
+        if i == 0:
+            docs += _seed_bucket("answer_helpful", w_mid,
+                                 shown=49, clicked=clk)
+        else:
+            docs += _seed_bucket("answer_helpful", w_mid,
+                                 shown=50, clicked=clk)
+        docs += _seed_bucket("session_end", w_mid, shown=50, clicked=10)
+        # first_visit deliberately absent from baselines.
+
+    # Stale event well outside the 5-week window — must NEVER show up.
+    docs.append(_seed_event(
+        "answer_helpful",
+        "review_prompt_shown",
+        now_dt - timedelta(days=window_days * 10),
+    ))
+    return docs
+
+
+def test_aggregation_respects_week_boundaries_via_real_pipeline():
+    """Drive ``_aggregate_review_prompt_window`` through mongomock so
+    the real ``$match`` / ``$group`` pipelines decide bucket
+    membership. Two events sit at ±1µs of ``curr_start``; an off-by-one
+    in ``$gte`` / ``$lt`` would flip both into the wrong bucket and
+    move totals by ±1 in opposite directions, which the asserts catch.
+    """
+    now_dt = datetime(2026, 4, 22, 12, 0, 0, tzinfo=timezone.utc)
+    window = timedelta(days=arp.REVIEW_PROMPT_ALERT_WINDOW_DAYS)
+    curr_start = now_dt - window
+    week0_since = curr_start - window
+
+    async def _body(_db):
+        curr = await arp._aggregate_review_prompt_window(curr_start, now_dt)
+        week0 = await arp._aggregate_review_prompt_window(
+            week0_since, curr_start,
+        )
+        return curr, week0
+
+    curr, week0 = _run_with_real_mongo(
+        now_dt, _five_bucket_seed(now_dt), _body,
+    )
+
+    by_reason_curr = {r["reason"]: r for r in curr["by_reason"]}
+    by_reason_week0 = {r["reason"]: r for r in week0["by_reason"]}
+
+    # Curr window: 49 in-bucket shown + 1 boundary-at-curr_start = 50.
+    # The 1µs-before-curr_start boundary doc must NOT leak in here.
+    assert by_reason_curr["answer_helpful"]["shown"] == 50
+    assert by_reason_curr["answer_helpful"]["clicked"] == 1
+    # Week 0: 49 in-bucket + 1 boundary-at-(curr_start - 1µs) = 50.
+    assert by_reason_week0["answer_helpful"]["shown"] == 50
+    # Week 0 click count is the first entry of baseline_clicks_for_helpful.
+    assert by_reason_week0["answer_helpful"]["clicked"] == 10
+    # Reason isolation: session_end / first_visit don't leak into the
+    # answer_helpful row; first_visit is curr-only.
+    assert by_reason_curr["session_end"]["shown"] == 50
+    assert by_reason_curr["first_visit"]["shown"] == 50
+    assert "first_visit" not in by_reason_week0
+    # Totals roll up across reasons — sanity check vs. the by-reason
+    # rows so a divergence between the two $group stages is caught.
+    assert curr["totals"]["shown"] == sum(
+        r["shown"] for r in curr["by_reason"]
+    )
+    assert curr["totals"]["clicked"] == sum(
+        r["clicked"] for r in curr["by_reason"]
+    )
+
+
+def test_noise_gate_fires_via_real_aggregation_when_curr_collapses():
+    """End-to-end: real Mongo aggregation feeds the sigma gate. The
+    answer_helpful CTR collapses from a tight ~20% baseline to 2% in
+    the current week — the WoW drop blows past both the absolute floor
+    and the auto-tuned 2σ band, so the alert MUST fire. session_end
+    stays flat, first_visit lacks a baseline; neither may appear in
+    the alert payload.
+    """
+    arp._REVIEW_PROMPT_ALERT_LAST_FIRED.clear()
+    now_dt = datetime(2026, 4, 22, 12, 0, 0, tzinfo=timezone.utc)
+
+    async def _body(_db):
+        return await arp._evaluate_review_prompt_reason_ctr_drop_alerts(
+            now_ts=now_dt.timestamp(),
+        )
+
+    alerts = _run_with_real_mongo(
+        now_dt, _five_bucket_seed(now_dt), _body,
+    )
+
+    assert len(alerts) == 1
+    a = alerts[0]
+    assert a["alert_type"] == "review_prompt_reason_ctr_drop"
+    snap_reasons = a["threshold_snapshot"]["reasons"]
+    assert [r["reason"] for r in snap_reasons] == ["answer_helpful"]
+    bad = snap_reasons[0]
+    # 2% vs ~20% → ~-18 pp delta. Round-trip through Mongo must not
+    # smear the value.
+    assert bad["delta_pp"] <= -15.0
+    # Sigma gate surfaced its inputs.
+    assert bad["baseline_weeks_used"] == 4
+    assert bad["baseline_mean_ctr_pct"] is not None
+    assert bad["baseline_stddev_pp"] is not None
+    assert bad["sigma_threshold_pp"] is not None
+    # session_end / first_visit must not have been flagged.
+    assert "session_end" not in a["body"]
+    assert "first_visit" not in a["body"]
+
+
+def test_noise_gate_quiet_via_real_aggregation_when_within_band():
+    """Same scaffolding, opposite outcome. Curr CTR for answer_helpful
+    dips by only ~3 pp against a baseline that routinely swings ~10
+    pp; the absolute floor is satisfied (3 < 5 pp drop_pp default
+    means floor NOT crossed) AND the noise gate would also stop it.
+    Either way, no alert. session_end stays flat; first_visit lacks a
+    baseline.
+    """
+    arp._REVIEW_PROMPT_ALERT_LAST_FIRED.clear()
+    now_dt = datetime(2026, 4, 22, 12, 0, 0, tzinfo=timezone.utc)
+    window = timedelta(days=arp.REVIEW_PROMPT_ALERT_WINDOW_DAYS)
+    curr_start = now_dt - window
+    docs = []
+
+    # Curr: 50 / 9 = 18% (vs baseline mean ≈ 17.25% — well within band)
+    docs += _seed_bucket("answer_helpful", now_dt - timedelta(days=1),
+                         shown=50, clicked=9)
+    docs += _seed_bucket("session_end", now_dt - timedelta(days=1),
+                         shown=50, clicked=10)
+
+    # Noisy baselines: 21%, 8%, 28%, 12% — μ ≈ 17.25%, σ ≈ 9 pp,
+    # 2σ ≈ 18 pp. -3 pp falls comfortably inside.
+    baseline_clicks = [10, 4, 14, 6]   # /50 → 20%, 8%, 28%, 12%
+    for i, clk in enumerate(baseline_clicks):
+        w_until = curr_start - timedelta(days=arp.REVIEW_PROMPT_ALERT_WINDOW_DAYS * i)
+        w_mid = w_until - timedelta(days=arp.REVIEW_PROMPT_ALERT_WINDOW_DAYS // 2)
+        docs += _seed_bucket("answer_helpful", w_mid, shown=50, clicked=clk)
+        docs += _seed_bucket("session_end", w_mid, shown=50, clicked=10)
+
+    async def _body(_db):
+        return await arp._evaluate_review_prompt_reason_ctr_drop_alerts(
+            now_ts=now_dt.timestamp(),
+        )
+
+    alerts = _run_with_real_mongo(now_dt, docs, _body)
+    assert alerts == []
