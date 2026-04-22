@@ -33,7 +33,7 @@ routes = [
 # ---------------------------------------------------------------------------
 # Production Railway backend. If this ever needs to change, update both
 # this value AND the Cloudflare dashboard binding in the same commit.
-BACKEND_URL = "https://workspacemockup-sandbox-production-df37.up.railway.app"
+BACKEND_URL = "https://workspacesyrabit-production-0ddc.up.railway.app"
 # Pages origin used by the worker to serve non-API GETs (the SPA).
 # MUST be the *.pages.dev hostname, not syrabit.ai/www.syrabit.ai —
 # routing through the custom domain would re-enter this same worker
