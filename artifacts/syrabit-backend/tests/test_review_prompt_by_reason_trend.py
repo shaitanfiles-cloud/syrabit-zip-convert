@@ -11,54 +11,49 @@ install_deps_stub()
 from routes import admin_review_prompts as arp  # noqa: E402
 
 
+class _Cursor:
+    def __init__(self, docs):
+        self._docs = list(docs)
+    def __aiter__(self):
+        return self
+    async def __anext__(self):
+        if not self._docs:
+            raise StopAsyncIteration
+        return self._docs.pop(0)
+
+
 def _fake_db_for_reason(reason: str, weekly_counts):
-    """Stub `db.review_prompt_events.aggregate` so that each successive
-    by-reason+event aggregation call returns one bucket from
-    ``weekly_counts`` (oldest first). The endpoint loops 8 times from
-    oldest to newest, so the helper consumes them in order.
+    """Stub `db.review_prompt_events.aggregate` for the Task #674
+    single-pipeline endpoint. ``weekly_counts`` is oldest-first; we
+    re-emit each bucket as ``(wk, reason, event)`` rows where ``wk``
+    is the week-offset-from-newest the endpoint uses to slot rows
+    back into oldest-first response buckets.
     """
-    weekly_iter = iter(weekly_counts)
-
-    class _Cursor:
-        def __init__(self, docs):
-            self._docs = list(docs)
-        def __aiter__(self):
-            return self
-        async def __anext__(self):
-            if not self._docs:
-                raise StopAsyncIteration
-            return self._docs.pop(0)
-
+    weeks = len(weekly_counts)
     fake = MagicMock()
+    aggregate_calls = {"n": 0}
 
     def _aggregate(pipeline, *a, **kw):
-        group_id = pipeline[1]["$group"]["_id"]
-        if isinstance(group_id, str):
-            # totals-by-event aggregation — not consumed by the endpoint
-            # logic itself but called inside `_aggregate_review_prompt_window`.
-            counts = next(weekly_iter, {"shown": 0, "clicked": 0, "dismissed": 0})
-            # Stash counts for the matching by-reason call below.
-            fake._pending = counts
-            return _Cursor([
-                {"_id": "review_prompt_shown", "count": counts["shown"]},
-                {"_id": "review_prompt_clicked", "count": counts["clicked"]},
-                {"_id": "review_prompt_dismissed", "count": counts["dismissed"]},
-            ])
-        # by reason+event aggregation
-        counts = getattr(fake, "_pending", {"shown": 0, "clicked": 0, "dismissed": 0})
-        if counts["shown"] == 0 and counts["clicked"] == 0 and counts["dismissed"] == 0:
-            return _Cursor([])
-        return _Cursor([
-            {"_id": {"reason": reason, "event": "review_prompt_shown"},
-             "count": counts["shown"]},
-            {"_id": {"reason": reason, "event": "review_prompt_clicked"},
-             "count": counts["clicked"]},
-            {"_id": {"reason": reason, "event": "review_prompt_dismissed"},
-             "count": counts["dismissed"]},
-        ])
+        aggregate_calls["n"] += 1
+        docs = []
+        for oldest_idx, counts in enumerate(weekly_counts):
+            wk = weeks - 1 - oldest_idx
+            for ev_field, ev in (
+                ("shown", "review_prompt_shown"),
+                ("clicked", "review_prompt_clicked"),
+                ("dismissed", "review_prompt_dismissed"),
+            ):
+                n = int(counts.get(ev_field) or 0)
+                if n > 0:
+                    docs.append({
+                        "_id": {"wk": wk, "reason": reason, "event": ev},
+                        "count": n,
+                    })
+        return _Cursor(docs)
 
     fake.review_prompt_events.aggregate = MagicMock(side_effect=_aggregate)
     fake.review_prompt_events.create_index = AsyncMock(return_value=None)
+    fake._aggregate_calls = aggregate_calls
     return fake
 
 
@@ -143,53 +138,38 @@ def test_trend_clamps_oversized_reason_string():
 # Task #673 — compare overlay + available reasons
 # ─────────────────────────────────────────────
 def _fake_db_for_multi_reasons(weekly_by_reason):
-    """Stub with full per-reason control: ``weekly_by_reason`` is a list
-    of dicts ``{reason: {shown, clicked, dismissed}}`` (oldest first).
-    Each weekly window pops the next dict and emits both the totals
-    aggregation and the by-reason+event aggregation from it.
+    """Stub for the Task #674 single-pipeline endpoint with full
+    per-reason control. ``weekly_by_reason`` is a list (oldest first)
+    of ``{reason: {shown, clicked, dismissed}}`` per week. The fake
+    flattens all weeks into one batch of ``(wk, reason, event)`` rows
+    so the endpoint's single ``aggregate`` call gets everything.
     """
-    weekly_iter = iter(weekly_by_reason)
-
-    class _Cursor:
-        def __init__(self, docs):
-            self._docs = list(docs)
-        def __aiter__(self):
-            return self
-        async def __anext__(self):
-            if not self._docs:
-                raise StopAsyncIteration
-            return self._docs.pop(0)
-
+    weeks = len(weekly_by_reason)
     fake = MagicMock()
+    aggregate_calls = {"n": 0}
 
     def _aggregate(pipeline, *a, **kw):
-        group_id = pipeline[1]["$group"]["_id"]
-        if isinstance(group_id, str):
-            week = next(weekly_iter, {})
-            fake._pending = week
-            shown = sum(int(c.get("shown") or 0) for c in week.values())
-            clicked = sum(int(c.get("clicked") or 0) for c in week.values())
-            dismissed = sum(int(c.get("dismissed") or 0) for c in week.values())
-            return _Cursor([
-                {"_id": "review_prompt_shown", "count": shown},
-                {"_id": "review_prompt_clicked", "count": clicked},
-                {"_id": "review_prompt_dismissed", "count": dismissed},
-            ])
-        week = getattr(fake, "_pending", {})
+        aggregate_calls["n"] += 1
         docs = []
-        for r, counts in week.items():
-            for ev_field, ev in (
-                ("shown", "review_prompt_shown"),
-                ("clicked", "review_prompt_clicked"),
-                ("dismissed", "review_prompt_dismissed"),
-            ):
-                n = int(counts.get(ev_field) or 0)
-                if n > 0:
-                    docs.append({"_id": {"reason": r, "event": ev}, "count": n})
+        for oldest_idx, week in enumerate(weekly_by_reason):
+            wk = weeks - 1 - oldest_idx
+            for r, counts in week.items():
+                for ev_field, ev in (
+                    ("shown", "review_prompt_shown"),
+                    ("clicked", "review_prompt_clicked"),
+                    ("dismissed", "review_prompt_dismissed"),
+                ):
+                    n = int(counts.get(ev_field) or 0)
+                    if n > 0:
+                        docs.append({
+                            "_id": {"wk": wk, "reason": r, "event": ev},
+                            "count": n,
+                        })
         return _Cursor(docs)
 
     fake.review_prompt_events.aggregate = MagicMock(side_effect=_aggregate)
     fake.review_prompt_events.create_index = AsyncMock(return_value=None)
+    fake._aggregate_calls = aggregate_calls
     return fake
 
 
@@ -267,6 +247,27 @@ def test_trend_available_reasons_only_lists_reasons_with_data():
     assert "quiz_high_score" in available
     assert "chapter_engaged" in available
     assert "answer_helpful" not in available
+
+
+def test_trend_runs_single_aggregation_regardless_of_weeks():
+    """Task #674 — endpoint must hit Mongo at most once per request,
+    even at the max ``weeks=26`` window, so high-traffic drill-downs
+    don't pay 26 round-trips.
+    """
+    weekly = [
+        {"quiz_high_score": {"shown": 10, "clicked": 1, "dismissed": 0}}
+        for _ in range(26)
+    ]
+    fake = _fake_db_for_multi_reasons(weekly)
+    arp._REVIEW_PROMPT_INDEXES_READY = True
+    with patch.object(arp, "db", fake), \
+         patch.object(arp, "is_mongo_available", AsyncMock(return_value=True)):
+        out = asyncio.run(arp.admin_review_prompt_by_reason_trend(
+            reason="quiz_high_score", weeks=26,
+            compare="chapter_engaged", admin={"email": "x@y"},
+        ))
+    assert fake._aggregate_calls["n"] == 1
+    assert len(out["buckets"]) == 26
 
 
 def test_trend_available_reasons_always_includes_primary():

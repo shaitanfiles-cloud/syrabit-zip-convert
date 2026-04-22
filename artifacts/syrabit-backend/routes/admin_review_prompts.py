@@ -299,27 +299,71 @@ async def admin_review_prompt_by_reason_trend(
     try:
         await _ensure_review_prompt_indexes()
         now = datetime.now(timezone.utc)
+        since = now - timedelta(days=7 * weeks)
+
+        # Task #674 — collapse the per-week aggregation loop into a
+        # single Mongo round-trip. We bucket each event by its
+        # week-offset-from-newest (``floor((now - created_at) /
+        # 7 days)``) so the post-loop only re-shapes the in-memory
+        # counts into the existing oldest-first response. Keeps the
+        # per-reason / per-event grouping so primary, compare, and
+        # ``available_reasons`` all come from the same scan.
+        ms_per_week = 7 * 24 * 60 * 60 * 1000
+        pipeline = [
+            {"$match": {
+                "created_at": {"$gte": since, "$lt": now},
+                "event": {"$in": list(_REVIEW_PROMPT_VALID_EVENTS)},
+            }},
+            {"$group": {
+                "_id": {
+                    "wk": {"$floor": {"$divide": [
+                        {"$subtract": [now, "$created_at"]},
+                        ms_per_week,
+                    ]}},
+                    "reason": "$reason",
+                    "event": "$event",
+                },
+                "count": {"$sum": 1},
+            }},
+        ]
+
+        # counts[wk_offset_from_newest][reason] = {shown, clicked, dismissed}
+        counts: Dict[int, Dict[str, Dict[str, int]]] = {}
+        available_reasons: set = set()
+        async for row in db.review_prompt_events.aggregate(pipeline):
+            key = row.get("_id") or {}
+            try:
+                wk = int(key.get("wk"))
+            except (TypeError, ValueError):
+                continue
+            if wk < 0 or wk >= weeks:
+                continue
+            rname = key.get("reason") or "unknown"
+            ev = key.get("event")
+            n = int(row.get("count") or 0)
+            available_reasons.add(rname)
+            bucket = counts.setdefault(wk, {}).setdefault(
+                rname, {"shown": 0, "clicked": 0, "dismissed": 0},
+            )
+            if ev == "review_prompt_shown":
+                bucket["shown"] += n
+            elif ev == "review_prompt_clicked":
+                bucket["clicked"] += n
+            elif ev == "review_prompt_dismissed":
+                bucket["dismissed"] += n
+
         buckets: List[Dict[str, Any]] = []
         compare_buckets: List[Dict[str, Any]] = []
-        available_reasons: set = set()
+        # Re-emit oldest-first so the response shape stays identical to
+        # the previous per-week-loop implementation.
         for i in range(weeks - 1, -1, -1):
             end = now - timedelta(days=7 * i)
             start = end - timedelta(days=7)
-            agg = await _aggregate_review_prompt_window(start, end)
-            for r in agg["by_reason"]:
-                rname = (r.get("reason") or "unknown")
-                if (int(r.get("shown") or 0)
-                        + int(r.get("clicked") or 0)
-                        + int(r.get("dismissed") or 0)) > 0:
-                    available_reasons.add(rname)
-            row = next(
-                (r for r in agg["by_reason"]
-                 if (r.get("reason") or "unknown") == reason_clean),
-                {},
-            )
-            shown = int(row.get("shown") or 0)
-            clicked = int(row.get("clicked") or 0)
-            dismissed = int(row.get("dismissed") or 0)
+            wk_bucket = counts.get(i, {})
+            primary = wk_bucket.get(reason_clean, {})
+            shown = int(primary.get("shown") or 0)
+            clicked = int(primary.get("clicked") or 0)
+            dismissed = int(primary.get("dismissed") or 0)
             buckets.append({
                 "week_start": start.isoformat(),
                 "week_end": end.isoformat(),
@@ -329,14 +373,10 @@ async def admin_review_prompt_by_reason_trend(
                 "ctr_pct": _ctr(clicked, shown),
             })
             if compare_clean:
-                row2 = next(
-                    (r for r in agg["by_reason"]
-                     if (r.get("reason") or "unknown") == compare_clean),
-                    {},
-                )
-                c_shown = int(row2.get("shown") or 0)
-                c_clicked = int(row2.get("clicked") or 0)
-                c_dismissed = int(row2.get("dismissed") or 0)
+                cmp_row = wk_bucket.get(compare_clean, {})
+                c_shown = int(cmp_row.get("shown") or 0)
+                c_clicked = int(cmp_row.get("clicked") or 0)
+                c_dismissed = int(cmp_row.get("dismissed") or 0)
                 compare_buckets.append({
                     "week_start": start.isoformat(),
                     "week_end": end.isoformat(),
