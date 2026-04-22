@@ -1672,6 +1672,29 @@ export default {
 
     const isApiRoute = pathname.startsWith("/api/");
 
+    // Task #672: alias the canonical /sitemap.xml to the dynamic D1 sitemap
+    // index. Crawlers (Google, Bing, etc.) probe the standard root location;
+    // there is no static sitemap.xml on Pages, so without this internal
+    // rewrite the request would fall through to PAGES_ORIGIN and return a
+    // 404 / SPA shell. Internal rewrite (no redirect hop) keeps discovery
+    // fast and avoids a 301 -> follow round-trip for bots.
+    if (
+      pathname === "/sitemap.xml" &&
+      (request.method === "GET" || request.method === "HEAD") &&
+      env.CONTENT_DB
+    ) {
+      try {
+        const indexResult = await tryD1Route(
+          env,
+          "/api/seo/sitemap-index.xml",
+          url.searchParams,
+        );
+        if (indexResult !== null && indexResult.type === "xml") {
+          return d1XmlResponse(indexResult.data, cors, remaining);
+        }
+      } catch { /* fall through to Pages on D1 failure */ }
+    }
+
     if (!isSearchBot && isApiRoute) {
       if (isAiPath(pathname)) {
         const aiKey = `rl:ai:${clientIp}`;
