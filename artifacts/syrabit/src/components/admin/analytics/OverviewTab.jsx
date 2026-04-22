@@ -804,6 +804,18 @@ function ReviewPromptReasonDeltaStrip({
               </td>
             </tr>
           </tbody>
+          {/* Explicit aggregate row spelled out across the full width
+              so the 8-week summary reads as a single sentence in
+              addition to being available column-wise via "Total". */}
+          <tfoot>
+            <tr className="border-t border-gray-200">
+              <td colSpan={rows.length + 2} className="text-left pt-1.5 text-[11px] text-gray-700">
+                <span className="font-semibold text-gray-600 mr-2">Aggregate (8 wks)</span>
+                <span className="mr-3">Δ shown {fmtShown(aggShownDelta)}</span>
+                <span>Δ CTR {fmtCtr(aggCtrDelta)}</span>
+              </td>
+            </tr>
+          </tfoot>
         </table>
       </div>
     </div>
