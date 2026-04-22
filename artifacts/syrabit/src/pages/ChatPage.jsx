@@ -28,6 +28,7 @@ import { startTrace, makeTraceparent } from '@/utils/firebasePerf';
 // client paint, instead of waiting for an async chunk. (Task #387)
 import { EmptyState } from './chat/EmptyState';
 import { useHashScroll } from '@/hooks/useHashScroll';
+import { requestReviewPrompt } from '@/components/ReviewPrompt';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AD POLICY: /chat is intentionally AD-FREE. Do NOT import <AdSlot /> or any
@@ -422,6 +423,19 @@ export default function ChatPage() {
           : m
       ));
       setSyncState('idle');
+      // Task #653 — Ask for a Google review after a clearly successful,
+      // engaged chat session. Heuristic: this send completed without an
+      // error AND the conversation now has at least 8 messages exchanged
+      // (~4 back-and-forth turns) — long enough that the student got real
+      // value out of Syra. ReviewPrompt enforces all throttling, dismissal,
+      // and per-30-day rules, so it is safe to call on every qualifying
+      // send. Tune the 8-message threshold here if needed.
+      if (!meta.hasError) {
+        const totalAfterSend = messages.length + 2; // +user +assistant just appended
+        if (totalAfterSend >= 8) {
+          try { requestReviewPrompt('chat_engagement'); } catch {}
+        }
+      }
     } catch (err) {
       if (err.name === 'AbortError') return;
       try { _perfTotal.putAttribute('error', '1'); } catch {}
