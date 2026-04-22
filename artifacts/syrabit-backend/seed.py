@@ -18,7 +18,35 @@ async def ensure_seeded():
     
     if not await is_mongo_available():
         return
-    
+
+    # Ensure admin users exist FIRST, independent of the structural-seed
+    # early-return below. Without this, adding a new entry to
+    # ADMIN_ACCOUNTS (e.g. ENABLE_E2E_ADMIN=true on an existing
+    # database) would never insert the row, and login would 401 forever.
+    try:
+        for admin_acc in ADMIN_ACCOUNTS:
+            existing = await supa_get_user(admin_acc["email"])
+            if not existing:
+                admin_doc = {
+                    "id": str(uuid.uuid4()),
+                    "name": admin_acc["name"],
+                    "email": admin_acc["email"],
+                    "password_hash": pwd_ctx.hash(admin_acc["password"]),
+                    "plan": "pro",
+                    "credits_used": 0,
+                    "credits_limit": 4000,
+                    "document_access": "full",
+                    "onboarding_done": True,
+                    "is_admin": True,
+                    "status": "active",
+                    "bio": "",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+                await supa_insert_user(admin_doc)
+                logger.info(f"Seeded admin user: {admin_acc['email']}")
+    except Exception as e:
+        logger.warning(f"Admin-account seed pass failed (non-fatal): {e}")
+
     try:
         ahsec_exists  = await db.boards.find_one({"id": "b1"})
         degree_exists = await db.boards.find_one({"id": "b2"})

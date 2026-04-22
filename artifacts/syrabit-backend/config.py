@@ -583,7 +583,12 @@ ADMIN_ACCOUNTS = _load_admin_accounts()
 
 _E2E_ADMIN_ENABLED = os.environ.get('ENABLE_E2E_ADMIN', '').strip().lower() in ('1', 'true', 'yes')
 _E2E_ADMIN = {
-    "email": "e2e-admin@syrabit.test",
+    # NB: Pydantic's `EmailStr` validator (via `email-validator`)
+    # rejects IETF special-use TLDs like `.test`, so a `@*.test`
+    # address would fail with HTTP 422 at the very first step of
+    # POST /api/auth/login. Use a non-special domain that is
+    # obviously test-only so it can't collide with a real signup.
+    "email": "e2e-admin@syrabit-e2e.com",
     "password": "e2e-test-admin-2026",
     "name": "E2E Test Admin",
 }
