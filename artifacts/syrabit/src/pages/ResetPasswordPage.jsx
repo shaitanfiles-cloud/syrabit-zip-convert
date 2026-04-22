@@ -153,7 +153,11 @@ export default function ResetPasswordPage() {
                     </button>
                   </div>
                 </div>
-                <Button type="submit" disabled={loading} className="w-full bg-violet-600 hover:bg-violet-500 text-white">
+                <Button
+                  type="submit"
+                  disabled={loading || (turnstileEnabled && !turnstileReady)}
+                  className="w-full bg-violet-600 hover:bg-violet-500 text-white"
+                >
                   {loading ? <Loader2 size={16} className="animate-spin mr-2" /> : null}
                   Update Password
                 </Button>
