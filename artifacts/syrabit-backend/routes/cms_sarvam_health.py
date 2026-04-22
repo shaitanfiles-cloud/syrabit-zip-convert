@@ -2043,6 +2043,10 @@ async def _load_persisted_assamese_purity_override() -> dict | None:
     {behaviour, threshold, ...} dict or None when no override is set."""
     try:
         from deps import db as _db
+        if _db is None:
+            # MongoDB client not initialised (missing/invalid MONGO_URL) —
+            # no persisted override can exist, so return None quietly.
+            return None
         doc = await _db.api_config.find_one({}, {_ASM_OVERRIDE_DOC_KEY: 1})
         if not doc:
             return None
