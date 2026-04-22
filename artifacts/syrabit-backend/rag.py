@@ -481,7 +481,7 @@ async def _fetch_internal_chapters(
     limit: int = 3,
     max_content_chars: int = 4000,
 ) -> list:
-    if not is_mongo_available():
+    if not await is_mongo_available():
         return []
     try:
         keywords = _extract_keywords(query)
