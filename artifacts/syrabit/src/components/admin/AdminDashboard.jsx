@@ -2966,6 +2966,36 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                           </>)}
                         </div>
                       )}
+                      {alert.type === 'review_prompt_reason_ctr_drop' && Array.isArray(alert.threshold_snapshot?.reasons) && alert.threshold_snapshot.reasons.length > 0 && (
+                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                          <span className={`text-[10px] font-medium ${alert.acknowledged ? 'text-gray-400' : 'text-gray-500'}`}>Reasons:</span>
+                          {alert.threshold_snapshot.reasons.map((r, idx) => {
+                            const reasonName = (r && typeof r === 'object') ? (r.reason ?? 'unknown') : String(r);
+                            const deltaPp = (r && typeof r === 'object' && r.delta_pp != null) ? Number(r.delta_pp) : null;
+                            const title = deltaPp != null
+                              ? `${reasonName}: ${r.prev_ctr_pct ?? '?'}% → ${r.curr_ctr_pct ?? '?'}% (${deltaPp >= 0 ? '+' : ''}${deltaPp.toFixed(1)} pp)`
+                              : reasonName;
+                            return (
+                              <span
+                                key={`${alert._id}-reason-${idx}`}
+                                title={title}
+                                className={`text-[10px] px-1.5 py-0.5 rounded font-medium border ${
+                                  alert.acknowledged
+                                    ? 'bg-gray-100 border-gray-200 text-gray-400'
+                                    : 'bg-red-100 border-red-200 text-red-700'
+                                }`}
+                              >
+                                {reasonName}
+                                {deltaPp != null && (
+                                  <span className={`ml-1 ${alert.acknowledged ? 'text-gray-400' : 'text-red-500'}`}>
+                                    ({deltaPp >= 0 ? '+' : ''}{deltaPp.toFixed(1)} pp)
+                                  </span>
+                                )}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
                       <div className="flex items-center gap-3 mt-1.5">
                         <span className="text-[10px] text-gray-400 flex items-center gap-1">
                           <Clock size={10} />
