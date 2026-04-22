@@ -435,14 +435,71 @@ function HydrateAlertBadge({ alert, acking, ackError, onAcknowledge }) {
 // columns. Reasons that newly appeared / disappeared in the current
 // window get a "new" / "gone" pill so ops can spot which surface is
 // responsible for an overall CTR swing instead of guessing.
+// Task #686 — persist the admin's last comparison reason in
+// localStorage so the picker doesn't reset to "— none —" every time
+// the row is collapsed/re-opened or the page is reloaded. Stored as
+// a single shared value (per browser, not per primary reason) since
+// admins typically triage with the same comparison baseline across
+// reasons. The "Clear comparison" button wipes both the in-memory
+// state and the stored value.
+const REVIEW_PROMPT_COMPARE_STORAGE_KEY =
+  'syrabit:adminReviewPromptCompareReason';
+
+function readStoredCompareReason() {
+  if (typeof window === 'undefined') return '';
+  try {
+    return window.localStorage.getItem(REVIEW_PROMPT_COMPARE_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function writeStoredCompareReason(value) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (value) {
+      window.localStorage.setItem(REVIEW_PROMPT_COMPARE_STORAGE_KEY, value);
+    } else {
+      window.localStorage.removeItem(REVIEW_PROMPT_COMPARE_STORAGE_KEY);
+    }
+  } catch {
+    // localStorage may be unavailable (private mode / quota); the
+    // picker still works in-memory for the current session.
+  }
+}
+
 function ReviewPromptReasonTrend({ adminToken, reason }) {
   // Task #673 — admins can overlay a second trigger reason's CTR /
   // shown line onto the same chart to spot whether a regression is
   // unique to one reason or shared across surfaces.
-  const [compare, setCompare] = useState('');
+  // Task #686 — initialise from localStorage; ignore the stored value
+  // if it equals the primary reason (would be a no-op overlay).
+  const [compare, setCompare] = useState(() => {
+    const stored = readStoredCompareReason();
+    return stored && stored !== reason ? stored : '';
+  });
   const [trend, setTrend] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+
+  // If the parent row's primary reason changes to whatever was stored
+  // as the comparison, drop the overlay (can't compare a reason to
+  // itself). Otherwise keep whatever the admin picked.
+  useEffect(() => {
+    if (compare && compare === reason) {
+      setCompare('');
+    }
+  }, [reason, compare]);
+
+  const handleCompareChange = (value) => {
+    setCompare(value);
+    writeStoredCompareReason(value);
+  };
+
+  const clearCompare = () => {
+    setCompare('');
+    writeStoredCompareReason('');
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -486,6 +543,21 @@ function ReviewPromptReasonTrend({ adminToken, reason }) {
   // aren't the primary row that was just expanded — that one's already
   // the baseline series.
   const pickable = availableReasons.filter(r => r && r !== reason);
+
+  // Task #686 — sanitise a stale stored value: if the persisted
+  // comparison reason no longer appears in this row's pickable list
+  // (e.g., it stopped firing in the last 8 weeks, or the backend
+  // pruned it), drop it so the controlled <select> always has a
+  // matching <option> and we never fire a useless compare API call.
+  // Only act once the trend payload has actually loaded — otherwise
+  // we'd wipe a perfectly valid selection during the initial render.
+  useEffect(() => {
+    if (!trend || !compare) return;
+    if (!pickable.includes(compare)) {
+      setCompare('');
+      writeStoredCompareReason('');
+    }
+  }, [trend, compare, pickable]);
 
   const chartData = buckets.map((b, i) => {
     const d = b?.week_end ? new Date(b.week_end) : null;
@@ -531,12 +603,12 @@ function ReviewPromptReasonTrend({ adminToken, reason }) {
             <span className="text-gray-500">Compare to</span>
             <select
               value={compare}
-              onChange={(e) => setCompare(e.target.value)}
+              onChange={(e) => handleCompareChange(e.target.value)}
               className="bg-white border border-gray-300 rounded px-1.5 py-0.5 text-[11px] text-gray-700 focus:outline-none focus:border-violet-400 max-w-[180px]"
               disabled={pickable.length === 0}
               title={pickable.length === 0
                 ? 'No other reasons have data in the last 8 weeks'
-                : 'Overlay another reason'}
+                : 'Overlay another reason (remembered across panel toggles and reloads)'}
             >
               <option value="">— none —</option>
               {pickable.map(r => (
@@ -544,6 +616,19 @@ function ReviewPromptReasonTrend({ adminToken, reason }) {
               ))}
             </select>
           </label>
+          {/* Task #686 — explicit reset back to the "— none —" baseline.
+              Only shown when an overlay is active so it doesn't clutter
+              the picker UI in the common single-reason case. */}
+          {compare && (
+            <button
+              type="button"
+              onClick={clearCompare}
+              className="text-[11px] text-gray-500 hover:text-rose-600 underline underline-offset-2 decoration-dotted"
+              title="Reset the comparison picker to — none — and forget the saved choice"
+            >
+              Clear comparison
+            </button>
+          )}
         </div>
       </div>
       <p className="text-gray-500 text-[11px] mb-2">
