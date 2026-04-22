@@ -838,6 +838,9 @@ app.include_router(api)
 from routes.pyq import router as pyq_router
 app.include_router(pyq_router)
 
+from routes.reviews import router as reviews_router
+app.include_router(reviews_router)
+
 @app.get("/robots.txt", response_class=Response)
 async def serve_robots_txt():
     txt = """# Syrabit.ai — robots.txt

@@ -4,6 +4,7 @@ import { WORKER_API } from '../utils/api';
 import { useShare } from '../hooks/useShare';
 import PageMeta from '@/components/seo/PageMeta';
 import ContinueLearning from '@/components/content/ContinueLearning';
+import GoogleReviewsSection, { ReviewsAggregateRatingJsonLd } from '@/components/content/GoogleReviewsSection';
 import AdSlot from '@/components/ads/AdSlot';
 import useQuge5Multitag from '@/components/ads/useQuge5Multitag';
 import useAdsenseAutoAds from '@/components/ads/useAdsenseAutoAds';
@@ -276,6 +277,15 @@ export default function PYQReplicaPage() {
       <div style={{ maxWidth: 880, margin: '24px auto 0', padding: '0 16px' }}>
         <AdSlot placement="pyq.endOfContent" />
       </div>
+
+      <GoogleReviewsSection
+        subheading={`Real Google reviews from students preparing with Syrabit.ai${pyqMeta.subject ? ' for ' + pyqMeta.subject : ''}.`}
+      />
+      <ReviewsAggregateRatingJsonLd
+        id="pyq-google-reviews-jsonld"
+        name={`Syrabit.ai — ${pyqMeta.title || 'PYQ'}`}
+        url={pyqUrl}
+      />
 
       <div
         aria-hidden="true"
