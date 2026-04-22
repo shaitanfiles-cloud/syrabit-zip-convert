@@ -313,3 +313,122 @@ def test_reset_request_missing_token_rejected_when_enabled(monkeypatch):
     assert resp.json().get("detail") == "turnstile_failed"
     fake_verify.assert_not_called()
     send_mock.assert_not_called()
+
+
+# ──────────────────────────────────────────────────────────────────
+# Task #699 — /auth/reset-confirm must gate on Turnstile too,
+# mirroring /auth/reset-request so the password-reset surface is
+# uniformly protected against bots probing for live tokens.
+# ──────────────────────────────────────────────────────────────────
+def _reset_confirm_body():
+    return {"token": "tok-uuid-abc", "new_password": "hunter2hunter2"}
+
+
+def _stub_reset_confirm_deps(auth_mod, *, record_valid: bool = True):
+    """Stub the Supabase + bcrypt deps so reset-confirm tests only
+    exercise the Turnstile gate + happy-path return shape. Returns
+    the update mock so callers can assert it was/wasn't invoked."""
+    from datetime import datetime, timedelta, timezone
+
+    if record_valid:
+        record = {
+            "email": "test@example.com",
+            "expires": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+        }
+    else:
+        record = None
+    auth_mod.supa_get_password_reset = AsyncMock(return_value=record)
+    update_mock = AsyncMock(return_value=None)
+    auth_mod.supa_update_user_password = update_mock
+    auth_mod.supa_delete_password_reset = AsyncMock(return_value=None)
+    return update_mock
+
+
+def test_reset_confirm_skips_turnstile_when_disabled():
+    from fastapi.testclient import TestClient
+    import turnstile_verify as tv_mod
+
+    tv_mod.CF_TURNSTILE_ENABLED = False
+
+    app, auth_mod = _build_auth_app()
+    update_mock = _stub_reset_confirm_deps(auth_mod)
+
+    client = TestClient(app)
+    resp = client.post("/api/auth/reset-confirm", json=_reset_confirm_body())
+    assert resp.status_code == 200, resp.text
+    assert "successfully" in resp.json().get("message", "").lower()
+    update_mock.assert_awaited_once()
+
+
+def test_reset_confirm_happy_path_with_valid_token(monkeypatch):
+    from fastapi.testclient import TestClient
+    import turnstile_verify as tv_mod
+
+    tv_mod.CF_TURNSTILE_ENABLED = True
+    monkeypatch.setattr(
+        tv_mod,
+        "verify_turnstile_token",
+        AsyncMock(return_value=True),
+    )
+
+    app, auth_mod = _build_auth_app()
+    update_mock = _stub_reset_confirm_deps(auth_mod)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/auth/reset-confirm",
+        json=_reset_confirm_body(),
+        headers={"x-turnstile-token": "tok-from-widget"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert "successfully" in resp.json().get("message", "").lower()
+    update_mock.assert_awaited_once()
+
+
+def test_reset_confirm_tampered_token_rejected(monkeypatch):
+    """Cloudflare siteverify returns success=False — route must
+    fail-closed and never touch the password-update path."""
+    from fastapi.testclient import TestClient
+    import turnstile_verify as tv_mod
+
+    tv_mod.CF_TURNSTILE_ENABLED = True
+    monkeypatch.setattr(
+        tv_mod,
+        "verify_turnstile_token",
+        AsyncMock(return_value=False),
+    )
+
+    app, auth_mod = _build_auth_app()
+    update_mock = _stub_reset_confirm_deps(auth_mod)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/auth/reset-confirm",
+        json=_reset_confirm_body(),
+        headers={"x-turnstile-token": "tampered"},
+    )
+    assert resp.status_code == 400
+    assert resp.json().get("detail") == "turnstile_failed"
+    update_mock.assert_not_called()
+
+
+def test_reset_confirm_missing_token_rejected_when_enabled(monkeypatch):
+    """Direct POST with no x-turnstile-token header: route must
+    reject without ever calling siteverify (cheap fail-closed) and
+    without touching the password-update path."""
+    from fastapi.testclient import TestClient
+    import turnstile_verify as tv_mod
+
+    tv_mod.CF_TURNSTILE_ENABLED = True
+    fake_verify = AsyncMock(return_value=True)
+    monkeypatch.setattr(tv_mod, "verify_turnstile_token", fake_verify)
+
+    app, auth_mod = _build_auth_app()
+    update_mock = _stub_reset_confirm_deps(auth_mod)
+
+    client = TestClient(app)
+    resp = client.post("/api/auth/reset-confirm", json=_reset_confirm_body())
+    assert resp.status_code == 400
+    assert resp.json().get("detail") == "turnstile_failed"
+    fake_verify.assert_not_called()
+    update_mock.assert_not_called()

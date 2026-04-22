@@ -49,10 +49,24 @@ export default function ResetPasswordPage() {
     e.preventDefault();
     setLoading(true);
     try {
-      await axios.post(`${API_BASE}/auth/reset-confirm`, { token, new_password: newPassword });
+      // Task #699 — mirror /auth/reset-request: forward an
+      // x-turnstile-token header so the backend can fail-closed on
+      // direct POST attempts. Header omitted when no token is
+      // available so dev / Turnstile-disabled envs keep working.
+      let turnstileToken = '';
+      if (turnstileEnabled) {
+        turnstileToken = await getTurnstileToken();
+      }
+      const headers = turnstileToken ? { 'x-turnstile-token': turnstileToken } : undefined;
+      await axios.post(
+        `${API_BASE}/auth/reset-confirm`,
+        { token, new_password: newPassword },
+        { headers },
+      );
       setStep('done');
       toast.success('Password updated!');
     } catch (err) {
+      try { resetTurnstile(); } catch {}
       toast.error(err.response?.data?.detail || 'Reset failed');
     } finally {
       setLoading(false);
