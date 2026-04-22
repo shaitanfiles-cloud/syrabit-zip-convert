@@ -185,6 +185,75 @@ export async function getChapterBySlug(db: D1Database, slug: string): Promise<Re
   }
 }
 
+interface ChapterByPathRow {
+  id: string; title: string; slug: string; subject_id: string;
+  order_index: number; notes_generated: number; status: string; extra_json: string;
+  subject_name: string; subject_slug: string;
+  stream_id: string | null; stream_name: string | null; stream_slug: string | null;
+  class_id: string; class_name: string; class_slug: string;
+  board_id: string; board_name: string; board_slug: string;
+}
+
+export async function getChapterByPath(
+  db: D1Database,
+  boardSlug: string,
+  classSlug: string,
+  streamSlug: string | null,
+  subjectSlug: string,
+  chapterSlug: string,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const baseSelect = `
+      SELECT
+        ch.id, ch.title, ch.slug, ch.subject_id, ch.order_index,
+        ch.notes_generated, ch.status, ch.extra_json,
+        s.name AS subject_name, s.slug AS subject_slug,
+        st.id AS stream_id, st.name AS stream_name, st.slug AS stream_slug,
+        c.id AS class_id, c.name AS class_name, c.slug AS class_slug,
+        b.id AS board_id, b.name AS board_name, b.slug AS board_slug
+      FROM chapters ch
+      JOIN subjects s ON s.id = ch.subject_id
+      LEFT JOIN streams st ON st.id = s.stream_id
+      JOIN classes c ON c.id = st.class_id
+      JOIN boards b ON b.id = c.board_id
+      WHERE b.slug = ? AND c.slug = ? AND s.slug = ? AND ch.slug = ?`;
+    const sql = streamSlug
+      ? `${baseSelect} AND st.slug = ? LIMIT 1`
+      : `${baseSelect} LIMIT 1`;
+    const stmt = streamSlug
+      ? db.prepare(sql).bind(boardSlug, classSlug, subjectSlug, chapterSlug, streamSlug)
+      : db.prepare(sql).bind(boardSlug, classSlug, subjectSlug, chapterSlug);
+    const row = await stmt.first<ChapterByPathRow>();
+    if (!row) return null;
+    const normalized = normalizeChapter({
+      id: row.id, title: row.title, slug: row.slug, subject_id: row.subject_id,
+      order_index: row.order_index, notes_generated: row.notes_generated,
+      extra_json: row.extra_json,
+    });
+    // Denormalized fields the frontend expects (matches FastAPI shape).
+    normalized.chapter_id = row.id;
+    normalized.chapter_title = row.title;
+    normalized.chapter_slug = row.slug;
+    normalized.subject_id = row.subject_id;
+    normalized.subject_name = row.subject_name;
+    normalized.subject_slug = row.subject_slug;
+    if (row.stream_id) {
+      normalized.stream_id = row.stream_id;
+      normalized.stream_name = row.stream_name;
+      normalized.stream_slug = row.stream_slug;
+    }
+    normalized.class_id = row.class_id;
+    normalized.class_name = row.class_name;
+    normalized.class_slug = row.class_slug;
+    normalized.board_id = row.board_id;
+    normalized.board_name = row.board_name;
+    normalized.board_slug = row.board_slug;
+    return normalized;
+  } catch {
+    return null;
+  }
+}
+
 export async function getTopicsByChapter(db: D1Database, chapterId: string): Promise<TopicRow[] | null> {
   try {
     const { results } = await db.prepare(

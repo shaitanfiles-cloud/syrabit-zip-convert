@@ -1,7 +1,7 @@
 import {
   isD1Synced, resetD1SyncedCache, isTablePopulated,
   getBoards, getClasses, getStreams, getAllSubjects, getSubjectsByStream,
-  getSubjectsByClassId, getSubjectById, getChaptersBySubject,
+  getSubjectsByClassId, getSubjectById, getChaptersBySubject, getChapterByPath,
   getTopicsByChapter, getSitemapEntries, getLibraryBundle, getLibraryBundleSlim,
   getSeoPageBySlugs, getSeoPageTypes, getSeoPageBundle,
   getSeoPagesByType, getPublishedPageTypes,
@@ -686,6 +686,27 @@ async function tryD1Route(
     if (data === null) return null;
     if (data.length === 0 && !await isTablePopulated(db, "chapters")) return null;
     return { type: "json", data };
+  }
+
+  // /api/content/chapter-by-slug/{board}/{class}/{subject}/{chapter}
+  // /api/content/chapter-by-slug/{board}/{class}/{stream}/{subject}/{chapter}
+  // Serves the full chapter (including markdown content packed into
+  // chapters.extra_json) directly from D1 so the chapter viewer keeps
+  // working even when the Railway origin is unreachable.
+  const chapterPathMatch = pathname.match(
+    /^\/api\/content\/chapter-by-slug\/([^/]+)\/([^/]+)\/([^/]+)\/([^/]+)(?:\/([^/]+))?$/
+  );
+  if (chapterPathMatch) {
+    const [, board, cls, third, fourth, fifth] = chapterPathMatch;
+    // 4-segment form: board/class/subject/chapter (third=subject, fourth=chapter)
+    // 5-segment form: board/class/stream/subject/chapter (fifth=chapter)
+    const hasStream = fifth !== undefined;
+    const stream = hasStream ? third : null;
+    const subject = hasStream ? fourth : third;
+    const chapter = hasStream ? fifth : fourth;
+    if (!await isTablePopulated(db, "chapters")) return null;
+    const data = await getChapterByPath(db, board, cls, stream, subject, chapter);
+    return data !== null ? { type: "json", data } : null;
   }
 
   const topicMatch = pathname.match(/^\/api\/content\/topic\/([^/]+)$/);
