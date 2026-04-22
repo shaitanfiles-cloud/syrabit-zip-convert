@@ -68,9 +68,13 @@ railway variables set COOKIE_DOMAIN=".syrabit.ai"
 railway variables set FRONTEND_URL="https://syrabit.ai"
 
 # AI Providers
+# NOTE: do NOT set GEMINI_API_KEY on Railway. After the BYOK migration
+# (Task #666), Gemini auth is provided per-request by the Cloudflare AI
+# Gateway binding using the user-supplied key. Setting GEMINI_API_KEY
+# here will be ignored by the chat path and only re-introduces a shared
+# secret on the backend.
 railway variables set GROQ_API_KEY="gsk_xxx"
 railway variables set GROQ_API_KEY_2="gsk_xxx"
-railway variables set GEMINI_API_KEY="AIza..."
 railway variables set CEREBRAS_API_KEY="csk-xxx"
 railway variables set SARVAM_API_KEY="xxx"
 railway variables set SARVAM_API_KEY_2="xxx"

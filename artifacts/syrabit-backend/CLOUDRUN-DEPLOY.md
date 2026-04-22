@@ -80,6 +80,12 @@ Mirror the Railway env. The shared-secret entry below is the new one
 introduced by Task #606 — generate it once and reuse the same value when
 you bind the worker secret in step 6.
 
+> **BYOK note (Task #666):** do NOT create a `gemini-api-key` Secret
+> Manager entry and do NOT pass `GEMINI_API_KEY` to Cloud Run. After the
+> BYOK migration, Gemini auth is supplied per-request by the Cloudflare
+> AI Gateway binding using the user's own key. The block below has been
+> trimmed accordingly.
+
 ```bash
 # Generate a fresh shared secret (write it down — you'll bind it on the
 # worker side too).
@@ -106,7 +112,6 @@ for entry in \
   "google-client-secret:<GOOGLE_CLIENT_SECRET>" \
   "groq-api-key:<GROQ_API_KEY>" \
   "groq-api-key-2:<GROQ_API_KEY_2>" \
-  "gemini-api-key:<GEMINI_API_KEY>" \
   "cerebras-api-key:<CEREBRAS_API_KEY>" \
   "sarvam-api-key:<SARVAM_API_KEY>" \
   "sarvam-api-key-2:<SARVAM_API_KEY_2>" \
@@ -146,7 +151,7 @@ gcloud builds triggers create github \
   --branch-pattern=^main$ \
   --build-config=artifacts/syrabit-backend/cloudbuild.yaml \
   --included-files=artifacts/syrabit-backend/** \
-  --substitutions=_REGION=${REGION},_AR_REPO=${AR_REPO},_SERVICE=${SERVICE},_IMAGE=backend,_RUNTIME_SA=${RUNTIME_SA},_MIN_INSTANCES=1,_MAX_INSTANCES=10,_CONCURRENCY=80,_CPU=2,_MEMORY=2Gi,_SECRETS=ORIGIN_SHARED_SECRET=origin-shared-secret:latest\,MONGO_URL=mongo-url:latest\,DB_NAME=db-name:latest\,DATABASE_URL=database-url:latest\,UPSTASH_REDIS_REST_URL=upstash-redis-rest-url:latest\,UPSTASH_REDIS_REST_TOKEN=upstash-redis-rest-token:latest\,SUPABASE_URL=supabase-url:latest\,SUPABASE_SERVICE_KEY=supabase-service-key:latest\,SUPABASE_ANON_KEY=supabase-anon-key:latest\,JWT_SECRET=jwt-secret:latest\,ADMIN_JWT_SECRET=admin-jwt-secret:latest\,ADMIN_EMAILS=admin-emails:latest\,ADMIN_PASSWORDS=admin-passwords:latest\,ADMIN_NAMES=admin-names:latest\,GOOGLE_CLIENT_ID=google-client-id:latest\,GOOGLE_CLIENT_SECRET=google-client-secret:latest\,GROQ_API_KEY=groq-api-key:latest\,GROQ_API_KEY_2=groq-api-key-2:latest\,GEMINI_API_KEY=gemini-api-key:latest\,CEREBRAS_API_KEY=cerebras-api-key:latest\,SARVAM_API_KEY=sarvam-api-key:latest\,SARVAM_API_KEY_2=sarvam-api-key-2:latest\,OPENROUTER_API_KEY=openrouter-api-key:latest\,RAZORPAY_KEY_ID=razorpay-key-id:latest\,RAZORPAY_KEY_SECRET=razorpay-key-secret:latest\,RAZORPAY_WEBHOOK_SECRET=razorpay-webhook-secret:latest\,RESEND_API_KEY=resend-api-key:latest\,CF_AI_GATEWAY_ACCOUNT_ID=cf-ai-gateway-account-id:latest\,CF_AI_GATEWAY_ID=cf-ai-gateway-id:latest\,CF_AI_GATEWAY_TOKEN=cf-ai-gateway-token:latest\,CLOUDFLARE_API_TOKEN=cloudflare-api-token:latest\,CF_ZONE_ID=cf-zone-id:latest\,CF_PAGES_DEPLOY_HOOK_URL=cf-pages-deploy-hook-url:latest\,D1_SYNC_SECRET=d1-sync-secret:latest\,KV_ALERT_SECRET=kv-alert-secret:latest
+  --substitutions=_REGION=${REGION},_AR_REPO=${AR_REPO},_SERVICE=${SERVICE},_IMAGE=backend,_RUNTIME_SA=${RUNTIME_SA},_MIN_INSTANCES=1,_MAX_INSTANCES=10,_CONCURRENCY=80,_CPU=2,_MEMORY=2Gi,_SECRETS=ORIGIN_SHARED_SECRET=origin-shared-secret:latest\,MONGO_URL=mongo-url:latest\,DB_NAME=db-name:latest\,DATABASE_URL=database-url:latest\,UPSTASH_REDIS_REST_URL=upstash-redis-rest-url:latest\,UPSTASH_REDIS_REST_TOKEN=upstash-redis-rest-token:latest\,SUPABASE_URL=supabase-url:latest\,SUPABASE_SERVICE_KEY=supabase-service-key:latest\,SUPABASE_ANON_KEY=supabase-anon-key:latest\,JWT_SECRET=jwt-secret:latest\,ADMIN_JWT_SECRET=admin-jwt-secret:latest\,ADMIN_EMAILS=admin-emails:latest\,ADMIN_PASSWORDS=admin-passwords:latest\,ADMIN_NAMES=admin-names:latest\,GOOGLE_CLIENT_ID=google-client-id:latest\,GOOGLE_CLIENT_SECRET=google-client-secret:latest\,GROQ_API_KEY=groq-api-key:latest\,GROQ_API_KEY_2=groq-api-key-2:latest\,CEREBRAS_API_KEY=cerebras-api-key:latest\,SARVAM_API_KEY=sarvam-api-key:latest\,SARVAM_API_KEY_2=sarvam-api-key-2:latest\,OPENROUTER_API_KEY=openrouter-api-key:latest\,RAZORPAY_KEY_ID=razorpay-key-id:latest\,RAZORPAY_KEY_SECRET=razorpay-key-secret:latest\,RAZORPAY_WEBHOOK_SECRET=razorpay-webhook-secret:latest\,RESEND_API_KEY=resend-api-key:latest\,CF_AI_GATEWAY_ACCOUNT_ID=cf-ai-gateway-account-id:latest\,CF_AI_GATEWAY_ID=cf-ai-gateway-id:latest\,CF_AI_GATEWAY_TOKEN=cf-ai-gateway-token:latest\,CLOUDFLARE_API_TOKEN=cloudflare-api-token:latest\,CF_ZONE_ID=cf-zone-id:latest\,CF_PAGES_DEPLOY_HOOK_URL=cf-pages-deploy-hook-url:latest\,D1_SYNC_SECRET=d1-sync-secret:latest\,KV_ALERT_SECRET=kv-alert-secret:latest
 ```
 
 Pushes to `main` that touch `artifacts/syrabit-backend/**` build, push, and
