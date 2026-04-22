@@ -164,6 +164,46 @@ async def _prewarm_library_cache():
             if attempt < 2:
                 await asyncio.sleep(2 * (attempt + 1))
 
+async def _vertex_startup_probe() -> None:
+    """Task #667 — fail-fast Gemini reachability self-check.
+
+    Calls ``vertex_services.health_check()`` once after boot. Logs a single
+    ERROR line if either the embed probe or the one-token generation probe
+    fails, so a broken credential / AI Gateway misconfig surfaces in the
+    deploy logs instead of waiting for a user-facing 502. Runs as a
+    background task via ``asyncio.create_task`` so it never blocks the
+    API from accepting requests.
+    """
+    try:
+        import vertex_services
+        result = await asyncio.wait_for(
+            vertex_services.health_check(), timeout=5.0
+        )
+    except asyncio.TimeoutError:
+        logger.error(
+            "[STARTUP-PROBE] Gemini self-check FAILED: timed out after 5s — "
+            "upstream (Vertex / AI Gateway) is unreachable or hung."
+        )
+        return
+    except Exception as exc:
+        logger.error(f"[STARTUP-PROBE] vertex health_check raised: {exc!r}")
+        return
+    embed_ok = bool(result.get("embeddings"))
+    gen_ok = bool(result.get("generation"))
+    if not embed_ok or not gen_ok:
+        reason = result.get("reason") or (
+            f"embeddings={embed_ok} generation={gen_ok} "
+            f"auth_mode={result.get('auth_mode')!r} "
+            f"via_cf_gateway={result.get('via_cf_gateway')!r}"
+        )
+        logger.error(f"[STARTUP-PROBE] Gemini self-check FAILED: {reason}")
+    else:
+        logger.info(
+            f"[STARTUP-PROBE] Gemini self-check OK "
+            f"(auth_mode={result.get('auth_mode')!r})"
+        )
+
+
 @asynccontextmanager
 async def lifespan(app):
     import deps as _deps_mod
@@ -665,6 +705,13 @@ async def lifespan(app):
         await _ai_cache.init_async_client()
     except Exception as _ai_cache_err:
         logger.warning(f"ai_cache init failed (continuing with fallback): {_ai_cache_err}")
+
+    # Task #667 — fail-fast startup self-check against Gemini/Vertex. Runs
+    # in the background so a slow upstream never blocks the API from
+    # accepting requests, but a broken credential or gateway misconfig
+    # surfaces in the deploy logs as a single ERROR line within seconds —
+    # before any user-facing 502.
+    asyncio.create_task(_vertex_startup_probe())
 
     logger.info("Syrabit.ai API started")
     if sarvam_client:
