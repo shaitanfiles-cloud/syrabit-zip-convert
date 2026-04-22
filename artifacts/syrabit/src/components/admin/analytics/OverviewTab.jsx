@@ -683,6 +683,129 @@ function ReviewPromptReasonTrend({ adminToken, reason }) {
           )}
         </ComposedChart>
       </ResponsiveContainer>
+      {compareReason && (
+        <ReviewPromptReasonDeltaStrip
+          chartData={chartData}
+          primaryReason={reason}
+          compareReason={compareReason}
+          totalShown={totalShown}
+          totalCompareShown={totalCompareShown}
+          totalClicked={totalClicked}
+          totalCompareClicked={totalCompareClicked}
+        />
+      )}
+    </div>
+  );
+}
+
+// Task #687 — compact per-week + aggregate delta strip rendered below
+// the overlay chart. Each cell shows `primary − compare`:
+//   • Δ shown — emitted whenever either reason fired in the week, so
+//     a one-sided week (e.g., compare went silent) still surfaces the
+//     full count gap instead of being hidden behind "—".
+//   • Δ CTR  — only emitted when BOTH reasons have a valid CTR for
+//     the week; otherwise we render "—" so admins don't misread a
+//     null-vs-N% comparison as "tied at 0 pp".
+// Aggregate Δ CTR is computed from raw click/shown totals rather
+// than the parent's already-rounded `overallCtr`/`overallCompareCtr`,
+// so a sub-decimal gap (e.g., 10.04 vs 9.96) is preserved instead of
+// collapsing to 0.0 pp.
+// Colours match the existing per-row delta styling in this file:
+// rose for negative (primary trailing compare), emerald for positive
+// (primary ahead), gray neutral marker (▬) for zero CTR, plain gray
+// for zero count and for the "no data" placeholder.
+function ReviewPromptReasonDeltaStrip({
+  chartData,
+  primaryReason,
+  compareReason,
+  totalShown,
+  totalCompareShown,
+  totalClicked,
+  totalCompareClicked,
+}) {
+  const fmtShown = (d) => {
+    if (d == null) return <span className="text-gray-400">—</span>;
+    if (d > 0) return <span className="text-emerald-600">+{d.toLocaleString()}</span>;
+    if (d < 0) return <span className="text-rose-600">{d.toLocaleString()}</span>;
+    return <span className="text-gray-500">0</span>;
+  };
+  const fmtCtr = (d) => {
+    if (d == null) return <span className="text-gray-400">—</span>;
+    const rounded = Math.round(d * 10) / 10;
+    if (rounded > 0) return <span className="text-emerald-600">▲ +{rounded.toFixed(1)} pp</span>;
+    if (rounded < 0) return <span className="text-rose-600">▼ {rounded.toFixed(1)} pp</span>;
+    return <span className="text-gray-500">▬ 0.0 pp</span>;
+  };
+
+  const rows = chartData.map((b) => {
+    const hasPrimary = (b.shown || 0) > 0;
+    const hasCompare = (b.compare_shown || 0) > 0;
+    const shownDelta = (hasPrimary || hasCompare)
+      ? (b.shown || 0) - (b.compare_shown || 0)
+      : null;
+    const ctrDelta = (b.ctr_pct != null && b.compare_ctr_pct != null)
+      ? b.ctr_pct - b.compare_ctr_pct
+      : null;
+    return { label: b.label, shownDelta, ctrDelta };
+  });
+
+  const aggShownDelta = totalShown - totalCompareShown;
+  // Compute aggregate CTR delta from raw totals to avoid the
+  // double-rounding artefact that would otherwise mask a real
+  // sub-percentage-point gap.
+  const aggCtrDelta = (totalShown > 0 && totalCompareShown > 0)
+    ? ((totalClicked / totalShown) - (totalCompareClicked / totalCompareShown)) * 100
+    : null;
+
+  return (
+    <div className="mt-3 border-t border-gray-100 pt-2">
+      <p
+        className="text-[10px] uppercase tracking-wide text-gray-500 mb-1"
+        title={`Each cell is "${primaryReason} − ${compareReason}". Positive = ${primaryReason} is ahead.`}
+      >
+        Δ {primaryReason} − {compareReason}
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[11px] tabular-nums">
+          <thead>
+            <tr className="text-gray-500">
+              <th className="text-left font-normal pr-2 pb-1">Week</th>
+              {rows.map((r, i) => (
+                <th key={`h-${i}`} className="text-right font-normal px-1 pb-1">
+                  {r.label}
+                </th>
+              ))}
+              <th className="text-right font-semibold text-gray-700 pl-2 pb-1 border-l border-gray-200">
+                Total
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td className="text-left text-gray-600 pr-2 py-0.5">Δ shown</td>
+              {rows.map((r, i) => (
+                <td key={`s-${i}`} className="text-right px-1 py-0.5">
+                  {fmtShown(r.shownDelta)}
+                </td>
+              ))}
+              <td className="text-right pl-2 py-0.5 font-semibold border-l border-gray-200">
+                {fmtShown(aggShownDelta)}
+              </td>
+            </tr>
+            <tr>
+              <td className="text-left text-gray-600 pr-2 py-0.5">Δ CTR</td>
+              {rows.map((r, i) => (
+                <td key={`c-${i}`} className="text-right px-1 py-0.5">
+                  {fmtCtr(r.ctrDelta)}
+                </td>
+              ))}
+              <td className="text-right pl-2 py-0.5 font-semibold border-l border-gray-200">
+                {fmtCtr(aggCtrDelta)}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
