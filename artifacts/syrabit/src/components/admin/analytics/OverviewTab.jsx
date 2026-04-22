@@ -990,7 +990,10 @@ function ReviewPromptReasonRow({ row, noise, expanded, onToggle, volatilityThres
             // jittery reasons before they false-positive an alert.
             const ratio = _reviewPromptVolatilityRatio(noise);
             if (ratio == null) return null;
-            if (!(volatilityThreshold > 0)) return null;
+            // Threshold of 0 is a valid "highlight every reason with a
+            // computable σ/μ" mode; only a negative or non-finite
+            // threshold disables the badge entirely.
+            if (!Number.isFinite(volatilityThreshold) || volatilityThreshold < 0) return null;
             if (ratio < volatilityThreshold) return null;
             return (
               <span
