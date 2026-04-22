@@ -2124,45 +2124,67 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                 <option value="acknowledged">Acknowledged</option>
               </select>
               {(() => {
-                const reasonSet = new Set();
+                // Task #693 — count how many loaded alerts mention each
+                // trigger reason so the dropdown can surface noisy
+                // reasons (e.g. "checkout_skip (4)") and operators can
+                // triage the loudest ones first. We dedupe within a
+                // single alert (one alert that lists "foo" twice in its
+                // snapshot still counts once) so the count matches the
+                // post-filter row count the table will show. The same
+                // counts feed the active "Reason: foo (N)" pill below
+                // via the shared ``reasonCounts`` Map (lifted via the
+                // outer IIFE so we only walk the alert history once).
+                const reasonCounts = new Map();
                 (alertHistory.alerts || []).forEach(a => {
                   if (a?.type === 'review_prompt_reason_ctr_drop' && Array.isArray(a?.threshold_snapshot?.reasons)) {
+                    const seenInAlert = new Set();
                     a.threshold_snapshot.reasons.forEach(r => {
                       const name = (r && typeof r === 'object') ? (r.reason ?? '') : String(r ?? '');
-                      if (name) reasonSet.add(name);
+                      if (name && !seenInAlert.has(name)) {
+                        seenInAlert.add(name);
+                        reasonCounts.set(name, (reasonCounts.get(name) || 0) + 1);
+                      }
                     });
                   }
                 });
-                const reasons = Array.from(reasonSet).sort();
+                const reasons = Array.from(reasonCounts.keys()).sort((a, b) => {
+                  // Noisiest first, then alphabetical for ties — matches
+                  // the triage flow the dropdown is meant to enable.
+                  const diff = (reasonCounts.get(b) || 0) - (reasonCounts.get(a) || 0);
+                  return diff !== 0 ? diff : a.localeCompare(b);
+                });
+                const activeCount = reasonCounts.get(alertReasonFilter) || 0;
                 if (reasons.length === 0 && !alertReasonFilter) return null;
                 return (
-                  <select
-                    className="text-[10px] border border-gray-200 rounded-md px-2 py-1 bg-white text-gray-600"
-                    value={alertReasonFilter}
-                    onChange={e => setAlertReasonFilter(e.target.value)}
-                    title="Filter alert history to alerts whose reason snapshot contains this trigger reason"
-                  >
-                    <option value="">All reasons</option>
-                    {reasons.map(r => (
-                      <option key={r} value={r}>{r}</option>
-                    ))}
-                    {alertReasonFilter && !reasons.includes(alertReasonFilter) && (
-                      <option value={alertReasonFilter}>{alertReasonFilter}</option>
+                  <>
+                    <select
+                      className="text-[10px] border border-gray-200 rounded-md px-2 py-1 bg-white text-gray-600"
+                      value={alertReasonFilter}
+                      onChange={e => setAlertReasonFilter(e.target.value)}
+                      title="Filter alert history to alerts whose reason snapshot contains this trigger reason. Counts show how many of the loaded alerts mention each reason — sorted noisiest first."
+                    >
+                      <option value="">All reasons</option>
+                      {reasons.map(r => (
+                        <option key={r} value={r}>{`${r} (${reasonCounts.get(r)})`}</option>
+                      ))}
+                      {alertReasonFilter && !reasons.includes(alertReasonFilter) && (
+                        <option value={alertReasonFilter}>{`${alertReasonFilter} (0)`}</option>
+                      )}
+                    </select>
+                    {alertReasonFilter && (
+                      <button
+                        type="button"
+                        onClick={() => setAlertReasonFilter('')}
+                        className="text-[10px] px-2 py-1 rounded-md bg-violet-50 text-violet-700 border border-violet-200 hover:bg-violet-100 transition-colors font-medium flex items-center gap-1"
+                        title={`Clear reason filter — ${activeCount} alert${activeCount === 1 ? '' : 's'} in the loaded history mention "${alertReasonFilter}"`}
+                      >
+                        {`Reason: ${alertReasonFilter} (${activeCount})`}
+                        <X size={10} />
+                      </button>
                     )}
-                  </select>
+                  </>
                 );
               })()}
-              {alertReasonFilter && (
-                <button
-                  type="button"
-                  onClick={() => setAlertReasonFilter('')}
-                  className="text-[10px] px-2 py-1 rounded-md bg-violet-50 text-violet-700 border border-violet-200 hover:bg-violet-100 transition-colors font-medium flex items-center gap-1"
-                  title="Clear reason filter"
-                >
-                  Reason: {alertReasonFilter}
-                  <X size={10} />
-                </button>
-              )}
               <label
                 className="flex items-center gap-1 text-[10px] text-gray-600 px-2 py-1 rounded-md border border-gray-200 bg-white cursor-pointer select-none hover:bg-gray-50"
                 title="Include synthetic alerts produced by the Test alert delivery button"
