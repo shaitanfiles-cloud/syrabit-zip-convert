@@ -88,10 +88,16 @@ export function useTurnstile({ skip = false } = {}) {
     }
   }, []);
 
+  const reset = useCallback(() => {
+    if (!window.turnstile || widgetIdRef.current == null) return;
+    try { window.turnstile.reset(widgetIdRef.current); } catch {}
+    tokenRef.current = '';
+  }, []);
+
   // When skipped (authenticated user), report ready=true and enabled=false
   // so call sites don't gate their UX on a widget that was never loaded.
   if (skip) {
-    return { getToken: async () => '', ready: true, enabled: false };
+    return { getToken: async () => '', ready: true, enabled: false, reset: () => {} };
   }
-  return { getToken, ready: SITE_KEY ? ready : true, enabled: !!SITE_KEY };
+  return { getToken, ready: SITE_KEY ? ready : true, enabled: !!SITE_KEY, reset };
 }

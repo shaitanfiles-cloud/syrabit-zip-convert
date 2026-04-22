@@ -177,8 +177,9 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const login = async (email, password) => {
-    const res = await axios.post(`${API_BASE}/auth/login`, { email, password }, { withCredentials: true });
+  const login = async (email, password, turnstileToken = '') => {
+    const headers = turnstileToken ? { 'x-turnstile-token': turnstileToken } : undefined;
+    const res = await axios.post(`${API_BASE}/auth/login`, { email, password }, { withCredentials: true, headers });
     const { user: userData, access_token } = res.data;
     if (access_token) _storeToken(access_token);
     justAuthenticated.current = true;
@@ -188,10 +189,11 @@ export const AuthProvider = ({ children }) => {
     return userData;
   };
 
-  const signup = async (name, email, password, consent_dpdp = false) => {
+  const signup = async (name, email, password, consent_dpdp = false, turnstileToken = '') => {
+    const headers = turnstileToken ? { 'x-turnstile-token': turnstileToken } : undefined;
     const res = await axios.post(`${API_BASE}/auth/signup`, {
       name, email, password, consent_dpdp,
-    }, { withCredentials: true });
+    }, { withCredentials: true, headers });
     const { user: userData, access_token } = res.data;
     if (access_token) _storeToken(access_token);
     justAuthenticated.current = true;

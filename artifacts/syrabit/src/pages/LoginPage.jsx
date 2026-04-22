@@ -5,6 +5,7 @@ import { usePublicStats } from '@/hooks/usePublicStats';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
+import { useTurnstile } from '@/hooks/useTurnstile';
 import { toast } from 'sonner';
 import { LogoFull } from '@/components/Logo';
 
@@ -45,6 +46,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const { login } = useAuth();
+  const { getToken: getTurnstileToken, ready: turnstileReady, enabled: turnstileEnabled, reset: resetTurnstile } = useTurnstile();
   const navigate = useNavigate();
 
   const handleInputFocus = useCallback((e) => {
@@ -58,7 +60,11 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      const user = await login(email, password);
+      let turnstileToken = '';
+      if (turnstileEnabled) {
+        turnstileToken = await getTurnstileToken();
+      }
+      const user = await login(email, password, turnstileToken);
       toast.success('Welcome back!');
       setTimeout(() => {
         if (!user.onboarding_done) {
@@ -68,6 +74,7 @@ export default function LoginPage() {
         }
       }, 100);
     } catch (err) {
+      try { resetTurnstile(); } catch {}
       setError(err.response?.data?.detail || 'Login failed. Please check your credentials.');
     } finally {
       setLoading(false);
@@ -249,7 +256,7 @@ export default function LoginPage() {
 
               <button
                 type="submit"
-                disabled={loading}
+                disabled={loading || (turnstileEnabled && !turnstileReady)}
                 className="w-full flex items-center justify-center gap-2 h-11 rounded-xl text-sm font-bold text-white transition-all duration-150 active:scale-[0.97] disabled:opacity-60 btn-gradient"
                 data-testid="auth-submit-button"
               >

@@ -5,6 +5,7 @@ import { usePublicStats } from '@/hooks/usePublicStats';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
+import { useTurnstile } from '@/hooks/useTurnstile';
 import { toast } from 'sonner';
 import { LogoFull } from '@/components/Logo';
 
@@ -44,6 +45,7 @@ export default function SignupPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const { signup } = useAuth();
+  const { getToken: getTurnstileToken, ready: turnstileReady, enabled: turnstileEnabled, reset: resetTurnstile } = useTurnstile();
   const navigate = useNavigate();
 
   const strength = getPasswordStrength(password);
@@ -72,10 +74,15 @@ export default function SignupPage() {
     }
     setLoading(true);
     try {
-      await signup(name, email, password, consentDpdp);
+      let turnstileToken = '';
+      if (turnstileEnabled) {
+        turnstileToken = await getTurnstileToken();
+      }
+      await signup(name, email, password, consentDpdp, turnstileToken);
       toast.success('Account created! Welcome to Syrabit.ai!');
       navigate('/onboarding');
     } catch (err) {
+      try { resetTurnstile(); } catch {}
       setError(err.response?.data?.detail || 'Signup failed. Please try again.');
     } finally {
       setLoading(false);
@@ -353,7 +360,7 @@ export default function SignupPage() {
 
               <button
                 type="submit"
-                disabled={loading}
+                disabled={loading || (turnstileEnabled && !turnstileReady)}
                 className="w-full flex items-center justify-center gap-2 h-11 rounded-xl text-sm font-bold text-white transition-all duration-150 active:scale-[0.97] disabled:opacity-60 btn-gradient"
                 data-testid="auth-submit-button"
               >
