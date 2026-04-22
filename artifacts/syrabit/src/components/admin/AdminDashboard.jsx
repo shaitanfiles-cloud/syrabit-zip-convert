@@ -316,8 +316,41 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
   // "fresh" indicator and a banner if any sitemap was auto-scanned in
   // the last hour.
   const [seoAutoDeepScans, setSeoAutoDeepScans] = useState(null);
-  const [alertFilter, setAlertFilter] = useState('all');
-  const [alertReasonFilter, setAlertReasonFilter] = useState('');
+  // Task #692 — alert filter selection persists in the URL query
+  // string so admins can bookmark and share a focused view (e.g. drop
+  // a `?alert_status=unacknowledged&alert_reason=foo` link into an
+  // incident ticket). Initial state reads from the current URL so a
+  // refresh restores the same view; a useEffect (below) syncs every
+  // change back via history.replaceState (no extra entry in the back
+  // stack — the dashboard isn't a navigable surface).
+  const [alertFilter, setAlertFilter] = useState(() => {
+    if (typeof window === 'undefined') return 'all';
+    const v = new URLSearchParams(window.location.search).get('alert_status');
+    return v === 'unacknowledged' || v === 'acknowledged' || v === 'all' ? v : 'all';
+  });
+  const [alertReasonFilter, setAlertReasonFilter] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    return new URLSearchParams(window.location.search).get('alert_reason') || '';
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (alertFilter && alertFilter !== 'all') {
+      params.set('alert_status', alertFilter);
+    } else {
+      params.delete('alert_status');
+    }
+    if (alertReasonFilter) {
+      params.set('alert_reason', alertReasonFilter);
+    } else {
+      params.delete('alert_reason');
+    }
+    const qs = params.toString();
+    const next = `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`;
+    if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+      window.history.replaceState(window.history.state, '', next);
+    }
+  }, [alertFilter, alertReasonFilter]);
   // Task #426: hide synthetic test alerts (from "Test alert delivery" button)
   // by default; admins can opt in via the "Show test alerts" toggle.
   const [showSyntheticAlerts, setShowSyntheticAlerts] = useState(false);
