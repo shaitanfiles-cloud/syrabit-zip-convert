@@ -6,11 +6,18 @@ enhancement, SEO meta, gap analysis, and the long-document reader.
 
 ## Auth modes (priority order)
 
-| Mode | Trigger env var |
-|------|-----------------|
-| Vertex AI service account | `VERTEX_SERVICE_ACCOUNT` (or `GEMINI_API_KEY` containing JSON). The streaming chat module `vertex_chat.py` additionally accepts `VERTEX_SERVICE_ACCOUNT_JSON` as an alias. |
-| Google AI Studio API key  | `GEMINI_API_KEY=AIza…` |
-| BYOK via CF AI Gateway    | `CF_AI_GATEWAY_ACCOUNT_ID` + `CF_AI_GATEWAY_ID` (no local creds) |
+> **Default in production: BYOK via CF AI Gateway** (Task #666). The
+> service-account and `GEMINI_API_KEY` modes are kept only as
+> rollback / local-dev fallbacks — do **not** set them on Railway,
+> Cloud Run, or App Runner unless you are intentionally backing out
+> of the BYOK migration. See "Migrating Railway → CF AI Gateway BYOK"
+> below.
+
+| Mode | Trigger env var | Status |
+|------|-----------------|--------|
+| Vertex AI service account | `VERTEX_SERVICE_ACCOUNT` (or `GEMINI_API_KEY` containing JSON). The streaming chat module `vertex_chat.py` additionally accepts `VERTEX_SERVICE_ACCOUNT_JSON` as an alias. | Optional — only needed for `vertex_chat.py` streaming chat (uses Vertex AI directly, not AI Gateway). |
+| Google AI Studio API key  | `GEMINI_API_KEY=AIza…` | **Legacy / rollback only.** Pre-#666 path. Setting this on a deployed backend re-introduces a shared origin secret without changing chat behaviour. |
+| BYOK via CF AI Gateway    | `CF_AI_GATEWAY_ACCOUNT_ID` + `CF_AI_GATEWAY_ID` (no local creds) | **Default — required in prod.** |
 
 When `CF_AI_GATEWAY_ACCOUNT_ID` + `CF_AI_GATEWAY_ID` are both set,
 requests are routed through the gateway by URL rewriting and
@@ -26,10 +33,15 @@ VERTEX_LOCATION=us-central1           # optional
 ```
 SA needs `roles/aiplatform.user` and the Vertex AI API enabled.
 
-### API key
+### API key (legacy / rollback only — do NOT set in prod)
 ```
 GEMINI_API_KEY=AIzaSy…
 ```
+Useful for local dev without a Cloudflare account, or as an emergency
+backout from the BYOK migration. On Railway/Cloud Run/App Runner this
+is a footgun — the chat path will use it but you've now restored a
+shared origin secret that bypasses CF AI Gateway analytics, spend
+caps, and per-user BYOK accounting.
 
 ### BYOK
 ```
