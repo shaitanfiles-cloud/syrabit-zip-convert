@@ -152,7 +152,31 @@ curl https://syrabit-backend-production.up.railway.app/api/health
 
 # Test through edge worker
 curl https://api.syrabit.ai/api/health
+
+# AI healthcheck (Task #678) — Railway points its healthcheck here.
+# Returns 200 only when the cached Vertex/Gemini probe is healthy and
+# fresh (within 2x VERTEX_PROBE_INTERVAL_S). Returns 503 on a broken
+# rollout so Railway auto-rolls back instead of serving 502s.
+curl -i https://syrabit-backend-production.up.railway.app/healthz/ai
 ```
+
+### Configure Railway Healthcheck Path
+
+In **Settings > Deploy > Healthcheck**:
+
+- **Healthcheck Path**: `/healthz/ai`
+- **Healthcheck Timeout**: `10` seconds
+- **Healthcheck Start Period**: keep at `300` seconds (boot + first
+  Vertex probe). Until the startup probe completes the endpoint
+  intentionally returns 503 with `{"status":"unknown"}` — that is what
+  the start-period grace window covers.
+
+Pointing Railway at `/healthz/ai` (instead of the generic `/api/health`)
+means a deploy where Gemini auth is broken — wrong
+`VERTEX_SERVICE_ACCOUNT_JSON`, revoked AI Gateway BYOK key, etc. — will
+fail the healthcheck and Railway will auto-rollback to the last good
+revision instead of cutting traffic over to a service that 502s every
+chat request.
 
 ## Resource Recommendations
 

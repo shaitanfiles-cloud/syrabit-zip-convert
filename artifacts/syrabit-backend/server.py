@@ -178,19 +178,24 @@ async def _vertex_startup_probe() -> None:
     background task via ``asyncio.create_task`` so it never blocks the
     API from accepting requests.
     """
+    import vertex_health_cache
     try:
         import vertex_services
         result = await asyncio.wait_for(
             vertex_services.health_check(), timeout=5.0
         )
     except asyncio.TimeoutError:
-        logger.error(
-            "[STARTUP-PROBE] Gemini self-check FAILED: timed out after 5s — "
-            "upstream (Vertex / AI Gateway) is unreachable or hung."
+        reason = (
+            "timed out after 5s — upstream (Vertex / AI Gateway) is "
+            "unreachable or hung."
         )
+        logger.error(f"[STARTUP-PROBE] Gemini self-check FAILED: {reason}")
+        vertex_health_cache.record(False, reason=reason, source="startup")
         return
     except Exception as exc:
-        logger.error(f"[STARTUP-PROBE] vertex health_check raised: {exc!r}")
+        reason = f"vertex health_check raised: {exc!r}"
+        logger.error(f"[STARTUP-PROBE] {reason}")
+        vertex_health_cache.record(False, reason=reason, source="startup")
         return
     embed_ok = bool(result.get("embeddings"))
     gen_ok = bool(result.get("generation"))
@@ -201,10 +206,23 @@ async def _vertex_startup_probe() -> None:
             f"via_cf_gateway={result.get('via_cf_gateway')!r}"
         )
         logger.error(f"[STARTUP-PROBE] Gemini self-check FAILED: {reason}")
+        vertex_health_cache.record(
+            False,
+            reason=reason,
+            auth_mode=result.get("auth_mode"),
+            via_cf_gateway=result.get("via_cf_gateway"),
+            source="startup",
+        )
     else:
         logger.info(
             f"[STARTUP-PROBE] Gemini self-check OK "
             f"(auth_mode={result.get('auth_mode')!r})"
+        )
+        vertex_health_cache.record(
+            True,
+            auth_mode=result.get("auth_mode"),
+            via_cf_gateway=result.get("via_cf_gateway"),
+            source="startup",
         )
 
 
@@ -232,12 +250,14 @@ async def _vertex_periodic_probe_loop() -> None:
     through the existing 30-min cooldown in ``_dispatch_alert`` as a
     secondary guard.
     """
+    import vertex_health_cache
     consecutive_failures = 0
     alerted_for_run = False
     await asyncio.sleep(_VERTEX_PROBE_INTERVAL_S)
     while True:
         ok = False
         reason = ""
+        result: dict = {}
         try:
             import vertex_services
             result = await asyncio.wait_for(
@@ -256,6 +276,14 @@ async def _vertex_periodic_probe_loop() -> None:
             reason = "timed out after 10s — upstream (Vertex / AI Gateway) unreachable or hung."
         except Exception as exc:
             reason = f"vertex health_check raised: {exc!r}"
+
+        vertex_health_cache.record(
+            ok,
+            reason=None if ok else reason,
+            auth_mode=result.get("auth_mode") if isinstance(result, dict) else None,
+            via_cf_gateway=result.get("via_cf_gateway") if isinstance(result, dict) else None,
+            source="periodic",
+        )
 
         if ok:
             consecutive_failures = 0
@@ -1002,6 +1030,22 @@ app.include_router(pyq_router)
 
 from routes.reviews import router as reviews_router
 app.include_router(reviews_router)
+
+@app.get("/healthz/ai")
+async def healthz_ai():
+    """Task #678 — Railway-friendly liveness probe for Gemini.
+
+    Reads the cache populated by ``_vertex_startup_probe`` and the
+    periodic re-probe in this module. Returns 200 only when the most
+    recent probe was healthy and was recorded within the TTL window
+    (``2 * VERTEX_PROBE_INTERVAL_S`` by default). When this endpoint
+    flips to 503 Railway will refuse to mark the rollout as healthy
+    and auto-rollback instead of serving 502s to users.
+    """
+    import vertex_health_cache
+    code, body = vertex_health_cache.healthz_ai_response()
+    return JSONResponse(status_code=code, content=body)
+
 
 @app.get("/robots.txt", response_class=Response)
 async def serve_robots_txt():
