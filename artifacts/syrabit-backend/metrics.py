@@ -309,6 +309,16 @@ _ALERT_THRESHOLDS_DEFAULT = {
     # the existing Alert Settings panel without a deploy.
     "review_prompt_ctr_min_shown": 50,
     "review_prompt_ctr_floor_pct": 5.0,
+    # Task #661: per-trigger-reason CTR collapse alert. Fires when, over
+    # the last 7d, an individual trigger reason's CTR drops by ≥
+    # ``review_prompt_reason_ctr_drop_pp`` percentage points vs the
+    # prior 7d AND both windows have at least
+    # ``review_prompt_reason_ctr_min_shown`` shown events for that
+    # reason (so a low-volume reason can't trip the alert on noise).
+    # Catches regressions confined to one surface (e.g. answer_helpful)
+    # before they wash out the aggregate ``review_prompt_ctr_low``.
+    "review_prompt_reason_ctr_drop_pp": 5.0,
+    "review_prompt_reason_ctr_min_shown": 30,
     # Task #432: page on-call when this worker's Assamese-purity override
     # refresh loop hasn't ticked successfully in this many seconds. The
     # poll cadence is 15s so 60s == 4 missed ticks before paging.

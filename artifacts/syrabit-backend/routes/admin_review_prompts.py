@@ -277,6 +277,12 @@ REVIEW_PROMPT_CTR_FLOOR_PCT = 5.0          # ctr_pct < this → alert
 REVIEW_PROMPT_ALERT_WINDOW_DAYS = 7
 REVIEW_PROMPT_ALERT_COOLDOWN_S = 6 * 60 * 60   # 6 h per incident
 REVIEW_PROMPT_ALERT_INTERVAL_S = 30 * 60       # poll every 30 min
+
+# Task #661 — per-reason CTR collapse defaults. Both knobs are
+# overridable from the Alert Settings panel via
+# ``metrics._ALERT_THRESHOLDS``.
+REVIEW_PROMPT_REASON_CTR_DROP_PP = 5.0     # min pp drop WoW to alert
+REVIEW_PROMPT_REASON_CTR_MIN_SHOWN = 30    # min shown in BOTH windows
 _REVIEW_PROMPT_DASHBOARD_URL = (
     "https://syrabit.ai/admin/dashboard?tab=overview#review-prompt-funnel"
 )
@@ -404,6 +410,166 @@ async def _evaluate_review_prompt_ctr_alerts(
     return alerts
 
 
+def _effective_review_prompt_reason_drop_thresholds() -> tuple:
+    """Return ``(min_shown, drop_pp)`` for the per-reason CTR-collapse
+    alert, applying admin overrides from ``metrics._ALERT_THRESHOLDS``
+    on top of the module-level defaults. Mirrors the resolution pattern
+    used by ``_effective_review_prompt_thresholds``.
+    """
+    min_shown = REVIEW_PROMPT_REASON_CTR_MIN_SHOWN
+    drop_pp = REVIEW_PROMPT_REASON_CTR_DROP_PP
+    try:
+        from metrics import _ALERT_THRESHOLDS
+        try:
+            min_shown = int(float(_ALERT_THRESHOLDS.get(
+                "review_prompt_reason_ctr_min_shown", min_shown,
+            )))
+        except (TypeError, ValueError):
+            pass
+        try:
+            drop_pp = float(_ALERT_THRESHOLDS.get(
+                "review_prompt_reason_ctr_drop_pp", drop_pp,
+            ))
+        except (TypeError, ValueError):
+            pass
+    except Exception:
+        pass
+    return min_shown, drop_pp
+
+
+async def _evaluate_review_prompt_reason_ctr_drop_alerts(
+    now_ts: Optional[float] = None,
+    *,
+    window_days: int = REVIEW_PROMPT_ALERT_WINDOW_DAYS,
+) -> List[Dict[str, Any]]:
+    """Pure evaluator for Task #661.
+
+    Compares per-trigger-reason CTR for the most recent ``window_days``
+    against the immediately-preceding equal-sized window. Flags every
+    reason whose CTR fell by ≥ ``drop_pp`` percentage points, *provided*
+    both windows have at least ``min_shown`` shown events for that
+    reason — without the sample-size gate, low-volume reasons would
+    page on noise alone.
+
+    The flagged reasons are batched into a single
+    ``review_prompt_reason_ctr_drop`` alert (so a regression that hits
+    multiple reasons at once doesn't create an inbox storm). Cooldown
+    is also at the alert-type level — same pattern as
+    ``_evaluate_review_prompt_ctr_alerts``.
+
+    Returns the (possibly empty) list of dispatch-kwarg dicts. The
+    caller is responsible for marking
+    ``_REVIEW_PROMPT_ALERT_LAST_FIRED`` only after a successful send.
+    """
+    if now_ts is None:
+        now_ts = time.time()
+    if not await is_mongo_available():
+        return []
+
+    min_shown, drop_pp = _effective_review_prompt_reason_drop_thresholds()
+    now_dt = datetime.now(timezone.utc)
+    curr_start = now_dt - timedelta(days=window_days)
+    prev_start = now_dt - timedelta(days=window_days * 2)
+
+    try:
+        curr = await _aggregate_review_prompt_window(curr_start, now_dt)
+        prev = await _aggregate_review_prompt_window(prev_start, curr_start)
+    except Exception as exc:
+        logger.debug(f"reason-ctr-drop window aggregation failed: {exc}")
+        return []
+
+    prev_map: Dict[str, Dict[str, int]] = {
+        str(r.get("reason") or "unknown"): {
+            "shown": int(r.get("shown") or 0),
+            "clicked": int(r.get("clicked") or 0),
+        }
+        for r in (prev.get("by_reason") or [])
+    }
+
+    flagged: List[Dict[str, Any]] = []
+    for row in (curr.get("by_reason") or []):
+        reason = str(row.get("reason") or "unknown")
+        c_shown = int(row.get("shown") or 0)
+        c_clicked = int(row.get("clicked") or 0)
+        prev_row = prev_map.get(reason, {})
+        p_shown = int(prev_row.get("shown") or 0)
+        p_clicked = int(prev_row.get("clicked") or 0)
+        # Sample-size gate on BOTH windows — protects against pages on
+        # the noise of a barely-fired reason.
+        if c_shown < min_shown or p_shown < min_shown:
+            continue
+        c_ctr = (c_clicked / c_shown) * 100
+        p_ctr = (p_clicked / p_shown) * 100
+        delta_pp = round(c_ctr - p_ctr, 2)
+        if delta_pp > -drop_pp:  # not a deep enough collapse
+            continue
+        flagged.append({
+            "reason": reason,
+            "curr_shown": c_shown,
+            "curr_clicked": c_clicked,
+            "curr_ctr_pct": round(c_ctr, 2),
+            "prev_shown": p_shown,
+            "prev_clicked": p_clicked,
+            "prev_ctr_pct": round(p_ctr, 2),
+            "delta_pp": delta_pp,
+        })
+
+    if not flagged:
+        return []
+
+    # Sort worst-collapse-first so the alert body leads with the most
+    # damaging regression.
+    flagged.sort(key=lambda r: r["delta_pp"])
+
+    last = _REVIEW_PROMPT_ALERT_LAST_FIRED.get("review_prompt_reason_ctr_drop")
+    if last is not None and (now_ts - last) < REVIEW_PROMPT_ALERT_COOLDOWN_S:
+        return []
+
+    reason_lines: List[str] = []
+    for r in flagged:
+        reason_lines.append(
+            f"  · {r['reason']}: CTR {r['prev_ctr_pct']:.1f}% → "
+            f"{r['curr_ctr_pct']:.1f}% ({r['delta_pp']:+.1f} pp, "
+            f"{r['curr_clicked']}/{r['curr_shown']} this week, "
+            f"{r['prev_clicked']}/{r['prev_shown']} prev)"
+        )
+    body_lines = [
+        (
+            f"{len(flagged)} review-prompt trigger reason(s) saw a "
+            f"CTR drop ≥ {drop_pp:.1f} pp week-over-week with ≥ "
+            f"{min_shown} shown events in both windows:"
+        ),
+        *reason_lines,
+        (
+            "A regression confined to one reason is invisible to the "
+            "aggregate `review_prompt_ctr_low` alert — investigate the "
+            "specific trigger surface(s) before it washes out the "
+            "overall number."
+        ),
+        f"Dashboard: {_REVIEW_PROMPT_DASHBOARD_URL}",
+    ]
+    title_reason = flagged[0]["reason"]
+    if len(flagged) == 1:
+        title = f"Review-prompt CTR collapsed for `{title_reason}` (WoW)"
+    else:
+        title = (
+            f"Review-prompt CTR collapsed for {len(flagged)} reasons "
+            f"(worst: `{title_reason}`)"
+        )
+    return [{
+        "alert_type": "review_prompt_reason_ctr_drop",
+        "title": title,
+        "body": "\n".join(body_lines),
+        "threshold_snapshot": {
+            "metric": "review_prompt_reason_ctr_delta_pp",
+            "value": -drop_pp,
+            "min_shown": min_shown,
+            "window_days": window_days,
+            "reasons": flagged,
+        },
+    }]
+
+
 async def _review_prompt_alert_loop():
     """Background loop: poll review_prompt_events and fire admin alerts
     when the 7-day CTR falls below the configured floor. Modeled on
@@ -424,6 +590,14 @@ async def _review_prompt_alert_loop():
             except Exception:
                 pass
             alerts = await _evaluate_review_prompt_ctr_alerts()
+            try:
+                alerts = list(alerts) + list(
+                    await _evaluate_review_prompt_reason_ctr_drop_alerts()
+                )
+            except Exception as exc:
+                logger.debug(
+                    f"reason-ctr-drop evaluator raised; skipping this tick: {exc}"
+                )
             if alerts:
                 try:
                     from metrics import _dispatch_alert, _alert_last_fired

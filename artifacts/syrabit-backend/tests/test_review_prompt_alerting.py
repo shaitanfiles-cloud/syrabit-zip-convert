@@ -7,6 +7,7 @@ helpers (``_gather_review_prompt_alert_window``,
 loop in production.
 """
 import asyncio
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from tests._deps_stub import install_deps_stub  # noqa: E402
@@ -165,6 +166,217 @@ def test_evaluator_does_not_mutate_cooldown_state():
     assert len(alerts1) == 1
     assert len(alerts2) == 1
     assert arp._REVIEW_PROMPT_ALERT_LAST_FIRED == {}
+
+
+# ------------- _evaluate_review_prompt_reason_ctr_drop_alerts (Task #661) ----
+
+def _patch_reason_windows(curr_by_reason, prev_by_reason):
+    """Stub ``_aggregate_review_prompt_window`` so the reason-drop
+    evaluator sees deterministic curr/prev rollups without needing a
+    full Mongo aggregation fake. The first awaited call returns the
+    *current* window, the second returns the *previous* window — same
+    order the production code requests them.
+    """
+    # Distinguish curr vs prev by ``until`` — the production code asks
+    # for the current window with ``until=now`` and the previous window
+    # with ``until=curr_start``. Counter-based fakes break under repeat
+    # invocations within the same test (cooldown / mutation cases).
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        days=arp.REVIEW_PROMPT_ALERT_WINDOW_DAYS - 1,
+    )
+
+    async def _fake_agg(since, until):
+        if until >= cutoff:
+            return {"totals": {}, "by_reason": list(curr_by_reason)}
+        return {"totals": {}, "by_reason": list(prev_by_reason)}
+
+    return patch.object(arp, "_aggregate_review_prompt_window", _fake_agg)
+
+
+def _reason_row(reason, shown, clicked):
+    return {"reason": reason, "shown": shown, "clicked": clicked, "dismissed": 0}
+
+
+def test_reason_drop_no_alert_when_per_reason_sample_too_small():
+    """Sample-size gate must protect both windows: a reason that fired
+    only a handful of times can't page on noise even if its CTR
+    dropped 100 pp."""
+    arp._REVIEW_PROMPT_ALERT_LAST_FIRED.clear()
+    # 5 shown / 5 clicked → 100% prev; 5 shown / 0 → 0% curr; massive
+    # drop but well under the 30-shown gate on both sides.
+    curr = [_reason_row("answer_helpful", 5, 0)]
+    prev = [_reason_row("answer_helpful", 5, 5)]
+    with _patch_reason_windows(curr, prev), \
+         patch.object(arp, "is_mongo_available", AsyncMock(return_value=True)):
+        alerts = asyncio.run(
+            arp._evaluate_review_prompt_reason_ctr_drop_alerts(now_ts=1000.0)
+        )
+    assert alerts == []
+
+
+def test_reason_drop_no_alert_when_only_curr_sample_meets_gate():
+    """One-sided sample size shouldn't satisfy the gate either — a
+    reason that just turned on this week has no comparable baseline."""
+    arp._REVIEW_PROMPT_ALERT_LAST_FIRED.clear()
+    curr = [_reason_row("answer_helpful", 200, 0)]
+    prev = [_reason_row("answer_helpful", 5, 5)]   # prev under min
+    with _patch_reason_windows(curr, prev), \
+         patch.object(arp, "is_mongo_available", AsyncMock(return_value=True)):
+        alerts = asyncio.run(
+            arp._evaluate_review_prompt_reason_ctr_drop_alerts(now_ts=1000.0)
+        )
+    assert alerts == []
+
+
+def test_reason_drop_no_alert_when_drop_is_below_threshold():
+    """A small dip (< drop_pp) on a healthy-volume reason must not page."""
+    arp._REVIEW_PROMPT_ALERT_LAST_FIRED.clear()
+    # prev: 200/40 = 20%; curr: 200/38 = 19% → -1pp drop, under 5pp default.
+    curr = [_reason_row("answer_helpful", 200, 38)]
+    prev = [_reason_row("answer_helpful", 200, 40)]
+    with _patch_reason_windows(curr, prev), \
+         patch.object(arp, "is_mongo_available", AsyncMock(return_value=True)):
+        alerts = asyncio.run(
+            arp._evaluate_review_prompt_reason_ctr_drop_alerts(now_ts=1000.0)
+        )
+    assert alerts == []
+
+
+def test_reason_drop_alert_fires_for_collapsed_reason():
+    arp._REVIEW_PROMPT_ALERT_LAST_FIRED.clear()
+    # prev: 200/40 = 20%; curr: 200/4 = 2% → -18pp drop, well past 5pp.
+    # Second reason stays healthy and must NOT appear in the alert.
+    curr = [
+        _reason_row("answer_helpful", 200, 4),
+        _reason_row("session_end", 200, 50),
+    ]
+    prev = [
+        _reason_row("answer_helpful", 200, 40),
+        _reason_row("session_end", 200, 48),
+    ]
+    with _patch_reason_windows(curr, prev), \
+         patch.object(arp, "is_mongo_available", AsyncMock(return_value=True)):
+        alerts = asyncio.run(
+            arp._evaluate_review_prompt_reason_ctr_drop_alerts(now_ts=1000.0)
+        )
+    assert len(alerts) == 1
+    a = alerts[0]
+    assert a["alert_type"] == "review_prompt_reason_ctr_drop"
+    assert "answer_helpful" in a["title"]
+    assert "answer_helpful" in a["body"]
+    assert "session_end" not in a["body"]
+    assert "/admin/dashboard" in a["body"]
+    snap = a["threshold_snapshot"]
+    assert snap["metric"] == "review_prompt_reason_ctr_delta_pp"
+    assert len(snap["reasons"]) == 1
+    assert snap["reasons"][0]["reason"] == "answer_helpful"
+    assert snap["reasons"][0]["delta_pp"] <= -5.0
+
+
+def test_reason_drop_alert_batches_multiple_reasons_worst_first():
+    arp._REVIEW_PROMPT_ALERT_LAST_FIRED.clear()
+    # answer_helpful: 20% → 2% (-18pp);  session_end: 15% → 5% (-10pp).
+    # answer_helpful collapsed harder so it must lead the title + body.
+    curr = [
+        _reason_row("answer_helpful", 200, 4),
+        _reason_row("session_end", 200, 10),
+    ]
+    prev = [
+        _reason_row("answer_helpful", 200, 40),
+        _reason_row("session_end", 200, 30),
+    ]
+    with _patch_reason_windows(curr, prev), \
+         patch.object(arp, "is_mongo_available", AsyncMock(return_value=True)):
+        alerts = asyncio.run(
+            arp._evaluate_review_prompt_reason_ctr_drop_alerts(now_ts=1000.0)
+        )
+    assert len(alerts) == 1
+    a = alerts[0]
+    snap_reasons = a["threshold_snapshot"]["reasons"]
+    assert [r["reason"] for r in snap_reasons] == ["answer_helpful", "session_end"]
+    # Worst reason mentioned in the title.
+    assert "answer_helpful" in a["title"]
+    assert "2 reasons" in a["title"] or "2 trigger" in a["title"] or "2 " in a["title"]
+
+
+def test_reason_drop_cooldown_suppresses_repeats_then_releases():
+    arp._REVIEW_PROMPT_ALERT_LAST_FIRED.clear()
+    curr = [_reason_row("answer_helpful", 200, 4)]
+    prev = [_reason_row("answer_helpful", 200, 40)]
+    with _patch_reason_windows(curr, prev), \
+         patch.object(arp, "is_mongo_available", AsyncMock(return_value=True)):
+        first = asyncio.run(
+            arp._evaluate_review_prompt_reason_ctr_drop_alerts(now_ts=1000.0)
+        )
+    assert len(first) == 1
+    # Simulate a successful dispatch marking the cooldown.
+    arp._REVIEW_PROMPT_ALERT_LAST_FIRED["review_prompt_reason_ctr_drop"] = 1000.0
+    with _patch_reason_windows(curr, prev), \
+         patch.object(arp, "is_mongo_available", AsyncMock(return_value=True)):
+        mid = asyncio.run(arp._evaluate_review_prompt_reason_ctr_drop_alerts(
+            now_ts=1000.0 + arp.REVIEW_PROMPT_ALERT_COOLDOWN_S / 2,
+        ))
+        after = asyncio.run(arp._evaluate_review_prompt_reason_ctr_drop_alerts(
+            now_ts=1000.0 + arp.REVIEW_PROMPT_ALERT_COOLDOWN_S + 60,
+        ))
+    assert mid == []
+    assert len(after) == 1
+
+
+def test_reason_drop_evaluator_does_not_mutate_cooldown_state():
+    """Pure helper — the loop is responsible for cooldown bookkeeping
+    so a downstream Resend failure can be retried next tick."""
+    arp._REVIEW_PROMPT_ALERT_LAST_FIRED.clear()
+    curr = [_reason_row("answer_helpful", 200, 4)]
+    prev = [_reason_row("answer_helpful", 200, 40)]
+    with _patch_reason_windows(curr, prev), \
+         patch.object(arp, "is_mongo_available", AsyncMock(return_value=True)):
+        a1 = asyncio.run(
+            arp._evaluate_review_prompt_reason_ctr_drop_alerts(now_ts=1000.0)
+        )
+        a2 = asyncio.run(
+            arp._evaluate_review_prompt_reason_ctr_drop_alerts(now_ts=1060.0)
+        )
+    assert len(a1) == 1
+    assert len(a2) == 1
+    assert arp._REVIEW_PROMPT_ALERT_LAST_FIRED == {}
+
+
+def test_reason_drop_no_alert_when_mongo_unavailable():
+    arp._REVIEW_PROMPT_ALERT_LAST_FIRED.clear()
+    with patch.object(arp, "is_mongo_available", AsyncMock(return_value=False)):
+        alerts = asyncio.run(
+            arp._evaluate_review_prompt_reason_ctr_drop_alerts(now_ts=1000.0)
+        )
+    assert alerts == []
+
+
+def test_reason_drop_admin_threshold_overrides_take_effect():
+    """Lowering ``review_prompt_reason_ctr_drop_pp`` from the Alert
+    Settings panel must let smaller dips page; lowering ``min_shown``
+    must let lower-volume reasons through the sample gate."""
+    arp._REVIEW_PROMPT_ALERT_LAST_FIRED.clear()
+    # Volume is below the default 30-shown gate, dip is below the
+    # default 5pp threshold — neither would alert under defaults.
+    curr = [_reason_row("answer_helpful", 20, 2)]   # 10%
+    prev = [_reason_row("answer_helpful", 20, 4)]   # 20%, -10pp
+    import metrics as _m
+    saved = dict(_m._ALERT_THRESHOLDS)
+    try:
+        _m._ALERT_THRESHOLDS["review_prompt_reason_ctr_min_shown"] = 10
+        _m._ALERT_THRESHOLDS["review_prompt_reason_ctr_drop_pp"] = 3.0
+        with _patch_reason_windows(curr, prev), \
+             patch.object(arp, "is_mongo_available", AsyncMock(return_value=True)):
+            alerts = asyncio.run(
+                arp._evaluate_review_prompt_reason_ctr_drop_alerts(now_ts=1000.0)
+            )
+    finally:
+        _m._ALERT_THRESHOLDS.clear()
+        _m._ALERT_THRESHOLDS.update(saved)
+    assert len(alerts) == 1
+    snap = alerts[0]["threshold_snapshot"]
+    assert snap["min_shown"] == 10
+    assert snap["value"] == -3.0
 
 
 def test_admin_threshold_overrides_take_effect():
