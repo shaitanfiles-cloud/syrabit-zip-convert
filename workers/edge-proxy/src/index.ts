@@ -1706,11 +1706,27 @@ export default {
       // Railway and get 404.
       const pagesOrigin = env.PAGES_ORIGIN || "https://syrabit-zip-convert.pages.dev";
       const pagesUrl = `${pagesOrigin}${url.pathname}${url.search}`;
-      return fetch(pagesUrl, {
+      const upstream = await fetch(pagesUrl, {
         method: request.method,
         headers: request.headers,
         redirect: "manual",
       });
+      // Inject perf headers Pages does not propagate from the zone:
+      //  - alt-svc: advertises HTTP/3 so browsers upgrade subsequent requests
+      //  - X-Polish-Hint: a marker proving the request flowed through the worker
+      //    so we can confirm in DevTools when investigating Polish behaviour
+      const out = new Response(upstream.body, upstream);
+      if (!out.headers.has("alt-svc")) {
+        out.headers.set("alt-svc", 'h3=":443"; ma=86400, h3-29=":443"; ma=86400');
+      }
+      out.headers.set("X-Edge-Worker", "syrabit-edge");
+      // Encourage Polish on image responses by ensuring a public, cacheable
+      // Cache-Control header. Polish skips images with no-cache/private.
+      const ct = (out.headers.get("content-type") || "").toLowerCase();
+      if (ct.startsWith("image/") && !out.headers.has("cache-control")) {
+        out.headers.set("cache-control", "public, max-age=86400");
+      }
+      return out;
     }
 
     if ((request.method !== "GET" && request.method !== "HEAD") || isBypass(pathname)) {
