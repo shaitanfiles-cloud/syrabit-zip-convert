@@ -57,7 +57,6 @@ SUPABASE_URL = "https://czeznmqogtwecidhpysa.supabase.co"
 GOOGLE_OAUTH_CLIENT_ID = "562571664721-d4pji8dnp263qmafctfhdsts09u3h3jc.apps.googleusercontent.com"
 VITE_SITE_URL = "https://syrabit.ai"
 TRUSTPILOT_BUSINESS_UNIT_ID = "6831bda2e0dd12f40d94de6c"
-D1_SYNC_SECRET = "5b5b091800ea2e552e8f600956ca7df609e25d90cecdcce502c8688df276250e"
 EDGE_WORKER_URL = "https://api.syrabit.ai"
 CF_AI_GATEWAY_ACCOUNT_ID = "d66e40eac539fff1db270fddf384a5ec"
 
