@@ -580,7 +580,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     try {
       const r = await llmCosts(adminToken, llmDays);
       setLlmData(r.data);
-    } catch {} finally { setLlmLoading(false); }
+    } catch (err) { console.warn('AdminHealth: llmCosts() failed:', err); } finally { setLlmLoading(false); }
   }, [adminToken, llmDays]);
 
   useEffect(() => { loadHealth(); }, []);

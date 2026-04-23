@@ -437,7 +437,9 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
     try {
       const statsRes = await axios.get(`${API_BASE}/admin/push/delivery-stats?days=7`, adminHdr(adminToken));
       setPushDeliverySummary(statsRes.data);
-    } catch {}
+    } catch (err) {
+      console.warn('AdminDashboard: /admin/push/delivery-stats fetch failed:', err);
+    }
     // Task #434 — pull channel_status.push from /admin/alert-settings
     // (the same payload Bot Security's Alert Settings panel uses) so
     // the dashboard tile can show last_success_at + last_error inline.
@@ -538,7 +540,13 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       gain.gain.exponentialRampToValueAtTime(0.01, now + toneConfig.dur);
       osc.start(now);
       osc.stop(now + toneConfig.dur);
-    } catch {}
+    } catch (err) {
+      // WebAudio/Oscillator can throw when the AudioContext is
+      // suspended (e.g. before the first user gesture) or the tone
+      // config is malformed — both are best-effort UX nice-to-haves
+      // (the chime preview), so degrade silently with a debug log.
+      console.debug('AdminDashboard: chime preview tone failed:', err?.message);
+    }
   }, [chimeTone, notifPrefs?.custom_chime_url]);
 
   const handleChimeFileSelect = useCallback((e) => {
@@ -3320,7 +3328,9 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                   try {
                     const statsRes = await axios.get(`${API_BASE}/admin/indexnow/stats`, adminHdr(adminToken));
                     setIndexNowStats(statsRes.data);
-                  } catch {}
+                  } catch (err) {
+                    console.warn('AdminDashboard: post-resubmit indexnow stats refresh failed:', err);
+                  }
                 } catch (e) {
                   setResubmitMessage(`Re-submit failed: ${e?.response?.data?.detail || e.message || 'unknown error'}`);
                 } finally {

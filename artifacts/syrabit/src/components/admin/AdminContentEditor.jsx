@@ -192,12 +192,19 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   }, [adminToken]);
 
   const reloadAll = useCallback(async () => {
-    await reloadAll();
-    if (onHierarchyChange) { try { await onHierarchyChange(); } catch {} }
+    // Bug fix: this used to call `await reloadAll()` (itself) instead
+    // of `await load()`, which would have stack-overflowed if anything
+    // ever invoked it. The dependency array already lists `load`,
+    // confirming the original intent.
+    await load();
+    if (onHierarchyChange) {
+      try { await onHierarchyChange(); }
+      catch (err) { console.warn('AdminContentEditor: parent onHierarchyChange handler threw:', err); }
+    }
   }, [load, onHierarchyChange]);
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { try { const raw = localStorage.getItem('syrabit_editor_prefill'); if (!raw) return; const pf = JSON.parse(raw); if (Date.now() - (pf.timestamp || 0) > 10 * 60 * 1000) { localStorage.removeItem('syrabit_editor_prefill'); return; } localStorage.removeItem('syrabit_editor_prefill'); setContentForm(f => ({ ...f, title: pf.title || f.title || '', content: pf.content || f.content || '' })); setEditView('new-chapter'); toast.success(`Pre-filled from CMS Doc "${pf.title || 'Untitled'}" — select a subject and save`); } catch {} }, []);
+  useEffect(() => { try { const raw = localStorage.getItem('syrabit_editor_prefill'); if (!raw) return; const pf = JSON.parse(raw); if (Date.now() - (pf.timestamp || 0) > 10 * 60 * 1000) { localStorage.removeItem('syrabit_editor_prefill'); return; } localStorage.removeItem('syrabit_editor_prefill'); setContentForm(f => ({ ...f, title: pf.title || f.title || '', content: pf.content || f.content || '' })); setEditView('new-chapter'); toast.success(`Pre-filled from CMS Doc "${pf.title || 'Untitled'}" — select a subject and save`); } catch (err) { console.warn('AdminContentEditor: failed to read syrabit_editor_prefill from localStorage:', err); } }, []);
   useEffect(() => { if (!hubContext?.subjectId || !subjects.length || selSubject) return; const sub = subjects.find(s => s.id === hubContext.subjectId); if (!sub) return; setSelBoard(hubContext.boardId || null); setSelClass(hubContext.classId || null); setSelStream(hubContext.streamId || null); setSelSubject(sub.id); }, [hubContext?.subjectId, subjects]);
   useEffect(() => { if (!onHubContext || !selSubject) return; const sub = subjects.find(s => s.id === selSubject); const str = streams.find(s => s.id === selStream); const cls = classes.find(c => c.id === selClass); const brd = boards.find(b => b.id === selBoard); onHubContext({ boardId: selBoard || '', boardName: brd?.name || '', classId: selClass || '', className: cls?.name || '', streamId: selStream || '', streamName: str?.name || '', subjectId: selSubject, subjectName: sub?.name || '' }); }, [selSubject]);
 

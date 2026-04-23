@@ -884,7 +884,9 @@ function TtlMonitorPanel({ adminToken }) {
       const res = await adminGetCollectionSizeHistory(adminToken, historyDays);
       setSizeHistory(res.data.history || []);
       setSizeGrowthRate(res.data.growth_rate_per_day);
-    } catch {}
+    } catch (err) {
+      console.warn('AdminBotSecurity: collection-size history fetch failed:', err);
+    }
   }, [adminToken, historyDays]);
 
   useEffect(() => { fetchTtl(); }, [fetchTtl]);

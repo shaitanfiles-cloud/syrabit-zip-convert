@@ -83,7 +83,11 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate, n
       const next = typeof ctxOrFn === 'function'
         ? { ...EMPTY_CTX, ...prev, ...ctxOrFn(prev) }
         : { ...EMPTY_CTX, ...prev, ...ctxOrFn };
-      try { localStorage.setItem(HUB_CTX_KEY, JSON.stringify({ ...next, _ts: Date.now() })); } catch {}
+      // localStorage.setItem can throw on QuotaExceededError or in
+      // private-mode browsers where storage is disabled. Caching the
+      // hub context is best-effort — keep the in-memory state and log
+      // so we notice if quota issues become persistent.
+      try { localStorage.setItem(HUB_CTX_KEY, JSON.stringify({ ...next, _ts: Date.now() })); } catch (err) { console.warn('AdminContentHub: failed to persist hub context to localStorage:', err); }
       return next;
     });
   }, []);

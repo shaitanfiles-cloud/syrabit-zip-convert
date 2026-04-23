@@ -1043,7 +1043,7 @@ function ReviewPromptFunnelCard({ stats, baseline, loading, error, onRetry, admi
     try {
       const v = window.localStorage.getItem(REVIEW_PROMPT_SORT_KEY);
       if (v && REVIEW_PROMPT_SORT_OPTIONS.some(o => o.value === v)) return v;
-    } catch {}
+    } catch (err) { console.warn('OverviewTab: failed to read review-prompt sort from localStorage:', err); }
     return 'shown';
   });
   const [volatilityThreshold, setVolatilityThreshold] = useState(() => {
@@ -1054,12 +1054,12 @@ function ReviewPromptFunnelCard({ stats, baseline, loading, error, onRetry, admi
         const parsed = parseFloat(raw);
         if (Number.isFinite(parsed) && parsed >= 0) return parsed;
       }
-    } catch {}
+    } catch (err) { console.warn('OverviewTab: failed to read volatility threshold from localStorage:', err); }
     return REVIEW_PROMPT_VOL_THRESHOLD_DEFAULT;
   });
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    try { window.localStorage.setItem(REVIEW_PROMPT_SORT_KEY, sortMode); } catch {}
+    try { window.localStorage.setItem(REVIEW_PROMPT_SORT_KEY, sortMode); } catch (err) { console.warn('OverviewTab: failed to persist review-prompt sort to localStorage:', err); }
   }, [sortMode]);
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1068,7 +1068,7 @@ function ReviewPromptFunnelCard({ stats, baseline, loading, error, onRetry, admi
         REVIEW_PROMPT_VOL_THRESHOLD_KEY,
         String(volatilityThreshold),
       );
-    } catch {}
+    } catch (err) { console.warn('OverviewTab: failed to persist volatility threshold to localStorage:', err); }
   }, [volatilityThreshold]);
   if (loading && !stats) {
     return (
@@ -1133,7 +1133,9 @@ function ReviewPromptFunnelCard({ stats, baseline, loading, error, onRetry, admi
     // a noisy reason" to "let me tune the sigma multiplier".
     try {
       window.dispatchEvent(new CustomEvent('syrabit:open-alert-sigma-setting'));
-    } catch {}
+    } catch (err) {
+      console.warn('OverviewTab: failed to dispatch syrabit:open-alert-sigma-setting:', err);
+    }
   };
 
   return (
