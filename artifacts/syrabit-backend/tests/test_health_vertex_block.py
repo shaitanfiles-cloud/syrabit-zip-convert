@@ -199,7 +199,7 @@ def health_inner_module(monkeypatch):
 
 def _run(coro):
     import asyncio
-    return asyncio.get_event_loop().run_until_complete(coro) if False else asyncio.run(coro)
+    return asyncio.run(coro) if False else asyncio.run(coro)
 
 
 def test_health_endpoint_includes_vertex_block_when_healthy(health_inner_module):

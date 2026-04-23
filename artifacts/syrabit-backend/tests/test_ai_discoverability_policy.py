@@ -341,7 +341,7 @@ def llms_txt_body() -> str:
 
     from routes.admin_advanced import _build_llms_txt
 
-    return asyncio.get_event_loop().run_until_complete(_build_llms_txt())
+    return asyncio.run(_build_llms_txt())
 
 
 @pytest.mark.parametrize("section", LLMS_TXT_REQUIRED_SECTIONS)

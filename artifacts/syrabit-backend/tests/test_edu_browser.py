@@ -38,7 +38,7 @@ def test_allowlist_basic_allow_deny():
         ("https://pornhub.com/", False),              # hard deny
     ]
     for url, expected in cases:
-        ok, reason = asyncio.get_event_loop().run_until_complete(is_allowed_url(url))
+        ok, reason = asyncio.run(is_allowed_url(url))
         assert ok is expected, f"{url!r} expected={expected} got={ok} reason={reason}"
 
 
@@ -239,7 +239,7 @@ def test_grounded_pipeline_blocks_injection_query():
             chunks.append(c)
         return chunks
 
-    chunks = asyncio.get_event_loop().run_until_complete(_run())
+    chunks = asyncio.run(_run())
     assert any('"guardrail_blocked": true' in c for c in chunks)
     assert chunks[-1].strip() == "data: [DONE]"
 

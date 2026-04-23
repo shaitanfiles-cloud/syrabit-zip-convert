@@ -543,6 +543,20 @@ def test_send_email_skipped_without_admin_email(monkeypatch):
 def test_send_email_skipped_without_resend_key(monkeypatch):
     monkeypatch.delenv("RESEND_API_KEY", raising=False)
     monkeypatch.setenv("ALERT_EMAIL", "ops@example.com")
+    # Reset the in-memory ``metrics._notification_channels`` dict — earlier
+    # tests in the suite (e.g. ``test_admin_assamese_purity``,
+    # ``test_hydrate_slack_payload``) populate this with stub values like
+    # "x@y.z" via ``_load_alert_settings``. Without resetting, the digest
+    # recipient resolver short-circuits on the polluted dict before ever
+    # consulting ``ALERT_EMAIL``.
+    import metrics
+    monkeypatch.setattr(metrics, "_notification_channels",
+                        dict(metrics._NOTIFICATION_CHANNELS_DEFAULT),
+                        raising=False)
+    monkeypatch.setattr(
+        metrics, "_load_alert_settings",
+        lambda *a, **kw: __import__("asyncio").sleep(0),
+    )
     fake_stats = {"iso_week": "2026-W17", "shown": 1, "clicked": 0,
                   "dismissed": 0, "ctr_pct": None}
     result = asyncio.run(

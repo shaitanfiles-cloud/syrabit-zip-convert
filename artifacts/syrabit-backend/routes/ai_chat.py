@@ -1010,6 +1010,15 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         _early_cached_answer = await ai_cache_aget(_cache_key_early)
         if not _early_cached_answer and _cache_key_early in _ai_response_cache:
             _early_cached_answer = _ai_response_cache[_cache_key_early]
+        if not _early_cached_answer:
+            _legacy_early = _cache_key(
+                _cache_msg_key_early,
+                subject_id=msg.subject_id or "",
+                board_id=msg.board_id or "",
+                conversation_id=getattr(msg, "conversation_id", "") or "",
+            )
+            if _legacy_early in _ai_response_cache:
+                _early_cached_answer = _ai_response_cache[_legacy_early]
         if _early_cached_answer:
             ai_cache_record_hit_saved_latency(ai_cache_expected_saved_ms())
     if _early_cached_answer:
@@ -1702,6 +1711,18 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         if _cached_answer:
             ai_cache_record_hit_saved_latency(ai_cache_expected_saved_ms())
             logger.info(f"AI cache HIT (pre-SSE, managed): {_cache_key_val}")
+    if not _cached_answer:
+        _legacy_key = _cache_key(
+            _cache_msg_key,
+            subject_id=msg.subject_id or "",
+            board_id=msg.board_id or "",
+            conversation_id=conv_id or "",
+        )
+        _legacy_hit = _ai_response_cache.get(_legacy_key)
+        if _legacy_hit:
+            _cached_answer = _legacy_hit
+            ai_cache_record_hit_saved_latency(ai_cache_expected_saved_ms())
+            logger.info(f"AI cache HIT (pre-SSE, L1 legacy): {_legacy_key}")
     if _cached_answer:
         try:
             _speedup.record_pre_sse_cache_hit()

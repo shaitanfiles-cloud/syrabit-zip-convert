@@ -28,6 +28,24 @@ def _reset_tracker(content):
             pass
 
 
+_PATCHED_ATTRS = (
+    "db",
+    "_invalidate_content_cache",
+    "_schedule_d1_sync_fire",
+    "_schedule_indexnow_for_subject",
+    "_schedule_prerender_refresh",
+)
+
+
+def _snapshot(mod):
+    return {a: getattr(mod, a, None) for a in _PATCHED_ATTRS}
+
+
+def _restore(mod, snap):
+    for a, v in snap.items():
+        setattr(mod, a, v)
+
+
 def test_admin_endpoint_lists_recorded_entries():
     async def run():
         from routes import content, admin_content
@@ -49,6 +67,8 @@ def test_admin_endpoint_lists_recorded_entries():
 
 
 def test_publish_patch_clears_tracker_entry():
+    from routes import admin_content
+    _orig = _snapshot(admin_content)
     async def run():
         from routes import content, admin_content
         _reset_tracker(content)
@@ -76,10 +96,15 @@ def test_publish_patch_clears_tracker_entry():
         items = content.get_draft_served_subjects()
         assert all(it["id"] != "subj-A" for it in items)
 
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    finally:
+        _restore(admin_content, _orig)
 
 
 def test_non_publish_patch_does_not_clear_tracker():
+    from routes import admin_content
+    _orig = _snapshot(admin_content)
     async def run():
         from routes import content, admin_content
         _reset_tracker(content)
@@ -107,10 +132,15 @@ def test_non_publish_patch_does_not_clear_tracker():
         items = content.get_draft_served_subjects()
         assert any(it["id"] == "subj-A" for it in items)
 
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    finally:
+        _restore(admin_content, _orig)
 
 
 def test_bulk_publish_clears_tracker_entries():
+    from routes import admin_content
+    _orig = _snapshot(admin_content)
     async def run():
         from routes import content, admin_content
         _reset_tracker(content)
@@ -144,4 +174,7 @@ def test_bulk_publish_clears_tracker_entries():
         # Only subj-C remains; A and B were bulk-published.
         assert ids == {"subj-C"}
 
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    finally:
+        _restore(admin_content, _orig)

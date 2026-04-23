@@ -218,7 +218,7 @@ def test_patch_on_worker_a_propagates_to_worker_b_within_budget(
                 except asyncio.CancelledError:
                     pass
 
-    ov, elapsed = asyncio.new_event_loop().run_until_complete(_scenario())
+    ov, elapsed = asyncio.run(_scenario())
     assert ov is not None, "worker B never picked up worker A's PATCH"
     assert ov.get("behaviour") == "off"
     assert ov.get("threshold") == pytest.approx(0.07)
@@ -311,7 +311,7 @@ def test_delete_then_repatch_then_delete_sequence_propagates_within_budget(
                 except asyncio.CancelledError:
                     pass
 
-    elapsed_per_step = asyncio.new_event_loop().run_until_complete(_scenario())
+    elapsed_per_step = asyncio.run(_scenario())
 
     # Every transition must land inside the documented per-tick budget.
     assert all(t < _PROPAGATION_BUDGET_SECONDS for t in elapsed_per_step), (

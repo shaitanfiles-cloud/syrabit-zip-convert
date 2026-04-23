@@ -20,7 +20,7 @@ TOLERANCE = 0.02  # allow 2% drop before failing
 def _run() -> dict:
     from bench.grounded_recall import load_cases, run_benchmark
     cases = load_cases()
-    return asyncio.get_event_loop().run_until_complete(
+    return asyncio.run(
         run_benchmark(cases, retriever="offline")
     ).to_dict()
 

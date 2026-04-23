@@ -28,7 +28,7 @@ def _drain():
     async def _go():
         for _ in range(20):
             await asyncio.sleep(0)
-    asyncio.get_event_loop().run_until_complete(_go())
+    asyncio.run(_go())
 
 
 def _sample_page():
@@ -183,7 +183,7 @@ def test_fanout_fires_all_three_signals_when_enabled(monkeypatch):
         assert events[0]["url"] == \
             "https://syrabit.ai/ahsec/class-12/physics/kinematics"
 
-    asyncio.new_event_loop().run_until_complete(run())
+    asyncio.run(run())
 
 
 def test_fanout_skips_everything_when_killswitch_off(monkeypatch):
@@ -203,7 +203,7 @@ def test_fanout_skips_everything_when_killswitch_off(monkeypatch):
         # actual attempts, not killswitch-skipped calls.
         assert seo_fanout.recent_fanout_events() == []
 
-    asyncio.new_event_loop().run_until_complete(run())
+    asyncio.run(run())
 
 
 def test_fanout_continues_when_one_signal_raises(monkeypatch):
@@ -231,7 +231,7 @@ def test_fanout_continues_when_one_signal_raises(monkeypatch):
         assert events[0]["cache_purge"].startswith("error:")
         assert events[0]["prewarm"] == "ok"
 
-    asyncio.new_event_loop().run_until_complete(run())
+    asyncio.run(run())
 
 
 def test_fanout_ignores_page_with_unresolvable_url(monkeypatch):
@@ -248,7 +248,7 @@ def test_fanout_ignores_page_with_unresolvable_url(monkeypatch):
         assert calls == {"indexnow": [], "purge": [], "prewarm": []}
         assert seo_fanout.recent_fanout_events() == []
 
-    asyncio.new_event_loop().run_until_complete(run())
+    asyncio.run(run())
 
 
 def test_schedule_indexnow_normalizes_relative_path_without_leading_slash():
@@ -293,7 +293,7 @@ def test_schedule_indexnow_normalizes_relative_path_without_leading_slash():
         )
         assert captured[0] == "ABS"
 
-    asyncio.new_event_loop().run_until_complete(run())
+    asyncio.run(run())
 
 
 def test_recent_events_ring_buffer_caps_at_50(monkeypatch):
@@ -316,4 +316,4 @@ def test_recent_events_ring_buffer_caps_at_50(monkeypatch):
         assert events[-1]["url"].endswith("/k59")
         assert events[0]["url"].endswith("/k10")
 
-    asyncio.new_event_loop().run_until_complete(run())
+    asyncio.run(run())

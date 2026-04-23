@@ -104,6 +104,7 @@ def test_chat_stream_assamese_cache_hit_sanitises_leaky_response(monkeypatch):
     cache_key = chat_mod._cache_key(
         cache_key_msg, subject_id="", board_id="", conversation_id=""
     )
+    chat_mod._ai_response_cache.clear()
     chat_mod._ai_response_cache[cache_key] = LEAKY_ASSAMESE_CACHED
 
     client = TestClient(app)
@@ -154,6 +155,7 @@ def test_chat_stream_assamese_cache_hit_emits_diagnostic_log(monkeypatch, caplog
     cache_key = chat_mod._cache_key(
         cache_key_msg, subject_id="", board_id="", conversation_id=""
     )
+    chat_mod._ai_response_cache.clear()
     chat_mod._ai_response_cache[cache_key] = LEAKY_ASSAMESE_CACHED
 
     client = TestClient(app)
@@ -194,7 +196,8 @@ def test_translate_plus_regenerate_skips_regenerate_when_translate_cleans():
     if the translate step alone brings leakage at or below threshold,
     the regenerate LLM call MUST NOT be made (it would only add latency
     + cost without improving purity)."""
-    import asyncio as _aio
+    import asyncio as _aio  # noqa: F401 (kept for back-compat)
+    import asyncio
     from lang_sanitizer import sanitize_assamese_with_optional_regenerate
 
     regen_called = {"n": 0}
@@ -207,7 +210,7 @@ def test_translate_plus_regenerate_skips_regenerate_when_translate_cleans():
         # Returns a long Assamese span so post-translate ratio drops to ~0.
         return "অসমীয়া অনুবাদিত পাঠ"
 
-    cleaned, diag = _aio.new_event_loop().run_until_complete(
+    cleaned, diag = _aio.run(
         sanitize_assamese_with_optional_regenerate(
             LEAKY_ASSAMESE_CACHED,
             behaviour="translate+regenerate",
@@ -229,7 +232,8 @@ def test_translate_plus_regenerate_runs_regenerate_when_translate_insufficient()
     """The opposite case: when the translate step CANNOT bring ratio
     under threshold (e.g. callable returns empty), `translate+regenerate`
     MUST fall back to the regenerate LLM call."""
-    import asyncio as _aio
+    import asyncio as _aio  # noqa: F401 (kept for back-compat)
+    import asyncio
     from lang_sanitizer import sanitize_assamese_with_optional_regenerate
 
     regen_called = {"n": 0}
@@ -245,7 +249,7 @@ def test_translate_plus_regenerate_runs_regenerate_when_translate_insufficient()
     async def _empty_translate(_fragment: str) -> str:
         return ""
 
-    cleaned, diag = _aio.new_event_loop().run_until_complete(
+    cleaned, diag = _aio.run(
         sanitize_assamese_with_optional_regenerate(
             LEAKY_ASSAMESE_CACHED,
             behaviour="translate+regenerate",
@@ -284,6 +288,7 @@ def test_chat_stream_off_mode_still_logs_and_passes_through_unchanged(monkeypatc
     cache_key = chat_mod._cache_key(
         cache_key_msg, subject_id="", board_id="", conversation_id=""
     )
+    chat_mod._ai_response_cache.clear()
     chat_mod._ai_response_cache[cache_key] = LEAKY_ASSAMESE_CACHED
 
     client = TestClient(app)
@@ -341,6 +346,7 @@ def test_chat_stream_english_cache_hit_passes_through_unchanged(monkeypatch):
     cache_key = chat_mod._cache_key(
         msg_text, subject_id="", board_id="", conversation_id=""
     )
+    chat_mod._ai_response_cache.clear()
     chat_mod._ai_response_cache[cache_key] = english_answer
 
     client = TestClient(app)

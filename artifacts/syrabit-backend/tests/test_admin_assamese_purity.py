@@ -387,7 +387,7 @@ class TestPersistedOverrideRoundTrip:
         db = MagicMock()
         db.api_config = api_cfg
         with _patch_db(db):
-            asyncio.new_event_loop().run_until_complete(
+            asyncio.run(
                 apply_persisted_assamese_purity_override()
             )
         assert get_behaviour() == "off"
@@ -495,7 +495,7 @@ class TestCrossWorkerPropagation:
 
         # One refresh-loop tick on worker B reads the persisted doc.
         with _patch_db(db):
-            asyncio.new_event_loop().run_until_complete(
+            asyncio.run(
                 apply_persisted_assamese_purity_override()
             )
 
@@ -547,7 +547,7 @@ class TestCrossWorkerPropagation:
 
         # One refresh-loop tick on worker B reconciles → cleared.
         with _patch_db(db):
-            asyncio.new_event_loop().run_until_complete(
+            asyncio.run(
                 apply_persisted_assamese_purity_override()
             )
         assert get_runtime_override() is None
@@ -603,7 +603,7 @@ class TestCrossWorkerPropagation:
                     except asyncio.CancelledError:
                         pass
 
-        ov = asyncio.new_event_loop().run_until_complete(_scenario())
+        ov = asyncio.run(_scenario())
         assert ov is not None, "refresh loop never picked up the change"
         assert ov.get("behaviour") == "strip"
         assert ov.get("threshold") == pytest.approx(0.11)
