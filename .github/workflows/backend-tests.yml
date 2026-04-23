@@ -56,6 +56,22 @@ jobs:
           pip install -r requirements.txt
           pip install pytest-cov coverage
 
+      # Task #723 — Symmetric backend gate for the cf_access break-glass
+      # contract. The full pytest run below also covers this file, but we
+      # invoke it explicitly first with `-v` so the 31 individual test
+      # names (including the Task #710 force-disable cases) are surfaced
+      # in the CI log. That makes any rename/regression of e.g.
+      # `break_glass_force_disabled` immediately visible in PR review,
+      # matching the frontend gate added in Task #722.
+      - name: cf_access break-glass tests (visible gate)
+        id: cf_access
+        env:
+          MONGODB_URL: "mongodb://localhost:27017/test"
+          DB_NAME: "syrabit_test"
+          JWT_SECRET: "ci-test-secret-not-real"
+        run: |
+          pytest tests/test_cf_access.py -v --no-header
+
       - name: Run pytest with coverage gate
         id: pytest
         env:
