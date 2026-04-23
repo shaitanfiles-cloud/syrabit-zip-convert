@@ -28,6 +28,7 @@ import axios from 'axios';
 import { adminGetDashboard, adminGetCfOverview, seoPipelineStatus, adminSeoHealthHistory, adminSeoHealthSnapshotNow, seoHealthLive, seoHealthDeepScan, adminSeoDeepScanHistory, API_BASE } from '@/utils/api';
 import CloudflareAnalyticsBanner from './analytics/CloudflareAnalyticsBanner';
 import { pushChannelTone } from '@/utils/pushChannelTone';
+import { TODAY_BUCKET_CAPTION, UTC_MIDNIGHT_IN_IST } from '@/utils/time';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, ReferenceLine, CartesianGrid, Legend,
@@ -171,8 +172,8 @@ function PipelineWidget({ token }) {
           <span className="text-xs text-gray-400">({pipe.total_topics} topics · {pipe.pages_total} pages)</span>
         </div>
         {pipe.published_today > 0 && (
-          <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600">
-            +{pipe.published_today} today
+          <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600" title={TODAY_BUCKET_CAPTION}>
+            +{pipe.published_today} today (UTC)
           </span>
         )}
       </div>
@@ -1143,6 +1144,8 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
           ];
           const hasData = (useOverview ? series.length > 0 : (vs.cloudflare && series.length > 0));
           return (
+            <>
+            <p className="text-[10px] text-gray-400 mb-2" title="Daily 'Today' buckets reset at UTC midnight (5:30 AM IST). In early IST morning the bucket only covers a few hours.">{TODAY_BUCKET_CAPTION}</p>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
               {tiles.map(t => (
                 <div key={t.key} className="rounded-xl p-3 bg-white border border-gray-200">
@@ -1184,6 +1187,7 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                 </div>
               ))}
             </div>
+            </>
           );
         })()}
 
@@ -3341,9 +3345,9 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
               <p className="text-blue-700 font-bold text-lg">{(indexNowStats.total_pushes ?? 0).toLocaleString()}</p>
               <p className="text-[10px] text-gray-500">Total Pushes</p>
             </div>
-            <div className="rounded-lg p-3 bg-violet-50 border border-violet-200 text-center">
+            <div className="rounded-lg p-3 bg-violet-50 border border-violet-200 text-center" title={TODAY_BUCKET_CAPTION}>
               <p className="text-violet-700 font-bold text-lg">{(indexNowStats.today_urls_pushed ?? 0).toLocaleString()}</p>
-              <p className="text-[10px] text-gray-500">URLs Today</p>
+              <p className="text-[10px] text-gray-500">URLs Today<span className="text-gray-400"> (UTC)</span></p>
             </div>
             <div className="rounded-lg p-3 bg-amber-50 border border-amber-200 text-center">
               <p className="text-amber-700 font-bold text-lg">{indexNowStats.pending ?? 0}</p>
@@ -3572,12 +3576,15 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       )}
       </SectionErrorBoundary>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
-        <StatCard label="Total Page Views" value={vs?.total_page_views ?? 0} icon={BarChart2} color="#84cc16"
-          subLabel="Today" subValue={vs?.page_views_today ?? 0} />
-        <StatCard label="Bounce Rate"  value={vs.bounce_rate != null ? `${vs.bounce_rate}%` : '—'} icon={TrendingUp} color="#f59e0b" />
-        <StatCard label="Avg Session"  value={vs.avg_session_duration != null ? `${vs.avg_session_duration}s` : '—'} icon={Clock} color="#a78bfa" />
+      <div>
+        <p className="text-[10px] text-gray-400 mb-2">{TODAY_BUCKET_CAPTION}</p>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
+          <StatCard label="Total Page Views" value={vs?.total_page_views ?? 0} icon={BarChart2} color="#84cc16"
+            subLabel="Today" subValue={vs?.page_views_today ?? 0} />
+          <StatCard label="Bounce Rate"  value={vs.bounce_rate != null ? `${vs.bounce_rate}%` : '—'} icon={TrendingUp} color="#f59e0b" />
+          <StatCard label="Avg Session"  value={vs.avg_session_duration != null ? `${vs.avg_session_duration}s` : '—'} icon={Clock} color="#a78bfa" />
+        </div>
       </div>
 
       <SectionErrorBoundary name="Chat Health">
@@ -4211,8 +4218,8 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
             <Smartphone size={14} className="text-violet-500" />
             <h3 className="text-gray-600 font-semibold text-sm">PWA App Downloads</h3>
             {pwaStats.installs_today > 0 && (
-              <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600">
-                +{pwaStats.installs_today} today
+              <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600" title={TODAY_BUCKET_CAPTION}>
+                +{pwaStats.installs_today} today (UTC)
               </span>
             )}
           </div>
@@ -4323,8 +4330,8 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
           </div>
           <div className="flex gap-4 mt-3">
             {vs.daily_visitors.slice(-1).map(d => (
-              <div key="today-summary" className="flex gap-4 text-xs text-gray-400">
-                <span>Today: <span className="text-violet-600 font-medium">{d.visitors} visitors</span></span>
+              <div key="today-summary" className="flex gap-4 text-xs text-gray-400" title={TODAY_BUCKET_CAPTION}>
+                <span>Today (UTC, {UTC_MIDNIGHT_IN_IST}–now): <span className="text-violet-600 font-medium">{d.visitors} visitors</span></span>
                 <span>·</span>
                 <span><span className="text-gray-600 font-medium">{d.page_views}</span> page views</span>
               </div>

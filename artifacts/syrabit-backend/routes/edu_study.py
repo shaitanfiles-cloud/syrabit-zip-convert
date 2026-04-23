@@ -227,6 +227,11 @@ def _coerce_quiz_payload(raw: str) -> dict:
 
 
 QUIZ_DAILY_CAP = 200          # Task #615: per-actor LLM call budget per UTC day.
+
+# Task #739: daily caps reset at UTC midnight (DB-friendly), but the
+# user base is in IST. Show both so a 9 PM IST student isn't confused
+# by "midnight UTC" (which is 5:30 AM IST the next morning).
+DAILY_RESET_LABEL = "midnight UTC (5:30 AM IST)"
 QUIZ_DAY_WINDOW_SEC = 86400
 
 
@@ -256,10 +261,10 @@ async def quiz_generate(req: QuizGenReq, request: Request,
                 "error": "quiz_daily_cap",
                 "limit": QUIZ_DAILY_CAP,
                 "scope": "day",
-                "resets_at": "midnight UTC",
+                "resets_at": DAILY_RESET_LABEL,
                 "message": (
                     f"Daily quiz limit reached ({QUIZ_DAILY_CAP}/day). "
-                    f"Try again after midnight UTC."
+                    f"Try again after {DAILY_RESET_LABEL}."
                 ),
             },
             headers={
@@ -1120,10 +1125,10 @@ async def generate_notes(req: NotesGenReq, request: Request,
                 "error": "notes_gen_daily_cap",
                 "limit": NOTES_GEN_DAILY_CAP,
                 "scope": "day",
-                "resets_at": "midnight UTC",
+                "resets_at": DAILY_RESET_LABEL,
                 "message": (
                     f"Daily AI-notes limit reached ({NOTES_GEN_DAILY_CAP}/day). "
-                    f"Try again after midnight UTC."
+                    f"Try again after {DAILY_RESET_LABEL}."
                 ),
             },
             headers={"Retry-After": "3600",
@@ -1143,7 +1148,7 @@ async def generate_notes(req: NotesGenReq, request: Request,
                 "remaining": remaining,
                 "message": (
                     f"This action costs {NOTES_GEN_CREDIT_COST} credits but you have "
-                    f"{remaining} remaining today. Resets at midnight UTC."
+                    f"{remaining} remaining today. Resets at {DAILY_RESET_LABEL}."
                 ),
             },
         )
