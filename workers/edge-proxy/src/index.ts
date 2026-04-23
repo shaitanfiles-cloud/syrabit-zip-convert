@@ -1749,6 +1749,25 @@ export default {
       } catch { /* fall through to Pages on D1 failure */ }
     }
 
+    // Bot-discovery endpoints live on the FastAPI backend (not Pages and not
+    // D1). Crawlers probe these at the zone root; without these internal
+    // rewrites the request would fall through to PAGES_ORIGIN and return
+    // the SPA HTML shell, rendering robots.txt / llms.txt unparseable.
+    // Kept separate from /api/* routing because the canonical public paths
+    // are root-level (per the llms.txt spec and the robots.txt RFC).
+    const BOT_DISCOVERY_PATHS = new Set([
+      "/robots.txt",
+      "/llms.txt",
+      "/llms-full.txt",
+      "/.well-known/ai-plugin.json",
+    ]);
+    if (
+      BOT_DISCOVERY_PATHS.has(pathname) &&
+      (request.method === "GET" || request.method === "HEAD")
+    ) {
+      return proxyToBackend(request, env, pathname, url.search, clientIp, cors, remaining);
+    }
+
     if (!isSearchBot && isApiRoute) {
       if (isAiPath(pathname)) {
         const aiKey = `rl:ai:${clientIp}`;
