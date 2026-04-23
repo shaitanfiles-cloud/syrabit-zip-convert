@@ -30,6 +30,7 @@ from cache import (
     REDIS_AI_CACHE_TTL,
     REDIS_CASUAL_CACHE_TTL,
     _ai_response_cache,
+    _cache_key,  # re-exported for tests/back-compat (test_ai_chat_indic_route)
     _redis_set,
     _syllabus_cache,
     _syllabus_cache_key,

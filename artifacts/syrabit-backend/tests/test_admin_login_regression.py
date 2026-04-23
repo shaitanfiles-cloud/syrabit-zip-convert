@@ -27,8 +27,8 @@ def admin_app(monkeypatch):
     monkeypatch.setenv("ADMIN_EMAILS", '"ops@syrabit.test"')
     monkeypatch.setenv("ADMIN_PASSWORDS", "  s3cret-pa55!  ")
     monkeypatch.setenv("ADMIN_NAMES", "Ops Admin")
-    monkeypatch.setenv("ADMIN_JWT_SECRET", "test-admin-secret-do-not-use")
-    monkeypatch.setenv("JWT_SECRET", "test-jwt-secret-do-not-use")
+    monkeypatch.setenv("ADMIN_JWT_SECRET", "a" * 64)
+    monkeypatch.setenv("JWT_SECRET", "b" * 64)
     monkeypatch.setenv("CF_ACCESS_ENFORCE", "")
 
     # Force a fresh config + route import so the env above is observed.
@@ -95,7 +95,7 @@ def test_admin_login_503_when_no_admins_configured(monkeypatch):
     monkeypatch.setenv("ADMIN_EMAILS", "")
     monkeypatch.setenv("ADMIN_PASSWORDS", "")
     monkeypatch.setenv("ADMIN_NAMES", "")
-    monkeypatch.setenv("ADMIN_JWT_SECRET", "test-admin-secret-do-not-use")
+    monkeypatch.setenv("ADMIN_JWT_SECRET", "a" * 64)
     monkeypatch.delenv("ENABLE_E2E_ADMIN", raising=False)
 
     for mod in ("config", "routes.admin_auth_users"):
@@ -137,8 +137,8 @@ def _build_admin_app_with_access(monkeypatch, *, enforce: bool):
     monkeypatch.setenv("ADMIN_EMAILS", "ops@syrabit.test")
     monkeypatch.setenv("ADMIN_PASSWORDS", "s3cret-pa55!")
     monkeypatch.setenv("ADMIN_NAMES", "Ops Admin")
-    monkeypatch.setenv("ADMIN_JWT_SECRET", "test-admin-secret-do-not-use")
-    monkeypatch.setenv("JWT_SECRET", "test-jwt-secret-do-not-use")
+    monkeypatch.setenv("ADMIN_JWT_SECRET", "a" * 64)
+    monkeypatch.setenv("JWT_SECRET", "b" * 64)
     if enforce:
         monkeypatch.setenv("CF_ACCESS_ENFORCE", "true")
         monkeypatch.setenv("CF_ACCESS_TEAM_DOMAIN", "syrabit-test")
@@ -194,7 +194,7 @@ def test_admin_login_503_when_cf_access_enforce_on_but_misconfigured(monkeypatch
     monkeypatch.setenv("ADMIN_EMAILS", "ops@syrabit.test")
     monkeypatch.setenv("ADMIN_PASSWORDS", "s3cret-pa55!")
     monkeypatch.setenv("ADMIN_NAMES", "Ops Admin")
-    monkeypatch.setenv("ADMIN_JWT_SECRET", "test-admin-secret-do-not-use")
+    monkeypatch.setenv("ADMIN_JWT_SECRET", "a" * 64)
     monkeypatch.setenv("CF_ACCESS_ENFORCE", "true")
     monkeypatch.delenv("CF_ACCESS_TEAM_DOMAIN", raising=False)
     monkeypatch.delenv("CF_ACCESS_AUD_ADMIN", raising=False)

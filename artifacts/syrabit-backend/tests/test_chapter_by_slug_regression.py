@@ -36,7 +36,7 @@ def chapter_app(monkeypatch):
     monkeypatch.setenv("ADMIN_EMAILS", "ops@syrabit.test")
     monkeypatch.setenv("ADMIN_PASSWORDS", "x")
     monkeypatch.setenv("ADMIN_NAMES", "Ops")
-    monkeypatch.setenv("ADMIN_JWT_SECRET", "test-secret")
+    monkeypatch.setenv("ADMIN_JWT_SECRET", "c" * 64)
 
     for mod in ("config", "routes.content"):
         sys.modules.pop(mod, None)
