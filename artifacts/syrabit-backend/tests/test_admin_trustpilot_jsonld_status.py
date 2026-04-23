@@ -934,3 +934,185 @@ def test_alert_dispatch_failure_does_not_break_ingest(authed_client):
         fake_replace.assert_awaited_once()
         boom.assert_awaited_once()
     asyncio.run(_inner())
+
+
+# ─── Task #757 — dedicated Slack incoming-webhook fan-out ─────────────────
+
+
+def test_slack_payload_includes_kind_emoji_title_and_run_button():
+    """Block Kit body must carry a header line, the message, and an
+    actions block with the GH Actions deep-link button when run_url
+    is present."""
+    from routes import admin_trustpilot_jsonld_status as mod
+
+    payload = mod._slack_payload_for_jsonld_alert(
+        title="Trustpilot JSON-LD regression: AggregateRating missing on 1 URL(s)",
+        message="The verifier reports:\n  - /about — ratingValue=4.7",
+        kind="regression",
+        run_url="https://github.com/x/y/actions/runs/9",
+        urls=["/about"],
+    )
+    assert ":rotating_light:" in payload["text"]
+    assert "regression" in payload["text"].lower()
+    blocks = payload["blocks"]
+    assert blocks[0]["type"] == "header"
+    assert blocks[1]["type"] == "section"
+    assert "/about" in blocks[1]["text"]["text"]
+    actions = [b for b in blocks if b["type"] == "actions"]
+    assert actions, "run_url must produce an actions block"
+    btn = actions[0]["elements"][0]
+    assert btn["type"] == "button"
+    assert btn["url"] == "https://github.com/x/y/actions/runs/9"
+
+
+def test_slack_payload_omits_actions_block_when_no_run_url():
+    from routes import admin_trustpilot_jsonld_status as mod
+
+    payload = mod._slack_payload_for_jsonld_alert(
+        title="Trustpilot JSON-LD recovered",
+        message="all good",
+        kind="recovery",
+        run_url=None,
+        urls=[],
+    )
+    assert ":white_check_mark:" in payload["text"]
+    assert all(b["type"] != "actions" for b in payload["blocks"])
+
+
+def test_slack_payload_truncates_huge_message_body():
+    from routes import admin_trustpilot_jsonld_status as mod
+
+    payload = mod._slack_payload_for_jsonld_alert(
+        title="Trustpilot JSON-LD: 100 URL(s) failing 3+ runs in a row",
+        message="x" * 5000,
+        kind="streak",
+        run_url=None,
+        urls=[],
+    )
+    section = payload["blocks"][1]
+    assert len(section["text"]["text"]) <= 2900
+
+
+def test_slack_post_is_noop_when_env_unset():
+    """Without SLACK_TRUSTPILOT_WEBHOOK_URL we must NOT touch the
+    network — no httpx import, no request issued."""
+    async def _inner():
+        from routes import admin_trustpilot_jsonld_status as mod
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SLACK_TRUSTPILOT_WEBHOOK_URL", None)
+            with patch("httpx.AsyncClient") as mock_client:
+                await mod._post_jsonld_slack_alert(
+                    "t", "m", "regression", None, [],
+                )
+                mock_client.assert_not_called()
+    asyncio.run(_inner())
+
+
+def test_slack_post_calls_webhook_when_env_set():
+    """When the env var is set we must POST the Block Kit payload to
+    that exact URL."""
+    async def _inner():
+        from routes import admin_trustpilot_jsonld_status as mod
+
+        webhook = "https://hooks.slack.com/services/T/B/abc"
+        captured: dict = {}
+
+        class _Resp:
+            status_code = 200
+            text = ""
+
+        class _FakeClient:
+            def __init__(self, *a, **kw):
+                pass
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                return False
+            async def post(self, url, json):
+                captured["url"] = url
+                captured["json"] = json
+                return _Resp()
+
+        with patch.dict(
+            os.environ, {"SLACK_TRUSTPILOT_WEBHOOK_URL": webhook}, clear=False,
+        ), patch("httpx.AsyncClient", _FakeClient):
+            await mod._post_jsonld_slack_alert(
+                title="Trustpilot JSON-LD regression",
+                message="  - /about — ratingValue=4.7",
+                kind="regression",
+                run_url="https://github.com/x/y/actions/runs/9",
+                urls=["/about"],
+            )
+        assert captured["url"] == webhook
+        assert "blocks" in captured["json"]
+        assert ":rotating_light:" in captured["json"]["text"]
+    asyncio.run(_inner())
+
+
+def test_slack_post_swallows_network_errors():
+    """A failing webhook (network down, Slack 500) must not raise —
+    the email + in-app notification legs must still go out."""
+    async def _inner():
+        from routes import admin_trustpilot_jsonld_status as mod
+
+        class _BoomClient:
+            def __init__(self, *a, **kw):
+                pass
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                return False
+            async def post(self, url, json):
+                raise RuntimeError("network down")
+
+        with patch.dict(
+            os.environ,
+            {"SLACK_TRUSTPILOT_WEBHOOK_URL": "https://hooks.slack.com/x"},
+            clear=False,
+        ), patch("httpx.AsyncClient", _BoomClient):
+            await mod._post_jsonld_slack_alert(
+                "t", "m", "regression", None, [],
+            )
+    asyncio.run(_inner())
+
+
+def test_emit_jsonld_alert_schedules_slack_post_alongside_email():
+    """The unified emitter must fire the Slack leg as a third
+    best-effort task so a failure in either channel can't suppress
+    the others."""
+    async def _inner():
+        from routes import admin_trustpilot_jsonld_status as mod
+
+        scheduled: list[str] = []
+        real_create = asyncio.create_task
+
+        def _spy_create_task(coro, *a, **kw):
+            try:
+                scheduled.append(coro.__qualname__)
+            except Exception:
+                scheduled.append(repr(coro))
+            return real_create(_drain(coro))
+
+        async def _drain(coro):
+            try:
+                await coro
+            except Exception:
+                pass
+
+        fake_supa = AsyncMock()
+        with patch("db_ops.supa_insert_notification", fake_supa), \
+             patch.object(mod.asyncio, "create_task", _spy_create_task), \
+             patch.object(mod, "_post_jsonld_slack_alert", AsyncMock()) as fake_slack, \
+             patch.object(mod, "_email_admins_about_jsonld", AsyncMock()) as fake_email:
+            await mod._emit_jsonld_alert(
+                title="Trustpilot JSON-LD regression",
+                message="msg",
+                kind="regression",
+                run_url=None,
+                urls=["/about"],
+            )
+            await asyncio.sleep(0)
+        fake_email.assert_called_once()
+        fake_slack.assert_called_once()
+    asyncio.run(_inner())

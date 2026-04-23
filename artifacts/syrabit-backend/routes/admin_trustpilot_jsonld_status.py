@@ -522,9 +522,11 @@ async def _emit_jsonld_alert(
     run_url: Optional[str], urls: list[str],
 ) -> None:
     """Insert the in-app notification (which the existing Slack/webhook
-    fan-out subscribes to) and email every admin. Both legs are
-    best-effort and isolated so a failure in one channel does not
-    suppress the other."""
+    fan-out subscribes to), email every admin, and — when configured —
+    fire a dedicated Slack incoming-webhook so the ops channel sees the
+    page the same instant the email goes out (Task #757). All three
+    legs are best-effort and isolated so a failure in one channel does
+    not suppress the others."""
     now_iso = datetime.now(timezone.utc).isoformat()
 
     try:
@@ -552,6 +554,94 @@ async def _emit_jsonld_alert(
         )
 
     asyncio.create_task(_email_admins_about_jsonld(title, message, kind))
+    asyncio.create_task(
+        _post_jsonld_slack_alert(title, message, kind, run_url, urls)
+    )
+
+
+# ─── Task #757 — dedicated Slack fan-out for trustpilot_jsonld_alert ──────
+#
+# The in-app notification persisted above is what a generic Slack/webhook
+# fan-out *should* subscribe to, but in production we observed that the
+# generic fan-out doesn't reliably forward this notification kind to the
+# ops channel — so until that's fixed end-to-end, wire a dedicated
+# incoming-webhook here. Gated on ``SLACK_TRUSTPILOT_WEBHOOK_URL`` so it
+# is a true no-op when the env var is unset (no network call, no logs at
+# anything noisier than DEBUG).
+
+_SLACK_WEBHOOK_ENV = "SLACK_TRUSTPILOT_WEBHOOK_URL"
+
+
+def _slack_webhook_url() -> str:
+    return (os.environ.get(_SLACK_WEBHOOK_ENV) or "").strip()
+
+
+def _slack_payload_for_jsonld_alert(
+    title: str, message: str, kind: str,
+    run_url: Optional[str], urls: list[str],
+) -> dict[str, Any]:
+    """Build the Slack incoming-webhook JSON body. Block Kit is used so
+    the run-link button shows up natively, with a ``text`` fallback for
+    push notifications and clients that don't render blocks."""
+    emoji = {
+        "regression": ":rotating_light:",
+        "streak": ":warning:",
+        "recovery": ":white_check_mark:",
+    }.get(kind, ":bell:")
+    header_text = f"{emoji} {title}"
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": header_text[:150]},
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                # Slack section text caps at 3000 chars — truncate
+                # defensively so a giant URL list can never blow up
+                # the webhook with a 400.
+                "text": (message or "")[:2900],
+            },
+        },
+    ]
+    if run_url:
+        blocks.append({
+            "type": "actions",
+            "elements": [{
+                "type": "button",
+                "text": {"type": "plain_text", "text": "Open GH Actions run"},
+                "url": run_url,
+            }],
+        })
+    return {"text": header_text, "blocks": blocks}
+
+
+async def _post_jsonld_slack_alert(
+    title: str, message: str, kind: str,
+    run_url: Optional[str], urls: list[str],
+) -> None:
+    """Best-effort POST to the dedicated Slack incoming webhook. No-op
+    when ``SLACK_TRUSTPILOT_WEBHOOK_URL`` is unset; never raises."""
+    webhook_url = _slack_webhook_url()
+    if not webhook_url:
+        return
+    payload = _slack_payload_for_jsonld_alert(
+        title, message, kind, run_url, urls,
+    )
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(webhook_url, json=payload)
+            if resp.status_code >= 400:
+                logger.warning(
+                    "[trustpilot-jsonld-alerts] slack webhook %s: %s",
+                    resp.status_code, resp.text[:200],
+                )
+    except Exception as exc:
+        logger.debug(
+            "[trustpilot-jsonld-alerts] slack webhook post failed: %s", exc,
+        )
 
 
 async def _email_admins_about_jsonld(
