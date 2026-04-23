@@ -203,6 +203,122 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────
+_section "CT — Content-Type headers must match served body"
+# Cloudflare / worker / backend can all mangle Content-Type. Bots parse
+# strictly: a JSON file served as text/html will be rejected silently.
+_check_ct() {
+  local path="$1" want="$2"
+  ct=$(curl -sI --max-time "$TIMEOUT" "${BASE_URL}${path}?cb=${CB}" \
+        | awk 'tolower($1) == "content-type:" { sub(/^[Cc]ontent-[Tt]ype:[ \t]*/,""); print; exit }' \
+        | tr -d '\r\n')
+  if printf "%s" "$ct" | grep -qi "$want"; then
+    _pass "${path} Content-Type contains '${want}' (got: ${ct:-<empty>})"
+  else
+    _fail "${path} wrong Content-Type" "want '${want}', got '${ct:-<empty>}'"
+  fi
+}
+_check_ct "/robots.txt"                      "text/plain"
+_check_ct "/llms.txt"                        "text/plain"
+_check_ct "/llms-full.txt"                   "text/plain"
+_check_ct "/.well-known/ai-plugin.json"      "application/json"
+
+# ─────────────────────────────────────────────────────────────────────────
+_section "SM — Sitemap must be reachable (XML)"
+# Try both /sitemap.xml (legacy) and /sitemap-index.xml (current). At
+# least one MUST return 200 with an XML content-type — otherwise AI
+# crawlers can't discover the 18+ per-subject sitemaps.
+sitemap_ok=0
+for path in "/sitemap-index.xml" "/sitemap.xml"; do
+  res=$(_status_size "${BASE_URL}${path}?cb=${CB}")
+  code="${res%%|*}"; size="${res##*|}"
+  if [ "$code" = "200" ] && [ "${size:-0}" -gt 100 ]; then
+    body=$(_fetch "${BASE_URL}${path}?cb=${CB}" | head -c 200)
+    if printf "%s" "$body" | grep -qi "<?xml\|<urlset\|<sitemapindex"; then
+      _pass "${path} → HTTP 200 (${size}B, XML)"
+      sitemap_ok=1
+    else
+      _fail "${path} is 200 but not XML" "first 200 bytes: ${body}"
+    fi
+  else
+    # Not fatal on its own — only one needs to work
+    printf "  \033[90m•\033[0m %s → HTTP %s (${size}B) — trying next\n" "$path" "${code:-N/A}"
+  fi
+done
+[ "$sitemap_ok" = "0" ] && _fail "no sitemap reachable" "tried /sitemap-index.xml and /sitemap.xml — both failed"
+
+# ─────────────────────────────────────────────────────────────────────────
+_section "SEO — Homepage must expose canonical + JSON-LD + OG tags"
+# AI search (Perplexity, ChatGPT browse, Gemini) uses these for grounding
+# and citation. Missing any one tanks citation probability.
+# Fetch once with a bot UA so prerendered HTML is served.
+home_html="$(curl -s --max-time "$TIMEOUT" -A "Googlebot/2.1" "${BASE_URL}/?cb=${CB}")"
+if [ -z "$home_html" ]; then
+  _fail "homepage fetch failed" "no body returned"
+else
+  # 1. Canonical link
+  if printf "%s" "$home_html" | grep -qiE '<link[^>]+rel=["'\'']canonical["'\'']'; then
+    _pass "homepage has <link rel=\"canonical\">"
+  else
+    _fail "homepage missing <link rel=\"canonical\">" \
+          "AI search citations get ambiguous — duplicate URLs compete"
+  fi
+  # 2. JSON-LD structured data
+  if printf "%s" "$home_html" | grep -qiE '<script[^>]+type=["'\'']application/ld\+json["'\'']'; then
+    _pass "homepage has JSON-LD <script type=\"application/ld+json\">"
+  else
+    _fail "homepage missing JSON-LD" \
+          "ChatGPT / Perplexity structured-data grounding degraded"
+  fi
+  # 3. Open Graph tags
+  og_count=$(printf "%s" "$home_html" | grep -ciE '<meta[^>]+property=["'\'']og:' || true)
+  if [ "${og_count:-0}" -ge 3 ]; then
+    _pass "homepage has ${og_count} og:* meta tags (≥3)"
+  else
+    _fail "homepage has only ${og_count} og:* meta tags" \
+          "need ≥3 (og:title, og:description, og:url) for social/AI previews"
+  fi
+  # 4. <title> non-empty
+  if printf "%s" "$home_html" | grep -oE '<title[^>]*>[^<]+</title>' | grep -vq "<title>[ \t]*</title>"; then
+    _pass "homepage <title> is non-empty"
+  else
+    _fail "homepage <title> empty or missing" "AI citation titles will be blank"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────
+_section "UA+ — Extra AI bot UAs that became popular post-audit"
+# These UAs emerged after the initial audit; verify they also reach
+# origin cleanly (CF may have added them to its "Block AI" default list
+# in a silent update).
+for UA in "MistralAI-User/1.0" "DuckAssistBot/1.0" "Applebot/0.1" \
+          "YandexBot/3.0" "Amazonbot/0.1" "meta-externalagent/1.1"; do
+  code=$(_status -A "$UA" "${BASE_URL}/?cb=${CB}")
+  if [ "$code" = "200" ]; then
+    _pass "$UA → HTTP 200"
+  else
+    _fail "$UA → HTTP ${code:-NO_RESPONSE}" "CF may have added UA to default block list — check AI Audit"
+  fi
+done
+
+# ─────────────────────────────────────────────────────────────────────────
+_section "TLS — HTTP must redirect to HTTPS"
+# AI crawlers (especially Perplexity, CCBot) do not always auto-upgrade
+# http:// links. A plain-HTTP URL that returns 200 is a known discovery
+# leak: crawlers index http://syrabit.ai as a separate (uncanonicalized)
+# origin.
+http_url="http://$(printf "%s" "$BASE_URL" | sed -E 's#^https?://##')/?cb=${CB}"
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time "$TIMEOUT" "$http_url")
+if [ "$code" = "301" ] || [ "$code" = "308" ]; then
+  _pass "http:// → HTTP ${code} (permanent redirect to HTTPS)"
+elif [ "$code" = "302" ] || [ "$code" = "307" ]; then
+  _fail "http:// returns temporary redirect ${code}" \
+        "crawlers cache 301/308 but may refetch 302/307 — use permanent redirect"
+else
+  _fail "http:// returns HTTP ${code:-NO_RESPONSE}" \
+        "expected 301/308 redirect to HTTPS — duplicate-origin discovery leak"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────
 # SUMMARY
 # ─────────────────────────────────────────────────────────────────────────
 echo
