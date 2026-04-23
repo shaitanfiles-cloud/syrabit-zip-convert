@@ -122,4 +122,26 @@ migrations_dir = "migrations"
 # index_name = "syllabus-index-v2"
 
 [triggers]
-crons = ["0 */6 * * *"]
+# Two crons fan out from the same `scheduled` handler in src/index.ts —
+# the dispatch arm reads `event.cron` and runs the right job:
+#
+#   "* * * * *"   → Task #708 synthetic probe of /admin/diagnostics.
+#                   Hits the endpoint every 60s with a CF Access service
+#                   token + admin JWT so the break-glass / Access-degraded
+#                   paging rule (Task #706) actually fires during an
+#                   outage where no admin happens to be browsing.
+#                   Required secrets/vars (set via `wrangler secret put`
+#                   or the dashboard — see docs/CLOUDFLARE_ZERO_TRUST.md
+#                   §7.1 for the rotation procedure):
+#                     SYNTHETIC_PROBE_CF_ACCESS_CLIENT_ID
+#                     SYNTHETIC_PROBE_CF_ACCESS_CLIENT_SECRET
+#                     SYNTHETIC_PROBE_ADMIN_JWT
+#                     SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL
+#                   Optional: SYNTHETIC_PROBE_TARGET_URL (defaults to
+#                   ${BACKEND_URL}/admin/diagnostics),
+#                   SYNTHETIC_PROBE_WATCHDOG_THRESHOLD_MIN (default 5),
+#                   SYNTHETIC_PROBE_DISABLED=true to pause without
+#                   redeploying.
+#
+#   "0 */6 * * *" → 6-hourly D1 content sync from the Railway backend.
+crons = ["* * * * *", "0 */6 * * *"]

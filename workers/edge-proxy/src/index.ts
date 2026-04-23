@@ -15,6 +15,7 @@ import {
   type WrapKvOptions,
   type KvUsageQuota,
 } from "./kv-monitor";
+import { runSyntheticProbe } from "./synthetic-probe";
 
 interface Env {
   BACKEND_URL: string;
@@ -52,6 +53,18 @@ interface Env {
    * on every /api/ai/fallback/* call. Without it the routes 401.
    */
   EDGE_AI_FALLBACK_SECRET?: string;
+  /**
+   * Task #708 — synthetic external probe of /admin/diagnostics. See
+   * src/synthetic-probe.ts and docs/CLOUDFLARE_ZERO_TRUST.md §7.1 for
+   * the full configuration matrix and the rotation procedure.
+   */
+  SYNTHETIC_PROBE_DISABLED?: string;
+  SYNTHETIC_PROBE_TARGET_URL?: string;
+  SYNTHETIC_PROBE_CF_ACCESS_CLIENT_ID?: string;
+  SYNTHETIC_PROBE_CF_ACCESS_CLIENT_SECRET?: string;
+  SYNTHETIC_PROBE_ADMIN_JWT?: string;
+  SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL?: string;
+  SYNTHETIC_PROBE_WATCHDOG_THRESHOLD_MIN?: string;
 }
 
 const KV_BINDINGS = ["RATE_LIMIT", "BOT_HTML_CACHE"] as const;
@@ -1876,6 +1889,35 @@ export default {
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    // Multiple cron triggers fan out from the same scheduled handler.
+    // We dispatch on `event.cron` so each trigger only runs the job it
+    // was designed for. The fallback below preserves the historical
+    // single-cron behaviour: when `event.cron` is empty (e.g. the local
+    // wrangler emulator on older versions, or any future invocation
+    // that does not match a known schedule), we run the D1 sync — that
+    // job is idempotent and has been the only scheduled job for this
+    // worker for months, so defaulting to it is the safe, no-surprises
+    // choice.
+    const cron = event.cron;
+    if (cron === "* * * * *") {
+      // Task #708 — 1-minute synthetic probe of /admin/diagnostics.
+      // Wrap the env so KV ops from the probe also feed the kv-monitor
+      // counters (1 read + 1 write/min adds 2880 ops/day, well under
+      // quota — but visible in the dashboard nonetheless).
+      const wrapped = wrapEnvKv(env, ctx);
+      ctx.waitUntil(runSyntheticProbe(wrapped).catch((e) => {
+        const msg = e instanceof Error ? e.message : "unknown";
+        console.error(`[synthetic-probe] unhandled error: ${msg.slice(0, 300)}`);
+      }));
+      return;
+    }
+    if (cron === "0 */6 * * *") {
+      ctx.waitUntil(handleScheduledSync(env));
+      return;
+    }
+    // Backwards-compat: when the worker was deployed with only the
+    // 6-hourly cron, event.cron may be empty in the local emulator.
+    // Default to the D1 sync so existing behaviour is preserved.
     ctx.waitUntil(handleScheduledSync(env));
   },
 };

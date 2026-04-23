@@ -323,9 +323,93 @@ types through the existing notification pipeline whenever the snapshot
 is degraded on a production-provisioned environment. Subscribe the
 on-call PagerDuty / Slack channel to both alert types — do **not**
 silence them, since their entire purpose is to remind the team to
-disable the bypass once the outage is over. Recommended monitor: a
-1-minute external ping to `/admin/diagnostics` from a synthetic check
-(via service token) so the alert fires even if no admin is browsing.
+disable the bypass once the outage is over.
+
+**Synthetic probe (Task #708 — required, ships in `syrabit-edge`):**
+The paging rule above only runs when something actually calls
+`/admin/diagnostics`. During a real outage no admin is browsing the
+dashboard, so the alert never fires. The `syrabit-edge` Worker carries
+a 1-minute cron (`* * * * *`) that hits the diagnostics endpoint from
+outside the cluster using a CF Access service token + a long-lived
+admin JWT. Implementation: `workers/edge-proxy/src/synthetic-probe.ts`.
+
+Configuration (Cloudflare dashboard → Workers & Pages →
+`syrabit-edge` → Settings → Variables and Secrets):
+
+| Name                                       | Kind   | Purpose                                                                 |
+| ------------------------------------------ | ------ | ----------------------------------------------------------------------- |
+| `SYNTHETIC_PROBE_TARGET_URL`               | var    | Full URL to probe. Default: `${BACKEND_URL}/admin/diagnostics`.         |
+| `SYNTHETIC_PROBE_CF_ACCESS_CLIENT_ID`      | secret | CF Access service token client id (`*.access`).                          |
+| `SYNTHETIC_PROBE_CF_ACCESS_CLIENT_SECRET`  | secret | CF Access service token secret.                                          |
+| `SYNTHETIC_PROBE_ADMIN_JWT`                | secret | Long-lived admin JWT signed with `ADMIN_JWT_SECRET` (1y exp, role=admin). |
+| `SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL`     | secret | Slack/PagerDuty webhook fired when the probe itself dies for >5 min.    |
+| `SYNTHETIC_PROBE_WATCHDOG_THRESHOLD_MIN`   | var    | Override watchdog threshold (default `5`, i.e. 5 consecutive failures). |
+| `SYNTHETIC_PROBE_DISABLED`                 | var    | Set to `true` to pause the probe without redeploying.                   |
+
+**Probe behaviour:**
+
+- Every minute the worker GETs the target URL with `CF-Access-Client-Id`,
+  `CF-Access-Client-Secret`, `Authorization: Bearer <admin JWT>`, and
+  the `X-Origin-Auth` shared secret (auto-injected from
+  `BACKEND_ORIGIN_SECRET`).
+- A 2xx response means the diagnostics paging logic executed — the
+  break-glass / `admin_enforced=false` alerts (above) will fire on
+  their own through the FastAPI pipeline if the snapshot is degraded.
+- A non-2xx response (or a network error) increments a consecutive-
+  failure counter persisted in the `RATE_LIMIT` KV namespace under
+  `synthetic_probe:state`.
+- After **5 consecutive failures** (i.e. the probe has been dark for
+  ≥5 minutes) the worker POSTs a JSON alert to
+  `SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL` with `alert_type:
+  "synthetic_probe_dark"`. This watchdog re-fires every 5 minutes
+  while the probe stays dark — a deliberate forcing function so
+  on-call cannot snooze the "paging is broken" signal.
+
+**Verification (run after rolling out the secrets):**
+
+```bash
+# 1. Force a one-shot run by triggering the cron from wrangler.
+pnpm --filter syrabit-edge dlx wrangler dev --test-scheduled
+# in another shell:
+curl 'http://localhost:8787/__scheduled?cron=*+*+*+*+*'
+# Expect a [synthetic-probe] log line with status=200 ok=true.
+
+# 2. From a personal laptop (NOT inside the worker), confirm the
+#    service token can reach diagnostics:
+curl -sS -i 'https://api.syrabit.ai/admin/diagnostics' \
+  -H "CF-Access-Client-Id: $SYNTHETIC_PROBE_CF_ACCESS_CLIENT_ID" \
+  -H "CF-Access-Client-Secret: $SYNTHETIC_PROBE_CF_ACCESS_CLIENT_SECRET" \
+  -H "Authorization: Bearer $SYNTHETIC_PROBE_ADMIN_JWT"
+# Expect HTTP/2 200 with a JSON body containing "cf_access" and "paging".
+
+# 3. Simulate a probe failure: rotate the admin JWT to garbage in the
+#    dashboard, wait 6 minutes, confirm the Slack/PagerDuty channel
+#    received an `alert_type: "synthetic_probe_dark"` payload, then
+#    restore the real JWT.
+```
+
+**Rotation procedure (run quarterly or on suspected leak):**
+
+1. **CF Access service token** — Cloudflare Zero Trust →
+   `Access → Service Auth → Service Tokens` → `syrabit-synthetic-probe`
+   → *Refresh* (creates a new client secret; the client id is stable).
+   Within the 24h overlap window, update both
+   `SYNTHETIC_PROBE_CF_ACCESS_CLIENT_ID` and
+   `SYNTHETIC_PROBE_CF_ACCESS_CLIENT_SECRET` on the worker. Confirm the
+   probe still logs `status=200`. Then `Revoke` the old token.
+2. **Admin JWT** — generate a new one with the existing helper
+   (`pnpm --filter syrabit-backend python scripts/mint_admin_jwt.py
+   --sub synthetic-probe --ttl 31536000`), update
+   `SYNTHETIC_PROBE_ADMIN_JWT` on the worker, and revoke the previous
+   `jti` via the admin sessions table. Note the rotation in the ops log.
+3. **Watchdog webhook URL** — rotate via the Slack/PagerDuty UI and
+   update `SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL` on the worker.
+
+If the team needs to take the probe down (e.g. extended planned
+maintenance), set `SYNTHETIC_PROBE_DISABLED=true` on the worker — this
+pauses the probe within ~10s without deleting any secrets. **Do not
+forget to flip it back**: a paused probe means `/admin/diagnostics`
+paging is dark.
 
 **What break-glass does NOT do:**
 
