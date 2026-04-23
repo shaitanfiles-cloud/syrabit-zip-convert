@@ -135,6 +135,53 @@ jobs:
             git push
           fi
 
+      - name: Heartbeat to backend (Task #751)
+        # Always run, even if earlier steps failed — the whole point of
+        # this heartbeat is to distinguish "Trustpilot is down" (refresh
+        # script failed but the workflow ran) from "the cron is silent"
+        # (workflow didn't run at all). The backend's >36h silence
+        # alerter only fires when no heartbeat arrives, so we MUST send
+        # one even when rc != 0.
+        if: always()
+        env:
+          TRUSTPILOT_REFRESH_SECRET: ${{ secrets.TRUSTPILOT_REFRESH_SECRET }}
+          BACKEND_URL: ${{ vars.TRUSTPILOT_BACKEND_URL || 'https://api.syrabit.ai' }}
+          RC: ${{ steps.refresh.outputs.rc }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/trustpilot-aggregate-refresh.yml
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set +e
+          if [ -z "${TRUSTPILOT_REFRESH_SECRET:-}" ]; then
+            echo "::warning title=Heartbeat::TRUSTPILOT_REFRESH_SECRET not set — skipping backend heartbeat"
+            exit 0
+          fi
+          # Map refresh script rc → status string the backend records.
+          # rc unset means the refresh step itself was skipped/cancelled
+          # (still a real workflow run; report as failure so on-call can
+          # tell from the dashboard pill).
+          case "${RC:-}" in
+            0)  STATUS="success" ;;
+            2)  STATUS="partial" ;;
+            "") STATUS="failure" ;;
+            *)  STATUS="failure" ;;
+          esac
+          payload=$(printf '{"status":"%s","rc":%s,"runUrl":"%s","workflowUrl":"%s","runId":"%s"}' \
+            "$STATUS" "${RC:-null}" "$RUN_URL" "$WORKFLOW_URL" "$RUN_ID")
+          # Best-effort, but log the HTTP status so a heartbeat-side
+          # outage is at least visible in the run log.
+          http_code=$(curl -sS -o /tmp/hb_body -w '%{http_code}' \
+            -X POST "${BACKEND_URL%/}/api/config/trustpilot/refresh-cron-heartbeat" \
+            -H 'Content-Type: application/json' \
+            -H "X-Trustpilot-Refresh-Secret: ${TRUSTPILOT_REFRESH_SECRET}" \
+            --max-time 15 --retry 2 --retry-delay 5 \
+            -d "$payload")
+          echo "[heartbeat] http=$http_code body=$(cat /tmp/hb_body 2>/dev/null | head -c 300)"
+          if [ "$http_code" != "200" ]; then
+            echo "::warning title=Heartbeat::backend heartbeat returned $http_code (non-fatal)"
+          fi
+          exit 0
+
       - name: Fail job if refresh script reported an error
         if: ${{ steps.refresh.outputs.rc != '0' }}
         run: |

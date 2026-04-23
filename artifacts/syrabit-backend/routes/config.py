@@ -560,6 +560,174 @@ async def refresh_trustpilot_aggregate(
     }
 
 
+# ─── Refresh-cron heartbeat (Task #751) ────────────────────────────────────
+#
+# The /api/config/trustpilot/aggregate/refresh webhook above is fed by a
+# daily GitHub Actions cron (.github/workflows/trustpilot-aggregate-
+# refresh.yml). If THAT workflow itself silently stops running
+# (disabled, repo-renamed, secret expired, GitHub-side outage), nothing
+# notices for >24h until the data-staleness alerter (Task #728) fires —
+# but that alert is also the only signal that the upstream Trustpilot
+# fetch is broken, so on-call can't tell which problem they have.
+#
+# We give the cron a separate, unconditional heartbeat channel: the
+# workflow POSTs here on every run regardless of the Trustpilot fetch
+# outcome. A dedicated alerter (routes/admin_trustpilot_cron_alerts.py)
+# pages when no heartbeat has arrived in >36h, distinct from the
+# data-staleness alert.
+
+_TP_REFRESH_CRON_HEALTH_DOC_ID = "trustpilot_refresh_cron_health"
+
+
+async def get_trustpilot_refresh_cron_health() -> Dict[str, Any]:
+    """Return the heartbeat snapshot for the daily refresh cron.
+
+    Always returns a plain dict; never raises. Falls back to a
+    not-configured shape when Mongo is unavailable so the alerter
+    degrades gracefully (treats it as "unknown" → never pages).
+    """
+    expected_secret = bool((os.environ.get("TRUSTPILOT_REFRESH_SECRET") or "").strip())
+    base = {
+        "configured": expected_secret,
+        "lastHeartbeatTs": None,
+        "lastHeartbeatAgeSeconds": None,
+        "lastSuccessHeartbeatTs": None,
+        "lastSuccessHeartbeatAgeSeconds": None,
+        "lastStatus": None,
+        "lastRc": None,
+        "lastRunUrl": None,
+        "lastSuccessRunUrl": None,
+        "lastWorkflowUrl": None,
+        "lastRunId": None,
+        "firstObservedTs": None,
+    }
+    try:
+        from deps import db, is_mongo_available  # type: ignore
+        if not await is_mongo_available():
+            return base
+        doc = await db.job_locks.find_one(
+            {"_id": _TP_REFRESH_CRON_HEALTH_DOC_ID}
+        )
+    except Exception:
+        return base
+    if not doc:
+        return base
+    now = time.time()
+    last_hb_ts = float(doc.get("last_heartbeat_ts") or 0.0) or None
+    last_success_hb_ts = (
+        float(doc.get("last_success_heartbeat_ts") or 0.0) or None
+    )
+    first_obs_ts = float(doc.get("first_observed_ts") or 0.0) or None
+    return {
+        **base,
+        "lastHeartbeatTs": last_hb_ts,
+        "lastHeartbeatAgeSeconds": (
+            int(now - last_hb_ts) if last_hb_ts else None
+        ),
+        "lastSuccessHeartbeatTs": last_success_hb_ts,
+        "lastSuccessHeartbeatAgeSeconds": (
+            int(now - last_success_hb_ts) if last_success_hb_ts else None
+        ),
+        "lastStatus": doc.get("last_status"),
+        "lastRc": doc.get("last_rc"),
+        "lastRunUrl": doc.get("last_run_url"),
+        "lastSuccessRunUrl": doc.get("last_success_run_url"),
+        "lastWorkflowUrl": doc.get("last_workflow_url"),
+        "lastRunId": doc.get("last_run_id"),
+        "firstObservedTs": first_obs_ts,
+    }
+
+
+@router.post("/api/config/trustpilot/refresh-cron-heartbeat")
+async def refresh_trustpilot_cron_heartbeat(
+    body: Dict[str, Any] = Body(default={}),
+    x_trustpilot_refresh_secret: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Heartbeat ping from the daily refresh GitHub Actions workflow.
+
+    Task #751 — the workflow calls this on every run (success OR
+    failure of the inner Trustpilot fetch) so the >36h "cron silent"
+    alert can distinguish between "Trustpilot is down" and "our cron
+    has been disabled".
+
+    Auth: same shared secret as the refresh webhook
+    (``TRUSTPILOT_REFRESH_SECRET`` header). Returns 503 when the
+    secret env var isn't configured (fails closed). Always 200 on
+    success. Body fields (all optional, best-effort recorded):
+
+      * ``status``: ``"success"`` | ``"partial"`` | ``"failure"``
+      * ``rc``: integer exit code from refresh-trustpilot-aggregate.mjs
+      * ``runUrl``: link to the specific GitHub Actions run page
+      * ``workflowUrl``: link to the workflow's run history
+      * ``runId``: ``${{ github.run_id }}``
+    """
+    expected = (os.environ.get("TRUSTPILOT_REFRESH_SECRET") or "").strip()
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="trustpilot_refresh_secret_not_configured",
+        )
+    provided = (x_trustpilot_refresh_secret or "").strip()
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="invalid_refresh_secret")
+
+    status = (body.get("status") or "").strip() or None
+    if status and status not in {"success", "partial", "failure"}:
+        # Be permissive — record what we got but don't 422 the workflow.
+        status = status[:32]
+    rc_raw = body.get("rc")
+    try:
+        rc = int(rc_raw) if rc_raw is not None else None
+    except (TypeError, ValueError):
+        rc = None
+    run_url = (str(body.get("runUrl") or "").strip() or None)
+    workflow_url = (str(body.get("workflowUrl") or "").strip() or None)
+    run_id = (str(body.get("runId") or "").strip() or None)
+    now_ts = time.time()
+
+    try:
+        from deps import db, is_mongo_available  # type: ignore
+        if await is_mongo_available():
+            # Track BOTH a "last heartbeat of any kind" timestamp (so the
+            # dashboard can distinguish "cron ran but failed" from "cron
+            # is silent") AND a "last successful heartbeat" timestamp
+            # (status=success only) — the silence alerter uses the
+            # latter so a perpetually-failing cron still pages after
+            # >36h of no successful runs, matching the task spec wording
+            # of "last-success age > 36h".
+            max_payload: Dict[str, Any] = {"last_heartbeat_ts": float(now_ts)}
+            set_payload: Dict[str, Any] = {
+                "last_status": status,
+                "last_rc": rc,
+                "last_run_url": run_url,
+                "last_workflow_url": workflow_url,
+                "last_run_id": run_id,
+                "updated_at": now_ts,
+            }
+            if status == "success":
+                max_payload["last_success_heartbeat_ts"] = float(now_ts)
+                set_payload["last_success_run_url"] = run_url
+            await db.job_locks.update_one(
+                {"_id": _TP_REFRESH_CRON_HEALTH_DOC_ID},
+                {
+                    "$max": max_payload,
+                    "$set": set_payload,
+                    "$setOnInsert": {"first_observed_ts": float(now_ts)},
+                },
+                upsert=True,
+            )
+    except Exception:
+        logger.debug(
+            "trustpilot refresh-cron heartbeat persist failed", exc_info=True
+        )
+
+    logger.info(
+        "trustpilot refresh-cron heartbeat: status=%s rc=%s run=%s",
+        status, rc, run_url,
+    )
+    return {"ok": True, "ts": now_ts}
+
+
 @router.get("/api/config/trustpilot/aggregate")
 async def get_trustpilot_aggregate() -> Dict[str, Any]:
     """Return the live aggregate Trustpilot rating for JSON-LD snippets.

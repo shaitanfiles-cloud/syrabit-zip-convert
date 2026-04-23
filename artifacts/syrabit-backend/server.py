@@ -996,6 +996,24 @@ async def lifespan(app):
     except Exception as _tp_alert_err:
         logger.warning(
             f"trustpilot feed alert loop not started: {_tp_alert_err}")
+    # Task #751 — separate alerter that pages when the daily refresh
+    # GitHub Actions cron itself stops checking in (>36h since the last
+    # heartbeat), distinct from the Task #728 data-staleness alert so
+    # on-call can tell "Trustpilot is down" apart from "our cron has
+    # been disabled". Leader-gated: the Mongo state doc is global, so
+    # one replica is enough; running on every replica would just spam
+    # the CAS without changing behaviour.
+    if _is_leader:
+        try:
+            from routes.admin_trustpilot_cron_alerts import (
+                _trustpilot_refresh_cron_alert_loop,
+            )
+            asyncio.create_task(_trustpilot_refresh_cron_alert_loop())
+        except Exception as _tp_cron_alert_err:
+            logger.warning(
+                "trustpilot refresh-cron alert loop not started: "
+                f"{_tp_cron_alert_err}"
+            )
     if _is_leader:
         # Single-leader: only one replica should query the CF GraphQL API
         # and write the per-UA report each Monday.
@@ -1227,6 +1245,7 @@ from routes.admin_kv_health import router as admin_kv_health_router
 from routes.admin_ci_status import router as admin_ci_status_router
 from routes.admin_trustpilot_alerts import router as admin_trustpilot_alerts_router
 from routes.admin_trustpilot_jsonld_status import router as admin_trustpilot_jsonld_status_router
+from routes.admin_trustpilot_cron_alerts import router as admin_trustpilot_cron_alerts_router
 from routes.admin_ads import router as admin_ads_router
 from routes.admin_review_prompts import router as admin_review_prompts_router
 from routes.edu_browser import router as edu_browser_router
@@ -1257,6 +1276,7 @@ api.include_router(admin_kv_health_router)
 api.include_router(admin_ci_status_router)
 api.include_router(admin_trustpilot_alerts_router)
 api.include_router(admin_trustpilot_jsonld_status_router)
+api.include_router(admin_trustpilot_cron_alerts_router)
 api.include_router(admin_ads_router)
 api.include_router(admin_review_prompts_router)
 api.include_router(edu_browser_router)
