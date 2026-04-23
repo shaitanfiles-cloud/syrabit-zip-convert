@@ -6,6 +6,29 @@ import {
 import { Card, Stat, TT, PLAN_COLORS, fmt, fmtInr } from './shared';
 import CurrencyProvenanceCaption, { breakdownTooltip } from './CurrencyProvenanceCaption';
 
+// Task #740 — custom Recharts tooltip that prints the daily INR total
+// AND the per-currency provenance line (USD slice + FX rate + source)
+// so an admin hovering a data point sees exactly which currencies
+// rolled into that day's number — not just a renamed series label.
+function RevenueChartTooltip({ active, payload, label, breakdown }) {
+  if (!active || !payload || !payload.length) return null;
+  const v = payload[0].value;
+  const usdLine = breakdownTooltip(breakdown);
+  return (
+    <div style={TT.contentStyle}>
+      <div className="font-medium text-gray-900">{label}</div>
+      <div className="text-emerald-600 mt-0.5">
+        Revenue: ₹{Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+      </div>
+      {usdLine && (
+        <div className="text-[10px] text-gray-500 mt-1 leading-snug max-w-[260px]">
+          {usdLine}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function RevenueTab({ widgetErrors, load, mrr, predicted, growth, arpu, ltv, paidUsers, dailyRev, cohortData, predict, revenue }) {
   const breakdown = revenue?.currency_breakdown;
   return (
@@ -44,7 +67,7 @@ export default function RevenueTab({ widgetErrors, load, mrr, predicted, growth,
             <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
             <XAxis dataKey="date" tick={{ fill: '#4b5563', fontSize: 11 }} tickFormatter={fmt} />
             <YAxis tick={{ fill: '#4b5563', fontSize: 11 }} tickFormatter={v => `₹${v}`} />
-            <Tooltip {...TT} formatter={v => [`₹${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`, breakdownTooltip(breakdown) ? 'Revenue (incl. Stripe)' : 'Revenue']} />
+            <Tooltip cursor={TT.cursor} content={<RevenueChartTooltip breakdown={breakdown} />} />
             <Line type="monotone" dataKey="revenue_inr" name="Revenue ₹" stroke="#10b981" strokeWidth={2.5}
               dot={{ r: 3, fill: '#10b981' }} activeDot={{ r: 5 }} />
           </LineChart>
