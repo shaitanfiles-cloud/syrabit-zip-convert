@@ -96,6 +96,38 @@ function isValidAggregate(obj) {
   );
 }
 
+function fetchFromOverride() {
+  // Operator escape hatch: when neither the backend nor the
+  // Trustpilot Business API can be reached from the build machine
+  // (e.g. CloudFront/WAF blocks the build container — Task #747),
+  // an operator can set TRUSTPILOT_AGGREGATE_OVERRIDE_JSON to a
+  // JSON blob with at least ratingValue + ratingCount, and the
+  // build will treat it as a successful live fetch (and persist
+  // it back to the cache file so subsequent unattended builds
+  // ship the same numbers).
+  const raw = (process.env.TRUSTPILOT_AGGREGATE_OVERRIDE_JSON || "").trim();
+  if (!raw) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    log(`override: TRUSTPILOT_AGGREGATE_OVERRIDE_JSON is not valid JSON (${e.message || e}) — skipping`);
+    return null;
+  }
+  const candidate = {
+    ratingValue: Number(parsed.ratingValue),
+    ratingCount: Number(parsed.ratingCount),
+    bestRating: Number(parsed.bestRating ?? 5),
+    worstRating: Number(parsed.worstRating ?? 1),
+    source: "env_override",
+  };
+  if (!isValidAggregate(candidate)) {
+    log(`override: blob missing ratingValue/ratingCount (got ${JSON.stringify(parsed)}) — skipping`);
+    return null;
+  }
+  return candidate;
+}
+
 async function fetchFromBackend() {
   const url = `${BACKEND_BASE}/api/config/trustpilot/aggregate`;
   try {
@@ -268,7 +300,8 @@ async function main() {
     process.exit(1);
   }
 
-  let agg = await fetchFromBackend();
+  let agg = fetchFromOverride();
+  if (!agg) agg = await fetchFromBackend();
   if (!agg) agg = await fetchFromTrustpilotDirect();
 
   if (agg) {
@@ -293,6 +326,7 @@ async function main() {
     log("=> Fix one of:");
     log("   - make the backend at " + BACKEND_BASE + "/api/config/trustpilot/aggregate return positive ratingValue+ratingCount");
     log("   - export TRUSTPILOT_API_KEY + TRUSTPILOT_BUSINESS_UNIT_ID so the build can hit Trustpilot directly");
+    log("   - export TRUSTPILOT_AGGREGATE_OVERRIDE_JSON='{\"ratingValue\":4.1,\"ratingCount\":7}' (operator escape hatch when the build host is WAF-blocked)");
     log("   - commit a non-null " + path.relative(process.cwd(), cacheFile) + " (a previous successful build will write this for you)");
     // Idempotency: STRIP any previously-injected script tag from dist/
     // so the failing build cannot leave stale review numbers behind

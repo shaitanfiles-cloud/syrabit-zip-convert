@@ -123,6 +123,56 @@ def get_trustpilot_aggregate_health() -> Dict[str, Any]:
     }
 
 
+def _load_aggregate_override() -> Optional[Dict[str, Any]]:
+    """Operator escape hatch (Task #747).
+
+    When the production container's egress is blocked by Trustpilot's
+    CloudFront/WAF (the failure mode that motivated this task), the
+    operator can set ``TRUSTPILOT_AGGREGATE_OVERRIDE_JSON`` to a JSON
+    blob ``{"ratingValue": 4.1, "ratingCount": 7}`` (optionally
+    ``bestRating`` / ``worstRating``) and the API will serve those
+    numbers as if they came from a successful upstream fetch. Returns
+    ``None`` when the env var is unset or unparseable.
+
+    Intentionally kept synchronous and dependency-free so it can be
+    called from the request path without blocking on httpx/Mongo.
+    """
+    raw = (os.environ.get("TRUSTPILOT_AGGREGATE_OVERRIDE_JSON") or "").strip()
+    if not raw:
+        return None
+    try:
+        import json
+        parsed = json.loads(raw)
+    except Exception as exc:
+        logger.warning(
+            "TRUSTPILOT_AGGREGATE_OVERRIDE_JSON is not valid JSON: %s", exc
+        )
+        return None
+    try:
+        rv = float(parsed.get("ratingValue"))
+        rc = int(parsed.get("ratingCount"))
+    except (TypeError, ValueError):
+        logger.warning(
+            "TRUSTPILOT_AGGREGATE_OVERRIDE_JSON missing ratingValue/ratingCount: %r",
+            parsed,
+        )
+        return None
+    if not (rv > 0 and rc > 0):
+        return None
+    def _safe_int(value: Any, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    return {
+        "ratingValue": round(rv, 2),
+        "ratingCount": rc,
+        "bestRating": _safe_int(parsed.get("bestRating"), 5),
+        "worstRating": _safe_int(parsed.get("worstRating"), 1),
+    }
+
+
 async def _fetch_trustpilot_aggregate_remote() -> Optional[Dict[str, Any]]:
     """Call the Trustpilot Business API for the configured business unit.
 
@@ -130,6 +180,13 @@ async def _fetch_trustpilot_aggregate_remote() -> Optional[Dict[str, Any]]:
     when the upstream call fails for any reason — callers fall back to
     the previously cached payload (or to omitting the JSON-LD entirely).
     """
+    # Honour the env-var override BEFORE attempting the upstream call.
+    # This lets the operator keep stars on the SERP even when the
+    # backend container can't reach api.trustpilot.com (Task #747).
+    override = _load_aggregate_override()
+    if override is not None:
+        return override
+
     business_unit_id = (os.environ.get("TRUSTPILOT_BUSINESS_UNIT_ID") or "").strip()
     api_key = (os.environ.get("TRUSTPILOT_API_KEY") or "").strip()
     if not business_unit_id or not api_key:
