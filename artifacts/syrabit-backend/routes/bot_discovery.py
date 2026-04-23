@@ -1976,6 +1976,19 @@ async def _probe_sitemap_url_with_retry(client, url: str) -> Dict:
     return check
 
 
+@router.get("/seo/" + INDEXNOW_KEY + ".txt", include_in_schema=False)
+async def indexnow_keyfile():
+    """Serve the IndexNow ownership keyfile.
+
+    IndexNow validates ownership by fetching ``https://syrabit.ai/<key>.txt``
+    and checking the body equals the key string. The CF Pages ``_worker.js``
+    rewrites that URL to ``/api/seo/<key>.txt``, so this route satisfies the
+    ownership probe end-to-end.
+    """
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(INDEXNOW_KEY, media_type="text/plain; charset=utf-8")
+
+
 @router.get("/seo/health")
 async def seo_health_check(
     request: Request = None,
