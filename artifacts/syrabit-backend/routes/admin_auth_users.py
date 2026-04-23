@@ -57,13 +57,27 @@ from db_ops import (
 from llm import call_llm_api, call_llm_api_stream
 from analytics_helpers import get_recent_user_events
 import cloudflare_client
+from cf_access import require_cf_access_admin
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 @router.post("/admin/login")
-async def admin_login(data: AdminLoginReq, response: Response):
+async def admin_login(
+    data: AdminLoginReq,
+    response: Response,
+    # Task #702 — gate the admin login entry point itself behind
+    # Cloudflare Access. `get_admin_user` already protects every other
+    # admin route, but `/admin/login` cannot use it (no admin JWT exists
+    # yet). Without this dependency, anyone who learns the Railway /
+    # Cloud Run URL can hit the credential check directly and brute-
+    # force passwords, completely bypassing the Zero Trust IdP +
+    # device-posture rules. The dependency is a no-op when
+    # CF_ACCESS_ENFORCE is unset (dev / pre-rollout) and 401s the
+    # request before the password compare in production.
+    _cf_access_claims: Optional[dict] = Depends(require_cf_access_admin),
+):
     # Task #700 — defensive normalisation + structured failure logging.
     # Login was returning a generic "Invalid credentials" even when the
     # email/password were correct because (a) the env-side parser was

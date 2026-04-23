@@ -130,7 +130,11 @@ existing admin sessions keep working. This is the safe rollout order:
 4. Flip `CF_ACCESS_ENFORCE=true` and restart the FastAPI service.
 5. Verify a curl to the bare Cloud Run URL with the
    `X-Origin-Auth` secret but **no** `Cf-Access-Jwt-Assertion` header
-   returns 401 on `/api/admin/*`.
+   returns 401 on `/api/admin/*` **including `/api/admin/login`**.
+   Task #702 added the `require_cf_access_admin` dependency directly to
+   the login handler so the credential check is unreachable without an
+   Access JWT — closing the brute-force bypass that existed when only
+   post-login admin routes were gated.
 
 ## 6. Verification (post-rollout smoke tests)
 

@@ -122,3 +122,99 @@ def test_admin_login_503_when_no_admins_configured(monkeypatch):
     # Loud failure surfaces the misconfiguration instead of pretending
     # the credentials are wrong.
     assert res.status_code == 503
+
+
+# ── Task #702 — Cloudflare Access gate on the login entry point ──────────
+
+def _build_admin_app_with_access(monkeypatch, *, enforce: bool):
+    """Build a fresh TestClient with CF Access env configured.
+
+    Reused by the two #702 tests so they share the exact same setup the
+    happy-path fixture uses (real ADMIN_ACCOUNTS, real router) and only
+    differ in whether enforcement is on. Reloading the cf_access module
+    is required because env vars are read at import time.
+    """
+    monkeypatch.setenv("ADMIN_EMAILS", "ops@syrabit.test")
+    monkeypatch.setenv("ADMIN_PASSWORDS", "s3cret-pa55!")
+    monkeypatch.setenv("ADMIN_NAMES", "Ops Admin")
+    monkeypatch.setenv("ADMIN_JWT_SECRET", "test-admin-secret-do-not-use")
+    monkeypatch.setenv("JWT_SECRET", "test-jwt-secret-do-not-use")
+    if enforce:
+        monkeypatch.setenv("CF_ACCESS_ENFORCE", "true")
+        monkeypatch.setenv("CF_ACCESS_TEAM_DOMAIN", "syrabit-test")
+        monkeypatch.setenv("CF_ACCESS_AUD_ADMIN", "aud-admin-tag")
+    else:
+        monkeypatch.setenv("CF_ACCESS_ENFORCE", "")
+
+    for mod in ("config", "cf_access", "routes.admin_auth_users"):
+        sys.modules.pop(mod, None)
+
+    from tests._deps_stub import install_deps_stub
+    install_deps_stub(force=True)
+
+    routes_mod = importlib.import_module("routes.admin_auth_users")
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(routes_mod.router, prefix="/api")
+    return TestClient(app)
+
+
+def test_admin_login_blocked_without_cf_access_jwt_when_enforced(monkeypatch):
+    """With enforcement on, /admin/login must 401 BEFORE the password
+    check — so an attacker with the bare Railway URL and the right
+    password still cannot log in."""
+    client = _build_admin_app_with_access(monkeypatch, enforce=True)
+    res = client.post(
+        "/api/admin/login",
+        json={"email": "ops@syrabit.test", "password": "s3cret-pa55!"},
+    )
+    assert res.status_code == 401, res.text
+    assert "Cloudflare Access" in res.json().get("detail", "")
+
+
+def test_admin_login_unaffected_when_enforcement_off(monkeypatch):
+    """Pre-rollout safety: with CF_ACCESS_ENFORCE unset the dependency
+    is a strict no-op and the existing happy path keeps working."""
+    client = _build_admin_app_with_access(monkeypatch, enforce=False)
+    res = client.post(
+        "/api/admin/login",
+        json={"email": "ops@syrabit.test", "password": "s3cret-pa55!"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json().get("access_token")
+
+
+def test_admin_login_503_when_cf_access_enforce_on_but_misconfigured(monkeypatch):
+    """Fail-closed at the route boundary: if an operator flips
+    CF_ACCESS_ENFORCE=true without provisioning CF_ACCESS_TEAM_DOMAIN +
+    CF_ACCESS_AUD_ADMIN, the endpoint must refuse with 503 (loud
+    misconfig) instead of silently no-op'ing back to the password
+    check."""
+    monkeypatch.setenv("ADMIN_EMAILS", "ops@syrabit.test")
+    monkeypatch.setenv("ADMIN_PASSWORDS", "s3cret-pa55!")
+    monkeypatch.setenv("ADMIN_NAMES", "Ops Admin")
+    monkeypatch.setenv("ADMIN_JWT_SECRET", "test-admin-secret-do-not-use")
+    monkeypatch.setenv("CF_ACCESS_ENFORCE", "true")
+    monkeypatch.delenv("CF_ACCESS_TEAM_DOMAIN", raising=False)
+    monkeypatch.delenv("CF_ACCESS_AUD_ADMIN", raising=False)
+
+    for mod in ("config", "cf_access", "routes.admin_auth_users"):
+        sys.modules.pop(mod, None)
+
+    from tests._deps_stub import install_deps_stub
+    install_deps_stub(force=True)
+
+    routes_mod = importlib.import_module("routes.admin_auth_users")
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(routes_mod.router, prefix="/api")
+    client = TestClient(app)
+
+    res = client.post(
+        "/api/admin/login",
+        json={"email": "ops@syrabit.test", "password": "s3cret-pa55!"},
+    )
+    assert res.status_code == 503, res.text
+    assert "misconfigured" in res.json().get("detail", "").lower()
