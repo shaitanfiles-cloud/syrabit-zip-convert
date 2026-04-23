@@ -159,8 +159,18 @@ export default function AdminPage() {
   }, [navigate]);
 
   // Periodic keep-alive: reach `/admin/verify` so the backend re-issues
-  // the cookie before its 1-day max_age lapses. No localStorage hop —
+  // the cookie before its 24h max_age lapses. No localStorage hop —
   // the cookie carries itself via `withCredentials: true`.
+  //
+  // Audit #10: the previous 20-minute cadence was hitting the API 72×
+  // per day per open admin tab for a cookie that lives 24 hours. None
+  // of the other admin endpoints (dashboard polls, alerts, etc.) re-
+  // issue the session cookie — only `/admin/verify` slides the expiry —
+  // so we still need *some* interval, but the standard "refresh at
+  // half-life" pattern is 12 hours: refreshes well before the 24h
+  // expiry, recovers from short network blips on the next tick, and
+  // cuts API churn ~36× while keeping active sessions sliding
+  // indefinitely.
   useEffect(() => {
     if (verifying) return;
     const id = setInterval(() => {
@@ -170,7 +180,7 @@ export default function AdminPage() {
           toast.error('Session expired. Please log in again.');
           navigate('/admin/login');
         });
-    }, 20 * 60 * 1000);
+    }, 12 * 60 * 60 * 1000);
     return () => clearInterval(id);
   }, [verifying, navigate]);
 
