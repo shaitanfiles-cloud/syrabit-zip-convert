@@ -1903,6 +1903,75 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                         />
                       </LineChart>
                     </ResponsiveContainer>
+                    {(() => {
+                      // Task #760 — second sparkline: 30-day average
+                      // ratingValue trend. Pass-rate alone can't catch a
+                      // slow drift in the actual star rating (e.g. 4.7★
+                      // → 4.5★ over a fortnight); this chart does.
+                      // Points without avgRating (pre-Task-#754 rows or
+                      // an all-fail run with no numeric ratings) are
+                      // filtered out so the line doesn't fake zeros.
+                      const ratingPoints = points.filter(
+                        (p) => p.avgRating != null && Number.isFinite(Number(p.avgRating)),
+                      ).map((p) => ({
+                        ...p,
+                        avgRatingNum: Number(p.avgRating),
+                      }));
+                      if (ratingPoints.length < 2) return null;
+                      // Tighten Y domain around the observed range so
+                      // sub-0.2★ drift is actually visible on a 48px
+                      // chart. Clamped to a sane Trustpilot band.
+                      const values = ratingPoints.map((p) => p.avgRatingNum);
+                      const minV = Math.max(0, Math.min(...values) - 0.1);
+                      const maxV = Math.min(5, Math.max(...values) + 0.1);
+                      const latest = ratingPoints[ratingPoints.length - 1].avgRatingNum;
+                      return (
+                        <div className="mt-2" data-testid="trustpilot-jsonld-rating-sparkline">
+                          <div className="flex items-center justify-between mb-1">
+                            <p className="text-[10px] uppercase tracking-wider text-gray-500">
+                              Avg ratingValue · last {ratingPoints.length} run{ratingPoints.length === 1 ? '' : 's'}
+                            </p>
+                            <p className="text-[10px] text-gray-400 font-mono">
+                              latest ★ {latest.toFixed(2)}
+                            </p>
+                          </div>
+                          <ResponsiveContainer width="100%" height={48}>
+                            <LineChart
+                              data={ratingPoints}
+                              margin={{ top: 2, right: 2, bottom: 2, left: 2 }}
+                            >
+                              <YAxis hide domain={[minV, maxV]} />
+                              <Tooltip
+                                contentStyle={TOOLTIP_STYLE}
+                                formatter={(v, name) => {
+                                  if (name === 'avgRatingNum') {
+                                    return [`★ ${Number(v).toFixed(2)}`, 'avg rating'];
+                                  }
+                                  return [v, name];
+                                }}
+                                labelFormatter={(_, payload) => {
+                                  const p = payload?.[0]?.payload;
+                                  if (!p) return '';
+                                  const bits = [p.label];
+                                  if (p.avgRating != null) {
+                                    bits.push(`★ ${Number(p.avgRating).toFixed(2)}`);
+                                  }
+                                  return bits.join(' · ');
+                                }}
+                              />
+                              <Line
+                                type="monotone"
+                                dataKey="avgRatingNum"
+                                stroke="#f59e0b"
+                                strokeWidth={2}
+                                dot={false}
+                                isAnimationActive={false}
+                              />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })()}
