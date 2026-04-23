@@ -570,14 +570,53 @@ if _apprunner_url:
 CORS_ORIGIN_REGEX = r"^https://[a-z0-9-]+(\.[a-z0-9-]+)*\.(awsapprunner\.com|up\.railway\.app|railway\.app|pages\.dev)$"
 
 # ── Admin accounts ────────────────────────────────────────────────────────────
-# Admin accounts loaded from environment (no credentials in source code)
+# Admin accounts loaded from environment (no credentials in source code).
+#
+# Task #700 hardening — the parser strips wrapping quotes/whitespace from
+# every field (not just passwords) because operators routinely paste
+# values like `"admin@syrabit.ai"` into Railway/Cloudflare dashboards
+# which would otherwise compare unequal to a plain `admin@syrabit.ai`
+# from the login form. We also log a structured WARN on length-mismatch
+# so future drift between ADMIN_EMAILS / ADMIN_PASSWORDS / ADMIN_NAMES
+# is obvious in startup logs instead of silently dropping accounts.
+def _strip_env_field(raw: str) -> str:
+    s = (raw or "").strip()
+    # Strip a single layer of wrapping quotes (handles `"foo"` and `'foo'`)
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
+        s = s[1:-1].strip()
+    return s
+
+
+def _split_csv_env(name: str) -> list:
+    raw = os.environ.get(name, "")
+    return [_strip_env_field(p) for p in raw.split(",") if _strip_env_field(p)]
+
+
 def _load_admin_accounts():
-    emails    = [e.strip() for e in os.environ.get('ADMIN_EMAILS', '').split(',') if e.strip()]
-    passwords = [p.strip().strip('"').strip("'") for p in os.environ.get('ADMIN_PASSWORDS', '').split(',') if p.strip()]
-    names     = [n.strip() for n in os.environ.get('ADMIN_NAMES', '').split(',') if n.strip()]
-    max_len = max(len(emails), len(passwords), len(names)) if emails else 0
-    return [{"email": emails[i], "password": passwords[i], "name": names[i]}
-            for i in range(min(len(emails), len(passwords), len(names)))]
+    emails    = _split_csv_env("ADMIN_EMAILS")
+    passwords = _split_csv_env("ADMIN_PASSWORDS")
+    names     = _split_csv_env("ADMIN_NAMES")
+    n = min(len(emails), len(passwords), len(names))
+    if not n:
+        _cfg_log.critical(
+            "ADMIN ACCOUNTS NOT CONFIGURED — emails=%d passwords=%d names=%d. "
+            "Admin login will reject every request until ADMIN_EMAILS / "
+            "ADMIN_PASSWORDS / ADMIN_NAMES are set (comma-separated, equal length).",
+            len(emails), len(passwords), len(names),
+        )
+        return []
+    if not (len(emails) == len(passwords) == len(names)):
+        _cfg_log.warning(
+            "ADMIN ACCOUNTS MISALIGNED — emails=%d passwords=%d names=%d; "
+            "using first %d (extras dropped). Re-align the three env vars "
+            "to silence this warning.",
+            len(emails), len(passwords), len(names), n,
+        )
+    # Normalise emails to lowercase once at parse-time so login compares
+    # lowercase-vs-lowercase regardless of how the row was entered.
+    return [{"email": emails[i].lower(), "password": passwords[i], "name": names[i]}
+            for i in range(n)]
+
 
 ADMIN_ACCOUNTS = _load_admin_accounts()
 

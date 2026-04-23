@@ -673,6 +673,35 @@ async def _resolve_slug_hierarchy(board_slug, class_slug, subject_slug):
             {"_id": 0},
         )
     if not subj:
+        # Task #700 — chapter pages were 404ing whenever an admin flipped
+        # a subject's status to "draft"/"unpublished" (or never set the
+        # field at all on legacy rows). The chapter content itself still
+        # existed, but the strict ``status: "published"`` filter above
+        # would skip the subject and the resolver returned None, surfacing
+        # as "Chapter not found" to the user. We now retry with status
+        # filtered out (only excluding the explicit "archived" tombstone),
+        # log a WARN so admins can see and fix the drift, and let the
+        # chapter render. SEO surfaces (sitemaps, library) keep their own
+        # ``published`` filters — this relaxation is local to the
+        # public chapter URL resolver only.
+        relaxed_filter = {
+            "slug": subject_slug,
+            "stream_id": {"$in": stream_ids},
+            "status": {"$ne": "archived"},
+        }
+        subj = await db.subjects.find_one(relaxed_filter, {"_id": 0})
+        if not subj:
+            subj = await db.subjects.find_one(
+                {**relaxed_filter, "slug": re.compile(f"^{re.escape(subject_slug)}$", re.IGNORECASE)},
+                {"_id": 0},
+            )
+        if subj:
+            logger.warning(
+                "chapter resolver matched subject %r via relaxed status filter "
+                "(status=%r). Publish the subject to silence this warning.",
+                subject_slug, subj.get("status"),
+            )
+    if not subj:
         return None
     stream = next((s for s in streams if s["id"] == subj.get("stream_id")), None)
     result = {"board": board, "cls": cls, "subj": subj, "stream": stream}
@@ -705,6 +734,25 @@ async def _chapter_fallback_search(subject_slug: str, chapter_slug: str, respons
         subj = await db.subjects.find_one(
             {"slug": re.compile(f"^{re.escape(subject_slug)}$", re.IGNORECASE), "status": "published"}, {"_id": 0}
         )
+    if not subj:
+        # Task #700 — match the relaxed-status policy in the main resolver
+        # so the streamSlug-fallback path doesn't 404 chapters whose
+        # subject is in draft/unpublished/no-status state.
+        subj = await db.subjects.find_one(
+            {"slug": subject_slug, "status": {"$ne": "archived"}}, {"_id": 0}
+        )
+        if not subj:
+            subj = await db.subjects.find_one(
+                {"slug": re.compile(f"^{re.escape(subject_slug)}$", re.IGNORECASE),
+                 "status": {"$ne": "archived"}},
+                {"_id": 0},
+            )
+        if subj:
+            logger.warning(
+                "chapter fallback matched subject %r via relaxed status filter "
+                "(status=%r). Publish the subject to silence this warning.",
+                subject_slug, subj.get("status"),
+            )
     if not subj:
         raise HTTPException(404, "Subject not found")
     stream = await db.streams.find_one({"id": subj.get("stream_id")}, {"_id": 0, "id": 1, "name": 1, "class_id": 1})

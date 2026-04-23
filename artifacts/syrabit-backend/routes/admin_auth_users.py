@@ -64,15 +64,36 @@ router = APIRouter()
 
 @router.post("/admin/login")
 async def admin_login(data: AdminLoginReq, response: Response):
+    # Task #700 — defensive normalisation + structured failure logging.
+    # Login was returning a generic "Invalid credentials" even when the
+    # email/password were correct because (a) the env-side parser was
+    # dropping wrapping quotes only on passwords, and (b) the form was
+    # round-tripping a stray space/newline. We strip on both sides now,
+    # and log the exact failure reason server-side (without echoing the
+    # password) so future regressions are immediately visible in logs.
+    submitted_email = (data.email or "").strip().lower()
+    submitted_password = (data.password or "").strip()
 
-    # Find the matching admin account across the array
+    if not ADMIN_ACCOUNTS:
+        logger.critical(
+            "admin_login refused — ADMIN_ACCOUNTS is empty (env not configured); "
+            "submitted_email=%r", submitted_email,
+        )
+        raise HTTPException(status_code=503, detail="Admin login is not configured")
+
     matched = next(
         (a for a in ADMIN_ACCOUNTS
-         if a["email"].lower() == data.email.lower()
-         and a["password"] == data.password),
-        None
+         if a["email"].lower() == submitted_email
+         and a["password"] == submitted_password),
+        None,
     )
     if not matched:
+        email_known = any(a["email"].lower() == submitted_email for a in ADMIN_ACCOUNTS)
+        reason = "wrong_password" if email_known else "unknown_email"
+        logger.warning(
+            "admin_login rejected — reason=%s submitted_email=%r configured_admins=%d",
+            reason, submitted_email, len(ADMIN_ACCOUNTS),
+        )
         raise HTTPException(status_code=401, detail="Invalid admin credentials")
 
     # Token payload includes name so the frontend welcome toast can greet by name
