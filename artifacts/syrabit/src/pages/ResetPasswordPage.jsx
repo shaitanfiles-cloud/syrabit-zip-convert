@@ -10,6 +10,7 @@ import axios from 'axios';
 import { LogoFull } from '@/components/Logo';
 import { API_BASE } from '@/utils/api';
 import { useTurnstile } from '@/hooks/useTurnstile';
+import { formatAuthError } from '@/lib/authErrors';
 
 export default function ResetPasswordPage() {
   const [email, setEmail] = useState('');
@@ -38,7 +39,7 @@ export default function ResetPasswordPage() {
       setStep('confirm');
       toast.success('Reset token sent! Check your email or ask admin.');
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Request failed');
+      toast.error(formatAuthError(err, 'Request failed. Please try again.'));
       try { resetTurnstile(); } catch {}
     } finally {
       setLoading(false);
@@ -67,7 +68,7 @@ export default function ResetPasswordPage() {
       toast.success('Password updated!');
     } catch (err) {
       try { resetTurnstile(); } catch {}
-      toast.error(err.response?.data?.detail || 'Reset failed');
+      toast.error(formatAuthError(err, 'Reset failed. Please try again.'));
     } finally {
       setLoading(false);
     }

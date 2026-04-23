@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
 import { useTurnstile } from '@/hooks/useTurnstile';
+import { formatAuthError } from '@/lib/authErrors';
 import { toast } from 'sonner';
 import { LogoFull } from '@/components/Logo';
 
@@ -83,7 +84,7 @@ export default function SignupPage() {
       navigate('/onboarding');
     } catch (err) {
       try { resetTurnstile(); } catch {}
-      setError(err.response?.data?.detail || 'Signup failed. Please try again.');
+      setError(formatAuthError(err, 'Signup failed. Please try again.'));
     } finally {
       setLoading(false);
     }

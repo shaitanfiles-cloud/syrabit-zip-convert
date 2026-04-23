@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
 import { useTurnstile } from '@/hooks/useTurnstile';
+import { formatAuthError } from '@/lib/authErrors';
 import { toast } from 'sonner';
 import { LogoFull } from '@/components/Logo';
 
@@ -75,7 +76,7 @@ export default function LoginPage() {
       }, 100);
     } catch (err) {
       try { resetTurnstile(); } catch {}
-      setError(err.response?.data?.detail || 'Login failed. Please check your credentials.');
+      setError(formatAuthError(err, 'Login failed. Please check your credentials.'));
     } finally {
       setLoading(false);
     }
