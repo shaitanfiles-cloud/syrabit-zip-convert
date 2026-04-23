@@ -117,6 +117,95 @@ PLAN_CREDITS    = {"starter": 300, "pro": 4000}
 PLAN_DOC_ACCESS = {"starter": "limited", "pro": "full"}
 PLAN_RANK_MAP   = {"free": 0, "starter": 1, "pro": 2}
 
+
+# ─────────────────────────────────────────────
+# Task #731 — Money truth: unify payment row schema
+# ─────────────────────────────────────────────
+async def _enrich_payment_record(record: dict) -> dict:
+    """Add canonical `amount_inr` (rupees, float, 2dp) plus FX audit
+    fields to every payment row before insert.
+
+    Rules:
+      * Razorpay rows already have `amount_paise` (always INR), so
+        amount_inr = amount_paise / 100 — no FX needed.
+      * Stripe rows have `amount_cents` + `currency` (typically "usd").
+        We convert to INR via the FX helper and persist the rate +
+        source + fetched_at on the row itself, so a row stays
+        self-describing months later when the live rate has moved.
+      * Records that already carry amount_inr (e.g. from migrations)
+        are passed through unchanged.
+
+    The helper mutates a copy and returns it; callers should pass the
+    return value to `db.payments.insert_one`.
+    """
+    out = dict(record)
+    if "amount_inr" in out:
+        return out
+
+    paise = out.get("amount_paise")
+    cents = out.get("amount_cents")
+    currency = (out.get("currency") or "").lower().strip()
+
+    if isinstance(paise, (int, float)) and paise:
+        # Razorpay path — paise is always INR.
+        out["amount_inr"] = round(float(paise) / 100.0, 2)
+        out.setdefault("currency_original", "INR")
+        out.setdefault("amount_original", float(paise) / 100.0)
+        # Razorpay rows don't need FX, but we mark the row so admin UI
+        # can still render a uniform "FX as of …" caption when listing
+        # mixed-provider revenue.
+        out.setdefault("fx_rate", 1.0)
+        out.setdefault("fx_source", "inr_native")
+        out.setdefault("fx_fetched_at", None)
+        return out
+
+    if isinstance(cents, (int, float)) and cents:
+        if currency in ("", "usd"):
+            try:
+                from fx import usd_to_inr, FxRateUnavailable
+                conv = await usd_to_inr(float(cents) / 100.0)
+                out["amount_inr"] = float(conv["inr"])
+                out["currency_original"] = "USD"
+                out["amount_original"] = float(cents) / 100.0
+                out["fx_rate"] = float(conv["rate"])
+                out["fx_source"] = conv["source"]
+                out["fx_fetched_at"] = conv["fetched_at"]
+            except FxRateUnavailable as e:
+                # Refuse to write a row we can't price correctly. The
+                # caller's exception path will surface this to the user.
+                raise
+        elif currency == "inr":
+            out["amount_inr"] = round(float(cents) / 100.0, 2)
+            out["currency_original"] = "INR"
+            out["amount_original"] = float(cents) / 100.0
+            out["fx_rate"] = 1.0
+            out["fx_source"] = "inr_native"
+            out["fx_fetched_at"] = None
+        else:
+            # Unknown currency — record what we know and leave amount_inr
+            # explicitly None so rollups exclude this row instead of
+            # inflating totals with the wrong unit.
+            logger.warning(
+                "_enrich_payment_record: unsupported currency=%s amount_cents=%s",
+                currency, cents,
+            )
+            out["amount_inr"] = None
+            out["currency_original"] = currency.upper() or "UNKNOWN"
+            out["amount_original"] = float(cents) / 100.0
+            out["fx_rate"] = None
+            out["fx_source"] = "unsupported_currency"
+            out["fx_fetched_at"] = None
+        return out
+
+    # Zero-amount / activation_skipped row — keep schema consistent.
+    out["amount_inr"] = 0.0
+    out["currency_original"] = (currency.upper() if currency else "INR")
+    out["amount_original"] = 0.0
+    out["fx_rate"] = 1.0
+    out["fx_source"] = "zero"
+    out["fx_fetched_at"] = None
+    return out
+
 class PaymentOrderRequest(BaseModel):
     plan: str  # "starter" or "pro"
 
@@ -239,6 +328,7 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
         "razorpay_payment_id":body.razorpay_payment_id,
         "verified_at":        now_iso,
     }
+    payment_record = await _enrich_payment_record(payment_record)
 
     _payment_inserted = False
     _pg_updated       = False
@@ -495,7 +585,7 @@ async def stripe_webhook(request: StarletteRequest2):
                         f"Stripe webhook: skipping downgrade {wh_current_plan}→{plan} "
                         f"for user={user_id} session={stripe_session_id} — payment logged only"
                     )
-                    await db.payments.insert_one({
+                    await db.payments.insert_one(await _enrich_payment_record({
                         "user_id": user_id, "plan": plan, "provider": "stripe",
                         "status": "skipped",
                         "stripe_session_id": stripe_session_id,
@@ -503,9 +593,9 @@ async def stripe_webhook(request: StarletteRequest2):
                         "currency": session.get("currency", "usd"),
                         "verified_at": now_iso, "activation_skipped": True,
                         "skip_reason": f"user already on higher plan ({wh_current_plan})",
-                    })
+                    }))
                     return {"received": True}
-                await db.payments.insert_one({
+                await db.payments.insert_one(await _enrich_payment_record({
                     "user_id": user_id,
                     "plan": plan,
                     "provider": "stripe",
@@ -514,7 +604,7 @@ async def stripe_webhook(request: StarletteRequest2):
                     "amount_cents": session.get("amount_total", 0),
                     "currency": session.get("currency", "usd"),
                     "verified_at": now_iso,
-                })
+                }))
                 await db.users.update_one(
                     {"id": user_id},
                     {"$set": {"plan": plan, "document_access": doc_acc, "updated_at": now_iso},
@@ -577,7 +667,7 @@ async def razorpay_webhook(request: StarletteRequest2):
             if plan == "topup":
                 topup_credits = int(notes.get("credits", 0))
                 if topup_credits > 0:
-                    await db.payments.insert_one({
+                    await db.payments.insert_one(await _enrich_payment_record({
                         "user_id": user_id,
                         "plan": "topup",
                         "provider": "razorpay",
@@ -586,7 +676,7 @@ async def razorpay_webhook(request: StarletteRequest2):
                         "amount_paise": entity.get("amount", 0),
                         "credits_added": topup_credits,
                         "verified_at": now_iso,
-                    })
+                    }))
                     await db.users.update_one(
                         {"id": user_id},
                         {"$set": {"updated_at": now_iso},
@@ -611,26 +701,26 @@ async def razorpay_webhook(request: StarletteRequest2):
                         f"Razorpay webhook: skipping downgrade {wh_current_plan}→{plan} "
                         f"for user={user_id} payment={rp_payment_id} — payment logged only"
                     )
-                    await db.payments.insert_one({
+                    await db.payments.insert_one(await _enrich_payment_record({
                         "user_id": user_id, "plan": plan, "provider": "razorpay",
                         "status": "skipped",
                         "razorpay_payment_id": rp_payment_id,
                         "amount_paise": entity.get("amount", 0),
                         "verified_at": now_iso, "activation_skipped": True,
                         "skip_reason": f"user already on higher plan ({wh_current_plan})",
-                    })
+                    }))
                 else:
                     _wh_payment_inserted = False
                     _wh_mongo_updated    = False
                     _wh_pg_updated       = False
                     try:
-                        await db.payments.insert_one({
+                        await db.payments.insert_one(await _enrich_payment_record({
                             "user_id": user_id, "plan": plan, "provider": "razorpay",
                             "status": "completed",
                             "razorpay_payment_id": rp_payment_id,
                             "amount_paise": entity.get("amount", 0),
                             "verified_at": now_iso,
-                        })
+                        }))
                         _wh_payment_inserted = True
                         await db.users.update_one(
                             {"id": user_id},
@@ -781,7 +871,7 @@ async def credit_topup_verify(body: CreditTopUpVerifyRequest, user: dict = Depen
     _tu_mongo_updated    = False
     try:
         # 1. Record payment
-        await db.payments.insert_one({
+        await db.payments.insert_one(await _enrich_payment_record({
             "user_id": str(user_id),
             "plan": "topup",
             "provider": "razorpay",
@@ -791,7 +881,7 @@ async def credit_topup_verify(body: CreditTopUpVerifyRequest, user: dict = Depen
             "amount_paise": TOPUP_PRICES_INR[body.credits],
             "credits_added": body.credits,
             "verified_at": now_iso,
-        })
+        }))
         _tu_payment_inserted = True
 
         # 2. Update PostgreSQL
