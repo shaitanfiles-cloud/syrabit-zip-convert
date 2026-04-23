@@ -1190,6 +1190,22 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                       </ResponsiveContainer>
                     )}
                   </div>
+                  {/* Chip row: only on the Interactions tile, shows
+                      the top edge content-types so admins can see what
+                      kinds of interactions make up the total. */}
+                  {t.key === 'requests' && Array.isArray(cfOverview?.interaction_types) && cfOverview.interaction_types.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-2" title="Top categories of interactions in this period">
+                      {cfOverview.interaction_types.map((it) => (
+                        <span
+                          key={it.label}
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-blue-50 border border-blue-100 text-[9px] font-medium text-blue-700"
+                        >
+                          {it.label}
+                          <span className="text-blue-400">{it.pct}%</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

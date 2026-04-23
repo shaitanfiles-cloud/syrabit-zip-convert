@@ -497,6 +497,113 @@ async def _fetch_visits_series(zone_id: str, range_key: str) -> Optional[dict]:
         return None
 
 
+_CONTENT_TYPE_FRIENDLY = {
+    # Map raw Cloudflare edgeResponseContentTypeName values to short,
+    # admin-friendly keywords shown as chips under the Interactions tile.
+    "html": "pages",
+    "json": "API",
+    "javascript": "scripts", "js": "scripts",
+    "css": "styles",
+    # CF reports "empty" for HEAD requests, 204/304 responses, redirects,
+    # health checks etc — group as "other" so the chip is meaningful.
+    "empty": "other", "": "other",
+    "jpeg": "images", "jpg": "images", "png": "images", "webp": "images",
+    "gif": "images", "svg": "images", "avif": "images", "ico": "images",
+    "woff": "fonts", "woff2": "fonts", "ttf": "fonts", "otf": "fonts",
+    "xml": "feeds", "rss": "feeds",
+    "mp4": "video", "webm": "video", "mov": "video",
+    "mp3": "audio", "wav": "audio",
+    "pdf": "docs",
+    "plain": "text", "octet-stream": "downloads",
+}
+
+
+async def _fetch_interaction_types(zone_id: str, range_key: str) -> Optional[list]:
+    """Task #741 follow-up: top edge content-type categories for the chosen
+    window, so the Interactions tile can show *what kinds* of interactions
+    they are (pages / API / images / scripts / ...). Best-effort —
+    returns None on any failure; caller renders no chips in that case.
+    """
+    if not is_configured():
+        return None
+    now = datetime.now(timezone.utc)
+    if range_key == "24h":
+        since = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        until = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        query = """
+        query CfTypesHourly($zoneTag: String!, $since: Time!, $until: Time!) {
+          viewer {
+            zones(filter: { zoneTag: $zoneTag }) {
+              groups: httpRequestsAdaptiveGroups(
+                filter: { datetime_geq: $since, datetime_lt: $until }
+                orderBy: [count_DESC]
+                limit: 25
+              ) {
+                count
+                dimensions { edgeResponseContentTypeName }
+              }
+            }
+          }
+        }
+        """
+        variables = {"zoneTag": zone_id, "since": since, "until": until}
+    else:
+        days = 30 if range_key == "30d" else 7
+        since_d = (now - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+        until_d = now.strftime("%Y-%m-%d")
+        query = """
+        query CfTypesDaily($zoneTag: String!, $since: Date!, $until: Date!) {
+          viewer {
+            zones(filter: { zoneTag: $zoneTag }) {
+              groups: httpRequestsAdaptiveGroups(
+                filter: { date_geq: $since, date_leq: $until }
+                orderBy: [count_DESC]
+                limit: 25
+              ) {
+                count
+                dimensions { edgeResponseContentTypeName }
+              }
+            }
+          }
+        }
+        """
+        variables = {"zoneTag": zone_id, "since": since_d, "until": until_d}
+
+    data = await _graphql_query(query, variables)
+    if not data:
+        return None
+    try:
+        zones = data.get("viewer", {}).get("zones", []) or []
+        if not zones:
+            return None
+        rows = zones[0].get("groups", []) or []
+        # Collapse raw mime subtypes ("jpeg" + "png" -> "images" etc).
+        bucket: dict = {}
+        total = 0
+        for row in rows:
+            raw = ((row.get("dimensions", {}) or {}).get("edgeResponseContentTypeName") or "").strip().lower()
+            count = int(row.get("count", 0) or 0)
+            if not raw or count <= 0:
+                continue
+            label = _CONTENT_TYPE_FRIENDLY.get(raw, raw)
+            bucket[label] = bucket.get(label, 0) + count
+            total += count
+        if total <= 0:
+            return None
+        # Top 5, drop slices < 1% to keep chips meaningful.
+        ranked = sorted(bucket.items(), key=lambda kv: kv[1], reverse=True)
+        out = []
+        for label, count in ranked[:5]:
+            pct = round((count / total) * 100, 1)
+            if pct < 1.0:
+                continue
+            out.append({"label": label, "count": count, "pct": pct})
+        return out or None
+    except Exception as e:
+        logger.debug(f"CF interaction-types parsing failed: {e}")
+        return None
+
+
 async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
     """Cloudflare-mirror analytics overview with selectable time range.
 
@@ -575,9 +682,11 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
     # tile can render alongside "Unique Visitors". The visits fetch is
     # best-effort: if it returns None, we degrade the visits tile to "—"
     # without touching the rest of the card.
-    data, visits_map = await asyncio.gather(
+    _safe_range = range_key if range_key in ("24h", "7d", "30d") else "7d"
+    data, visits_map, interaction_types = await asyncio.gather(
         _graphql_query(query, variables),
-        _fetch_visits_series(zone_id, range_key if range_key in ("24h", "7d", "30d") else "7d"),
+        _fetch_visits_series(zone_id, _safe_range),
+        _fetch_interaction_types(zone_id, _safe_range),
     )
     if not data:
         return None
@@ -634,11 +743,15 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
                 "visits": visits_count,
             })
         return {
-            "range": range_key if range_key in ("24h", "7d", "30d") else "7d",
+            "range": _safe_range,
             "bucket": bucket,
             "period_label": period_label,
             "totals": totals,
             "series": series,
+            # Top edge content-type breakdown (e.g. pages / API / images /
+            # scripts / styles) for the same window, used by the
+            # Interactions tile chip row. None when unavailable.
+            "interaction_types": interaction_types,
             "source": "cloudflare",
         }
     except Exception as e:
