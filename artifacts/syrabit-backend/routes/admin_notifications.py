@@ -218,7 +218,12 @@ async def _dispatch_push(payload: dict, admin_only: bool = False):
             user_id = sub.get("user_id", "")
             role = sub.get("role", "unknown")
             try:
-                webpush(
+                # pywebpush.webpush is a blocking requests.post call.
+                # Without to_thread it stalls the entire FastAPI worker
+                # for every slow gateway (FCM/autopush) — one bad
+                # endpoint blocks every other admin's push.
+                await asyncio.to_thread(
+                    webpush,
                     subscription_info=sub["subscription_info"],
                     data=json.dumps(payload),
                     vapid_private_key=private_pem,
