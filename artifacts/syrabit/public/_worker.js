@@ -50,7 +50,13 @@ const DEFAULT_BACKEND = "https://api.syrabit.ai";
 // the matching backend route and force the correct Content-Type. Cached
 // at the edge for an hour (matches _headers s-maxage).
 const SEO_PASSTHROUGH_RE =
-  /^\/(sitemap[a-z0-9_-]*\.xml|sitemap-index\.xml|feed\.xml|rss\.xml|feed\/[a-z0-9_-]+\.xml|llms\.txt|llms-full\.txt|robots\.txt|\.well-known\/ai-plugin\.json|[a-f0-9]{32}\.txt|[a-z0-9_-]*indexnow[a-z0-9_-]*\.txt)$/i;
+  /^\/(sitemap[a-z0-9_-]*\.xml|sitemap-index\.xml|feed\.xml|rss\.xml|feed\/[a-z0-9_-]+\.xml|llms\.txt|llms-full\.txt|robots\.txt|\.well-known\/ai-plugin\.json)$/i;
+// IndexNow keyfiles (32-hex .txt or *indexnow*.txt) are intentionally
+// excluded — they're shipped as static assets in dist/ so the Pages
+// ASSETS pipeline serves them directly. Routing them through the
+// backend hit "Direct origin access denied" because the Pages worker
+// fetches BACKEND_URL without the X-Origin-Auth header that
+// the edge worker injects.
 
 // Map a public path to the corresponding backend path. Sitemaps live
 // under `/api/seo/` on the backend; feeds, llms, robots, .well-known
