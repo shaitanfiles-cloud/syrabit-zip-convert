@@ -418,6 +418,85 @@ async def get_visitor_stats_cf(days: int = 7) -> Optional[dict]:
         return None
 
 
+async def _fetch_visits_series(zone_id: str, range_key: str) -> Optional[dict]:
+    """Task #741 — best-effort total-visits (sessions) per bucket.
+
+    `sum.visits` was removed from `httpRequests1dGroups`/`httpRequests1hGroups`,
+    so unique-visitors and total-sessions can no longer be fetched in a
+    single query. We mirror the same window the main overview uses but
+    pull from `httpRequestsAdaptiveGroups` (which still exposes
+    `sum { visits }`) and return ``{bucket_ts: visits}``.
+
+    Returns `None` on ANY failure (token rejected, schema change, account
+    plan without adaptive access). The caller then sets per-row visits to
+    None and the UI tile renders "—" instead of breaking the whole card.
+    """
+    if not is_configured():
+        return None
+    now = datetime.now(timezone.utc)
+    if range_key == "24h":
+        since = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        until = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        query = """
+        query CfVisitsHourly($zoneTag: String!, $since: Time!, $until: Time!) {
+          viewer {
+            zones(filter: { zoneTag: $zoneTag }) {
+              series: httpRequestsAdaptiveGroups(
+                filter: { datetime_geq: $since, datetime_lt: $until }
+                orderBy: [datetimeHour_ASC]
+                limit: 48
+              ) {
+                dimensions { datetimeHour }
+                sum { visits }
+              }
+            }
+          }
+        }
+        """
+        variables = {"zoneTag": zone_id, "since": since, "until": until}
+    else:
+        days = 30 if range_key == "30d" else 7
+        since_d = (now - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+        until_d = now.strftime("%Y-%m-%d")
+        query = """
+        query CfVisitsDaily($zoneTag: String!, $since: Date!, $until: Date!) {
+          viewer {
+            zones(filter: { zoneTag: $zoneTag }) {
+              series: httpRequestsAdaptiveGroups(
+                filter: { date_geq: $since, date_leq: $until }
+                orderBy: [date_ASC]
+                limit: 100
+              ) {
+                dimensions { date }
+                sum { visits }
+              }
+            }
+          }
+        }
+        """
+        variables = {"zoneTag": zone_id, "since": since_d, "until": until_d}
+
+    data = await _graphql_query(query, variables)
+    if not data:
+        return None
+    try:
+        zones = data.get("viewer", {}).get("zones", []) or []
+        if not zones:
+            return None
+        rows = zones[0].get("series", []) or []
+        out: dict = {}
+        for row in rows:
+            dims = row.get("dimensions", {}) or {}
+            ts = dims.get("date") or dims.get("datetimeHour") or ""
+            v = int((row.get("sum", {}) or {}).get("visits", 0) or 0)
+            if ts:
+                out[ts] = v
+        return out
+    except Exception as e:
+        logger.debug(f"CF visits-series parsing failed: {e}")
+        return None
+
+
 async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
     """Cloudflare-mirror analytics overview with selectable time range.
 
@@ -491,7 +570,15 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
         period_label = f"Previous {days} days"
         bucket = "day"
 
-    data = await _graphql_query(query, variables)
+    # Task #741 — fetch the Stripe-aware visits (sessions) series in
+    # parallel with the main overview query so the new "Total Visitors"
+    # tile can render alongside "Unique Visitors". The visits fetch is
+    # best-effort: if it returns None, we degrade the visits tile to "—"
+    # without touching the rest of the card.
+    data, visits_map = await asyncio.gather(
+        _graphql_query(query, variables),
+        _fetch_visits_series(zone_id, range_key if range_key in ("24h", "7d", "30d") else "7d"),
+    )
     if not data:
         return None
 
@@ -505,6 +592,7 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
         if len(rows) > max_buckets:
             rows = rows[-max_buckets:]
         series = []
+        visits_available = isinstance(visits_map, dict)
         # NOTE: `sum.visits` was removed from the CF GraphQL schema for the
         # `httpRequests1dGroups` / `httpRequests1hGroups` datasets, so the
         # old "visitors == sum.visits (sessions)" mapping started failing
@@ -515,7 +603,7 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
         # (sessions); if the exact session count is needed in the future
         # the right move is to migrate to `httpRequestsAdaptiveGroups`
         # which still exposes `sum { visits }`.
-        totals = {"requests": 0, "bytes": 0, "visitors": 0, "page_views": 0}
+        totals = {"requests": 0, "bytes": 0, "visitors": 0, "page_views": 0, "visits": (0 if visits_available else None)}
         for row in rows:
             dims = row.get("dimensions", {}) or {}
             ts = dims.get("datetime") or dims.get("date") or ""
@@ -526,10 +614,16 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
             pv = int(s.get("pageViews", 0) or 0)
             uniques = int(u.get("uniques", 0) or 0)        # CF "Unique visitors"
             vis = uniques                                  # back-compat alias
+            # Task #741: total visits/sessions per bucket from the
+            # parallel adaptive-groups query. None when unavailable
+            # so the UI can render "—" per bucket.
+            visits_count = visits_map.get(ts) if visits_available else None
             totals["requests"] += req
             totals["bytes"] += byt
             totals["page_views"] += pv
             totals["visitors"] += vis
+            if visits_available and isinstance(visits_count, int):
+                totals["visits"] += visits_count
             series.append({
                 "ts": ts,
                 "requests": req,
@@ -537,6 +631,7 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
                 "page_views": pv,
                 "visitors": vis,
                 "uniques": uniques,
+                "visits": visits_count,
             })
         return {
             "range": range_key if range_key in ("24h", "7d", "30d") else "7d",

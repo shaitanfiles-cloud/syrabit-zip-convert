@@ -1136,22 +1136,29 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
             if (n < 1e9) return `${(n / 1e6).toFixed(2).replace(/\.?0+$/, '')}M`;
             return `${(n / 1e9).toFixed(2)}B`;
           };
+          // Task #741 — split the old "Visits" tile (which was actually
+          // unique visitors after the CF schema change) into two tiles:
+          // "Unique Visitors" (uniques) + "Total Visitors" (sessions),
+          // matching the Cloudflare dashboard. The visits field is
+          // best-effort; the helper renders "—" when null/missing so a
+          // schema/permission gap doesn't break the whole card.
           const tiles = [
-            { key: 'requests',   label: 'Requests',   total: totals.requests,   today: useOverview ? lastBucket?.requests   : cf.requests_today,   fmt: fmtNum },
-            { key: 'bytes',      label: 'Bandwidth',  total: totals.bytes,      today: useOverview ? lastBucket?.bytes      : cf.bytes_today,      fmt: fmtBytes },
-            { key: 'visitors',   label: 'Visits',     total: totals.visitors,   today: useOverview ? lastBucket?.visitors   : cf.visitors_today,   fmt: fmtNum },
-            { key: 'page_views', label: 'Page views', total: totals.page_views, today: useOverview ? lastBucket?.page_views : cf.page_views_today, fmt: fmtNum },
+            { key: 'requests',   label: 'Requests',         total: totals.requests,   today: useOverview ? lastBucket?.requests   : cf.requests_today,   fmt: fmtNum },
+            { key: 'bytes',      label: 'Bandwidth',        total: totals.bytes,      today: useOverview ? lastBucket?.bytes      : cf.bytes_today,      fmt: fmtBytes },
+            { key: 'visitors',   label: 'Unique Visitors',  total: totals.visitors,   today: useOverview ? lastBucket?.visitors   : cf.visitors_today,   fmt: fmtNum },
+            { key: 'visits',     label: 'Total Visitors',   total: totals.visits,     today: useOverview ? lastBucket?.visits     : null,                fmt: fmtNum },
+            { key: 'page_views', label: 'Page views',       total: totals.page_views, today: useOverview ? lastBucket?.page_views : cf.page_views_today, fmt: fmtNum },
           ];
           const hasData = (useOverview ? series.length > 0 : (vs.cloudflare && series.length > 0));
           return (
             <>
             <p className="text-[10px] text-gray-400 mb-2" title="Daily 'Today' buckets reset at UTC midnight (5:30 AM IST). In early IST morning the bucket only covers a few hours.">{TODAY_BUCKET_CAPTION}</p>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-3">
               {tiles.map(t => (
                 <div key={t.key} className="rounded-xl p-3 bg-white border border-gray-200">
                   <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">{t.label}</p>
                   <p className="text-gray-900 font-bold text-2xl leading-none">
-                    {hasData ? t.fmt(t.total) : '—'}
+                    {hasData && t.total != null ? t.fmt(t.total) : '—'}
                   </p>
                   <p className="text-[10px] text-gray-400 mt-1">
                     {lastBucketLabel}: {hasData && t.today != null ? t.fmt(t.today) : '—'}
