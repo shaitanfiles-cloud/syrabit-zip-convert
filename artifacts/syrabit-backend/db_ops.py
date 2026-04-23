@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "_THREAD_POOL", "_pg_row", "_pg_rows", "_pg_user_cols", "_supa", "_supa_mirror",
     "_ALLOWED_CONV_COLUMNS", "_ALLOWED_SETTINGS_COLUMNS", "_ALLOWED_USER_COLUMNS",
-    "atomic_deduct_credit", "supa_clear_activity_log", "supa_count_conversations",
+    "atomic_deduct_credit", "atomic_deduct_ip_credit",
+    "supa_clear_activity_log", "supa_count_conversations",
     "supa_count_users", "supa_create_password_reset", "supa_delete_conversation",
     "supa_delete_notification", "supa_delete_password_reset", "supa_get_activity_logs",
     "supa_get_all_conversations", "supa_get_conversation", "supa_get_conversations",
@@ -289,6 +290,41 @@ def _redis_atomic_deduct(client, key: str, seed: int, limit: int, ttl: int) -> i
         except AttributeError:
             return int(client.eval(_REDIS_DEDUCT_LUA, 1, key, seed, limit, ttl))
     return int(cached(keys=[key], args=[seed, limit, ttl]))
+
+
+def atomic_deduct_ip_credit(ip: str, daily_limit: int, window_seconds: int = 86400) -> bool:
+    """Atomically charge 1 credit against a per-IP daily quota in Redis.
+
+    Mirrors :func:`atomic_deduct_credit`'s Redis fallback: a single Lua
+    script (``_REDIS_DEDUCT_LUA``) seeds the counter to 0 with a TTL on
+    first use, then check-and-increments only when the post-increment
+    value would still be within ``daily_limit``. Concurrent callers can
+    therefore never push the counter past the limit, which is the same
+    double-spend race that Task #765 fixed for user credit ledgers.
+
+    Returns
+    -------
+    True  — credit charged, caller may proceed.
+    False — quota already exhausted (or Redis unavailable, fail-closed).
+    """
+    if not ip:
+        return False
+    if redis_client is None:
+        # Fail-closed: without Redis we cannot make the cross-worker
+        # atomic guarantee that this primitive promises. Callers that
+        # want a permissive in-memory fallback can implement it on top.
+        return False
+    from datetime import datetime, timezone
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    key = f"ip_daily_credits:{ip}:{today_str}"
+    try:
+        new_count = _redis_atomic_deduct(
+            redis_client, key, 0, int(daily_limit), int(window_seconds),
+        )
+    except Exception as e:
+        logger.warning(f"atomic_deduct_ip_credit redis failed for ip={ip}: {e}")
+        return False
+    return new_count > 0
 
 
 async def atomic_deduct_credit(uid: str, current_used: int, current_limit: int) -> bool:

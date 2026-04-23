@@ -317,4 +317,19 @@ async def rate_limit_chat_optional(
             detail="Rate limit exceeded. Sign in for higher limits.",
             headers={"Retry-After": "60"},
         )
+    # Task #768: per-IP daily quota enforced via the same atomic Lua
+    # check-and-increment used for user credit ledgers (Task #765). This
+    # is the production wiring of ``db_ops.atomic_deduct_ip_credit`` —
+    # concurrent abusers cannot push the per-IP counter past
+    # ``free_cfg["credits_per_day"]`` because the seed-if-absent and
+    # check-and-increment happen inside one Redis Lua script.
+    daily_cap = int(free_cfg.get("credits_per_day") or 30)
+    if ip and ip != "unknown":
+        from db_ops import atomic_deduct_ip_credit
+        if not atomic_deduct_ip_credit(ip, daily_limit=daily_cap):
+            raise HTTPException(
+                status_code=429,
+                detail=f"Daily free quota exhausted ({daily_cap} requests/day). Sign in for higher limits — resets at midnight UTC.",
+                headers={"Retry-After": "3600", "X-RateLimit-Limit": str(daily_cap)},
+            )
     return None
