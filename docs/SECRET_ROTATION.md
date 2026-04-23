@@ -58,8 +58,18 @@ railway variables set D1_SYNC_SECRET="$NEW"
 # 2. Worker
 cd workers/edge-proxy && echo "$NEW" | wrangler secret put D1_SYNC_SECRET
 
-# 3. Replit Secrets + .dev.vars (local parity)
-echo "D1_SYNC_SECRET=$NEW" > workers/edge-proxy/.dev.vars
+# 3. Cloud Run (if the backend is deployed there too)
+gcloud secrets versions add d1-sync-secret --data-file=- <<< "$NEW"
+gcloud run services update syrabit-backend \
+  --update-secrets D1_SYNC_SECRET=d1-sync-secret:latest
+
+# 4. Replit Secrets — set via the Secrets pane (do NOT echo to a file).
+
+# 5. Local .dev.vars — APPEND or replace the single line, do not
+#    overwrite the whole file (it may hold BACKEND_URL, PAGES_ORIGIN,
+#    BACKEND_ORIGIN_SECRET, etc. for `wrangler dev`):
+sed -i.bak '/^D1_SYNC_SECRET=/d' workers/edge-proxy/.dev.vars 2>/dev/null || true
+echo "D1_SYNC_SECRET=$NEW" >> workers/edge-proxy/.dev.vars
 ```
 
 **Direction of break:** if the worker has an old value, nightly D1
@@ -121,8 +131,17 @@ might be hours later — silent).
 
 ```bash
 NEW=$(openssl rand -hex 32)
+
+# 1. Worker (accepts new value)
 echo "$NEW" | wrangler secret put EDGE_AI_FALLBACK_SECRET
+
+# 2. Backend — Railway
 railway variables set WORKERS_AI_FALLBACK_SECRET="$NEW"
+
+# 2b. Backend — Cloud Run (if both backends are live in parallel)
+gcloud secrets versions add workers-ai-fallback-secret --data-file=- <<< "$NEW"
+gcloud run services update syrabit-backend \
+  --update-secrets WORKERS_AI_FALLBACK_SECRET=workers-ai-fallback-secret:latest
 ```
 
 ### 1.4 `JWT_SECRET` and `ADMIN_JWT_SECRET`
