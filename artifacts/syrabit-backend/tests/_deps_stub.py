@@ -206,8 +206,21 @@ def install_deps_stub(*, force: bool = False, db: Any = None,
     # honour even on in-place reuse.
     if db is not None or not hasattr(deps, "db"):
         deps.db = db if db is not None else _MotorDbMock()
-    _set("is_mongo_available",
-         AsyncMock(return_value=is_mongo_available_value))
+    # ``is_mongo_available`` MUST honour the caller's parameter on
+    # every call (some tests, e.g. tests/test_chapter_by_slug_regression
+    # .py, force a re-install with ``is_mongo_available_value=True``).
+    # On in-place reuse: mutate the existing AsyncMock's return_value
+    # so the *identity* of ``deps.is_mongo_available`` stays stable
+    # for any route that captured it via ``from deps import
+    # is_mongo_available``, while the value still tracks the latest
+    # caller intent.
+    existing_ima = getattr(deps, "is_mongo_available", None)
+    if isinstance(existing_ima, AsyncMock):
+        existing_ima.return_value = is_mongo_available_value
+    else:
+        deps.is_mongo_available = AsyncMock(
+            return_value=is_mongo_available_value
+        )
     _set("mark_mongo_down", MagicMock())
 
     # Redis / auth / supa surface — every name some production module
