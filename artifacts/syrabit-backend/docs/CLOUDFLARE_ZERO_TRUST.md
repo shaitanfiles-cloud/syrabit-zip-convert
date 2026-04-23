@@ -30,6 +30,71 @@ The code-side enforcement is implemented in
 
 ---
 
+## 0. Operator activation checklist (Task #705)
+
+Task #702 shipped the *code-side* gate on `/api/admin/login` (fail-closed
+503 if the env vars are partially set, 401 if the JWT is missing) plus
+the regression tests. **Until an operator completes the steps below in
+production, the protection is a no-op** — `/api/admin/login` is still
+reachable on the bare Railway URL with only the origin shared secret.
+
+This checklist must be executed by someone with **both** Cloudflare
+dashboard access **and** Railway env access. The agent cannot perform
+any of these steps. Tick each item in the rollout ticket:
+
+- [ ] **Zero Trust team domain live.** Cloudflare dashboard → Zero Trust
+  is enabled on the syrabit account and the team domain
+  `https://syrabit.cloudflareaccess.com` resolves. (See §1.)
+- [ ] **Google IdP confirmed.** Zero Trust → Settings → Authentication
+  shows Google as a login method and a test login from an
+  `@syrabit.ai` account succeeds end-to-end. (See §1.)
+- [ ] **"Syrabit Admin" Access app exists.** Self-hosted Access app
+  covers `syrabit.ai/admin*` **and** `api.syrabit.ai/api/admin*`,
+  bound to the `syrabit-admins` group. (See §2.)
+- [ ] **AUD tag copied.** From the Access app overview page, copy the
+  Application Token AUD tag (sha256 hex). This is the value for
+  `CF_ACCESS_AUD_ADMIN`.
+- [ ] **(Optional) Internal Access app + AUD tag.** Only required once
+  `/api/_internal/*` routes ship; the env var can be left unset
+  until then (the dependency is a no-op when the AUD is empty).
+- [ ] **All four env vars set on Railway production** (Project →
+  syrabit-backend → Variables):
+  ```
+  CF_ACCESS_TEAM_DOMAIN=syrabit
+  CF_ACCESS_AUD_ADMIN=<admin app AUD tag>
+  CF_ACCESS_AUD_INTERNAL=<internal app AUD tag, or leave unset>
+  CF_ACCESS_ENFORCE=true
+  ```
+  > Set `CF_ACCESS_ENFORCE=true` **last**, after the AUD tag is in
+  > place. If `CF_ACCESS_ENFORCE=true` but `CF_ACCESS_AUD_ADMIN` is
+  > empty, the backend fails closed with a 503 on every admin request
+  > (intentional — see `cf_access._fail_closed_if_misconfigured`).
+- [ ] **FastAPI restarted.** Railway → syrabit-backend → Deployments →
+  Restart (or trigger a redeploy). Required because env vars are
+  read at process start.
+- [ ] **Diagnostics confirms enforcement is on.** From an authenticated
+  admin browser session:
+  ```
+  GET https://api.syrabit.ai/admin/diagnostics
+  ```
+  Response must include `"admin_enforced": true` and
+  `"admin_aud_configured": true`. If `admin_enforced` is `false`,
+  one of the four env vars is missing or the service was not
+  restarted.
+- [ ] **Bare-origin bypass returns 401 on `/api/admin/login`.** Run the
+  curl in §6 step 3 against the **bare Railway URL** (e.g.
+  `https://syrabit-backend-production.up.railway.app`) with the
+  `X-Origin-Auth` header set but **no** `Cf-Access-Jwt-Assertion`
+  header. Expected status: `401`. This is the regression check that
+  proves Task #702's gate on the login route is actually live in
+  production — not just in the test suite.
+
+Once every box is ticked, Task #705 is done. File the completed
+checklist (with the diagnostics JSON and the curl output) in the
+ops log so the next on-call can audit the rollout.
+
+---
+
 ## 1. One-time Zero Trust setup (Cloudflare dashboard)
 
 1. **Enable Zero Trust** on the Cloudflare account (free tier covers up
@@ -107,10 +172,11 @@ accepts traffic from the tunnel.
   findings into the existing notification pipeline using the webhook
   in admin/notifications.
 
-## 5. Backend env vars (Railway / Cloud Run / `.env`)
+## 5. Backend env vars (Railway production — and `.env` for local)
 
-Set on the FastAPI service. **All four must be set before flipping
-enforcement on**:
+Set on the FastAPI service in **Railway → syrabit-backend → Variables**
+(or in `.env` for local development). **All four must be set before
+flipping enforcement on**:
 
 ```
 CF_ACCESS_TEAM_DOMAIN=syrabit            # without the .cloudflareaccess.com suffix
@@ -151,11 +217,35 @@ cloudflared access curl \
   --service-token-secret "$CF_SERVICE_TOKEN_SECRET" \
   https://api.syrabit.ai/api/_internal/health
 
-# 3. Origin bypass attempt → must be 401
+# 3. Origin bypass attempt → must be 401 (run against the BARE Railway
+#    URL, not api.syrabit.ai, so you actually skip the Cloudflare edge)
+RAILWAY_URL="https://syrabit-backend-production.up.railway.app"
+
+curl -sS -X POST \
+     -H "X-Origin-Auth: $ORIGIN_SHARED_SECRET" \
+     -H "Content-Type: application/json" \
+     -d '{"email":"x@x","password":"x"}' \
+     "$RAILWAY_URL/api/admin/login" \
+  -o /dev/null -w '%{http_code}\n'    # expected: 401 (Task #702 gate)
+
 curl -sS -H "X-Origin-Auth: $ORIGIN_SHARED_SECRET" \
-     https://syrabit-backend-xxx.a.run.app/api/admin/users \
+     "$RAILWAY_URL/api/admin/users" \
   -o /dev/null -w '%{http_code}\n'    # expected: 401
+
+# 4. Enforcement state introspection (no auth required for the JSON
+#    body itself; reachable through the Access challenge in a browser)
+curl -sS https://api.syrabit.ai/admin/diagnostics | jq
+# expected (post-rollout):
+#   "admin_enforced": true,
+#   "admin_aud_configured": true,
+#   "team_domain": "syrabit"
 ```
+
+If step 3 returns `200` or a credentials-error JSON instead of `401`,
+**stop the rollout** — it means either `CF_ACCESS_ENFORCE` is not
+`true` in the running process (env var not set, or the service was not
+restarted after setting it) or the AUD env var is empty. Re-check §0
+and §5 before continuing.
 
 ## 7. Operational runbook
 
