@@ -586,7 +586,18 @@ async def stripe_webhook(request: StarletteRequest2):
                 # it on the supa side.
                 wh_user = await db.users.find_one({"id": user_id}) or {}
                 wh_current_plan = wh_user.get("plan", "free")
-                wh_prev_credits = int(wh_user.get("credits_limit", 0))
+                # Defensive cast: a stale row could carry None or a
+                # stringified int (legacy import). Crashing the webhook
+                # over a numeric anomaly would force Stripe into
+                # at-least-once retry hell — fall back to 0 instead.
+                try:
+                    wh_prev_credits = int(wh_user.get("credits_limit") or 0)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        f"Stripe webhook: non-numeric credits_limit on user={user_id} "
+                        f"(value={wh_user.get('credits_limit')!r}) — treating as 0"
+                    )
+                    wh_prev_credits = 0
                 if PLAN_RANK_MAP.get(plan, 0) < PLAN_RANK_MAP.get(wh_current_plan, 0):
                     logger.warning(
                         f"Stripe webhook: skipping downgrade {wh_current_plan}→{plan} "
