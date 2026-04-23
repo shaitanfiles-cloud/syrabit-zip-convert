@@ -246,11 +246,16 @@ def test_dashboard_snapshot_uses_explicit_consecutive_failures():
 def test_admin_probe_status_route_registered():
     """The admin tile depends on GET /admin/vertex/probe-status returning
     the cache snapshot. Verify the route is defined and reads from
-    vertex_health_cache.dashboard_snapshot."""
+    vertex_health_cache.dashboard_snapshot.
+
+    The /admin/vertex/* routes were carved out of cms_sarvam_health.py
+    into their own module during the admin-panel audit (Task #5);
+    this test now reads from the new home.
+    """
     route_src = (
         pathlib.Path(__file__).resolve().parent.parent
         / "routes"
-        / "cms_sarvam_health.py"
+        / "admin_vertex.py"
     ).read_text(encoding="utf-8")
     assert '"/admin/vertex/probe-status"' in route_src
     assert "dashboard_snapshot" in route_src

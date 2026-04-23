@@ -1,4 +1,109 @@
-"""Syrabit.ai — CMS documents, Sarvam AI, health checks, studio"""
+"""Syrabit.ai — CMS documents, Sarvam AI, health checks, studio, and assorted admin utilities.
+
+This file is the historical home for ~55 admin/public routes spanning
+several domains. It used to also host /admin/ga4/* and /admin/vertex/*;
+those were carved into ``routes/admin_ga4.py`` and ``routes/admin_vertex.py``
+during the admin-panel audit (Task #5) — see the breadcrumb comment
+near the bottom of this file. Further carve-outs (analytics, studio,
+dashboard, workers-ai) are tracked but deferred — the test suite pins
+several private symbols here (``_record_assamese_run``, ``_scrub_pii``,
+``_ASM_REFRESH_INTERVAL_SECONDS``, ``derive_bot_cache_key``,
+``BotRenderMiddleware``, ``CmsNoIndexMiddleware``) so any further split
+must move the helpers in lockstep with their tests.
+
+Route catalog (all paths have the ``/api`` prefix added by server.py):
+
+  CMS DOCUMENTS (admin) ── 14 routes ────────────────────────────────
+    GET    /admin/content/cms-documents/merged-subject-ids
+    GET    /admin/content/cms-documents/seo-topics-subject-ids
+    GET    /admin/content/cms-documents/assets-generated-subject-ids
+    GET    /admin/content/cms-documents
+    POST   /admin/content/cms-documents
+    PATCH  /admin/content/cms-documents/{doc_id}
+    PUT    /admin/content/cms-documents/{doc_id}
+    POST   /admin/content/cms-documents/{doc_id}/publish
+    POST   /admin/content/cms-documents/{doc_id}/link-syllabus
+    POST   /admin/content/cms-documents/{doc_id}/revisions
+    POST   /admin/content/extract-pdf-text
+    DELETE /admin/content/cms-documents/{doc_id}
+    POST   /admin/content/cms-documents/{doc_id}/process-rag
+    POST   /admin/upload/image
+
+  CMS PUBLIC + LEGACY MERGE ── 9 routes ─────────────────────────────
+    GET    /content/cms-library
+    GET    /content/cms-documents/{doc_id}
+    GET    /cms/posts
+    GET    /cms/post/{subject_id}
+    GET    /cms/{user_id}
+    GET    /cms/{user_id}/{slug}
+    POST   /cms/personalize
+    POST   /admin/cms/merge/{subject_id}
+    POST   /admin/cms/merge-by-chapter/{subject_id}
+
+  CONTENT / SYLLABUS PDF ── 5 routes ────────────────────────────────
+    POST   /admin/content/regenerate-sitemap
+    POST   /admin/content/upload-pdf
+    GET    /content/documents/{document_id}
+    GET    /content/subject-documents/{subject_id}
+    DELETE /admin/content/documents/{document_id}
+    DELETE /admin/syllabus/reset-all
+
+  HEALTH / METRICS / AI CACHE ── 6 routes ───────────────────────────
+    GET    /ready
+    GET    /health
+    GET    /metrics
+    GET    /metrics/history
+    GET    /ai/cache/stats
+    POST   /ai/cache/purge
+    GET    /admin/workers-ai/status
+    POST   /admin/workers-ai/kill-switch
+
+  SARVAM (TTS / Translate / Transliterate / Status) ── 4 routes ─────
+    GET    /sarvam/status
+    POST   /sarvam/translate
+    POST   /sarvam/tts
+    POST   /sarvam/transliterate
+    GET    /admin/translation/languages
+
+  ASSAMESE PURITY (admin) ── 8 routes ───────────────────────────────
+    GET    /admin/assamese-purity
+    PATCH  /admin/assamese-purity
+    DELETE /admin/assamese-purity
+    GET    /admin/assamese-purity/audit
+    POST   /admin/assamese-purity/audit/{audit_id}/revert
+    GET    /admin/assamese-purity/stats
+    GET    /admin/assamese-purity/runs
+    POST   /admin/assamese-purity/test
+
+  DASHBOARD / ALERTS / STUDIO / SEO / ANALYTICS / AUTOMATION ───────
+    GET    /admin/dashboard/metrics
+    GET    /admin/alerts
+    PATCH  /admin/alerts/{alert_id}/acknowledge
+    PUT    /admin/alerts/thresholds
+    POST   /admin/studio/parse
+    POST   /admin/studio/publish
+    POST   /admin/seo/generate
+    GET    /admin/studio/drafts
+    POST   /admin/studio/drafts
+    DELETE /admin/studio/drafts/{draft_id}
+    POST   /admin/studio/drafts/{draft_id}/publish
+    GET    /admin/analytics/funnel
+    GET    /admin/analytics/content-heatmap
+    GET    /admin/analytics/content-card-views
+    GET    /admin/analytics/revenue
+    GET    /admin/analytics/predictor
+    GET    /admin/analytics/daily
+    GET    /admin/automation/insights        (and remaining automation routes below)
+
+Module-level helpers + middleware that other modules / tests import from here:
+  * Middleware: ``CmsNoIndexMiddleware``, ``BotRenderMiddleware``
+  * Bot rendering: ``derive_bot_cache_key``
+  * Assamese purity: ``apply_persisted_assamese_purity_override``,
+    ``_assamese_purity_refresh_loop``, ``ensure_assamese_runs_index``,
+    ``ensure_assamese_audit_index``, ``_record_assamese_run``,
+    ``_scrub_pii``, ``_snippet``, ``_ASM_SNIPPET_MAX_CHARS``,
+    ``_ASM_REFRESH_INTERVAL_SECONDS``
+"""
 import re, json, asyncio, time, uuid, logging, hashlib, os, html as _html_mod
 from typing import Optional, List
 from datetime import datetime, timezone, timedelta
@@ -5151,228 +5256,12 @@ async def admin_analytics_daily(
 
 
 # ─────────────────────────────────────────────
-# GOOGLE ANALYTICS 4 OAUTH SETUP
-# ─────────────────────────────────────────────
-@router.get("/admin/ga4/status")
-async def ga4_status(admin: dict = Depends(get_admin_user)):
-    token_env = os.getenv("GA4_REFRESH_TOKEN", "")
-    # Also check db.api_config in case token was persisted there
-    token_db = ""
-    try:
-        cfg = await db.api_config.find_one({}, {"ga4": 1})
-        token_db = (cfg or {}).get("ga4", {}).get("refresh_token", "")
-    except Exception:
-        pass
-    connected = bool(token_env or token_db)
-    return {
-        "connected": connected,
-        "token_source": "env" if token_env else ("db" if token_db else "none"),
-        "property_id": os.getenv("GA4_PROPERTY_ID", ""),
-        "client_id_set": bool(os.getenv("GOOGLE_OAUTH_CLIENT_ID")),
-        "client_secret_set": bool(os.getenv("GOOGLE_CLIENT_SECRET")),
-    }
-
-
-@router.get("/admin/ga4/auth-url")
-async def ga4_auth_url(redirect_uri: str, admin: dict = Depends(get_admin_user)):
-    url = ga4_client.get_oauth_url(redirect_uri)
-    return {"url": url}
-
-
-@router.post("/admin/ga4/connect")
-async def ga4_connect(
-    code: str = Body(...),
-    redirect_uri: str = Body(...),
-    admin: dict = Depends(get_admin_user),
-):
-    tokens = await ga4_client.exchange_code_for_tokens(code, redirect_uri)
-    if not tokens or "refresh_token" not in tokens:
-        raise HTTPException(status_code=400, detail="Failed to exchange code — ensure you selected the correct Google account with GA4 access and that you clicked 'Allow'.")
-    refresh_token = tokens["refresh_token"]
-    # Persist to MongoDB so it survives process restarts
-    await db.api_config.update_one({}, {"$set": {"ga4.refresh_token": refresh_token}}, upsert=True)
-    # Also update current process env so GA4 works immediately without restart
-    os.environ["GA4_REFRESH_TOKEN"] = refresh_token
-    ga4_client._db_token_cache["token"] = refresh_token
-    ga4_client._db_token_cache["loaded"] = True
-    logger.info("GA4 refresh token stored in db.api_config and os.environ")
-    return {
-        "status": "connected",
-        "message": "GA4 connected. Token persisted to database — no Replit Secret needed.",
-    }
-
-
-@router.get("/admin/ga4/test")
-async def ga4_test(admin: dict = Depends(get_admin_user)):
-    stats = await ga4_client.get_visitor_stats_ga4(days=7)
-    if stats is None:
-        return {"ok": False, "reason": "GA4 not configured or refresh token missing"}
-    return {"ok": True, "stats": stats}
-
-
-# ─────────────────────────────────────────────
-# VERTEX AI / GEMINI POWERED SERVICES
+# MOVED — GA4 OAUTH SETUP → routes/admin_ga4.py        (Task #5 split)
+# MOVED — VERTEX AI / GEMINI    → routes/admin_vertex.py  (Task #5 split)
+# Both routers are mounted in server.py alongside this one;
+# all paths (/admin/ga4/*, /admin/vertex/*) and behaviour are unchanged.
 # ─────────────────────────────────────────────
 
-@router.get("/admin/vertex/health")
-async def vertex_health(admin: dict = Depends(get_admin_user)):
-    """Check status of all Vertex AI / Gemini services."""
-    return await vertex_services.health_check()
-
-
-@router.get("/admin/vertex/probe-status")
-async def vertex_probe_status(admin: dict = Depends(get_admin_user)):
-    """Task #689 — Return the cached state of the periodic Gemini health
-    probe (Task #677). Read-only: this does *not* trigger a fresh probe
-    (use ``/admin/vertex/health`` for that). Surfaces last-checked
-    timestamp, ok/fail, last reason, consecutive failure count and the
-    derived ``status`` (``ok`` / ``unknown`` / ``stale`` / ``unhealthy``)
-    so the admin dashboard can render a "Gemini upstream" tile without
-    spending a Vertex API call on every dashboard refresh.
-    """
-    import vertex_health_cache
-    return vertex_health_cache.dashboard_snapshot()
-
-
-@router.post("/admin/vertex/translate")
-async def vertex_translate(
-    text: str = Body(...),
-    target_lang: str = Body("as"),
-    source_lang: str = Body("en"),
-    admin: dict = Depends(get_admin_user),
-):
-    """Translate educational content to Assamese or other regional languages."""
-    if not text:
-        raise HTTPException(status_code=400, detail="text is required")
-    result = await vertex_services.translate(text, target_lang=target_lang, source_lang=source_lang)
-    if result is None:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Translation failed — Gemini auth now flows through the Cloudflare AI Gateway BYOK "
-                "binding (google-ai-studio / google-vertex-ai). Verify CF_AI_GATEWAY_ACCOUNT_ID, "
-                "CF_AI_GATEWAY_ID and the BYOK binding in the CF dashboard, then check "
-                "/admin/cms/sarvam-health/vertex/health. See docs/VERTEX_SETUP.md "
-                "'Migrating Railway → CF AI Gateway BYOK (Task #666)'."
-            ),
-        )
-    return {"translated": result, "target_lang": target_lang, "source_lang": source_lang}
-
-
-@router.post("/admin/vertex/semantic-search")
-async def vertex_semantic_search(
-    query: str = Body(...),
-    top_k: int = Body(10),
-    admin: dict = Depends(get_admin_user),
-):
-    """Semantic search across all published SEO topics using text embeddings."""
-    topics = await db.seo_topics.find(
-        {}, {"_id": 0, "slug": 1, "title": 1, "subject_name": 1, "class_name": 1, "status": 1}
-    ).to_list(5000)
-    results = await vertex_services.semantic_search(query, topics, text_key="title", top_k=top_k)
-    return {"query": query, "results": results, "total_searched": len(topics)}
-
-
-@router.post("/admin/vertex/enhance")
-async def vertex_enhance_content(
-    content: str = Body(...),
-    page_type: str = Body("notes"),
-    subject: str = Body(""),
-    topic: str = Body(""),
-    class_name: str = Body("Class 11"),
-    admin: dict = Depends(get_admin_user),
-):
-    """Improve AI-generated content with Gemini."""
-    if not content:
-        raise HTTPException(status_code=400, detail="content is required")
-    enhanced = await vertex_services.enhance_content(content, page_type, subject, topic, class_name)
-    if enhanced is None:
-        raise HTTPException(status_code=503, detail="Enhancement failed")
-    return {"enhanced": enhanced, "original_length": len(content), "enhanced_length": len(enhanced)}
-
-
-@router.post("/admin/vertex/quality-score")
-async def vertex_quality_score(
-    content: str = Body(...),
-    page_type: str = Body("notes"),
-    topic: str = Body(""),
-    subject: str = Body(""),
-    admin: dict = Depends(get_admin_user),
-):
-    """Score the quality of educational content with Gemini."""
-    return await vertex_services.score_content(content, page_type, topic, subject)
-
-
-@router.post("/admin/vertex/suggest-topics")
-async def vertex_suggest_topics(
-    subject: str = Body(...),
-    class_name: str = Body("Class 11"),
-    board: str = Body("AHSEC"),
-    admin: dict = Depends(get_admin_user),
-):
-    """Suggest missing high-value topics for a subject using AI."""
-    existing = await db.seo_topics.distinct(
-        "title",
-        {"subject_name": subject, "class_name": class_name}
-    )
-    suggestions = await vertex_services.suggest_topics(subject, class_name, existing, board)
-    return {"subject": subject, "class_name": class_name, "suggestions": suggestions, "existing_count": len(existing)}
-
-
-@router.post("/admin/vertex/seo-meta")
-async def vertex_seo_meta(
-    topic: str = Body(...),
-    subject: str = Body(""),
-    class_name: str = Body("Class 11"),
-    page_type: str = Body("notes"),
-    board: str = Body("AHSEC"),
-    content_preview: str = Body(""),
-    admin: dict = Depends(get_admin_user),
-):
-    """Generate optimised SEO metadata (title, description, keywords, OG tags)."""
-    meta = await vertex_services.generate_seo_meta(topic, subject, class_name, page_type, board, content_preview)
-    if not meta:
-        raise HTTPException(status_code=503, detail="SEO meta generation failed")
-    return meta
-
-
-@router.get("/admin/vertex/content-gaps")
-async def vertex_content_gaps(admin: dict = Depends(get_admin_user)):
-    """Identify high-value content gaps by cross-referencing searches with published content."""
-    published = await db.seo_topics.distinct("slug", {"status": "published"})
-
-    search_pipeline = [
-        {"$match": {"type": "search"}},
-        {"$group": {"_id": "$query", "count": {"$sum": 1}}},
-        {"$sort": {"count": -1}},
-        {"$limit": 30},
-    ]
-    top_searches = []
-    try:
-        raw = await db.analytics.aggregate(search_pipeline).to_list(30)
-        top_searches = [r["_id"] for r in raw if r.get("_id")]
-    except Exception:
-        pass
-
-    subjects = await db.seo_topics.distinct("subject_name")
-    gaps = await vertex_services.find_content_gaps(published, top_searches, subjects)
-    return {"gaps": gaps, "published_count": len(published), "search_queries_analyzed": len(top_searches)}
-
-
-@router.post("/admin/vertex/extract-document")
-async def vertex_extract_document(
-    file: UploadFile = File(...),
-    task: str = "extract_topics",
-    admin: dict = Depends(get_admin_user),
-):
-    """Extract structured data from PDF textbooks/question papers using Gemini 1.5 Pro."""
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported")
-    pdf_bytes = await file.read()
-    if len(pdf_bytes) > 20 * 1024 * 1024:  # 20MB limit
-        raise HTTPException(status_code=400, detail="PDF too large — max 20MB")
-    result = await vertex_services.extract_from_document(pdf_bytes, task=task)
-    return result
 
 
 @router.delete("/admin/syllabus/reset-all")
@@ -5396,78 +5285,6 @@ async def admin_syllabus_reset_all(admin: dict = Depends(get_admin_user)):
         "message": "All subjects and chapters cleared. Upload new syllabus via Admin → Syllabus Manager.",
     }
 
-
-@router.post("/admin/vertex/ocr")
-async def vertex_ocr(
-    file: UploadFile = File(...),
-    admin: dict = Depends(get_admin_user),
-):
-    """Cloud Vision equivalent — extract text from AHSEC question paper/textbook images using Gemini Vision."""
-    allowed = {"image/jpeg", "image/png", "image/webp", "image/gif"}
-    ct = file.content_type or ""
-    if ct not in allowed:
-        raise HTTPException(status_code=400, detail=f"Unsupported image type: {ct}. Use JPEG, PNG, or WebP.")
-    img_bytes = await file.read()
-    if len(img_bytes) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Image too large — max 10MB")
-    result = await vertex_services.ocr_image(img_bytes, mime_type=ct)
-    if "error" in result:
-        raise HTTPException(status_code=503, detail=result["error"])
-    return result
-
-
-@router.post("/admin/vertex/nlp-concepts")
-async def vertex_nlp_concepts(
-    text: str = Body(...),
-    subject: str = Body(""),
-    class_name: str = Body("Class 11"),
-    admin: dict = Depends(get_admin_user),
-):
-    """Cloud Natural Language equivalent — extract key concepts, entities and difficulty from educational text."""
-    if not text or len(text.strip()) < 50:
-        raise HTTPException(status_code=400, detail="text must be at least 50 characters")
-    result = await vertex_services.extract_key_concepts(text, subject=subject, class_name=class_name)
-    if "error" in result:
-        raise HTTPException(status_code=503, detail=result["error"])
-    return result
-
-
-@router.post("/admin/vertex/flashcards")
-async def vertex_flashcards(
-    text: str = Body(...),
-    subject: str = Body(""),
-    class_name: str = Body("Class 11"),
-    count: int = Body(10),
-    admin: dict = Depends(get_admin_user),
-):
-    """Generate revision flashcards from chapter content for students."""
-    if not text or len(text.strip()) < 100:
-        raise HTTPException(status_code=400, detail="text must be at least 100 characters")
-    count = max(5, min(count, 20))
-    result = await vertex_services.generate_flashcards(text, subject=subject, count=count, class_name=class_name)
-    if "error" in result:
-        raise HTTPException(status_code=503, detail=result["error"])
-    return result
-
-
-@router.post("/admin/vertex/mcq-generator")
-async def vertex_mcq_generator(
-    text: str = Body(...),
-    subject: str = Body(""),
-    class_name: str = Body("Class 11"),
-    count: int = Body(10),
-    difficulty: str = Body("mixed"),
-    admin: dict = Depends(get_admin_user),
-):
-    """Generate AHSEC-pattern MCQ questions from chapter text."""
-    if not text or len(text.strip()) < 100:
-        raise HTTPException(status_code=400, detail="text must be at least 100 characters")
-    count = max(5, min(count, 20))
-    result = await vertex_services.generate_mcqs(text, subject=subject, class_name=class_name,
-                                                  count=count, difficulty=difficulty)
-    if "error" in result:
-        raise HTTPException(status_code=503, detail=result["error"])
-    return result
 
 
 # ─────────────────────────────────────────────

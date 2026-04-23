@@ -1215,6 +1215,11 @@ from routes.admin_settings import router as admin_settings_router
 from routes.admin_notifications import router as admin_notifications_router
 from routes.admin_monetization import router as admin_monetization_router
 from routes.cms_sarvam_health import router as cms_sarvam_health_router
+# Carved out of cms_sarvam_health.py (admin-panel audit Task #5) so the
+# routes live in files whose name reflects what they do. Paths
+# (/admin/ga4/*, /admin/vertex/*) and behaviour are unchanged.
+from routes.admin_ga4 import router as admin_ga4_router
+from routes.admin_vertex import router as admin_vertex_router
 from routes.admin_advanced import router as admin_advanced_router
 from routes.admin_retriever import router as admin_retriever_router
 from routes.admin_benchmark import router as admin_benchmark_router
@@ -1243,6 +1248,8 @@ api.include_router(admin_settings_router)
 api.include_router(admin_notifications_router)
 api.include_router(admin_monetization_router)
 api.include_router(cms_sarvam_health_router)
+api.include_router(admin_ga4_router)
+api.include_router(admin_vertex_router)
 api.include_router(admin_advanced_router)
 api.include_router(admin_retriever_router)
 api.include_router(admin_benchmark_router)
