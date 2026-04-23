@@ -15,8 +15,10 @@ import os
 import time
 from typing import Any, Dict, Optional
 
+import hmac
+
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Body, Header, HTTPException
 
 logger = logging.getLogger(__name__)
 
@@ -325,17 +327,13 @@ async def _get_trustpilot_aggregate_cached() -> Dict[str, Any]:
                         "ageSeconds": int(time.time() - cached_ts)}
             return {"ratingValue": None, "ratingCount": None, "cached": False}
 
-        _tp_aggregate_cache["payload"] = fresh
-        _tp_aggregate_cache["ts"] = time.time()
-        _tp_aggregate_cache["fail_ts"] = 0.0
-        _tp_aggregate_cache["first_fail_ts"] = 0.0
-        _tp_aggregate_cache["last_error"] = None
         # Mirror success into the shared health doc so the alerter sees
         # a fresh global last-success even if the leader replica's local
-        # cache is cold (Task #728). Fire-and-forget.
-        asyncio.create_task(_persist_tp_health_success(
-            _tp_aggregate_cache["ts"],
-        ))
+        # cache is cold (Task #728). Fire-and-forget inside the helper.
+        _store_aggregate_in_cache(
+            fresh["ratingValue"], fresh["ratingCount"],
+            fresh.get("bestRating", 5), fresh.get("worstRating", 1),
+        )
         return {**fresh, "cached": False, "ageSeconds": 0}
 
 
@@ -462,6 +460,103 @@ async def get_trustpilot_global_health() -> Dict[str, Any]:
         ),
         "lastError": doc.get("last_error"),
         "global": True,
+    }
+
+
+def _store_aggregate_in_cache(
+    rating_value: float,
+    rating_count: int,
+    best_rating: int = 5,
+    worst_rating: int = 1,
+) -> Dict[str, Any]:
+    """Write a fresh aggregate into the in-process cache.
+
+    Used by both the live-fetch path and the off-host refresh webhook
+    (Task #749 — when this container's egress is WAF-blocked, an
+    external cron POSTs values it fetched from a non-blocked IP).
+    Resets failure bookkeeping and mirrors success into the shared
+    health doc so the >24h staleness alert clears.
+    """
+    payload = {
+        "ratingValue": round(float(rating_value), 2),
+        "ratingCount": int(rating_count),
+        "bestRating": int(best_rating),
+        "worstRating": int(worst_rating),
+    }
+    _tp_aggregate_cache["payload"] = payload
+    _tp_aggregate_cache["ts"] = time.time()
+    _tp_aggregate_cache["fail_ts"] = 0.0
+    _tp_aggregate_cache["first_fail_ts"] = 0.0
+    _tp_aggregate_cache["last_error"] = None
+    asyncio.create_task(_persist_tp_health_success(_tp_aggregate_cache["ts"]))
+    return payload
+
+
+@router.post("/api/config/trustpilot/aggregate/refresh")
+async def refresh_trustpilot_aggregate(
+    body: Dict[str, Any] = Body(...),
+    x_trustpilot_refresh_secret: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Externally-triggered refresh of the in-process Trustpilot cache.
+
+    Task #749 — the production container's egress is WAF-blocked from
+    Trustpilot's CloudFront, so the backend's own
+    :func:`_fetch_trustpilot_aggregate_remote` always fails and the
+    >24h staleness alert fires. A scheduled job that runs from a host
+    Trustpilot does not block (GitHub Actions runner) fetches the
+    Business API itself and POSTs the values here so this replica's
+    cache (and the shared health doc) stay current.
+
+    Auth: shared secret in the ``X-Trustpilot-Refresh-Secret`` header,
+    matched against ``TRUSTPILOT_REFRESH_SECRET``. Returns 503 when the
+    secret env var isn't configured (so a forgotten-secret deploy
+    fails closed instead of accepting anonymous writes), 401 on
+    mismatch, 422 on invalid payload.
+    """
+    expected = (os.environ.get("TRUSTPILOT_REFRESH_SECRET") or "").strip()
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="trustpilot_refresh_secret_not_configured",
+        )
+    provided = (x_trustpilot_refresh_secret or "").strip()
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="invalid_refresh_secret")
+
+    try:
+        rating_value = float(body.get("ratingValue"))
+        rating_count = int(body.get("ratingCount"))
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=422,
+            detail="ratingValue (number) and ratingCount (int) are required",
+        )
+    if not (rating_value > 0 and rating_count > 0):
+        raise HTTPException(
+            status_code=422,
+            detail="ratingValue and ratingCount must be positive",
+        )
+
+    def _safe_int(value: Any, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    best = _safe_int(body.get("bestRating"), 5)
+    worst = _safe_int(body.get("worstRating"), 1)
+
+    payload = _store_aggregate_in_cache(rating_value, rating_count, best, worst)
+    logger.info(
+        "trustpilot aggregate refreshed via webhook: %s★ (%d reviews) source=%s",
+        payload["ratingValue"], payload["ratingCount"],
+        (body.get("source") or "external_webhook"),
+    )
+    return {
+        "ok": True,
+        **payload,
+        "ageSeconds": 0,
+        "source": body.get("source") or "external_webhook",
     }
 
 
