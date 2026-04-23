@@ -530,7 +530,10 @@ def test_stripe_webhook_invoice_paid_renewal_tops_up_credits(
 ):
     """Subscription renewal: `invoice.paid` for a known plan must
     add the same credit grant *without* re-flipping the plan column
-    (the user already owns it) and must be idempotent on invoice id."""
+    (the user already owns it), must mirror to Postgres, must
+    invalidate the Redis session so the new credit balance shows
+    up on the user's next request, and must be idempotent on
+    invoice id (covered by the duplicate test below)."""
     _reset_collections()
     event = {
         "type": "invoice.paid",
@@ -546,6 +549,18 @@ def test_stripe_webhook_invoice_paid_renewal_tops_up_credits(
         }},
     }
     _install_fake_stripe(monkeypatch, event)
+    # Parity with checkout coverage: assert pg + redis side-effects
+    # also fire on the renewal path.
+    pg_conn = AsyncMock(name="pg_conn")
+    pg_conn.execute = AsyncMock(return_value=None)
+    class _AcquireCtx:
+        async def __aenter__(self_inner): return pg_conn
+        async def __aexit__(self_inner, *a): return None
+    pg_pool = MagicMock(name="pg_pool")
+    pg_pool.acquire = MagicMock(return_value=_AcquireCtx())
+    monkeypatch.setattr(deps, "pg_pool", pg_pool)
+    redis_invalidate = MagicMock(name="_redis_invalidate_session")
+    monkeypatch.setattr(mon, "_redis_invalidate_session", redis_invalidate)
 
     req = _DummyRequest(b"{}", headers={"stripe-signature": "t=0,v1=signed"})
     out = _run(mon.stripe_webhook(req))
@@ -565,6 +580,17 @@ def test_stripe_webhook_invoice_paid_renewal_tops_up_credits(
     upd = deps.db.users.update_one.await_args.args[1]
     assert "plan" not in upd["$set"]
     assert upd["$inc"]["credits_limit"] == mon.PLAN_CREDITS["pro"]
+    # Postgres mirror: increment-only, no plan update.
+    pg_conn.execute.assert_awaited_once()
+    pg_args = pg_conn.execute.await_args.args
+    assert "UPDATE users" in pg_args[0]
+    assert "credits_limit=credits_limit+$1" in pg_args[0]
+    assert "plan=" not in pg_args[0]
+    assert pg_args[1] == mon.PLAN_CREDITS["pro"]
+    assert pg_args[3] == "u-paying"
+    # Session cache invalidated so the new credit balance is visible
+    # on the user's next API call.
+    redis_invalidate.assert_called_once_with("u-paying")
 
 
 def test_stripe_webhook_invoice_paid_duplicate_is_idempotent(
