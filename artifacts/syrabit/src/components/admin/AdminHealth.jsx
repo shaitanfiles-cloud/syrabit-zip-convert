@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi, Copy, Check, Users, Activity, MessageSquare, TrendingUp, DollarSign, BarChart2, RotateCw, Clock, Undo2 } from 'lucide-react';
+import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi, Copy, Check, Users, Activity, MessageSquare, TrendingUp, DollarSign, BarChart2, RotateCw, Clock, Undo2, Star, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import AdminQuickLinks from './AdminQuickLinks';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar } from 'recharts';
@@ -179,6 +179,30 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   const [prerender, setPrerender] = useState(null);
   const [prerenderLoading, setPrerenderLoading] = useState(false);
   const [prerenderTriggering, setPrerenderTriggering] = useState(false);
+
+  // Task #750 — Trustpilot AggregateRating JSON-LD verifier report.
+  // Polled on the same cadence as other infra widgets so a regression
+  // (build-time inject + daily prod re-check) shows up here without
+  // ops/marketing having to read GitHub Actions failure email.
+  const [tpJsonldReport, setTpJsonldReport] = useState(null);
+  const [tpJsonldLoading, setTpJsonldLoading] = useState(false);
+
+  const loadTpJsonldReport = useCallback(() => {
+    setTpJsonldLoading(true);
+    axios.get(`${API_BASE}/admin/trustpilot-jsonld/report`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setTpJsonldReport(r.data))
+      .catch(() => setTpJsonldReport({ _error: true }))
+      .finally(() => setTpJsonldLoading(false));
+  }, [adminToken]);
+
+  useEffect(() => {
+    if (!adminToken) return;
+    loadTpJsonldReport();
+    const id = setInterval(loadTpJsonldReport, 60000);
+    return () => clearInterval(id);
+  }, [adminToken, loadTpJsonldReport]);
 
   // Task #609 — managed AI response cache stats + admin purge controls.
   const [aiCacheStats, setAiCacheStats] = useState(null);
@@ -1698,6 +1722,133 @@ export default function AdminHealth({ adminToken, onNavigate }) {
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
+        </SectionErrorBoundary>
+
+        <SectionErrorBoundary name="Trustpilot JSON-LD Coverage">
+        {(() => {
+          // Task #750 — pass/fail per URL from the daily verifier
+          // (.github/workflows/trustpilot-jsonld-prod.yml). Tile turns
+          // red when ANY URL failed the latest scheduled run, so a
+          // SERP-star regression surfaces here, not just in CI email.
+          const data = tpJsonldReport && !tpJsonldReport._error
+            ? tpJsonldReport
+            : null;
+          const configured = !!data?.configured;
+          const report = data?.report || null;
+          const failed = report?.failed ?? 0;
+          const total = report?.totalUrls ?? (report?.results?.length || 0);
+          const tileFailed = configured && report && (failed > 0 || report.ok === false);
+          const tileUnknown = !configured || !report;
+          const containerCls = tileFailed
+            ? 'bg-red-50 border-red-200'
+            : tileUnknown
+              ? 'bg-gray-50 border-gray-200'
+              : 'bg-emerald-50 border-emerald-200';
+          const headerColor = tileFailed
+            ? 'text-red-600'
+            : tileUnknown
+              ? 'text-gray-500'
+              : 'text-emerald-600';
+          let timestampLabel = 'never';
+          if (report?.generatedAt) {
+            try {
+              const ts = new Date(report.generatedAt);
+              const diff = Math.max(0, Math.floor((Date.now() - ts.getTime()) / 1000));
+              if (diff < 60) timestampLabel = `${diff}s ago`;
+              else if (diff < 3600) timestampLabel = `${Math.floor(diff / 60)}m ago`;
+              else if (diff < 86400) timestampLabel = `${Math.floor(diff / 3600)}h ago`;
+              else timestampLabel = `${Math.floor(diff / 86400)}d ago`;
+            } catch { /* keep default */ }
+          }
+          return (
+            <div className={`rounded-2xl p-4 border ${containerCls}`} data-testid="trustpilot-jsonld-tile">
+              <div className="flex items-center gap-3 mb-3">
+                {tileFailed
+                  ? <AlertTriangle size={18} className="text-red-500" />
+                  : tileUnknown
+                    ? <Star size={18} className="text-gray-400" />
+                    : <Star size={18} className="text-emerald-500" />}
+                <div className="flex-1 min-w-0">
+                  <p className={`text-sm font-semibold ${headerColor}`} data-testid="trustpilot-jsonld-status">
+                    {tileUnknown
+                      ? 'Trustpilot JSON-LD coverage — no verifier run yet'
+                      : tileFailed
+                        ? `Trustpilot JSON-LD coverage — ${failed}/${total} URL${failed === 1 ? '' : 's'} failed`
+                        : `Trustpilot JSON-LD coverage — all ${total} URL${total === 1 ? '' : 's'} pass`}
+                  </p>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    Last run {timestampLabel}
+                    {report?.target ? ` · target=${report.target}` : ''}
+                    {report?.origin ? ` · ${report.origin}` : ''}
+                  </p>
+                </div>
+                {report?.runUrl && (
+                  <a
+                    href={report.runUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[11px] text-violet-600 hover:text-violet-700 inline-flex items-center gap-1"
+                    data-testid="trustpilot-jsonld-run-link"
+                    title="Open the GitHub Actions run that produced this report"
+                  >
+                    Run <ExternalLink size={11} />
+                  </a>
+                )}
+                <button
+                  onClick={loadTpJsonldReport}
+                  disabled={tpJsonldLoading}
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-white/60"
+                  data-testid="button-refresh-trustpilot-jsonld"
+                  title="Refresh"
+                >
+                  <RefreshCw size={13} className={tpJsonldLoading ? 'animate-spin' : ''} />
+                </button>
+              </div>
+              {tileUnknown ? (
+                <p className="text-[11px] text-gray-500 leading-relaxed">
+                  The daily <code className="font-mono">trustpilot-jsonld-prod</code> workflow will publish per-URL pass/fail here once it runs (06:00 UTC). Until then, treat the build-time inject step as the source of truth.
+                </p>
+              ) : (
+                <div className="overflow-x-auto" data-testid="trustpilot-jsonld-table">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-100">
+                        <th className="py-1.5 pr-3 font-bold">URL</th>
+                        <th className="py-1.5 pr-3 font-bold">HTTP</th>
+                        <th className="py-1.5 pr-3 font-bold">Pass</th>
+                        <th className="py-1.5 font-bold">Detail</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(report.results || []).map((r, idx) => (
+                        <tr key={`${r.url}-${idx}`} className="border-b border-gray-50" data-testid={`trustpilot-jsonld-row-${idx}`}>
+                          <td className="py-1.5 pr-3 font-mono text-gray-700">{r.url}</td>
+                          <td className="py-1.5 pr-3 font-mono text-gray-500">{r.status ?? '—'}</td>
+                          <td className="py-1.5 pr-3">
+                            <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              r.pass
+                                ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
+                                : 'bg-red-50 text-red-600 border border-red-200'
+                            }`}>
+                              {r.pass ? 'PASS' : 'FAIL'}
+                            </span>
+                          </td>
+                          <td className="py-1.5 text-gray-600 font-mono text-[11px]">
+                            {r.pass
+                              ? (r.ratingValue != null && r.reviewCount != null
+                                  ? `${r.ratingValue}★ · ${r.reviewCount} reviews`
+                                  : '—')
+                              : (r.reason || 'fail')}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          );
+        })()}
         </SectionErrorBoundary>
 
         <SectionErrorBoundary name="Live Traffic Stats">

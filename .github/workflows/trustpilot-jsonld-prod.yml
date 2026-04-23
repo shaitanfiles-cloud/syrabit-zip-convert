@@ -42,7 +42,74 @@ jobs:
         with:
           node-version: "20"
 
+      # Task #750 — write the report to disk first (does NOT fail the
+      # job on its own; we still want the JSON to upload + the dashboard
+      # to update even when verification failed). The "Fail job" step
+      # below re-asserts the verifier's exit code so the existing pager
+      # behaviour is unchanged.
       - name: Verify Trustpilot JSON-LD on production origin
-        run: node artifacts/syrabit/scripts/verify-trustpilot-jsonld.mjs --target=remote
+        id: verify
+        continue-on-error: true
         env:
           TARGET_ORIGIN: "https://syrabit.ai"
+        run: |
+          set +e
+          node artifacts/syrabit/scripts/verify-trustpilot-jsonld.mjs \
+            --target=remote \
+            --json-out=trustpilot-jsonld-report.json
+          rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      # Task #750 — surface the per-URL pass/fail table on the admin
+      # dashboard so ops/marketing notice a regression in the same
+      # place they already check delivery + alert health, not just in
+      # the GitHub Actions failure email engineering watches. The POST
+      # is best-effort: if the backend is down we still upload the
+      # artifact below and the verifier exit code still pages on-call.
+      - name: Push report to admin dashboard
+        if: always() && hashFiles('trustpilot-jsonld-report.json') != ''
+        env:
+          BACKEND_URL: ${{ vars.TRUSTPILOT_BACKEND_URL || 'https://api.syrabit.ai' }}
+          TRUSTPILOT_REFRESH_SECRET: ${{ secrets.TRUSTPILOT_REFRESH_SECRET }}
+          GH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$TRUSTPILOT_REFRESH_SECRET" ]; then
+            echo "::warning title=Trustpilot dashboard push skipped::TRUSTPILOT_REFRESH_SECRET not configured — admin tile will stay stale"
+            exit 0
+          fi
+          # Splice runUrl into the JSON without needing jq/python deps.
+          node -e '
+            const fs = require("fs");
+            const r = JSON.parse(fs.readFileSync("trustpilot-jsonld-report.json", "utf8"));
+            r.runUrl = process.env.GH_RUN_URL || null;
+            fs.writeFileSync("trustpilot-jsonld-report.json", JSON.stringify(r));
+          '
+          http_code=$(curl -sS -o /tmp/resp.txt -w "%{http_code}" \
+            -X POST "${BACKEND_URL%/}/api/admin/trustpilot-jsonld/report" \
+            -H "Content-Type: application/json" \
+            -H "X-Trustpilot-Refresh-Secret: ${TRUSTPILOT_REFRESH_SECRET}" \
+            --data-binary @trustpilot-jsonld-report.json) || true
+          echo "POST ${BACKEND_URL%/}/api/admin/trustpilot-jsonld/report -> HTTP ${http_code}"
+          cat /tmp/resp.txt || true
+          if [ "$http_code" != "200" ]; then
+            echo "::warning title=Trustpilot dashboard push failed::backend returned HTTP ${http_code}"
+          fi
+
+      # Belt-and-braces — keep the JSON downloadable from the run page
+      # even when the dashboard push succeeds, so an engineer debugging
+      # a failure can grab the raw report without DB access.
+      - name: Upload report as build artifact
+        if: always() && hashFiles('trustpilot-jsonld-report.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: trustpilot-jsonld-report
+          path: trustpilot-jsonld-report.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Fail job if verifier reported a regression
+        if: ${{ steps.verify.outputs.rc != '0' }}
+        run: |
+          echo "verify-trustpilot-jsonld.mjs exited with rc=${{ steps.verify.outputs.rc }}"
+          exit 1

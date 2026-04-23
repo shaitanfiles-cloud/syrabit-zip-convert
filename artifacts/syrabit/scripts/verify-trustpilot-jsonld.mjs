@@ -48,6 +48,11 @@ const GOOGLEBOT_UA =
 const args = process.argv.slice(2);
 const targetMode =
   args.find((a) => a.startsWith("--target="))?.split("=")[1] || "remote";
+// Task #750 — write a machine-readable JSON report next to the
+// human-readable table so the daily scheduled workflow can POST it to
+// the admin dashboard. Optional; absent path = no file written.
+const jsonOutPath =
+  args.find((a) => a.startsWith("--json-out="))?.split("=")[1] || "";
 
 // The exact list of "previously-uncovered public URLs" referenced by
 // Task #729 + a couple of high-priority controls (Landing/Library)
@@ -261,6 +266,40 @@ async function main() {
   const passed = results.filter((r) => r.pass).length;
   const failed = results.length - passed;
   console.log(`\n${passed}/${results.length} URLs pass; ${failed} fail.`);
+
+  // Task #750 — emit a machine-readable copy of the same report so the
+  // scheduled workflow can POST it to the admin dashboard. We write the
+  // file even on failure so ops can see WHICH urls failed in the UI.
+  if (jsonOutPath) {
+    const report = {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      target: targetMode,
+      origin: targetMode === "remote" ? TARGET_ORIGIN : null,
+      totalUrls: results.length,
+      passed,
+      failed,
+      ok: failed === 0,
+      results: results.map((r) => ({
+        url: r.url,
+        pass: !!r.pass,
+        status: r.status ?? null,
+        ratingValue: r.ratingValue ?? null,
+        reviewCount: r.reviewCount ?? null,
+        reason: r.pass ? null : (r.reason || "fail"),
+      })),
+    };
+    try {
+      fs.mkdirSync(path.dirname(path.resolve(jsonOutPath)), { recursive: true });
+      fs.writeFileSync(jsonOutPath, JSON.stringify(report, null, 2));
+      console.log(`\nWrote JSON report → ${jsonOutPath}`);
+    } catch (e) {
+      console.error(`\n[verify-trustpilot-jsonld] failed to write --json-out=${jsonOutPath}: ${e?.message || e}`);
+      // Don't change the overall pass/fail outcome on a write error —
+      // the JSON file is supplementary, the table above is canonical.
+    }
+  }
+
   process.exit(failed === 0 ? 0 : 1);
 }
 
