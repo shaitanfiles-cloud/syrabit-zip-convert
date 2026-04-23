@@ -91,13 +91,16 @@ def fresh_db(monkeypatch):
     fresh.payments.insert_one = AsyncMock(return_value=None)
     fresh.payments.update_one = AsyncMock(return_value=None)
     fresh.users.update_one = AsyncMock(return_value=None)
+    # Task #774: ``mon.deps`` and ``deps`` (this module's local import)
+    # are now guaranteed to be the same module object — see
+    # ``install_deps_stub``'s in-place mutation path. So a single
+    # ``monkeypatch.setattr(deps, ...)`` is sufficient; the duplicate
+    # ``mon.deps.*`` patches are no longer needed.
     monkeypatch.setattr(deps, "db", fresh)
-    monkeypatch.setattr(mon.deps, "db", fresh, raising=False)
     monkeypatch.setattr(mon, "db", fresh)
     monkeypatch.setattr(mon, "_supa_mirror", lambda fn: None)
     monkeypatch.setattr(mon, "_redis_invalidate_session", lambda uid: None)
     monkeypatch.setattr(deps, "pg_pool", None, raising=False)
-    monkeypatch.setattr(mon.deps, "pg_pool", None, raising=False)
     # Email send is fire-and-forget (asyncio.create_task) — stub so the
     # success path doesn't try to talk to Resend.
     import email_templates
@@ -239,8 +242,10 @@ def test_pg_failure_triggers_rollback(stub_keys, fresh_db, fake_razorpay, monkey
             return _BoomConn()
 
     boom = _BoomPool()
+    # Task #774: single-site monkeypatch — see helper docstring on
+    # ``install_deps_stub`` for why ``mon.deps`` and ``deps`` now share
+    # identity, making the duplicate patch unnecessary.
     monkeypatch.setattr(deps, "pg_pool", boom, raising=False)
-    monkeypatch.setattr(mon.deps, "pg_pool", boom, raising=False)
 
     body = mon.PaymentVerifyRequest(
         razorpay_order_id="order_pg",
