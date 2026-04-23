@@ -1,0 +1,9 @@
+{
+  "_comment": "Build-time cache for Trustpilot aggregate-rating JSON-LD (Task #729). Updated automatically on every successful fetch by scripts/inject-trustpilot-jsonld.mjs. Committed to the repo so the build still ships a sane aggregate when the live source is unreachable. Set ratingValue + ratingCount to null to disable injection until the next successful fetch.",
+  "ratingValue": null,
+  "ratingCount": null,
+  "bestRating": 5,
+  "worstRating": 1,
+  "fetched_at": null,
+  "source": null
+}

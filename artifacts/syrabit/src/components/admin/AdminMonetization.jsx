@@ -192,6 +192,18 @@ export default function AdminMonetization({ adminToken, onNavigate }) {
               <MetricCard icon={Users} label="Paid Users" value={overview.total_paid_users} color="#8b5cf6" />
               <MetricCard icon={Percent} label="Conversion Rate" value={overview.conversion_rate + '%'} color="#f59e0b" />
             </div>
+            {/* Task #731 S3 + S9 — provenance caption: tells admins exactly
+                what currencies + FX policy these tiles add up. Without this
+                a Stripe payment in the row list looks inconsistent with the
+                INR total. */}
+            {overview.revenue_includes_stripe && (
+              <div className="text-[11px] text-gray-500 -mt-1 pl-1 leading-snug">
+                Includes Razorpay (INR) + Stripe (USD→INR @ rate captured at payment time).
+                {typeof overview.total_lifetime_revenue_inr === 'number' && (
+                  <> Lifetime: ₹{overview.total_lifetime_revenue_inr.toLocaleString('en-IN', { maximumFractionDigits: 2 })}.</>
+                )}
+              </div>
+            )}
 
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               <MetricCard icon={Star} label="ARPU (INR)" value={overview.arpu_inr} prefix="₹" color="#ec4899" />
@@ -218,8 +230,19 @@ export default function AdminMonetization({ adminToken, onNavigate }) {
                       }`}>
                         {txn.plan}
                       </span>
-                      <span className="text-gray-900 text-sm font-medium ml-auto">
-                        {txn.currency === 'INR' ? '₹' : '$'}{txn.amount}
+                      {/* Task #731 S3 — primary INR + small original-currency caption.
+                          For Stripe rows (currency_original=USD) admins see both
+                          ₹X.XX (the unified rollup figure) and "$Y.YY" (the receipt
+                          of record), so the row reconciles with Stripe's dashboard. */}
+                      <span className="ml-auto flex flex-col items-end leading-tight">
+                        <span className="text-gray-900 text-sm font-medium">
+                          ₹{Number(txn.amount_inr ?? txn.amount ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                        </span>
+                        {txn.currency_original && txn.currency_original !== 'INR' && txn.amount_original ? (
+                          <span className="text-gray-400 text-[10px]" title={txn.fx_rate ? `FX rate ${Number(txn.fx_rate).toFixed(4)} (${txn.fx_source || 'unknown source'})` : ''}>
+                            {txn.currency_original === 'USD' ? '$' : ''}{Number(txn.amount_original).toFixed(2)} {txn.currency_original}
+                          </span>
+                        ) : null}
                       </span>
                       <span className="text-gray-400 text-xs">{txn.date}</span>
                     </button>

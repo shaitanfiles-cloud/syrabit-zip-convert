@@ -164,7 +164,19 @@ async function main() {
     }),
   );
 
-  // 5. Verify — single dist/ walk + headless hydration check.
+  // 5a. Inject the Trustpilot aggregate-rating JSON-LD into every
+  //     dist/ HTML (Task #729). Runs AFTER prerender so prerendered
+  //     route HTMLs also receive the inject. Honest no-op when no
+  //     live source returns positive review counts — never blocks
+  //     the build.
+  await record(
+    "inject:trustpilot-jsonld",
+    node(path.join(__dirname, "inject-trustpilot-jsonld.mjs"), [], {
+      budgetMs: 30_000,
+    }),
+  );
+
+  // 5b. Verify — single dist/ walk + headless hydration check.
   await record(
     "verify",
     node(path.join(__dirname, "verify-all.mjs"), [], {

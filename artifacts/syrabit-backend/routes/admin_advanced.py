@@ -33,6 +33,35 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# ─────────────────────────────────────────────
+# Task #731 S3 — Stripe-aware revenue rollups
+# ─────────────────────────────────────────────
+def _row_inr(p: dict) -> float:
+    """Best-effort INR rupees for one payment row.
+
+    Order of preference:
+      1. Persisted `amount_inr` (set by `_enrich_payment_record` at
+         insert time post-S2, OR by the backfill migration). This is
+         always the right number — for Stripe rows it's the live USD->INR
+         FX as of the moment of payment, captured alongside fx_rate +
+         fx_source on the row itself.
+      2. For Razorpay rows that pre-date S2 + the migration, fall back
+         to `amount_paise / 100` since paise->INR is an identity.
+      3. For Stripe rows without persisted amount_inr we return 0
+         (instead of guessing with today's FX). The migration script
+         backfills these idempotently — once it runs, this branch
+         disappears.
+    """
+    v = p.get("amount_inr")
+    if isinstance(v, (int, float)) and v >= 0:
+        return float(v)
+    if p.get("provider") != "stripe":
+        paise = p.get("amount_paise") or 0
+        if isinstance(paise, (int, float)):
+            return float(paise) / 100.0
+    return 0.0
+
+
 @router.get("/admin/monetization/overview")
 async def admin_monetization_overview(admin: dict = Depends(get_admin_user)):
     users = await supa_list_users()
@@ -42,24 +71,47 @@ async def admin_monetization_overview(admin: dict = Depends(get_admin_user)):
     thirty_ago = (now - timedelta(days=30)).isoformat()
     seven_ago = (now - timedelta(days=7)).isoformat()
 
-    revenue_30d = sum(p.get("amount_paise", 0) for p in payments if p.get("verified_at", "") >= thirty_ago and p.get("provider") != "stripe") / 100
-    revenue_7d = sum(p.get("amount_paise", 0) for p in payments if p.get("verified_at", "") >= seven_ago and p.get("provider") != "stripe") / 100
+    # Stripe-aware: sum amount_inr for ALL providers (no provider filter)
+    # so revenue tiles and ARPU finally include Stripe payments at the
+    # FX rate captured at-payment-time (see _row_inr docstring).
+    revenue_30d = round(sum(_row_inr(p) for p in payments if p.get("verified_at", "") >= thirty_ago), 2)
+    revenue_7d  = round(sum(_row_inr(p) for p in payments if p.get("verified_at", "") >= seven_ago), 2)
 
-    total_paid = sum(1 for u in users if u.get("plan") in ("starter", "pro"))
+    # Plan-based counts include Stripe payers (Stripe webhook flips
+    # users to plan="starter"/"pro" on success), so this is the same
+    # paid-user universe as `revenue_30d`'s numerator.
     starter_count = sum(1 for u in users if u.get("plan") == "starter")
     pro_count = sum(1 for u in users if u.get("plan") == "pro")
+    total_paid = starter_count + pro_count
 
     arpu = round(revenue_30d / max(total_paid, 1), 2)
 
     recent_txns = []
     for p in payments[:20]:
+        amount_inr = _row_inr(p)
+        provider = p.get("provider") or "razorpay"
+        # Original-currency display values for the "shown alongside INR"
+        # caption — preserves the receipt-of-record amount even for
+        # Stripe rows where the live INR comes from FX conversion.
+        if provider == "stripe":
+            amount_original = (p.get("amount_cents", 0) or 0) / 100
+            currency_original = (p.get("currency_original") or p.get("currency") or "USD").upper()
+        else:
+            amount_original = (p.get("amount_paise", 0) or 0) / 100
+            currency_original = p.get("currency_original") or "INR"
         recent_txns.append({
-            "user_id": p.get("user_id", ""),
-            "plan": p.get("plan", ""),
-            "amount": p.get("amount_paise", 0) / 100 if p.get("provider") != "stripe" else p.get("amount_cents", 0) / 100,
-            "currency": "INR" if p.get("provider") != "stripe" else "USD",
-            "provider": p.get("provider", "razorpay"),
-            "date": p.get("verified_at", "")[:10],
+            "user_id":           p.get("user_id", ""),
+            "plan":              p.get("plan", ""),
+            "amount_inr":        amount_inr,
+            "amount":            amount_inr,            # back-compat alias for older UI builds
+            "amount_original":   round(amount_original, 2),
+            "currency_original": currency_original,
+            "currency":          "INR",                  # primary display currency
+            "fx_rate":           p.get("fx_rate"),
+            "fx_source":         p.get("fx_source"),
+            "fx_fetched_at":     p.get("fx_fetched_at"),
+            "provider":          provider,
+            "date":              (p.get("verified_at") or "")[:10],
         })
 
     return {
@@ -72,7 +124,12 @@ async def admin_monetization_overview(admin: dict = Depends(get_admin_user)):
         "total_free_users": len(users) - total_paid,
         "conversion_rate": round(total_paid / max(len(users), 1) * 100, 2),
         "recent_transactions": recent_txns,
-        "total_lifetime_revenue_inr": sum(p.get("amount_paise", 0) for p in payments if p.get("provider") != "stripe") / 100,
+        "total_lifetime_revenue_inr": round(sum(_row_inr(p) for p in payments), 2),
+        # Honest provenance caption — frontend renders "Includes:
+        # Razorpay + Stripe (USD->INR @ rate as of payment-time)" under
+        # revenue tiles using these flags (S9).
+        "revenue_includes_stripe": True,
+        "revenue_basis": "amount_inr_at_payment_time",
     }
 
 @router.get("/admin/monetization/referrals")
@@ -1321,6 +1378,23 @@ async def admin_monetization_funnel(admin: dict = Depends(get_admin_user)):
         if (u.get("created_at") or "") >= thirty_ago and u.get("plan") in ("starter", "pro")
     )
 
+    # Task #731 S3 — Stripe-aware "Revenue per Paid User" tile.
+    # Numerator: lifetime revenue across BOTH Razorpay + Stripe via
+    # _row_inr (which prefers persisted amount_inr over the legacy
+    # paise/cents fields). Denominator: same paid-user set the funnel
+    # already counts above (plan in {starter, pro}, regardless of
+    # provider) — so num + denom describe the SAME population.
+    payments = await db.payments.find(
+        {}, {"_id": 0, "amount_inr": 1, "amount_paise": 1, "amount_cents": 1, "provider": 1, "verified_at": 1},
+    ).to_list(5000)
+    lifetime_revenue_inr = round(sum(_row_inr(p) for p in payments), 2)
+    revenue_30d_inr = round(
+        sum(_row_inr(p) for p in payments if (p.get("verified_at") or "") >= thirty_ago),
+        2,
+    )
+    revenue_per_paid_user_inr = round(lifetime_revenue_inr / max(paid_count, 1), 2)
+    revenue_per_paid_user_30d_inr = round(revenue_30d_inr / max(paid_count, 1), 2)
+
     return {
         "funnel": [
             {"stage": "Registered", "count": total},
@@ -1334,6 +1408,12 @@ async def admin_monetization_funnel(admin: dict = Depends(get_admin_user)):
         "new_users_30d": new_users_30d,
         "new_paid_30d": new_paid_30d,
         "conversion_30d_rate": round(new_paid_30d / max(new_users_30d, 1) * 100, 2),
+        # Stripe-aware revenue context for the funnel tile.
+        "lifetime_revenue_inr": lifetime_revenue_inr,
+        "revenue_30d_inr": revenue_30d_inr,
+        "revenue_per_paid_user_inr": revenue_per_paid_user_inr,
+        "revenue_per_paid_user_30d_inr": revenue_per_paid_user_30d_inr,
+        "revenue_includes_stripe": True,
     }
 
 

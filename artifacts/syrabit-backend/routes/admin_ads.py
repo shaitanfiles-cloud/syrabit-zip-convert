@@ -338,6 +338,17 @@ async def admin_add_earning(
     _validate_date_str(entry.date)
     if entry.revenue_inr < 0:
         raise HTTPException(400, "revenue_inr must be >= 0")
+    # Task #731 S5 — every row's `source` must come from the closed set
+    # so `adsense_api` can NEVER be forged via the manual entry path.
+    # Manual entries default to "manual" and may opt into "csv" only
+    # for parity with the CSV upload route.
+    src = (entry.source or "manual").strip()
+    if src not in {"manual", "csv"}:
+        raise HTTPException(
+            400,
+            f"source must be one of {{manual, csv}} on this endpoint; "
+            f"adsense_api rows are written exclusively by /admin/ads/adsense/sync.",
+        )
     await _ensure_ad_indexes()
     doc = {
         "network": entry.network,
@@ -345,7 +356,8 @@ async def admin_add_earning(
         "revenue_inr": float(entry.revenue_inr),
         "impressions": int(entry.impressions) if entry.impressions is not None else None,
         "placement": (entry.placement or None),
-        "source": entry.source or "manual",
+        "source": src,
+        "currency_original": "INR",  # manual entries are always rupees
         "created_at": datetime.now(timezone.utc),
     }
     res = await db.ad_earnings.insert_one(doc)
@@ -451,8 +463,63 @@ async def _adsense_access_token() -> str:
         return r.json().get("access_token") or ""
 
 
+# Task #731 S5 — single source-of-truth list for the `source` field on
+# every ad_earnings row. Anything outside this set is rejected at insert
+# time so historical data stays trustworthy. The list is intentionally
+# small: every value here corresponds to a code path that can produce
+# the row in this file.
+_VALID_AD_EARNINGS_SOURCES = {"adsense_api", "manual", "csv"}
+
+
+# Task #731 S6 — record the last AdSense sync result so the admin status
+# panel can flip red the moment a sync fails (instead of the previous
+# behaviour where a 401/403/500 would silently produce zero rows and
+# leave the dashboard showing "₹0 today" — indistinguishable from "no
+# ads served today").
+async def _record_adsense_sync(*, ok: bool, days: int, rows: int = 0,
+                               error: str = "", fx_source: str = "",
+                               fx_rate: float | None = None) -> None:
+    try:
+        now = datetime.now(timezone.utc)
+        update: dict[str, Any] = {
+            "$set": {
+                "_id": "adsense",
+                "last_attempted_at": now.isoformat(),
+                "last_status": "ok" if ok else "error",
+                "last_days": int(days),
+            }
+        }
+        if ok:
+            update["$set"].update({
+                "last_success_at": now.isoformat(),
+                "last_rows_synced": int(rows),
+                "last_fx_source": fx_source or None,
+                "last_fx_rate": float(fx_rate) if fx_rate else None,
+                "last_error_message": None,
+                "last_error_at_recent": None,
+            })
+        else:
+            update["$set"].update({
+                "last_error_at": now.isoformat(),
+                "last_error_at_recent": now.isoformat(),
+                "last_error_message": (error or "")[:500],
+            })
+        await db.ad_sync_status.update_one({"_id": "adsense"}, update, upsert=True)
+    except Exception as e:
+        logger.warning(f"_record_adsense_sync failed: {e}")
+
+
 @router.get("/admin/ads/adsense/status")
 async def admin_adsense_status(admin: dict = Depends(get_admin_user)):
+    # Task #731 S6 — read sync state from db.ad_sync_status so admin UI
+    # can surface "AdSense sync failed at HH:MM — last error: ...".
+    sync_state: dict[str, Any] = {}
+    try:
+        doc = await db.ad_sync_status.find_one({"_id": "adsense"}, {"_id": 0})
+        if doc:
+            sync_state = doc
+    except Exception as e:
+        logger.debug(f"adsense status read failed: {e}")
     return {
         "configured": _adsense_configured(),
         "account_id": os.environ.get("ADSENSE_ACCOUNT_ID", "") if _adsense_configured() else "",
@@ -462,6 +529,10 @@ async def admin_adsense_status(admin: dict = Depends(get_admin_user)):
                 "ADSENSE_CLIENT_SECRET", "ADSENSE_ACCOUNT_ID",
             ) if not os.environ.get(k)
         ],
+        # The admin panel renders these directly: a red banner if
+        # last_status == "error", a green check + relative timestamp
+        # if last_status == "ok".
+        "sync": sync_state,
     }
 
 
@@ -477,8 +548,38 @@ async def admin_adsense_sync(
     (upsert on (network, date, placement=None)).
     """
     if not _adsense_configured():
+        # S6: configuration is the user's mistake, not an outage —
+        # don't poison the sync-status doc with this.
         raise HTTPException(503, "AdSense not configured. Set ADSENSE_* env vars.")
-    token = await _adsense_access_token()
+
+    # Task #731 S4 — fetch USD->INR FX up front. AdSense pays in the
+    # account's currency (USD here per the published account profile);
+    # ESTIMATED_EARNINGS is therefore USD and was previously written to
+    # `revenue_inr` directly — which is what made the dashboard show
+    # 1 impression earning ₹247. We refuse to sync if FX is unavailable
+    # because writing zeroes is exactly the silent-failure mode S6
+    # forbids.
+    try:
+        from fx import get_usd_inr_rate, FxRateUnavailable
+        fx = await get_usd_inr_rate()
+        fx_rate = float(fx["rate"])
+        fx_source = str(fx["source"])
+        fx_fetched_at = str(fx["fetched_at"])
+    except FxRateUnavailable as e:
+        msg = f"USD->INR FX unavailable: {e}"
+        await _record_adsense_sync(ok=False, days=days, error=msg)
+        raise HTTPException(503, msg)
+    except Exception as e:
+        msg = f"FX helper crashed: {e}"
+        await _record_adsense_sync(ok=False, days=days, error=msg)
+        raise HTTPException(500, msg)
+
+    try:
+        token = await _adsense_access_token()
+    except HTTPException as e:
+        await _record_adsense_sync(ok=False, days=days, error=f"oauth: {e.detail}")
+        raise
+
     account = os.environ.get("ADSENSE_ACCOUNT_ID", "")
     end = datetime.now(timezone.utc).date()
     start = end - timedelta(days=days - 1)
@@ -493,13 +594,26 @@ async def admin_adsense_sync(
         ("metrics", "AD_REQUESTS"),
         ("metrics", "MATCHED_AD_REQUESTS"),
     ]
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        r = await client.get(
-            url, params=params,
-            headers={"Authorization": f"Bearer {token}"},
-        )
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(
+                url, params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except Exception as e:
+        msg = f"network error contacting AdSense: {e}"
+        await _record_adsense_sync(ok=False, days=days, error=msg)
+        raise HTTPException(502, msg)
+
     if r.status_code != 200:
-        raise HTTPException(502, f"AdSense API error: {r.text[:300]}")
+        # Task #731 S6 — record + raise. We deliberately do NOT write a
+        # 0-revenue row for any date; the dashboard distinguishes
+        # "we got a real zero from AdSense" from "we couldn't talk to
+        # AdSense" via the sync status panel.
+        msg = f"AdSense API error HTTP {r.status_code}: {r.text[:300]}"
+        await _record_adsense_sync(ok=False, days=days, error=msg)
+        raise HTTPException(502, msg)
+
     body = r.json()
     rows = body.get("rows", []) or []
     headers = [h.get("name") for h in body.get("headers", [])]
@@ -510,7 +624,9 @@ async def admin_adsense_sync(
         req_idx = headers.index("AD_REQUESTS")
         match_idx = headers.index("MATCHED_AD_REQUESTS")
     except ValueError:
-        raise HTTPException(502, "Unexpected AdSense response shape")
+        msg = "Unexpected AdSense response shape (missing required columns)"
+        await _record_adsense_sync(ok=False, days=days, error=msg)
+        raise HTTPException(502, msg)
 
     await _ensure_ad_indexes()
     upserts = 0
@@ -520,19 +636,32 @@ async def admin_adsense_sync(
         try:
             d = cells[date_idx].get("value") or ""
             _validate_date_str(d)
-            rev = float(cells[earn_idx].get("value") or 0)
+            rev_usd = float(cells[earn_idx].get("value") or 0)  # AdSense reports in account currency = USD
             imps = int(cells[imps_idx].get("value") or 0)
             ad_reqs = int(cells[req_idx].get("value") or 0)
             matched = int(cells[match_idx].get("value") or 0)
         except (IndexError, AttributeError, ValueError):
             continue
+        # S4 — convert at the FX rate captured at the START of the sync,
+        # so every row in this batch shares one rate (auditable + means
+        # admins can reconcile against AdSense's own report by undoing
+        # one multiplication).
+        rev_inr = round(rev_usd * fx_rate, 2)
         fill_rate = round((matched / ad_reqs) * 100, 2) if ad_reqs > 0 else None
         flt = {"network": "adsense", "date": d, "placement": None}
         await db.ad_earnings.update_one(
             flt,
             {"$set": {
                 "network": "adsense", "date": d, "placement": None,
-                "revenue_inr": rev, "impressions": imps,
+                # Both the original-currency receipt AND the unified INR
+                # number — admin UI shows both via S9.
+                "revenue_inr": rev_inr,
+                "revenue_usd": round(rev_usd, 6),
+                "currency_original": "USD",
+                "fx_rate": fx_rate,
+                "fx_source": fx_source,
+                "fx_fetched_at": fx_fetched_at,
+                "impressions": imps,
                 "ad_requests": ad_reqs, "matched_ad_requests": matched,
                 "fill_rate_pct": fill_rate,
                 "source": "adsense_api", "created_at": now,
@@ -540,4 +669,15 @@ async def admin_adsense_sync(
             upsert=True,
         )
         upserts += 1
-    return {"days": days, "rows_synced": upserts}
+
+    await _record_adsense_sync(
+        ok=True, days=days, rows=upserts,
+        fx_source=fx_source, fx_rate=fx_rate,
+    )
+    return {
+        "days": days,
+        "rows_synced": upserts,
+        "fx_rate": fx_rate,
+        "fx_source": fx_source,
+        "fx_fetched_at": fx_fetched_at,
+    }

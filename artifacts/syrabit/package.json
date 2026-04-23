@@ -49,7 +49,10 @@
     "test:e2e:install": "playwright install --with-deps chromium",
     "lint:ads": "node scripts/verify-no-ads.mjs",
     "lint:ads-required": "node scripts/verify-required-ads.mjs",
-    "verify:jsonld": "node scripts/validate-jsonld.mjs"
+    "verify:jsonld": "node scripts/validate-jsonld.mjs",
+    "inject:trustpilot-jsonld": "node scripts/inject-trustpilot-jsonld.mjs",
+    "verify:trustpilot-jsonld": "node scripts/verify-trustpilot-jsonld.mjs",
+    "verify:trustpilot-jsonld:dist": "node scripts/verify-trustpilot-jsonld.mjs --target=dist"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",

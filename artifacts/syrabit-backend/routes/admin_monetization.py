@@ -1073,12 +1073,31 @@ async def admin_usage_summary(admin: dict = Depends(get_admin_user)):
     payments = await db.payments.find({}, {"_id": 0}).sort("verified_at", -1).to_list(1000)
     total_revenue_inr = sum(p.get("amount_paise", 0) for p in payments if p.get("provider") != "stripe")
     total_revenue_usd = sum(p.get("amount_cents", 0) for p in payments if p.get("provider") == "stripe")
+    # Task #731 S3 — Stripe-aware unified INR total. Prefers persisted
+    # `amount_inr` (set by S2's enrich helper at insert time using the
+    # FX rate of the moment) so this number actually answers "how much
+    # money have we made, in rupees" — including Stripe payments. The
+    # legacy split fields above stay for back-compat with older admin
+    # dashboards still in the wild.
+    def _row_inr_local(p: dict) -> float:
+        v = p.get("amount_inr")
+        if isinstance(v, (int, float)) and v >= 0:
+            return float(v)
+        if p.get("provider") != "stripe":
+            paise = p.get("amount_paise") or 0
+            if isinstance(paise, (int, float)):
+                return float(paise) / 100.0
+        return 0.0
+    total_revenue_inr_unified = round(sum(_row_inr_local(p) for p in payments), 2)
     return {
         "total_users": total_users,
         "total_conversations": total_convs,
         "total_payments": len(payments),
         "revenue_inr_paise": total_revenue_inr,
         "revenue_usd_cents": total_revenue_usd,
+        # Single source-of-truth INR figure for revenue tiles.
+        "revenue_inr_unified": total_revenue_inr_unified,
+        "revenue_includes_stripe": True,
         "recent_payments": payments[:20],
     }
 

@@ -19,6 +19,9 @@ export default function RevenueTab({ widgetErrors, load, mrr, predicted, growth,
             style={{ background: 'rgba(245,158,11,0.12)' }}>Retry</button>
         </div>
       )}
+      <p className="text-[11px] text-gray-400 px-1">
+        Includes Razorpay (INR) + Stripe (USD→INR via daily ECB rate). Per-row provenance on the Monetization page.
+      </p>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <Stat icon={DollarSign} label="MRR (30d)"     value={fmtInr(mrr)}       color="#10b981" trend={growth} />
         <Stat icon={TrendingUp} label="Predicted MRR" value={fmtInr(predicted)} color="#7c3aed"

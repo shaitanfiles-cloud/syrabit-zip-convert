@@ -83,7 +83,7 @@ async def send_plan_activation(email: str, name: str, plan: str, credits: int, a
           <tr><td style="color:{_MUTED};padding:6px 0;">Credits added</td>
               <td style="text-align:right;font-weight:600;color:{_BRAND};">+{credits:,}</td></tr>
           <tr><td style="color:{_MUTED};padding:6px 0;">Amount charged</td>
-              <td style="text-align:right;font-weight:600;">₹{amount_inr:,.0f}</td></tr>
+              <td style="text-align:right;font-weight:600;">₹{amount_inr:,.2f}</td></tr>
         </table>
       ''')}
       <p style="margin-bottom:24px;">
@@ -110,7 +110,7 @@ async def send_topup_confirmation(email: str, name: str, credits: int, amount_pa
           <tr><td style="color:{_MUTED};padding:6px 0;">Credits added</td>
               <td style="text-align:right;font-weight:600;color:{_BRAND};">+{credits:,}</td></tr>
           <tr><td style="color:{_MUTED};padding:6px 0;">Amount charged</td>
-              <td style="text-align:right;font-weight:600;">₹{amount_inr:,.0f}</td></tr>
+              <td style="text-align:right;font-weight:600;">₹{amount_inr:,.2f}</td></tr>
         </table>
       ''')}
       <p style="margin-bottom:24px;">

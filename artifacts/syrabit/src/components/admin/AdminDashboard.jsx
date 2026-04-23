@@ -994,6 +994,7 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
 
       <SectionErrorBoundary name="Revenue">
       {metrics?.revenue && (
+        <>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard
             label="Revenue (INR)"
@@ -1011,6 +1012,10 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
           <StatCard label="Bot Renders"    value={metrics.bot_render?.total_requests || 0} icon={Bot} color="#8b5cf6"
             subLabel="Success Rate" subValue={metrics.bot_render?.success_rate_pct != null ? `${metrics.bot_render.success_rate_pct}%` : '—'} />
         </div>
+        <p className="text-[11px] text-gray-400 mt-2 px-1">
+          Revenue includes Razorpay (INR) + Stripe (USD→INR via daily ECB rate). All values stored as <code>amount_inr</code> on each payment row.
+        </p>
+        </>
       )}
       </SectionErrorBoundary>
       <SectionErrorBoundary name="Bot Render">
