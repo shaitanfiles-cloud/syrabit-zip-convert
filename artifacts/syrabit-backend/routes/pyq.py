@@ -1,7 +1,7 @@
 """Syrabit.ai — PYQ upload, processing, and serving"""
 import re, json, asyncio, uuid, logging, os, base64, httpx
 from typing import List
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import (
     APIRouter, HTTPException, Depends, File, UploadFile, Form,
 )
@@ -49,7 +49,7 @@ async def _upsert_pyq_html_page(db_handle, slug: str, page_doc: dict) -> None:
     if db_handle is None:
         return
 
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     doc = dict(page_doc)
     created_at = doc.pop("created_at", None) or now
     updated_at = doc.pop("updated_at", None) or now
@@ -179,7 +179,7 @@ async def admin_pyq_upload(
             "pages": [{"file_url": file_url, "filename": upload.filename}] if is_image else [],
             "status":            "uploaded",
             "processing_status": "uploaded",
-            "created_at":        datetime.utcnow().isoformat(),
+            "created_at":        datetime.now(timezone.utc).isoformat(),
             "created_by":        admin.get("username", "admin"),
         }
         await _db["pyq_uploads"].insert_one(doc)
@@ -273,7 +273,7 @@ async def admin_pyq_upload_text(
         "status":            "uploaded",
         "processing_status": "uploaded",
         "raw_text":          raw_text[:10000],
-        "created_at":        datetime.utcnow().isoformat(),
+        "created_at":        datetime.now(timezone.utc).isoformat(),
         "created_by":        admin.get("username", "admin"),
     }
     await _db["pyq_uploads"].insert_one(doc)
@@ -310,7 +310,7 @@ async def admin_pyq_upload_text(
         subject_name=subject_name, exam_year=payload.exam_year, paper_type=payload.paper_type,
     )
 
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     page_doc = {
         "slug": slug, "html_content": html_content, "seo_title": seo_title,
         "seo_description": seo_desc, "geo_tags": geo_tags, "schema_json": schema_json,
@@ -516,7 +516,7 @@ async def admin_pyq_agentic_process(
 
     await _db["pyq_uploads"].update_one(
         {"id": pyq_id},
-        {"$set": {"processing_status": "ocr_running", "updated_at": datetime.utcnow().isoformat()}},
+        {"$set": {"processing_status": "ocr_running", "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
 
     # Fetch PDF bytes from storage URL
@@ -537,7 +537,7 @@ async def admin_pyq_agentic_process(
     class_name   = pyq.get("class_name", "")
     subject_name = pyq.get("subject_name", "")
     stream_name  = pyq.get("stream_name", "")
-    exam_year    = int(pyq.get("exam_year") or datetime.utcnow().year)
+    exam_year    = int(pyq.get("exam_year") or datetime.now(timezone.utc).year)
     paper_type   = pyq.get("paper_type", "major")
     board_id     = pyq.get("board_id", "")
     class_id     = pyq.get("class_id", "")
@@ -626,7 +626,7 @@ async def admin_pyq_agentic_process(
     )
 
     # Persist html page
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     page_doc = {
         "slug": slug, "html_content": html_content, "seo_title": seo_title,
         "seo_description": seo_desc, "geo_tags": geo_tags, "schema_json": schema_json,
@@ -1030,7 +1030,7 @@ async def admin_pyq_html_replica(
     )
 
     # ── Persist to MongoDB (upsert by slug) ───────────────────────────────────
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     page_doc = {
         "slug":         slug,
         "html_content": html_content,
@@ -1100,7 +1100,7 @@ async def _index_pyq_rag_chunks(
             paragraphs = [p.strip() for p in raw_text.split('\n') if len(p.strip()) >= 50]
             chunks_to_index = paragraphs[:30]
 
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         for i, chunk_text in enumerate(chunks_to_index):
             embedding = await vertex_services.embed_text(chunk_text, task_type="RETRIEVAL_DOCUMENT")
             chunk_doc = {

@@ -159,7 +159,7 @@ def _snapshot_metrics():
     """Take a point-in-time snapshot of key metrics for graphing."""
     import datetime
     from llm import _llm_batcher
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     batch_s = _llm_batcher.stats
     spoof_stats = _metrics.get_spoof_stats()
     snap = {
