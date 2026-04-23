@@ -4,7 +4,7 @@ import { WORKER_API } from '../utils/api';
 import { useShare } from '../hooks/useShare';
 import PageMeta from '@/components/seo/PageMeta';
 import ContinueLearning from '@/components/content/ContinueLearning';
-import GoogleReviewsSection, { ReviewsAggregateRatingJsonLd } from '@/components/content/GoogleReviewsSection';
+import TrustpilotReviewsSection from '@/components/content/TrustpilotReviewsSection';
 import AdSlot from '@/components/ads/AdSlot';
 import useQuge5Multitag from '@/components/ads/useQuge5Multitag';
 import useAdsenseAutoAds from '@/components/ads/useAdsenseAutoAds';
@@ -278,14 +278,8 @@ export default function PYQReplicaPage() {
         <AdSlot placement="pyq.endOfContent" />
       </div>
 
-      <GoogleReviewsSection
-        subheading={`Real Google reviews from students preparing with Syrabit.ai${pyqMeta.subject ? ' for ' + pyqMeta.subject : ''}.`}
-        keywords={[pyqMeta.subject, pyqMeta.board, pyqMeta.class_name, 'pyq', 'previous year', 'question paper'].filter(Boolean)}
-      />
-      <ReviewsAggregateRatingJsonLd
-        id="pyq-google-reviews-jsonld"
-        name={`Syrabit.ai — ${pyqMeta.title || 'PYQ'}`}
-        url={pyqUrl}
+      <TrustpilotReviewsSection
+        subheading={`Verified Trustpilot reviews from students preparing with Syrabit.ai${pyqMeta.subject ? ' for ' + pyqMeta.subject : ''}.`}
       />
 
       <div

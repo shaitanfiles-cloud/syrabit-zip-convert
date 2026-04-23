@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useResolveSubject, useChapters } from '@/hooks/useContent';
 import ContinueLearning from '@/components/content/ContinueLearning';
-import GoogleReviewsSection, { ReviewsAggregateRatingJsonLd } from '@/components/content/GoogleReviewsSection';
+import TrustpilotReviewsSection from '@/components/content/TrustpilotReviewsSection';
 import { MobileNavSwitch } from '@/components/layout/MobileNavSwitch';
 import { useContentLang } from '@/context/LanguageContext';
 import { seoRelatedByChapter } from '@/utils/api';
@@ -332,14 +332,8 @@ export default function SubjectLandingPage() {
           </div>
         )}
 
-        <GoogleReviewsSection
-          subheading={`Real Google reviews from students using Syrabit.ai for ${boardName} ${className} ${subjectName}.`}
-          keywords={[subjectName, boardName, className].filter(Boolean)}
-        />
-        <ReviewsAggregateRatingJsonLd
-          id="subject-google-reviews-jsonld"
-          name={`Syrabit.ai — ${subjectName}`}
-          url={`https://syrabit.ai${basePath}`}
+        <TrustpilotReviewsSection
+          subheading={`Verified Trustpilot reviews from students using Syrabit.ai for ${boardName} ${className} ${subjectName}.`}
         />
 
         <nav className="mt-10 pt-6 border-t border-border/30" aria-label="Site navigation">

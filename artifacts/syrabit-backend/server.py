@@ -1253,8 +1253,8 @@ app.include_router(api)
 from routes.pyq import router as pyq_router
 app.include_router(pyq_router)
 
-from routes.reviews import router as reviews_router
-app.include_router(reviews_router)
+from routes.config import router as config_router
+app.include_router(config_router)
 
 @app.get("/healthz/ai")
 async def healthz_ai():
