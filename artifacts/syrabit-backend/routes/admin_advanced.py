@@ -1,6 +1,6 @@
 """Syrabit.ai — SEO, referrals, vector, RAG, billing, pipeline auto-generate"""
 import re, json, asyncio, uuid, logging, hashlib, os, httpx
-from typing import List
+from typing import List, Optional
 from datetime import datetime, timezone, timedelta
 from fastapi import (
     APIRouter, HTTPException, Depends, Query, Body, BackgroundTasks, Request,
@@ -36,6 +36,155 @@ router = APIRouter()
 # ─────────────────────────────────────────────
 # Task #731 S3 — Stripe-aware revenue rollups
 # ─────────────────────────────────────────────
+def _row_inr_mongo_expr() -> dict:
+    """Mongo aggregation `$expr` mirror of `_row_inr()` Python semantics.
+
+    Used by `_sum_revenue_inr` and `_aggregate_currency_breakdown` so
+    the server-side INR sum matches the Python fallback ladder exactly:
+
+      1. `amount_inr` if numeric and >= 0     →  use as-is
+      2. else, non-stripe rows               →  `amount_paise / 100`
+      3. otherwise                            →  0.0
+    """
+    is_numeric_amount_inr = {
+        "$in": [
+            {"$type": "$amount_inr"},
+            ["double", "int", "long", "decimal"],
+        ]
+    }
+    return {
+        "$cond": [
+            {"$and": [is_numeric_amount_inr,
+                      {"$gte": [{"$ifNull": ["$amount_inr", -1]}, 0]}]},
+            {"$toDouble": "$amount_inr"},
+            {"$cond": [
+                {"$ne": [{"$ifNull": ["$provider", ""]}, "stripe"]},
+                {"$divide": [
+                    {"$toDouble": {"$ifNull": ["$amount_paise", 0]}},
+                    100.0,
+                ]},
+                0.0,
+            ]},
+        ]
+    }
+
+
+async def _sum_revenue_inr(start_iso: Optional[str] = None) -> float:
+    """Sum INR revenue across `db.payments` using a server-side
+    aggregation pipeline so the result is NEVER truncated by a
+    client-side document-count cap.
+
+    The previous implementation pulled `to_list(5000)` and summed in
+    Python, which silently undercounted revenue (and therefore ARPU)
+    once monthly payment volume passed ~5000 rows. At the current
+    product trajectory that threshold is crossed quickly, so the
+    revenue tiles must use a $sum aggregation.
+
+    Args:
+      start_iso: ISO-8601 string. If provided, only payments with
+                 `verified_at >= start_iso` are summed. `verified_at`
+                 is stored as an ISO-8601 string, so lexicographic
+                 `$gte` is the correct comparator.
+    """
+    pipeline: List[dict] = []
+    if start_iso:
+        pipeline.append({"$match": {"verified_at": {"$gte": start_iso}}})
+    pipeline += [
+        {"$project": {"_id": 0, "row_inr": _row_inr_mongo_expr()}},
+        {"$group": {"_id": None, "total": {"$sum": "$row_inr"}}},
+    ]
+    docs = await db.payments.aggregate(pipeline).to_list(1)
+    return round(float(docs[0]["total"]) if docs else 0.0, 2)
+
+
+async def _aggregate_currency_breakdown(start_iso: Optional[str] = None) -> dict:
+    """Aggregation-based equivalent of the in-memory `_currency_breakdown`,
+    so the per-currency breakdown stays correct at any payment volume.
+
+    Splits payments into "USD-native" and "INR-native" buckets using the
+    same predicate as `_currency_breakdown` (currency_original=='USD'
+    OR a Stripe row whose currency is anything other than INR) and then
+    grabs the most-recent USD-native row's FX provenance for the
+    "rate as of payment-time" caption.
+    """
+    base_match: dict = {}
+    if start_iso:
+        base_match = {"verified_at": {"$gte": start_iso}}
+
+    is_usd_expr = {
+        "$or": [
+            {"$eq": [{"$toUpper": {"$ifNull": ["$currency_original", ""]}}, "USD"]},
+            {"$and": [
+                {"$eq": [{"$toLower": {"$ifNull": ["$provider", ""]}}, "stripe"]},
+                {"$ne": [{"$toUpper": {"$ifNull": ["$currency_original", ""]}}, "INR"]},
+            ]},
+        ]
+    }
+    # USD-native amount: prefer cents/100, fall back to amount_original
+    usd_native_expr = {
+        "$cond": [
+            {"$gt": [{"$toDouble": {"$ifNull": ["$amount_cents", 0]}}, 0]},
+            {"$divide": [{"$toDouble": {"$ifNull": ["$amount_cents", 0]}}, 100.0]},
+            {"$toDouble": {"$ifNull": ["$amount_original", 0]}},
+        ]
+    }
+
+    pipeline: List[dict] = []
+    if base_match:
+        pipeline.append({"$match": base_match})
+    pipeline += [
+        {"$project": {
+            "_id": 0,
+            "verified_at": 1,
+            "fx_rate": 1, "fx_source": 1, "fx_fetched_at": 1,
+            "is_usd": is_usd_expr,
+            "row_inr": _row_inr_mongo_expr(),
+            "usd_native": usd_native_expr,
+        }},
+        {"$facet": {
+            "inr_native": [
+                {"$match": {"is_usd": False}},
+                {"$group": {"_id": None, "total": {"$sum": "$row_inr"}}},
+            ],
+            "usd": [
+                {"$match": {"is_usd": True}},
+                {"$group": {
+                    "_id": None,
+                    "usd_native": {"$sum": "$usd_native"},
+                    "inr_from_usd": {"$sum": "$row_inr"},
+                }},
+            ],
+            "latest_usd": [
+                {"$match": {"is_usd": True}},
+                {"$sort": {"verified_at": -1}},
+                {"$limit": 1},
+                {"$project": {"_id": 0, "fx_rate": 1, "fx_source": 1, "fx_fetched_at": 1}},
+            ],
+        }},
+    ]
+
+    facet_docs = await db.payments.aggregate(pipeline).to_list(1)
+    facet = facet_docs[0] if facet_docs else {}
+
+    inr_native_arr = facet.get("inr_native") or []
+    usd_arr = facet.get("usd") or []
+    latest_arr = facet.get("latest_usd") or []
+
+    inr_native = (inr_native_arr[0]["total"] if inr_native_arr else 0.0) or 0.0
+    usd_native = (usd_arr[0].get("usd_native", 0.0) if usd_arr else 0.0) or 0.0
+    inr_from_usd = (usd_arr[0].get("inr_from_usd", 0.0) if usd_arr else 0.0) or 0.0
+    latest = latest_arr[0] if latest_arr else {}
+
+    return {
+        "inr_native":   round(float(inr_native), 2),
+        "usd_native":   round(float(usd_native), 2),
+        "inr_from_usd": round(float(inr_from_usd), 2),
+        "fx_rate":      latest.get("fx_rate"),
+        "fx_source":    latest.get("fx_source"),
+        "fx_fetched_at": latest.get("fx_fetched_at"),
+    }
+
+
 def _currency_breakdown(payments: list) -> dict:
     """Task #740 — per-currency native totals + FX provenance metadata.
 
@@ -120,17 +269,25 @@ def _row_inr(p: dict) -> float:
 @router.get("/admin/monetization/overview")
 async def admin_monetization_overview(admin: dict = Depends(get_admin_user)):
     users = await supa_list_users()
-    payments = await db.payments.find({}, {"_id": 0}).sort("verified_at", -1).to_list(5000)
 
     now = datetime.now(timezone.utc)
     thirty_ago = (now - timedelta(days=30)).isoformat()
     seven_ago = (now - timedelta(days=7)).isoformat()
 
-    # Stripe-aware: sum amount_inr for ALL providers (no provider filter)
-    # so revenue tiles and ARPU finally include Stripe payments at the
-    # FX rate captured at-payment-time (see _row_inr docstring).
-    revenue_30d = round(sum(_row_inr(p) for p in payments if p.get("verified_at", "") >= thirty_ago), 2)
-    revenue_7d  = round(sum(_row_inr(p) for p in payments if p.get("verified_at", "") >= seven_ago), 2)
+    # Stripe-aware revenue rollups via server-side $sum aggregations.
+    # Previously this loaded `db.payments.find().to_list(5000)` and
+    # summed in Python — once monthly volume crosses ~5000 rows that
+    # cap silently undercounts revenue (and therefore ARPU + the
+    # currency_breakdown caption). All scalar revenue numbers + the
+    # currency breakdown are now computed in the database; only the
+    # 20-row "recent transactions" tail is materialised in Python.
+    revenue_30d, revenue_7d, total_lifetime_revenue, currency_breakdown, recent_payments = await asyncio.gather(
+        _sum_revenue_inr(thirty_ago),
+        _sum_revenue_inr(seven_ago),
+        _sum_revenue_inr(None),
+        _aggregate_currency_breakdown(None),
+        db.payments.find({}, {"_id": 0}).sort("verified_at", -1).to_list(20),
+    )
 
     # Plan-based counts include Stripe payers (Stripe webhook flips
     # users to plan="starter"/"pro" on success), so this is the same
@@ -142,7 +299,7 @@ async def admin_monetization_overview(admin: dict = Depends(get_admin_user)):
     arpu = round(revenue_30d / max(total_paid, 1), 2)
 
     recent_txns = []
-    for p in payments[:20]:
+    for p in recent_payments:
         amount_inr = _row_inr(p)
         provider = p.get("provider") or "razorpay"
         # Original-currency display values for the "shown alongside INR"
@@ -663,11 +820,16 @@ async def admin_page_conversions(days: int = 30, admin: dict = Depends(get_admin
     # revenue in the same period, since per-page attribution is not
     # tracked. The currency_breakdown lets the UI render the same
     # provenance caption as Monetization.
-    period_payments = await db.payments.find(
-        {"verified_at": {"$gte": cutoff}},
-        {"_id": 0},
-    ).to_list(5000)
-    revenue_attributed = round(sum(_row_inr(p) for p in period_payments), 2)
+    #
+    # Both numbers come from server-side aggregations rather than a
+    # `to_list(5000)` Python sum — `cutoff` can stretch back arbitrarily
+    # far via the `days` query param, and at full payment volume that
+    # cap silently truncated revenue_attributed (and the per-currency
+    # breakdown rendered alongside it).
+    revenue_attributed, currency_breakdown_period = await asyncio.gather(
+        _sum_revenue_inr(cutoff),
+        _aggregate_currency_breakdown(cutoff),
+    )
 
     return {
         "top_converting_pages": enriched,
@@ -677,7 +839,7 @@ async def admin_page_conversions(days: int = 30, admin: dict = Depends(get_admin
         ),
         "period_days": days,
         "revenue_attributed": revenue_attributed,
-        "currency_breakdown": _currency_breakdown(period_payments),
+        "currency_breakdown": currency_breakdown_period,
     }
 
 
