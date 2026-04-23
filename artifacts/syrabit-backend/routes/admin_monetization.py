@@ -616,8 +616,90 @@ async def stripe_webhook(request: StarletteRequest2):
                             "UPDATE users SET plan=$1, credits_limit=credits_limit+$2, document_access=$3, updated_at=$4 WHERE id=$5",
                             plan, credits, doc_acc, now_iso, user_id,
                         )
+                # Task #773: bring Stripe webhook to parity with the
+                # Razorpay webhook + verify path — mirror to Supabase
+                # and queue the activation email so a paying customer
+                # who funnels through Stripe Checkout actually receives
+                # confirmation and the supa-side users mirror reflects
+                # their new plan.
+                _full_user = await db.users.find_one({"id": user_id}) or {}
+                _new_limit = int(_full_user.get("credits_limit", 0)) + credits
+                _supa_mirror(lambda: supa.table("users").update({
+                    "plan": plan, "document_access": doc_acc,
+                    "credits_limit": _new_limit, "updated_at": now_iso,
+                }).eq("id", str(user_id)).execute())
                 _redis_invalidate_session(user_id)
                 logger.info(f"Stripe payment: user={user_id} plan={plan} credits+={credits}")
+                asyncio.create_task(email_templates.send_plan_activation(
+                    email=_full_user.get("email", ""),
+                    name=_full_user.get("name", _full_user.get("email", "")),
+                    plan=plan,
+                    credits=credits,
+                    # Stripe charges in USD cents; activation email
+                    # shows the INR price the customer was quoted at
+                    # checkout-create time so the receipt matches the
+                    # plan card they clicked.
+                    amount_paise=PLAN_PRICES_INR.get(plan, 0),
+                ))
+
+        elif event.get("type") == "invoice.paid":
+            # Task #773: subscription renewals. The one-time
+            # /payments/stripe/create-checkout above uses
+            # mode="payment", but customers on a Stripe-managed
+            # subscription (created out-of-band or via a future
+            # subscription endpoint) will fire `invoice.paid` on
+            # every renewal. We must top up credits for the same
+            # plan, but never re-flip the plan column (the user
+            # already owns it from the original checkout) and
+            # never downgrade.
+            invoice = event["data"]["object"]
+            inv_id = invoice.get("id", "")
+            if not inv_id:
+                return {"received": True}
+            # Stripe puts subscription metadata on the invoice's
+            # `subscription_details.metadata` (API >= 2024-09); fall
+            # back to the first line item's metadata for older API
+            # versions / hand-rolled subscriptions.
+            inv_meta = (invoice.get("subscription_details") or {}).get("metadata") or {}
+            if not inv_meta:
+                lines = ((invoice.get("lines") or {}).get("data") or [{}])
+                inv_meta = (lines[0] or {}).get("metadata") or {}
+            user_id = inv_meta.get("user_id")
+            plan = inv_meta.get("plan")
+            if not user_id or plan not in PLAN_CREDITS:
+                logger.info(f"Stripe invoice.paid ignored (no user/plan metadata): invoice={inv_id}")
+                return {"received": True}
+            existing = await db.payments.find_one({"stripe_invoice_id": inv_id})
+            if existing and existing.get("status") == "completed":
+                logger.info(f"Stripe duplicate invoice.paid ignored: invoice={inv_id}")
+                return {"received": True}
+            credits = PLAN_CREDITS[plan]
+            now_iso = datetime.now(timezone.utc).isoformat()
+            await db.payments.insert_one(await _enrich_payment_record({
+                "user_id": user_id,
+                "plan": plan,
+                "provider": "stripe",
+                "status": "completed",
+                "stripe_invoice_id": inv_id,
+                "stripe_subscription_id": invoice.get("subscription", ""),
+                "amount_cents": invoice.get("amount_paid", 0),
+                "currency": invoice.get("currency", "usd"),
+                "verified_at": now_iso,
+                "renewal": True,
+            }))
+            await db.users.update_one(
+                {"id": user_id},
+                {"$set": {"updated_at": now_iso},
+                 "$inc": {"credits_limit": credits}},
+            )
+            if deps.pg_pool:
+                async with deps.pg_pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE users SET credits_limit=credits_limit+$1, updated_at=$2 WHERE id=$3",
+                        credits, now_iso, user_id,
+                    )
+            _redis_invalidate_session(user_id)
+            logger.info(f"Stripe renewal: user={user_id} plan={plan} credits+={credits} invoice={inv_id}")
         return {"received": True}
     except ImportError:
         raise HTTPException(503, "Stripe SDK not installed.")

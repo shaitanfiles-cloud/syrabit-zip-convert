@@ -216,3 +216,268 @@ def test_stripe_webhook_secret_missing_returns_503(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         _run(mon.stripe_webhook(req))
     assert exc.value.status_code == 503
+
+
+# ─────────────────────────────────────────────
+# Task #773 — happy-path coverage
+# ─────────────────────────────────────────────
+#
+# The signature-rejection cases above prove we don't *accept* fraud.
+# These cases prove we don't *drop* a real, signed payment: every
+# downstream side-effect (mongo plan flip, pg mirror, supa mirror,
+# activation email, redis session invalidation, payment row insert,
+# duplicate-event idempotency, downgrade guard) must fire exactly
+# once on a valid `checkout.session.completed`. A regression here
+# silently fails to upgrade a paying customer — which is what the
+# task title means by "successful payments can't be lost".
+
+
+def _install_fake_stripe(monkeypatch, event_payload: dict):
+    """Bypass real signature verification by stubbing
+    ``stripe.Webhook.construct_event`` to return the canned event.
+    The bad-signature test above already proves the real verifier
+    is wired in; here we exercise the post-verification branches
+    end-to-end."""
+    fake_stripe = MagicMock(name="stripe")
+    fake_stripe.Webhook = MagicMock()
+    fake_stripe.Webhook.construct_event = MagicMock(return_value=event_payload)
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    return fake_stripe
+
+
+def _reset_collections():
+    """Refresh the AsyncMock collections we will assert against —
+    other tests in the file (or earlier in the run) may have
+    `.assert_not_called()` expectations that previously resolved them
+    to specific AsyncMock instances we still hold references to.
+    Reassigning here gives each happy-path test a clean slate."""
+    deps.db.payments.find_one        = AsyncMock(return_value=None)
+    deps.db.payments.insert_one      = AsyncMock(return_value=None)
+    deps.db.payments.update_one      = AsyncMock(return_value=None)
+    deps.db.users.find_one           = AsyncMock(return_value=None)
+    deps.db.users.update_one         = AsyncMock(return_value=None)
+
+
+def test_stripe_webhook_checkout_session_completed_happy_path(
+    stub_stripe_keys, monkeypatch
+):
+    """A signed `checkout.session.completed` for an upgrading user
+    must:
+      * insert a `completed` payment row tagged with the session id,
+      * flip mongo `users.plan` + bump credits_limit,
+      * mirror the same plan/credits to Postgres,
+      * fire-and-forget mirror to Supabase (`_supa_mirror` called),
+      * queue the activation email via `email_templates`,
+      * invalidate the user's redis session.
+    """
+    _reset_collections()
+    # User is currently on free; the webhook should upgrade to pro.
+    deps.db.users.find_one = AsyncMock(return_value={
+        "id": "u-paying",
+        "plan": "free",
+        "email": "buyer@example.com",
+        "name": "Buyer",
+        "credits_limit": 0,
+    })
+
+    event = {
+        "type": "checkout.session.completed",
+        "data": {"object": {
+            "id": "cs_test_HAPPY",
+            "metadata": {"user_id": "u-paying", "plan": "pro"},
+            "amount_total": 1299,
+            "currency": "usd",
+        }},
+    }
+    _install_fake_stripe(monkeypatch, event)
+
+    # Patch the side-effecting collaborators so we can assert on them.
+    supa_mirror = MagicMock(name="_supa_mirror")
+    monkeypatch.setattr(mon, "_supa_mirror", supa_mirror)
+    redis_invalidate = MagicMock(name="_redis_invalidate_session")
+    monkeypatch.setattr(mon, "_redis_invalidate_session", redis_invalidate)
+    email_module = MagicMock(name="email_templates")
+    email_module.send_plan_activation = AsyncMock(return_value=None)
+    monkeypatch.setattr(mon, "email_templates", email_module)
+
+    req = _DummyRequest(
+        body=json.dumps(event).encode(),
+        headers={"stripe-signature": "t=0,v1=signed"},
+    )
+    out = _run(mon.stripe_webhook(req))
+    assert out == {"received": True}
+
+    # Idempotency probe ran with the right session id.
+    deps.db.payments.find_one.assert_awaited_once_with(
+        {"stripe_session_id": "cs_test_HAPPY"}
+    )
+    # Payment row written exactly once with status=completed and the
+    # canonical Stripe identifiers.
+    deps.db.payments.insert_one.assert_awaited_once()
+    inserted = deps.db.payments.insert_one.await_args.args[0]
+    assert inserted["status"] == "completed"
+    assert inserted["provider"] == "stripe"
+    assert inserted["stripe_session_id"] == "cs_test_HAPPY"
+    assert inserted["plan"] == "pro"
+    assert inserted["amount_cents"] == 1299
+    # Mongo plan flip happened with $set+$inc.
+    deps.db.users.update_one.assert_awaited_once()
+    upd_args = deps.db.users.update_one.await_args
+    assert upd_args.args[0] == {"id": "u-paying"}
+    assert upd_args.args[1]["$set"]["plan"] == "pro"
+    assert upd_args.args[1]["$set"]["document_access"] == "full"
+    assert upd_args.args[1]["$inc"]["credits_limit"] == mon.PLAN_CREDITS["pro"]
+    # Supa mirror queued exactly once.
+    assert supa_mirror.call_count == 1
+    # Redis session invalidated for this user.
+    redis_invalidate.assert_called_once_with("u-paying")
+    # Activation email queued (asyncio.create_task wraps the coro;
+    # assert the underlying call was made with the right kwargs).
+    email_module.send_plan_activation.assert_called_once()
+    email_kwargs = email_module.send_plan_activation.call_args.kwargs
+    assert email_kwargs["email"] == "buyer@example.com"
+    assert email_kwargs["plan"] == "pro"
+    assert email_kwargs["credits"] == mon.PLAN_CREDITS["pro"]
+    assert email_kwargs["amount_paise"] == mon.PLAN_PRICES_INR["pro"]
+
+
+def test_stripe_webhook_duplicate_session_is_idempotent(
+    stub_stripe_keys, monkeypatch
+):
+    """Stripe is at-least-once. A second `checkout.session.completed`
+    for the same session id (or a delayed retry) must NOT double-credit
+    or re-flip the plan."""
+    _reset_collections()
+    deps.db.payments.find_one = AsyncMock(return_value={
+        "stripe_session_id": "cs_test_DUP",
+        "status": "completed",
+    })
+
+    event = {
+        "type": "checkout.session.completed",
+        "data": {"object": {
+            "id": "cs_test_DUP",
+            "metadata": {"user_id": "u-paying", "plan": "pro"},
+            "amount_total": 1299,
+            "currency": "usd",
+        }},
+    }
+    _install_fake_stripe(monkeypatch, event)
+    supa_mirror = MagicMock()
+    monkeypatch.setattr(mon, "_supa_mirror", supa_mirror)
+
+    req = _DummyRequest(b"{}", headers={"stripe-signature": "t=0,v1=signed"})
+    out = _run(mon.stripe_webhook(req))
+    assert out == {"received": True}
+
+    # No write side-effects on the duplicate.
+    deps.db.payments.insert_one.assert_not_awaited()
+    deps.db.users.update_one.assert_not_awaited()
+    supa_mirror.assert_not_called()
+
+
+def test_stripe_webhook_downgrade_guard_logs_skipped(
+    stub_stripe_keys, monkeypatch
+):
+    """A late event for a lower-tier plan (e.g. user upgraded
+    starter→pro out-of-band, then a delayed starter checkout webhook
+    arrives) must NOT downgrade them. The payment is logged with
+    `status=skipped` so admins can audit, but `users.update_one` is
+    never called."""
+    _reset_collections()
+    deps.db.users.find_one = AsyncMock(return_value={
+        "id": "u-paying", "plan": "pro",
+    })
+
+    event = {
+        "type": "checkout.session.completed",
+        "data": {"object": {
+            "id": "cs_test_LATE",
+            "metadata": {"user_id": "u-paying", "plan": "starter"},
+            "amount_total": 199,
+            "currency": "usd",
+        }},
+    }
+    _install_fake_stripe(monkeypatch, event)
+
+    req = _DummyRequest(b"{}", headers={"stripe-signature": "t=0,v1=signed"})
+    out = _run(mon.stripe_webhook(req))
+    assert out == {"received": True}
+
+    # Payment row inserted, but as `skipped` with the audit reason.
+    deps.db.payments.insert_one.assert_awaited_once()
+    skipped = deps.db.payments.insert_one.await_args.args[0]
+    assert skipped["status"] == "skipped"
+    assert skipped["activation_skipped"] is True
+    assert "higher plan" in skipped["skip_reason"]
+    # User row was NOT mutated (no plan flip, no credit grant).
+    deps.db.users.update_one.assert_not_awaited()
+
+
+def test_stripe_webhook_invoice_paid_renewal_tops_up_credits(
+    stub_stripe_keys, monkeypatch
+):
+    """Subscription renewal: `invoice.paid` for a known plan must
+    add the same credit grant *without* re-flipping the plan column
+    (the user already owns it) and must be idempotent on invoice id."""
+    _reset_collections()
+    event = {
+        "type": "invoice.paid",
+        "data": {"object": {
+            "id": "in_test_RENEW",
+            "subscription": "sub_test_1",
+            "amount_paid": 1299,
+            "currency": "usd",
+            "subscription_details": {
+                "metadata": {"user_id": "u-paying", "plan": "pro"},
+            },
+            "lines": {"data": []},
+        }},
+    }
+    _install_fake_stripe(monkeypatch, event)
+
+    req = _DummyRequest(b"{}", headers={"stripe-signature": "t=0,v1=signed"})
+    out = _run(mon.stripe_webhook(req))
+    assert out == {"received": True}
+
+    deps.db.payments.find_one.assert_awaited_once_with(
+        {"stripe_invoice_id": "in_test_RENEW"}
+    )
+    deps.db.payments.insert_one.assert_awaited_once()
+    row = deps.db.payments.insert_one.await_args.args[0]
+    assert row["status"] == "completed"
+    assert row["renewal"] is True
+    assert row["stripe_invoice_id"] == "in_test_RENEW"
+    assert row["stripe_subscription_id"] == "sub_test_1"
+    # Renewal tops up credits but does NOT rewrite the `plan` column.
+    deps.db.users.update_one.assert_awaited_once()
+    upd = deps.db.users.update_one.await_args.args[1]
+    assert "plan" not in upd["$set"]
+    assert upd["$inc"]["credits_limit"] == mon.PLAN_CREDITS["pro"]
+
+
+def test_stripe_webhook_invoice_paid_unknown_plan_no_op(
+    stub_stripe_keys, monkeypatch
+):
+    """Defensive: an `invoice.paid` with no recognisable user_id /
+    plan in metadata (test invoices, ad-hoc invoices in the dashboard,
+    etc.) must return 200 without touching any collection — not 4xx,
+    or Stripe will keep retrying forever."""
+    _reset_collections()
+    event = {
+        "type": "invoice.paid",
+        "data": {"object": {
+            "id": "in_test_GHOST",
+            "amount_paid": 1,
+            "currency": "usd",
+            "lines": {"data": [{"metadata": {}}]},
+        }},
+    }
+    _install_fake_stripe(monkeypatch, event)
+
+    req = _DummyRequest(b"{}", headers={"stripe-signature": "t=0,v1=signed"})
+    out = _run(mon.stripe_webhook(req))
+    assert out == {"received": True}
+
+    deps.db.payments.insert_one.assert_not_awaited()
+    deps.db.users.update_one.assert_not_awaited()
