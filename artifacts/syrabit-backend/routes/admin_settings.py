@@ -130,8 +130,54 @@ async def admin_log_activity(data: dict, admin: dict = Depends(get_admin_user)):
 
 @router.delete("/admin/activity-log")
 async def admin_clear_activity_log(admin: dict = Depends(get_admin_user)):
-    await supa_clear_activity_log()
-    return {"message": "Activity log cleared"}
+    """Purge the activity log AND drop a self-audit breadcrumb.
+
+    Why the breadcrumb matters: without it, a malicious admin could clear
+    their own trail and the next admin would see an empty log with no
+    indication anything had been deleted. By inserting a fresh entry
+    immediately after the purge — attributed to the requesting admin,
+    level=danger, with the count of prior entries — we guarantee the act
+    of clearing is itself audited. The new entry then becomes the first
+    row of the rebuilt log so the next GET shows it on top.
+
+    Returns ``cleared`` (int) so the frontend can confirm "Deleted N
+    entries" rather than the previous opaque "Activity log cleared".
+    """
+    cleared = await supa_clear_activity_log()
+    breadcrumb_written = False
+    try:
+        breadcrumb_written = await supa_insert_activity_log({
+            "id": str(uuid.uuid4()),
+            "action": "activity_log_cleared",
+            "details": f"Cleared {cleared} prior entr{'y' if cleared == 1 else 'ies'}",
+            "level": "danger",
+            "admin_name": admin.get("name", "Admin"),
+            "admin_email": admin.get("email", ""),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        # Self-audit insert is best-effort — we must not surface 500 to
+        # the admin if e.g. supabase blips. supa_insert_activity_log
+        # already logs warnings per failed tier; we additionally log
+        # an error below if the purge's audit trail breadcrumb didn't
+        # land in any tier.
+        logger.warning(f"admin_clear_activity_log: breadcrumb insert raised: {e}")
+    if not breadcrumb_written:
+        # This is the failure mode that breaks the audit guarantee:
+        # purge succeeded, but no replacement entry exists to attribute
+        # the action. Surface it loudly so it triggers any LOG-level
+        # alerting and on-call can manually post a backfill entry.
+        logger.error(
+            "admin_clear_activity_log: purge succeeded (cleared=%s) but the "
+            "self-audit breadcrumb failed to persist to ANY tier — admin=%s "
+            "(email=%s) acted unattributably. Backfill required.",
+            cleared, admin.get("name", "Admin"), admin.get("email", ""),
+        )
+    return {
+        "message": "Activity log cleared",
+        "cleared": cleared,
+        "breadcrumb_written": breadcrumb_written,
+    }
 
 # ─────────────────────────────────────────────
 # ALERT DELIVERY TEST (Task #418)

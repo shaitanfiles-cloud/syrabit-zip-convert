@@ -809,7 +809,15 @@ async def supa_get_activity_logs(limit: int = 200):
     except Exception:
         return []
 
-async def supa_insert_activity_log(entry: dict):
+async def supa_insert_activity_log(entry: dict) -> bool:
+    """Insert an activity log entry across the pg → supa → mongo tiers.
+
+    Returns True if any tier accepted the write, False only when every
+    available tier raised. Callers that need observability on the
+    write outcome (e.g. the activity-log purge breadcrumb in
+    admin_clear_activity_log) can branch on the return; the existing
+    fire-and-forget callers ignore it without behavior change.
+    """
     if _deps_mod.pg_pool:
         try:
             async with _deps_mod.pg_pool.acquire() as conn:
@@ -821,33 +829,63 @@ async def supa_insert_activity_log(entry: dict):
                     entry.get("admin_name",""), entry.get("admin_email",""),
                     entry.get("created_at", datetime.now(timezone.utc).isoformat())
                 )
-            return
+            return True
         except Exception as e:
             logger.warning(f"pg supa_insert_activity_log failed: {e}")
     if supa:
         try:
             allowed = {"id", "action", "details", "level", "admin_name", "admin_email", "created_at"}
-            await _supa(lambda: supa.table("activity_log").insert({k: v for k, v in entry.items() if k in allowed}).execute()); return
+            await _supa(lambda: supa.table("activity_log").insert({k: v for k, v in entry.items() if k in allowed}).execute())
+            return True
         except Exception as e:
             logger.warning(f"supa_insert_activity_log failed: {e}")
     try:
         await db.activity_log.insert_one(entry)
-    except Exception: pass
+        return True
+    except Exception as e:
+        logger.warning(f"mongo supa_insert_activity_log failed: {e}")
+        return False
 
-async def supa_clear_activity_log():
+async def supa_clear_activity_log() -> int:
+    """Purge every row from the activity log.
+
+    Returns the number of rows actually deleted so callers can attribute
+    "Cleared N prior entries" in the immediate self-audit entry that
+    admin_settings.admin_clear_activity_log() inserts after this call —
+    that breadcrumb is the only thing standing between us and a malicious
+    admin silently erasing their own trail. Falls through the pg → supa →
+    mongo tiers in the same order as supa_get_activity_logs() so the count
+    matches whatever the GET endpoint would have returned. Returns 0 if
+    every tier fails (caller still inserts the self-audit entry — the
+    breadcrumb is more important than the count's accuracy).
+    """
     if _deps_mod.pg_pool:
         try:
             async with _deps_mod.pg_pool.acquire() as conn:
-                await conn.execute("DELETE FROM activity_log")
-            return
-        except Exception: pass
+                # Single round-trip: DELETE ... RETURNING id is cheaper
+                # than COUNT(*) followed by DELETE and avoids a TOCTOU
+                # race where another admin inserts between the two.
+                rows = await conn.fetch("DELETE FROM activity_log RETURNING id")
+                return len(rows)
+        except Exception as e:
+            logger.warning(f"pg supa_clear_activity_log failed: {e}")
     if supa:
         try:
-            await _supa(lambda: supa.table("activity_log").delete().neq("id", "").execute()); return
-        except Exception: pass
+            # supabase-py doesn't surface a delete-count, so we count
+            # first then delete. The window between the two is tiny and
+            # acceptable for an audit-trail caption.
+            cnt_resp = await _supa(lambda: supa.table("activity_log").select("id", count="exact").limit(1).execute())
+            count = int(getattr(cnt_resp, "count", 0) or 0)
+            await _supa(lambda: supa.table("activity_log").delete().neq("id", "").execute())
+            return count
+        except Exception as e:
+            logger.warning(f"supa supa_clear_activity_log failed: {e}")
     try:
-        await db.activity_log.delete_many({})
-    except Exception: pass
+        result = await db.activity_log.delete_many({})
+        return int(getattr(result, "deleted_count", 0) or 0)
+    except Exception as e:
+        logger.warning(f"mongo supa_clear_activity_log failed: {e}")
+        return 0
 
 async def supa_get_notifications(limit: int = 100):
     if _deps_mod.pg_pool:
