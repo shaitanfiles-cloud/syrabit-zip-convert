@@ -27,10 +27,13 @@
  *      id="trustpilot-aggregaterating-static"> in the <head> of
  *      EVERY index.html under dist/ — so the SPA fallback shell AND
  *      every prerendered route's HTML carries the schema.
- *   4. If no source returns positive review counts, the script logs
- *      loudly and EXITS 0 without injecting — better to ship no
- *      aggregateRating than fake / zero values that would trigger
- *      Search Console structured-data warnings.
+ *   4. If no source returns positive review counts (live fetch fails
+ *      AND the committed cache is empty/invalid), the script logs
+ *      loudly, strips any stale injected tag, and EXITS NON-ZERO so
+ *      the build refuses to ship — honest-failure mode. Better to
+ *      block deploy than to silently ship a homepage without the
+ *      aggregateRating Search Console expects, or with stale numbers
+ *      from an unrelated previous build.
  *
  * The script is idempotent: re-running on a dist/ that already has
  * the script tag replaces it (so multiple builds in the same dir
@@ -286,10 +289,14 @@ async function main() {
 
   if (!agg) {
     log("no aggregate available from ANY source (backend, trustpilot-direct, cache).");
-    log("=> Static HTML will NOT carry aggregateRating until a live source returns positive review counts.");
-    log("=> This is intentional: shipping fake/zero values would trigger Search Console structured-data warnings.");
+    log("=> HONEST-FAILURE MODE: refusing to ship a build without aggregateRating.");
+    log("=> Fix one of:");
+    log("   - make the backend at " + BACKEND_BASE + "/api/config/trustpilot/aggregate return positive ratingValue+ratingCount");
+    log("   - export TRUSTPILOT_API_KEY + TRUSTPILOT_BUSINESS_UNIT_ID so the build can hit Trustpilot directly");
+    log("   - commit a non-null " + path.relative(process.cwd(), cacheFile) + " (a previous successful build will write this for you)");
     // Idempotency: STRIP any previously-injected script tag from dist/
-    // so a stale build artifact can't ship outdated review numbers.
+    // so the failing build cannot leave stale review numbers behind
+    // for a downstream packager to pick up.
     const stripPattern = new RegExp(
       `\\s*<script[^>]*id=["']${SCRIPT_ID}["'][^>]*>[\\s\\S]*?<\\/script>`,
       "g",
@@ -307,7 +314,7 @@ async function main() {
     if (stripped > 0) {
       log(`stripped stale aggregate-rating tag from ${stripped} HTML file(s)`);
     }
-    process.exit(0);
+    process.exit(1);
   }
 
   const tag = buildJsonLdScript(agg);
