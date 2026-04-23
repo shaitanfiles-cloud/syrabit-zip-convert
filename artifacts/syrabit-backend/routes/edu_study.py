@@ -171,7 +171,11 @@ def _note_row_to_dict(row) -> dict:
         "tags": list(row["tags"] or []),
         "created_at": row["created_at"].isoformat(),
         "updated_at": row["updated_at"].isoformat(),
-        "claimed_at": row["claimed_at"].isoformat() if row["claimed_at"] else None,
+        "claimed_at": (
+            row["claimed_at"].isoformat()
+            if "claimed_at" in row.keys() and row["claimed_at"]
+            else None
+        ),
         "generated": bool(row["generated"]) if "generated" in row.keys() else False,
         "structured": structured,
         "citations": citations or [],
