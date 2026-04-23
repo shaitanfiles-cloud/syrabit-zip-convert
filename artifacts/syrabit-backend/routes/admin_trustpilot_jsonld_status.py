@@ -357,11 +357,18 @@ def _compute_url_failure_streaks(
             # Pass resets — drop from both ledgers implicitly (we simply
             # don't carry them forward).
             continue
-        streak = prior_streaks.get(url, 0) + 1
-        new_streaks[url] = streak
-        if url in prior_alerted:
-            # Already paged on this ongoing streak — keep the dedup flag
-            # so the next run knows not to re-page.
+        # Take the prior streak counter once — a malformed payload that
+        # lists the same URL twice must not double-increment, and must
+        # not fire the alert twice for the same threshold crossing.
+        if url in new_streaks:
+            streak = new_streaks[url]
+        else:
+            streak = prior_streaks.get(url, 0) + 1
+            new_streaks[url] = streak
+        if url in prior_alerted or url in new_alerted:
+            # Already paged on this ongoing streak (either in a prior
+            # ingest, or earlier in this very payload) — keep the dedup
+            # flag so the next run knows not to re-page.
             new_alerted.add(url)
         elif streak >= _STREAK_THRESHOLD:
             new_alerted.add(url)

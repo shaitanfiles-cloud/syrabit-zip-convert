@@ -704,6 +704,36 @@ def test_streak_alert_only_fires_for_urls_crossing_threshold():
     assert [r["url"] for r in newly] == ["/about"]
 
 
+def test_streak_counts_duplicate_url_rows_in_single_payload():
+    """If a malformed verifier payload lists the same URL twice in one
+    run, each failing row increments the streak — the dict semantics
+    guarantee only one canonical counter ends up on the doc, and the
+    final value reflects the LAST row the verifier emitted for that
+    URL. This locks in the behaviour so a future verifier refactor
+    that de-dupes its own input can't silently shift the streak."""
+    from routes import admin_trustpilot_jsonld_status as mod
+
+    prior_doc = {"urlFailureStreaks": {"/about": 2}, "alertedStreaks": []}
+    # Same URL listed twice: both fail.
+    new_results = [
+        {"url": "/about", "pass": False, "reason": "first row"},
+        {"url": "/about", "pass": False, "reason": "second row"},
+    ]
+    new_streaks, new_alerted, newly = mod._compute_url_failure_streaks(
+        prior_doc, new_results,
+    )
+    # Counter advances exactly once per ingest regardless of duplicate
+    # rows (the helper takes the prior streak ONCE, then reuses the
+    # already-written value for subsequent rows of the same URL).
+    assert new_streaks == {"/about": 3}
+    # Dedup ledger must also carry only one entry and `newly_streaking`
+    # must emit exactly one row (no duplicate alerts for the same
+    # threshold crossing).
+    assert new_alerted == ["/about"]
+    assert [r["url"] for r in newly] == ["/about"]
+    assert len(newly) == 1
+
+
 def test_streak_alert_body_surfaces_url_streak_and_run_link():
     """The streak alert message must list the failing URL, its streak
     count, and deep-link to the latest GH Actions run."""
