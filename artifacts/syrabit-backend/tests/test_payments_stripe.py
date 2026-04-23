@@ -378,6 +378,20 @@ def test_stripe_webhook_checkout_session_completed_happy_path(
     email_module.send_plan_activation = AsyncMock(return_value=None)
     monkeypatch.setattr(mon, "email_templates", email_module)
 
+    # Drain the activation-email coroutine inline instead of letting
+    # `asyncio.create_task` schedule it on a loop that closes mid-test
+    # (which produces the "coroutine was never awaited" RuntimeWarning).
+    # Replacing create_task with a synchronous "consume the coroutine"
+    # shim keeps the production code unchanged while cleaning up the
+    # test output.
+    def _drain_coro(coro):
+        try:
+            coro.send(None)
+        except (StopIteration, AttributeError):
+            pass
+        return MagicMock()
+    monkeypatch.setattr(mon.asyncio, "create_task", _drain_coro)
+
     # Stand up a fake pg_pool so we can assert the SQL UPDATE fires.
     pg_conn = AsyncMock(name="pg_conn")
     pg_conn.execute = AsyncMock(return_value=None)
