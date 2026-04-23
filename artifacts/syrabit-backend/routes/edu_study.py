@@ -31,18 +31,16 @@ from __future__ import annotations
 import io
 import csv
 import json
-import time
 import uuid
 import hmac
-import base64
 import hashlib
 import logging
 import re
 from datetime import datetime, timezone, timedelta, date
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from auth_deps import get_current_user, get_current_user_optional, check_rate_limit, get_user_credits

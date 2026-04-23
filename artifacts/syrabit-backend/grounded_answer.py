@@ -40,11 +40,11 @@ from rag import (
     build_rag_system_prompt,
 )
 from edu_reader import fetch_and_extract
-from guardrails.web_safety import filter_web_results, score_text_kid_safety, redact_text
+from guardrails.web_safety import filter_web_results, score_text_kid_safety
 from guardrails.prompt_safety import evaluate_prompt_safety, validate_llm_output
 from llm import call_llm_api_stream
 from cache import (
-    _redis_get_ai_cache_async, _redis_set, REDIS_AI_CACHE_TTL,
+    REDIS_AI_CACHE_TTL,
     build_ai_cache_key, ai_cache_aget, ai_cache_aset,
     ai_cache_record_hit_saved_latency, ai_cache_expected_saved_ms,
 )

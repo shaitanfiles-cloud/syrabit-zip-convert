@@ -5,7 +5,7 @@ from collections import defaultdict as _defaultdict
 from datetime import datetime, timezone, timedelta
 import httpx
 import deps as _deps_mod
-from deps import db, redis_client, supa, logger as _dep_logger
+from deps import db, supa
 from config import SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_ANON_KEY, EMAIL_FROM, LLM_MODEL
 import cache as _cache_mod
 from cache import _redis_get_search

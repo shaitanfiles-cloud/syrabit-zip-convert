@@ -1,13 +1,11 @@
 """Syrabit.ai — Database operations: supa_*, pg_* helpers."""
 import json, asyncio, logging, uuid, concurrent.futures as _cf
-from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
-from fastapi import HTTPException
 import deps as _deps_mod
-from deps import supa, db, redis_client, logger as _dep_logger
+from deps import supa, db, redis_client
 from cache import (
     _invalidate_user_cache, _user_cache, _conv_cache, _conv_cache_key,
-    _invalidate_conv_cache, _redis_cache_session, _redis_get_conversation,
+    _invalidate_conv_cache, _redis_get_conversation,
     _redis_invalidate_conversation, _redis_cache_conversation,
 )
 

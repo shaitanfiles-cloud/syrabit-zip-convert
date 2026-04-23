@@ -1,23 +1,15 @@
 """Syrabit.ai — Admin auth, users, conversations"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
-from typing import Optional, List, Dict, Any, Union
+import json, asyncio, uuid, logging
+from typing import Optional
 from datetime import datetime, timezone, timedelta
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    APIRouter, HTTPException, Depends, Response, Cookie,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
-import mistune as _mistune
+from pydantic import BaseModel
 
 from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserRoleUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
+    AdminLoginReq, UserStatusUpdate, UserPlanUpdate, UserRoleUpdate, UserCreditsUpdate,
 )
 from config import (
     ADMIN_ACCOUNTS,
@@ -39,9 +31,7 @@ from cache import (
     redis_list_all_anon_conversations,
 )
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    create_token, decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional, JWTError,
+    get_admin_user, create_access_token, create_token, decode_token, get_user_credits, get_current_user_optional, JWTError,
     get_rate_limit_count, reset_rate_limit,
 )
 from db_ops import (
@@ -54,7 +44,6 @@ from db_ops import (
     supa_list_users,
     supa_update_user,
 )
-from llm import call_llm_api, call_llm_api_stream
 from analytics_helpers import get_recent_user_events
 import cloudflare_client
 from cf_access import require_cf_access_admin

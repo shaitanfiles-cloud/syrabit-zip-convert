@@ -1,24 +1,14 @@
 """Syrabit.ai — Content & library routes"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
+import re, json, asyncio, logging, base64
 import cachetools
-from typing import Optional, List, Dict, Any, Union
-from datetime import datetime, timezone, timedelta
+from typing import Optional
+from datetime import datetime, timezone
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    APIRouter, HTTPException, Depends, Query, Response,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
-import mistune as _mistune
 
 from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
+    DocumentUpload, LibraryBundleOut,
 )
 from deps import (
     db,
@@ -34,11 +24,8 @@ from cache import (
     set_hierarchy_cache,
 )
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional,
+    get_admin_user,
 )
-from llm import call_llm_api, call_llm_api_stream
 from utils import (
     _slow_query,
     slugify_title,

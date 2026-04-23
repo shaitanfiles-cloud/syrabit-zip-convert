@@ -11,7 +11,7 @@ from config import (
     JWT_REFRESH_EXPIRE_MINUTES, JWT_EXPIRE_MINUTES,
     ADMIN_JWT_SECRET, PLAN_LIMITS,
 )
-from deps import security, redis_client, logger as _dep_logger
+from deps import security, redis_client
 from cache import _redis_get_session, _redis_cache_session
 from cf_access import require_cf_access_admin
 

@@ -32,7 +32,7 @@ from auth_deps import (
 from edu_allowlist import (
     effective_allowlist, list_overrides, upsert_override,
     remove_override, list_blocked_requests, _refresh_overrides_cache,
-    BASE_ALLOWLIST, EDU_ALLOWLIST_COLLECTION, EDU_REQUESTED_SITES_COLLECTION,
+    EDU_ALLOWLIST_COLLECTION, EDU_REQUESTED_SITES_COLLECTION,
     EDU_USER_STATE_COLLECTION,
     _normalize_domain, is_allowed_url, is_domain_hard_blocked,
 )

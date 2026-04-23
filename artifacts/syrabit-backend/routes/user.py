@@ -1,35 +1,22 @@
 """Syrabit.ai — User profile & account routes"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
-from typing import Optional, List, Dict, Any, Union
+import logging, base64
+from typing import Optional
 from datetime import datetime, timezone, timedelta
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    APIRouter, HTTPException, Depends, File, UploadFile,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
-import mistune as _mistune
 
 from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
+    OnboardingData, ProfileUpdate,
 )
 import deps
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional,
+    get_current_user, get_user_credits, get_current_user_optional,
 )
 from db_ops import (
     supa_get_conversations,
     supa_update_user,
 )
-from llm import call_llm_api, call_llm_api_stream
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +111,6 @@ async def upload_avatar(
     max_size = 2 * 1024 * 1024
     if len(file_content) > max_size:
         raise HTTPException(status_code=400, detail="Image must be under 2 MB")
-    import base64
     b64 = base64.b64encode(file_content).decode("utf-8")
     data_url = f"data:{file.content_type};base64,{b64}"
     await supa_update_user(user["id"], {"avatar_url": data_url})

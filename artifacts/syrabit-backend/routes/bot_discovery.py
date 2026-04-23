@@ -5,7 +5,6 @@ from typing import Optional, List, Dict
 from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks, Request
-from fastapi.responses import Response
 
 logger = logging.getLogger(__name__)
 

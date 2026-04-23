@@ -1,26 +1,19 @@
 """Syrabit.ai — CMS documents, Sarvam AI, health checks, studio"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
-from typing import Optional, List, Dict, Any, Union
+import re, json, asyncio, time, uuid, logging, hashlib, os, html as _html_mod
+from typing import Optional, List
 from datetime import datetime, timezone, timedelta
 from fastapi import (
     APIRouter, HTTPException, Depends, Query, Body, Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    File, UploadFile, Response, Form,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
+from fastapi.responses import JSONResponse, HTMLResponse
 from starlette.requests import Request as StarletteRequest
 from starlette.middleware.base import BaseHTTPMiddleware
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel
 import cachetools, httpx
-import mistune as _mistune
 
 from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
+    HealthOut, ReadyOut,
 )
 from config import (
     LLM_MODEL,
@@ -42,24 +35,20 @@ from cache import (
 )
 from routes.admin_monetization import merge_subject_content, _md_to_html as _blog_md_to_html, _extract_headings_json, preprocess_markdown
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional,
+    get_current_user, get_admin_user,
 )
 from db_ops import (
     _pg_rows,
     _supa,
     supa_list_users,
 )
-from llm import call_llm_api, call_llm_api_content, call_llm_api_stream, _LLM_PROVIDERS, _llm_batcher
+from llm import call_llm_api, call_llm_api_content, _LLM_PROVIDERS, _llm_batcher
 from cache import _content_cache, _ai_response_cache, _redis_hit_count, _redis_miss_count
-import metrics as _metrics_mod
 from metrics import (
     _metrics, _health_deps_cache, _health_deps_cache_at, _HEALTH_CACHE_TTL_S,
     _metrics_history, _metrics_history_lock, _METRICS_HISTORY_MAX,
-    _snapshot_metrics, _start_metrics_collector, _startup_time,
-    _check_health_deps, _dispatch_alert, _alerting_loop,
-    _ALERT_COOLDOWN_S, _alert_last_fired, _ALERT_THRESHOLDS,
+    _snapshot_metrics, _startup_time,
+    _check_health_deps, _ALERT_THRESHOLDS,
 )
 from rag import _embed_and_store_page
 from seo_engine import _md_to_html
@@ -1412,8 +1401,6 @@ async def delete_document(document_id: str, admin: dict = Depends(get_admin_user
 # ENHANCED HEALTH
 # ─────────────────────────────────────────────
 import time as _time_mod
-import threading as _threading
-from collections import defaultdict as _defaultdict
 
 
 @router.get("/ready", response_model=ReadyOut)
@@ -1821,7 +1808,6 @@ async def metrics_history(minutes: int = 60, admin: dict = Depends(get_admin_use
         "window_minutes": minutes,
     }
 
-from qa_engine import log_chat_message as _log_chat_message
 
 # ─────────────────────────────────────────────
 # SARVAM AI — Translate, TTS, Transliterate
@@ -1842,7 +1828,7 @@ def _normalise_lang(code: str) -> str:
     return code
 
 def _sarvam_cache_key(op: str, payload: dict) -> str:
-    import hashlib, json
+    import json
     raw = json.dumps(payload, sort_keys=True)
     return f"sarvam:{op}:{hashlib.md5(raw.encode()).hexdigest()}"
 
@@ -3102,7 +3088,6 @@ def _bot_html_response(html: str, *, robots_tag: str = "index, follow"):
     HTTP `X-Robots-Tag` header agrees with the noindex meta in the body
     instead of overriding it with a global `index, follow`.
     """
-    from fastapi.responses import HTMLResponse
     return HTMLResponse(
         content=html, status_code=200,
         headers={

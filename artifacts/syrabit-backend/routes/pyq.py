@@ -1,35 +1,20 @@
 """Syrabit.ai — PYQ upload, processing, and serving"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod, httpx
-from typing import Optional, List, Dict, Any, Union
-from datetime import datetime, timezone, timedelta
+import re, json, asyncio, uuid, logging, os, base64, httpx
+from typing import List
+from datetime import datetime
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    APIRouter, HTTPException, Depends, File, UploadFile, Form,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
-import mistune as _mistune
+from pydantic import BaseModel
 
-from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
-)
 from deps import (
     db,
     supa,
 )
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional,
+    get_admin_user,
 )
 from db_ops import _THREAD_POOL
-from llm import call_llm_api, call_llm_api_stream
 from utils import _extract_keywords
 import vertex_services
 

@@ -3,11 +3,10 @@ Universal LLM adapter — supports Groq and OpenAI providers.
 Automatically selects the right client based on provider setting.
 Routes through Cloudflare AI Gateway when configured.
 """
-import asyncio
 import logging
 
 from config import (
-    CF_CACHE_TTL, is_cf_gateway_up, mark_cf_gateway_down, get_provider_base_url,
+    mark_cf_gateway_down, get_provider_base_url,
     byok_headers,
 )
 

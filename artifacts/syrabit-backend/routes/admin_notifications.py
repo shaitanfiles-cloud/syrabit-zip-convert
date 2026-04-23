@@ -1,30 +1,16 @@
 """Syrabit.ai — Admin notifications, push, exam schedule, export, rate policies"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
-from typing import Optional, List, Dict, Any, Union
+import re, json, asyncio, uuid, logging, csv, base64
+from typing import Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
 from fastapi import (
     APIRouter, HTTPException, Depends, Query, Body,
     Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    File, UploadFile, Response,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
-import mistune as _mistune
 
-from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
-)
 from deps import db
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional,
+    get_current_user, get_admin_user,
 )
 from db_ops import (
     _ADMIN_NOTIF_PREFS_DEFAULTS,
@@ -37,7 +23,6 @@ from db_ops import (
     supa_list_users,
     upsert_admin_notification_prefs,
 )
-from llm import call_llm_api, call_llm_api_stream
 
 logger = logging.getLogger(__name__)
 
@@ -629,7 +614,6 @@ async def admin_exam_schedule_toggle(exam_id: str, data: dict, admin: dict = Dep
 # ─────────────────────────────────────────────
 # ADMIN EXPORT — CSV/JSON
 # ─────────────────────────────────────────────
-import csv
 import io as _io
 
 @router.get("/admin/export/users")

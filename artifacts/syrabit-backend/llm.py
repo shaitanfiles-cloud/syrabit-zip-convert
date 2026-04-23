@@ -35,19 +35,19 @@ _MODEL_MAX_OUTPUT_TOKENS = {
 def _clamp_max_tokens(model: str, max_tokens: int) -> int:
     cap = _MODEL_MAX_OUTPUT_TOKENS.get(model)
     return min(max_tokens, cap) if cap else max_tokens
-from typing import Dict, Optional
+from typing import Dict
 from fastapi import HTTPException
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 from config import (
     LLM_PROVIDER, LLM_MODEL, OPENAI_API_KEY, SARVAM_THINK_BUFFER,
-    _GROQ_KEY, _GROQ_KEY_2, _GEMINI_KEY, _GEMINI_KEY_2, _XAI_KEY, _OPENAI_KEY,
+    _GROQ_KEY, _GROQ_KEY_2, _GEMINI_KEY, _GEMINI_KEY_2, _OPENAI_KEY,
     _SARVAM_LLM_KEY, _SARVAM_LLM_KEY_2, _SARVAM_LLM_KEY_3, _CEREBRAS_KEY, _OPENROUTER_KEY, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
-    CF_GATEWAY_ENABLED, CF_CACHE_TTL, is_cf_gateway_up, mark_cf_gateway_down, get_provider_base_url,
+    is_cf_gateway_up, mark_cf_gateway_down, get_provider_base_url,
     byok_headers,
     VERTEX_GEMINI_MODEL,
 )
 import vertex_chat as _vertex_chat
-from deps import sarvam_llm_client, sarvam_llm_client_direct, logger as _dep_logger
+from deps import sarvam_llm_client, sarvam_llm_client_direct
 from cache import _cache_key
 
 logger = logging.getLogger(__name__)

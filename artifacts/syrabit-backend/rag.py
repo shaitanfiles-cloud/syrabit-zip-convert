@@ -1,14 +1,9 @@
 """Syrabit.ai — LLM knowledge-based responses (web search and RAG removed)."""
-import os, re, asyncio, time, uuid, hashlib, logging
+import re, asyncio, time, hashlib, logging
 from typing import Optional, Dict, List
 from datetime import datetime, timezone
-from fastapi import HTTPException
-from deps import db, logger as _dep_logger, _assert_not_cms_context, is_mongo_available
-from cache import (
-    _cache_key, _redis_get_search, _redis_cache_search,
-    _redis_get_ai_cache, _redis_set,
-)
-from utils import _extract_keywords, _slow_query
+from deps import db, is_mongo_available
+from utils import _extract_keywords
 
 logger = logging.getLogger(__name__)
 
@@ -630,7 +625,6 @@ def build_rag_system_prompt(
     response_lang: str = "",
 ) -> str:
     from prompts import build_system_prompt, classify_intent, _format_board_label as _fbl, get_intent_extraction_rules
-    import re as _re
     base_prompt = build_system_prompt(
         context, user_info=user_info, query=query,
         resolved_intent=resolved_intent, response_lang=response_lang,

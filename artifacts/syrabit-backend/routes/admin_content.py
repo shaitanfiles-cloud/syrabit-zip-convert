@@ -1,5 +1,5 @@
 """Syrabit.ai — Admin content CRUD & thumbnails"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
+import re, json, asyncio, uuid, logging, base64
 
 _PRERENDER_LOG = logging.getLogger("syrabit.prerender_refresh")
 
@@ -75,24 +75,15 @@ def _schedule_indexnow_for_chapter(chapter_doc: dict):
         loop.create_task(_do())
     except Exception:
         pass
-from typing import Optional, List, Dict, Any, Union
-from datetime import datetime, timezone, timedelta
+from typing import Optional
+from datetime import datetime, timezone
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    APIRouter, HTTPException, Depends, Query, Body, File, UploadFile, Request, BackgroundTasks,
+    Form,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
-import mistune as _mistune
 
 from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
+    SubjectCreate, ChapterCreate, ChunkCreate,
 )
 from config import _GROQ_KEY
 from deps import (
@@ -107,11 +98,8 @@ from routes.content import (
     clear_draft_served_subject as _clear_draft_served_subject,
 )
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional,
+    get_admin_user,
 )
-from llm import call_llm_api, call_llm_api_stream
 from rag import (
     auto_chunk_content,
     rechunk_chapter,
@@ -942,8 +930,7 @@ def _inpaint_region(img, box, method=0):
     box = (x0, y0, x1, y1) in pixel coords.
     method: 0=gaussian blur fill, 1=edge-color gradient, 2=median + blur
     """
-    from PIL import Image, ImageFilter, ImageDraw
-    import random as _rand
+    from PIL import Image, ImageFilter
 
     W, H = img.size
     x0 = max(0, int(box[0]))
@@ -1369,7 +1356,7 @@ async def generate_ai_thumbnails_bulk(
 
 def _generate_chapter_card_wallpaper(chapter_title: str, subject_name: str, variant: int = 0, size=(400, 225)) -> str:
     from PIL import Image as _PILImage, ImageDraw as _Draw
-    import io as _io, hashlib as _hl, struct as _st, math as _math
+    import io as _io, hashlib as _hl
 
     seed = int(_hl.md5(f"{chapter_title}:{subject_name}:{variant}".encode()).hexdigest()[:8], 16)
     palette_sets = [

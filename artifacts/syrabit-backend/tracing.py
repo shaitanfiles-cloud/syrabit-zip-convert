@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import contextmanager
-from typing import Any, Iterator, Optional
+from typing import Any, Iterator
 
 logger = logging.getLogger(__name__)
 

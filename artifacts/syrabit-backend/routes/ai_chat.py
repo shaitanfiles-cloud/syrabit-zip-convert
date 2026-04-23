@@ -1,25 +1,17 @@
 """Syrabit.ai — AI chat & search routes"""
-import re, json, asyncio, time, time as _time_mod, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
+import re, json, asyncio, time as _time_mod, uuid, logging
 
-from typing import Optional, List, Dict, Any, Union
-from datetime import datetime, timezone, timedelta
+from typing import Optional
+from datetime import datetime, timezone
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    APIRouter, HTTPException, Depends, Request,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
+from fastapi.responses import StreamingResponse
 import cachetools
-import mistune as _mistune
 
 from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
+    ChatMessage,
+    SearchResultOut,
 )
 from config import (
     CF_TURNSTILE_ENABLED,
@@ -38,9 +30,6 @@ from cache import (
     REDIS_AI_CACHE_TTL,
     REDIS_CASUAL_CACHE_TTL,
     _ai_response_cache,
-    _cache_key,
-    _redis_get_ai_cache,
-    _redis_get_ai_cache_async,
     _redis_set,
     _syllabus_cache,
     _syllabus_cache_key,
@@ -51,9 +40,7 @@ from cache import (
     ai_cache_expected_saved_ms,
 )
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional, rate_limit_chat_optional,
+    get_user_credits, rate_limit_chat_optional,
 )
 from db_ops import (
     atomic_deduct_credit,
@@ -63,7 +50,7 @@ from db_ops import (
     supa_update_user,
     supa_upsert_conversation,
 )
-from llm import call_llm_api, call_llm_api_chat, call_llm_api_stream
+from llm import call_llm_api_chat, call_llm_api_stream
 from rag import (
     _fetch_internal_chapters,
     _record_chat_latency,
@@ -75,11 +62,10 @@ from rag import (
     syrabit_library_search,
     web_search_with_fallback,
 )
-from prompts import _classify_intent, classify_intent, _is_out_of_scope_response, extract_semester_number
+from prompts import classify_intent, _is_out_of_scope_response, extract_semester_number
 from tracing import (
     record_chat_attrs,
     record_first_token,
-    get_current_trace_id,
     emit_phase_span,
 )
 from followup_context import detect_followup, build_followup_context, merge_followup_into_query

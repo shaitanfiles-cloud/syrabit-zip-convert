@@ -1,5 +1,5 @@
 """Syrabit.ai — Utility functions: bot detection, device type, country, keywords, etc."""
-import re, time as _time_mod, logging, asyncio, hashlib, uuid
+import re, time as _time_mod, logging, uuid
 import dns.resolver
 import dns.reversename
 from typing import Optional

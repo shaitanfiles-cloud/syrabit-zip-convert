@@ -1,24 +1,15 @@
 """Syrabit.ai — Authentication routes"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
-from pymongo.errors import DuplicateKeyError
-from typing import Optional, List, Dict, Any, Union
+import json, asyncio, uuid, logging
+from typing import Optional
 from datetime import datetime, timezone, timedelta
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    APIRouter, HTTPException, Depends, Response, Request,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
-import mistune as _mistune
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
+    UserCreate, UserLogin, UserOut, TokenOut, PasswordResetReq, PasswordResetConfirm,
     GoogleAuthRequest,
 )
 from config import (
@@ -31,9 +22,8 @@ from config import (
 )
 from deps import pwd_ctx
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional,
+    get_current_user, create_access_token, create_refresh_token,
+    get_user_credits, get_current_user_optional,
 )
 from db_ops import (
     supa_create_password_reset,
@@ -46,7 +36,6 @@ from db_ops import (
     supa_update_user,
     supa_update_user_password,
 )
-from llm import call_llm_api, call_llm_api_stream
 from turnstile_verify import require_turnstile
 import email_templates
 

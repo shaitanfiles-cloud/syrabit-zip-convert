@@ -1,8 +1,8 @@
 """Syrabit.ai — Database seeding logic."""
-import uuid, logging, asyncio
+import uuid, logging
 from datetime import datetime, timezone
 from config import SEED_DATA, ADMIN_ACCOUNTS
-from deps import db, pwd_ctx, is_mongo_available, logger as _dep_logger
+from deps import db, pwd_ctx, is_mongo_available
 
 logger = logging.getLogger(__name__)
 

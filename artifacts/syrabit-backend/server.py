@@ -4,11 +4,9 @@ AHSEC AI-Powered Educational Platform
 
 Thin entry point: creates the app, mounts middleware, and includes all route modules.
 """
-import os, sys, json, uuid, logging, asyncio, fcntl
+import os, sys, json, logging, asyncio, fcntl
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Optional
-from datetime import datetime, timezone
 
 from fastapi import FastAPI, APIRouter, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -111,12 +109,10 @@ def _validate_env():
 _validate_env()
 
 from config import ROOT_DIR, CORS_ORIGINS, CORS_ORIGIN_REGEX, _CORS_ALLOW_CREDENTIALS
-import deps
 from deps import (
-    db, supa, sarvam_client, sarvam_translate_client, sarvam_llm_client,
+    db, sarvam_client, sarvam_translate_client, sarvam_llm_client,
     sarvam_client_direct, sarvam_llm_client_direct,
-    mongo_client, logger, _rate_cleanup_task, _init_pg_pool,
-    is_mongo_available,
+    mongo_client, logger, _init_pg_pool,
 )
 from auth_deps import _rate_limiter_cleanup
 from seed import ensure_seeded
@@ -125,7 +121,6 @@ from metrics import _bg_health_loop, _alerting_loop
 from routes.bot_discovery import _endpoint_health_alert_loop, _seo_health_alert_loop, _seo_weekly_digest_loop, _cf_bot_report_loop
 from routes.bot_traffic_report import _bot_traffic_report_loop
 
-from prompts import build_system_prompt, _classify_question
 from syllabus_embedder import SyllabusEmbedder
 
 _syllabus_embedder: Optional[SyllabusEmbedder] = None
@@ -1045,14 +1040,14 @@ api.include_router(edu_browser_router)
 api.include_router(edu_study_router)
 api.include_router(admin_seo_keywords_router)
 
-from llm import call_llm_api, call_llm_api_content
+from llm import call_llm_api_content
 from auth_deps import get_admin_user
 
 from seo_engine import router as seo_router, init_seo_engine
 init_seo_engine(db, call_llm_api_content, get_admin_user, log_activity_fn=supa_insert_activity_log)
 api.include_router(seo_router)
 
-from qa_engine import public_router as qa_public_router, admin_router as qa_admin_router, init_qa_engine, ensure_qa_indexes
+from qa_engine import public_router as qa_public_router, admin_router as qa_admin_router, init_qa_engine
 init_qa_engine(db, get_admin_user)
 api.include_router(qa_public_router)
 api.include_router(qa_admin_router)
