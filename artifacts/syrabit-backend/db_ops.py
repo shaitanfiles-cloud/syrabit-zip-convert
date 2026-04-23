@@ -337,6 +337,18 @@ async def atomic_deduct_credit(uid: str, current_used: int, current_limit: int) 
     # below executes atomically inside Redis, so only callers that fit
     # within ``current_limit`` ever see a successful return.
     if redis_client:
+        # Task #769: we've left the Postgres happy path — record the
+        # fallback so the alerting loop can page on-call when PG is
+        # silently broken. Recording before the attempt ensures we
+        # capture the event even if the Redis op itself raises and
+        # cascades to Supabase below (in which case both events fire,
+        # which is correct: both fallback paths were exercised).
+        # Lazy import avoids an import cycle with metrics.py.
+        try:
+            from metrics import record_credit_fallback as _rcf
+            _rcf("redis")
+        except Exception:
+            pass
         try:
             redis_key = f"daily_credits:{uid}:{today_str}"
             new_count = _redis_atomic_deduct(
@@ -351,6 +363,12 @@ async def atomic_deduct_credit(uid: str, current_used: int, current_limit: int) 
         except Exception as e:
             logger.warning(f"atomic_deduct_credit redis failed, falling back: {e}")
     # ── Last resort: Supabase with explicit limit guard ─────────────────────
+    # Task #769: same instrumentation as the Redis branch above.
+    try:
+        from metrics import record_credit_fallback as _rcf
+        _rcf("supabase")
+    except Exception:
+        pass
     if current_used >= current_limit:
         return False
     new_used = current_used + 1

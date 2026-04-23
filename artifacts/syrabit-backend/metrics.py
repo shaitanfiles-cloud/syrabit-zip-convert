@@ -26,6 +26,8 @@ __all__ = [
     "_snapshot_metrics", "_start_metrics_collector", "_startup_time",
     "record_assamese_refresh_success", "get_assamese_refresh_age_seconds",
     "_asm_last_refresh_at",
+    "record_credit_fallback", "get_credit_fallback_stats",
+    "_credit_fallback_window",
 ]
 
 _startup_time = _time_mod.time()
@@ -58,6 +60,77 @@ def get_assamese_refresh_age_seconds() -> float:
     Assamese-purity override from mongo. Exposed for the admin
     dashboard / health endpoint and consumed by `_alerting_loop`."""
     return max(0.0, _time_mod.time() - _asm_last_refresh_at)
+
+# ── Task #769: credit-deduct fallback observability ───────────────────────
+# `db_ops.atomic_deduct_credit` tries Postgres first, then a Redis Lua
+# script, then Supabase. Each fallback only logs a warning, so a broken
+# Postgres can keep deducting credits via Redis for hours with nobody
+# noticing — and the Redis path's daily counter is seeded from a
+# possibly stale read, which can drift from the real ledger. We track
+# every fallback event in a 10-minute rolling window so the alerting
+# loop can page on-call when the rate stays above the configured
+# threshold (default 5/min sustained over a 5 min window).
+_CREDIT_FALLBACK_WINDOW_SECONDS = 600
+_credit_fallback_window: list = []   # list of (ts_float, path: "redis"|"supabase")
+_credit_fallback_lock = _threading.Lock()
+
+
+def record_credit_fallback(path: str) -> None:
+    """Record a single credit-deduct fallback event.
+
+    ``path`` is one of:
+      - ``"redis"``   — Postgres path was unavailable or raised; the
+                        Redis Lua atomic-deduct path was used.
+      - ``"supabase"`` — Postgres failed AND Redis failed (or wasn't
+                        configured); the last-resort Supabase path
+                        was used.
+
+    Consumed by ``_alerting_loop`` to page on-call when the rate stays
+    above ``_ALERT_THRESHOLDS["credit_deduct_fallback_per_min"]``."""
+    if path not in ("redis", "supabase"):
+        return
+    now = _time_mod.time()
+    cutoff = now - _CREDIT_FALLBACK_WINDOW_SECONDS
+    with _credit_fallback_lock:
+        _credit_fallback_window.append((now, path))
+        # Trim entries older than the rolling window. The list is
+        # append-only with monotonically increasing timestamps, so we
+        # can drop the leading prefix in one slice instead of scanning.
+        keep_from = 0
+        for i, (ts, _) in enumerate(_credit_fallback_window):
+            if ts > cutoff:
+                keep_from = i
+                break
+        else:
+            keep_from = len(_credit_fallback_window)
+        if keep_from > 0:
+            del _credit_fallback_window[:keep_from]
+
+
+def get_credit_fallback_stats(window_seconds: int = 300) -> dict:
+    """Return rolling-window stats over the last ``window_seconds`` of
+    credit-deduct fallback events. Defaults to 5 min so the alerting
+    loop can compute "sustained over 5 minutes" cheaply on every tick.
+    """
+    if window_seconds <= 0:
+        window_seconds = 300
+    now = _time_mod.time()
+    cutoff = now - window_seconds
+    by_path = {"redis": 0, "supabase": 0}
+    total = 0
+    with _credit_fallback_lock:
+        for ts, p in _credit_fallback_window:
+            if ts > cutoff:
+                total += 1
+                if p in by_path:
+                    by_path[p] += 1
+    rate_per_min = round(total / max(1.0, window_seconds / 60.0), 2)
+    return {
+        "total": total,
+        "by_path": by_path,
+        "rate_per_min": rate_per_min,
+        "window_seconds": window_seconds,
+    }
 
 # ── Background health-check cache ─────────────────────────────────────────────
 # _check_health_deps() costs ~500 ms per call (Supabase round-trip).
@@ -342,6 +415,13 @@ _ALERT_THRESHOLDS_DEFAULT = {
     # the change. Operator-tunable from the existing Alert Settings table
     # so a noisy / urgent rollout can shorten the window without a deploy.
     "cf_access_silent_lockout_hours": 24,
+    # Task #769 (audit B1 follow-up): page on-call when
+    # `atomic_deduct_credit` falls back away from Postgres at a
+    # sustained rate over the last 5 min. Default 5/min — i.e. >25
+    # fallbacks in a 5 min window — is small enough to catch a real
+    # PG outage almost immediately and large enough to stay quiet
+    # during routine connection blips. Set to 0 to disable the alert.
+    "credit_deduct_fallback_per_min": 5,
 }
 _ALERT_EXPIRATION_DEFAULT = {
     "enabled": False,
@@ -1151,6 +1231,40 @@ async def _alerting_loop():
                                 "value": _stale_threshold,
                                 "actual": int(_age),
                                 "worker_pid": _worker_pid,
+                            },
+                        )
+            except Exception:
+                pass
+
+            # ── 7. Credit-deduct fallback rate (Task #769) ────────────
+            # `db_ops.atomic_deduct_credit` records every fall-through
+            # past the Postgres path. If the rolling 5-min rate stays
+            # above the configured per-min threshold, page on-call —
+            # we're silently charging credits via Redis (or worse,
+            # Supabase) while the canonical PG ledger is untouched.
+            try:
+                _cf_threshold = float(_ALERT_THRESHOLDS.get("credit_deduct_fallback_per_min", 5) or 0)
+                if _cf_threshold > 0:
+                    _cf_stats = get_credit_fallback_stats(300)
+                    if _cf_stats["rate_per_min"] > _cf_threshold:
+                        await _dispatch_alert(
+                            "credit_deduct_fallback_high",
+                            "Credit deduction silently falling back to Redis/Supabase",
+                            f"{_cf_stats['total']} credit-deduct fallbacks in last 5 min "
+                            f"(redis={_cf_stats['by_path']['redis']}, "
+                            f"supabase={_cf_stats['by_path']['supabase']}, "
+                            f"rate={_cf_stats['rate_per_min']:.1f}/min, "
+                            f"threshold: {_cf_threshold:.0f}/min). "
+                            f"Postgres credit path is degraded — verify pg_pool health "
+                            f"and DATABASE_URL connectivity. Until PG recovers, the "
+                            f"daily counter is seeded from possibly-stale reads, which "
+                            f"may drift from the real ledger.",
+                            threshold_snapshot={
+                                "metric": "credit_deduct_fallback_per_min",
+                                "value": _cf_threshold,
+                                "actual": _cf_stats["rate_per_min"],
+                                "by_path": _cf_stats["by_path"],
+                                "window_seconds": _cf_stats["window_seconds"],
                             },
                         )
             except Exception:
