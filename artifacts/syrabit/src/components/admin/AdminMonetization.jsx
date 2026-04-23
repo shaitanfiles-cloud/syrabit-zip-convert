@@ -250,11 +250,37 @@ export default function AdminMonetization({ adminToken, onNavigate }) {
                         <span className="text-gray-900 text-sm font-medium">
                           ₹{Number(txn.amount_inr ?? txn.amount ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                         </span>
-                        {txn.currency_original && txn.currency_original !== 'INR' && txn.amount_original ? (
-                          <span className="text-gray-400 text-[10px]" title={txn.fx_rate ? `FX rate ${Number(txn.fx_rate).toFixed(4)} (${txn.fx_source || 'unknown source'})` : ''}>
-                            {txn.currency_original === 'USD' ? '$' : ''}{Number(txn.amount_original).toFixed(2)} {txn.currency_original}
-                          </span>
-                        ) : null}
+                        {txn.currency_original && txn.currency_original !== 'INR' && txn.amount_original ? (() => {
+                          // Per-row stale detection mirrors isFxStale() in
+                          // CurrencyProvenanceCaption: trust backend's
+                          // "<provider>_stale" suffix on fx_source, treat
+                          // missing/old fx_fetched_at as stale too. Keeps the
+                          // staleness contract identical to the aggregate
+                          // caption above so admins don't see contradictory
+                          // signals.
+                          const src = String(txn.fx_source || '');
+                          let stale = !txn.fx_rate || src.endsWith('_stale');
+                          if (!stale && txn.fx_fetched_at) {
+                            const ts = new Date(txn.fx_fetched_at).getTime();
+                            stale = Number.isNaN(ts) || (Date.now() - ts) / 36e5 > 24;
+                          } else if (!stale && !txn.fx_fetched_at) {
+                            stale = true;
+                          }
+                          const baseTitle = txn.fx_rate
+                            ? `FX rate ${Number(txn.fx_rate).toFixed(4)} (${txn.fx_source || 'unknown source'})`
+                            : '';
+                          const title = stale && baseTitle
+                            ? `${baseTitle} — FX RATE STALE, refresh upstream provider`
+                            : baseTitle;
+                          return (
+                            <span className={`text-[10px] ${stale ? 'text-amber-700' : 'text-gray-400'}`} title={title}>
+                              {stale && (
+                                <span aria-label="Foreign exchange rate is stale" className="mr-1">⚠</span>
+                              )}
+                              {txn.currency_original === 'USD' ? '$' : ''}{Number(txn.amount_original).toFixed(2)} {txn.currency_original}
+                            </span>
+                          );
+                        })() : null}
                       </span>
                       <span className="text-gray-400 text-xs">{txn.date}</span>
                     </button>
