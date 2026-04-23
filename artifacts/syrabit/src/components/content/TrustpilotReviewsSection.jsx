@@ -37,6 +37,38 @@ export function fetchTrustpilotConfigOnce() {
   return _configPromise;
 }
 
+// Aggregate rating fetched once per app session and reused across every
+// page — feeds the Organization-level JSON-LD so Google can render
+// stars next to Syrabit.ai listings (Task #725). The backend already
+// caches the upstream Trustpilot Business API call for several hours,
+// so this single client-side fetch is the entire cost per session.
+let _aggregatePromise = null;
+let _aggregateCache = null;
+
+export function fetchTrustpilotAggregateOnce() {
+  if (_aggregateCache) return Promise.resolve(_aggregateCache);
+  if (_aggregatePromise) return _aggregatePromise;
+  _aggregatePromise = fetch(`${API_BASE}/config/trustpilot/aggregate`, { credentials: 'omit' })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((json) => {
+      if (
+        json &&
+        typeof json === 'object' &&
+        typeof json.ratingValue === 'number' &&
+        typeof json.ratingCount === 'number' &&
+        json.ratingCount > 0
+      ) {
+        _aggregateCache = json;
+      } else {
+        _aggregateCache = null;
+      }
+      return _aggregateCache;
+    })
+    .catch(() => null)
+    .finally(() => { _aggregatePromise = null; });
+  return _aggregatePromise;
+}
+
 let _scriptPromise = null;
 function loadTrustpilotScript(src) {
   if (typeof window === 'undefined') return Promise.resolve(false);
@@ -66,20 +98,30 @@ export default function TrustpilotReviewsSection({
   templateId = '53aa8912dec7e10d38f59f36',
   height = '240px',
   theme = 'light',
+  jsonLdId,
+  jsonLdName,
+  jsonLdUrl,
 }) {
   const containerRef = useRef(null);
   const widgetRef = useRef(null);
   const [config, setConfig] = useState(_configCache);
+  const [aggregate, setAggregate] = useState(_aggregateCache);
   const [visible, setVisible] = useState(false);
   const [failed, setFailed] = useState(false);
 
-  // Resolve Trustpilot config once per app session.
+  // Resolve Trustpilot config + live aggregate rating once per app session.
+  // The aggregate fetch runs eagerly (not gated on IntersectionObserver)
+  // so the JSON-LD is in the DOM before Googlebot leaves the page.
   useEffect(() => {
     let cancelled = false;
     fetchTrustpilotConfigOnce().then((c) => {
       if (cancelled) return;
       setConfig(c);
       if (!c || !c.businessUnitId) setFailed(true);
+    });
+    fetchTrustpilotAggregateOnce().then((a) => {
+      if (cancelled) return;
+      if (a) setAggregate(a);
     });
     return () => { cancelled = true; };
   }, []);
@@ -121,10 +163,23 @@ export default function TrustpilotReviewsSection({
     return () => { cancelled = true; };
   }, [visible, config]);
 
-  if (failed) return null;
-
   const businessUnitId = config?.businessUnitId || '';
   const profileUrl = config?.profileUrl || 'https://www.trustpilot.com/review/syrabit.ai';
+
+  // Render the aggregate-rating JSON-LD whenever we have a real value
+  // from the backend, even if the embed widget itself failed to load —
+  // the schema is what powers the Google search-result stars.
+  const jsonLd = aggregate ? (
+    <TrustpilotAggregateRatingJsonLd
+      id={jsonLdId}
+      name={jsonLdName}
+      url={jsonLdUrl}
+      ratingValue={aggregate.ratingValue}
+      ratingCount={aggregate.ratingCount}
+    />
+  ) : null;
+
+  if (failed) return jsonLd;
 
   return (
     <section
@@ -132,6 +187,7 @@ export default function TrustpilotReviewsSection({
       className="mt-12 max-w-5xl mx-auto px-4"
       aria-label="Trustpilot reviews"
     >
+      {jsonLd}
       <div className="rounded-3xl border border-border/40 bg-gradient-to-br from-emerald-50/40 via-background to-violet-50/30 p-6 sm:p-8">
         <div className="mb-5">
           <h2 className="text-xl sm:text-2xl font-bold text-foreground">{heading}</h2>
