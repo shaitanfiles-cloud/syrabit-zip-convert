@@ -8,9 +8,37 @@ import os
 import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional, List
+from typing import Optional, List, TypedDict
 
 logger = logging.getLogger(__name__)
+
+
+# ─── Public return-shape contracts (used by tests for schema-drift guard) ───
+# When `get_verified_bot_traffic_cf` ships a new key (or drops one) every
+# downstream caller — alerting, weekly email, WoW comparison, Mongo
+# persistence — must be updated in lockstep. The TypedDict below is the
+# single source of truth for that contract; the matching test in
+# `tests/test_cloudflare_client_contract.py` mocks `_graphql_query` and
+# asserts the returned dict has EXACTLY these keys with the right types.
+# Missing the test? See `VERIFIED_BOT_TRAFFIC_KEYS` below — that constant
+# is what the test imports and is the authoritative key list.
+class VerifiedBotTraffic(TypedDict):
+    by_category: dict   # {verifiedBotCategory: int request count}
+    bot_total: int
+    bot_5xx: int
+    window_start: str   # ISO8601 UTC, "%Y-%m-%dT%H:%M:%SZ"
+    window_end: str     # ISO8601 UTC, "%Y-%m-%dT%H:%M:%SZ"
+    source: str         # always literal "cloudflare"
+
+
+# Authoritative key set for the schema-drift test. Add/remove keys here
+# AND in the TypedDict above AND in every downstream consumer in the
+# same change — `routes/bot_traffic_report.py`, the Mongo persistence
+# in `cf_bot_report.py`, the WoW prior-week diff, etc.
+VERIFIED_BOT_TRAFFIC_KEYS: frozenset[str] = frozenset({
+    "by_category", "bot_total", "bot_5xx",
+    "window_start", "window_end", "source",
+})
 
 _cf_http: Optional["httpx.AsyncClient"] = None
 

@@ -58,6 +58,14 @@ _UA_PATTERNS: list[tuple[str, str]] = [
     ("applebot-extended", "Applebot-Extended"),  # Apple AI training
     ("applebot", "Applebot"),
     ("petalbot", "PetalBot"),
+    # NOTE — long-tail crawlers below (SeznamBot, MojeekBot, Yeti) are
+    # KEPT INTENTIONALLY even though Syrabit targets Assam/India and
+    # they're geo-irrelevant. They are *explicitly Allowed* in
+    # `artifacts/syrabit/public/robots.txt` per SEO Plan 10 (see
+    # `tests/test_robots_txt_snapshot.py::test_allow_long_tail_search_bots`).
+    # Removing them here would mean any traffic from them would silently
+    # fall into "Other verified bot" and the operator would lose the
+    # audit trail that proves the robots.txt allow-list is working.
     ("seznambot", "SeznamBot"),
     ("mojeekbot", "MojeekBot"),
     ("yeti", "Yeti"),
