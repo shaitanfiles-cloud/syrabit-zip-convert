@@ -236,7 +236,46 @@ async def _init_pg_pool():
     except Exception as _parse_err:
         _log.warning(f"PG DSN parse error: {_parse_err}")
     try:
-        pg_pool = await _asyncpg.create_pool(_PG_DSN, min_size=3, max_size=40)
+        # ── Pool sizing: Supabase Session mode has a hard cap (typically 15–20
+        # concurrent connections per project on the free/pro tier). Keeping
+        # max_size at 15 across all Gunicorn workers prevents
+        # "MaxClientsInSessionMode: max clients reached" errors.
+        #
+        # max_inactive_connection_lifetime=3600 — recycle idle connections every
+        # hour, equivalent to SQLAlchemy's pool_recycle. Prevents Supabase from
+        # closing long-idle connections on its side and leaving asyncpg holding
+        # a stale socket.
+        #
+        # init callback — runs SELECT 1 on every newly created connection
+        # (pool_pre_ping equivalent). Detects dead sockets before they are
+        # handed to application code.
+        #
+        # setup callback — applied on every connection checkout. Sets
+        # statement_timeout (30 s) and idle_in_transaction_session_timeout (10 s)
+        # so runaway queries and forgotten transactions cannot hold a pool slot
+        # indefinitely, which is the primary cause of pool exhaustion under load.
+
+        async def _pg_init(conn):
+            """Verify the connection is alive when first created (pool_pre_ping)."""
+            await conn.execute("SELECT 1")
+
+        async def _pg_setup(conn):
+            """Apply per-checkout session parameters to prevent slot exhaustion."""
+            await conn.execute(
+                "SET statement_timeout = '30s'; "
+                "SET idle_in_transaction_session_timeout = '10s';"
+            )
+
+        pg_pool = await _asyncpg.create_pool(
+            _PG_DSN,
+            min_size=3,
+            # Supabase Session mode hard limit — keep well below the project cap
+            # so other services / direct connections are not crowded out.
+            max_size=15,
+            max_inactive_connection_lifetime=3600,  # recycle idle conns hourly
+            init=_pg_init,
+            setup=_pg_setup,
+        )
         async with pg_pool.acquire() as conn:
             await conn.execute(_PG_INIT_SQL)
             try:
