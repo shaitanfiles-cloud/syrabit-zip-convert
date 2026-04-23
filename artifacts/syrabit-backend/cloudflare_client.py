@@ -570,7 +570,7 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
         period_label = f"Previous {days} days"
         bucket = "day"
 
-    # Task #741 — fetch the Stripe-aware visits (sessions) series in
+    # Task #741 — fetch the per-bucket visits (sessions) series in
     # parallel with the main overview query so the new "Total Visitors"
     # tile can render alongside "Unique Visitors". The visits fetch is
     # best-effort: if it returns None, we degrade the visits tile to "—"
