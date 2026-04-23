@@ -578,8 +578,15 @@ async def stripe_webhook(request: StarletteRequest2):
                 credits = PLAN_CREDITS[plan]
                 doc_acc = PLAN_DOC_ACCESS[plan]
                 now_iso = datetime.now(timezone.utc).isoformat()
-                wh_user = await db.users.find_one({"id": user_id}, {"plan": 1})
-                wh_current_plan = (wh_user or {}).get("plan", "free")
+                # Task #773: read the *pre-update* user doc once and use
+                # it for the downgrade guard, the supa-mirror credit
+                # math, and the activation-email recipient. Reading
+                # again *after* the mongo $inc would observe the
+                # already-incremented credits_limit and double-count
+                # it on the supa side.
+                wh_user = await db.users.find_one({"id": user_id}) or {}
+                wh_current_plan = wh_user.get("plan", "free")
+                wh_prev_credits = int(wh_user.get("credits_limit", 0))
                 if PLAN_RANK_MAP.get(plan, 0) < PLAN_RANK_MAP.get(wh_current_plan, 0):
                     logger.warning(
                         f"Stripe webhook: skipping downgrade {wh_current_plan}→{plan} "
@@ -621,9 +628,12 @@ async def stripe_webhook(request: StarletteRequest2):
                 # and queue the activation email so a paying customer
                 # who funnels through Stripe Checkout actually receives
                 # confirmation and the supa-side users mirror reflects
-                # their new plan.
-                _full_user = await db.users.find_one({"id": user_id}) or {}
-                _new_limit = int(_full_user.get("credits_limit", 0)) + credits
+                # their new plan. `wh_prev_credits` was captured BEFORE
+                # the mongo $inc above, so `_new_limit` is exactly the
+                # post-update value (re-reading users.find_one here
+                # would observe the already-incremented row and
+                # double-count the grant on the supa side).
+                _new_limit = wh_prev_credits + credits
                 _supa_mirror(lambda: supa.table("users").update({
                     "plan": plan, "document_access": doc_acc,
                     "credits_limit": _new_limit, "updated_at": now_iso,
@@ -631,8 +641,8 @@ async def stripe_webhook(request: StarletteRequest2):
                 _redis_invalidate_session(user_id)
                 logger.info(f"Stripe payment: user={user_id} plan={plan} credits+={credits}")
                 asyncio.create_task(email_templates.send_plan_activation(
-                    email=_full_user.get("email", ""),
-                    name=_full_user.get("name", _full_user.get("email", "")),
+                    email=wh_user.get("email", ""),
+                    name=wh_user.get("name", wh_user.get("email", "")),
                     plan=plan,
                     credits=credits,
                     # Stripe charges in USD cents; activation email

@@ -271,13 +271,19 @@ def test_stripe_webhook_checkout_session_completed_happy_path(
       * invalidate the user's redis session.
     """
     _reset_collections()
-    # User is currently on free; the webhook should upgrade to pro.
+    # User is currently on free with 50 credits already on the row
+    # (e.g. promo grant). The non-zero starting balance is important:
+    # it lets the test catch the read-after-write double-count bug
+    # where the supa mirror would observe the *post-update* mongo
+    # row and re-add `credits` on top of the already-incremented
+    # `credits_limit`. With this fixture, the correct mirrored value
+    # is 50 + 4000 = 4050, NOT 50 + 4000 + 4000 = 8050.
     deps.db.users.find_one = AsyncMock(return_value={
         "id": "u-paying",
         "plan": "free",
         "email": "buyer@example.com",
         "name": "Buyer",
-        "credits_limit": 0,
+        "credits_limit": 50,
     })
 
     event = {
@@ -299,6 +305,16 @@ def test_stripe_webhook_checkout_session_completed_happy_path(
     email_module = MagicMock(name="email_templates")
     email_module.send_plan_activation = AsyncMock(return_value=None)
     monkeypatch.setattr(mon, "email_templates", email_module)
+
+    # Stand up a fake pg_pool so we can assert the SQL UPDATE fires.
+    pg_conn = AsyncMock(name="pg_conn")
+    pg_conn.execute = AsyncMock(return_value=None)
+    class _AcquireCtx:
+        async def __aenter__(self_inner): return pg_conn
+        async def __aexit__(self_inner, *a): return None
+    pg_pool = MagicMock(name="pg_pool")
+    pg_pool.acquire = MagicMock(return_value=_AcquireCtx())
+    monkeypatch.setattr(deps, "pg_pool", pg_pool)
 
     req = _DummyRequest(
         body=json.dumps(event).encode(),
@@ -327,8 +343,32 @@ def test_stripe_webhook_checkout_session_completed_happy_path(
     assert upd_args.args[1]["$set"]["plan"] == "pro"
     assert upd_args.args[1]["$set"]["document_access"] == "full"
     assert upd_args.args[1]["$inc"]["credits_limit"] == mon.PLAN_CREDITS["pro"]
-    # Supa mirror queued exactly once.
+    # Postgres write fired with the right SQL + parameters
+    # (plan, +credits, doc_access, updated_at, user_id).
+    pg_conn.execute.assert_awaited_once()
+    pg_args = pg_conn.execute.await_args.args
+    assert "UPDATE users" in pg_args[0]
+    assert "credits_limit=credits_limit+$2" in pg_args[0]
+    assert pg_args[1] == "pro"
+    assert pg_args[2] == mon.PLAN_CREDITS["pro"]
+    assert pg_args[3] == "full"
+    assert pg_args[5] == "u-paying"
+    # Supa mirror queued exactly once with the *correct* post-update
+    # credits_limit (50 starting + 4000 grant = 4050 — NOT 8050,
+    # which is what we'd see if the code re-read the already-
+    # incremented mongo row instead of using wh_prev_credits).
     assert supa_mirror.call_count == 1
+    supa_lambda = supa_mirror.call_args.args[0]
+    # The supa lambda closes over a dict literal we want to inspect.
+    # Easiest way: grab the closure cell carrying `_new_limit`.
+    closure_vars = {
+        c: cell.cell_contents
+        for c, cell in zip(supa_lambda.__code__.co_freevars,
+                           supa_lambda.__closure__ or ())
+    }
+    assert closure_vars.get("_new_limit") == 4050
+    assert closure_vars.get("plan") == "pro"
+    assert closure_vars.get("doc_acc") == "full"
     # Redis session invalidated for this user.
     redis_invalidate.assert_called_once_with("u-paying")
     # Activation email queued (asyncio.create_task wraps the coro;
