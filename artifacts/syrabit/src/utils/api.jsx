@@ -185,6 +185,21 @@ export const adminLogout = () =>
 export const adminGetDashboard = (token) =>
   axios.get(`${API_BASE}/admin/dashboard`, { headers: adminHeaders(token), withCredentials: true });
 
+// Task #701 — list subjects served via the relaxed status filter so
+// admins can flip them to "published" and silence the WARN logs.
+export const adminGetDraftServedSubjects = (token) =>
+  axios.get(`${API_BASE}/admin/content/draft-served-subjects`, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+  });
+
+export const adminPublishSubject = (token, subjectId) =>
+  axios.patch(
+    `${API_BASE}/admin/content/subjects/${subjectId}`,
+    { status: 'published' },
+    { headers: adminHeaders(token), withCredentials: true },
+  );
+
 export const adminSeoHealthHistory = (token, limit = 168) =>
   axios.get(`${API_BASE}/admin/seo/health-history`, {
     headers: adminHeaders(token),

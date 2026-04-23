@@ -158,3 +158,56 @@ def test_chapter_404s_when_subject_is_archived(chapter_app):
     content._slug_hierarchy_cache.clear()
     res = client.get("/api/content/chapter-by-slug/degree/semester-2/biology/cell-structure")
     assert res.status_code == 404
+
+
+def test_draft_served_subjects_tracked(chapter_app):
+    """Task #701 — when the resolver matches a subject via the relaxed
+    status filter, that subject is recorded in the in-memory tracker so
+    the admin Control Center can surface it. Publishing the subject
+    (clearing the tracker entry) removes it from the list."""
+    client, state, content = chapter_app
+    content._DRAFT_SERVED_FALLBACK.clear()
+    state["subject_status"] = "draft"
+    content._slug_hierarchy_cache.clear()
+
+    # First hit — recorded.
+    res = client.get("/api/content/chapter-by-slug/degree/semester-2/biology/cell-structure")
+    assert res.status_code == 200, res.text
+    items = content.get_draft_served_subjects()
+    assert len(items) == 1
+    entry = items[0]
+    assert entry["id"] == "subj1"
+    assert entry["slug"] == "biology"
+    assert entry["status"] == "draft"
+    assert entry["count"] == 1
+    assert entry["last_served_at"]
+
+    # Second hit — count increments, no duplicate row. Clear both the
+    # slug-hierarchy cache and the chapter response cache so the resolver
+    # actually runs again instead of short-circuiting.
+    content._slug_hierarchy_cache.clear()
+    from cache import _content_cache as _cc2
+    _cc2.clear()
+    res = client.get("/api/content/chapter-by-slug/degree/semester-2/biology/cell-structure")
+    assert res.status_code == 200
+    items = content.get_draft_served_subjects()
+    assert len(items) == 1
+    assert items[0]["count"] == 2
+
+    # Clearing (publish hook) removes the entry.
+    assert content.clear_draft_served_subject("subj1") is True
+    assert content.get_draft_served_subjects() == []
+    assert content.clear_draft_served_subject("subj1") is False
+
+
+def test_published_subject_not_tracked(chapter_app):
+    """A normally-published subject must NOT be recorded in the
+    draft-served tracker — the WARN/record path is gated behind the
+    relaxed-filter retry."""
+    client, state, content = chapter_app
+    content._DRAFT_SERVED_FALLBACK.clear()
+    state["subject_status"] = "published"
+    content._slug_hierarchy_cache.clear()
+    res = client.get("/api/content/chapter-by-slug/degree/semester-2/biology/cell-structure")
+    assert res.status_code == 200
+    assert content.get_draft_served_subjects() == []

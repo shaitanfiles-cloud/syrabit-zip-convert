@@ -102,6 +102,10 @@ from deps import (
     supa,
 )
 from cache import _invalidate_content_cache
+from routes.content import (
+    get_draft_served_subjects as _get_draft_served_subjects,
+    clear_draft_served_subject as _clear_draft_served_subject,
+)
 from auth_deps import (
     get_current_user, get_admin_user, create_access_token, create_refresh_token,
     decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
@@ -678,11 +682,28 @@ async def admin_update_subject(subject_id: str, data: dict, admin: dict = Depend
         raise HTTPException(status_code=404, detail="Subject not found")
     _invalidate_content_cache("subjects")
     _schedule_d1_sync_fire("subjects")
+    if allowed.get("status") == "published":
+        _clear_draft_served_subject(subject_id)
     updated_subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0, "board_slug": 1, "class_slug": 1, "slug": 1})
     if updated_subj:
         _schedule_indexnow_for_subject(updated_subj)
     _schedule_prerender_refresh("subject_updated")
     return {"message": "Updated"}
+
+@router.get("/admin/content/draft-served-subjects")
+async def admin_draft_served_subjects(admin: dict = Depends(get_admin_user)):
+    """Task #701 — list of subjects currently being served via the relaxed
+    status filter (Task #700). The public chapter resolver tolerates
+    draft/unpublished subjects so live URLs don't 404, and records each hit.
+    Surfacing them here lets the admin Control Center show a "Subjects served
+    as draft" widget with a one-click publish action.
+
+    Returns: { "items": [{id, name, slug, status, first_served_at,
+    last_served_at, count}, ...], "total": int }
+    """
+    items = _get_draft_served_subjects()
+    return {"items": items, "total": len(items)}
+
 
 _ALLOWED_BULK_STATUSES = {"published", "draft", "unpublished", "archived"}
 _ALLOWED_BULK_SCOPES = {"subjects", "chapters"}
@@ -725,6 +746,9 @@ async def admin_bulk_status_update(data: dict, admin: dict = Depends(get_admin_u
     _schedule_d1_sync_fire(scope)
 
     if scope == "subjects":
+        if new_status == "published":
+            for sid in ids:
+                _clear_draft_served_subject(sid)
         try:
             async for subj in db.subjects.find(
                 {"id": {"$in": ids}},
@@ -771,6 +795,8 @@ async def admin_patch_subject(subject_id: str, data: dict, admin: dict = Depends
         raise HTTPException(status_code=404, detail="Subject not found")
     _invalidate_content_cache("subjects")
     _schedule_d1_sync_fire("subjects")
+    if allowed.get("status") == "published":
+        _clear_draft_served_subject(subject_id)
     updated_subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0, "board_slug": 1, "class_slug": 1, "slug": 1})
     if updated_subj:
         _schedule_indexnow_for_subject(updated_subj)

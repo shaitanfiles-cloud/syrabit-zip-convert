@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import { log } from '@/utils/logger';
 import AdminQuickLinks from './AdminQuickLinks';
+import AdminDraftServedSubjects from './AdminDraftServedSubjects';
 import AlertReasonsRow from './AlertReasonsRow';
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 
@@ -4360,6 +4361,10 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
           </div>
         )}
       </GlassCard>
+      </SectionErrorBoundary>
+
+      <SectionErrorBoundary name="Draft-Served Subjects">
+        <AdminDraftServedSubjects adminToken={adminToken} />
       </SectionErrorBoundary>
 
       <AdminQuickLinks links={['content','seomanager','analytics','users','conversations','vertex','monetization']} onNavigate={onNavigate} />
