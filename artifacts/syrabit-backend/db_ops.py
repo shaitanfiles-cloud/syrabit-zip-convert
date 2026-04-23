@@ -1,6 +1,7 @@
 """Syrabit.ai — Database operations: supa_*, pg_* helpers."""
 import json, asyncio, logging, uuid, concurrent.futures as _cf
 from datetime import datetime, timezone
+from typing import Any
 import deps as _deps_mod
 from deps import supa, db, redis_client
 from cache import (
@@ -250,12 +251,54 @@ async def supa_update_user(uid: str, updates: dict):
     except Exception as e:
         logger.warning(f"All stores failed for update_user: {e}")
 
+# Lua: seed the daily counter to ``seed`` if it does not exist (with TTL),
+# then atomically increment-and-return only if the post-increment value is
+# within ``limit``. Returns the new count on success, -1 if the limit was
+# already reached. Executes inside Redis as a single atomic operation, so
+# concurrent callers cannot both succeed when only one slot remains.
+_REDIS_DEDUCT_LUA = """
+local key = KEYS[1]
+local seed = tonumber(ARGV[1])
+local limit = tonumber(ARGV[2])
+local ttl = tonumber(ARGV[3])
+if redis.call('EXISTS', key) == 0 then
+  redis.call('SET', key, seed, 'EX', ttl)
+end
+local cur = tonumber(redis.call('GET', key)) or 0
+if cur >= limit then
+  return -1
+end
+return redis.call('INCR', key)
+"""
+
+
+_REDIS_DEDUCT_SCRIPT_CACHE: dict[int, Any] = {}
+
+
+def _redis_atomic_deduct(client, key: str, seed: int, limit: int, ttl: int) -> int:
+    """Run the atomic deduct script. The registered ``Script`` object is cached
+    per Redis client so we don't re-register on every call (registration only
+    needs to happen once; ``Script.__call__`` uses EVALSHA with EVAL fallback).
+    Falls back to a raw ``eval`` for clients without ``register_script``
+    (some test doubles)."""
+    cached = _REDIS_DEDUCT_SCRIPT_CACHE.get(id(client))
+    if cached is None:
+        try:
+            cached = client.register_script(_REDIS_DEDUCT_LUA)
+            _REDIS_DEDUCT_SCRIPT_CACHE[id(client)] = cached
+        except AttributeError:
+            return int(client.eval(_REDIS_DEDUCT_LUA, 1, key, seed, limit, ttl))
+    return int(cached(keys=[key], args=[seed, limit, ttl]))
+
+
 async def atomic_deduct_credit(uid: str, current_used: int, current_limit: int) -> bool:
     """Atomically deduct 1 daily credit only if credits_used_today < daily limit.
     Returns True on success, False if limit already reached (race condition guard).
     Resets credits_used_today to 0 when credits_reset_date is before today (UTC).
-    Uses PG UPDATE...WHERE for atomic check+increment; falls back to Redis INCR/DECR
-    CAS pattern; last resort falls back to Supabase with explicit limit guard.
+    Uses PG UPDATE...WHERE for atomic check+increment; falls back to a single
+    atomic Redis Lua script (see ``_REDIS_DEDUCT_LUA``) that seeds the daily
+    counter if absent and only increments when still under ``current_limit``;
+    last resort falls back to Supabase with an explicit limit guard.
     """
     from datetime import datetime, timezone
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -285,14 +328,21 @@ async def atomic_deduct_credit(uid: str, current_used: int, current_limit: int) 
             return False
         except Exception as e:
             logger.warning(f"atomic_deduct_credit pg failed, falling back: {e}")
-    # ── Fallback: Redis INCR + rollback CAS (atomic per Redis INCR semantics) ──
+    # ── Fallback: Redis Lua script — atomic seed-if-absent + check-and-incr ──
+    # Task #765 (audit finding B1): the prior implementation issued SETNX
+    # then INCR then a compensating DECR as three independent commands.
+    # Two concurrent callers could both observe the pre-deduction value,
+    # both INCR past the limit, and both write the over-spent count back
+    # to the user record before either rollback landed. The Lua script
+    # below executes atomically inside Redis, so only callers that fit
+    # within ``current_limit`` ever see a successful return.
     if redis_client:
         try:
             redis_key = f"daily_credits:{uid}:{today_str}"
-            redis_client.set(redis_key, current_used, ex=86400, nx=True)
-            new_count = redis_client.incr(redis_key)
-            if new_count > current_limit:
-                redis_client.decr(redis_key)
+            new_count = _redis_atomic_deduct(
+                redis_client, redis_key, int(current_used), int(current_limit), 86400,
+            )
+            if new_count < 0:
                 return False
             user_data = await supa_get_user_by_id(uid)
             lifetime_used = (user_data.get("credits_used", 0) if user_data else 0) + 1
