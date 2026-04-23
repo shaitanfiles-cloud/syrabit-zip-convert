@@ -197,16 +197,21 @@ _SEARCH_BOT_UA_RE = re.compile(
     r"bingbot|yandexbot|yandex|duckduckbot|slurp|baiduspider|"
     r"facebookexternalhit|twitterbot|linkedinbot|telegrambot|whatsapp|"
     r"applebot|applebot-extended|ia_archiver|msnbot|"
-    r"oai-searchbot|chatgpt-user|claudebot|perplexitybot|"
-    r"meta-externalagent|"
+    r"gptbot|oai-searchbot|chatgpt-user|claudebot|claude-web|perplexitybot|"
+    r"perplexity-user|anthropic-ai|meta-externalagent|"
     r"rogerbot|embedly|quora link preview|showyoubot|"
     r"outbrain|pinterest/0\.|developers\.google\.com/\+/web/snippet|slackbot|"
     r"vkshare|w3c_validator|redditbot|googleweblight",
     re.IGNORECASE,
 )
 
+# `gptbot` lives in `_SEARCH_BOT_UA_RE` above (it's a discovery+training
+# crawler that hits the same edge endpoints as Googlebot). The list below
+# is for crawlers we treat as "training-only / low-SEO-value" — kept
+# separate so future logic can choose to throttle one bucket without
+# the other. The unified `_BOT_PATTERNS` re-unions both.
 _TRAINING_SCRAPER_UA_RE = re.compile(
-    r"gptbot|ccbot|anthropic-ai|cohere-ai|bytespider|petalbot|"
+    r"ccbot|cohere-ai|bytespider|petalbot|"
     r"facebookbot|amazonbot|youbot|diffbot|img2dataset|omgili|"
     r"dotbot|mj12bot",
     re.IGNORECASE,
@@ -237,8 +242,28 @@ _RDNS_BOT_DOMAINS: dict[str, list[str]] = {
     "baiduspider": [".baidu.com", ".baidu.jp"],
     "duckduckbot": [".duckduckgo.com"],
     "slurp": [".crawl.yahoo.net"],
+    # OpenAI publishes verified IP ranges at:
+    #   https://openai.com/gptbot.json
+    #   https://openai.com/searchbot.json
+    #   https://openai.com/chatgpt-user.json
+    # PTR records resolve to *.openai.com for all three crawlers.
+    "gptbot": [".openai.com"],
     "oai-searchbot": [".openai.com"],
     "chatgpt-user": [".openai.com"],
+    # Perplexity: https://perplexity.ai/perplexitybot.json
+    "perplexitybot": [".perplexity.ai"],
+    "perplexity-user": [".perplexity.ai"],
+    # Anthropic: published in https://www.anthropic.com/.well-known/
+    "claudebot": [".anthropic.com", ".claude.ai"],
+    "claude-web": [".anthropic.com", ".claude.ai"],
+    "anthropic-ai": [".anthropic.com", ".claude.ai"],
+    # Meta crawler PTRs land in fbsv.net / facebook.com.
+    "meta-externalagent": [".fbsv.net", ".facebook.com"],
+    # ByteDance / TikTok crawler.
+    "bytespider": [".bytedance.com", ".tiktokv.com"],
+    # Amazon (Alexa / Q training) — PTRs end in compute.amazonaws.com,
+    # but Amazon does not publish a stable suffix yet, so we leave
+    # rDNS verification disabled to avoid false negatives.
 }
 
 _bot_verify_cache: dict[str, tuple[bool, float]] = {}

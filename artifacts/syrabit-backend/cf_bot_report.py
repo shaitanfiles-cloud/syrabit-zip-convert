@@ -41,20 +41,44 @@ logger = logging.getLogger(__name__)
 # patterns first so e.g. "Googlebot-Image" maps to "Googlebot-Image" not
 # "Googlebot". Matching is case-insensitive.
 _UA_PATTERNS: list[tuple[str, str]] = [
+    # Search-engine crawlers (most-specific Google variants first so
+    # "Googlebot-Image" doesn't get caught by the bare "googlebot" rule).
     ("googlebot-image", "Googlebot-Image"),
     ("googlebot-news", "Googlebot-News"),
     ("googlebot-video", "Googlebot-Video"),
+    ("google-inspectiontool", "Google-InspectionTool"),
+    ("googleother", "GoogleOther"),
     ("adsbot-google", "AdsBot-Google"),
+    ("google-extended", "Google-Extended"),  # Gemini training crawler
     ("googlebot", "Googlebot"),
     ("bingbot", "Bingbot"),
     ("yandexbot", "YandexBot"),
     ("duckduckbot", "DuckDuckBot"),
     ("baiduspider", "Baiduspider"),
+    ("applebot-extended", "Applebot-Extended"),  # Apple AI training
     ("applebot", "Applebot"),
     ("petalbot", "PetalBot"),
     ("seznambot", "SeznamBot"),
     ("mojeekbot", "MojeekBot"),
     ("yeti", "Yeti"),
+    # AI / LLM crawlers — Cloudflare files these under the
+    # "AI Crawler" verifiedBotCategory, which is why the GraphQL
+    # filter below must NOT pin to "Search Engine Crawler" alone.
+    ("oai-searchbot", "OAI-SearchBot"),       # ChatGPT search index
+    ("chatgpt-user", "ChatGPT-User"),         # ChatGPT live browsing
+    ("gptbot", "GPTBot"),                     # OpenAI training
+    ("perplexitybot", "PerplexityBot"),
+    ("perplexity-user", "Perplexity-User"),
+    ("claudebot", "ClaudeBot"),
+    ("claude-web", "Claude-Web"),
+    ("anthropic-ai", "Anthropic-AI"),
+    ("meta-externalagent", "Meta-ExternalAgent"),
+    ("bytespider", "Bytespider"),             # ByteDance / TikTok
+    ("ccbot", "CCBot"),                       # Common Crawl
+    ("amazonbot", "Amazonbot"),
+    ("youbot", "YouBot"),
+    ("cohere-ai", "Cohere-AI"),
+    ("diffbot", "Diffbot"),
 ]
 
 
@@ -96,7 +120,15 @@ async def _fetch_per_ua_buckets(zone_id: str, since_iso: str, until_iso: str,
             filter: {
               datetime_geq: $since
               datetime_leq: $until
-              verifiedBotCategory: "Search Engine Crawler"
+              # Any verified bot, regardless of CF's sub-category. CF
+              # files traditional crawlers under "Search Engine Crawler"
+              # and AI/LLM crawlers (GPTBot, PerplexityBot, ClaudeBot,
+              # OAI-SearchBot, Google-Extended, Applebot-Extended,
+              # Bytespider, Meta-ExternalAgent, …) under "AI Crawler".
+              # Pinning to a single category silently dropped every AI
+              # bot from this report. Client-side _classify_ua picks
+              # the bots we actually care about.
+              verifiedBotCategory_neq: ""
             }
             limit: $limit
             orderBy: [count_DESC]

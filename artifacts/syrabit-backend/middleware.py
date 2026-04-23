@@ -538,7 +538,22 @@ class ServerSideTrackingMiddleware(BaseHTTPMiddleware):
         ua = request.headers.get("user-agent", "")
         bot_match = _SERVER_BOT_RE.search(ua) if ua else None
         is_bot = bool(bot_match)
-        bot_name = bot_match.group(0).lower() if bot_match else ""
+        # Use the canonical classifier so e.g. "Googlebot-Image/1.0" is
+        # stored as "Googlebot-Image" (not just "googlebot"), and so AI
+        # crawlers (GPTBot, PerplexityBot, ClaudeBot, OAI-SearchBot,
+        # Google-Extended, Applebot-Extended, …) get readable names in
+        # the admin dashboard's top_bots / per_bot_pages aggregations.
+        # Fall back to the raw regex match for UAs that match the bot
+        # regex but aren't in the canonical patterns list.
+        if bot_match:
+            try:
+                from cf_bot_report import _classify_ua as _classify_bot_ua
+                _canonical = _classify_bot_ua(ua)
+            except Exception:
+                _canonical = None
+            bot_name = _canonical or bot_match.group(0)
+        else:
+            bot_name = ""
         cf_connecting_ip = request.headers.get("cf-connecting-ip", "")
         x_forwarded = request.headers.get("x-forwarded-for", "")
         client_ip = cf_connecting_ip or (x_forwarded.split(",")[0].strip() if x_forwarded else "") or (request.client.host if request.client else "unknown")
