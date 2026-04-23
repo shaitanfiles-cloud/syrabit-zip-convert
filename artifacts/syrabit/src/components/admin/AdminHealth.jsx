@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi, Copy, Check, Users, Activity, MessageSquare, TrendingUp, DollarSign, BarChart2, RotateCw, Clock, Undo2, Star, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import AdminQuickLinks from './AdminQuickLinks';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar, LineChart, Line } from 'recharts';
 import axios from 'axios';
 import { llmCosts, API_BASE } from '@/utils/api';
 import { buildHighlightedSegments } from '@/utils/highlightSegments';
@@ -187,6 +187,12 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   const [tpJsonldReport, setTpJsonldReport] = useState(null);
   const [tpJsonldLoading, setTpJsonldLoading] = useState(false);
 
+  // Task #754 — 30-day pass-rate history backing the sparkline shown
+  // beside the per-URL table. Polled less frequently than the latest
+  // report (which moves on every verifier run) since the trend only
+  // changes once per scheduled run anyway.
+  const [tpJsonldHistory, setTpJsonldHistory] = useState(null);
+
   const loadTpJsonldReport = useCallback(() => {
     setTpJsonldLoading(true);
     axios.get(`${API_BASE}/admin/trustpilot-jsonld/report`, {
@@ -197,12 +203,24 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       .finally(() => setTpJsonldLoading(false));
   }, [adminToken]);
 
+  const loadTpJsonldHistory = useCallback(() => {
+    axios.get(`${API_BASE}/admin/trustpilot-jsonld/history`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setTpJsonldHistory(r.data))
+      .catch(() => setTpJsonldHistory({ points: [], _error: true }));
+  }, [adminToken]);
+
   useEffect(() => {
     if (!adminToken) return;
     loadTpJsonldReport();
-    const id = setInterval(loadTpJsonldReport, 60000);
+    loadTpJsonldHistory();
+    const id = setInterval(() => {
+      loadTpJsonldReport();
+      loadTpJsonldHistory();
+    }, 60000);
     return () => clearInterval(id);
-  }, [adminToken, loadTpJsonldReport]);
+  }, [adminToken, loadTpJsonldReport, loadTpJsonldHistory]);
 
   // Task #609 — managed AI response cache stats + admin purge controls.
   const [aiCacheStats, setAiCacheStats] = useState(null);
@@ -1804,6 +1822,69 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                   <RefreshCw size={13} className={tpJsonldLoading ? 'animate-spin' : ''} />
                 </button>
               </div>
+              {(() => {
+                // Task #754 — 30-day pass-rate sparkline. Rendered above
+                // the per-URL table so ops sees a slow-moving regression
+                // (e.g. the line drifting from 100% to 80% over a week)
+                // without having to compare table snapshots day to day.
+                const points = (tpJsonldHistory?.points || [])
+                  .filter((p) => p && p.passRate != null)
+                  .map((p) => ({
+                    ts: p.ts,
+                    label: p.ts ? new Date(p.ts).toLocaleDateString() : '',
+                    passRatePct: Math.round((p.passRate ?? 0) * 1000) / 10,
+                    avgRating: p.avgRatingValue,
+                    passed: p.passed,
+                    failed: p.failed,
+                    total: p.totalUrls,
+                  }));
+                if (points.length < 2) return null;
+                const passColor = tileFailed ? '#dc2626' : '#10b981';
+                return (
+                  <div className="mb-3" data-testid="trustpilot-jsonld-sparkline">
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="text-[10px] uppercase tracking-wider text-gray-500">
+                        Pass-rate · last {points.length} run{points.length === 1 ? '' : 's'} (30d TTL)
+                      </p>
+                      <p className="text-[10px] text-gray-400 font-mono">
+                        latest {points[points.length - 1].passRatePct}%
+                      </p>
+                    </div>
+                    <ResponsiveContainer width="100%" height={48}>
+                      <LineChart data={points} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
+                        <YAxis hide domain={[0, 100]} />
+                        <Tooltip
+                          contentStyle={TOOLTIP_STYLE}
+                          formatter={(v, name) => {
+                            if (name === 'passRatePct') return [`${v}%`, 'pass-rate'];
+                            return [v, name];
+                          }}
+                          labelFormatter={(_, payload) => {
+                            const p = payload?.[0]?.payload;
+                            if (!p) return '';
+                            const bits = [p.label];
+                            if (p.passed != null && p.total != null) {
+                              bits.push(`${p.passed}/${p.total} pass`);
+                            }
+                            if (p.avgRating != null) {
+                              bits.push(`avg ★ ${Number(p.avgRating).toFixed(2)}`);
+                            }
+                            return bits.join(' · ');
+                          }}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="passRatePct"
+                          stroke={passColor}
+                          strokeWidth={2}
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                );
+              })()}
               {tileUnknown ? (
                 <p className="text-[11px] text-gray-500 leading-relaxed">
                   The daily <code className="font-mono">trustpilot-jsonld-prod</code> workflow will publish per-URL pass/fail here once it runs (06:00 UTC). Until then, treat the build-time inject step as the source of truth.

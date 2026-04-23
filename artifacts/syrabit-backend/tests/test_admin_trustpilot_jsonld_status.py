@@ -443,6 +443,143 @@ def test_recovery_email_includes_run_link_when_present():
         assert "recovered" in captured["title"].lower() or "recover" in captured["title"].lower()
         assert "actions/runs/10" in captured["message"]
     asyncio.run(_inner())
+# ─── Task #754 — 30-day history append + GET /history ────────────────────
+
+
+def test_post_report_appends_to_history_collection(authed_client):
+    """Each ingest should also insert one row into the TTL'd history
+    collection so the dashboard can render a 30-day pass-rate sparkline."""
+    async def _inner():
+        from routes import admin_trustpilot_jsonld_status as mod
+
+        fake_replace = AsyncMock()
+        fake_find = AsyncMock(return_value=None)
+        fake_dispatch = AsyncMock()
+        fake_insert = AsyncMock()
+        with patch.dict(os.environ, {"TRUSTPILOT_REFRESH_SECRET": "expected-secret"},
+                        clear=False), \
+             patch.object(mod, "_maybe_dispatch_jsonld_alerts", fake_dispatch), \
+             patch.object(mod.db, "api_config", create=True) as mock_cfg, \
+             patch.object(mod.db, mod._RUNS_COLLECTION, create=True) as mock_runs:
+            mock_cfg.replace_one = fake_replace
+            mock_cfg.find_one = fake_find
+            mock_runs.insert_one = fake_insert
+            res = authed_client.post(
+                "/admin/trustpilot-jsonld/report",
+                json={
+                    "results": _FAILING_RESULTS,
+                    "target": "remote",
+                    "origin": "https://syrabit.ai",
+                    "totalUrls": 2, "passed": 1, "failed": 1, "ok": False,
+                    "runUrl": "https://github.com/x/y/actions/runs/3",
+                },
+                headers={"X-Trustpilot-Refresh-Secret": "expected-secret"},
+            )
+
+        assert res.status_code == 200
+        fake_insert.assert_awaited_once()
+        run_doc = fake_insert.call_args.args[0]
+        # Real BSON datetime is required so Mongo's TTL monitor sweeps it.
+        from datetime import datetime as _dt
+        assert isinstance(run_doc["ts"], _dt)
+        assert run_doc["totalUrls"] == 2
+        assert run_doc["passed"] == 1
+        assert run_doc["failed"] == 1
+        assert run_doc["ok"] is False
+        assert run_doc["target"] == "remote"
+        assert run_doc["origin"] == "https://syrabit.ai"
+        assert run_doc["runUrl"] == "https://github.com/x/y/actions/runs/3"
+        # avgRatingValue averages only numeric ratings — the failing row
+        # has no ratingValue so it's excluded.
+        assert run_doc["avgRatingValue"] == pytest.approx(4.7)
+    asyncio.run(_inner())
+
+
+def test_history_append_failure_does_not_break_ingest(authed_client):
+    """A blip on the history collection (e.g. transient mongo error) must
+    never fail the verifier webhook — the latest doc is the source of
+    truth for the tile, and losing one sparkline point is acceptable."""
+    async def _inner():
+        from routes import admin_trustpilot_jsonld_status as mod
+
+        fake_replace = AsyncMock()
+        fake_find = AsyncMock(return_value=None)
+        fake_dispatch = AsyncMock()
+        boom = AsyncMock(side_effect=RuntimeError("mongo down"))
+        with patch.dict(os.environ, {"TRUSTPILOT_REFRESH_SECRET": "expected-secret"},
+                        clear=False), \
+             patch.object(mod, "_maybe_dispatch_jsonld_alerts", fake_dispatch), \
+             patch.object(mod.db, "api_config", create=True) as mock_cfg, \
+             patch.object(mod.db, mod._RUNS_COLLECTION, create=True) as mock_runs:
+            mock_cfg.replace_one = fake_replace
+            mock_cfg.find_one = fake_find
+            mock_runs.insert_one = boom
+            res = authed_client.post(
+                "/admin/trustpilot-jsonld/report",
+                json={"results": _PASSING_RESULTS, "target": "remote",
+                      "totalUrls": 2, "passed": 2, "failed": 0, "ok": True},
+                headers={"X-Trustpilot-Refresh-Secret": "expected-secret"},
+            )
+        assert res.status_code == 200
+        fake_replace.assert_awaited_once()
+    asyncio.run(_inner())
+
+
+def test_get_history_requires_admin_auth(deny_client):
+    res = deny_client.get("/admin/trustpilot-jsonld/history")
+    assert res.status_code in (401, 403)
+
+
+def test_get_history_returns_chronological_pass_rate_points(authed_client):
+    """The history endpoint must return rows oldest-first with a
+    pre-computed ``passRate`` so the front-end can plot directly without
+    having to do float maths in JSX."""
+    from datetime import datetime as _dt, timezone as _tz
+    from routes import admin_trustpilot_jsonld_status as mod
+
+    # Cursor is queried sort=ts DESC so a high-frequency-rerun day keeps
+    # the most recent 200 rows; the endpoint reverses in-memory before
+    # returning so the response is chronological (oldest first).
+    rows = [
+        {"ts": _dt(2026, 4, 2, tzinfo=_tz.utc), "totalUrls": 4,
+         "passed": 3, "failed": 1, "ok": False, "avgRatingValue": 4.6},
+        {"ts": _dt(2026, 4, 1, tzinfo=_tz.utc), "totalUrls": 4,
+         "passed": 4, "failed": 0, "ok": True, "avgRatingValue": 4.7},
+    ]
+
+    class _Cursor:
+        def __init__(self, items):
+            self._items = items
+        def sort(self, *a, **kw):
+            return self
+        def limit(self, *a, **kw):
+            return self
+        def __aiter__(self):
+            self._iter = iter(self._items)
+            return self
+        async def __anext__(self):
+            try:
+                return next(self._iter)
+            except StopIteration:
+                raise StopAsyncIteration
+
+    with patch.object(mod.db, mod._RUNS_COLLECTION, create=True) as mock_runs:
+        mock_runs.find.return_value = _Cursor(rows)
+        res = authed_client.get("/admin/trustpilot-jsonld/history")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ttlDays"] == 30
+    pts = body["points"]
+    assert len(pts) == 2
+    assert pts[0]["passRate"] == pytest.approx(1.0)
+    assert pts[1]["passRate"] == pytest.approx(0.75)
+    assert pts[0]["ok"] is True
+    assert pts[1]["ok"] is False
+    # ts is serialised as ISO so the front-end can parse with new Date().
+    assert pts[0]["ts"].startswith("2026-04-01")
+
+
 def test_alert_dispatch_failure_does_not_break_ingest(authed_client):
     async def _inner():
         """If the alert fan-out raises, the ingest endpoint still returns

@@ -28,9 +28,16 @@ Storage
 -------
 A single Mongo doc keyed by ``_id="trustpilot_jsonld_verifier_report"``
 in ``db.api_config`` (the same collection ``routes/admin_monetization.py``
-uses for similar telemetry rows). One doc, replaced atomically — there
-is no history requirement; the GitHub Actions run log is the audit
-trail.
+uses for similar telemetry rows). One doc, replaced atomically — the
+admin tile reads it for the current pass/fail snapshot.
+
+Task #754 — alongside the "latest" doc we also append every run to the
+``trustpilot_jsonld_runs`` collection (TTL-indexed on ``ts`` for 30 days)
+so the dashboard tile can render a sparkline of pass-rate over the
+trailing month and ops can spot a slow-moving regression (e.g. a single
+URL failing 3 days in a row) before it bites SERP coverage. The ``ts``
+field is a real ``datetime`` (not the ISO string we keep on the latest
+doc) because Mongo's TTL monitor only honours BSON dates.
 """
 from __future__ import annotations
 
@@ -52,6 +59,12 @@ router = APIRouter()
 
 _DOC_ID = "trustpilot_jsonld_verifier_report"
 
+# Task #754 — append-only history collection with a 30-day TTL so the
+# admin tile can render a trailing-month sparkline without unbounded
+# growth.
+_RUNS_COLLECTION = "trustpilot_jsonld_runs"
+_RUNS_TTL_SECONDS = 30 * 24 * 3600
+
 # Reuse the aggregate-refresh secret (Task #749) — the workflow already
 # has it in repo secrets and the backend already requires it for the
 # sibling Trustpilot webhook, so we avoid a second knob to forget.
@@ -60,6 +73,64 @@ _SECRET_ENV = "TRUSTPILOT_REFRESH_SECRET"
 
 def _expected_secret() -> str:
     return (os.environ.get(_SECRET_ENV) or "").strip()
+
+
+async def ensure_trustpilot_jsonld_runs_index() -> None:
+    """Idempotently ensure the 30-day TTL index on the per-run history
+    collection. Called from server.py lifespan; safe to call repeatedly
+    (Mongo no-ops when an equivalent index already exists)."""
+    if db is None:
+        return
+    try:
+        await db[_RUNS_COLLECTION].create_index(
+            "ts", expireAfterSeconds=_RUNS_TTL_SECONDS,
+        )
+        # Sparkline query sorts by ts asc within the trailing 30 days —
+        # this index makes that scan touch only the live window.
+        await db[_RUNS_COLLECTION].create_index([("ts", -1)])
+    except Exception as exc:
+        logger.warning(
+            "[trustpilot-jsonld] runs TTL index create failed: %s", exc,
+        )
+
+
+async def _append_trustpilot_jsonld_run(doc: dict[str, Any]) -> None:
+    """Best-effort append of one run to the TTL'd history collection.
+    Never raises into the ingest path — losing a sparkline point must
+    not fail the verifier webhook."""
+    if db is None:
+        return
+    try:
+        ts = datetime.now(timezone.utc)
+        # Keep the row narrow on purpose: the sparkline only needs the
+        # aggregate counters + average ratingValue. Per-URL detail lives
+        # on the "latest" doc, which is sufficient for the table render
+        # and avoids ballooning storage 30x.
+        rating_values = [
+            r["ratingValue"] for r in doc.get("results", [])
+            if isinstance(r.get("ratingValue"), (int, float))
+        ]
+        avg_rating = (
+            sum(rating_values) / len(rating_values)
+            if rating_values else None
+        )
+        run_doc = {
+            "ts": ts,
+            "generatedAt": doc.get("generatedAt"),
+            "target": doc.get("target"),
+            "origin": doc.get("origin"),
+            "totalUrls": doc.get("totalUrls", 0),
+            "passed": doc.get("passed", 0),
+            "failed": doc.get("failed", 0),
+            "ok": bool(doc.get("ok")),
+            "avgRatingValue": avg_rating,
+            "runUrl": doc.get("runUrl"),
+        }
+        await db[_RUNS_COLLECTION].insert_one(run_doc)
+    except Exception as exc:
+        logger.warning(
+            "[trustpilot-jsonld] history append failed: %s", exc,
+        )
 
 
 def _coerce_results(raw: Any) -> list[dict[str, Any]]:
@@ -180,6 +251,12 @@ async def ingest_trustpilot_jsonld_report(
         "trustpilot jsonld report ingested: %s/%s pass (target=%s)",
         passed, total, doc["target"],
     )
+
+    # Task #754 — append this run to the 30-day TTL'd history so the
+    # admin tile can render a trailing-month sparkline. Best-effort:
+    # the "latest" doc above is what the existing tile depends on, and
+    # losing one history point must not fail the verifier webhook.
+    await _append_trustpilot_jsonld_run(doc)
 
     # Best-effort fan-out — never fail ingest if the alert path errors.
     try:
@@ -389,3 +466,58 @@ async def get_trustpilot_jsonld_report(
         return {"configured": False, "report": None}
     doc.pop("_id", None)
     return {"configured": True, "report": doc}
+
+
+@router.get("/admin/trustpilot-jsonld/history")
+async def get_trustpilot_jsonld_history(
+    admin: dict = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """Task #754 — return the last 30 days of verifier runs (one row per
+    run, oldest first) so the AdminHealth tile can render a sparkline of
+    pass-rate / ratingValue trend. The collection is TTL'd to 30 days so
+    we can return everything we have without an extra cutoff filter, but
+    we still bound the response to 200 rows in case the verifier is ever
+    re-run more than ~6 times per day during an incident."""
+    if db is None:
+        return {"points": [], "ttlDays": 30}
+    points: list[dict[str, Any]] = []
+    try:
+        # Sort DESC + limit so a high-frequency rerun day (e.g. ops
+        # re-firing the workflow during an incident) keeps the most
+        # *recent* 200 rows rather than the oldest. Reverse in-memory
+        # below so the chart still renders oldest-first left to right.
+        cursor = db[_RUNS_COLLECTION].find(
+            {},
+            {
+                "_id": 0, "ts": 1, "totalUrls": 1, "passed": 1,
+                "failed": 1, "ok": 1, "avgRatingValue": 1,
+            },
+        ).sort("ts", -1).limit(200)
+        async for row in cursor:
+            ts = row.get("ts")
+            ts_iso: Optional[str] = None
+            if isinstance(ts, datetime):
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                ts_iso = ts.isoformat()
+            total = int(row.get("totalUrls") or 0)
+            passed = int(row.get("passed") or 0)
+            pass_rate = (passed / total) if total > 0 else None
+            points.append({
+                "ts": ts_iso,
+                "totalUrls": total,
+                "passed": passed,
+                "failed": int(row.get("failed") or 0),
+                "ok": bool(row.get("ok")),
+                "passRate": pass_rate,
+                "avgRatingValue": row.get("avgRatingValue"),
+            })
+    except Exception as exc:
+        logger.warning(
+            "[trustpilot-jsonld] history fetch failed: %s", exc,
+        )
+    # We queried newest-first to bound the window correctly under
+    # high-frequency reruns; reverse so the chart renders left→right
+    # in chronological order.
+    points.reverse()
+    return {"points": points, "ttlDays": 30}

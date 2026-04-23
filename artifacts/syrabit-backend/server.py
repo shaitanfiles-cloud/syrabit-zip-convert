@@ -1080,6 +1080,19 @@ async def lifespan(app):
     except Exception as _asm_load_err:
         logger.warning(f"[INDIC-SANITIZE] startup override load failed: {_asm_load_err}")
 
+    # Task #754 — TTL index on the Trustpilot JSON-LD per-run history
+    # collection so the AdminHealth tile can render a 30-day pass-rate
+    # sparkline without unbounded growth.
+    try:
+        from routes.admin_trustpilot_jsonld_status import (
+            ensure_trustpilot_jsonld_runs_index,
+        )
+        asyncio.create_task(ensure_trustpilot_jsonld_runs_index())
+    except Exception as _tp_runs_err:
+        logger.warning(
+            f"[trustpilot-jsonld] runs index startup failed: {_tp_runs_err}"
+        )
+
     # Task #609 — initialise the managed AI response cache. Safe no-op when
     # MEMORYSTORE_REDIS_URL is unset; the cache transparently falls back to
     # the existing Upstash REST client and finally to the in-memory L1.
