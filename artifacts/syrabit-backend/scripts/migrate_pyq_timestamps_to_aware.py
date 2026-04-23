@@ -4,7 +4,7 @@ Idempotent normalizer for legacy naive PYQ timestamps.
 
 Background
 ----------
-Task #738 converted every `datetime.utcnow().isoformat()` call site in
+Task #738 converted every naive UTC timestamp call site in
 `routes/pyq.py` to `datetime.now(timezone.utc).isoformat()`. New writes
 now produce ISO-8601 strings with a `+00:00` suffix.
 
