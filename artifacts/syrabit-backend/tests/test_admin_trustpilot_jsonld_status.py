@@ -827,21 +827,32 @@ def test_get_alerts_returns_classified_events(authed_client):
         {
             "id": "n1",
             "title": "Trustpilot JSON-LD regression: AggregateRating missing on 2 URL(s)",
-            "message": "body 1 " * 500,
+            # Real-world message shape produced by
+            # _send_jsonld_regression_alert / _format_failing_row so
+            # the URL-extraction contract is exercised end-to-end.
+            "message": (
+                "The Trustpilot AggregateRating JSON-LD verifier reports...\n\n"
+                "  - https://www.syrabit.ai/ — ratingValue=4.7 — http 503\n"
+                "  - https://www.syrabit.ai/about — no jsonld\n\n"
+                "GitHub Actions run: https://github.com/x/actions/runs/1"
+            ),
             "type": "error",
             "created_at": "2026-04-23T06:00:00+00:00",
         },
         {
             "id": "n2",
             "title": "Trustpilot JSON-LD recovered: AggregateRating present on all URLs",
-            "message": "body 2",
+            "message": "All previously-failing URLs are passing again on production.",
             "type": "info",
             "created_at": "2026-04-23T07:00:00+00:00",
         },
         {
             "id": "n3",
             "title": "Trustpilot JSON-LD: 1 URL(s) failing 3+ runs in a row",
-            "message": "body 3",
+            "message": (
+                "escalation prompt...\n\n"
+                "  - https://www.syrabit.ai/pricing — no jsonld (streak: 4)\n"
+            ),
             "type": "error",
             "created_at": "2026-04-23T08:00:00+00:00",
         },
@@ -860,6 +871,17 @@ def test_get_alerts_returns_classified_events(authed_client):
     # Message body is truncated to 500 chars so huge alerts can't blow
     # up the history strip.
     assert len(events[0]["message"]) <= 500
+    # URL bullets pulled out of the message body so the UI can render
+    # per-URL context — this is the flappy-URL visibility contract.
+    assert events[0]["urls"] == [
+        "https://www.syrabit.ai/",
+        "https://www.syrabit.ai/about",
+    ]
+    # Recovery alerts don't list URLs in the body, so urls=[] is fine.
+    assert events[1]["urls"] == []
+    # Streak format with trailing "(streak: N)" must still extract the
+    # URL cleanly.
+    assert events[2]["urls"] == ["https://www.syrabit.ai/pricing"]
     # Helper called with the shared title prefix so we only surface
     # alerts from this module, not every notification in the store.
     fake.assert_awaited_once()

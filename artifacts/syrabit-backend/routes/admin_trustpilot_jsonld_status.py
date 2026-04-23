@@ -45,6 +45,7 @@ import asyncio
 import hmac
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -678,6 +679,30 @@ async def get_trustpilot_jsonld_history(
 _ALERT_TITLE_PREFIX = "Trustpilot JSON-LD"
 
 
+_URL_LINE_RE = re.compile(r"^\s*-\s+(\S+?)(?:\s+—|\s+\(|\s*$)", re.MULTILINE)
+
+
+def _extract_jsonld_alert_urls(message: str) -> list[str]:
+    """Pull the per-URL bullets out of an alert message body. Every
+    regression/streak message built by ``_send_jsonld_*_alert`` formats
+    failing URLs with ``_format_failing_row`` → ``"  - <url> — ..."``
+    (streak appends ``" (streak: N)"``). Since ``meta`` is dropped on
+    the PG/Supabase insert paths, the message body is the only
+    reliable place to recover which URLs each alert fired for — which
+    is what ops need to see in the history strip to spot a flappy
+    URL. Duplicates are removed while preserving order."""
+    if not message:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for match in _URL_LINE_RE.finditer(message):
+        u = match.group(1).strip()
+        if u and u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
 def _classify_jsonld_alert_title(title: str) -> str:
     """Map a persisted notification title back to the alert kind the
     dispatcher emitted, so the UI can colour-code without parsing
@@ -724,12 +749,18 @@ async def get_trustpilot_jsonld_alerts(
                 created = created.replace(tzinfo=timezone.utc)
             created = created.isoformat()
         title = str(row.get("title") or "")
+        raw_message = str(row.get("message") or "")
         events.append({
             "id": str(row.get("id") or ""),
             "title": title,
             # Truncate the message — the full body can be dozens of
             # lines and the history strip only needs a summary line.
-            "message": (str(row.get("message") or "")[:500]),
+            "message": raw_message[:500],
+            # Parsed-out URL list so the UI can render exactly which
+            # URL(s) each alert fired for (flappy-URL detection).
+            # Parsed from the full message before truncation so long
+            # lists aren't silently dropped.
+            "urls": _extract_jsonld_alert_urls(raw_message),
             "type": row.get("type") or "info",
             "state": _classify_jsonld_alert_title(title),
             "created_at": created,

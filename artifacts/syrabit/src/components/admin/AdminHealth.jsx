@@ -2056,7 +2056,34 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                             >
                               {e.title}
                             </span>
-                            <span className="text-[10px] text-gray-400 font-mono">
+                            {Array.isArray(e.urls) && e.urls.length > 0 ? (
+                              // Render the per-URL bullets backend
+                              // parsed out of the alert body so ops can
+                              // spot a flappy URL at a glance. Capped
+                              // at 5 with a "+N more" suffix so one
+                              // giant alert can't push the strip off
+                              // screen.
+                              <span
+                                className="block mt-0.5 text-[10px] font-mono text-gray-600"
+                                data-testid={`trustpilot-jsonld-alert-urls-${e.id || e.created_at}`}
+                              >
+                                {e.urls.slice(0, 5).map((u, i) => (
+                                  <span
+                                    key={`${u}-${i}`}
+                                    className="block truncate"
+                                    title={u}
+                                  >
+                                    · {u}
+                                  </span>
+                                ))}
+                                {e.urls.length > 5 ? (
+                                  <span className="block text-gray-400">
+                                    · +{e.urls.length - 5} more
+                                  </span>
+                                ) : null}
+                              </span>
+                            ) : null}
+                            <span className="block text-[10px] text-gray-400 font-mono">
                               {fmtAge(e.created_at)}
                               {e.created_at ? ` · ${new Date(e.created_at).toLocaleString()}` : ''}
                             </span>
