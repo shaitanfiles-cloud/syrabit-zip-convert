@@ -375,6 +375,9 @@ export const adminAdsenseSync = (token, days = 7) =>
 export const adminGetSettings = (token) =>
   axios.get(`${API_BASE}/admin/settings`, { headers: adminHeaders(token), withCredentials: true });
 
+export const adminGetDiagnostics = (token) =>
+  axios.get(`${API_BASE}/admin/diagnostics`, { headers: adminHeaders(token), withCredentials: true });
+
 export const adminUpdateSettings = (token, data) =>
   axios.patch(`${API_BASE}/admin/settings`, data, { headers: adminHeaders(token), withCredentials: true });
 

@@ -12,6 +12,7 @@ import axios from 'axios';
 import { adminVerify, adminLogout, adminGetSettings, adminGetUnacknowledgedAlertCount, API_BASE } from '@/utils/api';
 import { toast } from 'sonner';
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
+import BreakGlassBanner from '@/components/admin/BreakGlassBanner';
 
 const AdminDashboard     = lazy(() => import('@/components/admin/AdminDashboard'));
 const AdminRoadmap       = lazy(() => import('@/components/admin/AdminRoadmap'));
@@ -360,6 +361,8 @@ export default function AdminPage() {
             <span className="text-[11px]">{sc.label}</span>
           </div>
         </header>
+
+        <BreakGlassBanner adminToken={adminToken} />
 
         <main className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'contenthub' ? '' : 'overflow-y-auto p-3 sm:p-4 md:p-6'}`}>
           <SectionErrorBoundary key={activeSection} name={activeLabel}>
