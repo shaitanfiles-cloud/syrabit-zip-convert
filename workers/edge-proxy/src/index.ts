@@ -469,7 +469,7 @@ async function checkRateLimit(
   }
 }
 
-function buildProxyHeaders(request: Request, clientIp: string): Headers {
+function buildProxyHeaders(request: Request, clientIp: string, env?: Env): Headers {
   const headers = new Headers();
   for (const [key, value] of request.headers.entries()) {
     if (
@@ -480,6 +480,15 @@ function buildProxyHeaders(request: Request, clientIp: string): Headers {
     headers.set(key, value);
   }
   headers.set("X-Forwarded-For", clientIp);
+  // Authenticated origin pull. Required by the FastAPI
+  // OriginSharedSecretMiddleware on Cloud Run / Railway. Without this
+  // header, every non-/health backend fetch returns 403. Centralised
+  // here so every call site that uses buildProxyHeaders gets it for
+  // free — fixes a regression where the cache-miss/D1-miss fallback
+  // and the bot-prerender fetches were sending the request unsigned.
+  if (env && env.BACKEND_ORIGIN_SECRET) {
+    headers.set("X-Origin-Auth", env.BACKEND_ORIGIN_SECRET);
+  }
   return headers;
 }
 
@@ -493,15 +502,10 @@ async function proxyToBackend(
   remaining: number,
 ): Promise<Response> {
   const backendUrl = `${env.BACKEND_URL}${pathname}${search}`;
-  const proxyHeaders = buildProxyHeaders(request, clientIp);
-  // Task #606: Authenticated origin pull for the Cloud Run backend.
-  // Without this header, the FastAPI `OriginSharedSecretMiddleware`
-  // returns 403 — which is what stops anyone from bypassing
-  // Cloudflare's WAF / rate limit / cache by hitting the
-  // `*.run.app` URL directly. No-op if the secret isn't bound.
-  if (env.BACKEND_ORIGIN_SECRET) {
-    proxyHeaders.set("X-Origin-Auth", env.BACKEND_ORIGIN_SECRET);
-  }
+  // Task #606: X-Origin-Auth is now injected centrally by buildProxyHeaders
+  // when env is passed — covers proxyToBackend, bot-prerender, cache-miss
+  // fallback, and any future call site uniformly.
+  const proxyHeaders = buildProxyHeaders(request, clientIp, env);
 
   try {
     const backendResp = await fetch(backendUrl, {
@@ -1168,7 +1172,7 @@ async function fetchBotRenderedHtml(
   }
 
   try {
-    const proxyHeaders = buildProxyHeaders(request, clientIp);
+    const proxyHeaders = buildProxyHeaders(request, clientIp, env);
     proxyHeaders.set("X-Bot-Request", "1");
     const resp = await fetch(apiUrl, {
       method: "GET",
@@ -1878,7 +1882,7 @@ export default {
       }
 
       const backendUrl = `${env.BACKEND_URL}${pathname}${url.search}`;
-      const backendHeaders = buildProxyHeaders(request, clientIp);
+      const backendHeaders = buildProxyHeaders(request, clientIp, env);
 
       try {
         const backendResp = await fetch(backendUrl, {
