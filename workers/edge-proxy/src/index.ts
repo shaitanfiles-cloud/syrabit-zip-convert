@@ -1591,12 +1591,19 @@ async function handleScheduledSync(env: Env): Promise<void> {
   if (!env.CONTENT_DB || !env.BACKEND_URL) return;
 
   try {
+    // X-Origin-Auth required by OriginSharedSecretMiddleware on the backend
+    // (Bearer token alone is insufficient — /api/admin/d1-export is not in
+    // the open-paths list, so the cron silently 403s without this header).
+    const syncHeaders: Record<string, string> = {
+      "Authorization": `Bearer ${env.D1_SYNC_SECRET}`,
+      "Content-Type": "application/json",
+    };
+    if (env.BACKEND_ORIGIN_SECRET) {
+      syncHeaders["X-Origin-Auth"] = env.BACKEND_ORIGIN_SECRET;
+    }
     const resp = await fetch(`${env.BACKEND_URL}/api/admin/d1-export`, {
       method: "GET",
-      headers: {
-        "Authorization": `Bearer ${env.D1_SYNC_SECRET}`,
-        "Content-Type": "application/json",
-      },
+      headers: syncHeaders,
     });
 
     if (!resp.ok) {
