@@ -13,6 +13,7 @@ Coverage:
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from unittest.mock import AsyncMock, patch
 
@@ -112,10 +113,14 @@ def test_post_report_persists_normalised_doc(authed_client):
     from routes import admin_trustpilot_jsonld_status as mod
 
     fake_replace = AsyncMock()
+    fake_find = AsyncMock(return_value=None)
+    fake_dispatch = AsyncMock()
     with patch.dict(os.environ, {"TRUSTPILOT_REFRESH_SECRET": "expected-secret"},
                     clear=False), \
+         patch.object(mod, "_maybe_dispatch_jsonld_alerts", fake_dispatch), \
          patch.object(mod.db, "api_config", create=True) as mock_coll:
         mock_coll.replace_one = fake_replace
+        mock_coll.find_one = fake_find
         res = authed_client.post(
             "/admin/trustpilot-jsonld/report",
             json={
@@ -170,10 +175,14 @@ def test_post_report_derives_counters_when_payload_omits_them(authed_client):
     from routes import admin_trustpilot_jsonld_status as mod
 
     fake_replace = AsyncMock()
+    fake_find = AsyncMock(return_value=None)
+    fake_dispatch = AsyncMock()
     with patch.dict(os.environ, {"TRUSTPILOT_REFRESH_SECRET": "expected-secret"},
                     clear=False), \
+         patch.object(mod, "_maybe_dispatch_jsonld_alerts", fake_dispatch), \
          patch.object(mod.db, "api_config", create=True) as mock_coll:
         mock_coll.replace_one = fake_replace
+        mock_coll.find_one = fake_find
         res = authed_client.post(
             "/admin/trustpilot-jsonld/report",
             json={"results": _FAILING_RESULTS, "target": "remote"},
@@ -186,6 +195,9 @@ def test_post_report_derives_counters_when_payload_omits_them(authed_client):
     assert doc["failed"] == 1
     assert doc["passed"] == 1
     assert doc["ok"] is False
+    # Task #753 — failing URLs are recorded in the dedup ledger so the
+    # next ingest can tell which URLs have already been paged on.
+    assert doc["alertedFailedUrls"] == ["/about"]
 
 
 # ─── GET /admin/trustpilot-jsonld/report ───────────────────────────────────
@@ -238,3 +250,220 @@ def test_get_report_returns_latest_doc(authed_client):
     assert rep["passed"] == 1
     assert rep["ok"] is False
     assert len(rep["results"]) == 2
+
+
+# ─── Task #753 — regression / recovery alert dispatch ──────────────────────
+
+def test_dispatch_pages_on_first_pass_to_fail_flip():
+    async def _inner():
+        """A URL that was passing in the prior report and is now failing
+        must trigger exactly one regression alert listing that URL."""
+        from routes import admin_trustpilot_jsonld_status as mod
+
+        prior_doc = {
+            "alertedFailedUrls": [],
+            "results": [
+                {"url": "/", "pass": True}, {"url": "/about", "pass": True},
+            ],
+        }
+        new_doc = {
+            "results": [
+                {"url": "/", "pass": True, "ratingValue": 4.7, "reviewCount": 312},
+                {"url": "/about", "pass": False,
+                 "reason": "AggregateRating present but invalid"},
+            ],
+            "runUrl": "https://github.com/x/y/actions/runs/1",
+        }
+        fake_reg = AsyncMock()
+        fake_rec = AsyncMock()
+        with patch.object(mod, "_send_jsonld_regression_alert", fake_reg), \
+             patch.object(mod, "_send_jsonld_recovery_alert", fake_rec):
+            await mod._maybe_dispatch_jsonld_alerts(prior_doc, new_doc)
+
+        fake_reg.assert_awaited_once()
+        failing_rows, passed_doc = fake_reg.call_args.args
+        assert [r["url"] for r in failing_rows] == ["/about"]
+        assert passed_doc is new_doc
+        fake_rec.assert_not_awaited()
+    asyncio.run(_inner())
+def test_dispatch_dedupes_same_url_until_recovery():
+    async def _inner():
+        """A URL that was already alerted on in the prior failing streak
+        must NOT page again while it remains failing."""
+        from routes import admin_trustpilot_jsonld_status as mod
+
+        prior_doc = {
+            "alertedFailedUrls": ["/about"],
+            "results": [
+                {"url": "/", "pass": True}, {"url": "/about", "pass": False},
+            ],
+        }
+        new_doc = {
+            "results": [
+                {"url": "/", "pass": True},
+                {"url": "/about", "pass": False, "reason": "still missing"},
+            ],
+            "runUrl": None,
+        }
+        fake_reg = AsyncMock()
+        fake_rec = AsyncMock()
+        with patch.object(mod, "_send_jsonld_regression_alert", fake_reg), \
+             patch.object(mod, "_send_jsonld_recovery_alert", fake_rec):
+            await mod._maybe_dispatch_jsonld_alerts(prior_doc, new_doc)
+
+        fake_reg.assert_not_awaited()
+        fake_rec.assert_not_awaited()
+    asyncio.run(_inner())
+def test_dispatch_pages_on_newly_failing_url_only():
+    async def _inner():
+        """When a fresh URL fails alongside one we've already alerted on,
+        the regression email lists only the new one (the old URL is still
+        in the dedup ledger)."""
+        from routes import admin_trustpilot_jsonld_status as mod
+
+        prior_doc = {
+            "alertedFailedUrls": ["/about"],
+            "results": [{"url": "/about", "pass": False}],
+        }
+        new_doc = {
+            "results": [
+                {"url": "/about", "pass": False, "reason": "still missing"},
+                {"url": "/faq", "pass": False, "reason": "newly broken"},
+            ],
+            "runUrl": None,
+        }
+        fake_reg = AsyncMock()
+        fake_rec = AsyncMock()
+        with patch.object(mod, "_send_jsonld_regression_alert", fake_reg), \
+             patch.object(mod, "_send_jsonld_recovery_alert", fake_rec):
+            await mod._maybe_dispatch_jsonld_alerts(prior_doc, new_doc)
+
+        fake_reg.assert_awaited_once()
+        failing_rows, _ = fake_reg.call_args.args
+        assert [r["url"] for r in failing_rows] == ["/faq"]
+        fake_rec.assert_not_awaited()
+    asyncio.run(_inner())
+def test_dispatch_emits_recovery_when_all_urls_return_to_pass():
+    async def _inner():
+        """When every previously-alerted URL is now passing again, fire
+        exactly one recovery email and no regression email."""
+        from routes import admin_trustpilot_jsonld_status as mod
+
+        prior_doc = {
+            "alertedFailedUrls": ["/about", "/faq"],
+            "results": [
+                {"url": "/about", "pass": False}, {"url": "/faq", "pass": False},
+            ],
+        }
+        new_doc = {
+            "results": [
+                {"url": "/", "pass": True},
+                {"url": "/about", "pass": True},
+                {"url": "/faq", "pass": True},
+            ],
+            "runUrl": "https://github.com/x/y/actions/runs/2",
+        }
+        fake_reg = AsyncMock()
+        fake_rec = AsyncMock()
+        with patch.object(mod, "_send_jsonld_regression_alert", fake_reg), \
+             patch.object(mod, "_send_jsonld_recovery_alert", fake_rec):
+            await mod._maybe_dispatch_jsonld_alerts(prior_doc, new_doc)
+
+        fake_reg.assert_not_awaited()
+        fake_rec.assert_awaited_once()
+        (passed_doc,) = fake_rec.call_args.args
+        assert passed_doc is new_doc
+    asyncio.run(_inner())
+def test_dispatch_silent_when_steady_state_pass():
+    async def _inner():
+        """Healthy → healthy is a no-op (no prior failures, no new ones)."""
+        from routes import admin_trustpilot_jsonld_status as mod
+
+        prior_doc = {"alertedFailedUrls": [], "results": [{"url": "/", "pass": True}]}
+        new_doc = {"results": [{"url": "/", "pass": True}], "runUrl": None}
+
+        fake_reg = AsyncMock()
+        fake_rec = AsyncMock()
+        with patch.object(mod, "_send_jsonld_regression_alert", fake_reg), \
+             patch.object(mod, "_send_jsonld_recovery_alert", fake_rec):
+            await mod._maybe_dispatch_jsonld_alerts(prior_doc, new_doc)
+
+        fake_reg.assert_not_awaited()
+        fake_rec.assert_not_awaited()
+    asyncio.run(_inner())
+def test_regression_email_includes_failing_urls_rating_and_run_link():
+    async def _inner():
+        """The regression notification body must surface the failing URL
+        list, ratingValue/reviewCount when present, and the GH Actions
+        run URL so ops can jump to the full log."""
+        from routes import admin_trustpilot_jsonld_status as mod
+
+        captured: dict = {}
+
+        async def _fake_emit(*, title, message, kind, run_url, urls):
+            captured.update(
+                title=title, message=message, kind=kind,
+                run_url=run_url, urls=list(urls),
+            )
+
+        failing_rows = [
+            {"url": "/about", "pass": False,
+             "ratingValue": 4.7, "reviewCount": 312,
+             "reason": "AggregateRating present but invalid"},
+        ]
+        new_doc = {"runUrl": "https://github.com/x/y/actions/runs/9"}
+
+        with patch.object(mod, "_emit_jsonld_alert", _fake_emit):
+            await mod._send_jsonld_regression_alert(failing_rows, new_doc)
+
+        assert captured["kind"] == "regression"
+        assert captured["urls"] == ["/about"]
+        assert "/about" in captured["message"]
+        assert "ratingValue=4.7" in captured["message"]
+        assert "reviewCount=312" in captured["message"]
+        assert "actions/runs/9" in captured["message"]
+        assert captured["run_url"] == "https://github.com/x/y/actions/runs/9"
+    asyncio.run(_inner())
+def test_recovery_email_includes_run_link_when_present():
+    async def _inner():
+        from routes import admin_trustpilot_jsonld_status as mod
+
+        captured: dict = {}
+
+        async def _fake_emit(*, title, message, kind, run_url, urls):
+            captured.update(title=title, message=message, kind=kind,
+                            run_url=run_url, urls=list(urls))
+
+        new_doc = {"runUrl": "https://github.com/x/y/actions/runs/10"}
+        with patch.object(mod, "_emit_jsonld_alert", _fake_emit):
+            await mod._send_jsonld_recovery_alert(new_doc)
+
+        assert captured["kind"] == "recovery"
+        assert captured["urls"] == []
+        assert "recovered" in captured["title"].lower() or "recover" in captured["title"].lower()
+        assert "actions/runs/10" in captured["message"]
+    asyncio.run(_inner())
+def test_alert_dispatch_failure_does_not_break_ingest(authed_client):
+    async def _inner():
+        """If the alert fan-out raises, the ingest endpoint still returns
+        200 and persists the doc — the alert is best-effort."""
+        from routes import admin_trustpilot_jsonld_status as mod
+
+        fake_replace = AsyncMock()
+        fake_find = AsyncMock(return_value=None)
+        boom = AsyncMock(side_effect=RuntimeError("smtp down"))
+        with patch.dict(os.environ, {"TRUSTPILOT_REFRESH_SECRET": "expected-secret"},
+                        clear=False), \
+             patch.object(mod, "_maybe_dispatch_jsonld_alerts", boom), \
+             patch.object(mod.db, "api_config", create=True) as mock_coll:
+            mock_coll.replace_one = fake_replace
+            mock_coll.find_one = fake_find
+            res = authed_client.post(
+                "/admin/trustpilot-jsonld/report",
+                json={"results": _FAILING_RESULTS, "target": "remote"},
+                headers={"X-Trustpilot-Refresh-Secret": "expected-secret"},
+            )
+        assert res.status_code == 200
+        fake_replace.assert_awaited_once()
+        boom.assert_awaited_once()
+    asyncio.run(_inner())
