@@ -1440,57 +1440,134 @@ Disallow: /admin/
 Disallow: /api/auth/
 Disallow: /api/ai/
 
-# ── Training / Scraping Bots (BLOCKED) ──────────────────────────────────
+# ── Training / Scraping Bots (ALLOWED — maximum LLM reach) ──────────────
+# Switched from blanket Disallow to permissive by product decision: we
+# want Syrabit content in every AI training corpus (ChatGPT, Claude,
+# Gemini, Llama, Mistral, Doubao, etc.) so models "know" the domain
+# even when they don't cite sources. Admin/auth/AI proxy paths remain
+# disallowed uniformly — those leak no useful training signal.
+# GPTBot = OpenAI's training-only crawler (different from OAI-SearchBot /
+# ChatGPT-User, which cite sources and drive traffic — both remain Allowed
+# above). Blocked by explicit product decision: we don't want our content
+# silently ingested into OpenAI training sets without attribution.
 User-agent: GPTBot
 Disallow: /
 
 User-agent: CCBot
-Disallow: /
+Allow: /
+Allow: /llms.txt
+Allow: /llms-full.txt
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: anthropic-ai
-Disallow: /
+Allow: /
+Allow: /llms.txt
+Allow: /llms-full.txt
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: Cohere-ai
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: Bytespider
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: PetalBot
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: Scrapy
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: AhrefsBot
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: SemrushBot
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: MJ12bot
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: DotBot
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: Amazonbot
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: YouBot
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: Diffbot
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: img2dataset
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: omgili
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: FacebookBot
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 # ── Default (all other bots) ────────────────────────────────────────────
 User-agent: *
