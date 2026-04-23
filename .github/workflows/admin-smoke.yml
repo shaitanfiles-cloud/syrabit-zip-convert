@@ -6,6 +6,12 @@ name: admin-smoke
 # invokes `pnpm run test:e2e` which runs every spec under
 # artifacts/syrabit/tests; we just had to expand the path filters so a
 # regression in those flows actually triggers the workflow.
+# Task #772 — `payment-flow.spec.ts` (added by Task #767) is also
+# auto-included by `pnpm run test:e2e`, but the path filter below
+# previously didn't list any of the payment surfaces, so a payment-only
+# change (admin_monetization route, ProfilePage, PaymentModal,
+# SubscriptionPlans) shipped without exercising the spec. The payment
+# paths added below close that gap.
 #
 # Task #567 was a runtime ReferenceError in a single admin widget that
 # fell through the global ErrorBoundary and replaced the dashboard with
@@ -43,6 +49,12 @@ on:
       - "artifacts/syrabit/src/pages/StudyTestHarnessPage.jsx"
       - "artifacts/syrabit/src/utils/studyApi.js"
       - "artifacts/syrabit/src/App.jsx"
+      # Task #772 — payment surfaces. Touch any of these → run the
+      # payment-flow.spec.ts that ships with the e2e suite.
+      - "artifacts/syrabit/src/pages/ProfilePage.jsx"
+      - "artifacts/syrabit/src/pages/profile/**"
+      - "artifacts/syrabit-backend/routes/admin_monetization.py"
+      - "artifacts/syrabit-backend/tests/test_payments_*.py"
       - "artifacts/syrabit/tests/**"
       - "artifacts/syrabit/playwright.config.ts"
       - ".github/workflows/admin-smoke.yml"
@@ -62,6 +74,11 @@ on:
       - "artifacts/syrabit/src/pages/StudyTestHarnessPage.jsx"
       - "artifacts/syrabit/src/utils/studyApi.js"
       - "artifacts/syrabit/src/App.jsx"
+      # Task #772 — payment surfaces (mirrors push filter above).
+      - "artifacts/syrabit/src/pages/ProfilePage.jsx"
+      - "artifacts/syrabit/src/pages/profile/**"
+      - "artifacts/syrabit-backend/routes/admin_monetization.py"
+      - "artifacts/syrabit-backend/tests/test_payments_*.py"
       - "artifacts/syrabit/tests/**"
       - "artifacts/syrabit/playwright.config.ts"
       - ".github/workflows/admin-smoke.yml"
