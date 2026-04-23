@@ -1143,7 +1143,7 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
           // as the single visitor metric. Backend still emits totals.visits
           // / series[].visits for any future consumers.
           const tiles = [
-            { key: 'requests',   label: 'Requests',         total: totals.requests,   today: useOverview ? lastBucket?.requests   : cf.requests_today,   fmt: fmtNum },
+            { key: 'requests',   label: 'Interactions',     total: totals.requests,   today: useOverview ? lastBucket?.requests   : cf.requests_today,   fmt: fmtNum },
             { key: 'bytes',      label: 'Bandwidth',        total: totals.bytes,      today: useOverview ? lastBucket?.bytes      : cf.bytes_today,      fmt: fmtBytes },
             { key: 'visitors',   label: 'Unique Visitors',  total: totals.visitors,   today: useOverview ? lastBucket?.visitors   : cf.visitors_today,   fmt: fmtNum },
             { key: 'page_views', label: 'Page views',       total: totals.page_views, today: useOverview ? lastBucket?.page_views : cf.page_views_today, fmt: fmtNum },
