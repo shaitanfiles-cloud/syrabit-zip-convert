@@ -499,7 +499,7 @@ async def _fetch_visits_series(zone_id: str, range_key: str) -> Optional[dict]:
 
 _CONTENT_TYPE_FRIENDLY = {
     # Map raw Cloudflare edgeResponseContentTypeName values to short,
-    # admin-friendly keywords shown as chips under the Interactions tile.
+    # admin-friendly keywords shown as chips under each tile.
     "html": "pages",
     "json": "API",
     "javascript": "scripts", "js": "scripts",
@@ -517,12 +517,52 @@ _CONTENT_TYPE_FRIENDLY = {
     "plain": "text", "octet-stream": "downloads",
 }
 
+_CONTENT_TYPE_HINTS = {
+    "pages":     "HTML page loads",
+    "API":       "JSON API calls",
+    "scripts":   "JavaScript files",
+    "styles":    "CSS stylesheets",
+    "images":    "image files (jpg/png/webp/svg/etc)",
+    "fonts":     "web fonts",
+    "feeds":     "XML/RSS — likely sitemap.xml or feed crawls",
+    "video":     "video files",
+    "audio":     "audio files",
+    "docs":      "PDF documents",
+    "text":      "plain-text responses",
+    "downloads": "binary downloads",
+    "other":     "HEAD checks, redirects, 304 not-modified",
+}
 
-async def _fetch_interaction_types(zone_id: str, range_key: str) -> Optional[list]:
-    """Task #741 follow-up: top edge content-type categories for the chosen
-    window, so the Interactions tile can show *what kinds* of interactions
-    they are (pages / API / images / scripts / ...). Best-effort —
-    returns None on any failure; caller renders no chips in that case.
+_DEVICE_HINTS = {
+    "desktop": "desktop browsers",
+    "mobile":  "phones",
+    "tablet":  "tablets",
+    "other":   "uncategorized device",
+    "":        "uncategorized device",
+}
+
+
+def _normalize_device(raw: str) -> str:
+    raw = (raw or "").strip().lower()
+    if raw in ("desktop", "mobile", "tablet"):
+        return raw
+    return "other"
+
+
+async def _fetch_chip_breakdowns(zone_id: str, range_key: str) -> Optional[dict]:
+    """Task #741 follow-up: top breakdown chips for each tile in the
+    Cloudflare card — interactions/bandwidth by content-type,
+    unique-visitors by country, page-views by device. All four
+    breakdowns are derived from a single multi-aliased GraphQL query
+    so the cost is one round-trip, not four. Best-effort: returns None
+    on any failure; caller renders no chips in that case.
+
+    Returns: {
+        "interactions": [{label, pct, hint}, ...],
+        "bandwidth":    [...],
+        "visitors":     [...],
+        "page_views":   [...],
+    }
     """
     if not is_configured():
         return None
@@ -531,16 +571,33 @@ async def _fetch_interaction_types(zone_id: str, range_key: str) -> Optional[lis
         since = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
         until = now.strftime("%Y-%m-%dT%H:%M:%SZ")
         query = """
-        query CfTypesHourly($zoneTag: String!, $since: Time!, $until: Time!) {
+        query CfChipsHourly($zoneTag: String!, $since: Time!, $until: Time!) {
           viewer {
             zones(filter: { zoneTag: $zoneTag }) {
-              groups: httpRequestsAdaptiveGroups(
+              by_type: httpRequestsAdaptiveGroups(
                 filter: { datetime_geq: $since, datetime_lt: $until }
                 orderBy: [count_DESC]
                 limit: 25
               ) {
                 count
+                sum { edgeResponseBytes }
                 dimensions { edgeResponseContentTypeName }
+              }
+              by_country: httpRequestsAdaptiveGroups(
+                filter: { datetime_geq: $since, datetime_lt: $until }
+                orderBy: [sum_visits_DESC]
+                limit: 15
+              ) {
+                sum { visits }
+                dimensions { clientCountryName }
+              }
+              by_device: httpRequestsAdaptiveGroups(
+                filter: { datetime_geq: $since, datetime_lt: $until, edgeResponseContentTypeName: "html" }
+                orderBy: [count_DESC]
+                limit: 8
+              ) {
+                count
+                dimensions { clientDeviceType }
               }
             }
           }
@@ -552,16 +609,33 @@ async def _fetch_interaction_types(zone_id: str, range_key: str) -> Optional[lis
         since_d = (now - timedelta(days=days - 1)).strftime("%Y-%m-%d")
         until_d = now.strftime("%Y-%m-%d")
         query = """
-        query CfTypesDaily($zoneTag: String!, $since: Date!, $until: Date!) {
+        query CfChipsDaily($zoneTag: String!, $since: Date!, $until: Date!) {
           viewer {
             zones(filter: { zoneTag: $zoneTag }) {
-              groups: httpRequestsAdaptiveGroups(
+              by_type: httpRequestsAdaptiveGroups(
                 filter: { date_geq: $since, date_leq: $until }
                 orderBy: [count_DESC]
                 limit: 25
               ) {
                 count
+                sum { edgeResponseBytes }
                 dimensions { edgeResponseContentTypeName }
+              }
+              by_country: httpRequestsAdaptiveGroups(
+                filter: { date_geq: $since, date_leq: $until }
+                orderBy: [sum_visits_DESC]
+                limit: 15
+              ) {
+                sum { visits }
+                dimensions { clientCountryName }
+              }
+              by_device: httpRequestsAdaptiveGroups(
+                filter: { date_geq: $since, date_leq: $until, edgeResponseContentTypeName: "html" }
+                orderBy: [count_DESC]
+                limit: 8
+              ) {
+                count
+                dimensions { clientDeviceType }
               }
             }
           }
@@ -576,31 +650,80 @@ async def _fetch_interaction_types(zone_id: str, range_key: str) -> Optional[lis
         zones = data.get("viewer", {}).get("zones", []) or []
         if not zones:
             return None
-        rows = zones[0].get("groups", []) or []
-        # Collapse raw mime subtypes ("jpeg" + "png" -> "images" etc).
-        bucket: dict = {}
-        total = 0
-        for row in rows:
+        zone = zones[0]
+
+        def _topn(bucket: dict, total: int, hint_fn, top_n: int = 5) -> list:
+            if total <= 0:
+                return []
+            ranked = sorted(bucket.items(), key=lambda kv: kv[1], reverse=True)
+            out = []
+            for label, value in ranked[:top_n]:
+                pct = round((value / total) * 100, 1)
+                if pct < 1.0:
+                    continue
+                out.append({"label": label, "pct": pct, "hint": hint_fn(label)})
+            return out
+
+        # ── Content-type rows feed BOTH interactions (count) and bandwidth (bytes)
+        type_rows = zone.get("by_type", []) or []
+        type_count: dict = {}
+        type_bytes: dict = {}
+        type_count_total = 0
+        type_bytes_total = 0
+        for row in type_rows:
             raw = ((row.get("dimensions", {}) or {}).get("edgeResponseContentTypeName") or "").strip().lower()
             count = int(row.get("count", 0) or 0)
-            if not raw or count <= 0:
+            byts = int((row.get("sum", {}) or {}).get("edgeResponseBytes", 0) or 0)
+            label = _CONTENT_TYPE_FRIENDLY.get(raw, raw or "other")
+            type_count[label] = type_count.get(label, 0) + count
+            type_bytes[label] = type_bytes.get(label, 0) + byts
+            type_count_total += count
+            type_bytes_total += byts
+
+        type_hint = lambda lbl: _CONTENT_TYPE_HINTS.get(lbl, f"content type: {lbl}")
+        interactions = _topn(type_count, type_count_total, type_hint)
+        bandwidth = _topn(type_bytes, type_bytes_total, type_hint)
+
+        # ── Country rows → visitors chips (top countries by sessions)
+        country_rows = zone.get("by_country", []) or []
+        country_bucket: dict = {}
+        country_total = 0
+        for row in country_rows:
+            name = ((row.get("dimensions", {}) or {}).get("clientCountryName") or "").strip()
+            visits = int((row.get("sum", {}) or {}).get("visits", 0) or 0)
+            if not name or visits <= 0:
                 continue
-            label = _CONTENT_TYPE_FRIENDLY.get(raw, raw)
-            bucket[label] = bucket.get(label, 0) + count
-            total += count
-        if total <= 0:
-            return None
-        # Top 5, drop slices < 1% to keep chips meaningful.
-        ranked = sorted(bucket.items(), key=lambda kv: kv[1], reverse=True)
-        out = []
-        for label, count in ranked[:5]:
-            pct = round((count / total) * 100, 1)
-            if pct < 1.0:
+            # CF returns ISO-2 codes ("IN", "US") OR full names depending on
+            # version; either way we display verbatim.
+            country_bucket[name] = country_bucket.get(name, 0) + visits
+            country_total += visits
+        country_hint = lambda lbl: f"visitors from {lbl}"
+        visitors = _topn(country_bucket, country_total, country_hint, top_n=5)
+
+        # ── Device rows → page_views chips (HTML hits only ≈ page views)
+        device_rows = zone.get("by_device", []) or []
+        device_bucket: dict = {}
+        device_total = 0
+        for row in device_rows:
+            label = _normalize_device((row.get("dimensions", {}) or {}).get("clientDeviceType"))
+            count = int(row.get("count", 0) or 0)
+            if count <= 0:
                 continue
-            out.append({"label": label, "count": count, "pct": pct})
-        return out or None
+            device_bucket[label] = device_bucket.get(label, 0) + count
+            device_total += count
+        device_hint = lambda lbl: _DEVICE_HINTS.get(lbl, f"device: {lbl}")
+        page_views = _topn(device_bucket, device_total, device_hint, top_n=4)
+
+        out = {
+            "interactions": interactions,
+            "bandwidth": bandwidth,
+            "visitors": visitors,
+            "page_views": page_views,
+        }
+        # Drop empty entries to keep the payload tidy
+        return {k: v for k, v in out.items() if v} or None
     except Exception as e:
-        logger.debug(f"CF interaction-types parsing failed: {e}")
+        logger.debug(f"CF chip-breakdowns parsing failed: {e}")
         return None
 
 
@@ -683,10 +806,10 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
     # best-effort: if it returns None, we degrade the visits tile to "—"
     # without touching the rest of the card.
     _safe_range = range_key if range_key in ("24h", "7d", "30d") else "7d"
-    data, visits_map, interaction_types = await asyncio.gather(
+    data, visits_map, breakdowns = await asyncio.gather(
         _graphql_query(query, variables),
         _fetch_visits_series(zone_id, _safe_range),
-        _fetch_interaction_types(zone_id, _safe_range),
+        _fetch_chip_breakdowns(zone_id, _safe_range),
     )
     if not data:
         return None
@@ -748,10 +871,12 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
             "period_label": period_label,
             "totals": totals,
             "series": series,
-            # Top edge content-type breakdown (e.g. pages / API / images /
-            # scripts / styles) for the same window, used by the
-            # Interactions tile chip row. None when unavailable.
-            "interaction_types": interaction_types,
+            # Per-tile breakdown chips: { interactions, bandwidth,
+            # visitors, page_views } → list of { label, pct, hint }.
+            # Each list is None/missing when the upstream query couldn't
+            # produce meaningful chips. Frontend renders chips below
+            # each tile's sparkline with `hint` shown as a hover tooltip.
+            "breakdowns": breakdowns,
             "source": "cloudflare",
         }
     except Exception as e:
