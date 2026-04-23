@@ -41,6 +41,13 @@ jobs:
         run: pnpm --filter ./workers/edge-proxy run test --run
         # vitest exit code is non-zero on failure → blocks the merge.
 
+      - name: Run syrabit web unit tests (vitest)
+        run: pnpm --filter @workspace/syrabit run test
+        # Task #722 — gate the syrabit web suite (BreakGlassBanner,
+        # pushChannelTone, highlightSegments, AdminEduBrowser,
+        # AlertReasonsRow, …). vitest exits non-zero on failure so a
+        # broken polled-field name or peer-dep churn blocks merge.
+
       - name: Build syrabit web artifact
         run: pnpm --filter @workspace/syrabit run build:vite-only || pnpm --filter @workspace/syrabit run build
         # Either build script works; we try the lighter `vite-only` first
