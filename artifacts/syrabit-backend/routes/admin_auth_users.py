@@ -228,7 +228,13 @@ async def _compute_dashboard():
                 )
                 for r in _pg_rows(rows):
                     pg_conv_map[r["id"]] = r
-        except Exception: pass
+        except Exception as e:
+            # Audit #7 sweep cleanup: this used to silently swallow pg
+            # failures, so if Postgres started returning errors the admin
+            # dashboard would just look empty with no clue why. Falling
+            # through to the supa branch below is still the right
+            # behavior, but we log so the failure mode is observable.
+            logger.warning(f"_compute_dashboard pg conversations fetch failed: {e}")
 
     if supa:
         try:
