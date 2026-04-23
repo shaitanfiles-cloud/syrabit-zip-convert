@@ -1,5 +1,6 @@
 import { DollarSign, TrendingUp } from 'lucide-react';
 import { Card, Stat, FUNNEL_COLORS } from './shared';
+import CurrencyProvenanceCaption, { breakdownTooltip } from './CurrencyProvenanceCaption';
 
 export default function FunnelTab({ funnel, widgetErrors, load }) {
   if (!funnel) {
@@ -28,9 +29,12 @@ export default function FunnelTab({ funnel, widgetErrors, load }) {
         </div>
       </Card>
       <div className="grid grid-cols-2 gap-3">
-        <Stat icon={DollarSign} label="Revenue / Paid User" value={`₹${funnel.revenue_per_user || 0}`}  color="#10b981" />
+        <div title={breakdownTooltip(funnel.currency_breakdown)}>
+          <Stat icon={DollarSign} label="Revenue / Paid User" value={`₹${funnel.revenue_per_user || 0}`}  color="#10b981" />
+        </div>
         <Stat icon={TrendingUp} label="Conversion Rate"     value={`${funnel.conversion_rate || 0}%`} color="#8b5cf6" />
       </div>
+      <CurrencyProvenanceCaption breakdown={funnel.currency_breakdown} className="px-1" />
     </div>
   );
 }

@@ -4,8 +4,10 @@ import {
   ResponsiveContainer, BarChart, Bar, LineChart, Line, Cell,
 } from 'recharts';
 import { Card, Stat, TT, PLAN_COLORS, fmt, fmtInr } from './shared';
+import CurrencyProvenanceCaption, { breakdownTooltip } from './CurrencyProvenanceCaption';
 
 export default function RevenueTab({ widgetErrors, load, mrr, predicted, growth, arpu, ltv, paidUsers, dailyRev, cohortData, predict, revenue }) {
+  const breakdown = revenue?.currency_breakdown;
   return (
     <div className="space-y-4">
       {widgetErrors.revenue && (
@@ -19,9 +21,13 @@ export default function RevenueTab({ widgetErrors, load, mrr, predicted, growth,
             style={{ background: 'rgba(245,158,11,0.12)' }}>Retry</button>
         </div>
       )}
-      <p className="text-[11px] text-gray-400 px-1">
-        Includes Razorpay (INR) + Stripe (USD→INR via daily ECB rate). Per-row provenance on the Monetization page.
-      </p>
+      {breakdown ? (
+        <CurrencyProvenanceCaption breakdown={breakdown} className="px-1" />
+      ) : (
+        <p className="text-[11px] text-gray-400 px-1">
+          Includes Razorpay (INR) + Stripe (USD→INR via daily ECB rate). Per-row provenance on the Monetization page.
+        </p>
+      )}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <Stat icon={DollarSign} label="MRR (30d)"     value={fmtInr(mrr)}       color="#10b981" trend={growth} />
         <Stat icon={TrendingUp} label="Predicted MRR" value={fmtInr(predicted)} color="#7c3aed"
@@ -38,7 +44,7 @@ export default function RevenueTab({ widgetErrors, load, mrr, predicted, growth,
             <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
             <XAxis dataKey="date" tick={{ fill: '#4b5563', fontSize: 11 }} tickFormatter={fmt} />
             <YAxis tick={{ fill: '#4b5563', fontSize: 11 }} tickFormatter={v => `₹${v}`} />
-            <Tooltip {...TT} formatter={v => [`₹${v}`, 'Revenue']} />
+            <Tooltip {...TT} formatter={v => [`₹${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`, breakdownTooltip(breakdown) ? 'Revenue (incl. Stripe)' : 'Revenue']} />
             <Line type="monotone" dataKey="revenue_inr" name="Revenue ₹" stroke="#10b981" strokeWidth={2.5}
               dot={{ r: 3, fill: '#10b981' }} activeDot={{ r: 5 }} />
           </LineChart>

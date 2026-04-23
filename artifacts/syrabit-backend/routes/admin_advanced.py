@@ -36,6 +36,61 @@ router = APIRouter()
 # ─────────────────────────────────────────────
 # Task #731 S3 — Stripe-aware revenue rollups
 # ─────────────────────────────────────────────
+def _currency_breakdown(payments: list) -> dict:
+    """Task #740 — per-currency native totals + FX provenance metadata.
+
+    Returns a dict the frontend uses to render the same
+    "Includes: Razorpay (₹X) + Stripe (USD $Y → ₹Z @ rate R, source: …)"
+    caption that Monetization tab already shows. Schema is
+    forward-compatible (only INR + USD slices populated for v1).
+
+    Fields:
+      inr_native:     float, sum of Razorpay/INR-native amounts in INR
+      usd_native:     float, sum of Stripe USD amounts in USD (original)
+      inr_from_usd:   float, INR equivalent of usd_native at captured rates
+      fx_rate:        float|None, FX rate from the most recent USD row
+      fx_source:      str|None,  e.g. "frankfurter", "open_er_api", "..._stale"
+      fx_fetched_at:  str|None, ISO timestamp of when that rate was captured
+    """
+    inr_native = 0.0
+    usd_native = 0.0
+    inr_from_usd = 0.0
+    latest_fx_row = None
+    for p in payments or []:
+        currency_original = (p.get("currency_original") or "").upper()
+        provider = (p.get("provider") or "").lower()
+        amount_inr = _row_inr(p)
+        is_usd = currency_original == "USD" or (
+            provider == "stripe" and currency_original != "INR"
+        )
+        if is_usd:
+            cents = p.get("amount_cents") or 0
+            if isinstance(cents, (int, float)) and cents:
+                usd_native += float(cents) / 100.0
+            else:
+                usd_native += float(p.get("amount_original") or 0)
+            inr_from_usd += amount_inr
+            ts = p.get("verified_at") or ""
+            if not latest_fx_row or ts > (latest_fx_row.get("verified_at") or ""):
+                latest_fx_row = p
+        else:
+            inr_native += amount_inr
+
+    out = {
+        "inr_native":   round(inr_native, 2),
+        "usd_native":   round(usd_native, 2),
+        "inr_from_usd": round(inr_from_usd, 2),
+        "fx_rate":      None,
+        "fx_source":    None,
+        "fx_fetched_at": None,
+    }
+    if latest_fx_row:
+        out["fx_rate"]       = latest_fx_row.get("fx_rate")
+        out["fx_source"]     = latest_fx_row.get("fx_source")
+        out["fx_fetched_at"] = latest_fx_row.get("fx_fetched_at")
+    return out
+
+
 def _row_inr(p: dict) -> float:
     """Best-effort INR rupees for one payment row.
 
@@ -130,6 +185,10 @@ async def admin_monetization_overview(admin: dict = Depends(get_admin_user)):
         # revenue tiles using these flags (S9).
         "revenue_includes_stripe": True,
         "revenue_basis": "amount_inr_at_payment_time",
+        # Task #740 — per-currency breakdown so the "Includes: Razorpay
+        # + Stripe (USD→INR @ rate …)" caption can render the actual
+        # numbers, not just an opaque "Includes Stripe" boolean.
+        "currency_breakdown": _currency_breakdown(payments),
     }
 
 @router.get("/admin/monetization/referrals")
@@ -599,6 +658,17 @@ async def admin_page_conversions(days: int = 30, admin: dict = Depends(get_admin
     except Exception:
         pass
 
+    # Task #740 — populate revenue_attributed (the frontend tile expected
+    # this field but it was always 0). For v1, "attributed" = total
+    # revenue in the same period, since per-page attribution is not
+    # tracked. The currency_breakdown lets the UI render the same
+    # provenance caption as Monetization.
+    period_payments = await db.payments.find(
+        {"verified_at": {"$gte": cutoff}},
+        {"_id": 0},
+    ).to_list(5000)
+    revenue_attributed = round(sum(_row_inr(p) for p in period_payments), 2)
+
     return {
         "top_converting_pages": enriched,
         "daily_signups": sorted(
@@ -606,6 +676,8 @@ async def admin_page_conversions(days: int = 30, admin: dict = Depends(get_admin
             key=lambda x: x["date"],
         ),
         "period_days": days,
+        "revenue_attributed": revenue_attributed,
+        "currency_breakdown": _currency_breakdown(period_payments),
     }
 
 

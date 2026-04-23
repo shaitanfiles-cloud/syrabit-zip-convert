@@ -4754,7 +4754,11 @@ async def admin_analytics_funnel(admin: dict = Depends(get_admin_user)):
             paid += 1
 
     payments = await db.payments.find({}, {"_id": 0}).to_list(5000)
-    total_revenue = sum(p.get("amount_paise", 0) for p in payments if p.get("provider") != "stripe") / 100
+    # Task #740 — Stripe-aware revenue using the same _row_inr helper as
+    # Monetization (#731 S3). The previous paise-only sum dropped every
+    # Stripe payment from the funnel's "revenue / paid user" tile.
+    from routes.admin_advanced import _row_inr, _currency_breakdown
+    total_revenue = sum(_row_inr(p) for p in payments)
 
     return {
         "funnel": [
@@ -4764,6 +4768,7 @@ async def admin_analytics_funnel(admin: dict = Depends(get_admin_user)):
         ],
         "revenue_per_user": round(total_revenue / max(paid, 1), 2),
         "conversion_rate": round(paid / max(total, 1) * 100, 2),
+        "currency_breakdown": _currency_breakdown(payments),
     }
 
 @router.get("/admin/analytics/content-heatmap")
@@ -4928,6 +4933,10 @@ async def admin_analytics_revenue(days: int = 30, admin: dict = Depends(get_admi
         {"_id": 0}
     ).sort("verified_at", 1).to_list(5000)
 
+    # Task #740 — Stripe-aware: use _row_inr so daily totals include
+    # USD payments at the FX rate captured at-payment-time. The
+    # previous `amount_paise / 100` was Razorpay-only.
+    from routes.admin_advanced import _row_inr, _currency_breakdown
     daily = {}
     for p in payments:
         day = p.get("verified_at", "")[:10]
@@ -4935,7 +4944,7 @@ async def admin_analytics_revenue(days: int = 30, admin: dict = Depends(get_admi
             continue
         if day not in daily:
             daily[day] = {"date": day, "revenue_inr": 0, "count": 0}
-        daily[day]["revenue_inr"] += p.get("amount_paise", 0) / 100
+        daily[day]["revenue_inr"] = round(daily[day]["revenue_inr"] + _row_inr(p), 2)
         daily[day]["count"] += 1
 
     users = await supa_list_users()
@@ -4948,6 +4957,7 @@ async def admin_analytics_revenue(days: int = 30, admin: dict = Depends(get_admi
         "daily_revenue": sorted(daily.values(), key=lambda x: x["date"]),
         "cohorts": cohorts,
         "total_payments": len(payments),
+        "currency_breakdown": _currency_breakdown(payments),
     }
 
 @router.get("/admin/analytics/predictor")

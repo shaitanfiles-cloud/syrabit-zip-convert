@@ -14,6 +14,7 @@ import { API_BASE, adminGetPlanConfig } from '@/utils/api';
 import { toast } from 'sonner';
 
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
+import CurrencyProvenanceCaption from './analytics/CurrencyProvenanceCaption';
 const LIGHT_TOOLTIP = {
   contentStyle: {
     background: '#ffffff',
@@ -192,11 +193,22 @@ export default function AdminMonetization({ adminToken, onNavigate }) {
               <MetricCard icon={Users} label="Paid Users" value={overview.total_paid_users} color="#8b5cf6" />
               <MetricCard icon={Percent} label="Conversion Rate" value={overview.conversion_rate + '%'} color="#f59e0b" />
             </div>
-            {/* Task #731 S3 + S9 — provenance caption: tells admins exactly
-                what currencies + FX policy these tiles add up. Without this
-                a Stripe payment in the row list looks inconsistent with the
-                INR total. */}
-            {overview.revenue_includes_stripe && (
+            {/* Task #731 S3 + S9, Task #740 — shared provenance caption so
+                Monetization, Funnel, Revenue, and Conversions tabs all
+                display the same wording. CurrencyProvenanceCaption uses
+                the new currency_breakdown payload to render real numbers
+                ("Razorpay ₹X + Stripe $Y → ₹Z"), gracefully shortening
+                to "Includes Razorpay only" when usd_native is 0. */}
+            {overview.currency_breakdown ? (
+              <div className="-mt-1 pl-1">
+                <CurrencyProvenanceCaption breakdown={overview.currency_breakdown} />
+                {typeof overview.total_lifetime_revenue_inr === 'number' && (
+                  <p className="text-[11px] text-gray-500 leading-snug">
+                    Lifetime: ₹{overview.total_lifetime_revenue_inr.toLocaleString('en-IN', { maximumFractionDigits: 2 })}.
+                  </p>
+                )}
+              </div>
+            ) : overview.revenue_includes_stripe && (
               <div className="text-[11px] text-gray-500 -mt-1 pl-1 leading-snug">
                 Includes Razorpay (INR) + Stripe (USD→INR @ rate captured at payment time).
                 {typeof overview.total_lifetime_revenue_inr === 'number' && (
