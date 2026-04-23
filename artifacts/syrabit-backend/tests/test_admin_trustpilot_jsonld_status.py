@@ -809,6 +809,85 @@ def test_ingest_fires_streak_alert_when_url_hits_threshold(authed_client):
     asyncio.run(_inner())
 
 
+# ─── Task #758 — alert-history endpoint ────────────────────────────────
+
+
+def test_get_alerts_requires_admin_auth(deny_client):
+    res = deny_client.get("/admin/trustpilot-jsonld/alerts")
+    assert res.status_code in (401, 403)
+
+
+def test_get_alerts_returns_classified_events(authed_client):
+    """History endpoint must read notifications via the shared helper,
+    classify each event's ``state`` from its title, and truncate the
+    message body to keep the response small."""
+    from routes import admin_trustpilot_jsonld_status as mod
+
+    stored = [
+        {
+            "id": "n1",
+            "title": "Trustpilot JSON-LD regression: AggregateRating missing on 2 URL(s)",
+            "message": "body 1 " * 500,
+            "type": "error",
+            "created_at": "2026-04-23T06:00:00+00:00",
+        },
+        {
+            "id": "n2",
+            "title": "Trustpilot JSON-LD recovered: AggregateRating present on all URLs",
+            "message": "body 2",
+            "type": "info",
+            "created_at": "2026-04-23T07:00:00+00:00",
+        },
+        {
+            "id": "n3",
+            "title": "Trustpilot JSON-LD: 1 URL(s) failing 3+ runs in a row",
+            "message": "body 3",
+            "type": "error",
+            "created_at": "2026-04-23T08:00:00+00:00",
+        },
+    ]
+
+    fake = AsyncMock(return_value=stored)
+    with patch("db_ops.supa_get_notifications_by_title_prefix", fake):
+        res = authed_client.get("/admin/trustpilot-jsonld/alerts?limit=5")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["limit"] == 5
+    events = body["events"]
+    assert [e["id"] for e in events] == ["n1", "n2", "n3"]
+    assert [e["state"] for e in events] == ["regression", "recovery", "streak"]
+    # Message body is truncated to 500 chars so huge alerts can't blow
+    # up the history strip.
+    assert len(events[0]["message"]) <= 500
+    # Helper called with the shared title prefix so we only surface
+    # alerts from this module, not every notification in the store.
+    fake.assert_awaited_once()
+    args, kwargs = fake.call_args
+    assert args[0] == mod._ALERT_TITLE_PREFIX
+    assert args[1] == 5
+
+
+def test_get_alerts_clamps_limit():
+    """Limit is bounded to [1, 50] to protect the backing query."""
+    from routes import admin_trustpilot_jsonld_status as mod
+    assert mod._classify_jsonld_alert_title("Trustpilot JSON-LD regression: x") == "regression"
+    assert mod._classify_jsonld_alert_title("Trustpilot JSON-LD recovered: y") == "recovery"
+    assert mod._classify_jsonld_alert_title("Trustpilot JSON-LD: 1 URL(s) failing 3+ runs in a row") == "streak"
+    # Unknown variants fall back to regression (safest visual default).
+    assert mod._classify_jsonld_alert_title("anything else") == "regression"
+
+
+def test_get_alerts_fetch_failure_returns_empty_events(authed_client):
+    """If the notifications backend is unreachable, the endpoint must
+    still 200 with an empty list so the tile renders gracefully."""
+    boom = AsyncMock(side_effect=RuntimeError("pg down"))
+    with patch("db_ops.supa_get_notifications_by_title_prefix", boom):
+        res = authed_client.get("/admin/trustpilot-jsonld/alerts")
+    assert res.status_code == 200
+    assert res.json()["events"] == []
+
+
 def test_alert_dispatch_failure_does_not_break_ingest(authed_client):
     async def _inner():
         """If the alert fan-out raises, the ingest endpoint still returns

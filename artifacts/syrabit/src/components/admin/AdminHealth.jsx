@@ -193,6 +193,12 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   // changes once per scheduled run anyway.
   const [tpJsonldHistory, setTpJsonldHistory] = useState(null);
 
+  // Task #758 — last N regression / recovery / streak alert events
+  // from the notifications store, rendered as a compact history strip
+  // inside the Trustpilot JSON-LD tile so ops can spot a flappy URL
+  // that single-fire email dedup would hide.
+  const [tpJsonldAlerts, setTpJsonldAlerts] = useState(null);
+
   // Task #755 — refresh-cron heartbeat snapshot. Surfaces whether the
   // daily GitHub Actions cron (.github/workflows/trustpilot-aggregate-
   // refresh.yml) is still checking in. Endpoint added in Task #751;
@@ -230,18 +236,32 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       .catch(() => setTpJsonldHistory({ points: [], _error: true }));
   }, [adminToken]);
 
+  const loadTpJsonldAlerts = useCallback(() => {
+    // Last 10 is enough to spot a flappy URL at a glance without
+    // blowing the tile height; user can deep-link into the full
+    // notifications page for more.
+    axios.get(`${API_BASE}/admin/trustpilot-jsonld/alerts?limit=10`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setTpJsonldAlerts(r.data))
+      .catch(() => setTpJsonldAlerts({ events: [], _error: true }));
+  }, [adminToken]);
+
   useEffect(() => {
     if (!adminToken) return;
     loadTpJsonldReport();
     loadTpJsonldHistory();
+    loadTpJsonldAlerts();
     loadTpCronHealth();
     const id = setInterval(() => {
       loadTpJsonldReport();
       loadTpJsonldHistory();
+      loadTpJsonldAlerts();
       loadTpCronHealth();
     }, 60000);
     return () => clearInterval(id);
-  }, [adminToken, loadTpJsonldReport, loadTpJsonldHistory, loadTpCronHealth]);
+  }, [adminToken, loadTpJsonldReport, loadTpJsonldHistory,
+      loadTpJsonldAlerts, loadTpCronHealth]);
 
   // Task #609 — managed AI response cache stats + admin purge controls.
   const [aiCacheStats, setAiCacheStats] = useState(null);
@@ -1972,6 +1992,78 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                         </div>
                       );
                     })()}
+                  </div>
+                );
+              })()}
+              {(() => {
+                // Task #758 — recent regression / recovery / streak
+                // alert events. Reads from the notifications the
+                // dispatcher already writes, so a flappy URL (alerted,
+                // recovered, re-alerted within a week) stands out at a
+                // glance — something single-fire email dedup hides.
+                const events = tpJsonldAlerts?.events || [];
+                if (!events.length) return null;
+                const stateStyles = {
+                  regression: 'bg-red-50 text-red-700 border-red-200',
+                  streak: 'bg-amber-50 text-amber-700 border-amber-200',
+                  recovery: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                };
+                const stateLabels = {
+                  regression: 'REGRESSION',
+                  streak: 'STREAK',
+                  recovery: 'RECOVERY',
+                };
+                const fmtAge = (iso) => {
+                  if (!iso) return '';
+                  const t = new Date(iso).getTime();
+                  if (!Number.isFinite(t)) return '';
+                  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+                  if (s < 60) return `${s}s ago`;
+                  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+                  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+                  return `${Math.round(s / 86400)}d ago`;
+                };
+                return (
+                  <div
+                    className="mb-3 pt-2 border-t border-gray-100"
+                    data-testid="trustpilot-jsonld-alert-history"
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <p className="text-[10px] uppercase tracking-wider text-gray-500">
+                        Recent alerts · last {events.length}
+                      </p>
+                      <p className="text-[10px] text-gray-400">
+                        auto-refreshes · 60s
+                      </p>
+                    </div>
+                    <ul className="space-y-1 max-h-40 overflow-y-auto pr-1">
+                      {events.map((e) => (
+                        <li
+                          key={e.id || `${e.created_at}-${e.title}`}
+                          className="flex items-start gap-2 text-[11px] leading-snug"
+                          data-testid={`trustpilot-jsonld-alert-${e.state}`}
+                        >
+                          <span
+                            className={`shrink-0 mt-0.5 inline-block px-1.5 py-0.5 rounded border font-bold text-[9px] tracking-wider ${stateStyles[e.state] || stateStyles.regression}`}
+                            title={e.state}
+                          >
+                            {stateLabels[e.state] || e.state?.toUpperCase() || 'ALERT'}
+                          </span>
+                          <span className="flex-1 min-w-0">
+                            <span
+                              className="block text-gray-700 truncate"
+                              title={e.title}
+                            >
+                              {e.title}
+                            </span>
+                            <span className="text-[10px] text-gray-400 font-mono">
+                              {fmtAge(e.created_at)}
+                              {e.created_at ? ` · ${new Date(e.created_at).toLocaleString()}` : ''}
+                            </span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                 );
               })()}

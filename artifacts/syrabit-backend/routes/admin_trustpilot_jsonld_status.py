@@ -666,3 +666,72 @@ async def get_trustpilot_jsonld_history(
     # in chronological order.
     points.reverse()
     return {"points": points, "ttlDays": 30}
+
+
+# ─── Task #758 — recent regression/recovery/streak alert history ─────────
+
+
+# Every alert this module emits prefixes its title with the same fixed
+# string so we can retrieve the history by title-prefix match without
+# relying on `meta` (which the PG and Supabase insert paths in
+# ``supa_insert_notification`` silently drop).
+_ALERT_TITLE_PREFIX = "Trustpilot JSON-LD"
+
+
+def _classify_jsonld_alert_title(title: str) -> str:
+    """Map a persisted notification title back to the alert kind the
+    dispatcher emitted, so the UI can colour-code without parsing
+    free-form strings. Unknown variants default to ``regression`` (the
+    most common / loudest path), which is a safe visual fallback."""
+    t = (title or "").lower()
+    if "recover" in t:
+        return "recovery"
+    if "runs in a row" in t:
+        return "streak"
+    return "regression"
+
+
+@router.get("/admin/trustpilot-jsonld/alerts")
+async def get_trustpilot_jsonld_alerts(
+    limit: int = 10,
+    admin: dict = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """Task #758 — return the last N Trustpilot JSON-LD alert events
+    (regression / recovery / 3-day streak) so the AdminHealth tile can
+    render an alert-history strip. Each event's ``state`` is classified
+    from the title so the UI can render a colour-coded chip without
+    having to parse the free-form message body."""
+    try:
+        n = int(limit)
+    except (TypeError, ValueError):
+        n = 10
+    n = max(1, min(50, n))
+
+    from db_ops import supa_get_notifications_by_title_prefix
+    try:
+        rows = await supa_get_notifications_by_title_prefix(
+            _ALERT_TITLE_PREFIX, n,
+        )
+    except Exception as exc:
+        logger.warning("[trustpilot-jsonld] alerts fetch failed: %s", exc)
+        rows = []
+
+    events: list[dict[str, Any]] = []
+    for row in rows or []:
+        created = row.get("created_at")
+        if isinstance(created, datetime):
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            created = created.isoformat()
+        title = str(row.get("title") or "")
+        events.append({
+            "id": str(row.get("id") or ""),
+            "title": title,
+            # Truncate the message — the full body can be dozens of
+            # lines and the history strip only needs a summary line.
+            "message": (str(row.get("message") or "")[:500]),
+            "type": row.get("type") or "info",
+            "state": _classify_jsonld_alert_title(title),
+            "created_at": created,
+        })
+    return {"events": events, "limit": n}

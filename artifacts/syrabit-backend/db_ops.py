@@ -904,6 +904,63 @@ async def supa_get_notifications(limit: int = 100):
     except Exception:
         return []
 
+async def supa_get_notifications_by_title_prefix(prefix: str, limit: int = 10):
+    """Return the N most-recent notifications whose title starts with
+    ``prefix`` (used by Task #758 to power the Trustpilot JSON-LD alert
+    history strip on the admin dashboard).
+
+    Filters on ``title`` rather than ``meta.kind`` because the PG and
+    Supabase code paths in ``supa_insert_notification`` only persist a
+    fixed column set — ``meta`` / ``channel`` are silently dropped — so
+    a meta-based filter would miss everything inserted in production.
+    Title-prefix matching is stable because every alert emitter in
+    this codebase uses a distinct, namespaced title prefix.
+
+    Tries the same storage backends, in the same priority order, as
+    ``supa_get_notifications`` so we stay consistent with the writer.
+    """
+    if _deps_mod.pg_pool:
+        try:
+            async with _deps_mod.pg_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """SELECT * FROM notifications
+                       WHERE title LIKE $1
+                       ORDER BY created_at DESC LIMIT $2""",
+                    f"{prefix}%", int(limit),
+                )
+                return _pg_rows(rows)
+        except Exception as exc:
+            logger.warning(
+                "pg supa_get_notifications_by_title_prefix failed: %s", exc,
+            )
+    if supa:
+        try:
+            r = await _supa(
+                lambda: supa.table("notifications")
+                .select("*")
+                .like("title", f"{prefix}%")
+                .order("created_at", desc=True)
+                .limit(int(limit))
+                .execute()
+            )
+            return r.data or []
+        except Exception as exc:
+            logger.warning(
+                "supa supa_get_notifications_by_title_prefix failed: %s", exc,
+            )
+    try:
+        # Mongo fallback — regex-anchored to the prefix.
+        import re as _re
+        safe = _re.escape(prefix)
+        cursor = db.notifications.find(
+            {"title": {"$regex": f"^{safe}"}},
+            {"_id": 0},
+        ).sort("created_at", -1).limit(int(limit))
+        return await cursor.to_list(int(limit))
+    except Exception:
+        return []
+
+
 async def supa_insert_notification(notif: dict):
     if _deps_mod.pg_pool:
         try:
