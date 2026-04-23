@@ -975,6 +975,27 @@ async def lifespan(app):
         except Exception as _ci_alert_err:
             logger.warning(
                 f"ci alert loop not started: {_ci_alert_err}")
+    # Task #728 — hourly poll of the in-process Trustpilot aggregate
+    # cache; emails admins + drops an in-app notification when the
+    # /api/config/trustpilot/aggregate feed has had no successful
+    # upstream fetch in >24h (rotated key, expired plan, WAF block,
+    # etc). Debounced to one alert per 24h while broken, plus exactly
+    # one recovery notification on broken→healthy.
+    #
+    # Run on EVERY replica (no leader gate) — the feed health state
+    # lives in *per-process* memory (_tp_aggregate_cache), so a
+    # leader-only loop could miss an outage entirely if production
+    # traffic hashes around the leader replica. Cross-replica spam is
+    # prevented by the atomic CAS on db.job_locks inside the loop, the
+    # same dedup pattern Task #484's CI alerter relies on.
+    try:
+        from routes.admin_trustpilot_alerts import (
+            _trustpilot_feed_alert_loop,
+        )
+        asyncio.create_task(_trustpilot_feed_alert_loop())
+    except Exception as _tp_alert_err:
+        logger.warning(
+            f"trustpilot feed alert loop not started: {_tp_alert_err}")
     if _is_leader:
         # Single-leader: only one replica should query the CF GraphQL API
         # and write the per-UA report each Monday.
@@ -1199,6 +1220,7 @@ from routes.admin_retriever import router as admin_retriever_router
 from routes.admin_benchmark import router as admin_benchmark_router
 from routes.admin_kv_health import router as admin_kv_health_router
 from routes.admin_ci_status import router as admin_ci_status_router
+from routes.admin_trustpilot_alerts import router as admin_trustpilot_alerts_router
 from routes.admin_ads import router as admin_ads_router
 from routes.admin_review_prompts import router as admin_review_prompts_router
 from routes.edu_browser import router as edu_browser_router
@@ -1225,6 +1247,7 @@ api.include_router(admin_retriever_router)
 api.include_router(admin_benchmark_router)
 api.include_router(admin_kv_health_router)
 api.include_router(admin_ci_status_router)
+api.include_router(admin_trustpilot_alerts_router)
 api.include_router(admin_ads_router)
 api.include_router(admin_review_prompts_router)
 api.include_router(edu_browser_router)

@@ -72,9 +72,55 @@ _TP_AGGREGATE_TIMEOUT_S = 8.0
 _tp_aggregate_cache: Dict[str, Any] = {
     "payload": None,   # last successful payload (dict with ratingValue/ratingCount/...)
     "ts": 0.0,         # timestamp of last successful fetch
-    "fail_ts": 0.0,    # timestamp of last failure (used to throttle retries)
+    "fail_ts": 0.0,    # timestamp of the *most recent* failure (throttles retries)
+    "first_fail_ts": 0.0,  # timestamp of the *first* failure since the last success
+    "last_error": None,  # short string describing the most recent fetch failure
 }
 _tp_aggregate_lock = asyncio.Lock()
+
+
+def get_trustpilot_aggregate_health() -> Dict[str, Any]:
+    """Return monitoring snapshot of the Trustpilot aggregate cache.
+
+    Used by the admin health endpoint and the >24h alerting loop
+    (Task #728). Always returns a plain dict; never raises.
+
+    Fields:
+      * ``configured``: both the API key and business unit ID are set.
+      * ``has_payload``: a previously-successful fetch is cached.
+      * ``last_success_ts`` / ``last_success_age_seconds``: when the
+        last good fetch happened (None if we never succeeded).
+      * ``last_error_ts`` / ``last_error_age_seconds`` / ``last_error``:
+        most recent failure, if any.
+      * ``stale``: the cached payload is past its TTL (or absent).
+    """
+    now = time.time()
+    business_unit_id = (os.environ.get("TRUSTPILOT_BUSINESS_UNIT_ID") or "").strip()
+    api_key = (os.environ.get("TRUSTPILOT_API_KEY") or "").strip()
+    cached = _tp_aggregate_cache.get("payload")
+    cached_ts = float(_tp_aggregate_cache.get("ts") or 0.0)
+    fail_ts = float(_tp_aggregate_cache.get("fail_ts") or 0.0)
+    first_fail_ts = float(_tp_aggregate_cache.get("first_fail_ts") or 0.0)
+    last_error = _tp_aggregate_cache.get("last_error")
+    last_success_age = int(now - cached_ts) if cached_ts else None
+    last_error_age = int(now - fail_ts) if fail_ts else None
+    first_error_age = int(now - first_fail_ts) if first_fail_ts else None
+    return {
+        "configured": bool(business_unit_id and api_key),
+        "businessUnitId": business_unit_id or None,
+        "ttlSeconds": _TP_AGGREGATE_TTL_S,
+        "hasPayload": bool(cached),
+        "lastSuccessTs": cached_ts or None,
+        "lastSuccessAgeSeconds": last_success_age,
+        "lastErrorTs": fail_ts or None,
+        "lastErrorAgeSeconds": last_error_age,
+        "firstErrorTs": first_fail_ts or None,
+        "firstErrorAgeSeconds": first_error_age,
+        "lastError": last_error,
+        "stale": (not cached) or (last_success_age is not None
+                                  and last_success_age >= _TP_AGGREGATE_TTL_S),
+        "cachedPayload": cached,
+    }
 
 
 async def _fetch_trustpilot_aggregate_remote() -> Optional[Dict[str, Any]]:
@@ -87,6 +133,7 @@ async def _fetch_trustpilot_aggregate_remote() -> Optional[Dict[str, Any]]:
     business_unit_id = (os.environ.get("TRUSTPILOT_BUSINESS_UNIT_ID") or "").strip()
     api_key = (os.environ.get("TRUSTPILOT_API_KEY") or "").strip()
     if not business_unit_id or not api_key:
+        _tp_aggregate_cache["last_error"] = "not_configured"
         return None
 
     url = f"https://api.trustpilot.com/v1/business-units/{business_unit_id}"
@@ -109,10 +156,16 @@ async def _fetch_trustpilot_aggregate_remote() -> Optional[Dict[str, Any]]:
                 "trustpilot aggregate API returned status=%s body=%s",
                 resp.status_code, resp.text[:200],
             )
+            _tp_aggregate_cache["last_error"] = (
+                f"http_{resp.status_code}: {resp.text[:120]}"
+            )
             return None
         data = resp.json()
-    except Exception:
+    except Exception as exc:
         logger.exception("trustpilot aggregate API call failed")
+        _tp_aggregate_cache["last_error"] = (
+            f"{type(exc).__name__}: {str(exc)[:120]}"
+        )
         return None
 
     # The Business API has historically returned trustScore/stars at the
@@ -140,9 +193,15 @@ async def _fetch_trustpilot_aggregate_remote() -> Optional[Dict[str, Any]]:
             "trustpilot aggregate API returned unparseable rating=%r count=%r",
             rating_value, rating_count,
         )
+        _tp_aggregate_cache["last_error"] = (
+            f"unparseable_response: rating={rating_value!r} count={rating_count!r}"
+        )
         return None
 
     if rating_count_i <= 0:
+        _tp_aggregate_cache["last_error"] = (
+            f"non_positive_review_count: {rating_count_i}"
+        )
         return None
 
     return {
@@ -188,6 +247,20 @@ async def _get_trustpilot_aggregate_cached() -> Dict[str, Any]:
         fresh = await _fetch_trustpilot_aggregate_remote()
         if fresh is None:
             _tp_aggregate_cache["fail_ts"] = time.time()
+            # Set first_fail_ts only on the *first* failure since the last
+            # successful refresh — that's the timestamp the alerter uses to
+            # decide whether the outage has crossed the >24h threshold. If
+            # we overwrote this on every retry, the age would reset every
+            # ~5 min (the retry throttle) and the alert would never fire.
+            if not _tp_aggregate_cache.get("first_fail_ts"):
+                _tp_aggregate_cache["first_fail_ts"] = _tp_aggregate_cache["fail_ts"]
+            # Mirror this replica's failure into the shared health doc so
+            # the alerter has a global view (Task #728). Fire-and-forget;
+            # never block the request path on the DB.
+            asyncio.create_task(_persist_tp_health_failure(
+                _tp_aggregate_cache["fail_ts"],
+                _tp_aggregate_cache.get("last_error"),
+            ))
             if cached:
                 # Serve stale rather than dropping stars from search results
                 # the moment Trustpilot has a hiccup.
@@ -198,7 +271,141 @@ async def _get_trustpilot_aggregate_cached() -> Dict[str, Any]:
         _tp_aggregate_cache["payload"] = fresh
         _tp_aggregate_cache["ts"] = time.time()
         _tp_aggregate_cache["fail_ts"] = 0.0
+        _tp_aggregate_cache["first_fail_ts"] = 0.0
+        _tp_aggregate_cache["last_error"] = None
+        # Mirror success into the shared health doc so the alerter sees
+        # a fresh global last-success even if the leader replica's local
+        # cache is cold (Task #728). Fire-and-forget.
+        asyncio.create_task(_persist_tp_health_success(
+            _tp_aggregate_cache["ts"],
+        ))
         return {**fresh, "cached": False, "ageSeconds": 0}
+
+
+# ─── Shared health doc (Task #728) ─────────────────────────────────────────
+#
+# The aggregate cache itself is per-process, but the alerter needs a
+# *global* view to decide whether the feed has been broken everywhere
+# for >24h. We mirror each replica's most recent fetch outcome into a
+# single Mongo doc with $max semantics:
+#
+#   * any successful fetch on any replica advances ``last_success_ts``;
+#   * the first failure (since the last global success) records
+#     ``first_fail_ts`` — never bumped while it's already set.
+#
+# This way:
+#
+#   * If even one replica is succeeding, ``last_success_ts`` stays
+#     fresh and the alerter does not page (correct — the SERP stars
+#     are being served from somewhere).
+#   * If every replica is failing, ``last_success_ts`` ages out and
+#     the alerter eventually fires (correct — the feed is dead).
+#   * The recovery transition can never be claimed by a replica with
+#     a stale local view of "healthy" while another replica is still
+#     failing, because the alerter reads the GLOBAL doc.
+
+_TP_HEALTH_DOC_ID = "trustpilot_feed_health"
+
+
+async def _persist_tp_health_success(success_ts: float) -> None:
+    """Bump the global last-success timestamp and clear first_fail_ts.
+
+    Uses ``$max`` so concurrent writes from multiple replicas can't
+    accidentally regress the timestamp. Best-effort — never raises."""
+    try:
+        from deps import db, is_mongo_available  # type: ignore
+        if not await is_mongo_available():
+            return
+        await db.job_locks.update_one(
+            {"_id": _TP_HEALTH_DOC_ID},
+            {
+                "$max": {"last_success_ts": float(success_ts)},
+                "$set": {
+                    "first_fail_ts": 0.0,
+                    "last_error": None,
+                    "updated_at": time.time(),
+                },
+            },
+            upsert=True,
+        )
+    except Exception:
+        logger.debug("trustpilot health success persist failed", exc_info=True)
+
+
+async def _persist_tp_health_failure(
+    fail_ts: float, last_error: Optional[str],
+) -> None:
+    """Record a failure in the shared health doc.
+
+    ``first_fail_ts`` is set only when missing/zero (preserved across
+    retries — the same invariant the in-process cache holds). Best-effort
+    — never raises."""
+    try:
+        from deps import db, is_mongo_available  # type: ignore
+        if not await is_mongo_available():
+            return
+        await db.job_locks.update_one(
+            {"_id": _TP_HEALTH_DOC_ID},
+            {"$set": {
+                "last_fail_ts": float(fail_ts),
+                "last_error": last_error,
+                "updated_at": time.time(),
+            }},
+            upsert=True,
+        )
+        # Set first_fail_ts only when absent/zero. A two-step write keeps
+        # the semantics clear without needing $cond / aggregation pipeline
+        # updates (which require Mongo 4.2+ and add complexity).
+        await db.job_locks.update_one(
+            {"_id": _TP_HEALTH_DOC_ID,
+             "$or": [
+                 {"first_fail_ts": {"$in": [None, 0, 0.0]}},
+                 {"first_fail_ts": {"$exists": False}},
+             ]},
+            {"$set": {"first_fail_ts": float(fail_ts)}},
+        )
+    except Exception:
+        logger.debug("trustpilot health failure persist failed", exc_info=True)
+
+
+async def get_trustpilot_global_health() -> Dict[str, Any]:
+    """Return the *global* (cross-replica) Trustpilot feed health doc.
+
+    Falls back to the in-process snapshot when Mongo is unavailable so
+    the alerter degrades gracefully. The returned dict has the same
+    shape as :func:`get_trustpilot_aggregate_health`.
+    """
+    local = get_trustpilot_aggregate_health()
+    try:
+        from deps import db, is_mongo_available  # type: ignore
+        if not await is_mongo_available():
+            return local
+        doc = await db.job_locks.find_one({"_id": _TP_HEALTH_DOC_ID})
+    except Exception:
+        return local
+    if not doc:
+        return local
+    now = time.time()
+    last_success_ts = float(doc.get("last_success_ts") or 0.0)
+    last_fail_ts = float(doc.get("last_fail_ts") or 0.0)
+    first_fail_ts = float(doc.get("first_fail_ts") or 0.0)
+    return {
+        **local,
+        "lastSuccessTs": last_success_ts or None,
+        "lastSuccessAgeSeconds": (
+            int(now - last_success_ts) if last_success_ts else None
+        ),
+        "lastErrorTs": last_fail_ts or None,
+        "lastErrorAgeSeconds": (
+            int(now - last_fail_ts) if last_fail_ts else None
+        ),
+        "firstErrorTs": first_fail_ts or None,
+        "firstErrorAgeSeconds": (
+            int(now - first_fail_ts) if first_fail_ts else None
+        ),
+        "lastError": doc.get("last_error"),
+        "global": True,
+    }
 
 
 @router.get("/api/config/trustpilot/aggregate")
