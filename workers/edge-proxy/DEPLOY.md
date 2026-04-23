@@ -1,5 +1,12 @@
 # Cloudflare Edge Proxy Worker — Deployment Guide
 
+> **Rotating a worker secret?** (`D1_SYNC_SECRET`,
+> `BACKEND_ORIGIN_SECRET`, `EDGE_AI_FALLBACK_SECRET`, etc.) See the
+> end-to-end runbook at
+> [`docs/SECRET_ROTATION.md`](../../docs/SECRET_ROTATION.md) — it
+> documents which other places each secret needs to be updated and in
+> what order, so rotation doesn't take down `api.syrabit.ai`.
+
 ## Architecture
 
 ```

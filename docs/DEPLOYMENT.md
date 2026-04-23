@@ -1,5 +1,9 @@
 # Syrabit.ai — Deployment Architecture
 
+> **Rotating a secret?** See [`docs/SECRET_ROTATION.md`](./SECRET_ROTATION.md)
+> for the end-to-end runbook (which secrets live in multiple places, what
+> order to rotate them, and how to verify).
+
 > **Task #606 — Cloud Run as the production API origin.** A second backend
 > origin is being stood up on Google Cloud Run. The full runbook
 > (one-time GCP setup, Cloud Build pipeline, parallel-validation, and
