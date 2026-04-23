@@ -136,32 +136,37 @@ export default function AdminPage() {
     return () => clearInterval(alertPollRef.current);
   }, [adminToken, verifying]);
 
+  // Cookie-only admin auth: the httponly `syrabit_admin_session`
+  // cookie set by `/admin/login` is the sole source of truth.
+  // `adminVerify()` sends `withCredentials: true` so the cookie rides
+  // along, and the backend slides its expiry forward on every call.
+  // `adminToken` is kept purely as a "session ready" sentinel so that
+  // downstream effects + children gate on a verified session; it does
+  // NOT hold a real JWT (the cookie does, in httponly form). Helpers
+  // call `adminHeaders(token)` which already filters non-JWT values to
+  // `{}`, so passing the sentinel falls through to cookie auth.
   useEffect(() => {
-    const storedToken = localStorage.getItem('admin_token');
-    adminVerify(storedToken)
+    adminVerify()
       .then((res) => {
         if (res.data?.name) setAdminName(res.data.name);
         if (res.data?.email) setAdminEmail(res.data.email);
-        if (res.data?.access_token) localStorage.setItem('admin_token', res.data.access_token);
-        setAdminToken(res.data?.access_token || storedToken || 'verified');
+        setAdminToken('verified');
         setVerifying(false);
       })
       .catch(() => {
-        localStorage.removeItem('admin_token');
         navigate('/admin/login');
       });
   }, [navigate]);
 
+  // Periodic keep-alive: reach `/admin/verify` so the backend re-issues
+  // the cookie before its 1-day max_age lapses. No localStorage hop —
+  // the cookie carries itself via `withCredentials: true`.
   useEffect(() => {
     if (verifying) return;
     const id = setInterval(() => {
-      const t = localStorage.getItem('admin_token');
-      adminVerify(t)
-        .then((res) => {
-          if (res.data?.access_token) localStorage.setItem('admin_token', res.data.access_token);
-        })
+      adminVerify()
         .catch(() => {
-          localStorage.removeItem('admin_token');
+          setAdminToken(null);
           toast.error('Session expired. Please log in again.');
           navigate('/admin/login');
         });
@@ -200,8 +205,10 @@ export default function AdminPage() {
   }, [verifying, adminToken]);
 
   const handleLogout = async () => {
+    // Backend `/admin/logout` clears the httponly `syrabit_admin_session`
+    // cookie — that's the entire session teardown. No localStorage to
+    // wipe (cookie-only auth).
     await adminLogout().catch(() => {});
-    localStorage.removeItem('admin_token');
     setAdminToken(null);
     toast.success('Logged out');
     navigate('/admin/login');
