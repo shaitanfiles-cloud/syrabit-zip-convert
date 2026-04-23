@@ -423,7 +423,7 @@ export default function ChatPage() {
           : m
       ));
       setSyncState('idle');
-      // Task #653 — Ask for a Google review after a clearly successful,
+      // Task #653 (Trustpilot per #724) — Ask for a Trustpilot review after a clearly successful,
       // engaged chat session. Heuristic: this send completed without an
       // error AND the conversation now has at least 8 messages exchanged
       // (~4 back-and-forth turns) — long enough that the student got real

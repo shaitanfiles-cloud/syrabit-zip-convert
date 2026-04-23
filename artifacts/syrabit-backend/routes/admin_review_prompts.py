@@ -1,4 +1,10 @@
-"""Syrabit.ai — Google review prompt funnel (Task #654).
+"""Syrabit.ai — Trustpilot review prompt funnel (Task #654, relabeled #726).
+
+Originally tracked Google review prompts; the user-facing widget moved to
+Trustpilot in Task #724, so all admin/digest copy now references Trustpilot.
+The collection name, PostHog event names, and metric keys are intentionally
+unchanged (review_prompt_shown / clicked / dismissed) so historical
+analytics, dashboards, and alerting continue to work without a backfill.
 
 Mirrors the client-side `review_prompt_shown` / `review_prompt_clicked` /
 `review_prompt_dismissed` PostHog events into our own collection so the
@@ -1479,7 +1485,7 @@ def _format_review_prompt_weekly_digest_html(stats: Dict[str, Any]) -> str:
 
     return (
         "<div style='font-family:sans-serif;max-width:560px;margin:auto;padding:24px;color:#0f172a'>"
-        "<h2 style='color:#7c3aed;margin:0 0 4px'>Syrabit.ai · Google review prompt — weekly summary</h2>"
+        "<h2 style='color:#7c3aed;margin:0 0 4px'>Syrabit.ai · Trustpilot review prompt — weekly summary</h2>"
         f"<p style='color:#64748b;margin:0 0 18px;font-size:13px'>"
         f"Window: {stats.get('window_start','')[:10]} → {stats.get('window_end','')[:10]} "
         f"(ISO week {stats.get('iso_week','')}, last {window_days}d)"

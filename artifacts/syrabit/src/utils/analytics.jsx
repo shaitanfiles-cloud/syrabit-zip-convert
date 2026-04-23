@@ -311,12 +311,14 @@ export const Analytics = {
     track('pwa_prompt_dismissed');
   },
 
-  // ── Google review prompt (Task #652) ─────────────────────────────────────
-  // Fired when the in-app prompt asking engaged students to leave a Google
-  // review is shown / clicked through / dismissed. The CTA opens the
-  // Google "write a review" form in a new tab — Google does not permit
-  // posting reviews via API, so click-through is the closest proxy we
-  // have for measuring conversion to actual reviews.
+  // ── Trustpilot review prompt (Task #652; relabeled #726, migrated #724) ──
+  // Fired when the in-app prompt asking engaged students to leave a
+  // Trustpilot review is shown / clicked through / dismissed. The CTA opens the
+  // Trustpilot "write a review" form in a new tab — Trustpilot does not
+  // permit posting reviews via API, so click-through is the closest
+  // proxy we have for measuring conversion to actual reviews. Event
+  // names (review_prompt_*) are intentionally generic and unchanged
+  // from the Google-era so historical funnels keep working.
   reviewPromptShown: (reason) => {
     track('review_prompt_shown', { reason });
   },

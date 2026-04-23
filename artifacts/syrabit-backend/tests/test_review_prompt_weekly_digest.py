@@ -177,7 +177,7 @@ def test_format_html_includes_key_metrics_and_dashboard_link():
         {"shown": 100, "clicked": 5, "dismissed": 10},
     )
     html = arp._format_review_prompt_weekly_digest_html(stats)
-    assert "Google review prompt" in html
+    assert "Trustpilot review prompt" in html
     assert "10.0%" in html       # current CTR
     assert "5.0%" in html        # previous CTR
     assert "+5.0 pp" in html     # WoW delta

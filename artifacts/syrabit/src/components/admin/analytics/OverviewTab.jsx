@@ -426,10 +426,11 @@ function HydrateAlertBadge({ alert, acking, ackError, onAcknowledge }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Task #654: Google review-prompt funnel tile. Shows shown / clicked /
+// Task #654: Trustpilot review-prompt funnel tile (relabeled #726;
+// formerly Google reviews — migrated in #724). Shows shown / clicked /
 // dismissed totals, click-through rate, and a per-trigger-reason
 // breakdown so the team can see which surfaces (quiz_high_score,
-// chapter_engaged, etc.) actually convert to Google review clicks.
+// chapter_engaged, etc.) actually convert to Trustpilot review clicks.
 // ─────────────────────────────────────────────────────────────────────
 // Task #659 — single per-reason row, including week-over-week delta
 // columns. Reasons that newly appeared / disappeared in the current
@@ -1071,14 +1072,14 @@ function ReviewPromptFunnelCard({ stats, baseline, loading, error, onRetry, admi
   }, [volatilityThreshold]);
   if (loading && !stats) {
     return (
-      <Card title="Google Review Prompt Funnel (7d)">
+      <Card title="Trustpilot Review Prompt Funnel (7d)">
         <p className="text-gray-600 text-sm text-center py-6">Loading…</p>
       </Card>
     );
   }
   if (error) {
     return (
-      <Card title="Google Review Prompt Funnel (7d)" error onRetry={onRetry} />
+      <Card title="Trustpilot Review Prompt Funnel (7d)" error onRetry={onRetry} />
     );
   }
   const s = stats || {};
@@ -1137,7 +1138,7 @@ function ReviewPromptFunnelCard({ stats, baseline, loading, error, onRetry, admi
 
   return (
     <Card
-      title="Google Review Prompt Funnel (7d)"
+      title="Trustpilot Review Prompt Funnel (7d)"
       action={
         <button
           onClick={onRetry}
@@ -1168,11 +1169,11 @@ function ReviewPromptFunnelCard({ stats, baseline, loading, error, onRetry, admi
               sub="happy-moment triggers" />
             <Stat icon={MousePointerClick} label="Clicked through"
               value={clicked.toLocaleString()} color="#10b981"
-              sub="opened Google review form" />
+              sub="opened Trustpilot review form" />
             <Stat icon={ShieldCheck} label="Click-through rate"
               value={ctr == null ? '—' : `${ctr}%`}
               color="#06b6d4"
-              sub="closest proxy for Google reviews" />
+              sub="closest proxy for Trustpilot reviews" />
             <Stat icon={XCircle} label="Dismissed"
               value={dismissed.toLocaleString()} color="#f59e0b"
               sub={dismissRate == null ? 'no shown events' : `${dismissRate}% dismiss rate`} />
