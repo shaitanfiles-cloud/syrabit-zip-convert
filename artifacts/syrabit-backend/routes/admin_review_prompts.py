@@ -114,7 +114,7 @@ async def admin_review_prompt_stats(
     days: int = Query(30, ge=1, le=180),
     admin: dict = Depends(get_admin_user),
 ):
-    """Funnel rollup for the admin Google-review-prompt tile.
+    """Funnel rollup for the admin Trustpilot-review-prompt tile.
 
     Returns:
       shown, clicked, dismissed: totals over the window.
@@ -1098,8 +1098,8 @@ async def _review_prompt_alert_loop():
 # Task #655 — weekly review-prompt summary email
 #
 # Background loop (modeled on `_seo_weekly_digest_loop` in
-# `routes.bot_discovery`) that emails ops a 7-day rollup of the Google
-# review-prompt funnel every Monday ~09:00 IST (= 03:30 UTC):
+# `routes.bot_discovery`) that emails ops a 7-day rollup of the
+# Trustpilot review-prompt funnel every Monday ~09:00 IST (= 03:30 UTC):
 #   - shown / clicked / dismissed totals + CTR
 #   - week-over-week CTR delta vs the previous 7 days
 #   - top trigger reason in the window
