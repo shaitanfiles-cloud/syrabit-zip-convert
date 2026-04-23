@@ -336,6 +336,12 @@ _ALERT_THRESHOLDS_DEFAULT = {
     # refresh loop hasn't ticked successfully in this many seconds. The
     # poll cadence is 15s so 60s == 4 missed ticks before paging.
     "assamese_refresh_stale_seconds": 60,
+    # Task #707: silent-lockout watcher. Fires
+    # `cf_access_admin_silent_lockout` when the CF_ACCESS_* env state has
+    # changed but no admin login has succeeded for this many hours since
+    # the change. Operator-tunable from the existing Alert Settings table
+    # so a noisy / urgent rollout can shorten the window without a deploy.
+    "cf_access_silent_lockout_hours": 24,
 }
 _ALERT_EXPIRATION_DEFAULT = {
     "enabled": False,

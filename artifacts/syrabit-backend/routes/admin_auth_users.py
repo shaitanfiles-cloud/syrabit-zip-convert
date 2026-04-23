@@ -114,6 +114,22 @@ async def admin_login(
     if COOKIE_DOMAIN:
         _ck["domain"] = COOKIE_DOMAIN
     response.set_cookie(**_ck)
+    # Task #707 — record successful admin logins so the silent-lockout
+    # watcher can tell whether anyone has reached the admin surface
+    # since the last CF_ACCESS_* env change. Best-effort: a Mongo
+    # outage must never break login itself, so we swallow errors.
+    try:
+        if await is_mongo_available():
+            await db.admin_login_log.insert_one({
+                "email": matched["email"],
+                "name": matched["name"],
+                "success": True,
+                "ts": datetime.now(timezone.utc),
+                "cf_access_email": (_cf_access_claims or {}).get("email"),
+                "cf_access_break_glass": bool((_cf_access_claims or {}).get("break_glass")),
+            })
+    except Exception as _login_log_err:
+        logger.debug(f"admin_login_log insert failed: {_login_log_err}")
     return {
         "access_token": token,
         "token_type":   "bearer",

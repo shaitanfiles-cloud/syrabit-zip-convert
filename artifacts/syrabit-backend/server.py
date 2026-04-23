@@ -6,6 +6,7 @@ Thin entry point: creates the app, mounts middleware, and includes all route mod
 """
 import os, sys, json, logging, asyncio, fcntl
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import FastAPI, APIRouter, HTTPException, Request
@@ -357,6 +358,177 @@ async def _vertex_periodic_probe_loop() -> None:
         await asyncio.sleep(_VERTEX_PROBE_INTERVAL_S)
 
 
+# ── Task #707 — silent-lockout watcher ────────────────────────────────────────
+# Pairs the persisted CF Access env-change timestamp (from
+# ``cf_access.record_cf_access_config_change``) with the most recent successful
+# admin login (``db.admin_login_log``). When the gap exceeds the operator-
+# configurable ``cf_access_silent_lockout_hours`` threshold, fires the
+# ``cf_access_admin_silent_lockout`` alert through ``metrics._dispatch_alert``
+# — which already enforces the 30-min cooldown so a perma-locked deployment
+# does not page on every iteration.
+_CF_ACCESS_SILENT_LOCKOUT_LOOP_INTERVAL_S = max(
+    60, int(os.environ.get("CF_ACCESS_SILENT_LOCKOUT_INTERVAL_S", "1800") or 1800)
+)
+_CF_ACCESS_SILENT_LOCKOUT_STARTUP_DELAY_S = 120
+_CF_ACCESS_SILENT_LOCKOUT_ALERT_TYPE = "cf_access_admin_silent_lockout"
+
+
+def _parse_iso_dt(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return None
+
+
+async def _cf_access_silent_lockout_check_once() -> dict:
+    """One iteration of the silent-lockout watcher.
+
+    Returns a dict describing what was observed (and whether an alert was
+    dispatched) so unit tests can assert on the decision without monkey-
+    patching the dispatcher itself.
+    """
+    from cf_access import cf_access_config_fingerprint
+    import metrics as _metrics
+
+    state_doc = None
+    try:
+        cfg = await db.api_config.find_one({}, {"_id": 0, "cf_access_config_state": 1})
+        if isinstance(cfg, dict):
+            state_doc = cfg.get("cf_access_config_state")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"[CF_ACCESS_LOCKOUT] state read failed: {exc}")
+        return {"skipped": "state_read_failed"}
+
+    if not isinstance(state_doc, dict) or not state_doc.get("changed_at"):
+        return {"skipped": "no_recorded_change"}
+
+    # Only watch environments that have ever provisioned CF Access — dev
+    # boxes that never set the env should not page.
+    fp = cf_access_config_fingerprint()
+    if not (fp.get("team_domain") or fp.get("admin_aud_configured")):
+        return {"skipped": "cf_access_not_provisioned"}
+
+    changed_at = _parse_iso_dt(state_doc.get("changed_at"))
+    if changed_at is None:
+        return {"skipped": "bad_changed_at"}
+
+    threshold_hours = float(_metrics._ALERT_THRESHOLDS.get(
+        "cf_access_silent_lockout_hours",
+        _metrics._ALERT_THRESHOLDS_DEFAULT["cf_access_silent_lockout_hours"],
+    ))
+    threshold_delta = timedelta(hours=max(0.1, threshold_hours))
+    now = datetime.now(timezone.utc)
+    age = now - changed_at
+    if age < threshold_delta:
+        return {"skipped": "within_threshold", "age_hours": age.total_seconds() / 3600}
+
+    # Most recent successful admin login.
+    last_login_at = None
+    last_login_email = None
+    try:
+        cursor = db.admin_login_log.find(
+            {"success": True}, {"_id": 0, "ts": 1, "email": 1}
+        ).sort("ts", -1).limit(1)
+        rows = await cursor.to_list(length=1)
+        if rows:
+            last_login_at = _parse_iso_dt(rows[0].get("ts"))
+            last_login_email = rows[0].get("email")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"[CF_ACCESS_LOCKOUT] admin_login_log read failed: {exc}")
+        return {"skipped": "login_log_read_failed"}
+
+    if last_login_at is not None and last_login_at >= changed_at:
+        return {
+            "skipped": "login_seen_after_change",
+            "last_login_at": last_login_at.isoformat(),
+            "changed_at": changed_at.isoformat(),
+        }
+
+    body = (
+        f"No admin login has succeeded in the {age.total_seconds() / 3600:.1f}h "
+        f"since the last CF_ACCESS_* env change at {changed_at.isoformat()} "
+        f"(threshold: {threshold_hours}h). This usually means a silent "
+        "lockout — the new AUD tag, team domain, or enforce flag rejected "
+        "the operator's session and nobody noticed because nobody tried to "
+        "log in. Verify /admin/diagnostics, the Cloudflare Zero Trust "
+        "dashboard, and the runbook (docs/CLOUDFLARE_ZERO_TRUST.md §0 + §7) "
+        "before the next on-call need. "
+        f"Last successful admin login: "
+        f"{last_login_at.isoformat() if last_login_at else 'never recorded'}"
+        f"{' (' + last_login_email + ')' if last_login_email else ''}."
+    )
+    try:
+        await _metrics._dispatch_alert(
+            _CF_ACCESS_SILENT_LOCKOUT_ALERT_TYPE,
+            "Cloudflare Access — possible silent admin lockout",
+            body,
+            threshold_snapshot={
+                "metric": "cf_access.hours_since_change_without_login",
+                "value": threshold_hours,
+                "actual": round(age.total_seconds() / 3600, 2),
+                "changed_at": changed_at.isoformat(),
+                "last_login_at": last_login_at.isoformat() if last_login_at else None,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[CF_ACCESS_LOCKOUT] dispatch failed: {exc}")
+        return {"skipped": "dispatch_failed", "error": str(exc)[:200]}
+    return {
+        "alerted": True,
+        "age_hours": age.total_seconds() / 3600,
+        "threshold_hours": threshold_hours,
+    }
+
+
+async def _cf_access_silent_lockout_loop() -> None:
+    """Task #707 — periodic wrapper around ``_cf_access_silent_lockout_check_once``.
+
+    Re-arms the persisted ``cf_access_config_state`` anchor on every
+    iteration via ``record_cf_access_config_change``. This matters for
+    two reasons:
+
+      * The boot-time call from ``lifespan`` can fail when Mongo is not
+        yet ready; without a re-arm path the watcher would stay stuck
+        in ``no_recorded_change`` for the lifetime of the process and
+        silently never page.
+      * If an operator rotates a CF Access AUD between boots, the
+        loop captures the new fingerprint + a fresh ``changed_at`` on
+        the very next tick instead of waiting for the next restart.
+    """
+    await asyncio.sleep(_CF_ACCESS_SILENT_LOCKOUT_STARTUP_DELAY_S)
+    while True:
+        try:
+            from deps import is_mongo_available as _is_mongo
+            if await _is_mongo():
+                try:
+                    from cf_access import (
+                        record_cf_access_config_change as _rec_cf_change,
+                    )
+                    await _rec_cf_change(db)
+                except Exception as rec_err:  # noqa: BLE001
+                    logger.debug(
+                        f"[CF_ACCESS_LOCKOUT] re-arm skipped: {rec_err}"
+                    )
+                outcome = await _cf_access_silent_lockout_check_once()
+                if outcome.get("alerted"):
+                    logger.warning(
+                        "[CF_ACCESS_LOCKOUT] paged on-call: "
+                        "age=%.1fh threshold=%.1fh",
+                        outcome.get("age_hours", 0),
+                        outcome.get("threshold_hours", 0),
+                    )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[CF_ACCESS_LOCKOUT] loop iteration error: {exc}")
+        await asyncio.sleep(_CF_ACCESS_SILENT_LOCKOUT_LOOP_INTERVAL_S)
+
+
 @asynccontextmanager
 async def lifespan(app):
     import deps as _deps_mod
@@ -660,6 +832,25 @@ async def lifespan(app):
         asyncio.create_task(ensure_synthetic_alerts_ttl_index())
     asyncio.create_task(_synthetic_alert_cleanup_loop())
     asyncio.create_task(_alerting_loop())
+    # Task #707 — silent-lockout watcher. Snapshot the current CF Access
+    # env fingerprint *before* starting the loop so a same-restart change
+    # already gets a fresh ``changed_at`` anchor. The loop itself is
+    # leader-gated to avoid N× paging on multi-replica deployments; the
+    # underlying ``_dispatch_alert`` cooldown is a defense-in-depth.
+    if _is_leader:
+        try:
+            from cf_access import record_cf_access_config_change as _rec_cf_change
+            await _rec_cf_change(db)
+            await db.admin_login_log.create_index([("ts", -1)])
+            await db.admin_login_log.create_index(
+                [("success", 1), ("ts", -1)],
+                name="success_ts_idx",
+            )
+        except Exception as _cf_lock_init_err:
+            logger.warning(
+                f"cf_access silent-lockout init skipped: {_cf_lock_init_err}"
+            )
+        asyncio.create_task(_cf_access_silent_lockout_loop())
     asyncio.create_task(_endpoint_health_alert_loop())
     # Task #412 — periodically check hydrate_telemetry and fire admin
     # alerts (email + webhook + persisted) when stale-build failures

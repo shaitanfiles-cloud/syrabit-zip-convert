@@ -451,6 +451,90 @@ async def require_cf_access_internal(request: Request) -> Optional[dict]:
     return await _require(request, [CF_ACCESS_AUD_INTERNAL], "internal")
 
 
+# ── CF Access env-change fingerprint (Task #707) ─────────────────────────────
+# A "silent lockout" happens when an operator rotates a CF Access AUD tag,
+# changes the team domain, toggles enforce, or activates break-glass — and
+# nobody happens to log in for hours afterwards. The /admin/diagnostics
+# paging rule (Task #706) only fires on poll, so without a background watcher
+# the lockout sits invisible until someone needs admin access urgently.
+#
+# We snapshot a stable fingerprint of the CF_ACCESS_* env-derived state and
+# persist it in db.api_config["cf_access_config_state"] together with the
+# UTC timestamp at which it last changed. The background loop in server.py
+# pairs this `changed_at` with the most recent successful admin login from
+# db.admin_login_log to decide whether to fire `cf_access_admin_silent_lockout`.
+
+def cf_access_config_fingerprint() -> dict:
+    """Return a stable summary of the CF Access env state.
+
+    The summary contains only booleans / public identifiers — no secrets —
+    so it is safe to persist and to surface in alert payloads. AUD tags
+    are reduced to ``configured: bool`` so a rotation is detected without
+    leaking the new tag value into the audit trail.
+    """
+    return {
+        "team_domain": CF_ACCESS_TEAM_DOMAIN or "",
+        "enforce": _enforce_enabled(),
+        "admin_aud_configured": bool(CF_ACCESS_AUD_ADMIN),
+        "internal_aud_configured": bool(CF_ACCESS_AUD_INTERNAL),
+        # AUD tags themselves are not secret (Cloudflare exposes them in
+        # the dashboard) but recording a hash keeps the change-detector
+        # sensitive to silent rotations without persisting the raw value.
+        "admin_aud_hash": _short_hash(CF_ACCESS_AUD_ADMIN),
+        "internal_aud_hash": _short_hash(CF_ACCESS_AUD_INTERNAL),
+        "break_glass_env": _break_glass_env_active(),
+        "break_glass_token_configured": bool(_break_glass_token_env()),
+    }
+
+
+def _short_hash(value: str) -> str:
+    if not value:
+        return ""
+    import hashlib
+    return hashlib.sha256(value.encode("utf-8", "ignore")).hexdigest()[:12]
+
+
+async def record_cf_access_config_change(db) -> dict:
+    """Compare the live CF Access fingerprint with the persisted one.
+
+    Updates ``db.api_config["cf_access_config_state"]`` when the fingerprint
+    has changed, stamping ``changed_at`` so the silent-lockout watcher has
+    a reliable "since" anchor. Returns the resulting state document
+    (including ``changed_at`` and ``fingerprint``). Safe to call on every
+    boot — a no-op when nothing changed.
+    """
+    from datetime import datetime, timezone
+    fp = cf_access_config_fingerprint()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        cfg = await db.api_config.find_one({}, {"_id": 0, "cf_access_config_state": 1})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[CF_ACCESS] record_cf_access_config_change read failed: {exc}")
+        return {"fingerprint": fp, "changed_at": now_iso, "first_seen": True}
+    prev = (cfg or {}).get("cf_access_config_state") if isinstance(cfg, dict) else None
+    if isinstance(prev, dict) and prev.get("fingerprint") == fp:
+        return prev
+    new_state = {
+        "fingerprint": fp,
+        "changed_at": now_iso,
+        "previous_fingerprint": (prev or {}).get("fingerprint") if isinstance(prev, dict) else None,
+    }
+    try:
+        await db.api_config.update_one(
+            {},
+            {"$set": {"cf_access_config_state": new_state}},
+            upsert=True,
+        )
+        if prev:
+            logger.info(
+                "[CF_ACCESS] config fingerprint changed at %s — "
+                "silent-lockout watcher armed.", now_iso,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[CF_ACCESS] record_cf_access_config_change write failed: {exc}")
+    return new_state
+
+
 def status(request: Optional[Request] = None) -> dict:
     """Public introspection used by /admin/diagnostics. No secrets.
 
