@@ -141,6 +141,19 @@ elif _KEY_RAW:
 elif _CF_GW_BYOK:
     _USE_BYOK = True
 
+# Fallback wiring: when VERTEX_SERVICE_ACCOUNT is present but malformed
+# (SA parse failed) OR a runtime 403 disables it, fall back to
+# GEMINI_API_KEY if separately set. Without this, prod sat in "disabled"
+# mode for the whole session even though a working API key was available.
+_GEMINI_API_KEY_FALLBACK = os.getenv("GEMINI_API_KEY", "").strip()
+if _SA_CREDS is None and not _API_KEY and not _USE_BYOK and _GEMINI_API_KEY_FALLBACK:
+    _API_KEY = _GEMINI_API_KEY_FALLBACK
+    GEMINI_KEY = _GEMINI_API_KEY_FALLBACK
+    logger.warning(
+        "vertex_services: VERTEX_SERVICE_ACCOUNT unusable — falling back to "
+        "GEMINI_API_KEY (Google AI Studio direct mode)."
+    )
+
 _GEMINI_FORBIDDEN = False
 
 
@@ -190,13 +203,30 @@ def _ok() -> bool:
 
 
 def _mark_forbidden() -> None:
-    global _GEMINI_FORBIDDEN
-    if not _GEMINI_FORBIDDEN:
-        _GEMINI_FORBIDDEN = True
-        logger.error(
-            "Gemini upstream returned 403 Forbidden — credential is invalid or the "
-            "model is not accessible. Disabling Gemini calls for this session."
+    """When Gemini upstream returns 403, attempt one runtime fallback to
+    GEMINI_API_KEY (Google AI Studio direct mode) before disabling. This
+    rescues prod from a bad VERTEX_SERVICE_ACCOUNT (e.g. SA lacks Vertex
+    AI User role) when a working API key is also configured."""
+    global _GEMINI_FORBIDDEN, _SA_CREDS, _API_KEY, _USE_BYOK, _AUTH_MODE, GEMINI_KEY
+    if _GEMINI_FORBIDDEN:
+        return
+    fallback_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if (_SA_CREDS is not None or _USE_BYOK) and fallback_key and fallback_key != _API_KEY:
+        _SA_CREDS = None
+        _USE_BYOK = False
+        _API_KEY = fallback_key
+        GEMINI_KEY = fallback_key
+        _AUTH_MODE = "google_ai_studio_api_key"
+        logger.warning(
+            "Gemini 403 on previous auth mode — switching to GEMINI_API_KEY "
+            "(Google AI Studio direct) for the rest of this session."
         )
+        return
+    _GEMINI_FORBIDDEN = True
+    logger.error(
+        "Gemini upstream returned 403 Forbidden — credential is invalid or the "
+        "model is not accessible. Disabling Gemini calls for this session."
+    )
 
 
 # ── URL + headers (gateway-aware) ───────────────────────────────────────────
