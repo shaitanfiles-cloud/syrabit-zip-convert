@@ -122,12 +122,122 @@ def _break_glass_token_env() -> str:
     return os.environ.get("CF_ACCESS_BREAK_GLASS_TOKEN", "").strip()
 
 
+_FORCE_DISABLE_REDIS_KEY = "cf_access:break_glass_force_disabled"
+
+
+def _force_disable_state() -> Optional[dict]:
+    """Return the persisted "force-disabled" record from Redis, or None.
+
+    Task #710 — once an admin clicks "Disable now" in the banner we set
+    this Redis key so all gunicorn workers (preload_app=True spawns 3+
+    in prod) see the disable immediately. Pure in-process os.environ
+    pop only fixes the worker that handled the request, leaving the
+    other workers still bypassed — exactly the silent-state class of
+    bug the original break-glass design works hard to avoid.
+
+    The record stores ``{disabled_at: iso, actor: email|sub}``; the
+    presence of the key is enough — the metadata is for the audit
+    trail surfaced via /admin/diagnostics.
+    """
+    try:
+        from deps import redis_client
+    except Exception:  # noqa: BLE001
+        return None
+    if not redis_client:
+        return None
+    try:
+        raw = redis_client.get(_FORCE_DISABLE_REDIS_KEY)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[CF_ACCESS] force-disable redis read failed: {exc}")
+        return None
+    if not raw:
+        return None
+    try:
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "ignore")
+        import json as _json
+        data = _json.loads(raw)
+        if isinstance(data, dict):
+            return data
+    except Exception:  # noqa: BLE001
+        # Legacy/garbled value — treat as a bare disable flag so we still
+        # honour the operator's intent rather than re-arming break-glass.
+        return {"disabled_at": str(raw), "actor": None}
+    return None
+
+
+def force_disable_break_glass(actor: Optional[str] = None) -> dict:
+    """Persist a process-shared "break-glass is OFF" flag.
+
+    Side effects:
+      * Sets Redis key ``cf_access:break_glass_force_disabled`` with
+        ``{disabled_at, actor}`` (no TTL — the operator must explicitly
+        clear it on the next deploy after also removing the source env
+        on Railway / rotating the Worker secret).
+      * Removes ``CF_ACCESS_BREAK_GLASS`` and ``CF_ACCESS_BREAK_GLASS_TOKEN``
+        from this process's ``os.environ`` so even if Redis writes fail
+        the calling worker honours the disable for the rest of its
+        lifetime.
+
+    Returns the persisted record (with a ``redis_persisted`` boolean so
+    the caller can warn on multi-worker drift if the persist failed).
+    """
+    from datetime import datetime, timezone
+    record = {
+        "disabled_at": datetime.now(timezone.utc).isoformat(),
+        "actor": actor,
+    }
+    persisted = False
+    try:
+        from deps import redis_client
+        if redis_client:
+            import json as _json
+            redis_client.set(_FORCE_DISABLE_REDIS_KEY, _json.dumps(record))
+            persisted = True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[CF_ACCESS] force-disable redis write failed: {exc}")
+    # Always pop the env vars from THIS process so the disable is honoured
+    # immediately on the worker that served the request, even if Redis is
+    # down. The popped values are not restored — operator must also clear
+    # them at the source (Railway env / Worker secret).
+    cleared = []
+    for key in ("CF_ACCESS_BREAK_GLASS", "CF_ACCESS_BREAK_GLASS_TOKEN"):
+        if os.environ.pop(key, None) is not None:
+            cleared.append(key)
+    record["redis_persisted"] = persisted
+    record["env_cleared"] = cleared
+    logger.warning(
+        "[CF_ACCESS] BREAK-GLASS force-disabled by actor=%r persisted=%s cleared=%s",
+        actor or "?",
+        persisted,
+        cleared,
+    )
+    return record
+
+
+def clear_force_disable() -> bool:
+    """Remove the force-disable Redis flag. Test-only / re-arm path."""
+    try:
+        from deps import redis_client
+        if redis_client:
+            redis_client.delete(_FORCE_DISABLE_REDIS_KEY)
+            return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[CF_ACCESS] clear_force_disable failed: {exc}")
+    return False
+
+
 def break_glass_state(request: Optional[Request] = None) -> dict:
     """Return the current break-glass state.
 
     Always includes ``env_active``; when a ``request`` is supplied the
     header path is also evaluated. ``active`` is the OR of both sources
     and ``source`` records which one tripped (env wins on tie).
+
+    Task #710: if a previous "force-disable" has been persisted (Redis
+    flag set by ``force_disable_break_glass``), ``active`` is forced to
+    False regardless of env/header so the disable actually sticks
+    across all gunicorn workers.
     """
     env_on = _break_glass_env_active()
     header_on = False
@@ -143,12 +253,14 @@ def break_glass_state(request: Optional[Request] = None) -> dict:
             # token byte-by-byte if the Worker leaks the header upstream.
             import hmac as _hmac
             header_on = bool(expected) and _hmac.compare_digest(raw.strip(), expected)
-    active = env_on or header_on
+    forced_off = _force_disable_state()
+    active = (env_on or header_on) and not forced_off
     source: Optional[str] = None
-    if env_on:
-        source = "env"
-    elif header_on:
-        source = "header"
+    if active:
+        if env_on:
+            source = "env"
+        elif header_on:
+            source = "header"
     return {
         "active": active,
         "source": source,
@@ -156,6 +268,9 @@ def break_glass_state(request: Optional[Request] = None) -> dict:
         "header_present": header_present,
         "header_accepted": header_on,
         "header_token_configured": bool(_break_glass_token_env()),
+        "force_disabled": bool(forced_off),
+        "force_disabled_at": (forced_off or {}).get("disabled_at") if forced_off else None,
+        "force_disabled_by": (forced_off or {}).get("actor") if forced_off else None,
     }
 
 
@@ -561,4 +676,10 @@ def status(request: Optional[Request] = None) -> dict:
         "break_glass_source": bg["source"],
         "break_glass_env_active": bg["env_active"],
         "break_glass_header_token_configured": bg["header_token_configured"],
+        # Task #710 — surfaced so the banner and runbook can show whether
+        # a one-click disable has already been applied across the worker
+        # pool (Redis-backed) and who clicked it.
+        "break_glass_force_disabled": bg["force_disabled"],
+        "break_glass_force_disabled_at": bg["force_disabled_at"],
+        "break_glass_force_disabled_by": bg["force_disabled_by"],
     }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { ShieldAlert, ExternalLink, RefreshCcw, AlertTriangle } from 'lucide-react';
-import { adminGetDiagnostics } from '@/utils/api';
+import { ShieldAlert, ExternalLink, RefreshCcw, AlertTriangle, ShieldOff } from 'lucide-react';
+import { toast } from 'sonner';
+import { adminGetDiagnostics, adminDisableBreakGlass } from '@/utils/api';
 
 const POLL_MS = 60_000;
 
@@ -11,6 +12,7 @@ export default function BreakGlassBanner({ adminToken }) {
   const [active, setActive] = useState(false);
   const [source, setSource] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [disabling, setDisabling] = useState(false);
   const [hasSucceededOnce, setHasSucceededOnce] = useState(false);
   const [stale, setStale] = useState(false);
   const pollRef = useRef(null);
@@ -35,6 +37,40 @@ export default function BreakGlassBanner({ adminToken }) {
       setLoading(false);
     }
   }, [adminToken]);
+
+  const handleDisable = useCallback(async () => {
+    if (!adminToken || disabling) return;
+    const ok = window.confirm(
+      'Disable Cloudflare Access break-glass mode now?\n\n'
+        + 'This restores Access enforcement on every admin worker. '
+        + 'You should also remove CF_ACCESS_BREAK_GLASS from Railway and rotate '
+        + 'the Worker break-glass secret so the bypass cannot be re-armed by a restart.',
+    );
+    if (!ok) return;
+    setDisabling(true);
+    try {
+      const res = await adminDisableBreakGlass(adminToken);
+      const cf = res?.data?.cf_access || {};
+      setActive(Boolean(cf.break_glass_active));
+      setSource(cf.break_glass_source || null);
+      setStale(false);
+      setHasSucceededOnce(true);
+      if (res?.data?.redis_persisted === false) {
+        toast.warning(
+          'Break-glass disabled in this worker, but the cluster-wide flag failed '
+            + 'to persist. Other workers may still be bypassed — check Redis and retry.',
+        );
+      } else {
+        toast.success('Cloudflare Access break-glass disabled.');
+      }
+    } catch (err) {
+      toast.error(
+        `Failed to disable break-glass: ${err?.response?.data?.detail || err?.message || 'unknown error'}`,
+      );
+    } finally {
+      setDisabling(false);
+    }
+  }, [adminToken, disabling]);
 
   useEffect(() => {
     if (!adminToken) return undefined;
@@ -80,6 +116,17 @@ export default function BreakGlassBanner({ adminToken }) {
         </p>
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
+        <button
+          type="button"
+          onClick={handleDisable}
+          disabled={disabling || !active}
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white text-red-700 hover:bg-red-50 disabled:opacity-60 transition"
+          data-testid="break-glass-banner-disable"
+          title="Persist a Redis-backed force-disable visible to every worker. You must still clear the source env / Worker secret afterwards."
+        >
+          <ShieldOff size={12} className={disabling ? 'animate-pulse' : ''} />
+          {disabling ? 'Disabling…' : 'Disable now'}
+        </button>
         <button
           type="button"
           onClick={fetchDiagnostics}

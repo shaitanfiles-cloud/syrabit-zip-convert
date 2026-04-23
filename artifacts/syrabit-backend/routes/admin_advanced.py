@@ -3429,6 +3429,58 @@ async def _maybe_page_cf_access_state(snapshot: dict) -> dict:
     return {"alerts_fired": fired}
 
 
+@router.post("/admin/break-glass/disable")
+async def admin_break_glass_disable(
+    request: Request,
+    admin: dict = Depends(get_admin_user),
+):
+    """One-click disable for Cloudflare Access break-glass mode (Task #710).
+
+    Persists a Redis-backed "force-disabled" flag visible to all gunicorn
+    workers (so the disable does not race with the other workers still
+    seeing the original env vars), pops the env vars in the current
+    process for instant local effect, and audit-logs the action at
+    WARNING with the admin's email.
+
+    The endpoint is admin-gated. Because ``require_cf_access_admin``
+    (folded into ``get_admin_user``) short-circuits while break-glass is
+    active, an admin can ALWAYS reach this endpoint to disable an active
+    bypass — that's the whole point of the affordance.
+
+    After the disable is recorded the operator must still:
+      1. Remove ``CF_ACCESS_BREAK_GLASS`` from Railway env (so a worker
+         restart does not re-arm it).
+      2. Rotate / clear the Cloudflare Worker secret that injected the
+         ``X-Cf-Access-Break-Glass`` header (so traffic-side activation
+         is also revoked).
+      See docs/CLOUDFLARE_ZERO_TRUST.md §7.1 for the full checklist.
+    """
+    import cf_access  # local import: avoids heavy import at module load
+    actor = (
+        (admin or {}).get("cf_access_email")
+        or (admin or {}).get("email")
+        or (admin or {}).get("sub")
+        or "unknown_admin"
+    )
+    record = cf_access.force_disable_break_glass(actor=actor)
+    logger.warning(
+        "[ADMIN_AUDIT] break-glass DISABLED actor=%r at=%s persisted=%s cleared=%s",
+        actor,
+        record.get("disabled_at"),
+        record.get("redis_persisted"),
+        record.get("env_cleared"),
+    )
+    snapshot = cf_access.status(request)
+    return {
+        "ok": True,
+        "disabled_at": record.get("disabled_at"),
+        "actor": actor,
+        "redis_persisted": record.get("redis_persisted"),
+        "env_cleared": record.get("env_cleared"),
+        "cf_access": snapshot,
+    }
+
+
 @router.get("/admin/diagnostics")
 async def admin_diagnostics(
     request: Request,

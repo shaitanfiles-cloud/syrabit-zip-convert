@@ -377,4 +377,115 @@ def test_break_glass_state_helper_with_no_request(monkeypatch, fake_access):
     monkeypatch.setenv("CF_ACCESS_BREAK_GLASS", "1")
     bg2 = fake_access.module.break_glass_state(None)
     assert bg2["active"] is True
-    assert bg2["source"] == "env"
+
+
+# ── Task #710 — one-click force-disable ───────────────────────────────────────
+
+class _FakeRedis:
+    """In-memory stand-in for the sync redis client used by force-disable."""
+
+    def __init__(self):
+        self.store = {}
+
+    def get(self, key):
+        return self.store.get(key)
+
+    def set(self, key, value, ex=None):
+        self.store[key] = value
+
+    def delete(self, key):
+        self.store.pop(key, None)
+
+
+@pytest.fixture
+def fake_redis(monkeypatch):
+    """Patch the deps.redis_client used by cf_access.force_disable_break_glass."""
+    import deps as _deps
+    fr = _FakeRedis()
+    monkeypatch.setattr(_deps, "redis_client", fr, raising=False)
+    return fr
+
+
+def test_force_disable_clears_env_and_persists(monkeypatch, fake_access, fake_redis):
+    """Clicking 'Disable now' must (a) clear the env vars in the calling
+    worker so the local request is no longer bypassed, (b) persist a
+    Redis-backed flag so the OTHER gunicorn workers also stop bypassing."""
+    monkeypatch.setenv("CF_ACCESS_BREAK_GLASS", "true")
+    monkeypatch.setenv("CF_ACCESS_BREAK_GLASS_TOKEN", "secret123")
+
+    rec = fake_access.module.force_disable_break_glass(actor="ops@syrabit.ai")
+
+    assert rec["actor"] == "ops@syrabit.ai"
+    assert rec["redis_persisted"] is True
+    assert set(rec["env_cleared"]) == {"CF_ACCESS_BREAK_GLASS", "CF_ACCESS_BREAK_GLASS_TOKEN"}
+    # Local-process env vars are gone
+    import os as _os
+    assert "CF_ACCESS_BREAK_GLASS" not in _os.environ
+    assert "CF_ACCESS_BREAK_GLASS_TOKEN" not in _os.environ
+    # Redis flag is set with the actor + timestamp
+    raw = fake_redis.store["cf_access:break_glass_force_disabled"]
+    import json as _json
+    payload = _json.loads(raw)
+    assert payload["actor"] == "ops@syrabit.ai"
+    assert payload["disabled_at"]
+
+
+def test_force_disable_makes_break_glass_inactive_in_status(monkeypatch, fake_access, fake_redis):
+    """Even if a fresh worker still sees CF_ACCESS_BREAK_GLASS=true in its
+    env, the Redis force-disable flag must override it so status() and the
+    request-time gate report break-glass OFF."""
+    # Simulate "another worker still has the env set" by re-setting it
+    # AFTER the force-disable persists the Redis flag.
+    fake_access.module.force_disable_break_glass(actor="ops@syrabit.ai")
+    monkeypatch.setenv("CF_ACCESS_BREAK_GLASS", "true")
+
+    s = fake_access.module.status()
+    assert s["break_glass_active"] is False
+    assert s["break_glass_force_disabled"] is True
+    assert s["break_glass_force_disabled_by"] == "ops@syrabit.ai"
+    assert s["break_glass_env_active"] is True  # raw env still reports true
+    # And the admin gate now refuses to bypass — the env flag is masked.
+    from fastapi import HTTPException
+    req = _request_with_headers_and_path([])
+    with pytest.raises(HTTPException) as ei:
+        run(fake_access.module.require_cf_access_admin(req))
+    assert ei.value.status_code == 401
+
+
+def test_force_disable_works_without_redis(monkeypatch, fake_access):
+    """If Redis is unavailable, the disable still pops env in this process
+    but reports redis_persisted=False so the caller can warn the operator
+    about multi-worker drift."""
+    import deps as _deps
+    monkeypatch.setattr(_deps, "redis_client", None, raising=False)
+    monkeypatch.setenv("CF_ACCESS_BREAK_GLASS", "true")
+
+    rec = fake_access.module.force_disable_break_glass(actor="ops@syrabit.ai")
+
+    assert rec["redis_persisted"] is False
+    assert "CF_ACCESS_BREAK_GLASS" in rec["env_cleared"]
+    import os as _os
+    assert "CF_ACCESS_BREAK_GLASS" not in _os.environ
+
+
+def test_clear_force_disable_rearms(fake_access, fake_redis):
+    """clear_force_disable() removes the Redis flag so a fresh env-set
+    can re-arm break-glass (used by tests / explicit operator re-arm)."""
+    fake_access.module.force_disable_break_glass(actor="ops@syrabit.ai")
+    assert "cf_access:break_glass_force_disabled" in fake_redis.store
+
+    ok = fake_access.module.clear_force_disable()
+    assert ok is True
+    assert "cf_access:break_glass_force_disabled" not in fake_redis.store
+
+
+def test_force_disable_audit_log_is_warning(fake_access, fake_redis, caplog):
+    """The disable action must emit a WARNING-level audit log carrying the
+    actor identity so SOC tooling can stitch the bypass timeline."""
+    import logging as _logging
+    with caplog.at_level(_logging.WARNING, logger="cf_access"):
+        fake_access.module.force_disable_break_glass(actor="ops@syrabit.ai")
+    assert any(
+        "BREAK-GLASS force-disabled" in rec.message and "ops@syrabit.ai" in rec.message
+        for rec in caplog.records
+    )

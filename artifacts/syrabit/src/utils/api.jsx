@@ -378,6 +378,9 @@ export const adminGetSettings = (token) =>
 export const adminGetDiagnostics = (token) =>
   axios.get(`${API_BASE}/admin/diagnostics`, { headers: adminHeaders(token), withCredentials: true });
 
+export const adminDisableBreakGlass = (token) =>
+  axios.post(`${API_BASE}/admin/break-glass/disable`, {}, { headers: adminHeaders(token), withCredentials: true });
+
 export const adminUpdateSettings = (token, data) =>
   axios.patch(`${API_BASE}/admin/settings`, data, { headers: adminHeaders(token), withCredentials: true });
 
