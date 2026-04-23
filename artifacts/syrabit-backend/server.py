@@ -1499,13 +1499,13 @@ Sitemap: https://syrabit.ai/sitemap-index.xml
 
 @app.get("/", include_in_schema=False)
 async def root_redirect(request: Request):
-    import re as _rr_re
-    _ROOT_BOT_RE = _rr_re.compile(
-        r"googlebot|bingbot|yandexbot|slurp|duckduckbot|baiduspider|"
-        r"facebookexternalhit|facebookbot|twitterbot|linkedinbot|applebot|"
-        r"gptbot|oai-searchbot|chatgpt-user|claudebot|anthropic-ai|perplexitybot",
-        _rr_re.IGNORECASE,
-    )
+    # Use the canonical bot regex from utils.py (the source of truth
+    # also imported by the tracking middleware) instead of redefining
+    # a local copy that drifts out of sync. Covers Googlebot, Bingbot,
+    # Applebot, GPTBot, PerplexityBot, ClaudeBot, OAI-SearchBot,
+    # ChatGPT-User, Google-Extended, Applebot-Extended, social
+    # previews, etc. — anything we want to see prerendered HTML.
+    from utils import _SEARCH_BOT_UA_RE as _ROOT_BOT_RE
     ua = request.headers.get("user-agent", "")
     if _ROOT_BOT_RE.search(ua):
         try:
@@ -1762,12 +1762,11 @@ if FRONTEND_BUILD.is_dir():
     _CHAPTER_PATH_RE = _spa_re.compile(
         r"^(?P<board>[^/]+)/(?P<class>[^/]+)/(?P<subject>[^/]+)/(?P<chapter>[^/]+)/?$"
     )
-    _SEO_BOT_RE = _spa_re.compile(
-        r"googlebot|bingbot|yandexbot|slurp|duckduckbot|baiduspider|"
-        r"facebookexternalhit|facebookbot|twitterbot|linkedinbot|applebot|"
-        r"gptbot|oai-searchbot|chatgpt-user|claudebot|anthropic-ai|perplexitybot",
-        _spa_re.IGNORECASE,
-    )
+    # Canonical bot regex from utils.py — same source of truth as
+    # the tracking middleware and root_redirect. Aliased locally
+    # under the historical name `_SEO_BOT_RE` so callers below
+    # keep working unchanged.
+    from utils import _SEARCH_BOT_UA_RE as _SEO_BOT_RE
     _VALID_SEO_PAGE_TYPES = {"mcqs", "important-questions", "examples", "definition"}
     _KNOWN_FIRST_SEGMENTS = {
         "api", "docs", "openapi.json", "health", "static",

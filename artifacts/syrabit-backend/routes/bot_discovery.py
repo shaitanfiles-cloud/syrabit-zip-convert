@@ -1,5 +1,5 @@
 """Syrabit.ai — Bot discovery routes: RSS feeds, llms-full.txt, IndexNow, ai-plugin.json, bot analytics."""
-import asyncio, html as _html, json, logging, os, time, uuid, hashlib
+import asyncio, html as _html, json, logging, os, re, time, uuid, hashlib
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict
 from xml.sax.saxutils import escape as xml_escape
@@ -1760,36 +1760,58 @@ async def admin_bot_traffic(
             if alert_level != "red":
                 alert_level = "yellow"
 
-        missing_bots = []
-        absent_bots = []
-        recent_cutoff = (datetime.now(timezone.utc) - timedelta(days=BOT_MISSING_DAYS)).strftime("%Y-%m-%d")
-        for key_bot in ["Googlebot", "Bingbot"]:
-            total_key = await db.server_hits.count_documents({
+        # ── Absent-bot alerts ───────────────────────────────────────────
+        # Two tiers because a missing Googlebot is an SEO emergency,
+        # but a missing PerplexityBot is a "nice to know — your site
+        # may not be in the LLM answer pool". We surface both tiers so
+        # the operator can act on whichever matters today.
+        #
+        # Search engines: any one missing → yellow; both missing → red.
+        # AI crawlers: at least one present → green; ALL missing → yellow
+        # (bundled into a single alert to avoid alert spam).
+        SEARCH_KEY_BOTS = ["Googlebot", "Bingbot"]
+        AI_KEY_BOTS = [
+            "GPTBot", "OAI-SearchBot", "ChatGPT-User",
+            "PerplexityBot", "ClaudeBot",
+            "Google-Extended", "Applebot-Extended",
+        ]
+
+        async def _bot_window_hits(canonical_name: str, since: str) -> int:
+            return await db.server_hits.count_documents({
                 "is_bot": True,
-                "bot_name": {"$regex": f"^{key_bot}$", "$options": "i"},
-                "date": {"$gte": start_date},
+                "bot_name": {"$regex": f"^{re.escape(canonical_name)}$", "$options": "i"},
+                "date": {"$gte": since},
             })
+
+        missing_bots: list[str] = []
+        absent_search_bots: list[str] = []
+        absent_ai_bots: list[str] = []
+        recent_cutoff = (datetime.now(timezone.utc) - timedelta(days=BOT_MISSING_DAYS)).strftime("%Y-%m-%d")
+
+        for key_bot in SEARCH_KEY_BOTS:
+            total_key = await _bot_window_hits(key_bot, start_date)
             if total_key == 0:
-                absent_bots.append(key_bot)
+                absent_search_bots.append(key_bot)
                 continue
             if days > BOT_MISSING_DAYS:
-                recent_hits = await db.server_hits.count_documents({
-                    "is_bot": True,
-                    "bot_name": {"$regex": f"^{key_bot}$", "$options": "i"},
-                    "date": {"$gte": recent_cutoff},
-                })
+                recent_hits = await _bot_window_hits(key_bot, recent_cutoff)
                 if recent_hits == 0:
                     missing_bots.append(key_bot)
 
-        if len(absent_bots) == 2 and total_bot > 0:
+        for ai_bot in AI_KEY_BOTS:
+            if await _bot_window_hits(ai_bot, start_date) == 0:
+                absent_ai_bots.append(ai_bot)
+
+        # Search-engine severity ladder.
+        if len(absent_search_bots) == len(SEARCH_KEY_BOTS) and total_bot > 0:
             alerts.append({
                 "type": "key_bot_missing",
                 "severity": "red",
                 "message": "No Googlebot or Bingbot activity detected in this period",
             })
             alert_level = "red"
-        elif absent_bots:
-            for ab in absent_bots:
+        elif absent_search_bots:
+            for ab in absent_search_bots:
                 alerts.append({
                     "type": "key_bot_missing",
                     "severity": "yellow",
@@ -1805,6 +1827,36 @@ async def admin_bot_traffic(
                 "message": f"{mb} was previously active but hasn't crawled in {BOT_MISSING_DAYS}+ days",
             })
             alert_level = "red"
+
+        # AI crawler tier — bundle so we don't fire 7 yellow alerts for a
+        # site that simply hasn't been picked up by any LLM yet.
+        if absent_ai_bots and len(absent_ai_bots) == len(AI_KEY_BOTS):
+            alerts.append({
+                "type": "ai_bot_missing",
+                "severity": "yellow",
+                "message": (
+                    "No AI crawlers (GPTBot, PerplexityBot, ClaudeBot, "
+                    "Google-Extended, Applebot-Extended, OAI-SearchBot, "
+                    "ChatGPT-User) detected — site is likely absent from "
+                    "LLM answer pools. Check robots.txt and llms.txt."
+                ),
+            })
+            if alert_level == "green":
+                alert_level = "yellow"
+        elif absent_ai_bots and len(absent_ai_bots) >= len(AI_KEY_BOTS) - 2:
+            # Most AI bots silent but one or two trickling in. Still worth
+            # a soft heads-up but not an alarm.
+            alerts.append({
+                "type": "ai_bot_missing",
+                "severity": "yellow",
+                "message": (
+                    f"Most AI crawlers silent in this period: "
+                    f"{', '.join(absent_ai_bots)} not seen. "
+                    f"Site visibility in LLM answers may be limited."
+                ),
+            })
+            if alert_level == "green":
+                alert_level = "yellow"
 
         if len(daily_bot_hits) >= 7:
             first_half = daily_bot_hits[:len(daily_bot_hits)//2]

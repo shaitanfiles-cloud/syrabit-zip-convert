@@ -235,7 +235,18 @@ function isAiPath(p: string): boolean {
   return AI_RATE_LIMIT_PREFIXES.some((x) => p.startsWith(x)) || (p.startsWith("/api/ai/") && !p.startsWith("/api/ai/fallback/"));
 }
 
-const SEARCH_BOT_UA = /googlebot|google-extended|bingbot|yandexbot|duckduckbot|slurp|applebot|chatgpt-user|oai-searchbot|perplexitybot|claudebot|meta-externalagent/i;
+// ─── CANONICAL BOT REGEX — DO NOT DRIFT ─────────────────────────────────────
+// MUST stay aligned with three other locations:
+//   * artifacts/syrabit-backend/utils.py        → _SEARCH_BOT_UA_RE (Python source of truth)
+//   * artifacts/syrabit/vite.config.js          → BOT_UA (build-time / dev SSR)
+//   * artifacts/syrabit/public/_worker.js       → SEARCH_BOT_UA (Pages Worker)
+// Used here for: rDNS verification gate (verifyBotIp), prerender route
+// trigger, and crawler analytics counters. AI training crawlers like
+// gptbot / ccbot / bytespider are intentionally INCLUDED — we want
+// edge-proxy analytics to count them even though we don't always serve
+// them prerendered HTML (that decision is made downstream).
+// ────────────────────────────────────────────────────────────────────────────
+const SEARCH_BOT_UA = /googlebot|google-extended|googleother|google-inspectiontool|bingbot|yandexbot|duckduckbot|slurp|baiduspider|applebot|applebot-extended|chatgpt-user|oai-searchbot|gptbot|perplexitybot|perplexity-user|claudebot|claude-web|anthropic-ai|meta-externalagent|bytespider|ccbot|amazonbot|facebookexternalhit|facebookbot|twitterbot|linkedinbot|whatsapp|telegrambot|discordbot/i;
 
 interface CidrRange { network: number; mask: number }
 
