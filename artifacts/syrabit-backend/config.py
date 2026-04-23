@@ -41,30 +41,74 @@ load_dotenv(ROOT_DIR / '.env')
 
 MONGO_URL    = (os.environ.get('MONGO_URL') or os.environ.get('MONGODB_URI') or 'mongodb://localhost:27017').strip().strip('"').strip("'")
 DB_NAME      = os.environ.get('DB_NAME', 'test_database')
-_jwt_secret_env = os.environ.get('JWT_SECRET', '').strip()
-if not _jwt_secret_env:
-    import hashlib as _jwt_hl
-    import warnings as _w
-    _fallback_seed = (MONGO_URL + DB_NAME + os.environ.get('REPL_ID', '')).encode()
-    JWT_SECRET = _jwt_hl.sha256(b'syrabit-jwt-fallback:' + _fallback_seed).hexdigest()
-    _w.warn(
-        "JWT_SECRET is not set — using deterministic fallback derived from MONGO_URL+DB_NAME. "
-        "Sessions survive restarts but Set JWT_SECRET in production for best security.",
-        stacklevel=1,
+# ── JWT signing secrets (Task #770 — audit finding S2) ───────────────────
+# `JWT_SECRET` and `ADMIN_JWT_SECRET` MUST be set explicitly. The
+# previous implementation fell back to a deterministic value derived
+# from `MONGO_URL + DB_NAME + REPL_ID` whenever the env var was unset.
+# That meant any leak of the database connection string (logs,
+# screenshots, a contractor's machine) was equivalent to a leak of the
+# admin signing key — an attacker could forge admin sessions without
+# touching the database. We now refuse to start in any non-test
+# environment when either secret is missing.
+#
+# Test runs (pytest) get a freshly generated ephemeral secret per
+# process — NOT derived from any deployment value — so unit tests
+# don't need to wire env in conftest. The ephemeral secret dies with
+# the process and can never be recomputed from anything else.
+_RUNNING_UNDER_PYTEST = (
+    "PYTEST_CURRENT_TEST" in os.environ
+    or "pytest" in os.environ.get("_", "")
+    or any("pytest" in (a or "") for a in __import__("sys").argv[:2])
+)
+
+
+def _require_secret(name: str, *, min_len: int = 32) -> str:
+    raw = os.environ.get(name, "").strip()
+    if raw:
+        if len(raw) < min_len:
+            raise RuntimeError(
+                f"{name} is set but only {len(raw)} chars long — "
+                f"refusing to start. Use at least {min_len} chars of "
+                f"high-entropy randomness (e.g. `python3 -c 'import secrets; "
+                f"print(secrets.token_hex(48))'`)."
+            )
+        return raw
+    if _RUNNING_UNDER_PYTEST:
+        import secrets as _secrets
+        ephemeral = _secrets.token_hex(48)
+        import warnings as _w
+        _w.warn(
+            f"{name} unset under pytest — using an ephemeral random "
+            f"secret for this process only. Tokens signed in this "
+            f"process cannot be verified anywhere else.",
+            stacklevel=2,
+        )
+        return ephemeral
+    raise RuntimeError(
+        f"{name} is not set. Refusing to start: the previous "
+        f"deterministic fallback derived from MONGO_URL+DB_NAME was a "
+        f"security hole (audit finding S2 — DB connection string leak "
+        f"became admin access). Set {name} to 64+ chars of randomness "
+        f"in Replit Secrets and your production env (Railway / "
+        f"Cloud Run). Generate one with: "
+        f"`python3 -c 'import secrets; print(secrets.token_hex(48))'`."
     )
-else:
-    JWT_SECRET = _jwt_secret_env
+
+
+JWT_SECRET = _require_secret("JWT_SECRET")
 JWT_ALGORITHM    = 'HS256'
 JWT_ACCESS_EXPIRE_MINUTES = int(os.environ.get('JWT_ACCESS_EXPIRE_MINUTES', '60'))
 JWT_REFRESH_EXPIRE_MINUTES = int(os.environ.get('JWT_REFRESH_EXPIRE_MINUTES', str(60 * 24 * 30)))
 JWT_EXPIRE_MINUTES = JWT_ACCESS_EXPIRE_MINUTES
 
-_admin_jwt_env = os.environ.get('ADMIN_JWT_SECRET', '').strip()
-if not _admin_jwt_env:
-    import hashlib as _hl
-    ADMIN_JWT_SECRET = _hl.sha256(f"admin-{JWT_SECRET}".encode()).hexdigest()
-else:
-    ADMIN_JWT_SECRET = _admin_jwt_env
+ADMIN_JWT_SECRET = _require_secret("ADMIN_JWT_SECRET")
+if ADMIN_JWT_SECRET == JWT_SECRET:
+    raise RuntimeError(
+        "ADMIN_JWT_SECRET must be different from JWT_SECRET. "
+        "Reusing the same key for user and admin tokens means a "
+        "leaked user token signing key is also an admin token "
+        "signing key. Generate two independent secrets."
+    )
 
 # ── Google OAuth ──────────────────────────────────────────────────────────────
 GOOGLE_CLIENT_ID     = os.environ.get('GOOGLE_CLIENT_ID', '').strip()
