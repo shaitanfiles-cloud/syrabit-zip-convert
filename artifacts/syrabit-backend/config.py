@@ -62,7 +62,7 @@ _RUNNING_UNDER_PYTEST = (
 )
 
 
-def _require_secret(name: str, *, min_len: int = 32) -> str:
+def _require_secret(name: str, *, min_len: int = 64) -> str:
     raw = os.environ.get(name, "").strip()
     if raw:
         if len(raw) < min_len:
