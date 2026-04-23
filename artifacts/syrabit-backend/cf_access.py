@@ -90,6 +90,100 @@ def _enforce_enabled() -> bool:
     return val in ("1", "true", "yes", "on")
 
 
+# ── Break-glass (Task #706) ──────────────────────────────────────────────────
+# When Cloudflare Access itself is degraded (Zero Trust outage, AUD tag
+# misrotation, IdP failure) the entire admin surface goes 401. Without a
+# tested escape hatch the only recovery is "set CF_ACCESS_ENFORCE=false on
+# Railway and restart" — which can take minutes during an active incident.
+#
+# Two break-glass surfaces are supported, both read **at request time** so
+# they can flip without a service restart:
+#
+#  1. ``CF_ACCESS_BREAK_GLASS`` env (truthy values: 1/true/yes/on). Set on
+#     the Railway service when an operator already has Railway access.
+#  2. ``X-Cf-Access-Break-Glass: <token>`` request header, validated against
+#     the ``CF_ACCESS_BREAK_GLASS_TOKEN`` env. The Cloudflare Worker in
+#     front of the origin can inject this header from a Worker secret —
+#     this is the "non-Railway" path: the on-call edits the Worker secret
+#     in the Cloudflare dashboard, traffic resumes within seconds, no
+#     FastAPI restart needed.
+#
+# Activation is **always loud** (CRITICAL log + diagnostics flag) so the
+# state cannot silently linger past the incident.
+_BREAK_GLASS_HEADER = "x-cf-access-break-glass"
+
+
+def _break_glass_env_active() -> bool:
+    val = os.environ.get("CF_ACCESS_BREAK_GLASS", "").strip().lower()
+    return val in ("1", "true", "yes", "on")
+
+
+def _break_glass_token_env() -> str:
+    return os.environ.get("CF_ACCESS_BREAK_GLASS_TOKEN", "").strip()
+
+
+def break_glass_state(request: Optional[Request] = None) -> dict:
+    """Return the current break-glass state.
+
+    Always includes ``env_active``; when a ``request`` is supplied the
+    header path is also evaluated. ``active`` is the OR of both sources
+    and ``source`` records which one tripped (env wins on tie).
+    """
+    env_on = _break_glass_env_active()
+    header_on = False
+    header_present = False
+    if request is not None:
+        raw = request.headers.get(_BREAK_GLASS_HEADER) or request.headers.get(
+            _BREAK_GLASS_HEADER.title()
+        )
+        if raw:
+            header_present = True
+            expected = _break_glass_token_env()
+            # Constant-time compare so a timing oracle doesn't leak the
+            # token byte-by-byte if the Worker leaks the header upstream.
+            import hmac as _hmac
+            header_on = bool(expected) and _hmac.compare_digest(raw.strip(), expected)
+    active = env_on or header_on
+    source: Optional[str] = None
+    if env_on:
+        source = "env"
+    elif header_on:
+        source = "header"
+    return {
+        "active": active,
+        "source": source,
+        "env_active": env_on,
+        "header_present": header_present,
+        "header_accepted": header_on,
+        "header_token_configured": bool(_break_glass_token_env()),
+    }
+
+
+def _log_break_glass(label: str, state: dict, request: Optional[Request]) -> None:
+    """Emit a CRITICAL log every time a request bypasses Access.
+
+    Logged per-request (no rate limiting) on purpose: while break-glass is
+    active every admin action must be auditable in the log stream. A noisy
+    log is also a strong reminder to the operator to disable the bypass
+    once the underlying outage is resolved.
+    """
+    ip = ""
+    ua = ""
+    if request is not None:
+        ip = (request.headers.get("cf-connecting-ip")
+              or request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+              or (request.client.host if request.client else ""))
+        ua = request.headers.get("user-agent", "")[:120]
+    logger.critical(
+        "CF Access BREAK-GLASS bypass active (%s) source=%s ip=%s ua=%r path=%s",
+        label,
+        state.get("source"),
+        ip or "?",
+        ua,
+        getattr(getattr(request, "url", None), "path", "?") if request else "?",
+    )
+
+
 def is_admin_enforcement_enabled() -> bool:
     """True when admin enforcement is configured AND complete.
 
@@ -328,7 +422,16 @@ async def require_cf_access_admin(request: Request) -> Optional[dict]:
     sets ``CF_ACCESS_ENFORCE=true`` along with ``CF_ACCESS_TEAM_DOMAIN``
     and ``CF_ACCESS_AUD_ADMIN``. If enforcement is on but config is
     incomplete, the request is refused with 503 (fail-closed).
+
+    Break-glass (Task #706): when ``CF_ACCESS_BREAK_GLASS=true`` or a
+    valid ``X-Cf-Access-Break-Glass`` header is present, the Access
+    challenge is skipped (CRITICAL log, surfaced via /admin/diagnostics).
+    The downstream admin JWT check in ``get_admin_user`` still runs.
     """
+    bg = break_glass_state(request)
+    if bg["active"]:
+        _log_break_glass("admin", bg, request)
+        return {"break_glass": True, "source": bg["source"]}
     _fail_closed_if_misconfigured(CF_ACCESS_AUD_ADMIN, "admin")
     if not is_admin_enforcement_enabled():
         return None
@@ -338,21 +441,40 @@ async def require_cf_access_admin(request: Request) -> Optional[dict]:
 async def require_cf_access_internal(request: Request) -> Optional[dict]:
     """FastAPI dependency for internal-tier Access app (operations,
     feature-flags, kill switches, anything ops-only)."""
+    bg = break_glass_state(request)
+    if bg["active"]:
+        _log_break_glass("internal", bg, request)
+        return {"break_glass": True, "source": bg["source"]}
     _fail_closed_if_misconfigured(CF_ACCESS_AUD_INTERNAL, "internal")
     if not is_internal_enforcement_enabled():
         return None
     return await _require(request, [CF_ACCESS_AUD_INTERNAL], "internal")
 
 
-def status() -> dict:
-    """Public introspection used by /admin/diagnostics. No secrets."""
+def status(request: Optional[Request] = None) -> dict:
+    """Public introspection used by /admin/diagnostics. No secrets.
+
+    Pass ``request`` to also evaluate the per-request break-glass header
+    path; without a request only the env-level break-glass flag is
+    reflected.
+    """
+    bg = break_glass_state(request)
+    admin_enforced = is_admin_enforcement_enabled() and not bg["active"]
+    internal_enforced = is_internal_enforcement_enabled() and not bg["active"]
     return {
         "team_domain": CF_ACCESS_TEAM_DOMAIN or None,
         "enforce": _enforce_enabled(),
-        "admin_enforced": is_admin_enforcement_enabled(),
-        "internal_enforced": is_internal_enforcement_enabled(),
+        "admin_enforced": admin_enforced,
+        "internal_enforced": internal_enforced,
         "admin_aud_configured": bool(CF_ACCESS_AUD_ADMIN),
         "internal_aud_configured": bool(CF_ACCESS_AUD_INTERNAL),
         "jwks_cached_keys": len(_jwks_state["keys_by_kid"]),
         "jwks_fetched_at": _jwks_state["fetched_at"] or None,
+        # Task #706 — break-glass surface. ``break_glass_active`` is the
+        # field the paging rule alerts on; ``break_glass_source`` records
+        # which surface tripped (env vs. header) for incident timelines.
+        "break_glass_active": bg["active"],
+        "break_glass_source": bg["source"],
+        "break_glass_env_active": bg["env_active"],
+        "break_glass_header_token_configured": bg["header_token_configured"],
     }

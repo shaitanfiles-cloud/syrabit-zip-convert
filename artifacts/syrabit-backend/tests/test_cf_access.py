@@ -263,6 +263,118 @@ def test_status_introspection_no_secrets(fake_access):
     assert s["enforce"] is True
     assert s["admin_enforced"] is True
     assert s["internal_enforced"] is True
+    # Task #706: break-glass surface ships in the diagnostics payload.
+    assert s["break_glass_active"] is False
+    assert s["break_glass_source"] is None
+    assert s["break_glass_env_active"] is False
+    assert s["break_glass_header_token_configured"] is False
     for v in s.values():
         assert "aud-admin-tag" not in str(v)
         assert "aud-internal-tag" not in str(v)
+
+
+# ── Break-glass tests (Task #706) ────────────────────────────────────────────
+
+
+def _request_with_headers_and_path(headers: list[tuple[bytes, bytes]], path: str = "/admin/test"):
+    """Build a Request scope with a usable ``url.path`` for log assertions."""
+    from fastapi import Request
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": path,
+        "raw_path": path.encode(),
+        "headers": headers,
+        "query_string": b"",
+        "scheme": "http",
+        "server": ("testserver", 80),
+        "client": ("203.0.113.5", 12345),
+    }
+    return Request(scope)
+
+
+def test_break_glass_env_bypasses_admin(monkeypatch, fake_access):
+    """When ``CF_ACCESS_BREAK_GLASS=true``, admin Access enforcement is
+    bypassed without a CF-Access JWT — the dependency returns a sentinel
+    claims dict instead of raising 401."""
+    monkeypatch.setenv("CF_ACCESS_BREAK_GLASS", "true")
+    req = _request_with_headers_and_path([])
+    claims = run(fake_access.module.require_cf_access_admin(req))
+    assert claims is not None
+    assert claims.get("break_glass") is True
+    assert claims.get("source") == "env"
+
+
+def test_break_glass_env_reports_in_status(monkeypatch, fake_access):
+    """``status()`` flips ``admin_enforced`` to False while break-glass is
+    active so the paging rule has a single field to alert on."""
+    monkeypatch.setenv("CF_ACCESS_BREAK_GLASS", "true")
+    s = fake_access.module.status()
+    assert s["break_glass_active"] is True
+    assert s["break_glass_source"] == "env"
+    assert s["break_glass_env_active"] is True
+    assert s["admin_enforced"] is False
+    assert s["internal_enforced"] is False
+
+
+def test_break_glass_header_requires_matching_token(monkeypatch, fake_access):
+    """The header path is rejected unless the supplied value matches the
+    ``CF_ACCESS_BREAK_GLASS_TOKEN`` env. A mismatched header is the same
+    as no header — Access enforcement still runs."""
+    from fastapi import HTTPException
+    monkeypatch.setenv("CF_ACCESS_BREAK_GLASS_TOKEN", "correct-horse-battery-staple")
+
+    bad_req = _request_with_headers_and_path(
+        [(b"x-cf-access-break-glass", b"wrong-token")]
+    )
+    with pytest.raises(HTTPException) as ei:
+        run(fake_access.module.require_cf_access_admin(bad_req))
+    assert ei.value.status_code == 401  # bypass not granted; standard 401 path
+
+    good_req = _request_with_headers_and_path(
+        [(b"x-cf-access-break-glass", b"correct-horse-battery-staple")]
+    )
+    claims = run(fake_access.module.require_cf_access_admin(good_req))
+    assert claims is not None
+    assert claims.get("break_glass") is True
+    assert claims.get("source") == "header"
+
+
+def test_break_glass_header_ignored_when_token_unset(monkeypatch, fake_access):
+    """If the operator never staged a break-glass token, the header path
+    cannot be activated — preventing accidental wide-open bypass."""
+    from fastapi import HTTPException
+    monkeypatch.delenv("CF_ACCESS_BREAK_GLASS_TOKEN", raising=False)
+    monkeypatch.delenv("CF_ACCESS_BREAK_GLASS", raising=False)
+    req = _request_with_headers_and_path(
+        [(b"x-cf-access-break-glass", b"any-value")]
+    )
+    with pytest.raises(HTTPException) as ei:
+        run(fake_access.module.require_cf_access_admin(req))
+    assert ei.value.status_code == 401
+
+
+def test_break_glass_logs_critical(monkeypatch, fake_access, caplog):
+    """Every bypassed request emits a CRITICAL log line tagged for audit."""
+    import logging as _logging
+    monkeypatch.setenv("CF_ACCESS_BREAK_GLASS", "true")
+    req = _request_with_headers_and_path([], path="/admin/users")
+    with caplog.at_level(_logging.CRITICAL, logger="cf_access"):
+        run(fake_access.module.require_cf_access_admin(req))
+    assert any("BREAK-GLASS bypass active" in rec.message for rec in caplog.records)
+
+
+def test_break_glass_state_helper_with_no_request(monkeypatch, fake_access):
+    """``break_glass_state(None)`` only sees env state — used by callers
+    that have no Request handle (e.g. background loops)."""
+    monkeypatch.delenv("CF_ACCESS_BREAK_GLASS", raising=False)
+    monkeypatch.delenv("CF_ACCESS_BREAK_GLASS_TOKEN", raising=False)
+    bg = fake_access.module.break_glass_state(None)
+    assert bg["active"] is False
+    assert bg["env_active"] is False
+    assert bg["header_present"] is False
+
+    monkeypatch.setenv("CF_ACCESS_BREAK_GLASS", "1")
+    bg2 = fake_access.module.break_glass_state(None)
+    assert bg2["active"] is True
+    assert bg2["source"] == "env"

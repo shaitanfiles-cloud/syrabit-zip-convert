@@ -256,7 +256,89 @@ and §5 before continuing.
 | Team domain renamed         | Update `CF_ACCESS_TEAM_DOMAIN`, restart service.   |
 | JWKS rotation               | No action — `cf_access.py` refetches on KID miss.  |
 | Suspected token leak        | Revoke the user's session in Zero Trust → Sessions; revoke the matching service token if CI was the source. |
-| Need temporary bypass       | Set `CF_ACCESS_ENFORCE=false`, restart, fix, restore. Document in incident log. |
+| Need temporary bypass       | Use the break-glass paths in §7.1 (60-second recovery, no Railway access required). The Railway env-flip is the slow fallback. |
+
+### 7.1 What to do if Cloudflare Access goes down (Task #706)
+
+A Cloudflare Zero Trust outage, an IdP failure, or an AUD-tag misrotation
+will lock every admin out of the dashboard at the exact moment they need
+to react. The original "set `CF_ACCESS_ENFORCE=false` on Railway and
+restart" recovery requires Railway access plus a service restart — that
+can take 5–10 minutes during an active incident. The two break-glass
+paths below cap recovery at **~60 seconds** and do **not** require a
+FastAPI restart.
+
+**Pre-staged inputs (one-time setup, must be done before the incident):**
+
+1. **One-Time-PIN IdP enabled in Zero Trust** with a 2-email allowlist
+   limited to founder personal email addresses (NOT `@syrabit.ai`,
+   because Workspace itself may be the thing that's down). Test the OTP
+   path end-to-end at provisioning time — log in once with each
+   allowlisted email, confirm the inbox actually receives the code, and
+   record the test in the ops log. Re-test quarterly.
+2. **`CF_ACCESS_BREAK_GLASS_TOKEN`** secret set on the FastAPI service
+   (one-time, never rotated mid-incident). A long random string;
+   generate with `python -c "import secrets;print(secrets.token_urlsafe(48))"`.
+3. **Cloudflare Worker secret** with the same value, named e.g.
+   `CF_ACCESS_BREAK_GLASS_TOKEN`. The Worker conditionally injects
+   `X-Cf-Access-Break-Glass: <secret>` on `/api/admin/*` requests when
+   another Worker secret (e.g. `CF_ACCESS_BREAK_GLASS_ENABLED=true`) is
+   set. Both secrets are editable from the Cloudflare dashboard alone.
+
+**Recovery path A — non-Railway (preferred, ~60s):**
+
+1. Cloudflare dashboard → Workers & Pages → `syrabit-edge` → Settings →
+   Variables and Secrets → set `CF_ACCESS_BREAK_GLASS_ENABLED=true`,
+   Save and Deploy. (Worker rolls out globally in ~10s.)
+2. From a **personal browser**, hit `/api/admin/login` with the normal
+   admin password. The Access challenge is bypassed for the lifetime of
+   the Worker flag; the admin JWT check still runs (so password and
+   2FA still apply — break-glass is *not* an authentication bypass,
+   only an *Access proxy* bypass).
+3. Confirm via `GET /admin/diagnostics` that the response shows
+   `"break_glass_active": true` and `"break_glass_source": "header"`.
+   This object is the authoritative state — every CRITICAL log line
+   tagged `BREAK-GLASS bypass active` is also the audit trail.
+4. Once Cloudflare Access is healthy again, **flip
+   `CF_ACCESS_BREAK_GLASS_ENABLED` back to `false`** on the Worker.
+   Re-confirm `"break_glass_active": false`.
+
+**Recovery path B — One-Time-PIN admin login (Railway untouchable):**
+
+If both Workers and Railway are unreachable but the admin team domain is
+still serving the OTP IdP, founders can log in via OTP (step 1 of §1)
+and reach `/admin/*` directly. Use this when path A is also blocked.
+
+**Recovery path C — Railway env-flip (legacy fallback, 5–10 min):**
+
+1. Railway → syrabit-backend → Variables → set
+   `CF_ACCESS_BREAK_GLASS=true`. Save (this triggers a redeploy).
+2. After the new revision goes live, the bypass is active until the
+   variable is unset. Same diagnostics signal as above.
+3. Restore: delete `CF_ACCESS_BREAK_GLASS` and let the redeploy roll.
+
+**Paging:** `/admin/diagnostics` fires the
+`cf_access_break_glass_active` and `cf_access_admin_degraded` alert
+types through the existing notification pipeline whenever the snapshot
+is degraded on a production-provisioned environment. Subscribe the
+on-call PagerDuty / Slack channel to both alert types — do **not**
+silence them, since their entire purpose is to remind the team to
+disable the bypass once the outage is over. Recommended monitor: a
+1-minute external ping to `/admin/diagnostics` from a synthetic check
+(via service token) so the alert fires even if no admin is browsing.
+
+**What break-glass does NOT do:**
+
+- It does **not** bypass the admin JWT check. A leaked break-glass
+  token by itself cannot reach admin handlers — the attacker still
+  needs valid admin credentials.
+- It does **not** disable origin shared-secret enforcement. The Worker
+  still injects `X-Origin-Auth`, so the bare Railway URL remains
+  unreachable from arbitrary clients.
+- It does **not** clear automatically. The on-call must explicitly
+  flip the toggle off; the CRITICAL log line on every bypassed
+  request and the persistent `cf_access_break_glass_active` alert are
+  the forcing functions.
 
 ## 8. What is **not** in scope here
 

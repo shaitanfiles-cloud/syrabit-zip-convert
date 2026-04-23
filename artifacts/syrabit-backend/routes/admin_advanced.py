@@ -3,7 +3,7 @@ import re, json, asyncio, uuid, logging, hashlib, os, httpx
 from typing import List
 from datetime import datetime, timezone, timedelta
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, BackgroundTasks,
+    APIRouter, HTTPException, Depends, Query, Body, BackgroundTasks, Request,
 )
 from pydantic import BaseModel
 
@@ -3333,6 +3333,126 @@ async def admin_ai_cache_purge(
     except Exception as e:
         logger.warning(f"admin_ai_cache_purge failed: {e}")
         return {"ok": False, "error": str(e)[:200], "deleted": 0, "l1_cleared": 0}
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Task #706 — /admin/diagnostics + Cloudflare Access break-glass paging
+# ───────────────────────────────────────────────────────────────────────────
+# The runbook (docs/CLOUDFLARE_ZERO_TRUST.md §0 + §7) instructs operators to
+# poll this endpoint to confirm Access enforcement is on after rollout, and
+# to confirm break-glass is *off* once an incident is resolved. The endpoint
+# is admin-gated (so the JSON cannot be casually scraped) but does NOT itself
+# require a CF Access JWT — by design, since its purpose is to surface the
+# state when Access is degraded. The admin-JWT-only path is reachable when
+# break-glass is active because ``require_cf_access_admin`` short-circuits
+# in that mode.
+#
+# Paging: when ``admin_enforced`` is False on a production-like environment
+# (i.e. CF_ACCESS_ENFORCE was provisioned at any point) we dispatch an
+# alert through the existing ``metrics._dispatch_alert`` pipeline. Cooldown
+# is handled inside the dispatcher (1h default) so polling the diagnostics
+# endpoint cannot spam the alert channel.
+
+_CF_ACCESS_DEGRADED_ALERT_TYPE = "cf_access_admin_degraded"
+_CF_ACCESS_BREAK_GLASS_ALERT_TYPE = "cf_access_break_glass_active"
+
+
+def _cf_access_provisioned() -> bool:
+    """True once an operator has *ever* turned on Access in this env.
+
+    We use the presence of ``CF_ACCESS_TEAM_DOMAIN`` (or any AUD) as the
+    "production-like" signal so dev environments that have never set
+    these vars do not page on every diagnostics call. Once enforcement
+    has been provisioned, the alert fires whenever ``admin_enforced``
+    flips to False — which is exactly the lockout-prevention signal
+    the on-call needs.
+    """
+    return bool(
+        os.environ.get("CF_ACCESS_TEAM_DOMAIN", "").strip()
+        or os.environ.get("CF_ACCESS_AUD_ADMIN", "").strip()
+    )
+
+
+async def _maybe_page_cf_access_state(snapshot: dict) -> dict:
+    """Fire paging alerts on degraded Access state. Returns alert metadata."""
+    fired: list[str] = []
+    if not _cf_access_provisioned():
+        return {"alerts_fired": fired, "skipped_reason": "cf_access_not_provisioned"}
+    try:
+        from metrics import _dispatch_alert  # local import: heavy module
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[CF_ACCESS_DIAG] metrics import failed: {exc}")
+        return {"alerts_fired": fired, "skipped_reason": f"metrics_unavailable:{exc}"}
+
+    if snapshot.get("break_glass_active"):
+        try:
+            await _dispatch_alert(
+                _CF_ACCESS_BREAK_GLASS_ALERT_TYPE,
+                "Cloudflare Access break-glass is ACTIVE",
+                (
+                    "Admin Access enforcement is currently BYPASSED via the "
+                    f"break-glass {snapshot.get('break_glass_source') or 'unknown'} "
+                    "path. Disable it as soon as the underlying Cloudflare Zero "
+                    "Trust outage is resolved. See docs/CLOUDFLARE_ZERO_TRUST.md §7."
+                ),
+                threshold_snapshot={
+                    "metric": "cf_access.break_glass_active",
+                    "value": "false",
+                    "actual": "true",
+                },
+            )
+            fired.append(_CF_ACCESS_BREAK_GLASS_ALERT_TYPE)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[CF_ACCESS_DIAG] break-glass alert dispatch failed: {exc}")
+    elif not snapshot.get("admin_enforced"):
+        try:
+            await _dispatch_alert(
+                _CF_ACCESS_DEGRADED_ALERT_TYPE,
+                "Cloudflare Access admin enforcement is OFF",
+                (
+                    "/admin/diagnostics reports admin_enforced=false in a "
+                    "production-provisioned environment. Either CF_ACCESS_ENFORCE "
+                    "is unset, the AUD tag was rotated and not updated, or the "
+                    "service was not restarted after env changes. Restore "
+                    "enforcement before the next admin login. See docs/"
+                    "CLOUDFLARE_ZERO_TRUST.md §0 + §7."
+                ),
+                threshold_snapshot={
+                    "metric": "cf_access.admin_enforced",
+                    "value": "true",
+                    "actual": "false",
+                },
+            )
+            fired.append(_CF_ACCESS_DEGRADED_ALERT_TYPE)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[CF_ACCESS_DIAG] degraded alert dispatch failed: {exc}")
+    return {"alerts_fired": fired}
+
+
+@router.get("/admin/diagnostics")
+async def admin_diagnostics(
+    request: Request,
+    admin: dict = Depends(get_admin_user),
+):
+    """Operator diagnostics for admin auth posture (Task #637 + Task #706).
+
+    Returns the live Cloudflare Access enforcement state plus break-glass
+    surface. Polling this endpoint also drives the paging rule: when
+    ``admin_enforced`` flips to False (or break-glass is active) on a
+    production-provisioned environment, an alert fires through the same
+    pipeline that handles SEO / hydrate alerts.
+    """
+    import cf_access  # local import: avoids heavy import at module load
+    snapshot = cf_access.status(request)
+    page_meta = await _maybe_page_cf_access_state(snapshot)
+    return {
+        "cf_access": snapshot,
+        "paging": page_meta,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "checked_by": (admin or {}).get("cf_access_email")
+        or (admin or {}).get("email")
+        or (admin or {}).get("sub"),
+    }
 
 
 # ── Background auto-warm loop (Task #282 T004) ────────────────────────────────
