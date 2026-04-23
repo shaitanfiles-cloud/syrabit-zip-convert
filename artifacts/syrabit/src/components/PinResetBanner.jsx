@@ -26,8 +26,7 @@ import {
 
 // Re-export so existing imports from `@/components/PinResetBanner`
 // continue to work.
-export { pinResetClear, pinResetIsNeeded } from '@/utils/pinReset';
-export { pinResetMarkNeeded } from '@/utils/pinReset';
+export { pinResetClear } from '@/utils/pinReset';
 
 export default function PinResetBanner({ variant = 'inline' }) {
   const { user } = useAuth();

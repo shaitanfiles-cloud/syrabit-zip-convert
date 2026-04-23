@@ -44,7 +44,7 @@ const fetchSavedSubjects = () =>
 // ── Hooks ────────────────────────────────────────────────────────────────────
 
 /** All boards (30min stale) */
-export const useBoards = () =>
+const useBoards = () =>
   useQuery({
     queryKey: ['boards'],
     queryFn: fetchBoards,
@@ -52,7 +52,7 @@ export const useBoards = () =>
   });
 
 /** All classes (30min stale) */
-export const useClasses = () =>
+const useClasses = () =>
   useQuery({
     queryKey: ['classes', undefined],
     queryFn: fetchClasses,
@@ -60,7 +60,7 @@ export const useClasses = () =>
   });
 
 /** All streams (30min stale) */
-export const useStreams = () =>
+const useStreams = () =>
   useQuery({
     queryKey: ['streams', undefined],
     queryFn: fetchStreams,
@@ -68,7 +68,7 @@ export const useStreams = () =>
   });
 
 /** All published subjects (10min stale) */
-export const useSubjects = () =>
+const useSubjects = () =>
   useQuery({
     queryKey: ['subjects', undefined],
     queryFn: fetchSubjects,
@@ -94,7 +94,7 @@ export const useChapters = (subjectId) =>
   });
 
 /** Chunks for a chapter (10min stale) */
-export const useChunks = (chapterId) =>
+const useChunks = (chapterId) =>
   useQuery({
     queryKey: ['chunks', chapterId],
     queryFn: () => fetchChunks(chapterId),
@@ -157,7 +157,7 @@ export const useResolveSubject = (board, classSlug, subjectSlug) =>
     enabled: !!board && !!classSlug && !!subjectSlug,
   });
 
-export const useSeoTopics = (board, classSlug, subjectSlug) =>
+const useSeoTopics = (board, classSlug, subjectSlug) =>
   useQuery({
     queryKey: ['seo-topics', board, classSlug, subjectSlug],
     queryFn: () => fetchSeoTopics(board, classSlug, subjectSlug),

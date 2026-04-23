@@ -80,7 +80,7 @@ const FIXTURES: Array<[string, Fixture]> = [
   ['/api/seo/health', () => ({ sitemaps: [] })],
 ];
 
-export interface InstallOptions {
+interface InstallOptions {
   /**
    * URL substrings to force-fail with a 500 status. Used to assert that
    * the dashboard degrades gracefully (inline "failed to load" card)

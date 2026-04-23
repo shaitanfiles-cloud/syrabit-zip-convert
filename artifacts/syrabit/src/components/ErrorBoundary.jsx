@@ -111,7 +111,7 @@ export class ErrorBoundary extends Component {
   }
 }
 
-export const RouteErrorBoundary = ({ children }) => (
+const RouteErrorBoundary = ({ children }) => (
   <ErrorBoundary>{children}</ErrorBoundary>
 );
 

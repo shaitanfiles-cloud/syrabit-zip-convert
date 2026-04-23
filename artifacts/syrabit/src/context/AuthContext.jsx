@@ -15,7 +15,7 @@ const AuthContext = createContext(null);
 
 let _inMemoryToken = null;
 
-export const getInMemoryToken = () => _inMemoryToken;
+const getInMemoryToken = () => _inMemoryToken;
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);

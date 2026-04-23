@@ -18,7 +18,7 @@ export const FUNNEL_COLORS = ['#3b82f6', '#8b5cf6', '#10b981'];
 export const fmt = (d) => d?.slice(5) ?? d;
 export const fmtInr = (n) => n >= 100000 ? `₹${(n / 100000).toFixed(1)}L` : n >= 1000 ? `₹${(n / 1000).toFixed(1)}k` : `₹${n}`;
 
-export function GlassCard({ children, className = '', glow }) {
+function GlassCard({ children, className = '', glow }) {
   return (
     <div className={`relative rounded-2xl overflow-hidden bg-white border border-gray-200 shadow-sm ${className}`}>
       {glow && (

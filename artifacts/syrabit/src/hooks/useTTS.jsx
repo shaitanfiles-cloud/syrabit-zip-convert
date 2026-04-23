@@ -79,7 +79,7 @@ function fetchSarvamStatus() {
     });
 }
 
-export function useSarvamStatus() {
+function useSarvamStatus() {
   const [enabled, setEnabled] = useState(_sarvamStatus?.enabled ?? null);
   const [languages, setLanguages] = useState(_sarvamStatus?.languages ?? []);
 
@@ -129,7 +129,7 @@ const LANG_LABELS = {
   'te-IN': 'Telugu',
 };
 
-export function getLangLabel(code) {
+function getLangLabel(code) {
   return LANG_LABELS[code] || code;
 }
 
@@ -141,7 +141,7 @@ export function getTTSLang() {
   return stored;
 }
 
-export function setTTSLang(lang) {
+function setTTSLang(lang) {
   localStorage.setItem(TTS_LANG_KEY, lang);
 }
 

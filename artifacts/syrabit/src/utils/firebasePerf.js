@@ -37,7 +37,7 @@ function _sampleRate() {
   return Math.min(1, Math.max(0, raw));
 }
 
-export function isPerfEnabled() {
+function isPerfEnabled() {
   return _enabled;
 }
 

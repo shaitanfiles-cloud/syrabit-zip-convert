@@ -86,8 +86,8 @@ export const getSubject = (id) => axios.get(`${WORKER_API}/content/subjects/${id
 export const getChapters = (subjectId) => axios.get(`${WORKER_API}/content/chapters/${subjectId}`);
 export const getChunks = (chapterId) => axios.get(`${WORKER_API}/content/chunks/${chapterId}`);
 export const getChapterTopicSummary = (chapterId) => axios.get(`${WORKER_API}/content/chapters/${chapterId}/topic-summary`);
-export const getChapterTopicContent = (chapterId) => axios.get(`${WORKER_API}/content/chapters/${chapterId}/topic-content`);
-export const getTopicPage = (topicId, pageType) => axios.get(`${WORKER_API}/content/topic/${topicId}/page/${pageType}`);
+const getChapterTopicContent = (chapterId) => axios.get(`${WORKER_API}/content/chapters/${chapterId}/topic-content`);
+const getTopicPage = (topicId, pageType) => axios.get(`${WORKER_API}/content/topic/${topicId}/page/${pageType}`);
 
 // ── Educational Browser (Task #577) ───────────────────────────────────────
 export const eduFetchReader = (url, opts = {}) =>
@@ -406,24 +406,24 @@ export const adminUpdateRoadmapItem = (token, id, data) =>
 export const adminGetActivityLog = (token) =>
   axios.get(`${API_BASE}/admin/activity-log`, { headers: adminHeaders(token), withCredentials: true });
 
-export const getSeoPage = (board, classSlug, subjectSlug, topicSlug, pageType) => {
+const getSeoPage = (board, classSlug, subjectSlug, topicSlug, pageType) => {
   let url = `${WORKER_API}/seo/page/${board}/${classSlug}/${subjectSlug}/${topicSlug}`;
   if (pageType && pageType !== 'notes') url += `/${pageType}`;
   return axios.get(url);
 };
 
-export const getSeoPageBundle = (board, classSlug, subjectSlug, topicSlug, pageType) =>
+const getSeoPageBundle = (board, classSlug, subjectSlug, topicSlug, pageType) =>
   axios.get(`${WORKER_API}/seo/page-bundle/${board}/${classSlug}/${subjectSlug}/${topicSlug}`, {
     params: pageType && pageType !== 'notes' ? { pt: pageType } : undefined,
   });
 
-export const getSeoPageTypes = (board, classSlug, subjectSlug, topicSlug) =>
+const getSeoPageTypes = (board, classSlug, subjectSlug, topicSlug) =>
   axios.get(`${WORKER_API}/seo/page-types/${board}/${classSlug}/${subjectSlug}/${topicSlug}`);
 
-export const getSeoRelated = (topicSlug) =>
+const getSeoRelated = (topicSlug) =>
   axios.get(`${WORKER_API}/seo/related/${topicSlug}`);
 
-export const getChapterBySlug = (board, classSlug, subjectSlug, chapterSlug) =>
+const getChapterBySlug = (board, classSlug, subjectSlug, chapterSlug) =>
   axios.get(`${WORKER_API}/content/chapter-by-slug/${board}/${classSlug}/${subjectSlug}/${chapterSlug}`);
 
 // ── Admin SEO management ──────────────────────────────────────────────────────
@@ -486,7 +486,7 @@ export const adminSeoBackfillNotes = (token) =>
 export const adminSeoInsights = (token) =>
   axios.get(`${API_BASE}/seo/insights`, { headers: adminHeaders(token), withCredentials: true });
 
-export const adminSeoExpand = (token, boardSlug, pageTypes = null) =>
+const adminSeoExpand = (token, boardSlug, pageTypes = null) =>
   axios.post(`${API_BASE}/seo/expand/${boardSlug}`, pageTypes ? { page_types: pageTypes } : {}, { headers: adminHeaders(token), withCredentials: true });
 
 export const adminSeoBulkPublish = (token, pageType = null, subjectId = null) =>
@@ -694,16 +694,16 @@ export const adminResetQuizQuota = (token, userId) =>
   axios.post(`${API_BASE}/admin/users/${userId}/quiz-quota/reset`, {}, { headers: adminHeaders(token), withCredentials: true });
 
 // ── Personalized CMS ────────────────────────────────────────────────────────
-export const cmsPersonalize = (body) =>
+const cmsPersonalize = (body) =>
   apiClient().post('/cms/personalize', body);
 
-export const cmsListPlans = (userId) =>
+const cmsListPlans = (userId) =>
   apiClient().get(`/cms/${userId}`);
 
-export const adminPipelineAutoGenerate = (token, subjectId, skipExisting = false) =>
+const adminPipelineAutoGenerate = (token, subjectId, skipExisting = false) =>
   axios.post(`${API_BASE}/admin/pipeline/auto-generate`, { subject_id: subjectId, skip_existing: skipExisting }, { headers: adminHeaders(token), withCredentials: true });
 
-export const adminPipelineStatus = (token, jobId) =>
+const adminPipelineStatus = (token, jobId) =>
   axios.get(`${API_BASE}/admin/pipeline/status/${jobId}`, { headers: adminHeaders(token), withCredentials: true });
 
 
@@ -713,7 +713,7 @@ export const adminIntelligenceOverview = (token) =>
 export const adminContentAutoHeal = (token) =>
   axios.post(`${API_BASE}/admin/content/auto-heal`, {}, { headers: adminHeaders(token), withCredentials: true });
 
-export const adminContentVersionHistory = (token, chapterId) =>
+const adminContentVersionHistory = (token, chapterId) =>
   axios.get(`${API_BASE}/admin/content/version-history/${chapterId}`, { headers: adminHeaders(token), withCredentials: true });
 
 export const postChatFeedback = (data) =>
@@ -794,10 +794,10 @@ export const adminAcknowledgeAllAlerts = (token) =>
 export const adminBackfillThresholds = (token) =>
   axios.post(`${API_BASE}/admin/alerts/backfill-thresholds`, {}, { headers: adminHeaders(token), withCredentials: true });
 
-export const adminIndexNowPing = (token, urls = []) =>
+const adminIndexNowPing = (token, urls = []) =>
   axios.post(`${API_BASE}/admin/indexnow/ping`, { urls }, { headers: adminHeaders(token), withCredentials: true });
 
-export const adminIndexNowStatus = (token) =>
+const adminIndexNowStatus = (token) =>
   axios.get(`${API_BASE}/admin/indexnow/status`, { headers: adminHeaders(token), withCredentials: true });
 
 export const adminIndexNowBackfillStart = (token) =>

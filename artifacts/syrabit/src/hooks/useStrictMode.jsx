@@ -112,4 +112,4 @@ export function useStrictMode() {
   return { strict, setStrict: update, loading, guardianLocked };
 }
 
-export function isStrictModeOn() { return _read(); }
+function isStrictModeOn() { return _read(); }

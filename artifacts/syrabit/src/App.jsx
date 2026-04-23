@@ -19,7 +19,7 @@ const LazyGlobalSeo = lazy(() => import("@/components/seo/GlobalSeo"));
 import { apiClient } from "@/utils/api";
 
 // ── React Query client ────────────────────────────────────────────────────────
-export const queryClient = new QueryClient({
+const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 10 * 60 * 1000,
@@ -262,7 +262,7 @@ function LegacyTopicRedirect() {
 }
 
 // ── Routes (extracted so SSR can render them inside a StaticRouter) ───────
-export function AppRoutes() {
+function AppRoutes() {
   return (
     <Routes>
       {/* ── Public routes ── */}
@@ -350,7 +350,7 @@ export function AppRoutes() {
 // Used by both the client (wrapped with BrowserRouter) and the SSR entry
 // (wrapped with StaticRouter) so the prerendered DOM matches React's
 // first client render. (Task #382)
-export function AppShell({ children, ssr = false, helmetContext }) {
+function AppShell({ children, ssr = false, helmetContext }) {
   // The four lazy presentational/effects components below are gated on a
   // post-hydration `mounted` flag — NOT on `ssr` — so the FIRST render
   // tree is identical on the server and on the client. Gating on `ssr`

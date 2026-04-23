@@ -89,4 +89,4 @@ export const LogoFull = ({
   );
 };
 
-export const LOGO_URL = '/logo.webp';
+const LOGO_URL = '/logo.webp';

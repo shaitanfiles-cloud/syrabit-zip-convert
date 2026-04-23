@@ -2,7 +2,7 @@ const VISITOR_ID_KEY = 'syrabit:visitor_id';
 const VISIT_COUNT_KEY = 'syrabit:visit_count';
 const SESSION_COUNTED_KEY = 'syrabit:session_counted';
 
-export function getOrCreateVisitorId() {
+function getOrCreateVisitorId() {
   try {
     let vid = localStorage.getItem(VISITOR_ID_KEY);
     if (!vid) {
@@ -28,7 +28,7 @@ export function incrementVisitIfNewSession() {
   }
 }
 
-export function getVisitCount() {
+function getVisitCount() {
   try {
     return parseInt(localStorage.getItem(VISIT_COUNT_KEY) || '0', 10);
   } catch {

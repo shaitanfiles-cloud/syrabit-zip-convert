@@ -19,7 +19,7 @@ const isDegreeStream = (streamName) =>
  * @param {string} boardName  - board name from DB (e.g. "DEGREE", "AHSEC", "SEBA")
  * @param {string} [streamName] - optional stream name for heuristic fallback
  */
-export const streamLabel = (boardName, streamName = '') => {
+const streamLabel = (boardName, streamName = '') => {
   if (isDegreeBoard(boardName) || isDegreeStream(streamName)) return 'Course Type';
   return 'Stream';
 };
