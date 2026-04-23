@@ -460,7 +460,22 @@ async def _adsense_access_token() -> str:
         )
         if r.status_code != 200:
             raise HTTPException(502, f"AdSense oauth failed: {r.text[:200]}")
-        return r.json().get("access_token") or ""
+        # Google occasionally returns HTTP 200 with a body that's
+        # missing `access_token` (e.g. revoked refresh token returning
+        # `{"error": "invalid_grant", ...}` with a 200 from a transient
+        # OAuth proxy). Returning "" here used to flow into a
+        # downstream `Authorization: Bearer ` request that AdSense
+        # answers with 401 — making it look like the AdSense API is
+        # broken when the real cause is a stale refresh token. Fail
+        # loud here so `_record_adsense_sync` records the actionable
+        # cause and the status panel turns red.
+        access_token = r.json().get("access_token")
+        if not access_token:
+            err = (r.json().get("error_description")
+                   or r.json().get("error")
+                   or "missing access_token in oauth response")
+            raise HTTPException(502, f"AdSense oauth: {err}")
+        return access_token
 
 
 # Task #731 S5 — single source-of-truth list for the `source` field on
