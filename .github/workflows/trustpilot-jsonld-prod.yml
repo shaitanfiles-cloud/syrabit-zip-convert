@@ -1,0 +1,48 @@
+name: trustpilot-jsonld-prod
+
+# Task #748 — second half of the gate.
+#
+# The build-time check (artifacts/syrabit/scripts/build.mjs step 5a.1)
+# already fails Cloudflare Pages builds when the inject step does not
+# land the AggregateRating JSON-LD on every Task #729 target path.
+# That catches code/config regressions in the static dist/ output.
+#
+# It does NOT catch a backend regression that strips the tag at
+# runtime — e.g. an edge worker rewriting <head>, an HTML-modifying
+# transform on Cloudflare, or a CDN cache pinned to a stale build.
+# This scheduled job hits the live origin once a day with a Googlebot
+# UA and fails (notifying the on-call via the standard GitHub Actions
+# failure channel) when any of the target paths is missing the rating.
+#
+# Cron: 06:00 UTC daily — early enough that a regression caught here
+# is fixable inside the same business day before Google's next crawl.
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+  pull_request:
+    branches: [master]
+    paths:
+      - "artifacts/syrabit/scripts/verify-trustpilot-jsonld.mjs"
+      - ".github/workflows/trustpilot-jsonld-prod.yml"
+
+jobs:
+  verify-prod:
+    name: Verify https://syrabit.ai AggregateRating
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Verify Trustpilot JSON-LD on production origin
+        run: node artifacts/syrabit/scripts/verify-trustpilot-jsonld.mjs --target=remote
+        env:
+          TARGET_ORIGIN: "https://syrabit.ai"

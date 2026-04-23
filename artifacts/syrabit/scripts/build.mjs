@@ -176,6 +176,18 @@ async function main() {
     }),
   );
 
+  // 5a.1. Verify the inject above actually landed the AggregateRating
+  //       JSON-LD on every Task #729 target path. Runs against the
+  //       freshly-built dist/ (not the network) so a regression in the
+  //       inject step or a drift in TARGET_PATHS fails the build
+  //       instead of silently shipping pages without stars (Task #748).
+  await record(
+    "verify:trustpilot-jsonld",
+    node(path.join(__dirname, "verify-trustpilot-jsonld.mjs"), ["--target=dist"], {
+      budgetMs: 60_000,
+    }),
+  );
+
   // 5b. Verify — single dist/ walk + headless hydration check.
   await record(
     "verify",
