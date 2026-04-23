@@ -3,7 +3,15 @@ every existing row in `payments` that doesn't already have it.
 
 Task #731 — Money truth. Run from the backend dir:
 
+    # write (default):
     cd artifacts/syrabit-backend && python -m scripts.migrate_payments_amount_inr
+
+    # preview only (no writes):
+    cd artifacts/syrabit-backend && python -m scripts.migrate_payments_amount_inr --dry-run
+
+NOTE: there is no `--apply` flag — the script writes by default. Pass
+`--dry-run` (or `-n`) if you want a preview. See
+`docs/PAYMENTS_BACKFILL_RUN.md` for the production execution log.
 
 Behaviour:
   * Idempotent. Rows that already have `amount_inr` are skipped.
