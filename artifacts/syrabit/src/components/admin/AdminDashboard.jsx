@@ -1190,34 +1190,6 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                       </ResponsiveContainer>
                     )}
                   </div>
-                  {/* Chip row per tile — shows the top breakdown for
-                      that metric. Each chip's `title` attribute carries
-                      a one-line hint (e.g. "HTML page loads") so admins
-                      can hover to learn what each keyword means. */}
-                  {(() => {
-                    const breakdownKeyByTile = {
-                      requests: 'interactions',
-                      bytes: 'bandwidth',
-                      visitors: 'visitors',
-                      page_views: 'page_views',
-                    };
-                    const chips = cfOverview?.breakdowns?.[breakdownKeyByTile[t.key]];
-                    if (!Array.isArray(chips) || chips.length === 0) return null;
-                    return (
-                      <div className="flex flex-wrap gap-1 mt-2">
-                        {chips.map((it) => (
-                          <span
-                            key={it.label}
-                            title={it.hint || it.label}
-                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-blue-50 border border-blue-100 text-[9px] font-medium text-blue-700 cursor-help"
-                          >
-                            {it.label}
-                            <span className="text-blue-400">{it.pct}%</span>
-                          </span>
-                        ))}
-                      </div>
-                    );
-                  })()}
                 </div>
               ))}
             </div>
