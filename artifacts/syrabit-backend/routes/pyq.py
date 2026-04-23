@@ -26,6 +26,30 @@ router = APIRouter()
 #  PYQ — Previous Year Questions Upload & Management
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _normalize_iso_for_sort(value):
+    """Normalize an ISO-8601 timestamp string for stable cross-format
+    comparison.
+
+    Task #738 made every new write timezone-aware (suffix ``+00:00``),
+    but historical PYQ rows on disk are still naive (no suffix).
+    MongoDB sorts strings lexicographically, so a mixed result set can
+    have rows from the same wall-clock instant appear in surprising
+    order. This helper coerces both shapes to a canonical aware form
+    so a Python-side ``sorted(..., key=...)`` re-sort is correct
+    regardless of which dialect is on disk.
+
+    Empty / non-string values sort to the start (so descending sort
+    pushes them to the end).
+    """
+    if not isinstance(value, str) or not value:
+        return ""
+    if value.endswith("Z"):
+        return value[:-1] + "+00:00"
+    if len(value) >= 6 and value[-6] in "+-" and value[-3] == ":":
+        return value
+    return value + "+00:00"
+
+
 def _get_db():
     return db
 
@@ -405,6 +429,12 @@ async def admin_pyq_list(
     if exam_year:  filt["exam_year"]  = exam_year
 
     docs = await _db["pyq_uploads"].find(filt, {"_id": 0}).sort("created_at", -1).to_list(200)
+    # Belt-and-suspenders re-sort: rows written before Task #738 are
+    # naive (no `+00:00`) and Mongo's lexicographic sort can interleave
+    # them with new aware rows incorrectly. The migration script
+    # `migrate_pyq_timestamps_to_aware` removes the gap permanently;
+    # this Python re-sort guarantees correctness during the rollout.
+    docs.sort(key=lambda d: _normalize_iso_for_sort(d.get("created_at")), reverse=True)
     return {"pyqs": docs}
 
 
@@ -415,6 +445,7 @@ async def admin_pyq_by_chapter(chapter_id: str, admin: dict = Depends(get_admin_
         {"chapter_id": chapter_id},
         {"_id": 0}
     ).sort("created_at", -1).to_list(100)
+    docs.sort(key=lambda d: _normalize_iso_for_sort(d.get("created_at")), reverse=True)
     return {"pyqs": docs}
 
 
@@ -1153,6 +1184,9 @@ async def public_pyq_list(
          "subject_name": 1, "board_name": 1, "exam_year": 1, "paper_type": 1,
          "question_count": 1, "created_at": 1}
     ).sort("created_at", -1).limit(200).to_list(200)
+    # See _normalize_iso_for_sort docstring — re-sort to handle the
+    # mixed naive/aware timestamp window during the Task #738 rollout.
+    docs.sort(key=lambda d: _normalize_iso_for_sort(d.get("created_at")), reverse=True)
     return {"pages": docs}
 
 

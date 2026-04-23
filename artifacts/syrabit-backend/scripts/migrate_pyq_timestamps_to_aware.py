@@ -71,8 +71,18 @@ _AWARE_SUFFIX_RE = re.compile(r"(?:Z|[+-]\d{2}:?\d{2})$")
 
 # Collections that the PYQ pipeline writes timestamps to. Kept narrow on
 # purpose — this script's promise is "normalize PYQ timestamps", not
-# "normalize the whole database".
-_PYQ_COLLECTIONS = ("pyq_uploads", "pyq_papers", "pyq_questions")
+# "normalize the whole database". The list mirrors the PYQ-owned
+# collections enumerated in `db_cleanup.py` plus the legacy
+# `pyq_papers` / `pyq_questions` names that may exist in older
+# environments.
+_PYQ_COLLECTIONS = (
+    "pyq_uploads",
+    "pyq_html_pages",
+    "topic_pyq_collections",
+    "ai_pyq_collections",
+    "pyq_papers",
+    "pyq_questions",
+)
 _TIMESTAMP_FIELDS = ("created_at", "updated_at")
 
 
