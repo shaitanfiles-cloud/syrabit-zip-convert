@@ -119,7 +119,6 @@ export default function AdSlot({ placement, className = '', style = {} }) {
               Analytics.adSlotViewed({
                 placement,
                 network: cfg.network,
-                enabled: !!cfg.enabled,
               });
             } catch {}
           }

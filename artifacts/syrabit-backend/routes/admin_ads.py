@@ -71,13 +71,21 @@ async def track_ad_impression(
     request: Request,
     placement: str = Body(...),
     network: str = Body(...),
-    enabled: Optional[bool] = Body(None),
 ):
     """Persist one viewability event per <AdSlot/> mount.
 
     Best-effort + capped — never raises; analytics must not break
     page loads. Drops obviously-bogus payloads (unknown network,
     oversize fields) instead of polluting the collection.
+
+    Note: an ``enabled`` body field used to be accepted and persisted
+    here but it was always ``true`` at the only call site (AdSlot's
+    IntersectionObserver fires only after a ``cfg.enabled`` early
+    return) and no aggregation ever read it back. Removed in the
+    admin-panel audit; legacy docs with ``enabled`` set will age out
+    via the 60-day TTL on ``created_at``. FastAPI ignores any extra
+    keys the client sends, so older bundles still hitting this route
+    won't error.
     """
     if not isinstance(placement, str) or not isinstance(network, str):
         return {"status": "ignored"}
@@ -92,7 +100,6 @@ async def track_ad_impression(
         await db.ad_impressions.insert_one({
             "placement": placement,
             "network": network,
-            "enabled": bool(enabled) if enabled is not None else None,
             "ua": ua or None,
             "path": path or None,
             "created_at": datetime.now(timezone.utc),

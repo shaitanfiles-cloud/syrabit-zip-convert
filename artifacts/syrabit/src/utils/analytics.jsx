@@ -79,10 +79,14 @@ const mirrorAdImpression = (properties) => {
       (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_BACKEND_URL)
         ? `${import.meta.env.VITE_BACKEND_URL.replace(/\/$/, '')}/api`
         : '/api';
+    // ``enabled`` used to be in this payload but it was always true
+    // at the AdSlot call site (the IntersectionObserver only fires
+    // after a cfg.enabled gate) and the backend never read it back.
+    // Dropped in the admin-panel audit; backend ignores the extra
+    // key from older bundles, so this is a one-sided rollout.
     const payload = JSON.stringify({
       placement: properties.placement,
       network: properties.network,
-      enabled: properties.enabled === undefined ? null : !!properties.enabled,
     });
     const url = `${apiBase}/analytics/ad-impression`;
     const blob = new Blob([payload], { type: 'application/json' });
@@ -369,8 +373,10 @@ export const Analytics = {
   // ── Ads (Task #528) ──────────────────────────────────────────────────────
   // Fired once per AdSlot mount when the slot first crosses 50% in-viewport.
   // Gated by ad consent in the caller so opt-out users emit nothing.
-  adSlotViewed: ({ placement, network, enabled } = {}) => {
-    track('ad_slot_viewed', { placement, network, enabled });
+  // ``enabled`` was dropped — see mirrorAdImpression() comment for
+  // rationale (always true at call site + never read by backend).
+  adSlotViewed: ({ placement, network } = {}) => {
+    track('ad_slot_viewed', { placement, network });
   },
 
   adminLogin: (email) => {
