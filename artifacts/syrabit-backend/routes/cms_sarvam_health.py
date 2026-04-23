@@ -2023,8 +2023,10 @@ except Exception as _rec_err:  # pragma: no cover - defensive
 async def ensure_assamese_runs_index() -> None:
     """Create the TTL index on the runs collection so old docs auto-
     expire. Called from server.py lifespan (idempotent)."""
+    from deps import db as _db
+    if _db is None:
+        return
     try:
-        from deps import db as _db
         await _db[_ASM_RUNS_COLLECTION].create_index(
             "ts", expireAfterSeconds=_ASM_RUNS_TTL_SECONDS,
         )
@@ -2036,8 +2038,10 @@ async def ensure_assamese_runs_index() -> None:
 async def ensure_assamese_audit_index() -> None:
     """Index `ts` desc on the audit collection so the history-panel
     query (`find().sort(ts, -1).limit(20)`) is cheap. Idempotent."""
+    from deps import db as _db
+    if _db is None:
+        return
     try:
-        from deps import db as _db
         await _db[_ASM_AUDIT_COLLECTION].create_index([("ts", -1)])
     except Exception as e:
         logger.warning(f"[INDIC-SANITIZE] audit index create failed: {e}")
@@ -2055,8 +2059,10 @@ async def _record_assamese_audit(
     continue — losing an audit row must NEVER fail the user-visible
     admin action. Returns the new row's `id` so callers (e.g. the
     revert endpoint) can reference it back to the source row."""
+    from deps import db as _db
+    if _db is None:
+        return None
     try:
-        from deps import db as _db
         new_id = uuid.uuid4().hex
         doc = {
             "id": new_id,
@@ -2087,8 +2093,10 @@ _ASM_TEST_FIRE_SAMPLE = (
 async def _load_persisted_assamese_purity_override() -> dict | None:
     """Read the persisted override doc from mongo. Returns the inner
     {behaviour, threshold, ...} dict or None when no override is set."""
+    from deps import db as _db
+    if _db is None:
+        return None
     try:
-        from deps import db as _db
         doc = await _db.api_config.find_one({}, {_ASM_OVERRIDE_DOC_KEY: 1})
         if not doc:
             return None

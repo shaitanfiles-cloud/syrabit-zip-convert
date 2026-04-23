@@ -132,6 +132,8 @@ _syllabus_embedder: Optional[SyllabusEmbedder] = None
 
 
 async def _load_ga4_from_db():
+    if db is None:
+        return
     try:
         if not os.getenv("GA4_REFRESH_TOKEN"):
             cfg = await db.api_config.find_one({}, {"ga4": 1})

@@ -488,6 +488,9 @@ async def _exam_reminder_loop():
     """
     import zoneinfo
     from datetime import timedelta as _td
+    if db is None:
+        logger.info("Exam reminder loop disabled — MongoDB unavailable.")
+        return
     IST = zoneinfo.ZoneInfo("Asia/Kolkata")
     await asyncio.sleep(30)   # let startup settle
     while True:
@@ -1228,6 +1231,8 @@ async def ensure_synthetic_alerts_ttl_index() -> None:
     """Create the partial TTL index on db.alerts so synthetic test
     alerts auto-expire ~7 days after they fire. Idempotent — safe to
     call on every startup."""
+    if db is None:
+        return
     try:
         await db.alerts.create_index(
             "expires_at",
@@ -1245,6 +1250,8 @@ async def cleanup_synthetic_alerts(ttl_seconds: int = _SYNTHETIC_ALERT_TTL_SECON
     string `fired_at` ISO timestamp (lexicographic compare works because
     we always write `datetime.now(tz.utc).isoformat()`). Returns the
     deleted count."""
+    if db is None:
+        return 0
     cutoff_dt = datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds)
     cutoff_iso = cutoff_dt.isoformat()
     try:

@@ -2927,6 +2927,8 @@ async def admin_ttl_monitor(
 
 
 async def _record_collection_size_snapshot():
+    if db is None:
+        return
     try:
         now = datetime.now(timezone.utc)
         today_str = now.strftime("%Y-%m-%d")
