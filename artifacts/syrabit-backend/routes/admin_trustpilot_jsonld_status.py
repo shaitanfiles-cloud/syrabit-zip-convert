@@ -59,6 +59,13 @@ router = APIRouter()
 
 _DOC_ID = "trustpilot_jsonld_verifier_report"
 
+# Task #761 — per-URL consecutive-failure threshold for the "URL failing
+# N days in a row" escalation alert. Three matches the intuition in the
+# task description (today's PASS→FAIL dedup suppresses repeat pages, so
+# a single URL that silently keeps failing can otherwise go un-paged
+# after its first regression email).
+_STREAK_THRESHOLD = 3
+
 # Task #754 — append-only history collection with a 30-day TTL so the
 # admin tile can render a trailing-month sparkline without unbounded
 # growth.
@@ -225,6 +232,15 @@ async def ingest_trustpilot_jsonld_report(
 
     new_failed_urls = sorted({r["url"] for r in results if not r["pass"]})
 
+    # Task #761 — compute per-URL consecutive-failure streaks BEFORE the
+    # write so the next ingest has a canonical ledger to diff against,
+    # and so the streak alert (fired below after the write) sees exactly
+    # the state we just persisted. The helper is pure; callers fire on
+    # the returned `newly_streaking_rows` to page ops.
+    url_streaks, alerted_streaks, newly_streaking_rows = (
+        _compute_url_failure_streaks(prior_doc, results)
+    )
+
     doc = {
         "_id": _DOC_ID,
         "schemaVersion": 1,
@@ -245,6 +261,11 @@ async def ingest_trustpilot_jsonld_report(
         # moment a URL flips back to pass, so the next regression on
         # the same URL re-pages.
         "alertedFailedUrls": new_failed_urls,
+        # Task #761 — per-URL consecutive-failure streak counters +
+        # escalation-alert dedup ledger. Both clear automatically when
+        # a URL flips back to pass (see _compute_url_failure_streaks).
+        "urlFailureStreaks": url_streaks,
+        "alertedStreaks": alerted_streaks,
     }
     await db.api_config.replace_one({"_id": _DOC_ID}, doc, upsert=True)
     logger.info(
@@ -264,7 +285,124 @@ async def ingest_trustpilot_jsonld_report(
     except Exception as exc:
         logger.warning("trustpilot jsonld alert dispatch errored: %s", exc)
 
+    # Task #761 — escalation alert when a URL has failed 3+ consecutive
+    # runs. Fires AFTER the regular regression alerter because today's
+    # PASS→FAIL dedup may have already suppressed paging on this URL.
+    try:
+        if newly_streaking_rows:
+            await _send_jsonld_streak_alert(newly_streaking_rows, doc)
+    except Exception as exc:
+        logger.warning(
+            "trustpilot jsonld streak alert errored: %s", exc,
+        )
+
     return {"ok": True, "stored": True, "passed": passed, "failed": failed}
+
+
+# ─── Task #761 — per-URL consecutive-failure streak detector ───────────────
+#
+# Motivation: Task #753's regression alert dedups per-URL once it flips
+# PASS→FAIL — so a URL that silently keeps failing day after day only
+# pages ops once, on day 1. That's correct for high-churn regressions
+# but wrong for slow-moving ones (the whole reason Task #754 added the
+# 30-day history). This detector escalates: when a URL has failed
+# ``_STREAK_THRESHOLD`` consecutive runs AND we haven't yet paged on
+# this particular streak, fire one streak alert. The streak ledger
+# lives on the same canonical doc as the existing per-URL dedup ledger
+# (``alertedStreaks``), so no extra collection is needed.
+
+
+def _compute_url_failure_streaks(
+    prior_doc: dict[str, Any],
+    new_results: list[dict[str, Any]],
+) -> tuple[dict[str, int], list[str], list[dict[str, Any]]]:
+    """Return (new_streaks, new_alerted_streaks, newly_streaking_rows).
+
+    * ``new_streaks`` — {url: consecutive_fail_count}. URLs that passed
+      are dropped (streak resets to 0), which keeps the doc narrow and
+      makes the "streak has been broken" semantics implicit.
+    * ``new_alerted_streaks`` — sorted URL list we've already paged on
+      in their current failing streak. A URL stays in this ledger while
+      it keeps failing and falls out the moment it passes, so the next
+      PASS→FAIL→FAIL→FAIL streak on the same URL re-pages.
+    * ``newly_streaking_rows`` — full result rows (with an added
+      ``streak`` field) for URLs whose streak just crossed the threshold
+      on this run. Callers fire exactly one alert per row.
+
+    Pure/sync — safe to test in isolation without mocking the DB layer.
+    """
+    prior_streaks_raw = (prior_doc or {}).get("urlFailureStreaks") or {}
+    # Defensive coercion — a corrupted doc (e.g. migrated from before
+    # this field existed, or hand-edited) must not crash ingest.
+    prior_streaks: dict[str, int] = {}
+    if isinstance(prior_streaks_raw, dict):
+        for k, v in prior_streaks_raw.items():
+            try:
+                prior_streaks[str(k)] = int(v)
+            except (TypeError, ValueError):
+                continue
+    prior_alerted: set[str] = {
+        str(u) for u in ((prior_doc or {}).get("alertedStreaks") or [])
+    }
+
+    new_streaks: dict[str, int] = {}
+    new_alerted: set[str] = set()
+    newly_streaking: list[dict[str, Any]] = []
+
+    for row in new_results:
+        url = row.get("url")
+        if not url:
+            continue
+        if row.get("pass"):
+            # Pass resets — drop from both ledgers implicitly (we simply
+            # don't carry them forward).
+            continue
+        streak = prior_streaks.get(url, 0) + 1
+        new_streaks[url] = streak
+        if url in prior_alerted:
+            # Already paged on this ongoing streak — keep the dedup flag
+            # so the next run knows not to re-page.
+            new_alerted.add(url)
+        elif streak >= _STREAK_THRESHOLD:
+            new_alerted.add(url)
+            newly_streaking.append({**row, "streak": streak})
+
+    return new_streaks, sorted(new_alerted), newly_streaking
+
+
+async def _send_jsonld_streak_alert(
+    streaking_rows: list[dict[str, Any]], new_doc: dict[str, Any],
+) -> None:
+    """Page ops when one or more URLs have failed ``_STREAK_THRESHOLD``
+    consecutive runs. Uses the same notification channel as the Task
+    #753 regression / recovery alerts so everything lands in one
+    admin inbox."""
+    title = (
+        f"Trustpilot JSON-LD: {len(streaking_rows)} URL(s) failing "
+        f"{_STREAK_THRESHOLD}+ runs in a row"
+    )
+    lines: list[str] = []
+    for row in streaking_rows:
+        streak = int(row.get("streak", _STREAK_THRESHOLD))
+        lines.append(f"{_format_failing_row(row)} (streak: {streak})")
+    msg = (
+        f"The following URL(s) have failed the Trustpilot AggregateRating "
+        f"JSON-LD verifier on {_STREAK_THRESHOLD} or more consecutive "
+        "scheduled runs. The initial PASS→FAIL regression alert was "
+        "already emitted on day 1; this escalation prompt fires because "
+        "the regression has not been remediated.\n\n"
+        + "\n".join(lines)
+    )
+    run_url = new_doc.get("runUrl")
+    if run_url:
+        msg += f"\n\nLatest GitHub Actions run: {run_url}"
+    await _emit_jsonld_alert(
+        title=title,
+        message=msg,
+        kind="streak",
+        run_url=run_url,
+        urls=[r["url"] for r in streaking_rows],
+    )
 
 
 # ─── Task #753 — regression / recovery email + in-app notifications ────────

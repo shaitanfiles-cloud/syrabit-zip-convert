@@ -580,6 +580,205 @@ def test_get_history_returns_chronological_pass_rate_points(authed_client):
     assert pts[0]["ts"].startswith("2026-04-01")
 
 
+# ─── Task #761 — per-URL N-day streak alert ───────────────────────────────
+
+
+def test_streak_below_threshold_does_not_page():
+    """Second consecutive fail (streak=2, threshold=3) must NOT page."""
+    from routes import admin_trustpilot_jsonld_status as mod
+
+    prior_doc = {
+        "urlFailureStreaks": {"/about": 1},
+        "alertedStreaks": [],
+        "alertedFailedUrls": ["/about"],
+    }
+    new_results = [
+        {"url": "/", "pass": True},
+        {"url": "/about", "pass": False, "reason": "still missing"},
+    ]
+    new_streaks, new_alerted, newly = mod._compute_url_failure_streaks(
+        prior_doc, new_results,
+    )
+    assert new_streaks == {"/about": 2}
+    assert new_alerted == []
+    assert newly == []
+
+
+def test_streak_at_threshold_pages_exactly_once():
+    """Third consecutive fail (streak=3) must produce one newly-streaking
+    row so the caller fires exactly one streak alert."""
+    from routes import admin_trustpilot_jsonld_status as mod
+
+    prior_doc = {
+        "urlFailureStreaks": {"/about": 2},
+        "alertedStreaks": [],
+        "alertedFailedUrls": ["/about"],
+    }
+    new_results = [
+        {"url": "/", "pass": True},
+        {"url": "/about", "pass": False, "reason": "still missing"},
+    ]
+    new_streaks, new_alerted, newly = mod._compute_url_failure_streaks(
+        prior_doc, new_results,
+    )
+    assert new_streaks == {"/about": 3}
+    assert new_alerted == ["/about"]
+    assert [r["url"] for r in newly] == ["/about"]
+    assert newly[0]["streak"] == 3
+
+
+def test_streak_already_alerted_dedupes_further_fails():
+    """Fourth and subsequent consecutive fails must NOT re-page — the
+    dedup ledger carries the URL forward until it passes."""
+    from routes import admin_trustpilot_jsonld_status as mod
+
+    prior_doc = {
+        "urlFailureStreaks": {"/about": 3},
+        "alertedStreaks": ["/about"],
+        "alertedFailedUrls": ["/about"],
+    }
+    new_results = [
+        {"url": "/about", "pass": False, "reason": "still missing"},
+    ]
+    new_streaks, new_alerted, newly = mod._compute_url_failure_streaks(
+        prior_doc, new_results,
+    )
+    assert new_streaks == {"/about": 4}
+    # Still alerted (dedup ledger retained), but nothing NEW to page on.
+    assert new_alerted == ["/about"]
+    assert newly == []
+
+
+def test_streak_resets_on_pass_and_repages_next_3_fail_streak():
+    """A URL that flips back to pass must lose both its streak counter
+    AND its dedup flag, so the next 3-fail streak re-pages ops."""
+    from routes import admin_trustpilot_jsonld_status as mod
+
+    # Day N: URL had a 4-fail streak, was alerted.
+    prior_doc = {
+        "urlFailureStreaks": {"/about": 4},
+        "alertedStreaks": ["/about"],
+        "alertedFailedUrls": ["/about"],
+    }
+    # Day N+1: passes.
+    new_streaks, new_alerted, newly = mod._compute_url_failure_streaks(
+        prior_doc, [{"url": "/about", "pass": True}],
+    )
+    assert new_streaks == {}
+    assert new_alerted == []
+    assert newly == []
+
+    # Day N+2, N+3, N+4: three fails in a row → re-page.
+    prior = {"urlFailureStreaks": new_streaks, "alertedStreaks": new_alerted}
+    for expected_streak in (1, 2, 3):
+        new_streaks, new_alerted, newly = mod._compute_url_failure_streaks(
+            prior, [{"url": "/about", "pass": False}],
+        )
+        assert new_streaks == {"/about": expected_streak}
+        prior = {"urlFailureStreaks": new_streaks,
+                 "alertedStreaks": new_alerted}
+    assert [r["url"] for r in newly] == ["/about"]
+    assert newly[0]["streak"] == 3
+
+
+def test_streak_alert_only_fires_for_urls_crossing_threshold():
+    """With a mix of URLs — one first-time fail, one hitting streak=3 —
+    only the streak=3 URL should appear in newly_streaking_rows."""
+    from routes import admin_trustpilot_jsonld_status as mod
+
+    prior_doc = {
+        "urlFailureStreaks": {"/about": 2},
+        "alertedStreaks": [],
+        "alertedFailedUrls": ["/about"],
+    }
+    new_results = [
+        {"url": "/about", "pass": False, "reason": "still missing"},
+        {"url": "/faq", "pass": False, "reason": "just broke"},
+        {"url": "/", "pass": True},
+    ]
+    new_streaks, new_alerted, newly = mod._compute_url_failure_streaks(
+        prior_doc, new_results,
+    )
+    assert new_streaks == {"/about": 3, "/faq": 1}
+    assert new_alerted == ["/about"]
+    assert [r["url"] for r in newly] == ["/about"]
+
+
+def test_streak_alert_body_surfaces_url_streak_and_run_link():
+    """The streak alert message must list the failing URL, its streak
+    count, and deep-link to the latest GH Actions run."""
+    async def _inner():
+        from routes import admin_trustpilot_jsonld_status as mod
+
+        captured: dict = {}
+
+        async def _fake_emit(*, title, message, kind, run_url, urls):
+            captured.update(title=title, message=message, kind=kind,
+                            run_url=run_url, urls=list(urls))
+
+        streaking_rows = [
+            {"url": "/about", "pass": False, "streak": 3,
+             "reason": "AggregateRating missing"},
+        ]
+        new_doc = {"runUrl": "https://github.com/x/y/actions/runs/42"}
+        with patch.object(mod, "_emit_jsonld_alert", _fake_emit):
+            await mod._send_jsonld_streak_alert(streaking_rows, new_doc)
+
+        assert captured["kind"] == "streak"
+        assert captured["urls"] == ["/about"]
+        assert "3+ runs in a row" in captured["title"]
+        assert "/about" in captured["message"]
+        assert "streak: 3" in captured["message"]
+        assert "actions/runs/42" in captured["message"]
+        assert captured["run_url"] == "https://github.com/x/y/actions/runs/42"
+    asyncio.run(_inner())
+
+
+def test_ingest_fires_streak_alert_when_url_hits_threshold(authed_client):
+    """End-to-end: POST an ingest where the prior doc shows a 2-fail
+    streak and the new run is a 3rd fail → the streak alert fires."""
+    async def _inner():
+        from routes import admin_trustpilot_jsonld_status as mod
+
+        prior_doc = {
+            "_id": mod._DOC_ID,
+            "alertedFailedUrls": ["/about"],
+            "urlFailureStreaks": {"/about": 2},
+            "alertedStreaks": [],
+            "results": [{"url": "/about", "pass": False}],
+        }
+        fake_replace = AsyncMock()
+        fake_find = AsyncMock(return_value=prior_doc)
+        fake_streak = AsyncMock()
+        with patch.dict(os.environ, {"TRUSTPILOT_REFRESH_SECRET": "expected-secret"},
+                        clear=False), \
+             patch.object(mod, "_maybe_dispatch_jsonld_alerts", AsyncMock()), \
+             patch.object(mod, "_append_trustpilot_jsonld_run", AsyncMock()), \
+             patch.object(mod, "_send_jsonld_streak_alert", fake_streak), \
+             patch.object(mod.db, "api_config", create=True) as mock_coll:
+            mock_coll.replace_one = fake_replace
+            mock_coll.find_one = fake_find
+            res = authed_client.post(
+                "/admin/trustpilot-jsonld/report",
+                json={
+                    "results": [{"url": "/about", "pass": False,
+                                 "reason": "still missing"}],
+                    "target": "remote",
+                },
+                headers={"X-Trustpilot-Refresh-Secret": "expected-secret"},
+            )
+        assert res.status_code == 200
+        fake_streak.assert_awaited_once()
+        rows, stored = fake_streak.call_args.args
+        assert [r["url"] for r in rows] == ["/about"]
+        assert rows[0]["streak"] == 3
+        # The persisted doc carries the new streak ledger for next run.
+        persisted = fake_replace.call_args.args[1]
+        assert persisted["urlFailureStreaks"] == {"/about": 3}
+        assert persisted["alertedStreaks"] == ["/about"]
+    asyncio.run(_inner())
+
+
 def test_alert_dispatch_failure_does_not_break_ingest(authed_client):
     async def _inner():
         """If the alert fan-out raises, the ingest endpoint still returns
