@@ -675,29 +675,18 @@ async def _schedule_indexnow_for_url(url: str, source: str = "fanout") -> bool:
 # tax — which is why the 7-day Googlebot cache-hit ratio sits at ~33.6%.
 # ---------------------------------------------------------------------------
 
-_PREWARM_USER_AGENT = (
-    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html) "
-    "syrabit-prewarm/1.0"
+# Internal-bot UAs and headers live in `internal_user_agents.py`
+# (Task #820) so Cloudflare bot analytics can identify our own
+# self-checks via a single `X-Syrabit-Internal: 1` header instead of
+# enumerating every per-call-site UA substring. The legacy module-level
+# names below are kept as thin aliases so existing call-sites in this
+# file (and any test that imports them) still resolve.
+from internal_user_agents import (  # noqa: E402
+    PREWARM_USER_AGENT as _PREWARM_USER_AGENT,
+    seo_self_check_headers as _seo_self_check_headers,
+    prewarm_headers as _prewarm_headers,
 )
-
-# Self-identifying headers used by every internal SEO self-check
-# (seo_health_check + _deep_scan_sitemap) when probing the public
-# syrabit.ai sitemap XMLs and sample URLs. The default `python-httpx`
-# UA is classified by Cloudflare's Super Bot Fight Mode as "definitely
-# automated" and served the 403 managed challenge — which previously
-# made every self-probe report HTTP 403 and the SEO health endpoint
-# permanently report `status=critical`. Naming convention mirrors the
-# existing `SyrabitBot/1.0` and `SyrabitSEOBot/1.0` UAs in
-# web_content.py and google_suggest_client.py. This is NOT a security
-# bypass — sitemaps and SPA pages are public; the UA simply identifies
-# our own self-checks at the edge so SBFM does not falsely flag them.
-_SEO_SELF_CHECK_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (compatible; SyrabitSEOHealth/1.0; "
-        "+https://syrabit.ai/api/seo/health)"
-    ),
-    "Accept": "application/xml,text/html;q=0.9,*/*;q=0.8",
-}
+_SEO_SELF_CHECK_HEADERS = _seo_self_check_headers()
 _PREWARM_RPS = 1.5
 _PREWARM_TIMEOUT = 8.0
 _prewarm_lock = asyncio.Lock()
@@ -720,12 +709,7 @@ async def prewarm_bot_cache(urls: list[str], rps: float = _PREWARM_RPS) -> bool:
     import httpx
     success = 0
     timeout = httpx.Timeout(_PREWARM_TIMEOUT)
-    headers = {
-        "User-Agent": _PREWARM_USER_AGENT,
-        "Accept": "text/html,application/xhtml+xml",
-        "Accept-Language": "en-IN,en;q=0.9,as;q=0.8",
-        "X-Syrabit-Prewarm": "1",
-    }
+    headers = _prewarm_headers()
     deduped = list(dict.fromkeys(u for u in urls if u))
     if not deduped:
         return False

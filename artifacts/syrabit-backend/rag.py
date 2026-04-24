@@ -3,6 +3,7 @@ import re, asyncio, time, hashlib, logging
 from typing import Optional, Dict, List
 from datetime import datetime, timezone
 from deps import db, is_mongo_available
+from internal_user_agents import rag_fetch_headers as _rag_fetch_headers
 from utils import _extract_keywords
 
 logger = logging.getLogger(__name__)
@@ -216,7 +217,7 @@ async def _fetch_page_content(url: str, max_chars: int = 3000) -> str:
             return ""
         client = _get_httpx_client()
         resp, final_url, redirect_reason = await safe_get_with_redirects(
-            client, url, headers={"User-Agent": "Mozilla/5.0 SyrabitBot/1.0"},
+            client, url, headers=_rag_fetch_headers(),
         )
         if redirect_reason != "ok" or resp is None:
             return ""

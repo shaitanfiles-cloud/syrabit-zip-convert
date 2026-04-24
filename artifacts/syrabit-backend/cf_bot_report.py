@@ -32,6 +32,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from cloudflare_client import _cfg, _graphql_query, is_configured
+from internal_user_agents import is_internal_user_agent
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +93,18 @@ _UA_PATTERNS: list[tuple[str, str]] = [
 
 def _classify_ua(ua: str) -> Optional[str]:
     """Return the canonical crawler name for a raw user-agent string, or
-    None if it doesn't match any known search-engine bot."""
+    None if it doesn't match any known search-engine bot.
+
+    Task #820: returns ``None`` for any UA carrying our own
+    ``SyrabitInternal`` marker (or any registered legacy internal
+    token) BEFORE pattern-matching against the search-bot list. The
+    KV-prewarm UA intentionally spoofs Googlebot to seed the edge bot
+    cache, and without this short-circuit every prewarm cycle would
+    inflate Googlebot's count in the per-UA report.
+    """
     if not ua:
+        return None
+    if is_internal_user_agent(ua):
         return None
     low = ua.lower()
     for needle, name in _UA_PATTERNS:
