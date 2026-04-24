@@ -144,6 +144,37 @@ OWASP_RULESET_NAME_HINTS = ("owasp",)  # description contains 'OWASP'
 CF_MANAGED_RULESET_NAME_HINTS = ("cloudflare managed", "managed ruleset")
 RATE_LIMIT_LEAKED_CRED_HINTS = ("leaked", "credential")
 
+# Stable Cloudflare-shipped deployed-ruleset IDs. These IDs are
+# tenant-stable across all CF zones (they identify the ruleset that
+# Cloudflare publishes, not the per-zone binding to it). Preferring
+# these over the brittle description substring match makes the
+# orchestrator robust to Cloudflare renaming the ruleset in the
+# dashboard — which they have done historically. Verified for the
+# syrabit.ai zone via `status` on 2026-04-24 and recorded in
+# docs/CLOUDFLARE_ZERO_TRUST.md §8.7.2.
+CF_OWASP_DEPLOYED_RULESET_ID = "4814384a9e5d4991b9815dcfc25d2f1f"
+CF_MANAGED_DEPLOYED_RULESET_ID = "efb7b8c949ac4650a09736fc376e9aee"
+
+
+def _binding_is_owasp(rule: dict) -> bool:
+    """Identify the OWASP Core Ruleset binding by stable id, with
+    description-substring fallback for forward-compat."""
+    deployed = (rule.get("action_parameters") or {}).get("id")
+    if deployed == CF_OWASP_DEPLOYED_RULESET_ID:
+        return True
+    desc = (rule.get("description") or "").lower()
+    return any(h in desc for h in OWASP_RULESET_NAME_HINTS)
+
+
+def _binding_is_cf_managed(rule: dict) -> bool:
+    """Identify the Cloudflare Managed Ruleset binding by stable id,
+    with description-substring fallback for forward-compat."""
+    deployed = (rule.get("action_parameters") or {}).get("id")
+    if deployed == CF_MANAGED_DEPLOYED_RULESET_ID:
+        return True
+    desc = (rule.get("description") or "").lower()
+    return any(h in desc for h in CF_MANAGED_RULESET_NAME_HINTS)
+
 
 # ─── HTTP plumbing ──────────────────────────────────────────────────────────
 
@@ -340,10 +371,7 @@ def cmd_step0(args) -> int:
 
     targets = []
     for r in fw.get("rules") or []:
-        desc = (r.get("description") or "").lower()
-        is_owasp = any(h in desc for h in OWASP_RULESET_NAME_HINTS)
-        is_cf_managed = any(h in desc for h in CF_MANAGED_RULESET_NAME_HINTS)
-        if is_owasp or is_cf_managed:
+        if _binding_is_owasp(r) or _binding_is_cf_managed(r):
             targets.append(r)
 
     if not targets:
@@ -441,8 +469,7 @@ def cmd_step3(args) -> int:
     fw = _entrypoint(token, zone, "http_request_firewall_managed")
     binding = None
     for r in fw.get("rules") or []:
-        desc = (r.get("description") or "").lower()
-        if any(h in desc for h in OWASP_RULESET_NAME_HINTS):
+        if _binding_is_owasp(r):
             binding = r
             break
     if binding is None:
@@ -590,11 +617,7 @@ def cmd_step6(args) -> int:
     expect_rule = getattr(args, "expect_disabled_rule", None) or DEFAULT_OWASP_TRIP_RULE
     if not getattr(args, "force", False):
         owasp_binding = next(
-            (
-                r for r in (fw.get("rules") or [])
-                if any(h in (r.get("description") or "").lower()
-                       for h in OWASP_RULESET_NAME_HINTS)
-            ),
+            (r for r in (fw.get("rules") or []) if _binding_is_owasp(r)),
             None,
         )
         per_rule_overrides = []
@@ -667,8 +690,7 @@ def cmd_rollback3(args) -> int:
     fw = _entrypoint(token, zone, "http_request_firewall_managed")
     binding = None
     for r in fw.get("rules") or []:
-        desc = (r.get("description") or "").lower()
-        if any(h in desc for h in OWASP_RULESET_NAME_HINTS):
+        if _binding_is_owasp(r):
             binding = r
             break
     if binding is None:
