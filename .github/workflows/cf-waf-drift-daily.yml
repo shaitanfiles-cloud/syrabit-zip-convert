@@ -44,9 +44,21 @@ name: cf-waf-drift-daily
 #
 # Optional repo secret
 # --------------------
-#   CF_WAF_DRIFT_SLACK_WEBHOOK  Slack incoming-webhook URL. When unset, the
-#                               job still fails on drift (GitHub email path)
-#                               but no Slack message is sent.
+#   CF_WAF_DRIFT_SLACK_WEBHOOK    Slack incoming-webhook URL. When unset,
+#                                 the job still fails on drift (GitHub
+#                                 email path) but no Slack message is sent.
+#   CF_WAF_DRIFT_HEARTBEAT_SECRET Shared secret for the backend heartbeat
+#                                 (Task #831). Same value as the backend
+#                                 env var. When unset the heartbeat step
+#                                 is a no-op `::warning::` and the silent-
+#                                 cron alerter cannot tell the workflow
+#                                 ran — set this in tandem with the
+#                                 backend env var on Railway/Cloud Run.
+#
+# Optional repo variable
+# ----------------------
+#   CF_WAF_DRIFT_BACKEND_URL    Override https://api.syrabit.ai for the
+#                               heartbeat POST (e.g. staging refreshes).
 #
 # Setup is documented in docs/CLOUDFLARE_ZERO_TRUST.md §8.7.7.
 
@@ -206,6 +218,76 @@ jobs:
           echo "[slack] http=$http_code body=$(cat /tmp/slack_body 2>/dev/null | head -c 200)"
           if [ "$http_code" != "200" ]; then
             echo "::warning title=Slack alert failed::Slack webhook returned HTTP $http_code (job will still fail at the final step so the GitHub email goes out)"
+          fi
+          exit 0
+
+      - name: Heartbeat to backend (Task #831)
+        # Always run, even if earlier steps failed — the whole point of
+        # this heartbeat is to distinguish "the firewall is drifting"
+        # (workflow ran, Slack alert fired) from "the cron is silent"
+        # (workflow didn't run at all). The backend's >36h silence
+        # alerter only fires when no heartbeat arrives, so we MUST
+        # send one even when verify/aggregate failed.
+        #
+        # Reduces (verify_rc, aggregate_rc) → status string the backend
+        # records:
+        #   * (0, 0)              → success      (clean pass)
+        #   * (1, *) or (*, 1)    → drift        (per-run Slack alert
+        #                                          already covered this;
+        #                                          heartbeat just proves
+        #                                          the cron ran)
+        #   * (2, *) or (*, 2)    → transport_error (CF GraphQL/network
+        #                                            transient — re-run
+        #                                            will likely succeed)
+        #   * unset / other       → failure      (workflow plumbing
+        #                                          itself broke before
+        #                                          producing an rc)
+        if: always()
+        env:
+          CF_WAF_DRIFT_HEARTBEAT_SECRET: ${{ secrets.CF_WAF_DRIFT_HEARTBEAT_SECRET }}
+          BACKEND_URL: ${{ vars.CF_WAF_DRIFT_BACKEND_URL || 'https://api.syrabit.ai' }}
+          VERIFY_RC: ${{ steps.verify.outputs.rc }}
+          AGGREGATE_RC: ${{ steps.aggregate.outputs.rc }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/cf-waf-drift-daily.yml
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set +e
+          if [ -z "${CF_WAF_DRIFT_HEARTBEAT_SECRET:-}" ]; then
+            echo "::warning title=Heartbeat::CF_WAF_DRIFT_HEARTBEAT_SECRET not set — skipping backend heartbeat. The silent-cron alerter (Task #831) will treat this workflow as silent if the secret stays unset for >36h on the backend side."
+            exit 0
+          fi
+          # Decide status. Treat unset rc (step skipped/cancelled) as
+          # failure — that's still a real workflow run we need to log,
+          # and the heartbeat itself proves the cron is alive.
+          STATUS="failure"
+          if [ -n "${VERIFY_RC:-}" ] && [ -n "${AGGREGATE_RC:-}" ]; then
+            if [ "$VERIFY_RC" = "2" ] || [ "$AGGREGATE_RC" = "2" ]; then
+              STATUS="transport_error"
+            elif [ "$VERIFY_RC" = "1" ] || [ "$AGGREGATE_RC" = "1" ]; then
+              STATUS="drift"
+            elif [ "$VERIFY_RC" = "0" ] && [ "$AGGREGATE_RC" = "0" ]; then
+              STATUS="success"
+            fi
+          fi
+          payload=$(jq -n \
+            --arg s "$STATUS" \
+            --arg vrc "${VERIFY_RC:-}" \
+            --arg arc "${AGGREGATE_RC:-}" \
+            --arg run "$RUN_URL" \
+            --arg wf  "$WORKFLOW_URL" \
+            --arg id  "$RUN_ID" \
+            '{status:$s, verifyRc:$vrc, aggregateRc:$arc,
+              runUrl:$run, workflowUrl:$wf, runId:$id}')
+          http_code=$(curl -sS -o /tmp/cfw_hb_body -w '%{http_code}' \
+            -X POST "${BACKEND_URL%/}/api/config/cf-waf-drift/heartbeat" \
+            -H 'Content-Type: application/json' \
+            -H "X-CF-WAF-Drift-Secret: ${CF_WAF_DRIFT_HEARTBEAT_SECRET}" \
+            --max-time 15 --retry 2 --retry-delay 5 \
+            -d "$payload")
+          echo "[heartbeat] status=$STATUS http=$http_code body=$(cat /tmp/cfw_hb_body 2>/dev/null | head -c 300)"
+          if [ "$http_code" != "200" ]; then
+            echo "::warning title=Heartbeat::backend heartbeat returned $http_code (non-fatal — verify/aggregate result is the source of truth for this run)"
           fi
           exit 0
 

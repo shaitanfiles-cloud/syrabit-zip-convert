@@ -1014,6 +1014,25 @@ async def lifespan(app):
                 "trustpilot refresh-cron alert loop not started: "
                 f"{_tp_cron_alert_err}"
             )
+    # Task #831 — symmetric silence alerter for the daily Cloudflare
+    # firewall drift cron (.github/workflows/cf-waf-drift-daily.yml,
+    # Task #828). The workflow already posts per-run Slack alerts on
+    # drift; this loop adds the missing "the workflow itself stopped
+    # running" signal, mirroring the Task #751 pattern. Leader-gated
+    # for the same reason: the Mongo state doc is global, so one
+    # replica is enough; running on every replica would just spam the
+    # CAS without changing behaviour.
+    if _is_leader:
+        try:
+            from routes.admin_cf_waf_drift_cron_alerts import (
+                _cf_waf_drift_cron_alert_loop,
+            )
+            asyncio.create_task(_cf_waf_drift_cron_alert_loop())
+        except Exception as _cfw_cron_alert_err:
+            logger.warning(
+                "cf-waf-drift cron alert loop not started: "
+                f"{_cfw_cron_alert_err}"
+            )
     if _is_leader:
         # Single-leader: only one replica should query the CF GraphQL API
         # and write the per-UA report each Monday.
@@ -1259,6 +1278,8 @@ from routes.admin_ci_status import router as admin_ci_status_router
 from routes.admin_trustpilot_alerts import router as admin_trustpilot_alerts_router
 from routes.admin_trustpilot_jsonld_status import router as admin_trustpilot_jsonld_status_router
 from routes.admin_trustpilot_cron_alerts import router as admin_trustpilot_cron_alerts_router
+from routes.cf_waf_drift_cron_heartbeat import router as cf_waf_drift_cron_heartbeat_router
+from routes.admin_cf_waf_drift_cron_alerts import router as admin_cf_waf_drift_cron_alerts_router
 from routes.admin_ads import router as admin_ads_router
 from routes.admin_review_prompts import router as admin_review_prompts_router
 from routes.edu_browser import router as edu_browser_router
@@ -1290,6 +1311,8 @@ api.include_router(admin_ci_status_router)
 api.include_router(admin_trustpilot_alerts_router)
 api.include_router(admin_trustpilot_jsonld_status_router)
 api.include_router(admin_trustpilot_cron_alerts_router)
+api.include_router(cf_waf_drift_cron_heartbeat_router)
+api.include_router(admin_cf_waf_drift_cron_alerts_router)
 api.include_router(admin_ads_router)
 api.include_router(admin_review_prompts_router)
 api.include_router(edu_browser_router)

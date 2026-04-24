@@ -1189,6 +1189,108 @@ trigger remains available for ad-hoc verification while the
 schedule is off. Re-enable as soon as the planned change is
 re-snapshotted into §8.7.4.
 
+**Silent-cron heartbeat (Task #831)**
+
+The Slack/email alerting above only works when the cron actually
+fires. If GitHub Actions silently stops scheduling the workflow —
+repo archived, workflow disabled in the Actions tab, GitHub-side
+outage, account billing lapse, secret expiry that prevents
+checkout — drift surfaces only when a user complains, exactly the
+failure mode this whole section was meant to remove.
+
+To catch that, the workflow has an `if: always()` "Heartbeat to
+backend (Task #831)" step that POSTs to
+`POST /api/config/cf-waf-drift/heartbeat` on every run regardless
+of `verify` / `aggregate` outcome. The body shape is:
+
+```json
+{
+  "status": "success" | "drift" | "transport_error" | "failure",
+  "verifyRc":    "0" | "1" | "2" | "",
+  "aggregateRc": "0" | "1" | "2" | "",
+  "runUrl":   "https://github.com/<org>/<repo>/actions/runs/<id>",
+  "workflowUrl": "https://github.com/<org>/<repo>/actions/workflows/cf-waf-drift-daily.yml",
+  "runId": "<id>"
+}
+```
+
+Status reduction (`(verify_rc, aggregate_rc) → status`):
+
+- `(0, 0)` → `success` (clean pass)
+- `(1, *)` or `(*, 1)` → `drift` (per-run Slack alert
+  already covered this; heartbeat just proves the cron ran)
+- `(2, *)` or `(*, 2)` → `transport_error` (CF GraphQL/network
+  transient — re-run will likely succeed)
+- unset / other → `failure` (workflow plumbing itself broke
+  before producing an rc)
+
+The backend persists the latest heartbeat to a `job_locks` doc
+(`cf_waf_drift_cron_health`). A leader-gated alerter
+(`routes/admin_cf_waf_drift_cron_alerts.py`) polls hourly and
+pages admins via in-app notification + email when no heartbeat
+has arrived in >36h. The 36h threshold gives a 10h grace window
+for a single missed run (transient GitHub outage) before
+scolding; re-pages cap at one per 24h while still silent. A
+freshly-deployed backend gets a 48h bootstrap grace window
+before alerting "never observed" so a deploy that lands on the
+wrong side of the daily cron doesn't immediately page.
+
+| Secret / env var (BACKEND)        | Required | Notes                                                                                                                            |
+| --------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `CF_WAF_DRIFT_HEARTBEAT_SECRET`   | yes      | Same value as the GitHub repo secret of the same name. When unset on the backend the heartbeat endpoint returns 503 (fail-closed). |
+
+| Secret / variable (GITHUB)        | Required | Notes                                                                                                                            |
+| --------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `CF_WAF_DRIFT_HEARTBEAT_SECRET`   | yes      | Repo secret. Same value as the backend env var.                                                                                  |
+| `CF_WAF_DRIFT_BACKEND_URL` (var)  | optional | Override `https://api.syrabit.ai` (e.g. for staging refreshes).                                                                  |
+
+Set both sides at the same time. If only the backend has the
+secret, the workflow's heartbeat step logs a `::warning::` and
+exits 0 — the workflow itself stays green but the silent-cron
+alerter will eventually classify the cron as silent and page.
+If only the GitHub side has it, the backend rejects with 401
+and the alerter never sees a heartbeat (same end state).
+
+Operator surface:
+
+- `GET /admin/health/cf-waf-drift/cron` (admin-only) returns
+  the same snapshot reduced to a status pill (`healthy`,
+  `degraded`, `silent`, `never_observed`, `not_configured`).
+  The dashboard branches on `status`. `degraded` here means
+  "recent heartbeat reports drift / transport_error / non-zero
+  rc" — the per-run Slack alert already paged on that, so the
+  silence alerter does NOT re-page; the pill just informs ops.
+- An in-app admin notification with `meta.kind =
+  "cf_waf_drift_cron_alert"` lands in the notifications
+  inbox each time the alerter fires (one per silent → silent
+  re-page, one on silent → recovered).
+- Same admins-list email template as the Trustpilot
+  refresh-cron alerter (Task #751).
+
+Tunables (env vars on the backend):
+
+- `CF_WAF_DRIFT_CRON_SILENT_THRESHOLD_S` (default `36 * 3600`)
+- `CF_WAF_DRIFT_CRON_REALERT_INTERVAL_S` (default `24 * 3600`)
+- `CF_WAF_DRIFT_CRON_LOOP_SLEEP_S` (default `3600`)
+- `CF_WAF_DRIFT_CRON_WARMUP_S` (default `900`)
+- `CF_WAF_DRIFT_CRON_BOOTSTRAP_GRACE_S` (default `48 * 3600`)
+
+Smoke test after rollout: trigger `cf-waf-drift-daily` manually
+and confirm:
+
+1. The "Heartbeat to backend (Task #831)" step logs
+   `[heartbeat] status=success http=200`.
+2. `GET /admin/health/cf-waf-drift/cron` flips from
+   `never_observed` → `healthy`, `lastHeartbeatAgeSeconds` is
+   small, `lastVerifyRc=0` and `lastAggregateRc=0`.
+3. To exercise the silence path without waiting 36h, temporarily
+   set `CF_WAF_DRIFT_CRON_SILENT_THRESHOLD_S=60` and
+   `CF_WAF_DRIFT_CRON_LOOP_SLEEP_S=30` on the backend, wait for
+   one loop iteration past the threshold, observe the in-app
+   notification, then revert. Do **not** test by disabling the
+   workflow in production — that would lose drift coverage
+   during the test window.
+
 ## 9. What is **not** in scope here
 
 - WARP enrollment of every team device (separate task; required before
