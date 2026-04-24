@@ -1443,15 +1443,23 @@ async def admin_chat_fallbacks(days: int = 7, admin: dict = Depends(get_admin_us
 async def admin_anon_quota_exhausted(
     days: int = 7,
     backfill: bool = False,
+    recent_limit: int = 200,
+    top_devices: bool = False,
+    top_devices_n: int = 10,
     admin: dict = Depends(get_admin_user),
 ):
-    """Task #798 — anonymous-quota exhaustion observability.
+    """Task #798 + #808 — anonymous-quota exhaustion observability.
 
     Reports how many anonymous students hit the per-device 30/day cap
     each day, alongside the next-24h sign-up conversion among
     exhausted devices. Pair the two to tune the cap quarterly with
     data instead of guessing — too low loses students, too high
     cannibalises sign-up conversions.
+
+    Task #808 also exposes the per-event detail so support can
+    answer "I keep getting blocked" tickets in seconds (via the
+    "Recent" tab) and so the daily numbers are legible at a glance
+    ("most cap-hits today are from one school's NAT range").
 
     Query params
     ------------
@@ -1466,10 +1474,27 @@ async def admin_anon_quota_exhausted(
         (one SCAN), idempotent (the metric dedupes on token+day),
         and gated behind an explicit flag so the admin page's
         default load is just a memory read.
+    recent_limit : int
+        How many recent exhaustion events to return in the
+        ``recent`` field (Task #808). Defaults to the ring buffer's
+        max (~200) so the support workflow gets the full feed in one
+        round-trip. Capped server-side at the ring-buffer's max so a
+        careless caller can't over-pull. Set to 0 to omit the feed
+        entirely.
+    top_devices : bool
+        When true, includes a ``top_devices`` leaderboard of the
+        top ``top_devices_n`` device hashes by hit count over the
+        ``days`` window (Task #808). Off by default because it
+        scans the rolling window — cheap at our current volume but
+        we don't want every page load paying for it.
+    top_devices_n : int
+        Cap for the leaderboard length when ``top_devices=true``.
     """
     from metrics import (
         get_anon_quota_exhausted_stats,
         backfill_anon_quota_exhausted_today,
+        get_anon_quota_exhausted_recent,
+        get_anon_quota_exhausted_top_devices,
     )
     backfilled_today = 0
     if backfill:
@@ -1477,6 +1502,16 @@ async def admin_anon_quota_exhausted(
     payload = get_anon_quota_exhausted_stats(days=days)
     payload["backfilled_today"] = backfilled_today
     payload["alert"] = "amber" if payload["unique_devices_exhausted"] >= 50 else "green"
+    # Task #808 — per-event detail. Always present in the response
+    # (even if empty) so the admin UI can render a stable "Recent"
+    # tab without conditionally hiding the column. Set
+    # ``recent_limit=0`` to opt out for callers that only want
+    # aggregates.
+    payload["recent"] = get_anon_quota_exhausted_recent(limit=recent_limit)
+    if top_devices:
+        payload["top_devices"] = get_anon_quota_exhausted_top_devices(
+            days=days, top_n=top_devices_n,
+        )
     return payload
 
 

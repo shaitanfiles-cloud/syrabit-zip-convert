@@ -1,7 +1,7 @@
 """Syrabit.ai — Metrics collection, health check infrastructure."""
 import time as _time_mod, threading as _threading, logging, asyncio, os, uuid
 from typing import Dict
-from collections import defaultdict as _defaultdict
+from collections import defaultdict as _defaultdict, deque as _deque
 from datetime import datetime, timezone, timedelta
 import httpx
 import deps as _deps_mod
@@ -30,6 +30,7 @@ __all__ = [
     "_credit_fallback_window",
     "record_anon_quota_exhausted", "record_signup_with_device",
     "get_anon_quota_exhausted_stats", "backfill_anon_quota_exhausted_today",
+    "get_anon_quota_exhausted_recent", "get_anon_quota_exhausted_top_devices",
 ]
 
 _startup_time = _time_mod.time()
@@ -152,8 +153,17 @@ import hashlib as _hashlib_anon
 # the line. The list is appended-only with monotonically increasing
 # timestamps, so trimming is a single slice on each insert.
 _ANON_EXHAUST_HISTORY_SECONDS = 14 * 24 * 3600
-_anon_exhaust_window: list = []   # list of dicts: ts, plan_target, dow, hour, token_hash
+_anon_exhaust_window: list = []   # list of dicts: ts, plan_target, dow, hour, token_hash, country, asn
 _anon_exhaust_lock = _threading.Lock()
+# ── Task #808: per-event ring buffer for the admin "Recent" tab ──────────
+# Keeps the last N exhaustion events with hashed device id, country/ASN,
+# and timestamp so support can answer "I keep getting blocked" tickets in
+# seconds (look up the device hash in the support ticket against the
+# Recent feed) instead of guessing from a daily aggregate. Bounded so a
+# burst can't grow unbounded; ~200 is roughly half a day at our current
+# wall-hit volume which keeps the feed useful without hoarding memory.
+_ANON_EXHAUST_RECENT_MAX = 200
+_anon_exhaust_recent: _deque = _deque(maxlen=_ANON_EXHAUST_RECENT_MAX)
 # Dedupe set keyed on (token_id_or_hash, day) so retry hammers from the
 # same already-exhausted device don't double-count the metric.
 _anon_exhaust_seen: set = set()
@@ -210,6 +220,7 @@ def _anon_redis_client():
 
 def record_anon_quota_exhausted(
     token_id: str, ip: str = "", plan_target: str = "free",
+    country: str = "", asn: str = "",
 ) -> bool:
     """Emit the `chat.anon_quota_exhausted` counter.
 
@@ -226,9 +237,24 @@ def record_anon_quota_exhausted(
          pipelines that consume key=value INFO records).
       2. Append to the in-memory rolling 14-day window so the admin
          chart endpoint can read it without a Redis round-trip.
-      3. Push the token_id into a date-bucketed Redis sorted set with
+      3. Append to the bounded "recent events" ring buffer
+         (Task #808) so the admin "Recent" tab can show support
+         the last N wall-hits with hashed device id, country, ASN
+         and timestamp without rescanning the 14-day window.
+      4. Push the token_id into a date-bucketed Redis sorted set with
          a 48h TTL so the signup-conversion join in
          `record_signup_with_device` can find it from any worker.
+
+    Parameters
+    ----------
+    country, asn : str
+        Optional Cloudflare-supplied tags (``cf-ipcountry`` and the
+        equivalent ASN header). Stored on the event so support can
+        spot patterns like "all wall-hits today are from one school's
+        NAT range" or "this angry-ticket device hashed XYZ kept
+        getting blocked from country=IN, ASN=AS24560". Empty string
+        when the request didn't traverse Cloudflare or the headers
+        weren't propagated.
 
     Returns
     -------
@@ -244,6 +270,13 @@ def record_anon_quota_exhausted(
     hour = dt.hour
     th = _anon_label_hash(token_id or "")
     ih = _anon_label_hash(ip or "")
+    # Normalise country/ASN to short, log-safe strings. Cloudflare's
+    # ``cf-ipcountry`` is a 2-letter ISO code (or "XX"/"T1"); ASN comes
+    # through as either "AS12345" or just "12345" depending on header
+    # source. We keep them as-is but truncate to defend against header
+    # spoofing inflating our in-memory state.
+    country_s = (country or "").strip()[:8]
+    asn_s = (asn or "").strip()[:16]
 
     # Dedupe key: hashed token + day. Falls back to the hashed IP +
     # second-resolution timestamp when no token is available so we
@@ -274,6 +307,23 @@ def record_anon_quota_exhausted(
             "dow": dow,
             "hour": hour,
             "token_hash": th,
+            "country": country_s,
+            "asn": asn_s,
+        })
+        # Task #808 — also push onto the bounded recent-events ring
+        # buffer. The deque's ``maxlen`` evicts oldest events for
+        # us so we never have to scan the rolling window to render
+        # the "Recent" tab. The dedupe gate above means a single
+        # device contributes at most one entry per day to this
+        # buffer, matching the daily-aggregate semantics.
+        _anon_exhaust_recent.append({
+            "ts": now,
+            "plan_target": plan_target,
+            "dow": dow,
+            "hour": hour,
+            "token_hash": th,
+            "country": country_s,
+            "asn": asn_s,
         })
         # Trim entries older than the configured rolling window in a
         # single slice (the list is monotonically increasing).
@@ -298,8 +348,8 @@ def record_anon_quota_exhausted(
 
     logger.info(
         "chat.anon_quota_exhausted plan_target=%s dow=%s hour=%02d "
-        "token_hash=%s ip_hash=%s",
-        plan_target, dow, hour, th, ih,
+        "token_hash=%s ip_hash=%s country=%s asn=%s",
+        plan_target, dow, hour, th, ih, country_s or "-", asn_s or "-",
     )
 
     # Best-effort cross-worker push so signups on a different gunicorn
@@ -531,6 +581,99 @@ def get_anon_quota_exhausted_stats(days: int = 7) -> dict:
         "has_data": total > 0,
         "data_source": data_source,
     }
+
+
+def get_anon_quota_exhausted_recent(limit: int = 200) -> list:
+    """Return the most-recent per-device exhaustion events (Task #808).
+
+    Powers the admin chart's "Recent" tab so support can investigate
+    angry "I keep getting blocked" tickets in seconds — look the
+    user's hashed device id up against this feed and see whether
+    they actually hit the cap, what country/ASN they came from, and
+    when. The feed is fed by `record_anon_quota_exhausted`'s ring
+    buffer, so it is naturally bounded (oldest evicted) and ordered.
+
+    Each event has the same shape used internally:
+      ``ts``         (float, unix seconds, UTC)
+      ``token_hash`` (12-hex sha256 prefix of the device cookie id)
+      ``country``    (cf-ipcountry, e.g. "IN" / "US"; "" if absent)
+      ``asn``        (e.g. "AS24560"; "" if not surfaced)
+      ``hour``       (UTC hour-of-day at the moment of the event)
+      ``dow``        (UTC day-of-week, "Mon".."Sun")
+      ``plan_target``("free" today; reserved for future tiers)
+
+    The returned list is sorted **newest-first** and capped at
+    ``limit`` (which itself is clamped at the buffer's max so a
+    careless caller can't ask for more than we keep).
+    """
+    if limit <= 0:
+        return []
+    cap = min(limit, _ANON_EXHAUST_RECENT_MAX)
+    with _anon_exhaust_lock:
+        # Snapshot under the lock so a concurrent recorder can't
+        # mutate the deque while we're reversing it. ``list(...)``
+        # on a deque is O(n) and avoids holding the lock during the
+        # JSON serialisation downstream.
+        snapshot = list(_anon_exhaust_recent)
+    snapshot.reverse()
+    return snapshot[:cap]
+
+
+def get_anon_quota_exhausted_top_devices(days: int = 7, top_n: int = 10) -> list:
+    """Top device hashes by hit count over the last ``days`` (Task #808).
+
+    Built from the in-memory rolling window. Per-device dedupe inside
+    `record_anon_quota_exhausted` already collapses repeat-retry
+    hammers to one event per device per day, so an entry of "5 hits
+    over 7 days" here actually means "this device hit the daily cap
+    on 5 distinct days" — the most useful signal for spotting a
+    chronic offender vs. a one-time student.
+
+    Returned list (sorted by hits desc, then most-recent first) of:
+      ``token_hash``, ``hits`` (int), ``last_seen`` (unix seconds),
+      ``country`` (most-recent country tag seen for this device),
+      ``asn`` (likewise).
+
+    Gated behind a query flag in the admin endpoint so we don't pay
+    the O(N_window) scan on every dashboard load.
+    """
+    days = max(1, int(days))
+    top_n = max(1, int(top_n))
+    cutoff = _time_mod.time() - days * 86400
+    counts: Dict[str, dict] = {}
+    with _anon_exhaust_lock:
+        for e in _anon_exhaust_window:
+            if e["ts"] < cutoff:
+                continue
+            th = e.get("token_hash") or ""
+            if not th:
+                continue
+            row = counts.get(th)
+            if row is None:
+                counts[th] = {
+                    "token_hash": th,
+                    "hits": 1,
+                    "last_seen": e["ts"],
+                    "country": e.get("country", ""),
+                    "asn": e.get("asn", ""),
+                }
+            else:
+                row["hits"] += 1
+                # Always remember the *most recent* country/ASN so a
+                # device that roamed (mobile -> wifi) is shown by its
+                # current location rather than its first.
+                if e["ts"] >= row["last_seen"]:
+                    row["last_seen"] = e["ts"]
+                    if e.get("country"):
+                        row["country"] = e["country"]
+                    if e.get("asn"):
+                        row["asn"] = e["asn"]
+    # Hits desc, then most-recent first as a stable tiebreaker.
+    ranked = sorted(
+        counts.values(),
+        key=lambda r: (-r["hits"], -r["last_seen"]),
+    )
+    return ranked[:top_n]
 
 
 def backfill_anon_quota_exhausted_today() -> int:

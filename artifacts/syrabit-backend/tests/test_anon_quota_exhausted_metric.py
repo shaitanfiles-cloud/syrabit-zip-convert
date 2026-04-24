@@ -70,6 +70,9 @@ def _install_fake_redis(monkeypatch):
         metrics._anon_exhaust_seen.clear()
         metrics._anon_exhausted_devices.clear()
         metrics._anon_signup_after_exhaust_devices.clear()
+        # Task #808 — clear the per-event ring buffer too so tests
+        # don't see stale events from a previous test's recordings.
+        metrics._anon_exhaust_recent.clear()
     return fake
 
 
@@ -528,5 +531,179 @@ def test_admin_endpoint_returns_payload_and_honours_backfill(monkeypatch):
     assert body["backfilled_today"] == 2
     assert body["unique_devices_exhausted"] == 2
     assert body["has_data"] is True
+
+    app.dependency_overrides = {}
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Task #808 — per-event detail (Recent feed + top-devices leaderboard)
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_recent_feed_captures_country_and_asn_from_cf_headers(monkeypatch):
+    """Drain a device's quota with cf-ipcountry / cf-ipasn headers
+    set; the resulting event must surface in the Recent feed with
+    those tags (Task #808's "who hit the wall" detail). Without this,
+    support has to guess from a count whether an angry ticket maps
+    to the actual cap firing.
+    """
+    _install_fake_redis(monkeypatch)
+    cookie = mint_device_token()
+    token_id = device_token_id(cookie)
+    req = _FakeReq(headers={
+        "cf-connecting-ip": "203.0.113.40",
+        "cf-ipcountry": "IN",
+        "cf-ipasn": "AS24560",
+    })
+
+    for _ in range(30):
+        asyncio.run(_call(req, cookie=cookie))
+    with pytest.raises(HTTPException):
+        asyncio.run(_call(req, cookie=cookie))
+
+    recent = metrics.get_anon_quota_exhausted_recent(limit=10)
+    assert len(recent) == 1, recent
+    ev = recent[0]
+    # The hashed device id must be present (never the raw cookie).
+    assert ev["token_hash"] and len(ev["token_hash"]) == 12
+    assert ev["token_hash"] != token_id
+    assert ev["country"] == "IN"
+    assert ev["asn"] == "AS24560"
+    # Belt-and-braces: we must never echo the raw IP back into the
+    # admin payload — only the country/ASN tags are safe.
+    assert "ip" not in ev
+
+
+def test_recent_feed_is_newest_first_and_bounded(monkeypatch):
+    """The Recent feed must order newest-first (so support sees the
+    angry-ticket device at the top) and stay within the ring
+    buffer's configured ceiling regardless of caller-supplied
+    ``limit``."""
+    _install_fake_redis(monkeypatch)
+    # Record three exhaustion events with monotonically increasing
+    # timestamps (different token ids so dedupe doesn't collapse
+    # them into one).
+    for i, country in enumerate(("IN", "US", "BD")):
+        metrics.record_anon_quota_exhausted(
+            f"recent-{i:02d}".ljust(32, "x"),
+            ip=f"203.0.113.{50 + i}",
+            plan_target="free",
+            country=country,
+            asn=f"AS{1000 + i}",
+        )
+
+    feed = metrics.get_anon_quota_exhausted_recent(limit=10)
+    assert [e["country"] for e in feed] == ["BD", "US", "IN"]
+
+    # An over-sized request is clamped at the ring buffer's max so
+    # a careless caller can't pull more than we keep.
+    over = metrics.get_anon_quota_exhausted_recent(limit=10_000)
+    assert len(over) == 3
+    # And limit=0 returns an empty feed (admin opt-out).
+    assert metrics.get_anon_quota_exhausted_recent(limit=0) == []
+
+
+def test_top_devices_leaderboard_ranks_by_hit_count(monkeypatch):
+    """The leaderboard answers "who is the chronic offender?"
+    Per-device dedupe means an entry of N hits = N distinct days
+    that this device hit the cap. Pinned: ranking is hits desc
+    with most-recent-first as a stable tiebreaker.
+    """
+    _install_fake_redis(monkeypatch)
+    import time as _t
+    now = _t.time()
+
+    # Helper: directly seed the rolling window with backdated events
+    # since `record_anon_quota_exhausted` dedupes per (device, day).
+    def _seed(token_hash: str, days_ago: int, country: str = "IN"):
+        ts = now - days_ago * 86400
+        with metrics._anon_exhaust_lock:
+            metrics._anon_exhaust_window.append({
+                "ts": ts,
+                "plan_target": "free",
+                "dow": "Mon",
+                "hour": 12,
+                "token_hash": token_hash,
+                "country": country,
+                "asn": "AS24560",
+            })
+
+    # Device A: 4 daily wall-hits over the last 7 days.
+    for d in range(4):
+        _seed("aaaaaaaaaaaa", days_ago=d)
+    # Device B: 2 wall-hits.
+    for d in range(2):
+        _seed("bbbbbbbbbbbb", days_ago=d, country="US")
+    # Device C: 1 wall-hit.
+    _seed("cccccccccccc", days_ago=0, country="BD")
+
+    top = metrics.get_anon_quota_exhausted_top_devices(days=7, top_n=10)
+    assert [r["token_hash"] for r in top] == [
+        "aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc",
+    ]
+    assert [r["hits"] for r in top] == [4, 2, 1]
+    # The most-recent country tag is what we surface (devices roam).
+    assert top[0]["country"] == "IN"
+    assert top[1]["country"] == "US"
+
+    # ``top_n`` truncates without re-ordering.
+    top2 = metrics.get_anon_quota_exhausted_top_devices(days=7, top_n=2)
+    assert [r["token_hash"] for r in top2] == ["aaaaaaaaaaaa", "bbbbbbbbbbbb"]
+
+
+def test_admin_endpoint_exposes_recent_and_top_devices_flag(monkeypatch):
+    """Pin the admin contract for Task #808: the response always
+    includes a ``recent`` list (possibly empty), and the
+    ``top_devices`` leaderboard appears only behind the explicit
+    flag so the default page load is cheap.
+    """
+    _install_fake_redis(monkeypatch)
+    pytest.importorskip("fastapi")
+    from fastapi import FastAPI  # noqa: E402
+    from fastapi.testclient import TestClient  # noqa: E402
+    from routes.admin_advanced import router as admin_router  # noqa: E402
+    from auth_deps import get_admin_user  # noqa: E402
+
+    app = FastAPI()
+    app.include_router(admin_router)
+    app.dependency_overrides[get_admin_user] = lambda: {"email": "admin@example.com"}
+    client = TestClient(app)
+
+    # Seed two real exhaustion events so the recent feed has rows.
+    metrics.record_anon_quota_exhausted(
+        "z" * 32, ip="203.0.113.60", plan_target="free",
+        country="IN", asn="AS24560",
+    )
+    metrics.record_anon_quota_exhausted(
+        "y" * 32, ip="203.0.113.61", plan_target="free",
+        country="US", asn="AS7018",
+    )
+
+    # 1. Default load: recent present, top_devices absent.
+    r = client.get("/admin/chat/anon-quota-exhausted?days=7")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "recent" in body
+    assert isinstance(body["recent"], list)
+    assert len(body["recent"]) == 2
+    assert {e["country"] for e in body["recent"]} == {"IN", "US"}
+    assert "top_devices" not in body
+
+    # 2. With top_devices=1 the leaderboard shows up.
+    r = client.get(
+        "/admin/chat/anon-quota-exhausted?days=7&top_devices=1&top_devices_n=5"
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "top_devices" in body
+    assert isinstance(body["top_devices"], list)
+    assert len(body["top_devices"]) == 2
+    assert all(row["hits"] == 1 for row in body["top_devices"])
+
+    # 3. recent_limit=0 opts out of the feed entirely (still keyed,
+    # just empty) — useful for callers that only want aggregates.
+    r = client.get("/admin/chat/anon-quota-exhausted?days=7&recent_limit=0")
+    assert r.status_code == 200, r.text
+    assert r.json()["recent"] == []
 
     app.dependency_overrides = {}

@@ -549,7 +549,31 @@ async def rate_limit_chat_optional(
                 from db_ops import peek_device_credit_used
                 if peek_device_credit_used(token_id) >= daily_cap:
                     from metrics import record_anon_quota_exhausted
-                    record_anon_quota_exhausted(token_id, ip=ip, plan_target="free")
+                    # Task #808 — pass through Cloudflare's geo/ASN
+                    # tags so support can investigate angry "I keep
+                    # getting blocked" tickets in seconds via the
+                    # admin "Recent" tab. ``cf-ipcountry`` is the
+                    # standard 2-letter ISO code; ASN is exposed by
+                    # CF Workers as ``cf-ipasn`` / ``cf-asn``
+                    # depending on origin config — try both so
+                    # whichever one our edge proxy forwards lands
+                    # on the metric. Falls back to "" when the
+                    # request didn't traverse Cloudflare (e.g.
+                    # local/dev), which the recorder treats as
+                    # "unknown" without crashing.
+                    cf_country = (
+                        request.headers.get("cf-ipcountry") or ""
+                    ).strip()
+                    cf_asn = (
+                        request.headers.get("cf-ipasn")
+                        or request.headers.get("cf-asn")
+                        or request.headers.get("x-asn")
+                        or ""
+                    ).strip()
+                    record_anon_quota_exhausted(
+                        token_id, ip=ip, plan_target="free",
+                        country=cf_country, asn=cf_asn,
+                    )
             except Exception:
                 pass
             raise HTTPException(
