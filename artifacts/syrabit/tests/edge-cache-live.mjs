@@ -70,6 +70,22 @@
  *   0 — every probed route served `HIT`/`HIT-304` on the 2nd request.
  *   1 — at least one route did not warm into the CF edge cache.
  *   2 — network/setup failure (all routes errored).
+ *
+ * Environment
+ * -----------
+ *   EDGE_CACHE_TEST_URL    Base URL to probe (default https://api.syrabit.ai)
+ *   EDGE_CACHE_DELAY_MS    Gap between MISS and HIT request in ms (default 250)
+ *   EDGE_CACHE_TIMEOUT_MS  Per-request timeout in ms (default 10000)
+ *   EDGE_CACHE_VERBOSE     Set to "1" to print full per-request headers
+ *   EDGE_CACHE_LENIENT     Set to "1" for diagnostic mode (NEVER in CI)
+ *
+ * CI usage
+ * --------
+ * Wired into .github/workflows/edge-cache-live.yml as a nightly cron +
+ * workflow_dispatch job. The CI workflow explicitly clears
+ * EDGE_CACHE_LENIENT and refuses to run if it leaks in from a parent
+ * environment. Run locally with:
+ *   pnpm --filter @workspace/syrabit run test:edge-cache
  */
 
 const BASE_URL = (process.env.EDGE_CACHE_TEST_URL || "https://api.syrabit.ai").replace(/\/$/, "");
