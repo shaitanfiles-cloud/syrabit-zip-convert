@@ -16,6 +16,7 @@ import {
   type KvUsageQuota,
 } from "./kv-monitor";
 import { runSyntheticProbe } from "./synthetic-probe";
+import { runCfBlockProbe } from "./cf-block-probe";
 
 interface Env {
   BACKEND_URL: string;
@@ -65,6 +66,16 @@ interface Env {
   SYNTHETIC_PROBE_ADMIN_JWT?: string;
   SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL?: string;
   SYNTHETIC_PROBE_WATCHDOG_THRESHOLD_MIN?: string;
+  /**
+   * Task #817 — public-homepage Cloudflare-block detection probe. See
+   * src/cf-block-probe.ts and docs/CLOUDFLARE_ZERO_TRUST.md §8 for the
+   * full rationale (catches WAF / Bot Fight / custom-firewall false
+   * positives that the admin-diagnostics probe is blind to). Re-uses
+   * SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL for alerts.
+   */
+  CF_BLOCK_PROBE_DISABLED?: string;
+  CF_BLOCK_PROBE_TARGET_URL?: string;
+  CF_BLOCK_PROBE_THRESHOLD?: string;
 }
 
 const KV_BINDINGS = ["RATE_LIMIT", "BOT_HTML_CACHE"] as const;
@@ -2031,13 +2042,23 @@ export default {
     const cron = event.cron;
     if (cron === "* * * * *") {
       // Task #708 — 1-minute synthetic probe of /admin/diagnostics.
-      // Wrap the env so KV ops from the probe also feed the kv-monitor
-      // counters (1 read + 1 write/min adds 2880 ops/day, well under
-      // quota — but visible in the dashboard nonetheless).
+      // Task #817 — same minute, also probe the public homepage from
+      // outside the cluster to detect CF managed-rule / Bot Fight /
+      // custom-firewall false positives that the admin probe is blind
+      // to. The two probes share the RATE_LIMIT KV but use distinct
+      // state keys, and share the watchdog webhook with distinct
+      // alert_type values so the receiver can route each one.
+      // Wrap the env so KV ops from both probes also feed the
+      // kv-monitor counters (4 ops/min total ≈ 5760 ops/day, well
+      // under quota — but visible in the dashboard nonetheless).
       const wrapped = wrapEnvKv(env, ctx);
       ctx.waitUntil(runSyntheticProbe(wrapped).catch((e) => {
         const msg = e instanceof Error ? e.message : "unknown";
         console.error(`[synthetic-probe] unhandled error: ${msg.slice(0, 300)}`);
+      }));
+      ctx.waitUntil(runCfBlockProbe(wrapped).catch((e) => {
+        const msg = e instanceof Error ? e.message : "unknown";
+        console.error(`[cf-block-probe] unhandled error: ${msg.slice(0, 300)}`);
       }));
       return;
     }

@@ -424,7 +424,189 @@ paging is dark.
   request and the persistent `cf_access_break_glass_active` alert are
   the forcing functions.
 
-## 8. What is **not** in scope here
+## 8. Triaging a Cloudflare block (Ray ID lookup) — Task #817
+
+When a user reports the **"Sorry, you have been blocked"** interstitial
+on syrabit.ai (or any Cloudflare 1xxx error page), they will see a Ray
+ID at the bottom of the page (e.g. `Cloudflare Ray ID: 9f14bccc891a6ebf`).
+Use the procedure below to identify the firing rule and apply the
+minimum-scope fix.
+
+### 8.1 Detect blocks before users complain — and triage by signal first
+
+A second synthetic probe — `workers/edge-proxy/src/cf-block-probe.ts`,
+wired into the same `* * * * *` cron as the admin diagnostics probe —
+hits `https://syrabit.ai/` from outside the cluster every minute. After
+two consecutive failures (default — override with
+`CF_BLOCK_PROBE_THRESHOLD`) it fires the watchdog webhook with one of
+**two distinct alert types**, depending on what kind of failure was
+detected. **Always triage by `alert_type` first** before opening the
+WAF console:
+
+| `alert_type`                    | What it means                                                                                                  | First step                                                                                                                       |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `cf_public_block_detected`      | Probe saw a Cloudflare-side mitigation: `cf-mitigated` header, a body marker, or a 403+empty+cf-ray response.   | Run §8.2 with the `last_ray_id` from the alert payload, then jump to §8.3 / §8.4 to apply the override.                          |
+| `public_homepage_probe_failed`  | Probe got a non-2xx that does NOT look like a CF block, or a network error. Likely an origin / DNS / CF outage. | Check Railway / Pages dashboards, the CF status page, and the admin `/admin/diagnostics` probe state. **Do not** chase WAF rules. |
+
+Detection signals (in priority order):
+
+1. `cf-mitigated:<value>` — the canonical Cloudflare flag. Trusted at
+   any HTTP status.
+2. `body:<marker>` — well-known interstitial markers ("Sorry, you have
+   been blocked", "Cloudflare Ray ID:", `id="cf-error-details"`,
+   `Attention Required! | Cloudflare`, etc.). **Only matched on status
+   ≥400** so a help-doc snippet on a 200 OK homepage cannot trigger a
+   false positive.
+3. `status403:empty-body+cf-ray` — defensive fallback for bare CF 403s
+   without a body.
+4. `non-cf:non-2xx-status:<n>` / `non-cf:fetch-error` — generic
+   failures with no CF mitigation evidence; these route to
+   `public_homepage_probe_failed`.
+
+State is persisted in the `RATE_LIMIT` KV namespace under
+`cf_block_probe:state` (the existing admin probe uses
+`synthetic_probe:state` — they do not interfere). Disable in an
+emergency with `CF_BLOCK_PROBE_DISABLED=true` in the worker secret.
+
+### 8.2 Look up a Ray ID
+
+```bash
+# Run from the project root. Requires CF_ZONE_ID and one of
+# CLOUDFLARE_ANALYTICS_TOKEN / CF_ANALYTICS_API_TOKEN (Zone Analytics:Read).
+python artifacts/syrabit-backend/scripts/cf_ray_lookup.py 9f14bccc891a6ebf
+# Add --json for raw output, --days N to widen the lookback window
+# (default 7d; CF caps each query window to 1d so the script walks
+# back day-by-day until it finds a match).
+```
+
+Output fields:
+
+| field                            | meaning                                                          |
+| -------------------------------- | ---------------------------------------------------------------- |
+| `source`                         | which CF subsystem fired (see decision tree in §8.3)             |
+| `ruleId`                         | the specific rule UUID — needed to override or disable           |
+| `description`                    | human-readable rule label (e.g. `949110: Inbound Anomaly Score`) |
+| `action`                         | `block`, `challenge`, `managed_challenge`, `jschallenge`         |
+| `clientRequestPath`              | URL path that triggered the rule                                 |
+| `clientCountryName` / `…ASN…`    | client country + ISP                                             |
+| `userAgent`                      | client UA (real browser vs bot)                                  |
+| `edgeResponseStatus`             | HTTP status returned (403 for block, 503 for challenge)          |
+
+The same query shape the script issues (in case the script is
+unavailable):
+
+```graphql
+query RayLookup($zone: String!, $since: Time!, $until: Time!, $ray: String!) {
+  viewer {
+    zones(filter: { zoneTag: $zone }) {
+      firewallEventsAdaptive(
+        filter: { datetime_geq: $since, datetime_leq: $until, rayName: $ray }
+        limit: 20
+        orderBy: [datetime_DESC]
+      ) {
+        action source ruleId description rayName datetime
+        clientCountryName clientASNDescription
+        clientRequestPath clientRequestHTTPHost clientRequestHTTPMethodName
+        userAgent edgeResponseStatus
+      }
+    }
+  }
+}
+```
+
+### 8.3 Decision tree by `source`
+
+| `source`             | What it means                                                         | Where to fix                                                                                                                |
+| -------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `firewallManaged`    | Cloudflare Managed Ruleset (OWASP CRS, CF Managed Rules)              | **WAF override / exception** scoped to the path or rule ID — see §8.4. Never disable a managed ruleset wholesale.           |
+| `rateLimit`          | CF zone-level rate-limit rule                                         | If false-positive, raise the threshold or scope the rule's `expression`. Cross-check our worker's `RATE_LIMIT_RPM` first.   |
+| `botManagement`      | Bot Fight Mode / Super Bot Fight Mode                                 | Add a "skip" rule for the user's IP/ASN/UA (in Security → Bots → Configure). Verify the user really is a human first.       |
+| `firewallCustom`     | Operator-authored Custom Firewall Rule (Security → WAF → Custom rules)| Edit the rule's predicate to exclude the false-positive surface; do **not** delete the rule.                                |
+| `l7ddos`             | CF L7 DDoS Attack Protection                                          | Tune the L7 DDoS sensitivity for the zone in Security → Settings.                                                            |
+| `uaBlock`            | Browser Integrity Check / "Block bad UAs"                             | If a real browser is hitting this, file a CF support ticket — do not disable BIC site-wide.                                  |
+| `hot` / `securityLevel` | Generic threat-score block driven by zone Security Level setting   | Lower Security Level (Security → Settings) for the affected ASN via a custom rule, not site-wide.                            |
+| `access`             | Cloudflare Access (Zero Trust) policy denial                          | Not a "block page" — Access shows a sign-in screen. See §0–§4 of this doc.                                                  |
+
+### 8.4 Apply a Managed-Ruleset override (the most common fix)
+
+A WAF Managed-Rule false positive — the `firewallManaged` source above
+— is what fired on Ray `9f14bccc891a6ebf`. The minimum-scope fix is a
+**Managed Rule override**, not a global rule disable. Two ways to apply:
+
+**A. Cloudflare dashboard** (recommended — leaves an audit trail in the
+zone history).
+
+1. Security → WAF → **Managed rules**.
+2. Find the deployed entry for the **Cloudflare OWASP Core Ruleset**
+   (the source for rule 949110) and click **Edit**.
+3. Under **Custom rules / Skip**, click **Add override**.
+4. Set the override:
+   - **Override type**: `Skip` (or `Set action: Log` if you want the
+     rule to keep firing into analytics without blocking).
+   - **Match expression**: `(http.host eq "syrabit.ai" and http.request.uri.path eq "/")`
+     — narrowest possible scope. Widen only if the same false positive
+     re-fires on additional paths.
+   - **Apply to**: this specific rule ID (e.g.
+     `6179ae15870a4bb7b2d480d4843b323c` — Inbound Anomaly Score
+     Exceeded). **Do NOT** "skip the entire OWASP ruleset".
+5. Save with a description like `Task #817 — skip OWASP 949110 on
+   homepage GET; false positive on Indian Airtel mobile traffic`.
+
+**B. Rulesets API** (when you need to script it — requires a token with
+`Zone:Read` + `Account Rulesets:Edit`, which the current
+`CLOUDFLARE_API_TOKEN` does **not** have; mint a scoped one in
+Account → API Tokens).
+
+```bash
+# 1. Find the deployed managed ruleset binding for this zone:
+curl -s -H "Authorization: Bearer $CF_RULESETS_TOKEN" \
+  "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/rulesets/phases/http_request_firewall_managed/entrypoint" \
+  | jq '.result.rules[] | select(.action_parameters.id | tostring | test("owasp"; "i"))'
+
+# 2. PATCH that rule to add a skip override scoped to the homepage:
+curl -X PATCH \
+  -H "Authorization: Bearer $CF_RULESETS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "execute",
+    "action_parameters": {
+      "id": "<owasp-ruleset-id-from-step-1>",
+      "overrides": {
+        "rules": [
+          {
+            "id": "6179ae15870a4bb7b2d480d4843b323c",
+            "enabled": false
+          }
+        ]
+      }
+    },
+    "expression": "(http.host eq \"syrabit.ai\" and http.request.uri.path eq \"/\")",
+    "description": "Task #817 — skip OWASP 949110 on homepage GET"
+  }' \
+  "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/rulesets/<entrypoint-id>/rules/<rule-binding-id>"
+```
+
+### 8.5 Rollback
+
+The override is immediately reversible without a deploy:
+
+- **Dashboard**: Security → WAF → Managed rules → OWASP entry → delete
+  the override row added in §8.4.
+- **API**: re-issue the PATCH from §8.4 with the `overrides.rules`
+  array empty (or delete the entire override binding via DELETE on the
+  rule binding id).
+
+The synthetic probe (§8.1) will start passing within 1 minute of the
+override being removed; the watchdog auto-clears its consecutive-failure
+counter on the first successful probe.
+
+### 8.6 Index of historical incidents
+
+| Ray ID                | Date         | Source            | Rule  | Action taken                                                                       |
+| --------------------- | ------------ | ----------------- | ----- | ---------------------------------------------------------------------------------- |
+| `9f14bccc891a6ebf`    | 2026-04-24   | `firewallManaged` | 949110 (OWASP Inbound Anomaly Score Exceeded) | Operator added a Managed-Rule override scoped to `http.host eq "syrabit.ai" and http.request.uri.path eq "/"` (per §8.4). cf-block-probe added so the next occurrence pages within 2 minutes instead of waiting for a user report. |
+
+## 9. What is **not** in scope here
 
 - WARP enrollment of every team device (separate task; required before
   enforcing device-posture rules in step 1).
