@@ -7,7 +7,7 @@ const MODELS = [
 ];
 
 const LANGUAGES = [
-  { code: 'en', label: 'EN',      nativeLabel: 'English' },
+  { code: 'en', label: 'English',  nativeLabel: 'English' },
   { code: 'as', label: 'অসমীয়া', nativeLabel: 'Assamese' },
 ];
 
