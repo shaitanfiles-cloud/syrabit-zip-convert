@@ -1483,3 +1483,119 @@ def test_e2e_long_outage_triggers_digest_after_interval():
     assert dispatched[2][0] == "digest" and dispatched[2][1] == 25
     # Digest counter persists across ticks
     assert state_holder["doc"]["digest_count"] == 2
+
+
+def test_e2e_regression_recurrence_within_cooldown_still_fires_initial():
+    """Regression for code-review finding on Task #821:
+
+    initial → recovered → new bad within < `_SEO_HEALTH_ALERT_COOLDOWN_S`
+    must fire a new initial alert. Previously the in-memory cooldown
+    `_seo_health_alert_last_fired` was applied to `fire_initial` too,
+    which would silently drop the second incident's first alert if it
+    recurred within 6h of recovery.
+
+    This test simulates the loop body's gating logic (cooldown only
+    applies to fire_digest, never to fire_initial / fire_recovered).
+    """
+    state_holder = {"doc": {}}
+    last_fired_holder = {"ts": 0.0}
+    cooldown_s = 6 * 3600  # bot_discovery._SEO_HEALTH_ALERT_COOLDOWN_S
+
+    async def _fake_load():
+        return dict(state_holder["doc"])
+
+    async def _fake_save(updates):
+        state_holder["doc"].update(updates)
+
+    fake_dispatch = AsyncMock()
+
+    async def _tick(status, cb, now):
+        prev = await _fake_load()
+        action = bot_discovery._decide_seo_health_alert(
+            current_status=status, consecutive_bad=cb,
+            prev_state=prev, now_ts=now,
+        )
+        # Mirror the production gating logic exactly: cooldown gates ONLY
+        # fire_digest.
+        if action == "fire_digest":
+            if (now - last_fired_holder["ts"]) < cooldown_s:
+                action = None
+
+        if action == "fire_initial":
+            await fake_dispatch("seo_health_degraded", "init", now)
+            last_fired_holder["ts"] = now
+            await _fake_save({"active": True, "first_bad_at_ts": now,
+                              "last_alert_status": status,
+                              "last_notified_at_ts": now,
+                              "digest_count": 0})
+        elif action == "fire_digest":
+            await fake_dispatch("seo_health_degraded", "digest", now)
+            last_fired_holder["ts"] = now
+            await _fake_save({"last_notified_at_ts": now,
+                              "digest_count": int(prev.get("digest_count", 0)) + 1})
+        elif action == "fire_recovered":
+            await fake_dispatch("seo_health_recovered", "recovered", now)
+            await _fake_save({"active": False, "last_alert_status": None,
+                              "recovered_at_ts": now})
+            # Production also zeroes the in-memory cooldown on recovery.
+            last_fired_holder["ts"] = 0.0
+
+    async def _scenario():
+        # T+0: 1st bad (no alert — only 1 in a row)
+        await _tick("critical", cb=1, now=0.0)
+        # T+1h: 2nd bad — initial alert fires
+        await _tick("critical", cb=2, now=3600.0)
+        # T+1h30m: recovered — recovery alert fires
+        await _tick("ok", cb=0, now=3600.0 + 1800.0)
+        # T+2h: bad again, only 1 in a row — no alert
+        await _tick("critical", cb=1, now=2 * 3600.0)
+        # T+3h: 2nd bad in this NEW incident — must fire a new initial
+        # even though only ~2h has passed since the previous initial
+        # (well within the legacy 6h cooldown). This is the regression.
+        await _tick("critical", cb=2, now=3 * 3600.0)
+        # T+3h30m: recovered again
+        await _tick("ok", cb=0, now=3 * 3600.0 + 1800.0)
+
+    asyncio.run(_scenario())
+
+    types = [c.args[0] for c in fake_dispatch.await_args_list]
+    assert types == [
+        "seo_health_degraded",   # incident 1 initial
+        "seo_health_recovered",  # incident 1 recovered
+        "seo_health_degraded",   # incident 2 initial — MUST fire
+        "seo_health_recovered",  # incident 2 recovered
+    ], f"Recurrence within cooldown was suppressed: {types}"
+
+
+def test_e2e_regression_in_memory_cooldown_still_caps_runaway_digests():
+    """The in-memory cooldown is intentionally still applied to
+    `fire_digest`. Verify that even if the persisted state were
+    corrupted to claim 12h passed twice in a row, the in-memory
+    cooldown still caps digest dispatches at one per cooldown window.
+    """
+    last_fired_holder = {"ts": 0.0}
+    cooldown_s = 6 * 3600
+    fake_dispatch = AsyncMock()
+
+    async def _maybe_fire_digest(now):
+        # Simulate _decide_seo_health_alert returning fire_digest
+        action = "fire_digest"
+        if (now - last_fired_holder["ts"]) < cooldown_s:
+            action = None
+        if action == "fire_digest":
+            await fake_dispatch("digest", now)
+            last_fired_holder["ts"] = now
+
+    # Use realistic epoch-style timestamps; production starts with
+    # ``_seo_health_alert_last_fired = 0.0`` so the very first call
+    # at time.time()≈1.7e9 always exceeds the cooldown.
+    base = 1_700_000_000.0
+
+    async def _scenario():
+        await _maybe_fire_digest(now=base)               # fires (last=0)
+        await _maybe_fire_digest(now=base + 3600.0)      # +1h — capped
+        await _maybe_fire_digest(now=base + 2 * 3600.0)  # +2h — capped
+        await _maybe_fire_digest(now=base + 7 * 3600.0)  # +7h — fires
+
+    asyncio.run(_scenario())
+    assert fake_dispatch.await_count == 2

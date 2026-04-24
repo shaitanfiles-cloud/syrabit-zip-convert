@@ -3069,11 +3069,16 @@ async def _seo_health_alert_loop():
                     now_ts=now,
                 )
 
-                if action in ("fire_initial", "fire_digest"):
-                    # Defence-in-depth cooldown — should never trip in
-                    # practice because the state machine already prevents
-                    # rapid re-firing, but keeps a runaway state doc from
-                    # spamming more than once per _SEO_HEALTH_ALERT_COOLDOWN_S.
+                # Defence-in-depth cooldown is scoped to ``fire_digest`` ONLY.
+                # Applying it to ``fire_initial`` would silently swallow a
+                # legitimate new incident if it recurs within
+                # ``_SEO_HEALTH_ALERT_COOLDOWN_S`` after a recovery — exactly
+                # the scenario this task was filed to fix in reverse. The
+                # state machine already prevents over-firing of initials
+                # (only one fire_initial per active=False → bad transition).
+                # ``fire_recovered`` is also intentionally never gated by the
+                # in-memory cooldown so the all-clear always lands.
+                if action == "fire_digest":
                     if (now - _seo_health_alert_last_fired) < _SEO_HEALTH_ALERT_COOLDOWN_S:
                         action = None
 
@@ -3200,6 +3205,12 @@ async def _seo_health_alert_loop():
                             "recovered_at_ts": now,
                             "digest_count": 0,
                         })
+                        # Belt-and-braces: zero the in-memory cooldown so a
+                        # quick recurrence within the next
+                        # ``_SEO_HEALTH_ALERT_COOLDOWN_S`` is not silently
+                        # swallowed even if a future change re-introduces
+                        # the cooldown gate on ``fire_initial``.
+                        _seo_health_alert_last_fired = 0.0
                     except Exception as exc:
                         logger.debug(f"Failed to dispatch seo_health_recovered alert: {exc}")
             except Exception as exc:
