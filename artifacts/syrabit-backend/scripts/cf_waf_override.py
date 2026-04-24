@@ -188,16 +188,40 @@ def _patch(url: str, token: str, body: dict, dry_run: bool = False) -> dict:
 # ─── State file helpers ─────────────────────────────────────────────────────
 
 def _load_state() -> dict:
+    """Read the orchestrator state file, failing loudly on corruption.
+
+    Silently swallowing a JSON parse error is dangerous: rollback
+    paths use this state to know what to restore, so a corrupt file
+    that returns ``{}`` would make the script "succeed" while
+    actually losing the pre-change snapshot. Better to abort and let
+    the operator decide whether to delete the file.
+    """
     if not STATE_FILE.exists():
         return {}
+    raw = STATE_FILE.read_text()
     try:
-        return json.loads(STATE_FILE.read_text())
-    except Exception:
-        return {}
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            f"error: state file {STATE_FILE} is corrupt ({exc}). "
+            f"Inspect it, copy out anything you need, then delete it "
+            f"and re-run from `status`. Refusing to continue with an "
+            f"empty state because that would mask rollback data."
+        )
 
 
 def _save_state(state: dict) -> None:
-    STATE_FILE.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+    """Atomically persist state via temp-file + rename.
+
+    Without this, a Ctrl-C / OOM / disk-full midway through
+    ``write_text`` would leave a half-written file that
+    ``_load_state`` then refuses to read — losing the rollback
+    snapshot for the in-flight incident.
+    """
+    payload = json.dumps(state, indent=2, sort_keys=True) + "\n"
+    tmp = STATE_FILE.with_suffix(STATE_FILE.suffix + ".tmp")
+    tmp.write_text(payload)
+    os.replace(tmp, STATE_FILE)
     # State file may contain rule IDs but no secrets; keep it readable.
 
 
@@ -267,13 +291,21 @@ def cmd_status(args) -> int:
 
 
 def cmd_step0(args) -> int:
-    """Flip both managed-ruleset entrypoint bindings to action: log.
+    """Force-log both managed-ruleset entrypoint bindings.
 
-    Saves the pre-change action of every binding so step6 can restore.
-    Idempotent: if a binding is already ``log``, it is left alone but
-    the saved-state record is still written (using whatever value was
-    saved on the *first* invocation, never overwritten by a later
-    "log" reading).
+    The Cloudflare Ruleset API does NOT allow a managed-firewall
+    binding's primary ``action`` to be set to anything other than
+    ``execute`` — that's what tells CF to actually run the deployed
+    ruleset. To turn the whole binding into "log mode" you instead
+    set ``action_parameters.overrides.action = "log"``, which CF
+    applies as a global "rewrite every rule's action to log" on top
+    of the deployed ruleset. We preserve any existing per-rule
+    overrides (e.g. step3 may have already disabled rule 949110).
+
+    Idempotent: if a binding already has ``overrides.action == "log"``
+    the binding is left alone but its pre-step0 override.action value
+    is still recorded in the state file (only on the FIRST
+    invocation, never overwritten).
     """
     token = _resolve_token()
     zone = _zone_id()
@@ -297,22 +329,71 @@ def cmd_step0(args) -> int:
             "ruleset already been customized? Run `status` first."
         )
 
+    # ── State-freshness check (architect feedback, Task #825) ──
+    # If the saved snapshot is from a previous incident that has
+    # already been resolved (i.e. NO target binding currently has
+    # overrides.action="log"), then carrying that snapshot forward
+    # would teach step6 to restore values that may no longer be the
+    # "natural" pre-incident state of this NEW incident. Detect
+    # that case and re-snapshot so step6 always restores to the
+    # state that existed at the start of the *current* incident.
+    any_currently_log = any(
+        ((t.get("action_parameters") or {}).get("overrides") or {}).get("action") == "log"
+        for t in targets
+    )
+    if saved and not any_currently_log:
+        print(
+            "step0: detected stale step0 snapshot from a previous "
+            "incident (no binding is currently in force-log mode). "
+            "Refreshing snapshot from live state so step6 restores "
+            "to the correct pre-incident values."
+        )
+        saved = {}
+        # Drop the stale step3 marker too — it's specific to whichever
+        # rule the previous incident disabled, and we don't want
+        # step6's precondition gate to fail just because we kept a
+        # stale rule id around.
+        state["step3"] = {}
+
     for r in targets:
         rid = r["id"]
-        current = r.get("action")
-        # Only write the original action the FIRST time we touch it.
+        ap = r.get("action_parameters") or {}
+        overrides = dict(ap.get("overrides") or {})
+        prior_override_action = overrides.get("action")  # may be None
+        # Only write the original override.action the FIRST time we
+        # touch this binding — so re-running step0 doesn't lose the
+        # pre-step0 value behind another "log".
         if rid not in saved:
             saved[rid] = {
-                "action": current,
+                "override_action": prior_override_action,
+                "binding_action": r.get("action"),
                 "description": r.get("description"),
             }
-        if current == "log":
-            print(f"step0: rule {rid} ({r.get('description')!r}) already action=log — skipped")
+        if prior_override_action == "log":
+            print(
+                f"step0: rule {rid} ({r.get('description')!r}) "
+                f"already overrides.action='log' — skipped"
+            )
             continue
+
+        new_overrides = dict(overrides)
+        new_overrides["action"] = "log"
+        new_ap = dict(ap)
+        new_ap["overrides"] = new_overrides
+
         url = f"{API_BASE}/zones/{zone}/rulesets/{fw['id']}/rules/{rid}"
-        body = {"action": "log"}
+        body = {
+            "action": r.get("action") or "execute",
+            "action_parameters": new_ap,
+            "expression": r.get("expression") or "true",
+            "description": r.get("description"),
+            "enabled": r.get("enabled", True),
+        }
         _patch(url, token, body, dry_run=args.dry_run)
-        print(f"step0: rule {rid} ({r.get('description')!r}) set action=log")
+        print(
+            f"step0: rule {rid} ({r.get('description')!r}) "
+            f"overrides.action set to 'log'"
+        )
 
     state["step0_pre_change"] = saved
     state["entrypoint_id"] = fw["id"]
@@ -449,27 +530,106 @@ def cmd_step4(args) -> int:
 
 
 def cmd_step6(args) -> int:
-    """Restore the entrypoint bindings flipped in step0 to their original action."""
+    """Undo step0's force-log on the managed-firewall bindings.
+
+    Reads each binding LIVE (rather than from a stale snapshot in the
+    state file) so that any per-rule overrides added between step0
+    and step6 — most importantly step3's disable of OWASP 949110 —
+    are preserved. Only ``action_parameters.overrides.action`` is
+    rewritten back to its pre-step0 value (``None`` in the common
+    case → key removed → ruleset reverts to executing every rule's
+    own action, which is what blocks attacks).
+    """
     token = _resolve_token()
     zone = _zone_id()
 
     state = _load_state()
     saved = state.get("step0_pre_change") or {}
-    entrypoint_id = state.get("entrypoint_id")
-    if not saved or not entrypoint_id:
+    if not saved:
         raise SystemExit(
             "error: no step0 state on file — refusing to guess what "
-            "the original action was. If you know the right action, "
-            "edit the bindings in the dashboard manually."
+            "the original override.action was. If you know the right "
+            "value, edit the bindings in the dashboard manually."
         )
 
+    fw = _entrypoint(token, zone, "http_request_firewall_managed")
+    by_id = {r["id"]: r for r in (fw.get("rules") or [])}
+
+    # ── Precondition gate (architect feedback, Task #825) ──
+    # Lifting force-log restores `execute` semantics, which means the
+    # OWASP ruleset will start blocking again the moment we PATCH. If
+    # step3 silently failed — wrong binding, manual revert in the
+    # dashboard, an operator running `rollback3` and forgetting —
+    # then step6 would re-block the very users we just unblocked.
+    # Refuse unless the trip rule is still disabled in the OWASP
+    # binding, or --force is passed.
+    expect_rule = getattr(args, "expect_disabled_rule", None) or DEFAULT_OWASP_TRIP_RULE
+    if not getattr(args, "force", False):
+        owasp_binding = next(
+            (
+                r for r in (fw.get("rules") or [])
+                if any(h in (r.get("description") or "").lower()
+                       for h in OWASP_RULESET_NAME_HINTS)
+            ),
+            None,
+        )
+        per_rule_overrides = []
+        if owasp_binding:
+            per_rule_overrides = (
+                ((owasp_binding.get("action_parameters") or {}).get("overrides") or {}).get("rules")
+                or []
+            )
+        disabled = any(
+            (o.get("id") == expect_rule and o.get("enabled") is False)
+            for o in per_rule_overrides
+        )
+        if not disabled:
+            raise SystemExit(
+                f"error: refusing to lift force-log because OWASP rule "
+                f"{expect_rule} is NOT currently disabled in the OWASP "
+                f"binding. Lifting force-log now would re-block users "
+                f"the moment the PATCH lands. Either:\n"
+                f"  • re-run `step3 --rule-id {expect_rule}` and verify "
+                f"with `status`, then re-run step6, or\n"
+                f"  • if you have hand-applied an equivalent fix in the "
+                f"dashboard, re-run step6 with --force."
+            )
+
     for rule_id, original in saved.items():
-        url = f"{API_BASE}/zones/{zone}/rulesets/{entrypoint_id}/rules/{rule_id}"
-        body = {"action": original.get("action") or "execute"}
+        binding = by_id.get(rule_id)
+        if binding is None:
+            print(
+                f"step6: rule {rule_id} ({original.get('description')!r}) "
+                f"not found in current entrypoint — skipped (was it "
+                f"removed in the dashboard?)"
+            )
+            continue
+        ap = dict(binding.get("action_parameters") or {})
+        overrides = dict(ap.get("overrides") or {})
+        prior_override_action = original.get("override_action")
+        if prior_override_action is None:
+            overrides.pop("action", None)
+        else:
+            overrides["action"] = prior_override_action
+        # If the overrides dict has nothing left, omit it so we don't
+        # leave an empty {} that the API might reject.
+        if not overrides:
+            ap.pop("overrides", None)
+        else:
+            ap["overrides"] = overrides
+
+        url = f"{API_BASE}/zones/{zone}/rulesets/{fw['id']}/rules/{rule_id}"
+        body = {
+            "action": original.get("binding_action") or binding.get("action") or "execute",
+            "action_parameters": ap,
+            "expression": binding.get("expression") or "true",
+            "description": binding.get("description") or original.get("description"),
+            "enabled": binding.get("enabled", True),
+        }
         _patch(url, token, body, dry_run=args.dry_run)
         print(
-            f"step6: rule {rule_id} ({original.get('description')!r}) "
-            f"restored to action={body['action']!r}"
+            f"step6: rule {rule_id} ({binding.get('description')!r}) "
+            f"overrides.action restored to {prior_override_action!r}"
         )
     return 0
 
@@ -573,8 +733,17 @@ def main(argv: Optional[list] = None) -> int:
     sub.add_parser("step4", parents=[common],
                    help="leaked-credential rate-limit rule: block → managed_challenge")
 
-    sub.add_parser("step6", parents=[common],
-                   help="restore entrypoint bindings flipped by step0")
+    p6 = sub.add_parser("step6", parents=[common],
+                        help="restore entrypoint bindings flipped by step0")
+    p6.add_argument("--force", action="store_true",
+                    help="skip the precondition that step3's per-rule "
+                         "disable is still in place. Only use this if "
+                         "you have manually re-verified the OWASP "
+                         "binding in the dashboard.")
+    p6.add_argument("--expect-disabled-rule", default=DEFAULT_OWASP_TRIP_RULE,
+                    help="OWASP rule id that must currently be "
+                         "disabled before step6 will lift force-log. "
+                         "Defaults to the Task #825 trip rule.")
 
     pr3 = sub.add_parser("rollback3", parents=[common], help="undo step3")
     pr3.add_argument("--rule-id", default=DEFAULT_OWASP_TRIP_RULE)

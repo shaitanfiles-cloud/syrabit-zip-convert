@@ -690,6 +690,75 @@ but only do this if you are **rotating** the existing
 the new token over the analytics-only one if anything else still
 expects analytics-only behaviour from `CLOUDFLARE_API_TOKEN`.
 
+#### 8.7.2 Cloudflare API quirks (learned the hard way during Task #825)
+
+Two non-obvious things about the Rulesets API for the
+`http_request_firewall_managed` phase, both worth pinning to memory
+before you reach for raw `curl`:
+
+1. **You cannot set the binding's primary `action` to anything other
+   than `execute`.** The whole point of a managed-ruleset binding is
+   "run this Cloudflare-shipped ruleset", so the API rejects
+   `action: "log"` (or `block`, `skip`, …) on the binding rule
+   itself with `code 20016`. To turn the entire binding into a
+   log-only observer (Task #825 step 0) you instead set
+   `action_parameters.overrides.action = "log"`, which CF then
+   applies as a global rewrite of every fired rule's action. To
+   restore (Task #825 step 6) remove that key from `overrides`. The
+   orchestrator script does both correctly — this note is for the
+   next operator who reaches for `curl` and gets the cryptic
+   `code 20016`.
+
+2. **PATCH requires the full rule body, not a partial diff.** Sending
+   just `{"action": "..."}` rejects with `code 20125` complaining the
+   `expression` is blank. You must echo back `action`,
+   `action_parameters`, `expression`, `description`, and `enabled`
+   verbatim from a prior GET on the same binding, and only mutate
+   the fields you want to change. The orchestrator does this; the
+   raw recipes in §8.4 above already do this for the per-rule
+   override case but the same constraint applies to every PATCH.
+
+Live rule IDs in the syrabit.ai zone (verified Task #825, 2026-04-24
+via `cf_waf_override.py status`):
+
+| Phase                              | Binding rule id                           | Description                          |
+| ---------------------------------- | ----------------------------------------- | ------------------------------------ |
+| `http_request_firewall_managed`    | `dc90efabf280440bb8ee2fa1bffbcf59`        | Execute Cloudflare Managed Ruleset   |
+| `http_request_firewall_managed`    | `7527dda5629f452aabd2323bb3e88346`        | Execute Cloudflare OWASP Core Ruleset |
+| `http_ratelimit`                   | `e65222f0dc254546a9a82673727f3999`        | Leaked credential check              |
+
+Entrypoint ruleset ids (also stable):
+
+| Phase                              | Entrypoint ruleset id                     |
+| ---------------------------------- | ----------------------------------------- |
+| `http_request_firewall_managed`    | `e354a966535944f6bfa99255b57a71bf`        |
+| `http_ratelimit`                   | `81ad2683e67744448bbb3d634b85d34f`        |
+
+These ids are recorded here for the next incident — the orchestrator
+discovers them dynamically every run, but having them in the runbook
+saves a `status` round-trip when you only need a one-line `curl`.
+
+#### 8.7.3 Mandatory verification gate before step6
+
+**Do not skip this.** The orchestrator now enforces it (step6 will
+abort with a precondition error otherwise), but the gate is here in
+prose too because the gate's whole purpose is to make you stop and
+read the live state with your eyes before lifting force-log:
+
+1. Run `python3 scripts/cf_waf_override.py status`.
+2. Confirm that under the OWASP Core Ruleset binding you see a line
+   like `override rule=<trip-rule-id> enabled=False action=None`.
+   That is step3's per-rule disable — without it, lifting force-log
+   re-enables the false-positive rule at the same instant.
+3. Only then run `python3 scripts/cf_waf_override.py step6`.
+
+If step6 aborts with "OWASP rule … is NOT currently disabled", do
+NOT use `--force` to bypass it — that flag exists only for the
+narrow case where you have hand-applied an equivalent fix in the
+dashboard that the orchestrator can't see. In all other cases the
+correct response is to re-run `step3 --rule-id <trip-rule-id>` and
+verify, then re-run step6.
+
 ## 9. What is **not** in scope here
 
 - WARP enrollment of every team device (separate task; required before
