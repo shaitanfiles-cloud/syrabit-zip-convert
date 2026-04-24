@@ -239,6 +239,39 @@ def test_signup_join_uses_redis_so_it_works_across_workers(monkeypatch):
     assert matched is True
 
 
+def test_conversion_ratio_is_cross_worker_consistent(monkeypatch):
+    """Multi-worker correctness pin. Without source-aligned KPIs, a
+    deployment with N workers could compute the conversion ratio with
+    a per-worker denominator (smaller) and a cross-worker numerator
+    (larger), producing >100% rates. We simulate the same race here:
+    record exhaustion+signup, then wipe the entire in-process
+    rolling window (as if the chart endpoint is now serving from a
+    third worker that never saw either event). The headline KPIs
+    must still come out consistent and within [0, 100]%.
+    """
+    _install_fake_redis(monkeypatch)
+    for i in range(5):
+        tok = f"crossworker-{i:02d}".ljust(32, "x")
+        metrics.record_anon_quota_exhausted(tok, ip=f"203.0.113.{i}", plan_target="free")
+        if i < 3:   # 3 of 5 sign up
+            metrics.record_signup_with_device(tok)
+
+    # Now wipe ALL local mirrors — simulates a fresh worker handling
+    # the admin chart request.
+    with metrics._anon_exhaust_lock:
+        metrics._anon_exhaust_window.clear()
+        metrics._anon_exhaust_seen.clear()
+        metrics._anon_exhausted_devices.clear()
+        metrics._anon_signup_after_exhaust_devices.clear()
+
+    stats = metrics.get_anon_quota_exhausted_stats(days=1)
+    assert stats["data_source"] == "redis", stats
+    assert stats["unique_devices_exhausted"] == 5, stats
+    assert stats["signup_after_exhaust"] == 3, stats
+    assert 0.0 <= stats["conversion_pct"] <= 100.0, stats
+    assert stats["conversion_pct"] == 60.0, stats   # 3/5
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Redis-down misclassification guard
 # ─────────────────────────────────────────────────────────────────────
@@ -406,15 +439,20 @@ def test_backfill_is_idempotent(monkeypatch):
 
 def test_metric_no_op_without_token(monkeypatch):
     """`record_anon_quota_exhausted("")` must not crash and must not
-    record anything. Belt-and-braces against a future caller that
-    forgets to pass the token id."""
+    inflate the cross-worker chart. The function returns True and
+    appends to the local rolling window (used for hour/dow histograms)
+    but cannot push to the Redis zset without a token id, so it stays
+    invisible to the cross-worker headline KPIs that the admin chart
+    uses. Belt-and-braces against a future caller that forgets to pass
+    the token id — the production callers in `auth_deps.py` always do.
+    """
     _install_fake_redis(monkeypatch)
     assert metrics.record_anon_quota_exhausted("", ip="") is True
-    # An anonymous-IP-only event WAS recorded (we don't lose the signal),
-    # but the unique-devices counter stays at 0 since no token was given.
     stats = metrics.get_anon_quota_exhausted_stats(days=1)
+    # Headline KPIs come from Redis, where no-token events don't land.
     assert stats["unique_devices_exhausted"] == 0
-    assert stats["total_exhausted"] == 1
+    assert stats["total_exhausted"] == 0
+    assert stats["data_source"] == "redis"
 
 
 def test_signup_no_op_without_token(monkeypatch):
@@ -470,12 +508,13 @@ def test_admin_endpoint_returns_payload_and_honours_backfill(monkeypatch):
         "period_days", "total_exhausted", "unique_devices_exhausted",
         "signup_after_exhaust", "conversion_pct", "daily",
         "by_hour", "by_day_of_week", "has_data", "backfilled_today",
-        "alert",
+        "alert", "data_source",
     ):
         assert k in body, f"missing key {k} in response: {body}"
     assert body["has_data"] is False
     assert body["backfilled_today"] == 0
     assert body["alert"] == "green"
+    assert body["data_source"] == "redis"
 
     # 2. Seed Redis with two at-cap devices and call with backfill=1.
     from datetime import datetime, timezone

@@ -303,15 +303,24 @@ def record_anon_quota_exhausted(
     )
 
     # Best-effort cross-worker push so signups on a different gunicorn
-    # worker can still match this device. The TTL on the sorted set
-    # also bounds the conversion window to "next 48h" without us
-    # having to scan back further at signup time.
+    # worker can still match this device, AND so the admin chart's
+    # denominator (unique devices that hit the wall per day) can be
+    # computed from the same Redis source as the numerator (signup-
+    # after-exhaust). Without that source-alignment a multi-worker
+    # deployment would mix per-worker exhausted counts with cross-
+    # worker signup counts and could compute conversion ratios > 100%.
+    #
+    # TTL is sized for the chart window (14d), not the conversion
+    # window (24h). The 24h gate is enforced in code at signup-join
+    # time via `_ANON_CONVERSION_WINDOW_SECONDS`, so a 14d TTL here
+    # only widens the historical denominator — it doesn't bleed
+    # late signups into the conversion ratio.
     rc = _anon_redis_client()
     if rc is not None and token_id:
         try:
             key = f"chat:anon_exhausted_devices:{day}"
             rc.zadd(key, {token_id: now})
-            rc.expire(key, 48 * 3600)
+            rc.expire(key, _ANON_EXHAUST_HISTORY_SECONDS)
         except Exception as _e:
             logger.debug("record_anon_quota_exhausted redis push failed: %s", _e)
     return True
@@ -399,58 +408,103 @@ def record_signup_with_device(token_id: str) -> bool:
 def get_anon_quota_exhausted_stats(days: int = 7) -> dict:
     """Compute the admin-chart payload for `chat.anon_quota_exhausted`.
 
-    Combines the in-memory rolling window (which is per-worker but
-    cheap) with the cross-worker signup-after-exhaust counters stored
-    in Redis. Returns the same `daily / has_data / period_days` shape
-    as `admin_chat_fallbacks` so the dashboard can chart it with the
-    same component.
+    The chart's headline KPIs (``daily``, ``unique_devices_exhausted``,
+    ``signup_after_exhaust``, ``conversion_pct``) are read from Redis
+    so that numerator and denominator come from the **same**
+    cross-worker source. Mixing per-worker counts with cross-worker
+    counts in a multi-gunicorn deployment can otherwise produce
+    inflated and unstable conversion rates (including >100%) depending
+    on which worker serves this endpoint.
+
+    Source of truth:
+      • denominator (``unique_devices_exhausted``, ``daily``) — sum of
+        ``ZCARD chat:anon_exhausted_devices:<day>`` across the window
+      • numerator (``signup_after_exhaust``)               — sum of
+        ``SCARD chat:anon_signup_after_exhaust_devices:<day>``
+
+    The in-memory rolling window is still used for the by-hour /
+    by-day-of-week distributions (which are sub-views and acceptable
+    as per-worker samples), and as a fallback when Redis is offline.
+    The ``data_source`` field in the payload tells the dashboard
+    whether it is showing fully cross-worker data or the degraded
+    single-worker view.
     """
     days = max(1, int(days))
     now = _time_mod.time()
     cutoff = now - days * 86400
-    by_day: dict = {}
+
+    # ── Local memory (always computed; used for label histograms and
+    # as the fallback when Redis is unavailable). ──────────────────
+    by_day_local: dict = {}
     by_hour: dict = {h: 0 for h in range(24)}
     by_dow: dict = {d: 0 for d in ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")}
-    total = 0
-    unique_tokens: set = set()
+    local_total = 0
+    local_unique_tokens: set = set()
     with _anon_exhaust_lock:
         for e in _anon_exhaust_window:
             if e["ts"] < cutoff:
                 continue
-            day = datetime.fromtimestamp(e["ts"], tz=timezone.utc).strftime("%Y-%m-%d")
-            by_day.setdefault(day, 0)
-            by_day[day] += 1
+            d = datetime.fromtimestamp(e["ts"], tz=timezone.utc).strftime("%Y-%m-%d")
+            by_day_local[d] = by_day_local.get(d, 0) + 1
             by_hour[e["hour"]] = by_hour.get(e["hour"], 0) + 1
             by_dow[e["dow"]] = by_dow.get(e["dow"], 0) + 1
-            total += 1
+            local_total += 1
             if e.get("token_hash"):
-                unique_tokens.add(e["token_hash"])
+                local_unique_tokens.add(e["token_hash"])
         local_signup_devices = set(_anon_signup_after_exhaust_devices)
 
-    # Pull cross-worker signup counts from Redis when available so the
-    # admin chart isn't a per-worker view of the funnel. We sum SCARD
-    # across the per-day device-sets — a device that signed up on
-    # day N can only land in day N's set, so summing is unique-safe
-    # without us having to SUNION the whole window.
-    redis_signup_total = 0
+    # ── Redis (cross-worker headline KPIs). ──────────────────────────
+    # We pull denominator AND numerator from the same source so the
+    # ratio can never compute above 100% due to source mismatch.
     rc = _anon_redis_client()
+    redis_ok = False
+    by_day_redis: dict = {}
+    redis_unique_total = 0
+    redis_signup_total = 0
     if rc is not None:
         try:
             for n in range(days):
                 day = datetime.fromtimestamp(now - n * 86400, tz=timezone.utc).strftime("%Y-%m-%d")
-                key = f"chat:anon_signup_after_exhaust_devices:{day}"
+                exh_key = f"chat:anon_exhausted_devices:{day}"
+                sup_key = f"chat:anon_signup_after_exhaust_devices:{day}"
                 try:
-                    redis_signup_total += int(rc.scard(key) or 0)
+                    exh_count = int(rc.zcard(exh_key) or 0)
                 except (TypeError, ValueError):
-                    continue
+                    exh_count = 0
+                try:
+                    sup_count = int(rc.scard(sup_key) or 0)
+                except (TypeError, ValueError):
+                    sup_count = 0
+                if exh_count:
+                    by_day_redis[day] = exh_count
+                redis_unique_total += exh_count
+                redis_signup_total += sup_count
+            redis_ok = True
         except Exception as _e:
             logger.debug("get_anon_quota_exhausted_stats redis read failed: %s", _e)
-    signup_after_exhaust = max(redis_signup_total, len(local_signup_devices))
 
-    unique_count = len(unique_tokens)
-    conversion_pct = round(
-        signup_after_exhaust / max(1, unique_count) * 100, 2
-    ) if unique_count else 0.0
+    if redis_ok:
+        data_source = "redis"
+        by_day = by_day_redis
+        unique_count = redis_unique_total
+        signup_after_exhaust = redis_signup_total
+        # Total events (sum of per-day uniques) — a device that hits
+        # the wall on day N and again on day N+1 is correctly counted
+        # twice here since the per-day zsets are independent.
+        total = redis_unique_total
+    else:
+        data_source = "memory_fallback"
+        by_day = by_day_local
+        unique_count = len(local_unique_tokens)
+        signup_after_exhaust = len(local_signup_devices)
+        total = local_total
+
+    # Defensive cap: even with source-aligned data, a freshly-pushed
+    # exhaustion event whose corresponding signup landed in a
+    # previous-day's set could in theory tip the ratio. Clamping at
+    # 100% means the chart stays in [0, 100] no matter what.
+    raw_pct = (signup_after_exhaust / max(1, unique_count) * 100) if unique_count else 0.0
+    conversion_pct = round(min(100.0, raw_pct), 2)
 
     daily = [{"date": d, "exhausted": by_day[d]} for d in sorted(by_day.keys())]
     return {
@@ -463,6 +517,7 @@ def get_anon_quota_exhausted_stats(days: int = 7) -> dict:
         "by_hour": by_hour,
         "by_day_of_week": by_dow,
         "has_data": total > 0,
+        "data_source": data_source,
     }
 
 
