@@ -163,33 +163,33 @@ def test_streaming_response_with_valid_cookie_does_not_remint(app):
     )
 
 
-def test_streaming_response_per_device_quota_enforced_after_first_visit(app):
-    """End-to-end: after the cookie round-trip, subsequent requests
-    from the same TestClient (which automatically carries the cookie
-    forward) must be charged against the per-device 30/day counter
-    and 429 on the 32nd request (1 first-visit + 30 charged + 1
-    over-cap).
+def test_streaming_response_per_device_quota_30_then_blocked(app):
+    """End-to-end UX contract: a brand-new browser hitting the
+    streaming chat path gets exactly 30 successful messages on its
+    first day, with the 31st blocked by the per-device 30/day cap
+    (NOT by the coarse per-IP cap). The first request both mints
+    the device cookie *and* counts as message #1 toward the
+    30-budget, so the cap kicks in on the very next message after
+    the 30th.
     """
     fastapi_app, _ = app
     client = TestClient(fastapi_app)
     headers = {"cf-connecting-ip": "192.0.2.44"}
 
-    # First visit — mints cookie, succeeds, NOT charged against the
-    # 30/day device counter (the dependency intentionally skips the
-    # device-deduct on first visit).
-    r0 = client.post("/stream", headers=headers, json={"m": "x"})
-    assert r0.status_code == 200
-    assert client.cookies.get(DEVICE_COOKIE_NAME)
-
-    # Next 30 calls with the cookie — all should succeed.
+    # First call mints the cookie AND charges 1 against the new
+    # token's 30/day counter. The cookie is then auto-carried by
+    # TestClient for all subsequent calls.
     for i in range(30):
         r = client.post("/stream", headers=headers, json={"m": "x"})
         assert r.status_code == 200, (
             f"request {i + 1}/30 unexpectedly returned {r.status_code}: {r.text}"
         )
+    assert client.cookies.get(DEVICE_COOKIE_NAME), (
+        "cookie should be persisted after the first call"
+    )
 
-    # 31st cookied call — must trip the per-device cap, NOT the
-    # coarse per-IP cap.
+    # 31st call — must trip the per-device cap, NOT the coarse
+    # per-IP cap.
     r_over = client.post("/stream", headers=headers, json={"m": "x"})
     assert r_over.status_code == 429
     detail = r_over.json().get("detail", "")

@@ -419,15 +419,22 @@ async def rate_limit_chat_optional(
     3. **Per-device daily quota** — 30/day from the free-plan config,
        enforced via :func:`db_ops.atomic_deduct_device_credit` (the
        same atomic Lua script used by the user credit ledger so
-       concurrent abusers can't push a counter past its limit). Only
-       applies once the visitor has a *valid* device cookie.
+       concurrent abusers can't push a counter past its limit). The
+       counter is keyed on either the verified incoming token or the
+       freshly minted one (see (4) below), so the very first request
+       counts toward the device's daily budget — preserving the
+       documented contract that anonymous browsers get exactly 30
+       successful messages a day, with the 31st blocked.
 
     4. **Cookie issuance** — every anonymous response that comes
        through here either re-confirms the existing valid cookie or
-       mints a fresh one. The first request from a brand-new browser
-       therefore *succeeds* (charged only against the coarse IP cap)
-       even though it hadn't sent the cookie yet — never let a
-       missing cookie produce a hard 429 on the first visit.
+       mints a fresh one (and stashes it on ``request.state`` for
+       :class:`middleware.DeviceCookieMiddleware` to apply onto any
+       ``StreamingResponse`` the route returns). A brand-new browser
+       therefore receives its cookie *and* is charged 1 against that
+       fresh token's 30/day budget on the same request — never let a
+       missing cookie produce a hard 429 outside of the per-device
+       cap, but never give it a free ride either.
     """
     if user:
         user_id = user.get("id", "anonymous")
@@ -449,19 +456,16 @@ async def rate_limit_chat_optional(
 
     # ── 1. Resolve / mint device cookie ──────────────────────────────
     # ``device_token_id`` returns a printable hex id when the signed
-    # cookie verifies, else None. We always issue a fresh cookie when
-    # the incoming one is missing/forged, but we do *not* let that
-    # branch produce a 429 — the "first visit" must succeed (it's
-    # charged against the coarse IP cap below as the only check).
+    # cookie verifies, else None. When the incoming cookie is missing
+    # or forged we mint a fresh one and use *its* token id for the
+    # rest of this request — so a brand-new browser still gets a
+    # valid token id keyed counter and is charged 1 against the
+    # 30/day device cap on its very first message (preserving the
+    # "30 successful, 31st blocked" UX contract).
     token_id = device_token_id(syrabit_device)
-    is_first_visit = token_id is None
-    if is_first_visit:
+    if token_id is None:
         new_cookie = mint_device_token()
         _set_device_cookie(request, response, new_cookie)
-        # Compute the new id so per-minute / per-day counters key on
-        # the freshly-minted token from this request onwards. This is
-        # what lets a student behind a busy NAT immediately get their
-        # own private quota window without a round-trip.
         token_id = device_token_id(new_cookie)
 
     # ── 2. Per-minute throttle (device-scoped when possible) ─────────
@@ -491,12 +495,12 @@ async def rate_limit_chat_optional(
             )
 
     # ── 4. Per-device daily quota (30/day) ───────────────────────────
-    # Skipped on the very first visit (no verified cookie yet) so a
-    # brand-new browser is never blocked before it has a chance to
-    # accept the cookie. From the second request onwards, the cookie
-    # round-trip is complete and we can charge against the device
-    # counter normally.
-    if not is_first_visit and token_id:
+    # Always charged. ``token_id`` here is either the verified
+    # incoming cookie's id, or — on first visit — the freshly-minted
+    # token id from step (1). Either way, the request consumes 1
+    # against this device's daily budget; the 31st request from the
+    # same device on the same day will trip the cap.
+    if token_id:
         from db_ops import atomic_deduct_device_credit
         if not atomic_deduct_device_credit(token_id, daily_limit=daily_cap):
             raise HTTPException(

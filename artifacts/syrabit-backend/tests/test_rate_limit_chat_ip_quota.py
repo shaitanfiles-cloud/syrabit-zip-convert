@@ -112,23 +112,21 @@ def test_first_visit_without_cookie_succeeds_and_sets_cookie(monkeypatch):
 
 
 def test_same_device_cookie_capped_at_30_per_day(monkeypatch):
-    """End-to-end check: a single signed device cookie cannot exceed
-    the free-plan ``credits_per_day`` (30) regardless of how many
-    requests it sends. This is the live wiring of
-    ``atomic_deduct_device_credit``.
+    """End-to-end check: a single signed device cookie can send
+    exactly ``credits_per_day`` (30) successful requests and the 31st
+    is rejected with 429. This is the live wiring of
+    ``atomic_deduct_device_credit`` and locks in the documented UX
+    contract for anonymous users.
     """
     _install_fake_redis(monkeypatch)
     cookie = mint_device_token()
     req = _FakeReq(headers={"cf-connecting-ip": "192.0.2.20"})
 
-    # First visit (no cookie) is free under the 30-budget — it only
-    # mints the cookie and is charged against the coarse cap. From
-    # the *second* call onwards the cookie is presented and counts.
-    asyncio.run(_call(req, cookie=None))
-
+    # All 30 calls with the same valid cookie should succeed.
     for i in range(30):
         asyncio.run(_call(req, cookie=cookie))
 
+    # 31st must be rejected with the per-device daily-quota 429.
     with pytest.raises(HTTPException) as excinfo:
         asyncio.run(_call(req, cookie=cookie))
     assert excinfo.value.status_code == 429
@@ -170,16 +168,11 @@ def test_coarse_ip_cap_only_fires_at_high_threshold(monkeypatch):
     monkeypatch.setattr(auth_deps, "IP_COARSE_DAILY_CAP", 60, raising=False)
 
     req = _FakeReq(headers={"cf-connecting-ip": "192.0.2.40"})
-    # Mint the cookie up-front so every call charges the IP counter
-    # (the first-visit cookie-mint branch skips the device deduct
-    # but still charges the IP cap, which is exactly what we want).
-    asyncio.run(_call(req, cookie=None))
-    cookie = mint_device_token()
 
-    # 60 - 1 (already charged by the first-visit call) = 59 more.
     # Use a fresh device cookie per call so we never hit the 30/day
-    # device cap before the 60/day IP cap.
-    for _ in range(59):
+    # device cap before the 60/day IP cap. Each call charges 1
+    # against the per-IP counter, so the 61st must 429.
+    for _ in range(60):
         asyncio.run(_call(req, cookie=mint_device_token()))
 
     with pytest.raises(HTTPException) as excinfo:
@@ -240,23 +233,47 @@ def test_xff_used_when_cf_connecting_ip_absent(monkeypatch):
     assert fake.get(f"ip_daily_credits:127.0.0.1:{today}") in (None, "0")
 
 
-def test_invalid_cookie_treated_as_first_visit(monkeypatch):
+def test_invalid_cookie_triggers_fresh_mint_and_charges_new_token(monkeypatch):
     """A forged or corrupted cookie value must NOT charge somebody
     else's counter; instead, the dependency mints a fresh signed
-    cookie and lets the request through under the first-visit
-    branch.
+    cookie and charges 1 against *that new token's* counter — not
+    against any pre-existing device key. This guards both against
+    silent data corruption (we never trust an unverified cookie) and
+    against quota theft (we never debit a counter that an attacker
+    didn't legitimately consume).
     """
     fake = _install_fake_redis(monkeypatch)
+    # Pre-seed a counter for some other device id so we can assert
+    # the bogus cookie didn't accidentally credit/debit it.
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    fake.set(f"device_daily_credits:cafebabecafebabecafebabecafebabe:{today}", "5")
+
     req = _FakeReq(headers={"cf-connecting-ip": "192.0.2.99"})
     resp = asyncio.run(_call(req, cookie="not-a-valid-token"))
     raw_cookie = resp.headers.get("set-cookie", "")
     assert DEVICE_COOKIE_NAME in raw_cookie, (
         "an invalid cookie must trigger a fresh mint, not a 429"
     )
-    # And no device counter is created for the bogus token id, since
-    # first-visit explicitly skips the device deduct.
-    matches = [k for k in fake.scan_iter("device_daily_credits:*")]
-    assert matches == [], f"first-visit branch must not write a device counter, found {matches}"
+
+    # The pre-seeded counter for the unrelated token id must be
+    # untouched — proving the dependency didn't accidentally key on
+    # the bogus cookie's bytes.
+    assert fake.get(
+        f"device_daily_credits:cafebabecafebabecafebabecafebabe:{today}"
+    ) == "5"
+
+    # Exactly one device counter at value 1 should now exist (the
+    # freshly minted token's counter, charged for this very call).
+    new_counters = [
+        k for k in fake.scan_iter("device_daily_credits:*")
+        if not k.endswith(":cafebabecafebabecafebabecafebabe:" + today)
+        and "cafebabecafebabecafebabecafebabe" not in k
+    ]
+    assert len(new_counters) == 1, (
+        f"expected exactly one fresh device counter, got {new_counters}"
+    )
+    assert fake.get(new_counters[0]) == "1"
 
 
 def test_rate_limit_chat_optional_fails_closed_when_redis_down(monkeypatch):
