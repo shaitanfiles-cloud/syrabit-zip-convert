@@ -4153,39 +4153,56 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
         </div>
 
         {/* Sparkline: daily exhaustion count + conversion % on second axis.
-            Conversion line is currently a window-aggregate (no per-day
-            value in the backend payload), so the line + legend + right
-            axis only render if any day actually carries a per-day
-            conversion_pct field — otherwise the chart stays a single-
-            series bar to avoid implying a hidden zero series. */}
+            The backend currently exposes only a window-aggregate
+            `conversion_pct`. We always render the conversion series so
+            the right axis is meaningful — when per-day data isn't
+            available, every point is the window-level value, drawn as
+            a flat dashed line and labeled accordingly. Per-day values
+            are used automatically once the backend starts returning
+            them. */}
         {(() => {
-          const hasPerDayConv = (anonQuotaWall?.daily ?? []).some(d => typeof d.conversion_pct === 'number');
+          const daily = anonQuotaWall?.daily ?? [];
+          const windowConv = typeof anonQuotaWall?.conversion_pct === 'number'
+            ? anonQuotaWall.conversion_pct
+            : null;
+          const hasPerDayConv = daily.some(d => typeof d.conversion_pct === 'number');
+          // Project the window-level value onto every row when per-day
+          // is missing, so the recharts <Line> draws a (flat) series.
+          const dailyForChart = daily.map(d => ({
+            ...d,
+            conversion_pct: typeof d.conversion_pct === 'number'
+              ? d.conversion_pct
+              : windowConv,
+          }));
+          const showConv = anonQuotaWall?.has_data && (hasPerDayConv || windowConv !== null);
           return (
             <div className="rounded-xl p-3 bg-gray-50 border border-gray-100 mb-3">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-medium text-gray-600">
-                  Daily wall hits{hasPerDayConv ? ' & conversion' : ''}
+                  Daily wall hits &amp; conversion
                 </span>
                 <div className="flex items-center gap-3 text-[10px] text-gray-500">
                   <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm bg-rose-500" /> exhausted</span>
-                  {hasPerDayConv && (
-                    <span className="flex items-center gap-1" data-testid="anon-quota-conv-legend"><span className="inline-block w-2 h-2 rounded-sm bg-violet-500" /> conv. %</span>
+                  {showConv && (
+                    <span className="flex items-center gap-1" data-testid="anon-quota-conv-legend">
+                      <span className="inline-block w-2 h-2 rounded-sm bg-violet-500" /> conv. %{!hasPerDayConv ? ' (window avg)' : ''}
+                    </span>
                   )}
                 </div>
               </div>
               {anonQuotaWall?.has_data && (anonQuotaWall.daily?.length ?? 0) > 0 ? (
                 <ResponsiveContainer width="100%" height={140}>
-                  <LineChart data={anonQuotaWall.daily}>
+                  <LineChart data={dailyForChart}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
                     <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#9ca3af' }} tickFormatter={d => (d || '').slice(5)} />
                     <YAxis yAxisId="left" tick={{ fontSize: 9, fill: '#fb7185' }} domain={[0, 'auto']} allowDecimals={false} />
-                    {hasPerDayConv && (
+                    {showConv && (
                       <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 9, fill: '#a78bfa' }} domain={[0, 100]} tickFormatter={v => `${v}%`} />
                     )}
                     <Tooltip content={<ChartTooltip />} />
                     <Line yAxisId="left" type="monotone" dataKey="exhausted" stroke="#f43f5e" strokeWidth={2} dot={{ r: 2 }} name="Wall hits" />
-                    {hasPerDayConv && (
-                      <Line yAxisId="right" type="monotone" dataKey="conversion_pct" stroke="#8b5cf6" strokeWidth={2} strokeDasharray="4 3" dot={false} name="Conversion %" data-testid="anon-quota-conv-line" />
+                    {showConv && (
+                      <Line yAxisId="right" type="monotone" dataKey="conversion_pct" stroke="#8b5cf6" strokeWidth={2} strokeDasharray="4 3" dot={hasPerDayConv ? { r: 2 } : false} name={hasPerDayConv ? 'Conversion %' : 'Conversion % (window avg)'} data-testid="anon-quota-conv-line" />
                     )}
                   </LineChart>
                 </ResponsiveContainer>
@@ -4196,9 +4213,9 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                   <span className="text-[10px] text-gray-300">Click <strong>Backfill today</strong> if devices have already hit the cap before this card shipped</span>
                 </div>
               )}
-              {!hasPerDayConv && anonQuotaWall?.has_data && (
+              {!hasPerDayConv && anonQuotaWall?.has_data && windowConv !== null && (
                 <p className="text-[10px] text-gray-400 mt-1 text-center">
-                  Per-day conversion not yet available — see the window-aggregate KPI tile above ({(anonQuotaWall?.conversion_pct ?? 0).toFixed(1)}%).
+                  Per-day conversion not yet emitted by the backend — the dashed line plots the window aggregate ({windowConv.toFixed(1)}%) across every day.
                 </p>
               )}
             </div>
