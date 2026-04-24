@@ -1636,7 +1636,14 @@ async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_ad
     # a student opens the quiz if this pre-generation skips or errors.
     try:
         from routes.edu_study import pregenerate_chapter_quiz
-        asyncio.create_task(pregenerate_chapter_quiz(chap, count=7, response_lang="en"))
+        # Intentionally NOT passing ``count=`` — the helper's default
+        # is now ``_QUIZ_POOL_SIZE`` (≈24), which is the size of the
+        # per-chapter conceptual question pool the user requested
+        # ("3-4 quiz per chapter, one time, shuffle and provide to
+        # user"). Hardcoding count=7 here would silently downgrade
+        # every newly-created chapter to a 7-question pool and
+        # defeat the purpose of the shuffle layer.
+        asyncio.create_task(pregenerate_chapter_quiz(chap, response_lang="en"))
     except Exception as quiz_pregen_err:
         # Defensive: import / scheduling failure must never bubble up
         # to the admin caller. The chapter is already written; the
