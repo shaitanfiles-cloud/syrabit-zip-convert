@@ -4,7 +4,7 @@ import re, json, asyncio, time as _time_mod, uuid, logging
 from typing import Optional
 from datetime import datetime, timezone
 from fastapi import (
-    APIRouter, HTTPException, Depends, Request,
+    APIRouter, HTTPException, Depends, Request, UploadFile, File,
 )
 from fastapi.responses import StreamingResponse
 import cachetools
@@ -201,6 +201,179 @@ async def _resolve_semester_class_id(query: str, ctx_board_id: str) -> str | Non
     except Exception as e:
         logger.warning(f"_resolve_semester_class_id failed: {e}")
     return None
+
+_OCR_ALLOWED_MIME = {"image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif"}
+_OCR_MAX_BYTES = 8 * 1024 * 1024  # 8MB
+_OCR_READ_CHUNK = 64 * 1024  # 64KB streamed reads — keeps peak RSS bounded
+
+
+def _sniff_image_mime(buf: bytes) -> Optional[str]:
+    """Magic-byte sniff for the formats Vertex Gemini Vision accepts.
+
+    Returns the canonical `image/<fmt>` string, or None if the buffer does
+    not start with a recognised image header. Client-supplied `Content-Type`
+    is untrusted, so this guards Vertex against being handed (and billed
+    for) non-image payloads such as PDFs or scripts.
+    """
+    if not buf or len(buf) < 12:
+        return None
+    if buf.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if buf.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if buf[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if buf[:4] == b"RIFF" and buf[8:12] == b"WEBP":
+        return "image/webp"
+    # HEIC/HEIF — ISO-BMFF box: bytes 4..8 == "ftyp", then a brand string.
+    if buf[4:8] == b"ftyp" and buf[8:12] in (b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"mif1", b"msf1"):
+        return "image/heic"
+    return None
+
+
+@router.post("/ai/ocr-image")
+async def ocr_chat_image(
+    request: Request,
+    file: UploadFile = File(...),
+    user: Optional[dict] = Depends(rate_limit_chat_optional),
+):
+    """Public OCR endpoint for the chat composer.
+
+    Accepts a single image (JPEG/PNG/WebP/GIF/HEIC, ≤8MB), runs Vertex AI
+    Gemini Vision OCR, and returns the extracted text. The endpoint reuses
+    :func:`rate_limit_chat_optional` so anonymous users share the same daily
+    chat budget, AND mirrors the chat endpoint's other safeguards:
+    Cloudflare Turnstile for anonymous callers, atomic credit deduction
+    for logged-in users, bounded streaming reads to cap memory pressure,
+    and magic-byte sniffing to refuse non-image payloads before any
+    Vertex call is made (a Vertex Vision call is far more expensive than
+    a chat call). No documents/PDFs — the chat composer is image-only by
+    product decision.
+    """
+    is_anon = user is None
+
+    # 1. Anti-bot: Turnstile parity with /ai/chat for anonymous callers.
+    if CF_TURNSTILE_ENABLED and is_anon:
+        _ts_tok = request.headers.get("x-turnstile-token", "")
+        _ts_ip = (
+            request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+            if request.headers.get("x-forwarded-for")
+            else (request.client.host if request.client else "")
+        )
+        if not _ts_tok:
+            raise HTTPException(status_code=403, detail="Turnstile token required")
+        if not await _verify_turnstile(_ts_tok, _ts_ip):
+            raise HTTPException(status_code=403, detail="Turnstile verification failed")
+
+    # 2. Mime check on the client-supplied Content-Type (cheap fast-path).
+    ct = (file.content_type or "").lower()
+    if ct not in _OCR_ALLOWED_MIME:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {ct or 'unknown'}. Please upload an image (JPEG, PNG, WebP, GIF or HEIC).",
+        )
+
+    # 3. Early reject by Content-Length when present — saves a streaming read.
+    cl_hdr = request.headers.get("content-length")
+    if cl_hdr:
+        try:
+            if int(cl_hdr) > _OCR_MAX_BYTES + 4096:  # +4KB multipart envelope overhead
+                raise HTTPException(status_code=413, detail="Image too large — max 8MB.")
+        except ValueError:
+            pass
+
+    # 4. Bounded streaming read — never buffer more than _OCR_MAX_BYTES + 1 byte.
+    img_buf = bytearray()
+    while True:
+        chunk = await file.read(_OCR_READ_CHUNK)
+        if not chunk:
+            break
+        img_buf.extend(chunk)
+        if len(img_buf) > _OCR_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Image too large — max 8MB.")
+    img_bytes = bytes(img_buf)
+    if not img_bytes:
+        raise HTTPException(status_code=400, detail="Empty image upload.")
+
+    # 5. Magic-byte sniff — drop payloads whose actual bytes aren't an image,
+    #    before paying for a Vertex Vision request.
+    sniffed = _sniff_image_mime(img_bytes)
+    if sniffed is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file is not a recognised image (only JPEG, PNG, WebP, GIF and HEIC are supported).",
+        )
+
+    # 6. Logged-in users: gate on chat credits + deduct atomically (parity
+    #    with /ai/chat). Anonymous quota is already enforced by
+    #    rate_limit_chat_optional via the device-token daily budget.
+    credits_info = None
+    user_id = None
+    if not is_anon:
+        user_id = user.get("id") or user.get("user_id") or user.get("uid")
+        if user_id:
+            credits_info = await get_user_credits(user)
+            if credits_info["remaining"] <= 0:
+                raise HTTPException(
+                    status_code=402,
+                    detail=f"Daily credit limit reached ({credits_info['limit']} credits/day). Resets at midnight UTC. Upgrade your plan for more.",
+                )
+            deducted = await atomic_deduct_credit(user_id, credits_info["used"], credits_info["limit"])
+            if not deducted:
+                raise HTTPException(status_code=402, detail="Credit limit reached. Upgrade your plan for more.")
+
+    # 7. Vertex call — use the magic-byte-sniffed mime (defends against
+    #    a JPEG body sent with a "image/png" Content-Type and vice versa).
+    vertex_mime = sniffed
+    try:
+        import vertex_services  # local import — avoids cold-start cost on chat path
+    except Exception as _imp_err:
+        logger.exception("vertex_services import failed")
+        # Refund the credit we just deducted (the call never reached Vertex).
+        if user_id and credits_info is not None:
+            asyncio.create_task(_refund_credit(user_id, credits_info["used"] + 1))
+        raise HTTPException(status_code=503, detail="OCR service unavailable.") from _imp_err
+
+    try:
+        result = await vertex_services.ocr_image(img_bytes, mime_type=vertex_mime)
+    except Exception as _vx_err:
+        logger.exception("vertex ocr_image raised")
+        if user_id and credits_info is not None:
+            asyncio.create_task(_refund_credit(user_id, credits_info["used"] + 1))
+        raise HTTPException(status_code=503, detail="OCR service unavailable.") from _vx_err
+
+    if not isinstance(result, dict) or "error" in result:
+        err_msg = (result or {}).get("error") if isinstance(result, dict) else "OCR failed"
+        if user_id and credits_info is not None:
+            asyncio.create_task(_refund_credit(user_id, credits_info["used"] + 1))
+        raise HTTPException(status_code=503, detail=err_msg or "OCR failed")
+
+    raw_text = (result.get("raw_text") or "").strip()
+    if not raw_text:
+        # Fallback: if Vertex returned only a structured questions list, flatten it.
+        qs = result.get("questions") or []
+        if isinstance(qs, list) and qs:
+            parts = []
+            for q in qs:
+                if not isinstance(q, dict):
+                    continue
+                num = q.get("number")
+                txt = q.get("text") or ""
+                parts.append(f"{num}. {txt}" if num else txt)
+            raw_text = "\n".join(p for p in parts if p).strip()
+
+    if not raw_text:
+        # Refund: nothing usable came back.
+        if user_id and credits_info is not None:
+            asyncio.create_task(_refund_credit(user_id, credits_info["used"] + 1))
+        raise HTTPException(status_code=422, detail="No text could be extracted from the image.")
+
+    return {
+        "text": raw_text,
+        "content_type": result.get("content_type") or "extracted",
+        "word_count": result.get("word_count") or len(raw_text.split()),
+    }
+
 
 @router.post("/ai/chat")
 async def chat(msg: ChatMessage, request: Request, user: Optional[dict] = Depends(rate_limit_chat_optional)):
