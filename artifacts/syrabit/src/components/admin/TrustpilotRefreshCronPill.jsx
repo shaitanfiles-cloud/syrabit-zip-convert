@@ -55,16 +55,47 @@ const renderSubText = ({ data, ageLabel: fmt }) => {
   );
 };
 
+// Task #843 — backwards-compat aliases for the pre-#838 testId
+// namespace. Task #838 renamed the Trustpilot pill's testId from
+// "trustpilot-cron-*" to "trustpilot-refresh-cron-*" so it lines up
+// with the cf-waf-drift pill. The in-repo sweep was clean, but
+// out-of-repo surfaces (an external Playwright suite, a Cloudflare
+// Browser Rendering uptime probe, a Sentry visual-regression
+// baseline, an admin runbook screenshot) cannot be verified from
+// this repo. To prevent silent breakage of any selector-existence
+// check using the old prefix, we render a `hidden` sibling element
+// per legacy testId. Notes on the deliberate trade-off:
+//
+//   * Selector-existence assertions (querySelector,
+//     `page.getByTestId('trustpilot-cron-tile')`, `locator(...).count()`)
+//     will keep finding an element with the old prefix.
+//   * Visibility-strict assertions (`toBeVisible()`, screenshot
+//     diffing) are NOT preserved because the alias element is
+//     `hidden` / `aria-hidden`. Any consumer relying on those
+//     semantics still needs to migrate to `trustpilot-refresh-cron-*`.
+//
+// DELETE BY 2026-07-24 (90 days from the rename). Tracking task: see
+// the follow-up for "Remove the trustpilot-cron-* backwards-compat
+// alias once external selector migration is complete".
+const LEGACY_TESTID_SUFFIXES = ['tile', 'status', 'pill', 'run-link', 'refresh'];
+
 export default function TrustpilotRefreshCronPill({ data, loading, onRefresh }) {
   return (
-    <CronHealthPill
-      data={data}
-      loading={loading}
-      onRefresh={onRefresh}
-      testId="trustpilot-refresh-cron"
-      defaultWorkflowUrl={DEFAULT_WORKFLOW_URL}
-      headerTextByStatus={HEADER_TEXT_BY_STATUS}
-      renderSubText={renderSubText}
-    />
+    <>
+      <CronHealthPill
+        data={data}
+        loading={loading}
+        onRefresh={onRefresh}
+        testId="trustpilot-refresh-cron"
+        defaultWorkflowUrl={DEFAULT_WORKFLOW_URL}
+        headerTextByStatus={HEADER_TEXT_BY_STATUS}
+        renderSubText={renderSubText}
+      />
+      <div hidden aria-hidden="true" data-legacy-alias-for="trustpilot-refresh-cron">
+        {LEGACY_TESTID_SUFFIXES.map((suffix) => (
+          <span key={suffix} data-testid={`trustpilot-cron-${suffix}`} />
+        ))}
+      </div>
+    </>
   );
 }
