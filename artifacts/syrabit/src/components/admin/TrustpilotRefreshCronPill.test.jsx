@@ -232,6 +232,38 @@ describe('TrustpilotRefreshCronPill', () => {
     );
   });
 
+  it('emits the Task #843 backwards-compat alias for every legacy trustpilot-cron-* testId so out-of-repo selector-existence checks keep passing', () => {
+    // Lock down the hidden alias element added in Task #843 so it
+    // cannot be silently removed before the 2026-07-24 delete-by date
+    // without an explicit follow-up. Selector-existence is the ONLY
+    // contract preserved (visibility-strict assertions are explicitly
+    // not — see the comment in the wrapper file).
+    render(<TrustpilotRefreshCronPill data={baseHealthy} loading={false} onRefresh={() => {}} />);
+
+    const aliasSuffixes = ['tile', 'status', 'pill', 'run-link', 'refresh'];
+    for (const suffix of aliasSuffixes) {
+      // Use queryAllByTestId because the live element + alias may both
+      // exist when the suffix overlaps (the new namespace uses
+      // `trustpilot-refresh-cron-*` so there is no collision today,
+      // but use the defensive query anyway).
+      const matches = screen.queryAllByTestId(`trustpilot-cron-${suffix}`);
+      expect(matches.length).toBeGreaterThan(0);
+    }
+
+    // Sanity check: the alias parent carries the documented marker
+    // attribute so a future grep for "data-legacy-alias-for" finds it.
+    const aliasParent = document.querySelector(
+      '[data-legacy-alias-for="trustpilot-refresh-cron"]',
+    );
+    expect(aliasParent).not.toBeNull();
+    // And the alias parent is `hidden` / `aria-hidden` so it does not
+    // leak into the accessible tree or visual layout — this is the
+    // documented trade-off (selector-existence preserved, visibility
+    // semantics not).
+    expect(aliasParent.hasAttribute('hidden')).toBe(true);
+    expect(aliasParent.getAttribute('aria-hidden')).toBe('true');
+  });
+
   it('shows only the no-success message when only the any-heartbeat is missing AND no success has been observed', () => {
     // Edge case: cron has never succeeded but also has no any-status
     // heartbeat (e.g. the very first observation window). Caption
