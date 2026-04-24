@@ -2478,25 +2478,37 @@ def _decide_seo_health_alert(
       - ``digest_interval_s``: how long the loop must wait between
         sustained-outage digests while still bad.
 
-    Returns one of ``"fire_initial"``, ``"fire_digest"``,
-    ``"fire_recovered"``, or ``None`` (no notification this tick).
+    Returns one of ``"fire_initial"``, ``"fire_escalated"``,
+    ``"fire_digest"``, ``"fire_recovered"``, or ``None``
+    (no notification this tick).
 
     Behaviour matrix:
-      | prev_active | current_status   | action          |
-      |-------------|------------------|-----------------|
-      | False       | ok / unknown     | None            |
-      | False       | bad, 1 in a row  | None (transient)|
-      | False       | bad, ≥2 in a row | fire_initial    |
-      | True        | bad, < interval  | None            |
-      | True        | bad, ≥ interval  | fire_digest     |
-      | True        | ok               | fire_recovered  |
-      | True        | unknown          | None (treat as  |
-      |             |                  |  in-progress)   |
+      | prev_active | last_alert | current   | action            |
+      |-------------|------------|-----------|-------------------|
+      | False       | —          | ok/unknown| None              |
+      | False       | —          | bad, 1    | None (transient)  |
+      | False       | —          | bad, ≥2   | fire_initial      |
+      | True        | degraded   | critical  | fire_escalated    |
+      | True        | critical   | degraded  | None (improvement)|
+      | True        | bad        | bad,      | None              |
+      |             |            |  <interval|                   |
+      | True        | bad        | bad,      | fire_digest       |
+      |             |            |  ≥interval|                   |
+      | True        | bad        | ok        | fire_recovered    |
+      | True        | bad        | unknown   | None              |
 
     The "unknown" while active case is intentionally a no-op: the
     health endpoint failed for an unrelated reason (Mongo timeout,
     snapshot exception) and we don't want to spam a recovery alert
     that might reverse on the next tick.
+
+    The ``critical → degraded`` case (incident is improving but still
+    bad) is intentionally silent — the eventual ``fire_recovered``
+    will summarize the whole outage including the previous worst
+    status, and a "downgrade" page-out adds noise without action
+    value. ``degraded → critical`` (escalation) DOES fire because
+    it usually signals the incident is broadening and the on-call
+    needs to know immediately, independent of the digest timer.
     """
     prev_active = bool(prev_state.get("active"))
     bad = current_status in ("degraded", "critical")
@@ -2506,6 +2518,11 @@ def _decide_seo_health_alert(
             if consecutive_bad >= 2:
                 return "fire_initial"
             return None
+        # Already-active incident — check for severity escalation
+        # before falling through to the digest-interval gate.
+        last_alert_status = (prev_state.get("last_alert_status") or "").lower()
+        if current_status == "critical" and last_alert_status == "degraded":
+            return "fire_escalated"
         last_notified = float(prev_state.get("last_notified_at_ts") or 0.0)
         if (now_ts - last_notified) >= digest_interval_s:
             return "fire_digest"
@@ -3124,6 +3141,56 @@ async def _seo_health_alert_loop():
                         })
                     except Exception as exc:
                         logger.debug(f"Failed to dispatch initial seo_health_degraded alert: {exc}")
+
+                elif action == "fire_escalated":
+                    # Severity transition degraded → critical while incident
+                    # is already active. Fires immediately (no digest gate),
+                    # uses an "[Escalated]" subject so on-call can tell it
+                    # apart from initial / digest alerts at a glance.
+                    try:
+                        from metrics import _dispatch_alert, _alert_last_fired as _ml
+                        _ml.pop(_SEO_HEALTH_INITIAL_ALERT_TYPE, None)
+                        s = snapshot.get("summary") or {}
+                        first_bad_ts = float(prev_state.get("first_bad_at_ts") or now)
+                        ongoing_h = int(max(0.0, (now - first_bad_ts)) // 3600)
+                        prev_status = (prev_state.get("last_alert_status") or "degraded").upper()
+                        await _dispatch_alert(
+                            _SEO_HEALTH_INITIAL_ALERT_TYPE,
+                            f"[Escalated to CRITICAL] SEO health (was {prev_status}, {ongoing_h}h)",
+                            (
+                                f"/api/seo/health escalated from {prev_status} to CRITICAL "
+                                f"{ongoing_h}h into the incident. "
+                                f"Sitemaps valid: {s.get('valid_sitemaps', 0)}/{s.get('total_sitemaps', 0)} · "
+                                f"URL spot-checks OK: {s.get('ok_url_checks', 0)}/{s.get('total_url_checks', 0)} "
+                                f"({s.get('url_check_success_rate', 0)}%). "
+                                f"Inspect /api/seo/health and the SEO Manager dashboard immediately."
+                            ),
+                            threshold_snapshot={
+                                "metric": "seo_health_status",
+                                "value": "ok",
+                                "actual": "critical",
+                                "valid_sitemaps": s.get("valid_sitemaps", 0),
+                                "total_sitemaps": s.get("total_sitemaps", 0),
+                                "url_check_success_rate": s.get("url_check_success_rate", 0),
+                                "phase": "escalated",
+                                "previous_status": prev_status.lower(),
+                                "ongoing_hours": ongoing_h,
+                            },
+                        )
+                        # Note: escalation does NOT bump the in-memory cooldown
+                        # because it's a new event that we explicitly want to
+                        # surface — the next genuine fire_digest 12h later
+                        # should still be allowed through the cooldown gate
+                        # (which is already permissive at 6h ≤ 12h).
+                        await _save_seo_alert_state({
+                            "active": True,
+                            "last_alert_status": "critical",
+                            "last_notified_at_ts": now,
+                            "escalated_at": datetime.now(timezone.utc),
+                            "escalated_at_ts": now,
+                        })
+                    except Exception as exc:
+                        logger.debug(f"Failed to dispatch escalated seo_health_degraded alert: {exc}")
 
                 elif action == "fire_digest":
                     try:

@@ -1599,3 +1599,135 @@ def test_e2e_regression_in_memory_cooldown_still_caps_runaway_digests():
 
     asyncio.run(_scenario())
     assert fake_dispatch.await_count == 2
+
+
+# -------- Task #821 (review-driven): severity-transition alerts --------
+# The reviewer asked for `degraded ↔ critical` transition coverage.
+# Decision: degraded → critical fires `fire_escalated` (broadening
+# incident — pages on-call). critical → degraded is silent (improvement;
+# the eventual `fire_recovered` summarizes the worst-case for the whole
+# outage). The transitions ok ↔ bad and the digest cadence are
+# already covered by the tests above.
+
+def test_decide_fires_escalated_on_degraded_to_critical():
+    prev = {"active": True, "last_alert_status": "degraded",
+            "last_notified_at_ts": 1000.0}
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="critical", consecutive_bad=2,
+        prev_state=prev, now_ts=1000.0 + 60,
+    ) == "fire_escalated"
+
+
+def test_decide_silent_on_critical_to_degraded_within_interval():
+    # Improvement-while-still-bad — no page, the interval gate stays in
+    # control. Even though the status changed, we don't fire.
+    prev = {"active": True, "last_alert_status": "critical",
+            "last_notified_at_ts": 1000.0}
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="degraded", consecutive_bad=2,
+        prev_state=prev, now_ts=1000.0 + 60,
+    ) is None
+
+
+def test_decide_critical_to_degraded_after_interval_still_just_digests():
+    # Even after the digest interval, critical → degraded is just a
+    # normal digest, not an "improvement" alert (we deliberately don't
+    # have one of those).
+    prev = {"active": True, "last_alert_status": "critical",
+            "last_notified_at_ts": 1000.0}
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="degraded", consecutive_bad=2,
+        prev_state=prev, now_ts=1000.0 + 13 * 3600,
+    ) == "fire_digest"
+
+
+def test_decide_no_repeat_escalation_when_already_critical():
+    # Once last_alert_status is "critical", subsequent critical ticks
+    # must not re-fire fire_escalated (that would re-introduce the
+    # spam this whole task is about).
+    prev = {"active": True, "last_alert_status": "critical",
+            "last_notified_at_ts": 1000.0}
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="critical", consecutive_bad=2,
+        prev_state=prev, now_ts=1000.0 + 60,
+    ) is None
+
+
+def test_decide_escalation_then_recovery_fires_recovered():
+    # degraded → critical → ok: escalation handled by previous tests,
+    # this verifies the recovered branch still fires after escalation
+    # bumped last_alert_status to "critical".
+    prev = {"active": True, "last_alert_status": "critical",
+            "last_notified_at_ts": 1000.0,
+            "first_bad_at_ts": 500.0}
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="ok", consecutive_bad=0,
+        prev_state=prev, now_ts=1000.0 + 120,
+    ) == "fire_recovered"
+
+
+def test_e2e_severity_escalation_scenario():
+    """ok → degraded(2) → degraded → critical → critical → ok must
+    dispatch exactly: initial(degraded), escalated(critical),
+    recovered. Two consecutive criticals must NOT cause a duplicate
+    escalation, and critical → critical between escalation and
+    recovery must stay silent."""
+    state_holder = {"doc": {}}
+
+    async def _fake_load():
+        return dict(state_holder["doc"])
+
+    async def _fake_save(updates):
+        state_holder["doc"].update(updates)
+
+    fake_dispatch = AsyncMock()
+
+    async def _tick(status, cb, now):
+        prev = await _fake_load()
+        action = bot_discovery._decide_seo_health_alert(
+            current_status=status, consecutive_bad=cb,
+            prev_state=prev, now_ts=now,
+        )
+        if action == "fire_initial":
+            await fake_dispatch("initial", status, now)
+            await _fake_save({"active": True, "first_bad_at_ts": now,
+                              "last_alert_status": status,
+                              "last_notified_at_ts": now,
+                              "digest_count": 0})
+        elif action == "fire_escalated":
+            await fake_dispatch("escalated", status, now)
+            await _fake_save({"last_alert_status": "critical",
+                              "last_notified_at_ts": now})
+        elif action == "fire_digest":
+            await fake_dispatch("digest", status, now)
+            await _fake_save({"last_notified_at_ts": now,
+                              "digest_count": int(prev.get("digest_count", 0)) + 1})
+        elif action == "fire_recovered":
+            await fake_dispatch("recovered", status, now)
+            await _fake_save({"active": False, "last_alert_status": None,
+                              "recovered_at_ts": now})
+
+    async def _scenario():
+        # T+0: degraded, 1 in a row — no alert
+        await _tick("degraded", cb=1, now=0.0)
+        # T+1h: degraded, 2 in a row — initial alert
+        await _tick("degraded", cb=2, now=3600.0)
+        # T+2h: still degraded — no alert (within digest interval)
+        await _tick("degraded", cb=2, now=2 * 3600.0)
+        # T+3h: ESCALATION to critical — fires immediately
+        await _tick("critical", cb=2, now=3 * 3600.0)
+        # T+4h: still critical — no alert (already escalated)
+        await _tick("critical", cb=2, now=4 * 3600.0)
+        # T+5h: critical → degraded (improvement, still bad) — silent
+        await _tick("degraded", cb=2, now=5 * 3600.0)
+        # T+6h: recovered
+        await _tick("ok", cb=0, now=6 * 3600.0)
+
+    asyncio.run(_scenario())
+
+    sequence = [(c.args[0], c.args[1]) for c in fake_dispatch.await_args_list]
+    assert sequence == [
+        ("initial", "degraded"),
+        ("escalated", "critical"),
+        ("recovered", "ok"),
+    ], f"Unexpected dispatch sequence: {sequence}"
