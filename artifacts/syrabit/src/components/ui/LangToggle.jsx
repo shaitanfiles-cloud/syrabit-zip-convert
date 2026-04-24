@@ -1,7 +1,7 @@
 export default function LangToggle({ contentLang, switchLang, variant = 'default', className = '' }) {
   const isCompact = variant === 'compact' || variant === 'floating';
-  const enLabel = isCompact ? 'EN' : 'English';
-  const btnSize = variant === 'compact' ? 'h-7 px-2' : variant === 'floating' ? 'h-8 px-2.5' : 'h-9 px-3';
+  const enLabel = 'English';
+  const btnSize = variant === 'compact' ? 'h-7 px-2.5' : variant === 'floating' ? 'h-8 px-3' : 'h-9 px-3';
   const inactiveClass = isCompact ? 'text-violet-400 hover:bg-violet-500/10' : 'text-violet-600 hover:bg-violet-50';
   const gapClass = isCompact ? '' : ' gap-1.5';
   const wrapperExtras = variant === 'default' ? ' shrink-0' : variant === 'floating' ? ' fixed top-20 right-4 z-30' : '';
