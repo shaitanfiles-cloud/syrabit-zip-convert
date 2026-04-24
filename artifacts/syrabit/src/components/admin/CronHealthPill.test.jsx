@@ -197,6 +197,73 @@ describe('CronHealthPill — testId templating', () => {
   });
 });
 
+describe('CronHealthPill — workflow URL fallback', () => {
+  // Task #839 — every wrapper (CfWafDriftCronPill, TrustpilotCronPill,
+  // …) passes a `defaultWorkflowUrl` so the GitHub Actions deep-link
+  // still points somewhere sensible BEFORE the heartbeat row carries
+  // a `workflowUrl`. The component prefers the per-heartbeat URL when
+  // present, and falls back to `defaultWorkflowUrl` otherwise. Both
+  // hyperlinks (the pill itself and the "Runs" link beside it) must
+  // resolve to the same URL — they're the same link rendered twice.
+  // Pin both behaviours so a future refactor of the fallback ladder
+  // doesn't silently break either link.
+  const DEFAULT_URL = 'https://github.com/example/actions/workflows/x.yml';
+  const DATA_URL = 'https://github.com/example/actions/runs/9999';
+
+  it('uses data.workflowUrl when the heartbeat carries one (overrides defaultWorkflowUrl)', () => {
+    const html = renderPill({
+      data: { status: 'healthy', workflowUrl: DATA_URL },
+      defaultWorkflowUrl: DEFAULT_URL,
+    });
+    expect(extractAttrValue(html, 'foo-pill', 'href')).toBe(DATA_URL);
+    expect(extractAttrValue(html, 'foo-run-link', 'href')).toBe(DATA_URL);
+  });
+
+  it('falls back to defaultWorkflowUrl when data has no workflowUrl', () => {
+    const html = renderPill({
+      data: { status: 'healthy' }, // no workflowUrl
+      defaultWorkflowUrl: DEFAULT_URL,
+    });
+    expect(extractAttrValue(html, 'foo-pill', 'href')).toBe(DEFAULT_URL);
+    expect(extractAttrValue(html, 'foo-run-link', 'href')).toBe(DEFAULT_URL);
+  });
+
+  it('falls back to defaultWorkflowUrl when data is null entirely', () => {
+    const html = renderPill({
+      data: null,
+      defaultWorkflowUrl: DEFAULT_URL,
+    });
+    expect(extractAttrValue(html, 'foo-pill', 'href')).toBe(DEFAULT_URL);
+    expect(extractAttrValue(html, 'foo-run-link', 'href')).toBe(DEFAULT_URL);
+  });
+
+  it('falls back to defaultWorkflowUrl when data is the _error sentinel (treated as no data)', () => {
+    // The `_error` short-circuit replaces `data` with null inside the
+    // component, so `data._error.workflowUrl` (if it ever existed)
+    // must NOT be honoured — the URL must come from defaultWorkflowUrl.
+    const html = renderPill({
+      data: { _error: true, workflowUrl: DATA_URL, status: 'healthy' },
+      defaultWorkflowUrl: DEFAULT_URL,
+    });
+    expect(extractAttrValue(html, 'foo-pill', 'href')).toBe(DEFAULT_URL);
+    expect(extractAttrValue(html, 'foo-run-link', 'href')).toBe(DEFAULT_URL);
+  });
+
+  it('honours data.workflowUrl across every non-error status, not just healthy', () => {
+    // Sanity: the data.workflowUrl preference is independent of the
+    // status colour ladder. A silent or degraded heartbeat that
+    // carries its own URL must still surface it.
+    for (const status of ['silent', 'degraded', 'never_observed', 'not_configured']) {
+      const html = renderPill({
+        data: { status, workflowUrl: DATA_URL },
+        defaultWorkflowUrl: DEFAULT_URL,
+      });
+      expect(extractAttrValue(html, 'foo-pill', 'href')).toBe(DATA_URL);
+      expect(extractAttrValue(html, 'foo-run-link', 'href')).toBe(DATA_URL);
+    }
+  });
+});
+
 describe('ageLabel helper', () => {
   const cases = [
     { input: null, expected: null, why: 'null input -> null' },
