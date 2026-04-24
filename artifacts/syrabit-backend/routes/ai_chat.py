@@ -41,7 +41,7 @@ from cache import (
     ai_cache_expected_saved_ms,
 )
 from auth_deps import (
-    get_user_credits, rate_limit_chat_optional,
+    get_user_credits, rate_limit_chat_optional, rate_limit_ocr_optional,
 )
 from db_ops import (
     atomic_deduct_credit,
@@ -235,16 +235,18 @@ def _sniff_image_mime(buf: bytes) -> Optional[str]:
 async def ocr_chat_image(
     request: Request,
     file: UploadFile = File(...),
-    user: Optional[dict] = Depends(rate_limit_chat_optional),
+    user: Optional[dict] = Depends(rate_limit_ocr_optional),
 ):
     """Public OCR endpoint for the chat composer.
 
     Accepts a single image (JPEG/PNG/WebP/GIF/HEIC, ≤8MB), runs Vertex AI
-    Gemini Vision OCR, and returns the extracted text. The endpoint reuses
-    :func:`rate_limit_chat_optional` so anonymous users share the same daily
-    chat budget, AND mirrors the chat endpoint's other safeguards:
-    Cloudflare Turnstile for anonymous callers, atomic credit deduction
-    for logged-in users, bounded streaming reads to cap memory pressure,
+    Gemini Vision OCR, and returns the extracted text. The endpoint uses
+    :func:`rate_limit_ocr_optional` (NOT the chat dep) so OCR uploads do
+    not consume the daily chat-message budget — Task #819. The follow-up
+    chat send still costs 1 credit on its own; OCR is free.
+
+    Other safeguards mirror the chat endpoint: Cloudflare Turnstile for
+    anonymous callers, bounded streaming reads to cap memory pressure,
     and magic-byte sniffing to refuse non-image payloads before any
     Vertex call is made (a Vertex Vision call is far more expensive than
     a chat call). No documents/PDFs — the chat composer is image-only by
@@ -304,48 +306,31 @@ async def ocr_chat_image(
             detail="Uploaded file is not a recognised image (only JPEG, PNG, WebP, GIF and HEIC are supported).",
         )
 
-    # 6. Logged-in users: gate on chat credits + deduct atomically (parity
-    #    with /ai/chat). Anonymous quota is already enforced by
-    #    rate_limit_chat_optional via the device-token daily budget.
-    credits_info = None
-    user_id = None
-    if not is_anon:
-        user_id = user.get("id") or user.get("user_id") or user.get("uid")
-        if user_id:
-            credits_info = await get_user_credits(user)
-            if credits_info["remaining"] <= 0:
-                raise HTTPException(
-                    status_code=402,
-                    detail=f"Daily credit limit reached ({credits_info['limit']} credits/day). Resets at midnight UTC. Upgrade your plan for more.",
-                )
-            deducted = await atomic_deduct_credit(user_id, credits_info["used"], credits_info["limit"])
-            if not deducted:
-                raise HTTPException(status_code=402, detail="Credit limit reached. Upgrade your plan for more.")
-
-    # 7. Vertex call — use the magic-byte-sniffed mime (defends against
+    # 6. Vertex call — use the magic-byte-sniffed mime (defends against
     #    a JPEG body sent with a "image/png" Content-Type and vice versa).
+    #
+    # NOTE (Task #819): we deliberately do NOT deduct a chat credit
+    # here. OCR is free; the user pays 1 credit only on the follow-up
+    # /ai/chat send that contains the extracted question. Per-minute
+    # throttle + per-IP coarse cap inside rate_limit_ocr_optional are
+    # enough abuse protection — OCR's 10/min/device cap is an order of
+    # magnitude tighter than chat's 15/min, so a single client can
+    # never burst more than ~600 Vertex Vision calls/hour.
     vertex_mime = sniffed
     try:
         import vertex_services  # local import — avoids cold-start cost on chat path
     except Exception as _imp_err:
         logger.exception("vertex_services import failed")
-        # Refund the credit we just deducted (the call never reached Vertex).
-        if user_id and credits_info is not None:
-            asyncio.create_task(_refund_credit(user_id, credits_info["used"] + 1))
         raise HTTPException(status_code=503, detail="OCR service unavailable.") from _imp_err
 
     try:
         result = await vertex_services.ocr_image(img_bytes, mime_type=vertex_mime)
     except Exception as _vx_err:
         logger.exception("vertex ocr_image raised")
-        if user_id and credits_info is not None:
-            asyncio.create_task(_refund_credit(user_id, credits_info["used"] + 1))
         raise HTTPException(status_code=503, detail="OCR service unavailable.") from _vx_err
 
     if not isinstance(result, dict) or "error" in result:
         err_msg = (result or {}).get("error") if isinstance(result, dict) else "OCR failed"
-        if user_id and credits_info is not None:
-            asyncio.create_task(_refund_credit(user_id, credits_info["used"] + 1))
         raise HTTPException(status_code=503, detail=err_msg or "OCR failed")
 
     raw_text = (result.get("raw_text") or "").strip()
@@ -363,9 +348,6 @@ async def ocr_chat_image(
             raw_text = "\n".join(p for p in parts if p).strip()
 
     if not raw_text:
-        # Refund: nothing usable came back.
-        if user_id and credits_info is not None:
-            asyncio.create_task(_refund_credit(user_id, credits_info["used"] + 1))
         raise HTTPException(status_code=422, detail="No text could be extracted from the image.")
 
     return {

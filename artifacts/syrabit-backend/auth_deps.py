@@ -586,3 +586,140 @@ async def rate_limit_chat_optional(
             )
 
     return None
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Task #819 — OCR-only rate limiter
+#
+# The chat composer's image-upload (Plus → Camera/Gallery → OCR) used
+# to share ``rate_limit_chat_optional``, which burned 1 chat-message
+# credit on every OCR call. That doubled the cost of "snap a photo
+# and ask a question" — the very flow the feature was built for —
+# and chewed through anonymous students' 30/day budget twice as fast,
+# tripping "Daily free quota exhausted" after just ~15 photo Q&As.
+#
+# This dep enforces the same anti-abuse layers as chat (per-minute
+# throttle, coarse per-IP daily ceiling, device-cookie issuance) but
+# **does not** deduct from the per-device daily message budget. The
+# follow-up chat send still costs 1 credit as usual; OCR itself is
+# free.
+#
+# A separate per-minute throttle (``OCR_PER_MIN_CAP``) is used so a
+# scripted client cannot just spam Vertex Vision calls — Vision
+# requests are an order of magnitude more expensive than a chat call,
+# so we keep this bound tight (10/min per device, vs 15/min for chat).
+# The per-IP coarse cap (1500/day) is shared with chat — it counts
+# *all* requests off a single egress IP, so OCR abuse still trips it.
+# ─────────────────────────────────────────────────────────────────────
+
+OCR_PER_MIN_CAP = 10            # per-device or per-IP per-minute cap on OCR calls.
+OCR_DAILY_CAP_ANON = 50         # per-device daily OCR cap for anonymous callers.
+OCR_DAILY_CAP_USER = 100        # per-user daily OCR cap for logged-in callers.
+
+async def rate_limit_ocr_optional(
+    request: Request,
+    response: Response,
+    user: Optional[dict] = Depends(get_current_user_optional),
+    syrabit_device: Optional[str] = Cookie(default=None),
+):
+    """OCR-only rate limiter.
+
+    See module-level docstring above the function for the rationale.
+    Returns the resolved user dict (or ``None`` for anonymous callers)
+    so the OCR route can branch on auth state without re-parsing the
+    cookie.
+    """
+    # Logged-in users: per-minute throttle + generous daily cap on Vertex
+    # Vision spend. Daily cap is intentionally separate from the chat
+    # credit budget (Task #819 — OCR no longer burns chat credits).
+    if user:
+        user_id = user.get("id", "anonymous")
+        if not check_rate_limit(f"ocr:{user_id}", max_requests=OCR_PER_MIN_CAP, window_seconds=60):
+            raise HTTPException(
+                status_code=429,
+                detail=f"OCR rate limit exceeded — {OCR_PER_MIN_CAP} uploads/minute. Try again in a moment.",
+                headers={"Retry-After": "60", "X-RateLimit-Limit": str(OCR_PER_MIN_CAP)},
+            )
+        if not check_rate_limit(f"ocr:day:{user_id}", max_requests=OCR_DAILY_CAP_USER, window_seconds=86400):
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Daily OCR limit reached ({OCR_DAILY_CAP_USER} image uploads/day). "
+                    "Resets at midnight UTC."
+                ),
+                headers={"Retry-After": "3600", "X-RateLimit-Limit": str(OCR_DAILY_CAP_USER)},
+            )
+        return user
+
+    # Anonymous: device-cookie + per-minute throttle + coarse per-IP daily cap.
+    ip = _real_client_ip(request)
+
+    # 1. Resolve / mint device cookie (parity with chat dep so the
+    #    follow-up chat send keys on the same device id).
+    token_id = device_token_id(syrabit_device)
+    if token_id is None:
+        if ip and ip != "unknown" and not check_rate_limit(
+            f"chat:mint:ip:{ip}",
+            max_requests=DEVICE_COOKIE_MINTS_PER_MIN,
+            window_seconds=60,
+        ):
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    "Too many new sessions from this network in a short window. "
+                    "Wait a minute and retry — make sure cookies are enabled."
+                ),
+                headers={
+                    "Retry-After": "60",
+                    "X-RateLimit-Limit": str(DEVICE_COOKIE_MINTS_PER_MIN),
+                },
+            )
+        new_cookie = mint_device_token()
+        _set_device_cookie(request, response, new_cookie)
+        token_id = device_token_id(new_cookie)
+
+    # 2. Per-minute throttle (device-scoped when possible).
+    rl_key = f"ocr:dev:{token_id}" if token_id else f"ocr:ip:{ip}"
+    if not check_rate_limit(rl_key, max_requests=OCR_PER_MIN_CAP, window_seconds=60):
+        raise HTTPException(
+            status_code=429,
+            detail=f"OCR rate limit exceeded — {OCR_PER_MIN_CAP} uploads/minute. Try again in a moment.",
+            headers={"Retry-After": "60", "X-RateLimit-Limit": str(OCR_PER_MIN_CAP)},
+        )
+
+    # 3. Coarse per-IP daily abuse cap (shared with chat — counts ALL
+    #    requests off the egress IP, so OCR abuse still trips it).
+    if ip and ip != "unknown":
+        from db_ops import atomic_deduct_ip_credit
+        if not atomic_deduct_ip_credit(ip, daily_limit=IP_COARSE_DAILY_CAP):
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Daily request ceiling reached for this network "
+                    f"(>{IP_COARSE_DAILY_CAP} requests/day). Sign in or try again "
+                    "tomorrow — resets at midnight UTC."
+                ),
+                headers={"Retry-After": "3600", "X-RateLimit-Limit": str(IP_COARSE_DAILY_CAP)},
+            )
+
+    # 4. Per-device daily OCR cap (separate from chat's 30/day budget —
+    #    Task #819 keeps OCR off the chat credit ledger but still bounds
+    #    total Vertex Vision spend per device).
+    if token_id and not check_rate_limit(
+        f"ocr:day:dev:{token_id}",
+        max_requests=OCR_DAILY_CAP_ANON,
+        window_seconds=86400,
+    ):
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Daily OCR limit reached ({OCR_DAILY_CAP_ANON} image uploads/day). "
+                "Sign in for higher limits — resets at midnight UTC."
+            ),
+            headers={"Retry-After": "3600", "X-RateLimit-Limit": str(OCR_DAILY_CAP_ANON)},
+        )
+
+    # NOTE: deliberately NOT calling atomic_deduct_device_credit here
+    # — OCR is free and does not consume the 30/day chat budget.
+
+    return None
