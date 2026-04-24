@@ -78,3 +78,22 @@ Run `pnpm deploy:pages` from the repo root to publish `artifacts/syrabit/dist` t
 - **Cloudflare Edge Cache Auto-Purge:** Utilizes Cloudflare Cache Purge API and Worker Cache API.
 - **IndexNow Integration:** Backend endpoints for instant URL submission to search engines.
 - **Observability — RUM + Distributed Tracing (Task #610):** Firebase Performance Monitoring captures Core Web Vitals (LCP / INP / CLS / TTFB / FCP) and custom chat traces (`chat_send_first_token`, `chat_send_total`) from production browsers. OpenTelemetry on the backend exports sampled (~10%) Cloud Trace spans for `/api/ai/chat/stream` with `syrabit.chat.*` attributes (intent, model, path, first_token_ms, total_ms). W3C `traceparent` header is generated client-side and propagated edge → backend → Vertex. All gated behind env vars (`TRACING_ENABLED`, `VITE_FIREBASE_*`) so dev / unconfigured deploys see zero overhead. Dashboards & starter alerts documented in `artifacts/syrabit-backend/docs/PERFORMANCE_MONITORING.md`.
+
+## Operational Notes
+
+### AdminHealth cron-pill testId convention
+
+The cron-health pills rendered in the AdminHealth dashboard follow a uniform `<cron-name>-cron-*` data-testid namespace so monitoring/Playwright surfaces can target each pill consistently. The hooks emitted by the shared `<CronHealthPill>` are: `<prefix>-tile`, `<prefix>-status`, `<prefix>-pill`, `<prefix>-run-link`, `<prefix>-refresh`. Current pills:
+
+- **Trustpilot refresh cron** — prefix `trustpilot-refresh-cron` (wrapper: `TrustpilotRefreshCronPill.jsx`, endpoint: `/admin/health/trustpilot/refresh-cron`).
+- **Cloudflare WAF drift cron** — prefix `cf-waf-drift-cron` (wrapper: `CfWafDriftCronPill.jsx`, endpoint: `/admin/health/cf-waf-drift/cron`).
+
+**Task #838 rename (2026-04-24):** the Trustpilot pill's testId moved from `trustpilot-cron-*` to `trustpilot-refresh-cron-*` so it lines up with the cf-waf-drift pill's naming convention. Task #843 swept the entire repo for stale references to the old prefix and confirmed:
+
+- The in-repo Playwright suite (`artifacts/syrabit/tests/`) uses `data-testid="admin-dashboard"` only — no cron-pill selectors.
+- The Cloudflare edge-proxy synthetic probes (`workers/edge-proxy/src/synthetic-probe.ts`, `cf-block-probe.ts`) hit endpoints (`/admin/diagnostics`, public homepage), not DOM testIds.
+- Hydration verification scripts (`artifacts/syrabit/scripts/verify-hydration.mjs`) and PageSpeed audit JSONs do not reference cron-pill testIds.
+- Docs / runbooks / markdown files contain no references to `trustpilot-cron-*`.
+- The only remaining trace is a stale prebuilt chunk in `artifacts/syrabit/dist/assets/AdminHealth-*.js` from before the rename — this is regenerated on every `pnpm deploy:pages` build, so the next deploy purges it.
+
+**Out-of-repo surfaces that cannot be verified from this repository** (audit if they exist outside it before assuming the rename is fully migrated): an external Playwright suite kept in another repo, a Cloudflare Browser Rendering uptime probe targeting cron pills, a Sentry visual-regression baseline of the AdminHealth screen, or an admin runbook screenshot that calls out the testIds. There is no current evidence any of these exist, so no backwards-compat data-testid alias was added. If any of these surfaces are discovered targeting `trustpilot-cron-*`, either update them to the new prefix or restore a temporary alias in `TrustpilotRefreshCronPill.jsx` with a delete-by date.
