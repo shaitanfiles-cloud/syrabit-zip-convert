@@ -531,6 +531,27 @@ async def rate_limit_chat_optional(
     if token_id:
         from db_ops import atomic_deduct_device_credit
         if not atomic_deduct_device_credit(token_id, daily_limit=daily_cap):
+            # Task #798 — emit `chat.anon_quota_exhausted` so we can
+            # tell how many anonymous students hit the wall each day
+            # and what fraction of them sign up vs bounce. Wrapped in
+            # try/except because a metric crash must never block a
+            # real user request — the 429 has to fire either way.
+            #
+            # ``atomic_deduct_device_credit`` returns False in **two**
+            # very different states: (a) quota is genuinely exhausted,
+            # and (b) Redis is unreachable / errored (fail-closed). We
+            # peek the counter to disambiguate so a Redis outage isn't
+            # misclassified as a wave of "wall-hits" in the metric.
+            # When the peek itself fails (returns 0 because Redis is
+            # also down for it), we deliberately skip the metric — a
+            # zero is better than a phantom spike.
+            try:
+                from db_ops import peek_device_credit_used
+                if peek_device_credit_used(token_id) >= daily_cap:
+                    from metrics import record_anon_quota_exhausted
+                    record_anon_quota_exhausted(token_id, ip=ip, plan_target="free")
+            except Exception:
+                pass
             raise HTTPException(
                 status_code=429,
                 detail=(

@@ -1439,6 +1439,47 @@ async def admin_chat_fallbacks(days: int = 7, admin: dict = Depends(get_admin_us
     }
 
 
+@router.get("/admin/chat/anon-quota-exhausted")
+async def admin_anon_quota_exhausted(
+    days: int = 7,
+    backfill: bool = False,
+    admin: dict = Depends(get_admin_user),
+):
+    """Task #798 — anonymous-quota exhaustion observability.
+
+    Reports how many anonymous students hit the per-device 30/day cap
+    each day, alongside the next-24h sign-up conversion among
+    exhausted devices. Pair the two to tune the cap quarterly with
+    data instead of guessing — too low loses students, too high
+    cannibalises sign-up conversions.
+
+    Query params
+    ------------
+    days : int
+        Lookback window for the daily/by-hour/by-day-of-week
+        breakdown (default 7, max bounded by the 14-day in-memory
+        retention configured in `metrics.py`).
+    backfill : bool
+        When true, scans Redis for `device_daily_credits:*:<today>`
+        keys already at the cap and replays the metric for any
+        device that exhausted *before* this code shipped. Cheap
+        (one SCAN), idempotent (the metric dedupes on token+day),
+        and gated behind an explicit flag so the admin page's
+        default load is just a memory read.
+    """
+    from metrics import (
+        get_anon_quota_exhausted_stats,
+        backfill_anon_quota_exhausted_today,
+    )
+    backfilled_today = 0
+    if backfill:
+        backfilled_today = backfill_anon_quota_exhausted_today()
+    payload = get_anon_quota_exhausted_stats(days=days)
+    payload["backfilled_today"] = backfilled_today
+    payload["alert"] = "amber" if payload["unique_devices_exhausted"] >= 50 else "green"
+    return payload
+
+
 @router.get("/admin/chat/speedups")
 async def admin_chat_speedups(days: int = 7, admin: dict = Depends(get_admin_user)):
     """Track how often the Task #282 chat speed-ups actually help (Task #303).

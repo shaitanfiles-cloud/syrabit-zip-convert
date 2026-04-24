@@ -28,6 +28,8 @@ __all__ = [
     "_asm_last_refresh_at",
     "record_credit_fallback", "get_credit_fallback_stats",
     "_credit_fallback_window",
+    "record_anon_quota_exhausted", "record_signup_with_device",
+    "get_anon_quota_exhausted_stats", "backfill_anon_quota_exhausted_today",
 ]
 
 _startup_time = _time_mod.time()
@@ -131,6 +133,391 @@ def get_credit_fallback_stats(window_seconds: int = 300) -> dict:
         "rate_per_min": rate_per_min,
         "window_seconds": window_seconds,
     }
+
+# ── Task #798: anonymous-quota exhaustion observability ───────────────────
+# We currently have no signal for how many anonymous students hit the
+# 30/day per-device cap each day, nor what fraction of them sign up vs
+# bounce after the 429. Without that signal we can't tell whether 30 is
+# the right number — too low loses students, too high cannibalises
+# sign-up conversions. This block emits a `chat.anon_quota_exhausted`
+# counter every time the per-device cap fires (once per device per day,
+# so a hammering script doesn't inflate the metric), plus a thin Redis
+# join so signups in the next 48h can be matched back to a previously-
+# exhausted device cookie. The admin chart in routes/admin_advanced.py
+# (`/admin/chat/anon-quota-exhausted`) renders both as a sparkline.
+import hashlib as _hashlib_anon
+
+# Keep ~14 days of per-event records so the admin chart's default 7-day
+# window has historical context and a single missing day doesn't flatten
+# the line. The list is appended-only with monotonically increasing
+# timestamps, so trimming is a single slice on each insert.
+_ANON_EXHAUST_HISTORY_SECONDS = 14 * 24 * 3600
+_anon_exhaust_window: list = []   # list of dicts: ts, plan_target, dow, hour, token_hash
+_anon_exhaust_lock = _threading.Lock()
+# Dedupe set keyed on (token_id_or_hash, day) so retry hammers from the
+# same already-exhausted device don't double-count the metric.
+_anon_exhaust_seen: set = set()
+# In-memory mirror of devices that exhausted recently. Lets the
+# signup-conversion join work even when Redis is offline (single worker
+# only — the Redis-backed path is the cross-worker source of truth).
+_anon_exhausted_devices: dict = {}   # token_id -> exhausted_at_ts
+# Process-local set of *unique* exhausted-then-signed-up devices, keyed
+# on the cookie token id so a device that re-attempts signup (e.g. a
+# duplicate-email failure followed by a successful retry) only counts
+# once toward the conversion ratio. The cross-worker source of truth
+# is the Redis set `chat:anon_signup_after_exhaust_devices:<day>` read
+# by `get_anon_quota_exhausted_stats`; this in-memory mirror keeps the
+# numerator meaningful in single-worker / Redis-down deploys.
+_anon_signup_after_exhaust_devices: set = set()
+# Strict conversion window. The product question is "of devices that
+# hit the wall today, what fraction signed up in the next 24 hours?",
+# so we reject signup-conversion matches whose exhaustion event is
+# older than this. The Redis sorted set's TTL is sized 2× the window
+# (48h) to absorb late signups arriving just past the boundary on a
+# different worker, but we still gate them on the zscore here.
+_ANON_CONVERSION_WINDOW_SECONDS = 24 * 3600
+
+
+def _anon_label_hash(s: str) -> str:
+    """Stable short hash for log/window labels.
+
+    The cookie token id is itself low-entropy enough that we don't want
+    to spray it across structured logs (cf. PII/cookie-leak posture from
+    Task #793). 12 hex chars of SHA-256 is enough to cluster repeat
+    offenders for forensics without being reversible by an analyst with
+    log-read access.
+    """
+    if not s:
+        return ""
+    return _hashlib_anon.sha256(s.encode("utf-8", errors="ignore")).hexdigest()[:12]
+
+
+def _anon_redis_client():
+    """Late-binding accessor for the shared redis client.
+
+    `deps.redis_client` is rebound by `tests/_deps_stub.install_deps_stub`
+    and by `_install_fake_redis` in the rate-limit test suite, so we have
+    to look it up on every call rather than capturing it at import time.
+    Returns None when Redis is unavailable so callers can degrade
+    gracefully (in-memory fallback).
+    """
+    try:
+        import deps as _d
+        return getattr(_d, "redis_client", None)
+    except Exception:
+        return None
+
+
+def record_anon_quota_exhausted(
+    token_id: str, ip: str = "", plan_target: str = "free",
+) -> bool:
+    """Emit the `chat.anon_quota_exhausted` counter.
+
+    Called from `auth_deps.rate_limit_chat_optional` whenever a device
+    has used all of its per-day free messages and the next request is
+    about to be rejected with HTTP 429. We dedupe on (token_id, day)
+    so the metric measures *unique devices that hit the wall*, not
+    *post-exhaustion retry hammer rate* — those are very different
+    product signals and we want the former for cap-tuning decisions.
+
+    Side effects:
+      1. Structured INFO log with plan_target / day-of-week / hour /
+         hashed token+ip labels (StatsD-equivalent for log-shipping
+         pipelines that consume key=value INFO records).
+      2. Append to the in-memory rolling 14-day window so the admin
+         chart endpoint can read it without a Redis round-trip.
+      3. Push the token_id into a date-bucketed Redis sorted set with
+         a 48h TTL so the signup-conversion join in
+         `record_signup_with_device` can find it from any worker.
+
+    Returns
+    -------
+    True  — first time this device was recorded today (metric emitted).
+    False — already counted today (deduped, no-op).
+    """
+    if plan_target not in ("free", "pro", "max"):
+        plan_target = "free"
+    now = _time_mod.time()
+    dt = datetime.fromtimestamp(now, tz=timezone.utc)
+    day = dt.strftime("%Y-%m-%d")
+    dow = dt.strftime("%a")
+    hour = dt.hour
+    th = _anon_label_hash(token_id or "")
+    ih = _anon_label_hash(ip or "")
+
+    # Dedupe key: hashed token + day. Falls back to the hashed IP +
+    # second-resolution timestamp when no token is available so we
+    # don't accidentally collapse all anonymous-IP events into one.
+    dedupe_key = f"{th}:{day}" if token_id else f"_:{ih}:{int(now)}"
+
+    with _anon_exhaust_lock:
+        if dedupe_key in _anon_exhaust_seen:
+            return False
+        _anon_exhaust_seen.add(dedupe_key)
+        # Trim the dedupe set when it gets large so we don't grow
+        # unboundedly across days. We rebuild from the rolling window
+        # so a device that exhausts today still won't double-count.
+        if len(_anon_exhaust_seen) > 5000:
+            cutoff_ts = now - _ANON_EXHAUST_HISTORY_SECONDS
+            keep = {
+                f"{e['token_hash']}:{datetime.fromtimestamp(e['ts'], tz=timezone.utc).strftime('%Y-%m-%d')}"
+                for e in _anon_exhaust_window
+                if e["ts"] > cutoff_ts and e.get("token_hash")
+            }
+            keep.add(dedupe_key)
+            _anon_exhaust_seen.clear()
+            _anon_exhaust_seen.update(keep)
+
+        _anon_exhaust_window.append({
+            "ts": now,
+            "plan_target": plan_target,
+            "dow": dow,
+            "hour": hour,
+            "token_hash": th,
+        })
+        # Trim entries older than the configured rolling window in a
+        # single slice (the list is monotonically increasing).
+        cutoff = now - _ANON_EXHAUST_HISTORY_SECONDS
+        keep_from = 0
+        for i, e in enumerate(_anon_exhaust_window):
+            if e["ts"] > cutoff:
+                keep_from = i
+                break
+        else:
+            keep_from = len(_anon_exhaust_window)
+        if keep_from > 0:
+            del _anon_exhaust_window[:keep_from]
+
+        if token_id:
+            _anon_exhausted_devices[token_id] = now
+            # Trim entries older than 48h (the signup-conversion window).
+            cutoff_48h = now - 48 * 3600
+            stale = [t for t, ts in _anon_exhausted_devices.items() if ts < cutoff_48h]
+            for t in stale:
+                _anon_exhausted_devices.pop(t, None)
+
+    logger.info(
+        "chat.anon_quota_exhausted plan_target=%s dow=%s hour=%02d "
+        "token_hash=%s ip_hash=%s",
+        plan_target, dow, hour, th, ih,
+    )
+
+    # Best-effort cross-worker push so signups on a different gunicorn
+    # worker can still match this device. The TTL on the sorted set
+    # also bounds the conversion window to "next 48h" without us
+    # having to scan back further at signup time.
+    rc = _anon_redis_client()
+    if rc is not None and token_id:
+        try:
+            key = f"chat:anon_exhausted_devices:{day}"
+            rc.zadd(key, {token_id: now})
+            rc.expire(key, 48 * 3600)
+        except Exception as _e:
+            logger.debug("record_anon_quota_exhausted redis push failed: %s", _e)
+    return True
+
+
+def record_signup_with_device(token_id: str) -> bool:
+    """Pair a successful new-account signup with a prior exhaustion event.
+
+    Called from `routes.auth.signup` and `routes.auth.google_auth` after
+    a brand-new account is created (NOT for returning users logging in).
+    Looks up the device cookie's token id in the in-memory mirror and
+    in today's + yesterday's Redis sorted sets, but only counts the
+    match if the original exhaustion event was within
+    ``_ANON_CONVERSION_WINDOW_SECONDS`` (24h). The Redis sorted set's
+    48h TTL gives us a 1× safety buffer for late-arriving signups
+    written on a different worker, but the 24h gate here is what the
+    product question actually asks: "next-24h sign-up conversion among
+    exhausted devices".
+
+    On match we add the device hash to a process-local set and to a
+    per-day Redis SET (note: SET, not counter — we want unique devices,
+    not raw signup events) so the admin chart can read it back across
+    workers without double-counting a device that retried signup
+    after a duplicate-email error.
+
+    Returns
+    -------
+    True  — this signup was preceded by a per-device cap exhaustion
+            within the last 24h (counts toward the conversion ratio).
+    False — no recent exhaustion for this device cookie (organic signup).
+    """
+    if not token_id:
+        return False
+    now = _time_mod.time()
+    matched = False
+    with _anon_exhaust_lock:
+        ts = _anon_exhausted_devices.get(token_id)
+        if ts is not None and (now - ts) <= _ANON_CONVERSION_WINDOW_SECONDS:
+            matched = True
+
+    if not matched:
+        rc = _anon_redis_client()
+        if rc is not None:
+            try:
+                today = datetime.fromtimestamp(now, tz=timezone.utc).strftime("%Y-%m-%d")
+                yesterday = datetime.fromtimestamp(now - 86400, tz=timezone.utc).strftime("%Y-%m-%d")
+                for day in (today, yesterday):
+                    key = f"chat:anon_exhausted_devices:{day}"
+                    score = rc.zscore(key, token_id)
+                    if score is None:
+                        continue
+                    try:
+                        score_f = float(score)
+                    except (TypeError, ValueError):
+                        continue
+                    # Strict 24h join: a signup at T+25h should not be
+                    # counted as a wall-hit conversion just because the
+                    # zset's 48h TTL hasn't expired the entry yet.
+                    if (now - score_f) <= _ANON_CONVERSION_WINDOW_SECONDS:
+                        matched = True
+                        break
+            except Exception as _e:
+                logger.debug("record_signup_with_device redis lookup failed: %s", _e)
+
+    if matched:
+        th = _anon_label_hash(token_id)
+        with _anon_exhaust_lock:
+            _anon_signup_after_exhaust_devices.add(th)
+        rc = _anon_redis_client()
+        if rc is not None:
+            try:
+                day = datetime.fromtimestamp(now, tz=timezone.utc).strftime("%Y-%m-%d")
+                key = f"chat:anon_signup_after_exhaust_devices:{day}"
+                rc.sadd(key, th)
+                rc.expire(key, 14 * 86400)
+            except Exception as _e:
+                logger.debug("record_signup_with_device redis sadd failed: %s", _e)
+        logger.info(
+            "chat.anon_signup_after_exhaust matched token_hash=%s",
+            th,
+        )
+    return matched
+
+
+def get_anon_quota_exhausted_stats(days: int = 7) -> dict:
+    """Compute the admin-chart payload for `chat.anon_quota_exhausted`.
+
+    Combines the in-memory rolling window (which is per-worker but
+    cheap) with the cross-worker signup-after-exhaust counters stored
+    in Redis. Returns the same `daily / has_data / period_days` shape
+    as `admin_chat_fallbacks` so the dashboard can chart it with the
+    same component.
+    """
+    days = max(1, int(days))
+    now = _time_mod.time()
+    cutoff = now - days * 86400
+    by_day: dict = {}
+    by_hour: dict = {h: 0 for h in range(24)}
+    by_dow: dict = {d: 0 for d in ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")}
+    total = 0
+    unique_tokens: set = set()
+    with _anon_exhaust_lock:
+        for e in _anon_exhaust_window:
+            if e["ts"] < cutoff:
+                continue
+            day = datetime.fromtimestamp(e["ts"], tz=timezone.utc).strftime("%Y-%m-%d")
+            by_day.setdefault(day, 0)
+            by_day[day] += 1
+            by_hour[e["hour"]] = by_hour.get(e["hour"], 0) + 1
+            by_dow[e["dow"]] = by_dow.get(e["dow"], 0) + 1
+            total += 1
+            if e.get("token_hash"):
+                unique_tokens.add(e["token_hash"])
+        local_signup_devices = set(_anon_signup_after_exhaust_devices)
+
+    # Pull cross-worker signup counts from Redis when available so the
+    # admin chart isn't a per-worker view of the funnel. We sum SCARD
+    # across the per-day device-sets — a device that signed up on
+    # day N can only land in day N's set, so summing is unique-safe
+    # without us having to SUNION the whole window.
+    redis_signup_total = 0
+    rc = _anon_redis_client()
+    if rc is not None:
+        try:
+            for n in range(days):
+                day = datetime.fromtimestamp(now - n * 86400, tz=timezone.utc).strftime("%Y-%m-%d")
+                key = f"chat:anon_signup_after_exhaust_devices:{day}"
+                try:
+                    redis_signup_total += int(rc.scard(key) or 0)
+                except (TypeError, ValueError):
+                    continue
+        except Exception as _e:
+            logger.debug("get_anon_quota_exhausted_stats redis read failed: %s", _e)
+    signup_after_exhaust = max(redis_signup_total, len(local_signup_devices))
+
+    unique_count = len(unique_tokens)
+    conversion_pct = round(
+        signup_after_exhaust / max(1, unique_count) * 100, 2
+    ) if unique_count else 0.0
+
+    daily = [{"date": d, "exhausted": by_day[d]} for d in sorted(by_day.keys())]
+    return {
+        "period_days": days,
+        "total_exhausted": total,
+        "unique_devices_exhausted": unique_count,
+        "signup_after_exhaust": signup_after_exhaust,
+        "conversion_pct": conversion_pct,
+        "daily": daily,
+        "by_hour": by_hour,
+        "by_day_of_week": by_dow,
+        "has_data": total > 0,
+    }
+
+
+def backfill_anon_quota_exhausted_today() -> int:
+    """One-shot baseline scan for today's chart.
+
+    The metric only starts collecting from the moment this code ships,
+    so today's chart would otherwise be empty until the first device
+    exhausts. This scans Redis for `device_daily_credits:*:<today>`
+    keys (the same keys `atomic_deduct_device_credit` writes) and
+    replays `record_anon_quota_exhausted` for any whose counter has
+    already reached the per-day cap. The dedupe inside
+    `record_anon_quota_exhausted` ensures repeated calls are safe.
+
+    Returns the number of at-cap devices found (0 when Redis is
+    unavailable). Intended for one-off invocation from the admin
+    endpoint via `?backfill=1` so we don't run a full keyspace scan
+    on every page load.
+    """
+    rc = _anon_redis_client()
+    if rc is None:
+        return 0
+    try:
+        from config import PLAN_LIMITS
+        cap = int(PLAN_LIMITS.get("free", {}).get("credits_per_day") or 30)
+    except Exception:
+        cap = 30
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    suffix = f":{today}"
+    found = 0
+    try:
+        for key in rc.scan_iter(f"device_daily_credits:*{suffix}"):
+            try:
+                key_str = key.decode("ascii", errors="ignore") if isinstance(key, bytes) else key
+                if not key_str.endswith(suffix):
+                    continue
+                raw = rc.get(key_str)
+                if isinstance(raw, bytes):
+                    raw = raw.decode("ascii", errors="ignore")
+                used = int(raw or 0)
+                if used < cap:
+                    continue
+                # Strip the `device_daily_credits:` prefix and the
+                # trailing `:<today>` suffix to recover the token id.
+                middle = key_str[len("device_daily_credits:"):-len(suffix)]
+                if not middle:
+                    continue
+                if record_anon_quota_exhausted(middle, ip="", plan_target="free"):
+                    found += 1
+            except (TypeError, ValueError, AttributeError):
+                continue
+    except Exception as _e:
+        logger.debug("backfill_anon_quota_exhausted_today scan failed: %s", _e)
+        return 0
+    return found
 
 # ── Background health-check cache ─────────────────────────────────────────────
 # _check_health_deps() costs ~500 ms per call (Supabase round-trip).
