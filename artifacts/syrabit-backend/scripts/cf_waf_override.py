@@ -19,6 +19,30 @@ of thing that goes wrong at 11pm on a Saturday. This script writes a
 state file ``cf_waf_override_state.json`` (next to the script) on every
 mutating call and uses it to drive the restore step.
 
+State-file lifecycle (read this before re-using across incidents)
+-----------------------------------------------------------------
+``cf_waf_override_state.json`` is a **per-incident operational
+artifact, not a durable repo file**. It is gitignored on purpose. The
+correct lifecycle is:
+
+  1. Operator runs ``step0`` → snapshot of the pre-incident binding
+     state is written to the file.
+  2. Operator runs ``step3`` / ``step4`` → entries are appended.
+  3. Operator runs ``step6`` (after the verification gate in §8.7.3
+     of the runbook) → the file's ``step0_pre_change`` snapshot is
+     consumed to restore.
+  4. Once the incident is fully closed (status confirms the
+     steady-state config), **delete the file**:
+     ``rm artifacts/syrabit-backend/scripts/cf_waf_override_state.json``
+
+If the file from a prior incident is left on disk and you start a new
+incident, ``step0`` will detect that no binding is currently in
+force-log mode and refresh the snapshot automatically (see the
+"State-freshness check" in ``cmd_step0``). That guard exists exactly
+because forgetting to clean up step 4 is a realistic operator
+failure. The guard is belt-and-braces; the discipline is still to
+delete the file.
+
 Token requirements
 ------------------
 The Cloudflare Ruleset API requires Account-level scope to PATCH zone-

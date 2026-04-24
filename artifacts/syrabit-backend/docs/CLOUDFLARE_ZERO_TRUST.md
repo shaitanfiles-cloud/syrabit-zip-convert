@@ -607,6 +607,29 @@ counter on the first successful probe.
 | `9f14bccc891a6ebf`    | 2026-04-24   | `firewallManaged` | 949110 (OWASP Inbound Anomaly Score Exceeded) | Operator added a Managed-Rule override scoped to `http.host eq "syrabit.ai" and http.request.uri.path eq "/"` (per §8.4). cf-block-probe added so the next occurrence pages within 2 minutes instead of waiting for a user report. |
 | `9f1537aba88aaa6a` (+ same-day `9f14bccc891a6ebf` re-fire) | 2026-04-24 | `firewallManaged` | 949110 (OWASP Inbound Anomaly Score Exceeded) — `ruleId 6179ae15870a4bb7b2d480d4843b323c` | The path-scoped override added on the previous report was insufficient: a 24h `firewallEventsAdaptive` aggregation showed rule 949110 firing across **every** path (homepage, `/favicon.ico`, `/sw.js`, `/api/analytics/page-view`, `/api/content/library-bundle`, every `/degree/...` page) for IN/Bharti-Airtel desktop Chrome traffic — i.e. it is the OWASP Core "anomaly score exceeded" trip-rule and the false positive is paranoia-level wide, not request-shape narrow. Task #825: globally disabled rule 949110 inside the OWASP binding via the new orchestrator at `scripts/cf_waf_override.py step3` (see §8.7). The underlying CRS detections still run and are scored — only the threshold-trip rule is muted, so genuine attack patterns are still caught by the higher-severity OWASP rules and by the Cloudflare Managed Ruleset. Bot-management rule `874a3e315c344b1281ad4f00046aab6f` ("manage definite bots") was also observed `managed_challenge`-ing legitimate `/api/content/library-bundle` and `/api/seo/sitemap-*.xml` requests in the same window — tracked separately, **not** addressed here. |
 
+#### Per-Ray evidence captured during Task #825
+
+Both Rays were verified via `python3 artifacts/syrabit-backend/scripts/cf_ray_lookup.py <ray-id>` against the `firewallEventsAdaptive` GraphQL dataset. All fields below come straight from that lookup; no values are inferred.
+
+| Field                | `9f1537aba88aaa6a`                                                        | `9f14bccc891a6ebf`                                                        |
+| -------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Datetime (UTC)       | `2026-04-24T12:47:36Z`                                                    | `2026-04-24T11:23:43Z`                                                    |
+| Action               | `block`                                                                   | `block`                                                                   |
+| Edge response status | `403`                                                                     | `403`                                                                     |
+| Source               | `firewallManaged`                                                         | `firewallManaged`                                                         |
+| Rule id              | `6179ae15870a4bb7b2d480d4843b323c`                                        | `6179ae15870a4bb7b2d480d4843b323c`                                        |
+| Rule description     | `949110: Inbound Anomaly Score Exceeded`                                  | `949110: Inbound Anomaly Score Exceeded`                                  |
+| Method               | `GET`                                                                     | `GET`                                                                     |
+| Host                 | `syrabit.ai`                                                              | `syrabit.ai`                                                              |
+| Path                 | `/`                                                                       | `/`                                                                       |
+| Country              | `IN`                                                                      | `IN`                                                                      |
+| ASN description      | `Bharti Airtel Ltd. AS for GPRS Service`                                  | `Bharti Airtel Ltd. AS for GPRS Service`                                  |
+| User agent           | `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36` | `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36` |
+
+Two real Indian mobile users on Airtel, both on desktop-class Chrome, both blocked on the bare homepage GET. No request-shape pattern; the trigger is purely the user's IP/ASN reputation feeding the OWASP anomaly score over its threshold.
+
+**Conscious tradeoff (tracked here, not just in chat):** disabling OWASP 949110 globally meaningfully reduces anomaly-score enforcement for the entire zone. The reasoning: §8.6 above shows the rule fires across every path with no request-shape commonality, so a path-scoped override would not contain the impact. Higher-severity OWASP rules (paranoia level ≥ 2) and the Cloudflare Managed Ruleset still run and still block — only the *threshold* rule is muted. This should be revalidated quarterly: if Cloudflare ships a calibration fix or if attack volume changes, re-enable 949110 by running `python3 scripts/cf_waf_override.py rollback3`.
+
 ### 8.7 Orchestrator script — `scripts/cf_waf_override.py`
 
 The runbook curl recipes in §8.4 work but they leave no audit trail of
@@ -647,11 +670,34 @@ python artifacts/syrabit-backend/scripts/cf_waf_override.py status
 ```
 
 Every mutating subcommand accepts `--dry-run` to print the intended
-PATCH body without sending it. The state file
-`scripts/cf_waf_override_state.json` is the source of truth for
-rollback — keep it in source control if you want the rollback to be
-possible from a fresh checkout, or just leave it on the operator
-laptop that ran step0.
+PATCH body without sending it.
+
+**State-file lifecycle (do not commit this file):**
+`scripts/cf_waf_override_state.json` is a per-incident operational
+artifact, not a durable repo file. It is gitignored on purpose. The
+intended lifecycle is:
+
+1. `step0` writes the pre-incident snapshot to the file.
+2. `step3` / `step4` append their rollback markers.
+3. `step6` consumes the snapshot to restore force-log.
+4. **Once the incident is closed** (a `status` run shows the
+   steady-state config you intend to leave in place), delete the
+   file: `rm artifacts/syrabit-backend/scripts/cf_waf_override_state.json`.
+
+Why "do not commit": if the file from a prior incident is reused
+across machines or environments, its `step0_pre_change` snapshot
+encodes a moment in time that may no longer match the live binding
+state — and step6 would then "restore" stale values. The script's
+`step0` includes a freshness check that auto-refreshes the snapshot
+when no binding is currently in force-log mode (so you cannot
+silently corrupt a new incident with stale data), but that guard is
+belt-and-braces. The discipline is still: delete the file at step 4.
+
+For multi-operator scenarios, the file lives on the laptop that ran
+`step0`. If a different operator needs to run `step6`, they should
+re-run `step0` (which produces an identical force-log result and a
+fresh, locally-owned snapshot) rather than copy the file across
+machines.
 
 **Rollback subcommands** (always available, regardless of whether
 step6 was run):

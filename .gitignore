@@ -74,3 +74,7 @@ artifacts/syrabit/test-results/
 artifacts/syrabit/playwright-report/
 artifacts/syrabit/blob-report/
 
+
+# Cloudflare WAF orchestrator state — per-incident artifact, never durable
+# (see artifacts/syrabit-backend/scripts/cf_waf_override.py header for why)
+artifacts/syrabit-backend/scripts/cf_waf_override_state.json
