@@ -719,6 +719,117 @@ def cmd_rollback3(args) -> int:
     return 0
 
 
+def cmd_verify(args) -> int:
+    """Assert post-incident steady-state invariants and exit non-zero on drift.
+
+    This is the smoke-test the runbook §8.7.3 verification gate
+    points at: after running step0 → step3 → step4 → step6 the live
+    Cloudflare config should match the four invariants below. Wire
+    this into a cron / CI job to catch silent drift (a teammate
+    re-enables 949110 in the dashboard, an external script overwrites
+    the rate-limit rule, etc.) without waiting for the next user
+    report.
+
+    Invariants (all four must hold, else exit 1):
+      1. The Cloudflare Managed Ruleset binding is `action=execute`
+         AND `overrides.action` is unset (no force-log left over).
+      2. The OWASP Core Ruleset binding is `action=execute` AND
+         `overrides.action` is unset AND it has a per-rule override
+         for ``--expect-disabled-rule`` (default = the trip rule)
+         with ``enabled=False``.
+      3. The leaked-credential rate-limit rule's action is
+         ``managed_challenge`` (not ``block``).
+      4. None of the bindings above are themselves ``enabled=false``
+         (a disabled binding does NOT execute the deployed ruleset
+         at all, which would silently drop ALL WAF protection).
+    """
+    token = _resolve_token()
+    zone = _zone_id()
+    expect_rule = getattr(args, "expect_disabled_rule", None) or DEFAULT_OWASP_TRIP_RULE
+
+    fw = _entrypoint(token, zone, "http_request_firewall_managed")
+    rl = _entrypoint(token, zone, "http_ratelimit")
+
+    cf_managed = next((r for r in (fw.get("rules") or []) if _binding_is_cf_managed(r)), None)
+    owasp = next((r for r in (fw.get("rules") or []) if _binding_is_owasp(r)), None)
+    leaked = _find_rule(rl.get("rules") or [], RATE_LIMIT_LEAKED_CRED_HINTS)
+
+    failures = []
+
+    def check(label: str, cond: bool, detail: str = "") -> None:
+        marker = "PASS" if cond else "FAIL"
+        line = f"  [{marker}] {label}"
+        if detail and not cond:
+            line += f" — {detail}"
+        print(line)
+        if not cond:
+            failures.append(label)
+
+    print("=== Steady-state invariant verification ===")
+
+    # Invariant 1: CF Managed binding
+    if cf_managed is None:
+        check("CF Managed Ruleset binding present", False,
+              "binding not found at all")
+    else:
+        ap = cf_managed.get("action_parameters") or {}
+        ovr = (ap.get("overrides") or {}).get("action")
+        check(
+            "CF Managed Ruleset binding action=execute, no force-log",
+            cf_managed.get("action") == "execute"
+                and ovr is None
+                and cf_managed.get("enabled", True),
+            f"action={cf_managed.get('action')!r} "
+            f"overrides.action={ovr!r} enabled={cf_managed.get('enabled')!r}",
+        )
+
+    # Invariant 2: OWASP binding + trip-rule disable override
+    if owasp is None:
+        check("OWASP Core Ruleset binding present", False,
+              "binding not found at all")
+    else:
+        ap = owasp.get("action_parameters") or {}
+        overrides = ap.get("overrides") or {}
+        ovr_action = overrides.get("action")
+        check(
+            "OWASP binding action=execute, no force-log",
+            owasp.get("action") == "execute"
+                and ovr_action is None
+                and owasp.get("enabled", True),
+            f"action={owasp.get('action')!r} "
+            f"overrides.action={ovr_action!r} enabled={owasp.get('enabled')!r}",
+        )
+        per_rule = overrides.get("rules") or []
+        trip_disabled = any(
+            o.get("id") == expect_rule and o.get("enabled") is False
+            for o in per_rule
+        )
+        check(
+            f"OWASP binding has trip-rule {expect_rule} disabled",
+            trip_disabled,
+            f"per-rule overrides currently: "
+            f"{[(o.get('id'), o.get('enabled')) for o in per_rule]}",
+        )
+
+    # Invariant 3: leaked-credential rate-limit rule
+    if leaked is None:
+        check("Leaked-credential rate-limit rule present", False,
+              "rule not found in http_ratelimit phase")
+    else:
+        check(
+            "Leaked-credential rate-limit rule action=managed_challenge",
+            leaked.get("action") == "managed_challenge"
+                and leaked.get("enabled", True),
+            f"action={leaked.get('action')!r} enabled={leaked.get('enabled')!r}",
+        )
+
+    if failures:
+        print(f"\nverify: {len(failures)} invariant(s) failed.")
+        return 1
+    print("\nverify: all invariants hold.")
+    return 0
+
+
 def cmd_rollback4(args) -> int:
     """Restore step4's rate-limit rule to its saved original action."""
     token = _resolve_token()
@@ -796,6 +907,18 @@ def main(argv: Optional[list] = None) -> int:
 
     sub.add_parser("rollback4", parents=[common], help="undo step4")
 
+    pv = sub.add_parser(
+        "verify",
+        help="assert post-incident steady-state invariants "
+             "(exits non-zero on drift; safe to run from cron / CI)",
+    )
+    pv.add_argument(
+        "--expect-disabled-rule",
+        default=DEFAULT_OWASP_TRIP_RULE,
+        help="OWASP rule id that must be disabled in the OWASP "
+             "binding (default = the Task #825 trip rule).",
+    )
+
     args = p.parse_args(argv)
     return {
         "status":     cmd_status,
@@ -805,6 +928,7 @@ def main(argv: Optional[list] = None) -> int:
         "step6":      cmd_step6,
         "rollback3":  cmd_rollback3,
         "rollback4":  cmd_rollback4,
+        "verify":     cmd_verify,
     }[args.cmd](args)
 
 

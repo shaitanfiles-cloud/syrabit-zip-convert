@@ -805,6 +805,28 @@ dashboard that the orchestrator can't see. In all other cases the
 correct response is to re-run `step3 --rule-id <trip-rule-id>` and
 verify, then re-run step6.
 
+#### 8.7.4 Continuous drift detection — `verify` subcommand
+
+After step6, run `python3 scripts/cf_waf_override.py verify` to
+assert the steady-state config in one command. It checks four
+invariants and exits non-zero on any drift:
+
+1. CF Managed Ruleset binding is `action=execute`, not in force-log,
+   not disabled.
+2. OWASP Core Ruleset binding is `action=execute`, not in force-log,
+   not disabled.
+3. The OWASP binding still carries a per-rule override disabling the
+   trip rule (default = the Task #825 rule, override via
+   `--expect-disabled-rule`).
+4. The "Leaked credential check" rate-limit rule is
+   `action=managed_challenge` (not `block`), and is enabled.
+
+Wire this into a daily cron / CI job so silent drift (a teammate
+re-enabling 949110 in the dashboard, an external script stomping the
+rate-limit rule, etc.) pages immediately rather than waiting for the
+next user report. Output is line-per-invariant `[PASS]` / `[FAIL]`,
+suitable for pasting into incident tickets.
+
 ## 9. What is **not** in scope here
 
 - WARP enrollment of every team device (separate task; required before
