@@ -827,6 +827,24 @@ rate-limit rule, etc.) pages immediately rather than waiting for the
 next user report. Output is line-per-invariant `[PASS]` / `[FAIL]`,
 suitable for pasting into incident tickets.
 
+**Archived `verify` output, Task #825 close-out (2026-04-24, immediately
+after step6):**
+
+```text
+=== Steady-state invariant verification ===
+  [PASS] CF Managed Ruleset binding action=execute, no force-log
+  [PASS] OWASP binding action=execute, no force-log
+  [PASS] OWASP binding has trip-rule 6179ae15870a4bb7b2d480d4843b323c disabled
+  [PASS] Leaked-credential rate-limit rule action=managed_challenge
+
+verify: all invariants hold.
+```
+
+This is the canonical post-incident steady state for #825. Any
+future drift detected by `verify` should be compared against this
+archive before deciding whether to roll forward (re-apply step3 /
+step4) or roll back (`rollback3` / `rollback4`).
+
 ## 9. What is **not** in scope here
 
 - WARP enrollment of every team device (separate task; required before
