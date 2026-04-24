@@ -1041,3 +1041,871 @@ def test_path_is_exempt_exact_match(cwo):
 def test_path_is_exempt_handles_non_string_inputs(cwo):
     assert cwo._path_is_exempt(None, ["/api/"], {"/x"}) is False
     assert cwo._path_is_exempt(123, ["/api/"], {"/x"}) is False
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# status (Task #832)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# `status` is the only read-only subcommand and is the operator's first
+# move on every incident. The tests below pin two things that have bitten
+# us before:
+#   1. the printed output surfaces every dimension the rest of the
+#      orchestrator keys off (rule ids, deployed-ruleset ids, the per-rule
+#      override list, and the Skip-rule expression — operators paste this
+#      verbatim into incident tickets);
+#   2. the custom-firewall phase being absent must NOT crash the
+#      command — it's the on-demand phase created by `bot_skip` and
+#      will not exist on a fresh zone.
+
+
+def test_status_prints_all_three_entrypoints(cwo, fake_req, capsys):
+    """Happy path: status fetches the managed-firewall, rate-limit, and
+    custom-firewall entrypoints and prints every dimension the rest of
+    the orchestrator keys off (rule ids, deployed-ruleset ids, per-rule
+    overrides, Skip-rule expression)."""
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_request_firewall_managed/entrypoint",
+        _passing_fw_entrypoint(cwo),
+    )
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_ratelimit/entrypoint",
+        _passing_rl_entrypoint(),
+    )
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_request_firewall_custom/entrypoint",
+        _passing_custom_entrypoint(cwo),
+    )
+
+    rc = cwo.cmd_status(_ns())
+    assert rc == 0
+    out = capsys.readouterr().out
+
+    # Managed-firewall section: both bindings rendered with rule_id +
+    # deployed_ruleset id.
+    assert "BIND_CFM" in out
+    assert "BIND_OWASP" in out
+    assert cwo.CF_MANAGED_DEPLOYED_RULESET_ID in out
+    assert cwo.CF_OWASP_DEPLOYED_RULESET_ID in out
+    # Per-rule override on the OWASP binding (the trip rule disable)
+    # must be visible — operators eyeball this to confirm step3 took.
+    assert cwo.DEFAULT_OWASP_TRIP_RULE in out
+
+    # Rate-limit section: leaked-cred rule rendered.
+    assert "LCRED" in out
+    assert "managed_challenge" in out
+
+    # Custom-firewall section: Skip rule with deployed_ruleset id and
+    # the canonical bot-skip expression.
+    assert "SKIP1" in out
+    assert cwo.BOT_DEFINITE_RULE_ID in out
+    assert cwo.BOT_SKIP_EXPRESSION in out
+
+
+def test_status_handles_missing_custom_phase_gracefully(cwo, fake_req, capsys):
+    """Drift / fresh-zone case: the custom-firewall phase has no
+    entrypoint yet (the `bot_skip` subcommand creates it lazily). The
+    read-only `status` command must NOT crash — it must print the
+    "(none)" sentinel and still return 0 so an operator can run it
+    safely on any zone shape."""
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_request_firewall_managed/entrypoint",
+        _passing_fw_entrypoint(cwo),
+    )
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_ratelimit/entrypoint",
+        _passing_rl_entrypoint(),
+    )
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_request_firewall_custom/entrypoint",
+        "404",
+    )
+
+    rc = cwo.cmd_status(_ns())
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "(none" in out
+    # Operator hint pointing at `bot_skip` is part of the runbook —
+    # pin it so a casual rewording of this string doesn't lose it.
+    assert "bot_skip" in out
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# step0  (and the step0 ↔ step6 round-trip)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# step0 is the most blast-radius-heavy mutation in the script: it flips
+# both managed-ruleset bindings to force-log, dropping the zone's WAF
+# protection until step6 lifts it. The tests below pin:
+#   1. the PATCH body shape CF requires (action stays "execute"; only
+#      action_parameters.overrides.action becomes "log");
+#   2. the snapshot written to the state file has enough information
+#      for step6 to faithfully restore the original action;
+#   3. the idempotency rules — re-running step0 must NOT re-PATCH a
+#      binding already in force-log mode, and must NOT overwrite the
+#      first-call snapshot;
+#   4. the state-freshness check that protects against a stale
+#      previous-incident snapshot teaching step6 to restore wrong
+#      values;
+#   5. the abort path when the entrypoint contains no managed bindings
+#      — silently doing nothing on a customised zone would be a worse
+#      outcome than aborting and asking a human to look.
+
+
+def _fw_pre_step0(cwo) -> dict:
+    """A managed-firewall entrypoint in the pre-incident steady state:
+    both bindings exist, action=execute, no overrides.action set, OWASP
+    has no per-rule overrides yet. Used by every step0/step6 test."""
+    return {"result": {"id": "FW1", "rules": [
+        {
+            "id": "BIND_CFM",
+            "action": "execute",
+            "enabled": True,
+            "action_parameters": {
+                "id": cwo.CF_MANAGED_DEPLOYED_RULESET_ID,
+                "overrides": {},
+            },
+            "expression": "true",
+            "description": "Cloudflare Managed Ruleset binding",
+        },
+        {
+            "id": "BIND_OWASP",
+            "action": "execute",
+            "enabled": True,
+            "action_parameters": {
+                "id": cwo.CF_OWASP_DEPLOYED_RULESET_ID,
+                "overrides": {},
+            },
+            "expression": "true",
+            "description": "OWASP Core Ruleset binding",
+        },
+    ]}}
+
+
+def test_step0_flips_both_bindings_and_snapshots_for_step6(
+    cwo, fake_req, capsys,
+):
+    """Happy path: both managed-ruleset bindings get
+    ``overrides.action='log'`` while the binding's primary
+    ``action`` stays ``execute`` (CF rejects the alternative). The
+    pre-change action of each is recorded in the state file so step6
+    knows what to restore."""
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_request_firewall_managed/entrypoint",
+        _fw_pre_step0(cwo),
+    )
+    fake_req.expect("PATCH", "/rulesets/FW1/rules/BIND_CFM", {"result": {}})
+    fake_req.expect("PATCH", "/rulesets/FW1/rules/BIND_OWASP", {"result": {}})
+
+    rc = cwo.cmd_step0(_ns())
+    assert rc == 0
+
+    # Both bindings PATCHed exactly once.
+    cfm = fake_req.calls_for("PATCH", "/rulesets/FW1/rules/BIND_CFM")
+    owasp = fake_req.calls_for("PATCH", "/rulesets/FW1/rules/BIND_OWASP")
+    assert len(cfm) == 1 and len(owasp) == 1, fake_req.calls
+
+    # CF Ruleset API contract: managed-firewall bindings MUST keep
+    # action="execute"; the force-log behaviour is opted into via
+    # action_parameters.overrides.action="log".
+    for body in (cfm[0]["body"], owasp[0]["body"]):
+        assert body["action"] == "execute"
+        assert body["action_parameters"]["overrides"]["action"] == "log"
+        # The binding must remain enabled — disabling it would drop
+        # WAF entirely instead of force-logging it.
+        assert body["enabled"] is True
+
+    # Snapshot for step6: must record both binding ids with their
+    # ORIGINAL (pre-step0) override.action and binding action.
+    state = json.loads(cwo.STATE_FILE.read_text())
+    saved = state["step0_pre_change"]
+    assert set(saved.keys()) == {"BIND_CFM", "BIND_OWASP"}
+    for snap in saved.values():
+        assert snap["override_action"] is None  # was unset pre-incident
+        assert snap["binding_action"] == "execute"
+    assert state["entrypoint_id"] == "FW1"
+
+
+def test_step0_idempotent_skips_binding_already_in_force_log(
+    cwo, fake_req, capsys,
+):
+    """Re-running step0 mid-incident must NOT re-PATCH a binding that
+    is already in force-log mode (no-op'd by the idempotency guard),
+    and must NOT overwrite the snapshot recorded on the FIRST call —
+    losing that would teach step6 to restore the wrong value."""
+    fw = _fw_pre_step0(cwo)
+    cfm = next(r for r in fw["result"]["rules"] if r["id"] == "BIND_CFM")
+    cfm["action_parameters"]["overrides"] = {"action": "log"}
+
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_request_firewall_managed/entrypoint", fw,
+    )
+    fake_req.expect("PATCH", "/rulesets/FW1/rules/BIND_OWASP", {"result": {}})
+
+    rc = cwo.cmd_step0(_ns())
+    assert rc == 0
+
+    # CFM was already in force-log → must not be re-PATCHed.
+    assert not fake_req.calls_for("PATCH", "/rulesets/FW1/rules/BIND_CFM"), (
+        "step0 must NOT re-PATCH a binding already in force-log mode"
+    )
+    # OWASP was clean → must be PATCHed.
+    assert fake_req.calls_for("PATCH", "/rulesets/FW1/rules/BIND_OWASP")
+
+    # The snapshot still records BOTH bindings — including CFM's
+    # pre-step0 override.action='log' so step6 restores the
+    # genuinely-original value rather than blindly removing the key.
+    state = json.loads(cwo.STATE_FILE.read_text())
+    saved = state["step0_pre_change"]
+    assert saved["BIND_CFM"]["override_action"] == "log"
+    assert saved["BIND_OWASP"]["override_action"] is None
+
+    out = capsys.readouterr().out
+    assert "already overrides.action='log'" in out
+
+
+def test_step0_aborts_when_no_managed_bindings_found(cwo, fake_req):
+    """Drift case: the managed-firewall entrypoint contains no OWASP
+    or CF-Managed binding (e.g. heavily-customised zone). step0 must
+    SystemExit cleanly — silently doing nothing would mean the
+    operator believes WAF is in force-log mode when it actually
+    isn't."""
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_request_firewall_managed/entrypoint",
+        {"result": {"id": "FW1", "rules": [
+            {
+                "id": "OTHER",
+                "action": "execute",
+                "action_parameters": {"id": "irrelevant-deployed-id"},
+                "description": "some unrelated custom binding",
+            },
+        ]}},
+    )
+    with pytest.raises(SystemExit) as exc:
+        cwo.cmd_step0(_ns())
+    assert "no managed-ruleset bindings found" in str(exc.value)
+
+
+def test_step0_refreshes_stale_snapshot_from_previous_incident(
+    cwo, fake_req, capsys,
+):
+    """State-freshness guard: if the state file contains a snapshot
+    from a PREVIOUS incident (no binding currently in force-log), it
+    must be refreshed from live state — otherwise step6 would restore
+    values that are no longer the natural pre-incident state of THIS
+    incident. The associated stale step3 marker must also be dropped
+    so step6's precondition gate doesn't fail on a phantom rule id."""
+    cwo.STATE_FILE.write_text(json.dumps({
+        "step0_pre_change": {
+            "BIND_CFM": {
+                "override_action": "log",  # stale; live state is None
+                "binding_action": "execute",
+                "description": "stale CFM entry from prior incident",
+            },
+        },
+        "step3": {
+            "some-old-rule-from-last-incident": {
+                "binding_id": "BIND_OWASP",
+                "entrypoint_id": "FW1",
+            },
+        },
+        "entrypoint_id": "FW1",
+    }))
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_request_firewall_managed/entrypoint",
+        _fw_pre_step0(cwo),
+    )
+    fake_req.expect("PATCH", "/rulesets/FW1/rules/BIND_CFM", {"result": {}})
+    fake_req.expect("PATCH", "/rulesets/FW1/rules/BIND_OWASP", {"result": {}})
+
+    rc = cwo.cmd_step0(_ns())
+    assert rc == 0
+
+    state = json.loads(cwo.STATE_FILE.read_text())
+    saved = state["step0_pre_change"]
+    # Stale CFM entry replaced with LIVE values.
+    assert saved["BIND_CFM"]["override_action"] is None
+    assert "BIND_OWASP" in saved
+    # Stale step3 marker cleared so step6's precondition gate isn't
+    # checking against a rule that the previous incident disabled.
+    assert state["step3"] == {}
+
+    out = capsys.readouterr().out
+    assert "stale step0 snapshot" in out
+
+
+def test_step0_dry_run_does_not_write_state_file(cwo, fake_req):
+    """``--dry-run`` must not persist anything to the state file —
+    operators rely on that when previewing a step0 they intend to
+    back out of."""
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_request_firewall_managed/entrypoint",
+        _fw_pre_step0(cwo),
+    )
+    rc = cwo.cmd_step0(_ns(dry_run=True))
+    assert rc == 0
+    assert not cwo.STATE_FILE.exists()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# step3 / rollback3
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def test_step3_appends_per_rule_disable_override(cwo, fake_req, capsys):
+    """Happy path: step3 PATCHes the OWASP binding to add a per-rule
+    override that disables ``--rule-id``. The override is the
+    {"id": <rule>, "enabled": False} shape CF requires; the binding's
+    primary action stays ``execute``."""
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_request_firewall_managed/entrypoint",
+        _fw_pre_step0(cwo),
+    )
+    fake_req.expect("PATCH", "/rulesets/FW1/rules/BIND_OWASP", {"result": {}})
+
+    rc = cwo.cmd_step3(_ns(rule_id=cwo.DEFAULT_OWASP_TRIP_RULE))
+    assert rc == 0
+
+    patches = fake_req.calls_for("PATCH", "/rulesets/FW1/rules/BIND_OWASP")
+    assert len(patches) == 1
+    body = patches[0]["body"]
+    assert body["action"] == "execute"  # CF requires this on managed bindings
+    rules_overrides = body["action_parameters"]["overrides"]["rules"]
+    assert len(rules_overrides) == 1
+    assert rules_overrides[0] == {
+        "id": cwo.DEFAULT_OWASP_TRIP_RULE, "enabled": False,
+    }
+
+    state = json.loads(cwo.STATE_FILE.read_text())
+    assert state["step3"][cwo.DEFAULT_OWASP_TRIP_RULE] == {
+        "binding_id": "BIND_OWASP",
+        "entrypoint_id": "FW1",
+    }
+
+
+def test_step3_idempotent_updates_existing_override_in_place(
+    cwo, fake_req, capsys,
+):
+    """If the rule already has an override entry (e.g. someone left it
+    enabled=True in the dashboard), step3 must UPDATE that entry in
+    place rather than appending a duplicate — duplicate entries with
+    the same id are a documented source of CF Ruleset API errors."""
+    fw = _fw_pre_step0(cwo)
+    owasp = next(r for r in fw["result"]["rules"] if r["id"] == "BIND_OWASP")
+    owasp["action_parameters"]["overrides"] = {
+        "rules": [
+            {"id": cwo.DEFAULT_OWASP_TRIP_RULE, "enabled": True, "action": "block"},
+        ],
+    }
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_request_firewall_managed/entrypoint", fw,
+    )
+    fake_req.expect("PATCH", "/rulesets/FW1/rules/BIND_OWASP", {"result": {}})
+
+    rc = cwo.cmd_step3(_ns(rule_id=cwo.DEFAULT_OWASP_TRIP_RULE))
+    assert rc == 0
+
+    body = fake_req.calls_for("PATCH", "/rulesets/FW1/rules/BIND_OWASP")[0]["body"]
+    overrides = body["action_parameters"]["overrides"]["rules"]
+    # Exactly one entry — the existing one was UPDATED, not appended.
+    matching = [o for o in overrides if o["id"] == cwo.DEFAULT_OWASP_TRIP_RULE]
+    assert len(matching) == 1, (
+        f"step3 duplicated the override instead of updating in place: {overrides}"
+    )
+    # The updated entry must be disabled, and the now-irrelevant
+    # ``action`` key must be removed (the script does this explicitly).
+    assert matching[0]["enabled"] is False
+    assert "action" not in matching[0]
+
+
+def test_step3_aborts_when_owasp_binding_missing(cwo, fake_req):
+    """Drift case: the OWASP binding has been removed (or never
+    existed on this zone). step3 must SystemExit — silently doing
+    nothing would let the operator believe the trip rule is disabled
+    when it isn't, and step6's precondition gate would then refuse to
+    lift force-log."""
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_request_firewall_managed/entrypoint",
+        {"result": {"id": "FW1", "rules": [
+            {
+                "id": "BIND_CFM",
+                "action": "execute",
+                "action_parameters": {"id": cwo.CF_MANAGED_DEPLOYED_RULESET_ID},
+                "description": "Cloudflare Managed Ruleset binding",
+            },
+        ]}},
+    )
+    with pytest.raises(SystemExit) as exc:
+        cwo.cmd_step3(_ns(rule_id=cwo.DEFAULT_OWASP_TRIP_RULE))
+    assert "OWASP" in str(exc.value)
+
+
+def test_rollback3_removes_override_for_named_rule(cwo, fake_req, capsys):
+    """Happy path: rollback3 PATCHes the OWASP binding with the
+    targeted rule id removed from the per-rule overrides list. Other
+    overrides on the same binding must be preserved."""
+    fw = _fw_pre_step0(cwo)
+    owasp = next(r for r in fw["result"]["rules"] if r["id"] == "BIND_OWASP")
+    owasp["action_parameters"]["overrides"] = {
+        "rules": [
+            {"id": cwo.DEFAULT_OWASP_TRIP_RULE, "enabled": False},
+            {"id": "unrelated-rule-id", "enabled": False},
+        ],
+    }
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_request_firewall_managed/entrypoint", fw,
+    )
+    fake_req.expect("PATCH", "/rulesets/FW1/rules/BIND_OWASP", {"result": {}})
+
+    rc = cwo.cmd_rollback3(_ns(rule_id=cwo.DEFAULT_OWASP_TRIP_RULE))
+    assert rc == 0
+
+    body = fake_req.calls_for("PATCH", "/rulesets/FW1/rules/BIND_OWASP")[0]["body"]
+    remaining = body["action_parameters"]["overrides"]["rules"]
+    assert all(o["id"] != cwo.DEFAULT_OWASP_TRIP_RULE for o in remaining)
+    # Critical: the unrelated override must NOT have been collateral-
+    # damaged. (A naive implementation that wipes the whole list
+    # would re-enable an unrelated rule we still want disabled.)
+    assert any(o["id"] == "unrelated-rule-id" for o in remaining)
+
+
+def test_rollback3_aborts_when_owasp_binding_missing(cwo, fake_req):
+    """Drift case mirroring the step3 abort: rollback3 must
+    SystemExit if the OWASP binding can't be found."""
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_request_firewall_managed/entrypoint",
+        {"result": {"id": "FW1", "rules": []}},
+    )
+    with pytest.raises(SystemExit) as exc:
+        cwo.cmd_rollback3(_ns(rule_id=cwo.DEFAULT_OWASP_TRIP_RULE))
+    assert "OWASP" in str(exc.value)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# step4 / rollback4
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def _rl_pre_step4() -> dict:
+    """A rate-limit entrypoint where the leaked-credential rule is
+    currently action=block (the pre-step4 state)."""
+    return {"result": {"id": "RL1", "rules": [{
+        "id": "LCRED",
+        "description": "Leaked credential check (managed)",
+        "action": "block",
+        "enabled": True,
+        "expression": "true",
+        "ratelimit": {"period": 10, "requests_per_period": 5},
+    }]}}
+
+
+def test_step4_changes_block_to_managed_challenge(cwo, fake_req, capsys):
+    """Happy path: step4 PATCHes the leaked-credential rate-limit rule
+    from action=block → managed_challenge. The ``ratelimit`` block is
+    forwarded verbatim (CF rejects PATCHes that drop it)."""
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_ratelimit/entrypoint",
+        _rl_pre_step4(),
+    )
+    fake_req.expect("PATCH", "/rulesets/RL1/rules/LCRED", {"result": {}})
+
+    rc = cwo.cmd_step4(_ns())
+    assert rc == 0
+
+    body = fake_req.calls_for("PATCH", "/rulesets/RL1/rules/LCRED")[0]["body"]
+    assert body["action"] == "managed_challenge"
+    # Forwarded verbatim — the script reuses the existing rule's
+    # ratelimit dict instead of reconstructing it.
+    assert body["ratelimit"] == {"period": 10, "requests_per_period": 5}
+
+    state = json.loads(cwo.STATE_FILE.read_text())
+    saved = state["step4"]["LCRED"]
+    assert saved["action"] == "block"  # original action recorded for rollback4
+    assert saved["ratelimit_entrypoint_id"] == "RL1"
+
+
+def test_step4_idempotent_no_patch_when_already_managed_challenge(
+    cwo, fake_req, capsys,
+):
+    """If the rule is already managed_challenge (e.g. step4 ran
+    earlier in the same incident), step4 must skip the PATCH but
+    still ensure the state file has an entry — otherwise rollback4
+    would have nothing to restore from."""
+    rl = _rl_pre_step4()
+    rl["result"]["rules"][0]["action"] = "managed_challenge"
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_ratelimit/entrypoint", rl,
+    )
+    # No PATCH handler registered — if the script attempted a PATCH,
+    # FakeRequest would assert.
+
+    rc = cwo.cmd_step4(_ns())
+    assert rc == 0
+    assert not fake_req.calls_for("PATCH", "/rulesets/RL1/rules/LCRED")
+
+    state = json.loads(cwo.STATE_FILE.read_text())
+    assert "LCRED" in state["step4"]
+    out = capsys.readouterr().out
+    assert "already action=managed_challenge" in out
+
+
+def test_step4_aborts_when_leaked_cred_rule_not_found(cwo, fake_req):
+    """Drift case: the rate-limit entrypoint has no rule whose
+    description contains both 'leaked' and 'credential'. step4 must
+    SystemExit so the operator investigates rather than silently
+    leaving a phishing-mirror block in place."""
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_ratelimit/entrypoint",
+        {"result": {"id": "RL1", "rules": [
+            {"id": "RL_OTHER", "description": "an unrelated rate limit",
+             "action": "block", "enabled": True},
+        ]}},
+    )
+    with pytest.raises(SystemExit) as exc:
+        cwo.cmd_step4(_ns())
+    assert "leaked" in str(exc.value).lower()
+
+
+def test_rollback4_restores_action_from_state(cwo, fake_req, capsys):
+    """Happy path: rollback4 reads the saved action from the state
+    file and PATCHes the rule back to it."""
+    cwo.STATE_FILE.write_text(json.dumps({
+        "step4": {
+            "LCRED": {
+                "action": "block",
+                "ratelimit_entrypoint_id": "RL1",
+                "description": "Leaked credential check (managed)",
+            },
+        },
+    }))
+    rl = _rl_pre_step4()
+    rl["result"]["rules"][0]["action"] = "managed_challenge"
+    fake_req.expect("GET", "/rulesets/phases/http_ratelimit/entrypoint", rl)
+    fake_req.expect("PATCH", "/rulesets/RL1/rules/LCRED", {"result": {}})
+
+    rc = cwo.cmd_rollback4(_ns())
+    assert rc == 0
+
+    body = fake_req.calls_for("PATCH", "/rulesets/RL1/rules/LCRED")[0]["body"]
+    assert body["action"] == "block"
+    # ratelimit must be forwarded — CF requires it on rate-limit rule
+    # PATCHes.
+    assert body["ratelimit"] == {"period": 10, "requests_per_period": 5}
+
+
+def test_rollback4_aborts_when_no_state(cwo, fake_req):
+    """Drift case: rollback4 invoked without a prior step4 (state file
+    has no ``step4`` key). Must SystemExit — there's nothing to
+    restore TO and guessing 'block' would be unsafe (the operator
+    might have intentionally moved the rule to ``js_challenge``)."""
+    # No state file written at all.
+    with pytest.raises(SystemExit) as exc:
+        cwo.cmd_rollback4(_ns())
+    assert "no step4 state" in str(exc.value)
+
+
+def test_rollback4_skips_rule_no_longer_in_ruleset(cwo, fake_req, capsys):
+    """Edge case: the rate-limit rule recorded in state has been
+    deleted from the live ruleset (e.g. rule rotation). rollback4 must
+    print a "skipped" notice and exit 0 — not crash, not PATCH a
+    URL that no longer exists."""
+    cwo.STATE_FILE.write_text(json.dumps({
+        "step4": {
+            "GHOST_RULE": {
+                "action": "block",
+                "ratelimit_entrypoint_id": "RL1",
+                "description": "deleted long ago",
+            },
+        },
+    }))
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_ratelimit/entrypoint",
+        {"result": {"id": "RL1", "rules": []}},
+    )
+    rc = cwo.cmd_rollback4(_ns())
+    assert rc == 0
+    assert not fake_req.calls_for("PATCH"), (
+        "rollback4 must not PATCH a rule that no longer exists"
+    )
+    out = capsys.readouterr().out
+    assert "GHOST_RULE" in out and "skipped" in out
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# step6  (and the step0 → step6 round-trip)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# step6 is the inverse of step0 — it lifts the force-log override and
+# re-enables blocking. The most consequential thing it does is read
+# the snapshot written by step0 and use it to decide what to put back.
+# A wrong restored value here means an incident is "fixed" but actually
+# left the zone in a different state from the one it started in.
+# Particular pins:
+#   1. the precondition gate that refuses to lift force-log unless
+#      step3's per-rule disable is still in place (otherwise step6
+#      would re-block the very users the incident response just
+#      unblocked);
+#   2. the ``--force`` escape hatch when the operator has hand-applied
+#      an equivalent fix in the dashboard;
+#   3. the abort path when the state file is empty (refusing to guess);
+#   4. the round-trip test below: a snapshot written by step0 must be
+#      faithfully consumed by step6 to restore the original action.
+
+
+def _fw_post_step0_step3(cwo) -> dict:
+    """Live state AFTER step0+step3 ran: both bindings have
+    overrides.action='log', and OWASP additionally has the trip-rule
+    disable override (so step6's precondition gate accepts the call)."""
+    return {"result": {"id": "FW1", "rules": [
+        {
+            "id": "BIND_CFM",
+            "action": "execute",
+            "enabled": True,
+            "action_parameters": {
+                "id": cwo.CF_MANAGED_DEPLOYED_RULESET_ID,
+                "overrides": {"action": "log"},
+            },
+            "expression": "true",
+            "description": "Cloudflare Managed Ruleset binding",
+        },
+        {
+            "id": "BIND_OWASP",
+            "action": "execute",
+            "enabled": True,
+            "action_parameters": {
+                "id": cwo.CF_OWASP_DEPLOYED_RULESET_ID,
+                "overrides": {
+                    "action": "log",
+                    "rules": [
+                        {"id": cwo.DEFAULT_OWASP_TRIP_RULE, "enabled": False},
+                    ],
+                },
+            },
+            "expression": "true",
+            "description": "OWASP Core Ruleset binding",
+        },
+    ]}}
+
+
+def test_step6_restores_overrides_from_step0_snapshot(cwo, fake_req, capsys):
+    """Happy path: with a clean step0 snapshot on file (override_action
+    was None pre-incident), step6 PATCHes both bindings such that
+    overrides.action is removed entirely. step3's per-rule disable
+    survives because step6 reads the binding LIVE rather than from a
+    stale snapshot."""
+    cwo.STATE_FILE.write_text(json.dumps({
+        "step0_pre_change": {
+            "BIND_CFM": {"override_action": None, "binding_action": "execute",
+                         "description": "CFM binding"},
+            "BIND_OWASP": {"override_action": None, "binding_action": "execute",
+                           "description": "OWASP binding"},
+        },
+        "entrypoint_id": "FW1",
+    }))
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_request_firewall_managed/entrypoint",
+        _fw_post_step0_step3(cwo),
+    )
+    fake_req.expect("PATCH", "/rulesets/FW1/rules/BIND_CFM", {"result": {}})
+    fake_req.expect("PATCH", "/rulesets/FW1/rules/BIND_OWASP", {"result": {}})
+
+    rc = cwo.cmd_step6(_ns())
+    assert rc == 0
+
+    cfm_body = fake_req.calls_for("PATCH", "/rulesets/FW1/rules/BIND_CFM")[0]["body"]
+    owasp_body = fake_req.calls_for("PATCH", "/rulesets/FW1/rules/BIND_OWASP")[0]["body"]
+
+    # CFM had no per-rule overrides AND its pre-step0 override.action
+    # was None → the whole `overrides` dict should be omitted.
+    cfm_ap = cfm_body["action_parameters"]
+    assert "overrides" not in cfm_ap, (
+        f"CFM step6 left empty overrides dict: {cfm_ap}"
+    )
+
+    # OWASP had a per-rule override that step6 must PRESERVE — only
+    # the override.action key is removed.
+    owasp_ap = owasp_body["action_parameters"]
+    assert "action" not in owasp_ap["overrides"]
+    rule_overrides = owasp_ap["overrides"]["rules"]
+    assert any(
+        o["id"] == cwo.DEFAULT_OWASP_TRIP_RULE and o["enabled"] is False
+        for o in rule_overrides
+    ), (
+        "step6 must preserve step3's per-rule disable when lifting "
+        f"force-log: {rule_overrides}"
+    )
+
+
+def test_step0_step6_round_trip_restores_nondefault_pre_action(
+    cwo, monkeypatch, capsys,
+):
+    """End-to-end round-trip for the failure mode the snapshot exists
+    to prevent: a binding whose override.action was NOT None
+    pre-incident (e.g. CFM was already in 'log' for an unrelated
+    long-running experiment). step0 must capture that value, and
+    step6 must restore it — NOT silently flip it to None.
+
+    This is the interaction the task description specifically called
+    out as 'a regression there could mean an incident is recovered
+    with the wrong original action'."""
+    # Pre-incident state: CFM is in custom 'log' mode for an unrelated
+    # reason; OWASP is clean.
+    fw_pre = _fw_pre_step0(cwo)
+    cfm_pre = next(r for r in fw_pre["result"]["rules"] if r["id"] == "BIND_CFM")
+    cfm_pre["action_parameters"]["overrides"] = {"action": "log"}
+
+    # Phase 1: run step0 → snapshot must capture override_action='log'
+    # for CFM.
+    fr1 = FakeRequest()
+    monkeypatch.setattr(cwo, "_request", fr1)
+    fr1.expect(
+        "GET", "/rulesets/phases/http_request_firewall_managed/entrypoint", fw_pre,
+    )
+    fr1.expect("PATCH", "/rulesets/FW1/rules/BIND_OWASP", {"result": {}})
+    # (CFM is already in force-log → step0 won't PATCH it.)
+
+    rc0 = cwo.cmd_step0(_ns())
+    assert rc0 == 0
+    snap = json.loads(cwo.STATE_FILE.read_text())["step0_pre_change"]
+    assert snap["BIND_CFM"]["override_action"] == "log", (
+        "step0 must record the genuine pre-incident override value; "
+        "got snapshot " + json.dumps(snap)
+    )
+    assert snap["BIND_OWASP"]["override_action"] is None
+
+    # Phase 2: between step0 and step6, the operator runs step3 and
+    # the OWASP trip rule is now disabled. CFM and OWASP are both in
+    # force-log mode in live state.
+    fw_post = _fw_post_step0_step3(cwo)
+
+    # Phase 3: run step6 with a fresh FakeRequest (so we can inspect
+    # only the step6-issued calls). step6 must:
+    #   • restore CFM's overrides.action to 'log' (the saved value),
+    #   • REMOVE OWASP's overrides.action entirely (the saved value
+    #     was None) while preserving the per-rule disable.
+    fr2 = FakeRequest()
+    monkeypatch.setattr(cwo, "_request", fr2)
+    fr2.expect(
+        "GET", "/rulesets/phases/http_request_firewall_managed/entrypoint", fw_post,
+    )
+    fr2.expect("PATCH", "/rulesets/FW1/rules/BIND_CFM", {"result": {}})
+    fr2.expect("PATCH", "/rulesets/FW1/rules/BIND_OWASP", {"result": {}})
+
+    rc6 = cwo.cmd_step6(_ns())
+    assert rc6 == 0
+
+    cfm_body = fr2.calls_for("PATCH", "/rulesets/FW1/rules/BIND_CFM")[0]["body"]
+    assert cfm_body["action_parameters"]["overrides"]["action"] == "log", (
+        "step6 silently flipped CFM back to None instead of "
+        "restoring the genuine pre-incident 'log'"
+    )
+    owasp_body = fr2.calls_for("PATCH", "/rulesets/FW1/rules/BIND_OWASP")[0]["body"]
+    owasp_overrides = owasp_body["action_parameters"]["overrides"]
+    assert "action" not in owasp_overrides
+    assert any(
+        o["id"] == cwo.DEFAULT_OWASP_TRIP_RULE and o["enabled"] is False
+        for o in owasp_overrides["rules"]
+    )
+
+
+def test_step6_aborts_when_no_state_on_file(cwo, fake_req):
+    """Drift case: step6 invoked without a prior step0. The script
+    must SystemExit rather than guess what the original action was —
+    guessing here would be the worst kind of silent failure."""
+    # No state file on disk.
+    with pytest.raises(SystemExit) as exc:
+        cwo.cmd_step6(_ns())
+    assert "no step0 state" in str(exc.value)
+
+
+def test_step6_precondition_gate_refuses_when_trip_rule_re_enabled(
+    cwo, fake_req,
+):
+    """Architect-feedback gate: step6 must REFUSE to lift force-log
+    when the OWASP trip rule is no longer disabled. Lifting force-log
+    in that state would re-block the very users the incident response
+    just unblocked."""
+    cwo.STATE_FILE.write_text(json.dumps({
+        "step0_pre_change": {
+            "BIND_CFM": {"override_action": None, "binding_action": "execute",
+                         "description": "CFM"},
+            "BIND_OWASP": {"override_action": None, "binding_action": "execute",
+                           "description": "OWASP"},
+        },
+        "entrypoint_id": "FW1",
+    }))
+    # Live state: force-log is in place but the per-rule disable is
+    # GONE (someone re-enabled it in the dashboard, or rollback3 ran).
+    fw = _fw_post_step0_step3(cwo)
+    owasp = next(r for r in fw["result"]["rules"] if r["id"] == "BIND_OWASP")
+    owasp["action_parameters"]["overrides"]["rules"] = []
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_request_firewall_managed/entrypoint", fw,
+    )
+    # No PATCH handler — if the script proceeded past the gate,
+    # FakeRequest would assert on the unmatched call.
+
+    with pytest.raises(SystemExit) as exc:
+        cwo.cmd_step6(_ns())
+    msg = str(exc.value)
+    assert "refusing to lift force-log" in msg
+    assert cwo.DEFAULT_OWASP_TRIP_RULE in msg
+
+
+def test_step6_force_bypasses_precondition_gate(cwo, fake_req, capsys):
+    """``--force`` is the documented escape hatch when the operator
+    has hand-applied an equivalent fix in the dashboard. With force=True
+    step6 must proceed even though the per-rule disable is missing."""
+    cwo.STATE_FILE.write_text(json.dumps({
+        "step0_pre_change": {
+            "BIND_CFM": {"override_action": None, "binding_action": "execute",
+                         "description": "CFM"},
+            "BIND_OWASP": {"override_action": None, "binding_action": "execute",
+                           "description": "OWASP"},
+        },
+        "entrypoint_id": "FW1",
+    }))
+    fw = _fw_post_step0_step3(cwo)
+    owasp = next(r for r in fw["result"]["rules"] if r["id"] == "BIND_OWASP")
+    owasp["action_parameters"]["overrides"]["rules"] = []  # gate would normally fail
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_request_firewall_managed/entrypoint", fw,
+    )
+    fake_req.expect("PATCH", "/rulesets/FW1/rules/BIND_CFM", {"result": {}})
+    fake_req.expect("PATCH", "/rulesets/FW1/rules/BIND_OWASP", {"result": {}})
+
+    rc = cwo.cmd_step6(_ns(force=True))
+    assert rc == 0
+    # Both PATCHes happened despite the missing per-rule disable.
+    assert fake_req.calls_for("PATCH", "/rulesets/FW1/rules/BIND_CFM")
+    assert fake_req.calls_for("PATCH", "/rulesets/FW1/rules/BIND_OWASP")
+
+
+def test_step6_skips_binding_no_longer_in_entrypoint(cwo, fake_req, capsys):
+    """Edge case: the snapshot references a binding id that no longer
+    exists in the live entrypoint (someone deleted it in the dashboard
+    mid-incident). step6 must print a "skipped" notice and continue
+    with the remaining bindings — not crash, not PATCH a URL that
+    points at a deleted resource."""
+    cwo.STATE_FILE.write_text(json.dumps({
+        "step0_pre_change": {
+            "GHOST_BIND": {"override_action": None, "binding_action": "execute",
+                           "description": "deleted in dashboard"},
+            "BIND_OWASP": {"override_action": None, "binding_action": "execute",
+                           "description": "OWASP"},
+        },
+        "entrypoint_id": "FW1",
+    }))
+    fake_req.expect(
+        "GET", "/rulesets/phases/http_request_firewall_managed/entrypoint",
+        _fw_post_step0_step3(cwo),
+    )
+    fake_req.expect("PATCH", "/rulesets/FW1/rules/BIND_OWASP", {"result": {}})
+
+    rc = cwo.cmd_step6(_ns())
+    assert rc == 0
+    # OWASP got its PATCH; GHOST_BIND did not.
+    assert fake_req.calls_for("PATCH", "/rulesets/FW1/rules/BIND_OWASP")
+    assert not any("GHOST_BIND" in c["url"] for c in fake_req.calls)
+    out = capsys.readouterr().out
+    assert "GHOST_BIND" in out and "skipped" in out
