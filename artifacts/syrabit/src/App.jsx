@@ -267,7 +267,7 @@ function LegacyTopicRedirect() {
 }
 
 // ── Routes (extracted so SSR can render them inside a StaticRouter) ───────
-function AppRoutes() {
+export function AppRoutes() {
   return (
     <Routes>
       {/* ── Public routes ── */}
@@ -355,7 +355,7 @@ function AppRoutes() {
 // Used by both the client (wrapped with BrowserRouter) and the SSR entry
 // (wrapped with StaticRouter) so the prerendered DOM matches React's
 // first client render. (Task #382)
-function AppShell({ children, ssr = false, helmetContext }) {
+export function AppShell({ children, ssr = false, helmetContext }) {
   // The four lazy presentational/effects components below are gated on a
   // post-hydration `mounted` flag — NOT on `ssr` — so the FIRST render
   // tree is identical on the server and on the client. Gating on `ssr`
