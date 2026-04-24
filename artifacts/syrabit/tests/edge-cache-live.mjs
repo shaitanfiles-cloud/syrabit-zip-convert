@@ -197,8 +197,24 @@ async function probeRoute(route) {
     console.log(`    status=${secondResp.status} X-Cache=${secondCache} X-Source=${source}`);
   }
 
-  if (HIT_VALUES.has(secondCache)) {
+  // A cached non-success response (e.g. CF accidentally storing a 500
+  // or a redirect chain) would still surface as `X-Cache: HIT`. Gate on
+  // status as well so we only treat 200 / 304 as a real warm hit.
+  const statusOk = secondResp.status === 200 || secondResp.status === 304;
+
+  if (HIT_VALUES.has(secondCache) && statusOk) {
     return { route, ok: true, firstCache, secondCache, status: secondResp.status, source };
+  }
+  if (HIT_VALUES.has(secondCache) && !statusOk) {
+    return {
+      route,
+      ok: false,
+      firstCache,
+      secondCache,
+      status: secondResp.status,
+      source,
+      error: `cached response had unexpected status ${secondResp.status} (X-Cache: ${secondCache})`,
+    };
   }
 
   // BYPASS / MISS on a route the worker chose not to cache (e.g. backend
