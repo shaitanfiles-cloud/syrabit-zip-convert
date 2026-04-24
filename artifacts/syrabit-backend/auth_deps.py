@@ -2,7 +2,7 @@
 import time, asyncio, logging
 from typing import Optional, List, Dict
 from datetime import datetime, timezone, timedelta
-from fastapi import Depends, HTTPException, Cookie, Request
+from fastapi import Depends, HTTPException, Cookie, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials
 import jwt
 from jwt.exceptions import PyJWTError as JWTError
@@ -10,10 +10,96 @@ from config import (
     JWT_SECRET, JWT_ALGORITHM, JWT_ACCESS_EXPIRE_MINUTES,
     JWT_REFRESH_EXPIRE_MINUTES, JWT_EXPIRE_MINUTES,
     ADMIN_JWT_SECRET, PLAN_LIMITS,
+    COOKIE_DOMAIN, COOKIE_SAMESITE, SECURE_COOKIES,
+    IP_COARSE_DAILY_CAP,
 )
 from deps import security, redis_client
 from cache import _redis_get_session, _redis_cache_session
 from cf_access import require_cf_access_admin
+from device_token import (
+    DEVICE_COOKIE_NAME, DEVICE_COOKIE_MAX_AGE_SECONDS,
+    mint_device_token, device_token_id,
+)
+
+
+def _real_client_ip(request: Request) -> str:
+    """Return the best-effort real client IP for rate limiting.
+
+    Header preference order (Task #793):
+
+    1. ``cf-connecting-ip`` — Cloudflare always sets this on requests
+       it forwards to origin, and it always carries the **real**
+       client IP (not the CF edge POP). This is the highest-trust
+       source when traffic actually comes from the CF edge.
+    2. ``x-forwarded-for`` (first comma-separated entry) — what our
+       own ``workers/edge-proxy`` rewrites onto the upstream request
+       after stripping CF-Connecting-IP, and the de-facto standard
+       header that any HTTP-aware proxy in front of us will set.
+    3. ``request.client.host`` — the immediate peer the ASGI server
+       sees, which behind any proxy will be the proxy's address (a
+       Replit gateway, the Cloud Run frontend, etc.) and is therefore
+       the worst signal of "who is actually talking to us". Used only
+       as a last resort.
+
+    Previously :func:`rate_limit_chat_optional` checked
+    ``request.client.host`` *first*, which on Replit/Cloud Run pinned
+    the entire daily quota to a single shared upstream IP and made
+    every test environment look like an exhausted attacker.
+    """
+    cf_ip = (request.headers.get("cf-connecting-ip") or "").strip()
+    if cf_ip:
+        return cf_ip
+    xff = request.headers.get("x-forwarded-for") or ""
+    if xff:
+        first = xff.split(",")[0].strip()
+        if first:
+            return first
+    return (request.client.host if request.client else "") or "unknown"
+
+
+def _set_device_cookie(request: Request, response: Response, value: str) -> None:
+    """Attach the signed device-token cookie to ``response`` *and* stash
+    the value on ``request.state`` so the
+    :class:`middleware.DeviceCookieMiddleware` fall-back can re-apply
+    it when the route handler returns its own ``Response`` instance
+    (FastAPI discards the dependency-injected ``Response`` object in
+    that case — the most common path here is ``StreamingResponse`` on
+    ``/ai/chat/stream``, which is the user-facing chat endpoint).
+
+    Cookie attributes mirror the existing ``syrabit_session`` cookie
+    set by :mod:`routes.auth`: HttpOnly (so client JS cannot read or
+    tamper with it), Secure when running over HTTPS, SameSite=Lax (so
+    ordinary navigations from search results / WhatsApp link previews
+    still send the cookie and the user keeps their device-keyed
+    quota), and a 400-day max-age (the longest browsers will honour).
+    """
+    cookie_kwargs = dict(
+        key=DEVICE_COOKIE_NAME,
+        value=value,
+        httponly=True,
+        secure=SECURE_COOKIES,
+        samesite=COOKIE_SAMESITE,
+        max_age=DEVICE_COOKIE_MAX_AGE_SECONDS,
+        path="/",
+    )
+    if COOKIE_DOMAIN:
+        cookie_kwargs["domain"] = COOKIE_DOMAIN
+    response.set_cookie(**cookie_kwargs)
+    # Stash for the middleware fall-back. Using ``request.state`` (an
+    # arbitrary attribute namespace per Starlette docs) keeps the
+    # cookie payload bound to this single request and avoids any
+    # global mutable state that could leak between concurrent
+    # requests.
+    try:
+        request.state.device_cookie_to_set = value
+    except Exception:
+        # ``request.state`` is always available on a real Starlette
+        # request; the only way this raises is in unit tests that
+        # pass a hand-rolled stub without a ``state`` attribute. The
+        # tests that exercise the dependency directly read the cookie
+        # off ``response.headers`` so they don't need the stash, and
+        # the middleware fall-back is irrelevant for them.
+        pass
 
 
 logger = logging.getLogger(__name__)
@@ -294,9 +380,55 @@ async def rate_limit_chat(user: dict = Depends(get_current_user)):
 
 async def rate_limit_chat_optional(
     request: Request,
+    response: Response,
     user: Optional[dict] = Depends(get_current_user_optional),
+    syrabit_device: Optional[str] = Cookie(default=None),
 ):
-    """Like rate_limit_chat but allows anonymous users with IP-based rate limiting."""
+    """Anonymous-friendly chat rate limiter.
+
+    Logged-in users keep their plan-aware per-minute limit (unchanged
+    since Task #768).
+
+    For anonymous users (Task #793), the daily 30-message budget is
+    keyed on a **signed HttpOnly device-token cookie**, not on the
+    public IP. The IP is kept only as a coarse abuse cap.
+
+    The change exists to fix the single biggest funnel-killer on the
+    site: AHSEC/SEBA students almost always reach us through shared
+    egress IPs (Jio/Airtel mobile CGNAT, school/college WiFi,
+    hostel/cyber-café WiFi). When the daily budget was per-IP, the
+    first ~30 messages from any one of those networks drained the
+    pool for every other student behind the same NAT, so the second
+    visitor saw "Daily free quota exhausted" before sending a single
+    message.
+
+    Per-anonymous-request logic, top to bottom:
+
+    1. **Per-minute throttle** — sliding-window rate limit, keyed on
+       the device-token id when one is present, else on the IP. This
+       mirrors the previous behaviour (a fresh device on a busy NAT
+       still doesn't get throttled because each device gets its own
+       per-minute window once the cookie is issued).
+
+    2. **Coarse per-IP daily ceiling** — ``IP_COARSE_DAILY_CAP``
+       requests/day per real client IP. Set high enough (default
+       1500/day) that a classroom or hostel of students sharing one
+       NAT never hits it; meant only to stop a single host from
+       scripting thousands of requests.
+
+    3. **Per-device daily quota** — 30/day from the free-plan config,
+       enforced via :func:`db_ops.atomic_deduct_device_credit` (the
+       same atomic Lua script used by the user credit ledger so
+       concurrent abusers can't push a counter past its limit). Only
+       applies once the visitor has a *valid* device cookie.
+
+    4. **Cookie issuance** — every anonymous response that comes
+       through here either re-confirms the existing valid cookie or
+       mints a fresh one. The first request from a brand-new browser
+       therefore *succeeds* (charged only against the coarse IP cap)
+       even though it hadn't sent the cookie yet — never let a
+       missing cookie produce a hard 429 on the first visit.
+    """
     if user:
         user_id = user.get("id", "anonymous")
         plan = user.get("plan", "free")
@@ -309,27 +441,71 @@ async def rate_limit_chat_optional(
                 headers={"Retry-After": "60", "X-RateLimit-Limit": str(limit)},
             )
         return user
-    ip = (request.client.host if request.client else None) or request.headers.get("x-forwarded-for", "").split(",")[0].strip() or "unknown"
+
     free_cfg = PLAN_LIMITS["free"]
-    if not check_rate_limit(f"chat:ip:{ip}", max_requests=free_cfg["req_per_min"], window_seconds=60):
+    daily_cap = int(free_cfg.get("credits_per_day") or 30)
+    per_min_cap = int(free_cfg.get("req_per_min") or 15)
+    ip = _real_client_ip(request)
+
+    # ── 1. Resolve / mint device cookie ──────────────────────────────
+    # ``device_token_id`` returns a printable hex id when the signed
+    # cookie verifies, else None. We always issue a fresh cookie when
+    # the incoming one is missing/forged, but we do *not* let that
+    # branch produce a 429 — the "first visit" must succeed (it's
+    # charged against the coarse IP cap below as the only check).
+    token_id = device_token_id(syrabit_device)
+    is_first_visit = token_id is None
+    if is_first_visit:
+        new_cookie = mint_device_token()
+        _set_device_cookie(request, response, new_cookie)
+        # Compute the new id so per-minute / per-day counters key on
+        # the freshly-minted token from this request onwards. This is
+        # what lets a student behind a busy NAT immediately get their
+        # own private quota window without a round-trip.
+        token_id = device_token_id(new_cookie)
+
+    # ── 2. Per-minute throttle (device-scoped when possible) ─────────
+    rl_key = f"chat:dev:{token_id}" if token_id else f"chat:ip:{ip}"
+    if not check_rate_limit(rl_key, max_requests=per_min_cap, window_seconds=60):
         raise HTTPException(
             status_code=429,
             detail="Rate limit exceeded. Sign in for higher limits.",
             headers={"Retry-After": "60"},
         )
-    # Task #768: per-IP daily quota enforced via the same atomic Lua
-    # check-and-increment used for user credit ledgers (Task #765). This
-    # is the production wiring of ``db_ops.atomic_deduct_ip_credit`` —
-    # concurrent abusers cannot push the per-IP counter past
-    # ``free_cfg["credits_per_day"]`` because the seed-if-absent and
-    # check-and-increment happen inside one Redis Lua script.
-    daily_cap = int(free_cfg.get("credits_per_day") or 30)
+
+    # ── 3. Coarse per-IP abuse cap ───────────────────────────────────
+    # Skip on truly unknown IPs so we don't lock out the loopback /
+    # offline test paths; in production cf-connecting-ip / xff are
+    # always populated upstream of this dependency.
     if ip and ip != "unknown":
         from db_ops import atomic_deduct_ip_credit
-        if not atomic_deduct_ip_credit(ip, daily_limit=daily_cap):
+        if not atomic_deduct_ip_credit(ip, daily_limit=IP_COARSE_DAILY_CAP):
             raise HTTPException(
                 status_code=429,
-                detail=f"Daily free quota exhausted ({daily_cap} requests/day). Sign in for higher limits — resets at midnight UTC.",
+                detail=(
+                    f"Hourly request ceiling reached for this network "
+                    f"(>{IP_COARSE_DAILY_CAP} requests/day). Sign in or try again "
+                    "later — resets at midnight UTC."
+                ),
+                headers={"Retry-After": "3600", "X-RateLimit-Limit": str(IP_COARSE_DAILY_CAP)},
+            )
+
+    # ── 4. Per-device daily quota (30/day) ───────────────────────────
+    # Skipped on the very first visit (no verified cookie yet) so a
+    # brand-new browser is never blocked before it has a chance to
+    # accept the cookie. From the second request onwards, the cookie
+    # round-trip is complete and we can charge against the device
+    # counter normally.
+    if not is_first_visit and token_id:
+        from db_ops import atomic_deduct_device_credit
+        if not atomic_deduct_device_credit(token_id, daily_limit=daily_cap):
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Daily free quota exhausted ({daily_cap} requests/day). "
+                    "Sign in for higher limits — resets at midnight UTC."
+                ),
                 headers={"Retry-After": "3600", "X-RateLimit-Limit": str(daily_cap)},
             )
+
     return None

@@ -722,6 +722,18 @@ PLAN_LIMITS = {
     "starter": {"credits_per_day": 500,  "max_tokens": 1536,   "document_access": "limited", "req_per_min": 10, "req_per_min_ip": 90},
     "pro":     {"credits_per_day": 4000, "max_tokens": 2048,   "document_access": "full",    "req_per_min": 15, "req_per_min_ip": 120},
 }
+
+# Task #793 — coarse per-IP daily ceiling for the free-tier chat. The
+# real free-tier 30/day budget is now device-keyed (signed HttpOnly
+# cookie minted by ``device_token.mint_device_token``) so school WiFi
+# / Jio CGNAT / hostel users no longer drain each other's quota. This
+# IP-keyed counter is kept *only* as an abuse cap: a single host
+# should not be able to script thousands of chat requests/day even if
+# they rotate cookies. Set high enough that a classroom-sized NAT of
+# students (say, 30 devices × 30 req/day = 900) running normally
+# never trips it. Override via ``IP_COARSE_DAILY_CAP`` env var if a
+# specific deployment sees legitimate traffic above the default.
+IP_COARSE_DAILY_CAP = int(os.environ.get("IP_COARSE_DAILY_CAP", "1500"))
 PLAN_PRICES = {
     "free":    {"price": 0,   "label": "Free",    "description": "30 credits/day · zero document access"},
     "starter": {"price": 99,  "label": "Starter", "description": "500 credits/day · limited document access"},

@@ -177,6 +177,90 @@ class SecurityHeadersMiddleware:
 
         await self.app(scope, receive, send_with_security_headers)
 
+
+# ── DeviceCookieMiddleware (Task #793) ────────────────────────────────
+# The chat rate-limit dependency (``auth_deps.rate_limit_chat_optional``)
+# may need to mint a fresh ``syrabit_device`` cookie for first-visit
+# anonymous traffic. It tries to do so by calling ``set_cookie`` on
+# the ``Response`` parameter FastAPI injects into the dependency.
+#
+# That works fine when the route handler returns a JSON-serialisable
+# value (FastAPI builds the response from the injected ``Response``
+# object), but it does **not** work when the route handler returns a
+# concrete ``Response`` instance of its own — the most common case
+# here is ``StreamingResponse`` on ``/ai/chat/stream``, which is the
+# user-facing chat path. In that case FastAPI uses the route's
+# response and discards the dependency-injected one, so the freshly
+# minted device cookie is silently dropped on the floor and the
+# client never persists it. Effective behaviour collapses back to
+# coarse per-IP enforcement, which defeats the entire point of
+# Task #793.
+#
+# This middleware is the safety net: when the dependency mints a
+# cookie it also stashes the value on ``request.state.device_cookie_to_set``;
+# we read that back on the way out and append the ``Set-Cookie``
+# header to whichever response the handler ultimately produced — but
+# only if no ``syrabit_device`` cookie is already on the response (so
+# we don't double-set when FastAPI's normal merge actually did work,
+# e.g. on the JSON ``/ai/chat`` path).
+class DeviceCookieMiddleware:
+    """Re-apply the freshly-minted device cookie to whatever response
+    the route handler returned. See module-level comment above for
+    the failure mode this guards against.
+    """
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        # Lazy import so this module stays importable even when
+        # device_token / auth_deps haven't been initialised yet (e.g.
+        # in test bootstrap).
+        from device_token import DEVICE_COOKIE_NAME
+        from auth_deps import _set_device_cookie  # type: ignore
+        from starlette.responses import Response as _Response
+
+        # Build a real Starlette request once so we can read its
+        # ``state`` after the inner app has run. ``state`` is a plain
+        # attribute namespace shared between the request and any
+        # ASGI-level code that pulls a Request out of the scope.
+        request = StarletteRequest(scope, receive)
+
+        async def send_with_device_cookie(message):
+            if message["type"] == "http.response.start":
+                pending = getattr(request.state, "device_cookie_to_set", None)
+                if pending:
+                    headers = MutableHeaders(scope=message)
+                    # Skip if the route handler already set the same
+                    # cookie (e.g. JSON /ai/chat where the injected
+                    # Response did get merged in normally) so we
+                    # never double-emit Set-Cookie.
+                    already = any(
+                        v.startswith(f"{DEVICE_COOKIE_NAME}=")
+                        for v in headers.getlist("set-cookie")
+                    )
+                    if not already:
+                        # Use a throwaway Response purely to format
+                        # the Set-Cookie value with the same flags
+                        # (HttpOnly / Secure / SameSite / max-age /
+                        # domain) the dependency uses, then transplant
+                        # it onto the live outgoing headers.
+                        scratch = _Response()
+                        try:
+                            _set_device_cookie(request, scratch, pending)
+                            for cookie_value in scratch.headers.getlist("set-cookie"):
+                                headers.append("set-cookie", cookie_value)
+                        except Exception as exc:  # pragma: no cover — defensive
+                            logger.warning(
+                                f"DeviceCookieMiddleware: failed to apply pending cookie: {exc}"
+                            )
+            await send(message)
+
+        await self.app(scope, receive, send_with_device_cookie)
+
+
 from utils import _SEARCH_BOT_UA_RE, _ABUSIVE_SCRAPER_UA_RE, _TRAINING_SCRAPER_UA_RE, verify_bot_ip
 
 _BOT_RATE_LIMIT = 1200

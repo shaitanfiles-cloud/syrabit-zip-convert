@@ -1834,6 +1834,13 @@ app.add_middleware(BotRenderMiddleware)
 app.add_middleware(ServerSideTrackingMiddleware)
 app.add_middleware(GlobalRateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+# Task #793: re-applies a freshly-minted ``syrabit_device`` cookie to
+# the outgoing response when the route handler returned its own
+# ``Response`` (e.g. ``StreamingResponse`` on /ai/chat/stream), which
+# otherwise causes FastAPI to discard the dependency-injected
+# Response and silently drop the Set-Cookie header.
+from middleware import DeviceCookieMiddleware
+app.add_middleware(DeviceCookieMiddleware)
 # Task #606: When deployed on Cloud Run behind Cloudflare, require the
 # shared-secret header injected by the edge worker so direct hits to the
 # Cloud Run URL (e.g. `https://syrabit-backend-xyz.a.run.app/api/...`) are

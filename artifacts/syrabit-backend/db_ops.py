@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "_THREAD_POOL", "_pg_row", "_pg_rows", "_pg_user_cols", "_supa", "_supa_mirror",
     "_ALLOWED_CONV_COLUMNS", "_ALLOWED_SETTINGS_COLUMNS", "_ALLOWED_USER_COLUMNS",
-    "atomic_deduct_credit", "atomic_deduct_ip_credit",
+    "atomic_deduct_credit", "atomic_deduct_ip_credit", "atomic_deduct_device_credit",
     "supa_clear_activity_log", "supa_count_conversations",
     "supa_count_users", "supa_create_password_reset", "supa_delete_conversation",
     "supa_delete_notification", "supa_delete_password_reset", "supa_get_activity_logs",
@@ -302,6 +302,14 @@ def atomic_deduct_ip_credit(ip: str, daily_limit: int, window_seconds: int = 864
     therefore never push the counter past the limit, which is the same
     double-spend race that Task #765 fixed for user credit ledgers.
 
+    .. note::
+       Task #793 demoted this from "the daily free-tier quota" (30/day)
+       to a much higher coarse abuse cap (a few hundred per day,
+       configurable via ``IP_COARSE_DAILY_CAP``). The per-device 30/day
+       budget is now enforced by :func:`atomic_deduct_device_credit`
+       so that shared NAT / school WiFi / Jio CGNAT users no longer
+       drain each other's quota.
+
     Returns
     -------
     True  — credit charged, caller may proceed.
@@ -323,6 +331,56 @@ def atomic_deduct_ip_credit(ip: str, daily_limit: int, window_seconds: int = 864
         )
     except Exception as e:
         logger.warning(f"atomic_deduct_ip_credit redis failed for ip={ip}: {e}")
+        return False
+    return new_count > 0
+
+
+def atomic_deduct_device_credit(
+    token_id: str, daily_limit: int, window_seconds: int = 86400,
+) -> bool:
+    """Atomically charge 1 credit against a per-device daily quota.
+
+    This is the Task #793 replacement for the per-IP daily counter
+    formerly used in :func:`auth_deps.rate_limit_chat_optional`. The
+    key is keyed on the **device-token id** (the verified payload
+    minted by :mod:`device_token`), not on the public IP, so two
+    students on the same school/college NAT or Jio CGNAT egress each
+    get their own 30/day budget.
+
+    Implementation is identical to :func:`atomic_deduct_ip_credit` —
+    same Lua script, same atomic check-and-increment guarantee, same
+    midnight-UTC reset via the date-suffixed key + TTL — only the key
+    namespace differs (``device_daily_credits:`` instead of
+    ``ip_daily_credits:``). Reusing the script means the existing
+    concurrency regression in
+    ``tests/test_atomic_deduct_ip_race.py`` already covers the
+    correctness of the underlying primitive; the new tests added in
+    Task #793 only have to assert the routing.
+
+    Returns
+    -------
+    True  — credit charged, caller may proceed.
+    False — quota already exhausted (or Redis unavailable, fail-closed).
+    """
+    if not token_id:
+        return False
+    if redis_client is None:
+        # Same fail-closed posture as atomic_deduct_ip_credit: without
+        # Redis we cannot honour the cross-worker atomic guarantee that
+        # the per-device quota promises, so we deny rather than silently
+        # let abusers through.
+        return False
+    from datetime import datetime, timezone
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    key = f"device_daily_credits:{token_id}:{today_str}"
+    try:
+        new_count = _redis_atomic_deduct(
+            redis_client, key, 0, int(daily_limit), int(window_seconds),
+        )
+    except Exception as e:
+        logger.warning(
+            f"atomic_deduct_device_credit redis failed for token={token_id[:8]}…: {e}"
+        )
         return False
     return new_count > 0
 
