@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi, Copy, Check, Users, Activity, MessageSquare, TrendingUp, DollarSign, BarChart2, RotateCw, Clock, Undo2, Star, ExternalLink } from 'lucide-react';
 import CronHealthPill from './CronHealthPill';
+import CfWafDriftCronPill from './CfWafDriftCronPill';
 import { toast } from 'sonner';
 import AdminQuickLinks from './AdminQuickLinks';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar, LineChart, Line } from 'recharts';
@@ -2214,63 +2215,17 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           straight to the offending GitHub Actions run is the first
           thing an admin wants when the pill turns red. Endpoint:
           /admin/health/cf-waf-drift/cron — status keys mirror the
-          Trustpilot endpoint. Task #835 — the visual pill is now the
-          shared <CronHealthPill> component.
+          Trustpilot endpoint. Task #835 — the visual pill is the
+          shared <CronHealthPill> component. Task #836 — the
+          configuration was extracted into <CfWafDriftCronPill> so
+          its colour mapping, heartbeat-age caption, and conditional
+          verify/aggregate-RC text can be unit-tested in isolation
+          (see CfWafDriftCronPill.test.jsx).
         */}
-        <CronHealthPill
+        <CfWafDriftCronPill
           data={cfDriftCronHealth}
           loading={cfDriftCronLoading}
           onRefresh={loadCfDriftCronHealth}
-          testId="cf-waf-drift-cron"
-          defaultWorkflowUrl="https://github.com/syrabit/syrabit/actions/workflows/cf-waf-drift-daily.yml"
-          headerTextByStatus={{
-            healthy: 'Firewall drift cron — checking in',
-            silent: 'Firewall drift cron — silent',
-            degraded: 'Firewall drift cron — last run flagged',
-            never_observed: 'Firewall drift cron — no heartbeat yet',
-            not_configured: 'Firewall drift cron — not configured',
-            unknown: 'Firewall drift cron — status unknown',
-          }}
-          renderSubText={({ data, isDegraded, ageLabel: fmt }) => {
-            const anyLbl = fmt(data?.lastHeartbeatAgeSeconds);
-            // The endpoint reports last verify/aggregate exit codes —
-            // when degraded we surface them so the admin knows whether
-            // it was the verify gate or the aggregate gate that tripped
-            // before they click through to the run.
-            const verifyRc = data?.lastVerifyRc;
-            const aggregateRc = data?.lastAggregateRc;
-            const lastStatusRaw = (data?.lastStatus || '').toString();
-            return (
-              <>
-                {anyLbl
-                  ? `Last heartbeat ${anyLbl} ago`
-                  : 'No heartbeat recorded yet'}
-                {isDegraded && (verifyRc != null || aggregateRc != null || lastStatusRaw)
-                  ? ` · ${lastStatusRaw || 'failure'}`
-                    + (verifyRc != null ? ` (verify=${verifyRc}` : '')
-                    + (verifyRc != null && aggregateRc != null ? `, aggregate=${aggregateRc})` : '')
-                    + (verifyRc != null && aggregateRc == null ? ')' : '')
-                    + (verifyRc == null && aggregateRc != null ? ` (aggregate=${aggregateRc})` : '')
-                  : ''}
-              </>
-            );
-          }}
-          renderExtraActions={({ data }) => {
-            const lastRunUrl = data?.lastRunUrl;
-            if (!lastRunUrl) return null;
-            return (
-              <a
-                href={lastRunUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[11px] text-violet-600 hover:text-violet-700 inline-flex items-center gap-1"
-                data-testid="cf-waf-drift-cron-last-run-link"
-                title="Open the most recent workflow run"
-              >
-                Last run <ExternalLink size={11} />
-              </a>
-            );
-          }}
         />
         </SectionErrorBoundary>
 
