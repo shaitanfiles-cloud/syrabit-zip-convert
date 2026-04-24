@@ -1,7 +1,8 @@
 import { Suspense } from "react";
 import { renderToString } from "react-dom/server";
 import { StaticRouter } from "react-router-dom";
-import { AppShell, AppRoutes, queryClient, preloadPageForKind } from "./App";
+import { AppShell, AppRoutes, preloadPageForKind } from "./App";
+import { queryClient } from "./queryClient";
 
 // Map a request URL to the prerendered route's hydration kind so we
 // can pre-await the matching page chunk BEFORE renderToString runs.

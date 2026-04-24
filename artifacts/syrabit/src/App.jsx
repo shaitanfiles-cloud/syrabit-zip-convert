@@ -5,7 +5,8 @@ import { AuthProvider } from "@/context/AuthContext";
 import { LanguageProvider } from "@/context/LanguageContext";
 import { AuthGuard } from "@/components/AuthGuard";
 import { AdminGuard } from "@/components/AdminGuard";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { queryClient } from "./queryClient";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { HelmetProvider } from "react-helmet-async";
 import Analytics from "@/utils/analytics";
@@ -24,17 +25,13 @@ const LazyGlobalTrustpilotJsonLd = lazy(() => import("@/components/seo/GlobalTru
 import { apiClient } from "@/utils/api";
 
 // ── React Query client ────────────────────────────────────────────────────────
-export const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 10 * 60 * 1000,
-      gcTime: 60 * 60 * 1000,
-      retry: 1,
-      refetchOnWindowFocus: false,
-      refetchOnReconnect: false,
-    },
-  },
-});
+// `queryClient` lives in its own leaf module (`./queryClient`) so it has no
+// outgoing edges in the dependency graph. This avoids a Rollup SSR-build
+// failure where named-export resolution from `App.jsx` would intermittently
+// see the symbol as missing due to a circular-import chain via
+// AuthContext/LanguageContext/ErrorBoundary etc. Re-exported for any
+// existing imports that still pull it from `./App`.
+export { queryClient };
 
 // Seed React Query from data baked into the prerendered HTML so the
 // first render on the client matches the server-rendered markup
