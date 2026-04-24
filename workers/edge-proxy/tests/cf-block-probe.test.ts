@@ -165,6 +165,8 @@ describe("cf-block-probe", () => {
     expect(body.cf_block_signal).toBe(true);
     expect(body.consecutive_failures).toBe(2);
     expect(body.target_url).toBe("https://syrabit.ai/");
+    expect(body.endpoint_path).toBe("/");
+    expect(body.probe_leg).toBe("homepage");
   });
 
   it("respects the watchdog cooldown and only re-pages after `threshold` minutes", async () => {

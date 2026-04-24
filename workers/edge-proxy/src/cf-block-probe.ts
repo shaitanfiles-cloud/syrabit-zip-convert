@@ -235,12 +235,26 @@ async function fireWatchdog(
       `Last Ray ID: ${state.last_ray_id || "(none)"}. ` +
       `See docs/CLOUDFLARE_ZERO_TRUST.md §8.1 for the signal-first ` +
       `triage decision tree.`;
+  // Emit both the full URL and the path independently so a future
+  // multi-leg probe (e.g. homepage + chat-submit) can be triaged
+  // quickly: an on-call sees `endpoint_path: "/"` vs
+  // `endpoint_path: "/api/ai/chat"` in the alert without needing to
+  // parse the URL. Tracked in
+  // .local/follow_up_tasks/cf-block-probe-chat-smoke.md.
+  let endpointPath = "/";
+  try {
+    endpointPath = new URL(targetUrl).pathname || "/";
+  } catch {
+    endpointPath = "/";
+  }
   const payload = {
     text,
     severity: "critical",
     alert_type: alertType,
     cf_block_signal: isCfBlock,
     target_url: targetUrl,
+    endpoint_path: endpointPath,
+    probe_leg: "homepage",
     consecutive_failures: state.consecutive_failures,
     last_signal: state.last_signal,
     last_status: state.last_status,
