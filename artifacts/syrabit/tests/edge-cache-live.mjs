@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 /**
  * Live edge-cache integration check (Task #794).
  *
@@ -119,6 +123,40 @@ const ROUTES = [
 // (`X-Cache: D1`) and downgrade `MISS`/`BYPASS` to soft warnings.
 // Lenient is for interactive investigation only; CI must stay strict
 // so a missing CF cache write never silently passes.
+// Drift check: verify every entry in ROUTES still matches at least one
+// of the worker's CACHEABLE_PREFIXES. If someone removes a prefix from
+// the worker without updating this script we'd silently probe a route
+// that's no longer routed through cache; this turns that into a loud
+// startup failure instead of a confusing FAIL line.
+function assertRoutesCoverWorkerPrefixes() {
+  const workerSrc = path.resolve(
+    fileURLToPath(import.meta.url),
+    "../../../../workers/edge-proxy/src/index.ts",
+  );
+  let src;
+  try {
+    src = fs.readFileSync(workerSrc, "utf8");
+  } catch {
+    // Running outside the monorepo (e.g. from a built tarball) — skip
+    // the drift check rather than blocking the probe.
+    console.log("note: worker source not reachable, skipping prefix-drift check");
+    return;
+  }
+  const m = src.match(/const CACHEABLE_PREFIXES = \[([\s\S]*?)\];/);
+  if (!m) {
+    console.error("error: could not parse CACHEABLE_PREFIXES from worker source");
+    process.exit(2);
+  }
+  const prefixes = Array.from(m[1].matchAll(/"([^"]+)"/g)).map((x) => x[1]);
+  const orphaned = ROUTES.filter((r) => !prefixes.some((p) => r.startsWith(p)));
+  if (orphaned.length > 0) {
+    console.error(
+      `error: probe routes no longer match any CACHEABLE_PREFIXES entry — update tests/edge-cache-live.mjs:\n  ${orphaned.join("\n  ")}`,
+    );
+    process.exit(2);
+  }
+}
+
 const LENIENT = process.env.EDGE_CACHE_LENIENT === "1";
 const HIT_VALUES = LENIENT
   ? new Set(["HIT", "HIT-304", "D1"])
@@ -251,6 +289,7 @@ function pad(s, n) {
 }
 
 async function main() {
+  assertRoutesCoverWorkerPrefixes();
   console.log(`edge-cache-live → ${BASE_URL}`);
   console.log(`probing ${ROUTES.length} routes (delay=${DELAY_MS}ms, timeout=${TIMEOUT_MS}ms)`);
   console.log("");
