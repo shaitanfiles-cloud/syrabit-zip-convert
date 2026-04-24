@@ -54,6 +54,10 @@ The project is a pnpm workspace monorepo, with a React + Vite frontend and a Fas
 
 Run `pnpm verify` from the repo root to execute the full pre-merge gate. This runs `typecheck` across all artifacts and shared libs, then runs `verify:jsonld` for every package that defines it (currently `@workspace/syrabit`), which validates structured-data builders (Article, LearningResource, WebPage, Breadcrumb, FAQ, HowTo, LocalBusiness, PYQ Dataset, Quiz). To run the JSON-LD validator alone: `pnpm --filter @workspace/syrabit verify:jsonld`.
 
+## Deploy — Cloudflare Pages
+
+Run `pnpm deploy:pages` from the repo root to publish `artifacts/syrabit/dist` to Cloudflare Pages. Defaults are now correct out of the box: `--project-name=syrabit-analytics --branch=master` (the public hostname is `syrabit-zip-convert.pages.dev`, referenced as `PAGES_ORIGIN` in `workers/edge-proxy/wrangler.toml`). Override only if you are deploying to a different Pages project: `CF_PAGES_PROJECT_NAME=<project> CF_PAGES_BRANCH=<branch> pnpm deploy:pages`. Requires `CLOUDFLARE_API_TOKEN` (and `CLOUDFLARE_ACCOUNT_ID` if your token is scoped to multiple accounts) in the environment.
+
 ## External Dependencies
 
 - **Databases:** PostgreSQL, MongoDB, Cloudflare D1.
