@@ -22,6 +22,15 @@ from tests._deps_stub import install_deps_stub  # noqa: E402
 
 install_deps_stub()
 
+# Smallest possible PNG (1x1 transparent) used by tests that exercise
+# code paths which decode the subject's `data:image/png;base64,...`
+# thumbnail through PIL. Hand-crafted to keep the test self-contained
+# rather than pulling Pillow in test setup.
+_TINY_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAA"
+    "IAAAUAAarVyFEAAAAASUVORK5CYII="
+)
+
 
 def _install_purge_recorder(mod):
     """Replace `_invalidate_content_cache` and `_purge_for_route` on the
@@ -330,6 +339,224 @@ def test_content_manual_delete_404_does_not_purge():
         assert raised is True
         assert invalidations == []
         assert audit == []
+
+    asyncio.run(run())
+
+
+def test_thumbnail_generate_bulk_purges_only_when_at_least_one_done():
+    """Bulk AI thumbnail generation fans out to ≤50 subjects. We expect:
+    - one purge call for the whole batch when done_count > 0;
+    - zero purge calls when every subject was skipped (no data: thumbnail)."""
+    async def run():
+        from routes import admin_content
+
+        # Case A: nothing skip-worthy, all 3 subjects lack a data: thumbnail
+        invalidations, audit, _ = _install_purge_recorder(admin_content)
+        fake_db = MagicMock()
+        fake_db.subjects.find_one = AsyncMock(side_effect=[
+            {"thumbnailUrl": "https://example/x.png", "name": "A"},
+            {"thumbnailUrl": "", "name": "B"},
+            None,
+        ])
+        admin_content.db = fake_db
+
+        result = await admin_content.generate_ai_thumbnails_bulk(
+            data={"subject_ids": ["s1", "s2", "s3"]}, admin={"id": "admin"}
+        )
+        await _drain()
+        assert result["done"] == 0
+        assert all(r["status"] == "skipped" for r in result["results"])
+        assert invalidations == []
+        assert audit == []
+
+        # Case B: one subject succeeds (we patch the heavy vision/PIL work
+        # so the success branch runs without external deps).
+        invalidations.clear(); audit.clear()
+        # Reset find_one with one successful subject and force the loop body
+        # to short-circuit at update_one (fake success). We patch the
+        # internal helpers to no-op.
+        fake_db.subjects.find_one = AsyncMock(return_value={
+            "thumbnailUrl": "data:image/png;base64," + _TINY_PNG_B64,
+            "name": "Math",
+        })
+        fake_db.subjects.update_one = AsyncMock(
+            return_value=MagicMock(matched_count=1)
+        )
+        admin_content._extract_dominant_colors = lambda _b: ["#000"]
+        admin_content._sanitize_text_regions = lambda r: r or []
+
+        async def _fake_vision(_b64, _mime):
+            return {"dominant_colors": ["#fff"], "text_regions": []}
+        admin_content._analyze_with_groq_vision = _fake_vision
+        admin_content._remove_text_variant = lambda _b, _r, _i: "data:image/png;base64,Zm9v"
+
+        result = await admin_content.generate_ai_thumbnails_bulk(
+            data={"subject_ids": ["s1"]}, admin={"id": "admin"}
+        )
+        await _drain()
+        assert result["done"] == 1
+        assert "subjects" in invalidations
+        routes = [r for (r, _p, _i) in audit]
+        assert "admin.thumbnail_generate_bulk" in routes
+
+    asyncio.run(run())
+
+
+def test_chapter_card_thumbnails_purges_chapters_and_subjects():
+    """Chapter-card generation rewrites `card_thumbnails` + `thumbnailUrl`
+    on each chapter — we expect a purge of both `chapters` and `subjects`
+    (the latter because the library bundle nests chapters under subjects)."""
+    async def run():
+        from routes import admin_content
+
+        invalidations, audit, _ = _install_purge_recorder(admin_content)
+
+        fake_db = MagicMock()
+        fake_db.subjects.find_one = AsyncMock(return_value={"name": "Physics"})
+        ch_cursor = MagicMock()
+        ch_cursor.to_list = AsyncMock(return_value=[
+            {"id": "ch-1", "title": "Mechanics"},
+            {"id": "ch-2", "title": "Optics"},
+        ])
+        fake_db.chapters.find = MagicMock(return_value=ch_cursor)
+        fake_db.chapters.update_one = AsyncMock(
+            return_value=MagicMock(matched_count=1)
+        )
+        admin_content.db = fake_db
+
+        # Patch the heavy wallpaper renderer
+        admin_content._generate_chapter_card_wallpaper = (
+            lambda _t, _s, _v=0: "data:image/png;base64,Zm9v"
+        )
+
+        result = await admin_content.generate_chapter_card_thumbnails(
+            data={"subject_id": "subj-P", "chapter_ids": ["ch-1", "ch-2"]},
+            admin={"id": "admin"},
+        )
+        await _drain()
+
+        assert result["done"] == 2
+        assert "chapters" in invalidations
+        assert "subjects" in invalidations
+        routes = [r for (r, _p, _i) in audit]
+        assert "admin.thumbnail_generate_chapter_cards" in routes
+
+    asyncio.run(run())
+
+
+def test_chapter_card_thumbnails_no_chapters_skips_purge():
+    """When the chapter list is empty, no DB writes happen and we should
+    not issue a wasted purge."""
+    async def run():
+        from routes import admin_content
+
+        invalidations, audit, _ = _install_purge_recorder(admin_content)
+
+        fake_db = MagicMock()
+        fake_db.subjects.find_one = AsyncMock(return_value={"name": "Physics"})
+        ch_cursor = MagicMock()
+        ch_cursor.to_list = AsyncMock(return_value=[])
+        fake_db.chapters.find = MagicMock(return_value=ch_cursor)
+        admin_content.db = fake_db
+
+        result = await admin_content.generate_chapter_card_thumbnails(
+            data={"subject_id": "subj-P"}, admin={"id": "admin"}
+        )
+        await _drain()
+
+        assert result["done"] == 0
+        assert invalidations == []
+        assert audit == []
+
+    asyncio.run(run())
+
+
+def test_upload_content_file_purges_subjects_and_chapters():
+    """Generic content file upload rewrites `has_document` on the subject
+    AND inserts a content_uploads row that the chapter-list fallback
+    reads — both prefixes must be invalidated."""
+    async def run():
+        from routes import admin_content
+
+        invalidations, audit, _ = _install_purge_recorder(admin_content)
+
+        fake_db = MagicMock()
+        fake_db.content_uploads.insert_one = AsyncMock(
+            return_value=MagicMock(inserted_id="up-1")
+        )
+        fake_db.subjects.update_one = AsyncMock(
+            return_value=MagicMock(matched_count=1)
+        )
+        admin_content.db = fake_db
+        admin_content._schedule_prerender_refresh = lambda *a, **kw: None
+
+        class _FakeUpload:
+            filename = "notes.txt"
+            content_type = "text/plain"
+
+            async def read(self):
+                return b"hello world content"
+
+        result = await admin_content.upload_content_file(
+            file=_FakeUpload(),
+            subject_id="subj-Z",
+            content_type="document",
+            title=None,
+            description="",
+            tags="",
+            year="",
+            admin={"id": "admin", "email": "a@x"},
+        )
+        await _drain()
+
+        assert result["message"] == "Upload successful"
+        assert "subjects" in invalidations
+        assert "chapters" in invalidations
+        routes = [r for (r, _p, _i) in audit]
+        assert "admin.content_upload" in routes
+
+    asyncio.run(run())
+
+
+def test_thumbnail_generate_single_purges_subjects():
+    """Single-subject AI thumbnail generation overwrites `thumbnailUrl`
+    and `thumbnail_variants` — purge subjects so the public payload
+    refreshes."""
+    async def run():
+        from routes import admin_content
+
+        invalidations, audit, _ = _install_purge_recorder(admin_content)
+
+        # Use an existing data: URL on the subject so the handler skips
+        # the file/upload branch and reuses the embedded image.
+        fake_db = MagicMock()
+        fake_db.subjects.find_one = AsyncMock(return_value={
+            "id": "subj-T",
+            "thumbnailUrl": "data:image/png;base64," + ("AAAA" * 10),
+        })
+        fake_db.subjects.update_one = AsyncMock(
+            return_value=MagicMock(matched_count=1)
+        )
+        admin_content.db = fake_db
+
+        # Patch heavy bits
+        admin_content._extract_dominant_colors = lambda _b: ["#000"]
+        admin_content._sanitize_text_regions = lambda r: r or []
+
+        async def _fake_vision(_b64, _mime):
+            return {"dominant_colors": ["#fff"], "text_regions": []}
+        admin_content._analyze_with_groq_vision = _fake_vision
+        admin_content._remove_text_variant = lambda _b, _r, _i: "data:image/png;base64,Zm9v"
+
+        result = await admin_content.generate_ai_thumbnails(
+            subject_id="subj-T", file=None, admin={"id": "admin"}
+        )
+        await _drain()
+
+        assert "variants" in result
+        assert "subjects" in invalidations
+        routes = [r for (r, _p, _i) in audit]
+        assert "admin.thumbnail_generate" in routes
 
     asyncio.run(run())
 
