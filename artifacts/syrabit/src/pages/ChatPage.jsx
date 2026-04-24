@@ -106,7 +106,20 @@ export default function ChatPage() {
     const lastMsg = messages[messages.length - 1];
     const isStreaming = lastMsg?.streaming;
     const contentLen = (lastMsg?.content || '').length;
-    if (isStreaming && contentLen - lastMsgLenRef.current < 80 && lastMsgLenRef.current > 0) return;
+    // Throttle: while an answer is streaming, only re-scroll once we've
+    // accumulated ≥80 new characters since the last scroll. BUT if a
+    // brand-new user message just got sent (``pendingSendScroll`` is
+    // true) we MUST always run the effect this tick, otherwise the
+    // pin-to-top scroll is starved when the previous answer was long
+    // (lastMsgLenRef still holds e.g. 2000 from the prior reply, while
+    // the new streaming bubble starts at 0 — the delta is negative and
+    // the early-return swallows the very scroll the user came here for).
+    if (
+      !pendingSendScroll.current &&
+      isStreaming &&
+      contentLen - lastMsgLenRef.current < 80 &&
+      lastMsgLenRef.current > 0
+    ) return;
     lastMsgLenRef.current = contentLen;
     if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
     scrollTimeoutRef.current = setTimeout(() => {
@@ -270,6 +283,12 @@ export default function ChatPage() {
     setInput('');
     setIsLoading(true);
     pendingSendScroll.current = true;
+    // Reset the streaming-throttle baseline so the scroll effect doesn't
+    // skip the pin-to-top run because the previous answer's length is
+    // still cached in ``lastMsgLenRef`` (the new assistant bubble starts
+    // empty, so without this reset the delta check wrongly suppresses
+    // the scroll on the second-and-later sends in a conversation).
+    lastMsgLenRef.current = 0;
     setSyncState('syncing');
     if (abortControllerRef.current) abortControllerRef.current.abort();
     const controller = new AbortController();
@@ -606,6 +625,36 @@ export default function ChatPage() {
                 });
                 return out;
               })()}
+            {/*
+              ChatGPT-style "pin user message to top while answer streams":
+              the scroll effect above calls scrollIntoView({block: 'start'})
+              on the most recent user message after each send, but the
+              browser can only scroll as far as the container's content
+              allows. With a freshly-sent message the streaming AI bubble
+              starts empty, so without this spacer there isn't enough room
+              below the user message to actually push it to the top of the
+              viewport — the message ends up centred or near-bottom.
+              Reserving ~one viewport of empty space below the messages
+              while the assistant is still streaming gives the browser the
+              headroom it needs. The spacer collapses to 0 once streaming
+              ends so the chat doesn't end with a giant blank gap.
+            */}
+            {(() => {
+              const lastMsg = messages[messages.length - 1];
+              const showSpacer = !!(lastMsg && lastMsg.role === 'assistant' && lastMsg.streaming);
+              if (!showSpacer) return null;
+              return (
+                <div
+                  aria-hidden="true"
+                  data-testid="chat-scroll-spacer"
+                  // 100vh - composer height (~196px sticky at bottom) keeps
+                  // the spacer from pushing the page taller than the screen
+                  // so the scrollbar doesn't suddenly grow when streaming
+                  // finishes and the spacer disappears.
+                  style={{ minHeight: 'calc(100vh - 220px)' }}
+                />
+              );
+            })()}
             <div ref={messagesEndRef} />
           </div>
         </div>

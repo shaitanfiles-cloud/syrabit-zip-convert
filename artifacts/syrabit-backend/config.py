@@ -712,13 +712,22 @@ PLAN_LIMITS = {
     # single classroom behind one NAT shares the same IP — 5/min throttled
     # legitimate students at peak usage. 15/min ≈ one chat every 4s, still
     # well below abuse thresholds.
-    # max_tokens raised: previous caps (512/768/1024) were truncating
-    # step-by-step explanations and solved-example replies mid-sentence
-    # for every plan, especially in Assamese where each word averages
-    # ~2x the tokens of English. New caps comfortably fit a full
-    # textbook-style answer (~700–1500 words) without affecting the
-    # daily credit accounting (1 reply = 1 credit regardless of length).
-    "free":    {"credits_per_day": 30,   "max_tokens": 1024,   "document_access": "zero",    "req_per_min": 15, "req_per_min_ip": 60},
+    # ``max_tokens`` is the per-reply UPPER BOUND for the plan, not the
+    # default budget. Bumped free 1024 → 10000 so a complex
+    # "explain step by step" / "solve every PYQ from this chapter"
+    # answer can complete without truncation. The actual per-request
+    # budget is now computed dynamically by
+    # ``prompts.compute_answer_budget(query, intent, plan_max)``:
+    # short / casual queries still get a few hundred tokens, the
+    # default factual question gets ~1024–1536 ("medium"), and only
+    # long-form / multi-part / "in detail" questions are allowed to
+    # scale up toward this ceiling. Daily credit accounting is
+    # unaffected (1 reply = 1 credit regardless of length).
+    # Only the free-plan ceiling was raised in this change (per request);
+    # starter/pro keep their previous 1536/2048 ceilings — paid plans
+    # already had headroom and bumping them would change cost/latency
+    # behaviour for paying users without it being asked for.
+    "free":    {"credits_per_day": 30,   "max_tokens": 10000,  "document_access": "zero",    "req_per_min": 15, "req_per_min_ip": 60},
     "starter": {"credits_per_day": 500,  "max_tokens": 1536,   "document_access": "limited", "req_per_min": 10, "req_per_min_ip": 90},
     "pro":     {"credits_per_day": 4000, "max_tokens": 2048,   "document_access": "full",    "req_per_min": 15, "req_per_min_ip": 120},
 }

@@ -63,7 +63,7 @@ from rag import (
     syrabit_library_search,
     web_search_with_fallback,
 )
-from prompts import classify_intent, _is_out_of_scope_response, extract_semester_number
+from prompts import classify_intent, _is_out_of_scope_response, extract_semester_number, compute_answer_budget
 from tracing import (
     record_chat_attrs,
     record_first_token,
@@ -371,11 +371,20 @@ async def chat(msg: ChatMessage, request: Request, user: Optional[dict] = Depend
             raise HTTPException(status_code=403, detail="Turnstile verification failed")
 
     plan = user.get("plan", "free") if user else "free"
-    max_tokens = PLAN_LIMITS[plan]["max_tokens"]
+    _plan_max_tokens = PLAN_LIMITS[plan]["max_tokens"]
     conv_id = msg.conversation_id
     user_id = user["id"] if user else None
 
     _detected_intent, _detected_db_category = classify_intent(msg.message)
+    # Smart per-request budget: free plan ceiling is 10 000 (so a complex
+    # "explain step by step" or "solve every PYQ" request can complete) but
+    # the median question stays at the medium ~1024-token tier — see
+    # ``prompts.compute_answer_budget`` for the intent + keyword heuristics.
+    max_tokens = compute_answer_budget(msg.message, _detected_intent, _plan_max_tokens)
+    logger.info(
+        f"[NON-STREAM] answer-budget: intent={_detected_intent} "
+        f"plan={plan} plan_max={_plan_max_tokens} chosen={max_tokens}"
+    )
 
     _ns_resp_lang = (msg.response_lang or "").lower().strip()
     _instant = get_instant_response(msg.message) if (_detected_intent == "casual" and _ns_resp_lang in ("", "en")) else None
@@ -1048,7 +1057,22 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     plan = user.get("plan", "free") if user else "free"
-    max_tokens = PLAN_LIMITS[plan]["max_tokens"]
+    _plan_max_tokens = PLAN_LIMITS[plan]["max_tokens"]
+    # Smart per-request budget — same heuristic as the non-streaming path.
+    # The intent has already been classified above as ``_stream_intent`` /
+    # ``_detected_intent`` (whichever this branch uses); fall back to a fresh
+    # classification if neither is in scope yet so we never break the route.
+    _budget_intent = locals().get("_stream_intent") or locals().get("_detected_intent")
+    if not _budget_intent:
+        try:
+            _budget_intent, _ = classify_intent(msg.message)
+        except Exception:
+            _budget_intent = "general"
+    max_tokens = compute_answer_budget(msg.message, _budget_intent, _plan_max_tokens)
+    logger.info(
+        f"[STREAM] answer-budget: intent={_budget_intent} "
+        f"plan={plan} plan_max={_plan_max_tokens} chosen={max_tokens}"
+    )
 
     _t_auth_done = _time_mod.time()
     _auth_elapsed = _t_auth_done - _stream_t0
