@@ -616,6 +616,8 @@ export default function ChatPage() {
           effectiveLimit={effectiveLimit} remaining={remaining} creditPercent={creditPercent}
           textareaRef={textareaRef} adjustTextarea={adjustTextarea} sendMsg={sendMsg} handleStop={handleStop}
           isAnon={!user}
+          getTurnstileToken={getTurnstileToken}
+          turnstileEnabled={turnstileEnabled}
         />
       </div>
       </AppLayout>

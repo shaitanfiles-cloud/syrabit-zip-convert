@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { MicButton } from '@/components/study/MicButton';
 import { getTTSLang } from '@/hooks/useTTS';
-import { API_BASE } from '@/utils/api';
+import { API_BASE, getAnonId } from '@/utils/api';
 
 const ALLOWED_IMAGE_MIME = /^image\//i;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -18,6 +18,7 @@ export function InputBar({
   effectiveLimit, remaining, creditPercent,
   textareaRef, adjustTextarea, sendMsg, handleStop,
   isAnon,
+  getTurnstileToken, turnstileEnabled,
 }) {
   const navigate = useNavigate();
   const [maxTextareaHeight, setMaxTextareaHeight] = useState(160);
@@ -100,9 +101,21 @@ export function InputBar({
     try {
       const fd = new FormData();
       fd.append('file', file, file.name || 'image');
+      // Mirror the chat-send headers so anonymous students pass the same
+      // device-id + Turnstile checks the OCR endpoint inherits from /ai/chat.
+      const headers = { 'Content-Type': 'multipart/form-data' };
+      if (isAnon) {
+        try { headers['x-anon-id'] = getAnonId(); } catch {}
+        if (turnstileEnabled && typeof getTurnstileToken === 'function') {
+          try {
+            const tok = await getTurnstileToken();
+            if (tok) headers['x-turnstile-token'] = tok;
+          } catch { /* turnstile widget not ready — server will 403 */ }
+        }
+      }
       const { data } = await axios.post(`${API_BASE}/ai/ocr-image`, fd, {
         withCredentials: true,
-        headers: { 'Content-Type': 'multipart/form-data' },
+        headers,
         timeout: 60000,
       });
       const extracted = (data?.text || '').trim();
