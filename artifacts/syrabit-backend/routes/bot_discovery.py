@@ -2200,6 +2200,28 @@ _SEO_HEALTH_ALERT_COOLDOWN_S = 6 * 3600
 _SEO_URL_SPIKE_ALERT_COOLDOWN_S = 6 * 3600
 _SEO_HEALTH_HISTORY_RETENTION_DAYS = 30
 
+# ── Task #821: alert deduplication for SEO health ────────────────────────────
+# Previously the hourly SEO health loop fired ``seo_health_degraded`` on every
+# tick where the last 2 snapshots were both bad (subject only to a 6h
+# in-memory cooldown). For a sustained outage that meant 4+ duplicate alerts
+# and zero "all-clear" message on recovery — making it impossible to tell from
+# the inbox whether the incident was new, ongoing, or resolved.
+#
+# The new model is transition-based and persisted in MongoDB
+# (``db.seo_alert_state`` keyed by ``_id="seo_health"``):
+#   • "fire_initial"   — first time status flips ok → degraded/critical
+#                        (still requires 2 consecutive bad snapshots so a
+#                        single transient blip cannot trigger an alert)
+#   • "fire_digest"    — still bad and ≥ digest interval (12h) since the
+#                        last notification (initial alert OR previous digest)
+#   • "fire_recovered" — status flips bad → ok (single ok snapshot is enough,
+#                        we want fast recovery confirmation)
+#   • None             — no notification needed
+_SEO_HEALTH_ALERT_STATE_KEY = "seo_health"
+_SEO_HEALTH_DIGEST_INTERVAL_S = 12 * 3600
+_SEO_HEALTH_RECOVERED_ALERT_TYPE = "seo_health_recovered"
+_SEO_HEALTH_INITIAL_ALERT_TYPE = "seo_health_degraded"
+
 # ── Weekly digest ────────────────────────────────────────────────────────────
 # Target: Monday 09:00 IST = Monday 03:30 UTC. The loop polls every 5 minutes
 # and only fires inside a tight ±15 minute window around 03:30 UTC so the
@@ -2389,6 +2411,109 @@ def _format_by_sitemap_text(by_sitemap,
         for f in (r.get("failing_urls") or []):
             lines.append(f"      [{f.get('status', 0)}] {f.get('url', '')}")
     return "\nPer-sitemap breakdown:\n" + "\n".join(lines)
+
+
+async def _load_seo_alert_state() -> dict:
+    """Read the persisted SEO health alert state doc.
+
+    Returns ``{}`` when Mongo is unavailable or the doc has never been
+    written. Callers must treat empty/missing as "not currently alerting"
+    so a fresh deploy never re-fires on already-known-bad state.
+    """
+    from deps import db, is_mongo_available
+    if not await is_mongo_available():
+        return {}
+    try:
+        doc = await db.seo_alert_state.find_one(
+            {"_id": _SEO_HEALTH_ALERT_STATE_KEY}
+        )
+        return doc or {}
+    except Exception as exc:
+        logger.debug(f"_load_seo_alert_state failed: {exc}")
+        return {}
+
+
+async def _save_seo_alert_state(updates: dict) -> None:
+    """Upsert the SEO health alert state doc.
+
+    Only the keys present in ``updates`` are merged — the document is
+    intentionally tiny (active flag + a handful of timestamps + counters)
+    so a single ``$set`` upsert is fine. Failures are logged at debug
+    level and do not propagate, so a transient Mongo blip never breaks
+    the alert loop itself.
+    """
+    from deps import db, is_mongo_available
+    if not await is_mongo_available():
+        return
+    try:
+        payload = dict(updates)
+        payload["updated_at"] = datetime.now(timezone.utc)
+        await db.seo_alert_state.update_one(
+            {"_id": _SEO_HEALTH_ALERT_STATE_KEY},
+            {"$set": payload},
+            upsert=True,
+        )
+    except Exception as exc:
+        logger.debug(f"_save_seo_alert_state failed: {exc}")
+
+
+def _decide_seo_health_alert(
+    *,
+    current_status: str,
+    consecutive_bad: int,
+    prev_state: dict,
+    now_ts: float,
+    digest_interval_s: int = _SEO_HEALTH_DIGEST_INTERVAL_S,
+) -> Optional[str]:
+    """Pure decision function for the SEO health alert loop.
+
+    Inputs:
+      - ``current_status``: the latest snapshot's aggregate status
+        (``"ok"`` / ``"degraded"`` / ``"critical"`` / ``"unknown"``).
+      - ``consecutive_bad``: how many of the most-recent snapshots are
+        in ``("degraded", "critical")``. Caller computes from history.
+      - ``prev_state``: the persisted alert state doc from
+        ``_load_seo_alert_state`` (may be ``{}``).
+      - ``now_ts``: monotonic-style epoch seconds (``time.time()``).
+      - ``digest_interval_s``: how long the loop must wait between
+        sustained-outage digests while still bad.
+
+    Returns one of ``"fire_initial"``, ``"fire_digest"``,
+    ``"fire_recovered"``, or ``None`` (no notification this tick).
+
+    Behaviour matrix:
+      | prev_active | current_status   | action          |
+      |-------------|------------------|-----------------|
+      | False       | ok / unknown     | None            |
+      | False       | bad, 1 in a row  | None (transient)|
+      | False       | bad, ≥2 in a row | fire_initial    |
+      | True        | bad, < interval  | None            |
+      | True        | bad, ≥ interval  | fire_digest     |
+      | True        | ok               | fire_recovered  |
+      | True        | unknown          | None (treat as  |
+      |             |                  |  in-progress)   |
+
+    The "unknown" while active case is intentionally a no-op: the
+    health endpoint failed for an unrelated reason (Mongo timeout,
+    snapshot exception) and we don't want to spam a recovery alert
+    that might reverse on the next tick.
+    """
+    prev_active = bool(prev_state.get("active"))
+    bad = current_status in ("degraded", "critical")
+
+    if bad:
+        if not prev_active:
+            if consecutive_bad >= 2:
+                return "fire_initial"
+            return None
+        last_notified = float(prev_state.get("last_notified_at_ts") or 0.0)
+        if (now_ts - last_notified) >= digest_interval_s:
+            return "fire_digest"
+        return None
+
+    if prev_active and current_status == "ok":
+        return "fire_recovered"
+    return None
 
 
 async def _record_seo_health_snapshot() -> Dict:
@@ -2916,10 +3041,16 @@ async def _seo_health_alert_loop():
             except Exception as exc:
                 logger.debug(f"seo_url_spike check skipped: {exc}")
 
-            if status in ("degraded", "critical"):
+            # ── (1) Transition-based seo_health_degraded / seo_health_recovered
+            # Task #821: replace the hourly-while-bad firing pattern with a
+            # state machine persisted in db.seo_alert_state. The legacy
+            # in-memory ``_seo_health_alert_last_fired`` cooldown is kept as
+            # a defence-in-depth so a corrupted state doc still cannot spam
+            # more than once every ``_SEO_HEALTH_ALERT_COOLDOWN_S``.
+            try:
                 from deps import db, is_mongo_available
-                consecutive_bad = 1
-                if await is_mongo_available():
+                consecutive_bad = 1 if status in ("degraded", "critical") else 0
+                if status in ("degraded", "critical") and await is_mongo_available():
                     try:
                         recent = await db.seo_health_history.find(
                             {}, {"_id": 0, "status": 1, "recorded_at": 1}
@@ -2929,20 +3060,84 @@ async def _seo_health_alert_loop():
                     except Exception:
                         pass
 
+                prev_state = await _load_seo_alert_state()
                 now = time.time()
-                if consecutive_bad >= 2 and (now - _seo_health_alert_last_fired) >= _SEO_HEALTH_ALERT_COOLDOWN_S:
+                action = _decide_seo_health_alert(
+                    current_status=status,
+                    consecutive_bad=consecutive_bad,
+                    prev_state=prev_state,
+                    now_ts=now,
+                )
+
+                if action in ("fire_initial", "fire_digest"):
+                    # Defence-in-depth cooldown — should never trip in
+                    # practice because the state machine already prevents
+                    # rapid re-firing, but keeps a runaway state doc from
+                    # spamming more than once per _SEO_HEALTH_ALERT_COOLDOWN_S.
+                    if (now - _seo_health_alert_last_fired) < _SEO_HEALTH_ALERT_COOLDOWN_S:
+                        action = None
+
+                if action == "fire_initial":
                     try:
                         from metrics import _dispatch_alert, _alert_last_fired as _ml
-                        _ml.pop("seo_health_degraded", None)
+                        _ml.pop(_SEO_HEALTH_INITIAL_ALERT_TYPE, None)
                         s = snapshot.get("summary") or {}
                         await _dispatch_alert(
-                            "seo_health_degraded",
+                            _SEO_HEALTH_INITIAL_ALERT_TYPE,
                             f"SEO health: {status.upper()}",
                             (
                                 f"/api/seo/health reported {status.upper()} for two consecutive hourly checks. "
                                 f"Sitemaps valid: {s.get('valid_sitemaps', 0)}/{s.get('total_sitemaps', 0)} · "
                                 f"URL spot-checks OK: {s.get('ok_url_checks', 0)}/{s.get('total_url_checks', 0)} "
                                 f"({s.get('url_check_success_rate', 0)}%). "
+                                f"Inspect /api/seo/health and the SEO Manager dashboard. "
+                                f"You will not get another alert for this incident "
+                                f"unless it persists for more than "
+                                f"{_SEO_HEALTH_DIGEST_INTERVAL_S // 3600}h "
+                                f"(sustained-outage digest) or until it recovers."
+                            ),
+                            threshold_snapshot={
+                                "metric": "seo_health_status",
+                                "value": "ok",
+                                "actual": status,
+                                "valid_sitemaps": s.get("valid_sitemaps", 0),
+                                "total_sitemaps": s.get("total_sitemaps", 0),
+                                "url_check_success_rate": s.get("url_check_success_rate", 0),
+                                "phase": "initial",
+                            },
+                        )
+                        _seo_health_alert_last_fired = now
+                        await _save_seo_alert_state({
+                            "active": True,
+                            "first_bad_at": datetime.now(timezone.utc),
+                            "first_bad_at_ts": now,
+                            "first_bad_status": status,
+                            "last_alert_status": status,
+                            "last_notified_at_ts": now,
+                            "digest_count": 0,
+                            "recovered_at": None,
+                        })
+                    except Exception as exc:
+                        logger.debug(f"Failed to dispatch initial seo_health_degraded alert: {exc}")
+
+                elif action == "fire_digest":
+                    try:
+                        from metrics import _dispatch_alert, _alert_last_fired as _ml
+                        _ml.pop(_SEO_HEALTH_INITIAL_ALERT_TYPE, None)
+                        s = snapshot.get("summary") or {}
+                        first_bad_ts = float(prev_state.get("first_bad_at_ts") or now)
+                        ongoing_h = int(max(0.0, (now - first_bad_ts)) // 3600)
+                        digest_count = int(prev_state.get("digest_count") or 0) + 1
+                        await _dispatch_alert(
+                            _SEO_HEALTH_INITIAL_ALERT_TYPE,
+                            f"[Still ongoing — {ongoing_h}h] SEO health: {status.upper()}",
+                            (
+                                f"/api/seo/health is still {status.upper()} {ongoing_h}h after the "
+                                f"initial alert (digest #{digest_count}). "
+                                f"Sitemaps valid: {s.get('valid_sitemaps', 0)}/{s.get('total_sitemaps', 0)} · "
+                                f"URL spot-checks OK: {s.get('ok_url_checks', 0)}/{s.get('total_url_checks', 0)} "
+                                f"({s.get('url_check_success_rate', 0)}%). "
+                                f"Next digest in {_SEO_HEALTH_DIGEST_INTERVAL_S // 3600}h if still bad. "
                                 f"Inspect /api/seo/health and the SEO Manager dashboard."
                             ),
                             threshold_snapshot={
@@ -2952,11 +3147,63 @@ async def _seo_health_alert_loop():
                                 "valid_sitemaps": s.get("valid_sitemaps", 0),
                                 "total_sitemaps": s.get("total_sitemaps", 0),
                                 "url_check_success_rate": s.get("url_check_success_rate", 0),
+                                "phase": "digest",
+                                "ongoing_hours": ongoing_h,
+                                "digest_count": digest_count,
                             },
                         )
                         _seo_health_alert_last_fired = now
+                        await _save_seo_alert_state({
+                            "active": True,
+                            "last_alert_status": status,
+                            "last_notified_at_ts": now,
+                            "digest_count": digest_count,
+                        })
                     except Exception as exc:
-                        logger.debug(f"Failed to dispatch seo_health_degraded alert: {exc}")
+                        logger.debug(f"Failed to dispatch sustained-outage seo_health_degraded digest: {exc}")
+
+                elif action == "fire_recovered":
+                    try:
+                        from metrics import _dispatch_alert, _alert_last_fired as _ml
+                        _ml.pop(_SEO_HEALTH_RECOVERED_ALERT_TYPE, None)
+                        s = snapshot.get("summary") or {}
+                        first_bad_ts = float(prev_state.get("first_bad_at_ts") or now)
+                        outage_min = int(max(0.0, (now - first_bad_ts)) // 60)
+                        prev_status = (prev_state.get("last_alert_status") or "").upper() or "DEGRADED"
+                        await _dispatch_alert(
+                            _SEO_HEALTH_RECOVERED_ALERT_TYPE,
+                            f"SEO health: RECOVERED (was {prev_status} for ~{outage_min}m)",
+                            (
+                                f"/api/seo/health is back to OK after ~{outage_min}m of "
+                                f"{prev_status}. Sitemaps valid: "
+                                f"{s.get('valid_sitemaps', 0)}/{s.get('total_sitemaps', 0)} · "
+                                f"URL spot-checks OK: {s.get('ok_url_checks', 0)}/{s.get('total_url_checks', 0)} "
+                                f"({s.get('url_check_success_rate', 0)}%). "
+                                f"No further alerts will fire for this incident."
+                            ),
+                            threshold_snapshot={
+                                "metric": "seo_health_status",
+                                "value": "ok",
+                                "actual": "ok",
+                                "valid_sitemaps": s.get("valid_sitemaps", 0),
+                                "total_sitemaps": s.get("total_sitemaps", 0),
+                                "url_check_success_rate": s.get("url_check_success_rate", 0),
+                                "phase": "recovered",
+                                "previous_status": prev_status.lower(),
+                                "outage_minutes": outage_min,
+                            },
+                        )
+                        await _save_seo_alert_state({
+                            "active": False,
+                            "last_alert_status": None,
+                            "recovered_at": datetime.now(timezone.utc),
+                            "recovered_at_ts": now,
+                            "digest_count": 0,
+                        })
+                    except Exception as exc:
+                        logger.debug(f"Failed to dispatch seo_health_recovered alert: {exc}")
+            except Exception as exc:
+                logger.debug(f"seo_health alert decision iteration error: {exc}")
         except Exception as exc:
             logger.debug(f"SEO health alert loop iteration error: {exc}")
 

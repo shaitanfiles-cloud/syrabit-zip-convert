@@ -1207,3 +1207,279 @@ def test_probe_with_retry_records_retry_status_when_still_failing():
     assert result["status"] == 0
     assert result["retry_status"] == 404
     assert "connection reset" in result.get("error", "")
+
+
+# -------- Task #821: transition-based SEO health alerting --------
+# These tests exercise the new state-machine that replaced the
+# fire-on-every-bad-tick behaviour. Coverage:
+#   1. _decide_seo_health_alert pure logic (all branches in the truth table)
+#   2. _load_seo_alert_state / _save_seo_alert_state Mongo round-trip
+#   3. End-to-end: ok → bad → bad → ok produces exactly one initial
+#      alert + one recovered alert, no duplicates.
+
+# ---- 1. _decide_seo_health_alert pure logic ----
+
+def test_decide_no_alert_when_ok_and_was_ok():
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="ok", consecutive_bad=0,
+        prev_state={}, now_ts=1000.0,
+    ) is None
+
+
+def test_decide_no_alert_when_unknown_and_was_ok():
+    # /api/seo/health failed for an unrelated reason — don't fire.
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="unknown", consecutive_bad=0,
+        prev_state={}, now_ts=1000.0,
+    ) is None
+
+
+def test_decide_no_alert_on_single_bad_snapshot():
+    # First bad snapshot — could be a transient blip; wait for confirmation.
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="critical", consecutive_bad=1,
+        prev_state={}, now_ts=1000.0,
+    ) is None
+
+
+def test_decide_fires_initial_on_two_consecutive_bad():
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="critical", consecutive_bad=2,
+        prev_state={}, now_ts=1000.0,
+    ) == "fire_initial"
+
+
+def test_decide_fires_initial_on_two_consecutive_degraded():
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="degraded", consecutive_bad=2,
+        prev_state={}, now_ts=1000.0,
+    ) == "fire_initial"
+
+
+def test_decide_no_repeat_alert_within_digest_interval():
+    # Already alerting; recent notification — should stay quiet.
+    prev = {"active": True, "last_notified_at_ts": 1000.0}
+    # 6h later, digest interval is 12h, so still suppressed.
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="critical", consecutive_bad=2,
+        prev_state=prev, now_ts=1000.0 + 6 * 3600,
+    ) is None
+
+
+def test_decide_fires_digest_after_interval_when_still_bad():
+    prev = {"active": True, "last_notified_at_ts": 1000.0}
+    # 12h later — digest fires.
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="critical", consecutive_bad=2,
+        prev_state=prev, now_ts=1000.0 + 12 * 3600,
+    ) == "fire_digest"
+
+
+def test_decide_fires_digest_with_custom_interval():
+    prev = {"active": True, "last_notified_at_ts": 1000.0}
+    # Custom 1h interval — second tick at +1h fires.
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="degraded", consecutive_bad=2,
+        prev_state=prev, now_ts=1000.0 + 3600,
+        digest_interval_s=3600,
+    ) == "fire_digest"
+
+
+def test_decide_fires_recovered_when_bad_then_ok():
+    prev = {"active": True, "last_notified_at_ts": 1000.0,
+            "last_alert_status": "critical"}
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="ok", consecutive_bad=0,
+        prev_state=prev, now_ts=1000.0 + 60,
+    ) == "fire_recovered"
+
+
+def test_decide_does_not_fire_recovered_on_unknown_status():
+    # Unknown could be a Mongo blip — don't claim recovery yet.
+    prev = {"active": True, "last_notified_at_ts": 1000.0,
+            "last_alert_status": "critical"}
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="unknown", consecutive_bad=0,
+        prev_state=prev, now_ts=1000.0 + 60,
+    ) is None
+
+
+def test_decide_does_not_re_recover_when_already_inactive():
+    prev = {"active": False}
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="ok", consecutive_bad=0,
+        prev_state=prev, now_ts=1000.0,
+    ) is None
+
+
+def test_decide_first_bad_when_active_but_only_one_in_a_row_still_digests_on_interval():
+    # Active=True, status currently bad, only 1 in a row (because the
+    # immediately-prior snapshot was ok) — the consecutive_bad guard is
+    # only for the INITIAL transition. While already active, any bad
+    # snapshot at all qualifies for a digest if interval elapsed.
+    prev = {"active": True, "last_notified_at_ts": 1000.0}
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="critical", consecutive_bad=1,
+        prev_state=prev, now_ts=1000.0 + 13 * 3600,
+    ) == "fire_digest"
+
+
+# ---- 2. _load_seo_alert_state / _save_seo_alert_state ----
+
+def test_load_state_returns_empty_when_mongo_unavailable():
+    with patch("deps.is_mongo_available", AsyncMock(return_value=False)):
+        out = asyncio.run(bot_discovery._load_seo_alert_state())
+    assert out == {}
+
+
+def test_load_state_returns_doc_when_present():
+    fake_db = MagicMock()
+    fake_db.seo_alert_state.find_one = AsyncMock(return_value={
+        "_id": "seo_health", "active": True, "last_notified_at_ts": 100.0,
+    })
+    with patch("deps.db", fake_db), \
+         patch("deps.is_mongo_available", AsyncMock(return_value=True)):
+        out = asyncio.run(bot_discovery._load_seo_alert_state())
+    assert out["active"] is True
+    assert out["last_notified_at_ts"] == 100.0
+
+
+def test_save_state_upserts_with_updated_at():
+    fake_db = MagicMock()
+    fake_db.seo_alert_state.update_one = AsyncMock()
+    with patch("deps.db", fake_db), \
+         patch("deps.is_mongo_available", AsyncMock(return_value=True)):
+        asyncio.run(bot_discovery._save_seo_alert_state(
+            {"active": True, "last_notified_at_ts": 200.0}
+        ))
+    fake_db.seo_alert_state.update_one.assert_awaited_once()
+    args, kwargs = fake_db.seo_alert_state.update_one.call_args
+    # Filter is keyed by _id
+    assert args[0] == {"_id": "seo_health"}
+    set_payload = args[1]["$set"]
+    assert set_payload["active"] is True
+    assert set_payload["last_notified_at_ts"] == 200.0
+    # updated_at is auto-added so the doc always has a freshness signal
+    assert "updated_at" in set_payload
+    assert kwargs.get("upsert") is True
+
+
+def test_save_state_silently_swallows_mongo_failure():
+    # The alert loop must never crash because of state-write failure.
+    fake_db = MagicMock()
+    fake_db.seo_alert_state.update_one = AsyncMock(
+        side_effect=RuntimeError("mongo timeout"))
+    with patch("deps.db", fake_db), \
+         patch("deps.is_mongo_available", AsyncMock(return_value=True)):
+        # No exception should propagate
+        asyncio.run(bot_discovery._save_seo_alert_state({"active": False}))
+
+
+# ---- 3. End-to-end alert deduplication scenarios ----
+
+def test_e2e_critical_then_critical_then_ok_dedupes_and_recovers():
+    """Three loop ticks: first bad (no alert — only 1 in a row), second bad
+    (initial alert fires once), third ok (recovered alert fires once).
+    Verifies the exact dispatch sequence and that the state doc is
+    flipped between active/inactive correctly."""
+
+    state_holder = {"doc": {}}  # simulates Mongo round-trip
+
+    async def _fake_load():
+        return dict(state_holder["doc"])
+
+    async def _fake_save(updates):
+        state_holder["doc"].update(updates)
+
+    fake_dispatch = AsyncMock()
+
+    async def _tick(status: str, consecutive_bad: int, now: float):
+        prev = await _fake_load()
+        action = bot_discovery._decide_seo_health_alert(
+            current_status=status, consecutive_bad=consecutive_bad,
+            prev_state=prev, now_ts=now,
+        )
+        if action == "fire_initial":
+            await fake_dispatch("seo_health_degraded", "init", "init body")
+            await _fake_save({"active": True, "first_bad_at_ts": now,
+                              "last_alert_status": status,
+                              "last_notified_at_ts": now,
+                              "digest_count": 0})
+        elif action == "fire_digest":
+            await fake_dispatch("seo_health_degraded", "digest", "digest body")
+            await _fake_save({"last_notified_at_ts": now,
+                              "digest_count": int(prev.get("digest_count", 0)) + 1})
+        elif action == "fire_recovered":
+            await fake_dispatch("seo_health_recovered", "recovered", "recovered body")
+            await _fake_save({"active": False, "last_alert_status": None,
+                              "recovered_at_ts": now})
+
+    async def _scenario():
+        # T+0: first bad tick — no alert (only 1 in a row)
+        await _tick("critical", consecutive_bad=1, now=1000.0)
+        # T+1h: second bad tick — initial alert
+        await _tick("critical", consecutive_bad=2, now=1000.0 + 3600)
+        # T+2h: third bad tick — should NOT re-fire (digest interval not up)
+        await _tick("critical", consecutive_bad=2, now=1000.0 + 7200)
+        # T+3h: still bad — should NOT re-fire
+        await _tick("critical", consecutive_bad=2, now=1000.0 + 3 * 3600)
+        # T+4h: recovered — fires recovered alert
+        await _tick("ok", consecutive_bad=0, now=1000.0 + 4 * 3600)
+        # T+5h: still ok — should NOT fire anything
+        await _tick("ok", consecutive_bad=0, now=1000.0 + 5 * 3600)
+
+    asyncio.run(_scenario())
+
+    types_dispatched = [c.args[0] for c in fake_dispatch.await_args_list]
+    assert types_dispatched == ["seo_health_degraded", "seo_health_recovered"], \
+        f"Expected exactly 1 initial + 1 recovered, got {types_dispatched}"
+    assert state_holder["doc"]["active"] is False
+    assert state_holder["doc"]["recovered_at_ts"] == 1000.0 + 4 * 3600
+
+
+def test_e2e_long_outage_triggers_digest_after_interval():
+    """Sustained 24h outage: initial alert at hour 1, then digest at hour
+    13 (≥ 12h interval), then digest at hour 25 (≥ another 12h)."""
+
+    state_holder = {"doc": {}}
+
+    async def _fake_load():
+        return dict(state_holder["doc"])
+
+    async def _fake_save(updates):
+        state_holder["doc"].update(updates)
+
+    fake_dispatch = AsyncMock()
+
+    async def _tick(status, cb, now):
+        prev = await _fake_load()
+        action = bot_discovery._decide_seo_health_alert(
+            current_status=status, consecutive_bad=cb,
+            prev_state=prev, now_ts=now,
+        )
+        if action == "fire_initial":
+            await fake_dispatch("init", now)
+            await _fake_save({"active": True, "first_bad_at_ts": now,
+                              "last_notified_at_ts": now, "digest_count": 0,
+                              "last_alert_status": status})
+        elif action == "fire_digest":
+            await fake_dispatch("digest", now)
+            await _fake_save({"last_notified_at_ts": now,
+                              "digest_count": int(prev.get("digest_count", 0)) + 1})
+
+    async def _scenario():
+        # Tick once per hour for 26 hours, all critical
+        for h in range(0, 27):
+            cb = 1 if h == 0 else 2  # second hour onwards has 2 in a row
+            await _tick("critical", cb=cb, now=h * 3600.0)
+
+    asyncio.run(_scenario())
+
+    # Expected dispatches: initial at h=1, digest at h=13, digest at h=25
+    dispatched = [(c.args[0], c.args[1] / 3600) for c in fake_dispatch.await_args_list]
+    assert len(dispatched) == 3, f"Expected 3 alerts in 26h, got {len(dispatched)}: {dispatched}"
+    assert dispatched[0][0] == "init" and dispatched[0][1] == 1
+    assert dispatched[1][0] == "digest" and dispatched[1][1] == 13
+    assert dispatched[2][0] == "digest" and dispatched[2][1] == 25
+    # Digest counter persists across ticks
+    assert state_holder["doc"]["digest_count"] == 2

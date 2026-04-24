@@ -1258,7 +1258,7 @@ _NOTIFICATION_CHANNELS_DEFAULT = {
     "review_prompt_digest_emails": [],
 }
 # Alert types treated as "SEO incidents" for the Slack webhook toggle.
-_SEO_WEBHOOK_ALERT_TYPES = ("seo_health_degraded", "seo_url_spike")
+_SEO_WEBHOOK_ALERT_TYPES = ("seo_health_degraded", "seo_url_spike", "seo_health_recovered")
 _SEO_DASHBOARD_URL = "https://syrabit.ai/admin/seo"
 # Task #414: alert types that get a custom hydrate Slack card.
 _HYDRATE_WEBHOOK_ALERT_TYPES = ("hydrate_failure_spike", "hydrate_recovery_low")
@@ -1378,12 +1378,27 @@ def _build_seo_slack_payload(alert_type: str, title: str, body: str, snap: dict)
     "Open SEO Manager" button. Slack, Discord (via `text` fallback), and
     generic webhooks all accept the `text` field, while Slack additionally
     renders `blocks` for the rich layout.
+
+    Task #821: handle the new ``seo_health_recovered`` alert type with a
+    green check icon and a "RESOLVED" label so the all-clear message is
+    visually distinct from the initial / digest alerts. The header emoji
+    and section icon also switch from red to green for recoveries.
     """
-    status = str(snap.get("actual", "")).lower() or "degraded"
-    severity_label = {
-        "critical": ":rotating_light: CRITICAL",
-        "degraded": ":warning: DEGRADED",
-    }.get(status, f":warning: {status.upper() or 'DEGRADED'}")
+    is_recovery = (alert_type == "seo_health_recovered")
+    status = str(snap.get("actual", "")).lower() or ("ok" if is_recovery else "degraded")
+    if is_recovery:
+        severity_label = ":white_check_mark: RESOLVED"
+        header_emoji = "✅"
+        fallback_emoji = ":white_check_mark:"
+        button_style = "primary"
+    else:
+        severity_label = {
+            "critical": ":rotating_light: CRITICAL",
+            "degraded": ":warning: DEGRADED",
+        }.get(status, f":warning: {status.upper() or 'DEGRADED'}")
+        header_emoji = "🚨"
+        fallback_emoji = ":rotating_light:"
+        button_style = "primary"
 
     valid_sm = snap.get("valid_sitemaps", "N/A")
     total_sm = snap.get("total_sitemaps", "N/A")
@@ -1392,7 +1407,7 @@ def _build_seo_slack_payload(alert_type: str, title: str, body: str, snap: dict)
     url_line = f"URL spot-check success: *{url_rate}%*"
 
     text_fallback = (
-        f":rotating_light: *{title}*\n"
+        f"{fallback_emoji} *{title}*\n"
         f"{severity_label}\n"
         f"{body}\n"
         f"{sitemap_line} · {url_line}\n"
@@ -1400,19 +1415,19 @@ def _build_seo_slack_payload(alert_type: str, title: str, body: str, snap: dict)
     )
 
     blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"🚨 {title}", "emoji": True}},
+        {"type": "header", "text": {"type": "plain_text", "text": f"{header_emoji} {title}", "emoji": True}},
         {"type": "section", "fields": [
             {"type": "mrkdwn", "text": f"*Severity*\n{severity_label}"},
             {"type": "mrkdwn", "text": f"*Alert type*\n`{alert_type}`"},
             {"type": "mrkdwn", "text": f"*{sitemap_line.split(':',1)[0]}*\n{valid_sm} / {total_sm}"},
             {"type": "mrkdwn", "text": f"*URL spot-checks*\n{url_rate}%"},
         ]},
-        {"type": "section", "text": {"type": "mrkdwn", "text": body or "SEO health degraded."}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": body or ("SEO health back to OK." if is_recovery else "SEO health degraded.")}},
         {"type": "actions", "elements": [
             {"type": "button",
              "text": {"type": "plain_text", "text": "Open SEO Manager", "emoji": True},
              "url": _SEO_DASHBOARD_URL,
-             "style": "primary"},
+             "style": button_style},
         ]},
     ]
 
