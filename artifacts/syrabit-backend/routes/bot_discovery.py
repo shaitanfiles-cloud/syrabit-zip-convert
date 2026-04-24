@@ -679,6 +679,25 @@ _PREWARM_USER_AGENT = (
     "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html) "
     "syrabit-prewarm/1.0"
 )
+
+# Self-identifying headers used by every internal SEO self-check
+# (seo_health_check + _deep_scan_sitemap) when probing the public
+# syrabit.ai sitemap XMLs and sample URLs. The default `python-httpx`
+# UA is classified by Cloudflare's Super Bot Fight Mode as "definitely
+# automated" and served the 403 managed challenge — which previously
+# made every self-probe report HTTP 403 and the SEO health endpoint
+# permanently report `status=critical`. Naming convention mirrors the
+# existing `SyrabitBot/1.0` and `SyrabitSEOBot/1.0` UAs in
+# web_content.py and google_suggest_client.py. This is NOT a security
+# bypass — sitemaps and SPA pages are public; the UA simply identifies
+# our own self-checks at the edge so SBFM does not falsely flag them.
+_SEO_SELF_CHECK_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (compatible; SyrabitSEOHealth/1.0; "
+        "+https://syrabit.ai/api/seo/health)"
+    ),
+    "Accept": "application/xml,text/html;q=0.9,*/*;q=0.8",
+}
 _PREWARM_RPS = 1.5
 _PREWARM_TIMEOUT = 8.0
 _prewarm_lock = asyncio.Lock()
@@ -2098,7 +2117,7 @@ async def seo_health_check(
     import random
     import xml.etree.ElementTree as ET
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with httpx.AsyncClient(timeout=15.0, headers=_SEO_SELF_CHECK_HEADERS) as client:
         for sm_url in sitemap_urls:
             sm_name = sm_url.split("/")[-1]
             sm_result = {"name": sm_name, "url": sm_url, "valid_xml": False, "url_count": 0, "sample_checks": []}
@@ -3467,7 +3486,7 @@ async def _deep_scan_sitemap(sitemap_name: str) -> dict:
         "failing": [],
     }
 
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    async with httpx.AsyncClient(timeout=20.0, headers=_SEO_SELF_CHECK_HEADERS) as client:
         try:
             resp = await client.get(sitemap_url)
         except Exception as fetch_err:
