@@ -154,7 +154,23 @@ if _SA_CREDS is None and not _API_KEY and not _USE_BYOK and _GEMINI_API_KEY_FALL
         "GEMINI_API_KEY (Google AI Studio direct mode)."
     )
 
-_GEMINI_FORBIDDEN = False
+# ── Circuit breaker (Task #831) ─────────────────────────────────────────────
+# Replaces the legacy `_GEMINI_FORBIDDEN` boolean which permanently
+# disabled Vertex on a single 403. The breaker opens after N consecutive
+# failures (any class of failure: 4xx, 5xx, timeout, parse error) and
+# auto-attempts recovery after a cooldown — so when Vertex billing /
+# quota is restored, the next probe (or the next user request) closes
+# the breaker without an API restart.
+from vertex_breaker import CircuitBreaker  # noqa: E402
+
+_BREAKER_THRESHOLD = max(1, int(os.environ.get("VERTEX_BREAKER_THRESHOLD", "5")))
+_BREAKER_COOLDOWN_S = max(1.0, float(os.environ.get("VERTEX_BREAKER_COOLDOWN_S", "300")))
+
+_breaker = CircuitBreaker(
+    name="vertex_services",
+    failure_threshold=_BREAKER_THRESHOLD,
+    cooldown_s=_BREAKER_COOLDOWN_S,
+)
 
 
 def _auth_mode_label() -> str:
@@ -197,36 +213,139 @@ else:
 
 
 def _ok() -> bool:
-    if _GEMINI_FORBIDDEN:
+    """True iff a credential is configured AND the breaker allows traffic.
+
+    The breaker may transition OPEN→HALF_OPEN here as a side effect of
+    `allow()` so that a single probe call goes through after the
+    cooldown elapses; that probe's outcome is fed back via
+    `_record_response()` (success closes the breaker, failure re-opens
+    with a fresh cooldown).
+    """
+    if not (bool(_API_KEY) or _SA_CREDS is not None or _USE_BYOK):
         return False
-    return bool(_API_KEY) or _SA_CREDS is not None or _USE_BYOK
+    return _breaker.allow()
 
 
-def _mark_forbidden() -> None:
-    """When Gemini upstream returns 403, attempt one runtime fallback to
-    GEMINI_API_KEY (Google AI Studio direct mode) before disabling. This
-    rescues prod from a bad VERTEX_SERVICE_ACCOUNT (e.g. SA lacks Vertex
-    AI User role) when a working API key is also configured."""
-    global _GEMINI_FORBIDDEN, _SA_CREDS, _API_KEY, _USE_BYOK, _AUTH_MODE, GEMINI_KEY
-    if _GEMINI_FORBIDDEN:
-        return
+def _attempt_auth_rescue() -> bool:
+    """When a Gemini 403 hits, try to swap to direct GEMINI_API_KEY mode
+    (Google AI Studio) if a different key is available than what we're
+    currently using. Returns True if the swap happened and the next
+    request should be retried under the new mode. Returns False when
+    we're already on the only available key.
+    """
+    global _SA_CREDS, _API_KEY, _USE_BYOK, _AUTH_MODE, GEMINI_KEY
     fallback_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if (_SA_CREDS is not None or _USE_BYOK) and fallback_key and fallback_key != _API_KEY:
+    if (
+        (_SA_CREDS is not None or _USE_BYOK)
+        and fallback_key
+        and fallback_key != _API_KEY
+    ):
         _SA_CREDS = None
         _USE_BYOK = False
         _API_KEY = fallback_key
         GEMINI_KEY = fallback_key
         _AUTH_MODE = "google_ai_studio_api_key"
         logger.warning(
-            "Gemini 403 on previous auth mode — switching to GEMINI_API_KEY "
-            "(Google AI Studio direct) for the rest of this session."
+            "Gemini auth failure on previous auth mode — switching to "
+            "GEMINI_API_KEY (Google AI Studio direct) as a rescue."
         )
-        return
-    _GEMINI_FORBIDDEN = True
-    logger.error(
-        "Gemini upstream returned 403 Forbidden — credential is invalid or the "
-        "model is not accessible. Disabling Gemini calls for this session."
-    )
+        return True
+    return False
+
+
+# 4xx classification — distinguish "upstream is broken" from "the client
+# (or the user's payload) is broken". Only the former should open the
+# breaker; counting a user-submitted oversized image as evidence of a
+# Vertex outage would degrade everyone else's chat for no reason.
+_INFRA_4XX_STATUS = (401, 403, 408, 429)
+_USER_4XX_STATUS = (413, 422)  # payload too large / unprocessable
+
+# Substrings that, when present in a 400 body, indicate the 400 is an
+# infra failure (Google returns "API key expired" / quota / billing
+# errors as HTTP 400 INVALID_ARGUMENT — i.e. the *current* outage).
+_INFRA_400_MARKERS = (
+    "api key", "expired", "quota", "billing", "limit", "exhausted",
+    "permission denied", "deadline exceeded", "invalid_grant",
+    "service is currently unavailable", "consumer", "denied",
+)
+
+
+def _is_infra_400(body_text: str) -> bool:
+    if not body_text:
+        return False
+    bt = body_text.lower()
+    return any(m in bt for m in _INFRA_400_MARKERS)
+
+
+def _record_response(r: Optional["httpx.Response"], label: str) -> bool:
+    """Update the breaker based on an HTTP response and return True iff
+    the response is suitable for the caller to continue parsing.
+
+    Failure classification (Task #831 architect feedback):
+      - Infra failures (401/403/408/429, 5xx, network, missing response,
+        and 400s containing API-key/quota/billing markers) feed the
+        breaker — these signal the upstream is broken and we should
+        stop hammering it.
+      - User-payload failures (413, 422, plain 400 with no infra
+        markers) are logged but NOT counted — a single user submitting
+        a bad image must not open the breaker for everyone else.
+      - 403 still attempts the auth-mode rescue (swap to direct
+        GEMINI_API_KEY) before counting the failure.
+    """
+    if r is None:
+        _breaker.record_failure(f"{label}_no_response")
+        return False
+
+    code = r.status_code
+    if code == 403:
+        rescued = _attempt_auth_rescue()
+        if not rescued:
+            _breaker.record_failure(f"{label}_403")
+        return False
+
+    if code == 400:
+        # `httpx.Response.text` triggers a synchronous read on the
+        # already-buffered body; safe in non-streaming contexts (which
+        # is everywhere in vertex_services).
+        body = ""
+        try:
+            body = r.text[:500] if r.text else ""
+        except Exception:
+            body = ""
+        if _is_infra_400(body):
+            _breaker.record_failure(f"{label}_400_infra")
+            logger.warning(f"vertex {label} 400 (infra): {body[:160]}")
+        else:
+            # User payload error or unknown 400 — log but do not penalise.
+            logger.info(f"vertex {label} 400 (payload/unknown): {body[:120]}")
+        return False
+
+    if code in _INFRA_4XX_STATUS or code >= 500:
+        _breaker.record_failure(f"{label}_http_{code}")
+        return False
+
+    if code in _USER_4XX_STATUS:
+        logger.info(f"vertex {label} {code} — user payload error (not breaker-counted)")
+        return False
+
+    if code >= 400:
+        # Unknown 4xx — log but do not penalise (could be a routing
+        # issue we don't recognise; safer to not flap the breaker).
+        logger.warning(f"vertex {label} HTTP {code} (uncategorised, not breaker-counted)")
+        return False
+
+    _breaker.record_success()
+    return True
+
+
+def breaker_snapshot() -> dict:
+    """Public accessor for admin endpoints / health probes."""
+    return _breaker.snapshot()
+
+
+def force_breaker_close() -> None:
+    """Operator override (admin endpoint) to force-close the breaker."""
+    _breaker.force_close()
 
 
 # ── URL + headers (gateway-aware) ───────────────────────────────────────────
@@ -357,16 +476,13 @@ async def _embed_one(text: str, task_type: str) -> Optional[List[float]]:
                 "parameters": {"outputDimensionality": _EMBED_DIMENSIONS},
             }
             r = await _post_embed_with_retry(url, body, headers, "Vertex")
-            if r is None:
-                return None
-            if r.status_code == 403:
-                _mark_forbidden()
+            if not _record_response(r, "embed_vertex"):
                 return None
             try:
-                r.raise_for_status()
                 return r.json()["predictions"][0]["embeddings"]["values"]
             except Exception as e:
                 logger.warning(f"gemini embed (Vertex) parse failed: {e}")
+                _breaker.record_failure(f"embed_vertex_parse_{type(e).__name__}")
                 return None
 
         for model in (_EMBED_MODEL, "text-embedding-004"):
@@ -379,17 +495,34 @@ async def _embed_one(text: str, task_type: str) -> Optional[List[float]]:
             }
             r = await _post_embed_with_retry(url, body, headers, model)
             if r is None:
+                # Transient exhausted — let the breaker count it and try
+                # the next candidate model (404 below also continues).
+                _breaker.record_failure(f"embed_{model}_no_response")
                 continue
             if r.status_code == 403:
-                _mark_forbidden()
+                rescued = _attempt_auth_rescue()
+                if not rescued:
+                    _breaker.record_failure(f"embed_{model}_403")
                 return None
             if r.status_code == 404:
+                # Model unavailable on this endpoint — try the next
+                # candidate. NOT counted as a breaker failure (it's a
+                # routing decision, not an upstream outage).
+                continue
+            if r.status_code >= 400:
+                _breaker.record_failure(f"embed_{model}_http_{r.status_code}")
+                logger.warning(
+                    f"gemini embed ({model}) HTTP {r.status_code}: "
+                    f"{r.text[:200] if hasattr(r, 'text') else ''}"
+                )
                 continue
             try:
-                r.raise_for_status()
-                return r.json()["embedding"]["values"]
+                vec = r.json()["embedding"]["values"]
+                _breaker.record_success()
+                return vec
             except Exception as e:
                 logger.warning(f"gemini embed ({model}) parse failed: {e}")
+                _breaker.record_failure(f"embed_{model}_parse_{type(e).__name__}")
                 continue
         return None
 
@@ -562,13 +695,12 @@ async def analyze_image(image_bytes: bytes, mime_type: str = "image/jpeg",
     try:
         async with httpx.AsyncClient(timeout=60) as c:
             r = await c.post(url, json=body, headers=headers)
-            if r.status_code == 403:
-                _mark_forbidden()
+            if not _record_response(r, "analyze_image"):
                 return None
-            r.raise_for_status()
             return r.json()["candidates"][0]["content"]["parts"][0]["text"]
     except Exception as e:
         logger.warning(f"analyze_image failed: {e}")
+        _breaker.record_failure(f"analyze_image_{type(e).__name__}")
         return None
 
 
@@ -905,14 +1037,20 @@ async def extract_from_document(pdf_bytes: bytes, task: str = "extract_mcqs") ->
         async with httpx.AsyncClient(timeout=120) as c:
             r = await c.post(url, json=body, headers=headers)
             if r.status_code == 403:
-                _mark_forbidden()
+                rescued = _attempt_auth_rescue()
+                if not rescued:
+                    _breaker.record_failure("extract_from_document_403")
                 return {"error": "Gemini upstream returned 403 — check credentials"}
-            r.raise_for_status()
+            if r.status_code >= 400:
+                _breaker.record_failure(f"extract_from_document_http_{r.status_code}")
+                return {"error": f"Gemini upstream returned {r.status_code}"}
+            _breaker.record_success()
             raw = r.json()["candidates"][0]["content"]["parts"][0]["text"]
             cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```")
             return {"result": json.loads(cleaned), "task": task}
     except Exception as e:
         logger.warning(f"extract_from_document failed: {e}")
+        _breaker.record_failure(f"extract_from_document_{type(e).__name__}")
         return {"error": str(e)}
 
 
@@ -937,13 +1075,12 @@ async def _generate(prompt: str, model: str = _GEN_MODEL,
     try:
         async with httpx.AsyncClient(timeout=45) as c:
             r = await c.post(url, json=body, headers=headers)
-            if r.status_code == 403:
-                _mark_forbidden()
+            if not _record_response(r, "generate"):
                 return None
-            r.raise_for_status()
             return r.json()["candidates"][0]["content"]["parts"][0]["text"]
     except Exception as e:
         logger.warning(f"vertex _generate failed: {e}")
+        _breaker.record_failure(f"generate_{type(e).__name__}")
         return None
 
 

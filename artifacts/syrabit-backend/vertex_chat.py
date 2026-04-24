@@ -33,6 +33,8 @@ from typing import AsyncIterator, List, Dict, Any, Optional
 
 import httpx
 
+from vertex_breaker import CircuitBreaker
+
 logger = logging.getLogger(__name__)
 
 VERTEX_PROJECT_ID = os.environ.get("VERTEX_PROJECT_ID", "").strip()
@@ -47,10 +49,50 @@ _creds = None
 _creds_err: Optional[str] = None
 _token_lock = asyncio.Lock()
 
+# ── Circuit breaker (Task #831) ────────────────────────────────────────────
+# Tighter than vertex_services because chat is latency-sensitive: every
+# attempt against a dead upstream pays the connect timeout (10s) before
+# the SLM-pool fallback runs. Open the breaker quickly and recover
+# eagerly so user-perceived latency stays low during outages.
+_CHAT_BREAKER_THRESHOLD = max(1, int(os.environ.get("VERTEX_CHAT_BREAKER_THRESHOLD", "3")))
+_CHAT_BREAKER_COOLDOWN_S = max(1.0, float(os.environ.get("VERTEX_CHAT_BREAKER_COOLDOWN_S", "180")))
+
+_breaker = CircuitBreaker(
+    name="vertex_chat",
+    failure_threshold=_CHAT_BREAKER_THRESHOLD,
+    cooldown_s=_CHAT_BREAKER_COOLDOWN_S,
+)
+
 
 def is_configured() -> bool:
-    """True iff the Vertex chat client can be used."""
+    """True iff the Vertex chat client has the env vars set.
+
+    Static config check only — does NOT consider runtime breaker state.
+    Callers that gate request routing should use `is_available()` so a
+    known-broken upstream is skipped without paying the connect timeout.
+    """
     return bool(VERTEX_PROJECT_ID)
+
+
+def is_available() -> bool:
+    """True iff configured AND the circuit breaker currently allows traffic.
+
+    Use this in request-time routing (e.g. the llm.py fast-path) so a
+    Vertex outage degrades to the SLM pool with no per-request latency
+    penalty. Calling `allow()` may transition OPEN → HALF_OPEN as a side
+    effect — that's intentional, the next caller acts as the probe.
+    """
+    return is_configured() and _breaker.allow()
+
+
+def breaker_snapshot() -> dict:
+    """Public accessor for admin endpoints / health probes."""
+    return _breaker.snapshot()
+
+
+def force_breaker_close() -> None:
+    """Operator override (admin endpoint) to force-close the breaker."""
+    _breaker.force_close()
 
 
 def _load_credentials():
@@ -143,7 +185,14 @@ async def stream_chat(
         raise RuntimeError("Vertex chat is not configured (VERTEX_PROJECT_ID missing)")
 
     use_model = (model or VERTEX_GEMINI_MODEL).strip() or VERTEX_GEMINI_MODEL
-    token = await _get_access_token()
+
+    try:
+        token = await _get_access_token()
+    except Exception as e:
+        # Auth failure (no creds, expired key, refresh denied) — feed
+        # the breaker so subsequent requests skip Vertex entirely.
+        _breaker.record_failure(f"auth_{type(e).__name__}")
+        raise
 
     base = f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com/v1"
     url = (
@@ -163,28 +212,49 @@ async def stream_chat(
     }
 
     timeout = httpx.Timeout(timeout_s, connect=10.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        async with client.stream("POST", url, json=body, headers=headers) as resp:
-            if resp.status_code >= 400:
-                err_text = (await resp.aread()).decode("utf-8", errors="replace")[:500]
-                raise RuntimeError(
-                    f"Vertex Gemini Flash {resp.status_code}: {err_text}"
-                )
-            async for line in resp.aiter_lines():
-                if not line or not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if not data or data == "[DONE]":
-                    continue
-                try:
-                    evt = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                candidates = evt.get("candidates") or []
-                if not candidates:
-                    continue
-                parts = (candidates[0].get("content") or {}).get("parts") or []
-                for p in parts:
-                    txt = p.get("text")
-                    if txt:
-                        yield txt
+    success_recorded = False
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream("POST", url, json=body, headers=headers) as resp:
+                if resp.status_code >= 400:
+                    err_text = (await resp.aread()).decode("utf-8", errors="replace")[:500]
+                    _breaker.record_failure(f"http_{resp.status_code}")
+                    raise RuntimeError(
+                        f"Vertex Gemini Flash {resp.status_code}: {err_text}"
+                    )
+                # 2xx — upstream accepted our request. Record success
+                # exactly once at the response-status boundary; if the
+                # stream later dies mid-way that's a separate concern
+                # (the upstream WAS alive, so don't re-open the breaker
+                # on transient mid-stream errors).
+                _breaker.record_success()
+                success_recorded = True
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    try:
+                        evt = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    candidates = evt.get("candidates") or []
+                    if not candidates:
+                        continue
+                    parts = (candidates[0].get("content") or {}).get("parts") or []
+                    for p in parts:
+                        txt = p.get("text")
+                        if txt:
+                            yield txt
+    except RuntimeError:
+        # Already recorded above (status >= 400); just propagate.
+        raise
+    except httpx.HTTPError as e:
+        # Only feed the breaker if we never saw a successful response.
+        # Mid-stream errors after a 2xx don't change the "upstream is
+        # alive" verdict — counting them would falsely re-open the
+        # breaker after a successful accept.
+        if not success_recorded:
+            _breaker.record_failure(f"network_{type(e).__name__}")
+        raise

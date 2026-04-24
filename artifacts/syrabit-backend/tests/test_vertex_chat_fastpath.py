@@ -339,3 +339,79 @@ def test_vertex_fastpath_unconfigured_routes_to_legacy(monkeypatch):
     import chat_speedup_metrics as csm
     snap = csm.snapshot(days=1)
     assert snap["provider_fallbacks"] == []
+
+
+# ────────────────────────────────────────────────────────────────────────
+# 6. Circuit breaker open → fast-path skips Vertex without an attempt
+# ────────────────────────────────────────────────────────────────────────
+
+def test_vertex_fastpath_skipped_when_breaker_open(monkeypatch):
+    """When ``is_configured()`` is True but ``is_available()`` is False
+    (circuit breaker open), the fast-path must skip the Vertex call
+    entirely so we don't pay the connect timeout per request. The
+    request still routes to the legacy SLM pool — but transparently,
+    without a fallback metric (the breaker prevented the attempt; no
+    runtime Vertex failure happened on this turn)."""
+    import llm
+    import vertex_chat
+
+    monkeypatch.setattr(vertex_chat, "is_configured", lambda: True)
+    monkeypatch.setattr(vertex_chat, "is_available", lambda: False)
+    vertex_spy = AsyncMock()
+    monkeypatch.setattr(vertex_chat, "stream_chat", vertex_spy)
+
+    monkeypatch.setattr(llm, "_resolve_provider_for_model",
+                        lambda model, providers: ("cerebras", "fake_key"))
+    monkeypatch.setattr(llm, "_safe_model_for_provider",
+                        lambda model, provider, providers: model)
+
+    async def _fake_legacy_stream(messages, api_key, model, max_tokens):
+        for tok in ("Hello", " ", "world"):
+            yield tok
+    monkeypatch.setattr(llm, "_stream_cerebras", _fake_legacy_stream)
+
+    msgs = [{"role": "user", "content": "hi"}]
+    chunks = _run(_collect(llm.call_llm_api_stream(
+        msgs, model="vertex/gemini-flash", response_lang="english",
+    )))
+    events = _parse_sse(chunks)
+
+    # User still gets a real answer from the legacy pool.
+    contents = [e["content"] for e in events if "content" in e]
+    assert contents and "".join(contents) == "Hello world"
+    # Vertex was NEVER attempted — that's the whole point.
+    vertex_spy.assert_not_called()
+    # No fallback metric — there was no Vertex *attempt* to fall back
+    # from. The breaker pre-empted the call.
+    import chat_speedup_metrics as csm
+    snap = csm.snapshot(days=1)
+    assert snap["provider_fallbacks"] == []
+
+
+def test_vertex_chat_breaker_opens_on_repeated_http_failures():
+    """End-to-end: vertex_chat's breaker module-level instance opens
+    after the configured threshold of failures and ``is_available()``
+    flips to False, so the fast-path automatically routes to the
+    SLM pool on the next call."""
+    import vertex_chat
+
+    # Use the real breaker instance — exercise it directly.
+    vertex_chat._breaker.force_close()
+    vertex_chat.VERTEX_PROJECT_ID = "test-project"  # make is_configured True
+
+    threshold = vertex_chat._CHAT_BREAKER_THRESHOLD
+    assert vertex_chat.is_configured() is True
+    assert vertex_chat.is_available() is True
+
+    for i in range(threshold):
+        vertex_chat._breaker.record_failure(f"http_503_{i}")
+
+    assert vertex_chat.is_configured() is True
+    assert vertex_chat.is_available() is False
+    snap = vertex_chat.breaker_snapshot()
+    assert snap["state"] == "open"
+    assert snap["consecutive_failures"] >= threshold
+
+    # Operator override resets it.
+    vertex_chat.force_breaker_close()
+    assert vertex_chat.is_available() is True

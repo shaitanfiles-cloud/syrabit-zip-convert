@@ -1229,6 +1229,16 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         if not _vertex_chat.is_configured():
             logger.warning("vertex/gemini-flash requested but VERTEX_PROJECT_ID is not set — falling back to legacy SLM pool")
             use_model_raw = _vertex_fallback_target
+        elif not _vertex_chat.is_available():
+            # Circuit breaker is open — Vertex is known-broken right now.
+            # Skip it entirely so we don't pay the connect timeout
+            # (~10s) per request. The breaker will auto-attempt
+            # recovery after its cooldown.
+            logger.info(
+                "vertex/gemini-flash skipped — circuit breaker is open; "
+                f"routing to {_vertex_fallback_target}"
+            )
+            use_model_raw = _vertex_fallback_target
         else:
             _vertex_first_token = False
             _vertex_t0 = time.monotonic()
