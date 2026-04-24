@@ -198,7 +198,17 @@ const CACHE_TTL: Record<string, number> = {
   "/api/content/subjects": 3600,
   "/api/content/chapters/": 3600,
   "/api/content/chunks/": 3600,
-  "/api/content/library-bundle": 300,
+  // Bumped from 300s → 1800s (30 min) so cold POPs don't pay the
+  // ~1.5s D1+backend round-trip on every TTL boundary. Admin write
+  // routes already explicitly purge this key (see ADMIN_PURGE_KEYS
+  // around line 1030 — purgeKeys.push("/api/content/library-bundle")
+  // and "?slim=1"), so an admin edit still invalidates within seconds.
+  // The implicit stale-while-revalidate window is 2× this value
+  // (3600s) — users continue to be served the stale body while the
+  // worker refreshes in the background, so the worst-case latency
+  // experienced by a real user is the cf-cache hit (~30ms), not the
+  // backend round-trip.
+  "/api/content/library-bundle": 1800,
   "/api/content/chapter-by-slug/": 3600,
   "/api/content/topic/": 3600,
   "/api/content/syllabus/": 3600,
