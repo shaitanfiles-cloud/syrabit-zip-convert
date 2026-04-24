@@ -734,6 +734,23 @@ PLAN_LIMITS = {
 # never trips it. Override via ``IP_COARSE_DAILY_CAP`` env var if a
 # specific deployment sees legitimate traffic above the default.
 IP_COARSE_DAILY_CAP = int(os.environ.get("IP_COARSE_DAILY_CAP", "1500"))
+
+# Task #797 — cap how often a single IP can mint a fresh device cookie
+# in a short window. The first-visit branch in
+# ``auth_deps.rate_limit_chat_optional`` lets an anonymous request
+# through without a valid cookie by minting one and charging 1 against
+# the new token's 30/day budget. A scripted abuser can defeat the
+# 30/device cap by simply discarding the cookie on every request, so
+# every hit looks like a "first visit" and is only limited by the much
+# higher per-IP coarse cap (1500/day default). This per-minute mint
+# rate-limit closes that loophole: even if the script never persists
+# the cookie, it still gets at most ``DEVICE_COOKIE_MINTS_PER_MIN``
+# fresh sessions per minute from a single IP. Real browsers retain the
+# cookie they're given and never re-trigger this code path. Override
+# via the env var if a deployment terminates an unusually large NAT
+# (e.g. a national carrier CGNAT pop) where many genuine first-visits
+# legitimately co-occur.
+DEVICE_COOKIE_MINTS_PER_MIN = int(os.environ.get("DEVICE_COOKIE_MINTS_PER_MIN", "5"))
 PLAN_PRICES = {
     "free":    {"price": 0,   "label": "Free",    "description": "30 credits/day · zero document access"},
     "starter": {"price": 99,  "label": "Starter", "description": "500 credits/day · limited document access"},

@@ -11,7 +11,7 @@ from config import (
     JWT_REFRESH_EXPIRE_MINUTES, JWT_EXPIRE_MINUTES,
     ADMIN_JWT_SECRET, PLAN_LIMITS,
     COOKIE_DOMAIN, COOKIE_SAMESITE, SECURE_COOKIES,
-    IP_COARSE_DAILY_CAP,
+    IP_COARSE_DAILY_CAP, DEVICE_COOKIE_MINTS_PER_MIN,
 )
 from deps import security, redis_client
 from cache import _redis_get_session, _redis_cache_session
@@ -464,6 +464,34 @@ async def rate_limit_chat_optional(
     # "30 successful, 31st blocked" UX contract).
     token_id = device_token_id(syrabit_device)
     if token_id is None:
+        # Task #797 — rate-limit fresh-cookie issuance per IP. The
+        # first-visit branch is a deliberate UX softener: a brand-new
+        # browser must be able to send its first message even though
+        # the cookie round-trip hasn't completed. A scripted client
+        # can abuse it by simply discarding the cookie on every
+        # request and looking like an endless stream of "first
+        # visits", capped only by the much higher 1500/day per-IP
+        # coarse cap. Gating the mint itself at a small per-minute
+        # ceiling shuts that loophole without affecting any real
+        # browser (real browsers retain the cookie they're handed and
+        # never come back through this branch). On (truly) unknown
+        # IPs we skip the gate so loopback/test paths aren't broken.
+        if ip and ip != "unknown" and not check_rate_limit(
+            f"chat:mint:ip:{ip}",
+            max_requests=DEVICE_COOKIE_MINTS_PER_MIN,
+            window_seconds=60,
+        ):
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    "Too many new sessions from this network in a short window. "
+                    "Wait a minute and retry — make sure cookies are enabled."
+                ),
+                headers={
+                    "Retry-After": "60",
+                    "X-RateLimit-Limit": str(DEVICE_COOKIE_MINTS_PER_MIN),
+                },
+            )
         new_cookie = mint_device_token()
         _set_device_cookie(request, response, new_cookie)
         token_id = device_token_id(new_cookie)

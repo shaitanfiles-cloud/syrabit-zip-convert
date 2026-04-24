@@ -276,6 +276,103 @@ def test_invalid_cookie_triggers_fresh_mint_and_charges_new_token(monkeypatch):
     assert fake.get(new_counters[0]) == "1"
 
 
+def test_cookie_mint_rate_limited_per_ip_per_minute(monkeypatch):
+    """Task #797 — a single IP can only mint a small number of fresh
+    device cookies per minute. Without this gate, a scripted client
+    that simply discards its cookie on each request would look like an
+    endless stream of "first visits" and could effectively chat
+    ``IP_COARSE_DAILY_CAP`` (1500/day) times instead of being limited
+    to the 30/day per-device pool the UX advertises.
+
+    We re-enable the real ``check_rate_limit`` (the helper that owns
+    the new mint counter) and pin the per-IP mint cap to a small
+    value so the test runs fast. The Nth request from the same IP
+    *without* a cookie should succeed; the (N+1)th should 429 with a
+    Retry-After header — exactly mirroring the cookie-thief abuse
+    scenario the task spec describes.
+    """
+    fake = _install_fake_redis(monkeypatch)
+    # _install_fake_redis stubs out check_rate_limit globally to
+    # isolate other tests from the per-minute throttle. Restore the
+    # real helper so the new mint gate can actually count.
+    import importlib
+    real_auth_deps = importlib.reload(auth_deps)
+    monkeypatch.setattr(real_auth_deps, "redis_client", fake, raising=False)
+    monkeypatch.setattr(real_auth_deps, "DEVICE_COOKIE_MINTS_PER_MIN", 5, raising=False)
+
+    req = _FakeReq(headers={"cf-connecting-ip": "192.0.2.77"})
+
+    # 5 cookieless calls all succeed — each mints a fresh cookie.
+    for i in range(5):
+        resp = Response()
+        asyncio.run(real_auth_deps.rate_limit_chat_optional(
+            req, resp, user=None, syrabit_device=None,
+        ))
+        assert DEVICE_COOKIE_NAME in resp.headers.get("set-cookie", ""), (
+            f"call {i+1}: expected a fresh cookie to be minted"
+        )
+
+    # 6th cookieless call from the same IP must 429 — even though no
+    # other limit (per-device 30/day, per-IP 1500/day) has been hit
+    # yet. Source-of-truth assertion for the new mint gate.
+    resp = Response()
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(real_auth_deps.rate_limit_chat_optional(
+            req, resp, user=None, syrabit_device=None,
+        ))
+    assert excinfo.value.status_code == 429
+    assert excinfo.value.headers.get("Retry-After") == "60", (
+        "mint-rate 429 must advertise Retry-After so well-behaved "
+        "clients know when to come back"
+    )
+    detail = excinfo.value.detail.lower()
+    assert "session" in detail or "cookie" in detail, (
+        f"mint-rate 429 should explain the cookie/session issue, got: {excinfo.value.detail}"
+    )
+
+    # And critically: a *different* IP is unaffected — the gate is
+    # per-IP, not global. This guards against accidentally keying on a
+    # shared bucket which would let one bad actor lock everyone out.
+    other_req = _FakeReq(headers={"cf-connecting-ip": "192.0.2.88"})
+    resp = Response()
+    asyncio.run(real_auth_deps.rate_limit_chat_optional(
+        other_req, resp, user=None, syrabit_device=None,
+    ))
+    assert DEVICE_COOKIE_NAME in resp.headers.get("set-cookie", "")
+
+
+def test_cookie_mint_rate_does_not_block_returning_browsers(monkeypatch):
+    """The mint gate must *only* affect cookieless requests. A real
+    browser that already has a valid cookie keeps using it on every
+    request, never re-entering the mint branch. This test pins that
+    contract: even at the per-IP mint cap, a request with a valid
+    cookie still succeeds (it skips the mint path entirely).
+    """
+    fake = _install_fake_redis(monkeypatch)
+    import importlib
+    real_auth_deps = importlib.reload(auth_deps)
+    monkeypatch.setattr(real_auth_deps, "redis_client", fake, raising=False)
+    monkeypatch.setattr(real_auth_deps, "DEVICE_COOKIE_MINTS_PER_MIN", 2, raising=False)
+
+    ip_headers = {"cf-connecting-ip": "192.0.2.55"}
+
+    # Burn through the mint cap with cookieless calls.
+    for _ in range(2):
+        asyncio.run(real_auth_deps.rate_limit_chat_optional(
+            _FakeReq(headers=ip_headers), Response(),
+            user=None, syrabit_device=None,
+        ))
+
+    # A returning browser presenting a valid cookie from the same IP
+    # must still go through — this is the entire point of the gate
+    # being scoped to the mint branch and not to all anonymous traffic.
+    cookie = mint_device_token()
+    asyncio.run(real_auth_deps.rate_limit_chat_optional(
+        _FakeReq(headers=ip_headers), Response(),
+        user=None, syrabit_device=cookie,
+    ))
+
+
 def test_rate_limit_chat_optional_fails_closed_when_redis_down(monkeypatch):
     """Locks in the deliberate availability tradeoff (preserved from
     Task #768): when Redis is down we cannot make the cross-worker
