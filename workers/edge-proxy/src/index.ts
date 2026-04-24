@@ -168,27 +168,54 @@ const ALLOWED_ORIGINS = [
   "https://api.syrabit.ai",
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// EDGE CACHE KEY AUDIT — last reviewed 2026-04-24
+//
+// Route family               | Behaviour          | Reason
+// ───────────────────────────┼────────────────────┼──────────────────────────
+// /api/content/*             | cached             | public, static content
+// /api/seo/                  | cached             | public SEO data, read-only
+// /api/pyq/                  | cached             | public past-year questions
+// /api/sitemap               | cached (1d TTL)    | sitemaps rarely change
+// /api/robots.txt            | cached (1d TTL)    | robots rarely changes
+// /api/notes/public          | cached             | publicly readable notes
+// /api/mcq/                  | cached             | public MCQ bank
+// /api/user/stats            | cached+user-keyed  | per-user, keyed by identity
+// /api/cms/articles          | cached             | public CMS article index
+// /api/flashcards/           | cached             | public flashcard sets
+// /api/edu/allowlist         | cached (1d TTL)    | rarely-changing allowlist
+// /api/ai/chat               | bypass             | streaming AI; non-idempotent, per-session
+// /api/ai/* (non-chat)       | not-listed         | INTENTIONAL — rate-limited via isAiPath()
+// /api/webhooks/*            | bypass             | inbound POST events
+// /api/auth/*                | bypass             | auth tokens must be fresh
+// /api/health                | not-listed         | INTENTIONAL — computed live
+// /api/admin/*               | not-listed         | INTENTIONAL — auth-gated
+// /api/analytics/*           | not-listed         | INTENTIONAL — event writes
+// /api/conversations/*       | not-listed         | INTENTIONAL — user-specific
+// /api/user/* (non-stats)    | not-listed         | INTENTIONAL — user-specific
+// /api/notifications/*       | not-listed         | INTENTIONAL — user-specific
+// ─────────────────────────────────────────────────────────────────────────────
 const CACHEABLE_PREFIXES = [
-  "/api/content/boards",
-  "/api/content/classes",
-  "/api/content/streams",
-  "/api/content/subjects",
-  "/api/content/chapters/",
-  "/api/content/chunks/",
-  "/api/content/chapter-by-slug/",
-  "/api/content/library-bundle",
-  "/api/content/topic/",
-  "/api/seo/",
-  "/api/pyq/",
-  "/api/sitemap",
-  "/api/robots.txt",
-  "/api/notes/public",
-  "/api/mcq/",
-  "/api/user/stats",
-  "/api/cms/articles",
-  "/api/flashcards/",
-  "/api/content/syllabus/",
-  "/api/edu/allowlist",
+  "/api/content/boards",        // public board list; same for every visitor
+  "/api/content/classes",       // public class list; same for every visitor
+  "/api/content/streams",       // public stream list; same for every visitor
+  "/api/content/subjects",      // public subject list; same for every visitor
+  "/api/content/chapters/",     // public chapter data keyed by path segment
+  "/api/content/chunks/",       // public chunk data keyed by path segment
+  "/api/content/chapter-by-slug/", // public chapter lookup by slug
+  "/api/content/library-bundle", // heavy public bundle; admin writes purge it
+  "/api/content/topic/",        // public topic detail keyed by path segment
+  "/api/seo/",                  // public SEO metadata and keyword index
+  "/api/pyq/",                  // public past-year question bank
+  "/api/sitemap",               // sitemaps served to crawlers; 1d TTL
+  "/api/robots.txt",            // robots.txt served to crawlers; 1d TTL
+  "/api/notes/public",          // publicly readable study notes
+  "/api/mcq/",                  // public MCQ bank
+  "/api/user/stats",            // per-user stats; cache-keyed by identity header
+  "/api/cms/articles",          // public CMS article index
+  "/api/flashcards/",           // public flashcard sets
+  "/api/content/syllabus/",     // public syllabus data keyed by path segment
+  "/api/edu/allowlist",         // institution allowlist; changes rarely, 1d TTL
 ];
 
 const CACHE_TTL: Record<string, number> = {
@@ -226,13 +253,13 @@ const CACHE_TTL: Record<string, number> = {
 };
 
 const USER_SPECIFIC_PREFIXES = [
-  "/api/user/stats",
+  "/api/user/stats", // cache key includes identity header so each user gets their own entry
 ];
 
 const BYPASS_PREFIXES = [
-  "/api/ai/chat",
-  "/api/webhooks",
-  "/api/auth",
+  "/api/ai/chat",   // streaming AI responses; non-idempotent and per-session
+  "/api/webhooks",  // inbound POST events from payment/push providers; must never be cached
+  "/api/auth",      // auth tokens and session cookies must always be fresh
 ];
 
 const RATE_LIMIT_RPM = 120;
@@ -429,15 +456,15 @@ function getCacheTtl(pathname: string): number {
   return 300;
 }
 
-function isCacheable(pathname: string): boolean {
+export function isCacheable(pathname: string): boolean {
   return CACHEABLE_PREFIXES.some((p) => pathname.startsWith(p));
 }
 
-function isBypass(pathname: string): boolean {
+export function isBypass(pathname: string): boolean {
   return BYPASS_PREFIXES.some((p) => pathname.startsWith(p));
 }
 
-function isUserSpecific(pathname: string): boolean {
+export function isUserSpecific(pathname: string): boolean {
   return USER_SPECIFIC_PREFIXES.some((p) => pathname.startsWith(p));
 }
 

@@ -1,23 +1,9 @@
-// ── PropellerAds push integration — DISABLED 2026-04-19 ──────────
-// Per user request, both PropellerAds push zones (10894781 and
-// 10896932) have been removed from the service worker. The upstream
-// `https://3nbf4.com/act/files/service-worker.min.js` is no longer
-// imported, so this SW no longer registers PropellerAds `push` or
-// `notificationclick` handlers. Existing browsers that already cached
-// the previous SW will pick up this new version on next visit (we bump
-// CACHE_VERSION below on every deploy, which forces an `activate`).
-//
-// Our own `push` and `notificationclick` handlers further down still
-// run for first-party Web Push notifications. To restore PropellerAds,
-// `git checkout cc3dd2a2 -- artifacts/syrabit/public/sw.js`.
-// ─────────────────────────────────────────────────────────────────
-
-// Bumped to v14 (2026-04-21) to force `activate` on all returning
-// visitors so the new SW_BYPASS_PATTERNS list (sitemaps, RSS/Atom
-// feeds, llms.txt, robots.txt, /.well-known/*) takes effect immediately
-// — without this bump, returning visitors would keep serving stale
-// crawler-facing surfaces from the v13 cache until natural expiry.
-const CACHE_VERSION = '14';
+// Bumped to v15 (2026-04-24) to drop the 13-line PropellerAds-disabled
+// header block that shipped dead bytes to every device on every SW update.
+// The PropellerAds push integration was removed 2026-04-19; this is the
+// final sweep of associated commentary. First-party Web Push handlers
+// (`push`, `notificationclick`) below are unaffected.
+const CACHE_VERSION = '15';
 const STATIC_CACHE = 'syrabit-static-v' + CACHE_VERSION;
 const RUNTIME_CACHE = 'syrabit-runtime-v' + CACHE_VERSION;
 const API_CACHE = 'syrabit-api-v' + CACHE_VERSION;
