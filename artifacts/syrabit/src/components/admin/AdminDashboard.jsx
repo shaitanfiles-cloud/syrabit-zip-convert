@@ -21,6 +21,7 @@ import {
   CheckCircle, AlertCircle, AlertTriangle, Wifi, Database, DollarSign, Crown,
   Layers, Link2, FileCheck, Target, Cpu, ShieldCheck, Smartphone,
   Volume2, VolumeX, Bell, BellOff, RotateCcw, Upload, Trash2, Music, X,
+  ShieldAlert, UserCheck,
 } from 'lucide-react';
 import AudioTrimPreview from './AudioTrimPreview';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
@@ -281,6 +282,14 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
   const [chatSpeedups, setChatSpeedups] = useState(null);
   const [speedupDays, setSpeedupDays] = useState(7);
   const [speedupLoading, setSpeedupLoading] = useState(false);
+  // Task #810 — anonymous-quota wall card. Independent of the main
+  // dashboard payload because the period picker and the
+  // "Backfill today" action both re-fetch this card on demand
+  // without touching the rest of the dashboard cache.
+  const [anonQuotaWall, setAnonQuotaWall] = useState(null);
+  const [anonQuotaDays, setAnonQuotaDays] = useState(7);
+  const [anonQuotaLoading, setAnonQuotaLoading] = useState(false);
+  const [anonQuotaBackfilling, setAnonQuotaBackfilling] = useState(false);
   const [topQueries, setTopQueries] = useState(null);
   const [tokenSpend, setTokenSpend] = useState(null);
   const [funnel, setFunnel] = useState(null);
@@ -733,6 +742,51 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
     const interval = setInterval(() => loadChatSpeedups(speedupDays), 60000);
     return () => clearInterval(interval);
   }, [loadChatSpeedups, speedupDays]);
+
+  // Task #810 — pull the anonymous-quota wall stats produced by Task
+  // #798's `chat.anon_quota_exhausted` counter. The endpoint can be
+  // called with `?backfill=1` to seed today's chart from existing
+  // Redis device-credit counters; we only do that on explicit click
+  // so the auto-refresh path stays a cheap memory read.
+  // We track fetch errors separately from `anonQuotaWall === null` so
+  // the card can show an honest "couldn't load" banner instead of a
+  // grid of zeros that would otherwise be indistinguishable from a
+  // real "no devices hit the wall today" state.
+  const [anonQuotaError, setAnonQuotaError] = useState(null);
+  const loadAnonQuotaWall = useCallback(async (days, withBackfill = false) => {
+    if (withBackfill) setAnonQuotaBackfilling(true);
+    else setAnonQuotaLoading(true);
+    try {
+      const url = `${API_BASE}/admin/chat/anon-quota-exhausted?days=${days}${withBackfill ? '&backfill=1' : ''}`;
+      const res = await axios.get(url, adminHdr(adminToken));
+      setAnonQuotaWall(res.data);
+      setAnonQuotaError(null);
+      if (withBackfill) {
+        const n = res.data?.backfilled_today ?? 0;
+        toast.success(n > 0 ? `Backfilled ${n} device${n === 1 ? '' : 's'} for today` : 'Already up-to-date — nothing to backfill');
+      }
+    } catch (e) {
+      log.error('Failed to load anon-quota wall stats', { error: e.message, status: e.response?.status });
+      // Deliberately do NOT clear `anonQuotaWall` here — keep the
+      // last-known-good payload visible behind the error banner so
+      // the admin still has stale-but-real numbers to look at while
+      // the retry resolves. The banner copy makes the staleness
+      // explicit ("numbers below are not real" if there's no prior
+      // payload, otherwise the banner reads as a refresh failure).
+      setAnonQuotaError(e?.response?.status ? `HTTP ${e.response.status}` : (e?.message || 'Network error'));
+      if (withBackfill) toast.error('Backfill failed — see logs');
+    } finally {
+      setAnonQuotaLoading(false);
+      setAnonQuotaBackfilling(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adminToken]);
+
+  useEffect(() => {
+    loadAnonQuotaWall(anonQuotaDays);
+    const interval = setInterval(() => loadAnonQuotaWall(anonQuotaDays), 60000);
+    return () => clearInterval(interval);
+  }, [loadAnonQuotaWall, anonQuotaDays]);
 
   // Task #626 — Chat Model config tab deep-links here with
   // { scrollTo: 'chat-speedup-providers' } to land the admin on the
@@ -3972,6 +4026,263 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
             </div>
           );
         })()}
+      </GlassCard>
+      </SectionErrorBoundary>
+
+      <SectionErrorBoundary name="Anonymous Quota Wall">
+      <GlassCard className="p-5" data-testid="anon-quota-wall-card">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <ShieldAlert size={14} className="text-rose-500" />
+            <h3 className="text-gray-700 font-semibold text-sm">Anonymous Quota Wall</h3>
+            <span className="text-xs text-gray-400">device 30/day cap hits &amp; sign-up rescue</span>
+            {anonQuotaWall?.alert && (
+              <span
+                className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                  anonQuotaWall.alert === 'amber'
+                    ? 'bg-amber-100 text-amber-700'
+                    : 'bg-emerald-100 text-emerald-700'
+                }`}
+                data-testid="anon-quota-alert-pill"
+              >
+                {anonQuotaWall.alert === 'amber' ? '≥50 devices/wk' : 'healthy'}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+              {[{d: 1, label: '24h'}, {d: 7, label: '7d'}, {d: 14, label: '14d'}].map(({d, label}) => (
+                <button
+                  key={d}
+                  onClick={() => setAnonQuotaDays(d)}
+                  disabled={anonQuotaLoading}
+                  className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
+                    anonQuotaDays === d
+                      ? 'bg-white text-rose-600 font-medium shadow-sm'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                  data-testid={`anon-quota-period-${d}`}
+                >
+                  {label}
+                </button>
+              ))}
+              {anonQuotaLoading && <Loader2 size={11} className="animate-spin text-gray-400 ml-1" />}
+            </div>
+            <button
+              onClick={() => loadAnonQuotaWall(anonQuotaDays, true)}
+              disabled={anonQuotaBackfilling || anonQuotaLoading}
+              className="text-xs px-2.5 py-1 rounded-md border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+              data-testid="anon-quota-backfill-btn"
+              title="Replay today's at-cap devices from existing Redis device-credit counters so the chart isn't empty on first load"
+            >
+              {anonQuotaBackfilling ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}
+              Backfill today
+            </button>
+          </div>
+        </div>
+
+        {anonQuotaWall?.data_source === 'memory_fallback' && (
+          <div className="mb-3 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-start gap-2" data-testid="anon-quota-degraded-banner">
+            <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+            <span>
+              <span className="font-medium">Showing per-worker memory fallback.</span>{' '}
+              Redis is offline or unreachable, so totals reflect only the gunicorn worker that served this request — multiply by worker count for a rough fleet estimate.
+            </span>
+          </div>
+        )}
+
+        {anonQuotaError && (
+          <div className="mb-3 px-3 py-3 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-start justify-between gap-3" data-testid="anon-quota-fetch-error">
+            <div className="flex items-start gap-2">
+              <AlertCircle size={12} className="mt-0.5 flex-shrink-0" />
+              <span>
+                <span className="font-medium">Couldn't load wall-hit stats.</span>{' '}
+                The numbers below are not real — they are placeholders shown because the request failed ({anonQuotaError}). Use the retry button to fetch live data.
+              </span>
+            </div>
+            <button
+              onClick={() => loadAnonQuotaWall(anonQuotaDays)}
+              disabled={anonQuotaLoading}
+              className="text-xs px-2 py-1 rounded-md border border-rose-300 bg-white text-rose-700 hover:bg-rose-100 disabled:opacity-50 flex items-center gap-1 flex-shrink-0"
+              data-testid="anon-quota-retry-btn"
+            >
+              {anonQuotaLoading ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+              Retry
+            </button>
+          </div>
+        )}
+
+        {/* Headline KPIs */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          <div className="rounded-xl p-3 bg-rose-50 border border-rose-100">
+            <div className="flex items-center gap-1 text-rose-600 text-[10px] uppercase tracking-wide font-medium mb-1">
+              <ShieldAlert size={10} /> Wall hits
+            </div>
+            <div className="text-2xl font-bold text-rose-700" data-testid="anon-quota-total-exhausted">
+              {anonQuotaWall?.total_exhausted ?? 0}
+            </div>
+            <div className="text-[10px] text-rose-500/70">events in window</div>
+          </div>
+          <div className="rounded-xl p-3 bg-gray-50 border border-gray-100">
+            <div className="flex items-center gap-1 text-gray-500 text-[10px] uppercase tracking-wide font-medium mb-1">
+              <Smartphone size={10} /> Unique devices
+            </div>
+            <div className="text-2xl font-bold text-gray-800" data-testid="anon-quota-unique-devices">
+              {anonQuotaWall?.unique_devices_exhausted ?? 0}
+            </div>
+            <div className="text-[10px] text-gray-400">distinct cookies</div>
+          </div>
+          <div className="rounded-xl p-3 bg-emerald-50 border border-emerald-100">
+            <div className="flex items-center gap-1 text-emerald-600 text-[10px] uppercase tracking-wide font-medium mb-1">
+              <UserCheck size={10} /> Signed up
+            </div>
+            <div className="text-2xl font-bold text-emerald-700" data-testid="anon-quota-signup-after">
+              {anonQuotaWall?.signup_after_exhaust ?? 0}
+            </div>
+            <div className="text-[10px] text-emerald-600/70">within 24h of wall</div>
+          </div>
+          <div className="rounded-xl p-3 bg-violet-50 border border-violet-100">
+            <div className="flex items-center gap-1 text-violet-600 text-[10px] uppercase tracking-wide font-medium mb-1">
+              <Target size={10} /> Conversion
+            </div>
+            <div className="text-2xl font-bold text-violet-700" data-testid="anon-quota-conversion-pct">
+              {(anonQuotaWall?.conversion_pct ?? 0).toFixed(1)}%
+            </div>
+            <div className="text-[10px] text-violet-500/70">wall → sign-up</div>
+          </div>
+        </div>
+
+        {/* Sparkline: daily exhaustion count + conversion % on second axis.
+            Conversion line is currently a window-aggregate (no per-day
+            value in the backend payload), so the line + legend + right
+            axis only render if any day actually carries a per-day
+            conversion_pct field — otherwise the chart stays a single-
+            series bar to avoid implying a hidden zero series. */}
+        {(() => {
+          const hasPerDayConv = (anonQuotaWall?.daily ?? []).some(d => typeof d.conversion_pct === 'number');
+          return (
+            <div className="rounded-xl p-3 bg-gray-50 border border-gray-100 mb-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-gray-600">
+                  Daily wall hits{hasPerDayConv ? ' & conversion' : ''}
+                </span>
+                <div className="flex items-center gap-3 text-[10px] text-gray-500">
+                  <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm bg-rose-500" /> exhausted</span>
+                  {hasPerDayConv && (
+                    <span className="flex items-center gap-1" data-testid="anon-quota-conv-legend"><span className="inline-block w-2 h-2 rounded-sm bg-violet-500" /> conv. %</span>
+                  )}
+                </div>
+              </div>
+              {anonQuotaWall?.has_data && (anonQuotaWall.daily?.length ?? 0) > 0 ? (
+                <ResponsiveContainer width="100%" height={140}>
+                  <LineChart data={anonQuotaWall.daily}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                    <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#9ca3af' }} tickFormatter={d => (d || '').slice(5)} />
+                    <YAxis yAxisId="left" tick={{ fontSize: 9, fill: '#fb7185' }} domain={[0, 'auto']} allowDecimals={false} />
+                    {hasPerDayConv && (
+                      <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 9, fill: '#a78bfa' }} domain={[0, 100]} tickFormatter={v => `${v}%`} />
+                    )}
+                    <Tooltip content={<ChartTooltip />} />
+                    <Line yAxisId="left" type="monotone" dataKey="exhausted" stroke="#f43f5e" strokeWidth={2} dot={{ r: 2 }} name="Wall hits" />
+                    {hasPerDayConv && (
+                      <Line yAxisId="right" type="monotone" dataKey="conversion_pct" stroke="#8b5cf6" strokeWidth={2} strokeDasharray="4 3" dot={false} name="Conversion %" data-testid="anon-quota-conv-line" />
+                    )}
+                  </LineChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex flex-col items-center justify-center h-[140px] text-gray-400 text-xs gap-1" data-testid="anon-quota-empty-state">
+                  <ShieldAlert size={20} className="opacity-30" />
+                  <span>No wall hits in the last {anonQuotaWall?.period_days ?? anonQuotaDays} day{(anonQuotaWall?.period_days ?? anonQuotaDays) === 1 ? '' : 's'}</span>
+                  <span className="text-[10px] text-gray-300">Click <strong>Backfill today</strong> if devices have already hit the cap before this card shipped</span>
+                </div>
+              )}
+              {!hasPerDayConv && anonQuotaWall?.has_data && (
+                <p className="text-[10px] text-gray-400 mt-1 text-center">
+                  Per-day conversion not yet available — see the window-aggregate KPI tile above ({(anonQuotaWall?.conversion_pct ?? 0).toFixed(1)}%).
+                </p>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* By-hour heatmap (24 cells) */}
+        <div className="rounded-xl p-3 bg-gray-50 border border-gray-100">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-medium text-gray-600">By hour of day (UTC)</span>
+            <span className="text-[10px] text-gray-400">when devices hit the wall</span>
+          </div>
+          {(() => {
+            const byHour = anonQuotaWall?.by_hour || {};
+            const counts = Array.from({ length: 24 }, (_, h) => Number(byHour[h] ?? byHour[String(h)] ?? 0));
+            const maxCount = Math.max(1, ...counts);
+            return (
+              <div
+                className="grid gap-1"
+                style={{ gridTemplateColumns: 'repeat(24, minmax(0, 1fr))' }}
+                data-testid="anon-quota-hour-heatmap"
+              >
+                {counts.map((c, h) => {
+                  const intensity = c === 0 ? 0 : 0.15 + (c / maxCount) * 0.85;
+                  return (
+                    <div
+                      key={h}
+                      className="relative group rounded h-6 flex items-end justify-center"
+                      style={{ background: c === 0 ? '#f3f4f6' : `rgba(244, 63, 94, ${intensity})` }}
+                      title={`${String(h).padStart(2, '0')}:00 — ${c} hit${c === 1 ? '' : 's'}`}
+                      data-testid={`anon-quota-hour-${h}`}
+                    >
+                      <span className={`text-[9px] leading-none mb-0.5 ${c > 0 && intensity > 0.5 ? 'text-white' : 'text-gray-500'}`}>
+                        {h % 3 === 0 ? String(h).padStart(2, '0') : ''}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+          {(() => {
+            // Backend (`metrics.get_anon_quota_exhausted_stats`)
+            // returns weekday keys as the three-letter string names
+            // ("Mon".."Sun"). Read with the same shape; fall back to
+            // numeric indices in case the contract is ever changed
+            // to Mon=0..Sun=6 down the line.
+            const dowMap = anonQuotaWall?.by_day_of_week || {};
+            const dowLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+            const dowCounts = dowLabels.map((label, i) => Number(dowMap[label] ?? dowMap[i] ?? dowMap[String(i)] ?? 0));
+            const dowMax = Math.max(1, ...dowCounts);
+            return (
+              <div className="mt-3 pt-3 border-t border-gray-200">
+                <div className="text-xs font-medium text-gray-600 mb-2">By day of week (UTC)</div>
+                <div className="grid grid-cols-7 gap-1" data-testid="anon-quota-dow-strip">
+                  {dowLabels.map((label, i) => {
+                    const c = dowCounts[i];
+                    const intensity = c === 0 ? 0 : 0.15 + (c / dowMax) * 0.85;
+                    return (
+                      <div key={label} className="text-center">
+                        <div
+                          className="rounded h-6 flex items-center justify-center"
+                          style={{ background: c === 0 ? '#f3f4f6' : `rgba(244, 63, 94, ${intensity})` }}
+                          data-testid={`anon-quota-dow-${i}`}
+                        >
+                          <span className={`text-[10px] font-medium ${c > 0 && intensity > 0.5 ? 'text-white' : 'text-gray-500'}`}>
+                            {c}
+                          </span>
+                        </div>
+                        <span className="text-[9px] text-gray-400">{label}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+
+        <p className="text-xs text-gray-400 mt-3">
+          Window: last {anonQuotaWall?.period_days ?? anonQuotaDays} day{(anonQuotaWall?.period_days ?? anonQuotaDays) === 1 ? '' : 's'}
+          {(anonQuotaWall?.backfilled_today ?? 0) > 0 && <> · Backfilled today: {anonQuotaWall.backfilled_today}</>}
+          {anonQuotaWall?.data_source && <> · Source: {anonQuotaWall.data_source === 'redis' ? 'Redis (cross-worker)' : 'memory fallback'}</>}
+        </p>
       </GlassCard>
       </SectionErrorBoundary>
 
