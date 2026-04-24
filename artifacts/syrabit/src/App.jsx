@@ -24,7 +24,7 @@ const LazyGlobalTrustpilotJsonLd = lazy(() => import("@/components/seo/GlobalTru
 import { apiClient } from "@/utils/api";
 
 // ── React Query client ────────────────────────────────────────────────────────
-const queryClient = new QueryClient({
+export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 10 * 60 * 1000,
