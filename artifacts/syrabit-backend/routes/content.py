@@ -17,6 +17,7 @@ from deps import (
 from cache import (
     _cache_key,
     _get_content_cache,
+    _invalidate_content_cache,
     _redis_cache_search,
     _redis_get_search,
     _set_content_cache,
@@ -709,6 +710,13 @@ async def upload_subject_document(
         }}
     )
     logger.info(f"Admin uploaded document '{data.document_name}' for subject {subject_id}")
+    # Task #795: rewriting `document_*` + `has_document` on the subject
+    # changes what `/api/content/subjects` and the library bundle return,
+    # so the edge cache must drop the stale subject list.
+    _invalidate_content_cache("subjects")
+    logger.info(
+        f"admin.purge route=admin.subject_document_upload prefixes=['subjects'] id={subject_id}"
+    )
     return {
         "message": "Document uploaded",
         "subject_id": subject_id,
@@ -722,6 +730,12 @@ async def delete_subject_document(subject_id: str, admin: dict = Depends(get_adm
     await db.subjects.update_one(
         {"id": subject_id},
         {"$unset": {"document_name": "", "document_text": "", "document_type": "", "document_uploaded_at": "", "has_document": ""}}
+    )
+    # Task #795: same reason as the POST handler above — the unset of
+    # `has_document` flips a public-payload field, so purge subjects.
+    _invalidate_content_cache("subjects")
+    logger.info(
+        f"admin.purge route=admin.subject_document_delete prefixes=['subjects'] id={subject_id}"
     )
     return {"message": "Document removed"}
 
