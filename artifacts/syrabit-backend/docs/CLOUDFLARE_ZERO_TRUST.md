@@ -606,6 +606,7 @@ counter on the first successful probe.
 | --------------------- | ------------ | ----------------- | ----- | ---------------------------------------------------------------------------------- |
 | `9f14bccc891a6ebf`    | 2026-04-24   | `firewallManaged` | 949110 (OWASP Inbound Anomaly Score Exceeded) | Operator added a Managed-Rule override scoped to `http.host eq "syrabit.ai" and http.request.uri.path eq "/"` (per §8.4). cf-block-probe added so the next occurrence pages within 2 minutes instead of waiting for a user report. |
 | `9f1537aba88aaa6a` (+ same-day `9f14bccc891a6ebf` re-fire) | 2026-04-24 | `firewallManaged` | 949110 (OWASP Inbound Anomaly Score Exceeded) — `ruleId 6179ae15870a4bb7b2d480d4843b323c` | The path-scoped override added on the previous report was insufficient: a 24h `firewallEventsAdaptive` aggregation showed rule 949110 firing across **every** path (homepage, `/favicon.ico`, `/sw.js`, `/api/analytics/page-view`, `/api/content/library-bundle`, every `/degree/...` page) for IN/Bharti-Airtel desktop Chrome traffic — i.e. it is the OWASP Core "anomaly score exceeded" trip-rule and the false positive is paranoia-level wide, not request-shape narrow. Task #825: globally disabled rule 949110 inside the OWASP binding via the new orchestrator at `scripts/cf_waf_override.py step3` (see §8.7). The underlying CRS detections still run and are scored — only the threshold-trip rule is muted, so genuine attack patterns are still caught by the higher-severity OWASP rules and by the Cloudflare Managed Ruleset. Bot-management rule `874a3e315c344b1281ad4f00046aab6f` ("manage definite bots") was also observed `managed_challenge`-ing legitimate `/api/content/library-bundle` and `/api/seo/sitemap-*.xml` requests in the same window — tracked separately, **not** addressed here. |
+| (no single Ray; aggregate finding) | 2026-04-24   | `firewallManaged` | `874a3e315c344b1281ad4f00046aab6f` ("manage definite bots", inside CF Managed Ruleset binding `dc90efabf280440bb8ee2fa1bffbcf59`, deployed ruleset `efb7b8c949ac4650a09736fc376e9aee`) | **Task #826.** Same 24h aggregation that closed #825 also showed this bot rule managed-challenging `/api/content/library-bundle` (legitimate first-party API) and `/api/seo/sitemap-*.xml` (search-engine sitemap fetch) — adds latency for real users and breaks scripted/legitimate API consumers. Fix: instead of disabling the rule globally (#825-style), added a **path-scoped Skip rule** in the `http_request_firewall_custom` phase via `scripts/cf_waf_override.py bot_skip`. The Skip rule's expression is `(starts_with(http.request.uri.path, "/api/") or http.request.uri.path eq "/sitemap.xml")` and it lists rule `874a3e…` under the CF Managed deployed ruleset id. Bot management remains active on every other surface (homepage, `/degree/*`, login, etc.) — only the SEO/API surface is exempted. Post-fix verification: run `python3 scripts/cf_waf_override.py aggregate --rule-id 874a3e315c344b1281ad4f00046aab6f --hours 24` ~24 h after deploy; the gate is path-aware (challenge-style events on non-exempt paths are expected and reported as informational), so success is exit 0 with the "EXEMPT PATHS — challenge-style actions" bucket showing zero rows — see §8.7.6. |
 
 #### Per-Ray evidence captured during Task #825
 
@@ -629,6 +630,17 @@ Both Rays were verified via `python3 artifacts/syrabit-backend/scripts/cf_ray_lo
 Two real Indian mobile users on Airtel, both on desktop-class Chrome, both blocked on the bare homepage GET. No request-shape pattern; the trigger is purely the user's IP/ASN reputation feeding the OWASP anomaly score over its threshold.
 
 **Conscious tradeoff (tracked here, not just in chat):** disabling OWASP 949110 globally meaningfully reduces anomaly-score enforcement for the entire zone. The reasoning: §8.6 above shows the rule fires across every path with no request-shape commonality, so a path-scoped override would not contain the impact. Higher-severity OWASP rules (paranoia level ≥ 2) and the Cloudflare Managed Ruleset still run and still block — only the *threshold* rule is muted. This should be revalidated quarterly: if Cloudflare ships a calibration fix or if attack volume changes, re-enable 949110 by running `python3 scripts/cf_waf_override.py rollback3`.
+
+#### Aggregate evidence captured during Task #826
+
+For the bot-management rule the trigger was an aggregation, not a single Ray. The same 24h `firewallEventsAdaptive` query that closed #825 (filtered to `ruleId = 874a3e315c344b1281ad4f00046aab6f`) showed every match was either:
+
+- `clientRequestPath` starting with `/api/` (predominantly `/api/content/library-bundle` and `/api/seo/sitemap-*.xml`), or
+- `clientRequestPath` equal to `/sitemap.xml`
+
+with `action=managed_challenge`, `source=firewallManaged`, no other request-shape commonality (mix of UAs, mix of countries). That distribution is what justifies the path-scoped Skip rule (§8.7.5) over a global disable: the bot rule is correct on the public-HTML surface and the only false-positive cluster is the SEO/API surface.
+
+**Conscious tradeoff (Task #826, tracked here):** the Skip rule turns off the "definite bots" signal *for `/api/*` and `/sitemap.xml` only*. A determined attacker could plausibly try to abuse the unscored API surface — but every `/api/*` route already sits behind the per-IP rate limit (§7) and the application-layer auth/credit checks, so the marginal protection from this single managed rule on those paths is small. Re-evaluate quarterly: if a real attack profile emerges that uses `/api/*` and bypasses the in-app limits, narrow the exemption (e.g. drop the `/api/admin/*` subpath from `BOT_SKIP_EXPRESSION`) before reverting the Skip rule wholesale.
 
 ### 8.7 Orchestrator script — `scripts/cf_waf_override.py`
 
@@ -663,9 +675,16 @@ python artifacts/syrabit-backend/scripts/cf_waf_override.py step4
 # action=execute (read from the state file).
 python artifacts/syrabit-backend/scripts/cf_waf_override.py step6
 
+# (Task #826) Path-scoped exemption for the CF Managed bot rule on
+# /api/* and /sitemap.xml. Independent of the #825 step sequence —
+# safe to run any time after step6, idempotent on re-runs. See
+# §8.7.5 for the full body and rationale.
+python artifacts/syrabit-backend/scripts/cf_waf_override.py bot_skip
+
 # Re-verify: the OWASP binding should show the new override row in
-# action_parameters.overrides.rules, and both bindings should be
-# action=execute again.
+# action_parameters.overrides.rules, both managed bindings should be
+# action=execute again, and the http_request_firewall_custom phase
+# should now carry the bot-skip rule.
 python artifacts/syrabit-backend/scripts/cf_waf_override.py status
 ```
 
@@ -708,6 +727,11 @@ python artifacts/syrabit-backend/scripts/cf_waf_override.py rollback3
 
 # Restore the rate-limit rule's original action (block, in our case)
 python artifacts/syrabit-backend/scripts/cf_waf_override.py rollback4
+
+# (Task #826) Delete the bot-skip Skip rule. Idempotent — uses
+# description-tag lookup, so it works on a different operator's
+# machine without depending on the local state file.
+python artifacts/syrabit-backend/scripts/cf_waf_override.py rollback_bot_skip
 ```
 
 #### 8.7.1 Required token scope (re-read this before §8.4 too)
@@ -773,12 +797,31 @@ via `cf_waf_override.py status`):
 | `http_request_firewall_managed`    | `7527dda5629f452aabd2323bb3e88346`        | Execute Cloudflare OWASP Core Ruleset |
 | `http_ratelimit`                   | `e65222f0dc254546a9a82673727f3999`        | Leaked credential check              |
 
+Cloudflare-published deployed ruleset IDs referenced inside the
+bindings above (the Skip Rules `action_parameters.rules` map keys
+off these — see §8.7.5):
+
+| Deployed ruleset                | Deployed ruleset id                       |
+| ------------------------------- | ----------------------------------------- |
+| Cloudflare Managed Ruleset      | `efb7b8c949ac4650a09736fc376e9aee`        |
+| Cloudflare OWASP Core Ruleset   | `4814384a9e5d4991b9815dcfc25d2f1f`        |
+
+Notable rules inside those deployed rulesets that the orchestrator
+targets by id (these are stable across CF tenants — same hex on
+every zone):
+
+| Rule id                                  | Lives in                  | Description                                 |
+| ---------------------------------------- | ------------------------- | ------------------------------------------- |
+| `6179ae15870a4bb7b2d480d4843b323c`       | OWASP Core (CRS) ruleset  | 949110 Inbound Anomaly Score Exceeded (Task #825 trip rule) |
+| `874a3e315c344b1281ad4f00046aab6f`       | CF Managed Ruleset        | "Manage definite bots" (Task #826 false-positive rule)      |
+
 Entrypoint ruleset ids (also stable):
 
 | Phase                              | Entrypoint ruleset id                     |
 | ---------------------------------- | ----------------------------------------- |
 | `http_request_firewall_managed`    | `e354a966535944f6bfa99255b57a71bf`        |
 | `http_ratelimit`                   | `81ad2683e67744448bbb3d634b85d34f`        |
+| `http_request_firewall_custom`     | created on first `bot_skip` run (Task #826 — id printed by the script; record it here on first deploy) |
 
 These ids are recorded here for the next incident — the orchestrator
 discovers them dynamically every run, but having them in the runbook
@@ -807,9 +850,10 @@ verify, then re-run step6.
 
 #### 8.7.4 Continuous drift detection — `verify` subcommand
 
-After step6, run `python3 scripts/cf_waf_override.py verify` to
-assert the steady-state config in one command. It checks four
-invariants and exits non-zero on any drift:
+After step6 (and after `bot_skip` in §8.7.5), run
+`python3 scripts/cf_waf_override.py verify` to assert the steady-
+state config in one command. It checks five invariants and exits
+non-zero on any drift:
 
 1. CF Managed Ruleset binding is `action=execute`, not in force-log,
    not disabled.
@@ -820,11 +864,22 @@ invariants and exits non-zero on any drift:
    `--expect-disabled-rule`).
 4. The "Leaked credential check" rate-limit rule is
    `action=managed_challenge` (not `block`), and is enabled.
+5. **(Task #826)** The `http_request_firewall_custom` phase carries
+   the bot-management Skip rule (looked up by description-tag
+   `Task #826`) and that rule lists the bot-management rule id from
+   `--expect-skip-bot-rule` (default
+   `874a3e315c344b1281ad4f00046aab6f`) under the CF Managed
+   deployed ruleset id, with `enabled=true`. Pass
+   `--no-check-bot-skip` to relax this single invariant **only**
+   when intentionally rolling back to the pre-#826 baseline; the
+   verify output then prints `[SKIP] …` on that line so the omission
+   is still visible in incident tickets.
 
 Wire this into a daily cron / CI job so silent drift (a teammate
 re-enabling 949110 in the dashboard, an external script stomping the
-rate-limit rule, etc.) pages immediately rather than waiting for the
-next user report. Output is line-per-invariant `[PASS]` / `[FAIL]`,
+rate-limit rule, deleting the bot-skip Skip rule from the dashboard,
+etc.) pages immediately rather than waiting for the next user
+report. Output is line-per-invariant `[PASS]` / `[FAIL]` / `[SKIP]`,
 suitable for pasting into incident tickets.
 
 **Archived `verify` output, Task #825 close-out (2026-04-24, immediately
@@ -844,6 +899,187 @@ This is the canonical post-incident steady state for #825. Any
 future drift detected by `verify` should be compared against this
 archive before deciding whether to roll forward (re-apply step3 /
 step4) or roll back (`rollback3` / `rollback4`).
+
+**Expected `verify` output after Task #826 close-out** (the
+canonical steady state going forward — invariant 5 is now part of
+it):
+
+```text
+=== Steady-state invariant verification ===
+  [PASS] CF Managed Ruleset binding action=execute, no force-log
+  [PASS] OWASP binding action=execute, no force-log
+  [PASS] OWASP binding has trip-rule 6179ae15870a4bb7b2d480d4843b323c disabled
+  [PASS] Leaked-credential rate-limit rule action=managed_challenge
+  [PASS] Skip rule disables bot rule 874a3e315c344b1281ad4f00046aab6f on safe paths
+
+verify: all invariants hold.
+```
+
+The 2026-04-24 archive above does **not** include the invariant-5
+PASS line because the Skip rule did not yet exist when that snapshot
+was taken; archive the new five-line output the first time you run
+`verify` after `bot_skip` lands in production.
+
+#### 8.7.5 Path-scoped bot-rule exemption — `bot_skip` subcommand (Task #826)
+
+The bot-management rule `874a3e315c344b1281ad4f00046aab6f` ("manage
+definite bots", inside the Cloudflare Managed Ruleset binding) was
+observed `managed_challenge`-ing legitimate `/api/*` and
+`/sitemap.xml` traffic during the Task #825 24h aggregation. Rather
+than disable the rule globally (#825-style), Task #826 adds a
+path-scoped Skip Rules custom-phase rule:
+
+```sh
+export CF_WAF_OVERRIDE_TOKEN=<scoped-token>
+export CF_ZONE_ID=<zone-hex>
+
+# Inspect first — confirms the bot rule binding and any pre-existing
+# rules in the http_request_firewall_custom phase.
+python3 artifacts/syrabit-backend/scripts/cf_waf_override.py status
+
+# Apply the Skip rule. If the http_request_firewall_custom
+# entrypoint does not exist yet (fresh zone), it is created.
+python3 artifacts/syrabit-backend/scripts/cf_waf_override.py bot_skip
+# → bot_skip: added new skip rule <rid> (managed-rule 874a3e…) on
+#   custom-firewall entrypoint <eid>
+
+# Verify (invariant 5 now PASSes)
+python3 artifacts/syrabit-backend/scripts/cf_waf_override.py verify
+```
+
+The Skip rule body the orchestrator submits (kept here for paste-
+into-incident-ticket reference; the orchestrator is the source of
+truth at `BOT_SKIP_EXPRESSION` / `BOT_SKIP_DESCRIPTION`):
+
+```json
+{
+  "action": "skip",
+  "action_parameters": {
+    "rules": {
+      "efb7b8c949ac4650a09736fc376e9aee": [
+        "874a3e315c344b1281ad4f00046aab6f"
+      ]
+    }
+  },
+  "expression": "(starts_with(http.request.uri.path, \"/api/\") or http.request.uri.path eq \"/sitemap.xml\")",
+  "description": "Task #826: skip CF managed bot rule 874a3e315c344b1281ad4f00046aab6f for /api/* and /sitemap.xml (legitimate-traffic false-positive exemption)",
+  "enabled": true
+}
+```
+
+Two things worth pinning to memory:
+
+1. **The `action_parameters.rules` map is keyed by the *deployed*
+   ruleset id**, not the per-zone binding id. CF's Skip semantics
+   are "when ruleset X is about to fire, skip rule Y inside it" —
+   independent of how X is deployed in the zone. The deployed id
+   for the CF Managed Ruleset is `efb7b8c949ac4650a09736fc376e9aee`
+   (see §8.7.2). Using the binding id `dc90efabf280440bb8ee2fa1bffbcf59`
+   here would silently no-op.
+2. **Idempotency is anchored on the description-tag substring**
+   `"Task #826"`. Re-running `bot_skip` PATCHes the existing rule
+   rather than appending a duplicate; `rollback_bot_skip` finds and
+   deletes the rule by the same tag, so it works on a different
+   operator's machine without depending on the local state file.
+
+To roll back (re-enables the bot rule on `/api/*` and `/sitemap.xml`):
+
+```sh
+python3 artifacts/syrabit-backend/scripts/cf_waf_override.py rollback_bot_skip
+```
+
+If you need to widen the exemption (e.g. add `/sitemap-index.xml`),
+edit `BOT_SKIP_EXPRESSION` in the script and re-run `bot_skip`. The
+PATCH will update the existing rule's expression in place.
+
+#### 8.7.6 24-hour post-fix verification gate — `aggregate` subcommand
+
+The Task #826 done-criterion ("a 24-hour post-fix WAF event
+aggregation confirms the rule no longer fires on the affected
+paths") is enforced by the `aggregate` subcommand:
+
+```sh
+# 24h after deploying bot_skip — gate is path-aware:
+# success = exit 0 with the "EXEMPT PATHS — challenge-style
+# actions" bucket showing zero rows. Either "0 events matched.
+# Fix held." (rule was completely silent in the window) or
+# "Fix held: zero challenge-style events on exempt paths …"
+# (with non-exempt activity reported as informational).
+python3 artifacts/syrabit-backend/scripts/cf_waf_override.py \
+    aggregate --rule-id 874a3e315c344b1281ad4f00046aab6f --hours 24
+```
+
+Behaviour (the aggregator is **path-aware** — it knows about the
+exemption expression and only fails when challenge-style events
+land on the *exempt* paths; non-exempt-path activity is reported
+as informational because bot management is intentionally still
+active there):
+
+- Exit 0 — **The fix held.** Either zero matches at all, or all
+  matches are on non-exempt paths and/or are non-challenge
+  actions (`skip`, `log`, `allow`). The output prints a
+  bucketed breakdown:
+  - "EXEMPT PATHS — non-challenge actions" — the post-fix steady
+    state for `/api/*` and `/sitemap.xml` (skip/log only).
+  - "NON-EXEMPT PATHS — challenge-style actions" — bot
+    protection still working correctly on homepage, `/degree/*`,
+    login, etc. **This subtotal will normally be in the
+    thousands per day; that is correct behaviour, not a
+    regression.**
+  Archive the bucket subtotals into the incident ticket.
+- Exit 1 — **Fix BROKEN.** One or more challenge-style events
+  (`managed_challenge`, `challenge`, `js_challenge`, `block`)
+  landed on an exempt path. The "EXEMPT PATHS — challenge-style
+  actions (FIX BROKEN if any)" bucket lists exactly which
+  exempt paths and counts. Re-run `status` and confirm the
+  Skip rule is enabled, and references the bot rule under the
+  CF Managed deployed-ruleset id (not the binding id — see
+  §8.7.2).
+- Exit 2 — configuration / network error (e.g. token missing,
+  DNS failure). The error goes to stderr; safe to retry.
+
+Override the exemption set with `--exempt-prefix` (repeatable)
+and `--exempt-exact` (repeatable) when re-using `aggregate` for a
+different rule (e.g. verifying a future Task #82x exemption). The
+defaults — `['/api/']` prefix and `/sitemap.xml` exact — mirror
+`BOT_SKIP_EXPRESSION` exactly, so the no-flag invocation in the
+cron above is correct for the Task #826 close-out.
+
+`aggregate` is read-only — it reuses the same GraphQL endpoint
+`cf_ray_lookup.py` uses, but queries the *Groups* variant for
+count-by-dimension aggregation. The token only needs Zone
+Analytics:Read for this subcommand (the existing `CF_WAF_OVERRIDE_TOKEN`
+already includes that scope; no separate token needed).
+
+Wire `aggregate` into the same daily cron as `verify` so a
+regression (e.g. someone deletes the Skip rule from the dashboard
+and the bot rule starts challenging `/api/*` again) pages within
+24 h instead of waiting for a user report. Recommended cron line
+(check exit code; alert on non-zero):
+
+```cron
+17 4 * * *  cd /opt/syrabit-backend && \
+    CF_WAF_OVERRIDE_TOKEN=… CF_ZONE_ID=… \
+    python3 scripts/cf_waf_override.py aggregate \
+        --rule-id 874a3e315c344b1281ad4f00046aab6f --hours 24 \
+    || /usr/local/bin/page-oncall "bot-skip drift detected"
+```
+
+**Operator gate (do this once when Task #826 is being deployed):**
+
+1. Run `bot_skip` in production.
+2. Wait ~24 h.
+3. Run `aggregate --rule-id 874a3e315c344b1281ad4f00046aab6f --hours 24`.
+4. If exit 0, archive the bucket subtotals (especially
+   "EXEMPT PATHS — non-challenge actions" and "NON-EXEMPT PATHS
+   — challenge-style actions") under §8.6 in the row for #826,
+   alongside the #825 close-out archive in §8.7.4. If exit 1,
+   inspect the "EXEMPT PATHS — challenge-style actions" bucket
+   to see which exempt path is still being challenged and either
+   widen `BOT_SKIP_EXPRESSION` (if a legitimate path was missed)
+   or fix the Skip rule's deployed-ruleset-id mapping (if every
+   exempt path is still firing — usually means the Skip rule was
+   keyed off the binding id instead of the deployed-ruleset id).
 
 ## 9. What is **not** in scope here
 

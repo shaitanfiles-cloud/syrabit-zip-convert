@@ -81,8 +81,23 @@ Subcommands
                   back to their original action (typically
                   ``execute``). Step3's per-rule disable stays in
                   place — that is the whole point of the targeted fix.
+    bot_skip    — add (idempotent) a Skip Rules custom-phase rule that
+                  exempts ``/api/*`` and ``/sitemap.xml`` from the CF
+                  Managed Ruleset's bot-management rule
+                  ``874a3e315c344b1281ad4f00046aab6f`` ("manage
+                  definite bots"). Task #826 — the bot rule was
+                  managed-challenging legitimate API and sitemap
+                  traffic (see runbook §8.6 row for #826).
+    aggregate   — query firewallEventsAdaptiveGroups over a window
+                  for a given ``--rule-id`` and print a count
+                  breakdown by path / action / source. Used as the
+                  24h post-fix verification gate (Task #826 done-
+                  criterion: rule no longer fires on affected paths).
     rollback3   — undo step3 (re-enable the disabled rule).
     rollback4   — undo step4 (revert rate-limit action).
+    rollback_bot_skip
+                — undo bot_skip (delete the Skip Rules custom-phase
+                  rule by description tag).
 
 All subcommands accept ``--dry-run`` to print the intended PATCH body
 without sending it.
@@ -155,6 +170,46 @@ RATE_LIMIT_LEAKED_CRED_HINTS = ("leaked", "credential")
 CF_OWASP_DEPLOYED_RULESET_ID = "4814384a9e5d4991b9815dcfc25d2f1f"
 CF_MANAGED_DEPLOYED_RULESET_ID = "efb7b8c949ac4650a09736fc376e9aee"
 
+# ─── Task #826 — bot-management rule exemption ──────────────────────────────
+# The "manage definite bots" rule inside the Cloudflare Managed Ruleset
+# binding was observed managed_challenge-ing legitimate `/api/*` and
+# `/sitemap.xml` traffic during the Task #825 24h aggregation. The fix
+# is a path-scoped Skip Rules custom-phase rule (rather than a global
+# disable) so the bot rule keeps protecting the rest of the zone.
+#
+# The Skip Rules ``action_parameters.rules`` map is keyed by the
+# *deployed* ruleset id (the Cloudflare-shipped ruleset that contains
+# the rule), NOT by the per-zone binding id. That is intentional in the
+# CF API: a Skip rule says "when you encounter ruleset X, skip rule Y
+# inside it" — independent of how X is deployed in the current zone.
+BOT_DEFINITE_RULE_ID = "874a3e315c344b1281ad4f00046aab6f"
+
+# Path-scoped exemption for the bot rule. Matches the Task #826 done-
+# criterion verbatim ("/api/* and /sitemap.xml"). If you need to widen
+# the exemption (e.g. add /sitemap-index.xml), edit this constant and
+# re-run `bot_skip` — the command is idempotent on the description tag
+# below, so it will PATCH the existing rule rather than duplicate it.
+BOT_SKIP_EXPRESSION = (
+    '(starts_with(http.request.uri.path, "/api/") '
+    'or http.request.uri.path eq "/sitemap.xml")'
+)
+
+# Stable description tag used by `bot_skip` and `rollback_bot_skip` to
+# find the rule on subsequent runs. The tag MUST stay in the
+# description even if the human-readable prose around it changes —
+# `rollback_bot_skip` is a substring lookup against this exact string.
+BOT_SKIP_DESCRIPTION_TAG = "Task #826"
+BOT_SKIP_DESCRIPTION = (
+    f"{BOT_SKIP_DESCRIPTION_TAG}: skip CF managed bot rule "
+    f"{BOT_DEFINITE_RULE_ID} for /api/* and /sitemap.xml "
+    f"(legitimate-traffic false-positive exemption)"
+)
+
+# GraphQL endpoint reused by the `aggregate` subcommand. Same dataset
+# the read-only `cf_ray_lookup.py` script uses; we just query the
+# *Groups* variant for count-by-dimension aggregation.
+GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql"
+
 
 def _binding_is_owasp(rule: dict) -> bool:
     """Identify the OWASP Core Ruleset binding by stable id, with
@@ -197,7 +252,12 @@ def _zone_id() -> str:
 
 
 def _request(method: str, url: str, token: str, body: Optional[dict] = None,
-             dry_run: bool = False) -> dict:
+             dry_run: bool = False, allow_404: bool = False) -> Optional[dict]:
+    """Call the Cloudflare API. Returns the parsed JSON payload, or
+    ``None`` when ``allow_404=True`` and the server returns 404 (the
+    only place we currently use that is the optional GET of the
+    custom-firewall entrypoint, which may not exist on a fresh zone).
+    """
     data = None
     if body is not None:
         data = json.dumps(body).encode()
@@ -217,8 +277,11 @@ def _request(method: str, url: str, token: str, body: Optional[dict] = None,
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            payload = json.loads(resp.read())
+            raw = resp.read()
+            payload = json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:
+        if allow_404 and exc.code == 404:
+            return None
         text = exc.read()[:600].decode("utf-8", errors="replace")
         raise SystemExit(
             f"error: Cloudflare API HTTP {exc.code} on {method} {url}\n"
@@ -295,6 +358,52 @@ def _entrypoint(token: str, zone: str, phase: str) -> dict:
     return payload.get("result") or {}
 
 
+def _entrypoint_optional(token: str, zone: str, phase: str) -> Optional[dict]:
+    """Like ``_entrypoint`` but returns ``None`` when the phase has no
+    entrypoint ruleset yet.
+
+    The ``http_request_firewall_custom`` phase often does not exist
+    on a fresh zone — Cloudflare lazily creates it the first time you
+    add a custom rule via the dashboard. The orchestrator therefore
+    has to handle the "no entrypoint yet" case by creating one before
+    POSTing the first Skip rule. (See ``cmd_bot_skip``.)
+    """
+    url = f"{API_BASE}/zones/{zone}/rulesets/phases/{phase}/entrypoint"
+    payload = _request("GET", url, token, allow_404=True)
+    if payload is None:
+        return None
+    return payload.get("result") or {}
+
+
+def _create_phase_entrypoint(token: str, zone: str, phase: str,
+                             dry_run: bool = False) -> dict:
+    """Create an empty entrypoint ruleset for ``phase``.
+
+    Used by ``cmd_bot_skip`` only when the custom-firewall phase has
+    no entrypoint yet. Body shape is the documented Cloudflare
+    minimum: ``kind=zone``, the phase name, an empty ``rules`` array,
+    and a human-readable name. A subsequent POST adds the actual
+    Skip rule — we do NOT inline the rule here so the create + add
+    paths stay separable (idempotency is then driven by the
+    description-tag lookup on the rule, not on the entrypoint).
+    """
+    url = f"{API_BASE}/zones/{zone}/rulesets"
+    body = {
+        "name": "default",
+        "description": (
+            "Custom-firewall entrypoint auto-created by "
+            "scripts/cf_waf_override.py for Task #826 (path-scoped "
+            "bot-rule exemption). See docs/CLOUDFLARE_ZERO_TRUST.md "
+            "§8.7.5."
+        ),
+        "kind": "zone",
+        "phase": phase,
+        "rules": [],
+    }
+    payload = _request("POST", url, token, body=body, dry_run=dry_run)
+    return (payload or {}).get("result") or {}
+
+
 def _find_rule(rules: list, hints: tuple, also_action: Optional[str] = None) -> Optional[dict]:
     """Pick the first rule whose description (case-insensitive) contains
     *all* of ``hints``. If ``also_action`` is given, the rule's current
@@ -319,6 +428,10 @@ def cmd_status(args) -> int:
 
     fw = _entrypoint(token, zone, "http_request_firewall_managed")
     rl = _entrypoint(token, zone, "http_ratelimit")
+    # Custom-firewall phase is created on-demand by `bot_skip` (Task
+    # #826), so it may not exist on every zone. Fetch with the
+    # 404-tolerant helper and skip the section entirely if absent.
+    cf = _entrypoint_optional(token, zone, "http_request_firewall_custom")
 
     print(f"=== zone {zone} ===")
     print(f"http_request_firewall_managed entrypoint: id={fw.get('id')!r}")
@@ -342,6 +455,35 @@ def cmd_status(args) -> int:
             f"  - rule_id={r.get('id')} action={r.get('action')!r} "
             f"description={r.get('description')!r} enabled={r.get('enabled')}"
         )
+    print()
+    if cf is None:
+        print(
+            "http_request_firewall_custom entrypoint: (none — no custom "
+            "rules deployed; the `bot_skip` subcommand will create one "
+            "on first run)"
+        )
+    else:
+        print(f"http_request_firewall_custom entrypoint: id={cf.get('id')!r}")
+        for r in cf.get("rules") or []:
+            ap = r.get("action_parameters") or {}
+            skipped = (ap.get("rules") or {}) if r.get("action") == "skip" else {}
+            print(
+                f"  - rule_id={r.get('id')} action={r.get('action')!r} "
+                f"description={r.get('description')!r} "
+                f"enabled={r.get('enabled')}"
+            )
+            if skipped:
+                # Show which managed rules each skip rule disables
+                # (keys are deployed-ruleset ids; values are rule-id
+                # lists). This is what makes the custom phase
+                # consistent with the runbook §8.7.5 description.
+                for ds_id, rule_ids in skipped.items():
+                    print(
+                        f"      skips deployed_ruleset={ds_id!r} rules={rule_ids}"
+                    )
+                expr = r.get("expression")
+                if expr:
+                    print(f"      expression={expr}")
     return 0
 
 
@@ -730,7 +872,7 @@ def cmd_verify(args) -> int:
     the rate-limit rule, etc.) without waiting for the next user
     report.
 
-    Invariants (all four must hold, else exit 1):
+    Invariants (all five must hold, else exit 1):
       1. The Cloudflare Managed Ruleset binding is `action=execute`
          AND `overrides.action` is unset (no force-log left over).
       2. The OWASP Core Ruleset binding is `action=execute` AND
@@ -742,13 +884,23 @@ def cmd_verify(args) -> int:
       4. None of the bindings above are themselves ``enabled=false``
          (a disabled binding does NOT execute the deployed ruleset
          at all, which would silently drop ALL WAF protection).
+      5. (Task #826) The custom-firewall phase carries a Skip rule
+         tagged ``BOT_SKIP_DESCRIPTION_TAG`` that lists the bot rule
+         in ``--expect-skip-bot-rule`` (default
+         ``874a3e315c344b1281ad4f00046aab6f``) under the CF Managed
+         deployed ruleset id, with ``enabled=true``. Pass
+         ``--no-check-bot-skip`` to relax this invariant only when
+         intentionally rolling back to the pre-#826 baseline.
     """
     token = _resolve_token()
     zone = _zone_id()
     expect_rule = getattr(args, "expect_disabled_rule", None) or DEFAULT_OWASP_TRIP_RULE
+    expect_bot_rule = getattr(args, "expect_skip_bot_rule", None) or BOT_DEFINITE_RULE_ID
+    check_bot_skip = not getattr(args, "no_check_bot_skip", False)
 
     fw = _entrypoint(token, zone, "http_request_firewall_managed")
     rl = _entrypoint(token, zone, "http_ratelimit")
+    custom = _entrypoint_optional(token, zone, "http_request_firewall_custom") if check_bot_skip else None
 
     cf_managed = next((r for r in (fw.get("rules") or []) if _binding_is_cf_managed(r)), None)
     owasp = next((r for r in (fw.get("rules") or []) if _binding_is_owasp(r)), None)
@@ -823,6 +975,54 @@ def cmd_verify(args) -> int:
             f"action={leaked.get('action')!r} enabled={leaked.get('enabled')!r}",
         )
 
+    # Invariant 5 (Task #826): bot-management Skip rule for safe paths.
+    # We DO NOT short-circuit when --no-check-bot-skip is set — instead
+    # we record an explicit "skipped" line so the verify output still
+    # shows what was (and wasn't) checked, which matters when the
+    # output is pasted into incident tickets.
+    if not check_bot_skip:
+        print("  [SKIP] Bot-management Skip rule check disabled via --no-check-bot-skip")
+    elif custom is None:
+        check(
+            f"Bot-management Skip rule for {expect_bot_rule} present (custom phase)",
+            False,
+            "no http_request_firewall_custom entrypoint exists at all — "
+            "run `bot_skip` to create it",
+        )
+    else:
+        skip = _find_bot_skip_rule(custom)
+        if skip is None:
+            check(
+                f"Bot-management Skip rule for {expect_bot_rule} present",
+                False,
+                f"no rule with description containing "
+                f"{BOT_SKIP_DESCRIPTION_TAG!r} found in custom phase",
+            )
+        else:
+            ap = skip.get("action_parameters") or {}
+            rules_map = ap.get("rules") or {}
+            listed = rules_map.get(CF_MANAGED_DEPLOYED_RULESET_ID) or []
+            expr = skip.get("expression") or ""
+            # Drift guard (architect feedback, Task #826 review):
+            # also assert the expression itself matches the canonical
+            # BOT_SKIP_EXPRESSION so an over-broad expression (e.g.
+            # someone widened it in the dashboard to
+            # `not http.request.uri.path eq "/"`) is detected here
+            # instead of silently passing.
+            check(
+                f"Skip rule disables bot rule {expect_bot_rule} on safe paths",
+                skip.get("action") == "skip"
+                    and skip.get("enabled", True)
+                    and expect_bot_rule in listed
+                    and expr == BOT_SKIP_EXPRESSION,
+                f"action={skip.get('action')!r} "
+                f"enabled={skip.get('enabled')!r} "
+                f"deployed_ruleset_id_listed={list(rules_map.keys())} "
+                f"rules_under_cf_managed={listed} "
+                f"expression_matches_canonical={expr == BOT_SKIP_EXPRESSION} "
+                f"(actual={expr!r})",
+            )
+
     if failures:
         print(f"\nverify: {len(failures)} invariant(s) failed.")
         return 1
@@ -861,6 +1061,451 @@ def cmd_rollback4(args) -> int:
         print(
             f"rollback4: rule {rule_id} action restored to {body['action']!r}"
         )
+    return 0
+
+
+# ─── Task #826 — bot-management Skip rule ───────────────────────────────────
+
+def _find_bot_skip_rule(custom_entrypoint: dict) -> Optional[dict]:
+    """Locate a previously-applied bot-skip rule by description tag.
+
+    Idempotency is anchored on ``BOT_SKIP_DESCRIPTION_TAG`` (a
+    substring match). The Cloudflare API gives custom rules a UUID
+    on creation that we can't predict, so we cannot key off id —
+    description-tag matching is the only stable handle.
+    """
+    tag = BOT_SKIP_DESCRIPTION_TAG
+    for r in custom_entrypoint.get("rules") or []:
+        if tag in (r.get("description") or ""):
+            return r
+    return None
+
+
+def cmd_bot_skip(args) -> int:
+    """Add (idempotent) a Skip Rules custom-phase rule that exempts
+    ``/api/*`` and ``/sitemap.xml`` from the CF Managed Ruleset's
+    bot-management rule ``874a3e315c344b1281ad4f00046aab6f``.
+
+    Why a Skip rule and not a per-rule disable on the binding
+    (step3-style)? The per-rule disable is *global* — it would turn
+    bot management off for the entire zone. The bot rule is mostly
+    correct — it only false-positives on the SEO/API surface where
+    legitimate clients (search engines, our own internal scripts,
+    the Razorpay webhook IPs) get score-flagged. A Skip rule keeps
+    the bot rule active everywhere except the two surfaces named in
+    the Task #826 done-criterion.
+
+    The Cloudflare Skip rule body shape is:
+
+        action: "skip"
+        action_parameters:
+          rules:
+            <DEPLOYED_RULESET_ID>: ["<rule_id>"]
+        expression: "<filter that selects the requests to exempt>"
+
+    where ``DEPLOYED_RULESET_ID`` is the *Cloudflare-published*
+    ruleset id (``CF_MANAGED_DEPLOYED_RULESET_ID``), NOT the per-zone
+    binding id. CF's Skip semantics are "when ruleset X is about to
+    fire, skip rule Y inside it" — which is exactly what we want.
+
+    State-file note: this writes ``state["bot_skip"][rule_id] = {
+    custom_entrypoint_id, custom_rule_id, expression }`` so
+    ``rollback_bot_skip`` can be run on a different operator's
+    machine using the orchestrator's standard discovery (description-
+    tag lookup) without depending on the local state file.
+    """
+    token = _resolve_token()
+    zone = _zone_id()
+    rule_to_skip = args.rule_id
+
+    custom = _entrypoint_optional(token, zone, "http_request_firewall_custom")
+    if custom is None:
+        if args.dry_run:
+            print(
+                "[dry-run] http_request_firewall_custom entrypoint does "
+                "not exist yet — would POST a new one before adding the "
+                "skip rule"
+            )
+            entrypoint_id = "<would-be-created>"
+            existing_rules: list = []
+        else:
+            print(
+                "bot_skip: http_request_firewall_custom entrypoint not "
+                "found — creating an empty one"
+            )
+            created = _create_phase_entrypoint(
+                token, zone, "http_request_firewall_custom", dry_run=False
+            )
+            entrypoint_id = created.get("id") or ""
+            existing_rules = created.get("rules") or []
+            if not entrypoint_id:
+                raise SystemExit(
+                    "error: created custom-firewall entrypoint but the "
+                    "API response had no id; refusing to continue"
+                )
+            print(f"bot_skip: created custom-firewall entrypoint {entrypoint_id}")
+    else:
+        entrypoint_id = custom["id"]
+        existing_rules = custom.get("rules") or []
+
+    existing = _find_bot_skip_rule({"rules": existing_rules})
+
+    body = {
+        "action": "skip",
+        "action_parameters": {
+            "rules": {
+                CF_MANAGED_DEPLOYED_RULESET_ID: [rule_to_skip],
+            },
+        },
+        "expression": BOT_SKIP_EXPRESSION,
+        "description": BOT_SKIP_DESCRIPTION,
+        "enabled": True,
+    }
+
+    if existing:
+        rid = existing["id"]
+        url = f"{API_BASE}/zones/{zone}/rulesets/{entrypoint_id}/rules/{rid}"
+        _patch(url, token, body, dry_run=args.dry_run)
+        print(
+            f"bot_skip: updated existing skip rule {rid} "
+            f"(managed-rule {rule_to_skip}, expression unchanged)"
+        )
+        custom_rule_id = rid
+    else:
+        url = f"{API_BASE}/zones/{zone}/rulesets/{entrypoint_id}/rules"
+        result = _request("POST", url, token, body=body, dry_run=args.dry_run)
+        custom_rule_id = None
+        if not args.dry_run:
+            res = (result or {}).get("result") or {}
+            for r in res.get("rules") or []:
+                if BOT_SKIP_DESCRIPTION_TAG in (r.get("description") or ""):
+                    custom_rule_id = r["id"]
+                    break
+        print(
+            f"bot_skip: added new skip rule {custom_rule_id} "
+            f"(managed-rule {rule_to_skip}) on custom-firewall "
+            f"entrypoint {entrypoint_id}"
+        )
+
+    state = _load_state()
+    state.setdefault("bot_skip", {})
+    state["bot_skip"][rule_to_skip] = {
+        "custom_entrypoint_id": entrypoint_id,
+        "custom_rule_id": custom_rule_id,
+        "expression": BOT_SKIP_EXPRESSION,
+        "deployed_ruleset_id": CF_MANAGED_DEPLOYED_RULESET_ID,
+    }
+    if not args.dry_run:
+        _save_state(state)
+    return 0
+
+
+def cmd_rollback_bot_skip(args) -> int:
+    """Remove the bot-skip Skip Rules entry added by ``bot_skip``.
+
+    Locates the rule by ``BOT_SKIP_DESCRIPTION_TAG`` substring in the
+    rule's description, NOT by the state file — so this works even
+    if a different operator runs the rollback on a fresh checkout.
+    """
+    token = _resolve_token()
+    zone = _zone_id()
+
+    custom = _entrypoint_optional(token, zone, "http_request_firewall_custom")
+    if custom is None:
+        print(
+            "rollback_bot_skip: no http_request_firewall_custom "
+            "entrypoint exists — nothing to do"
+        )
+        return 0
+
+    entrypoint_id = custom["id"]
+    existing = _find_bot_skip_rule(custom)
+    if existing is None:
+        print(
+            f"rollback_bot_skip: no rule with description containing "
+            f"{BOT_SKIP_DESCRIPTION_TAG!r} found — already gone"
+        )
+        return 0
+
+    rid = existing["id"]
+    url = f"{API_BASE}/zones/{zone}/rulesets/{entrypoint_id}/rules/{rid}"
+    _request("DELETE", url, token, dry_run=args.dry_run)
+    print(
+        f"rollback_bot_skip: deleted skip rule {rid} "
+        f"({existing.get('description')!r})"
+    )
+
+    if not args.dry_run:
+        state = _load_state()
+        bs = state.get("bot_skip") or {}
+        # Drop any entries that pointed to this rule id.
+        for k, v in list(bs.items()):
+            if (v or {}).get("custom_rule_id") == rid:
+                bs.pop(k, None)
+        if bs:
+            state["bot_skip"] = bs
+        else:
+            state.pop("bot_skip", None)
+        _save_state(state)
+    return 0
+
+
+# ─── Task #826 — post-fix WAF event aggregation ─────────────────────────────
+
+_AGGREGATE_QUERY = """
+query Aggregate(
+  $zoneTag: String!,
+  $since: Time!,
+  $until: Time!,
+  $rule: String!,
+  $limit: Int!
+) {
+  viewer {
+    zones(filter: {zoneTag: $zoneTag}) {
+      firewallEventsAdaptiveGroups(
+        limit: $limit,
+        filter: {datetime_geq: $since, datetime_leq: $until, ruleId: $rule},
+        orderBy: [count_DESC]
+      ) {
+        count
+        dimensions {
+          action
+          source
+          ruleId
+          clientRequestPath
+          clientRequestHTTPHost
+        }
+      }
+    }
+  }
+}
+"""
+
+# CF firewallEventsAdaptiveGroups caps `limit` at 10000. We default
+# to 5000 so even very high-cardinality (path, action, host) result
+# sets fit in a single page without truncating low-volume exempt-
+# path challenge events (which are exactly the events we MUST see
+# to fail the gate). If a future incident spans more than 5000
+# distinct (path,action,host,source) combinations, override with
+# `--graphql-limit 10000`. The aggregator detects boundary hits
+# (count == limit) and prints a warning so operators know to widen.
+_AGGREGATE_DEFAULT_LIMIT = 5000
+_AGGREGATE_MAX_LIMIT = 10000
+
+
+def _path_is_exempt(path: str, prefixes, exact) -> bool:
+    """True if ``path`` matches any of the bot-skip exemption clauses.
+
+    Mirrors ``BOT_SKIP_EXPRESSION`` in pure Python so the aggregator
+    can bucket GraphQL results into "should be challenged" vs
+    "should be exempt". ``prefixes`` and ``exact`` are iterables of
+    strings sourced from CLI flags so callers can verify other
+    exemptions later without re-coding the matcher.
+    """
+    if not isinstance(path, str):
+        return False
+    if path in exact:
+        return True
+    for p in prefixes:
+        if p and path.startswith(p):
+            return True
+    return False
+
+
+def cmd_aggregate(args) -> int:
+    """Aggregate firewall events for ``--rule-id`` over a window.
+
+    Used as the 24h post-fix verification gate documented in
+    runbook §8.7.6. After ``bot_skip`` (Task #826) or ``step3``
+    (Task #825) has been live for ~24h, run::
+
+        python3 scripts/cf_waf_override.py aggregate \\
+            --rule-id 874a3e315c344b1281ad4f00046aab6f --hours 24
+
+    Bot management is intentionally still active on every surface
+    *outside* the bot-skip exemption (homepage, /degree/*, login,
+    etc.), so non-zero events for the bot rule on those paths is
+    correct behaviour — not a regression. The aggregator therefore
+    buckets results by path against the exemption expression
+    (``--exempt-prefix`` / ``--exempt-exact``, default values match
+    ``BOT_SKIP_EXPRESSION``) and only fails when challenge-style
+    events appear on the *exempt* paths.
+
+    Exit code is 0 when no challenge-style events hit any exempt
+    path (the fix held — non-exempt-path activity is reported but
+    accepted), 1 when challenge-style events are still landing on
+    the exempt paths (the fix did NOT hold), and 2 on configuration
+    or network errors. This is suitable for wiring into a daily
+    cron alongside ``verify`` for drift detection.
+
+    The set of "challenge-style" actions counted as a fix-broken
+    signal is ``managed_challenge``, ``challenge``, ``js_challenge``
+    and ``block``. Other actions (``log``, ``skip``, ``allow``) are
+    informational and never fail the gate.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    zone = _zone_id()
+    token = _resolve_token()
+    rule_id = args.rule_id
+    hours = max(1, args.hours)
+    # Defaults mirror BOT_SKIP_EXPRESSION exactly.
+    exempt_prefixes = tuple(args.exempt_prefix or ["/api/"])
+    exempt_exact = set(args.exempt_exact or ["/sitemap.xml"])
+    fail_actions = {"managed_challenge", "challenge", "js_challenge", "block"}
+    # Clamp limit into [1, _AGGREGATE_MAX_LIMIT] — CF rejects values
+    # above 10000.
+    limit = max(1, min(args.graphql_limit, _AGGREGATE_MAX_LIMIT))
+
+    now = datetime.now(timezone.utc)
+    until = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    since = (now - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    body = json.dumps(
+        {
+            "query": _AGGREGATE_QUERY,
+            "variables": {
+                "zoneTag": zone,
+                "since": since,
+                "until": until,
+                "rule": rule_id,
+                "limit": limit,
+            },
+        }
+    ).encode()
+    req = urllib.request.Request(
+        GRAPHQL_URL,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        text = exc.read()[:600].decode("utf-8", errors="replace")
+        print(
+            f"error: Cloudflare GraphQL HTTP {exc.code}: {text}",
+            file=sys.stderr,
+        )
+        return 2
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: Cloudflare GraphQL transport error: {exc}", file=sys.stderr)
+        return 2
+
+    errors = payload.get("errors")
+    if errors:
+        print(f"error: Cloudflare GraphQL errors: {errors}", file=sys.stderr)
+        return 2
+
+    zones = (payload.get("data") or {}).get("viewer", {}).get("zones") or []
+    groups = zones[0].get("firewallEventsAdaptiveGroups", []) if zones else []
+
+    print(
+        f"=== firewallEventsAdaptive aggregation for rule {rule_id} ==="
+    )
+    print(f"window: {since} → {until}  ({hours}h)")
+    print(
+        f"exempt prefixes: {list(exempt_prefixes)}   "
+        f"exempt exact paths: {sorted(exempt_exact)}"
+    )
+    # Truncation guard (architect feedback, Task #826 review):
+    # CF returns at most `limit` group rows ordered by count_DESC,
+    # which means low-volume exempt-path challenge events could be
+    # invisibly dropped from the tail when the result set is very
+    # high-cardinality. We surface that risk explicitly so operators
+    # can re-run with --graphql-limit 10000 (the CF max) and, if
+    # still saturated, narrow with --hours.
+    if len(groups) >= limit:
+        print(
+            f"WARNING: result set hit the {limit}-row GraphQL page "
+            "limit. Low-volume exempt-path events may be truncated "
+            "from the tail. Re-run with `--graphql-limit "
+            f"{_AGGREGATE_MAX_LIMIT}` (or shorter `--hours`) before "
+            "trusting an exit-0 result."
+        )
+
+    if not groups:
+        print("0 events matched. Fix held.")
+        return 0
+
+    # Bucket by (path-is-exempt, action-is-fail) so we can:
+    #   - print non-exempt activity as informational (correct
+    #     bot-management behaviour outside the exemption)
+    #   - fail the gate ONLY when challenge-style events still hit
+    #     exempt paths (which is what Task #826 was meant to stop)
+    exempt_fail = []
+    exempt_other = []
+    nonexempt_fail = []
+    nonexempt_other = []
+
+    for g in groups:
+        d = g.get("dimensions") or {}
+        path = d.get("clientRequestPath") or ""
+        action = d.get("action") or ""
+        is_exempt = _path_is_exempt(path, exempt_prefixes, exempt_exact)
+        is_fail_action = action in fail_actions
+        bucket = (
+            exempt_fail if (is_exempt and is_fail_action)
+            else exempt_other if is_exempt
+            else nonexempt_fail if is_fail_action
+            else nonexempt_other
+        )
+        bucket.append(g)
+
+    def _print_bucket(label: str, rows) -> None:
+        if not rows:
+            return
+        subtotal = sum(int(r.get("count") or 0) for r in rows)
+        print(f"\n{label}  (subtotal {subtotal}):")
+        for r in rows:
+            d = r.get("dimensions") or {}
+            print(
+                f"  count={r.get('count'):>5}  "
+                f"action={(d.get('action') or ''):<18} "
+                f"source={(d.get('source') or ''):<18} "
+                f"host={(d.get('clientRequestHTTPHost') or ''):<24} "
+                f"path={d.get('clientRequestPath')!r}"
+            )
+
+    _print_bucket(
+        "EXEMPT PATHS — challenge-style actions (FIX BROKEN if any)",
+        exempt_fail,
+    )
+    _print_bucket(
+        "EXEMPT PATHS — non-challenge actions (informational; expected "
+        "to be skip/log post-fix)",
+        exempt_other,
+    )
+    _print_bucket(
+        "NON-EXEMPT PATHS — challenge-style actions (expected; bot "
+        "protection still active outside the exemption)",
+        nonexempt_fail,
+    )
+    _print_bucket(
+        "NON-EXEMPT PATHS — non-challenge actions (informational)",
+        nonexempt_other,
+    )
+
+    if exempt_fail:
+        broken_total = sum(int(r.get("count") or 0) for r in exempt_fail)
+        print(
+            f"\nFAIL: {broken_total} challenge-style event(s) on exempt "
+            "paths. The Skip rule did NOT take effect — re-run "
+            "`status` and confirm the http_request_firewall_custom "
+            "Skip rule is enabled and references the bot rule under "
+            "the correct deployed-ruleset id."
+        )
+        return 1
+
+    print(
+        "\nFix held: zero challenge-style events on exempt paths "
+        "during the window. Bot protection on non-exempt paths is "
+        "operating normally."
+    )
     return 0
 
 
@@ -907,6 +1552,72 @@ def main(argv: Optional[list] = None) -> int:
 
     sub.add_parser("rollback4", parents=[common], help="undo step4")
 
+    # Task #826 — bot-management Skip rule.
+    pbs = sub.add_parser(
+        "bot_skip",
+        parents=[common],
+        help="add a Skip Rules custom-phase rule that exempts /api/* "
+             "and /sitemap.xml from a managed bot rule (default = "
+             "the Task #826 'manage definite bots' rule)",
+    )
+    pbs.add_argument(
+        "--rule-id",
+        default=BOT_DEFINITE_RULE_ID,
+        help=f"managed-rule id to skip on the safe paths "
+             f"(default {BOT_DEFINITE_RULE_ID})",
+    )
+
+    sub.add_parser(
+        "rollback_bot_skip",
+        parents=[common],
+        help="delete the bot_skip Skip rule (idempotent; uses "
+             "description-tag lookup so it works without a state file)",
+    )
+
+    pa = sub.add_parser(
+        "aggregate",
+        help="count firewallEventsAdaptive matches for a rule over a "
+             "window — the 24h post-fix verification gate "
+             "(exit 0 = zero events, 1 = still firing, 2 = error)",
+    )
+    pa.add_argument(
+        "--rule-id",
+        default=BOT_DEFINITE_RULE_ID,
+        help=f"rule id to aggregate (default {BOT_DEFINITE_RULE_ID})",
+    )
+    pa.add_argument(
+        "--hours", type=int, default=24,
+        help="lookback window in hours (default 24)",
+    )
+    pa.add_argument(
+        "--exempt-prefix",
+        action="append",
+        default=None,
+        help="path prefix considered exempt from the rule (repeat "
+             "for multiple). Default mirrors BOT_SKIP_EXPRESSION: "
+             "['/api/']. Challenge-style events on these paths fail "
+             "the gate.",
+    )
+    pa.add_argument(
+        "--exempt-exact",
+        action="append",
+        default=None,
+        help="exact path considered exempt from the rule (repeat "
+             "for multiple). Default mirrors BOT_SKIP_EXPRESSION: "
+             "['/sitemap.xml']. Challenge-style events on these "
+             "paths fail the gate.",
+    )
+    pa.add_argument(
+        "--graphql-limit",
+        type=int,
+        default=_AGGREGATE_DEFAULT_LIMIT,
+        help=f"max grouped rows requested from CF GraphQL (default "
+             f"{_AGGREGATE_DEFAULT_LIMIT}, hard CF cap "
+             f"{_AGGREGATE_MAX_LIMIT}). Bump to "
+             f"{_AGGREGATE_MAX_LIMIT} if the run prints a "
+             "page-limit WARNING.",
+    )
+
     pv = sub.add_parser(
         "verify",
         help="assert post-incident steady-state invariants "
@@ -918,17 +1629,35 @@ def main(argv: Optional[list] = None) -> int:
         help="OWASP rule id that must be disabled in the OWASP "
              "binding (default = the Task #825 trip rule).",
     )
+    pv.add_argument(
+        "--expect-skip-bot-rule",
+        default=BOT_DEFINITE_RULE_ID,
+        help="bot-management rule id that must be listed in the "
+             "custom-phase Skip rule (default = the Task #826 "
+             "'manage definite bots' rule).",
+    )
+    pv.add_argument(
+        "--no-check-bot-skip",
+        action="store_true",
+        help="relax invariant 5 (the Task #826 bot-skip rule). Use "
+             "ONLY when intentionally rolling back to the pre-#826 "
+             "baseline; the verify output will record [SKIP] on that "
+             "line so it is visible in incident tickets.",
+    )
 
     args = p.parse_args(argv)
     return {
-        "status":     cmd_status,
-        "step0":      cmd_step0,
-        "step3":      cmd_step3,
-        "step4":      cmd_step4,
-        "step6":      cmd_step6,
-        "rollback3":  cmd_rollback3,
-        "rollback4":  cmd_rollback4,
-        "verify":     cmd_verify,
+        "status":             cmd_status,
+        "step0":              cmd_step0,
+        "step3":              cmd_step3,
+        "step4":              cmd_step4,
+        "step6":              cmd_step6,
+        "bot_skip":           cmd_bot_skip,
+        "rollback_bot_skip":  cmd_rollback_bot_skip,
+        "aggregate":          cmd_aggregate,
+        "rollback3":          cmd_rollback3,
+        "rollback4":          cmd_rollback4,
+        "verify":             cmd_verify,
     }[args.cmd](args)
 
 
