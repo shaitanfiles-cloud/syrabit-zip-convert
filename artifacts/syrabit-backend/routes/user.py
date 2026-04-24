@@ -3,7 +3,7 @@ import logging, base64
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 from fastapi import (
-    APIRouter, HTTPException, Depends, File, UploadFile,
+    APIRouter, HTTPException, Depends, File, UploadFile, Cookie,
 )
 
 from models import (
@@ -13,9 +13,12 @@ import deps
 from auth_deps import (
     get_current_user, get_user_credits, get_current_user_optional,
 )
+from config import PLAN_LIMITS
+from device_token import device_token_id
 from db_ops import (
     supa_get_conversations,
     supa_update_user,
+    peek_device_credit_used,
 )
 
 logger = logging.getLogger(__name__)
@@ -133,9 +136,43 @@ async def toggle_saved_subject(subject_id: str, user: dict = Depends(get_current
     return {"message": action, "saved_subjects": saved}
 
 @router.get("/user/credits")
-async def get_credits(user: Optional[dict] = Depends(get_current_user_optional)):
+async def get_credits(
+    user: Optional[dict] = Depends(get_current_user_optional),
+    syrabit_device: Optional[str] = Cookie(default=None),
+):
+    """Daily credit summary for the chat composer's "X / N left today" badge.
+
+    For authenticated users this returns the plan's per-day allowance
+    (``free`` / ``pro`` / ``max`` from :data:`config.PLAN_LIMITS`)
+    minus today's usage from the user-credit ledger.
+
+    For anonymous users (Task #796), the same shape is returned but
+    sourced from the device-keyed Redis counter that
+    :func:`auth_deps.rate_limit_chat_optional` charges on every send
+    (the per-IP daily counter was demoted to a coarse abuse cap in
+    Task #793 and is therefore *not* what we surface to students).
+    The peek is read-only — calling this endpoint never burns a free
+    message — so polling it on every chat-composer mount or after
+    each send is safe. When the device cookie is missing or
+    unverifiable, or Redis is unreachable, we return the optimistic
+    "fresh quota" view (``used=0``, ``remaining=daily_limit``)
+    rather than risk showing "0 left" to a student who has never
+    sent a message.
+    """
     if not user:
-        return {"used": 0, "limit": 30, "remaining": 30, "document_access": False}
+        free_cfg = PLAN_LIMITS.get("free", {})
+        daily_limit = int(free_cfg.get("credits_per_day") or 30)
+        token_id = device_token_id(syrabit_device) if syrabit_device else None
+        used = peek_device_credit_used(token_id) if token_id else 0
+        used = min(used, daily_limit)
+        return {
+            "used": used,
+            "limit": daily_limit,
+            "remaining": max(0, daily_limit - used),
+            "document_access": False,
+            "resets_at": "midnight UTC",
+            "anonymous": True,
+        }
     credits_info = await get_user_credits(user)
     return credits_info
 

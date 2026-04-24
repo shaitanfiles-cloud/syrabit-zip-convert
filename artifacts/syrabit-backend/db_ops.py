@@ -16,6 +16,7 @@ __all__ = [
     "_THREAD_POOL", "_pg_row", "_pg_rows", "_pg_user_cols", "_supa", "_supa_mirror",
     "_ALLOWED_CONV_COLUMNS", "_ALLOWED_SETTINGS_COLUMNS", "_ALLOWED_USER_COLUMNS",
     "atomic_deduct_credit", "atomic_deduct_ip_credit", "atomic_deduct_device_credit",
+    "peek_device_credit_used",
     "supa_clear_activity_log", "supa_count_conversations",
     "supa_count_users", "supa_create_password_reset", "supa_delete_conversation",
     "supa_delete_notification", "supa_delete_password_reset", "supa_get_activity_logs",
@@ -383,6 +384,56 @@ def atomic_deduct_device_credit(
         )
         return False
     return new_count > 0
+
+
+def peek_device_credit_used(token_id: str) -> int:
+    """Return today's per-device daily-credit usage *without* incrementing it.
+
+    Read-only companion to :func:`atomic_deduct_device_credit`, used by
+    the ``/user/credits`` endpoint (Task #796) to surface the remaining
+    free messages-of-the-day on the chat composer for anonymous
+    students. A peek must never charge a credit — students are simply
+    rendering "X / 30 left" in the UI; a side-effecting "peek" would
+    silently burn one of their messages on every page load.
+
+    Mirrors the date-suffixed Redis key built by
+    :func:`atomic_deduct_device_credit` exactly (same
+    ``device_daily_credits:<token>:<YYYY-MM-DD>`` namespace, midnight
+    UTC reset boundary), so the value returned here always matches
+    what the dependency would observe on its next charge attempt.
+
+    Returns
+    -------
+    int
+        Number of messages already charged against the device today
+        (``0`` when the counter has not yet been seeded). Returns
+        ``0`` for missing tokens or when Redis is unreachable — a
+        peek that fails should fall back to an optimistic
+        "fresh quota" view in the UI rather than show a misleading
+        "0 left" badge.
+    """
+    if not token_id:
+        return 0
+    if redis_client is None:
+        return 0
+    from datetime import datetime, timezone
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    key = f"device_daily_credits:{token_id}:{today_str}"
+    try:
+        raw = redis_client.get(key)
+    except Exception as e:
+        logger.warning(
+            f"peek_device_credit_used redis failed for token={token_id[:8]}…: {e}"
+        )
+        return 0
+    if raw is None:
+        return 0
+    try:
+        if isinstance(raw, bytes):
+            raw = raw.decode("ascii", errors="ignore")
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
 
 
 async def atomic_deduct_credit(uid: str, current_used: int, current_limit: int) -> bool:

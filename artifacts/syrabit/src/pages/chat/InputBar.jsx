@@ -11,6 +11,7 @@ export function InputBar({
   isLoading, isOutOfCredits, isLow, credits,
   effectiveLimit, remaining, creditPercent,
   textareaRef, adjustTextarea, sendMsg, handleStop,
+  isAnon,
 }) {
   const navigate = useNavigate();
   const [maxTextareaHeight, setMaxTextareaHeight] = useState(160);
@@ -58,7 +59,9 @@ export function InputBar({
             }}
             placeholder={
               isOutOfCredits
-                ? 'No credits remaining — upgrade to continue'
+                ? (isAnon
+                    ? 'Free daily messages used — sign in to keep chatting'
+                    : 'No credits remaining — upgrade to continue')
                 : subject
                 ? `Ask about ${subject.name}…`
                 : 'Ask anything about your Syllabus...'
@@ -139,12 +142,47 @@ export function InputBar({
                 }}
               />
             </div>
-            <span
-              className="text-[10px] font-medium shrink-0"
-              style={{ color: isLow || isOutOfCredits ? '#f87171' : 'hsl(var(--muted-foreground))' }}
-            >
-              {remaining !== null ? `${remaining} left` : ''}
-            </span>
+            {/*
+              Task #796 — anonymous students get a slightly more
+              explicit "X / 30 free messages left today" caption (the
+              previous "12 left" was cryptic to first-time visitors who
+              had never seen the cap), plus a tiny "Sign in for more"
+              CTA once they're at the half-way mark. Logged-in users
+              keep the compact "X left" badge they're used to.
+            */}
+            {isAnon ? (
+              <span
+                className="text-[10px] font-medium shrink-0 flex items-center gap-1.5"
+                style={{ color: isLow || isOutOfCredits ? '#f87171' : 'hsl(var(--muted-foreground))' }}
+              >
+                <span data-testid="anon-credits-remaining">
+                  {remaining !== null
+                    ? (isOutOfCredits
+                        ? `0 / ${effectiveLimit} free messages left today`
+                        : `${remaining} / ${effectiveLimit} free messages left today`)
+                    : ''}
+                </span>
+                {remaining !== null && remaining <= Math.ceil(effectiveLimit / 2) && (
+                  <button
+                    type="button"
+                    onClick={() => navigate('/login')}
+                    className="font-semibold underline hover:no-underline"
+                    style={{ color: isOutOfCredits || isLow ? '#fca5a5' : '#a78bfa' }}
+                    data-testid="anon-credits-signin-cta"
+                    aria-label="Sign in for more messages"
+                  >
+                    {isOutOfCredits ? 'Sign in →' : 'Sign in for more'}
+                  </button>
+                )}
+              </span>
+            ) : (
+              <span
+                className="text-[10px] font-medium shrink-0"
+                style={{ color: isLow || isOutOfCredits ? '#f87171' : 'hsl(var(--muted-foreground))' }}
+              >
+                {remaining !== null ? `${remaining} left` : ''}
+              </span>
+            )}
           </div>
         )}
       </div>
