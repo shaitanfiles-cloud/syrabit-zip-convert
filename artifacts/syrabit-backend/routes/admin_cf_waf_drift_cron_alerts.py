@@ -84,6 +84,21 @@ _DEFAULT_WORKFLOW_URL = (
     "cf-waf-drift-daily.yml"
 )
 
+# Task #834 — fan-out the silence / recovered alert to the same Slack
+# webhook the per-run drift alert (Task #828, ``.github/workflows/
+# cf-waf-drift-daily.yml``) posts to. Operators already watch this
+# channel for "workflow ran and found drift" findings; consolidating
+# the "workflow stopped running entirely" signal here removes the gap
+# where they'd otherwise have to also watch admin email + the in-app
+# inbox to catch a silent cron. Best-effort: a missing env var or a
+# failed POST never duplicates the alert and never breaks the email +
+# in-app channels above.
+_CRON_SLACK_WEBHOOK_ENV = "CF_WAF_DRIFT_SLACK_WEBHOOK"
+
+
+def _slack_webhook_url() -> str:
+    return (os.environ.get(_CRON_SLACK_WEBHOOK_ENV) or "").strip()
+
 
 # ─── Admin health endpoint ─────────────────────────────────────────────────
 
@@ -303,11 +318,106 @@ async def _email_admins_about_cron(
             )
 
 
+def _slack_payload_for_cron_alert(
+    title: str, message: str, kind: str, health: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the Slack incoming-webhook JSON body for the cron silence /
+    recovered alert.
+
+    Mirrors the per-run drift alert format in
+    ``.github/workflows/cf-waf-drift-daily.yml`` so this channel reads
+    consistently: a ``:rotating_light:`` (or ``:white_check_mark:`` on
+    recovery) section with the same mrkdwn shape, plus a follow-up
+    section listing the heartbeat metadata that motivated the page.
+
+    The ``text`` fallback is required by Slack so push notifications
+    and clients that don't render Block Kit still show something.
+    """
+    last_age = health.get("lastHeartbeatAgeSeconds")
+    age_h = (
+        f"{last_age / 3600:.1f}h"
+        if isinstance(last_age, (int, float)) else "never"
+    )
+    workflow_url = health.get("lastWorkflowUrl") or _DEFAULT_WORKFLOW_URL
+    run_url = health.get("lastRunUrl")
+    last_status = health.get("lastStatus") or "n/a"
+    verify_rc = health.get("lastVerifyRc")
+    aggregate_rc = health.get("lastAggregateRc")
+
+    if kind == "recovered":
+        emoji = ":white_check_mark:"
+        header_md = (
+            f"{emoji} *Cloudflare firewall drift cron recovered*\n"
+            f"Last heartbeat: {age_h} ago, status=`{last_status}`\n"
+            f"<{run_url or workflow_url}|GitHub Actions run>\n"
+            f"Runbook: `docs/CLOUDFLARE_ZERO_TRUST.md` §8.7.7"
+        )
+    else:
+        emoji = ":rotating_light:"
+        header_md = (
+            f"{emoji} *Cloudflare firewall drift cron silent*\n"
+            f"No heartbeat in `{age_h}` "
+            f"(threshold `{_CRON_SILENT_THRESHOLD_S // 3600}h`)\n"
+            f"<{workflow_url}|GitHub Actions workflow>"
+            + (f" · <{run_url}|last run>" if run_url else "")
+            + "\nRunbook: `docs/CLOUDFLARE_ZERO_TRUST.md` §8.7.7"
+        )
+
+    detail_md = (
+        "*Last heartbeat metadata*\n"
+        f"```status={last_status}  "
+        f"verifyRc={verify_rc if verify_rc is not None else '-'}  "
+        f"aggregateRc={aggregate_rc if aggregate_rc is not None else '-'}\n"
+        f"age={age_h}```"
+    )
+
+    blocks: list[dict[str, Any]] = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": header_md}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": detail_md}},
+        # Slack section text caps at 3000 chars; the cron alert body is
+        # already short, but truncate defensively for the same reason
+        # the Trustpilot helper does (Task #757).
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": (message or "")[:2900]},
+        },
+    ]
+    return {"text": f"{emoji} {title}", "blocks": blocks}
+
+
+async def _post_slack_cron_alert(
+    title: str, message: str, kind: str, health: dict[str, Any],
+) -> None:
+    """Best-effort POST to ``CF_WAF_DRIFT_SLACK_WEBHOOK``. No-op when
+    the env var is unset; never raises. Mirrors
+    ``routes/admin_trustpilot_jsonld_status._post_jsonld_slack_alert``
+    (Task #757) — same httpx client, same logging discipline — so the
+    failure modes are uniform across the admin alert surface."""
+    webhook_url = _slack_webhook_url()
+    if not webhook_url:
+        return
+    payload = _slack_payload_for_cron_alert(title, message, kind, health)
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(webhook_url, json=payload)
+            if resp.status_code >= 400:
+                logger.warning(
+                    "[cf-waf-drift-cron-alerts] slack webhook %s: %s",
+                    resp.status_code, resp.text[:200],
+                )
+    except Exception as exc:
+        logger.debug(
+            "[cf-waf-drift-cron-alerts] slack webhook post failed: %s", exc,
+        )
+
+
 async def _send_cron_alert(
     db, kind: str, health: dict[str, Any], now_utc: datetime,
 ) -> None:
-    """Email + in-app notification. ``kind`` is ``"silent"`` or
-    ``"recovered"``. Best-effort — never raises."""
+    """Email + in-app notification + (Task #834) best-effort Slack
+    fan-out to ``CF_WAF_DRIFT_SLACK_WEBHOOK``. ``kind`` is ``"silent"``
+    or ``"recovered"``. Best-effort — never raises."""
     last_age = health.get("lastHeartbeatAgeSeconds")
     age_h = (
         f"{last_age / 3600:.1f}h"
@@ -384,6 +494,11 @@ async def _send_cron_alert(
         logger.debug(f"[cf-waf-drift-cron-alerts] notification persist failed: {exc}")
 
     asyncio.create_task(_email_admins_about_cron(title, msg, kind))
+    # Task #834 — fan out to the per-run drift Slack channel as well.
+    # Scheduled as a background task (matching the email fan-out above)
+    # so a slow/dead webhook can't stall the alert loop or the in-app
+    # notification persist that already succeeded.
+    asyncio.create_task(_post_slack_cron_alert(title, msg, kind, health))
 
 
 async def _check_and_alert_cf_waf_drift_cron(

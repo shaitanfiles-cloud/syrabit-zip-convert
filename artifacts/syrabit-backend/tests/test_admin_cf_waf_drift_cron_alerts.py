@@ -1,5 +1,6 @@
-"""Task #831 — heartbeat + >36h "cron silent" alerter for the daily
-Cloudflare firewall drift workflow.
+"""Task #831 (silent-cron alerter) + Task #834 (Slack fan-out for it)
+— heartbeat + >36h "cron silent" alerter for the daily Cloudflare
+firewall drift workflow.
 
 Mirrors ``tests/test_admin_trustpilot_cron_alerts.py`` (Task #751)
 because the implementation deliberately copies that pattern. The key
@@ -456,3 +457,185 @@ def test_heartbeat_endpoint_rejects_wrong_secret():
                 )
             )
         assert ei.value.status_code == 401
+
+
+# ─── Task #834 — Slack fan-out ─────────────────────────────────────────────
+
+def test_slack_payload_silent_has_drift_alert_style():
+    """The Slack body for a silence page must mirror the per-run drift
+    alert (Task #828) so the channel reads consistently:
+    ``:rotating_light:`` header text, mrkdwn blocks, and a runbook
+    pointer to ``docs/CLOUDFLARE_ZERO_TRUST.md``."""
+    health = _health(
+        last_heartbeat_age_s=40 * 3600,
+        last_status="failure",
+        last_verify_rc=2,
+        last_aggregate_rc=0,
+    )
+    payload = cron._slack_payload_for_cron_alert(
+        title="Cloudflare firewall drift cron silent: no run in 40.0h",
+        message="body...",
+        kind="silent",
+        health=health,
+    )
+    assert payload["text"].startswith(":rotating_light:")
+    blocks = payload["blocks"]
+    assert all(b["type"] == "section" for b in blocks)
+    assert all(b["text"]["type"] == "mrkdwn" for b in blocks)
+    header_md = blocks[0]["text"]["text"]
+    assert "Cloudflare firewall drift cron silent" in header_md
+    assert "40.0h" in header_md
+    assert "GitHub Actions workflow" in header_md
+    assert "docs/CLOUDFLARE_ZERO_TRUST.md" in header_md
+    detail_md = blocks[1]["text"]["text"]
+    assert "verifyRc=2" in detail_md
+    assert "aggregateRc=0" in detail_md
+    assert "status=failure" in detail_md
+
+
+def test_slack_payload_recovered_uses_check_emoji():
+    health = _health(last_heartbeat_age_s=120, last_status="success")
+    payload = cron._slack_payload_for_cron_alert(
+        title="Cloudflare firewall drift cron recovered: heartbeat resumed",
+        message="body...",
+        kind="recovered",
+        health=health,
+    )
+    assert payload["text"].startswith(":white_check_mark:")
+    header_md = payload["blocks"][0]["text"]["text"]
+    assert "recovered" in header_md.lower()
+    assert "GitHub Actions run" in header_md
+
+
+def test_slack_payload_truncates_long_message_body():
+    """Defensively cap the free-form message section under Slack's
+    3000-char per-section limit so an unusually verbose alert body
+    can't 400 the webhook."""
+    huge = "x" * 5000
+    payload = cron._slack_payload_for_cron_alert(
+        title="t", message=huge, kind="silent",
+        health=_health(last_heartbeat_age_s=40 * 3600),
+    )
+    body_md = payload["blocks"][2]["text"]["text"]
+    assert len(body_md) <= 2900
+
+
+def test_post_slack_cron_alert_noop_when_env_unset():
+    """No env var → no network call, no logs above DEBUG, never raises."""
+    import os
+    captured = {"called": False}
+
+    class _SentinelClient:
+        def __init__(self, *a, **kw):
+            captured["called"] = True
+
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("CF_WAF_DRIFT_SLACK_WEBHOOK", None)
+        with patch("httpx.AsyncClient", _SentinelClient):
+            asyncio.run(cron._post_slack_cron_alert(
+                "t", "m", "silent",
+                _health(last_heartbeat_age_s=40 * 3600),
+            ))
+    assert captured["called"] is False
+
+
+def test_post_slack_cron_alert_posts_when_env_set():
+    """When the env var is set the helper POSTs the rendered payload
+    to that URL with a JSON body."""
+    import os
+    posted: dict = {}
+
+    class _Resp:
+        status_code = 200
+        text = "ok"
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None):
+            posted["url"] = url
+            posted["json"] = json
+            return _Resp()
+
+    with patch.dict(
+        os.environ,
+        {"CF_WAF_DRIFT_SLACK_WEBHOOK": "https://hooks.slack.test/abc"},
+        clear=False,
+    ):
+        with patch("httpx.AsyncClient", _Client):
+            asyncio.run(cron._post_slack_cron_alert(
+                "t", "m", "silent",
+                _health(last_heartbeat_age_s=40 * 3600),
+            ))
+    assert posted["url"] == "https://hooks.slack.test/abc"
+    assert posted["json"]["text"].startswith(":rotating_light:")
+    assert posted["json"]["blocks"]
+
+
+def test_post_slack_cron_alert_swallows_transport_failures():
+    """A 500 / network error from the webhook must NOT propagate —
+    the alerter's email + in-app channels already succeeded by the
+    time the Slack task runs in the background."""
+    import os
+
+    class _BoomClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **kw):
+            raise RuntimeError("network dead")
+
+    with patch.dict(
+        os.environ,
+        {"CF_WAF_DRIFT_SLACK_WEBHOOK": "https://hooks.slack.test/abc"},
+        clear=False,
+    ):
+        with patch("httpx.AsyncClient", _BoomClient):
+            # Must not raise.
+            asyncio.run(cron._post_slack_cron_alert(
+                "t", "m", "silent",
+                _health(last_heartbeat_age_s=40 * 3600),
+            ))
+
+
+def test_send_cron_alert_schedules_slack_fan_out(fake_db):
+    """End-to-end: ``_send_cron_alert`` must schedule a Slack POST
+    alongside the email + in-app channels (Task #834). Patch the
+    Slack helper itself so the test pins the contract — title, kind,
+    and the same ``health`` dict — without exercising httpx."""
+    now = _now()
+    health = _health(last_heartbeat_age_s=40 * 3600, last_status="failure")
+    captured: dict = {}
+
+    async def _fake_slack(title, msg, kind, h):
+        captured["title"] = title
+        captured["kind"] = kind
+        captured["health"] = h
+
+    async def _run():
+        with patch.object(cron, "_post_slack_cron_alert", new=_fake_slack):
+            with patch.object(cron, "_email_admins_about_cron",
+                              new=AsyncMock()):
+                await cron._send_cron_alert(fake_db, "silent", health, now)
+                # Background tasks scheduled via asyncio.create_task —
+                # yield once so they run in the same loop before the
+                # context managers tear the patches back down.
+                await asyncio.sleep(0)
+
+    asyncio.run(_run())
+    assert captured.get("kind") == "silent"
+    assert "silent" in captured.get("title", "").lower()
+    assert captured.get("health") is health

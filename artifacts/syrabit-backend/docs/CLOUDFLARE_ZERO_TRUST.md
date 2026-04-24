@@ -1238,6 +1238,7 @@ wrong side of the daily cron doesn't immediately page.
 | Secret / env var (BACKEND)        | Required | Notes                                                                                                                            |
 | --------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `CF_WAF_DRIFT_HEARTBEAT_SECRET`   | yes      | Same value as the GitHub repo secret of the same name. When unset on the backend the heartbeat endpoint returns 503 (fail-closed). |
+| `CF_WAF_DRIFT_SLACK_WEBHOOK`      | optional | Task #834 — when set, the silent-cron alerter also POSTs the silence + recovered alert to this Slack incoming-webhook (same value as the repo secret of the same name used by the per-run drift alert). When unset the email + in-app channels still fire unchanged. |
 
 | Secret / variable (GITHUB)        | Required | Notes                                                                                                                            |
 | --------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------- |
@@ -1266,6 +1267,17 @@ Operator surface:
   re-page, one on silent → recovered).
 - Same admins-list email template as the Trustpilot
   refresh-cron alerter (Task #751).
+- Task #834 also fans the silence + recovered alert out to the
+  same `CF_WAF_DRIFT_SLACK_WEBHOOK` Slack channel the per-run
+  drift alert (Task #828) posts to, so operators can watch one
+  channel for both "the cron ran and found drift" and "the
+  cron stopped running entirely." Best-effort and gated on the
+  env var being set on the backend — when the webhook is unset
+  the email + in-app channels above still fire unchanged, and a
+  failed POST is logged but never duplicates the alert or breaks
+  the loop. The Slack body mirrors the per-run drift alert's
+  `:rotating_light:` block style (`:white_check_mark:` on
+  recovery) so the channel reads consistently.
 
 Tunables (env vars on the backend):
 
