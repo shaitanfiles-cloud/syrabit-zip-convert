@@ -422,6 +422,18 @@ def get_anon_quota_exhausted_stats(days: int = 7) -> dict:
       • numerator (``signup_after_exhaust``)               — sum of
         ``SCARD chat:anon_signup_after_exhaust_devices:<day>``
 
+    Conversion semantics: this is **window-level** conversion, not
+    cohort-by-exhaustion-day conversion. The numerator buckets the
+    signup by *signup day*, so a device that exhausts on day N at
+    23:00 and signs up on day N+1 at 02:00 (still inside the 24h
+    code-level join) is counted in day N+1's signup bucket but day
+    N's exhaustion bucket. For the headline window-aggregated
+    ratio this is exactly what we want; if the dashboard later
+    needs per-day cohort fidelity (`% of day-N cohort that
+    converted within 24h`) the numerator key would have to switch
+    to exhaustion-day. Documented here so the chart copy stays
+    honest and the next iteration knows what to change.
+
     The in-memory rolling window is still used for the by-hour /
     by-day-of-week distributions (which are sub-views and acceptable
     as per-worker samples), and as a fallback when Redis is offline.
