@@ -1,6 +1,7 @@
 import React from 'react';
 import { ExternalLink } from 'lucide-react';
 import CronHealthPill from './CronHealthPill';
+import { captionLine, joinCaptionParts } from './cronCaptionHelpers';
 
 // Task #833 — sibling pill for the daily cf-waf-drift-daily workflow
 // heartbeat (Task #831). Same shape as the Trustpilot refresh-cron
@@ -34,20 +35,16 @@ const renderSubText = ({ data, isDegraded, ageLabel: fmt }) => {
   const verifyRc = data?.lastVerifyRc;
   const aggregateRc = data?.lastAggregateRc;
   const lastStatusRaw = (data?.lastStatus || '').toString();
-  return (
-    <>
-      {anyLbl
-        ? `Last heartbeat ${anyLbl} ago`
-        : 'No heartbeat recorded yet'}
-      {isDegraded && (verifyRc != null || aggregateRc != null || lastStatusRaw)
-        ? ` · ${lastStatusRaw || 'failure'}`
-          + (verifyRc != null ? ` (verify=${verifyRc}` : '')
-          + (verifyRc != null && aggregateRc != null ? `, aggregate=${aggregateRc})` : '')
-          + (verifyRc != null && aggregateRc == null ? ')' : '')
-          + (verifyRc == null && aggregateRc != null ? ` (aggregate=${aggregateRc})` : '')
-        : ''}
-    </>
-  );
+
+  const primary = captionLine('Last heartbeat', anyLbl, 'No heartbeat recorded yet');
+  const degradedSuffix = isDegraded && (verifyRc != null || aggregateRc != null || lastStatusRaw)
+    ? `${lastStatusRaw || 'failure'}`
+      + (verifyRc != null ? ` (verify=${verifyRc}` : '')
+      + (verifyRc != null && aggregateRc != null ? `, aggregate=${aggregateRc})` : '')
+      + (verifyRc != null && aggregateRc == null ? ')' : '')
+      + (verifyRc == null && aggregateRc != null ? ` (aggregate=${aggregateRc})` : '')
+    : '';
+  return joinCaptionParts([primary, degradedSuffix]);
 };
 
 const renderExtraActions = ({ data }) => {

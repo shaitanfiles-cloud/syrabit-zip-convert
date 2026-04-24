@@ -1,5 +1,6 @@
 import React from 'react';
 import CronHealthPill from './CronHealthPill';
+import { captionLine, joinCaptionParts } from './cronCaptionHelpers';
 
 // Task #838 — sibling pill for the daily Trustpilot
 // aggregate-refresh GitHub Actions cron (Task #751,
@@ -43,16 +44,15 @@ const renderSubText = ({ data, ageLabel: fmt }) => {
   //     successful one is known), append " · last heartbeat (any) Xm
   //     ago" so admins can tell apart "cron is silent" from "cron
   //     keeps running but keeps failing".
-  return (
-    <>
-      {successLbl
-        ? `Last successful heartbeat ${successLbl} ago`
-        : 'No successful heartbeat recorded'}
-      {anyLbl && (!successLbl || anyLbl !== successLbl)
-        ? ` · last heartbeat (any) ${anyLbl} ago`
-        : ''}
-    </>
+  const primary = captionLine(
+    'Last successful heartbeat',
+    successLbl,
+    'No successful heartbeat recorded',
   );
+  const anySuffix = anyLbl && (!successLbl || anyLbl !== successLbl)
+    ? captionLine('last heartbeat (any)', anyLbl, '')
+    : '';
+  return joinCaptionParts([primary, anySuffix]);
 };
 
 // Task #843 — backwards-compat aliases for the pre-#838 testId
