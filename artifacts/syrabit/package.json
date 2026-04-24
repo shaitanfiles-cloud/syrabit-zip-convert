@@ -47,6 +47,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install --with-deps chromium",
+    "test:edge-cache": "node tests/edge-cache-live.mjs",
     "lint:ads": "node scripts/verify-no-ads.mjs",
     "lint:ads-required": "node scripts/verify-required-ads.mjs",
     "verify:jsonld": "node scripts/validate-jsonld.mjs",
