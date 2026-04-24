@@ -1625,6 +1625,26 @@ async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_ad
         chapter_id, data.subject_id, data.title,
         data.description or "", _topics, data.content or "",
     ))
+
+    # Permanent per-chapter quiz: generate ONCE at chapter-creation time
+    # and pin it to MongoDB (``chapter_quizzes`` collection) so every
+    # student who later clicks "Quiz me" gets the SAME stored quiz with
+    # zero LLM round-trip and zero rate-limit charge. Best-effort
+    # background task — chapter creation must not be blocked by a slow
+    # / failed LLM call, and the lazy fallback in
+    # ``edu_study.quiz_generate`` will recover the miss the first time
+    # a student opens the quiz if this pre-generation skips or errors.
+    try:
+        from routes.edu_study import pregenerate_chapter_quiz
+        asyncio.create_task(pregenerate_chapter_quiz(chap, count=7, response_lang="en"))
+    except Exception as quiz_pregen_err:
+        # Defensive: import / scheduling failure must never bubble up
+        # to the admin caller. The chapter is already written; the
+        # quiz can be generated lazily on first student click.
+        logger.warning(
+            f"Quiz pre-generation could not be scheduled for chapter {chapter_id}: "
+            f"{quiz_pregen_err}"
+        )
     
     result = {k: v for k, v in chap.items() if k != "_id"}
     result["chunks_created"] = len(chunks_created)
