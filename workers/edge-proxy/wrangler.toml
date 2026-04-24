@@ -12,27 +12,36 @@ routes = [
 # ---------------------------------------------------------------------------
 # BACKEND_URL — the production Railway backend the edge worker proxies to.
 #
-# DO NOT hard-code a real Railway URL here. wrangler.toml [vars] are
-# DEPLOYED on every `wrangler deploy` and OVERWRITE whatever was set in
-# the Cloudflare dashboard, so a stale value here silently breaks
-# api.syrabit.ai for users until someone re-edits the dashboard.
+# Despite the misleading hostname, `workspacemockup-sandbox-production-df37`
+# IS the live production Railway service. It was originally created off a
+# sandbox project's name and never renamed — the URL is permanent because
+# Railway hostnames cannot be changed without re-provisioning. A `curl
+# /api/health` against it returns the real Syrabit.ai API (status 200,
+# `"service":"Syrabit.ai API"`).
 #
-# The previous value (`workspacemockup-sandbox-production-df37`) was a
-# stale dev-environment URL pointing at a sandbox project — leaving it
-# in source meant any contributor running `wrangler deploy` from a
-# fresh checkout would have nuked the live api.syrabit.ai backend
-# binding without realising it.
+# Verified state (Apr 2026):
+#   - Live worker has BACKEND_URL set ONLY as a plaintext binding (this
+#     value); there is no encrypted secret override on the dashboard.
+#   - `wrangler deploy` from this repo therefore round-trips the same
+#     value back into production — safe to redeploy at any time.
 #
-# How to set the real URL for production:
-#   1. Cloudflare dashboard → Workers & Pages → syrabit-edge → Settings
-#      → Variables and Secrets → add BACKEND_URL as an *encrypted*
-#      variable (encrypted vars are NOT overwritten by wrangler.toml).
-#   2. For local `wrangler dev`, create workers/edge-proxy/.dev.vars
-#      (already in .gitignore via the worker template):
-#        BACKEND_URL=https://your-real-railway-host.up.railway.app
+# How to change the backend URL:
+#   1. Update this line and `wrangler deploy`. The new value is what
+#      production will use; there is nothing to also edit in the dashboard.
+#   2. If you want the new value to be a *secret* instead of plaintext,
+#      first delete this `BACKEND_URL = "..."` line, then run
+#      `wrangler secret put BACKEND_URL` and enter the value. Wrangler
+#      secrets ARE preserved across deploys, but only when the same name
+#      is not also declared as a plaintext var here (a plaintext var with
+#      the same name overwrites the secret on every deploy).
+#   3. For local `wrangler dev`, create workers/edge-proxy/.dev.vars
+#      (gitignored):
+#        BACKEND_URL=https://your-local-or-staging-host.up.railway.app
+#
+# Followup if the misleading name keeps confusing operators: rename the
+# Railway service to e.g. `syrabit-prod-api` (requires re-provisioning +
+# DNS-style cutover) and update the value below in the same commit.
 # ---------------------------------------------------------------------------
-# Production Railway backend. If this ever needs to change, update both
-# this value AND the Cloudflare dashboard binding in the same commit.
 BACKEND_URL = "https://workspacemockup-sandbox-production-df37.up.railway.app"
 # Pages origin used by the worker to serve non-API GETs (the SPA).
 # MUST be the *.pages.dev hostname, not syrabit.ai/www.syrabit.ai —
