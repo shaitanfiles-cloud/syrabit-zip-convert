@@ -218,6 +218,26 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       .finally(() => setTpCronLoading(false));
   }, [adminToken]);
 
+  // Task #833 — cf-waf-drift daily cron heartbeat snapshot. Mirrors the
+  // Trustpilot refresh-cron pill above so admins can spot a silent
+  // firewall-drift cron at a glance instead of waiting for the >36h
+  // silence email/in-app notification (Task #831). Endpoint shape:
+  // /admin/health/cf-waf-drift/cron — status ∈ {healthy, silent,
+  // degraded, never_observed, not_configured} plus lastHeartbeatAge,
+  // lastVerifyRc/lastAggregateRc, lastRunUrl, workflowUrl.
+  const [cfDriftCronHealth, setCfDriftCronHealth] = useState(null);
+  const [cfDriftCronLoading, setCfDriftCronLoading] = useState(false);
+
+  const loadCfDriftCronHealth = useCallback(() => {
+    setCfDriftCronLoading(true);
+    axios.get(`${API_BASE}/admin/health/cf-waf-drift/cron`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setCfDriftCronHealth(r.data))
+      .catch(() => setCfDriftCronHealth({ _error: true }))
+      .finally(() => setCfDriftCronLoading(false));
+  }, [adminToken]);
+
   const loadTpJsonldReport = useCallback(() => {
     setTpJsonldLoading(true);
     axios.get(`${API_BASE}/admin/trustpilot-jsonld/report`, {
@@ -253,15 +273,17 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     loadTpJsonldHistory();
     loadTpJsonldAlerts();
     loadTpCronHealth();
+    loadCfDriftCronHealth();
     const id = setInterval(() => {
       loadTpJsonldReport();
       loadTpJsonldHistory();
       loadTpJsonldAlerts();
       loadTpCronHealth();
+      loadCfDriftCronHealth();
     }, 60000);
     return () => clearInterval(id);
   }, [adminToken, loadTpJsonldReport, loadTpJsonldHistory,
-      loadTpJsonldAlerts, loadTpCronHealth]);
+      loadTpJsonldAlerts, loadTpCronHealth, loadCfDriftCronHealth]);
 
   // Task #609 — managed AI response cache stats + admin purge controls.
   const [aiCacheStats, setAiCacheStats] = useState(null);
@@ -2257,6 +2279,153 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                   title="Refresh"
                 >
                   <RefreshCw size={13} className={tpCronLoading ? 'animate-spin' : ''} />
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+        </SectionErrorBoundary>
+
+        <SectionErrorBoundary name="Cloudflare WAF Drift Cron">
+        {(() => {
+          // Task #833 — sibling pill for the daily cf-waf-drift-daily
+          // workflow heartbeat (Task #831). Same shape as the
+          // Trustpilot refresh-cron pill above, with one addition: a
+          // "Last run" deep-link when the heartbeat carries one, since
+          // jumping straight to the offending GitHub Actions run is
+          // the first thing an admin wants when the pill turns red.
+          // Endpoint: /admin/health/cf-waf-drift/cron — status keys
+          // mirror the Trustpilot endpoint: healthy / silent /
+          // degraded / never_observed / not_configured.
+          const data = cfDriftCronHealth && !cfDriftCronHealth._error ? cfDriftCronHealth : null;
+          const status = data?.status || 'unknown';
+          const isFailed = status === 'silent';
+          const isDegraded = status === 'degraded';
+          const isUnknown = status === 'never_observed' || status === 'not_configured' || !data;
+          const containerCls = isFailed
+            ? 'bg-red-50 border-red-200'
+            : isDegraded
+              ? 'bg-amber-50 border-amber-200'
+              : isUnknown
+                ? 'bg-gray-50 border-gray-200'
+                : 'bg-emerald-50 border-emerald-200';
+          const headerColor = isFailed
+            ? 'text-red-600'
+            : isDegraded
+              ? 'text-amber-600'
+              : isUnknown
+                ? 'text-gray-500'
+                : 'text-emerald-600';
+          const pillCls = isFailed
+            ? 'bg-red-100 text-red-700 border-red-200'
+            : isDegraded
+              ? 'bg-amber-100 text-amber-700 border-amber-200'
+              : isUnknown
+                ? 'bg-gray-100 text-gray-600 border-gray-200'
+                : 'bg-emerald-100 text-emerald-700 border-emerald-200';
+          const pillLabel = ({
+            healthy: 'CRON HEALTHY',
+            silent: 'CRON SILENT',
+            degraded: 'CRON DEGRADED',
+            never_observed: 'NEVER OBSERVED',
+            not_configured: 'NOT CONFIGURED',
+          })[status] || 'UNKNOWN';
+          const headerText = ({
+            healthy: 'Firewall drift cron — checking in',
+            silent: 'Firewall drift cron — silent',
+            degraded: 'Firewall drift cron — last run flagged',
+            never_observed: 'Firewall drift cron — no heartbeat yet',
+            not_configured: 'Firewall drift cron — not configured',
+          })[status] || 'Firewall drift cron — status unknown';
+          const lastAnyAge = data?.lastHeartbeatAgeSeconds;
+          const ageLabel = (secs) => {
+            if (secs == null) return null;
+            const s = Math.max(0, Math.floor(Number(secs)));
+            if (s < 60) return `${s}s`;
+            if (s < 3600) return `${Math.floor(s / 60)}m`;
+            if (s < 86400) return `${Math.floor(s / 3600)}h`;
+            return `${Math.floor(s / 86400)}d`;
+          };
+          const anyLbl = ageLabel(lastAnyAge);
+          // The endpoint reports last verify/aggregate exit codes —
+          // when degraded we surface them so the admin knows whether
+          // it was the verify gate or the aggregate gate that tripped
+          // before they click through to the run.
+          const verifyRc = data?.lastVerifyRc;
+          const aggregateRc = data?.lastAggregateRc;
+          const lastStatusRaw = (data?.lastStatus || '').toString();
+          const workflowUrl = data?.workflowUrl
+            || 'https://github.com/syrabit/syrabit/actions/workflows/cf-waf-drift-daily.yml';
+          const lastRunUrl = data?.lastRunUrl;
+          return (
+            <div className={`rounded-2xl p-4 border ${containerCls}`} data-testid="cf-waf-drift-cron-tile">
+              <div className="flex items-center gap-3">
+                {isFailed
+                  ? <AlertTriangle size={18} className="text-red-500" />
+                  : isDegraded
+                    ? <AlertTriangle size={18} className="text-amber-500" />
+                    : isUnknown
+                      ? <Clock size={18} className="text-gray-400" />
+                      : <ShieldCheck size={18} className="text-emerald-500" />}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className={`text-sm font-semibold ${headerColor}`} data-testid="cf-waf-drift-cron-status">
+                      {headerText}
+                    </p>
+                    <a
+                      href={workflowUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold border ${pillCls} hover:opacity-80`}
+                      data-testid="cf-waf-drift-cron-pill"
+                      title="Open the GitHub Actions runs page for this workflow"
+                    >
+                      {pillLabel}
+                    </a>
+                  </div>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    {anyLbl
+                      ? `Last heartbeat ${anyLbl} ago`
+                      : 'No heartbeat recorded yet'}
+                    {isDegraded && (verifyRc != null || aggregateRc != null || lastStatusRaw)
+                      ? ` · ${lastStatusRaw || 'failure'}`
+                        + (verifyRc != null ? ` (verify=${verifyRc}` : '')
+                        + (verifyRc != null && aggregateRc != null ? `, aggregate=${aggregateRc})` : '')
+                        + (verifyRc != null && aggregateRc == null ? ')' : '')
+                        + (verifyRc == null && aggregateRc != null ? ` (aggregate=${aggregateRc})` : '')
+                      : ''}
+                  </p>
+                </div>
+                {lastRunUrl ? (
+                  <a
+                    href={lastRunUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[11px] text-violet-600 hover:text-violet-700 inline-flex items-center gap-1"
+                    data-testid="cf-waf-drift-cron-last-run-link"
+                    title="Open the most recent workflow run"
+                  >
+                    Last run <ExternalLink size={11} />
+                  </a>
+                ) : null}
+                <a
+                  href={workflowUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[11px] text-violet-600 hover:text-violet-700 inline-flex items-center gap-1"
+                  data-testid="cf-waf-drift-cron-run-link"
+                  title="Open the GitHub Actions runs page for this workflow"
+                >
+                  Runs <ExternalLink size={11} />
+                </a>
+                <button
+                  onClick={loadCfDriftCronHealth}
+                  disabled={cfDriftCronLoading}
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-white/60"
+                  data-testid="button-refresh-cf-waf-drift-cron"
+                  title="Refresh"
+                >
+                  <RefreshCw size={13} className={cfDriftCronLoading ? 'animate-spin' : ''} />
                 </button>
               </div>
             </div>
