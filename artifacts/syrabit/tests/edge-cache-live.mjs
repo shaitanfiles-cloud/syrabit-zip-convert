@@ -43,26 +43,32 @@
  * MISS→HIT transition. By appending `?_cb=<random>` we force a fresh cache
  * entry that we know the second call must produce by storing into this POP.
  *
- * What counts as a warm response?
- * --------------------------------
- * The worker has TWO fast paths and both are real production outcomes:
- *   - `X-Cache: HIT` / `HIT-304` — CF per-POP cache hit (the canonical
- *     case this task targets).
- *   - `X-Cache: D1`              — served straight from a D1 replica
- *     without backend round-trip. ~30–80 ms TTFB, fully Cache-Control'd
- *     at the browser layer. Functionally a warm response from the
- *     student's perspective even though it bypasses CF's edge cache.
+ * What counts as a pass?
+ * ----------------------
+ * By default ONLY `X-Cache: HIT` and `HIT-304` (the latter when an
+ * If-None-Match header is replayed) on the second request count as a
+ * pass. Every other outcome — `MISS`, `BYPASS`, or the worker's `D1`
+ * fast-path — is a failure, because the explicit task contract is
+ * "assert X-Cache: HIT on the second response".
  *
- * In the default mode we treat both as PASS so this script does not
- * flap when D1 is healthy but CF cache hasn't yet warmed for a
- * particular cache-bust query. Set `EDGE_CACHE_STRICT=1` to require
- * `HIT`/`HIT-304` only — useful when investigating a suspected CF
- * cache-write regression.
+ * The worker also has a D1 fast-path (`X-Cache: D1`) that serves the
+ * same routes directly from the D1 replica. That path is fast, but it
+ * means the response did NOT go through CF's per-POP edge cache, so it
+ * shouldn't make a regression-gating script pass. If the D1 fast-path
+ * is intentionally preferred over CF cache for a route, remove that
+ * route from the probe set.
+ *
+ * Diagnostic mode (non-gating)
+ * ----------------------------
+ * Set `EDGE_CACHE_LENIENT=1` to additionally treat `D1` as a pass and
+ * `MISS`/`BYPASS` as soft warnings. Use this when investigating
+ * production behavior interactively — never in CI, since it hides the
+ * regressions this script exists to catch.
  *
  * Exit codes
  * ----------
- *   0 — every probed route returned a warm response (HIT/D1).
- *   1 — at least one route stayed cold on the 2nd request.
+ *   0 — every probed route served `HIT`/`HIT-304` on the 2nd request.
+ *   1 — at least one route did not warm into the CF edge cache.
  *   2 — network/setup failure (all routes errored).
  */
 
@@ -92,21 +98,20 @@ const ROUTES = [
   "/api/edu/allowlist",
 ];
 
-const STRICT = process.env.EDGE_CACHE_STRICT === "1";
-// In default mode both CF cache hits and the worker's D1 fast-path
-// count as "warm" — both serve the user without backend round-trip.
-// In strict mode only CF cache hits count, so a CF-cache-write
-// regression is surfaced even when D1 is healthy.
-const HIT_VALUES = STRICT
-  ? new Set(["HIT", "HIT-304"])
-  : new Set(["HIT", "HIT-304", "D1"]);
-// Some intentionally non-cacheable upstream responses (e.g. an empty body
-// or a 4xx) will surface as `BYPASS` even on routes that *appear* in
-// CACHEABLE_PREFIXES. We treat those as a soft warning, not a failure,
-// because they say "the worker correctly chose not to cache this" — the
-// contract being tested is "warm requests are served from the edge", not
-// "every CACHEABLE_PREFIXES route always produces a cacheable response".
-const SOFT_BYPASS_VALUES = new Set(["BYPASS", "MISS"]);
+// Default = strict gating: only CF edge cache hits count as a pass.
+// Lenient = diagnostic mode: also accept the worker's D1 fast-path
+// (`X-Cache: D1`) and downgrade `MISS`/`BYPASS` to soft warnings.
+// Lenient is for interactive investigation only; CI must stay strict
+// so a missing CF cache write never silently passes.
+const LENIENT = process.env.EDGE_CACHE_LENIENT === "1";
+const HIT_VALUES = LENIENT
+  ? new Set(["HIT", "HIT-304", "D1"])
+  : new Set(["HIT", "HIT-304"]);
+// In lenient mode, MISS/BYPASS become soft warnings (printed but
+// non-gating). In strict mode (the default) they are hard failures.
+const SOFT_BYPASS_VALUES = LENIENT
+  ? new Set(["BYPASS", "MISS"])
+  : new Set();
 
 function abortableFetch(url, init = {}) {
   const ctrl = new AbortController();
@@ -193,7 +198,7 @@ async function probeRoute(route) {
       secondCache,
       status: secondResp.status,
       source,
-      note: "worker did not store this response; verify upstream contract",
+      note: "worker did not store this response; cache regression to investigate",
     };
   }
 
@@ -237,7 +242,10 @@ async function main() {
   const hits = results.filter((r) => r.ok && !r.soft);
 
   console.log("");
-  console.log(`summary: ${hits.length} hit, ${softWarnings.length} bypass/warn, ${hardFailures.length} fail`);
+  console.log(
+    `summary: ${hits.length} hit, ${softWarnings.length} bypass/warn, ${hardFailures.length} fail` +
+      (LENIENT ? "  (LENIENT mode — diagnostic only)" : ""),
+  );
 
   if (hardFailures.length === results.length) {
     console.error("\nALL routes failed — likely a network or DNS issue, not a cache regression.");
@@ -246,11 +254,17 @@ async function main() {
   if (hardFailures.length > 0) {
     console.error(`\n${hardFailures.length} route(s) did not warm into the edge cache:`);
     for (const f of hardFailures) {
-      console.error(`  - ${f.route}: ${f.error}`);
+      console.error(`  - ${f.route}: ${f.error || `expected X-Cache: HIT on second request, got ${f.secondCache}`}`);
     }
     process.exit(1);
   }
-  console.log("\nAll cacheable routes serve HIT on the second request. ✓");
+  if (softWarnings.length > 0) {
+    console.log(
+      `\n${hits.length} route(s) served HIT on the second request; ${softWarnings.length} returned BYPASS/MISS (soft warnings — re-run without EDGE_CACHE_LENIENT to gate on them).`,
+    );
+  } else {
+    console.log("\nAll cacheable routes returned X-Cache: HIT on the second request. ✓");
+  }
   process.exit(0);
 }
 
