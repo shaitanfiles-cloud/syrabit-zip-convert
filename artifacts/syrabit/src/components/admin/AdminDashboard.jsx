@@ -4096,8 +4096,12 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
             <div className="flex items-start gap-2">
               <AlertCircle size={12} className="mt-0.5 flex-shrink-0" />
               <span>
-                <span className="font-medium">Couldn't load wall-hit stats.</span>{' '}
-                The numbers below are not real — they are placeholders shown because the request failed ({anonQuotaError}). Use the retry button to fetch live data.
+                <span className="font-medium">Couldn't refresh wall-hit stats ({anonQuotaError}).</span>{' '}
+                {anonQuotaWall ? (
+                  <>The numbers below are the <span className="font-medium">last successful snapshot</span> — they may be stale. Click Retry to fetch fresh data.</>
+                ) : (
+                  <>No data has loaded yet. Click Retry to fetch live data.</>
+                )}
               </span>
             </div>
             <button
