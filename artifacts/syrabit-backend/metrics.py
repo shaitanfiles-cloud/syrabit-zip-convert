@@ -31,6 +31,7 @@ __all__ = [
     "record_anon_quota_exhausted", "record_signup_with_device",
     "get_anon_quota_exhausted_stats", "backfill_anon_quota_exhausted_today",
     "get_anon_quota_exhausted_recent", "get_anon_quota_exhausted_top_devices",
+    "get_anon_quota_exhausted_weekly_trend",
 ]
 
 _startup_time = _time_mod.time()
@@ -218,6 +219,96 @@ def _anon_redis_client():
         return None
 
 
+# Task #809 — durable per-day aggregate so the wall-hit chart survives
+# gunicorn restarts (deploys, OOM kills, weekly memory recycle). The
+# rolling in-memory window above resets to zero on every boot, and the
+# `chat:anon_exhausted_devices:<day>` zsets only carry a 14-day TTL,
+# so without this writer the dashboard's daily sparkline silently
+# truncates after each restart and weekly/monthly trends are
+# impossible to compute without scraping logs.
+#
+# Storage shape: per-day Redis HASH `chat:anon_exhausted_daily_agg:<day>`
+# with fields:
+#   • events  — INCR'd once per fired metric (== unique devices that
+#               day, since record_anon_quota_exhausted dedupes per
+#               (token, day); the field name future-proofs the schema
+#               for a separate raw-retry counter later);
+#   • unique  — snapshot of the same-day zset's ZCARD after each push,
+#               so the value is correct even if `events` ever
+#               outgrows uniques (e.g. a future patch loosens the
+#               dedupe window).
+#
+# TTL is sized for ~13 months of history (52 weekly buckets × 7 days
+# + buffer), comfortably covering the longest charts we expose today
+# and giving plenty of headroom for quarterly capacity reviews.
+_ANON_EXHAUST_DAILY_AGG_TTL_SECONDS = 400 * 24 * 3600
+
+
+def _anon_exhaust_daily_agg_key(day: str) -> str:
+    return f"chat:anon_exhausted_daily_agg:{day}"
+
+
+def _persist_anon_exhaust_daily_agg(day: str) -> None:
+    """Best-effort write-through for the durable daily aggregate.
+
+    Called from `record_anon_quota_exhausted` after the per-day
+    sorted-set push. Failures are swallowed (debug-logged) — the
+    in-memory rolling window remains the local fallback and the
+    chart endpoint already declares ``data_source='memory_fallback'``
+    when Redis is unreachable, so a write here failing only costs
+    us cross-restart durability for that one event.
+    """
+    rc = _anon_redis_client()
+    if rc is None:
+        return
+    try:
+        key = _anon_exhaust_daily_agg_key(day)
+        rc.hincrby(key, "events", 1)
+        try:
+            zset_key = f"chat:anon_exhausted_devices:{day}"
+            unique_n = int(rc.zcard(zset_key) or 0)
+            if unique_n:
+                rc.hset(key, "unique", unique_n)
+        except Exception:
+            # Snapshot is best-effort; `events` alone is still useful.
+            pass
+        rc.expire(key, _ANON_EXHAUST_DAILY_AGG_TTL_SECONDS)
+    except Exception as _e:
+        logger.debug("_persist_anon_exhaust_daily_agg failed: %s", _e)
+
+
+def _read_anon_exhaust_daily_agg(day: str) -> dict | None:
+    """Return ``{'events': int, 'unique': int}`` or None if absent.
+
+    Tolerates both ``decode_responses=True`` (str keys, fakeredis
+    default) and the bytes-key real-Redis configuration so the
+    helper is interchangeable across the test suite and prod.
+    """
+    rc = _anon_redis_client()
+    if rc is None:
+        return None
+    try:
+        raw = rc.hgetall(_anon_exhaust_daily_agg_key(day))
+        if not raw:
+            return None
+
+        def _g(k: str) -> int:
+            v = raw.get(k)
+            if v is None:
+                v = raw.get(k.encode("ascii"))
+            if isinstance(v, bytes):
+                v = v.decode("ascii", errors="ignore")
+            try:
+                return int(v or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        return {"events": _g("events"), "unique": _g("unique")}
+    except Exception as _e:
+        logger.debug("_read_anon_exhaust_daily_agg failed: %s", _e)
+        return None
+
+
 def record_anon_quota_exhausted(
     token_id: str, ip: str = "", plan_target: str = "free",
     country: str = "", asn: str = "",
@@ -367,12 +458,31 @@ def record_anon_quota_exhausted(
     # late signups into the conversion ratio.
     rc = _anon_redis_client()
     if rc is not None and token_id:
+        # Task #809 — gate the durable aggregate's `events`
+        # increment on whether ZADD actually inserted a new
+        # member. ZADD NX returns 1 only the first time a given
+        # (token, day) lands in the zset, even across workers, so
+        # `events` cannot drift above `unique` no matter how many
+        # gunicorn workers process the same device's 30th request
+        # of the day. Without this, per-process dedupe via
+        # `_anon_exhaust_seen` does not protect cross-worker
+        # writers, and the daily count would slowly inflate as
+        # workers each see the same device.
+        added = 0
         try:
             key = f"chat:anon_exhausted_devices:{day}"
-            rc.zadd(key, {token_id: now})
+            added = int(rc.zadd(key, {token_id: now}, nx=True) or 0)
             rc.expire(key, _ANON_EXHAUST_HISTORY_SECONDS)
         except Exception as _e:
             logger.debug("record_anon_quota_exhausted redis push failed: %s", _e)
+
+        # Only persist when this worker observed a brand-new
+        # device-day. The unique-snapshot inside the persist helper
+        # still reads ZCARD so the `unique` field self-corrects
+        # even if a future caller forgets to gate the increment.
+        # Best-effort: failures are debug-logged and never raise.
+        if added:
+            _persist_anon_exhaust_daily_agg(day)
     return True
 
 
@@ -529,10 +639,32 @@ def get_anon_quota_exhausted_stats(days: int = 7) -> dict:
                 day = datetime.fromtimestamp(now - n * 86400, tz=timezone.utc).strftime("%Y-%m-%d")
                 exh_key = f"chat:anon_exhausted_devices:{day}"
                 sup_key = f"chat:anon_signup_after_exhaust_devices:{day}"
-                try:
-                    exh_count = int(rc.zcard(exh_key) or 0)
-                except (TypeError, ValueError):
-                    exh_count = 0
+                # Task #809 — prefer the durable per-day aggregate
+                # (HASH `chat:anon_exhausted_daily_agg:<day>`) which
+                # survives gunicorn restarts and outlives the
+                # 14-day TTL on the zset above. Fall back to ZCARD
+                # for the (rare) window where the writer raced the
+                # reader and the aggregate hasn't been written yet,
+                # OR for legacy days that pre-date this task.
+                exh_count = 0
+                agg = _read_anon_exhaust_daily_agg(day)
+                if agg:
+                    # Prefer `unique` (canonical: ZCARD-derived,
+                    # always reflects true distinct devices). Use
+                    # `events` only as a fallback for the rare
+                    # window where the writer hasn't taken the
+                    # `unique` snapshot yet — never `max(...)`,
+                    # because in multi-worker setups `events` can
+                    # transiently exceed `unique` if the
+                    # ZADD-NX gate is bypassed by a future caller.
+                    exh_count = int(agg.get("unique") or 0)
+                    if not exh_count:
+                        exh_count = int(agg.get("events") or 0)
+                if not exh_count:
+                    try:
+                        exh_count = int(rc.zcard(exh_key) or 0)
+                    except (TypeError, ValueError):
+                        exh_count = 0
                 try:
                     sup_count = int(rc.scard(sup_key) or 0)
                 except (TypeError, ValueError):
@@ -674,6 +806,87 @@ def get_anon_quota_exhausted_top_devices(days: int = 7, top_n: int = 10) -> list
         key=lambda r: (-r["hits"], -r["last_seen"]),
     )
     return ranked[:top_n]
+
+
+def get_anon_quota_exhausted_weekly_trend(weeks: int = 12) -> list:
+    """Return wall-hits grouped by ISO week for the last ``weeks`` weeks.
+
+    Reads the durable per-day aggregate written by
+    `_persist_anon_exhaust_daily_agg` (TTL ~13 months), so this
+    survives gunicorn restarts and goes back well beyond the 14-day
+    in-memory rolling window. Powers the second sparkline added in
+    Task #809.
+
+    Bucketing is by **ISO week-Monday (UTC)** so weeks are consistent
+    across timezones — `week_start` is the Monday's date in
+    ``YYYY-MM-DD``. Weeks with zero data are returned with
+    ``exhausted=0`` so the chart's x-axis is regularly spaced rather
+    than jumping over silent weeks.
+
+    The aggregate stores deduplicated per-device counts per day, so
+    ``exhausted`` here is "device-days that hit the wall this week"
+    — a single device that hit on Mon, Wed and Fri counts as 3.
+    Computing strict per-week unique devices would need the full
+    per-day device sets which we don't durably persist; the
+    device-days metric is the right one for cap-tuning trends and is
+    documented honestly in the field name.
+
+    Falls back to the (still-alive) zset ``ZCARD`` for days that
+    pre-date the persistence writer, keeping the chart non-empty
+    on first deploy.
+    """
+    weeks = max(1, min(int(weeks), 52))
+    rc = _anon_redis_client()
+    today = datetime.now(timezone.utc).date()
+    # Monday of the current ISO week, then walk back `weeks - 1` weeks
+    # to get the oldest bucket's Monday. Iterating forward by day
+    # (rather than week) keeps the bucketing logic uniform with the
+    # daily aggregate's storage shape.
+    cur_monday = today - timedelta(days=today.weekday())
+    oldest_monday = cur_monday - timedelta(days=(weeks - 1) * 7)
+    # Pre-seed every week with zero so the chart x-axis never has
+    # gaps that look like missing data.
+    buckets: dict = {
+        (oldest_monday + timedelta(days=7 * i)).strftime("%Y-%m-%d"):
+            {"week_start": (oldest_monday + timedelta(days=7 * i)).strftime("%Y-%m-%d"), "exhausted": 0, "days_with_data": 0}
+        for i in range(weeks)
+    }
+
+    if rc is not None:
+        total_days = (today - oldest_monday).days + 1
+        for n in range(total_days):
+            d = oldest_monday + timedelta(days=n)
+            day_str = d.strftime("%Y-%m-%d")
+            count = 0
+            agg = _read_anon_exhaust_daily_agg(day_str)
+            if agg:
+                # Prefer `unique` (canonical, ZCARD-derived). Fall
+                # back to `events` only if `unique` is missing —
+                # never `max(...)`, see explanation in
+                # `get_anon_quota_exhausted_stats`.
+                count = int(agg.get("unique") or 0)
+                if not count:
+                    count = int(agg.get("events") or 0)
+            if not count:
+                # Fallback: still-alive zset for legacy days.
+                try:
+                    count = int(rc.zcard(f"chat:anon_exhausted_devices:{day_str}") or 0)
+                except Exception:
+                    count = 0
+            if count <= 0:
+                continue
+            week_monday = d - timedelta(days=d.weekday())
+            wk = week_monday.strftime("%Y-%m-%d")
+            row = buckets.get(wk)
+            if row is None:
+                # Defensive: a `d` outside the seeded range shouldn't
+                # happen but we don't want to drop a real datapoint.
+                row = {"week_start": wk, "exhausted": 0, "days_with_data": 0}
+                buckets[wk] = row
+            row["exhausted"] += count
+            row["days_with_data"] += 1
+
+    return sorted(buckets.values(), key=lambda r: r["week_start"])
 
 
 def backfill_anon_quota_exhausted_today() -> int:

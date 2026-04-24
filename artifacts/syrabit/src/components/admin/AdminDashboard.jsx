@@ -4226,6 +4226,53 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
           );
         })()}
 
+        {/* Task #809 — durable weekly trend sparkline. Reads from the
+            backend's `weekly_trend` series (Redis-persisted, ~13mo
+            history) so this chart survives gunicorn restarts and
+            shows trends well beyond the 14-day in-memory window
+            powering the daily sparkline above. Always rendered when
+            the array is present (it's pre-seeded with zero buckets
+            server-side) so the dashboard's layout stays stable. */}
+        {(() => {
+          const weekly = anonQuotaWall?.weekly_trend ?? [];
+          if (weekly.length === 0) return null;
+          const weeklyMax = Math.max(1, ...weekly.map(w => Number(w.exhausted) || 0));
+          const weeklyTotal = weekly.reduce((a, w) => a + (Number(w.exhausted) || 0), 0);
+          return (
+            <div className="rounded-xl p-3 bg-gray-50 border border-gray-100 mb-3" data-testid="anon-quota-weekly-trend">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-gray-600">
+                  Weekly trend ({weekly.length} weeks, ISO Mondays UTC)
+                </span>
+                <span className="text-[10px] text-gray-400">
+                  {weeklyTotal.toLocaleString()} device-days · peak {weeklyMax.toLocaleString()}
+                </span>
+              </div>
+              <ResponsiveContainer width="100%" height={100}>
+                <LineChart data={weekly}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                  <XAxis
+                    dataKey="week_start"
+                    tick={{ fontSize: 9, fill: '#9ca3af' }}
+                    tickFormatter={d => (d || '').slice(5)}
+                    interval={Math.max(0, Math.floor(weekly.length / 6) - 1)}
+                  />
+                  <YAxis tick={{ fontSize: 9, fill: '#fb7185' }} domain={[0, 'auto']} allowDecimals={false} />
+                  <Tooltip
+                    content={<ChartTooltip />}
+                    formatter={(v) => [`${v} device-days`, 'Wall hits']}
+                    labelFormatter={(l) => `Week of ${l}`}
+                  />
+                  <Line type="monotone" dataKey="exhausted" stroke="#f43f5e" strokeWidth={2} dot={{ r: 2 }} name="Wall hits" />
+                </LineChart>
+              </ResponsiveContainer>
+              <p className="text-[10px] text-gray-400 mt-1 text-center">
+                Durable — survives backend restarts. Each bucket sums device-days that hit the cap that ISO week.
+              </p>
+            </div>
+          );
+        })()}
+
         {/* By-hour heatmap (24 cells) */}
         <div className="rounded-xl p-3 bg-gray-50 border border-gray-100">
           <div className="flex items-center justify-between mb-2">

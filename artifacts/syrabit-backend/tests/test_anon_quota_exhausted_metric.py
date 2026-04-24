@@ -73,6 +73,11 @@ def _install_fake_redis(monkeypatch):
         # Task #808 — clear the per-event ring buffer too so tests
         # don't see stale events from a previous test's recordings.
         metrics._anon_exhaust_recent.clear()
+    # Task #809 — fakeredis instance is fresh per call, so the
+    # per-day aggregate hashes are already empty. We don't need to
+    # explicitly purge them; this comment exists so the next person
+    # adding state doesn't wonder why there's no `agg_hash.clear()`
+    # here.
     return fake
 
 
@@ -705,5 +710,217 @@ def test_admin_endpoint_exposes_recent_and_top_devices_flag(monkeypatch):
     r = client.get("/admin/chat/anon-quota-exhausted?days=7&recent_limit=0")
     assert r.status_code == 200, r.text
     assert r.json()["recent"] == []
+
+    app.dependency_overrides = {}
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Task #809 — durable per-day aggregate + weekly trend
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_record_persists_durable_daily_aggregate(monkeypatch):
+    """A successful `record_anon_quota_exhausted` must write through
+    to a per-day Redis HASH that survives gunicorn restarts. Without
+    this, the daily sparkline truncates after every deploy because
+    the in-memory rolling window is process-local. Pin both fields
+    (`events`, `unique`) and the TTL so the schema is intentional.
+    """
+    from datetime import datetime, timezone
+    fake = _install_fake_redis(monkeypatch)
+    metrics.record_anon_quota_exhausted(
+        "durable-1".ljust(32, "x"), ip="203.0.113.10",
+        plan_target="free", country="IN", asn="AS24560",
+    )
+    metrics.record_anon_quota_exhausted(
+        "durable-2".ljust(32, "x"), ip="203.0.113.11",
+        plan_target="free", country="IN", asn="AS24560",
+    )
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    key = f"chat:anon_exhausted_daily_agg:{today}"
+    raw = fake.hgetall(key)
+    # `decode_responses=True` so str-keys; both fields are present
+    # and `events` matches the count of distinct devices today.
+    assert int(raw.get("events") or 0) == 2, raw
+    assert int(raw.get("unique") or 0) == 2, raw
+    # TTL is set to ~13 months so quarterly capacity reviews work.
+    ttl = fake.ttl(key)
+    assert ttl > 350 * 86400, ttl
+    assert ttl <= 400 * 86400, ttl
+
+
+def test_record_dedupe_does_not_double_count_aggregate(monkeypatch):
+    """Repeated calls for the same (device, day) must not inflate the
+    durable aggregate — otherwise a hammering script that retries 100
+    times after the 429 would distort the cap-tuning numbers we just
+    spent a task ensuring are honest.
+    """
+    from datetime import datetime, timezone
+    fake = _install_fake_redis(monkeypatch)
+    token = "dedupe-1".ljust(32, "x")
+    for _ in range(5):
+        metrics.record_anon_quota_exhausted(
+            token, ip="203.0.113.10", plan_target="free",
+        )
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    raw = fake.hgetall(f"chat:anon_exhausted_daily_agg:{today}")
+    assert int(raw.get("events") or 0) == 1, raw
+    assert int(raw.get("unique") or 0) == 1, raw
+
+
+def test_stats_reads_persisted_aggregate_after_zset_expiry(monkeypatch):
+    """Simulate a gunicorn restart by clearing the in-memory window
+    AND deleting the 14-day zset, leaving only the durable per-day
+    aggregate. `get_anon_quota_exhausted_stats` must still surface
+    yesterday's numbers — that's the whole point of Task #809.
+    """
+    from datetime import datetime, timezone, timedelta
+    fake = _install_fake_redis(monkeypatch)
+    # Pre-seed the durable aggregate for yesterday and the day before
+    # (simulates a fleet that's been emitting the metric for a while
+    # before the current process started).
+    for n, count in [(1, 7), (2, 12)]:
+        d = (datetime.now(timezone.utc) - timedelta(days=n)).strftime("%Y-%m-%d")
+        key = f"chat:anon_exhausted_daily_agg:{d}"
+        fake.hset(key, mapping={"events": count, "unique": count})
+
+    # Wipe all in-memory state to simulate a fresh worker boot.
+    with metrics._anon_exhaust_lock:
+        metrics._anon_exhaust_window.clear()
+        metrics._anon_exhaust_recent.clear()
+        metrics._anon_exhaust_seen.clear()
+
+    stats = metrics.get_anon_quota_exhausted_stats(days=7)
+    by_date = {row["date"]: row["exhausted"] for row in stats["daily"]}
+    yday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    dby = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+    assert by_date.get(yday) == 7, stats
+    assert by_date.get(dby) == 12, stats
+    # Cross-check: the headline KPI sums across days.
+    assert stats["unique_devices_exhausted"] == 19, stats
+    # And the chart is correctly labelled as redis-backed (not the
+    # degraded memory_fallback that would render the warning banner).
+    assert stats["data_source"] == "redis"
+
+
+def test_weekly_trend_groups_days_by_iso_monday(monkeypatch):
+    """The weekly trend must bucket by ISO week (Monday-anchored UTC)
+    so `week_start` lines up with how the rest of the company already
+    talks about weeks. Empty weeks must come back as zero buckets so
+    the dashboard's x-axis stays evenly spaced.
+    """
+    from datetime import datetime, timezone, timedelta
+    fake = _install_fake_redis(monkeypatch)
+
+    # Seed daily aggregates: today + 8 days ago so we land in two
+    # different ISO weeks regardless of which weekday the test runs.
+    today = datetime.now(timezone.utc).date()
+    eight_days_ago = today - timedelta(days=8)
+    for d, n in ((today, 5), (eight_days_ago, 3)):
+        fake.hset(
+            f"chat:anon_exhausted_daily_agg:{d.strftime('%Y-%m-%d')}",
+            mapping={"events": n, "unique": n},
+        )
+
+    trend = metrics.get_anon_quota_exhausted_weekly_trend(weeks=4)
+    # 4 weekly buckets, regardless of how many had data.
+    assert len(trend) == 4, trend
+    # Sorted oldest-first.
+    assert trend == sorted(trend, key=lambda r: r["week_start"])
+    # Each row has the documented schema.
+    for row in trend:
+        assert set(row.keys()) >= {"week_start", "exhausted", "days_with_data"}
+    # The two seeded days land in (likely-different) weeks; their
+    # combined exhausted total across the trend must equal what we
+    # wrote — proving no double-counting and no silent dropping.
+    assert sum(r["exhausted"] for r in trend) == 8, trend
+
+
+def test_aggregate_dedupes_across_simulated_workers(monkeypatch):
+    """Multi-worker safety net: each gunicorn worker has its own
+    `_anon_exhaust_seen` set, so the in-memory dedupe doesn't
+    protect us across processes. We rely on Redis ZADD NX in
+    `record_anon_quota_exhausted` to keep the durable `events`
+    field from drifting upward when worker A and worker B both
+    record the same (token, day). Simulate this by clearing the
+    per-process seen-set between two record() calls — the wire
+    behaviour is the same as two workers each receiving the
+    request without prior knowledge of the device.
+    """
+    from datetime import datetime, timezone
+    fake = _install_fake_redis(monkeypatch)
+    token = "x" * 32
+
+    # Worker A processes the device's first wall-hit of the day.
+    metrics.record_anon_quota_exhausted(token, ip="203.0.113.30", plan_target="free")
+    # Simulate a different worker (no shared in-memory dedupe state)
+    # picking up the next request from the same device the same day.
+    with metrics._anon_exhaust_lock:
+        metrics._anon_exhaust_seen.clear()
+    metrics.record_anon_quota_exhausted(token, ip="203.0.113.30", plan_target="free")
+    # And once more for good measure (third "worker").
+    with metrics._anon_exhaust_lock:
+        metrics._anon_exhaust_seen.clear()
+    metrics.record_anon_quota_exhausted(token, ip="203.0.113.30", plan_target="free")
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    raw = fake.hgetall(f"chat:anon_exhausted_daily_agg:{today}")
+    # `events` MUST stay at 1 because the ZADD NX gate detected that
+    # the second and third calls did not introduce a new device.
+    # Without the NX gate this would be 3, which would inflate both
+    # the daily count and the 12-week trend in production.
+    assert int(raw.get("events") or 0) == 1, raw
+    assert int(raw.get("unique") or 0) == 1, raw
+
+    # And the headline KPI must agree (single device, regardless of
+    # how many workers saw it).
+    stats = metrics.get_anon_quota_exhausted_stats(days=1)
+    assert stats["unique_devices_exhausted"] == 1, stats
+
+
+def test_admin_endpoint_includes_weekly_trend(monkeypatch):
+    """Pin the wire contract: ``weekly_trend`` is always present (so
+    the dashboard never has to feature-flag the second sparkline) and
+    its ``weeks`` query param is honoured (clamped server-side).
+    """
+    from datetime import datetime, timezone
+    _install_fake_redis(monkeypatch)
+    pytest.importorskip("fastapi")
+    from fastapi import FastAPI  # noqa: E402
+    from fastapi.testclient import TestClient  # noqa: E402
+    from routes.admin_advanced import router as admin_router  # noqa: E402
+    from auth_deps import get_admin_user  # noqa: E402
+
+    app = FastAPI()
+    app.include_router(admin_router)
+    app.dependency_overrides[get_admin_user] = lambda: {"email": "admin@example.com"}
+    client = TestClient(app)
+
+    metrics.record_anon_quota_exhausted(
+        "weekly-1".ljust(32, "x"), ip="203.0.113.20", plan_target="free",
+    )
+
+    r = client.get("/admin/chat/anon-quota-exhausted?days=7&weeks=4")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "weekly_trend" in body
+    assert isinstance(body["weekly_trend"], list)
+    assert len(body["weekly_trend"]) == 4
+    for row in body["weekly_trend"]:
+        assert "week_start" in row
+        assert "exhausted" in row
+    # Today's recording should show up in the most-recent bucket.
+    assert body["weekly_trend"][-1]["exhausted"] >= 1
+
+    # Server-side clamp: ?weeks=999 must be capped at 52 (one year).
+    r = client.get("/admin/chat/anon-quota-exhausted?days=7&weeks=999")
+    assert r.status_code == 200, r.text
+    assert len(r.json()["weekly_trend"]) == 52
+
+    # Lower bound: weeks=0 must coerce up to 1 (never zero buckets).
+    r = client.get("/admin/chat/anon-quota-exhausted?days=7&weeks=0")
+    assert r.status_code == 200, r.text
+    assert len(r.json()["weekly_trend"]) == 1
 
     app.dependency_overrides = {}

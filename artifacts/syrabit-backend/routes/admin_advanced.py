@@ -1446,6 +1446,7 @@ async def admin_anon_quota_exhausted(
     recent_limit: int = 200,
     top_devices: bool = False,
     top_devices_n: int = 10,
+    weeks: int = 12,
     admin: dict = Depends(get_admin_user),
 ):
     """Task #798 + #808 — anonymous-quota exhaustion observability.
@@ -1489,12 +1490,20 @@ async def admin_anon_quota_exhausted(
         we don't want every page load paying for it.
     top_devices_n : int
         Cap for the leaderboard length when ``top_devices=true``.
+    weeks : int
+        Lookback (in ISO weeks, Monday-anchored UTC) for the
+        ``weekly_trend`` series powered by Task #809's durable
+        per-day aggregate. Default 12 (one quarter); server-clamped
+        to [1, 52]. Always present in the response — empty buckets
+        are pre-seeded with ``exhausted=0`` so the chart x-axis
+        stays regularly spaced.
     """
     from metrics import (
         get_anon_quota_exhausted_stats,
         backfill_anon_quota_exhausted_today,
         get_anon_quota_exhausted_recent,
         get_anon_quota_exhausted_top_devices,
+        get_anon_quota_exhausted_weekly_trend,
     )
     backfilled_today = 0
     if backfill:
@@ -1512,6 +1521,13 @@ async def admin_anon_quota_exhausted(
         payload["top_devices"] = get_anon_quota_exhausted_top_devices(
             days=days, top_n=top_devices_n,
         )
+    # Task #809 — durable weekly trend. Always emitted (with zero
+    # buckets pre-seeded) so the dashboard can render a stable
+    # 12-week sparkline regardless of recent activity. The data
+    # itself is read from Redis hashes that survive gunicorn
+    # restarts (TTL ~13 months), unlike the in-memory rolling
+    # window used by the daily series.
+    payload["weekly_trend"] = get_anon_quota_exhausted_weekly_trend(weeks=weeks)
     return payload
 
 
