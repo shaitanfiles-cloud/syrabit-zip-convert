@@ -1,5 +1,5 @@
 """Syrabit.ai — JWT helpers, authentication dependencies, and rate limiting."""
-import time, asyncio, logging
+import os, time, asyncio, logging
 from typing import Optional, List, Dict
 from datetime import datetime, timezone, timedelta
 from fastapi import Depends, HTTPException, Cookie, Request, Response
@@ -615,6 +615,15 @@ async def rate_limit_chat_optional(
 OCR_PER_MIN_CAP = 10            # per-device or per-IP per-minute cap on OCR calls.
 OCR_DAILY_CAP_ANON = 50         # per-device daily OCR cap for anonymous callers.
 OCR_DAILY_CAP_USER = 100        # per-user daily OCR cap for logged-in callers.
+# Per-IP daily OCR ceiling — separate bucket from the chat coarse cap
+# (``IP_COARSE_DAILY_CAP``) so OCR uploads do NOT eat into the per-IP
+# chat budget. Sized for shared egress IPs (school WiFi, hostel,
+# Jio/Airtel CGNAT): a class of ~100 students × 50 anon OCR/day each
+# fits comfortably under 5000/day. A single IP scripting thousands of
+# Vertex Vision calls still trips it, which is the only abuse case
+# the per-IP layer is meant to catch (per-device + per-minute caps
+# already handle real-user throttling).
+OCR_IP_DAILY_CAP = int(os.environ.get("OCR_IP_DAILY_CAP", "5000"))
 
 async def rate_limit_ocr_optional(
     request: Request,
@@ -687,19 +696,27 @@ async def rate_limit_ocr_optional(
             headers={"Retry-After": "60", "X-RateLimit-Limit": str(OCR_PER_MIN_CAP)},
         )
 
-    # 3. Coarse per-IP daily abuse cap (shared with chat — counts ALL
-    #    requests off the egress IP, so OCR abuse still trips it).
+    # 3. Per-IP daily OCR ceiling — uses a SEPARATE Redis bucket from
+    #    the chat coarse cap (``IP_COARSE_DAILY_CAP`` / ``ip_daily_credits:``)
+    #    so a busy classroom uploading photos doesn't drain the chat
+    #    quota for that same egress IP. Sized for shared NAT use
+    #    (~5000/day, see ``OCR_IP_DAILY_CAP`` constant). Falls back
+    #    open on Redis outage instead of blocking real users — abuse
+    #    is still bounded by the per-device + per-minute caps below.
     if ip and ip != "unknown":
-        from db_ops import atomic_deduct_ip_credit
-        if not atomic_deduct_ip_credit(ip, daily_limit=IP_COARSE_DAILY_CAP):
+        if not check_rate_limit(
+            f"ocr:ip:day:{ip}",
+            max_requests=OCR_IP_DAILY_CAP,
+            window_seconds=86400,
+        ):
             raise HTTPException(
                 status_code=429,
                 detail=(
-                    f"Daily request ceiling reached for this network "
-                    f"(>{IP_COARSE_DAILY_CAP} requests/day). Sign in or try again "
-                    "tomorrow — resets at midnight UTC."
+                    f"Daily OCR ceiling reached for this network "
+                    f"(>{OCR_IP_DAILY_CAP} uploads/day). Try again tomorrow — "
+                    "resets at midnight UTC."
                 ),
-                headers={"Retry-After": "3600", "X-RateLimit-Limit": str(IP_COARSE_DAILY_CAP)},
+                headers={"Retry-After": "3600", "X-RateLimit-Limit": str(OCR_IP_DAILY_CAP)},
             )
 
     # 4. Per-device daily OCR cap (separate from chat's 30/day budget —
