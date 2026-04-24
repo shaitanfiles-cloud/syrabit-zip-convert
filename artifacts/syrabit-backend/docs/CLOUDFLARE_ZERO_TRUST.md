@@ -605,6 +605,90 @@ counter on the first successful probe.
 | Ray ID                | Date         | Source            | Rule  | Action taken                                                                       |
 | --------------------- | ------------ | ----------------- | ----- | ---------------------------------------------------------------------------------- |
 | `9f14bccc891a6ebf`    | 2026-04-24   | `firewallManaged` | 949110 (OWASP Inbound Anomaly Score Exceeded) | Operator added a Managed-Rule override scoped to `http.host eq "syrabit.ai" and http.request.uri.path eq "/"` (per §8.4). cf-block-probe added so the next occurrence pages within 2 minutes instead of waiting for a user report. |
+| `9f1537aba88aaa6a` (+ same-day `9f14bccc891a6ebf` re-fire) | 2026-04-24 | `firewallManaged` | 949110 (OWASP Inbound Anomaly Score Exceeded) — `ruleId 6179ae15870a4bb7b2d480d4843b323c` | The path-scoped override added on the previous report was insufficient: a 24h `firewallEventsAdaptive` aggregation showed rule 949110 firing across **every** path (homepage, `/favicon.ico`, `/sw.js`, `/api/analytics/page-view`, `/api/content/library-bundle`, every `/degree/...` page) for IN/Bharti-Airtel desktop Chrome traffic — i.e. it is the OWASP Core "anomaly score exceeded" trip-rule and the false positive is paranoia-level wide, not request-shape narrow. Task #825: globally disabled rule 949110 inside the OWASP binding via the new orchestrator at `scripts/cf_waf_override.py step3` (see §8.7). The underlying CRS detections still run and are scored — only the threshold-trip rule is muted, so genuine attack patterns are still caught by the higher-severity OWASP rules and by the Cloudflare Managed Ruleset. Bot-management rule `874a3e315c344b1281ad4f00046aab6f` ("manage definite bots") was also observed `managed_challenge`-ing legitimate `/api/content/library-bundle` and `/api/seo/sitemap-*.xml` requests in the same window — tracked separately, **not** addressed here. |
+
+### 8.7 Orchestrator script — `scripts/cf_waf_override.py`
+
+The runbook curl recipes in §8.4 work but they leave no audit trail of
+the pre-change action of each rule, which makes the "restore to
+Execute (Block)" step in §8.5 fragile. Task #825 added a Python
+orchestrator that wraps the same Cloudflare Ruleset API calls,
+remembers the original action of every binding it touches, and
+exposes idempotent subcommands for the full incident workflow:
+
+```sh
+export CF_WAF_OVERRIDE_TOKEN=<scoped-token>   # see token reqs below
+export CF_ZONE_ID=<zone-hex>                  # already in the env
+
+# read-only — safe at any time, prints every binding + override
+python artifacts/syrabit-backend/scripts/cf_waf_override.py status
+
+# Step 0 — flip Cloudflare Managed + OWASP bindings to action=log so
+# the site is reachable within ~30s. Saves originals to
+# scripts/cf_waf_override_state.json so step6 can restore.
+python artifacts/syrabit-backend/scripts/cf_waf_override.py step0
+
+# Step 3 — disable the offending OWASP rule (defaults to 949110;
+# pass --rule-id <hex> for any other rule).
+python artifacts/syrabit-backend/scripts/cf_waf_override.py step3
+
+# Step 4 — change the "Leaked credential check" rate-limit rule from
+# action=block to action=managed_challenge.
+python artifacts/syrabit-backend/scripts/cf_waf_override.py step4
+
+# Step 6 — restore the entrypoint bindings flipped in step0 back to
+# action=execute (read from the state file).
+python artifacts/syrabit-backend/scripts/cf_waf_override.py step6
+
+# Re-verify: the OWASP binding should show the new override row in
+# action_parameters.overrides.rules, and both bindings should be
+# action=execute again.
+python artifacts/syrabit-backend/scripts/cf_waf_override.py status
+```
+
+Every mutating subcommand accepts `--dry-run` to print the intended
+PATCH body without sending it. The state file
+`scripts/cf_waf_override_state.json` is the source of truth for
+rollback — keep it in source control if you want the rollback to be
+possible from a fresh checkout, or just leave it on the operator
+laptop that ran step0.
+
+**Rollback subcommands** (always available, regardless of whether
+step6 was run):
+
+```sh
+# Re-enable the rule disabled by step3
+python artifacts/syrabit-backend/scripts/cf_waf_override.py rollback3
+
+# Restore the rate-limit rule's original action (block, in our case)
+python artifacts/syrabit-backend/scripts/cf_waf_override.py rollback4
+```
+
+#### 8.7.1 Required token scope (re-read this before §8.4 too)
+
+The Cloudflare Ruleset API requires **Account-level** scope to PATCH
+zone-phase rulesets — `Zone:Read` alone is not enough, and none of
+the existing tokens on this project (analytics token, Pages token,
+default API token) has it. Mint a new token at Cloudflare → My
+Profile → API Tokens with **all of**:
+
+| Scope        | Resource  | Permission |
+| ------------ | --------- | ---------- |
+| Zone         | Zone      | Read       |
+| Zone         | WAF       | Edit       |
+| Account      | Rulesets  | Edit       |
+| Zone         | Analytics | Read       |
+
+Restrict to:
+- Account → the syrabit Cloudflare account
+- Zone resources → `syrabit.ai` only
+
+Store the value as the secret `CF_WAF_OVERRIDE_TOKEN`. The orchestrator
+also accepts the legacy `CLOUDFLARE_API_TOKEN` env name as a fallback,
+but only do this if you are **rotating** the existing
+`CLOUDFLARE_API_TOKEN` secret to the new scoped value — do not paste
+the new token over the analytics-only one if anything else still
+expects analytics-only behaviour from `CLOUDFLARE_API_TOKEN`.
 
 ## 9. What is **not** in scope here
 
