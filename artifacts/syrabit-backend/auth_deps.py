@@ -487,9 +487,9 @@ async def rate_limit_chat_optional(
             raise HTTPException(
                 status_code=429,
                 detail=(
-                    f"Hourly request ceiling reached for this network "
+                    f"Daily request ceiling reached for this network "
                     f"(>{IP_COARSE_DAILY_CAP} requests/day). Sign in or try again "
-                    "later — resets at midnight UTC."
+                    "tomorrow — resets at midnight UTC."
                 ),
                 headers={"Retry-After": "3600", "X-RateLimit-Limit": str(IP_COARSE_DAILY_CAP)},
             )
