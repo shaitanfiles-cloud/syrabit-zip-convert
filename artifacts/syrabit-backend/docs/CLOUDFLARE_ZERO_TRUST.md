@@ -882,6 +882,10 @@ etc.) pages immediately rather than waiting for the next user
 report. Output is line-per-invariant `[PASS]` / `[FAIL]` / `[SKIP]`,
 suitable for pasting into incident tickets.
 
+The cron is wired up by the GitHub Actions workflow
+`.github/workflows/cf-waf-drift-daily.yml` (Task #828). See §8.7.7
+for setup and the alert-routing contract.
+
 **Archived `verify` output, Task #825 close-out (2026-04-24, immediately
 after step6):**
 
@@ -1054,8 +1058,11 @@ already includes that scope; no separate token needed).
 Wire `aggregate` into the same daily cron as `verify` so a
 regression (e.g. someone deletes the Skip rule from the dashboard
 and the bot rule starts challenging `/api/*` again) pages within
-24 h instead of waiting for a user report. Recommended cron line
-(check exit code; alert on non-zero):
+24 h instead of waiting for a user report. The cron is wired up by
+the GitHub Actions workflow `.github/workflows/cf-waf-drift-daily.yml`
+(Task #828) — see §8.7.7 for setup. The plain-cron form (kept here
+for an out-of-band operator who needs to mirror the same gate from a
+host without GitHub Actions access) is:
 
 ```cron
 17 4 * * *  cd /opt/syrabit-backend && \
@@ -1080,6 +1087,107 @@ and the bot rule starts challenging `/api/*` again) pages within
    or fix the Skip rule's deployed-ruleset-id mapping (if every
    exempt path is still firing — usually means the Skip rule was
    keyed off the binding id instead of the deployed-ruleset id).
+
+#### 8.7.7 Daily drift detection workflow — `cf-waf-drift-daily` (Task #828)
+
+The §8.7.4 (`verify`) and §8.7.6 (`aggregate`) gates were both
+operator-driven until Task #828. Drift introduced via the Cloudflare
+dashboard (a teammate re-enabling 949110, deleting the bot-skip Skip
+rule, demoting the leaked-credential rate-limit rule back to `block`,
+etc.) used to surface only when a user complained. The GitHub Actions
+workflow `.github/workflows/cf-waf-drift-daily.yml` runs both gates
+once per day in production and pages on-call within 24 h instead.
+
+**What it runs**
+
+- `python3 scripts/cf_waf_override.py verify` — full 5-invariant
+  check from §8.7.4.
+- `python3 scripts/cf_waf_override.py aggregate
+  --rule-id 874a3e315c344b1281ad4f00046aab6f --hours 24` — the
+  path-aware 24h post-fix gate from §8.7.6.
+
+The job intentionally captures both exit codes before deciding
+whether to fail (`set +e` + `${PIPESTATUS[0]}`), so a single Slack
+alert carries both outputs rather than masking the second signal
+when the first fails.
+
+**Cadence and cron offset**
+
+`schedule: 47 4 * * *` (04:47 UTC daily). Offset off both
+`edge-cache-live` (03:17 UTC) and `trustpilot-aggregate-refresh`
+(04:30 UTC) so a Slack burst from one workflow doesn't bury this
+one, and away from the top-of-hour GitHub cron stampede. Manual
+runs via `workflow_dispatch` accept overrides for `--hours` and
+`--rule-id` (used when verifying a future Task #82x exemption
+without editing the workflow file).
+
+**Required repo secrets**
+
+| Secret                       | Required | Notes                                                                                          |
+| ---------------------------- | -------- | ---------------------------------------------------------------------------------------------- |
+| `CF_WAF_OVERRIDE_TOKEN`      | yes      | Same scoped token §8.7 documents (Zone:Read + WAF:Edit + Account Rulesets:Edit + Zone Analytics:Read). |
+| `CF_ZONE_ID`                 | yes      | syrabit.ai zone id — same value the analytics setup already uses.                              |
+| `CF_WAF_DRIFT_SLACK_WEBHOOK` | optional | Slack incoming-webhook URL. When unset, the job still fails on drift but no Slack post is made. |
+
+Add them in Settings → Secrets and variables → Actions on the
+GitHub repository. The "Guard required secrets" step in the
+workflow fails fast with a clear annotation if either of the two
+required secrets is missing, instead of bottoming out as an opaque
+401 from Cloudflare.
+
+**Alerting contract**
+
+- **Success path:** both subcommands exit 0. The job posts no
+  Slack message and ends green. `::notice` annotations record
+  "all 5 invariants hold" and "fix held" so a successful run is
+  still inspectable in the Actions UI without producing inbox
+  spam.
+- **Drift path:** if `verify` rc != 0 (drift) OR `aggregate` rc
+  != 0 (rc 1 = drift on exempt path; rc 2 = transient CF GraphQL
+  / config error), the workflow posts a single Slack message to
+  `CF_WAF_DRIFT_SLACK_WEBHOOK` containing both exit codes, the
+  last 1500 chars of each subcommand's stdout, and a deep link
+  to the GitHub Actions run. The job then fails its final step,
+  so GitHub's built-in failed-workflow email goes to repo admins
+  as a secondary signal even when Slack is misconfigured.
+- **Slack misconfigured:** the Slack step logs a `::warning::`
+  and exits 0; the job still fails on the final step, so the
+  GitHub failed-workflow email path is preserved as a fallback.
+- **Transient errors (`aggregate` rc=2):** treated as a failure
+  on purpose. A repeated rc=2 across consecutive days is the only
+  way to distinguish a CF API outage from a misconfigured token
+  — masking it would let token-rotation drift sit silently.
+
+**Manual smoke test before relying on it**
+
+After adding the secrets, trigger the workflow manually from the
+Actions tab once to confirm:
+
+1. The "Guard required secrets" step passes.
+2. `verify` prints all 5 `[PASS]` lines (matches the §8.7.4
+   archived steady state).
+3. `aggregate` prints "Fix held: zero challenge-style events on
+   exempt paths …" or "0 events matched. Fix held." (matches the
+   §8.7.6 success contract).
+4. The job ends green with no Slack message.
+
+To smoke-test the alert path itself without disturbing
+production, run the workflow with a deliberately unrelated
+`--rule-id` override that has zero events: this still exits 0,
+so the Slack code path stays exercise-via-rollback (e.g.
+temporarily disable the bot-skip rule in a staging zone with the
+same shape, then re-run); do **not** flip a real production
+invariant to test the alert.
+
+**Rollback**
+
+If the daily run is producing false positives (e.g. during a
+planned dashboard change), disable the schedule by editing the
+`on.schedule` block out of the workflow file or by toggling the
+workflow off in the Actions tab. The job's `workflow_dispatch`
+trigger remains available for ad-hoc verification while the
+schedule is off. Re-enable as soon as the planned change is
+re-snapshotted into §8.7.4.
 
 ## 9. What is **not** in scope here
 
