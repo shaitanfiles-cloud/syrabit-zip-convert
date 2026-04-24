@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi, Copy, Check, Users, Activity, MessageSquare, TrendingUp, DollarSign, BarChart2, RotateCw, Clock, Undo2, Star, ExternalLink } from 'lucide-react';
 import CronHealthPill from './CronHealthPill';
 import CfWafDriftCronPill from './CfWafDriftCronPill';
+import TrustpilotRefreshCronPill from './TrustpilotRefreshCronPill';
 import { toast } from 'sonner';
 import AdminQuickLinks from './AdminQuickLinks';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar, LineChart, Line } from 'recharts';
@@ -2171,38 +2172,20 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           the existing Trustpilot data tile so admins can spot a silent
           cron at a glance instead of waiting for the email. Endpoint
           shape comes from /admin/health/trustpilot/refresh-cron (Task
-          #751). Task #835 — the visual pill is now the shared
-          <CronHealthPill> component; this block only supplies the
-          per-cron config.
+          #751). Task #835 — the visual pill is the shared
+          <CronHealthPill> component. Task #838 — the configuration
+          (header text per status, two-line success/any heartbeat
+          caption, default workflow URL) was extracted into
+          <TrustpilotRefreshCronPill> so its colour mapping and
+          dual-heartbeat caption can be unit-tested in isolation
+          (see TrustpilotRefreshCronPill.test.jsx). testId moved from
+          "trustpilot-cron" to "trustpilot-refresh-cron" to align
+          with the cf-waf-drift pill's naming convention.
         */}
-        <CronHealthPill
+        <TrustpilotRefreshCronPill
           data={tpCronHealth}
           loading={tpCronLoading}
           onRefresh={loadTpCronHealth}
-          testId="trustpilot-cron"
-          defaultWorkflowUrl="https://github.com/syrabit/syrabit/actions/workflows/trustpilot-aggregate-refresh.yml"
-          headerTextByStatus={{
-            healthy: 'Trustpilot refresh cron — checking in',
-            silent: 'Trustpilot refresh cron — silent',
-            degraded: 'Trustpilot refresh cron — last run failed',
-            never_observed: 'Trustpilot refresh cron — no heartbeat yet',
-            not_configured: 'Trustpilot refresh cron — not configured',
-            unknown: 'Trustpilot refresh cron — status unknown',
-          }}
-          renderSubText={({ data, ageLabel: fmt }) => {
-            const successLbl = fmt(data?.lastSuccessHeartbeatAgeSeconds);
-            const anyLbl = fmt(data?.lastHeartbeatAgeSeconds);
-            return (
-              <>
-                {successLbl
-                  ? `Last successful heartbeat ${successLbl} ago`
-                  : 'No successful heartbeat recorded'}
-                {anyLbl && (!successLbl || anyLbl !== successLbl)
-                  ? ` · last heartbeat (any) ${anyLbl} ago`
-                  : ''}
-              </>
-            );
-          }}
         />
         </SectionErrorBoundary>
 
