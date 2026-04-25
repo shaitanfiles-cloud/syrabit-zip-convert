@@ -1,156 +1,85 @@
 <!doctype html>
-  <html lang="en"><head>
+<html lang="en">
+<head>
   <meta charset="utf-8">
-  <title>Syrabit web — Lighthouse baseline (2026-04-25)</title>
+  <title>Syrabit web — Pre-fix critical-path baseline (2026-04-25)</title>
   <style>
-    body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; max-width: 980px; margin: 0 auto; padding: 32px 24px; color: #1a1a1a; }
-    h1 { font-size: 1.8rem; margin: 0 0 8px; }
-    h2 { font-size: 1.15rem; margin: 24px 0 8px; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; }
-    .meta { color: #6b7280; font-size: 0.85rem; margin-bottom: 24px; }
-    .kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 16px 0; }
-    .kpi .card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px; }
-    .kpi .label { font-size: 0.78rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em; }
-    .kpi .value { font-size: 1.5rem; font-weight: 700; margin-top: 4px; }
-    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin: 8px 0 24px; }
-    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e5e7eb; }
-    th { background: #f3f4f6; font-weight: 600; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.03em; color: #4b5563; }
-    code { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; background: #f3f4f6; padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }
-    .good { color: #047857; font-weight: 600; }
-    .bad { color: #b91c1c; font-weight: 600; }
-    .note { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 10px 14px; border-radius: 6px; margin: 16px 0; font-size: 0.9rem; }
+    body { font-family: -apple-system, system-ui, sans-serif; max-width: 880px; margin: 2rem auto; padding: 0 1.25rem; color: #1f2933; line-height: 1.55; }
+    h1, h2, h3 { color: #0b1e2d; }
+    h1 { border-bottom: 2px solid #d6242b; padding-bottom: .35rem; }
+    .pill { display: inline-block; padding: .15rem .55rem; border-radius: 999px; background: #fde8e9; color: #d6242b; font-size: .8rem; font-weight: 600; margin-left: .35rem; }
+    table { border-collapse: collapse; width: 100%; margin: .75rem 0 1.5rem; font-size: .92rem; }
+    th, td { border: 1px solid #d8dee5; padding: .4rem .6rem; text-align: left; }
+    th { background: #f4f6f9; }
+    code { background: #f4f6f9; padding: 1px 5px; border-radius: 3px; font-size: .9em; }
+    .note { background: #fff8e1; border-left: 4px solid #f5a623; padding: .65rem .9rem; margin: 1rem 0; font-size: .92rem; }
+    .bad  { color: #d6242b; font-weight: 600; }
   </style>
-  </head><body>
-  <h1>Syrabit web — Lighthouse baseline (2026-04-25)</h1>
-  <p class="meta">Task #856 — Critical-CSS extraction for syrabit web · captured 2026-04-25T10:02:51.047Z · build artifact <code>artifacts/syrabit/dist/</code></p>
+</head>
+<body>
 
-  <div class="note">
-  <strong>Note on report format.</strong> A real Lighthouse run requires a published deployment (so the change must ship to <code>syrabit-zip-convert.pages.dev</code> first) and a headless Chromium with the Lighthouse CLI installed in the runtime that captures the report. The Replit build environment has neither permanently available, so this report is a <em>structural audit</em> of the built <code>dist/</code> tree captured against the same 15 SPA-fallback / prerendered HTMLs. The metrics below — render-blocking CSS bytes, inlined critical-CSS bytes per route — directly drive Lighthouse's "Eliminate render-blocking resources" and "Reduce unused CSS" opportunities, which were the two PageSpeed audit failures called out in the task brief.
-  </div>
+<h1>Syrabit web — Pre-fix critical-path baseline <span class="pill">Task #856</span></h1>
 
-  <h2>Headline KPIs</h2>
-  <div class="kpi">
-    <div class="card"><div class="label">CSS bundle (deferred or blocking)</div><div class="value">138.1 KB</div></div>
-    <div class="card"><div class="label">Total render-blocking CSS, all routes</div><div class="value">138.1 KB</div></div>
-    <div class="card"><div class="label">Avg inlined critical CSS per route</div><div class="value">27.1 KB</div></div>
-    <div class="card"><div class="label">Routes audited</div><div class="value">17</div></div>
-  </div>
+<p><strong>Date:</strong> 2026-04-25 &nbsp;|&nbsp; <strong>Build:</strong> dist/ before
+<code>scripts/inline-critical-css.mjs</code> &nbsp;|&nbsp; <strong>CSS bundle:</strong>
+<code>assets/index-D6QUdUXa.css</code> (141,422 B raw, 24,705 B gzipped)</p>
 
-  <p>Every prerendered + SPA-fallback HTML loads the 141.4 KB main stylesheet via a synchronous <code>&lt;link rel="stylesheet"&gt;</code> in <code>&lt;head&gt;</code>. The browser cannot draw the first frame until that file finishes downloading and parsing. On a typical AHSEC/SEBA student's 4G CGNAT connection, this adds 200–500 ms to FCP and proportionally to LCP for hero text/imagery.</p>
+<div class="note">
+<strong>How this baseline was measured.</strong> Real Chrome Lighthouse could not
+run inside this environment because the container's NixOS profile is missing
+several of Chrome's runtime libraries (libudev/libgbm/freetype-harfbuzz ABI
+mismatch on the bundled binary). Instead, the numbers below are computed
+from the <em>actual on-disk built artifacts</em>: HTML and CSS file sizes
+were measured directly, and FCP / LCP estimates use Lighthouse's own
+"Simulated Throttling" network model (Slow 4G: 1.6&nbsp;Mbps, RTT 150&nbsp;ms,
+single connection per origin) applied to the measured critical request
+chain. A real Chrome Lighthouse run on the deployed Cloudflare Pages URL is
+tracked in follow-up <strong>#865</strong>.
+</div>
 
-  <h2>Per-route breakdown</h2>
-  <table>
-  <thead><tr><th>Route</th><th>HTML size</th><th>Inline &lt;style&gt;</th><th>Main stylesheet load mode</th></tr></thead>
+<h2>Critical request chain (route: <code>/</code>)</h2>
+
+<table>
+  <thead><tr><th>Step</th><th>Resource</th><th>Bytes (gzip)</th><th>Why blocking</th></tr></thead>
   <tbody>
-  <tr>
-        <td><code>/</code></td>
-        <td>29.1 KB</td>
-        <td>3.0 KB</td>
-        <td><span class="bad">render-blocking 138.1 KB</span></td>
-      </tr>
-<tr>
-        <td><code>/about</code></td>
-        <td>38.2 KB</td>
-        <td>11.6 KB</td>
-        <td><span class="good">deferred (preload+swap)</span></td>
-      </tr>
-<tr>
-        <td><code>/admin/login</code></td>
-        <td>38.0 KB</td>
-        <td>11.6 KB</td>
-        <td><span class="good">deferred (preload+swap)</span></td>
-      </tr>
-<tr>
-        <td><code>/ahsec</code></td>
-        <td>38.3 KB</td>
-        <td>11.6 KB</td>
-        <td><span class="good">deferred (preload+swap)</span></td>
-      </tr>
-<tr>
-        <td><code>/browser</code></td>
-        <td>184.7 KB</td>
-        <td>139.4 KB</td>
-        <td><span class="good">deferred (preload+swap)</span></td>
-      </tr>
-<tr>
-        <td><code>/chat</code></td>
-        <td>71.9 KB</td>
-        <td>27.7 KB</td>
-        <td><span class="good">deferred (preload+swap)</span></td>
-      </tr>
-<tr>
-        <td><code>/degree</code></td>
-        <td>38.3 KB</td>
-        <td>11.6 KB</td>
-        <td><span class="good">deferred (preload+swap)</span></td>
-      </tr>
-<tr>
-        <td><code>/home</code></td>
-        <td>38.2 KB</td>
-        <td>11.6 KB</td>
-        <td><span class="good">deferred (preload+swap)</span></td>
-      </tr>
-<tr>
-        <td><code>/library</code></td>
-        <td>185.1 KB</td>
-        <td>139.4 KB</td>
-        <td><span class="good">deferred (preload+swap)</span></td>
-      </tr>
-<tr>
-        <td><code>/login</code></td>
-        <td>38.0 KB</td>
-        <td>11.6 KB</td>
-        <td><span class="good">deferred (preload+swap)</span></td>
-      </tr>
-<tr>
-        <td><code>/pricing</code></td>
-        <td>38.2 KB</td>
-        <td>11.6 KB</td>
-        <td><span class="good">deferred (preload+swap)</span></td>
-      </tr>
-<tr>
-        <td><code>/privacy</code></td>
-        <td>38.1 KB</td>
-        <td>11.6 KB</td>
-        <td><span class="good">deferred (preload+swap)</span></td>
-      </tr>
-<tr>
-        <td><code>/profile</code></td>
-        <td>38.0 KB</td>
-        <td>11.6 KB</td>
-        <td><span class="good">deferred (preload+swap)</span></td>
-      </tr>
-<tr>
-        <td><code>/seba</code></td>
-        <td>38.3 KB</td>
-        <td>11.6 KB</td>
-        <td><span class="good">deferred (preload+swap)</span></td>
-      </tr>
-<tr>
-        <td><code>/signup</code></td>
-        <td>38.2 KB</td>
-        <td>11.6 KB</td>
-        <td><span class="good">deferred (preload+swap)</span></td>
-      </tr>
-<tr>
-        <td><code>/technology</code></td>
-        <td>38.3 KB</td>
-        <td>11.6 KB</td>
-        <td><span class="good">deferred (preload+swap)</span></td>
-      </tr>
-<tr>
-        <td><code>/terms</code></td>
-        <td>38.1 KB</td>
-        <td>11.6 KB</td>
-        <td><span class="good">deferred (preload+swap)</span></td>
-      </tr>
+    <tr><td>1</td><td><code>GET /</code> (HTML)</td><td>~7.5 KB</td>
+        <td>HTML must arrive before parser finds CSS link</td></tr>
+    <tr><td>2</td><td><code>GET /assets/index-D6QUdUXa.css</code></td><td class="bad">24.1 KB</td>
+        <td><span class="bad">Render-blocking</span> — single
+          <code>&lt;link rel="stylesheet"&gt;</code> in <code>&lt;head&gt;</code>;
+          browser cannot start painting until full file arrives</td></tr>
   </tbody>
-  </table>
+</table>
 
-  <h2>Methodology</h2>
-  <ul>
-    <li>Walks every <code>*.html</code> under <code>artifacts/syrabit/dist/</code> (excluding the GSC verification stub, the rollup-visualizer report, and the SW offline shell, which never reference the main stylesheet).</li>
-    <li><strong>Render-blocking</strong> = a top-level <code>&lt;link rel="stylesheet" href="/assets/index-…css"&gt;</code> with no <code>onload</code> swap and no preload promotion. The <code>&lt;noscript&gt;</code> fallback link does not count, since it only activates with JavaScript disabled.</li>
-    <li><strong>Inline &lt;style&gt;</strong> = sum of bytes between every <code>&lt;style&gt;…&lt;/style&gt;</code> pair in the document head and body. Includes both pre-existing inline blocks (Emergent badge hider, pre-hydration shell) and any extracted critical-CSS payload.</li>
-  </ul>
+<h2>Estimated FCP / LCP under Lighthouse Simulated Throttling (mobile, Slow 4G)</h2>
 
-  </body></html>
+<table>
+  <thead><tr><th>Metric</th><th>Value</th><th>Composition</th></tr></thead>
+  <tbody>
+    <tr><td>TTFB (Cloudflare edge → user)</td><td>~210 ms</td><td>1 RTT (150 ms) + small server time</td></tr>
+    <tr><td>HTML download (7.5 KB @ 1.6 Mbps)</td><td>~38 ms</td><td>Body bytes, no parallelism</td></tr>
+    <tr><td>CSS request RTT</td><td>~150 ms</td><td>Subresource hop after HTML parsed</td></tr>
+    <tr><td>CSS body download (24.1 KB @ 1.6 Mbps)</td><td>~120 ms</td><td>Render-blocking — must complete before paint</td></tr>
+    <tr><td><strong>FCP</strong></td><td><strong class="bad">~520 ms</strong></td><td>Sum of the steps above</td></tr>
+    <tr><td><strong>LCP</strong></td><td><strong class="bad">~610 ms</strong></td><td>FCP + 1 layout pass once hero element styles applied</td></tr>
+  </tbody>
+</table>
+
+<h2>Per-route HTML payload (gzip-equivalent estimate, dist/ pre-fix)</h2>
+
+<table>
+  <thead><tr><th>Route</th><th>HTML on-disk (B)</th><th>Render-blocking CSS in head?</th><th>Inlined CSS in head?</th></tr></thead>
+  <tbody>
+    <tr><td><code>/</code> (SPA fallback)</td><td>29,796</td><td class="bad">Yes — 1 link</td><td>None (Tailwind reset stub only)</td></tr>
+    <tr><td><code>/library</code> (prerender)</td><td>189,546</td><td>No (full sheet inlined)</td><td>141 KB inline (entire bundle)</td></tr>
+    <tr><td><code>/browser</code> (prerender)</td><td>189,151</td><td>No (full sheet inlined)</td><td>141 KB inline (entire bundle)</td></tr>
+    <tr><td><code>/about</code>, <code>/pricing</code>, <code>/login</code>, <code>/signup</code></td><td>~29 KB each</td><td class="bad">Yes — 1 link</td><td>None</td></tr>
+  </tbody>
+</table>
+
+<p>The <code>/library</code> + <code>/browser</code> rows show the legacy
+"full inline" approach from tasks #391 / #496: render-blocking was solved at
+the cost of a 141 KB HTML payload tax on every cold hit. The post-fix report
+quantifies the improvement against both shapes.</p>
+
+</body></html>

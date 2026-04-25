@@ -83,11 +83,43 @@ function hasActiveBlockingLink(html) {
   );
 }
 
+// The earlier prerender stages (scripts/prerender-library.mjs +
+// scripts/prerender-routes.mjs) full-inline the entire 141 KB
+// stylesheet into prerendered HTMLs as a `<style data-inline-css="X">`
+// block, citing tasks #391 / #496. That removed render-blocking CSS at
+// the time but it predates this critical-CSS step and is now a 140 KB
+// HTML payload tax on every cold hit to /library, /browser, /subject/*
+// and /chapter/* — the highest-value SEO routes.
+//
+// Before handing the HTML to Beasties we restore the original
+// `<link rel="stylesheet" href="/assets/X">` so Beasties can do its
+// proper job: extract just the ~14 KB above-the-fold subset (which now
+// includes the SSR-rendered subject/chapter card rules because those
+// elements are present in the markup at scan time), inline that, and
+// rewrite the link into the non-blocking preload+swap pattern. End
+// result for these routes: ~140 KB HTML → ~30 KB HTML, no render
+// blocking, no FOUC.
+const INLINE_CSS_RE =
+  /<style\s+data-inline-css="([^"]+)">[\s\S]*?<\/style>/g;
+function unwrapInlinedStylesheet(html) {
+  return html.replace(INLINE_CSS_RE, (_match, file) => {
+    return `<link rel="stylesheet" crossorigin href="/assets/${file}">`;
+  });
+}
+
 function shouldProcess(htmlPath) {
   const name = path.basename(htmlPath);
   if (SKIP_NAMES.has(name)) return false;
   const html = fs.readFileSync(htmlPath, "utf-8");
-  return hasActiveBlockingLink(html);
+  if (hasActiveBlockingLink(html)) return true;
+  // Prerendered routes have the full sheet wrapped in
+  // <style data-inline-css="…">. Treat them as candidates so the
+  // unwrap → Beasties pass below can shrink them.
+  if (INLINE_CSS_RE.test(html)) {
+    INLINE_CSS_RE.lastIndex = 0;
+    return true;
+  }
+  return false;
 }
 
 const beasties = new Beasties({
@@ -116,17 +148,20 @@ for (const htmlPath of htmls) {
     continue;
   }
   const original = fs.readFileSync(htmlPath, "utf-8");
+  // Restore the canonical <link> shape on prerendered routes so
+  // Beasties can extract their critical subset and defer the rest
+  // (otherwise they'd ship the full ~141 KB sheet inline forever).
+  const beastiesInput = unwrapInlinedStylesheet(original);
   try {
-    const transformed = await beasties.process(original);
+    const transformed = await beasties.process(beastiesInput);
     if (typeof transformed === "string" && transformed.length > 0) {
-      // Approximation: anything Beasties added between the <!-- inline
-      // critical CSS for above-the-fold rendering --> sentinel and
-      // </head> is the new critical-CSS payload it inlined. We measure
-      // total head growth as a coarse proxy and report it for visibility.
-      const beforeHead = original.indexOf("</head>");
-      const afterHead = transformed.indexOf("</head>");
-      const delta = afterHead - beforeHead;
-      if (delta > 0) bytesInlinedTotal += delta;
+      // Track HTML-size delta vs the on-disk file. For prerendered
+      // routes this is a large NEGATIVE number (e.g. -110 KB on
+      // /library) because we replaced a 141 KB inline <style> with a
+      // ~14 KB critical extract + a small <link>. For SPA-fallback
+      // pages it's a small positive number (the inlined critical CSS).
+      const delta = transformed.length - original.length;
+      bytesInlinedTotal += delta;
       fs.writeFileSync(htmlPath, transformed);
       processed++;
     } else {

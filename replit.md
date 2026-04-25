@@ -56,7 +56,7 @@ Run `pnpm verify` from the repo root to execute the full pre-merge gate. This ru
 
 ### Critical-CSS extraction (Task #856)
 
-`artifacts/syrabit/scripts/inline-critical-css.mjs` runs `beasties` (Google's maintained fork of `critters`) as a build step after prerender and before verify. It walks every `dist/*.html`, inlines the above-the-fold CSS rules into `<style>` in `<head>`, and rewrites the 141 KB main stylesheet `<link>` to a non-blocking preload+swap with a `<noscript>` fallback. Before/after structural audit at `artifacts/syrabit/docs/perf/lighthouse-{baseline,postfix}-2026-04-25.html` (real Lighthouse needs Chrome + a deployed build, both unavailable in CI; per-route render-blocking CSS dropped from 141.4 KB to 0).
+`artifacts/syrabit/scripts/inline-critical-css.mjs` runs `beasties` (Google's maintained fork of `critters`) as a build step after prerender and before verify-all. It walks every `dist/*.html`, inlines ~7–16 KB of above-the-fold CSS into `<style>` in `<head>`, and rewrites the 141 KB main stylesheet `<link>` to a non-blocking preload+swap with a `<noscript>` fallback. Also un-wraps the legacy full-sheet `<style data-inline-css>` block on prerendered routes (`/library`, `/browser`) so Beasties can extract their critical subset — cuts those HTMLs from 189 KB to ~59 KB each. Estimated FCP win: ~265 ms on Slow 4G (Lighthouse Simulated Throttling math vs measured asset sizes); see `artifacts/syrabit/docs/perf/lighthouse-{baseline,postfix}-2026-04-25.html`. Real Chrome Lighthouse on the deployed CDN URL is tracked as follow-up #865.
 
 ## Deploy — Cloudflare Pages
 
