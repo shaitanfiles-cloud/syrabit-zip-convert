@@ -115,7 +115,14 @@ Drive the syrabit-backend Railway service from this workspace via `pnpm run rail
 2. **Source-level revert (if rollback is not enough):** revert this commit (`git revert <sha>`), `pnpm --filter syrabit-edge install` (re-resolves to wrangler 3.114.x), then `wrangler deploy` from `workers/edge-proxy`. The pnpm-lock change is the only artefact — no `wrangler.toml` was modified, so a downgrade does not require config edits.
 3. **Smoke checks after rollback:** `curl https://api.syrabit.ai/api/health` (200), `curl -I https://syrabit.ai/` (Worker hits PAGES_ORIGIN), and tail `wrangler tail` for ~2 min to confirm no spike in 5xx/exception-class log lines. If the issue was binding-shaped, also `wrangler kv key list --binding=RATE_LIMIT --preview false | head` to confirm KV reads work.
 
-The actual `wrangler deploy` (preview + prod promote) is intentionally **not** run from this Replit env — the worker is on the hot path of every `syrabit.ai` request and `wrangler.toml` has no `[env.preview]` block, so any deploy here goes straight to prod. Operator with deploy credentials should run `wrangler deploy --dry-run` once more on their machine, then `wrangler deploy`, then watch `wrangler tail` for 10 min per the task's "Promote to prod" step.
+**Promote workflow (added by Task #872 — `[env.preview]` now exists):** the actual `wrangler deploy` (preview + prod promote) is intentionally **not** run from this Replit env. Operator with deploy credentials uses the four scripts in `workers/edge-proxy/package.json`:
+
+1. `pnpm --filter syrabit-edge run deploy:preview:dry` — schema check the preview env (no upload, no API call).
+2. `pnpm --filter syrabit-edge run deploy:preview` — publish to `syrabit-edge-preview.<account>.workers.dev` (separate Worker, no `syrabit.ai/*` routes, crons cleared, KV/D1 bindings isolated to the preview-tier IDs lifted from the prior `preview_id` fields).
+3. Smoke-test the preview hostname (`/api/health`, WAF-override path, rate-limit path, BOT_HTML_CACHE read/write); set per-env secrets first if missing — `wrangler secret put D1_SYNC_SECRET --env preview` etc., per the comment block in `workers/edge-proxy/wrangler.toml` § `[env.preview]`.
+4. `pnpm --filter syrabit-edge run deploy` — promote to prod (no `--env`, lands on the live routes), then `wrangler tail --format=pretty` for 10 min per the task #859 spec. Rollback per the procedure above (`wrangler rollback` for prod, `wrangler rollback --env preview` for preview — the two envs keep independent version histories).
+
+The preview Worker reuses the prod D1 (`syrabit-content`) by design — the only D1 write path (`POST /api/d1/sync`) is gated by `D1_SYNC_SECRET`, so leaving that secret unset on the preview env makes preview read-only against prod D1. KV bindings use the previously-unused `preview_id` namespaces (physically separate from prod KV, so preview rate-limit / BOT_HTML_CACHE writes cannot pollute prod state). Crons are explicitly disabled on preview (`[env.preview.triggers] crons = []`) so the synthetic probe and 6-hourly D1 sync only run from prod.
 
 ### AdminHealth cron-pill testId convention
 

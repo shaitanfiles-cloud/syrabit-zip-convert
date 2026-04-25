@@ -154,3 +154,93 @@ migrations_dir = "migrations"
 #
 #   "0 */6 * * *" → 6-hourly D1 content sync from the Railway backend.
 crons = ["* * * * *", "0 */6 * * *"]
+
+# ---------------------------------------------------------------------------
+# [env.preview] — non-prod safety net for infra changes (Task #872)
+# ---------------------------------------------------------------------------
+# Lands at https://syrabit-edge-preview.<account>.workers.dev (NOT on the
+# real syrabit.ai routes), so an operator can validate Wrangler bumps,
+# compatibility-date moves, binding additions, or src/index.ts refactors
+# without touching the hot-path Worker that fronts every syrabit.ai
+# request.
+#
+# How to use it:
+#   pnpm --filter syrabit-edge run deploy:preview:dry  # schema check only
+#   pnpm --filter syrabit-edge run deploy:preview      # publish to *.workers.dev
+#   curl https://syrabit-edge-preview.<account>.workers.dev/api/health
+#   # … smoke-test target paths against the preview hostname …
+#   pnpm --filter syrabit-edge run deploy              # promote to prod
+#
+# Rollback: `wrangler rollback --env preview` (the preview env keeps its
+# own version history independent of prod).
+#
+# wrangler v4 inheritance rules applied here (DO NOT casually change):
+#   - Top-level scalars (name, main, compatibility_date) ARE inherited
+#     unless overridden. We override `name` (separate Worker) and clear
+#     `routes` (preview must not bind to syrabit.ai/*).
+#   - [vars] block is NOT inherited (Wrangler v4 emits a WARNING if
+#     env.preview.vars is missing while top-level [vars] exists).
+#     Redeclared below with the same values; override individual keys
+#     here if pointing preview at staging.
+#   - Bindings ([ai], [[kv_namespaces]], [[d1_databases]]) are NOT
+#     inherited — redeclared below.
+#   - [triggers] IS inherited; explicitly cleared to [] so the preview
+#     Worker does NOT run the synthetic probe (which would page on a
+#     prod /admin/diagnostics outage from the preview hostname) or the
+#     6-hourly D1 sync (which writes to whatever D1 is bound below).
+#
+# Secrets are per-env in Wrangler v4 — none are inherited. Set them
+# separately when first deploying preview:
+#   wrangler secret put D1_SYNC_SECRET --env preview         # required for /api/d1/sync writes
+#   wrangler secret put BACKEND_ORIGIN_SECRET --env preview  # only if preview hits Cloud Run
+#   wrangler secret put EDGE_AI_FALLBACK_SECRET --env preview
+#   wrangler secret put KV_ALERT_SECRET --env preview        # optional
+# Synthetic-probe + cf-block-probe secrets are intentionally NOT set on
+# preview (probes are disabled via the empty crons above).
+#
+# D1 binding: reuses the prod database (`syrabit-content`) for now, which
+# is acceptable because (a) the read paths are identical and (b) the only
+# write path (`POST /api/d1/sync`) is gated by `D1_SYNC_SECRET` — leave
+# that secret unset on preview to make preview read-only against the prod
+# D1. If preview ever needs isolated D1 writes, provision a fresh
+# database from the operator's machine:
+#   pnpm dlx wrangler d1 create syrabit-content-preview
+#   pnpm dlx wrangler d1 migrations apply syrabit-content-preview --remote
+# then swap `database_id` below for the new ID.
+#
+# KV bindings: the IDs below are the existing `preview_id` values from
+# the top-level [[kv_namespaces]] entries. Those preview KV namespaces
+# were created when the prod ones were (`wrangler kv namespace create
+# … --preview`) and are physically separate from prod KV — so writes
+# from the preview Worker cannot pollute prod rate-limit or BOT_HTML_CACHE
+# state.
+[env.preview]
+name = "syrabit-edge-preview"
+workers_dev = true
+routes = []
+
+[env.preview.vars]
+BACKEND_URL = "https://workspacemockup-sandbox-production-df37.up.railway.app"
+PAGES_ORIGIN = "https://syrabit-zip-convert.pages.dev"
+
+[env.preview.triggers]
+crons = []
+
+[env.preview.ai]
+binding = "AI"
+
+[[env.preview.kv_namespaces]]
+binding = "RATE_LIMIT"
+id = "c7d531ef4b9a4cd980134251f5739556"
+preview_id = "c7d531ef4b9a4cd980134251f5739556"
+
+[[env.preview.kv_namespaces]]
+binding = "BOT_HTML_CACHE"
+id = "2c67fcc51dbf430391602e11d7a5e9fe"
+preview_id = "2c67fcc51dbf430391602e11d7a5e9fe"
+
+[[env.preview.d1_databases]]
+binding = "CONTENT_DB"
+database_name = "syrabit-content"
+database_id = "da5b5b9d-a8f9-43dd-bd23-a938f5c0cf69"
+migrations_dir = "migrations"

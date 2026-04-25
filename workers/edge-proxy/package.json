@@ -6,6 +6,9 @@
     "dev": "wrangler dev",
     "build": "echo 'syrabit-edge: no build step — wrangler bundles src/index.ts on deploy'",
     "deploy": "wrangler deploy",
+    "deploy:dry": "wrangler deploy --dry-run",
+    "deploy:preview": "wrangler deploy --env preview",
+    "deploy:preview:dry": "wrangler deploy --env preview --dry-run",
     "test": "vitest run",
     "d1:migrate:local": "wrangler d1 migrations apply syrabit-content --local",
     "d1:migrate:remote": "wrangler d1 migrations apply syrabit-content --remote"
