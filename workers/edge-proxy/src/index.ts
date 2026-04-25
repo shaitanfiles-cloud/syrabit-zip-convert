@@ -55,7 +55,7 @@ interface Env {
    */
   EDGE_AI_FALLBACK_SECRET?: string;
   /**
-   * Task #708 — synthetic external probe of /admin/diagnostics. See
+   * Task #708 — synthetic external probe of /api/admin/diagnostics. See
    * src/synthetic-probe.ts and docs/CLOUDFLARE_ZERO_TRUST.md §7.1 for
    * the full configuration matrix and the rotation procedure.
    */
@@ -2056,7 +2056,7 @@ export default {
     // choice.
     const cron = event.cron;
     if (cron === "* * * * *") {
-      // Task #708 — 1-minute synthetic probe of /admin/diagnostics.
+      // Task #708 — 1-minute synthetic probe of /api/admin/diagnostics.
       // Task #817 — same minute, also probe the public homepage from
       // outside the cluster to detect CF managed-rule / Bot Fight /
       // custom-firewall false positives that the admin probe is blind

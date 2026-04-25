@@ -48,7 +48,7 @@ describe("synthetic probe", () => {
     vi.unstubAllGlobals();
   });
 
-  it("hits ${BACKEND_URL}/admin/diagnostics with all required headers", async () => {
+  it("hits ${BACKEND_URL}/api/admin/diagnostics with all required headers", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(JSON.stringify({ ok: true }), { status: 200 }),
     );
@@ -58,7 +58,9 @@ describe("synthetic probe", () => {
     expect(res.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("https://backend.example.com/admin/diagnostics");
+    // Task #877 — must include the FastAPI `/api` prefix; bare
+    // `/admin/diagnostics` returns 404 in production.
+    expect(url).toBe("https://backend.example.com/api/admin/diagnostics");
     const headers = (init as RequestInit).headers as Record<string, string>;
     expect(headers["CF-Access-Client-Id"]).toBe("client-id");
     expect(headers["CF-Access-Client-Secret"]).toBe("client-secret");
@@ -129,7 +131,7 @@ describe("synthetic probe", () => {
     const body = JSON.parse(init.body as string);
     expect(body.alert_type).toBe("synthetic_probe_dark");
     expect(body.consecutive_failures).toBe(5);
-    expect(body.target_url).toBe("https://backend.example.com/admin/diagnostics");
+    expect(body.target_url).toBe("https://backend.example.com/api/admin/diagnostics");
   });
 
   it("respects watchdog cooldown (does not re-fire every minute while still failing)", async () => {

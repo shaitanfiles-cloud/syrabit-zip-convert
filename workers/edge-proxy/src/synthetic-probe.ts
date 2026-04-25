@@ -1,18 +1,19 @@
 /**
- * Task #708 — synthetic external probe for /admin/diagnostics.
+ * Task #708 — synthetic external probe for /api/admin/diagnostics.
  *
  * Why this exists
  * ---------------
- * Task #706 wired `/admin/diagnostics` into the alert pipeline so that when
- * Cloudflare Access enforcement flips off (or break-glass is left active),
- * a page fires through `metrics._dispatch_alert`. The catch: that paging
- * code path only runs when *something* actually calls `/admin/diagnostics`.
- * In a real outage no admin is going to be browsing the dashboard, so the
- * alert never fires and the team finds out the next morning.
+ * Task #706 wired `/api/admin/diagnostics` into the alert pipeline so that
+ * when Cloudflare Access enforcement flips off (or break-glass is left
+ * active), a page fires through `metrics._dispatch_alert`. The catch:
+ * that paging code path only runs when *something* actually calls
+ * `/api/admin/diagnostics`. In a real outage no admin is going to be
+ * browsing the dashboard, so the alert never fires and the team finds
+ * out the next morning.
  *
  * This module is a 1-minute synthetic monitor that runs inside the
- * `syrabit-edge` Worker (cron trigger) and hits `/admin/diagnostics` from
- * outside the cluster using a Cloudflare Access service token + a
+ * `syrabit-edge` Worker (cron trigger) and hits `/api/admin/diagnostics`
+ * from outside the cluster using a Cloudflare Access service token + a
  * long-lived admin JWT. Every minute the diagnostics paging logic gets a
  * fresh chance to fire — `admin_enforced=false` and `break_glass_active=true`
  * are detected within ~60s instead of "whenever an admin happens to look".
@@ -124,7 +125,16 @@ function resolveTargetUrl(env: SyntheticProbeEnv): string | null {
     return env.SYNTHETIC_PROBE_TARGET_URL.trim();
   }
   if (env.BACKEND_URL && env.BACKEND_URL.trim()) {
-    return env.BACKEND_URL.trim().replace(/\/+$/, "") + "/admin/diagnostics";
+    // The FastAPI router is mounted under the `/api` prefix
+    // (server.py: `api = APIRouter(prefix="/api")`), so the live
+    // diagnostics route is `/api/admin/diagnostics`. Hitting bare
+    // `/admin/diagnostics` returns 404 from the backend, which made
+    // every probe look like a failure and silently broke the
+    // watchdog (Task #877 — fixed the consecutive_failures runaway
+    // counter that hid this for ~56h). Do NOT drop the `/api`
+    // segment without first confirming the backend exposes a
+    // bare-root alias.
+    return env.BACKEND_URL.trim().replace(/\/+$/, "") + "/api/admin/diagnostics";
   }
   return null;
 }
@@ -148,10 +158,24 @@ async function fireWatchdog(
 ): Promise<boolean> {
   const webhook = env.SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL;
   if (!webhook) {
-    console.warn(
-      "[synthetic-probe] watchdog threshold reached but " +
-      "SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL is not configured — alert " +
-      "would have fired. consecutive_failures=" + state.consecutive_failures,
+    // ESCALATED to console.error (Task #877) — this is the "paging is
+    // dark" signal of last resort. If you are reading this in Workers
+    // logs, the synthetic probe has been failing for ≥threshold minutes
+    // AND the watchdog webhook is not configured, so nothing else is
+    // going to wake anyone up. Fix in this order:
+    //   1. Set the secret on the live worker:
+    //        wrangler secret put SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL
+    //      (Slack incoming-webhook URL or PagerDuty Events v2 endpoint.)
+    //   2. Investigate the underlying probe failure — see
+    //      docs/CLOUDFLARE_ZERO_TRUST.md §7.1 for the runbook.
+    console.error(
+      "[synthetic-probe] PAGING-DARK: watchdog threshold reached " +
+      `(consecutive_failures=${state.consecutive_failures}, ` +
+      `last_status=${state.last_status}, ` +
+      `target=${targetUrl}) but SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL ` +
+      "is NOT configured — no page will be sent. Fix: " +
+      "`wrangler secret put SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL` " +
+      "on the syrabit-edge worker. See docs/CLOUDFLARE_ZERO_TRUST.md §7.1.",
     );
     return false;
   }

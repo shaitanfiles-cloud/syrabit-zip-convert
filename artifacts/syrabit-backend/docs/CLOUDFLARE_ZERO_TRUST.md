@@ -75,7 +75,7 @@ any of these steps. Tick each item in the rollout ticket:
 - [ ] **Diagnostics confirms enforcement is on.** From an authenticated
   admin browser session:
   ```
-  GET https://api.syrabit.ai/admin/diagnostics
+  GET https://api.syrabit.ai/api/admin/diagnostics
   ```
   Response must include `"admin_enforced": true` and
   `"admin_aud_configured": true`. If `admin_enforced` is `false`,
@@ -234,7 +234,7 @@ curl -sS -H "X-Origin-Auth: $ORIGIN_SHARED_SECRET" \
 
 # 4. Enforcement state introspection (no auth required for the JSON
 #    body itself; reachable through the Access challenge in a browser)
-curl -sS https://api.syrabit.ai/admin/diagnostics | jq
+curl -sS https://api.syrabit.ai/api/admin/diagnostics | jq
 # expected (post-rollout):
 #   "admin_enforced": true,
 #   "admin_aud_configured": true,
@@ -295,7 +295,7 @@ FastAPI restart.
    the Worker flag; the admin JWT check still runs (so password and
    2FA still apply — break-glass is *not* an authentication bypass,
    only an *Access proxy* bypass).
-3. Confirm via `GET /admin/diagnostics` that the response shows
+3. Confirm via `GET /api/admin/diagnostics` that the response shows
    `"break_glass_active": true` and `"break_glass_source": "header"`.
    This object is the authoritative state — every CRITICAL log line
    tagged `BREAK-GLASS bypass active` is also the audit trail.
@@ -317,7 +317,7 @@ and reach `/admin/*` directly. Use this when path A is also blocked.
    variable is unset. Same diagnostics signal as above.
 3. Restore: delete `CF_ACCESS_BREAK_GLASS` and let the redeploy roll.
 
-**Paging:** `/admin/diagnostics` fires the
+**Paging:** `/api/admin/diagnostics` fires the
 `cf_access_break_glass_active` and `cf_access_admin_degraded` alert
 types through the existing notification pipeline whenever the snapshot
 is degraded on a production-provisioned environment. Subscribe the
@@ -327,7 +327,7 @@ disable the bypass once the outage is over.
 
 **Synthetic probe (Task #708 — required, ships in `syrabit-edge`):**
 The paging rule above only runs when something actually calls
-`/admin/diagnostics`. During a real outage no admin is browsing the
+`/api/admin/diagnostics`. During a real outage no admin is browsing the
 dashboard, so the alert never fires. The `syrabit-edge` Worker carries
 a 1-minute cron (`* * * * *`) that hits the diagnostics endpoint from
 outside the cluster using a CF Access service token + a long-lived
@@ -338,7 +338,7 @@ Configuration (Cloudflare dashboard → Workers & Pages →
 
 | Name                                       | Kind   | Purpose                                                                 |
 | ------------------------------------------ | ------ | ----------------------------------------------------------------------- |
-| `SYNTHETIC_PROBE_TARGET_URL`               | var    | Full URL to probe. Default: `${BACKEND_URL}/admin/diagnostics`.         |
+| `SYNTHETIC_PROBE_TARGET_URL`               | var    | Full URL to probe. Default: `${BACKEND_URL}/api/admin/diagnostics` (the `/api` prefix matches the FastAPI router mount in `server.py`; bare `/admin/diagnostics` returns 404 — Task #877). |
 | `SYNTHETIC_PROBE_CF_ACCESS_CLIENT_ID`      | secret | CF Access service token client id (`*.access`).                          |
 | `SYNTHETIC_PROBE_CF_ACCESS_CLIENT_SECRET`  | secret | CF Access service token secret.                                          |
 | `SYNTHETIC_PROBE_ADMIN_JWT`                | secret | Long-lived admin JWT signed with `ADMIN_JWT_SECRET` (1y exp, role=admin). |
@@ -376,7 +376,7 @@ curl 'http://localhost:8787/__scheduled?cron=*+*+*+*+*'
 
 # 2. From a personal laptop (NOT inside the worker), confirm the
 #    service token can reach diagnostics:
-curl -sS -i 'https://api.syrabit.ai/admin/diagnostics' \
+curl -sS -i 'https://api.syrabit.ai/api/admin/diagnostics' \
   -H "CF-Access-Client-Id: $SYNTHETIC_PROBE_CF_ACCESS_CLIENT_ID" \
   -H "CF-Access-Client-Secret: $SYNTHETIC_PROBE_CF_ACCESS_CLIENT_SECRET" \
   -H "Authorization: Bearer $SYNTHETIC_PROBE_ADMIN_JWT"
@@ -408,7 +408,7 @@ curl -sS -i 'https://api.syrabit.ai/admin/diagnostics' \
 If the team needs to take the probe down (e.g. extended planned
 maintenance), set `SYNTHETIC_PROBE_DISABLED=true` on the worker — this
 pauses the probe within ~10s without deleting any secrets. **Do not
-forget to flip it back**: a paused probe means `/admin/diagnostics`
+forget to flip it back**: a paused probe means `/api/admin/diagnostics`
 paging is dark.
 
 **What break-glass does NOT do:**
@@ -446,7 +446,7 @@ WAF console:
 | `alert_type`                    | What it means                                                                                                  | First step                                                                                                                       |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `cf_public_block_detected`      | Probe saw a Cloudflare-side mitigation: `cf-mitigated` header, a body marker, or a 403+empty+cf-ray response.   | Run §8.2 with the `last_ray_id` from the alert payload, then jump to §8.3 / §8.4 to apply the override.                          |
-| `public_homepage_probe_failed`  | Probe got a non-2xx that does NOT look like a CF block, or a network error. Likely an origin / DNS / CF outage. | Check Railway / Pages dashboards, the CF status page, and the admin `/admin/diagnostics` probe state. **Do not** chase WAF rules. |
+| `public_homepage_probe_failed`  | Probe got a non-2xx that does NOT look like a CF block, or a network error. Likely an origin / DNS / CF outage. | Check Railway / Pages dashboards, the CF status page, and the admin `/api/admin/diagnostics` probe state. **Do not** chase WAF rules. |
 
 Detection signals (in priority order):
 

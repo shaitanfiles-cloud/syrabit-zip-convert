@@ -4,7 +4,7 @@
  * Why this exists
  * ---------------
  * Task #708's synthetic probe (`./synthetic-probe.ts`) hits the
- * authenticated `/admin/diagnostics` endpoint. It catches Cloudflare
+ * authenticated `/api/admin/diagnostics` endpoint. It catches Cloudflare
  * Access regressions — but it does NOT catch a different class of
  * outage: the Cloudflare WAF managed ruleset, Bot Fight, or a custom
  * firewall rule starts blocking legitimate traffic on the public site.

@@ -134,7 +134,7 @@ migrations_dir = "migrations"
 # Two crons fan out from the same `scheduled` handler in src/index.ts —
 # the dispatch arm reads `event.cron` and runs the right job:
 #
-#   "* * * * *"   → Task #708 synthetic probe of /admin/diagnostics.
+#   "* * * * *"   → Task #708 synthetic probe of /api/admin/diagnostics.
 #                   Hits the endpoint every 60s with a CF Access service
 #                   token + admin JWT so the break-glass / Access-degraded
 #                   paging rule (Task #706) actually fires during an
@@ -145,9 +145,18 @@ migrations_dir = "migrations"
 #                     SYNTHETIC_PROBE_CF_ACCESS_CLIENT_ID
 #                     SYNTHETIC_PROBE_CF_ACCESS_CLIENT_SECRET
 #                     SYNTHETIC_PROBE_ADMIN_JWT
-#                     SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL
+#                     SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL  ← REQUIRED for
+#                       paging; without it the watchdog only logs to the
+#                       Workers console and no human gets woken up. The
+#                       absence of this secret was the root cause of the
+#                       Task #877 silent-outage incident — set it before
+#                       relying on this probe. Slack incoming-webhook URL
+#                       or PagerDuty Events v2 endpoint both accepted.
 #                   Optional: SYNTHETIC_PROBE_TARGET_URL (defaults to
-#                   ${BACKEND_URL}/admin/diagnostics),
+#                   ${BACKEND_URL}/api/admin/diagnostics — note the
+#                   `/api` prefix; the FastAPI router is mounted at
+#                   `/api`, hitting bare `/admin/diagnostics` returns
+#                   404 — Task #877),
 #                   SYNTHETIC_PROBE_WATCHDOG_THRESHOLD_MIN (default 5),
 #                   SYNTHETIC_PROBE_DISABLED=true to pause without
 #                   redeploying.
@@ -186,7 +195,7 @@ crons = ["* * * * *", "0 */6 * * *"]
 #     inherited — redeclared below.
 #   - [triggers] IS inherited; explicitly cleared to [] so the preview
 #     Worker does NOT run the synthetic probe (which would page on a
-#     prod /admin/diagnostics outage from the preview hostname) or the
+#     prod /api/admin/diagnostics outage from the preview hostname) or the
 #     6-hourly D1 sync (which writes to whatever D1 is bound below).
 #
 # Secrets are per-env in Wrangler v4 — none are inherited. Set them
