@@ -139,15 +139,17 @@ async def _fetch_per_ua_buckets(zone_id: str, since_iso: str, until_iso: str,
             filter: {
               datetime_geq: $since
               datetime_leq: $until
-              # Any verified bot, regardless of CF's sub-category. CF
-              # files traditional crawlers under "Search Engine Crawler"
-              # and AI/LLM crawlers (GPTBot, PerplexityBot, ClaudeBot,
-              # OAI-SearchBot, Google-Extended, Applebot-Extended,
-              # Bytespider, Meta-ExternalAgent, …) under "AI Crawler".
-              # Pinning to a single category silently dropped every AI
-              # bot from this report. Client-side _classify_ua picks
-              # the bots we actually care about.
-              verifiedBotCategory_neq: ""
+              # NOTE: previously we tried `verifiedBotCategory_neq: ""`
+              # to restrict to verified bots at the GraphQL layer, but
+              # CF's adaptive-groups schema rejects the `_neq` operator
+              # with a parser error ("Expected :, found Name 'eq'").
+              # Filtering happens client-side instead — `_classify_ua`
+              # in this file only returns canonical names for bots we
+              # care about (traditional crawlers under CF's "Search
+              # Engine Crawler" and AI/LLM crawlers under "AI Crawler",
+              # incl. GPTBot, PerplexityBot, ClaudeBot, OAI-SearchBot,
+              # Google-Extended, Applebot-Extended, Bytespider,
+              # Meta-ExternalAgent, …) and unverified UAs are dropped.
             }
             limit: $limit
             orderBy: [count_DESC]
@@ -625,7 +627,9 @@ async def _fetch_per_ua_daily_series(zone_id: str, since_iso: str,
             filter: {
               datetime_geq: $since
               datetime_leq: $until
-              verifiedBotCategory_neq: ""
+              # See PerUaBots query above — CF rejects
+              # `verifiedBotCategory_neq: ""`. We rely on
+              # client-side `_classify_ua` to drop unverified UAs.
             }
             limit: $limit
             orderBy: [date_ASC]

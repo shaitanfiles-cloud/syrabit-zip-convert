@@ -771,8 +771,7 @@ async def get_verified_bot_traffic_cf(since: datetime, until: datetime) -> Optio
           categories: httpRequestsAdaptiveGroups(
             filter: {
               datetime_geq: $since,
-              datetime_lt: $until,
-              verifiedBotCategory_neq: ""
+              datetime_lt: $until
             }
             limit: 50
             orderBy: [count_DESC]
@@ -784,7 +783,6 @@ async def get_verified_bot_traffic_cf(since: datetime, until: datetime) -> Optio
             filter: {
               datetime_geq: $since,
               datetime_lt: $until,
-              verifiedBotCategory_neq: "",
               edgeResponseStatus_geq: 500,
               edgeResponseStatus_lt: 600
             }
