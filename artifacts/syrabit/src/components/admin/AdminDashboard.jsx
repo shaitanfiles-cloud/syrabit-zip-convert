@@ -1319,12 +1319,21 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
         <p className="text-[10px] text-gray-400 mb-2">{TODAY_BUCKET_CAPTION}</p>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
-          {/* "Total Visitors" = unique humans counted once each (Cloudflare's
-              JS beacon does not fire for bots, and CF's `uniques` metric is
-              deduped by visitor fingerprint, so repeat visits from the same
-              person collapse to a single count). Replaces the previous
-              "Total Page Views" tile per the operator's request. */}
-          <StatCard label="Total Visitors" value={vs?.total_visitors ?? 0} icon={Users} color="#84cc16"
+          {/* "Total Visitors" — bound to the SAME Cloudflare overview the
+              "Traffic (Cloudflare)" card above uses (cfOverview.totals.visitors)
+              so the two CF-sourced cards never disagree on the headline
+              number. The dashboard payload's vs.total_visitors comes from a
+              different CF call with a slightly wider window (today + 7 prior
+              days vs the overview card's exact 7 buckets) and was producing
+              an inflated count (e.g. 2664 vs 2228 on the same data). When
+              cfOverview hasn't loaded yet we fall back to vs.total_visitors
+              so the tile is never blank on first paint. CF's JS beacon does
+              not fire for bots and uniques are deduped by visitor
+              fingerprint, so each human visitor is counted exactly once
+              regardless of repeat visits within the bucket. */}
+          <StatCard label="Total Visitors"
+            value={cfOverview?.totals?.visitors ?? vs?.total_visitors ?? 0}
+            icon={Users} color="#84cc16"
             subLabel="Today" subValue={vs?.visitors_today ?? 0} />
           <StatCard label="Bounce Rate"  value={vs.bounce_rate != null ? `${vs.bounce_rate}%` : '—'} icon={TrendingUp} color="#f59e0b" />
           <StatCard label="Avg Session"  value={vs.avg_session_duration != null ? `${vs.avg_session_duration}s` : '—'} icon={Clock} color="#a78bfa" />
