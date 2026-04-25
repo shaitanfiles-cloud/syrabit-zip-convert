@@ -44,7 +44,7 @@ from db_ops import (
     supa_list_users,
     supa_update_user,
 )
-from analytics_helpers import get_recent_user_events
+from analytics_helpers import get_recent_user_events, get_session_metrics
 import cloudflare_client
 from cf_access import require_cf_access_admin
 
@@ -292,9 +292,16 @@ async def _compute_dashboard():
         p = u.get("plan", "free")
         plan_dist[p] = plan_dist.get(p, 0) + 1
 
-    cf_stats, recent_events = await asyncio.gather(
+    # Cloudflare GraphQL is the source of truth for visitor / page-view
+    # counts but does not expose bounce rate or session duration. Fan
+    # those two metrics out from the Mongo-backed sessions aggregation
+    # in parallel so the dashboard's two right-hand traffic tiles
+    # ("Bounce Rate", "Avg Session") stop rendering as em-dash
+    # placeholders.
+    cf_stats, recent_events, sess_metrics = await asyncio.gather(
         cloudflare_client.get_visitor_stats_cf(days=7),
         get_recent_user_events(limit=10),
+        get_session_metrics(days=7),
     )
     cf_connected = bool(cf_stats)
     if cf_stats:
@@ -308,10 +315,15 @@ async def _compute_dashboard():
             "total_bytes": cf_stats.get("total_bytes", 0),
             "bytes_today": cf_stats.get("bytes_today", 0),
             "daily_visitors": cf_stats.get("daily_visitors", []),
+            "bounce_rate": sess_metrics.get("bounce_rate"),
+            "avg_session_duration": sess_metrics.get("avg_session_duration"),
             "cloudflare": {**cf_stats, "period_days": 7},
         }
     else:
-        visitor_stats = {}
+        visitor_stats = {
+            "bounce_rate": sess_metrics.get("bounce_rate"),
+            "avg_session_duration": sess_metrics.get("avg_session_duration"),
+        }
 
     return {
         "total_users": total_users,

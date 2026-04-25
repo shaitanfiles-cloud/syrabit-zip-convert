@@ -14,9 +14,87 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "get_library_analytics", "get_recent_user_events", "get_visitor_stats",
+    "get_session_metrics",
     "track_library_event", "track_page_view",
     "track_pwa_install", "get_pwa_stats",
 ]
+
+
+async def get_session_metrics(days: int = 7) -> dict:
+    """Compute bounce-rate and avg-session-duration from db.sessions.
+
+    Cloudflare's free GraphQL feed (the source of truth for visitor /
+    page-view counts in /admin/dashboard) does NOT expose bounce rate
+    or session duration, so the admin Traffic row's two right-hand
+    tiles ("Bounce Rate" and "Avg Session") rendered as em-dash
+    placeholders. This helper runs only the session-shaped aggregation
+    from the legacy Mongo-backed get_visitor_stats() so the dashboard
+    handler can merge those two fields into its CF-derived
+    visitor_stats payload without paying the cost of the full
+    page_views fan-out.
+
+    Returns a dict with bounce_rate (percent, 1 dp, may be None) and
+    avg_session_duration (seconds, integer, may be None). Both keys
+    are always present so the caller can blindly merge.
+    """
+    if not await is_mongo_available():
+        return {"bounce_rate": None, "avg_session_duration": None}
+    try:
+        cutoff_iso = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        bot_visitor_ids = await db.page_views.distinct(
+            "visitor_id",
+            {"is_bot": True, "date": {"$gte": (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")}},
+        )
+        match: dict = {
+            "start_time": {"$gte": cutoff_iso},
+            "is_bot": {"$ne": True},
+        }
+        if bot_visitor_ids:
+            match["visitor_id"] = {"$nin": bot_visitor_ids}
+
+        pipeline = [
+            {"$match": match},
+            {"$addFields": {
+                "effective_end": {"$ifNull": ["$end_time", "$last_ping"]},
+                "effective_page_count": {"$ifNull": ["$page_count", 0]},
+            }},
+            {"$match": {
+                "effective_end": {"$exists": True, "$ne": None},
+                "effective_page_count": {"$gte": 1},
+            }},
+            {"$project": {
+                "effective_page_count": 1,
+                "duration_secs": {
+                    "$divide": [
+                        {"$subtract": [
+                            {"$toDate": "$effective_end"},
+                            {"$toDate": "$start_time"},
+                        ]},
+                        1000,
+                    ],
+                },
+            }},
+            {"$group": {
+                "_id": None,
+                "total": {"$sum": 1},
+                "bounces": {"$sum": {"$cond": [{"$eq": ["$effective_page_count", 1]}, 1, 0]}},
+                "avg_duration": {"$avg": "$duration_secs"},
+            }},
+        ]
+        rows = await db.sessions.aggregate(pipeline).to_list(1)
+        if not rows:
+            return {"bounce_rate": None, "avg_session_duration": None}
+        row = rows[0]
+        total = row.get("total", 0) or 0
+        if total <= 0:
+            return {"bounce_rate": None, "avg_session_duration": None}
+        bounce_rate = round(row.get("bounces", 0) / total * 100, 1)
+        avg_dur = row.get("avg_duration")
+        avg_session_duration = round(avg_dur) if avg_dur is not None else None
+        return {"bounce_rate": bounce_rate, "avg_session_duration": avg_session_duration}
+    except Exception as e:
+        logger.warning(f"get_session_metrics failed: {e}")
+        return {"bounce_rate": None, "avg_session_duration": None}
 
 from deps import is_mongo_available
 from db_ops import supa_list_users, supa_get_all_conversations
