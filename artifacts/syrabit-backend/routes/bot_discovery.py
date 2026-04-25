@@ -5908,7 +5908,21 @@ async def admin_cf_ai_crawl_control(
     #     BOTH contributions summed onto a single tile, mirroring how
     #     CF's dashboard shows a single Google tile combining Googlebot
     #     + Google-Extended traffic.
-    crawlers_grid = aggregate_per_operator(full_per_bot)
+    # Allowlist — only the operators the product cares about appear in
+    # the dashboard tile grid. Mix of pure search engines (Google, MS,
+    # DuckDuckGo, Yandex, Apple) and AI-assistant operators we want
+    # visibility into (Perplexity, You.com, Meta). Everything else
+    # (OpenAI, Anthropic, Common Crawl, Baidu, Amazon, ByteDance, …)
+    # is hidden from this card by request — they're still counted in
+    # the headline totals via CF GraphQL, just not displayed as tiles.
+    _CRAWLER_TILE_ALLOWLIST = {
+        "Google", "Microsoft", "DuckDuckGo", "Apple",
+        "Yandex", "Perplexity", "You.com", "Meta",
+    }
+    crawlers_grid = [
+        op for op in aggregate_per_operator(full_per_bot)
+        if op.get("operator") in _CRAWLER_TILE_ALLOWLIST
+    ]
     # Operator-name → search-engine-name lookup (the search referrals
     # map is keyed by engine display name from _SEARCH_REFERRER_HOSTS,
     # which doesn't always match the CF operator-tile name — e.g. CF's
