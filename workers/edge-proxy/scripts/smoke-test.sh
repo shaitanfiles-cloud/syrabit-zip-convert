@@ -11,25 +11,32 @@
 #   ./scripts/smoke-test.sh https://syrabit.ai
 #
 # Optional env knobs:
-#   SKIP_RATE_LIMIT=1   skip the rate-limit burst (saves ~10 s, but leaves
-#                       RATE_LIMIT KV unverified end-to-end)
-#   D1_SYNC_SECRET      if set, sent as X-Edge-Admin-Secret to unlock
-#                       /api/edge/kv-usage so we can enumerate KV bindings
-#                       (specifically BOT_HTML_CACHE, which has no
-#                       externally-reachable read path because the
-#                       bot-cache lookup requires cf.verifiedBot===true).
-#                       Without it the BOT_HTML_CACHE binding check is
-#                       skipped with a warning.
-#   AI_FALLBACK_SECRET  if set, the AI fallback test sends this as
-#                       X-CF-AI-Fallback-Secret and expects a 200 instead
-#                       of the gate's 401 (proves the AI binding actually
-#                       reaches Workers AI; without it we only prove the
-#                       gate is wired)
-#   VERBOSE=1           print full response bodies on failure
+#   SKIP_RATE_LIMIT=1         skip the rate-limit burst (saves ~10 s, but
+#                             leaves RATE_LIMIT KV unverified end-to-end).
+#   D1_SYNC_SECRET            if set, sent as X-Edge-Admin-Secret to unlock
+#                             /api/edge/kv-usage so we can enumerate KV
+#                             bindings (specifically BOT_HTML_CACHE, which
+#                             has no externally-reachable read path because
+#                             the bot-cache lookup requires
+#                             cf.verifiedBot===true). Without it the
+#                             BOT_HTML_CACHE binding check is skipped with
+#                             a warning.
+#   EDGE_AI_FALLBACK_SECRET   if set, the AI fallback test sends this as
+#                             X-Edge-AI-Secret and expects 200 instead of
+#                             the gate's 401 (proves the AI binding actually
+#                             reaches Workers AI; without it we only prove
+#                             the gate is wired). Header & env names match
+#                             src/index.ts:handleAiFallback. Legacy
+#                             AI_FALLBACK_SECRET is honoured as a fallback
+#                             for backward compat only — please migrate.
+#   FAIL_FAST=0               run every check and summarise at end instead
+#                             of aborting on the first failure (default 1).
+#   VERBOSE=1                 print full response bodies on failure.
 #
-# Exits non-zero on the first failed check. Each check prints a single
-# pass/fail line, and a summary line is printed at the end. Designed to be
-# CI-droppable as-is.
+# Exits non-zero on the first failed check (fail-fast). Each check prints
+# a single pass/fail line; an EXIT trap always emits a one-line
+# PASSED/FAILED/TOTAL summary, even when the script aborts early.
+# Designed to be CI-droppable as-is.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -53,6 +60,10 @@ FAIL_FAST="${FAIL_FAST:-1}"
 
 # Always print the summary on exit (success, fail-fast exit, or unexpected
 # error) so operators see PASSED/FAILED/TOTAL even when we abort mid-run.
+# The trap captures the original exit code as the FIRST statement and
+# explicitly re-exits with it at the end so commands inside the trap (e.g.
+# `rm`, `echo`) cannot accidentally overwrite it to 0 — that bug ate a
+# fail-fast smoke run during local validation.
 print_summary() {
   local code=$?
   local elapsed=$(( $(date +%s) - START_TS ))
@@ -64,7 +75,16 @@ print_summary() {
     [[ "${VERBOSE:-0}" != "1" ]] && echo "  Re-run with VERBOSE=1 to see response bodies."
     [[ "$FAIL_FAST" == "1" ]] && echo "  (fail-fast mode: aborted on first failure; export FAIL_FAST=0 to run every check)"
   fi
-  rm -rf "$TMP_DIR"
+  rm -rf "$TMP_DIR" 2>/dev/null || true
+  # Preserve the original exit code (or surface accumulated FAILED if the
+  # script reached the natural end without a fail-fast abort).
+  if [[ "$code" -ne 0 ]]; then
+    exit "$code"
+  fi
+  if [[ "$FAILED" -ne 0 ]]; then
+    exit 1
+  fi
+  exit 0
 }
 trap print_summary EXIT
 
@@ -130,7 +150,7 @@ header_value() {
 
 # ── 1) /api/health — proves worker is up + reports CONTENT_DB binding ──────
 TOTAL=$((TOTAL + 1))
-echo "[1/6] GET /api/health"
+echo "[1/7] GET /api/health"
 http_get "$BASE_URL/api/health"
 if [[ "$HTTP_STATUS" != "200" ]]; then
   fail "health" "expected 200, got $HTTP_STATUS"
@@ -154,11 +174,11 @@ fi
 # binding is wired without needing CF's bot infrastructure. The endpoint
 # is gated by D1_SYNC_SECRET (X-Edge-Admin-Secret header).
 if [[ -z "${D1_SYNC_SECRET:-}" ]]; then
-  echo "[2/6] SKIPPED — D1_SYNC_SECRET unset (BOT_HTML_CACHE binding NOT verified)"
+  echo "[2/7] SKIPPED — D1_SYNC_SECRET unset (BOT_HTML_CACHE binding NOT verified)"
   echo "       export D1_SYNC_SECRET=… to unlock /api/edge/kv-usage"
 else
   TOTAL=$((TOTAL + 1))
-  echo "[2/6] GET /api/edge/kv-usage (with X-Edge-Admin-Secret)"
+  echo "[2/7] GET /api/edge/kv-usage (with X-Edge-Admin-Secret)"
   http_get "$BASE_URL/api/edge/kv-usage" \
     -H "X-Edge-Admin-Secret: ${D1_SYNC_SECRET}"
   if [[ "$HTTP_STATUS" != "200" ]]; then
@@ -178,7 +198,7 @@ fi
 # proves the read path returns >=1 row, which is the contract the frontend
 # depends on.
 TOTAL=$((TOTAL + 1))
-echo "[3/6] GET /api/content/subjects"
+echo "[3/7] GET /api/content/subjects"
 http_get "$BASE_URL/api/content/subjects"
 if [[ "$HTTP_STATUS" != "200" ]]; then
   fail "d1-subjects" "expected 200, got $HTTP_STATUS"
@@ -197,7 +217,38 @@ else
   fi
 fi
 
-# ── 4) Rate-limit burst against /api/content/boards ────────────────────────
+# ── 4) Backend reverse-proxy identity check via /api/readyz ────────────────
+# /api/health is served entirely by the worker (`X-Source: edge`) so it
+# *cannot* prove BACKEND_URL is wired correctly — a misconfigured backend
+# origin would still pass test [1/7]. /api/readyz is intentionally NOT
+# intercepted by the worker (see comment at src/index.ts ~L1717: "the
+# actual dependency state moved to /api/readyz, which intentionally
+# proxies through to the backend so on-call sees real Mongo / PG / Vertex
+# status instead of a static 'edge is up' lie") and the FastAPI backend
+# always responds with a JSON body containing dependency identity.
+# Asserting `X-Source: backend` here proves the request actually exited
+# the worker via proxyToBackend (src/index.ts:`proxyToBackend` always
+# stamps that header on the response). /api/readyz is allow-listed in
+# the backend's middleware so it cannot 429 the smoke run mid-burst
+# (artifacts/syrabit-backend/middleware.py L446).
+TOTAL=$((TOTAL + 1))
+echo "[4/7] GET /api/readyz (backend reverse-proxy identity)"
+http_get "$BASE_URL/api/readyz"
+ready_src=$(header_value "X-Source")
+ready_byte_len=$(wc -c < "$BODY_PATH" | tr -d ' ')
+if [[ "$HTTP_STATUS" != "200" && "$HTTP_STATUS" != "503" ]]; then
+  # 503 is acceptable: it means the backend answered "not ready" — proves
+  # the proxy worked even though a downstream dep is unhealthy.
+  fail "backend-proxy" "expected 200/503, got $HTTP_STATUS — BACKEND_URL likely misconfigured (X-Source=${ready_src:-(missing)})"
+elif [[ "$ready_src" != "backend" ]]; then
+  fail "backend-proxy" "expected X-Source=backend (proxy path), got '${ready_src:-(missing)}' — request did not flow through proxyToBackend"
+elif [[ "$ready_byte_len" -lt 2 ]]; then
+  fail "backend-proxy" "empty body (${ready_byte_len} bytes) — backend reachable but returned nothing"
+else
+  pass "backend-proxy" "${HTTP_STATUS}, X-Source=$ready_src, ${ready_byte_len} bytes (BACKEND_URL wired)"
+fi
+
+# ── 5) Rate-limit burst against /api/content/boards ────────────────────────
 # RATE_LIMIT_RPM = 120 IP requests / 60 s. We send 130 sequential requests
 # from one IP and expect at least one 429 with X-RateLimit-Limit=120.
 #
@@ -211,10 +262,10 @@ fi
 # Each request also gets a unique nocache value so even CF's URL-keyed
 # cache can't collapse them.
 if [[ "${SKIP_RATE_LIMIT:-0}" == "1" ]]; then
-  echo "[4/6] SKIPPED (SKIP_RATE_LIMIT=1)"
+  echo "[5/7] SKIPPED (SKIP_RATE_LIMIT=1)"
 else
   TOTAL=$((TOTAL + 1))
-  echo "[4/6] burst 130x GET /api/content/boards?nocache=… (expect ≥1 429)"
+  echo "[5/7] burst 130x GET /api/content/boards?nocache=… (expect ≥1 429)"
   burst_429=0
   burst_other=0
   burst_first_429_at=0
@@ -257,7 +308,7 @@ fi
 # fixed 2026-04-25 after the smoke runbook went in).
 EDGE_AI_FALLBACK_SECRET="${EDGE_AI_FALLBACK_SECRET:-${AI_FALLBACK_SECRET:-}}"
 TOTAL=$((TOTAL + 1))
-echo "[5/6] POST /api/ai/fallback/chat (gate check)"
+echo "[6/7] POST /api/ai/fallback/chat (gate check)"
 ai_payload='{"messages":[{"role":"user","content":"reply with the single word: ok"}],"max_tokens":8}'
 if [[ -n "${EDGE_AI_FALLBACK_SECRET:-}" ]]; then
   http_post "$BASE_URL/api/ai/fallback/chat" \
@@ -300,7 +351,7 @@ fi
 #     full flow needs a Googlebot-IP source. Test #2 (kv-usage enumeration)
 #     still proves the binding is wired in this env.
 TOTAL=$((TOTAL + 1))
-echo "[6/6] BOT_HTML_CACHE: GET / x2 (User-Agent: Googlebot)"
+echo "[7/7] BOT_HTML_CACHE: GET / x2 (User-Agent: Googlebot)"
 http_get "$BASE_URL/" \
   -H 'User-Agent: Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' \
   -H 'Accept: text/html'
@@ -316,7 +367,7 @@ elif [[ "$bot_rendered_1" != "1" ]]; then
   echo "  ⓘ [bot-cache] first call returned ${bot_status_1} X-Source=${bot_source_1:-(none)}"
   echo "       (spoofed bot path; full BOT_HTML_CACHE flow needs cf.verifiedBot===true"
   echo "        or a source IP in Google's bot ranges. Binding visibility is still"
-  echo "        verified by test [2/6] /api/edge/kv-usage.)"
+  echo "        verified by test [2/7] /api/edge/kv-usage.)"
 else
   # Verified-bot path — assert warm-cache evidence on call #2.
   http_get "$BASE_URL/" \
@@ -334,14 +385,7 @@ else
   fi
 fi
 
-# ── summary ─────────────────────────────────────────────────────────────────
-ELAPSED=$(( $(date +%s) - START_TS ))
-echo
-if [[ "$FAILED" -eq 0 ]]; then
-  echo "✓ ${PASSED}/${TOTAL} passed in ${ELAPSED}s — $BASE_URL"
-  exit 0
-else
-  echo "✗ ${FAILED}/${TOTAL} FAILED (${PASSED} passed) in ${ELAPSED}s — $BASE_URL"
-  echo "  Re-run with VERBOSE=1 to see response bodies."
-  exit 1
-fi
+# Summary is printed by the EXIT trap (`print_summary`) at the top of this
+# script — keeping a single emission point so success and fail-fast aborts
+# render identical, fully-counted output.
+exit "$([[ "$FAILED" -eq 0 ]] && echo 0 || echo 1)"
