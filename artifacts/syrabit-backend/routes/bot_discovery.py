@@ -5731,7 +5731,7 @@ async def admin_cf_ai_crawl_control(
     credentials are missing or the upstream call fails so the UI can
     render an empty-state card instead of a 5xx."""
     try:
-        from cf_bot_report import fetch_admin_summary
+        from cf_bot_report import fetch_admin_summary, aggregate_per_operator
         from analytics_helpers import get_ai_referrals_by_operator
         # Run the CF crawler aggregation and the Mongo-backed referral
         # tally in parallel — they hit independent backends and the
@@ -5746,6 +5746,16 @@ async def admin_cf_ai_crawl_control(
         logger.warning(f"cf-ai-crawl-control fetch failed: {exc}")
         summary = None
         ai_refs_by_op = {}
+
+    # Sorted-desc list of (operator, referrals) — used by the dashboard's
+    # standalone "AI assistant referrals" block. Built up here once so
+    # both the empty-state and populated branches return the same shape.
+    ai_refs_list = sorted(
+        ({"operator": op, "referrals": int(refs)}
+         for op, refs in (ai_refs_by_op or {}).items() if int(refs) > 0),
+        key=lambda r: (-r["referrals"], r["operator"]),
+    )
+    ai_refs_total = sum(int(v) for v in (ai_refs_by_op or {}).values())
 
     if summary is None:
         return {
@@ -5764,47 +5774,84 @@ async def admin_cf_ai_crawl_control(
             "per_bot": [],
             "per_operator": [],
             "daily_series": {"top_bots": [], "rows": []},
-            "ai_referrals_total": 0,
+            "ai_referrals_total": ai_refs_total,
+            "ai_referrals_per_operator": ai_refs_list,
         }
 
-    # Enrich each per-operator tile with its AI-assistant referral
-    # count, mirroring CF's *AI Crawl Control → Overview* "Total
-    # referrals" field. Operators with no AI referrals in the window
-    # get 0 (rather than missing) so the frontend can render the row
-    # uniformly across all tiles. Any AI-referrer operator that
-    # doesn't appear in the CF crawler list (e.g. xAI/Grok, which
-    # has chat surfaces but no verified crawler in CF's list yet)
-    # gets appended as a synthetic tile so the referral isn't
-    # silently dropped — same fallback CF uses for "Other".
-    per_operator = summary.get("per_operator") or []
-    seen_ops = {op.get("operator") for op in per_operator}
-    for op in per_operator:
-        op["referrals"] = int(ai_refs_by_op.get(op.get("operator"), 0))
-    for op_name, refs in ai_refs_by_op.items():
-        if op_name in seen_ops or not refs:
-            continue
-        per_operator.append({
-            "operator": op_name,
-            "allowed": 0,
-            "unsuccessful": 0,
-            "requests": 0,
-            "bots": [],
-            "category": "ai",
-            "referrals": int(refs),
-        })
-    # Re-apply the operator ordering that ``aggregate_per_operator``
-    # established (allowed-desc, then requests-desc, then operator name
-    # for deterministic tie-break) so the synthetic referral-only tiles
-    # we just appended slot in next to their CF-crawler peers — and the
-    # busiest tile still renders first, matching CF's overview layout.
-    # Without this, a Grok/xAI synthetic tile (allowed=0) would always
-    # land at the end of the array even when it has more referrals
-    # than the lowest-volume CF crawler tile.
-    per_operator.sort(
-        key=lambda t: (-int(t.get("allowed") or 0),
-                       -int(t.get("requests") or 0),
-                       t.get("operator") or "")
-    )
-    summary["per_operator"] = per_operator
-    summary["ai_referrals_total"] = sum(int(v) for v in ai_refs_by_op.values())
+    # ─── Strip AI crawlers from the response ──────────────────────────────
+    # Per the user's policy decision (see edge-proxy AI_BOT_UA block and
+    # robots.txt), AI training/answer crawlers are blocked at the edge
+    # AND hidden from this card. The CF GraphQL backend keeps reporting
+    # them (they hit the edge, get 403'd, and CF still counts the request
+    # against the verified-bot category), but the admin dashboard should
+    # only show the search-engine traffic the site actually wants.
+    #
+    # We filter at this single seam so:
+    #   * `per_bot` keeps only category == "search" entries.
+    #   * `per_operator` is *re-aggregated* from the filtered per_bot
+    #     instead of just dropping AI tiles — otherwise a mixed-bag
+    #     operator like Google (Googlebot + Google-Extended) would
+    #     vanish entirely because the original aggregator marks the
+    #     whole tile "ai" as soon as one contributing bot is AI.
+    #   * Daily-series top-bots and per-row keys lose AI names so the
+    #     stacked chart doesn't carry orphan AI columns.
+    #   * `totals` and `ai_totals` are recomputed from the filtered list
+    #     so the headline numbers match what the user sees below.
+    full_per_bot = summary.get("per_bot") or []
+    search_per_bot = [b for b in full_per_bot if b.get("category") != "ai"]
+
+    # Re-aggregate operators from the search-only per_bot so allowed /
+    # unsuccessful / requests totals add up without AI contamination.
+    # ``aggregate_per_operator`` carries the same sort & tie-break as
+    # the unfiltered call, so ordering is preserved.
+    search_per_operator = aggregate_per_operator(search_per_bot)
+
+    # Recompute headline totals from the filtered list. Bots count is
+    # "distinct bots with at least one request" — same definition the
+    # original aggregator uses (see fetch_admin_summary).
+    search_total_requests = sum(int(b.get("requests") or 0) for b in search_per_bot)
+    search_distinct_bots = sum(1 for b in search_per_bot if int(b.get("requests") or 0) > 0)
+    search_allowed = sum(int(t.get("allowed") or 0) for t in search_per_operator)
+    search_unsuccessful = sum(int(t.get("unsuccessful") or 0) for t in search_per_operator)
+
+    summary["per_bot"] = search_per_bot
+    summary["per_operator"] = search_per_operator
+    summary["totals"] = {
+        "requests": search_total_requests,
+        # Preserve any byte total the upstream provided, but recompute it
+        # from the filtered list when present so AI bot bytes don't show.
+        "bytes": sum(int(b.get("bytes") or 0) for b in search_per_bot),
+        "bots": search_distinct_bots,
+    }
+    summary["allowed_total"] = search_allowed
+    summary["unsuccessful_total"] = search_unsuccessful
+    # AI bots are no longer reported in this card — keep the field for
+    # frontend-compat (older builds may still read it) but zero it out.
+    summary["ai_totals"] = {"requests": 0, "bots": 0}
+    summary["search_totals"] = {
+        "requests": search_total_requests,
+        "bots": search_distinct_bots,
+    }
+
+    # Filter daily series: drop AI bot names from top_bots and remove
+    # their keys from each row. We deliberately don't try to re-bucket
+    # dropped traffic into "Other" because it would inflate "Other"
+    # with AI volume and defeat the purpose of hiding AI activity.
+    ai_bot_names = {b.get("name") for b in full_per_bot if b.get("category") == "ai"}
+    daily = summary.get("daily_series") or {"top_bots": [], "rows": []}
+    if ai_bot_names:
+        daily_top = [n for n in (daily.get("top_bots") or []) if n not in ai_bot_names]
+        daily_rows = []
+        for row in daily.get("rows") or []:
+            new_row = {k: v for k, v in row.items() if k not in ai_bot_names}
+            daily_rows.append(new_row)
+        summary["daily_series"] = {"top_bots": daily_top, "rows": daily_rows}
+
+    # AI assistant referrals (humans clicking from AI chats) are a
+    # SEPARATE signal from crawler activity — the chats render answers
+    # citing syrabit.ai and a fraction of users click through. We expose
+    # this as its own top-level payload so the frontend can render a
+    # standalone "AI assistant referrals" block beside the crawler card.
+    summary["ai_referrals_total"] = ai_refs_total
+    summary["ai_referrals_per_operator"] = ai_refs_list
     return {"available": True, **summary}

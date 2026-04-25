@@ -1360,7 +1360,7 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
         <GlassCard className="p-5">
           <div className="flex items-center gap-2 mb-4">
             <ShieldCheck size={16} className="text-orange-500" />
-            <h3 className="text-gray-700 font-semibold">Cloudflare AI Crawl Control</h3>
+            <h3 className="text-gray-700 font-semibold">Cloudflare Search Crawler Activity</h3>
             <div className="ml-auto flex items-center gap-2">
               {cfCrawlControl.available ? (
                 <span className="text-[10px] text-gray-400">{cfCrawlControl.period_days}-day window</span>
@@ -1407,18 +1407,17 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                   <p className="text-[10px] text-gray-500">Distinct crawlers</p>
                 </div>
               </div>
-              {/* Secondary AI-vs-search context line preserved so the
-                  prior split data is still discoverable in one glance. */}
+              {/* Search-engine totals only — AI crawlers are blocked at
+                  the edge (see workers/edge-proxy AI_BOT_UA) and hidden
+                  from this card by the backend filter, so the entire
+                  card represents legitimate search-index traffic. */}
               <div className="text-[10px] text-gray-500 mb-4 flex items-center justify-center gap-3">
                 <span>
-                  <span className="inline-block w-2 h-2 rounded-sm bg-violet-400 mr-1 align-middle" />
-                  AI crawlers: {(cfCrawlControl.ai_totals?.requests ?? 0).toLocaleString()} ({cfCrawlControl.ai_totals?.bots ?? 0} bots)
+                  <span className="inline-block w-2 h-2 rounded-sm bg-blue-400 mr-1 align-middle" />
+                  Search-engine crawlers: {(cfCrawlControl.search_totals?.requests ?? 0).toLocaleString()} ({cfCrawlControl.search_totals?.bots ?? 0} bots)
                 </span>
                 <span className="text-gray-300">·</span>
-                <span>
-                  <span className="inline-block w-2 h-2 rounded-sm bg-blue-400 mr-1 align-middle" />
-                  Search-engine: {(cfCrawlControl.search_totals?.requests ?? 0).toLocaleString()} ({cfCrawlControl.search_totals?.bots ?? 0} bots)
-                </span>
+                <span className="text-gray-400">AI crawlers blocked at edge</span>
               </div>
 
               {/* Operator-company tiles — one card per operator, mirrors
@@ -1483,34 +1482,12 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                               </p>
                             </div>
                           </div>
-                          {/* Total referrals — count of human visits to
-                              syrabit.ai whose Referer header was an AI
-                              assistant's chat surface owned by this
-                              operator (e.g. chatgpt.com/openai.com →
-                              "OpenAI"). Mirrors the field of the same
-                              name on Cloudflare's *AI Crawl Control →
-                              Overview* per-operator card. Sourced from
-                              db.page_views in Mongo since CF's free-tier
-                              GraphQL doesn't expose the Referer
-                              dimension. Always rendered (zero shown as
-                              0) so all tiles align vertically — the
-                              "0" itself is informative ("we know this
-                              operator's crawler hit us, but no one
-                              clicked through from their chat surface
-                              yet") and matches CF's own UI which also
-                              shows 0 rather than hiding the row. */}
-                          <div className="mt-1 pt-1 border-t border-gray-100">
-                            <div className="flex items-baseline justify-between gap-2">
-                              <p className="text-[9px] text-gray-400 leading-none">
-                                Total referrals
-                              </p>
-                              <p className={`font-semibold text-xs leading-tight ${
-                                (op.referrals || 0) > 0 ? 'text-violet-700' : 'text-gray-400'
-                              }`}>
-                                {(op.referrals || 0).toLocaleString()}
-                              </p>
-                            </div>
-                          </div>
+                          {/* Per-operator AI-referral row removed — this
+                              card is now search-engine-only, and AI
+                              assistant referrals (humans clicking from
+                              ChatGPT/Perplexity/etc.) are surfaced in
+                              the dedicated "AI assistant referrals"
+                              block below the per-bot list. */}
                         </div>
                       );
                     })}
@@ -1600,6 +1577,49 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
               {cfCrawlControl.per_bot?.length === 0 && (
                 <div className="mt-4 rounded-lg p-3 bg-gray-50 border border-gray-200 text-xs text-gray-600 text-center">
                   No verified-bot traffic in the last {cfCrawlControl.period_days} days.
+                </div>
+              )}
+
+              {/* AI assistant referrals — humans clicking from AI chat
+                  surfaces (ChatGPT, Perplexity, Claude, Grok, etc.)
+                  whose Referer header matches an AI operator host. This
+                  is a *separate* signal from crawler activity: AI
+                  crawlers are blocked at the edge, but the citations
+                  they previously trained on still drive a small stream
+                  of human visits, which is the only AI-surface metric
+                  worth tracking now that crawler ingestion is denied.
+                  Sourced from db.page_views in Mongo (CF GraphQL doesn't
+                  expose Referer on the free tier). */}
+              {(cfCrawlControl.ai_referrals_total ?? 0) > 0 && (
+                <div className="mt-4 rounded-lg p-3 bg-violet-50/60 border border-violet-200">
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="text-[10px] text-violet-700 font-semibold uppercase tracking-wider">
+                      AI assistant referrals (humans clicking from AI chats)
+                    </div>
+                    <div className="text-xs text-violet-700 font-bold">
+                      {(cfCrawlControl.ai_referrals_total ?? 0).toLocaleString()} total
+                    </div>
+                  </div>
+                  {(cfCrawlControl.ai_referrals_per_operator?.length ?? 0) > 0 && (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                      {cfCrawlControl.ai_referrals_per_operator.map((row) => (
+                        <div
+                          key={row.operator}
+                          className="rounded-md px-2.5 py-1.5 bg-white border border-violet-100 flex items-center justify-between gap-2"
+                        >
+                          <span className="text-[10px] text-gray-600 font-medium truncate" title={row.operator}>
+                            {row.operator}
+                          </span>
+                          <span className="text-[11px] text-violet-700 font-semibold">
+                            {row.referrals.toLocaleString()}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="text-[9px] text-violet-600/70 mt-2">
+                    Last {cfCrawlControl.period_days} days · sourced from page-view Referer headers
+                  </div>
                 </div>
               )}
             </>

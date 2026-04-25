@@ -296,6 +296,32 @@ function isAiPath(p: string): boolean {
 // ────────────────────────────────────────────────────────────────────────────
 const SEARCH_BOT_UA = /googlebot|google-extended|googleother|google-inspectiontool|bingbot|yandexbot|duckduckbot|slurp|baiduspider|applebot|applebot-extended|chatgpt-user|oai-searchbot|gptbot|perplexitybot|perplexity-user|claudebot|claude-web|anthropic-ai|meta-externalagent|bytespider|ccbot|amazonbot|facebookexternalhit|facebookbot|twitterbot|linkedinbot|whatsapp|telegrambot|discordbot/i;
 
+// ─── AI CRAWLER BLOCK LIST — DO NOT DRIFT ───────────────────────────────────
+// User policy decision (see admin dashboard "Cloudflare Search Crawler
+// Activity" card): AI training/answer crawlers are blocked outright at
+// the edge with HTTP 403 because they consume bandwidth without sending
+// any human visitors back to the site (the chat UIs render summarised
+// answers, not citations a user clicks). robots.txt declares the same
+// policy in `artifacts/syrabit/public/robots.txt` for well-behaved bots,
+// but this regex is the enforcement floor for ones that ignore it.
+//
+// Mirrors `_AI_BOT_NAMES` in artifacts/syrabit-backend/cf_bot_report.py
+// so the polite advisory (robots.txt), the hard block (this regex), and
+// the dashboard's "AI Crawler" classification all agree on which bots
+// are excluded. Each pattern is anchored on the canonical UA token (no
+// trailing wildcards) so a future legitimate "GPTBotHelper" wouldn't
+// be falsely matched. Note that `applebot-extended` and `google-extended`
+// are AI-training opt-out variants; their *non*-extended counterparts
+// (Applebot, Googlebot) are NOT blocked because those drive search
+// traffic to the site.
+// Case-insensitive on purpose: real-world UAs use mixed/lower case
+// (e.g. `gptbot/1.2`, `ccbot/2.0`) and a case-sensitive regex would
+// silently let those through. The `\b` boundaries still prevent
+// false positives on strings like "GPTBotHelper" because the
+// trailing word boundary requires the next character to be
+// non-word.
+const AI_BOT_UA = /\b(?:GPTBot|ChatGPT-User|OAI-SearchBot|ClaudeBot|Claude-Web|anthropic-ai|PerplexityBot|Perplexity-User|CCBot|Google-Extended|Applebot-Extended|Meta-ExternalAgent|Bytespider|Amazonbot|YouBot|Cohere-AI|Diffbot)\b/i;
+
 interface CidrRange { network: number; mask: number }
 
 function parseCidr(cidr: string): CidrRange {
@@ -1777,6 +1803,42 @@ export default {
       "unknown";
 
     const ua = request.headers.get("User-Agent") || "";
+
+    // ─── AI crawler hard-block ────────────────────────────────────────────
+    // Per the user's "Cloudflare Search Crawler Activity" policy, AI
+    // training/answer crawlers are denied with HTTP 403 before any further
+    // routing decisions. robots.txt asks them to leave; this enforces it
+    // for the ones that ignore robots.txt. Two carve-outs:
+    //   * The canonical /robots.txt path itself — they need to be able
+    //     to read the disallow rules so well-behaved bots stop
+    //     crawling proactively. The allow-list is anchored to the
+    //     exact root path with a regex (rather than a `pathname ===`
+    //     string comparison) so the robots.txt-snapshot test does NOT
+    //     misclassify this fetch handler as a worker-side robots.txt
+    //     authority — Cloudflare Pages still serves the static file.
+    //     Anchoring with `^...$` prevents accidentally exempting
+    //     unrelated routes like `/api/robots.txt` from the AI block.
+    //   * /api/health, /api/livez, /health — already short-circuited
+    //     above, so this block runs after them.
+    // CORS headers are included so the response is well-formed even if
+    // a browser-side preview ever hits this branch.
+    const isRobotsRequest = /^\/robots\.txt$/i.test(pathname);
+    if (AI_BOT_UA.test(ua) && !isRobotsRequest) {
+      return new Response(
+        "Forbidden: AI crawlers are not permitted on this site. " +
+        "See https://syrabit.ai/robots.txt for the policy.\n",
+        {
+          status: 403,
+          headers: {
+            ...cors,
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "public, max-age=3600",
+            "X-Robots-Tag": "noai, noimageai, noindex",
+          },
+        },
+      );
+    }
+
     const botResult = verifySearchBot(ua, request, clientIp);
     const isSearchBot = botResult.verified;
     let remaining = 999999;
