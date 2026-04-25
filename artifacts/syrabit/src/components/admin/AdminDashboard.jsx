@@ -949,8 +949,10 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
   const latencyAlert = failedSections.includes('latency') ? 'yellow' : (latency?.alert || 'green');
   const vectorAlert = failedSections.includes('vector') ? 'yellow'
     : (vectorStats?.overall_coverage_pct ?? 100) < 90 ? 'yellow' : 'green';
-  const botAlert = failedSections.includes('bot-analytics') ? 'yellow'
-    : (botAnalytics?.alert_level || 'green');
+  // botAlert was used by the legacy "Bot Traffic Analytics" card,
+  // which has been replaced by the Cloudflare AI Crawl Control card.
+  // botAnalytics is still fetched (other consumers may rely on it),
+  // but the alert badge for it is no longer rendered here.
 
   const hasRagIssue = ragAlert === 'red' || latencyAlert === 'red';
 
@@ -1305,124 +1307,15 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       </GlassCard>
       </SectionErrorBoundary>
 
-      <SectionErrorBoundary name="Bot Analytics">
-      {botAnalytics && (
-        <GlassCard className="p-5">
-          <div className="flex items-center gap-2 mb-4">
-            <Bot size={16} className="text-amber-500" />
-            <h3 className="text-gray-700 font-semibold">Bot Traffic Analytics</h3>
-            <div className="ml-auto flex items-center gap-2">
-              <AlertBadge alert={botAlert} />
-              <span className="text-[10px] text-gray-400">{botAnalytics.period_days}-day window</span>
-            </div>
-          </div>
-
-          {botAnalytics.alerts?.length > 0 && (
-            <div className="mb-4 space-y-1.5">
-              {botAnalytics.alerts.map((a, i) => (
-                <div
-                  key={i}
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
-                  style={{
-                    background: a.severity === 'red' ? '#fef2f2' : '#fffbeb',
-                    border: `1px solid ${a.severity === 'red' ? '#fecaca' : '#fde68a'}`,
-                    color: a.severity === 'red' ? '#991b1b' : '#92400e',
-                  }}
-                >
-                  {a.severity === 'red' ? <AlertCircle size={13} /> : <AlertTriangle size={13} />}
-                  <span>{a.message}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-            <div className="rounded-lg p-3 bg-blue-50 border border-blue-200 text-center">
-              <p className="text-blue-700 font-bold text-lg">{(botAnalytics.bot_vs_human?.total_bot ?? 0).toLocaleString()}</p>
-              <p className="text-[10px] text-gray-500">Bot Hits</p>
-            </div>
-            <div className="rounded-lg p-3 bg-green-50 border border-green-200 text-center">
-              <p className="text-green-700 font-bold text-lg">{(botAnalytics.bot_vs_human?.total_human ?? 0).toLocaleString()}</p>
-              <p className="text-[10px] text-gray-500">Human Hits</p>
-            </div>
-            <div className={`rounded-lg p-3 text-center ${
-              botAlert === 'red' ? 'bg-red-50 border border-red-300' :
-              botAlert === 'yellow' ? 'bg-yellow-50 border border-yellow-300' :
-              'bg-violet-50 border border-violet-200'
-            }`}>
-              <p className={`font-bold text-lg ${
-                botAlert === 'red' ? 'text-red-700' :
-                botAlert === 'yellow' ? 'text-yellow-700' :
-                'text-violet-700'
-              }`}>{botAnalytics.crawl_coverage ?? 0}%</p>
-              <p className="text-[10px] text-gray-500">Crawl Coverage</p>
-            </div>
-            <div className="rounded-lg p-3 bg-amber-50 border border-amber-200 text-center">
-              <p className="text-amber-700 font-bold text-lg">{botAnalytics.bot_vs_human?.bot_ratio_pct ?? 0}%</p>
-              <p className="text-[10px] text-gray-500">Bot Ratio</p>
-            </div>
-          </div>
-
-          <div className="text-[10px] text-gray-400 mb-1">
-            Crawled {(botAnalytics.pages_crawled ?? 0).toLocaleString()} of {(botAnalytics.total_sitemap_pages ?? 0).toLocaleString()} sitemap pages
-          </div>
-
-          {botAnalytics.daily_bot_hits?.length > 0 && (
-            <div className="mt-4">
-              <div className="text-[10px] text-gray-400 font-semibold mb-2 uppercase tracking-wider">Daily Bot vs Human Hits</div>
-              <div style={{ width: '100%', height: 200 }}>
-                <ResponsiveContainer>
-                  <BarChart data={botAnalytics.daily_bot_hits.slice(-14)} margin={{ top: 5, right: 5, left: -15, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                    <XAxis dataKey="date" tick={{ fontSize: 9 }} tickFormatter={v => v.slice(5)} />
-                    <YAxis tick={{ fontSize: 9 }} />
-                    <Tooltip contentStyle={{ fontSize: 11 }} labelFormatter={v => `Date: ${v}`} />
-                    <Bar dataKey="bot_hits" fill="#f59e0b" name="Bot" radius={[2, 2, 0, 0]} />
-                    <Bar dataKey="human_hits" fill="#6366f1" name="Human" radius={[2, 2, 0, 0]} />
-                    <Legend wrapperStyle={{ fontSize: 10 }} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          )}
-
-          {botAnalytics.top_bots?.length > 0 && (
-            <div className="mt-4">
-              <div className="text-[10px] text-gray-400 font-semibold mb-2 uppercase tracking-wider">Top Bots (by hits)</div>
-              <div className="space-y-1.5">
-                {botAnalytics.top_bots.slice(0, 10).map((b, i) => {
-                  const maxHits = botAnalytics.top_bots[0]?.hits || 1;
-                  const pct = Math.round((b.hits / maxHits) * 100);
-                  return (
-                    <div key={i} className="flex items-center gap-2">
-                      <span className="text-[10px] text-gray-600 font-medium w-28 truncate">{b.bot}</span>
-                      <div className="flex-1 h-3 bg-gray-100 rounded-full overflow-hidden">
-                        <div className="h-full bg-amber-400 rounded-full" style={{ width: `${pct}%` }} />
-                      </div>
-                      <span className="text-[10px] text-gray-500 w-14 text-right">{b.hits.toLocaleString()}</span>
-                      <span className="text-[9px] text-gray-400 w-12 text-right">{b.unique_ips} IPs</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {botAnalytics.per_bot_pages?.length > 0 && (
-            <div className="mt-4">
-              <div className="text-[10px] text-gray-400 font-semibold mb-2 uppercase tracking-wider">Pages Fetched per Bot</div>
-              <div className="flex flex-wrap gap-1.5">
-                {botAnalytics.per_bot_pages.slice(0, 10).map((b, i) => (
-                  <span key={i} className="text-[10px] px-2 py-0.5 rounded-md text-violet-700 bg-violet-50 border border-violet-200">
-                    {b.bot}: {b.pages_fetched} pages
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-        </GlassCard>
-      )}
-      </SectionErrorBoundary>
+      {/* Legacy "Bot Traffic Analytics" card removed — its content
+          (bot vs human totals, top bots, per-bot pages) was sourced
+          from local server logs and duplicated what the
+          authoritative Cloudflare AI Crawl Control card below now
+          shows. The CF card uses verified-bot data straight from
+          Cloudflare's GraphQL feed (the same dataset CF's own
+          dashboard reads), so it's the canonical source of truth.
+          The `botAnalytics` API endpoint is intentionally still
+          fetched in case other components or alerts depend on it. */}
 
       <SectionErrorBoundary name="CF AI Crawl Control">
       {cfCrawlControl && (
