@@ -101,8 +101,17 @@ _EMBED_DIMENSIONS = 1024
 
 
 # ── Auth detection ──────────────────────────────────────────────────────────
+# Credential sources, in priority order:
+#   1. VERTEX_SERVICE_ACCOUNT          — explicit Syrabit-side SA JSON
+#   2. GOOGLE_APPLICATION_CREDENTIALS_JSON — canonical Google env var, used
+#      by the rest of the stack (admin tools, GCS clients, etc.). Adding it
+#      here means a single Google service-account secret can power both the
+#      AI client and any other GCP integration without duplication.
+#   3. GEMINI_API_KEY                  — AIza-style direct AI Studio key
+#      (or a JSON SA blob if someone parked it here historically).
 _KEY_RAW = (
     os.getenv("VERTEX_SERVICE_ACCOUNT", "").strip()
+    or os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON", "").strip()
     or os.getenv("GEMINI_API_KEY", "").strip()
 )
 
@@ -190,9 +199,10 @@ _AUTH_MODE = _auth_mode_label()
 # made an entire stub-mode regression silent for days).
 if _AUTH_MODE == "disabled":
     logger.error(
-        "vertex_services: NO credentials configured. Set VERTEX_SERVICE_ACCOUNT or "
-        "GEMINI_API_KEY, or configure CF_AI_GATEWAY_ACCOUNT_ID + CF_AI_GATEWAY_ID "
-        "with a BYOK binding. Every Gemini-backed feature will return None / 503."
+        "vertex_services: NO credentials configured. Set VERTEX_SERVICE_ACCOUNT, "
+        "GOOGLE_APPLICATION_CREDENTIALS_JSON, or GEMINI_API_KEY, or configure "
+        "CF_AI_GATEWAY_ACCOUNT_ID + CF_AI_GATEWAY_ID with a BYOK binding. "
+        "Every Gemini-backed feature will return None / 503."
     )
     if os.environ.get("VERTEX_REQUIRED", "").strip().lower() in ("1", "true", "yes", "on"):
         # Opt-in hard-fail for deploys that want boot to error rather

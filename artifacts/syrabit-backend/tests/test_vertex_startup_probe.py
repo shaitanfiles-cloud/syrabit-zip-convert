@@ -67,7 +67,19 @@ def _extract_probe_callable():
 
     stub_logger.addHandler(_Capture())
 
-    namespace: dict[str, Any] = {"logger": stub_logger, "asyncio": asyncio}
+    # Globals the probe body references at the module level. Kept in
+    # one dict so adding a new dependency on a stdlib symbol (e.g.
+    # ``os.environ`` for the configurable timeout introduced after the
+    # 2026-04-25 audit) is a one-line change here instead of N test
+    # updates.
+    import os as _os
+    from typing import Optional as _Optional
+    namespace: dict[str, Any] = {
+        "logger": stub_logger,
+        "asyncio": asyncio,
+        "os": _os,
+        "Optional": _Optional,
+    }
     exec(compile(src, str(SERVER_PY), "exec"), namespace)
     return namespace["_vertex_startup_probe"], captured, namespace
 
@@ -253,3 +265,192 @@ def test_probe_swallows_exceptions_and_logs_error(monkeypatch):
     errors = [r for r in captured if r.levelno == logging.ERROR]
     assert errors
     assert "boom" in errors[0].getMessage()
+
+
+# ---------------------------------------------------------------------------
+# 3. Failure-path diagnostics (post-2026-04-25 audit)
+# ---------------------------------------------------------------------------
+#
+# Before the audit fix, both the timeout and exception branches called
+# ``vertex_health_cache.record(False, reason=..., source="startup")`` WITHOUT
+# passing ``auth_mode`` or ``via_cf_gateway``. That made ``/healthz/ai`` show
+# ``"auth_mode": null`` even when credentials WERE configured and the upstream
+# was simply slow — operators couldn't tell whether the box had no creds at
+# all or whether SA-mode was attempted and the network hung.
+#
+# These tests pin the new behavior: failure paths must look up the auth
+# meta from the vertex_services module (which captures ``_AUTH_MODE`` /
+# ``_CF_GW_ENABLED`` at import time) and forward it into the cache.
+
+def _extract_record_calls(monkeypatch):
+    """Patch vertex_health_cache.record to capture call kwargs and return
+    the captured list. Stubs the module before the probe runs."""
+    import sys
+    import types
+
+    captured: list[dict[str, Any]] = []
+    stub = types.ModuleType("vertex_health_cache")
+
+    def _record(ok, **kwargs):  # noqa: ANN001
+        captured.append({"ok": ok, **kwargs})
+
+    stub.record = _record  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "vertex_health_cache", stub)
+    return captured
+
+
+def test_timeout_path_captures_auth_mode_and_gateway(monkeypatch):
+    """Regression test: the timeout branch must forward ``auth_mode`` and
+    ``via_cf_gateway`` to the health cache (looked up from the
+    vertex_services module-level state) so /healthz/ai reports a real
+    auth mode instead of null.
+    """
+    probe, captured_logs, ns = _extract_probe_callable()
+    captured_records = _extract_record_calls(monkeypatch)
+
+    import sys
+    import types
+    fake_vs = types.ModuleType("vertex_services")
+    fake_vs._AUTH_MODE = "vertex_ai_service_account"  # type: ignore[attr-defined]
+    fake_vs._CF_GW_ENABLED = True  # type: ignore[attr-defined]
+
+    async def _hang():
+        await asyncio.sleep(60)
+        return {}
+
+    fake_vs.health_check = _hang  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "vertex_services", fake_vs)
+
+    real_wait_for = asyncio.wait_for
+
+    async def _fast_wait_for(coro, timeout):  # noqa: ARG001
+        return await real_wait_for(coro, timeout=0.05)
+
+    monkeypatch.setattr(asyncio, "wait_for", _fast_wait_for)
+
+    _run(probe())
+
+    assert len(captured_records) == 1, "Probe must record exactly one outcome"
+    rec = captured_records[0]
+    assert rec["ok"] is False
+    assert rec["auth_mode"] == "vertex_ai_service_account", (
+        f"Expected auth_mode forwarded from vertex_services._AUTH_MODE, "
+        f"got {rec.get('auth_mode')!r}. Without this, /healthz/ai shows "
+        f"auth_mode: null on timeout — operators can't distinguish a "
+        f"no-credentials deploy from a slow upstream."
+    )
+    assert rec["via_cf_gateway"] is True
+    assert rec["source"] == "startup"
+    assert "timed out" in rec["reason"].lower()
+
+
+def test_exception_path_captures_auth_mode_and_gateway(monkeypatch):
+    """Same regression as the timeout test, but for the generic-exception
+    branch (e.g. TLS handshake error). The cache must still record which
+    auth path was attempted.
+    """
+    probe, captured_logs, ns = _extract_probe_callable()
+    captured_records = _extract_record_calls(monkeypatch)
+
+    import sys
+    import types
+    fake_vs = types.ModuleType("vertex_services")
+    fake_vs._AUTH_MODE = "google_ai_studio_api_key"  # type: ignore[attr-defined]
+    fake_vs._CF_GW_ENABLED = False  # type: ignore[attr-defined]
+
+    async def _boom():
+        raise RuntimeError("TLS handshake refused")
+
+    fake_vs.health_check = _boom  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "vertex_services", fake_vs)
+
+    _run(probe())
+
+    assert len(captured_records) == 1
+    rec = captured_records[0]
+    assert rec["ok"] is False
+    assert rec["auth_mode"] == "google_ai_studio_api_key"
+    assert rec["via_cf_gateway"] is False
+    assert "TLS handshake refused" in rec["reason"]
+
+
+def test_probe_timeout_is_configurable_via_env(monkeypatch):
+    """The cold-start probe budget must be configurable. The default of
+    15s replaced the legacy 5s (which was too tight for two sequential
+    HTTPS calls + OAuth2 token exchange on a cold container). When
+    ``VERTEX_STARTUP_PROBE_TIMEOUT_S`` is set, the probe must honor it
+    so operators can tune up/down per environment without a code change.
+    """
+    probe, captured_logs, ns = _extract_probe_callable()
+
+    import sys
+    import types
+    fake_vs = types.ModuleType("vertex_services")
+    fake_vs._AUTH_MODE = "disabled"  # type: ignore[attr-defined]
+    fake_vs._CF_GW_ENABLED = False  # type: ignore[attr-defined]
+
+    seen_timeouts: list[float] = []
+    real_wait_for = asyncio.wait_for
+
+    async def _spy_wait_for(coro, timeout):
+        seen_timeouts.append(float(timeout))
+        # Run the coro to completion so the probe path is exercised end-to-end.
+        return await real_wait_for(coro, timeout=1.0)
+
+    async def _ok():
+        return {
+            "embeddings": True,
+            "generation": True,
+            "auth_mode": "disabled",
+            "via_cf_gateway": False,
+        }
+
+    fake_vs.health_check = _ok  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "vertex_services", fake_vs)
+    # Stub the cache so we don't depend on the real module here.
+    _extract_record_calls(monkeypatch)
+    monkeypatch.setattr(asyncio, "wait_for", _spy_wait_for)
+    monkeypatch.setenv("VERTEX_STARTUP_PROBE_TIMEOUT_S", "27")
+
+    _run(probe())
+
+    assert seen_timeouts, "Probe must call asyncio.wait_for"
+    assert seen_timeouts[0] == 27.0, (
+        f"Expected probe to honor VERTEX_STARTUP_PROBE_TIMEOUT_S=27, "
+        f"got timeout={seen_timeouts[0]!r}."
+    )
+
+
+def test_probe_timeout_default_is_15_seconds(monkeypatch):
+    """Without the env override the default budget must be 15s, not the
+    old 5s — the audit found 5s was insufficient for cold-start cases.
+    """
+    probe, captured_logs, ns = _extract_probe_callable()
+
+    import sys
+    import types
+    fake_vs = types.ModuleType("vertex_services")
+    fake_vs._AUTH_MODE = "disabled"  # type: ignore[attr-defined]
+    fake_vs._CF_GW_ENABLED = False  # type: ignore[attr-defined]
+
+    seen_timeouts: list[float] = []
+    real_wait_for = asyncio.wait_for
+
+    async def _spy_wait_for(coro, timeout):
+        seen_timeouts.append(float(timeout))
+        return await real_wait_for(coro, timeout=1.0)
+
+    async def _ok():
+        return {"embeddings": True, "generation": True}
+
+    fake_vs.health_check = _ok  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "vertex_services", fake_vs)
+    _extract_record_calls(monkeypatch)
+    monkeypatch.setattr(asyncio, "wait_for", _spy_wait_for)
+    monkeypatch.delenv("VERTEX_STARTUP_PROBE_TIMEOUT_S", raising=False)
+
+    _run(probe())
+
+    assert seen_timeouts and seen_timeouts[0] == 15.0, (
+        f"Default startup-probe timeout must be 15s, got {seen_timeouts!r}."
+    )

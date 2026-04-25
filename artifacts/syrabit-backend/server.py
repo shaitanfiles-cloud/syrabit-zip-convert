@@ -175,25 +175,69 @@ async def _vertex_startup_probe() -> None:
     deploy logs instead of waiting for a user-facing 502. Runs as a
     background task via ``asyncio.create_task`` so it never blocks the
     API from accepting requests.
+
+    The wait_for budget is configurable via ``VERTEX_STARTUP_PROBE_TIMEOUT_S``
+    (default 15s). The legacy 5s budget was unrealistic for the cold-start
+    path: ``health_check()`` does TWO sequential HTTPS calls (embed +
+    generate), each requiring DNS + TLS + (for SA mode) a fresh OAuth2
+    token exchange. A cold container in a region with elevated baseline
+    latency to ``*-aiplatform.googleapis.com`` regularly exceeded 5s and
+    booted into a permanent ``unhealthy`` state on otherwise-working
+    deploys (#audit 2026-04-25).
+
+    Failure paths now also pass ``auth_mode`` and ``via_cf_gateway`` to
+    the cache (read from the vertex_services module-level state) so
+    ``/healthz/ai`` reports which auth path was attempted instead of
+    showing ``null``.
     """
     import vertex_health_cache
+
+    def _probe_auth_meta() -> tuple[Optional[str], Optional[bool]]:
+        """Best-effort lookup of the auth_mode + gateway flag from the
+        already-imported vertex_services module. Returns (None, None)
+        when the module hasn't loaded yet (e.g. import itself failed)."""
+        try:
+            import vertex_services as _vs
+            return (
+                getattr(_vs, "_AUTH_MODE", None),
+                getattr(_vs, "_CF_GW_ENABLED", None),
+            )
+        except Exception:  # pragma: no cover — defensive
+            return (None, None)
+
+    timeout_s = max(1.0, float(os.environ.get("VERTEX_STARTUP_PROBE_TIMEOUT_S", "15") or 15))
+
     try:
         import vertex_services
         result = await asyncio.wait_for(
-            vertex_services.health_check(), timeout=5.0
+            vertex_services.health_check(), timeout=timeout_s
         )
     except asyncio.TimeoutError:
+        auth_mode, via_cf_gateway = _probe_auth_meta()
         reason = (
-            "timed out after 5s — upstream (Vertex / AI Gateway) is "
-            "unreachable or hung."
+            f"timed out after {timeout_s:.0f}s — upstream (Vertex / AI Gateway) "
+            f"is unreachable or hung."
         )
         logger.error(f"[STARTUP-PROBE] Gemini self-check FAILED: {reason}")
-        vertex_health_cache.record(False, reason=reason, source="startup")
+        vertex_health_cache.record(
+            False,
+            reason=reason,
+            auth_mode=auth_mode,
+            via_cf_gateway=via_cf_gateway,
+            source="startup",
+        )
         return
     except Exception as exc:
+        auth_mode, via_cf_gateway = _probe_auth_meta()
         reason = f"vertex health_check raised: {exc!r}"
         logger.error(f"[STARTUP-PROBE] {reason}")
-        vertex_health_cache.record(False, reason=reason, source="startup")
+        vertex_health_cache.record(
+            False,
+            reason=reason,
+            auth_mode=auth_mode,
+            via_cf_gateway=via_cf_gateway,
+            source="startup",
+        )
         return
     embed_ok = bool(result.get("embeddings"))
     gen_ok = bool(result.get("generation"))

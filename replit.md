@@ -98,3 +98,18 @@ The cron-health pills rendered in the AdminHealth dashboard follow a uniform `<c
 (Note: incidental *text* mentions of `trustpilot-cron-*` exist in comments, this Operational Notes section, and the wrapper file's documentation. Those are historical context, not runtime selectors, and do not affect the audit.)
 
 **Backwards-compat alias (Task #843):** `<TrustpilotRefreshCronPill>` also emits a `hidden`/`aria-hidden` sibling block carrying the legacy `trustpilot-cron-{tile,status,pill,run-link,refresh}` testIds. This protects out-of-repo surfaces — an external Playwright suite kept in another repo, a Cloudflare Browser Rendering uptime probe, a Sentry visual-regression baseline, an admin runbook screenshot — that cannot be inspected from this repository. Selector-existence assertions on the old prefix keep passing; visibility-strict assertions (`toBeVisible()`, pixel-diff) are *not* preserved because the alias element is hidden, so any consumer relying on those semantics still needs to migrate. The alias has a delete-by date of **2026-07-24** (90 days from the rename) noted in the wrapper file's comment.
+
+### Vertex AI / Cloudflare AI Gateway credential & probe configuration
+
+**Credential resolution order** (`artifacts/syrabit-backend/vertex_services.py`):
+
+1. `VERTEX_SERVICE_ACCOUNT` — explicit Syrabit-side service-account JSON (highest priority).
+2. `GOOGLE_APPLICATION_CREDENTIALS_JSON` — canonical Google env var, also used by other GCP integrations on the box. Added 2026-04-25 so a single Google secret can power both Vertex and any future GCS / Vertex Search / Document AI client without a duplicated `VERTEX_SERVICE_ACCOUNT`.
+3. `GEMINI_API_KEY` — accepts either an `AIza…` direct AI Studio key OR a JSON SA blob if someone parked it here historically. Also acts as a runtime rescue when the SA path returns 403 (`_attempt_auth_rescue`).
+
+When all three are absent the module sets `_AUTH_MODE = "disabled"` and emits a single `ERROR` log line listing every accepted source. Set `VERTEX_REQUIRED=1` to make boot hard-fail in that case instead of starting in degraded mode.
+
+**Startup-probe budget** (`artifacts/syrabit-backend/server.py:_vertex_startup_probe`):
+
+- Timeout is configurable via `VERTEX_STARTUP_PROBE_TIMEOUT_S` (default **15s**, was 5s pre-2026-04-25). The legacy 5s budget was insufficient for the cold-start path because `vertex_services.health_check()` does TWO sequential HTTPS calls (embed + generate), each requiring DNS + TLS + (for SA mode) an OAuth2 token exchange against `oauth2.googleapis.com`. A cold container in a region with elevated baseline latency to `*-aiplatform.googleapis.com` regularly exceeded 5s and booted into a permanent `unhealthy` cache state on otherwise-working deploys (root cause discovered in the 2026-04-25 production audit when `/healthz/ai` showed `auth_mode: null`).
+- Both failure paths (timeout + generic exception) now look up `_AUTH_MODE` and `_CF_GW_ENABLED` from the `vertex_services` module-level state and forward them into `vertex_health_cache.record(...)`. Without this the cache stayed at `auth_mode: null` on every failure — operators couldn't distinguish a no-credentials deploy from a slow upstream. Both behaviours are pinned by tests in `tests/test_vertex_startup_probe.py::test_timeout_path_captures_auth_mode_and_gateway` and `…::test_exception_path_captures_auth_mode_and_gateway`.
