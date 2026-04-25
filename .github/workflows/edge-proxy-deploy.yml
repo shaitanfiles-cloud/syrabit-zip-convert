@@ -1,0 +1,254 @@
+name: edge-proxy-deploy
+
+# Task #875 — Wire the edge-proxy preview smoke test into CI so it runs
+# automatically after every wrangler deploy, eliminating the "remember to run
+# step 3" failure mode in the promote runbook.
+#
+# Pipeline (push to master/main with workers/edge-proxy/** changed):
+#
+#   deploy-preview ──► smoke-preview ──► deploy-prod (manual approval)
+#
+# 1. deploy-preview
+#      `wrangler deploy --env preview` against
+#      syrabit-edge-preview.<account>.workers.dev. Authenticated via the
+#      CLOUDFLARE_API_TOKEN repo secret (needs edit:workers + edit:kv +
+#      edit:d1 scope) and CLOUDFLARE_ACCOUNT_ID.
+#
+# 2. smoke-preview
+#      `pnpm --filter syrabit-edge run smoke -- <preview-url>` against the
+#      hostname just published. D1_SYNC_SECRET and AI_FALLBACK_SECRET
+#      (preview values) are exported into the env so all five binding checks
+#      execute (kv-usage enumeration + AI-fallback end-to-end), not just the
+#      three that work secret-less. The script's final pass/fail line is
+#      mirrored into the run summary via `::notice::` so on-call sees the
+#      verdict in the GitHub UI without opening logs.
+#
+# 3. deploy-prod
+#      Runs only after smoke-preview is green. Pinned to the `production`
+#      GitHub environment so GitHub waits for a manual reviewer to approve
+#      the promotion before `wrangler deploy` (no --env, lands on the live
+#      syrabit.ai routes) executes. Auto-skips on PRs / non-default-branch
+#      pushes (the environment gate refuses non-protected refs).
+#
+# Required repo secrets (set under Settings → Secrets and variables →
+# Actions → Secrets):
+#   CLOUDFLARE_API_TOKEN   — token with Workers Scripts:Edit, Workers KV
+#                            Storage:Edit, D1:Edit, Workers AI:Edit on the
+#                            Syrabit account.
+#   CLOUDFLARE_ACCOUNT_ID  — the account ID Wrangler should target.
+#   D1_SYNC_SECRET         — preview-env value (matches the secret bound
+#                            to the preview Worker via
+#                            `wrangler secret put D1_SYNC_SECRET --env preview`).
+#                            Without it, smoke skips the kv-usage step.
+#   AI_FALLBACK_SECRET     — preview-env value (matches
+#                            EDGE_AI_FALLBACK_SECRET on the preview Worker).
+#                            Without it, the AI-fallback test only proves
+#                            the gate is wired, not Workers AI itself.
+#
+# Required repo variable (Settings → Secrets and variables → Actions →
+# Variables):
+#   CF_WORKERS_SUBDOMAIN   — the account's workers.dev subdomain, used to
+#                            build https://syrabit-edge-preview.<sub>.workers.dev
+#                            for the smoke step. Falls back to
+#                            `wrangler deployments list --env preview`
+#                            parsing if unset.
+#
+# Required GitHub environment:
+#   production — protect with required reviewers (Settings → Environments →
+#                production → Required reviewers) so the prod promote waits
+#                for human approval. Without the gate the prod deploy will
+#                run unattended after every smoke-green push.
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - "workers/edge-proxy/**"
+      - ".github/workflows/edge-proxy-deploy.yml"
+  workflow_dispatch:
+    inputs:
+      skip_prod:
+        description: "Skip the prod promote step (preview-only run)."
+        required: false
+        type: boolean
+        default: false
+
+# Serialize edge-proxy deploys so two pushes back-to-back don't race
+# wrangler against itself (Cloudflare rejects concurrent deploys to the
+# same Worker with a 4xx, which would falsely fail the second build).
+concurrency:
+  group: edge-proxy-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-preview:
+    name: wrangler deploy --env preview
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Verify Cloudflare credentials present
+        run: |
+          if [ -z "${CLOUDFLARE_API_TOKEN}" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN repo secret is not set."
+            exit 1
+          fi
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID}" ]; then
+            echo "::error::CLOUDFLARE_ACCOUNT_ID repo secret is not set."
+            exit 1
+          fi
+
+      - name: Install workspace deps (resolves wrangler from the lockfile)
+        run: pnpm --filter syrabit-edge install --frozen-lockfile
+
+      - name: wrangler deploy --env preview
+        run: pnpm --filter syrabit-edge run deploy:preview
+
+  smoke-preview:
+    name: smoke-test preview hostname
+    needs: deploy-preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      # Both secrets are read by scripts/smoke-test.sh: D1_SYNC_SECRET
+      # unlocks /api/edge/kv-usage (KV bindings enumeration) and
+      # AI_FALLBACK_SECRET (legacy alias for EDGE_AI_FALLBACK_SECRET)
+      # upgrades the AI-fallback check from gate-only (401) to full
+      # Workers-AI round-trip (200). Both must be the *preview*-env
+      # values, i.e. matching the secrets set on the preview Worker via
+      # `wrangler secret put … --env preview`.
+      D1_SYNC_SECRET: ${{ secrets.D1_SYNC_SECRET }}
+      AI_FALLBACK_SECRET: ${{ secrets.AI_FALLBACK_SECRET }}
+      CF_WORKERS_SUBDOMAIN: ${{ vars.CF_WORKERS_SUBDOMAIN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Install workspace deps (need wrangler for URL discovery)
+        run: pnpm --filter syrabit-edge install --frozen-lockfile
+
+      - name: Resolve preview hostname
+        id: resolve
+        run: |
+          set -euo pipefail
+          # Prefer the explicit subdomain var (avoids a wrangler API call
+          # for what is a static value per account) and fall back to the
+          # deployments-list parse path that smoke-preview.sh already has.
+          if [ -n "${CF_WORKERS_SUBDOMAIN}" ]; then
+            url="https://syrabit-edge-preview.${CF_WORKERS_SUBDOMAIN}.workers.dev"
+          else
+            echo "CF_WORKERS_SUBDOMAIN repo variable is unset — discovering via wrangler."
+            url=$(
+              cd workers/edge-proxy && \
+              ./node_modules/.bin/wrangler deployments list --env preview 2>/dev/null \
+                | grep -oE 'https://[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)?\.workers\.dev' \
+                | head -n1
+            )
+            if [ -z "${url}" ]; then
+              echo "::error::could not resolve preview hostname; set the CF_WORKERS_SUBDOMAIN repo variable."
+              exit 1
+            fi
+          fi
+          echo "preview_url=${url}" >> "$GITHUB_OUTPUT"
+          echo "resolved preview hostname: ${url}"
+
+      - name: smoke-test preview
+        id: smoke
+        run: |
+          set -o pipefail
+          # Capture the script's final summary line (e.g. "✓ 7/7 passed
+          # in 12s — https://…") so we can echo it back via ::notice::.
+          # `tee` keeps the live output streaming into the build log so
+          # operators can still see per-check output as it happens.
+          summary_file="$RUNNER_TEMP/smoke-summary.txt"
+          pnpm --filter syrabit-edge run smoke -- "${{ steps.resolve.outputs.preview_url }}" \
+            | tee "$summary_file"
+          status=${PIPESTATUS[0]}
+          # The summary line starts with ✓ (pass) or ✗ (fail) and is the
+          # last non-empty line printed by print_summary().
+          last_line=$(grep -E '^[✓✗]' "$summary_file" | tail -n1 || true)
+          if [ -z "$last_line" ]; then
+            last_line="(no summary line captured — see step log)"
+          fi
+          if [ "$status" -eq 0 ]; then
+            echo "::notice title=edge-proxy preview smoke::${last_line}"
+          else
+            echo "::error title=edge-proxy preview smoke FAILED::${last_line}"
+          fi
+          exit "$status"
+
+  deploy-prod:
+    name: wrangler deploy (prod) — manual approval
+    needs: smoke-preview
+    if: >-
+      (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') &&
+      !(github.event_name == 'workflow_dispatch' && inputs.skip_prod)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # GitHub blocks this job until a `production`-environment reviewer
+    # approves it (configured under Settings → Environments → production
+    # → Required reviewers). The preview deploy + smoke have already run;
+    # only the live syrabit.ai/* route flip waits on a human.
+    environment:
+      name: production
+      url: https://api.syrabit.ai
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Install workspace deps (frozen lockfile)
+        run: pnpm --filter syrabit-edge install --frozen-lockfile
+
+      - name: wrangler deploy (prod)
+        run: pnpm --filter syrabit-edge run deploy
+
+      - name: Post-deploy notice
+        run: |
+          echo "::notice title=edge-proxy prod deploy::promoted to syrabit.ai/* — tail with \`wrangler tail --format=pretty\` for ~10 min."
