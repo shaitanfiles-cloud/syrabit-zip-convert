@@ -766,13 +766,24 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
     if (!adminToken) return;
     let cancelled = false;
     // True iff the response shape is one we can actually surface:
-    // a connected-CF payload with a non-null visitors total. Anything
-    // else (fetch threw, connected:false, totals missing, totals.visitors
-    // is null/undefined) trips the fallback path.
+    // a connected-CF payload with a non-null total-visits count AND
+    // complete bucket coverage for the requested window. We require
+    // `visits_coverage.complete` because Cloudflare's adaptive-groups
+    // dataset (the only one that still exposes `sum.visits`) is capped
+    // at ~8 days of retention on most plans — so a 30d call typically
+    // returns a non-null but partial total (~7-8 of 30 days), which
+    // would under-count by 4x if shown under a "30 days" headline.
+    // Falling through to the 7d window in that case gives a complete,
+    // honest number.
     const isUsable = (data) => {
       if (!data || data.connected === false) return false;
-      const v = data?.totals?.visitors;
-      return v !== null && v !== undefined;
+      const v = data?.totals?.visits;
+      if (v === null || v === undefined) return false;
+      const cov = data?.totals?.visits_coverage;
+      // If coverage info is missing assume usable (back-compat with
+      // older backend versions that don't emit the field).
+      if (!cov) return true;
+      return cov.complete === true;
     };
     const tryRange = async (range) => {
       try {
@@ -1286,26 +1297,30 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
             if (n < 1e9) return `${(n / 1e6).toFixed(2).replace(/\.?0+$/, '')}M`;
             return `${(n / 1e9).toFixed(2)}B`;
           };
-          // Task #741 follow-up: dropped the "Total Visitors" (sessions)
-          // tile — the adaptive-groups visits count was orders of magnitude
-          // higher than CF dashboard expectations and confused admins. We
-          // keep "Unique Visitors" (uniques from httpRequests1{d,h}Groups)
-          // as the single visitor metric. Backend still emits totals.visits
-          // / series[].visits for any future consumers.
-          // Unique Visitors headline is hard-pinned to the locked
+          // "Total Visitors" headline is hard-pinned to the locked
           // visitors window (`cfVisitors30d` — see the fetcher above).
           // The fetcher prefers a 30-day window and transparently
-          // degrades to 7-day if Cloudflare returns no data for 30d
-          // (which happens periodically under quota / token rotation).
-          // The variable name is kept for backward-compat; the actual
-          // window in use is in `cfVisitorsWindow` and surfaced in
-          // the sub-label so the operator knows when we degraded.
-          const visitorsLockedTotal = cfVisitors30d?.totals?.visitors ?? totals.visitors;
-          const visitorsLabel = cfVisitorsWindow === '7d' ? 'Unique Visitors (7d)' : 'Unique Visitors';
+          // degrades to 7-day if Cloudflare returns incomplete or no
+          // visits data for 30d (typical because the adaptive-groups
+          // dataset that exposes `sum.visits` is capped at ~8 days
+          // retention on most CF plans).
+          //
+          // We use `totals.visits` (total sessions / visits) rather
+          // than `totals.visitors` (uniques) per product requirement.
+          // The "today" sub-line uses `lastBucket.visits` so it stays
+          // consistent with the headline; on the initial-paint path
+          // (before cfOverview lands) we fall back to `cf.visitors_today`
+          // (uniques) — the only "visits today" signal available before
+          // the GraphQL overview returns — which is harmless because
+          // it's only used for one paint and the active-range refresh
+          // immediately replaces it.
+          const visitorsLockedTotal = cfVisitors30d?.totals?.visits ?? totals.visits ?? totals.visitors;
+          const visitorsLabel = cfVisitorsWindow === '7d' ? 'Total Visitors (7d)' : 'Total Visitors';
+          const visitorsToday = useOverview ? (lastBucket?.visits ?? lastBucket?.visitors) : cf.visitors_today;
           const tiles = [
             { key: 'requests',   label: 'Interactions',     total: totals.requests,       today: useOverview ? lastBucket?.requests   : cf.requests_today,   fmt: fmtNum },
             { key: 'bytes',      label: 'Bandwidth',        total: totals.bytes,          today: useOverview ? lastBucket?.bytes      : cf.bytes_today,      fmt: fmtBytes },
-            { key: 'visitors',   label: visitorsLabel,      total: visitorsLockedTotal,   today: useOverview ? lastBucket?.visitors   : cf.visitors_today,   fmt: fmtNum },
+            { key: 'visitors',   label: visitorsLabel,      total: visitorsLockedTotal,   today: visitorsToday,                                              fmt: fmtNum },
             { key: 'page_views', label: 'Page views',       total: totals.page_views,     today: useOverview ? lastBucket?.page_views : cf.page_views_today, fmt: fmtNum },
           ];
           const hasData = (useOverview ? series.length > 0 : (vs.cloudflare && series.length > 0));
