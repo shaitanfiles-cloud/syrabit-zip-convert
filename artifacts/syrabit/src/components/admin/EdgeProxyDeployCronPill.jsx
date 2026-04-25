@@ -1,0 +1,111 @@
+import React from 'react';
+import { ExternalLink } from 'lucide-react';
+import CronHealthPill from './CronHealthPill';
+import { captionLine, joinCaptionParts } from './cronCaptionHelpers';
+
+// Task #882 — sibling pill for the unattended `edge-proxy-deploy`
+// GitHub Actions workflow (.github/workflows/edge-proxy-deploy.yml).
+// Same shape as the cf-waf-drift wrapper next door, with one subtle
+// twist in the caption: this cron does not post a heartbeat to the
+// backend (the GitHub Actions REST API is the source of truth for
+// "did the workflow run and what did it conclude"), so the caption
+// reads "Last run X ago — <conclusion>" instead of the
+// heartbeat-centric phrasing the Trustpilot / cf-waf-drift pills
+// use. The colour mapping is driven by the backend translating
+// GitHub's `conclusion` and run age into the shared CronHealthPill
+// status keys (healthy / silent / degraded / never_observed /
+// not_configured). Endpoint: /admin/health/edge-proxy-deploy/cron.
+//
+// testIds follow the AdminHealth cron-pill convention (replit.md
+// § "AdminHealth cron-pill testId convention"):
+//   edge-proxy-deploy-cron-{tile,status,pill,run-link,refresh}
+// plus the pill's own edge-proxy-deploy-cron-last-run-link when the
+// latest run carries an html_url (it almost always does — only a
+// brand-new workflow with zero runs produces null).
+
+const HEADER_TEXT_BY_STATUS = {
+  healthy: 'Edge-proxy deploy CI — passing',
+  silent: 'Edge-proxy deploy CI — last run failed',
+  degraded: 'Edge-proxy deploy CI — last run is stale',
+  never_observed: 'Edge-proxy deploy CI — no run yet',
+  not_configured: 'Edge-proxy deploy CI — not configured',
+  unknown: 'Edge-proxy deploy CI — status unknown',
+};
+
+const PILL_LABEL_BY_STATUS = {
+  healthy: 'CI HEALTHY',
+  silent: 'CI FAILED',
+  degraded: 'RUN STALE',
+  never_observed: 'NEVER RUN',
+  not_configured: 'NOT CONFIGURED',
+};
+
+const DEFAULT_WORKFLOW_URL =
+  'https://github.com/syrabit/syrabit/actions/workflows/edge-proxy-deploy.yml';
+
+const renderSubText = ({ data, status, isFailed, isDegraded, ageLabel: fmt }) => {
+  // The backend exposes the GitHub `updated_at` as `ageSeconds` and
+  // the GitHub `conclusion` verbatim. Compose the caption out of the
+  // same primitives the other cron pills use so the visual rhythm
+  // matches: "Last run Xh ago" for the primary line, with a suffix
+  // that depends on what mattered for the colour:
+  //   * On red (failure)   → suffix = "failure" so admins know why
+  //                          even before they hover.
+  //   * On amber (stale)   → suffix = "stale (>7d)" so the threshold
+  //                          is visible without reading the docs.
+  //   * Otherwise (green)  → suffix = the GitHub `conclusion`
+  //                          ("success", "in_progress", …) so a green
+  //                          pill still tells you whether the latest
+  //                          run completed or is queued/running.
+  const ageLbl = fmt(data?.ageSeconds);
+  const conclusionRaw = (data?.conclusion || '').toString();
+  const runStatusRaw = (data?.runStatus || '').toString();
+
+  const primary = captionLine('Last run', ageLbl, 'No run recorded yet');
+
+  let suffix = '';
+  if (isFailed) {
+    suffix = conclusionRaw || 'failure';
+  } else if (isDegraded) {
+    suffix = `stale (>${Math.floor((data?.staleThresholdSeconds || 7 * 86400) / 86400)}d)`;
+  } else if (status === 'healthy') {
+    // Prefer the conclusion ("success") when present; otherwise fall
+    // back to the run status ("in_progress", "queued") so a green
+    // pill mid-deploy still conveys what's actually happening.
+    suffix = conclusionRaw || runStatusRaw;
+  }
+  return joinCaptionParts([primary, suffix]);
+};
+
+const renderExtraActions = ({ data }) => {
+  const lastRunUrl = data?.lastRunUrl || data?.html_url;
+  if (!lastRunUrl) return null;
+  return (
+    <a
+      href={lastRunUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-[11px] text-violet-600 hover:text-violet-700 inline-flex items-center gap-1"
+      data-testid="edge-proxy-deploy-cron-last-run-link"
+      title="Open the most recent workflow run"
+    >
+      Last run <ExternalLink size={11} />
+    </a>
+  );
+};
+
+export default function EdgeProxyDeployCronPill({ data, loading, onRefresh }) {
+  return (
+    <CronHealthPill
+      data={data}
+      loading={loading}
+      onRefresh={onRefresh}
+      testId="edge-proxy-deploy-cron"
+      defaultWorkflowUrl={DEFAULT_WORKFLOW_URL}
+      headerTextByStatus={HEADER_TEXT_BY_STATUS}
+      pillLabelByStatus={PILL_LABEL_BY_STATUS}
+      renderSubText={renderSubText}
+      renderExtraActions={renderExtraActions}
+    />
+  );
+}

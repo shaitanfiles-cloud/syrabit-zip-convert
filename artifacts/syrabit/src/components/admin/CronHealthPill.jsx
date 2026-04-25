@@ -115,7 +115,17 @@ export default function CronHealthPill({
           onClick={onRefresh}
           disabled={loading}
           className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-white/60"
-          data-testid={`button-refresh-${testId}`}
+          // Task #882 — primary testId follows the AdminHealth cron-pill
+          // convention documented in replit.md (`<prefix>-refresh`); the
+          // `data-testid-legacy` attribute carries the historical
+          // `button-refresh-<prefix>` form so any external selector
+          // (Cloudflare Browser Rendering uptime probe, runbook
+          // screenshots, etc.) that grew up against the old shape
+          // before the convention block was added does not break.
+          // Querying by `data-testid` (the React Testing Library
+          // default) sees only the convention-correct primary form.
+          data-testid={`${testId}-refresh`}
+          data-testid-legacy={`button-refresh-${testId}`}
           title="Refresh"
         >
           <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />

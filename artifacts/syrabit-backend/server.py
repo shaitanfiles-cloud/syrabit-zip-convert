@@ -1324,6 +1324,11 @@ from routes.admin_trustpilot_jsonld_status import router as admin_trustpilot_jso
 from routes.admin_trustpilot_cron_alerts import router as admin_trustpilot_cron_alerts_router
 from routes.cf_waf_drift_cron_heartbeat import router as cf_waf_drift_cron_heartbeat_router
 from routes.admin_cf_waf_drift_cron_alerts import router as admin_cf_waf_drift_cron_alerts_router
+# Task #882 — surfaces the latest edge-proxy-deploy GitHub Actions run
+# as a cron pill in AdminHealth so a red `smoke-preview` regression
+# pages on-call via the dashboard they already watch, instead of
+# relying on someone noticing a red badge in the GitHub Actions UI.
+from routes.admin_health import router as admin_health_router
 from routes.admin_ads import router as admin_ads_router
 from routes.admin_review_prompts import router as admin_review_prompts_router
 from routes.edu_browser import router as edu_browser_router
@@ -1357,6 +1362,7 @@ api.include_router(admin_trustpilot_jsonld_status_router)
 api.include_router(admin_trustpilot_cron_alerts_router)
 api.include_router(cf_waf_drift_cron_heartbeat_router)
 api.include_router(admin_cf_waf_drift_cron_alerts_router)
+api.include_router(admin_health_router)
 api.include_router(admin_ads_router)
 api.include_router(admin_review_prompts_router)
 api.include_router(edu_browser_router)

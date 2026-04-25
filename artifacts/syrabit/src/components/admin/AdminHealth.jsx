@@ -3,6 +3,7 @@ import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi,
 import CronHealthPill from './CronHealthPill';
 import CfWafDriftCronPill from './CfWafDriftCronPill';
 import TrustpilotRefreshCronPill from './TrustpilotRefreshCronPill';
+import EdgeProxyDeployCronPill from './EdgeProxyDeployCronPill';
 import { toast } from 'sonner';
 import AdminQuickLinks from './AdminQuickLinks';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar, LineChart, Line } from 'recharts';
@@ -241,6 +242,30 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       .finally(() => setCfDriftCronLoading(false));
   }, [adminToken]);
 
+  // Task #882 — edge-proxy-deploy CI cron snapshot. Mirrors the
+  // cf-waf-drift pill above but the data source is the GitHub
+  // Actions REST API rather than a workflow-posted heartbeat (this
+  // workflow doesn't post one — see routes/admin_health.py for the
+  // full reasoning). Endpoint shape: /admin/health/edge-proxy-deploy/
+  // cron — status ∈ {healthy, silent, degraded, never_observed,
+  // not_configured, unknown} plus conclusion, html_url/lastRunUrl,
+  // updated_at, ageSeconds, runStatus, workflowUrl. The pill goes
+  // red on conclusion: "failure", amber on runs older than 7 days
+  // (deploys this rare are themselves suspicious — the workflow
+  // only fires on workers/edge-proxy/** pushes), green otherwise.
+  const [edgeProxyDeployCronHealth, setEdgeProxyDeployCronHealth] = useState(null);
+  const [edgeProxyDeployCronLoading, setEdgeProxyDeployCronLoading] = useState(false);
+
+  const loadEdgeProxyDeployCronHealth = useCallback(() => {
+    setEdgeProxyDeployCronLoading(true);
+    axios.get(`${API_BASE}/admin/health/edge-proxy-deploy/cron`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setEdgeProxyDeployCronHealth(r.data))
+      .catch(() => setEdgeProxyDeployCronHealth({ _error: true }))
+      .finally(() => setEdgeProxyDeployCronLoading(false));
+  }, [adminToken]);
+
   const loadTpJsonldReport = useCallback(() => {
     setTpJsonldLoading(true);
     axios.get(`${API_BASE}/admin/trustpilot-jsonld/report`, {
@@ -277,16 +302,19 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     loadTpJsonldAlerts();
     loadTpCronHealth();
     loadCfDriftCronHealth();
+    loadEdgeProxyDeployCronHealth();
     const id = setInterval(() => {
       loadTpJsonldReport();
       loadTpJsonldHistory();
       loadTpJsonldAlerts();
       loadTpCronHealth();
       loadCfDriftCronHealth();
+      loadEdgeProxyDeployCronHealth();
     }, 60000);
     return () => clearInterval(id);
   }, [adminToken, loadTpJsonldReport, loadTpJsonldHistory,
-      loadTpJsonldAlerts, loadTpCronHealth, loadCfDriftCronHealth]);
+      loadTpJsonldAlerts, loadTpCronHealth, loadCfDriftCronHealth,
+      loadEdgeProxyDeployCronHealth]);
 
   // Task #609 — managed AI response cache stats + admin purge controls.
   const [aiCacheStats, setAiCacheStats] = useState(null);
@@ -2209,6 +2237,25 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           data={cfDriftCronHealth}
           loading={cfDriftCronLoading}
           onRefresh={loadCfDriftCronHealth}
+        />
+        </SectionErrorBoundary>
+
+        <SectionErrorBoundary name="Edge-Proxy Deploy CI">
+        {/*
+          Task #882 — surface the latest `edge-proxy-deploy` GitHub
+          Actions run next to the other cron pills. The workflow runs
+          unattended on every push to master that touches
+          workers/edge-proxy/**; its `smoke-preview` job is the
+          canonical signal that the latest worker build still passes
+          the burst / D1 / KV / bot-cache checks. A red badge there
+          previously only lived in the GitHub Actions UI — this pill
+          puts it on the AdminHealth dashboard on-call already
+          watches. Endpoint: /admin/health/edge-proxy-deploy/cron.
+        */}
+        <EdgeProxyDeployCronPill
+          data={edgeProxyDeployCronHealth}
+          loading={edgeProxyDeployCronLoading}
+          onRefresh={loadEdgeProxyDeployCronHealth}
         />
         </SectionErrorBoundary>
 

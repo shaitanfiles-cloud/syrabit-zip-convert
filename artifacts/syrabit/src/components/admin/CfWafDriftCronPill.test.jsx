@@ -20,6 +20,7 @@ const TILE = 'cf-waf-drift-cron-tile';
 const STATUS = 'cf-waf-drift-cron-status';
 const PILL = 'cf-waf-drift-cron-pill';
 const RUN_LINK = 'cf-waf-drift-cron-run-link';
+const REFRESH = 'cf-waf-drift-cron-refresh';
 const LAST_RUN_LINK = 'cf-waf-drift-cron-last-run-link';
 
 const baseHealthy = {
@@ -69,6 +70,11 @@ describe('CfWafDriftCronPill', () => {
     // The Runs link always points at the workflow page.
     const runsLink = within(tile).getByTestId(RUN_LINK);
     expect(runsLink).toHaveAttribute('href', baseHealthy.workflowUrl);
+
+    // Task #882 — convention check: the refresh button must be
+    // queryable as `<prefix>-refresh` per the AdminHealth cron-pill
+    // testId convention block in replit.md.
+    expect(within(tile).getByTestId(REFRESH)).toBeTruthy();
   });
 
   it('renders the silent state in red with the silent header, "CRON SILENT" pill, and a stale heartbeat caption (days)', () => {

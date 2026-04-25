@@ -176,7 +176,12 @@ describe('CronHealthPill — testId templating', () => {
     expect(html).toContain('data-testid="foo-status"');
     expect(html).toContain('data-testid="foo-pill"');
     expect(html).toContain('data-testid="foo-run-link"');
-    expect(html).toContain('data-testid="button-refresh-foo"');
+    // Task #882 — primary refresh testId follows the AdminHealth
+    // cron-pill convention (replit.md § "AdminHealth cron-pill testId
+    // convention"). The legacy `button-refresh-<prefix>` form is
+    // preserved on `data-testid-legacy` for external selectors.
+    expect(html).toContain('data-testid="foo-refresh"');
+    expect(html).toContain('data-testid-legacy="button-refresh-foo"');
   });
 
   it('changes every templated testId when the testId prop changes', () => {
@@ -189,11 +194,13 @@ describe('CronHealthPill — testId templating', () => {
     expect(html).toContain('data-testid="cf-waf-status"');
     expect(html).toContain('data-testid="cf-waf-pill"');
     expect(html).toContain('data-testid="cf-waf-run-link"');
-    expect(html).toContain('data-testid="button-refresh-cf-waf"');
+    expect(html).toContain('data-testid="cf-waf-refresh"');
+    expect(html).toContain('data-testid-legacy="button-refresh-cf-waf"');
 
     // No leftover ids from the other test's testId value.
     expect(html).not.toContain('data-testid="foo-tile"');
-    expect(html).not.toContain('data-testid="button-refresh-foo"');
+    expect(html).not.toContain('data-testid="foo-refresh"');
+    expect(html).not.toContain('data-testid-legacy="button-refresh-foo"');
   });
 });
 
