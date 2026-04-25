@@ -747,26 +747,65 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
     loadCfOverview(cfRange);
   }, [cfRange, loadCfOverview]);
 
-  // Locked 30-day Cloudflare overview — used ONLY by the "Unique Visitors"
+  // Locked Cloudflare visitors window — used ONLY by the "Unique Visitors"
   // tile in the Traffic card so the headline always reads "uniques over
   // the last 30 days" regardless of which range pill (24h / 7d / 30d) is
   // currently active for the rest of the tiles. Refreshes hourly since the
   // 30-day window moves slowly enough that minute-level updates would be
   // wasted CF GraphQL calls.
+  //
+  // Fallback chain: prefer the 30-day window, but if that call fails OR
+  // comes back empty (CF GraphQL occasionally returns ``connected:false``
+  // for the 30d range under quota pressure / token churn), retry with
+  // the 7-day window so the tile never goes blank. We cache the window
+  // we actually used in `cfVisitorsWindow` so the tile sub-label can
+  // honestly say which one is being shown when we degrade.
   const [cfVisitors30d, setCfVisitors30d] = useState(null);
+  const [cfVisitorsWindow, setCfVisitorsWindow] = useState('30d');
   useEffect(() => {
     if (!adminToken) return;
     let cancelled = false;
-    const fetch30d = async () => {
+    // True iff the response shape is one we can actually surface:
+    // a connected-CF payload with a non-null visitors total. Anything
+    // else (fetch threw, connected:false, totals missing, totals.visitors
+    // is null/undefined) trips the fallback path.
+    const isUsable = (data) => {
+      if (!data || data.connected === false) return false;
+      const v = data?.totals?.visitors;
+      return v !== null && v !== undefined;
+    };
+    const tryRange = async (range) => {
       try {
-        const r = await adminGetCfOverview(adminToken, '30d');
-        if (!cancelled) setCfVisitors30d(r.data || null);
+        const r = await adminGetCfOverview(adminToken, range);
+        return isUsable(r?.data) ? r.data : null;
       } catch (e) {
-        if (!cancelled) log.error('Failed to load CF 30d uniques', { error: e.message });
+        log.warn(`CF visitors ${range} fetch failed`, { error: e.message });
+        return null;
       }
     };
-    fetch30d();
-    const interval = setInterval(fetch30d, 60 * 60 * 1000);
+    const fetchVisitors = async () => {
+      let data = await tryRange('30d');
+      let window = '30d';
+      if (!data) {
+        data = await tryRange('7d');
+        window = '7d';
+        if (data) {
+          log.warn('CF visitors fell back to 7d window — 30d returned no data');
+        }
+      }
+      if (cancelled) return;
+      if (data) {
+        setCfVisitors30d(data);
+        setCfVisitorsWindow(window);
+      } else {
+        log.error('CF visitors fetch failed for both 30d and 7d windows');
+        // Don't wipe the previous good value — leaving the existing
+        // state in place means the tile keeps showing the last known
+        // count instead of flashing back to the active-range fallback.
+      }
+    };
+    fetchVisitors();
+    const interval = setInterval(fetchVisitors, 60 * 60 * 1000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [adminToken]);
 
@@ -1253,18 +1292,21 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
           // keep "Unique Visitors" (uniques from httpRequests1{d,h}Groups)
           // as the single visitor metric. Backend still emits totals.visits
           // / series[].visits for any future consumers.
-          // Unique Visitors headline is hard-pinned to the locked 30-day
-          // CF overview (`cfVisitors30d`) regardless of the active range
-          // pill, per product requirement that the visitors tile always
-          // reads "uniques over the last 30 days". Falls back to the
-          // active-range total only if the 30d fetch hasn't completed
-          // yet so the tile never goes blank on first paint.
-          const visitors30dTotal = cfVisitors30d?.totals?.visitors ?? totals.visitors;
+          // Unique Visitors headline is hard-pinned to the locked
+          // visitors window (`cfVisitors30d` — see the fetcher above).
+          // The fetcher prefers a 30-day window and transparently
+          // degrades to 7-day if Cloudflare returns no data for 30d
+          // (which happens periodically under quota / token rotation).
+          // The variable name is kept for backward-compat; the actual
+          // window in use is in `cfVisitorsWindow` and surfaced in
+          // the sub-label so the operator knows when we degraded.
+          const visitorsLockedTotal = cfVisitors30d?.totals?.visitors ?? totals.visitors;
+          const visitorsLabel = cfVisitorsWindow === '7d' ? 'Unique Visitors (7d)' : 'Unique Visitors';
           const tiles = [
-            { key: 'requests',   label: 'Interactions',     total: totals.requests,    today: useOverview ? lastBucket?.requests   : cf.requests_today,   fmt: fmtNum },
-            { key: 'bytes',      label: 'Bandwidth',        total: totals.bytes,       today: useOverview ? lastBucket?.bytes      : cf.bytes_today,      fmt: fmtBytes },
-            { key: 'visitors',   label: 'Unique Visitors',  total: visitors30dTotal,   today: useOverview ? lastBucket?.visitors   : cf.visitors_today,   fmt: fmtNum },
-            { key: 'page_views', label: 'Page views',       total: totals.page_views,  today: useOverview ? lastBucket?.page_views : cf.page_views_today, fmt: fmtNum },
+            { key: 'requests',   label: 'Interactions',     total: totals.requests,       today: useOverview ? lastBucket?.requests   : cf.requests_today,   fmt: fmtNum },
+            { key: 'bytes',      label: 'Bandwidth',        total: totals.bytes,          today: useOverview ? lastBucket?.bytes      : cf.bytes_today,      fmt: fmtBytes },
+            { key: 'visitors',   label: visitorsLabel,      total: visitorsLockedTotal,   today: useOverview ? lastBucket?.visitors   : cf.visitors_today,   fmt: fmtNum },
+            { key: 'page_views', label: 'Page views',       total: totals.page_views,     today: useOverview ? lastBucket?.page_views : cf.page_views_today, fmt: fmtNum },
           ];
           const hasData = (useOverview ? series.length > 0 : (vs.cloudflare && series.length > 0));
           return (
