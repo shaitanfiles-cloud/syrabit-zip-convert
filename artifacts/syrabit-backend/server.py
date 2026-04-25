@@ -1318,6 +1318,7 @@ api = APIRouter(prefix="/api")
 
 from routes.auth import router as auth_router
 from routes.content import router as content_router
+from routes.topic_faq_jsonld import router as topic_faq_jsonld_router
 from routes.syllabus import router as syllabus_router
 from routes.ai_chat import router as ai_chat_router
 from routes.conversations import router as conversations_router
@@ -1358,6 +1359,7 @@ from routes.admin_seo_keywords import router as admin_seo_keywords_router
 
 api.include_router(auth_router)
 api.include_router(content_router)
+api.include_router(topic_faq_jsonld_router)
 api.include_router(syllabus_router)
 api.include_router(ai_chat_router)
 api.include_router(conversations_router)

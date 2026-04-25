@@ -261,6 +261,26 @@ export default function ChapterPage() {
   const [error, setError] = useState(null);
   const skipFirstFetchRef = useRef(!!initialChapterData);
   const [pyqData, setPyqData] = useState(null);
+  // P0 #1 of the AI-visibility plan — FAQPage JSON-LD entries built from
+  // the chapter's published MCQs. Fed into chapterSchema() via
+  // pageData.data.faq_entries so the existing JSON-LD pipeline emits a
+  // schema.org FAQPage node alongside Article / LearningResource.
+  //
+  // Sources, in priority order:
+  //   1. The prerender script (scripts/prerender-routes.mjs) bakes
+  //      `faq_entries` directly into the chapter preload payload, so
+  //      SSR-rendered HTML ships the FAQPage JSON-LD on first byte —
+  //      this is what crawlers (Googlebot, Perplexity, ChatGPT) see.
+  //   2. For non-prerendered routes served via the SPA shell, the
+  //      useEffect below fetches `/api/content/chapters/{id}/faq-jsonld`
+  //      and updates the head after hydration. Real-user browsers get
+  //      the same enhancement; AI crawlers that execute JS also pick
+  //      it up on the second render.
+  const [faqEntries, setFaqEntries] = useState(
+    Array.isArray(initialChapterData?.faq_entries)
+      ? initialChapterData.faq_entries
+      : null,
+  );
   const articleRef = useRef(null);
   const [quizOpen, setQuizOpen] = useState(false);
   const [activeId, setActiveId] = useState('');
@@ -386,6 +406,26 @@ export default function ChapterPage() {
       .get(`/content/chapters/${data.chapter_id}/topic-pyqs?limit=50`)
       .then(r => { if (!cancelled) setPyqData(r.data); })
       .catch(() => { if (!cancelled) setPyqData(null); });
+    return () => { cancelled = true; };
+  }, [data?.chapter_id]);
+
+  // P0 #1 of the AI-visibility plan — fetch FAQPage source data so the
+  // existing chapterSchema() builder can emit a schema.org FAQPage node.
+  // The endpoint returns 404 when the chapter has no MCQ-derived Q+A
+  // pairs, in which case we leave faqEntries null and the JSON-LD path
+  // simply skips emitting FAQPage (existing behaviour).
+  useEffect(() => {
+    setFaqEntries(null);
+    if (!data?.chapter_id) return;
+    let cancelled = false;
+    apiClient()
+      .get(`/content/chapters/${data.chapter_id}/faq-jsonld`)
+      .then(r => {
+        if (cancelled) return;
+        const entries = r?.data?.entries;
+        if (Array.isArray(entries) && entries.length > 0) setFaqEntries(entries);
+      })
+      .catch(() => { /* 404 expected when no parseable MCQs — silent skip */ });
     return () => { cancelled = true; };
   }, [data?.chapter_id]);
 
@@ -820,7 +860,16 @@ export default function ChapterPage() {
         })()}
         tags={[chapterTitle, subjectName, boardName, className, data.chapter_title || ''].filter(Boolean)}
         pageType="chapter"
-        pageData={{ data, basePath }}
+        pageData={{
+          // Merge async-loaded FAQ entries into the chapter data so the
+          // existing chapterSchema() builder emits a FAQPage @graph node.
+          // Falls back to plain `data` when faqEntries is null (404 from
+          // the FAQ endpoint = no parseable MCQs for this chapter).
+          data: (faqEntries && faqEntries.length > 0)
+            ? { ...data, faq_entries: faqEntries }
+            : data,
+          basePath,
+        }}
         hasAssamese={hasAssamese}
       />
 

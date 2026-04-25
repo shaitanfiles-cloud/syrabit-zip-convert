@@ -206,6 +206,45 @@ function rewriteHead(html, { title, description, canonical }) {
   return html;
 }
 
+// P0 #1 of the AI-visibility plan — inject schema.org FAQPage JSON-LD
+// directly into the prerendered <head> as a static <script> tag so AI
+// crawlers (Googlebot, Perplexity, ChatGPT, Claude) see it on first
+// byte without executing JavaScript.
+//
+// PageMeta also emits the same JSON-LD client-side via syncJsonLd, but
+// uses a `data-pm` marker to tag its own scripts. The script we inject
+// here CARRIES the same marker so PageMeta's client-side cleanup
+// (`querySelectorAll("script[type='application/ld+json'][data-pm]")
+// .forEach(remove)`) replaces this static script with the React-built
+// equivalent on hydration — no duplicate FAQPage scripts, no SEO
+// penalty for "double markup".
+function injectFaqJsonLdIntoHead(html, faqEntries) {
+  if (!Array.isArray(faqEntries) || faqEntries.length < 2) return html;
+  const mainEntity = faqEntries.slice(0, 10).map((e) => ({
+    "@type": "Question",
+    name: String(e.question || "").trim(),
+    acceptedAnswer: {
+      "@type": "Answer",
+      text: String(e.answer || "").trim(),
+    },
+  })).filter((q) => q.name && q.acceptedAnswer.text);
+  if (mainEntity.length < 2) return html;
+  const ld = {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity,
+  };
+  // Escape `</` so a stray sequence in user content can't close our
+  // script tag; mirrors the SSR queries inline-script escape pattern.
+  const json = JSON.stringify(ld).replace(/<\//g, "<\\/");
+  const tag =
+    `    <script type="application/ld+json" data-pm="1">${json}</script>\n  `;
+  if (html.includes("</head>")) {
+    return html.replace("</head>", `${tag}</head>`);
+  }
+  return html;
+}
+
 // Task #395: page-chunk preload helper, lazily resolved on first use
 // so the import cost doesn't hit unrelated routes.
 let _pageChunkHelper = null;
@@ -369,10 +408,39 @@ function pickChapterPayload(c) {
     "chapter_slug", "content", "content_as", "content_type",
     "has_assamese", "meta_description", "word_count",
     "generated_at", "updated_at", "bing_keywords",
+    // P0 #1 of the AI-visibility plan — FAQPage JSON-LD seed pulled
+    // from /api/content/chapters/{id}/faq-jsonld and merged into the
+    // chapter preload below. Listed here so the keep-list filter
+    // doesn't strip it.
+    "faq_entries",
   ];
   const out = {};
   for (const k of keys) if (c[k] !== undefined) out[k] = c[k];
   return out;
+}
+
+// Fetch FAQPage entries (built from MCQ Q+A) for a chapter so the
+// prerendered HTML ships schema.org FAQPage JSON-LD on first byte —
+// this is what crawlers (Googlebot, Perplexity, ChatGPT) see, and
+// missing it is the gap P0 #1 of the AI-visibility plan addresses.
+//
+// Returns `null` (not throws) on any failure so a backend hiccup or a
+// chapter without parseable MCQs never blocks the rest of the chapter
+// snapshot. The runtime useEffect in ChapterPage will still try to
+// fetch on the client for non-prerendered routes.
+async function fetchChapterFaqEntries(chapterId) {
+  if (!chapterId) return null;
+  const url = `${BACKEND.replace(/\/$/, "")}/api/content/chapters/${encodeURIComponent(chapterId)}/faq-jsonld`;
+  try {
+    const payload = await fetchJson(url);
+    const entries = Array.isArray(payload?.entries) ? payload.entries : null;
+    if (!entries || entries.length < 2) return null; // chapterSchema() also requires >= 2
+    return entries;
+  } catch {
+    // 404 (no parseable MCQs) and transient network errors are both fine —
+    // we just skip baking FAQ into this chapter snapshot.
+    return null;
+  }
 }
 
 function enumerateSubjectRoutes(bundle) {
@@ -690,6 +758,23 @@ async function main() {
       }
 
       const chapterData = clean(pickChapterPayload(chapterPayload));
+      // P0 #1 of the AI-visibility plan — fetch FAQPage entries built
+      // from the chapter's MCQs and bake them into BOTH:
+      //   (a) the chapter preload, so the runtime useEffect in
+      //       ChapterPage skips its fetch and the client-side
+      //       PageMeta builds the same JSON-LD on first render
+      //       (no double-fetch, no flash of missing schema)
+      //   (b) a `<script type="application/ld+json">` injected into
+      //       the prerendered HTML head below — this is what AI/SEO
+      //       crawlers read on first byte (PageMeta currently emits
+      //       JSON-LD only via client useEffect, which Googlebot
+      //       executes but Perplexity/ChatGPT often do not).
+      // Failure here is logged but never fatal: the runtime useEffect
+      // in ChapterPage will still try to fetch on the client.
+      const faqEntries = await fetchChapterFaqEntries(chapterData.chapter_id);
+      if (faqEntries) {
+        chapterData.faq_entries = faqEntries;
+      }
       const preload = {
         board, classSlug, subjectSlug, chapterSlug,
         data: chapterData,
@@ -709,7 +794,7 @@ async function main() {
       ];
 
       try {
-        const html = await renderOne(renderRoute, htmlTemplate, {
+        let html = await renderOne(renderRoute, htmlTemplate, {
           url: chapterUrl,
           seed: { chapterPreload: preload },
           hydrateKind: "chapter",
@@ -722,6 +807,11 @@ async function main() {
             canonical: chapterCanonical,
           },
         });
+        // P0 #1 — bake FAQPage JSON-LD into byte-zero HTML so AI
+        // crawlers see Q+A structure without executing JS.
+        if (faqEntries) {
+          html = injectFaqJsonLdIntoHead(html, faqEntries);
+        }
         const out = writeRoute(chapterUrl, html);
         chaptersWritten++;
         console.log(
