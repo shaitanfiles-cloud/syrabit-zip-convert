@@ -87,10 +87,20 @@ interface InstallOptions {
    * instead of falling through to the global ErrorBoundary.
    */
   failPatterns?: string[];
+  /**
+   * Per-endpoint fixture overrides keyed by URL substring. Checked
+   * before the default FIXTURES list so a single test can replace
+   * the catch-all empty payload for one endpoint (e.g. the
+   * AdminHealth cron pills) without disturbing the rest of the
+   * dashboard mocks. The value is the JSON body to respond with
+   * (status 200), or a function returning that body.
+   */
+  overrides?: Record<string, unknown | ((url: string) => unknown)>;
 }
 
 export async function installAdminApiMocks(page: Page, opts: InstallOptions = {}) {
   const failPatterns = opts.failPatterns ?? [];
+  const overrides = Object.entries(opts.overrides ?? {});
 
   await page.route('**/api/**', async (route: Route) => {
     const req = route.request();
@@ -108,6 +118,18 @@ export async function installAdminApiMocks(page: Page, opts: InstallOptions = {}
 
     if (method === 'OPTIONS') {
       await route.fulfill({ status: 204, body: '' });
+      return;
+    }
+
+    const override = overrides.find(([key]) => url.includes(key));
+    if (override) {
+      const [, value] = override;
+      const body = typeof value === 'function' ? (value as (u: string) => unknown)(url) : value;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(body ?? EMPTY),
+      });
       return;
     }
 
