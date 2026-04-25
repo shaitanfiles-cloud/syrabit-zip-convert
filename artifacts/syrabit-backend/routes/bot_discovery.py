@@ -5908,7 +5908,15 @@ async def admin_cf_ai_crawl_control(
     #     BOTH contributions summed onto a single tile, mirroring how
     #     CF's dashboard shows a single Google tile combining Googlebot
     #     + Google-Extended traffic.
-    crawlers_grid = aggregate_per_operator(full_per_bot)
+    # Search-engine operators only — the user's product policy is that
+    # AI crawlers are blocked at the edge, so showing AI operator tiles
+    # in this card is misleading (they're not "crawlers we serve"). The
+    # full unfiltered AI activity is still visible in the dedicated AI
+    # observability cards elsewhere on the dashboard.
+    crawlers_grid = [
+        op for op in aggregate_per_operator(full_per_bot)
+        if op.get("category") == "search"
+    ]
     # Operator-name → search-engine-name lookup (the search referrals
     # map is keyed by engine display name from _SEARCH_REFERRER_HOSTS,
     # which doesn't always match the CF operator-tile name — e.g. CF's
