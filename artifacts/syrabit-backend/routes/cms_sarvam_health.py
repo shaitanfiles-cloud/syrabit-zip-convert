@@ -1723,7 +1723,7 @@ async def _health_inner():
             "supabase": {"status": "ok" if supa else "not_configured"},
             "razorpay": {"status": rp_status},
             "vertex": vertex_block,
-            "bot_render": get_bot_render_metrics(),
+            "bot_render": await get_bot_render_metrics_async(),
         },
         "chat_latency": {
             "samples": len(_recent_lats),
@@ -3278,18 +3278,168 @@ def _bot_html_response(html: str, *, robots_tag: str = "index, follow"):
     )
 
 
+# Bot-render counters — were previously in-memory module globals which
+# caused the "Bot Renders" admin tile to perpetually show 0 because:
+#   1. Every gunicorn worker restart wiped the counters back to zero.
+#   2. Each gunicorn worker maintained its own private copy, so the
+#      value the admin saw depended on which worker handled the
+#      dashboard request — not the true cluster-wide total.
+# Now mirrored to MongoDB via atomic $inc so the counters survive
+# restarts and aggregate across workers. (Tried Redis first but
+# `deps.redis_client` is permanently None in this codebase — never
+# assigned — so cache layers silently no-op. Mongo IS wired and is
+# the actual durable persistence layer here.)
+# The in-memory dict is kept as a hot fallback that can absorb writes
+# while Mongo is briefly unavailable.
 _bot_render_fallback_count = 0
 _bot_render_success_count = 0
 _bot_render_by_type: dict = {}
+# Single-document doc id used in the `metrics_counters` collection.
+_BOT_RENDER_MONGO_ID = "bot_render_v1"
+# Keep strong refs to fire-and-forget Mongo writes so the loop's
+# weak reference doesn't garbage-collect the task before it runs —
+# a well-known asyncio footgun. Tasks self-remove on completion via
+# the discard callback below.
+_bot_render_pending_tasks: set = set()
+# Bound the cardinality of `by_page_type` field names so the single
+# Mongo doc can never balloon. Anything passed in that isn't on this
+# allowlist is bucketed as "other" — the four dynamic call sites in
+# the catch-all middleware previously split the URL slug, which in
+# the worst case (chapter / subject pages) would have written one
+# field per unique URL into the doc and eventually breached Mongo's
+# 16MB document limit.
+_BOT_RENDER_KNOWN_TYPES = frozenset({
+    "about", "chat", "curriculum", "exam-routine",
+    "board", "board_class", "static_page", "learn",
+    "subject", "subject_id", "chapter", "page",
+})
+
+
+def _normalize_page_type(page_type) -> str:
+    if not page_type:
+        return "other"
+    pt = str(page_type).strip().lower()
+    if pt in _BOT_RENDER_KNOWN_TYPES:
+        return pt
+    return "other"
+
+
+def _bot_render_task_done(task):  # noqa: ANN001 — asyncio callback signature
+    _bot_render_pending_tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        try:
+            logger.warning(f"bot_render mongo persist failed: {exc!r}")
+        except Exception:
+            pass
+
+
+def _bot_render_mongo_snapshot():
+    """Pull the cluster-wide bot-render counters from Mongo. Returns
+    None if Mongo is unreachable, the doc is missing, or any decode
+    fails — caller falls back to the in-memory counters in that case
+    so the tile still renders a (degraded) value instead of 500'ing."""
+    if db is None:
+        return None
+    try:
+        # The dashboard metrics endpoint is sync (uses asyncio.run) so
+        # use the sync motor accessor — `db` is async-only. Build a
+        # short-lived sync client via PyMongo if available.
+        # In practice get_bot_render_metrics is invoked from an async
+        # FastAPI handler, so awaiting works. But to keep the helper
+        # callable from both sync/async contexts we delegate to the
+        # async path via run_until_complete-on-new-loop only if needed.
+        import asyncio as _asyncio
+        coro = db["metrics_counters"].find_one({"_id": _BOT_RENDER_MONGO_ID})
+        try:
+            loop = _asyncio.get_event_loop()
+            if loop.is_running():
+                # Called from inside a running loop — caller (FastAPI)
+                # should await us instead. Fall back to in-memory to
+                # avoid blocking the loop.
+                return None
+            doc = loop.run_until_complete(coro)
+        except RuntimeError:
+            doc = _asyncio.run(coro)
+        if not doc:
+            return None
+        success = int(doc.get("success_count", 0))
+        fallback = int(doc.get("fallback_count", 0))
+        by_type = {k: int(v) for k, v in (doc.get("by_page_type") or {}).items()}
+        return {"success": success, "fallback": fallback, "by_type": by_type}
+    except Exception:
+        return None
+
+
+async def _bot_render_mongo_snapshot_async():
+    """Async-safe version of the snapshot pull. Used by the dashboard
+    metrics endpoint which already runs inside the FastAPI event loop."""
+    if db is None:
+        return None
+    try:
+        doc = await db["metrics_counters"].find_one({"_id": _BOT_RENDER_MONGO_ID})
+        if not doc:
+            return None
+        success = int(doc.get("success_count", 0))
+        fallback = int(doc.get("fallback_count", 0))
+        by_type = {k: int(v) for k, v in (doc.get("by_page_type") or {}).items()}
+        return {"success": success, "fallback": fallback, "by_type": by_type}
+    except Exception:
+        return None
+
+
+async def get_bot_render_metrics_async():
+    """Async entry point — preferred when called from FastAPI handlers
+    (which are themselves async). Reads the durable Mongo counters
+    directly without juggling event loops, then falls back to the
+    in-memory counters for this worker if Mongo is unreachable."""
+    snap = await _bot_render_mongo_snapshot_async()
+    if snap is not None:
+        success = snap["success"]
+        fallback = snap["fallback"]
+        by_type = snap["by_type"]
+    else:
+        success = _bot_render_success_count
+        fallback = _bot_render_fallback_count
+        by_type = dict(_bot_render_by_type)
+    total = success + fallback
+    return {
+        "fallback_count": fallback,
+        "success_count": success,
+        "total_requests": total,
+        "success_rate_pct": round(success / max(total, 1) * 100, 1),
+        "by_page_type": by_type,
+    }
+
 
 def get_bot_render_metrics():
+    """Sync entry point — kept for backward compatibility with any
+    sync callers. Async callers should prefer get_bot_render_metrics_async
+    so we can read the durable Mongo counters even when the event loop
+    is already running."""
+    snap = _bot_render_mongo_snapshot()
+    if snap is not None:
+        # Combine durable + in-flight in-memory counts. The in-memory
+        # values for THIS worker may have been double-counted into Mongo
+        # already on each _track_bot_render call, so just trust Mongo.
+        success = snap["success"]
+        fallback = snap["fallback"]
+        by_type = snap["by_type"]
+    else:
+        success = _bot_render_success_count
+        fallback = _bot_render_fallback_count
+        by_type = dict(_bot_render_by_type)
+    total = success + fallback
     return {
-        "fallback_count": _bot_render_fallback_count,
-        "success_count": _bot_render_success_count,
-        "total_requests": _bot_render_fallback_count + _bot_render_success_count,
-        "success_rate_pct": round(_bot_render_success_count / max(_bot_render_success_count + _bot_render_fallback_count, 1) * 100, 1),
-        "by_page_type": dict(_bot_render_by_type),
+        "fallback_count": fallback,
+        "success_count": success,
+        "total_requests": total,
+        "success_rate_pct": round(success / max(total, 1) * 100, 1),
+        "by_page_type": by_type,
     }
+
 
 def _track_bot_render(page_type: str, success: bool):
     global _bot_render_success_count, _bot_render_fallback_count
@@ -3297,8 +3447,52 @@ def _track_bot_render(page_type: str, success: bool):
         _bot_render_success_count += 1
     else:
         _bot_render_fallback_count += 1
-    key = f"{page_type}:{'ok' if success else 'fail'}"
+    # Normalize so unknown / dynamic slugs collapse to "other" — this
+    # is what bounds the cardinality of by_page_type both in memory
+    # and in the persisted Mongo doc.
+    norm_type = _normalize_page_type(page_type)
+    key = f"{norm_type}:{'ok' if success else 'fail'}"
     _bot_render_by_type[key] = _bot_render_by_type.get(key, 0) + 1
+    # Mirror to Mongo so the counter survives worker restarts and
+    # aggregates atomically across all gunicorn workers. Fire-and-
+    # forget on the running event loop; if there isn't one (e.g. unit
+    # tests) we silently skip the durable write — the in-memory dict
+    # above is still authoritative for this worker so we don't lose
+    # accuracy locally. Errors are swallowed so a transient Mongo
+    # blip never breaks the actual bot-render response path.
+    if db is None:
+        return
+    try:
+        import asyncio as _asyncio
+        try:
+            loop = _asyncio.get_running_loop()
+        except RuntimeError:
+            # Not in an async context — skip the durable write. The
+            # in-memory counters above are still accurate for this
+            # worker. Real bot-render middleware always runs inside
+            # the FastAPI loop so this path is only hit by tests.
+            return
+        update = {
+            "$inc": {
+                "success_count" if success else "fallback_count": 1,
+                f"by_page_type.{key}": 1,
+            },
+            "$currentDate": {"updated_at": True},
+        }
+        task = loop.create_task(
+            db["metrics_counters"].update_one(
+                {"_id": _BOT_RENDER_MONGO_ID}, update, upsert=True
+            )
+        )
+        # Strong ref + done callback — without this asyncio is free to
+        # GC the task before it starts, silently dropping the write.
+        _bot_render_pending_tasks.add(task)
+        task.add_done_callback(_bot_render_task_done)
+    except Exception as e:
+        try:
+            logger.warning(f"bot_render mongo schedule failed: {e!r}")
+        except Exception:
+            pass
 
 
 _BOT_KNOWN_BOARDS = {"ahsec", "seba", "degree", "cbse", "nep"}
@@ -4519,7 +4713,7 @@ async def admin_dashboard_metrics(admin: dict = Depends(get_admin_user)):
             "revenue": {"total_inr": total_revenue_inr, "total_usd": total_revenue_usd, "mrr_inr": mrr_inr},
             "seo": {"topics": seo_count, "published_pages": seo_published},
             "payments_count": len(payments),
-            "bot_render": get_bot_render_metrics(),
+            "bot_render": await get_bot_render_metrics_async(),
         }
         _metrics_cache["data"] = result
         _metrics_cache["ts"] = now_ts
