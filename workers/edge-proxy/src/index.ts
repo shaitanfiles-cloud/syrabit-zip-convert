@@ -17,6 +17,11 @@ import {
 } from "./kv-monitor";
 import { runSyntheticProbe } from "./synthetic-probe";
 import { runCfBlockProbe } from "./cf-block-probe";
+import {
+  recordBotCacheEvent,
+  getBotCacheStats,
+  type BotCacheStats,
+} from "./bot-cache-stats";
 
 interface Env {
   BACKEND_URL: string;
@@ -146,7 +151,20 @@ async function handleKvUsage(env: Env, request: Request, cors: Record<string, st
   } catch {
     snapshot = getUsageSnapshot([...KV_BINDINGS], opts);
   }
-  return new Response(JSON.stringify(snapshot), {
+  // Task #885 — bot HTML cache hit/miss/304/fallback observability.
+  // Surfaced under `bot_cache:` so a deploy that drifts the cache key
+  // (silently dropping hit-rate from ~95% to 0%) is visible in the
+  // admin dashboard within one bucket window.
+  let botCache: BotCacheStats | null = null;
+  if (env.RATE_LIMIT) {
+    try {
+      botCache = await getBotCacheStats(env.RATE_LIMIT);
+    } catch {
+      /* keep the rest of the response usable on a stats read failure */
+    }
+  }
+  const body = { ...snapshot, bot_cache: botCache };
+  return new Response(JSON.stringify(body), {
     status: 200,
     headers: {
       ...cors,
@@ -1444,8 +1462,14 @@ export async function handleBotContentRequest(
         const lastmodMs = parseHttpDate(entry.lastmod) ?? Date.now();
         const headers = buildBotCacheHeaders(cacheTtl, entry.lastmod, entry.etag, "bot-cache");
         if (shouldReturn304(request, entry.etag, lastmodMs)) {
+          // Task #885 — KV had the entry AND the crawler's
+          // If-None-Match / If-Modified-Since matches: cheapest path.
+          recordBotCacheEvent(env.RATE_LIMIT, "conditional_304", ctx);
           return new Response(null, { status: 304, headers });
         }
+        // Task #885 — KV-served full body. The hit-rate metric uses
+        // this counter as its numerator.
+        recordBotCacheEvent(env.RATE_LIMIT, "hit", ctx);
         return new Response(entry.body, { status: 200, headers });
       }
     } catch { /* fall through */ }
@@ -1478,6 +1502,16 @@ export async function handleBotContentRequest(
   // bot-prerender-fallback) so observability stays accurate.
   const renderedSource = rendered.headers.get("X-Source");
   if (renderedSource) headers["X-Source"] = renderedSource;
+  // Task #885 — distinguish a normal KV miss (we paid the prerender
+  // round-trip but the SEO HTML pipeline served us) from a "fallback"
+  // miss (the prerender pipeline failed and we served the live origin
+  // HTML via bot-prerender-fallback). The latter is a degraded mode
+  // and a sustained spike is operationally important.
+  if (renderedSource === "bot-prerender-fallback") {
+    recordBotCacheEvent(env.RATE_LIMIT, "fallback", ctx);
+  } else {
+    recordBotCacheEvent(env.RATE_LIMIT, "miss", ctx);
+  }
   if (shouldReturn304(request, etag, parseHttpDate(lastmod) ?? Date.now())) {
     return new Response(null, { status: 304, headers });
   }

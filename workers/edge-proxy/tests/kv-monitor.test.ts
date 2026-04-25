@@ -6,6 +6,13 @@ import {
   _resetMonitorStateForTests,
   DEFAULT_QUOTA,
 } from "../src/kv-monitor";
+import {
+  recordBotCacheEvent,
+  getBotCacheStats,
+  botCacheKey,
+  currentBotCacheBucket,
+  BOT_CACHE_BUCKETS_PER_WINDOW,
+} from "../src/bot-cache-stats";
 
 /* ───────────── fakes ───────────── */
 
@@ -561,5 +568,211 @@ describe("deferred writes across day rollover", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/* ───────────── Task #885: bot-cache hit/miss/304/fallback counters ─────────────
+   Verifies the rolling-bucket counters that surface at
+   /api/edge/kv-usage under `bot_cache:`. These counters are how we
+   detect a cache-key drift in production (which would silently push
+   the hit-rate from ~95% to 0%) and confirm the BOT_HTML_CACHE is
+   actually paying its keep against real Googlebot/Bingbot traffic. */
+
+describe("bot-cache hit/miss/304/fallback counters", () => {
+  // Drain the synchronous waitUntil promises before asserting on KV
+  // state — the recorder is fire-and-forget by design.
+  const collect = (queued: Promise<unknown>[]) =>
+    ({ waitUntil: (p: Promise<unknown>) => { queued.push(p); } });
+
+  // Helper: record one event and await its scheduled work before the
+  // next call. The recorder is intentionally read-then-write (cheap,
+  // matches the spoof:count:* pattern at logSpoofedBot in src/index.ts)
+  // so concurrent calls on the same bucket can race in production —
+  // that's an accepted best-effort tradeoff for observability counters.
+  // In tests we serialize so the counts are deterministic.
+  async function recordSeq(
+    kv: KVNamespace,
+    kind: Parameters<typeof recordBotCacheEvent>[1],
+  ): Promise<void> {
+    const queued: Promise<unknown>[] = [];
+    recordBotCacheEvent(kv, kind, collect(queued));
+    for (const p of queued) await p;
+  }
+
+  it("increments per-event counters in the current 5-minute bucket", async () => {
+    const inner = new FakeKv();
+    const kv = wrapKvNamespace(inner as unknown as KVNamespace, "RATE_LIMIT", { ctx: noopCtx });
+
+    await recordSeq(kv, "hit");
+    await recordSeq(kv, "hit");
+    await recordSeq(kv, "miss");
+    await recordSeq(kv, "conditional_304");
+    await recordSeq(kv, "fallback");
+
+    const stats = await getBotCacheStats(kv as unknown as KVNamespace);
+    expect(stats.hit).toBe(2);
+    expect(stats.miss).toBe(1);
+    expect(stats.conditional_304).toBe(1);
+    expect(stats.fallback).toBe(1);
+    // 2 hits / (2 hits + 1 miss + 1 fallback) = 0.5
+    expect(stats.hit_rate).toBeCloseTo(0.5, 3);
+    // Always exactly 12 buckets (rolling hour, 5 min each).
+    expect(stats.buckets.length).toBe(BOT_CACHE_BUCKETS_PER_WINDOW);
+    // The newest bucket should hold all our writes (the test runs in
+    // well under 5 minutes wall-clock).
+    const newest = stats.buckets[stats.buckets.length - 1];
+    expect(newest.hit).toBe(2);
+    expect(newest.miss).toBe(1);
+    expect(newest.conditional_304).toBe(1);
+    expect(newest.fallback).toBe(1);
+  });
+
+  it("writes counters with TTL=3600 so they survive a worker eviction", async () => {
+    const inner = new FakeKv();
+    await recordSeq(inner as unknown as KVNamespace, "hit");
+    expect(inner.lastPutOpts).toMatchObject({ expirationTtl: 3600 });
+  });
+
+  it("a no-op when the KV binding is missing (early HMR / dev without bindings)", () => {
+    const queued: Promise<unknown>[] = [];
+    const ctx = collect(queued);
+    expect(() => recordBotCacheEvent(undefined, "hit", ctx)).not.toThrow();
+    expect(queued).toEqual([]);
+  });
+
+  it("getBotCacheStats returns zeros (not throw) when KV is empty", async () => {
+    const inner = new FakeKv();
+    const stats = await getBotCacheStats(inner as unknown as KVNamespace);
+    expect(stats.hit).toBe(0);
+    expect(stats.miss).toBe(0);
+    expect(stats.conditional_304).toBe(0);
+    expect(stats.fallback).toBe(0);
+    expect(stats.hit_rate).toBe(0);
+    expect(stats.buckets.length).toBe(BOT_CACHE_BUCKETS_PER_WINDOW);
+  });
+
+  it("buckets that have rolled past the 1-hour window are not summed", async () => {
+    const inner = new FakeKv();
+    const now = Date.now();
+    // Pre-seed an OLD bucket (90 minutes ago, well past the 12×5-min window).
+    const oldBucket = currentBotCacheBucket(now - 90 * 60 * 1000);
+    await inner.put(botCacheKey("hit", oldBucket), "999");
+    // And a fresh hit in the current bucket.
+    await recordSeq(inner as unknown as KVNamespace, "hit");
+
+    const stats = await getBotCacheStats(inner as unknown as KVNamespace, now);
+    // The 999 must NOT leak into the rolling window total.
+    expect(stats.hit).toBe(1);
+  });
+
+  it("a cache-key regression visibly drops hit_rate within one bucket window", async () => {
+    // Simulate the scenario the task spec calls out:
+    //   "A regression in cache-key derivation (forced by a synthetic
+    //    test) would visibly drop hit rate in the response within one
+    //    bucket window."
+    // Phase 1: 9 crawler requests served from KV (healthy hit-rate).
+    // Phase 2: cache-key drifts → next 9 requests all miss.
+    const inner = new FakeKv();
+    const kv = inner as unknown as KVNamespace;
+
+    for (let i = 0; i < 9; i++) await recordSeq(kv, "hit");
+    let stats = await getBotCacheStats(kv);
+    expect(stats.hit_rate).toBe(1);
+
+    // Cache-key drift simulation: every subsequent request goes to KV
+    // but the key isn't there → miss.
+    for (let i = 0; i < 9; i++) await recordSeq(kv, "miss");
+
+    stats = await getBotCacheStats(inner as unknown as KVNamespace);
+    // Same window, but the regression has cut hit-rate roughly in half.
+    expect(stats.hit_rate).toBeLessThanOrEqual(0.55);
+    expect(stats.hit).toBe(9);
+    expect(stats.miss).toBe(9);
+  });
+
+  it("counters use a namespaced KV key that doesn't collide with spoof:count:* or __kv_usage:*", () => {
+    const k = botCacheKey("hit", 12345);
+    expect(k.startsWith("bot_cache:")).toBe(true);
+    expect(k).not.toMatch(/^spoof:/);
+    expect(k).not.toMatch(/^__kv_usage:/);
+  });
+});
+
+/* ───────────── Task #885: /api/edge/kv-usage exposes bot_cache block ─────────────
+   End-to-end check that the admin route surfaces the rolling counters
+   so the dashboard / on-call can see hit-rate without hand-grepping
+   raw logs for the X-Cache header. */
+
+describe("/api/edge/kv-usage exposes bot_cache block", () => {
+  it("includes bot_cache.{hit,miss,conditional_304,fallback,hit_rate,buckets}", async () => {
+    const worker = (await import("../src/index")).default;
+
+    // Use real in-memory FakeKv so the route can read what
+    // recordBotCacheEvent wrote (the wrapper passes through to it).
+    const inner = new FakeKv();
+
+    const env = {
+      RATE_LIMIT: inner,
+      BOT_HTML_CACHE: new FakeKv(),
+      BACKEND_URL: "https://backend.example.com",
+      D1_SYNC_SECRET: "admin-secret",
+    } as unknown as Parameters<typeof worker.fetch>[1];
+
+    const ctx = {
+      waitUntil: () => undefined,
+      passThroughOnException: () => undefined,
+    } as unknown as ExecutionContext;
+
+    // Pre-seed a few events directly into KV in the current bucket so
+    // the assertion is independent of route plumbing.
+    const bucket = currentBotCacheBucket();
+    await inner.put(botCacheKey("hit", bucket), "7");
+    await inner.put(botCacheKey("miss", bucket), "2");
+    await inner.put(botCacheKey("conditional_304", bucket), "3");
+    await inner.put(botCacheKey("fallback", bucket), "1");
+
+    const resp = await worker.fetch(
+      new Request("https://api.syrabit.ai/api/edge/kv-usage", {
+        headers: { "X-Edge-Admin-Secret": "admin-secret" },
+      }),
+      env,
+      ctx,
+    );
+    expect(resp.status).toBe(200);
+    const body = (await resp.json()) as {
+      bot_cache: {
+        hit: number; miss: number; conditional_304: number;
+        fallback: number; hit_rate: number;
+        buckets: Array<{ ts: string; hit: number }>;
+      } | null;
+    };
+    expect(body.bot_cache).not.toBeNull();
+    expect(body.bot_cache!.hit).toBe(7);
+    expect(body.bot_cache!.miss).toBe(2);
+    expect(body.bot_cache!.conditional_304).toBe(3);
+    expect(body.bot_cache!.fallback).toBe(1);
+    // 7 / (7 + 2 + 1) = 0.7
+    expect(body.bot_cache!.hit_rate).toBeCloseTo(0.7, 3);
+    expect(body.bot_cache!.buckets.length).toBe(BOT_CACHE_BUCKETS_PER_WINDOW);
+  });
+
+  it("rejects requests without the admin secret with 401 (no bot_cache leak)", async () => {
+    const worker = (await import("../src/index")).default;
+    const env = {
+      RATE_LIMIT: new FakeKv(),
+      BOT_HTML_CACHE: new FakeKv(),
+      BACKEND_URL: "https://backend.example.com",
+      D1_SYNC_SECRET: "admin-secret",
+    } as unknown as Parameters<typeof worker.fetch>[1];
+    const ctx = {
+      waitUntil: () => undefined,
+      passThroughOnException: () => undefined,
+    } as unknown as ExecutionContext;
+    const resp = await worker.fetch(
+      new Request("https://api.syrabit.ai/api/edge/kv-usage"),
+      env,
+      ctx,
+    );
+    expect(resp.status).toBe(401);
   });
 });
