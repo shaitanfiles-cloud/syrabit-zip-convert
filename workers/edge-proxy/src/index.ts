@@ -1458,6 +1458,19 @@ export async function handleBotContentRequest(
           // single full-body response per legacy entry until it expires.
           const etag = await computeEtag(raw);
           entry = { body: raw, lastmod: formatRfc7231(new Date()), etag };
+          // Upgrade the KV value to the JSON wrapper in the background so
+          // subsequent reads of this key return a stable Last-Modified
+          // (the synthesized one) instead of a fresh "now" each time —
+          // which would otherwise mislead crawlers about content age
+          // (Task #896).
+          if (env.BOT_HTML_CACHE) {
+            const upgraded = entry;
+            ctx.waitUntil(
+              env.BOT_HTML_CACHE
+                .put(cacheKey, JSON.stringify(upgraded), { expirationTtl: cacheTtl })
+                .catch(() => {}),
+            );
+          }
         }
         const lastmodMs = parseHttpDate(entry.lastmod) ?? Date.now();
         const headers = buildBotCacheHeaders(cacheTtl, entry.lastmod, entry.etag, "bot-cache");

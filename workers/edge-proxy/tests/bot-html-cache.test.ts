@@ -253,10 +253,11 @@ describe("BOT_HTML_CACHE end-to-end via worker.fetch (verifiedBot=true)", () => 
     expect(r1.headers.get("Last-Modified")).toBeTruthy();
     expect(await r1.text()).toBe(LEGACY_HTML);
 
-    // Legacy hit must not trigger a backend re-render and must not rewrite
-    // the cache entry itself (kv-monitor may still write its own usage key).
+    // Legacy hit must not trigger a backend re-render. The cache entry is
+    // upgraded to the JSON wrapper exactly once on first read (Task #896);
+    // see the dedicated upgrade test below for the wrapper-shape assertions.
     expect(fetchSpy.mock.calls.length).toBe(callsBefore);
-    expect(cacheWrites()).toBe(0);
+    expect(cacheWrites()).toBe(1);
 
     // Conditional GET against the synthesized etag must yield 304.
     const r2 = await workerHandler.fetch(
@@ -269,9 +270,90 @@ describe("BOT_HTML_CACHE end-to-end via worker.fetch (verifiedBot=true)", () => 
     expect(r2.headers.get("X-Source")).toBe("bot-cache");
     expect(await r2.text()).toBe("");
 
-    // Still no backend re-render, still no rewrite of the cache entry.
+    // Still no backend re-render. Second hit reads the upgraded JSON wrapper
+    // — no further rewrites, so the per-key write count stays at 1.
     expect(fetchSpy.mock.calls.length).toBe(callsBefore);
-    expect(cacheWrites()).toBe(0);
+    expect(cacheWrites()).toBe(1);
+  });
+
+  it("legacy plain-string KV entry is upgraded to the JSON wrapper on first read, and subsequent reads return a stable Last-Modified (Task #896)", async () => {
+    const LEGACY_HTML =
+      "<html><body>legacy-upgrade-" + "z".repeat(400) + "</body></html>";
+    const expectedEtag = createHash("sha256")
+      .update(LEGACY_HTML)
+      .digest("hex")
+      .slice(0, 12);
+
+    const kv = makeExpiringKv();
+    const env = makeEnv({ botCache: kv });
+    const cacheKey = `bot:content:${CONTENT_PATH}`;
+
+    // Pre-seed the old plain-HTML format.
+    kv.store.set(cacheKey, { value: LEGACY_HTML, expiresAt: null });
+
+    // The handler defers the upgrade write through ctx.waitUntil — collect
+    // and await those promises so the post-conditions are deterministic.
+    const writes: Promise<unknown>[] = [];
+    const ctxAwait = {
+      waitUntil: (p: Promise<unknown>) => {
+        writes.push(p);
+      },
+      passThroughOnException: () => {},
+    } as unknown as ExecutionContext;
+
+    // Pin time so the synthesized Last-Modified is the same value we expect
+    // to see persisted in KV and replayed on every subsequent read.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-20T12:00:00Z"));
+    const synthesizedLm = new Date().toUTCString();
+
+    const r1 = await workerHandler.fetch(
+      botRequest(CONTENT_PATH),
+      env,
+      ctxAwait,
+    );
+    await Promise.all(writes.splice(0));
+
+    expect(r1.status).toBe(200);
+    expect(r1.headers.get("X-Source")).toBe("bot-cache");
+    expect(r1.headers.get("ETag")).toBe(`"${expectedEtag}"`);
+    expect(r1.headers.get("Last-Modified")).toBe(synthesizedLm);
+    expect(await r1.text()).toBe(LEGACY_HTML);
+
+    // The KV value is now the JSON wrapper, with the synthesized lastmod
+    // and body-derived etag preserved. TTL matches the configured page TTL.
+    const writeCalls = kv.putSpy.mock.calls.filter((c) => c[0] === cacheKey);
+    expect(writeCalls).toHaveLength(1);
+    const [, writtenValue, writtenOpts] = writeCalls[0];
+    expect(writtenOpts?.expirationTtl).toBe(3600);
+    const wrapper = JSON.parse(writtenValue);
+    expect(wrapper.body).toBe(LEGACY_HTML);
+    expect(wrapper.etag).toBe(expectedEtag);
+    expect(wrapper.lastmod).toBe(synthesizedLm);
+    expect(kv.store.get(cacheKey)?.value).toBe(writtenValue);
+
+    // Advance the clock by 30 minutes — well within the 3600s KV TTL so
+    // the entry is still present — to prove the second read does NOT
+    // synthesize a fresh "now": the upgraded JSON wrapper now drives the
+    // Last-Modified header, so it stays pinned to the original value.
+    vi.setSystemTime(Date.now() + 30 * 60 * 1000);
+    const r2 = await workerHandler.fetch(
+      botRequest(CONTENT_PATH),
+      env,
+      ctxAwait,
+    );
+    await Promise.all(writes.splice(0));
+
+    expect(r2.status).toBe(200);
+    expect(r2.headers.get("X-Source")).toBe("bot-cache");
+    expect(r2.headers.get("ETag")).toBe(`"${expectedEtag}"`);
+    expect(r2.headers.get("Last-Modified")).toBe(synthesizedLm);
+    expect(await r2.text()).toBe(LEGACY_HTML);
+
+    // No further rewrites — upgrade happens exactly once.
+    expect(
+      kv.putSpy.mock.calls.filter((c) => c[0] === cacheKey),
+    ).toHaveLength(1);
   });
 
   it("non-verified Googlebot UA falls through to Pages-origin proxy without writing BOT_HTML_CACHE", async () => {
