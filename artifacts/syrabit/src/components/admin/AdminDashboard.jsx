@@ -1320,26 +1320,31 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
           {/* "Total Visitors" — bound to Cloudflare's per-day deduped
-              uniques (cfOverview.totals.visitors), summed across the 7
-              day-buckets of the overview window. CF generates a daily
-              anonymous visitor fingerprint from IP + User-Agent and
-              counts each fingerprint at most once per day-bucket, so
-              this value is effectively "1 visit per IP per 24 hours"
-              rolled up over the period — exactly the de-duplication
-              policy the operator asked for. Bots are excluded because
-              CF's JS beacon doesn't fire for non-browser traffic. The
-              tile is intentionally distinct from page views: on this
-              content site CF "visits" (sessions) tracks ~1.02
-              pages/visit and would visually collide with the page-views
-              numbers in the Traffic (Cloudflare) card above; per-day
-              uniques produce a value two orders of magnitude smaller,
-              keeping the two surfaces clearly differentiated. We fall
-              back to vs.total_visitors only if cfOverview hasn't loaded
-              yet (avoids a blank tile on first paint). The "Today"
-              sub-value uses CF's single-day uniques query the dashboard
-              payload already exposes. */}
+              uniques. We have TWO CF-derived "visitors" series in scope
+              that both apply the same dedup rule (one count per
+              IP+User-Agent fingerprint per day-bucket — effectively
+              "1 visit per IP per 24 hours"):
+                a) vs.total_visitors comes from the dashboard payload's
+                   get_visitor_stats_cf call, which sums today's bucket
+                   plus the 7 prior day-buckets (8 buckets total).
+                b) cfOverview.totals.visitors comes from the separate
+                   /admin/analytics/cf-overview fetch and sums exactly 7
+                   day-buckets matching the operator's range selector.
+              Per the operator's instruction to surface the source that
+              shows the HIGHEST human-visitor count, we prefer (a) — its
+              wider window naturally produces the larger sum (e.g.
+              2,665 vs 2,230 on the same data). Falling back to (b)
+              only if the dashboard payload omitted total_visitors
+              (e.g. CF GraphQL transient failure on that one call but
+              the overview fetch succeeded), then 0 as a final guard.
+              Both sources exclude bots because CF's JS beacon doesn't
+              fire for non-browser traffic. The tile remains visually
+              distinct from page views (which run ~50× higher) so it
+              can't be confused with the Traffic (Cloudflare) card
+              above. The "Today" sub-value uses CF's single-day
+              uniques query already in the dashboard payload. */}
           <StatCard label="Total Visitors"
-            value={cfOverview?.totals?.visitors ?? vs?.total_visitors ?? 0}
+            value={vs?.total_visitors ?? cfOverview?.totals?.visitors ?? 0}
             icon={Users} color="#84cc16"
             subLabel="Today" subValue={vs?.visitors_today ?? 0} />
           <StatCard label="Bounce Rate"  value={vs.bounce_rate != null ? `${vs.bounce_rate}%` : '—'} icon={TrendingUp} color="#f59e0b" />
