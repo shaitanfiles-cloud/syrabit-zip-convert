@@ -17,6 +17,7 @@ import {
 } from "./kv-monitor";
 import { runSyntheticProbe } from "./synthetic-probe";
 import { runCfBlockProbe } from "./cf-block-probe";
+import { runBotCacheAlert } from "./bot-cache-alert";
 import {
   recordBotCacheEvent,
   getBotCacheStats,
@@ -81,6 +82,20 @@ interface Env {
   CF_BLOCK_PROBE_DISABLED?: string;
   CF_BLOCK_PROBE_TARGET_URL?: string;
   CF_BLOCK_PROBE_THRESHOLD?: string;
+  /**
+   * Task #898 — bot-cache hit-rate / fallback-rate watchdog. Reads
+   * the `bot_cache.*` counters that Task #885 surfaces under
+   * `/api/edge/kv-usage` and pages the on-call when the rolling
+   * 15-minute hit-rate drops by ≥30pp vs the prior 15 minutes, OR
+   * the fallback rate sits above ~10%. Re-uses
+   * SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL so on-call sees a single
+   * "edge layer is degraded" channel. See src/bot-cache-alert.ts.
+   */
+  BOT_CACHE_ALERT_DISABLED?: string;
+  BOT_CACHE_ALERT_DROP_PCT?: string;
+  BOT_CACHE_ALERT_FALLBACK_PCT?: string;
+  BOT_CACHE_ALERT_MIN_SAMPLE?: string;
+  BOT_CACHE_ALERT_WINDOW_BUCKETS?: string;
 }
 
 const KV_BINDINGS = ["RATE_LIMIT", "BOT_HTML_CACHE"] as const;
@@ -2183,6 +2198,15 @@ export default {
       ctx.waitUntil(runCfBlockProbe(wrapped).catch((e) => {
         const msg = e instanceof Error ? e.message : "unknown";
         console.error(`[cf-block-probe] unhandled error: ${msg.slice(0, 300)}`);
+      }));
+      // Task #898 — bot-cache hit-rate / fallback-rate watchdog. Reads
+      // the `bot_cache.*` counters from RATE_LIMIT KV (no HTTP) and
+      // pages on a sudden drop or sustained fallback. Shares the
+      // synthetic probe watchdog webhook with distinct alert_type
+      // values so the receiver can route each independently.
+      ctx.waitUntil(runBotCacheAlert(wrapped).catch((e) => {
+        const msg = e instanceof Error ? e.message : "unknown";
+        console.error(`[bot-cache-alert] unhandled error: ${msg.slice(0, 300)}`);
       }));
       return;
     }

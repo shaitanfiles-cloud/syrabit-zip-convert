@@ -161,6 +161,32 @@ migrations_dir = "migrations"
 #                   SYNTHETIC_PROBE_DISABLED=true to pause without
 #                   redeploying.
 #
+#                   ALSO runs Task #898 bot-cache hit-rate / fallback
+#                   watchdog. NOTE the data source: although the task
+#                   description (and the admin dashboard) reference
+#                   `/api/edge/kv-usage` → `bot_cache.hit_rate`, the
+#                   watchdog deliberately reads the same underlying
+#                   `bot_cache:count:*` counters DIRECTLY from
+#                   RATE_LIMIT KV inside the same isolate. Skipping
+#                   the HTTP round-trip removes an auth dependency and
+#                   keeps the watchdog alive in the failure mode where
+#                   the admin endpoint itself is degraded. The numbers
+#                   the watchdog evaluates are therefore exactly the
+#                   numbers `/api/edge/kv-usage` would report.
+#                   Pages on:
+#                     - hit-rate drop ≥30pp over the last 15m vs the
+#                       prior 15m (cache-key regression),
+#                     - fallback rate ≥10% over the last 15m
+#                       (degraded prerender pipeline).
+#                   Re-uses SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL but
+#                   tags payloads with alert_type=
+#                   bot_cache_hit_rate_drop / bot_cache_fallback_elevated.
+#                   Optional knobs: BOT_CACHE_ALERT_DROP_PCT (default 30),
+#                   BOT_CACHE_ALERT_FALLBACK_PCT (default 10),
+#                   BOT_CACHE_ALERT_MIN_SAMPLE (default 20),
+#                   BOT_CACHE_ALERT_WINDOW_BUCKETS (default 3 → 15m),
+#                   BOT_CACHE_ALERT_DISABLED=true to pause.
+#
 #   "0 */6 * * *" → 6-hourly D1 content sync from the Railway backend.
 crons = ["* * * * *", "0 */6 * * *"]
 
