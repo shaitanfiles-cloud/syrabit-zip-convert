@@ -413,6 +413,58 @@ curl -sS -i 'https://api.syrabit.ai/api/admin/diagnostics' \
 3. **Watchdog webhook URL** — rotate via the Slack/PagerDuty UI and
    update `SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL` on the worker.
 
+**Nightly drift check (Task #899 — required, ships in
+`.github/workflows/synthetic-probe-secrets-daily.yml`):**
+
+The four secrets above (`SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL`,
+`SYNTHETIC_PROBE_CF_ACCESS_CLIENT_ID`,
+`SYNTHETIC_PROBE_CF_ACCESS_CLIENT_SECRET`, `SYNTHETIC_PROBE_ADMIN_JWT`)
+can be silently removed during an unrelated Wrangler env reshuffle, an
+accidental `wrangler secret delete`, or a misapplied env-promotion
+script. If `SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL` in particular goes
+missing, the next outage looks identical to "everything is healthy"
+again — exactly the failure mode Task #877 was triggered by. The
+quarterly `pnpm run test-fire:watchdog` drill (Task #886) catches that
+at most every ~90 days and only if a human remembers; this nightly
+check closes the gap to ≤24h with no human in the loop.
+
+The cron runs at 05:13 UTC daily:
+
+1. `npx wrangler@4 secret list --name syrabit-edge` returns the JSON
+   array of secrets bound to the live worker.
+2. The job verifies all four `REQUIRED_SECRETS` are present.
+3. On drift, it POSTs the missing list to
+   `/api/config/synthetic-probe-secrets/missing-alert` on the FastAPI
+   backend, which re-dispatches through the existing
+   `metrics._dispatch_alert` pipeline (email + webhook + persisted +
+   push) with `alert_type: "synthetic_probe_secret_missing"`. The job
+   then fails so GitHub's failed-workflow email serves as a secondary
+   signal in case the backend POST itself failed.
+4. A clean run (all four secrets present) is silent — no Slack post,
+   no email, no backend ping.
+
+Required GitHub repo secrets:
+
+- `CLOUDFLARE_API_TOKEN` (already set for the edge-proxy-deploy
+  workflow — `Workers Scripts:Edit` is sufficient for `secret list`).
+- `CLOUDFLARE_ACCOUNT_ID` (already set).
+- `SYNTHETIC_PROBE_SECRETS_CHECK_TOKEN` — long random string
+  authenticating the workflow's POST to the backend. Generate with
+  `python -c "import secrets;print(secrets.token_urlsafe(48))"` and
+  set the same value as `SYNTHETIC_PROBE_SECRETS_CHECK_TOKEN` on the
+  FastAPI service (Railway / Cloud Run env). The backend returns 503
+  when the env var is unset (fails closed — visible by design).
+
+Optional GitHub repo variable:
+
+- `SYNTHETIC_PROBE_BACKEND_URL` — overrides the default
+  `https://api.syrabit.ai` for the alert POST (e.g. staging
+  refreshes). Same shape as `CF_WAF_DRIFT_BACKEND_URL`.
+
+Manually trigger the workflow from the Actions tab (`Run workflow`) to
+verify the wiring after rolling out the secrets — a green run with the
+"all required secrets present" notice means the daily check is live.
+
 If the team needs to take the probe down (e.g. extended planned
 maintenance), set `SYNTHETIC_PROBE_DISABLED=true` on the worker — this
 pauses the probe within ~10s without deleting any secrets. **Do not
