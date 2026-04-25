@@ -1319,22 +1319,29 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
         <p className="text-[10px] text-gray-400 mb-2">{TODAY_BUCKET_CAPTION}</p>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
-          {/* "Total Visitors" — bound to the SAME Cloudflare overview the
-              "Traffic (Cloudflare)" card above uses (cfOverview.totals.visitors)
-              so the two CF-sourced cards never disagree on the headline
-              number. The dashboard payload's vs.total_visitors comes from a
-              different CF call with a slightly wider window (today + 7 prior
-              days vs the overview card's exact 7 buckets) and was producing
-              an inflated count (e.g. 2664 vs 2228 on the same data). When
-              cfOverview hasn't loaded yet we fall back to vs.total_visitors
-              so the tile is never blank on first paint. CF's JS beacon does
-              not fire for bots and uniques are deduped by visitor
-              fingerprint, so each human visitor is counted exactly once
-              regardless of repeat visits within the bucket. */}
-          <StatCard label="Total Visitors"
-            value={cfOverview?.totals?.visitors ?? vs?.total_visitors ?? 0}
+          {/* "Total Visitors" — bound to Cloudflare's `visits` (sessions)
+              metric per the operator's request to NOT deduplicate repeat
+              visits from the same person. CF defines a "visit" as a
+              session: every time a visitor comes back after their previous
+              session has expired (~30 min idle) it counts again, so a
+              regular returning user contributes multiple visits over a
+              week. This matches the CF dashboard's "Visits" tile and is a
+              separate dimension from "Unique visitors" (the deduped count).
+              Bots are still excluded — the JS beacon CF uses to record
+              both metrics does not fire for non-browser traffic.
+              Source: same /admin/analytics/cf-overview payload the
+              Traffic (Cloudflare) card above uses, so the two CF-sourced
+              surfaces stay in lockstep. We fall back to the deduped
+              vs.total_visitors only if cfOverview hasn't loaded yet
+              (avoids a blank tile on first paint) and to 0 as a final
+              guard. The "Today" sub-value is the visits count from the
+              latest series bucket — for the 7d/30d ranges that's today's
+              date; for the 24h range it's the most recent hour. */}
+          <StatCard label="Total Visits"
+            value={cfOverview?.totals?.visits ?? vs?.total_visitors ?? 0}
             icon={Users} color="#84cc16"
-            subLabel="Today" subValue={vs?.visitors_today ?? 0} />
+            subLabel="Today"
+            subValue={(cfOverview?.series?.length ? cfOverview.series[cfOverview.series.length - 1]?.visits : null) ?? vs?.visitors_today ?? 0} />
           <StatCard label="Bounce Rate"  value={vs.bounce_rate != null ? `${vs.bounce_rate}%` : '—'} icon={TrendingUp} color="#f59e0b" />
           <StatCard label="Avg Session"  value={vs.avg_session_duration != null ? `${vs.avg_session_duration}s` : '—'} icon={Clock} color="#a78bfa" />
         </div>
