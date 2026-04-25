@@ -1319,34 +1319,30 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
         <p className="text-[10px] text-gray-400 mb-2">{TODAY_BUCKET_CAPTION}</p>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
-          {/* "Total Visitors" — bound to Cloudflare's per-day deduped
-              uniques. We have TWO CF-derived "visitors" series in scope
-              that both apply the same dedup rule (one count per
-              IP+User-Agent fingerprint per day-bucket — effectively
-              "1 visit per IP per 24 hours"):
-                a) vs.total_visitors comes from the dashboard payload's
-                   get_visitor_stats_cf call, which sums today's bucket
-                   plus the 7 prior day-buckets (8 buckets total).
-                b) cfOverview.totals.visitors comes from the separate
-                   /admin/analytics/cf-overview fetch and sums exactly 7
-                   day-buckets matching the operator's range selector.
-              Per the operator's instruction to surface the source that
-              shows the HIGHEST human-visitor count, we prefer (a) — its
-              wider window naturally produces the larger sum (e.g.
-              2,665 vs 2,230 on the same data). Falling back to (b)
-              only if the dashboard payload omitted total_visitors
-              (e.g. CF GraphQL transient failure on that one call but
-              the overview fetch succeeded), then 0 as a final guard.
-              Both sources exclude bots because CF's JS beacon doesn't
-              fire for non-browser traffic. The tile remains visually
-              distinct from page views (which run ~50× higher) so it
-              can't be confused with the Traffic (Cloudflare) card
-              above. The "Today" sub-value uses CF's single-day
-              uniques query already in the dashboard payload. */}
+          {/* "Total Visitors" — bound to Cloudflare's "Visits" (sessions)
+              metric (cfOverview.totals.visits) so this tile matches the
+              headline number the operator sees on the Cloudflare Web
+              Analytics dashboard (~1 lakh+ on this site). CF defines a
+              "visit" as a session: every return after a 30-minute idle
+              gap creates a new visit, so repeat visitors from the same
+              IP all contribute multiple counts over the period. Bots
+              are excluded because CF's JS beacon doesn't fire for
+              non-browser traffic. We previously bound this to per-day
+              uniques (~2.6k) to keep the value visually distinct from
+              page views, but the operator explicitly wants parity with
+              their Cloudflare dashboard view, so we use sessions here
+              and accept the closer-to-page-views magnitude. Fallback
+              order: cfOverview.totals.visits → vs.total_visitors (CF
+              uniques, last-resort if the overview fetch hasn't loaded)
+              → 0. The "Today" sub-value pulls visits from the latest
+              day-bucket of the cfOverview series so it stays internally
+              consistent with the headline metric (a CF visits-today
+              field would otherwise drift against the totals number). */}
           <StatCard label="Total Visitors"
-            value={vs?.total_visitors ?? cfOverview?.totals?.visitors ?? 0}
+            value={cfOverview?.totals?.visits ?? vs?.total_visitors ?? 0}
             icon={Users} color="#84cc16"
-            subLabel="Today" subValue={vs?.visitors_today ?? 0} />
+            subLabel="Today"
+            subValue={(cfOverview?.series?.length ? cfOverview.series[cfOverview.series.length - 1]?.visits : null) ?? vs?.visitors_today ?? 0} />
           <StatCard label="Bounce Rate"  value={vs.bounce_rate != null ? `${vs.bounce_rate}%` : '—'} icon={TrendingUp} color="#f59e0b" />
           <StatCard label="Avg Session"  value={vs.avg_session_duration != null ? `${vs.avg_session_duration}s` : '—'} icon={Clock} color="#a78bfa" />
         </div>
