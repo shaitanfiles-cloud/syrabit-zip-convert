@@ -11,9 +11,9 @@
     "d1:migrate:remote": "wrangler d1 migrations apply syrabit-content --remote"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20241205.0",
+    "@cloudflare/workers-types": "^4.20260424.1",
     "typescript": "^5.7.0",
     "vitest": "^4.1.4",
-    "wrangler": "^3.99.0"
+    "wrangler": "^4.0.0"
   }
 }

@@ -105,6 +105,18 @@ Drive the syrabit-backend Railway service from this workspace via `pnpm run rail
 
 ## Operational Notes
 
+### Wrangler v4 in workers/edge-proxy (Task #859)
+
+`workers/edge-proxy/package.json` was bumped from `wrangler ^3.99.0` (was running 3.114.17) to `wrangler ^4.0.0` (resolves to 4.85.0 today). The companion `@cloudflare/workers-types` was bumped from `^4.20241205.0` to `^4.20260424.1` to satisfy v4's tightened peer range. **No `wrangler.toml` schema changes were required** — the file already conformed to v4 conventions: no `[assets]` block (so the v4 schema tightening is a non-issue), no `--node-compat` CLI flag, and the four bindings (`RATE_LIMIT` KV, `BOT_HTML_CACHE` KV, `CONTENT_DB` D1, `AI`) all use the v4-accepted standard format. Validation evidence: `tsc --noEmit` clean, `vitest run` green (156/156), `wrangler deploy --dry-run` lists all four bindings + 2 vars with no schema warnings, `wrangler dev` boots cleanly with all bindings (KV/D1 local-emulated, AI remote — same as v3 behaviour). Two informational warnings during `wrangler dev` are unchanged from v3 and are intentional: (a) cron triggers are not auto-fired in local dev (manually invoke via `curl http://127.0.0.1:8787/cdn-cgi/handler/scheduled`), and (b) the AI binding always hits remote even in local dev, which can incur charges — silence by adding `remote = true` under `[ai]` in `wrangler.toml` if desired (we don't, because the warning is the desired feedback).
+
+**Rollback procedure if a v4 deploy misbehaves in production:**
+
+1. **Fast revert (preferred, no rebuild):** `cd workers/edge-proxy && wrangler rollback` — Cloudflare keeps the previous version of every Worker deploy and `rollback` re-points the route at the prior version-id in seconds. Confirm with `wrangler deployments list`.
+2. **Source-level revert (if rollback is not enough):** revert this commit (`git revert <sha>`), `pnpm --filter syrabit-edge install` (re-resolves to wrangler 3.114.x), then `wrangler deploy` from `workers/edge-proxy`. The pnpm-lock change is the only artefact — no `wrangler.toml` was modified, so a downgrade does not require config edits.
+3. **Smoke checks after rollback:** `curl https://api.syrabit.ai/api/health` (200), `curl -I https://syrabit.ai/` (Worker hits PAGES_ORIGIN), and tail `wrangler tail` for ~2 min to confirm no spike in 5xx/exception-class log lines. If the issue was binding-shaped, also `wrangler kv key list --binding=RATE_LIMIT --preview false | head` to confirm KV reads work.
+
+The actual `wrangler deploy` (preview + prod promote) is intentionally **not** run from this Replit env — the worker is on the hot path of every `syrabit.ai` request and `wrangler.toml` has no `[env.preview]` block, so any deploy here goes straight to prod. Operator with deploy credentials should run `wrangler deploy --dry-run` once more on their machine, then `wrangler deploy`, then watch `wrangler tail` for 10 min per the task's "Promote to prod" step.
+
 ### AdminHealth cron-pill testId convention
 
 The cron-health pills rendered in the AdminHealth dashboard follow a uniform `<cron-name>-cron-*` data-testid namespace so monitoring/Playwright surfaces can target each pill consistently. The hooks emitted by the shared `<CronHealthPill>` are: `<prefix>-tile`, `<prefix>-status`, `<prefix>-pill`, `<prefix>-run-link`, `<prefix>-refresh`. Current pills:
