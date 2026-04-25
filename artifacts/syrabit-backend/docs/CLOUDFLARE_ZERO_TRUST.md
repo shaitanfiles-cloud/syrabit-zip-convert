@@ -386,6 +386,14 @@ curl -sS -i 'https://api.syrabit.ai/api/admin/diagnostics' \
 #    dashboard, wait 6 minutes, confirm the Slack/PagerDuty channel
 #    received an `alert_type: "synthetic_probe_dark"` payload, then
 #    restore the real JWT.
+#
+# 3b. Or, automated path (Task #886) — wraps the same dance into one
+#     command, with an EXIT-trap that always restores state:
+#       cd workers/edge-proxy
+#       pnpm run test-fire:watchdog          # ~7 min, asks for confirm
+#     Pre-req: `SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL` already set as a
+#     Wrangler secret on `syrabit-edge`. The script aborts loudly with
+#     the exact `wrangler secret put` command if it isn't.
 ```
 
 **Rotation procedure (run quarterly or on suspected leak):**

@@ -12,6 +12,7 @@
     "d1:check-drift": "bash scripts/check-d1-drift.sh",
     "smoke": "bash scripts/smoke-test.sh",
     "smoke:preview": "bash scripts/smoke-preview.sh",
+    "test-fire:watchdog": "bash scripts/test-fire-watchdog.sh",
     "test": "vitest run",
     "d1:migrate:local": "wrangler d1 migrations apply syrabit-content --local",
     "d1:migrate:remote": "wrangler d1 migrations apply syrabit-content --remote"
