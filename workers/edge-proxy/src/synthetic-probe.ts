@@ -46,6 +46,8 @@
  *   - BACKEND_ORIGIN_SECRET               (secret, X-Origin-Auth shared secret)
  */
 
+import { SYNTHETIC_PROBE_PATH } from "./monitored-urls";
+
 const PROBE_STATE_KEY = "synthetic_probe:state";
 const PROBE_TIMEOUT_MS = 10_000;
 const DEFAULT_WATCHDOG_THRESHOLD_MIN = 5;
@@ -125,16 +127,16 @@ function resolveTargetUrl(env: SyntheticProbeEnv): string | null {
     return env.SYNTHETIC_PROBE_TARGET_URL.trim();
   }
   if (env.BACKEND_URL && env.BACKEND_URL.trim()) {
+    // The path comes from `monitored-urls.ts` (Task #887) so the value
+    // we send and the value the drift test validates against the live
+    // OpenAPI schema are the SAME constant — the Task #877 class of bug
+    // (probe URL drifts away from the FastAPI router prefix and silently
+    // 404s for hours) cannot recur without the CI gate failing first.
     // The FastAPI router is mounted under the `/api` prefix
-    // (server.py: `api = APIRouter(prefix="/api")`), so the live
-    // diagnostics route is `/api/admin/diagnostics`. Hitting bare
-    // `/admin/diagnostics` returns 404 from the backend, which made
-    // every probe look like a failure and silently broke the
-    // watchdog (Task #877 — fixed the consecutive_failures runaway
-    // counter that hid this for ~56h). Do NOT drop the `/api`
-    // segment without first confirming the backend exposes a
-    // bare-root alias.
-    return env.BACKEND_URL.trim().replace(/\/+$/, "") + "/api/admin/diagnostics";
+    // (server.py: `api = APIRouter(prefix="/api")`); the canonical path
+    // is therefore `/api/admin/diagnostics`. Do NOT inline a different
+    // string here — the assertion lives in `monitored-urls.json`.
+    return env.BACKEND_URL.trim().replace(/\/+$/, "") + SYNTHETIC_PROBE_PATH;
   }
   return null;
 }

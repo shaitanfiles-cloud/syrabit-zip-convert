@@ -1,0 +1,55 @@
+{
+  "$schema_version": 1,
+  "_doc": [
+    "Single source of truth for every backend URL/path the edge-proxy worker (or its companion deploy infra)",
+    "hard-codes outside the FastAPI app. Task #887 — added so the Task #877 class of bug (a probe URL drifts",
+    "away from the real router prefix and silently 404s for ~56h before anyone notices) can be caught by a",
+    "deterministic CI check instead of a manual log review.",
+    "",
+    "Two arrays:",
+    "  backend_paths       — paths that MUST resolve to a real FastAPI route (exact-match on the OpenAPI",
+    "                        schema, or prefix-match when 'match' is 'prefix'). Add a one-line 'rationale'",
+    "                        so a future reader knows why the worker hard-codes the path.",
+    "  intentionally_external — full URLs the worker hits that are NOT FastAPI routes (e.g. the public",
+    "                        homepage served by Cloudflare Pages, an external webhook endpoint). Each entry",
+    "                        MUST carry a non-empty 'rationale' or the drift test fails.",
+    "",
+    "If you add a new probe / healthcheck / hard-coded backend URL anywhere, register it here. The drift",
+    "test (artifacts/syrabit-backend/tests/test_monitoring_url_drift.py) gates merges on this manifest."
+  ],
+  "backend_paths": [
+    {
+      "path": "/api/admin/diagnostics",
+      "match": "exact",
+      "rationale": "synthetic-probe target — Task #708 1-minute external probe of the admin diagnostics paging path; drifted in Task #877 and stayed dark for ~56h",
+      "registered_in": [
+        "workers/edge-proxy/src/synthetic-probe.ts"
+      ]
+    },
+    {
+      "path": "/api/livez",
+      "match": "exact",
+      "rationale": "Railway restart-probe healthcheck (cheap process-alive check; Task #848)",
+      "registered_in": [
+        "artifacts/syrabit-backend/railway.toml"
+      ]
+    },
+    {
+      "path": "/api/health",
+      "match": "exact",
+      "rationale": "Docker HEALTHCHECK CMD inside the container image",
+      "registered_in": [
+        "artifacts/syrabit-backend/Dockerfile"
+      ]
+    }
+  ],
+  "intentionally_external": [
+    {
+      "url": "https://syrabit.ai/",
+      "rationale": "cf-block-probe target — public homepage served by Cloudflare Pages, NOT the FastAPI backend (Task #817)",
+      "registered_in": [
+        "workers/edge-proxy/src/cf-block-probe.ts"
+      ]
+    }
+  ]
+}

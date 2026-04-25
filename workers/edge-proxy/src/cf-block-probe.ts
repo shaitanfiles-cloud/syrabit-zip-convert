@@ -47,9 +47,14 @@
  * page rather than a "did paging die?" reminder.
  */
 
+import { CF_BLOCK_PROBE_DEFAULT_URL } from "./monitored-urls";
+
 const PROBE_STATE_KEY = "cf_block_probe:state";
 const PROBE_TIMEOUT_MS = 10_000;
-const DEFAULT_TARGET_URL = "https://syrabit.ai/";
+// Sourced from `monitored-urls.json` (Task #887). The default target is
+// the public homepage — explicitly registered as "intentionally external"
+// because Cloudflare Pages serves it, NOT the FastAPI backend.
+const DEFAULT_TARGET_URL = CF_BLOCK_PROBE_DEFAULT_URL;
 const DEFAULT_THRESHOLD = 2;
 
 // Body markers that are extremely unlikely to appear in a real Syrabit
