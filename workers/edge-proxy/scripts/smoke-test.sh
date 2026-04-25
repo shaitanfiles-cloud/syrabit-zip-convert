@@ -175,21 +175,29 @@ fi
 
 # ── 4) Rate-limit burst against /api/content/boards ────────────────────────
 # RATE_LIMIT_RPM = 120 IP requests / 60 s. We send 130 sequential requests
-# from one IP and expect at least one 429 with X-RateLimit-Limit=120. If
-# RATE_LIMIT KV is broken, every request will succeed and the burst will
-# never trigger 429. The cache lookup happens AFTER the rate-limit check,
-# so cached responses still consume budget — no need to add ?nocache=.
+# from one IP and expect at least one 429 with X-RateLimit-Limit=120.
+#
+# CRITICAL: append ?nocache=<unique> to every request. Without it, the
+# Cloudflare HTTP cache (cf-cache) intercepts identical-URL requests
+# BEFORE the worker runs (cacheable response sets Cache-Control: max-age=
+# 3600), so the rate-limit gate is never entered and the burst returns
+# 200/200/200/... forever. The worker's `nocache` query param skips both
+# the CF cache lookup AND the worker's own caches.default lookup, forcing
+# every request through the rate-limit check at src/index.ts:1855.
+# Each request also gets a unique nocache value so even CF's URL-keyed
+# cache can't collapse them.
 if [[ "${SKIP_RATE_LIMIT:-0}" == "1" ]]; then
   echo "[4/5] SKIPPED (SKIP_RATE_LIMIT=1)"
 else
   TOTAL=$((TOTAL + 1))
-  echo "[4/5] burst 130x GET /api/content/boards (expect ≥1 429)"
+  echo "[4/5] burst 130x GET /api/content/boards?nocache=… (expect ≥1 429)"
   burst_429=0
   burst_other=0
   burst_first_429_at=0
+  cb_seed="$$-$(date +%s)"
   for i in $(seq 1 130); do
     code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 \
-      "$BASE_URL/api/content/boards" || echo "000")
+      "$BASE_URL/api/content/boards?nocache=${cb_seed}-${i}" || echo "000")
     if [[ "$code" == "429" ]]; then
       burst_429=$((burst_429 + 1))
       [[ "$burst_first_429_at" == "0" ]] && burst_first_429_at=$i
