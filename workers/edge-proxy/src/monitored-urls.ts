@@ -50,6 +50,14 @@ export interface MonitoredBackendPath {
   match: "exact" | "prefix";
   rationale: string;
   registered_in: string[];
+  /**
+   * Optional name of the exported identifier (constant or helper function)
+   * that the `registered_in` files use to reach this path. Set this when
+   * the file consumes the path through an import rather than inlining the
+   * literal string — the Task #901 drift test will then accept the
+   * identifier as a stand-in for the literal path.
+   */
+  runtime_constant?: string;
   edge_cache?: MonitoredEdgeCache;
 }
 
@@ -57,6 +65,8 @@ export interface MonitoredExternalUrl {
   url: string;
   rationale: string;
   registered_in: string[];
+  /** See `MonitoredBackendPath.runtime_constant`. */
+  runtime_constant?: string;
 }
 
 export interface MonitoredUrlsManifest {

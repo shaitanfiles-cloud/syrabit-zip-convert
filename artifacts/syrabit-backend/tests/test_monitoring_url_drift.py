@@ -265,3 +265,169 @@ def test_registered_in_files_exist(manifest: dict[str, Any]) -> None:
         "entry is stale and should be deleted (or the path corrected):\n  - "
         + "\n  - ".join(missing)
     )
+
+
+# ─── Manifest entries are still actually USED by the files they claim ──
+#
+# Task #901 — the `registered_in` existence check above proves the file
+# is still on disk, but says nothing about whether the file still
+# references the path. A common drift mode is: somebody refactors
+# `synthetic-probe.ts` to call a different path (or moves the constant
+# elsewhere) but forgets to update `monitored-urls.json`. The dead
+# manifest entry then rots silently for months — the OpenAPI gate keeps
+# passing because the path itself still exists, but nothing in the
+# worker actually hits it anymore, so the probe it was meant to guard
+# is gone.
+#
+# This check closes the gap by grepping each `registered_in` file for
+# either the literal path/URL string OR the declared `runtime_constant`
+# export name. Files that compute the path via concatenation (e.g.
+# `BACKEND_URL + SYNTHETIC_PROBE_PATH`) opt into the constant-name
+# variant by setting `runtime_constant` on the manifest entry.
+
+
+def _check_entry_referenced_in_files(
+    entry: dict[str, Any],
+    base_dir: Path,
+) -> list[str]:
+    """Return human-readable failure strings for one manifest entry.
+
+    Empty list ⇒ every `registered_in` file mentions the path (or its
+    declared runtime constant). The function is pure (no I/O outside
+    reading the listed files) so the negative test below can drive it
+    against a planted entry under a tmp directory.
+    """
+    needle_path = entry.get("path") or entry.get("url")
+    if not needle_path:
+        return [f"entry {entry!r} has neither 'path' nor 'url'"]
+    runtime_constant = (entry.get("runtime_constant") or "").strip()
+    failures: list[str] = []
+    for rel in entry.get("registered_in", []):
+        full = base_dir / rel
+        if not full.exists():
+            # A separate test (`test_registered_in_files_exist`) covers
+            # the missing-file case with a clearer error message — skip
+            # here so we don't double-report.
+            continue
+        try:
+            text = full.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            failures.append(
+                f"entry {needle_path!r}: could not read {rel} ({exc})."
+            )
+            continue
+        if needle_path in text:
+            continue
+        if runtime_constant and runtime_constant in text:
+            continue
+        if runtime_constant:
+            failures.append(
+                f"entry {needle_path!r}: file {rel} contains neither the "
+                f"literal path nor the declared runtime_constant "
+                f"{runtime_constant!r}. Either restore the reference, "
+                "update `runtime_constant` to the new export name, or "
+                "remove this entry from monitored-urls.json."
+            )
+        else:
+            failures.append(
+                f"entry {needle_path!r}: file {rel} no longer contains "
+                "the literal path string. If the file now reaches the "
+                "path through an imported constant, add "
+                "`\"runtime_constant\": \"<EXPORT_NAME>\"` to this "
+                "manifest entry. Otherwise the entry is stale — remove it."
+            )
+    return failures
+
+
+def test_registered_in_files_still_reference_path(manifest: dict[str, Any]) -> None:
+    failures: list[str] = []
+    for section in ("backend_paths", "intentionally_external"):
+        for entry in manifest[section]:
+            failures.extend(_check_entry_referenced_in_files(entry, _REPO_ROOT))
+    assert not failures, (
+        "monitored-urls.json has entries whose registered_in file no "
+        "longer references the path (Task #901 — silent manifest rot). "
+        "Either fix the file, update the manifest, or remove the entry:"
+        "\n  - " + "\n  - ".join(failures)
+    )
+
+
+# ─── Negative test — the new check actually fails on stale entries ────
+#
+# Without this, a future refactor that accidentally short-circuits
+# `_check_entry_referenced_in_files` (e.g. a stray `return []`) would
+# silently re-open the gap. Plant a stale entry under a tmp directory
+# and assert the helper flags it.
+
+
+def test_drift_check_flags_stale_registered_in(tmp_path: Path) -> None:
+    # File exists but does NOT mention the path or the declared
+    # runtime constant — the canonical "manifest rot" failure mode.
+    # NB: keep the file body free of the path string (even in comments)
+    # so a substring match cannot accidentally satisfy the check.
+    stale_file = tmp_path / "src" / "fake-probe.ts"
+    stale_file.parent.mkdir(parents=True, exist_ok=True)
+    stale_file.write_text(
+        "// Refactored: this file no longer references the old endpoint.\n"
+        "export function noop() { return 0; }\n",
+        encoding="utf-8",
+    )
+
+    stale_entry = {
+        "path": "/api/old/path",
+        "match": "exact",
+        "rationale": "(test fixture)",
+        "registered_in": ["src/fake-probe.ts"],
+    }
+    failures = _check_entry_referenced_in_files(stale_entry, tmp_path)
+    assert failures, (
+        "_check_entry_referenced_in_files must flag a registered_in "
+        "file that no longer mentions the path — the Task #901 gate "
+        "depends on this returning a non-empty list."
+    )
+    assert any("/api/old/path" in msg for msg in failures), (
+        f"failure message should name the offending path; got {failures!r}"
+    )
+
+    # Sanity: planting the literal back into the file makes the check pass.
+    stale_file.write_text(
+        "// Restored: hits /api/old/path on every cron tick.\n"
+        "export const PATH = \"/api/old/path\";\n",
+        encoding="utf-8",
+    )
+    assert _check_entry_referenced_in_files(stale_entry, tmp_path) == [], (
+        "after restoring the literal path string, the check should pass."
+    )
+
+    # Sanity: declaring a runtime_constant is also enough — the file
+    # mentions the export name even though the literal path is absent.
+    stale_file.write_text(
+        "import { OLD_PATH } from \"./constants\";\n"
+        "export const target = OLD_PATH;\n",
+        encoding="utf-8",
+    )
+    entry_with_constant = {**stale_entry, "runtime_constant": "OLD_PATH"}
+    assert _check_entry_referenced_in_files(entry_with_constant, tmp_path) == [], (
+        "runtime_constant escape hatch should let the check pass when "
+        "the file references the declared export name instead of the "
+        "literal path."
+    )
+
+    # And: a runtime_constant whose name is also missing must still fail.
+    entry_with_missing_constant = {
+        **stale_entry,
+        "runtime_constant": "DEFINITELY_NOT_IN_THE_FILE",
+    }
+    stale_file.write_text(
+        "// Refactored to use a different constant entirely.\n"
+        "export function noop() { return 0; }\n",
+        encoding="utf-8",
+    )
+    failures = _check_entry_referenced_in_files(entry_with_missing_constant, tmp_path)
+    assert failures, (
+        "when neither the literal path nor the declared runtime_constant "
+        "appears in the file, the check must fail loudly."
+    )
+    assert any("DEFINITELY_NOT_IN_THE_FILE" in msg for msg in failures), (
+        f"failure message should mention the missing runtime_constant; got {failures!r}"
+    )

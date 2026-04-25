@@ -12,6 +12,11 @@
     "entries carry an optional `edge_cache` block; `workers/edge-proxy/src/index.ts` derives its runtime",
     "constants from this manifest via `monitored-urls.ts` so there is exactly one source of truth.",
     "",
+    "Task #901 added a second drift gate: each `registered_in` file must actually still mention the path,",
+    "either as a literal string or via a declared `runtime_constant` export name. This catches the case",
+    "where a registered file is refactored to no longer reference the path (or the path constant is renamed)",
+    "but the manifest entry rots silently.",
+    "",
     "Two arrays:",
     "  backend_paths       — paths that MUST resolve to a real FastAPI route (exact-match on the OpenAPI",
     "                        schema, or prefix-match when 'match' is 'prefix'). Add a one-line 'rationale'",
@@ -20,11 +25,16 @@
     "                        homepage served by Cloudflare Pages, an external webhook endpoint). Each entry",
     "                        MUST carry a non-empty 'rationale' or the drift test fails.",
     "",
-    "Optional fields on backend_paths entries:",
+    "Optional fields on backend_paths / intentionally_external entries:",
     "  edge_cache.behavior     — 'cacheable' (worker stores in CF cache) or 'bypass' (worker forbids caching).",
     "  edge_cache.ttl_seconds  — cache TTL when behavior='cacheable'. Required for cacheable entries.",
     "  edge_cache.user_keyed   — when true, the cache key includes a per-user identity header so each user",
     "                            gets their own cached entry (e.g. /api/user/stats).",
+    "  runtime_constant        — name of the exported identifier (constant or helper function) that the",
+    "                            registered_in file uses to reach this path/URL. When set, the Task #901",
+    "                            drift test accepts the file mentioning that identifier as a stand-in for",
+    "                            the literal path string (use this for paths the file consumes via an",
+    "                            import rather than inlining as a literal).",
     "",
     "If you add a new probe / healthcheck / hard-coded backend URL anywhere, register it here. The drift",
     "test (artifacts/syrabit-backend/tests/test_monitoring_url_drift.py) gates merges on this manifest."
@@ -36,7 +46,8 @@
       "rationale": "synthetic-probe target — Task #708 1-minute external probe of the admin diagnostics paging path; drifted in Task #877 and stayed dark for ~56h",
       "registered_in": [
         "workers/edge-proxy/src/synthetic-probe.ts"
-      ]
+      ],
+      "runtime_constant": "SYNTHETIC_PROBE_PATH"
     },
     {
       "path": "/api/livez",
@@ -61,6 +72,7 @@
       "registered_in": [
         "workers/edge-proxy/src/index.ts"
       ],
+      "runtime_constant": "getCacheablePrefixes",
       "edge_cache": {
         "behavior": "cacheable",
         "ttl_seconds": 3600
@@ -73,6 +85,7 @@
       "registered_in": [
         "workers/edge-proxy/src/index.ts"
       ],
+      "runtime_constant": "getCacheablePrefixes",
       "edge_cache": {
         "behavior": "cacheable",
         "ttl_seconds": 3600
@@ -85,6 +98,7 @@
       "registered_in": [
         "workers/edge-proxy/src/index.ts"
       ],
+      "runtime_constant": "getCacheablePrefixes",
       "edge_cache": {
         "behavior": "cacheable",
         "ttl_seconds": 3600
@@ -97,6 +111,7 @@
       "registered_in": [
         "workers/edge-proxy/src/index.ts"
       ],
+      "runtime_constant": "getCacheablePrefixes",
       "edge_cache": {
         "behavior": "cacheable",
         "ttl_seconds": 3600
@@ -109,6 +124,7 @@
       "registered_in": [
         "workers/edge-proxy/src/index.ts"
       ],
+      "runtime_constant": "getCacheablePrefixes",
       "edge_cache": {
         "behavior": "cacheable",
         "ttl_seconds": 3600
@@ -121,6 +137,7 @@
       "registered_in": [
         "workers/edge-proxy/src/index.ts"
       ],
+      "runtime_constant": "getCacheablePrefixes",
       "edge_cache": {
         "behavior": "cacheable",
         "ttl_seconds": 3600
@@ -133,6 +150,7 @@
       "registered_in": [
         "workers/edge-proxy/src/index.ts"
       ],
+      "runtime_constant": "getCacheablePrefixes",
       "edge_cache": {
         "behavior": "cacheable",
         "ttl_seconds": 3600
@@ -145,6 +163,7 @@
       "registered_in": [
         "workers/edge-proxy/src/index.ts"
       ],
+      "runtime_constant": "getCacheablePrefixes",
       "edge_cache": {
         "behavior": "cacheable",
         "ttl_seconds": 1800
@@ -157,6 +176,7 @@
       "registered_in": [
         "workers/edge-proxy/src/index.ts"
       ],
+      "runtime_constant": "getCacheablePrefixes",
       "edge_cache": {
         "behavior": "cacheable",
         "ttl_seconds": 3600
@@ -169,6 +189,7 @@
       "registered_in": [
         "workers/edge-proxy/src/index.ts"
       ],
+      "runtime_constant": "getCacheablePrefixes",
       "edge_cache": {
         "behavior": "cacheable",
         "ttl_seconds": 3600
@@ -181,6 +202,7 @@
       "registered_in": [
         "workers/edge-proxy/src/index.ts"
       ],
+      "runtime_constant": "getCacheablePrefixes",
       "edge_cache": {
         "behavior": "cacheable",
         "ttl_seconds": 600
@@ -193,6 +215,7 @@
       "registered_in": [
         "workers/edge-proxy/src/index.ts"
       ],
+      "runtime_constant": "getCacheablePrefixes",
       "edge_cache": {
         "behavior": "cacheable",
         "ttl_seconds": 3600
@@ -205,6 +228,7 @@
       "registered_in": [
         "workers/edge-proxy/src/index.ts"
       ],
+      "runtime_constant": "getUserSpecificPrefixes",
       "edge_cache": {
         "behavior": "cacheable",
         "ttl_seconds": 900,
@@ -218,6 +242,7 @@
       "registered_in": [
         "workers/edge-proxy/src/index.ts"
       ],
+      "runtime_constant": "getCacheablePrefixes",
       "edge_cache": {
         "behavior": "cacheable",
         "ttl_seconds": 86400
@@ -230,6 +255,7 @@
       "registered_in": [
         "workers/edge-proxy/src/index.ts"
       ],
+      "runtime_constant": "getBypassPrefixes",
       "edge_cache": {
         "behavior": "bypass"
       }
@@ -241,6 +267,7 @@
       "registered_in": [
         "workers/edge-proxy/src/index.ts"
       ],
+      "runtime_constant": "getBypassPrefixes",
       "edge_cache": {
         "behavior": "bypass"
       }
@@ -252,6 +279,7 @@
       "registered_in": [
         "workers/edge-proxy/src/index.ts"
       ],
+      "runtime_constant": "getBypassPrefixes",
       "edge_cache": {
         "behavior": "bypass"
       }
@@ -263,7 +291,8 @@
       "rationale": "cf-block-probe target — public homepage served by Cloudflare Pages, NOT the FastAPI backend (Task #817)",
       "registered_in": [
         "workers/edge-proxy/src/cf-block-probe.ts"
-      ]
+      ],
+      "runtime_constant": "CF_BLOCK_PROBE_DEFAULT_URL"
     }
   ]
 }
