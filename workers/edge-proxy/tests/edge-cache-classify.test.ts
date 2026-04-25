@@ -102,6 +102,12 @@ async function hit(
 // tests below will also fail for predictable reasons)
 // ─────────────────────────────────────────────────────────────────────────────
 describe("route classification", () => {
+  // Cache config is sourced from `monitored-urls.json` (Task #900). Every
+  // path here MUST have a `backend_paths` entry with `edge_cache.behavior =
+  // "cacheable"`. Stale prefixes that never matched a real FastAPI route
+  // (e.g. /api/sitemap, /api/notes/public, /api/mcq/, /api/cms/articles,
+  // /api/flashcards/, /api/content/syllabus/, /api/robots.txt) were
+  // removed in Task #900 — they were dead config that cached nothing.
   const CACHED = [
     "/api/content/boards",
     "/api/content/subjects",
@@ -109,13 +115,7 @@ describe("route classification", () => {
     "/api/content/library-bundle",
     "/api/seo/keyword-index",
     "/api/pyq/123",
-    "/api/mcq/set-42",
-    "/api/sitemap",
-    "/api/notes/public",
-    "/api/cms/articles",
-    "/api/flashcards/deck-7",
     "/api/edu/allowlist",
-    "/api/content/syllabus/cbse",
   ];
   const BYPASS = ["/api/ai/chat/stream", "/api/webhooks/razorpay", "/api/auth/login"];
   const USER_SPECIFIC = ["/api/user/stats"];
@@ -202,8 +202,6 @@ describe("warm second request – X-Cache header assertions", () => {
     "/api/content/library-bundle",
     "/api/seo/some-slug",
     "/api/pyq/2024",
-    "/api/mcq/set-1",
-    "/api/notes/public",
   ];
 
   for (const path of CACHE_ROUTES) {

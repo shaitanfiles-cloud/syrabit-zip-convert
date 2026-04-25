@@ -23,6 +23,13 @@ import {
   getBotCacheStats,
   type BotCacheStats,
 } from "./bot-cache-stats";
+import {
+  getCacheablePrefixes,
+  getCacheTtlEntries,
+  getBypassPrefixes,
+  getUserSpecificPrefixes,
+  DEFAULT_CACHE_TTL_SECONDS,
+} from "./monitored-urls";
 
 interface Env {
   BACKEND_URL: string;
@@ -213,98 +220,33 @@ const ALLOWED_ORIGINS = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EDGE CACHE KEY AUDIT — last reviewed 2026-04-24
+// EDGE CACHE KEY AUDIT — source of truth: workers/edge-proxy/monitored-urls.json
 //
-// Route family               | Behaviour          | Reason
-// ───────────────────────────┼────────────────────┼──────────────────────────
-// /api/content/*             | cached             | public, static content
-// /api/seo/                  | cached             | public SEO data, read-only
-// /api/pyq/                  | cached             | public past-year questions
-// /api/sitemap               | cached (1d TTL)    | sitemaps rarely change
-// /api/robots.txt            | cached (1d TTL)    | robots rarely changes
-// /api/notes/public          | cached             | publicly readable notes
-// /api/mcq/                  | cached             | public MCQ bank
-// /api/user/stats            | cached+user-keyed  | per-user, keyed by identity
-// /api/cms/articles          | cached             | public CMS article index
-// /api/flashcards/           | cached             | public flashcard sets
-// /api/edu/allowlist         | cached (1d TTL)    | rarely-changing allowlist
-// /api/ai/chat               | bypass             | streaming AI; non-idempotent, per-session
-// /api/ai/* (non-chat)       | not-listed         | INTENTIONAL — rate-limited via isAiPath()
-// /api/webhooks/*            | bypass             | inbound POST events
-// /api/auth/*                | bypass             | auth tokens must be fresh
-// /api/health                | not-listed         | INTENTIONAL — computed live
-// /api/admin/*               | not-listed         | INTENTIONAL — auth-gated
-// /api/analytics/*           | not-listed         | INTENTIONAL — event writes
-// /api/conversations/*       | not-listed         | INTENTIONAL — user-specific
-// /api/user/* (non-stats)    | not-listed         | INTENTIONAL — user-specific
-// /api/notifications/*       | not-listed         | INTENTIONAL — user-specific
+// The CACHEABLE_PREFIXES / CACHE_TTL_ENTRIES / BYPASS_PREFIXES /
+// USER_SPECIFIC_PREFIXES constants below are projected at module load
+// from `monitored-urls.json` via `monitored-urls.ts`. The JSON manifest
+// is gated by `tests/test_monitoring_url_drift.py` against the live
+// FastAPI OpenAPI schema, so a renamed backend route fails CI with an
+// actionable message instead of silently bypassing the edge cache for
+// weeks (Task #900 — the same drift class as Task #877).
+//
+// To add / change a cache rule:
+//   1. Edit `workers/edge-proxy/monitored-urls.json` — add or update the
+//      `edge_cache` block on the relevant `backend_paths` entry.
+//   2. The runtime constants below pick the change up automatically;
+//      no edit to this file is needed.
+//
+// Route families NOT listed in the manifest are intentionally excluded
+// (admin / analytics / conversations / notifications / non-stats user
+// routes are auth-gated or user-specific; /api/health and /api/livez
+// are computed live by the worker; /api/ai/* non-chat is rate-limited
+// via isAiPath() and never cached). Do not add them here — list them
+// in `monitored-urls.json` if a real cache decision is being made.
 // ─────────────────────────────────────────────────────────────────────────────
-const CACHEABLE_PREFIXES = [
-  "/api/content/boards",        // public board list; same for every visitor
-  "/api/content/classes",       // public class list; same for every visitor
-  "/api/content/streams",       // public stream list; same for every visitor
-  "/api/content/subjects",      // public subject list; same for every visitor
-  "/api/content/chapters/",     // public chapter data keyed by path segment
-  "/api/content/chunks/",       // public chunk data keyed by path segment
-  "/api/content/chapter-by-slug/", // public chapter lookup by slug
-  "/api/content/library-bundle", // heavy public bundle; admin writes purge it
-  "/api/content/topic/",        // public topic detail keyed by path segment
-  "/api/seo/",                  // public SEO metadata and keyword index
-  "/api/pyq/",                  // public past-year question bank
-  "/api/sitemap",               // sitemaps served to crawlers; 1d TTL
-  "/api/robots.txt",            // robots.txt served to crawlers; 1d TTL
-  "/api/notes/public",          // publicly readable study notes
-  "/api/mcq/",                  // public MCQ bank
-  "/api/user/stats",            // per-user stats; cache-keyed by identity header
-  "/api/cms/articles",          // public CMS article index
-  "/api/flashcards/",           // public flashcard sets
-  "/api/content/syllabus/",     // public syllabus data keyed by path segment
-  "/api/edu/allowlist",         // institution allowlist; changes rarely, 1d TTL
-];
-
-const CACHE_TTL: Record<string, number> = {
-  "/api/content/boards": 3600,
-  "/api/content/classes": 3600,
-  "/api/content/streams": 3600,
-  "/api/content/subjects": 3600,
-  "/api/content/chapters/": 3600,
-  "/api/content/chunks/": 3600,
-  // Bumped from 300s → 1800s (30 min) so cold POPs don't pay the
-  // ~1.5s D1+backend round-trip on every TTL boundary. Admin write
-  // routes already explicitly purge this key (see ADMIN_PURGE_KEYS
-  // around line 1030 — purgeKeys.push("/api/content/library-bundle")
-  // and "?slim=1"), so an admin edit still invalidates within seconds.
-  // The implicit stale-while-revalidate window is 2× this value
-  // (3600s) — users continue to be served the stale body while the
-  // worker refreshes in the background, so the worst-case latency
-  // experienced by a real user is the cf-cache hit (~30ms), not the
-  // backend round-trip.
-  "/api/content/library-bundle": 1800,
-  "/api/content/chapter-by-slug/": 3600,
-  "/api/content/topic/": 3600,
-  "/api/content/syllabus/": 3600,
-  "/api/seo/keyword-index": 3600,
-  "/api/seo/": 600,
-  "/api/pyq/": 3600,
-  "/api/notes/public": 3600,
-  "/api/mcq/": 3600,
-  "/api/user/stats": 900,
-  "/api/cms/articles": 900,
-  "/api/flashcards/": 3600,
-  "/api/sitemap": 86400,
-  "/api/robots.txt": 86400,
-  "/api/edu/allowlist": 86400,
-};
-
-const USER_SPECIFIC_PREFIXES = [
-  "/api/user/stats", // cache key includes identity header so each user gets their own entry
-];
-
-const BYPASS_PREFIXES = [
-  "/api/ai/chat",   // streaming AI responses; non-idempotent and per-session
-  "/api/webhooks",  // inbound POST events from payment/push providers; must never be cached
-  "/api/auth",      // auth tokens and session cookies must always be fresh
-];
+const CACHEABLE_PREFIXES = getCacheablePrefixes();
+const CACHE_TTL_ENTRIES = getCacheTtlEntries();
+const USER_SPECIFIC_PREFIXES = getUserSpecificPrefixes();
+const BYPASS_PREFIXES = getBypassPrefixes();
 
 const RATE_LIMIT_RPM = 120;
 const BOT_RATE_LIMIT_RPM = 1200;
@@ -520,10 +462,12 @@ function safeCorsHeaders(origin: string | null): Record<string, string> {
 }
 
 function getCacheTtl(pathname: string): number {
-  for (const [prefix, ttl] of Object.entries(CACHE_TTL)) {
+  // CACHE_TTL_ENTRIES is sorted by descending key length so the most
+  // specific prefix wins (e.g. /api/seo/keyword-index before /api/seo/).
+  for (const [prefix, ttl] of CACHE_TTL_ENTRIES) {
     if (pathname.startsWith(prefix)) return ttl;
   }
-  return 300;
+  return DEFAULT_CACHE_TTL_SECONDS;
 }
 
 export function isCacheable(pathname: string): boolean {

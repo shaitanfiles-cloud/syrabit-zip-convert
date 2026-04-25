@@ -19,6 +19,14 @@
  * the value the test validates is *literally the same value* the worker
  * sends — no transcription drift between the manifest and the code.
  *
+ * Task #900 extended the manifest to also cover the edge-cache config.
+ * The `CACHEABLE_PREFIXES` / `CACHE_TTL` / `BYPASS_PREFIXES` /
+ * `USER_SPECIFIC_PREFIXES` constants in `index.ts` are derived from this
+ * module via the `getCacheable*` / `getBypass*` helpers below — so a
+ * developer who renames a FastAPI route (e.g. `/api/content/boards` →
+ * `/api/v2/content/boards`) gets a CI failure pointing at
+ * `monitored-urls.json` instead of a silent cache miss in production.
+ *
  * If you add a new probe / healthcheck / hard-coded backend URL anywhere
  * in this worker, register it in `monitored-urls.json` and reference it
  * from this module (or via `getBackendPath()` below). The drift test
@@ -28,11 +36,21 @@
 
 import manifest from "../monitored-urls.json";
 
+export interface MonitoredEdgeCache {
+  /** "cacheable" → store in CF cache. "bypass" → must never be cached. */
+  behavior: "cacheable" | "bypass";
+  /** TTL in seconds when behavior === "cacheable". Required for cacheable entries. */
+  ttl_seconds?: number;
+  /** When true, the cache key includes a per-user identity header so each user gets their own entry. */
+  user_keyed?: boolean;
+}
+
 export interface MonitoredBackendPath {
   path: string;
   match: "exact" | "prefix";
   rationale: string;
   registered_in: string[];
+  edge_cache?: MonitoredEdgeCache;
 }
 
 export interface MonitoredExternalUrl {
@@ -99,3 +117,92 @@ export const SYNTHETIC_PROBE_PATH = getBackendPath("/api/admin/diagnostics").pat
 
 /** cf-block-probe target — see `cf-block-probe.ts`. */
 export const CF_BLOCK_PROBE_DEFAULT_URL = getExternalUrl("https://syrabit.ai/").url;
+
+
+// ─── Edge-cache config (Task #900) ─────────────────────────────────────
+//
+// `index.ts` used to inline three sibling constants — `CACHEABLE_PREFIXES`,
+// `CACHE_TTL`, `BYPASS_PREFIXES` — that decided whether the worker
+// stored a response in the CF cache and for how long. Each constant was
+// a hand-maintained list of `/api/...` strings, and a renamed FastAPI
+// route silently stopped matching with no probe to catch it (the same
+// failure mode as Task #877). Task #900 moves the source of truth into
+// `monitored-urls.json`'s `edge_cache` block; the helpers below project
+// the manifest into the shape `index.ts` consumes at runtime.
+//
+// Eagerly memoised at module load — the manifest is a literal JSON
+// import, so this work happens exactly once per Worker instance.
+
+const CACHEABLE_ENTRIES: readonly MonitoredBackendPath[] = MANIFEST.backend_paths.filter(
+  (entry) => entry.edge_cache?.behavior === "cacheable",
+);
+
+const BYPASS_ENTRIES: readonly MonitoredBackendPath[] = MANIFEST.backend_paths.filter(
+  (entry) => entry.edge_cache?.behavior === "bypass",
+);
+
+// Validate cacheable entries carry a TTL. Throwing at module load is the
+// loudest place to surface a malformed manifest — a deployed worker that
+// silently skipped TTL entries would re-introduce the exact silent-miss
+// class of bug this module exists to prevent.
+for (const entry of CACHEABLE_ENTRIES) {
+  if (typeof entry.edge_cache?.ttl_seconds !== "number") {
+    throw new Error(
+      `[monitored-urls] backend path ${JSON.stringify(entry.path)} has ` +
+      `edge_cache.behavior="cacheable" but no numeric ttl_seconds. ` +
+      `Set ttl_seconds in monitored-urls.json — see Task #900 docstring.`,
+    );
+  }
+}
+
+const CACHEABLE_PREFIXES_FROZEN: readonly string[] = Object.freeze(
+  CACHEABLE_ENTRIES.map((entry) => entry.path),
+);
+
+const BYPASS_PREFIXES_FROZEN: readonly string[] = Object.freeze(
+  BYPASS_ENTRIES.map((entry) => entry.path),
+);
+
+const USER_SPECIFIC_PREFIXES_FROZEN: readonly string[] = Object.freeze(
+  CACHEABLE_ENTRIES.filter((entry) => entry.edge_cache?.user_keyed === true).map(
+    (entry) => entry.path,
+  ),
+);
+
+// TTL list sorted by descending key length so that the most specific
+// prefix wins the lookup. e.g. /api/seo/keyword-index (24 chars) must
+// resolve before /api/seo/ (9 chars) for a request to
+// /api/seo/keyword-index/foo. Matches the order-sensitive behaviour of
+// the previous `Object.entries(CACHE_TTL)` iteration in `index.ts`.
+const CACHE_TTL_ENTRIES_SORTED: ReadonlyArray<readonly [string, number]> = Object.freeze(
+  CACHEABLE_ENTRIES
+    .map((entry) => [entry.path, entry.edge_cache!.ttl_seconds!] as const)
+    .sort((a, b) => b[0].length - a[0].length),
+);
+
+/** Default cache TTL for paths that match `isCacheable` but have no explicit TTL entry. */
+export const DEFAULT_CACHE_TTL_SECONDS = 300;
+
+/** Edge-cacheable path prefixes (used by `isCacheable` in `index.ts`). */
+export function getCacheablePrefixes(): readonly string[] {
+  return CACHEABLE_PREFIXES_FROZEN;
+}
+
+/** Path prefixes the edge MUST NOT cache (used by `isBypass` in `index.ts`). */
+export function getBypassPrefixes(): readonly string[] {
+  return BYPASS_PREFIXES_FROZEN;
+}
+
+/** Cacheable prefixes whose cache key includes a per-user identity header. */
+export function getUserSpecificPrefixes(): readonly string[] {
+  return USER_SPECIFIC_PREFIXES_FROZEN;
+}
+
+/**
+ * Cache TTL entries, sorted by descending key length. Iterate in order
+ * and return the first prefix that `pathname.startsWith(prefix)` — the
+ * sort guarantees the most specific entry wins.
+ */
+export function getCacheTtlEntries(): ReadonlyArray<readonly [string, number]> {
+  return CACHE_TTL_ENTRIES_SORTED;
+}

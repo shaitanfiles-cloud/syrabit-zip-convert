@@ -1,10 +1,16 @@
 {
-  "$schema_version": 1,
+  "$schema_version": 2,
   "_doc": [
     "Single source of truth for every backend URL/path the edge-proxy worker (or its companion deploy infra)",
     "hard-codes outside the FastAPI app. Task #887 — added so the Task #877 class of bug (a probe URL drifts",
     "away from the real router prefix and silently 404s for ~56h before anyone notices) can be caught by a",
     "deterministic CI check instead of a manual log review.",
+    "",
+    "Task #900 extended the manifest to also cover the edge-cache config (CACHEABLE_PREFIXES / CACHE_TTL /",
+    "BYPASS_PREFIXES / USER_SPECIFIC_PREFIXES) — same drift class: a renamed FastAPI route silently stops",
+    "matching the cache rule and bypasses the cache forever, with no probe ever firing. Cache-related",
+    "entries carry an optional `edge_cache` block; `workers/edge-proxy/src/index.ts` derives its runtime",
+    "constants from this manifest via `monitored-urls.ts` so there is exactly one source of truth.",
     "",
     "Two arrays:",
     "  backend_paths       — paths that MUST resolve to a real FastAPI route (exact-match on the OpenAPI",
@@ -13,6 +19,12 @@
     "  intentionally_external — full URLs the worker hits that are NOT FastAPI routes (e.g. the public",
     "                        homepage served by Cloudflare Pages, an external webhook endpoint). Each entry",
     "                        MUST carry a non-empty 'rationale' or the drift test fails.",
+    "",
+    "Optional fields on backend_paths entries:",
+    "  edge_cache.behavior     — 'cacheable' (worker stores in CF cache) or 'bypass' (worker forbids caching).",
+    "  edge_cache.ttl_seconds  — cache TTL when behavior='cacheable'. Required for cacheable entries.",
+    "  edge_cache.user_keyed   — when true, the cache key includes a per-user identity header so each user",
+    "                            gets their own cached entry (e.g. /api/user/stats).",
     "",
     "If you add a new probe / healthcheck / hard-coded backend URL anywhere, register it here. The drift",
     "test (artifacts/syrabit-backend/tests/test_monitoring_url_drift.py) gates merges on this manifest."
@@ -41,6 +53,208 @@
       "registered_in": [
         "artifacts/syrabit-backend/Dockerfile"
       ]
+    },
+    {
+      "path": "/api/content/boards",
+      "match": "prefix",
+      "rationale": "edge-cached public board list — same body for every visitor (Task #900)",
+      "registered_in": [
+        "workers/edge-proxy/src/index.ts"
+      ],
+      "edge_cache": {
+        "behavior": "cacheable",
+        "ttl_seconds": 3600
+      }
+    },
+    {
+      "path": "/api/content/classes",
+      "match": "prefix",
+      "rationale": "edge-cached public class list — same body for every visitor (Task #900)",
+      "registered_in": [
+        "workers/edge-proxy/src/index.ts"
+      ],
+      "edge_cache": {
+        "behavior": "cacheable",
+        "ttl_seconds": 3600
+      }
+    },
+    {
+      "path": "/api/content/streams",
+      "match": "prefix",
+      "rationale": "edge-cached public stream list — same body for every visitor (Task #900)",
+      "registered_in": [
+        "workers/edge-proxy/src/index.ts"
+      ],
+      "edge_cache": {
+        "behavior": "cacheable",
+        "ttl_seconds": 3600
+      }
+    },
+    {
+      "path": "/api/content/subjects",
+      "match": "prefix",
+      "rationale": "edge-cached public subject list — same body for every visitor (Task #900)",
+      "registered_in": [
+        "workers/edge-proxy/src/index.ts"
+      ],
+      "edge_cache": {
+        "behavior": "cacheable",
+        "ttl_seconds": 3600
+      }
+    },
+    {
+      "path": "/api/content/chapters/",
+      "match": "prefix",
+      "rationale": "edge-cached public chapter data keyed by path segment (Task #900)",
+      "registered_in": [
+        "workers/edge-proxy/src/index.ts"
+      ],
+      "edge_cache": {
+        "behavior": "cacheable",
+        "ttl_seconds": 3600
+      }
+    },
+    {
+      "path": "/api/content/chunks/",
+      "match": "prefix",
+      "rationale": "edge-cached public chunk data keyed by path segment (Task #900)",
+      "registered_in": [
+        "workers/edge-proxy/src/index.ts"
+      ],
+      "edge_cache": {
+        "behavior": "cacheable",
+        "ttl_seconds": 3600
+      }
+    },
+    {
+      "path": "/api/content/chapter-by-slug/",
+      "match": "prefix",
+      "rationale": "edge-cached public chapter lookup by slug (Task #900)",
+      "registered_in": [
+        "workers/edge-proxy/src/index.ts"
+      ],
+      "edge_cache": {
+        "behavior": "cacheable",
+        "ttl_seconds": 3600
+      }
+    },
+    {
+      "path": "/api/content/library-bundle",
+      "match": "prefix",
+      "rationale": "edge-cached heavy public library bundle; admin writes purge it explicitly. TTL bumped 300→1800s so cold POPs avoid the ~1.5s D1+backend round-trip every TTL boundary (Task #900)",
+      "registered_in": [
+        "workers/edge-proxy/src/index.ts"
+      ],
+      "edge_cache": {
+        "behavior": "cacheable",
+        "ttl_seconds": 1800
+      }
+    },
+    {
+      "path": "/api/content/topic/",
+      "match": "prefix",
+      "rationale": "edge-cached public topic detail keyed by path segment (Task #900)",
+      "registered_in": [
+        "workers/edge-proxy/src/index.ts"
+      ],
+      "edge_cache": {
+        "behavior": "cacheable",
+        "ttl_seconds": 3600
+      }
+    },
+    {
+      "path": "/api/seo/keyword-index",
+      "match": "prefix",
+      "rationale": "edge-cached SEO keyword index — TTL override (longer than parent /api/seo/ default of 600s); listed BEFORE /api/seo/ so length-desc TTL lookup wins (Task #900)",
+      "registered_in": [
+        "workers/edge-proxy/src/index.ts"
+      ],
+      "edge_cache": {
+        "behavior": "cacheable",
+        "ttl_seconds": 3600
+      }
+    },
+    {
+      "path": "/api/seo/",
+      "match": "prefix",
+      "rationale": "edge-cached public SEO metadata; default TTL for the SEO router family (Task #900)",
+      "registered_in": [
+        "workers/edge-proxy/src/index.ts"
+      ],
+      "edge_cache": {
+        "behavior": "cacheable",
+        "ttl_seconds": 600
+      }
+    },
+    {
+      "path": "/api/pyq/",
+      "match": "prefix",
+      "rationale": "edge-cached public past-year question bank (Task #900)",
+      "registered_in": [
+        "workers/edge-proxy/src/index.ts"
+      ],
+      "edge_cache": {
+        "behavior": "cacheable",
+        "ttl_seconds": 3600
+      }
+    },
+    {
+      "path": "/api/user/stats",
+      "match": "prefix",
+      "rationale": "edge-cached per-user stats — cache key includes the identity header so each user gets their own entry (Task #900)",
+      "registered_in": [
+        "workers/edge-proxy/src/index.ts"
+      ],
+      "edge_cache": {
+        "behavior": "cacheable",
+        "ttl_seconds": 900,
+        "user_keyed": true
+      }
+    },
+    {
+      "path": "/api/edu/allowlist",
+      "match": "prefix",
+      "rationale": "edge-cached institution allowlist — changes rarely, 1d TTL (Task #900)",
+      "registered_in": [
+        "workers/edge-proxy/src/index.ts"
+      ],
+      "edge_cache": {
+        "behavior": "cacheable",
+        "ttl_seconds": 86400
+      }
+    },
+    {
+      "path": "/api/ai/chat",
+      "match": "prefix",
+      "rationale": "edge bypass — streaming AI responses are non-idempotent and per-session; must never be cached (Task #900)",
+      "registered_in": [
+        "workers/edge-proxy/src/index.ts"
+      ],
+      "edge_cache": {
+        "behavior": "bypass"
+      }
+    },
+    {
+      "path": "/api/webhooks",
+      "match": "prefix",
+      "rationale": "edge bypass — inbound POST events from payment / push providers; must never be cached (Task #900)",
+      "registered_in": [
+        "workers/edge-proxy/src/index.ts"
+      ],
+      "edge_cache": {
+        "behavior": "bypass"
+      }
+    },
+    {
+      "path": "/api/auth",
+      "match": "prefix",
+      "rationale": "edge bypass — auth tokens and session cookies must always be fresh (Task #900)",
+      "registered_in": [
+        "workers/edge-proxy/src/index.ts"
+      ],
+      "edge_cache": {
+        "behavior": "bypass"
+      }
     }
   ],
   "intentionally_external": [
