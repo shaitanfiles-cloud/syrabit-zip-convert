@@ -298,18 +298,11 @@ async def _compute_dashboard():
     # in parallel so the dashboard's two right-hand traffic tiles
     # ("Bounce Rate", "Avg Session") stop rendering as em-dash
     # placeholders.
-    cf_stats, recent_events, sess_metrics, cf_hourly = await asyncio.gather(
+    cf_stats, recent_events, sess_metrics = await asyncio.gather(
         cloudflare_client.get_visitor_stats_cf(days=7),
         get_recent_user_events(limit=10),
         get_session_metrics(days=7),
-        cloudflare_client.get_visitors_per_hour_sum(days=7),
     )
-    # `cf_hourly` is None on any CF GraphQL failure / token issue; the
-    # frontend tile then falls back to other CF-derived counts so the
-    # card never goes blank.
-    visitors_per_hour_sum = (cf_hourly or {}).get("visitors_sum") if cf_hourly else None
-    visitors_per_hour_today = (cf_hourly or {}).get("today_sum") if cf_hourly else None
-    visitors_per_hour_buckets = (cf_hourly or {}).get("buckets") if cf_hourly else None
     cf_connected = bool(cf_stats)
     if cf_stats:
         visitor_stats = {
@@ -324,18 +317,12 @@ async def _compute_dashboard():
             "daily_visitors": cf_stats.get("daily_visitors", []),
             "bounce_rate": sess_metrics.get("bounce_rate"),
             "avg_session_duration": sess_metrics.get("avg_session_duration"),
-            "visitors_per_hour_sum": visitors_per_hour_sum,
-            "visitors_per_hour_today": visitors_per_hour_today,
-            "visitors_per_hour_buckets": visitors_per_hour_buckets,
             "cloudflare": {**cf_stats, "period_days": 7},
         }
     else:
         visitor_stats = {
             "bounce_rate": sess_metrics.get("bounce_rate"),
             "avg_session_duration": sess_metrics.get("avg_session_duration"),
-            "visitors_per_hour_sum": visitors_per_hour_sum,
-            "visitors_per_hour_today": visitors_per_hour_today,
-            "visitors_per_hour_buckets": visitors_per_hour_buckets,
         }
 
     return {

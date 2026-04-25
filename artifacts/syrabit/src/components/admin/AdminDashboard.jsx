@@ -1319,27 +1319,27 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
         <p className="text-[10px] text-gray-400 mb-2">{TODAY_BUCKET_CAPTION}</p>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
-          {/* "Total Visitors" — bound to Cloudflare's per-HOUR unique
-              visitor sum over the last 7 days (vs.visitors_per_hour_sum,
-              backed by cloudflare_client.get_visitors_per_hour_sum which
-              queries httpRequests1hGroups.uniq.uniques and adds them up
-              across hour-buckets). This implements the operator's
-              "filter visits per hour" rule on top of the CF "visit"
-              definition: each unique IP+UA fingerprint can contribute
-              at most one count per hour, and a returning visitor in a
-              new hour counts again. Bots are excluded because CF's JS
-              beacon doesn't fire for non-browser traffic. Fallback
-              chain if the hourly fetch hasn't returned yet or CF's
-              free-plan retention truncated the response: drop to CF
-              visits (sessions, ~1 lakh+ — the previous headline) so
-              the tile is never blank or smaller than expected. The
-              "Today" sub-value uses the same hourly sum scoped to the
-              current UTC day, with the same fallback. */}
+          {/* "Total Visitors" — bound to Cloudflare's "Visits" metric
+              exactly as it appears on the CF Analytics Overview page,
+              with no additional filtering applied. CF defines a visit
+              as a session: every return after a 30-minute idle gap
+              counts as a new visit, so repeat visitors from the same
+              IP all contribute multiple counts. Bots are excluded
+              because CF's JS beacon doesn't fire for non-browser
+              traffic. Source: cfOverview.totals.visits from the same
+              /admin/analytics/cf-overview payload the Traffic
+              (Cloudflare) card above renders, so the headline matches
+              the Cloudflare dashboard 1:1. Fallback chain: if the
+              overview fetch hasn't loaded yet, drop to CF unique
+              visitors so the tile isn't blank, then 0. The "Today"
+              sub-value pulls visits from the latest day-bucket of
+              the cfOverview series so it stays internally consistent
+              with the headline metric. */}
           <StatCard label="Total Visitors"
-            value={vs?.visitors_per_hour_sum ?? cfOverview?.totals?.visits ?? vs?.total_visitors ?? 0}
+            value={cfOverview?.totals?.visits ?? vs?.total_visitors ?? 0}
             icon={Users} color="#84cc16"
             subLabel="Today"
-            subValue={vs?.visitors_per_hour_today ?? (cfOverview?.series?.length ? cfOverview.series[cfOverview.series.length - 1]?.visits : null) ?? vs?.visitors_today ?? 0} />
+            subValue={(cfOverview?.series?.length ? cfOverview.series[cfOverview.series.length - 1]?.visits : null) ?? vs?.visitors_today ?? 0} />
           <StatCard label="Bounce Rate"  value={vs.bounce_rate != null ? `${vs.bounce_rate}%` : '—'} icon={TrendingUp} color="#f59e0b" />
           <StatCard label="Avg Session"  value={vs.avg_session_duration != null ? `${vs.avg_session_duration}s` : '—'} icon={Clock} color="#a78bfa" />
         </div>
