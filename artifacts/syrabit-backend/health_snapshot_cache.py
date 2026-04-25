@@ -241,17 +241,35 @@ async def _probe_postgres() -> Dict[str, Any]:
     return {"status": "ok", "latencyMs": int((time.time() - t0) * 1000)}
 
 
-async def _probe_redis() -> Dict[str, Any]:
-    import deps
-    if not deps.redis_client:
-        return {"status": "not_connected", "latencyMs": 0}
+async def _probe_cloudflare_cache() -> Dict[str, Any]:
+    """Cloudflare AI Gateway / cache reachability probe.
+
+    Replaced the previous Redis probe — Redis is not actually wired
+    in this codebase (``deps.redis_client`` is permanently ``None``),
+    so the dashboard "Redis Connected" tile was misleading. The real
+    durable cache layer the backend leans on is the Cloudflare AI
+    Gateway cache (LLM response cache) plus the edge-proxy KV cache,
+    so probe that instead.
+
+    Strategy: HEAD the configured CF AI Gateway base URL with a tight
+    timeout. We don't care about the HTTP status code (the gateway
+    returns 4xx for an empty HEAD by design) — we only care that we
+    can reach the Cloudflare edge at all. Any HTTP response = ok.
+    Connection / DNS / timeout errors = error. Returns
+    ``not_configured`` when the gateway env vars aren't set so the
+    UI shows a neutral grey tile instead of a red one."""
+    from config import CF_GATEWAY_ENABLED, CF_GATEWAY_BASE
+    if not CF_GATEWAY_ENABLED or not CF_GATEWAY_BASE:
+        return {"status": "not_configured", "latencyMs": 0}
     t0 = time.time()
-    # redis-py's sync ``ping`` is fine here — it runs in the asyncio
-    # default executor effectively because we're already in an event
-    # loop and the call is sub-millisecond. Switching to async-redis
-    # is out of scope for #848.
-    deps.redis_client.ping()
-    return {"status": "ok", "latencyMs": int((time.time() - t0) * 1000)}
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=2.5) as client:
+            await client.head(CF_GATEWAY_BASE)
+        return {"status": "ok", "latencyMs": int((time.time() - t0) * 1000)}
+    except Exception as exc:
+        logger.debug("cloudflare_cache probe failed: %s", exc)
+        return {"status": "error", "latencyMs": int((time.time() - t0) * 1000)}
 
 
 async def _probe_razorpay() -> Dict[str, Any]:
@@ -283,5 +301,5 @@ def register_default_probes() -> None:
     to call multiple times (re-registration preserves cached values)."""
     register("mongodb", _probe_mongo)
     register("postgresql", _probe_postgres)
-    register("redis", _probe_redis)
+    register("cloudflare_cache", _probe_cloudflare_cache)
     register("razorpay", _probe_razorpay)

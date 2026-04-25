@@ -1594,7 +1594,7 @@ async def readyz():
     snapshot = await health_snapshot_cache.get_all()
     mongo = snapshot.get("mongodb", {"status": "unknown"})
     pg = snapshot.get("postgresql", {"status": "unknown"})
-    redis_dep = snapshot.get("redis", {"status": "unknown"})
+    cf_cache_dep = snapshot.get("cloudflare_cache", {"status": "unknown"})
     razorpay_dep = snapshot.get("razorpay", {"status": "unknown"})
 
     # Vertex/LLM blocks come from their own bg-probe caches, not the
@@ -1608,7 +1608,7 @@ async def readyz():
         "checks": {
             "mongodb": mongo,
             "postgresql": pg,
-            "redis": redis_dep,
+            "cloudflare_cache": cf_cache_dep,
             "razorpay": razorpay_dep,
             "vertex": vertex_block,
         },
@@ -1649,7 +1649,7 @@ async def _health_inner():
     snapshot = await health_snapshot_cache.get_all()
     mongo_dep = snapshot.get("mongodb", {"status": "unknown", "latencyMs": 0})
     pg_dep = snapshot.get("postgresql", {"status": "unknown", "latencyMs": 0})
-    redis_dep = snapshot.get("redis", {"status": "unknown", "latencyMs": 0})
+    cf_cache_dep = snapshot.get("cloudflare_cache", {"status": "unknown", "latencyMs": 0})
     razorpay_dep = snapshot.get("razorpay", {"status": "unknown"})
 
     kv_ok = mongo_dep.get("status") == "ok"
@@ -1659,7 +1659,8 @@ async def _health_inner():
     pg_ok = pg_dep.get("status") == "ok"
     pg_latency = pg_dep.get("latencyMs", 0)
 
-    redis_ok = redis_dep.get("status") == "ok"
+    cf_cache_status = cf_cache_dep.get("status", "unknown")
+    cf_cache_latency = cf_cache_dep.get("latencyMs", 0)
 
     rp_status = razorpay_dep.get("status", "not_configured")
 
@@ -1711,7 +1712,7 @@ async def _health_inner():
         "dependencies": {
             "mongodb": {"status": mongo_status, "latencyMs": kv_latency},
             "postgresql": {"status": "ok" if pg_ok else "unavailable", "latencyMs": pg_latency},
-            "redis": {"status": "ok" if redis_ok else "not_connected"},
+            "cloudflare_cache": {"status": cf_cache_status, "latencyMs": cf_cache_latency},
             "llm": {
                 "status": llm_status,
                 "latencyMs": llm_latency,

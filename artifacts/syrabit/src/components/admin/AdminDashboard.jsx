@@ -31,7 +31,7 @@ import {
   CheckCircle, AlertCircle, AlertTriangle, Wifi, Database, DollarSign, Crown,
   Layers, Link2, FileCheck, Target, Cpu, ShieldCheck, Smartphone,
   Volume2, VolumeX, Bell, BellOff, RotateCcw, Upload, Trash2, Music, X,
-  ShieldAlert, UserCheck,
+  ShieldAlert, UserCheck, Cloud,
 } from 'lucide-react';
 import AudioTrimPreview from './AudioTrimPreview';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
@@ -129,19 +129,26 @@ function ActivityItem({ event, idx }) {
   );
 }
 
-const DEP_ICONS = { mongodb: Database, postgresql: Database, redis: Server, supabase: Database };
+const DEP_ICONS = { mongodb: Database, postgresql: Database, cloudflare_cache: Cloud, supabase: Database };
+// Friendly display names so the underscored backend keys
+// (e.g. ``cloudflare_cache``) don't render as "Cloudflare_cache" via
+// the CSS ``capitalize`` rule. Keys not present here fall back to the
+// raw ``name`` (still capitalize-d by CSS) so adding new probes is a
+// no-op for the UI.
+const DEP_LABELS = { mongodb: 'MongoDB', postgresql: 'PostgreSQL', cloudflare_cache: 'Cloudflare Cache', supabase: 'Supabase' };
 const STATUS_COLORS = { ok: '#10b981', error: '#ef4444', not_configured: '#64748b', unknown: '#f59e0b' };
 
 function DepStatusCard({ name, status, latency }) {
   const Icon = DEP_ICONS[name] || Server;
   const color = STATUS_COLORS[status] || STATUS_COLORS.unknown;
+  const label = DEP_LABELS[name] || name;
   return (
     <div className="flex items-center gap-3 p-3 rounded-xl transition-all duration-200 hover:bg-gray-50 bg-gray-50 border border-gray-100">
       <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: `${color}15` }}>
         <Icon size={14} style={{ color }} />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-gray-700 text-sm font-medium capitalize">{name}</p>
+        <p className="text-gray-700 text-sm font-medium">{label}</p>
         <p className="text-xs" style={{ color }}>{status === 'ok' ? 'Connected' : status}</p>
       </div>
       {status === 'ok' && (

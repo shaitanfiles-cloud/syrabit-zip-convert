@@ -1101,12 +1101,25 @@ async def _check_health_deps():
             result["postgresql"] = {"status": "not_configured", "latencyMs": 0}
     except Exception:
         result["postgresql"] = {"status": "error", "latencyMs": 0}
+    # Cloudflare AI Gateway / cache reachability — replaced the previous
+    # Redis probe because ``deps.redis_client`` is permanently None in
+    # this codebase, so the dashboard "Redis Connected" tile was always
+    # showing a misleading status. The Cloudflare AI Gateway is the
+    # actual durable cache layer the chat path leans on, so probe it
+    # instead. HEAD with a tight timeout — we don't care about the HTTP
+    # status (gateway returns 4xx for an empty HEAD) only that we can
+    # reach the edge at all.
     try:
-        t0 = _time_mod.time()
-        _redis_get_search("__healthcheck__")
-        result["redis"] = {"status": "ok", "latencyMs": round((_time_mod.time() - t0) * 1000, 1)}
+        from config import CF_GATEWAY_ENABLED, CF_GATEWAY_BASE
+        if not CF_GATEWAY_ENABLED or not CF_GATEWAY_BASE:
+            result["cloudflare_cache"] = {"status": "not_configured", "latencyMs": 0}
+        else:
+            t0 = _time_mod.time()
+            async with httpx.AsyncClient(timeout=2.5) as _hc:
+                await _hc.head(CF_GATEWAY_BASE)
+            result["cloudflare_cache"] = {"status": "ok", "latencyMs": round((_time_mod.time() - t0) * 1000, 1)}
     except Exception:
-        result["redis"] = {"status": "error", "latencyMs": 0}
+        result["cloudflare_cache"] = {"status": "error", "latencyMs": 0}
     try:
         if supa and SUPABASE_URL:
             # Use the best available key: service key → anon key.
