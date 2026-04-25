@@ -314,6 +314,14 @@ export function AppRoutes() {
       {/* ── SEO routes: /{board}/{class}/{subject} and /{board}/{class}/{subject}/{chapter} ── */}
       <Route path="/:board/:classSlug/:streamSlug/:subjectSlug/:chapterSlug" element={<ChapterPage />} />
       <Route path="/:board/:classSlug/:subjectSlug/:chapterSlug" element={<ChapterPage />} />
+      {/* Task #914 Step 2 — topic deep-link URLs. Mounted BEFORE the
+          legacy `/:pageType` redirect below so the literal `topic`
+          segment doesn't get swallowed and re-routed. ChapterPage
+          treats `topicSlug` as scroll-to-anchor + canonical override
+          context; markup is identical to the chapter URL (no
+          cloaking — same React tree, same DOM). */}
+      <Route path="/:board/:classSlug/:streamSlug/:subjectSlug/:chapterSlug/topic/:topicSlug" element={<ChapterPage />} />
+      <Route path="/:board/:classSlug/:subjectSlug/:chapterSlug/topic/:topicSlug" element={<ChapterPage />} />
       <Route path="/:board/:classSlug/:subjectSlug/:chapterSlug/:pageType" element={<LegacyTopicRedirect />} />
       <Route path="/:board/:classSlug/:subjectSlug" element={<SubjectLandingPage />} />
 

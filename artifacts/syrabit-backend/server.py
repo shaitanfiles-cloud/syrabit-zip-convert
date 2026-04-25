@@ -594,6 +594,36 @@ async def lifespan(app):
             await db.chapters.create_index("subject_id")
             await db.chapters.create_index("order_index")
             await db.chapters.create_index([("slug", 1), ("subject_id", 1)])
+            # Task #914 Step 1 — durable uniqueness for the persistent
+            # topic_slug. The backfill resolves intra-chapter
+            # collisions deterministically; this compound unique
+            # index stops a future admin edit / SEO regen from
+            # silently re-introducing two topics that point at the
+            # same `/.../<chapter>/topic/<slug>` URL. Partial filter
+            # so legacy rows without `topic_slug` (or with empty
+            # string) don't trip the constraint before the next
+            # backfill pass.
+            try:
+                await db.topics.create_index(
+                    [("chapter_id", 1), ("topic_slug", 1)],
+                    unique=True,
+                    partialFilterExpression={
+                        "topic_slug": {"$type": "string", "$gt": ""},
+                    },
+                    name="topics_chapter_id_topic_slug_unique",
+                )
+            except Exception as _idx_err:  # noqa: BLE001
+                # Pre-existing duplicates would block index creation.
+                # Log and continue — the next backfill run will
+                # repair the data and a follow-up restart picks up
+                # the index. Failure here must NOT block app boot.
+                logging.getLogger("syrabit.startup").warning(
+                    "topics chapter_id+topic_slug unique index skipped: %s", _idx_err,
+                )
+            # And a non-unique index on definition_status to make the
+            # admin definition-missing audit O(matched) instead of
+            # full-collection scan.
+            await db.topics.create_index("definition_status")
             await db.subjects.create_index("stream_id")
             await db.subjects.create_index("status")
             await db.subjects.create_index([("slug", 1), ("stream_id", 1)])
@@ -1319,6 +1349,14 @@ api = APIRouter(prefix="/api")
 from routes.auth import router as auth_router
 from routes.content import router as content_router
 from routes.topic_faq_jsonld import router as topic_faq_jsonld_router
+# Task #914 Steps 1-3 — topic citability pipeline:
+#   * topic_answer_cards: public endpoints powering the per-topic AI
+#     answer card on chapter pages and the dedicated topic deep-link
+#     route (`/.../<chapter>/topic/<slug>`).
+#   * admin_topic_audit: admin-only audit + on-demand backfill for
+#     the persistent `topic_slug` and `definition_status` fields.
+from routes.topic_answer_cards import router as topic_answer_cards_router
+from routes.admin_topic_audit import router as admin_topic_audit_router
 from routes.syllabus import router as syllabus_router
 from routes.ai_chat import router as ai_chat_router
 from routes.conversations import router as conversations_router
@@ -1361,6 +1399,8 @@ from routes.admin_seo_keywords import router as admin_seo_keywords_router
 api.include_router(auth_router)
 api.include_router(content_router)
 api.include_router(topic_faq_jsonld_router)
+api.include_router(topic_answer_cards_router)
+api.include_router(admin_topic_audit_router)
 api.include_router(syllabus_router)
 api.include_router(ai_chat_router)
 api.include_router(conversations_router)

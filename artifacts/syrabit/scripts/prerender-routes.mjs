@@ -413,6 +413,12 @@ function pickChapterPayload(c) {
     // chapter preload below. Listed here so the keep-list filter
     // doesn't strip it.
     "faq_entries",
+    // Task #914 Step 3 — published topics seed for the per-topic
+    // AI answer cards. Baking these into the preload means the
+    // first-byte HTML already contains the citable definitions and
+    // attribution sentences, so AI crawlers don't need to execute
+    // JS to see them.
+    "published_topics",
   ];
   const out = {};
   for (const k of keys) if (c[k] !== undefined) out[k] = c[k];
@@ -439,6 +445,25 @@ async function fetchChapterFaqEntries(chapterId) {
   } catch {
     // 404 (no parseable MCQs) and transient network errors are both fine —
     // we just skip baking FAQ into this chapter snapshot.
+    return null;
+  }
+}
+
+// Task #914 Step 3 — fetch the published-topics list (already
+// filtered server-side to those with `definition_status=ok`) so the
+// prerendered HTML ships every AI answer card on first byte. Same
+// failure semantics as fetchChapterFaqEntries: any error returns
+// null and the runtime useEffect in ChapterPage takes over for the
+// SPA path.
+async function fetchChapterPublishedTopics(chapterId) {
+  if (!chapterId) return null;
+  const url = `${BACKEND.replace(/\/$/, "")}/api/content/chapters/${encodeURIComponent(chapterId)}/topics-published`;
+  try {
+    const payload = await fetchJson(url);
+    const topics = Array.isArray(payload?.topics) ? payload.topics : null;
+    if (!topics || topics.length === 0) return null;
+    return topics;
+  } catch {
     return null;
   }
 }
@@ -774,6 +799,13 @@ async function main() {
       const faqEntries = await fetchChapterFaqEntries(chapterData.chapter_id);
       if (faqEntries) {
         chapterData.faq_entries = faqEntries;
+      }
+      // Task #914 Step 3 — bake published topics so the answer
+      // cards render server-side (no JS, no flash, single source
+      // of truth for bots and humans).
+      const publishedTopics = await fetchChapterPublishedTopics(chapterData.chapter_id);
+      if (publishedTopics) {
+        chapterData.published_topics = publishedTopics;
       }
       const preload = {
         board, classSlug, subjectSlug, chapterSlug,
