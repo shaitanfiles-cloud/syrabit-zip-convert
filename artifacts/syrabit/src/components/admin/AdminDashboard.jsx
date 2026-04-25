@@ -1307,6 +1307,25 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       </GlassCard>
       </SectionErrorBoundary>
 
+      {/* Site-level page-view metrics row — moved here at the user's
+          request so the at-a-glance traffic numbers sit directly
+          under the Cloudflare account-wide traffic card and above
+          the verified-bot Crawl Control card. The block was
+          originally rendered much further down (above the Chat
+          Health card); the move keeps all traffic-shaped cards
+          adjacent so the dashboard tells one continuous story:
+          account traffic → site totals → bot share. */}
+      <div>
+        <p className="text-[10px] text-gray-400 mb-2">{TODAY_BUCKET_CAPTION}</p>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
+          <StatCard label="Total Page Views" value={vs?.total_page_views ?? 0} icon={BarChart2} color="#84cc16"
+            subLabel="Today" subValue={vs?.page_views_today ?? 0} />
+          <StatCard label="Bounce Rate"  value={vs.bounce_rate != null ? `${vs.bounce_rate}%` : '—'} icon={TrendingUp} color="#f59e0b" />
+          <StatCard label="Avg Session"  value={vs.avg_session_duration != null ? `${vs.avg_session_duration}s` : '—'} icon={Clock} color="#a78bfa" />
+        </div>
+      </div>
+
       {/* Legacy "Bot Traffic Analytics" card removed — its content
           (bot vs human totals, top bots, per-bot pages) was sourced
           from local server logs and duplicated what the
@@ -3771,16 +3790,11 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       )}
       </SectionErrorBoundary>
 
-      <div>
-        <p className="text-[10px] text-gray-400 mb-2">{TODAY_BUCKET_CAPTION}</p>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
-          <StatCard label="Total Page Views" value={vs?.total_page_views ?? 0} icon={BarChart2} color="#84cc16"
-            subLabel="Today" subValue={vs?.page_views_today ?? 0} />
-          <StatCard label="Bounce Rate"  value={vs.bounce_rate != null ? `${vs.bounce_rate}%` : '—'} icon={TrendingUp} color="#f59e0b" />
-          <StatCard label="Avg Session"  value={vs.avg_session_duration != null ? `${vs.avg_session_duration}s` : '—'} icon={Clock} color="#a78bfa" />
-        </div>
-      </div>
+      {/* Page-views / bounce-rate / avg-session row was previously
+          rendered here. It has been moved up to sit directly between
+          the "Traffic (Cloudflare)" card and the "Cloudflare AI
+          Crawl Control" card so all traffic-shaped surfaces are
+          adjacent. See the marker comment near that block. */}
 
       <SectionErrorBoundary name="Chat Health">
       <GlassCard className="p-5">
