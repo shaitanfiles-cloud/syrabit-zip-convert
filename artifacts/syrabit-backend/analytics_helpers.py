@@ -21,45 +21,29 @@ __all__ = [
 
 
 async def get_session_metrics(days: int = 7) -> dict:
-    """Compute bounce-rate, avg-session-duration, and human-session counts
-    from db.sessions.
+    """Compute bounce-rate and avg-session-duration from db.sessions.
 
     Cloudflare's free GraphQL feed (the source of truth for visitor /
     page-view counts in /admin/dashboard) does NOT expose bounce rate
-    or session duration, and its "visits" metric on the adaptive-groups
-    dataset hugs page-views so closely on a content site (~1.02
-    pages/visit) that it can't be used as a distinct "human sessions"
-    headline. This helper runs the session-shaped aggregation from the
-    legacy Mongo-backed get_visitor_stats() so the dashboard handler
-    can merge real session-derived metrics into its CF-derived
+    or session duration, so the admin Traffic row's two right-hand
+    tiles ("Bounce Rate" and "Avg Session") rendered as em-dash
+    placeholders. This helper runs only the session-shaped aggregation
+    from the legacy Mongo-backed get_visitor_stats() so the dashboard
+    handler can merge those two fields into its CF-derived
     visitor_stats payload without paying the cost of the full
     page_views fan-out.
 
-    Returns a dict with:
-      - bounce_rate (percent, 1 dp, may be None)
-      - avg_session_duration (seconds, integer, may be None)
-      - human_visits_total (count of non-bot sessions in the window,
-        each return after a 30-min idle creates a new session row so
-        repeat visits from the same IP/visitor all count; may be 0)
-      - human_visits_today (same metric scoped to today, may be 0)
-
-    All keys are always present so the caller can blindly merge.
+    Returns a dict with bounce_rate (percent, 1 dp, may be None) and
+    avg_session_duration (seconds, integer, may be None). Both keys
+    are always present so the caller can blindly merge.
     """
-    empty = {
-        "bounce_rate": None,
-        "avg_session_duration": None,
-        "human_visits_total": 0,
-        "human_visits_today": 0,
-    }
     if not await is_mongo_available():
-        return empty
+        return {"bounce_rate": None, "avg_session_duration": None}
     try:
-        now = datetime.now(timezone.utc)
-        cutoff_iso = (now - timedelta(days=days)).isoformat()
-        today_iso_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        cutoff_iso = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         bot_visitor_ids = await db.page_views.distinct(
             "visitor_id",
-            {"is_bot": True, "date": {"$gte": (now - timedelta(days=days)).strftime("%Y-%m-%d")}},
+            {"is_bot": True, "date": {"$gte": (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")}},
         )
         match: dict = {
             "start_time": {"$gte": cutoff_iso},
@@ -68,13 +52,6 @@ async def get_session_metrics(days: int = 7) -> dict:
         if bot_visitor_ids:
             match["visitor_id"] = {"$nin": bot_visitor_ids}
 
-        # The aggregation already requires an effective_end + non-zero
-        # page_count, so the count it emits is the "real human session"
-        # count (filters out empty/abandoned session rows that would
-        # otherwise inflate the headline). Today's count is computed
-        # with the same bot filter via a cheap count_documents call so
-        # the operator can see the per-day rhythm without re-running
-        # the full pipeline.
         pipeline = [
             {"$match": match},
             {"$addFields": {
@@ -104,37 +81,20 @@ async def get_session_metrics(days: int = 7) -> dict:
                 "avg_duration": {"$avg": "$duration_secs"},
             }},
         ]
-
-        today_match: dict = {
-            "start_time": {"$gte": today_iso_start},
-            "is_bot": {"$ne": True},
-        }
-        if bot_visitor_ids:
-            today_match["visitor_id"] = {"$nin": bot_visitor_ids}
-
-        rows, today_total = await asyncio.gather(
-            db.sessions.aggregate(pipeline).to_list(1),
-            db.sessions.count_documents(today_match),
-        )
-
+        rows = await db.sessions.aggregate(pipeline).to_list(1)
         if not rows:
-            return {**empty, "human_visits_today": today_total or 0}
+            return {"bounce_rate": None, "avg_session_duration": None}
         row = rows[0]
         total = row.get("total", 0) or 0
         if total <= 0:
-            return {**empty, "human_visits_today": today_total or 0}
+            return {"bounce_rate": None, "avg_session_duration": None}
         bounce_rate = round(row.get("bounces", 0) / total * 100, 1)
         avg_dur = row.get("avg_duration")
         avg_session_duration = round(avg_dur) if avg_dur is not None else None
-        return {
-            "bounce_rate": bounce_rate,
-            "avg_session_duration": avg_session_duration,
-            "human_visits_total": int(total),
-            "human_visits_today": int(today_total or 0),
-        }
+        return {"bounce_rate": bounce_rate, "avg_session_duration": avg_session_duration}
     except Exception as e:
         logger.warning(f"get_session_metrics failed: {e}")
-        return empty
+        return {"bounce_rate": None, "avg_session_duration": None}
 
 from deps import is_mongo_available
 from db_ops import supa_list_users, supa_get_all_conversations

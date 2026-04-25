@@ -317,16 +317,12 @@ async def _compute_dashboard():
             "daily_visitors": cf_stats.get("daily_visitors", []),
             "bounce_rate": sess_metrics.get("bounce_rate"),
             "avg_session_duration": sess_metrics.get("avg_session_duration"),
-            "human_visits_total": sess_metrics.get("human_visits_total", 0),
-            "human_visits_today": sess_metrics.get("human_visits_today", 0),
             "cloudflare": {**cf_stats, "period_days": 7},
         }
     else:
         visitor_stats = {
             "bounce_rate": sess_metrics.get("bounce_rate"),
             "avg_session_duration": sess_metrics.get("avg_session_duration"),
-            "human_visits_total": sess_metrics.get("human_visits_total", 0),
-            "human_visits_today": sess_metrics.get("human_visits_today", 0),
         }
 
     return {

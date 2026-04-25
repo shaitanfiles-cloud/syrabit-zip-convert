@@ -1317,7 +1317,7 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
           account traffic → site totals → bot share. */}
       <div>
         <p className="text-[10px] text-gray-400 mb-2">{TODAY_BUCKET_CAPTION}</p>
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
           {/* "Unique Visitors" — bound to Cloudflare's deduped uniques
               (cfOverview.totals.visitors) so this tile is clearly distinct
@@ -1339,28 +1339,6 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
             value={cfOverview?.totals?.visitors ?? vs?.total_visitors ?? 0}
             icon={Users} color="#84cc16"
             subLabel="Today" subValue={vs?.visitors_today ?? 0} />
-          {/* "Total Human Visits" — counts every non-bot session in the
-              last 7 days from our own session tracker (db.sessions in
-              Mongo, surfaced via get_session_metrics). Distinct from the
-              "Unique Visitors" tile to its left because it does NOT
-              deduplicate by visitor: every time a person comes back
-              after a 30-minute idle gap their browser opens a fresh
-              session row, so repeat visits from the same IP / same
-              person all count. Bots are filtered three ways: (1) the
-              session's own is_bot flag (set by the frontend tracker
-              from UA + behavioural heuristics), (2) any visitor_id
-              that has been classified as a bot in db.page_views during
-              the same window is excluded, and (3) abandoned sessions
-              with zero page_count are dropped so synthetic / probe
-              hits don't inflate the headline. CF "visits" was rejected
-              for this slot because it tracks ~1.02 pages/visit on this
-              site and is therefore visually indistinguishable from the
-              page-views tile. The today sub-value is a separate cheap
-              count_documents over the same bot-filtered match. */}
-          <StatCard label="Total Human Visits"
-            value={vs?.human_visits_total ?? 0}
-            icon={Users} color="#22d3ee"
-            subLabel="Today" subValue={vs?.human_visits_today ?? 0} />
           <StatCard label="Bounce Rate"  value={vs.bounce_rate != null ? `${vs.bounce_rate}%` : '—'} icon={TrendingUp} color="#f59e0b" />
           <StatCard label="Avg Session"  value={vs.avg_session_duration != null ? `${vs.avg_session_duration}s` : '—'} icon={Clock} color="#a78bfa" />
         </div>
