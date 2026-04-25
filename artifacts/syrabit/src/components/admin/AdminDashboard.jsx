@@ -1091,7 +1091,7 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       )}
       </SectionErrorBoundary>
       <SectionErrorBoundary name="Bot Render">
-      {metrics.bot_render?.by_page_type && Object.keys(metrics.bot_render.by_page_type).length > 0 && (() => {
+      {metrics?.bot_render?.by_page_type && Object.keys(metrics.bot_render.by_page_type).length > 0 && (() => {
         const raw = metrics.bot_render.by_page_type;
         const grouped = {};
         Object.entries(raw).forEach(([key, count]) => {
