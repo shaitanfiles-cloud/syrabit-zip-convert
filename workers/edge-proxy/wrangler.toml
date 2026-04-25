@@ -198,15 +198,21 @@ crons = ["* * * * *", "0 */6 * * *"]
 # Synthetic-probe + cf-block-probe secrets are intentionally NOT set on
 # preview (probes are disabled via the empty crons above).
 #
-# D1 binding: reuses the prod database (`syrabit-content`) for now, which
-# is acceptable because (a) the read paths are identical and (b) the only
-# write path (`POST /api/d1/sync`) is gated by `D1_SYNC_SECRET` — leave
-# that secret unset on preview to make preview read-only against the prod
-# D1. If preview ever needs isolated D1 writes, provision a fresh
-# database from the operator's machine:
+# D1 binding: dedicated `syrabit-content-preview` database (provisioned in
+# Task #874) — physically separate from the prod `syrabit-content` D1, so
+# preview can exercise the `POST /api/d1/sync` write path end-to-end
+# without any risk of polluting prod content. Schema is kept in lockstep
+# with prod via the shared `migrations/` directory; re-apply after any
+# new migration with:
+#   pnpm dlx wrangler d1 migrations apply syrabit-content-preview --remote
+# To re-create from scratch (only if the DB is ever deleted):
 #   pnpm dlx wrangler d1 create syrabit-content-preview
 #   pnpm dlx wrangler d1 migrations apply syrabit-content-preview --remote
-# then swap `database_id` below for the new ID.
+# then swap the new `database_id` below.
+#
+# Backfill: preview D1 starts empty. Populate it either by setting
+# D1_SYNC_SECRET on the preview env and POSTing /api/d1/sync against the
+# preview hostname, or by pointing the Railway-side sync job at preview.
 #
 # KV bindings: the IDs below are the existing `preview_id` values from
 # the top-level [[kv_namespaces]] entries. Those preview KV namespaces
@@ -241,6 +247,6 @@ preview_id = "2c67fcc51dbf430391602e11d7a5e9fe"
 
 [[env.preview.d1_databases]]
 binding = "CONTENT_DB"
-database_name = "syrabit-content"
-database_id = "da5b5b9d-a8f9-43dd-bd23-a938f5c0cf69"
+database_name = "syrabit-content-preview"
+database_id = "35e59391-218e-4e94-bbf5-972baa0d0b30"
 migrations_dir = "migrations"
