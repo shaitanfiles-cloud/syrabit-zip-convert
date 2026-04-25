@@ -360,6 +360,59 @@ console.log(
   `[verify-all] indexability gate: checked ${indexabilityChecked} prerendered route(s)`,
 );
 
+// ── Critical-CSS postcondition (Task #856) ──────────────────────────
+// scripts/inline-critical-css.mjs runs in the build pipeline ahead of
+// this verifier and is expected to leave the SPA-fallback +
+// prerendered HTMLs without a render-blocking <link rel="stylesheet">
+// to the main bundle. Two non-blocking shapes are acceptable:
+//
+//   (a) Beasties rewrote the link to preload+swap with a <noscript>
+//       fallback (the SPA fallback /index.html and most prerendered
+//       routes). Looks like:
+//         <link rel="alternate stylesheet preload" ... href="/assets/
+//              index-XYZ.css" ... onload="this.rel='stylesheet'">
+//
+//   (b) The prerender step inlined the full stylesheet body inline
+//       under a <style data-inline-css="index-XYZ.css"> wrapper
+//       (currently /library and /browser do this). Bigger HTML
+//       payload, but zero render-blocking external CSS.
+//
+// We strip <noscript>…</noscript> bodies before scanning for the
+// blocking pattern so the JS-disabled fallback link does not count.
+const NOSCRIPT_RE = /<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi;
+const ACTIVE_BLOCKING_RE =
+  /<link[^>]+rel=["']stylesheet["'][^>]+\/assets\/index-[A-Za-z0-9_-]+\.css/;
+
+const cssRoutesToCheck = [
+  { route: "/", file: "index.html" },
+  ...REQUIRED_CANONICAL_ROUTES,
+  // Library + browser are first-class prerender targets handled by
+  // scripts/prerender-library.mjs (see LIBRARY_FILES). They're not in
+  // REQUIRED_CANONICAL_ROUTES because their canonicals are already
+  // injected by the prerender step itself, but the critical-CSS
+  // postcondition still applies.
+  { route: "/library", file: "library/index.html" },
+  { route: "/browser", file: "browser/index.html" },
+];
+let cssChecked = 0;
+for (const { route, file } of cssRoutesToCheck) {
+  const page = byRel.get(file);
+  if (!page) continue; // missing-page failure already raised above
+  const stripped = page.body.replace(NOSCRIPT_RE, "");
+  if (ACTIVE_BLOCKING_RE.test(stripped)) {
+    fail(
+      `${route}: render-blocking <link rel="stylesheet"> to /assets/index-*.css ` +
+        `survived the critical-CSS step (Task #856 regression). Check that ` +
+        `scripts/inline-critical-css.mjs ran successfully against this HTML.`,
+    );
+    continue;
+  }
+  cssChecked++;
+}
+console.log(
+  `[verify-all] critical-css gate: checked ${cssChecked} route(s)`,
+);
+
 // ── Print warnings + decide outcome ─────────────────────────────────
 for (const w of warnings) console.warn(`[verify-all] WARN: ${w}`);
 
