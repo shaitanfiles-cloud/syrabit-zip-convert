@@ -5917,7 +5917,7 @@ async def admin_cf_ai_crawl_control(
     # the headline totals via CF GraphQL, just not displayed as tiles.
     _CRAWLER_TILE_ALLOWLIST = {
         "Google", "Microsoft", "DuckDuckGo", "Apple",
-        "Yandex", "Perplexity", "You.com", "Meta",
+        "Yandex", "Perplexity", "You.com", "OpenAI",
     }
     crawlers_grid = [
         op for op in aggregate_per_operator(full_per_bot)
