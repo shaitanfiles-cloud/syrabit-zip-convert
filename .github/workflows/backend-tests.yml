@@ -1,5 +1,16 @@
 name: backend-tests
 
+#
+# Supply-chain hardening: every `uses:` reference in this file is pinned to a
+# full 40-char commit SHA (with a trailing `# vX.Y.Z` tag comment for
+# readability). Float tags like `actions/checkout@v4` are forbidden because a
+# compromise of the upstream tag — as happened with tj-actions/changed-files in
+# 2025 — would let an attacker silently exfiltrate this repo's secrets on the
+# next push. See https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#using-third-party-actions
+# To upgrade an action: look up the SHA for the new tag (e.g.
+# `gh api repos/actions/checkout/git/refs/tags/v4.3.0 --jq .object.sha`) and
+# update both the SHA and the trailing tag comment.
+#
 # Task #470 — Real CI gate for the backend test suite.
 #
 # Runs `pytest --cov` for the FastAPI backend on every push and PR. The
@@ -39,12 +50,12 @@ jobs:
 
     steps:
       - name: Checkout (with merge base for coverage diff)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
           cache: pip
@@ -85,7 +96,7 @@ jobs:
 
       - name: Upload coverage artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-xml
           path: artifacts/syrabit-backend/coverage.xml
@@ -132,7 +143,7 @@ jobs:
           steps.head_cov.outputs.diff_pct != '' &&
           fromJSON(steps.head_cov.outputs.diff_pct) < -1
         continue-on-error: true
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const head = parseFloat("${{ steps.head_cov.outputs.head_pct }}" || "0");

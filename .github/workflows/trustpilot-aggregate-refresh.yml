@@ -1,5 +1,16 @@
 name: trustpilot-aggregate-refresh
 
+#
+# Supply-chain hardening: every `uses:` reference in this file is pinned to a
+# full 40-char commit SHA (with a trailing `# vX.Y.Z` tag comment for
+# readability). Float tags like `actions/checkout@v4` are forbidden because a
+# compromise of the upstream tag — as happened with tj-actions/changed-files in
+# 2025 — would let an attacker silently exfiltrate this repo's secrets on the
+# next push. See https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#using-third-party-actions
+# To upgrade an action: look up the SHA for the new tag (e.g.
+# `gh api repos/actions/checkout/git/refs/tags/v4.3.0 --jq .object.sha`) and
+# update both the SHA and the trailing tag comment.
+#
 # Task #749 — Auto-refresh the Trustpilot aggregate from a host that
 # can actually reach Trustpilot.
 #
@@ -63,14 +74,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           # Need write access for the auto-commit step below.
           token: ${{ secrets.GITHUB_TOKEN }}
           persist-credentials: true
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
 

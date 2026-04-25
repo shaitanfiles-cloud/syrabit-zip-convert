@@ -1,5 +1,16 @@
 name: admin-smoke
 
+#
+# Supply-chain hardening: every `uses:` reference in this file is pinned to a
+# full 40-char commit SHA (with a trailing `# vX.Y.Z` tag comment for
+# readability). Float tags like `actions/checkout@v4` are forbidden because a
+# compromise of the upstream tag — as happened with tj-actions/changed-files in
+# 2025 — would let an attacker silently exfiltrate this repo's secrets on the
+# next push. See https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#using-third-party-actions
+# To upgrade an action: look up the SHA for the new tag (e.g.
+# `gh api repos/actions/checkout/git/refs/tags/v4.3.0 --jq .object.sha`) and
+# update both the SHA and the trailing tag comment.
+#
 # Task #571 — Catch admin dashboard crashes early.
 # Task #614 — Same gate now also runs the Phase-3 study-flows suite
 # (highlight → save, quiz, flashcards, guardian-PIN). The job already
@@ -91,15 +102,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v3
+        uses: pnpm/action-setup@a3252b78c470c02df07e9d59298aecedc3ccdd6d # v3.0.0
         with:
           version: 9
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
           cache: pnpm
@@ -117,7 +128,7 @@ jobs:
 
       - name: Upload Playwright report on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: admin-smoke-playwright-report
           path: |
