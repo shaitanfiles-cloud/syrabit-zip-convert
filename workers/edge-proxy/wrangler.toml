@@ -219,6 +219,17 @@ crons = ["* * * * *", "0 */6 * * *"]
 #   pnpm dlx wrangler d1 migrations apply syrabit-content-preview --remote
 # then swap the new `database_id` below.
 #
+# Drift guard (Task #880): the `deploy` and `deploy:preview` scripts in
+# package.json each chain `scripts/check-d1-drift.sh && wrangler deploy …`
+# (chained with `&&` rather than as a `pre*` lifecycle hook because pnpm 10
+# disables those by default). The check compares the
+# applied-migration list (`SELECT name FROM d1_migrations`) on prod vs
+# preview AND against the `migrations/` directory. If a new migration has
+# been applied to one DB but not the other (or to neither), the deploy is
+# blocked before any Worker code that depends on the new schema can ship.
+# Run on demand with `pnpm --filter syrabit-edge run d1:check-drift`.
+# Emergency override: `SKIP_D1_DRIFT_CHECK=1` (logs follow-up needed).
+#
 # Backfill: as of Task #879 the Railway sync (`d1_sync.py`) automatically
 # fans out to the preview hostname when both `EDGE_WORKER_PREVIEW_URL`
 # and `D1_SYNC_SECRET_PREVIEW` are set on the Railway service. Once the

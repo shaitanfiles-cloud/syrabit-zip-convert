@@ -304,6 +304,8 @@ crons = ["0 */6 * * *"]
 
 ```bash
 wrangler d1 migrations apply syrabit-content --remote
+# AND, if a preview DB exists, keep it in lockstep:
+wrangler d1 migrations apply syrabit-content-preview --remote
 ```
 
 This creates 8 tables with indexes:
@@ -313,6 +315,15 @@ Verify with:
 ```bash
 wrangler d1 execute syrabit-content --remote --command "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
 ```
+
+> **Drift guard (Task #880).** The `deploy` and `deploy:preview` scripts
+> chain `scripts/check-d1-drift.sh && wrangler deploy …`, so every deploy
+> first compares the `d1_migrations` rows on both DBs against the
+> `migrations/` directory. A forgotten `--env preview` apply (or vice-versa)
+> blocks the deploy with a clear diff. Run on demand with
+> `pnpm --filter syrabit-edge run d1:check-drift` (add `VERBOSE=1` to
+> surface wrangler stderr on failure). Emergency override:
+> `SKIP_D1_DRIFT_CHECK=1`.
 
 ---
 

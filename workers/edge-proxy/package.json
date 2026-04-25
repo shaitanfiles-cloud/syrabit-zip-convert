@@ -5,10 +5,11 @@
   "scripts": {
     "dev": "wrangler dev",
     "build": "echo 'syrabit-edge: no build step — wrangler bundles src/index.ts on deploy'",
-    "deploy": "wrangler deploy",
+    "deploy": "bash scripts/check-d1-drift.sh && wrangler deploy",
     "deploy:dry": "wrangler deploy --dry-run",
-    "deploy:preview": "wrangler deploy --env preview",
+    "deploy:preview": "bash scripts/check-d1-drift.sh && wrangler deploy --env preview",
     "deploy:preview:dry": "wrangler deploy --env preview --dry-run",
+    "d1:check-drift": "bash scripts/check-d1-drift.sh",
     "smoke": "bash scripts/smoke-test.sh",
     "smoke:preview": "bash scripts/smoke-preview.sh",
     "test": "vitest run",
