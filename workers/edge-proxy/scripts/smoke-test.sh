@@ -45,7 +45,28 @@ FAILED=0
 TOTAL=0
 START_TS=$(date +%s)
 TMP_DIR=$(mktemp -d)
-trap 'rm -rf "$TMP_DIR"' EXIT
+
+# Fail-fast by default — exit immediately on the first failed check (per the
+# task spec). Set FAIL_FAST=0 to opt into "run every check, summarise at end"
+# behaviour for full-coverage debugging runs.
+FAIL_FAST="${FAIL_FAST:-1}"
+
+# Always print the summary on exit (success, fail-fast exit, or unexpected
+# error) so operators see PASSED/FAILED/TOTAL even when we abort mid-run.
+print_summary() {
+  local code=$?
+  local elapsed=$(( $(date +%s) - START_TS ))
+  echo
+  if [[ "$FAILED" -eq 0 && "$code" -eq 0 ]]; then
+    echo "✓ ${PASSED}/${TOTAL} passed in ${elapsed}s — $BASE_URL"
+  else
+    echo "✗ ${FAILED}/${TOTAL} FAILED (${PASSED} passed) in ${elapsed}s — $BASE_URL"
+    [[ "${VERBOSE:-0}" != "1" ]] && echo "  Re-run with VERBOSE=1 to see response bodies."
+    [[ "$FAIL_FAST" == "1" ]] && echo "  (fail-fast mode: aborted on first failure; export FAIL_FAST=0 to run every check)"
+  fi
+  rm -rf "$TMP_DIR"
+}
+trap print_summary EXIT
 
 # ── helpers ─────────────────────────────────────────────────────────────────
 fail() {
@@ -58,6 +79,9 @@ fail() {
     head -c 2000 "$TMP_DIR/body" | sed 's/^/    /'
     echo
     echo "    --- end body ---"
+  fi
+  if [[ "$FAIL_FAST" == "1" ]]; then
+    exit 1
   fi
 }
 
@@ -106,7 +130,7 @@ header_value() {
 
 # ── 1) /api/health — proves worker is up + reports CONTENT_DB binding ──────
 TOTAL=$((TOTAL + 1))
-echo "[1/5] GET /api/health"
+echo "[1/6] GET /api/health"
 http_get "$BASE_URL/api/health"
 if [[ "$HTTP_STATUS" != "200" ]]; then
   fail "health" "expected 200, got $HTTP_STATUS"
@@ -130,11 +154,11 @@ fi
 # binding is wired without needing CF's bot infrastructure. The endpoint
 # is gated by D1_SYNC_SECRET (X-Edge-Admin-Secret header).
 if [[ -z "${D1_SYNC_SECRET:-}" ]]; then
-  echo "[2/5] SKIPPED — D1_SYNC_SECRET unset (BOT_HTML_CACHE binding NOT verified)"
+  echo "[2/6] SKIPPED — D1_SYNC_SECRET unset (BOT_HTML_CACHE binding NOT verified)"
   echo "       export D1_SYNC_SECRET=… to unlock /api/edge/kv-usage"
 else
   TOTAL=$((TOTAL + 1))
-  echo "[2/5] GET /api/edge/kv-usage (with X-Edge-Admin-Secret)"
+  echo "[2/6] GET /api/edge/kv-usage (with X-Edge-Admin-Secret)"
   http_get "$BASE_URL/api/edge/kv-usage" \
     -H "X-Edge-Admin-Secret: ${D1_SYNC_SECRET}"
   if [[ "$HTTP_STATUS" != "200" ]]; then
@@ -154,7 +178,7 @@ fi
 # proves the read path returns >=1 row, which is the contract the frontend
 # depends on.
 TOTAL=$((TOTAL + 1))
-echo "[3/5] GET /api/content/subjects"
+echo "[3/6] GET /api/content/subjects"
 http_get "$BASE_URL/api/content/subjects"
 if [[ "$HTTP_STATUS" != "200" ]]; then
   fail "d1-subjects" "expected 200, got $HTTP_STATUS"
@@ -187,10 +211,10 @@ fi
 # Each request also gets a unique nocache value so even CF's URL-keyed
 # cache can't collapse them.
 if [[ "${SKIP_RATE_LIMIT:-0}" == "1" ]]; then
-  echo "[4/5] SKIPPED (SKIP_RATE_LIMIT=1)"
+  echo "[4/6] SKIPPED (SKIP_RATE_LIMIT=1)"
 else
   TOTAL=$((TOTAL + 1))
-  echo "[4/5] burst 130x GET /api/content/boards?nocache=… (expect ≥1 429)"
+  echo "[4/6] burst 130x GET /api/content/boards?nocache=… (expect ≥1 429)"
   burst_429=0
   burst_other=0
   burst_first_429_at=0
@@ -218,21 +242,30 @@ else
 fi
 
 # ── 5) AI fallback gate — proves AI binding is wired ───────────────────────
-# Without AI_FALLBACK_SECRET we expect 401 (proves the gate is wired but
-# does NOT prove Workers AI itself works on this env).
-# With AI_FALLBACK_SECRET set we expect 200 (proves the AI binding actually
-# reaches Workers AI). Use the latter on preview after running
-# `wrangler secret put CF_AI_FALLBACK_DEV_SECRET --env preview`.
+# Without the secret we expect 401 (proves the gate is wired but does NOT
+# prove Workers AI itself works on this env).
+# With the secret set we expect 200 (proves the AI binding actually reaches
+# Workers AI). Use the latter on preview after running
+# `wrangler secret put EDGE_AI_FALLBACK_SECRET --env preview`.
+#
+# Header / env names match the worker (src/index.ts:handleAiFallback):
+#   - HTTP header: `X-Edge-AI-Secret`
+#   - Worker env binding (server-side): `EDGE_AI_FALLBACK_SECRET`
+# `EDGE_AI_FALLBACK_SECRET` is the canonical env-var name on the operator's
+# shell too; `AI_FALLBACK_SECRET` is preserved for backward-compat with the
+# previous version of this script (which sent the wrong header name —
+# fixed 2026-04-25 after the smoke runbook went in).
+EDGE_AI_FALLBACK_SECRET="${EDGE_AI_FALLBACK_SECRET:-${AI_FALLBACK_SECRET:-}}"
 TOTAL=$((TOTAL + 1))
-echo "[5/5] POST /api/ai/fallback/chat (gate check)"
+echo "[5/6] POST /api/ai/fallback/chat (gate check)"
 ai_payload='{"messages":[{"role":"user","content":"reply with the single word: ok"}],"max_tokens":8}'
-if [[ -n "${AI_FALLBACK_SECRET:-}" ]]; then
+if [[ -n "${EDGE_AI_FALLBACK_SECRET:-}" ]]; then
   http_post "$BASE_URL/api/ai/fallback/chat" \
     -H 'Content-Type: application/json' \
-    -H "X-CF-AI-Fallback-Secret: ${AI_FALLBACK_SECRET}" \
+    -H "X-Edge-AI-Secret: ${EDGE_AI_FALLBACK_SECRET}" \
     --data "$ai_payload"
   if [[ "$HTTP_STATUS" != "200" ]]; then
-    fail "ai-fallback" "expected 200 with secret, got $HTTP_STATUS"
+    fail "ai-fallback" "expected 200 with secret, got $HTTP_STATUS (header=X-Edge-AI-Secret; check EDGE_AI_FALLBACK_SECRET matches the value set via wrangler secret put EDGE_AI_FALLBACK_SECRET --env preview)"
   else
     src=$(header_value "X-Source")
     pass "ai-fallback" "200 with secret, X-Source=${src:-(missing)} (Workers AI reachable)"
@@ -242,9 +275,9 @@ else
     -H 'Content-Type: application/json' \
     --data "$ai_payload"
   if [[ "$HTTP_STATUS" != "401" && "$HTTP_STATUS" != "403" ]]; then
-    fail "ai-fallback" "expected 401/403 (gate), got $HTTP_STATUS — set AI_FALLBACK_SECRET to test the binding end-to-end"
+    fail "ai-fallback" "expected 401/403 (gate), got $HTTP_STATUS — set EDGE_AI_FALLBACK_SECRET to test the binding end-to-end"
   else
-    pass "ai-fallback" "${HTTP_STATUS} (gate wired; set AI_FALLBACK_SECRET=… to test Workers AI end-to-end)"
+    pass "ai-fallback" "${HTTP_STATUS} (gate wired; set EDGE_AI_FALLBACK_SECRET=… to test Workers AI end-to-end)"
   fi
 fi
 
