@@ -1709,7 +1709,19 @@ export default {
       return handleKvUsage(env, request, cors);
     }
 
-    if (pathname === "/api/health" || pathname === "/health") {
+    // Task #848 — /api/livez is the new Railway liveness probe. The
+    // edge can answer it directly because the contract is "is *some*
+    // process alive" — for the synthetic external probe, the edge
+    // worker itself responding IS proof of life from the user's
+    // perspective (DNS + Cloudflare + Worker all up). The actual
+    // dependency state moved to /api/readyz, which intentionally
+    // proxies through to the backend so on-call sees real Mongo /
+    // PG / Vertex status instead of a static "edge is up" lie.
+    if (
+      pathname === "/api/health" ||
+      pathname === "/api/livez" ||
+      pathname === "/health"
+    ) {
       return new Response(
         JSON.stringify({
           status: "ok",
@@ -1723,6 +1735,9 @@ export default {
           headers: {
             ...cors,
             "Content-Type": "application/json",
+            // /api/livez is hit every minute by the synthetic probe;
+            // a 30 s edge cache absorbs spikes without hiding a real
+            // outage longer than the probe's own granularity.
             "Cache-Control": "public, max-age=30, stale-while-revalidate=60",
             "X-Source": "edge",
           },

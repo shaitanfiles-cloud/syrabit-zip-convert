@@ -86,6 +86,11 @@ _ORIGIN_AUTH_HEADER = os.environ.get("ORIGIN_SHARED_SECRET_HEADER", "X-Origin-Au
 # header when ORIGIN_SHARED_SECRET is set.
 _ORIGIN_AUTH_OPEN_PATHS = (
     "/api/health",
+    "/api/livez",   # Task #848 — Railway liveness probe, no I/O
+    "/api/readyz",  # Task #848 — load-balancer readiness probe
+    "/api/ready",   # Legacy readiness — kept open for back-compat with
+                    # any external monitor still pointing at the old path
+                    # (Task #848 follow-up review).
     "/health",
 )
 
@@ -436,6 +441,9 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
         "/api/auth/me",
         "/api/analytics/",
         "/api/health",
+        "/api/livez",   # Task #848 — never rate-limit the Railway liveness probe
+        "/api/readyz",  # Task #848 — never rate-limit the readiness probe
+        "/api/ready",   # Legacy readiness — same treatment as /api/readyz
     )
 
     async def dispatch(self, request: StarletteRequest, call_next):
@@ -585,7 +593,8 @@ _STATIC_ASSET_RE = re.compile(
 
 _SKIP_TRACKING_PREFIXES = (
     "/api/auth/", "/api/admin/", "/api/ai/", "/api/analytics/",
-    "/api/health", "/api/billing/",
+    "/api/health", "/api/livez", "/api/readyz", "/api/ready",  # Task #848 + legacy
+    "/api/billing/",
     "/static/", "/assets/", "/icons/", "/fonts/",
     "/health", "/docs", "/openapi.json", "/robots.txt", "/sitemap",
     "/__mockup", "/favicon",

@@ -1134,8 +1134,25 @@ async def health_check() -> dict:
             "reason": reason,
             "breaker": _breaker.snapshot(),
         }
-    test = await embed_text("test", task_type="SEMANTIC_SIMILARITY")
-    gen_test = await _generate("Reply with just the word: OK", max_tokens=5)
+    # Task #848 — run embed and generate concurrently. Sequential awaits
+    # made the healthcheck path roughly ``embed_latency + gen_latency``
+    # (~1.4 s p50 in production), which compounded the per-request
+    # /api/health TTFB problem this task is fixing. ``asyncio.gather``
+    # collapses that to ``max(embed, gen)`` while preserving the same
+    # success criterion. ``return_exceptions=True`` keeps a failure in
+    # one probe from cancelling the other so we still get a useful
+    # diagnostic dict back instead of half-blank fields.
+    test, gen_test = await asyncio.gather(
+        embed_text("test", task_type="SEMANTIC_SIMILARITY"),
+        _generate("Reply with just the word: OK", max_tokens=5),
+        return_exceptions=True,
+    )
+    if isinstance(test, BaseException):
+        logger.warning(f"vertex health_check embed raised: {test!r}")
+        test = None
+    if isinstance(gen_test, BaseException):
+        logger.warning(f"vertex health_check generate raised: {gen_test!r}")
+        gen_test = None
     embed_ok = test is not None and len(test) == _EMBED_DIMENSIONS
     gen_ok = gen_test is not None and "OK" in (gen_test or "")
     # `ok` reflects actual probe success (not just credential presence)
