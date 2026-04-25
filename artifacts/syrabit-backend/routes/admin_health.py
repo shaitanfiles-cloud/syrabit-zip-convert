@@ -115,21 +115,14 @@ def _classify(
     return "healthy"
 
 
-@router.get("/admin/health/edge-proxy-deploy/cron")
-async def admin_edge_proxy_deploy_cron(
-    admin: dict = Depends(get_admin_user),
-) -> dict[str, Any]:
+async def get_edge_proxy_deploy_cron_health() -> dict[str, Any]:
     """Return the latest ``edge-proxy-deploy`` run shaped for the pill.
 
-    Always 200 — surfaces ``configured: false`` / ``status:
-    not_configured`` when ``GITHUB_REPO`` isn't set so the dashboard
-    can render a setup hint instead of an error. Surfaces ``status:
-    never_observed`` when the workflow exists but has not produced any
-    runs yet (e.g. brand-new workflow file, or repo just renamed).
-    GitHub-side errors land in ``error`` with ``status: unknown``;
-    this mirrors ``routes.admin_ci_status``'s defensive contract so
-    the AdminHealth tile renders an "unavailable" banner instead of
-    going blank.
+    Same return shape as :func:`admin_edge_proxy_deploy_cron` (which
+    is just a thin auth-gated wrapper). Factored out so the silence
+    alerter (Task #893, ``routes.admin_edge_proxy_deploy_cron_alerts``)
+    can poll the same snapshot without smuggling a fake admin past
+    the FastAPI dependency. Always returns a dict; never raises.
     """
     cfg = _cfg()
     workflow_url = _workflow_url(cfg["repo"] or "syrabit/syrabit", cfg["workflow"])
@@ -257,3 +250,22 @@ async def admin_edge_proxy_deploy_cron(
         "actor": (run.get("actor") or {}).get("login"),
         "error": None,
     }
+
+
+@router.get("/admin/health/edge-proxy-deploy/cron")
+async def admin_edge_proxy_deploy_cron(
+    admin: dict = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """Auth-gated wrapper for :func:`get_edge_proxy_deploy_cron_health`.
+
+    Always 200 — surfaces ``configured: false`` / ``status:
+    not_configured`` when ``GITHUB_REPO`` isn't set so the dashboard
+    can render a setup hint instead of an error. Surfaces ``status:
+    never_observed`` when the workflow exists but has not produced any
+    runs yet (e.g. brand-new workflow file, or repo just renamed).
+    GitHub-side errors land in ``error`` with ``status: unknown``;
+    this mirrors ``routes.admin_ci_status``'s defensive contract so
+    the AdminHealth tile renders an "unavailable" banner instead of
+    going blank.
+    """
+    return await get_edge_proxy_deploy_cron_health()

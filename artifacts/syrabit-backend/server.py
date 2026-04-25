@@ -1077,6 +1077,27 @@ async def lifespan(app):
                 "cf-waf-drift cron alert loop not started: "
                 f"{_cfw_cron_alert_err}"
             )
+    # Task #893 — silence-alerter for the edge-proxy-deploy CI workflow.
+    # Task #882 added a red/amber/green pill to AdminHealth that polls
+    # the GitHub Actions REST API for the latest edge-proxy-deploy run;
+    # this loop pages on-call (email + in-app + best-effort Slack) when
+    # that pill flips to silent (failure) or degraded (>7d stale) so a
+    # red smoke-preview regression at 03:00 UTC doesn't wait for an
+    # admin to open the dashboard. Leader-gated for the same reason
+    # the cf-waf-drift loop is: the Mongo state doc is global, so one
+    # replica is enough; running on every replica would just spam the
+    # GitHub REST quota without changing alert behaviour.
+    if _is_leader:
+        try:
+            from routes.admin_edge_proxy_deploy_cron_alerts import (
+                _edge_proxy_deploy_cron_alert_loop,
+            )
+            asyncio.create_task(_edge_proxy_deploy_cron_alert_loop())
+        except Exception as _epd_cron_alert_err:
+            logger.warning(
+                "edge-proxy-deploy cron alert loop not started: "
+                f"{_epd_cron_alert_err}"
+            )
     if _is_leader:
         # Single-leader: only one replica should query the CF GraphQL API
         # and write the per-UA report each Monday.
