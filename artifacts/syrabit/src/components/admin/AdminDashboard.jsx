@@ -8,6 +8,16 @@ import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 
 const safeArr = (v) => (Array.isArray(v) ? v : []);
 const safeObj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
+// Compact integer formatter — matches CF dashboard style ("7k", "6.02k",
+// "1k") so the redesigned Cloudflare AI Crawl Control card reads the
+// same way as Cloudflare's own Overview tab. Falls back to a plain
+// localised string for values < 1,000 (where compact would just print
+// the same digits) so small counts like "108" or "11" stay legible.
+const _COMPACT_INT_FORMATTER = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 2 });
+const formatCompactInt = (n) => {
+  const num = Number(n) || 0;
+  return num >= 1000 ? _COMPACT_INT_FORMATTER.format(num) : num.toLocaleString();
+};
 const normalizeChatFallbacks = (d) => (d ? { ...d, daily: safeArr(d.daily) } : null);
 const normalizeLatency = (d) => (d ? { ...d, daily: safeArr(d.daily) } : null);
 const normalizeTokenSpend = (d) => (d ? { ...d, daily: safeArr(d.daily), totals: safeObj(d.totals) } : null);
@@ -1409,79 +1419,119 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
 
           {cfCrawlControl.available && (
             <>
-              {/* Headline metrics row — mirrors CF's "AI Crawl Control →
-                  Overview" tab: Total / Allowed / Unsuccessful / Crawlers. */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-2">
-                <div className="rounded-lg p-3 bg-orange-50 border border-orange-200 text-center">
-                  <p className="text-orange-700 font-bold text-lg">
-                    {(cfCrawlControl.totals?.requests ?? 0).toLocaleString()}
-                  </p>
-                  <p className="text-[10px] text-gray-500">Total requests</p>
+              {/* ─── METRICS section (top of CF "AI Crawl Control →
+                  Overview"). Four headline stats stacked above a
+                  full-width sparkline showing daily request volume.
+                  Stats use the verified-bot totals from CF GraphQL;
+                  the sparkline sums all per-bot daily counts so the
+                  shape matches what CF's own dashboard renders. ─── */}
+              <div className="rounded-xl border border-gray-200 bg-white px-4 pt-4 pb-2 mb-4">
+                <div className="text-[11px] text-gray-500 font-medium mb-3">Metrics</div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-3">
+                  <div>
+                    <p className="text-[11px] text-gray-500 underline decoration-dotted decoration-gray-300 underline-offset-4 mb-1">
+                      Total requests
+                    </p>
+                    <p className="text-gray-800 font-bold text-xl tabular-nums">
+                      {formatCompactInt(cfCrawlControl.totals?.requests ?? 0)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-gray-500 underline decoration-dotted decoration-gray-300 underline-offset-4 mb-1">
+                      Allowed requests
+                    </p>
+                    <p className="text-gray-800 font-bold text-xl tabular-nums">
+                      {formatCompactInt(cfCrawlControl.allowed_total ?? 0)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-gray-500 underline decoration-dotted decoration-gray-300 underline-offset-4 mb-1">
+                      Unsuccessful requests
+                    </p>
+                    <p className="text-gray-800 font-bold text-xl tabular-nums">
+                      {formatCompactInt(cfCrawlControl.unsuccessful_total ?? 0)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-gray-500 underline decoration-dotted decoration-gray-300 underline-offset-4 mb-1">
+                      Total referrals
+                    </p>
+                    <p className="text-gray-800 font-bold text-xl tabular-nums">
+                      {formatCompactInt(cfCrawlControl.total_referrals ?? 0)}
+                    </p>
+                  </div>
                 </div>
-                <div className="rounded-lg p-3 bg-emerald-50 border border-emerald-200 text-center">
-                  <p className="text-emerald-700 font-bold text-lg">
-                    {(cfCrawlControl.allowed_total ?? 0).toLocaleString()}
-                  </p>
-                  <p className="text-[10px] text-gray-500">Allowed requests</p>
-                </div>
-                <div className="rounded-lg p-3 bg-rose-50 border border-rose-200 text-center">
-                  <p className="text-rose-700 font-bold text-lg">
-                    {(cfCrawlControl.unsuccessful_total ?? 0).toLocaleString()}
-                  </p>
-                  <p className="text-[10px] text-gray-500">Unsuccessful requests</p>
-                </div>
-                <div className="rounded-lg p-3 bg-gray-50 border border-gray-200 text-center">
-                  <p className="text-gray-700 font-bold text-lg">{cfCrawlControl.totals?.bots ?? 0}</p>
-                  <p className="text-[10px] text-gray-500">Distinct crawlers</p>
-                </div>
-              </div>
-              {/* Search-engine totals only — AI crawlers are blocked at
-                  the edge (see workers/edge-proxy AI_BOT_UA) and hidden
-                  from this card by the backend filter, so the entire
-                  card represents legitimate search-index traffic. */}
-              <div className="text-[10px] text-gray-500 mb-4 flex items-center justify-center gap-3">
-                <span>
-                  <span className="inline-block w-2 h-2 rounded-sm bg-blue-400 mr-1 align-middle" />
-                  Search-engine crawlers: {(cfCrawlControl.search_totals?.requests ?? 0).toLocaleString()} ({cfCrawlControl.search_totals?.bots ?? 0} bots)
-                </span>
-                <span className="text-gray-300">·</span>
-                <span className="text-gray-400">AI crawlers blocked at edge</span>
+                {/* Sparkline of total daily requests — sums every per-bot
+                    column in daily_series.rows so the line matches CF's
+                    "requests over time" sparkline on the Overview tab.
+                    Filtered to last 30 days max for a clean shape. */}
+                {cfCrawlControl.daily_series?.rows?.length > 0 && (() => {
+                  const rows = cfCrawlControl.daily_series.rows.slice(-30).map(row => {
+                    const total = Object.entries(row).reduce((acc, [k, v]) => (
+                      k === 'date' ? acc : acc + (Number(v) || 0)
+                    ), 0);
+                    return { date: row.date, total };
+                  });
+                  return (
+                    <div style={{ width: '100%', height: 56 }}>
+                      <ResponsiveContainer>
+                        <AreaChart data={rows} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
+                          <defs>
+                            <linearGradient id="cfMetricsSparkFill" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.35} />
+                              <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
+                            </linearGradient>
+                          </defs>
+                          <Tooltip
+                            contentStyle={{ fontSize: 11, padding: '4px 8px' }}
+                            labelFormatter={v => v}
+                            formatter={(val) => [Number(val).toLocaleString(), 'Requests']}
+                          />
+                          <Area
+                            type="monotone"
+                            dataKey="total"
+                            stroke="#3b82f6"
+                            strokeWidth={1.4}
+                            fill="url(#cfMetricsSparkFill)"
+                            dot={false}
+                            isAnimationActive={false}
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  );
+                })()}
               </div>
 
-              {/* Operator-company tiles — one card per operator, mirrors
-                  CF's "Crawlers" grid on the overview tab. Tiles already
-                  arrive sorted by allowed-requests desc from the backend. */}
-              {cfCrawlControl.per_operator?.length > 0 && (
-                <div className="mb-4">
-                  <div className="text-[10px] text-gray-400 font-semibold mb-2 uppercase tracking-wider">
-                    Crawlers by operator
-                  </div>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    {cfCrawlControl.per_operator.map((op) => {
-                      const isAi = op.category === 'ai';
-                      const accent = isAi
-                        ? 'bg-violet-50 border-violet-200 text-violet-700'
-                        : 'bg-blue-50 border-blue-200 text-blue-700';
+              {/* ─── CRAWLERS section. Grid of operator tiles, one per
+                  company (Google, Microsoft, Apple, OpenAI, etc.). Each
+                  tile shows: operator name, contributing-bot pills, and
+                  a two-column footer with "Allowed requests" + "Total
+                  referrals" — same layout as CF's own Overview tab. The
+                  unified ``crawlers_grid`` is built server-side from the
+                  full unfiltered per_bot list, so AI operators (whose
+                  bots get 403'd at our edge) still appear in the grid
+                  for visibility — just like they do in CF's UI. ─── */}
+              {cfCrawlControl.crawlers_grid?.length > 0 && (
+                <div className="rounded-xl border border-gray-200 bg-white px-4 pt-4 pb-4">
+                  <div className="text-[11px] text-gray-500 font-medium mb-3">Crawlers</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    {cfCrawlControl.crawlers_grid.map((op) => {
                       const headBots = (op.bots || []).slice(0, 1);
                       const extraBots = Math.max(0, (op.bots?.length || 0) - 1);
                       return (
                         <div
                           key={op.operator}
-                          className="rounded-lg p-3 bg-white border border-gray-200 flex flex-col gap-1.5"
+                          className="rounded-lg border border-gray-200 bg-white p-3 flex flex-col gap-2 hover:shadow-sm transition-shadow"
                         >
-                          <div className="flex items-center justify-between gap-1">
-                            <span className="text-gray-700 font-semibold text-sm truncate" title={op.operator}>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-gray-800 font-semibold text-sm" title={op.operator}>
                               {op.operator}
                             </span>
-                            <span className={`text-[9px] px-1.5 py-0.5 rounded ${accent}`}>
-                              {isAi ? 'AI' : 'Search'}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-1 flex-wrap">
                             {headBots.map(b => (
                               <span
                                 key={b.name}
-                                className="text-[9px] px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-600 truncate max-w-[120px]"
+                                className="text-[10px] px-2 py-0.5 rounded bg-gray-100 text-gray-600 truncate max-w-[110px]"
                                 title={b.name}
                               >
                                 {b.name}
@@ -1489,207 +1539,40 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                             ))}
                             {extraBots > 0 && (
                               <span
-                                className="text-[9px] px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-600"
-                                title={(op.bots || []).slice(1).map(b => `${b.name}: ${b.requests.toLocaleString()}`).join('\n')}
+                                className="text-[10px] px-2 py-0.5 rounded bg-gray-100 text-gray-600"
+                                title={(op.bots || []).slice(1).map(b => `${b.name}: ${(b.requests ?? 0).toLocaleString()}`).join('\n')}
                               >
                                 +{extraBots}
                               </span>
                             )}
                           </div>
-                          <div className="flex items-baseline justify-between gap-2 mt-1">
+                          <div className="grid grid-cols-2 gap-3 mt-1">
                             <div>
-                              <p className="text-[9px] text-gray-400 leading-none">Allowed</p>
-                              <p className="text-emerald-700 font-bold text-base leading-tight">
-                                {op.allowed.toLocaleString()}
+                              <p className="text-[11px] text-gray-500 mb-0.5">Allowed requests</p>
+                              <p className="text-gray-800 font-bold text-base tabular-nums">
+                                {formatCompactInt(op.allowed ?? 0)}
                               </p>
                             </div>
-                            <div className="text-right">
-                              <p className="text-[9px] text-gray-400 leading-none">Errors</p>
-                              <p className="text-rose-600 font-semibold text-xs leading-tight">
-                                {op.unsuccessful.toLocaleString()}
+                            <div>
+                              <p className="text-[11px] text-gray-500 mb-0.5">Total referrals</p>
+                              <p className="text-gray-800 font-bold text-base tabular-nums">
+                                {formatCompactInt(op.referrals ?? 0)}
                               </p>
                             </div>
                           </div>
-                          {/* Per-operator AI-referral row removed — this
-                              card is now search-engine-only, and AI
-                              assistant referrals (humans clicking from
-                              ChatGPT/Perplexity/etc.) are surfaced in
-                              the dedicated "AI assistant referrals"
-                              block below the per-bot list. */}
                         </div>
                       );
                     })}
                   </div>
-                </div>
-              )}
-
-              {cfCrawlControl.daily_series?.rows?.length > 0 && (
-                <div className="mt-4">
-                  <div className="text-[10px] text-gray-400 font-semibold mb-2 uppercase tracking-wider">
-                    Requests over time (top {cfCrawlControl.daily_series.top_bots.length} crawlers, stacked)
-                  </div>
-                  <div style={{ width: '100%', height: 220 }}>
-                    <ResponsiveContainer>
-                      <BarChart
-                        data={cfCrawlControl.daily_series.rows.slice(-14)}
-                        margin={{ top: 5, right: 5, left: -15, bottom: 0 }}
-                      >
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                        <XAxis dataKey="date" tick={{ fontSize: 9 }} tickFormatter={v => v.slice(5)} />
-                        <YAxis tick={{ fontSize: 9 }} />
-                        <Tooltip contentStyle={{ fontSize: 11 }} labelFormatter={v => `Date: ${v}`} />
-                        <Legend wrapperStyle={{ fontSize: 10 }} />
-                        {cfCrawlControl.daily_series.top_bots.map((name, i) => {
-                          const palette = ['#f59e0b', '#a855f7', '#3b82f6', '#10b981', '#ef4444'];
-                          return (
-                            <Bar
-                              key={name}
-                              dataKey={name}
-                              stackId="bots"
-                              fill={palette[i % palette.length]}
-                              radius={i === cfCrawlControl.daily_series.top_bots.length - 1 ? [2, 2, 0, 0] : [0, 0, 0, 0]}
-                            />
-                          );
-                        })}
-                        <Bar dataKey="Other" stackId="bots" fill="#9ca3af" />
-                      </BarChart>
-                    </ResponsiveContainer>
+                  <div className="text-[10px] text-gray-400 mt-3">
+                    Source: Cloudflare GraphQL{cfCrawlControl.zone_id ? ` · zone ${cfCrawlControl.zone_id.slice(0, 8)}…` : ''} · same dataset as Cloudflare's AI Crawl Control dashboard · referrals sourced from page-view Referer headers (distinct visitors per operator)
                   </div>
                 </div>
               )}
 
-              {cfCrawlControl.per_bot?.length > 0 && (
-                <div className="mt-4">
-                  <div className="text-[10px] text-gray-400 font-semibold mb-2 uppercase tracking-wider">
-                    Top crawlers (verified by Cloudflare)
-                  </div>
-                  <div className="space-y-1.5">
-                    {cfCrawlControl.per_bot.slice(0, 12).map((b, i) => {
-                      const maxReq = cfCrawlControl.per_bot[0]?.requests || 1;
-                      const pct = Math.round((b.requests / maxReq) * 100);
-                      const isAi = b.category === 'ai';
-                      return (
-                        <div key={b.name} className="flex items-center gap-2">
-                          <span className="text-[10px] text-gray-600 font-medium w-32 truncate" title={b.name}>
-                            {b.name}
-                          </span>
-                          <div className="flex-1 h-3 bg-gray-100 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${isAi ? 'bg-violet-400' : 'bg-blue-400'}`}
-                              style={{ width: `${pct}%` }}
-                            />
-                          </div>
-                          <span className="text-[10px] text-gray-500 w-14 text-right">
-                            {b.requests.toLocaleString()}
-                          </span>
-                          <span
-                            className={`text-[9px] px-1.5 py-0.5 rounded w-10 text-center ${
-                              isAi ? 'text-violet-700 bg-violet-50' : 'text-blue-700 bg-blue-50'
-                            }`}
-                          >
-                            {isAi ? 'AI' : 'Search'}
-                          </span>
-                          <span className="text-[9px] text-gray-400 w-12 text-right">
-                            {(b.error_rate * 100).toFixed(1)}% err
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="text-[9px] text-gray-400 mt-2">
-                    Source: Cloudflare GraphQL · zone {cfCrawlControl.zone_id ? `${cfCrawlControl.zone_id.slice(0, 8)}…` : ''} · same dataset as Cloudflare's AI Crawl Control dashboard
-                  </div>
-                </div>
-              )}
-
-              {cfCrawlControl.per_bot?.length === 0 && (
+              {cfCrawlControl.crawlers_grid?.length === 0 && (
                 <div className="mt-4 rounded-lg p-3 bg-gray-50 border border-gray-200 text-xs text-gray-600 text-center">
                   No verified-bot traffic in the last {cfCrawlControl.period_days} days.
-                </div>
-              )}
-
-              {/* AI assistant referrals — humans clicking from AI chat
-                  surfaces (ChatGPT, Perplexity, Claude, Grok, etc.)
-                  whose Referer header matches an AI operator host. This
-                  is a *separate* signal from crawler activity: AI
-                  crawlers are blocked at the edge, but the citations
-                  they previously trained on still drive a small stream
-                  of human visits, which is the only AI-surface metric
-                  worth tracking now that crawler ingestion is denied.
-                  Sourced from db.page_views in Mongo (CF GraphQL doesn't
-                  expose Referer on the free tier). */}
-              {(cfCrawlControl.ai_referrals_total ?? 0) > 0 && (
-                <div className="mt-4 rounded-lg p-3 bg-violet-50/60 border border-violet-200">
-                  <div className="flex items-center justify-between gap-2 mb-2">
-                    <div className="text-[10px] text-violet-700 font-semibold uppercase tracking-wider">
-                      AI assistant referrals (humans clicking from AI chats)
-                    </div>
-                    <div className="text-xs text-violet-700 font-bold">
-                      {(cfCrawlControl.ai_referrals_total ?? 0).toLocaleString()} total
-                    </div>
-                  </div>
-                  {(cfCrawlControl.ai_referrals_per_operator?.length ?? 0) > 0 && (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                      {cfCrawlControl.ai_referrals_per_operator.map((row) => (
-                        <div
-                          key={row.operator}
-                          className="rounded-md px-2.5 py-1.5 bg-white border border-violet-100 flex items-center justify-between gap-2"
-                        >
-                          <span className="text-[10px] text-gray-600 font-medium truncate" title={row.operator}>
-                            {row.operator}
-                          </span>
-                          <span className="text-[11px] text-violet-700 font-semibold">
-                            {row.referrals.toLocaleString()}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div className="text-[9px] text-violet-600/70 mt-2">
-                    Last {cfCrawlControl.period_days} days · sourced from page-view Referer headers
-                  </div>
-                </div>
-              )}
-
-              {/* Search-engine referrals — sibling to the AI block above.
-                  Counts humans who landed on the site after clicking an
-                  organic result on Google, Bing, DuckDuckGo, Yahoo,
-                  Yandex, Baidu, Ecosia, Brave, Kagi, Startpage, Qwant
-                  or Mojeek. Sourced from db.page_views Referer headers
-                  with per-engine visitor dedup so a single visitor with
-                  N page-views still contributes 1. Renders right under
-                  the AI block with a sky palette so the two acquisition
-                  channels can be compared at a glance. */}
-              {(cfCrawlControl.search_referrals_total ?? 0) > 0 && (
-                <div className="mt-3 rounded-lg p-3 bg-sky-50/60 border border-sky-200">
-                  <div className="flex items-center justify-between gap-2 mb-2">
-                    <div className="text-[10px] text-sky-700 font-semibold uppercase tracking-wider">
-                      Total referrals by search results (humans clicking from search engines)
-                    </div>
-                    <div className="text-xs text-sky-700 font-bold">
-                      {(cfCrawlControl.search_referrals_total ?? 0).toLocaleString()} total
-                    </div>
-                  </div>
-                  {(cfCrawlControl.search_referrals_per_engine?.length ?? 0) > 0 && (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                      {cfCrawlControl.search_referrals_per_engine.map((row) => (
-                        <div
-                          key={row.engine}
-                          className="rounded-md px-2.5 py-1.5 bg-white border border-sky-100 flex items-center justify-between gap-2"
-                        >
-                          <span className="text-[10px] text-gray-600 font-medium truncate" title={row.engine}>
-                            {row.engine}
-                          </span>
-                          <span className="text-[11px] text-sky-700 font-semibold">
-                            {row.referrals.toLocaleString()}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div className="text-[9px] text-sky-600/70 mt-2">
-                    Last {cfCrawlControl.period_days} days · sourced from page-view Referer headers · distinct visitors per engine
-                  </div>
                 </div>
               )}
             </>

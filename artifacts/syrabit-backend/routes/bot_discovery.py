@@ -5882,4 +5882,60 @@ async def admin_cf_ai_crawl_control(
     # two acquisition channels can be compared at a glance.
     summary["search_referrals_total"] = search_refs_total
     summary["search_referrals_per_engine"] = search_refs_list
+
+    # ── Unified Crawlers grid (matches CF "AI Crawl Control → Overview"
+    # ── design exactly: one tile per operator, both AI and search,
+    # ── footer shows "Allowed requests" + "Total referrals"). ─────────
+    #
+    # Built from the *unfiltered* full_per_bot so AI operators (OpenAI,
+    # Anthropic, Perplexity, Common Crawl, Meta) appear in the grid the
+    # same way they do on Cloudflare's own dashboard. The "AI is hidden
+    # at the edge" policy still holds — the headline `totals.requests`
+    # / `allowed_total` / `unsuccessful_total` numbers above remain
+    # search-only — but the grid itself follows CF's layout so admins
+    # can see who is hitting the edge (and therefore what's being
+    # blocked) at a glance.
+    #
+    # Each tile is enriched with a ``referrals`` field that merges:
+    #   * search_referrals_per_engine[engine] for the operator's owned
+    #     search engine (Google → Google, Microsoft → Bing, Yandex →
+    #     Yandex, etc.). Apple / Common Crawl have no consumer search
+    #     surface so their search referrals contribute 0.
+    #   * ai_referrals_per_operator[operator_name] for the operator's
+    #     AI assistant referrals (OpenAI ChatGPT, Anthropic Claude,
+    #     Google Gemini, Microsoft Copilot, etc.). Operators that share
+    #     a parent company with a search engine (Google, Microsoft) get
+    #     BOTH contributions summed onto a single tile, mirroring how
+    #     CF's dashboard shows a single Google tile combining Googlebot
+    #     + Google-Extended traffic.
+    crawlers_grid = aggregate_per_operator(full_per_bot)
+    # Operator-name → search-engine-name lookup (the search referrals
+    # map is keyed by engine display name from _SEARCH_REFERRER_HOSTS,
+    # which doesn't always match the CF operator-tile name — e.g. CF's
+    # "Microsoft" tile carries Bingbot but the search referral key is
+    # "Bing", because users see "bing.com" in their address bar, not
+    # "microsoft.com"). Operators absent from this map have no search
+    # surface, so their search referral contribution is 0.
+    _OPERATOR_TO_ENGINE = {
+        "Google": "Google",
+        "Microsoft": "Bing",
+        "Yandex": "Yandex",
+        "DuckDuckGo": "DuckDuckGo",
+        "Baidu": "Baidu",
+    }
+    for tile in crawlers_grid:
+        op_name = tile.get("operator", "")
+        eng_name = _OPERATOR_TO_ENGINE.get(op_name)
+        s_refs = int((search_refs_by_eng or {}).get(eng_name, 0)) if eng_name else 0
+        a_refs = int((ai_refs_by_op or {}).get(op_name, 0))
+        tile["referrals"] = s_refs + a_refs
+
+    # Re-sort by allowed-requests desc with referrals as tie-break so
+    # operators that drive real traffic (high referrals) outrank
+    # crawler-only operators with the same allowed count. Matches
+    # CF dashboard ordering.
+    crawlers_grid.sort(key=lambda t: (-int(t.get("allowed") or 0), -int(t.get("referrals") or 0), t.get("operator", "")))
+    summary["crawlers_grid"] = crawlers_grid
+    summary["total_referrals"] = ai_refs_total + search_refs_total
+
     return {"available": True, **summary}
