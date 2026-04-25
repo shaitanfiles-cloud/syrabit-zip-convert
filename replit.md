@@ -58,6 +58,10 @@ Run `pnpm verify` from the repo root to execute the full pre-merge gate. This ru
 
 Run `pnpm deploy:pages` from the repo root to publish `artifacts/syrabit/dist` to Cloudflare Pages. Defaults are now correct out of the box: `--project-name=syrabit-analytics --branch=master` (the public hostname is `syrabit-zip-convert.pages.dev`, referenced as `PAGES_ORIGIN` in `workers/edge-proxy/wrangler.toml`). Override only if you are deploying to a different Pages project: `CF_PAGES_PROJECT_NAME=<project> CF_PAGES_BRANCH=<branch> pnpm deploy:pages`. Requires `CLOUDFLARE_API_TOKEN` (and `CLOUDFLARE_ACCOUNT_ID` if your token is scoped to multiple accounts) in the environment.
 
+## Deploy — Railway (backend)
+
+Drive the syrabit-backend Railway service from this workspace via `pnpm run railway:*` (Task #846). The dispatcher is `scripts/railway.sh`; subcommands include `redeploy` (re-run the latest built image, polls until SUCCESS), `deploy` (`railway up`-style upload of `artifacts/syrabit-backend/`), `status`, `logs [-b]`, `vars`, `var-set`, and `var-unset`. All read paths and `redeploy`/`var-*` use the Railway GraphQL API directly (no CLI needed); `deploy` shells out to the `railway` CLI. Production project / service / `production` environment are baked in as defaults — override with `RAILWAY_PROJECT_ID` / `RAILWAY_SERVICE_ID` / `RAILWAY_ENVIRONMENT` for staging. Auth via `RAILWAY_API_TOKEN` (Replit Secret). The same flow runs from CI via `.github/workflows/railway-deploy.yml` (`workflow_dispatch` only, gated to master). Full reference: `docs/RAILWAY-DEPLOYMENT.md` ("Driving deploys from Replit / CI").
+
 ## External Dependencies
 
 - **Databases:** PostgreSQL, MongoDB, Cloudflare D1.

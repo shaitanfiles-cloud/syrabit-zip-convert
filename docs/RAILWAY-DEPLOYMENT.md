@@ -317,6 +317,81 @@ For high traffic, increase replicas:
 
 ---
 
+## Driving deploys from Replit / CI
+
+Day-to-day deploy operations don't require opening the Railway dashboard or
+running `railway login` interactively. The `scripts/railway.sh` dispatcher
+wraps everything in non-interactive commands that authenticate via the
+`RAILWAY_API_TOKEN` secret (already stored in Replit Secrets) and target the
+production `syrabit-backend` service by default.
+
+| `pnpm run …`            | What it does                                                                                                                                |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `railway:status`        | Prints active deployment id, status, region, image digest, and a live `/api/health` probe of `api.syrabit.ai`. Read-only.                    |
+| `railway:logs`          | Prints the last 200 deploy logs of the current deployment. `… -- -b` for build logs, `… -- -n 500` to widen the window.                      |
+| `railway:redeploy`      | Re-runs the **latest already-built image** (no source upload, no rebuild). Polls Railway until the deployment reports `SUCCESS`, exits 0.    |
+| `railway:deploy`        | `railway up`-style. Uploads the current `artifacts/syrabit-backend/` tree, builds a fresh image, deploys it, exits 0 only on `SUCCESS`.       |
+| `railway:vars`          | Lists variable names on the production service+environment.                                                                                  |
+| `railway:var-set …`     | Upserts one or more `KEY=VALUE` pairs, then waits for the resulting deployment to reach `SUCCESS` before exiting 0. Example: `pnpm run railway:var-set LOG_LEVEL=info`. |
+| `railway:var-unset …`   | Deletes one or more variables, then waits for the resulting deployment to reach `SUCCESS` before exiting 0. Example: `pnpm run railway:var-unset FEATURE_FLAG_X`.       |
+
+All scripts auto-target the live production project / service / `production`
+environment — those defaults are baked into `scripts/railway.sh`. Override
+for staging by exporting `RAILWAY_PROJECT_ID`, `RAILWAY_SERVICE_ID`, and/or
+`RAILWAY_ENVIRONMENT` (name) before invoking. `RAILWAY_API_TOKEN` must be set
+in the shell — in this Replit workspace it's already a Secret, so just open
+a terminal and run.
+
+### Example: redeploy + verify
+
+```bash
+pnpm run railway:redeploy        # re-runs the existing image
+pnpm run railway:status          # confirm status: SUCCESS + healthcheck 200
+```
+
+A clean redeploy looks like this (smoke run from this workspace, 2026-04-25):
+
+```text
+[railway.sh] redeploying latest built image for service=5acc87f2-… env=production
+[railway.sh] found latest deployment: 20d1dfab-…
+[railway.sh] redeploy enqueued as deployment 14f2642d-…
+[railway.sh] polling deployment 14f2642d-… (timeout 1800s)
+[railway.sh] deployment status: BUILDING
+[railway.sh] deployment status: DEPLOYING
+[railway.sh] deployment status: SUCCESS
+[railway.sh] deployment 14f2642d-… succeeded.
+```
+
+Followed by `pnpm run railway:status` reporting `active_deployment.status:
+"SUCCESS"` and `health.status: 200`.
+
+### CI: `.github/workflows/railway-deploy.yml`
+
+A `workflow_dispatch`-only GitHub Actions workflow runs the same
+`scripts/railway.sh` from CI. It uses the `RAILWAY_API_TOKEN` repo secret
+and accepts these inputs:
+
+- `mode` — `redeploy` (re-run latest image) or `deploy-from-source`.
+- `service` — optional Railway service ID override.
+- `environment` — optional environment name (default: `production`).
+- `health_url` — public URL probed for HTTP 200 after the deploy
+  (default: `https://api.syrabit.ai/api/health`). **Blank this out when
+  you override `service`/`environment` for a non-production target**, or
+  set it to that target's public hostname; otherwise the probe will
+  pass/fail based on production rather than what you actually deployed.
+
+The workflow is gated to `master`/`main` and prints status before and
+after the deploy. There is no auto-deploy on push from this workflow —
+Railway's own GitHub integration handles that separately.
+
+> **Token scope note.** The `redeploy`, `status`, `logs`, `vars`,
+> `var-set`, and `var-unset` subcommands talk directly to the Railway
+> GraphQL API and work with any token that has access to the project. The
+> `deploy` subcommand (source upload) shells out to the Railway CLI's
+> `railway up`, which validates the token through a separate code path —
+> use a Railway account or team token with full workspace access for that
+> one. CI uses such a token via `secrets.RAILWAY_API_TOKEN`.
+
 ## Migration from Replit
 
 When ready to switch:

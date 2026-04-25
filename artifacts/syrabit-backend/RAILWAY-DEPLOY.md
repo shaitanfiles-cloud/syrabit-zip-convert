@@ -232,3 +232,40 @@ User → syrabit.ai (CF Pages)
 ### CORS Errors
 - Add Railway domain to `CORS_ORIGINS`
 - Ensure `https://syrabit.ai` and `https://api.syrabit.ai` are included
+
+## Driving deploys from Replit / CI
+
+You don't need to open the Railway dashboard or run `railway login` to
+trigger a deploy. The `scripts/railway.sh` dispatcher in this repo wraps
+the Railway GraphQL API and CLI in non-interactive subcommands that
+authenticate using the `RAILWAY_API_TOKEN` Replit Secret and target this
+service by default.
+
+```bash
+# from the repo root
+pnpm run railway:status        # active deployment + /api/health probe
+pnpm run railway:logs          # last 200 deploy logs
+pnpm run railway:logs -- -b    # last 200 build logs
+pnpm run railway:redeploy      # re-run the latest image, no rebuild
+pnpm run railway:deploy        # railway up: upload artifacts/syrabit-backend/, build, deploy
+pnpm run railway:vars          # list variable names on the service
+pnpm run railway:var-set FOO=bar
+pnpm run railway:var-unset FOO
+```
+
+`redeploy` and `deploy` exit `0` only after Railway reports the deployment
+as `SUCCESS`. `redeploy` polls the GraphQL API; `deploy` uses
+`railway up --ci` which streams build logs and waits for healthcheck.
+
+To target a different project / service / environment, override:
+
+```bash
+RAILWAY_PROJECT_ID=… RAILWAY_SERVICE_ID=… RAILWAY_ENVIRONMENT=staging \
+  pnpm run railway:status
+```
+
+The same scripts run from CI via `.github/workflows/railway-deploy.yml`
+(`workflow_dispatch` only, gated to `master`/`main`).
+
+See [`docs/RAILWAY-DEPLOYMENT.md`](../../docs/RAILWAY-DEPLOYMENT.md#driving-deploys-from-replit--ci)
+for the full reference.

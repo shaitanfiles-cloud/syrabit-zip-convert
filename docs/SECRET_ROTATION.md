@@ -207,7 +207,7 @@ to prevent leaking into the public build log.
 | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | upstash.com | backend |
 | `SESSION_SECRET` | self-generated (`openssl rand -hex 48`) | backend |
 | `CF_ANALYTICS_API_TOKEN`, `CF_PAGES_API_TOKEN`, `CF_ZONE_ID` | Cloudflare dashboard → API Tokens | backend (analytics + deploy automation) |
-| `RAILWAY_API_TOKEN` | railway.app → Account Settings | local tooling only |
+| `RAILWAY_API_TOKEN` | railway.app → Account Settings | local tooling (`scripts/railway.sh`, `pnpm run railway:*`) + GitHub Actions (`.github/workflows/railway-deploy.yml` repo secret of the same name) |
 | `GITHUB_TOKEN` | github.com → Developer Settings | local tooling only |
 | `TRUSTPILOT_API_KEY` | Trustpilot dashboard | backend |
 | `KV_ALERT_SECRET` | self-generated | worker only (`wrangler secret put`) |
