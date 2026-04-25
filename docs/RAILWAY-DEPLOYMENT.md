@@ -250,20 +250,25 @@ To temporarily expose the schema for one-off internal codegen:
 # 1. Add "/openapi.json" to _ORIGIN_AUTH_OPEN_PATHS in middleware.py
 # 2. Redeploy backend:
 pnpm run railway:redeploy && pnpm run railway:status
-# 3. Pull the spec straight from the Railway origin (still gated by
+# 3. Look up the current Railway backend hostname. Source of truth:
+#      workers/edge-proxy/wrangler.toml  →  BACKEND_URL = "..."
+#    or `pnpm run railway:status` (prints the active deployment URL).
+#    Export it for the next step:
+RAILWAY_BACKEND_URL="$(grep -E '^BACKEND_URL' workers/edge-proxy/wrangler.toml \
+  | sed -E 's/.*"([^"]+)".*/\1/')"
+# 4. Pull the spec straight from the Railway origin (still gated by
 #    Railway-edge IP allowlist + Cloudflare WAF in front of it):
-curl -A 'Mozilla/5.0' \
-  https://workspacemockup-sandbox-production-df37.up.railway.app/openapi.json \
+curl -A 'Mozilla/5.0' "${RAILWAY_BACKEND_URL}/openapi.json" \
   -o /tmp/openapi.json
-# 4. Revert the middleware change and redeploy.
+# 5. Revert the middleware change and redeploy.
 ```
 
-> The audit step in `workers/edge-proxy/DEPLOY.md` that pipes
-> `https://workspacesyrabit-production-0ddc.up.railway.app/openapi.json`
-> through `python3 -c "…"` is from a previous Railway service URL and
-> a previous middleware state. Both the hostname and the open-paths
-> allowlist have changed since — that audit step no longer applies as
-> written. Use the recipe above instead.
+> The audit step in `workers/edge-proxy/DEPLOY.md` that pipes the old
+> Railway hostname through `python3 -c "…"` is from a previous service
+> URL **and** a previous middleware state. Both the hostname and the
+> open-paths allowlist have changed since — that audit step no longer
+> applies as written. Use the recipe above instead. (Cleanup of that
+> stale runbook step is tracked separately as a follow-up task.)
 
 ## Railway Health Check
 
