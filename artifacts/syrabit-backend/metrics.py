@@ -970,7 +970,24 @@ class _MetricsStore:
         with self._lock:
             self.request_count += 1
             self.status_counts[status] += 1
-            if status >= 400:
+            # Only count *server* failures as errors. Bucketing every 4xx
+            # as an error caused the alerting loop to fire constant
+            # "Error rate spike" alerts (40-67% rates were typical)
+            # because:
+            #   - 401 / 403  →  auth working as intended (failed login,
+            #                   missing token, bot probing /admin)
+            #   - 404        →  bot scans for /wp-admin, /.env, /xmlrpc.php
+            #                   etc. — totally normal noise on the open web
+            #   - 422        →  client sent invalid form data
+            #   - 429        →  the rate limiter doing its job
+            # None of those indicate the backend is broken; they indicate
+            # the backend correctly *rejected* a bad request. We now only
+            # increment error_count on:
+            #   - 5xx (server fault: code bug, dep down, OOM, etc.)
+            #   - 408 (request timeout — backend was too slow)
+            #   - 499 (client closed during slow response — same signal,
+            #          surfaced by some proxies / NGINX-style middleware)
+            if status >= 500 or status in (408, 499):
                 self.error_count += 1
             bucket = path.split("?")[0]
             if bucket.startswith("/api/"):
