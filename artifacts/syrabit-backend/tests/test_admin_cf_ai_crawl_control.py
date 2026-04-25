@@ -24,8 +24,10 @@ install_deps_stub()
 import cf_bot_report  # noqa: E402
 from cf_bot_report import (  # noqa: E402
     aggregate_daily_series,
+    aggregate_per_operator,
     fetch_admin_summary,
     is_ai_bot,
+    operator_for,
 )
 
 
@@ -102,6 +104,119 @@ def test_aggregate_daily_series_empty_input():
     assert out == {"top_bots": [], "rows": []}
 
 
+# ── Operator grouping (mirrors CF AI Crawl Control overview tiles) ──────────
+
+def test_operator_for_known_companies():
+    assert operator_for("Googlebot") == "Google"
+    assert operator_for("Google-Extended") == "Google"
+    assert operator_for("Meta-ExternalAgent") == "Meta"
+    assert operator_for("Bingbot") == "Microsoft"
+    assert operator_for("Applebot") == "Apple"
+    assert operator_for("Applebot-Extended") == "Apple"
+    assert operator_for("GPTBot") == "OpenAI"
+    assert operator_for("ChatGPT-User") == "OpenAI"
+    assert operator_for("OAI-SearchBot") == "OpenAI"
+    assert operator_for("PerplexityBot") == "Perplexity"
+    assert operator_for("ClaudeBot") == "Anthropic"
+    assert operator_for("CCBot") == "Common Crawl"
+
+
+def test_operator_for_unknown_falls_through_to_other():
+    assert operator_for("BrandNewBot") == "Other"
+    assert operator_for("") == "Other"
+
+
+def test_aggregate_per_operator_groups_by_company_and_sorts_by_allowed():
+    """Mirrors CF's overview: operator tiles ordered by allowed-requests
+    desc, with each operator's bots rolled up into a single tile carrying
+    a ``bots`` chip-list also ordered by request count desc.
+
+    Numbers chosen to mimic the user-supplied screenshot shape (Google
+    leads with Googlebot+Google-Extended; OpenAI shows up under AI).
+    """
+    per_bot = [
+        {"name": "Googlebot", "requests": 6000, "category": "search", "error_rate": 0.05},
+        {"name": "Google-Extended", "requests": 200, "category": "ai", "error_rate": 0.0},
+        {"name": "Meta-ExternalAgent", "requests": 108, "category": "ai", "error_rate": 0.10},
+        {"name": "Bingbot", "requests": 88, "category": "search", "error_rate": 0.0},
+        {"name": "Applebot", "requests": 80, "category": "search", "error_rate": 0.0},
+        {"name": "GPTBot", "requests": 20, "category": "ai", "error_rate": 0.0},
+        {"name": "ChatGPT-User", "requests": 12, "category": "ai", "error_rate": 0.0},
+        {"name": "ClaudeBot", "requests": 9, "category": "ai", "error_rate": 0.0},
+        {"name": "CCBot", "requests": 7, "category": "ai", "error_rate": 0.0},
+    ]
+    tiles = aggregate_per_operator(per_bot)
+
+    # Tile order: by allowed desc → Google first by a wide margin
+    assert tiles[0]["operator"] == "Google"
+    google = tiles[0]
+    # Googlebot 6000 * 0.95 = 5700 + Google-Extended 200 * 1.0 = 200 → 5900
+    assert google["allowed"] == 5900
+    # 6000 * 0.05 = 300 unsuccessful from Googlebot
+    assert google["unsuccessful"] == 300
+    assert google["requests"] == 6200
+    # Bots chip list inside a tile sorted by request count desc
+    assert [b["name"] for b in google["bots"]] == ["Googlebot", "Google-Extended"]
+    # Mixed search + AI under Google → category bumps to "ai"
+    assert google["category"] == "ai"
+
+    # Subsequent tiles still in allowed-desc order
+    operators_in_order = [t["operator"] for t in tiles]
+    # Meta (108 reqs * 0.9 = 97 allowed) > Microsoft (88) > Apple (80) > OpenAI (32)
+    # > Anthropic (9) > Common Crawl (7)
+    assert operators_in_order == [
+        "Google", "Meta", "Microsoft", "Apple", "OpenAI", "Anthropic", "Common Crawl",
+    ]
+    # Apple is search-only → tile category stays "search"
+    apple = next(t for t in tiles if t["operator"] == "Apple")
+    assert apple["category"] == "search"
+    # OpenAI tile aggregates GPTBot + ChatGPT-User
+    openai = next(t for t in tiles if t["operator"] == "OpenAI")
+    assert openai["allowed"] == 32
+    assert {b["name"] for b in openai["bots"]} == {"GPTBot", "ChatGPT-User"}
+
+
+def test_aggregate_per_operator_unknown_bot_falls_into_other():
+    per_bot = [
+        {"name": "BrandNewBot", "requests": 10, "category": "ai", "error_rate": 0.0},
+    ]
+    tiles = aggregate_per_operator(per_bot)
+    assert len(tiles) == 1
+    assert tiles[0]["operator"] == "Other"
+    assert tiles[0]["allowed"] == 10
+
+
+def test_aggregate_per_operator_empty():
+    assert aggregate_per_operator([]) == []
+
+
+def test_aggregate_per_operator_clamps_invalid_error_rate():
+    """Defensive: if upstream returns a percent (>1.0) instead of a
+    fraction, allowed should not go negative."""
+    per_bot = [
+        {"name": "Googlebot", "requests": 100, "error_rate": 50.0},  # i.e. 50%
+    ]
+    tiles = aggregate_per_operator(per_bot)
+    assert tiles[0]["allowed"] == 50
+    assert tiles[0]["unsuccessful"] == 50
+
+
+def test_operator_map_covers_every_canonical_ua_pattern():
+    """Drift guard: every canonical name produced by ``_classify_ua``
+    (i.e. every entry in ``_UA_PATTERNS``) MUST have an explicit
+    operator mapping. Without this, a new bot added to ``_UA_PATTERNS``
+    would silently fall into the "Other" tile and the operator would
+    lose attribution on the AI Crawl Control overview card."""
+    canonical_names = {name for _needle, name in cf_bot_report._UA_PATTERNS}
+    mapped_names = set(cf_bot_report._OPERATOR_MAP.keys())
+    missing = canonical_names - mapped_names
+    extra = mapped_names - canonical_names
+    assert not missing, f"Canonical bots missing from _OPERATOR_MAP: {sorted(missing)}"
+    # Extra entries are allowed (e.g., aliases) but flag for awareness;
+    # currently we expect a clean 1:1 so a non-empty set is a red flag.
+    assert not extra, f"_OPERATOR_MAP has names not in _UA_PATTERNS: {sorted(extra)}"
+
+
 # ── fetch_admin_summary glue ────────────────────────────────────────────────
 
 def _run(coro):
@@ -156,6 +271,25 @@ def test_fetch_admin_summary_happy_path_splits_ai_vs_search():
     # Daily series populated
     assert "Googlebot" in out["daily_series"]["top_bots"]
     assert out["daily_series"]["rows"][0]["date"] == "2026-04-25"
+
+    # Operator tiles + headline allowed/unsuccessful match CF overview
+    assert out["per_operator"]
+    operators = [t["operator"] for t in out["per_operator"]]
+    # Google (100) > OpenAI (30) > Anthropic (5) by allowed
+    assert operators[:3] == ["Google", "OpenAI", "Anthropic"]
+    google_tile = next(t for t in out["per_operator"] if t["operator"] == "Google")
+    assert google_tile["allowed"] == 100
+    assert google_tile["unsuccessful"] == 0
+    assert google_tile["category"] == "search"
+    # Anthropic 5 reqs * 100% error → 0 allowed, 5 unsuccessful
+    anthropic_tile = next(t for t in out["per_operator"] if t["operator"] == "Anthropic")
+    assert anthropic_tile["allowed"] == 0
+    assert anthropic_tile["unsuccessful"] == 5
+    # Headline metrics row totals match the sum of per_operator tiles
+    assert out["allowed_total"] == sum(t["allowed"] for t in out["per_operator"])
+    assert out["unsuccessful_total"] == sum(t["unsuccessful"] for t in out["per_operator"])
+    assert out["allowed_total"] == 130
+    assert out["unsuccessful_total"] == 5
 
 
 def test_fetch_admin_summary_returns_none_when_per_ua_fetch_fails():
@@ -216,6 +350,9 @@ def test_admin_route_unavailable_when_cf_returns_none(app_client):
     assert body["period_days"] == 7
     assert body["totals"] == {"requests": 0, "bytes": 0, "bots": 0}
     assert body["per_bot"] == []
+    assert body["per_operator"] == []
+    assert body["allowed_total"] == 0
+    assert body["unsuccessful_total"] == 0
     assert body["daily_series"] == {"top_bots": [], "rows": []}
 
 

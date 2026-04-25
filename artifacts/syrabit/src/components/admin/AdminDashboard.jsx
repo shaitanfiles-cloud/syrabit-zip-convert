@@ -1450,34 +1450,114 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
 
           {cfCrawlControl.available && (
             <>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+              {/* Headline metrics row — mirrors CF's "AI Crawl Control →
+                  Overview" tab: Total / Allowed / Unsuccessful / Crawlers. */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-2">
                 <div className="rounded-lg p-3 bg-orange-50 border border-orange-200 text-center">
                   <p className="text-orange-700 font-bold text-lg">
                     {(cfCrawlControl.totals?.requests ?? 0).toLocaleString()}
                   </p>
-                  <p className="text-[10px] text-gray-500">Verified bot requests</p>
+                  <p className="text-[10px] text-gray-500">Total requests</p>
                 </div>
-                <div className="rounded-lg p-3 bg-violet-50 border border-violet-200 text-center">
-                  <p className="text-violet-700 font-bold text-lg">
-                    {(cfCrawlControl.ai_totals?.requests ?? 0).toLocaleString()}
+                <div className="rounded-lg p-3 bg-emerald-50 border border-emerald-200 text-center">
+                  <p className="text-emerald-700 font-bold text-lg">
+                    {(cfCrawlControl.allowed_total ?? 0).toLocaleString()}
                   </p>
-                  <p className="text-[10px] text-gray-500">
-                    AI crawler hits ({cfCrawlControl.ai_totals?.bots ?? 0} bots)
-                  </p>
+                  <p className="text-[10px] text-gray-500">Allowed requests</p>
                 </div>
-                <div className="rounded-lg p-3 bg-blue-50 border border-blue-200 text-center">
-                  <p className="text-blue-700 font-bold text-lg">
-                    {(cfCrawlControl.search_totals?.requests ?? 0).toLocaleString()}
+                <div className="rounded-lg p-3 bg-rose-50 border border-rose-200 text-center">
+                  <p className="text-rose-700 font-bold text-lg">
+                    {(cfCrawlControl.unsuccessful_total ?? 0).toLocaleString()}
                   </p>
-                  <p className="text-[10px] text-gray-500">
-                    Search-engine hits ({cfCrawlControl.search_totals?.bots ?? 0} bots)
-                  </p>
+                  <p className="text-[10px] text-gray-500">Unsuccessful requests</p>
                 </div>
                 <div className="rounded-lg p-3 bg-gray-50 border border-gray-200 text-center">
                   <p className="text-gray-700 font-bold text-lg">{cfCrawlControl.totals?.bots ?? 0}</p>
                   <p className="text-[10px] text-gray-500">Distinct crawlers</p>
                 </div>
               </div>
+              {/* Secondary AI-vs-search context line preserved so the
+                  prior split data is still discoverable in one glance. */}
+              <div className="text-[10px] text-gray-500 mb-4 flex items-center justify-center gap-3">
+                <span>
+                  <span className="inline-block w-2 h-2 rounded-sm bg-violet-400 mr-1 align-middle" />
+                  AI crawlers: {(cfCrawlControl.ai_totals?.requests ?? 0).toLocaleString()} ({cfCrawlControl.ai_totals?.bots ?? 0} bots)
+                </span>
+                <span className="text-gray-300">·</span>
+                <span>
+                  <span className="inline-block w-2 h-2 rounded-sm bg-blue-400 mr-1 align-middle" />
+                  Search-engine: {(cfCrawlControl.search_totals?.requests ?? 0).toLocaleString()} ({cfCrawlControl.search_totals?.bots ?? 0} bots)
+                </span>
+              </div>
+
+              {/* Operator-company tiles — one card per operator, mirrors
+                  CF's "Crawlers" grid on the overview tab. Tiles already
+                  arrive sorted by allowed-requests desc from the backend. */}
+              {cfCrawlControl.per_operator?.length > 0 && (
+                <div className="mb-4">
+                  <div className="text-[10px] text-gray-400 font-semibold mb-2 uppercase tracking-wider">
+                    Crawlers by operator
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    {cfCrawlControl.per_operator.map((op) => {
+                      const isAi = op.category === 'ai';
+                      const accent = isAi
+                        ? 'bg-violet-50 border-violet-200 text-violet-700'
+                        : 'bg-blue-50 border-blue-200 text-blue-700';
+                      const headBots = (op.bots || []).slice(0, 1);
+                      const extraBots = Math.max(0, (op.bots?.length || 0) - 1);
+                      return (
+                        <div
+                          key={op.operator}
+                          className="rounded-lg p-3 bg-white border border-gray-200 flex flex-col gap-1.5"
+                        >
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="text-gray-700 font-semibold text-sm truncate" title={op.operator}>
+                              {op.operator}
+                            </span>
+                            <span className={`text-[9px] px-1.5 py-0.5 rounded ${accent}`}>
+                              {isAi ? 'AI' : 'Search'}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1 flex-wrap">
+                            {headBots.map(b => (
+                              <span
+                                key={b.name}
+                                className="text-[9px] px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-600 truncate max-w-[120px]"
+                                title={b.name}
+                              >
+                                {b.name}
+                              </span>
+                            ))}
+                            {extraBots > 0 && (
+                              <span
+                                className="text-[9px] px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-600"
+                                title={(op.bots || []).slice(1).map(b => `${b.name}: ${b.requests.toLocaleString()}`).join('\n')}
+                              >
+                                +{extraBots}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-baseline justify-between gap-2 mt-1">
+                            <div>
+                              <p className="text-[9px] text-gray-400 leading-none">Allowed</p>
+                              <p className="text-emerald-700 font-bold text-base leading-tight">
+                                {op.allowed.toLocaleString()}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-[9px] text-gray-400 leading-none">Errors</p>
+                              <p className="text-rose-600 font-semibold text-xs leading-tight">
+                                {op.unsuccessful.toLocaleString()}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {cfCrawlControl.daily_series?.rows?.length > 0 && (
                 <div className="mt-4">

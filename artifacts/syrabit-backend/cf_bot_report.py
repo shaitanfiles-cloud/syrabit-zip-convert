@@ -479,6 +479,136 @@ def is_ai_bot(name: str) -> bool:
     return name in _AI_BOT_NAMES
 
 
+# ── Operator (company) grouping for the AI Crawl Control overview ────────────
+# Cloudflare's *AI Crawl Control → Overview* tab presents one tile per
+# operator company (Google, Meta, Microsoft, Apple, OpenAI, Perplexity,
+# Anthropic, Common Crawl, …) with the operator's individual bots rolled
+# up underneath. The map below mirrors that grouping so the admin card can
+# render the same operator-tile layout. Every canonical name produced by
+# ``_classify_ua`` should appear here exactly once; bots not listed are
+# rolled into the synthetic "Other" tile so the operator can still see
+# their volume.
+_OPERATOR_MAP: dict[str, str] = {
+    # Google family — search + AI training (Gemini)
+    "Googlebot": "Google",
+    "Googlebot-Image": "Google",
+    "Googlebot-News": "Google",
+    "Googlebot-Video": "Google",
+    "Google-InspectionTool": "Google",
+    "GoogleOther": "Google",
+    "AdsBot-Google": "Google",
+    "Google-Extended": "Google",
+    # Meta — Llama training + link previews
+    "Meta-ExternalAgent": "Meta",
+    # Microsoft
+    "Bingbot": "Microsoft",
+    # Apple — search + AI training opt-out
+    "Applebot": "Apple",
+    "Applebot-Extended": "Apple",
+    # OpenAI
+    "GPTBot": "OpenAI",
+    "ChatGPT-User": "OpenAI",
+    "OAI-SearchBot": "OpenAI",
+    # Perplexity
+    "PerplexityBot": "Perplexity",
+    "Perplexity-User": "Perplexity",
+    # Anthropic
+    "ClaudeBot": "Anthropic",
+    "Claude-Web": "Anthropic",
+    "Anthropic-AI": "Anthropic",
+    # Common Crawl (open dataset, used by many AI training pipelines)
+    "CCBot": "Common Crawl",
+    # Long-tail search engines (kept individually so the robots.txt
+    # allow-list stays auditable — see the note on _UA_PATTERNS).
+    "YandexBot": "Yandex",
+    "DuckDuckBot": "DuckDuckGo",
+    "Baiduspider": "Baidu",
+    "PetalBot": "Huawei",
+    "SeznamBot": "Seznam",
+    "MojeekBot": "Mojeek",
+    "Yeti": "Naver",
+    # Other AI / research crawlers
+    "Bytespider": "ByteDance",
+    "Amazonbot": "Amazon",
+    "YouBot": "You.com",
+    "Cohere-AI": "Cohere",
+    "Diffbot": "Diffbot",
+}
+
+
+def operator_for(name: str) -> str:
+    """Return the operator-company tile name that ``name`` belongs to,
+    or ``"Other"`` for unmapped (long-tail / brand-new) crawlers so
+    they still surface with a request count."""
+    return _OPERATOR_MAP.get(name, "Other")
+
+
+def aggregate_per_operator(per_bot: list[dict]) -> list[dict]:
+    """Group a flat ``per_bot`` list (the shape produced by
+    ``fetch_admin_summary``) into operator-company tiles, mirroring the
+    cards on Cloudflare's *AI Crawl Control → Overview* tab.
+
+    Each tile carries the same headline numbers CF surfaces:
+      * ``allowed`` — successful (non-4xx/5xx) verified-bot requests.
+      * ``unsuccessful`` — 4xx/5xx requests (derived from ``error_rate``,
+        which is fraction-of-1 in our shape).
+      * ``requests`` — total verified-bot requests for the operator.
+      * ``bots`` — the canonical bot names that contributed, sorted by
+        request count descending (matches CF's "Googlebot +1" chip).
+      * ``category`` — ``"ai"`` if any contributing bot is in the AI
+        bucket per ``is_ai_bot()`` (canonical-name-based, *not* the
+        per-bot ``category`` field on the input). This makes the
+        promotion deterministic from the bot name alone — important
+        because `_AI_BOT_NAMES` is the same source of truth used by
+        the AI-vs-search totals on the same response, so the tile
+        colouring and the `ai_totals` headline can never disagree.
+        Used for tile colouring.
+
+    The list is sorted by ``allowed`` descending so the busiest
+    operator renders first, matching CF's overview ordering.
+    """
+    by_op: dict[str, dict] = {}
+    for b in per_bot or []:
+        name = b.get("name") or ""
+        if not name:
+            continue
+        requests = int(b.get("requests") or 0)
+        # error_rate is stored as a fraction (0.0–1.0); guard against
+        # GraphQL hiccups returning a percent (>1.0) by clamping.
+        err = float(b.get("error_rate") or 0.0)
+        if err > 1.0:
+            err = err / 100.0
+        err = max(0.0, min(1.0, err))
+        unsuccessful = int(round(requests * err))
+        allowed = max(0, requests - unsuccessful)
+        op = operator_for(name)
+        tile = by_op.setdefault(op, {
+            "operator": op,
+            "allowed": 0,
+            "unsuccessful": 0,
+            "requests": 0,
+            "bots": [],
+            "category": "search",
+        })
+        tile["allowed"] += allowed
+        tile["unsuccessful"] += unsuccessful
+        tile["requests"] += requests
+        tile["bots"].append({"name": name, "requests": requests})
+        # Promote to "ai" if any contributing bot is AI — matches CF
+        # which files the operator under AI Crawl Control as soon as
+        # one of its bots is in the AI Crawler category.
+        if is_ai_bot(name):
+            tile["category"] = "ai"
+    # Order each tile's bot chips by request count desc, then sort
+    # tiles by total allowed requests desc so the busiest operator
+    # renders first (CF's overview ordering).
+    out = list(by_op.values())
+    for tile in out:
+        tile["bots"].sort(key=lambda b: -b["requests"])
+    out.sort(key=lambda t: (-t["allowed"], -t["requests"], t["operator"]))
+    return out
+
+
 async def _fetch_per_ua_daily_series(zone_id: str, since_iso: str,
                                      until_iso: str,
                                      limit: int = 1000) -> Optional[list[dict]]:
@@ -617,11 +747,21 @@ async def fetch_admin_summary(days: int = 7) -> Optional[dict]:
                 search_bots_count += 1
     per_bot_list.sort(key=lambda b: -b["requests"])
 
+    per_operator = aggregate_per_operator(per_bot_list)
+    # Allowed/unsuccessful are derived from per-bot error_rate so they
+    # tally exactly with the per_operator tiles. Mirrors the four-tile
+    # Metrics row at the top of CF's overview tab.
+    allowed_total = sum(op["allowed"] for op in per_operator)
+    unsuccessful_total = sum(op["unsuccessful"] for op in per_operator)
+
     return {
         "totals": agg.get("totals", {"requests": 0, "bytes": 0, "bots": 0}),
         "ai_totals": {"requests": ai_requests, "bots": ai_bots_count},
         "search_totals": {"requests": search_requests, "bots": search_bots_count},
+        "allowed_total": allowed_total,
+        "unsuccessful_total": unsuccessful_total,
         "per_bot": per_bot_list,
+        "per_operator": per_operator,
         "daily_series": daily_summary,
         "since": since_iso,
         "until": until_iso,

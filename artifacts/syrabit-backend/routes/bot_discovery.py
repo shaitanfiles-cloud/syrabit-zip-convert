@@ -5749,7 +5749,10 @@ async def admin_cf_ai_crawl_control(
             "totals": {"requests": 0, "bytes": 0, "bots": 0},
             "ai_totals": {"requests": 0, "bots": 0},
             "search_totals": {"requests": 0, "bots": 0},
+            "allowed_total": 0,
+            "unsuccessful_total": 0,
             "per_bot": [],
+            "per_operator": [],
             "daily_series": {"top_bots": [], "rows": []},
         }
     return {"available": True, **summary}
