@@ -527,6 +527,100 @@ async def _fetch_visits_series(zone_id: str, range_key: str) -> Optional[dict]:
 
 
 
+async def get_visitors_per_hour_sum(days: int = 3) -> Optional[dict]:
+    """Sum of CF unique visitors over hourly buckets across the window.
+
+    Cloudflare's GraphQL `httpRequests1hGroups.uniq.uniques` field
+    deduplicates uniques inside each hour-bucket using the same
+    fingerprint (IP + User-Agent) the dashboard uses for daily uniques.
+    Summing those per-hour counts across the window therefore implements
+    the operator's "1 visit per IP per hour" rule directly: a single
+    visitor can contribute at most one count per hour, but if the same
+    visitor returns in a later hour they count again.
+
+    Compared to the existing tile sources:
+      - CF visits (sessions, 30-min idle): tracks ~125k on this site
+      - CF visitors per DAY summed over 7 days: ~2.2k
+      - CF visitors per HOUR summed over the maximum allowed window:
+        this helper, lands between the two depending on how spread
+        out traffic is
+
+    NOTE: Cloudflare's Free / Pro plans cap hour-resolution
+    (`httpRequests1hGroups`) queries to a 3-DAY window — wider ranges
+    are rejected with a `quota` GraphQL error ("cannot request a time
+    range wider than 3d"). Default `days` is therefore 3, and we clamp
+    any larger value down to 3 silently. Business plans extend this to
+    7 days; Enterprise to 30. If/when the zone gets upgraded, raise
+    the cap by passing a larger `days` value from the caller.
+
+    Returns ``{visitors_sum, today_sum, buckets, hours_requested}`` or
+    None on any failure (token rejected, schema change, plan without
+    adaptive access). The today_sum is the sum of buckets that fall
+    within the current UTC day, and hours_requested is `days * 24` so
+    the caller can detect retention-truncated responses.
+    """
+    if not is_configured():
+        return None
+    zone_id = _cfg()["zone_id"]
+    now = datetime.now(timezone.utc)
+    # Free / Pro plans: hour-bucket queries cap at 3 days. Clamp here so
+    # an over-eager caller can't trigger a CF GraphQL `quota` rejection
+    # that would null out the whole tile.
+    days = max(1, min(days, 3))
+    since = now - timedelta(days=days)
+    since_str = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+    until_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    hours_requested = days * 24
+    query = """
+    query CfVisitorsHourly($zoneTag: String!, $since: String!, $until: String!, $limit: Int!) {
+      viewer {
+        zones(filter: { zoneTag: $zoneTag }) {
+          series: httpRequests1hGroups(
+            filter: { datetime_geq: $since, datetime_lt: $until }
+            orderBy: [datetime_ASC]
+            limit: $limit
+          ) {
+            dimensions { datetime }
+            uniq { uniques }
+          }
+        }
+      }
+    }
+    """
+    # Cap at 200 — covers the 168 hours in 7 days with some margin and
+    # stays well inside CF's adaptive-groups row ceiling for a single
+    # query. Larger windows would need pagination.
+    limit_rows = min(hours_requested + 32, 200)
+    variables = {"zoneTag": zone_id, "since": since_str, "until": until_str, "limit": limit_rows}
+    data = await _graphql_query(query, variables)
+    if not data:
+        return None
+    try:
+        zones = data.get("viewer", {}).get("zones", []) or []
+        if not zones:
+            return None
+        rows = zones[0].get("series", []) or []
+        today_str = now.strftime("%Y-%m-%d")
+        total = 0
+        today_total = 0
+        for row in rows:
+            dims = row.get("dimensions", {}) or {}
+            ts = dims.get("datetime") or ""
+            u = int((row.get("uniq", {}) or {}).get("uniques", 0) or 0)
+            total += u
+            if ts.startswith(today_str):
+                today_total += u
+        return {
+            "visitors_sum": total,
+            "today_sum": today_total,
+            "buckets": len(rows),
+            "hours_requested": hours_requested,
+        }
+    except Exception as e:
+        logger.warning(f"CF hourly-visitors sum parsing failed: {e}")
+        return None
+
+
 async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
     """Cloudflare-mirror analytics overview with selectable time range.
 
