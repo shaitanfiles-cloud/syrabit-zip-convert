@@ -1101,10 +1101,38 @@ async def _generate(prompt: str, model: str = _GEN_MODEL,
 
 async def health_check() -> dict:
     if not _ok():
+        # Distinguish the two failure modes that both make _ok() False.
+        # The previous text claimed "No credential available" in BOTH
+        # cases, which sent ops on multi-hour wild-goose chases when the
+        # real problem was an open circuit breaker (e.g. upstream IAM
+        # 403s). The credential snapshot below names the actual auth
+        # mode that was loaded so a Railway log reader can immediately
+        # tell "creds present but upstream rejecting" from "no creds at
+        # all".
+        has_creds = bool(_API_KEY) or _SA_CREDS is not None or _USE_BYOK
+        if not has_creds:
+            reason = (
+                "No credential available — set VERTEX_SERVICE_ACCOUNT, "
+                "GOOGLE_APPLICATION_CREDENTIALS_JSON, or GEMINI_API_KEY, "
+                "or configure CF AI Gateway BYOK."
+            )
+        else:
+            snap = _breaker.snapshot()
+            reason = (
+                f"Vertex circuit breaker is {snap.get('state', 'open')} "
+                f"(credentials are loaded as auth_mode={_AUTH_MODE!r}; the "
+                f"upstream is rejecting calls). Last failure reason: "
+                f"{snap.get('last_reason') or 'unknown'}. Run "
+                f"`python scripts/test_vertex_via_aig.py` to see the raw "
+                f"upstream HTTP status — a 403 PERMISSION_DENIED means "
+                f"the SA needs roles/aiplatform.user on its GCP project."
+            )
         return {
             "ok": False,
             "auth_mode": _AUTH_MODE,
-            "reason": "No credential available (set VERTEX_SERVICE_ACCOUNT, GEMINI_API_KEY, or CF AI Gateway BYOK).",
+            "via_cf_gateway": _CF_GW_ENABLED,
+            "reason": reason,
+            "breaker": _breaker.snapshot(),
         }
     test = await embed_text("test", task_type="SEMANTIC_SIMILARITY")
     gen_test = await _generate("Reply with just the word: OK", max_tokens=5)
