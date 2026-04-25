@@ -1319,27 +1319,55 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
         <p className="text-[10px] text-gray-400 mb-2">{TODAY_BUCKET_CAPTION}</p>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
-          {/* "Total Visitors" — bound to Cloudflare's "Visits" metric
-              exactly as it appears on the CF Analytics Overview page,
-              with no additional filtering applied. CF defines a visit
-              as a session: every return after a 30-minute idle gap
-              counts as a new visit, so repeat visitors from the same
-              IP all contribute multiple counts. Bots are excluded
-              because CF's JS beacon doesn't fire for non-browser
-              traffic. Source: cfOverview.totals.visits from the same
-              /admin/analytics/cf-overview payload the Traffic
-              (Cloudflare) card above renders, so the headline matches
-              the Cloudflare dashboard 1:1. Fallback chain: if the
-              overview fetch hasn't loaded yet, drop to CF unique
-              visitors so the tile isn't blank, then 0. The "Today"
-              sub-value pulls visits from the latest day-bucket of
-              the cfOverview series so it stays internally consistent
-              with the headline metric. */}
-          <StatCard label="Total Visitors"
-            value={cfOverview?.totals?.visits ?? vs?.total_visitors ?? 0}
-            icon={Users} color="#84cc16"
-            subLabel="Today"
-            subValue={(cfOverview?.series?.length ? cfOverview.series[cfOverview.series.length - 1]?.visits : null) ?? vs?.visitors_today ?? 0} />
+          {/* "Total Visitors" — auto-swaps between two CF metrics
+              depending on what the active range can actually deliver:
+
+                * If `visits_coverage.complete` is true (24h + 7d
+                  always; 30d when the CF plan retains 30 days of
+                  adaptive-groups data), show `totals.visits` —
+                  Cloudflare's "Visits" (sessions) metric, where every
+                  return after a 30-minute idle gap counts as a new
+                  visit. Matches the CF Analytics dashboard 1:1.
+
+                * If coverage is INCOMPLETE (e.g. 30d on a plan with
+                  only 8 days of adaptive-groups retention), CF cannot
+                  give us 30 days of session data — the most we can
+                  get is the recent 7-8 days, so showing that as a
+                  "30-day total" would silently under-report by 4x.
+                  In that case we switch to `totals.visitors` (unique
+                  visitors from `httpRequests1dGroups`, which DOES
+                  retain 30 days), update the label to "Unique
+                  Visitors" so the metric matches the headline, and
+                  put the partial-coverage note in the tooltip.
+
+              Final fallback to `vs.total_visitors` (server-side
+              7-day count) if the CF overview hasn't loaded yet. */}
+          {(() => {
+            const cov = cfOverview?.totals?.visits_coverage;
+            const visitsComplete = cov?.complete === true;
+            const useUniques = !visitsComplete && cfOverview?.totals?.visitors != null;
+            const headline = useUniques
+              ? cfOverview.totals.visitors
+              : (cfOverview?.totals?.visits ?? vs?.total_visitors ?? 0);
+            const todayBucket = cfOverview?.series?.length
+              ? cfOverview.series[cfOverview.series.length - 1]
+              : null;
+            const todayValue = useUniques
+              ? (todayBucket?.uniques ?? todayBucket?.visitors ?? vs?.visitors_today ?? 0)
+              : ((todayBucket?.visits) ?? vs?.visitors_today ?? 0);
+            const label = useUniques ? 'Unique Visitors' : 'Total Visitors';
+            const tooltip = useUniques && cov
+              ? `Switched from "Visits" (sessions) to "Unique Visitors" because Cloudflare only kept ${cov.returned_buckets} of ${cov.requested_buckets} days of session data for this range. Unique-visitors data covers the full ${cov.requested_buckets}-day window.`
+              : undefined;
+            return (
+              <StatCard label={label}
+                value={headline}
+                icon={Users} color="#84cc16"
+                subLabel="Today"
+                subValue={todayValue}
+                title={tooltip} />
+            );
+          })()}
           <StatCard label="Bounce Rate"  value={vs.bounce_rate != null ? `${vs.bounce_rate}%` : '—'} icon={TrendingUp} color="#f59e0b" />
           <StatCard label="Avg Session"  value={vs.avg_session_duration != null ? `${vs.avg_session_duration}s` : '—'} icon={Clock} color="#a78bfa" />
         </div>

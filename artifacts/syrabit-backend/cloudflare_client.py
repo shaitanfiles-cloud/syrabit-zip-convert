@@ -483,9 +483,31 @@ async def _fetch_visits_series(zone_id: str, range_key: str) -> Optional[dict]:
         """
         variables = {"zoneTag": zone_id, "since": since, "until": until}
     else:
+        # Daily path: 7d = 1 chunk, 30d = 5 chunks of <= 7 days each.
+        #
+        # Cloudflare's `httpRequestsAdaptiveGroups` dataset is capped at
+        # an 8-day (1w1d) window per request on most plans — a 30-day
+        # query gets rejected with:
+        #   "cannot request a time range wider than 1w1d, but your query
+        #    time range spans 4w1d…"
+        # which made the entire `visits` (sessions) total fall back to
+        # None and the dashboard "Total Visitors" tile under-report by
+        # silently dropping to `vs.total_visitors` (often 0). To stay
+        # safely under the cap we chunk into <=7-day windows and run the
+        # chunks in parallel, then merge the per-day maps. The 24h
+        # path above already fits in one window, so it's untouched.
         days = 30 if range_key == "30d" else 7
-        since_d = (now - timedelta(days=days - 1)).strftime("%Y-%m-%d")
-        until_d = now.strftime("%Y-%m-%d")
+        chunk_size = 7  # safely below CF's 8-day cap
+        chunks: list[tuple[str, str]] = []
+        end = now
+        remaining = days
+        while remaining > 0:
+            span = min(chunk_size, remaining)
+            start = end - timedelta(days=span - 1)
+            chunks.append((start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")))
+            end = start - timedelta(days=1)
+            remaining -= span
+
         query = """
         query CfVisitsDaily($zoneTag: String!, $since: Date!, $until: Date!) {
           viewer {
@@ -502,8 +524,36 @@ async def _fetch_visits_series(zone_id: str, range_key: str) -> Optional[dict]:
           }
         }
         """
-        variables = {"zoneTag": zone_id, "since": since_d, "until": until_d}
+        results = await asyncio.gather(*[
+            _graphql_query(query, {"zoneTag": zone_id, "since": s, "until": u})
+            for (s, u) in chunks
+        ])
+        # If every chunk failed we have no usable data; otherwise merge
+        # whatever chunks succeeded so a single bad window doesn't
+        # blank out the whole 30-day tile.
+        if not any(results):
+            return None
+        out: dict = {}
+        try:
+            for data in results:
+                if not data:
+                    continue
+                zones = data.get("viewer", {}).get("zones", []) or []
+                if not zones:
+                    continue
+                rows = zones[0].get("series", []) or []
+                for row in rows:
+                    dims = row.get("dimensions", {}) or {}
+                    ts = dims.get("date") or ""
+                    v = int((row.get("sum", {}) or {}).get("visits", 0) or 0)
+                    if ts:
+                        out[ts] = v
+            return out
+        except Exception as e:
+            logger.debug(f"CF visits-series parsing failed: {e}")
+            return None
 
+    # 24h path (unchanged single-shot adaptive-groups fetch).
     data = await _graphql_query(query, variables)
     if not data:
         return None
@@ -662,6 +712,27 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
                 "uniques": uniques,
                 "visits": visits_count,
             })
+        # Per-bucket visits coverage: how many days actually returned a
+        # number from `_fetch_visits_series` vs. how many we asked for.
+        # On most CF plans `httpRequestsAdaptiveGroups` is capped at an
+        # 8-day retention window, so a 30-day request comes back with
+        # only the most recent ~7-8 days of `visits` populated. Without
+        # this signal the UI would proudly display 132 899 sessions
+        # under a "Previous 30 days" headline that's actually only 7
+        # days of data — a 4x under-count by definition.
+        if _safe_range == "24h":
+            requested_buckets = 24
+        elif _safe_range == "30d":
+            requested_buckets = 30
+        else:
+            requested_buckets = 7
+        returned_buckets = sum(1 for b in series if b.get("visits") is not None)
+        totals["visits_coverage"] = {
+            "requested_buckets": requested_buckets,
+            "returned_buckets": returned_buckets,
+            "complete": returned_buckets >= requested_buckets,
+            "bucket_unit": bucket,
+        }
         return {
             "range": _safe_range,
             "bucket": bucket,
