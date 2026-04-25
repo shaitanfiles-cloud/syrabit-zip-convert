@@ -394,6 +394,28 @@ const cssRoutesToCheck = [
   { route: "/library", file: "library/index.html" },
   { route: "/browser", file: "browser/index.html" },
 ];
+
+// Soft + hard budgets for per-route inline critical CSS (sum of every
+// non-data-inline-css <style> body in <head>). The 14 KB target comes
+// from the Task #856 spec; today's measured worst case is ~16 KB on
+// the marketing-shell SPA fallbacks (/about, /pricing, /login,
+// /signup) where Beasties picks up shared header/hero/CTA selectors.
+// A WARN at 18 KB gives us headroom + visibility before silent growth
+// becomes a real LCP regression; a hard FAIL at 30 KB catches the
+// "Beasties stopped pruning entirely" case.
+const INLINE_CSS_SOFT_KB = 18;
+const INLINE_CSS_HARD_KB = 30;
+// Match <style …> blocks but exclude the legacy
+// <style data-inline-css="…"> wrapper that prerender-{library,routes}
+// emits and the inliner un-wraps before Beasties.
+const INLINE_STYLE_RE =
+  /<style(?![^>]*\bdata-inline-css\b)[^>]*>([\s\S]*?)<\/style>/g;
+function measureInlineCssKB(html) {
+  let total = 0;
+  for (const m of html.matchAll(INLINE_STYLE_RE)) total += m[1].length;
+  return total / 1024;
+}
+
 let cssChecked = 0;
 for (const { route, file } of cssRoutesToCheck) {
   const page = byRel.get(file);
@@ -407,10 +429,26 @@ for (const { route, file } of cssRoutesToCheck) {
     );
     continue;
   }
+  const kb = measureInlineCssKB(page.body);
+  if (kb > INLINE_CSS_HARD_KB) {
+    fail(
+      `${route}: inline critical CSS is ${kb.toFixed(1)} KB which exceeds the ` +
+        `${INLINE_CSS_HARD_KB} KB hard budget — Beasties may have stopped pruning. ` +
+        `Investigate scripts/inline-critical-css.mjs before shipping.`,
+    );
+    continue;
+  }
+  if (kb > INLINE_CSS_SOFT_KB) {
+    warn(
+      `${route}: inline critical CSS is ${kb.toFixed(1)} KB (soft budget ` +
+        `${INLINE_CSS_SOFT_KB} KB) — review whether Beasties is over-inlining.`,
+    );
+  }
   cssChecked++;
 }
 console.log(
-  `[verify-all] critical-css gate: checked ${cssChecked} route(s)`,
+  `[verify-all] critical-css gate: checked ${cssChecked} route(s) ` +
+    `(soft budget ${INLINE_CSS_SOFT_KB} KB, hard ${INLINE_CSS_HARD_KB} KB)`,
 );
 
 // ── Print warnings + decide outcome ─────────────────────────────────

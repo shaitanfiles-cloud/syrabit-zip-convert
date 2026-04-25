@@ -107,6 +107,21 @@ function unwrapInlinedStylesheet(html) {
   });
 }
 
+// Stale dist/ files from an earlier (pre-idempotent) run of this
+// script can have multiple stacked Beasties critical-CSS extracts +
+// duplicated preload+swap links pointing at the same bundle. Detect
+// that shape so we can clean them up below. Today's idempotency check
+// (htmlWithoutNoscript + INLINE_CSS_RE) prevents *new* duplication,
+// but it won't repair files that were already stacked.
+const PRELOAD_DUP_RE =
+  /<link[^>]*rel=["']alternate stylesheet preload["'][^>]*\/assets\/index-[A-Za-z0-9_-]+\.css/g;
+function countPreloadLinks(html) {
+  PRELOAD_DUP_RE.lastIndex = 0;
+  let n = 0;
+  while (PRELOAD_DUP_RE.exec(html)) n++;
+  return n;
+}
+
 function shouldProcess(htmlPath) {
   const name = path.basename(htmlPath);
   if (SKIP_NAMES.has(name)) return false;
@@ -119,7 +134,65 @@ function shouldProcess(htmlPath) {
     INLINE_CSS_RE.lastIndex = 0;
     return true;
   }
+  // Cleanup pass for stale stacked output from earlier runs.
+  if (countPreloadLinks(html) > 1) return true;
   return false;
+}
+
+// Collapse duplicate stacked output from earlier (pre-idempotent)
+// inliner runs. Keeps:
+//   * the FIRST <link rel="alternate stylesheet preload" …> only
+//   * one <noscript><link rel="stylesheet" …></noscript> fallback
+// Drops every other preload+swap copy and returns the cleaned HTML.
+// We deliberately do not touch the inlined critical-CSS <style>
+// blocks here — Beasties.process() below will re-emit a single
+// canonical extract once we restore a single <link> input. This keeps
+// the dedup logic small and avoids guessing which of the stacked
+// <style> blocks is the "right" one.
+function dedupeStaleOutput(html) {
+  if (countPreloadLinks(html) <= 1) return html;
+  let firstSeen = false;
+  let out = html.replace(PRELOAD_DUP_RE, (match) => {
+    if (!firstSeen) {
+      firstSeen = true;
+      // Convert the kept preload link back into a plain
+      // <link rel="stylesheet" …> so Beasties below treats it as
+      // input to extract from (and re-emits a single fresh
+      // preload+swap pair). Strip the onload attribute to be safe.
+      return match
+        .replace(/rel=["']alternate stylesheet preload["']/, 'rel="stylesheet"')
+        .replace(/\s+onload=("[^"]*"|'[^']*')/, "")
+        .replace(/\s+as=("style"|'style')/, "")
+        .replace(/\s+title=("[^"]*"|'[^']*')/, "");
+    }
+    return ""; // drop every duplicate
+  });
+  // Drop duplicate <noscript> fallback links pointing at the same
+  // bundle — Beasties will re-emit a fresh one.
+  const NOSCRIPT_LINK_RE =
+    /<noscript>\s*<link[^>]+rel=["']stylesheet["'][^>]+\/assets\/index-[A-Za-z0-9_-]+\.css[^>]*>\s*<\/noscript>/g;
+  out = out.replace(NOSCRIPT_LINK_RE, "");
+  // Drop every existing Beasties-emitted critical-CSS <style> block
+  // (anything that doesn't carry the data-inline-css attribute and
+  // sits in <head>). Beasties below will re-extract a single canonical
+  // critical CSS block on the cleaned input.
+  const STALE_STYLE_RE =
+    /<style(?![^>]*\bdata-inline-css\b)(?![^>]*\bdata-keep\b)[^>]*>[\s\S]*?<\/style>/g;
+  // Only operate on <head>. Body-level <style> would be unusual but
+  // we still want to leave it alone.
+  const headEnd = out.indexOf("</head>");
+  if (headEnd > 0) {
+    const head = out.slice(0, headEnd);
+    const body = out.slice(headEnd);
+    // Preserve the small SHELL/Emergent inline blocks (≤ 2 KB each) —
+    // those are the hand-authored ones, not Beasties output.
+    const cleanedHead = head.replace(STALE_STYLE_RE, (m, ..._rest) => {
+      const inner = m.replace(/<\/?style[^>]*>/g, "");
+      return inner.length > 4096 ? "" : m;
+    });
+    out = cleanedHead + body;
+  }
+  return out;
 }
 
 const beasties = new Beasties({
@@ -148,10 +221,14 @@ for (const htmlPath of htmls) {
     continue;
   }
   const original = fs.readFileSync(htmlPath, "utf-8");
-  // Restore the canonical <link> shape on prerendered routes so
-  // Beasties can extract their critical subset and defer the rest
+  // Step 1: clean up any stale stacked output from earlier
+  // (pre-idempotent) inliner runs. After this, the file has at most
+  // one preload+swap link and the small hand-authored inline blocks.
+  const deduped = dedupeStaleOutput(original);
+  // Step 2: restore the canonical <link> shape on prerendered routes
+  // so Beasties can extract their critical subset and defer the rest
   // (otherwise they'd ship the full ~141 KB sheet inline forever).
-  const beastiesInput = unwrapInlinedStylesheet(original);
+  const beastiesInput = unwrapInlinedStylesheet(deduped);
   try {
     const transformed = await beasties.process(beastiesInput);
     if (typeof transformed === "string" && transformed.length > 0) {
