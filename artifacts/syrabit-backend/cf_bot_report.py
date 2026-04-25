@@ -451,6 +451,186 @@ def _iso_week_for(dt: datetime) -> str:
     return f"{iso_year}-W{iso_week:02d}"
 
 
+# ── Admin AI Crawl Control summary ───────────────────────────────────────────
+# CF's "AI Crawl Control" dashboard categorises verified bots into AI-training
+# /answer crawlers vs traditional search-index crawlers. We mirror that split
+# locally using the canonical names from `_UA_PATTERNS` so the admin panel can
+# show the same headline numbers (top crawlers, AI vs search totals, daily
+# series) that the CF dashboard shows — sourced from the same dataset
+# (`httpRequestsAdaptiveGroups` filtered to verified bots).
+_AI_BOT_NAMES: frozenset[str] = frozenset({
+    "OAI-SearchBot", "ChatGPT-User", "GPTBot",
+    "PerplexityBot", "Perplexity-User",
+    "ClaudeBot", "Claude-Web", "Anthropic-AI",
+    "Meta-ExternalAgent",
+    "Bytespider", "CCBot", "Amazonbot", "YouBot", "Cohere-AI", "Diffbot",
+    # Both of these are AI-training opt-out crawlers operated by Google/Apple
+    # respectively — CF files them under the "AI Crawler" verifiedBotCategory.
+    "Google-Extended", "Applebot-Extended",
+})
+
+
+def is_ai_bot(name: str) -> bool:
+    """True when ``name`` (a canonical bot name from ``_classify_ua``) is an
+    AI-training/answer crawler rather than a traditional search-index
+    crawler. The list mirrors Cloudflare's "AI Crawler" verifiedBotCategory
+    so the admin AI Crawl Control card can split totals the same way CF's
+    own dashboard does."""
+    return name in _AI_BOT_NAMES
+
+
+async def _fetch_per_ua_daily_series(zone_id: str, since_iso: str,
+                                     until_iso: str,
+                                     limit: int = 1000) -> Optional[list[dict]]:
+    """Daily request series grouped by ``(date, userAgent)`` for verified
+    bots only. Used by the admin AI Crawl Control card to render the
+    Cloudflare-style stacked time-series. Returns the raw GraphQL bucket
+    list, or None on credential/upstream failure (caller treats that as
+    "no series available" and renders the per-bot summary alone)."""
+    query = """
+    query PerUaBotsDaily($zoneTag: String!, $since: String!, $until: String!, $limit: Int!) {
+      viewer {
+        zones(filter: { zoneTag: $zoneTag }) {
+          httpRequestsAdaptiveGroups(
+            filter: {
+              datetime_geq: $since
+              datetime_leq: $until
+              verifiedBotCategory_neq: ""
+            }
+            limit: $limit
+            orderBy: [date_ASC]
+          ) {
+            count
+            dimensions {
+              date
+              userAgent
+            }
+          }
+        }
+      }
+    }
+    """
+    data = await _graphql_query(query, {
+        "zoneTag": zone_id,
+        "since": since_iso,
+        "until": until_iso,
+        "limit": limit,
+    })
+    if not data:
+        return None
+    try:
+        zones = data.get("viewer", {}).get("zones", [])
+        if not zones:
+            return []
+        return zones[0].get("httpRequestsAdaptiveGroups", []) or []
+    except Exception as exc:
+        logger.warning(f"CF per-UA daily parse failed: {exc}")
+        return None
+
+
+def aggregate_daily_series(buckets: list[dict], top_n: int = 5) -> dict:
+    """Roll daily-by-UA buckets into a chart-ready dict. Top-N bots get
+    their own keyed series; everything else is collapsed under ``"Other"``
+    so the legend stays readable.
+
+    Returns:
+      ``{"top_bots": ["Googlebot", "Meta-ExternalAgent", ...],
+         "rows": [{"date": "2026-04-19", "Googlebot": 240, "Other": 3}, ...]}``
+    """
+    per_bot_total: dict[str, int] = {}
+    classified: list[tuple[str, str, int]] = []  # (date, name, count)
+    for b in buckets or []:
+        dims = b.get("dimensions") or {}
+        date = dims.get("date") or ""
+        ua = dims.get("userAgent") or ""
+        cnt = int(b.get("count") or 0)
+        name = _classify_ua(ua)
+        if not name or not date:
+            continue
+        per_bot_total[name] = per_bot_total.get(name, 0) + cnt
+        classified.append((date, name, cnt))
+
+    top_names = [n for n, _ in sorted(per_bot_total.items(),
+                                      key=lambda kv: -kv[1])[:top_n]]
+    top_set = set(top_names)
+    rows: dict[str, dict] = {}
+    for date, name, cnt in classified:
+        row = rows.setdefault(date, {"date": date})
+        key = name if name in top_set else "Other"
+        row[key] = row.get(key, 0) + cnt
+    series = sorted(rows.values(), key=lambda r: r["date"])
+    return {"top_bots": top_names, "rows": series}
+
+
+async def fetch_admin_summary(days: int = 7) -> Optional[dict]:
+    """Admin-API shaped summary of Cloudflare's verified-bot data — the
+    same dataset Cloudflare's *AI Crawl Control* dashboard reads, sourced
+    from CF GraphQL ``httpRequestsAdaptiveGroups`` filtered to
+    ``verifiedBotCategory_neq: ""`` (which covers both "Search Engine
+    Crawler" and "AI Crawler" buckets).
+
+    Splits results into AI vs search-engine crawlers using ``is_ai_bot``
+    so the admin card can show the AI-bot headline counts CF emphasises.
+
+    Returns ``None`` when CF analytics credentials are missing or the
+    upstream call fails — admin route then renders a clear empty-state
+    instead of a 500."""
+    if not is_configured():
+        return None
+    cfg = _cfg()
+    zone_id = cfg["zone_id"]
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=days)
+    since_iso = start.strftime("%Y-%m-%dT%H:%M:%SZ")
+    until_iso = end.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    buckets = await _fetch_per_ua_buckets(zone_id, since_iso, until_iso)
+    if buckets is None:
+        return None
+    agg = aggregate_per_ua(buckets)
+
+    # Daily series is best-effort — if it fails we still return the per-bot
+    # summary so the card renders at least the totals + bar list.
+    daily_buckets = await _fetch_per_ua_daily_series(zone_id, since_iso, until_iso)
+    daily_summary = aggregate_daily_series(daily_buckets or [], top_n=5)
+
+    per_bot_list: list[dict] = []
+    ai_requests = ai_bots_count = 0
+    search_requests = search_bots_count = 0
+    for name, bot in agg.get("per_bot", {}).items():
+        cat = "ai" if is_ai_bot(name) else "search"
+        per_bot_list.append({
+            "name": name,
+            "requests": bot["requests"],
+            "bytes": bot["bytes"],
+            "category": cat,
+            "hit_pct": bot.get("hit_pct", 0.0),
+            "error_rate": bot.get("error_rate", 0.0),
+        })
+        if cat == "ai":
+            ai_requests += bot["requests"]
+            if bot["requests"] > 0:
+                ai_bots_count += 1
+        else:
+            search_requests += bot["requests"]
+            if bot["requests"] > 0:
+                search_bots_count += 1
+    per_bot_list.sort(key=lambda b: -b["requests"])
+
+    return {
+        "totals": agg.get("totals", {"requests": 0, "bytes": 0, "bots": 0}),
+        "ai_totals": {"requests": ai_requests, "bots": ai_bots_count},
+        "search_totals": {"requests": search_requests, "bots": search_bots_count},
+        "per_bot": per_bot_list,
+        "daily_series": daily_summary,
+        "since": since_iso,
+        "until": until_iso,
+        "zone_id": zone_id,
+        "period_days": days,
+        "source": "cloudflare",
+    }
+
+
 async def generate_per_ua_report(*, days: int = 7,
                                   prior: Optional[dict] = None,
                                   now: Optional[datetime] = None,

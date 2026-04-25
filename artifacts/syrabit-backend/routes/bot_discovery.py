@@ -5716,3 +5716,40 @@ async def admin_bing_submit_stats(
         "quota": quota,
         "days": rows[:days],
     }
+
+
+@router.get("/admin/analytics/cf-ai-crawl-control")
+async def admin_cf_ai_crawl_control(
+    days: int = Query(7, ge=1, le=30),
+    admin: dict = Depends(get_admin_user),
+):
+    """Mirror of Cloudflare's AI Crawl Control dashboard for the admin
+    panel. Sourced from CF GraphQL httpRequestsAdaptiveGroups filtered
+    to verified bots — the same dataset CF's own dashboard reads.
+
+    Returns ``available: false`` with a clear reason when CF analytics
+    credentials are missing or the upstream call fails so the UI can
+    render an empty-state card instead of a 5xx."""
+    try:
+        from cf_bot_report import fetch_admin_summary
+        summary = await fetch_admin_summary(days=days)
+    except Exception as exc:
+        logger.warning(f"cf-ai-crawl-control fetch failed: {exc}")
+        summary = None
+
+    if summary is None:
+        return {
+            "available": False,
+            "reason": (
+                "Cloudflare analytics not configured or unreachable. "
+                "Set CLOUDFLARE_ANALYTICS_TOKEN with Account Analytics:Read "
+                "and Zone Analytics:Read scopes to enable this card."
+            ),
+            "period_days": days,
+            "totals": {"requests": 0, "bytes": 0, "bots": 0},
+            "ai_totals": {"requests": 0, "bots": 0},
+            "search_totals": {"requests": 0, "bots": 0},
+            "per_bot": [],
+            "daily_series": {"top_bots": [], "rows": []},
+        }
+    return {"available": True, **summary}

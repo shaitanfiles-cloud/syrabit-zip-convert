@@ -296,6 +296,11 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
   const [coverage, setCoverage] = useState(null);
   const [pwaStats, setPwaStats] = useState(null);
   const [botAnalytics, setBotAnalytics] = useState(null);
+  // Cloudflare AI Crawl Control — sourced from CF GraphQL via the
+  // /admin/analytics/cf-ai-crawl-control route. When CF analytics
+  // credentials are missing the route returns `available: false` with a
+  // reason so we render an empty-state card instead of hiding the section.
+  const [cfCrawlControl, setCfCrawlControl] = useState(null);
   // Cloudflare Account Analytics overview — re-fetched whenever the
   // user clicks 24h / 7d / 30d on the Traffic card. Independent of the
   // dashboard payload so the selector responds instantly without
@@ -637,7 +642,7 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       const [
         dashRes, metricsRes,
         ragAccRes, fallbackRes, vectorRes, latencyRes,
-        queriesRes, tokenRes, funnelRes, coverageRes, pwaRes, botRes, indexNowRes, indexNowHistRes,
+        queriesRes, tokenRes, funnelRes, coverageRes, pwaRes, botRes, cfCrawlRes, indexNowRes, indexNowHistRes,
         alertHistRes, seoHealthRes,
       ] = await Promise.allSettled([
         adminGetDashboard(adminToken),
@@ -652,6 +657,7 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
         axios.get(`${API_BASE}/admin/content/coverage`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/pwa/stats`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/analytics/bot-traffic?days=30`, adminHdr(adminToken)),
+        axios.get(`${API_BASE}/admin/analytics/cf-ai-crawl-control?days=7`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/indexnow/stats`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/indexnow/history?limit=20`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/alerts?limit=50${showSyntheticAlerts ? '&include_synthetic=true' : ''}`, adminHdr(adminToken)),
@@ -670,6 +676,7 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       if (coverageRes.status === 'fulfilled') setCoverage(coverageRes.value.data); else { failed.push('coverage'); setCoverage(null); }
       if (pwaRes.status === 'fulfilled') setPwaStats(pwaRes.value.data); else { failed.push('pwa'); setPwaStats(null); }
       if (botRes.status === 'fulfilled') setBotAnalytics(botRes.value.data); else { failed.push('bot-analytics'); setBotAnalytics(null); }
+      if (cfCrawlRes.status === 'fulfilled') setCfCrawlControl(cfCrawlRes.value.data); else { failed.push('cf-ai-crawl-control'); setCfCrawlControl(null); }
       if (indexNowRes.status === 'fulfilled') setIndexNowStats(indexNowRes.value.data); else { failed.push('indexnow'); setIndexNowStats(null); }
       if (indexNowHistRes.status === 'fulfilled') setIndexNowHistory(indexNowHistRes.value.data); else setIndexNowHistory(null);
       if (alertHistRes.status === 'fulfilled') setAlertHistory(alertHistRes.value.data); else { failed.push('alerts'); setAlertHistory(null); }
@@ -1412,6 +1419,151 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                 ))}
               </div>
             </div>
+          )}
+        </GlassCard>
+      )}
+      </SectionErrorBoundary>
+
+      <SectionErrorBoundary name="CF AI Crawl Control">
+      {cfCrawlControl && (
+        <GlassCard className="p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <ShieldCheck size={16} className="text-orange-500" />
+            <h3 className="text-gray-700 font-semibold">Cloudflare AI Crawl Control</h3>
+            <div className="ml-auto flex items-center gap-2">
+              {cfCrawlControl.available ? (
+                <span className="text-[10px] text-gray-400">{cfCrawlControl.period_days}-day window</span>
+              ) : (
+                <span className="text-[10px] px-2 py-0.5 rounded-md text-amber-700 bg-amber-50 border border-amber-200">
+                  CF analytics unavailable
+                </span>
+              )}
+            </div>
+          </div>
+
+          {!cfCrawlControl.available && (
+            <div className="rounded-lg p-3 bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-start gap-2">
+              <AlertTriangle size={13} className="mt-0.5 flex-shrink-0" />
+              <span>{cfCrawlControl.reason || 'Cloudflare GraphQL API did not return verified-bot data.'}</span>
+            </div>
+          )}
+
+          {cfCrawlControl.available && (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                <div className="rounded-lg p-3 bg-orange-50 border border-orange-200 text-center">
+                  <p className="text-orange-700 font-bold text-lg">
+                    {(cfCrawlControl.totals?.requests ?? 0).toLocaleString()}
+                  </p>
+                  <p className="text-[10px] text-gray-500">Verified bot requests</p>
+                </div>
+                <div className="rounded-lg p-3 bg-violet-50 border border-violet-200 text-center">
+                  <p className="text-violet-700 font-bold text-lg">
+                    {(cfCrawlControl.ai_totals?.requests ?? 0).toLocaleString()}
+                  </p>
+                  <p className="text-[10px] text-gray-500">
+                    AI crawler hits ({cfCrawlControl.ai_totals?.bots ?? 0} bots)
+                  </p>
+                </div>
+                <div className="rounded-lg p-3 bg-blue-50 border border-blue-200 text-center">
+                  <p className="text-blue-700 font-bold text-lg">
+                    {(cfCrawlControl.search_totals?.requests ?? 0).toLocaleString()}
+                  </p>
+                  <p className="text-[10px] text-gray-500">
+                    Search-engine hits ({cfCrawlControl.search_totals?.bots ?? 0} bots)
+                  </p>
+                </div>
+                <div className="rounded-lg p-3 bg-gray-50 border border-gray-200 text-center">
+                  <p className="text-gray-700 font-bold text-lg">{cfCrawlControl.totals?.bots ?? 0}</p>
+                  <p className="text-[10px] text-gray-500">Distinct crawlers</p>
+                </div>
+              </div>
+
+              {cfCrawlControl.daily_series?.rows?.length > 0 && (
+                <div className="mt-4">
+                  <div className="text-[10px] text-gray-400 font-semibold mb-2 uppercase tracking-wider">
+                    Requests over time (top {cfCrawlControl.daily_series.top_bots.length} crawlers, stacked)
+                  </div>
+                  <div style={{ width: '100%', height: 220 }}>
+                    <ResponsiveContainer>
+                      <BarChart
+                        data={cfCrawlControl.daily_series.rows.slice(-14)}
+                        margin={{ top: 5, right: 5, left: -15, bottom: 0 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                        <XAxis dataKey="date" tick={{ fontSize: 9 }} tickFormatter={v => v.slice(5)} />
+                        <YAxis tick={{ fontSize: 9 }} />
+                        <Tooltip contentStyle={{ fontSize: 11 }} labelFormatter={v => `Date: ${v}`} />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        {cfCrawlControl.daily_series.top_bots.map((name, i) => {
+                          const palette = ['#f59e0b', '#a855f7', '#3b82f6', '#10b981', '#ef4444'];
+                          return (
+                            <Bar
+                              key={name}
+                              dataKey={name}
+                              stackId="bots"
+                              fill={palette[i % palette.length]}
+                              radius={i === cfCrawlControl.daily_series.top_bots.length - 1 ? [2, 2, 0, 0] : [0, 0, 0, 0]}
+                            />
+                          );
+                        })}
+                        <Bar dataKey="Other" stackId="bots" fill="#9ca3af" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+
+              {cfCrawlControl.per_bot?.length > 0 && (
+                <div className="mt-4">
+                  <div className="text-[10px] text-gray-400 font-semibold mb-2 uppercase tracking-wider">
+                    Top crawlers (verified by Cloudflare)
+                  </div>
+                  <div className="space-y-1.5">
+                    {cfCrawlControl.per_bot.slice(0, 12).map((b, i) => {
+                      const maxReq = cfCrawlControl.per_bot[0]?.requests || 1;
+                      const pct = Math.round((b.requests / maxReq) * 100);
+                      const isAi = b.category === 'ai';
+                      return (
+                        <div key={b.name} className="flex items-center gap-2">
+                          <span className="text-[10px] text-gray-600 font-medium w-32 truncate" title={b.name}>
+                            {b.name}
+                          </span>
+                          <div className="flex-1 h-3 bg-gray-100 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${isAi ? 'bg-violet-400' : 'bg-blue-400'}`}
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                          <span className="text-[10px] text-gray-500 w-14 text-right">
+                            {b.requests.toLocaleString()}
+                          </span>
+                          <span
+                            className={`text-[9px] px-1.5 py-0.5 rounded w-10 text-center ${
+                              isAi ? 'text-violet-700 bg-violet-50' : 'text-blue-700 bg-blue-50'
+                            }`}
+                          >
+                            {isAi ? 'AI' : 'Search'}
+                          </span>
+                          <span className="text-[9px] text-gray-400 w-12 text-right">
+                            {(b.error_rate * 100).toFixed(1)}% err
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="text-[9px] text-gray-400 mt-2">
+                    Source: Cloudflare GraphQL · zone {cfCrawlControl.zone_id ? `${cfCrawlControl.zone_id.slice(0, 8)}…` : ''} · same dataset as Cloudflare's AI Crawl Control dashboard
+                  </div>
+                </div>
+              )}
+
+              {cfCrawlControl.per_bot?.length === 0 && (
+                <div className="mt-4 rounded-lg p-3 bg-gray-50 border border-gray-200 text-xs text-gray-600 text-center">
+                  No verified-bot traffic in the last {cfCrawlControl.period_days} days.
+                </div>
+              )}
+            </>
           )}
         </GlassCard>
       )}
