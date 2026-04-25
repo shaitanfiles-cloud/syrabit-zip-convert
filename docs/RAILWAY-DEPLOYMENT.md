@@ -220,6 +220,51 @@ After your Railway URL is set:
 
 ---
 
+## OpenAPI schema is suppressed in prod by design (Task #857)
+
+`/openapi.json` and `/docs` are intentionally NOT reachable from the
+public internet. Two stacked gates enforce this:
+
+1. **Backend** — `OriginSharedSecretMiddleware`
+   (`artifacts/syrabit-backend/middleware.py:79-93`) excludes
+   `/openapi.json` + `/docs` from `_ORIGIN_AUTH_OPEN_PATHS`. Hitting the
+   Railway hostname directly returns
+   `403 {"detail": "Direct origin access denied — must traverse the edge worker."}`
+   for those paths even with a real browser UA. Only `/health`,
+   `/api/health`, `/api/livez`, `/api/readyz`, and `/api/ready` are
+   open without the `X-Origin-Auth` header.
+2. **Edge** — the Cloudflare worker
+   (`workers/edge-proxy/src/index.ts`) only proxies `/api/*` paths to
+   the backend. `/openapi.json` and `/docs` fall through to
+   `PAGES_ORIGIN` and serve the SPA HTML 200, so the schema is
+   invisible from `https://api.syrabit.ai/openapi.json` too.
+
+Rationale: exposing every route shape is a low-cost reconnaissance
+vector and we have no public SDK consumer that needs the live schema.
+Internal codegen (Orval) reads from a checked-in spec, not the live
+endpoint.
+
+To temporarily expose the schema for one-off internal codegen:
+
+```bash
+# 1. Add "/openapi.json" to _ORIGIN_AUTH_OPEN_PATHS in middleware.py
+# 2. Redeploy backend:
+pnpm run railway:redeploy && pnpm run railway:status
+# 3. Pull the spec straight from the Railway origin (still gated by
+#    Railway-edge IP allowlist + Cloudflare WAF in front of it):
+curl -A 'Mozilla/5.0' \
+  https://workspacemockup-sandbox-production-df37.up.railway.app/openapi.json \
+  -o /tmp/openapi.json
+# 4. Revert the middleware change and redeploy.
+```
+
+> The audit step in `workers/edge-proxy/DEPLOY.md` that pipes
+> `https://workspacesyrabit-production-0ddc.up.railway.app/openapi.json`
+> through `python3 -c "…"` is from a previous Railway service URL and
+> a previous middleware state. Both the hostname and the open-paths
+> allowlist have changed since — that audit step no longer applies as
+> written. Use the recipe above instead.
+
 ## Railway Health Check
 
 Railway auto-detects health from your Dockerfile's HEALTHCHECK instruction.
