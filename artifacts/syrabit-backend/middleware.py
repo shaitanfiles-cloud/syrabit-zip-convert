@@ -488,6 +488,7 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
 
         user_id = None
         ip_limit = PLAN_LIMITS["free"]["req_per_min_ip"]
+        is_admin_request = False
         try:
             token = None
             auth = request.headers.get("authorization", "")
@@ -505,6 +506,21 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
                         user_plan = cached_user.get("plan", user_plan)
                 plan_cfg = PLAN_LIMITS.get(user_plan, PLAN_LIMITS["free"])
                 ip_limit = plan_cfg["req_per_min_ip"]
+                # Admin requests bypass the IP-based rate limit. The admin
+                # dashboard fan-outs (~30+ panels in parallel on first
+                # load, plus the BreakGlassBanner's /admin/diagnostics
+                # poll every 60s) routinely exceed the per-IP free-plan
+                # cap of 60/min from a single browser session, which used
+                # to 429-storm the whole UI for the first ~minute after
+                # login and silently mask break-glass-mode visibility
+                # during a real Cloudflare Access incident — the exact
+                # moment the diagnostics endpoint must remain reachable.
+                # The admin endpoints themselves are gated by
+                # ``Depends(get_admin_user)`` (which re-validates the
+                # admin role against the DB / cache), so the IP cap was
+                # never the real authorization boundary for them.
+                if payload.get("is_admin") or payload.get("role") == "admin":
+                    is_admin_request = True
         except Exception:
             pass
 
@@ -555,7 +571,7 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
                 except Exception as e:
                     logger.debug(f"spoof persist failed: {e}")
             asyncio.create_task(_bg_persist_spoof())
-        if not is_legit_bot:
+        if not is_legit_bot and not is_admin_request:
             if not check_rate_limit(f"ip:{client_ip}", max_requests=ip_limit, window_seconds=60):
                 from fastapi.responses import JSONResponse
                 _metrics.record_request(path, 429)
