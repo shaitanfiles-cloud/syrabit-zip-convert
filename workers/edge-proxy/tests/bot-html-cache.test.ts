@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createHash } from "node:crypto";
 import workerHandler, { handleBotContentRequest } from "../src/index";
 import { _resetMonitorStateForTests } from "../src/kv-monitor";
 
@@ -214,6 +215,63 @@ describe("BOT_HTML_CACHE end-to-end via worker.fetch (verifiedBot=true)", () => 
     expect(r2.headers.get("Last-Modified")).toBe(BACKEND_LM);
     expect(r2.headers.get("X-Source")).toBe("bot-cache");
     expect(await r2.text()).toBe("");
+  });
+
+  it("legacy plain-string KV entry: served with synthesized etag (sha256 prefix) and supports If-None-Match → 304", async () => {
+    const LEGACY_HTML =
+      "<html><body>legacy-bot-cache-entry-" + "y".repeat(400) + "</body></html>";
+    const expectedEtag = createHash("sha256")
+      .update(LEGACY_HTML)
+      .digest("hex")
+      .slice(0, 12);
+
+    const kv = makeExpiringKv();
+    const env = makeEnv({ botCache: kv });
+
+    // Pre-seed BOT_HTML_CACHE the way the previous worker version did:
+    // the value is a plain HTML string, not the {body,lastmod,etag} JSON
+    // wrapper that parseBotCacheEntry expects.
+    kv.store.set(`bot:content:${CONTENT_PATH}`, {
+      value: LEGACY_HTML,
+      expiresAt: null,
+    });
+
+    const cacheKey = `bot:content:${CONTENT_PATH}`;
+    const cacheWrites = () =>
+      kv.putSpy.mock.calls.filter((c) => c[0] === cacheKey).length;
+
+    const callsBefore = fetchSpy.mock.calls.length;
+    const r1 = await workerHandler.fetch(
+      botRequest(CONTENT_PATH),
+      env,
+      ctxNoop,
+    );
+    expect(r1.status).toBe(200);
+    expect(r1.headers.get("X-Source")).toBe("bot-cache");
+    expect(r1.headers.get("X-Cache")).toBe("BOT-KV-HIT");
+    expect(r1.headers.get("ETag")).toBe(`"${expectedEtag}"`);
+    expect(r1.headers.get("Last-Modified")).toBeTruthy();
+    expect(await r1.text()).toBe(LEGACY_HTML);
+
+    // Legacy hit must not trigger a backend re-render and must not rewrite
+    // the cache entry itself (kv-monitor may still write its own usage key).
+    expect(fetchSpy.mock.calls.length).toBe(callsBefore);
+    expect(cacheWrites()).toBe(0);
+
+    // Conditional GET against the synthesized etag must yield 304.
+    const r2 = await workerHandler.fetch(
+      botRequest(CONTENT_PATH, { "If-None-Match": `"${expectedEtag}"` }),
+      env,
+      ctxNoop,
+    );
+    expect(r2.status).toBe(304);
+    expect(r2.headers.get("ETag")).toBe(`"${expectedEtag}"`);
+    expect(r2.headers.get("X-Source")).toBe("bot-cache");
+    expect(await r2.text()).toBe("");
+
+    // Still no backend re-render, still no rewrite of the cache entry.
+    expect(fetchSpy.mock.calls.length).toBe(callsBefore);
+    expect(cacheWrites()).toBe(0);
   });
 
   it("non-verified Googlebot UA falls through to Pages-origin proxy without writing BOT_HTML_CACHE", async () => {
