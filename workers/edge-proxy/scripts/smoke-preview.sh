@@ -44,9 +44,13 @@ resolve_url() {
     [[ -x "$WORKER_DIR/node_modules/.bin/wrangler" ]] && \
       wrangler_bin="$WORKER_DIR/node_modules/.bin/wrangler"
     local discovered
+    # Workers hostnames can be either single-label (`<worker>.workers.dev`)
+    # on accounts using the implicit subdomain or, far more commonly,
+    # two-label (`<worker>.<account>.workers.dev`) once the account has
+    # claimed a workers.dev subdomain. Match both shapes.
     discovered=$(
       cd "$WORKER_DIR" && "$wrangler_bin" deployments list --env preview 2>/dev/null \
-        | grep -oE 'https://[a-z0-9-]+\.workers\.dev' \
+        | grep -oE 'https://[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)?\.workers\.dev' \
         | head -n1 || true
     )
     if [[ -n "$discovered" ]]; then
