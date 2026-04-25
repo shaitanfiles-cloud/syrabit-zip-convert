@@ -1483,6 +1483,34 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                               </p>
                             </div>
                           </div>
+                          {/* Total referrals — count of human visits to
+                              syrabit.ai whose Referer header was an AI
+                              assistant's chat surface owned by this
+                              operator (e.g. chatgpt.com/openai.com →
+                              "OpenAI"). Mirrors the field of the same
+                              name on Cloudflare's *AI Crawl Control →
+                              Overview* per-operator card. Sourced from
+                              db.page_views in Mongo since CF's free-tier
+                              GraphQL doesn't expose the Referer
+                              dimension. Always rendered (zero shown as
+                              0) so all tiles align vertically — the
+                              "0" itself is informative ("we know this
+                              operator's crawler hit us, but no one
+                              clicked through from their chat surface
+                              yet") and matches CF's own UI which also
+                              shows 0 rather than hiding the row. */}
+                          <div className="mt-1 pt-1 border-t border-gray-100">
+                            <div className="flex items-baseline justify-between gap-2">
+                              <p className="text-[9px] text-gray-400 leading-none">
+                                Total referrals
+                              </p>
+                              <p className={`font-semibold text-xs leading-tight ${
+                                (op.referrals || 0) > 0 ? 'text-violet-700' : 'text-gray-400'
+                              }`}>
+                                {(op.referrals || 0).toLocaleString()}
+                              </p>
+                            </div>
+                          </div>
                         </div>
                       );
                     })}

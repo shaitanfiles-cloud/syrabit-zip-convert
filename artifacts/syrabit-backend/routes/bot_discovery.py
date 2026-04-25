@@ -5732,10 +5732,20 @@ async def admin_cf_ai_crawl_control(
     render an empty-state card instead of a 5xx."""
     try:
         from cf_bot_report import fetch_admin_summary
-        summary = await fetch_admin_summary(days=days)
+        from analytics_helpers import get_ai_referrals_by_operator
+        # Run the CF crawler aggregation and the Mongo-backed referral
+        # tally in parallel — they hit independent backends and the
+        # referral lookup is the slower of the two (one $regex per AI
+        # operator host pattern), so serialising would visibly hurt
+        # the dashboard's first-paint time.
+        summary, ai_refs_by_op = await asyncio.gather(
+            fetch_admin_summary(days=days),
+            get_ai_referrals_by_operator(days=days),
+        )
     except Exception as exc:
         logger.warning(f"cf-ai-crawl-control fetch failed: {exc}")
         summary = None
+        ai_refs_by_op = {}
 
     if summary is None:
         return {
@@ -5754,5 +5764,47 @@ async def admin_cf_ai_crawl_control(
             "per_bot": [],
             "per_operator": [],
             "daily_series": {"top_bots": [], "rows": []},
+            "ai_referrals_total": 0,
         }
+
+    # Enrich each per-operator tile with its AI-assistant referral
+    # count, mirroring CF's *AI Crawl Control → Overview* "Total
+    # referrals" field. Operators with no AI referrals in the window
+    # get 0 (rather than missing) so the frontend can render the row
+    # uniformly across all tiles. Any AI-referrer operator that
+    # doesn't appear in the CF crawler list (e.g. xAI/Grok, which
+    # has chat surfaces but no verified crawler in CF's list yet)
+    # gets appended as a synthetic tile so the referral isn't
+    # silently dropped — same fallback CF uses for "Other".
+    per_operator = summary.get("per_operator") or []
+    seen_ops = {op.get("operator") for op in per_operator}
+    for op in per_operator:
+        op["referrals"] = int(ai_refs_by_op.get(op.get("operator"), 0))
+    for op_name, refs in ai_refs_by_op.items():
+        if op_name in seen_ops or not refs:
+            continue
+        per_operator.append({
+            "operator": op_name,
+            "allowed": 0,
+            "unsuccessful": 0,
+            "requests": 0,
+            "bots": [],
+            "category": "ai",
+            "referrals": int(refs),
+        })
+    # Re-apply the operator ordering that ``aggregate_per_operator``
+    # established (allowed-desc, then requests-desc, then operator name
+    # for deterministic tie-break) so the synthetic referral-only tiles
+    # we just appended slot in next to their CF-crawler peers — and the
+    # busiest tile still renders first, matching CF's overview layout.
+    # Without this, a Grok/xAI synthetic tile (allowed=0) would always
+    # land at the end of the array even when it has more referrals
+    # than the lowest-volume CF crawler tile.
+    per_operator.sort(
+        key=lambda t: (-int(t.get("allowed") or 0),
+                       -int(t.get("requests") or 0),
+                       t.get("operator") or "")
+    )
+    summary["per_operator"] = per_operator
+    summary["ai_referrals_total"] = sum(int(v) for v in ai_refs_by_op.values())
     return {"available": True, **summary}

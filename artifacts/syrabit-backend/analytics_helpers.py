@@ -100,6 +100,134 @@ from deps import is_mongo_available
 from db_ops import supa_list_users, supa_get_all_conversations
 
 
+# ── AI-provider referral hostname → CF operator-tile name ────────────────
+# Cloudflare's *AI Crawl Control → Overview* tab shows a "Total
+# referrals" number on each operator card: the count of human visits to
+# the site that arrived with a Referer header pointing back to that AI
+# assistant (e.g. someone clicked a citation in a ChatGPT answer and
+# landed on syrabit.ai). CF's free-tier GraphQL doesn't expose the
+# Referer dimension, but we already capture it in ``db.page_views``,
+# so this helper reproduces the same per-operator referral tally from
+# Mongo. The hostname patterns below cover the user-facing chat /
+# search surfaces of every AI operator that also has a crawler in
+# ``cf_bot_report._OPERATOR_MAP``, so the operator tile colouring
+# (which side of the AI/Search divide a card lands on) and the
+# referral attribution agree on which company owns each click.
+#
+# Each entry is ``(hostname-suffix-pattern, operator-tile-name)``.
+# Suffix matching keeps it robust to subdomains (e.g. ``chat.openai.com``
+# and ``openai.com`` both map to "OpenAI"; ``gemini.google.com`` and
+# ``aistudio.google.com`` both map to "Google"). Order matters only
+# for overlap cases (Microsoft's copilot.microsoft.com is matched
+# before bing.com to avoid swallowing Bing search referrals which
+# belong on the Microsoft tile already).
+_AI_REFERRER_HOSTS: list[tuple[str, str]] = [
+    # OpenAI surfaces — ChatGPT web app + branded variants.
+    ("chatgpt.com", "OpenAI"),
+    ("chat.openai.com", "OpenAI"),
+    ("openai.com", "OpenAI"),
+    # Anthropic — Claude consumer chat.
+    ("claude.ai", "Anthropic"),
+    ("anthropic.com", "Anthropic"),
+    # Google — Gemini consumer + AI Studio + legacy Bard.
+    ("gemini.google.com", "Google"),
+    ("aistudio.google.com", "Google"),
+    ("bard.google.com", "Google"),
+    # Microsoft — Copilot chat + Bing chat (latter still uses bing.com).
+    ("copilot.microsoft.com", "Microsoft"),
+    ("bing.com/chat", "Microsoft"),
+    # Perplexity AI search.
+    ("perplexity.ai", "Perplexity"),
+    # Meta — Llama-powered consumer chat.
+    ("meta.ai", "Meta"),
+    # You.com — AI search.
+    ("you.com", "You.com"),
+    # xAI Grok consumer chat (no entry in CF operator map yet, so it
+    # rolls into the synthetic "Other" tile via the same fallback CF
+    # uses for unmapped crawlers — keeps the totals honest).
+    ("grok.com", "xAI"),
+    ("x.ai", "xAI"),
+]
+
+
+async def get_ai_referrals_by_operator(days: int = 7) -> dict[str, int]:
+    """Per-operator AI-assistant referral count from ``db.page_views``.
+
+    Mirrors Cloudflare's *AI Crawl Control → Overview* "Total referrals"
+    metric (see ``_AI_REFERRER_HOSTS`` above for what counts as an AI
+    referrer and the mapping back to operator tiles). Used by
+    ``/admin/analytics/cf-ai-crawl-control`` to enrich each
+    ``per_operator`` entry with a ``referrals`` field so the admin card
+    matches CF's own per-operator card layout.
+
+    Counts distinct visitors per operator over the window, so a single
+    ChatGPT visitor browsing 5 pages still counts as 1 referral —
+    matches CF's "Total referrals" semantics on the Overview tab.
+
+    Two correctness traps the implementation has to avoid:
+
+    * **Overlapping host patterns.** ``chat.openai.com`` and the
+      broader ``openai.com`` would both match a referrer like
+      ``https://chat.openai.com/share/abc`` because the regex allows
+      a subdomain prefix. Naively summing per-pattern ``distinct``
+      counts would double-count that visitor toward OpenAI. We solve
+      it by accumulating visitor_ids into a per-operator ``set`` and
+      counting set-cardinality at the end — guarantees each visitor
+      contributes ≤1 to each operator regardless of how many host
+      patterns they match.
+
+    * **Querystring/fragment after host.** A referrer such as
+      ``https://www.bing.com/chat?source=...`` must still be
+      classified, so the trailing boundary is ``[/:?#]`` (or end of
+      string) rather than just ``/`` — otherwise Microsoft (and any
+      other operator with a path-prefixed host pattern) would be
+      undercounted whenever the AI provider appends UTM/source
+      tracking params on outbound links.
+
+    Returns a dict ``{operator_name: int}`` with only operators that
+    have ≥1 referral over the window present. Callers should treat
+    missing keys as 0. Returns ``{}`` on any failure or when Mongo is
+    unavailable so the caller can blindly merge without null checks.
+    """
+    out: dict[str, int] = {}
+    if not await is_mongo_available():
+        return out
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        # Per-operator visitor sets (deduped across overlapping host
+        # patterns — see the docstring's "overlapping host patterns"
+        # trap). Sets at write time also keep memory bounded vs.
+        # accumulating raw counts and trying to subtract overlap
+        # later, which would require knowing which patterns overlap.
+        per_op_visitors: dict[str, set] = {}
+        for host_pat, operator in _AI_REFERRER_HOSTS:
+            escaped = host_pat.replace(".", r"\.").replace("/", r"/")
+            # Match bare host (https://chatgpt.com/…) or any subdomain
+            # of it (https://chat.openai.com → openai.com), with a
+            # boundary that admits path / port / query / fragment so
+            # tracking-tagged outbound links from AI surfaces still
+            # classify (e.g. https://www.bing.com/chat?ref=copilot).
+            # The boundary anchor also prevents lookalike-domain
+            # hits like https://openai.com.fake.example.org/.
+            host_regex = rf"^https?://(?:[^/]*\.)?{escaped}(?:[/:?#]|$)"
+            visitors = await db.page_views.distinct(
+                "visitor_id",
+                {
+                    "date": {"$gte": cutoff},
+                    "referrer": {"$regex": host_regex, "$options": "i"},
+                },
+            )
+            if not visitors:
+                continue
+            per_op_visitors.setdefault(operator, set()).update(visitors)
+        for operator, visitor_set in per_op_visitors.items():
+            if visitor_set:
+                out[operator] = len(visitor_set)
+    except Exception as e:
+        logger.warning(f"get_ai_referrals_by_operator failed: {e}")
+    return out
+
+
 async def track_pwa_install(action: str, metadata: dict = None, user_id: str = None):
     try:
         event = {
