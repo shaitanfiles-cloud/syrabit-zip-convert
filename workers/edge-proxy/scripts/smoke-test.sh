@@ -217,6 +217,67 @@ else
   fi
 fi
 
+# ── 3b) /api/edge/d1-status — assert non-zero rows for boards/subjects/chapters
+# /api/content/subjects (test [3/7]) only proves *one* table is non-empty
+# AND can be served from cache (the `cf-cache` X-Source branch defeats the
+# data-presence check on the second run). /api/edge/d1-status is a direct
+# read of the CONTENT_DB binding for every table the worker writes to, so
+# it's the authoritative signal that the preview-tier backfill (Task #879)
+# actually populated the DB. No auth required; the endpoint only returns
+# row counts (no row content), so it is safe to expose.
+#
+# Parser: the response shape is `{"counts":{"boards":N,"subjects":N,...},
+# "last_sync":"..."}`. We use `grep -oE` to find every `"<key>":<digits>`
+# substring anywhere in the body and take the first match. This is robust
+# against the body being on one line OR pretty-printed across many lines,
+# and against future fields being added (e.g. an outer `"boards"` field
+# would still leave the inner `"counts":{"boards":N}` intact and matchable
+# — the inner is just the second hit, the outer the first; both equal in
+# a healthy state). Avoids depending on `jq` (not present on stock CI
+# runners) and avoids splitting on `,` / `:` which the previous awk
+# version did and broke against the nested `counts` object.
+extract_d1_count() {
+  local key="$1" path="$2"
+  # `\"key\"\s*:\s*([0-9]+)` — POSIX `[[:space:]]` for portability across
+  # GNU and BSD grep. Trailing `head -n1` returns "" on no match.
+  grep -oE "\"$key\"[[:space:]]*:[[:space:]]*[0-9]+" "$path" 2>/dev/null \
+    | head -n1 \
+    | grep -oE '[0-9]+$' \
+    || true
+}
+
+# Self-test the parser against a fixture so a future regression in
+# extract_d1_count can never silently report 0/0/0 against real data.
+# A failure here aborts before we ever hit the network.
+_d1_fixture=$(mktemp "$TMP_DIR/d1-status-fixture.XXXX")
+printf '%s' '{"counts":{"boards":7,"classes":42,"streams":13,"subjects":188,"chapters":5421,"topics":99000,"seo_pages":61234},"last_sync":"2026-04-25T12:00:00Z","last_sync_at":"2026-04-25T12:00:00Z"}' > "$_d1_fixture"
+_b=$(extract_d1_count "boards" "$_d1_fixture")
+_s=$(extract_d1_count "subjects" "$_d1_fixture")
+_c=$(extract_d1_count "chapters" "$_d1_fixture")
+if [[ "$_b" != "7" || "$_s" != "188" || "$_c" != "5421" ]]; then
+  echo "FATAL: extract_d1_count parser broken against fixture (boards='$_b' subjects='$_s' chapters='$_c'; expected 7/188/5421). Refusing to run smoke." >&2
+  exit 70
+fi
+
+TOTAL=$((TOTAL + 1))
+echo "[3b/7] GET /api/edge/d1-status (boards/subjects/chapters row counts)"
+http_get "$BASE_URL/api/edge/d1-status"
+if [[ "$HTTP_STATUS" != "200" ]]; then
+  fail "d1-counts" "expected 200, got $HTTP_STATUS"
+else
+  d1_boards=$(extract_d1_count "boards" "$BODY_PATH")
+  d1_subjects=$(extract_d1_count "subjects" "$BODY_PATH")
+  d1_chapters=$(extract_d1_count "chapters" "$BODY_PATH")
+  d1_boards=${d1_boards:-0}; d1_subjects=${d1_subjects:-0}; d1_chapters=${d1_chapters:-0}
+  if [[ "$d1_boards" -eq 0 || "$d1_subjects" -eq 0 || "$d1_chapters" -eq 0 ]]; then
+    fail "d1-counts" "preview D1 is missing rows (boards=${d1_boards} subjects=${d1_subjects} chapters=${d1_chapters}). \
+Run the Railway-side fan-out: set EDGE_WORKER_PREVIEW_URL + D1_SYNC_SECRET_PREVIEW on the backend \
+and POST /api/admin/d1-sync to backfill. See artifacts/syrabit-backend/docs/D1_PREVIEW_BACKFILL.md."
+  else
+    pass "d1-counts" "boards=${d1_boards} subjects=${d1_subjects} chapters=${d1_chapters} (non-zero)"
+  fi
+fi
+
 # ── 4) Backend reverse-proxy identity check via /api/readyz ────────────────
 # /api/health is served entirely by the worker (`X-Source: edge`) so it
 # *cannot* prove BACKEND_URL is wired correctly — a misconfigured backend

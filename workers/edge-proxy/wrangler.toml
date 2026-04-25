@@ -219,9 +219,26 @@ crons = ["* * * * *", "0 */6 * * *"]
 #   pnpm dlx wrangler d1 migrations apply syrabit-content-preview --remote
 # then swap the new `database_id` below.
 #
-# Backfill: preview D1 starts empty. Populate it either by setting
-# D1_SYNC_SECRET on the preview env and POSTing /api/d1/sync against the
-# preview hostname, or by pointing the Railway-side sync job at preview.
+# Backfill: as of Task #879 the Railway sync (`d1_sync.py`) automatically
+# fans out to the preview hostname when both `EDGE_WORKER_PREVIEW_URL`
+# and `D1_SYNC_SECRET_PREVIEW` are set on the Railway service. Once the
+# operator sets those vars, every CRUD-driven, manual, or 6-hourly cron
+# sync writes prod AND preview in the same call — no separate cron / GH
+# Action needed. Preview-target failures are logged but never block prod.
+#
+# To enable end-to-end (one-time, ~5 min):
+#   1. wrangler secret put D1_SYNC_SECRET --env preview        # generate + set
+#   2. Add to Railway service env:
+#        EDGE_WORKER_PREVIEW_URL=https://syrabit-edge-preview.<account>.workers.dev
+#        D1_SYNC_SECRET_PREVIEW=<the-same-value-from-step-1>
+#   3. POST /api/admin/d1-sync against the prod backend ONCE to backfill
+#      preview from prod (subsequent CRUD writes keep them in lockstep).
+#   4. Verify with `pnpm --filter syrabit-edge run smoke:preview` —
+#      step `[d1-counts]` will report non-zero rows for boards/subjects/
+#      chapters when the fan-out is healthy.
+#
+# See artifacts/syrabit-backend/docs/D1_PREVIEW_BACKFILL.md for the full
+# on-call procedure (cadence, monitoring signal, manual one-shot replay).
 #
 # KV bindings: the IDs below are the existing `preview_id` values from
 # the top-level [[kv_namespaces]] entries. Those preview KV namespaces
