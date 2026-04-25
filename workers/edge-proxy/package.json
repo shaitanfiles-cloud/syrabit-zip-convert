@@ -10,6 +10,7 @@
     "deploy:preview": "wrangler deploy --env preview",
     "deploy:preview:dry": "wrangler deploy --env preview --dry-run",
     "smoke": "bash scripts/smoke-test.sh",
+    "smoke:preview": "bash scripts/smoke-preview.sh",
     "test": "vitest run",
     "d1:migrate:local": "wrangler d1 migrations apply syrabit-content --local",
     "d1:migrate:remote": "wrangler d1 migrations apply syrabit-content --remote"
