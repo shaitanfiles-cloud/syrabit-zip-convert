@@ -1319,8 +1319,13 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
         <p className="text-[10px] text-gray-400 mb-2">{TODAY_BUCKET_CAPTION}</p>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
-          <StatCard label="Total Page Views" value={vs?.total_page_views ?? 0} icon={BarChart2} color="#84cc16"
-            subLabel="Today" subValue={vs?.page_views_today ?? 0} />
+          {/* "Total Visitors" = unique humans counted once each (Cloudflare's
+              JS beacon does not fire for bots, and CF's `uniques` metric is
+              deduped by visitor fingerprint, so repeat visits from the same
+              person collapse to a single count). Replaces the previous
+              "Total Page Views" tile per the operator's request. */}
+          <StatCard label="Total Visitors" value={vs?.total_visitors ?? 0} icon={Users} color="#84cc16"
+            subLabel="Today" subValue={vs?.visitors_today ?? 0} />
           <StatCard label="Bounce Rate"  value={vs.bounce_rate != null ? `${vs.bounce_rate}%` : '—'} icon={TrendingUp} color="#f59e0b" />
           <StatCard label="Avg Session"  value={vs.avg_session_duration != null ? `${vs.avg_session_duration}s` : '—'} icon={Clock} color="#a78bfa" />
         </div>
