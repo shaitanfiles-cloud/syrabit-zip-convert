@@ -1650,6 +1650,48 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                   </div>
                 </div>
               )}
+
+              {/* Search-engine referrals — sibling to the AI block above.
+                  Counts humans who landed on the site after clicking an
+                  organic result on Google, Bing, DuckDuckGo, Yahoo,
+                  Yandex, Baidu, Ecosia, Brave, Kagi, Startpage, Qwant
+                  or Mojeek. Sourced from db.page_views Referer headers
+                  with per-engine visitor dedup so a single visitor with
+                  N page-views still contributes 1. Renders right under
+                  the AI block with a sky palette so the two acquisition
+                  channels can be compared at a glance. */}
+              {(cfCrawlControl.search_referrals_total ?? 0) > 0 && (
+                <div className="mt-3 rounded-lg p-3 bg-sky-50/60 border border-sky-200">
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="text-[10px] text-sky-700 font-semibold uppercase tracking-wider">
+                      Total referrals by search results (humans clicking from search engines)
+                    </div>
+                    <div className="text-xs text-sky-700 font-bold">
+                      {(cfCrawlControl.search_referrals_total ?? 0).toLocaleString()} total
+                    </div>
+                  </div>
+                  {(cfCrawlControl.search_referrals_per_engine?.length ?? 0) > 0 && (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                      {cfCrawlControl.search_referrals_per_engine.map((row) => (
+                        <div
+                          key={row.engine}
+                          className="rounded-md px-2.5 py-1.5 bg-white border border-sky-100 flex items-center justify-between gap-2"
+                        >
+                          <span className="text-[10px] text-gray-600 font-medium truncate" title={row.engine}>
+                            {row.engine}
+                          </span>
+                          <span className="text-[11px] text-sky-700 font-semibold">
+                            {row.referrals.toLocaleString()}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="text-[9px] text-sky-600/70 mt-2">
+                    Last {cfCrawlControl.period_days} days · sourced from page-view Referer headers · distinct visitors per engine
+                  </div>
+                </div>
+              )}
             </>
           )}
         </GlassCard>

@@ -228,6 +228,113 @@ async def get_ai_referrals_by_operator(days: int = 7) -> dict[str, int]:
     return out
 
 
+# ── Search-engine referral hostname → engine display name ─────────────────
+# Counterpart to ``_AI_REFERRER_HOSTS`` for organic search-engine
+# referrals (humans clicking a Google / Bing / DuckDuckGo / etc. search
+# result and landing on syrabit.ai). The admin dashboard renders this
+# beside the AI-assistant referrals block so site owners can see both
+# acquisition channels side by side.
+#
+# Each entry is ``(host-regex-fragment, engine-display-name)``. Unlike
+# ``_AI_REFERRER_HOSTS`` (which stores literal host strings and escapes
+# them at query time), entries here are pre-built regex fragments —
+# necessary because Google country-code TLDs (``.co.in``, ``.com.au``,
+# ``.de``, etc.) are matched with a single character-class fragment
+# instead of one entry per TLD. The fragment is dropped into the
+# template ``^https?://{frag}(?:[/:?#]|$)`` so anchors/boundaries are
+# added uniformly and stay consistent with the AI helper above.
+#
+# Important overlap-avoidance notes:
+#   * Google AI surfaces (``gemini.google.com``, ``aistudio.google.com``,
+#     ``bard.google.com``) are already attributed to "Google" under the
+#     AI map. The Google search fragment uses ``(?:www\.)?google\.…``
+#     rather than ``(?:[^/]*\.)?google\.…`` so those AI subdomains
+#     don't double-count as search referrals.
+#   * Bing's legacy ``bing.com/chat`` was mapped to Microsoft on the AI
+#     side. The Bing fragment here is host-only (no path constraint),
+#     so the rare residual chat referrer also lands here, but per-engine
+#     visitor sets dedupe it within this map. Cross-map overlap is
+#     accepted (and explicitly noted in the dashboard tooltip) because
+#     a visitor genuinely browsing both Bing search and Bing chat
+#     legitimately appears in both blocks.
+_SEARCH_REFERRER_HOSTS: list[tuple[str, str]] = [
+    # Google: bare or www., across the full universe of Google country
+    # TLDs. The character-class TLD pattern covers .com, .de, .fr, .in,
+    # .uk plus compound TLDs like .co.in, .co.uk, .com.au, .com.br, etc.
+    (r"(?:www\.)?google\.[a-z]{2,3}(?:\.[a-z]{2,3})?", "Google"),
+    # Microsoft Bing organic.
+    (r"(?:[^/]*\.)?bing\.com", "Bing"),
+    (r"(?:[^/]*\.)?duckduckgo\.com", "DuckDuckGo"),
+    # Yahoo Search lives at search.yahoo.com; bare yahoo.com is the
+    # portal and rarely a real search referrer.
+    (r"search\.yahoo\.com", "Yahoo"),
+    (r"(?:[^/]*\.)?yandex\.(?:com|ru)", "Yandex"),
+    (r"(?:[^/]*\.)?baidu\.com", "Baidu"),
+    (r"(?:[^/]*\.)?ecosia\.org", "Ecosia"),
+    (r"search\.brave\.com", "Brave"),
+    (r"kagi\.com", "Kagi"),
+    (r"(?:[^/]*\.)?startpage\.com", "Startpage"),
+    (r"(?:[^/]*\.)?qwant\.com", "Qwant"),
+    (r"(?:[^/]*\.)?mojeek\.com", "Mojeek"),
+]
+
+
+async def get_search_referrals_by_engine(days: int = 7) -> dict[str, int]:
+    """Per-engine organic-search referral count from ``db.page_views``.
+
+    Mirrors :func:`get_ai_referrals_by_operator` but for search engines
+    (Google / Bing / DuckDuckGo / Yahoo / Yandex / Baidu / Ecosia /
+    Brave / Kagi / Startpage / Qwant / Mojeek). Counts distinct
+    visitor_ids per engine over the window, so a single Google visitor
+    browsing 12 pages still counts as 1 referral — same semantics as
+    the AI helper, which keeps the two cards visually comparable on
+    the admin dashboard.
+
+    Implementation notes (also see ``_SEARCH_REFERRER_HOSTS`` above):
+
+    * Each engine's host fragment may be matched by multiple referrer
+      strings on the same visitor (e.g. ``google.com/search?q=A`` and
+      ``www.google.co.in/`` both contribute toward "Google"); we
+      accumulate visitor ids into a per-engine set so the union is
+      counted once. This mirrors the dedupe trick in the AI helper.
+    * Engines that the visitor never used produce empty distinct
+      results; we skip empty sets so absent engines don't appear with
+      a zero in the response. Callers should treat missing keys as 0.
+
+    Returns a dict ``{engine_name: int}`` containing only engines with
+    ≥1 referral. Returns ``{}`` on any failure or when Mongo is down so
+    the caller can blindly merge into the response payload.
+    """
+    out: dict[str, int] = {}
+    if not await is_mongo_available():
+        return out
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        per_eng_visitors: dict[str, set] = {}
+        for host_frag, engine in _SEARCH_REFERRER_HOSTS:
+            # Same anchor / trailing-boundary template as the AI helper
+            # so query-string-tagged outbound links from search engines
+            # (``?utm_source=…`` etc.) still classify, and lookalike
+            # domains (``google.com.fake.example.org``) don't.
+            host_regex = rf"^https?://{host_frag}(?:[/:?#]|$)"
+            visitors = await db.page_views.distinct(
+                "visitor_id",
+                {
+                    "date": {"$gte": cutoff},
+                    "referrer": {"$regex": host_regex, "$options": "i"},
+                },
+            )
+            if not visitors:
+                continue
+            per_eng_visitors.setdefault(engine, set()).update(visitors)
+        for engine, visitor_set in per_eng_visitors.items():
+            if visitor_set:
+                out[engine] = len(visitor_set)
+    except Exception as e:
+        logger.warning(f"get_search_referrals_by_engine failed: {e}")
+    return out
+
+
 async def track_pwa_install(action: str, metadata: dict = None, user_id: str = None):
     try:
         event = {

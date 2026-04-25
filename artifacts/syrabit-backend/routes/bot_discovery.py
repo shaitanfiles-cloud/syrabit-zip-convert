@@ -5732,20 +5732,27 @@ async def admin_cf_ai_crawl_control(
     render an empty-state card instead of a 5xx."""
     try:
         from cf_bot_report import fetch_admin_summary, aggregate_per_operator
-        from analytics_helpers import get_ai_referrals_by_operator
-        # Run the CF crawler aggregation and the Mongo-backed referral
-        # tally in parallel — they hit independent backends and the
-        # referral lookup is the slower of the two (one $regex per AI
-        # operator host pattern), so serialising would visibly hurt
-        # the dashboard's first-paint time.
-        summary, ai_refs_by_op = await asyncio.gather(
+        from analytics_helpers import (
+            get_ai_referrals_by_operator,
+            get_search_referrals_by_engine,
+        )
+        # Run the CF crawler aggregation and the two Mongo-backed
+        # referral tallies in parallel — they hit independent backends
+        # and the referral lookups are the slower of the three (one
+        # $regex per host pattern), so serialising would visibly hurt
+        # the dashboard's first-paint time. Three-way gather keeps the
+        # critical path equal to the single slowest call instead of
+        # the sum of all three.
+        summary, ai_refs_by_op, search_refs_by_eng = await asyncio.gather(
             fetch_admin_summary(days=days),
             get_ai_referrals_by_operator(days=days),
+            get_search_referrals_by_engine(days=days),
         )
     except Exception as exc:
         logger.warning(f"cf-ai-crawl-control fetch failed: {exc}")
         summary = None
         ai_refs_by_op = {}
+        search_refs_by_eng = {}
 
     # Sorted-desc list of (operator, referrals) — used by the dashboard's
     # standalone "AI assistant referrals" block. Built up here once so
@@ -5756,6 +5763,17 @@ async def admin_cf_ai_crawl_control(
         key=lambda r: (-r["referrals"], r["operator"]),
     )
     ai_refs_total = sum(int(v) for v in (ai_refs_by_op or {}).values())
+
+    # Sorted-desc list of (engine, referrals) — sibling block to the AI
+    # one above. Same shape so the frontend can render them with a
+    # shared component pattern. ``engine`` key (not ``operator``) keeps
+    # the two response branches distinguishable in the payload.
+    search_refs_list = sorted(
+        ({"engine": eng, "referrals": int(refs)}
+         for eng, refs in (search_refs_by_eng or {}).items() if int(refs) > 0),
+        key=lambda r: (-r["referrals"], r["engine"]),
+    )
+    search_refs_total = sum(int(v) for v in (search_refs_by_eng or {}).values())
 
     if summary is None:
         return {
@@ -5776,6 +5794,8 @@ async def admin_cf_ai_crawl_control(
             "daily_series": {"top_bots": [], "rows": []},
             "ai_referrals_total": ai_refs_total,
             "ai_referrals_per_operator": ai_refs_list,
+            "search_referrals_total": search_refs_total,
+            "search_referrals_per_engine": search_refs_list,
         }
 
     # ─── Strip AI crawlers from the response ──────────────────────────────
@@ -5854,4 +5874,12 @@ async def admin_cf_ai_crawl_control(
     # standalone "AI assistant referrals" block beside the crawler card.
     summary["ai_referrals_total"] = ai_refs_total
     summary["ai_referrals_per_operator"] = ai_refs_list
+
+    # Search-engine referrals — sibling block. Same intent as the AI
+    # referrals fields above (humans clicking through to the site from
+    # an external surface), but for organic search engines instead of
+    # AI chats. Rendered as its own pill grid on the dashboard so the
+    # two acquisition channels can be compared at a glance.
+    summary["search_referrals_total"] = search_refs_total
+    summary["search_referrals_per_engine"] = search_refs_list
     return {"available": True, **summary}
