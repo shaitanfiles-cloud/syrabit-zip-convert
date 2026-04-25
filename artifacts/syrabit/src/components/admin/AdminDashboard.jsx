@@ -1319,23 +1319,26 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
         <p className="text-[10px] text-gray-400 mb-2">{TODAY_BUCKET_CAPTION}</p>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
-          {/* "Unique Visitors" — bound to Cloudflare's deduped uniques
-              (cfOverview.totals.visitors) so this tile is clearly distinct
-              from "Page Views Today" / total page-views surfaced in the
-              Traffic (Cloudflare) card above. We previously bound this to
-              CF's `visits` (sessions) metric, but on a content-heavy site
-              CF visits ≈ CF page views (typical ratio ~1.02 pages/visit
-              because most sessions land and bounce on a single page), so
-              the two tiles ended up looking identical. Switching back to
-              uniques produces a value two orders of magnitude smaller
-              than page views, eliminating the visual collision while
-              keeping Cloudflare as the source of truth (per the operator's
-              "use Cloudflare" instruction). CF's JS beacon doesn't fire
-              for bots and uniques are deduped by visitor fingerprint per
-              day-bucket, so each human counts once per day. Today's
-              sub-value uses the same single-day uniques query the
-              dashboard payload already exposes. */}
-          <StatCard label="Unique Visitors"
+          {/* "Total Visitors" — bound to Cloudflare's per-day deduped
+              uniques (cfOverview.totals.visitors), summed across the 7
+              day-buckets of the overview window. CF generates a daily
+              anonymous visitor fingerprint from IP + User-Agent and
+              counts each fingerprint at most once per day-bucket, so
+              this value is effectively "1 visit per IP per 24 hours"
+              rolled up over the period — exactly the de-duplication
+              policy the operator asked for. Bots are excluded because
+              CF's JS beacon doesn't fire for non-browser traffic. The
+              tile is intentionally distinct from page views: on this
+              content site CF "visits" (sessions) tracks ~1.02
+              pages/visit and would visually collide with the page-views
+              numbers in the Traffic (Cloudflare) card above; per-day
+              uniques produce a value two orders of magnitude smaller,
+              keeping the two surfaces clearly differentiated. We fall
+              back to vs.total_visitors only if cfOverview hasn't loaded
+              yet (avoids a blank tile on first paint). The "Today"
+              sub-value uses CF's single-day uniques query the dashboard
+              payload already exposes. */}
+          <StatCard label="Total Visitors"
             value={cfOverview?.totals?.visitors ?? vs?.total_visitors ?? 0}
             icon={Users} color="#84cc16"
             subLabel="Today" subValue={vs?.visitors_today ?? 0} />
