@@ -4,6 +4,7 @@ import { log } from '@/utils/logger';
 import AdminQuickLinks from './AdminQuickLinks';
 import AdminDraftServedSubjects from './AdminDraftServedSubjects';
 import AlertReasonsRow from './AlertReasonsRow';
+import BotCachePanel from './BotCachePanel';
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 
 const safeArr = (v) => (Array.isArray(v) ? v : []);
@@ -3100,6 +3101,12 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                   </ul>
                 )}
               </div>
+
+              {/* Task #897 — bot HTML cache rolling-hour hit rate.
+                  Extracted to <BotCachePanel> so the panel logic +
+                  sparkline geometry can be unit-tested without
+                  rendering the whole admin dashboard. */}
+              <BotCachePanel kvHealth={kvHealth} />
 
               {/* Task #474 — recent SEO summary dispatch history. */}
               <div className="mb-3 pb-3 border-b border-gray-200" data-testid="notif-prefs-seo-summary-history">
