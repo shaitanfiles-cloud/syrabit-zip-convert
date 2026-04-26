@@ -209,10 +209,14 @@ if _GROQ_KEY:
 if _GROQ_KEY_2 and _GROQ_KEY_2 != _GROQ_KEY:
     _LLM_PROVIDERS.append({"provider": "groq",         "key": _GROQ_KEY_2,     "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
 if _CEREBRAS_KEY:
-    # Upgraded from llama-3.3-70b-versatile (Task #282 T002): Llama-4 Scout
-    # is faster on Cerebras (~2600 tok/s vs 2200), has a 10M context window,
-    # and noticeably better instruction-following for chat workloads.
-    _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama-3.3-70b"})
+    # Cerebras dropped llama-3.3-70b from this account's catalog (verified
+    # 2026-04-26: GET /v1/models returns only llama3.1-8b, gpt-oss-120b,
+    # zai-glm-4.7, qwen-3-235b-a22b-instruct-2507; only the 8B and the
+    # 235B qwen are accessible to us — gpt-oss-120b and zai-glm both
+    # return 404 "does not have access"). llama3.1-8b is the fast-tier
+    # SLM choice; the 235B qwen is reserved for the higher-quality
+    # content slot (see _CONTENT_SLOT_CANDIDATES below).
+    _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama3.1-8b"})
 if _OPENROUTER_KEY:
     _LLM_PROVIDERS.append({"provider": "openrouter",  "key": _OPENROUTER_KEY, "default_model": "deepseek/deepseek-chat-v3-0324"})
 if _OPENAI_KEY and _OPENAI_KEY != 'x':
@@ -223,7 +227,7 @@ _LLM_PROVIDERS_CHAT: list[dict] = []
 # now leads because Groq's hosted Llama-4 Scout endpoint has been failing
 # 100% in prod (see _SLM_SLOT_CANDIDATES note above).
 if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama-3.3-70b"})
+    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
 if _GROQ_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
 if _OPENROUTER_KEY:
@@ -248,6 +252,10 @@ _MODEL_PROVIDER_MAP = {
     "meta-llama/llama-4-maverick": "openrouter",
     "meta-llama/llama-4-scout": "openrouter",
     "meta-llama/llama-4-scout-17b-16e-instruct": "groq",
+    # Legacy entries — kept for cost-lookup back-compat on historical
+    # records, but no live provider call site references these any
+    # more (Cerebras dropped llama-3.3-70b from our account; the SLM
+    # tier-0 slot is now llama3.1-8b which is mapped above).
     "llama-3.3-70b-versatile": "cerebras",
     "llama-3.3-70b": "cerebras",
 }
@@ -263,12 +271,14 @@ _MODEL_ALIAS_MAP = {
 # Slots in the same tier are load-balanced by in-flight count.
 #
 _SLM_SLOT_CANDIDATES = [
-    # Cerebras serves the same Llama-4 Scout model as Groq but at higher
-    # tok/s and far better latency in our region; Groq's hosted endpoint
-    # for this model has been intermittently failing (100% fallback rate
-    # observed in prod alerts), so Cerebras is now Tier 0 and Groq is
-    # the Tier 1 fallback.
-    ("cerebras",    "llama-3.3-70b",                                     4, 0),
+    # Tier 0: Cerebras llama3.1-8b — fast small-model slot for SLM
+    # work (topic resolution, classification, short rewrites). This
+    # replaced llama-3.3-70b after Cerebras removed that model from
+    # our account on 2026-04-26 (see provider list comment above).
+    # llama3.1-8b is the only fast Cerebras model we have access to;
+    # the 235B qwen sits in the content slot for higher-quality jobs.
+    # Tiers 1/2 keep the larger Llama-4 Scout fallbacks unchanged.
+    ("cerebras",    "llama3.1-8b",                                       4, 0),
     ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 1),
     ("openrouter",  "meta-llama/llama-4-scout",                          4, 2),
 ]
