@@ -5022,6 +5022,25 @@ async def _cf_bot_report_catchup_if_missed(db, now_utc: datetime) -> dict:
     return {"ran": True, "iso_week": cur_iso_week}
 
 
+# Task #950 — Mongo-backed lease so only ONE replica polls and fires
+# the weekly CF bot report. Previously gated by ``_is_leader`` in
+# server.py, which is per-machine and double-fires on multi-replica
+# Railway deployments. The report itself is dedup'd via
+# ``_claim_cf_bot_report_slot``, but each replica without the lease
+# would still hit the CF GraphQL API on every 5-min poll, multiplying
+# the analytics quota cost. Followers stand down on each tick.
+#
+# TTL is 3× the loop interval (~15 min) so a single missed renewal
+# does not trigger a needless leader fail-over. Lease tied to the
+# per-week catch-up too — boot catch-up runs only when we hold the
+# lease.
+_CF_BOT_REPORT_LEASE_LOCK_ID = "cf_bot_report_lease"
+_CF_BOT_REPORT_LEASE_TTL_S = max(900, _CF_BOT_REPORT_LOOP_SLEEP_S * 3)
+_CF_BOT_REPORT_FOLLOWER_INTERVAL_S = max(60, _CF_BOT_REPORT_LOOP_SLEEP_S)
+import background_lease as _bglease_cfbr
+_CF_BOT_REPORT_OWNER_ID = _bglease_cfbr.make_owner_id("cf-bot-report")
+
+
 async def _cf_bot_report_loop():
     """Background loop for the weekly Cloudflare per-UA crawler report.
 
@@ -5029,23 +5048,54 @@ async def _cf_bot_report_loop():
     once so a service outage during the Monday window doesn't silently
     skip a week. Then polls every 5 min and fires inside Mon 04:00 UTC
     ±15 min, dedup'd via `_claim_cf_bot_report_slot`.
+
+    Cross-replica dedup (Task #950): every replica runs this loop, but
+    only the lease-holder fires the CF GraphQL pull and the weekly
+    catch-up. Followers stand down for one follower interval per tick,
+    so the CF analytics quota cost stays at 1× regardless of replica
+    count.
     """
     from deps import db, is_mongo_available
     await asyncio.sleep(_CF_BOT_REPORT_WARMUP_S)
-    # Boot-time catch-up: heal any missed Monday window.
     try:
-        if await is_mongo_available():
-            await _cf_bot_report_catchup_if_missed(db, datetime.now(timezone.utc))
-    except Exception as exc:
-        logger.debug(f"[CF bot report] catch-up error: {exc}")
-    while True:
+        # Boot-time catch-up only fires when we win the lease — otherwise
+        # a fresh replica racing in would replay the same catch-up the
+        # incumbent leader already did.
         try:
-            now_utc = datetime.now(timezone.utc)
-            if await is_mongo_available():
-                await _try_run_cf_bot_report_once(db, now_utc)
+            if await is_mongo_available() and await _bglease_cfbr.try_acquire_lease(
+                db, _CF_BOT_REPORT_LEASE_LOCK_ID, _CF_BOT_REPORT_OWNER_ID,
+                _CF_BOT_REPORT_LEASE_TTL_S,
+            ):
+                await _cf_bot_report_catchup_if_missed(
+                    db, datetime.now(timezone.utc))
         except Exception as exc:
-            logger.debug(f"[CF bot report] loop iteration error: {exc}")
-        await asyncio.sleep(_CF_BOT_REPORT_LOOP_SLEEP_S)
+            logger.debug(f"[CF bot report] catch-up error: {exc}")
+        while True:
+            try:
+                now_utc = datetime.now(timezone.utc)
+                if not await is_mongo_available():
+                    await asyncio.sleep(_CF_BOT_REPORT_FOLLOWER_INTERVAL_S)
+                    continue
+                if not await _bglease_cfbr.try_acquire_lease(
+                    db, _CF_BOT_REPORT_LEASE_LOCK_ID,
+                    _CF_BOT_REPORT_OWNER_ID,
+                    _CF_BOT_REPORT_LEASE_TTL_S,
+                ):
+                    await asyncio.sleep(_CF_BOT_REPORT_FOLLOWER_INTERVAL_S)
+                    continue
+                await _try_run_cf_bot_report_once(db, now_utc)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug(f"[CF bot report] loop iteration error: {exc}")
+            await asyncio.sleep(_CF_BOT_REPORT_LOOP_SLEEP_S)
+    finally:
+        try:
+            await asyncio.shield(_bglease_cfbr.release_lease(
+                db, _CF_BOT_REPORT_LEASE_LOCK_ID, _CF_BOT_REPORT_OWNER_ID,
+            ))
+        except Exception:
+            pass
 
 
 @router.post("/admin/cf-bot-report/external-totals")

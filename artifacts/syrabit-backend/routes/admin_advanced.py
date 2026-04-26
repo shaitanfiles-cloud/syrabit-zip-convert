@@ -3925,21 +3925,70 @@ _CACHE_WARM_LOOP_INTERVAL_S = 6 * 3600
 _CACHE_WARM_LOOP_TOP_N = 30
 _CACHE_WARM_LOOP_STARTUP_DELAY_S = 15 * 60
 
+# Task #950 — Mongo-backed lease so only ONE replica fires the LLM
+# cache pre-warm per cycle. Previously gated by ``_is_leader`` in
+# server.py, which is per-machine and double-fires on multi-replica
+# Railway deployments — the warmer issues real LLM completions, so
+# every duplicate run multiplies the LLM budget by N.
+#
+# TTL is 3× the loop interval (~18h) so a single missed renewal
+# doesn't trigger a needless leader fail-over. Followers poll every
+# 15 minutes — enough to take over within one cycle if the leader
+# replica dies, without hammering Mongo in the steady state.
+_CACHE_WARM_LOCK_ID = "cache_warm_lease"
+_CACHE_WARM_LEASE_TTL_S = _CACHE_WARM_LOOP_INTERVAL_S * 3
+_CACHE_WARM_FOLLOWER_INTERVAL_S = 15 * 60
+import background_lease as _bglease
+_CACHE_WARM_OWNER_ID = _bglease.make_owner_id("cache-warm")
+
 
 async def _cache_warm_loop():
     """Auto-warm the AI response cache every ``_CACHE_WARM_LOOP_INTERVAL_S``
     seconds. Failures are swallowed and logged so a single bad iteration
-    never tears down the loop."""
-    from deps import is_mongo_available
+    never tears down the loop.
+
+    Cross-replica dedup (Task #950): every replica may run this loop,
+    but only the one holding the Mongo-backed lease actually fires
+    ``_perform_cache_warm`` (which costs real LLM tokens). Followers
+    stand down on each tick, so the LLM-budget cost stays at 1×
+    regardless of replica count, and a leader fail-over is picked up
+    within one follower interval (~15 min) instead of waiting hours.
+    """
+    from deps import db, is_mongo_available
     await asyncio.sleep(_CACHE_WARM_LOOP_STARTUP_DELAY_S)
-    while True:
+    try:
+        while True:
+            try:
+                if not await is_mongo_available():
+                    logger.debug(
+                        "[CACHE_WARM] Skipping auto warm — Mongo unavailable")
+                    await asyncio.sleep(_CACHE_WARM_FOLLOWER_INTERVAL_S)
+                    continue
+                have_lease = await _bglease.try_acquire_lease(
+                    db, _CACHE_WARM_LOCK_ID, _CACHE_WARM_OWNER_ID,
+                    _CACHE_WARM_LEASE_TTL_S,
+                )
+                if not have_lease:
+                    # A peer replica owns the lease and it's still
+                    # fresh; stand down and re-check at the follower
+                    # cadence. This branch does NOT touch the LLM
+                    # budget.
+                    await asyncio.sleep(_CACHE_WARM_FOLLOWER_INTERVAL_S)
+                    continue
+                await _perform_cache_warm(
+                    _CACHE_WARM_LOOP_TOP_N, source="auto_loop")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    f"[CACHE_WARM] auto loop iteration error: {exc}")
+            await asyncio.sleep(_CACHE_WARM_LOOP_INTERVAL_S)
+    finally:
         try:
-            if await is_mongo_available():
-                await _perform_cache_warm(_CACHE_WARM_LOOP_TOP_N, source="auto_loop")
-            else:
-                logger.debug("[CACHE_WARM] Skipping auto warm — Mongo unavailable")
-        except Exception as exc:
-            logger.warning(f"[CACHE_WARM] auto loop iteration error: {exc}")
-        await asyncio.sleep(_CACHE_WARM_LOOP_INTERVAL_S)
+            await asyncio.shield(_bglease.release_lease(
+                db, _CACHE_WARM_LOCK_ID, _CACHE_WARM_OWNER_ID,
+            ))
+        except Exception:
+            pass
 
 

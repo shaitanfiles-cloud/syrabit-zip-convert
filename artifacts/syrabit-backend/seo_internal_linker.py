@@ -1078,59 +1078,88 @@ async def nightly_maintenance_pass(db, *, top_n: Optional[int] = None) -> dict:
 
 
 async def _internal_linker_loop(db) -> None:
-    """Leader-gated background worker. Sleeps ``nightly_idle_secs``
-    between cycles. Runs the maintenance pass once per UTC date by
-    holding an atomic per-date marker in
-    ``internal_link_budget`` (avoids running multiple times within
-    the same day across leader fail-overs)."""
+    """Background worker. Sleeps ``nightly_idle_secs`` between cycles.
+
+    Runs the maintenance pass once per UTC date by holding an atomic
+    per-date marker in ``internal_link_budget`` (avoids running
+    multiple times within the same day across leader fail-overs).
+
+    Cross-replica dedup (Task #950): every replica may run this loop,
+    but only the holder of the ``internal_linker_lease`` actually
+    runs the maintenance pass. The per-date marker remains as a
+    belt-and-braces guard against fail-overs mid-day. Followers stand
+    down for the same ``nightly_idle_secs`` so they pick up leadership
+    on the next cycle if the leader dies.
+    """
+    import background_lease as _bglease
+    owner_id = _bglease.make_owner_id("internal-linker")
+    lock_id = "internal_linker_lease"
     logger.info("internal_linker: nightly maintenance loop started")
-    while True:
-        try:
-            cfg = get_config()
-            if not cfg["enabled"]:
-                await asyncio.sleep(cfg["nightly_idle_secs"])
-                continue
-            today = _today_key()
-            # Atomic CAS marker so leader fail-overs within the same
-            # UTC day don't double-run the pass. The marker piggy-
-            # backs on the budget doc (tiny, already exists).  When
-            # two workers race on day-zero the loser raises
-            # ``DuplicateKeyError`` — that just means the other
-            # worker already claimed today's slot, so we move on.
-            won = False
+    try:
+        while True:
             try:
-                # IMPORTANT: this upsert may create today's budget doc
-                # *before* any auto-apply ever happens. We MUST seed
-                # ``auto_applied: 0`` here too, otherwise the later
-                # ``{auto_applied: {$lt: cap}}`` guard inside
-                # ``_consume_auto_budget`` won't match a missing field
-                # and every high-confidence proposal for the rest of
-                # the day silently downgrades to drafted.
-                res = await db.internal_link_budget.update_one(
-                    {"_id": today, "nightly_ran_at": {"$exists": False}},
-                    {
-                        "$set": {
-                            "nightly_ran_at": datetime.now(timezone.utc).isoformat(),
-                        },
-                        "$setOnInsert": {
-                            "auto_applied": 0,
-                            "created_at": datetime.now(timezone.utc).isoformat(),
-                        },
-                    },
-                    upsert=True,
-                )
-                won = bool(
-                    getattr(res, "modified_count", 0)
-                    or getattr(res, "upserted_id", None)
-                )
-            except DuplicateKeyError:
+                cfg = get_config()
+                if not cfg["enabled"]:
+                    await asyncio.sleep(cfg["nightly_idle_secs"])
+                    continue
+                ttl_s = max(int(cfg["nightly_idle_secs"]) * 3, 3 * 3600)
+                if not await _bglease.try_acquire_lease(
+                    db, lock_id, owner_id, ttl_s,
+                ):
+                    # A peer replica holds the lease — back off for one
+                    # full cycle so leader fail-over is picked up on
+                    # the next iteration without N× hitting the upstream
+                    # data sources (GA4, content embeddings, LLM).
+                    await asyncio.sleep(cfg["nightly_idle_secs"])
+                    continue
+                today = _today_key()
+                # Atomic CAS marker so leader fail-overs within the same
+                # UTC day don't double-run the pass. The marker piggy-
+                # backs on the budget doc (tiny, already exists).  When
+                # two workers race on day-zero the loser raises
+                # ``DuplicateKeyError`` — that just means the other
+                # worker already claimed today's slot, so we move on.
                 won = False
-            if won:
-                summary = await nightly_maintenance_pass(db)
-                logger.info("internal_linker: nightly pass: %s", summary)
-            await asyncio.sleep(cfg["nightly_idle_secs"])
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning("internal_linker: nightly loop error: %s", exc)
-            await asyncio.sleep(60)
+                try:
+                    # IMPORTANT: this upsert may create today's budget doc
+                    # *before* any auto-apply ever happens. We MUST seed
+                    # ``auto_applied: 0`` here too, otherwise the later
+                    # ``{auto_applied: {$lt: cap}}`` guard inside
+                    # ``_consume_auto_budget`` won't match a missing field
+                    # and every high-confidence proposal for the rest of
+                    # the day silently downgrades to drafted.
+                    res = await db.internal_link_budget.update_one(
+                        {"_id": today, "nightly_ran_at": {"$exists": False}},
+                        {
+                            "$set": {
+                                "nightly_ran_at": datetime.now(timezone.utc).isoformat(),
+                            },
+                            "$setOnInsert": {
+                                "auto_applied": 0,
+                                "created_at": datetime.now(timezone.utc).isoformat(),
+                            },
+                        },
+                        upsert=True,
+                    )
+                    won = bool(
+                        getattr(res, "modified_count", 0)
+                        or getattr(res, "upserted_id", None)
+                    )
+                except DuplicateKeyError:
+                    won = False
+                if won:
+                    summary = await nightly_maintenance_pass(db)
+                    logger.info("internal_linker: nightly pass: %s", summary)
+                await asyncio.sleep(cfg["nightly_idle_secs"])
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("internal_linker: nightly loop error: %s", exc)
+                await asyncio.sleep(60)
+    finally:
+        try:
+            await asyncio.shield(_bglease.release_lease(
+                db, lock_id, owner_id,
+            ))
+        except Exception:
+            pass

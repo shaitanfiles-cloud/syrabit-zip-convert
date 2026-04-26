@@ -610,17 +610,44 @@ async def _check_and_alert_edge_proxy_deploy_cron(
 
 
 async def _edge_proxy_deploy_cron_alert_loop():
-    """Background poll loop — safe to run on every replica thanks to the
-    atomic CAS dedup above, but in practice ``server.py`` only spawns it
-    on the leader to keep the GitHub REST quota usage cheap."""
+    """Background poll loop.
+
+    Cross-replica dedup (Task #950): the per-state CAS above already
+    prevents N×-paging across replicas, but the loop also acquires a
+    Mongo-backed lease so only one replica polls upstream state on
+    each tick. This keeps the GitHub REST quota usage at 1× regardless
+    of replica count. Followers stand down on each tick.
+    """
     from deps import db, is_mongo_available  # type: ignore
+    import background_lease as _bglease
+    owner_id = _bglease.make_owner_id("edge-proxy-deploy-cron")
+    lock_id = "edge_proxy_deploy_cron_alert_lease"
+    ttl_s = max(900, _CRON_LOOP_SLEEP_S * 3)
+    follower_s = max(60, min(600, _CRON_LOOP_SLEEP_S // 2))
     await asyncio.sleep(_CRON_WARMUP_S)
-    while True:
-        try:
-            if await is_mongo_available():
+    try:
+        while True:
+            try:
+                if not await is_mongo_available():
+                    await asyncio.sleep(follower_s)
+                    continue
+                if not await _bglease.try_acquire_lease(
+                    db, lock_id, owner_id, ttl_s,
+                ):
+                    await asyncio.sleep(follower_s)
+                    continue
                 await _check_and_alert_edge_proxy_deploy_cron(db)
-        except Exception as exc:
-            logger.debug(
-                f"[edge-proxy-deploy-cron-alerts] loop iteration error: {exc}"
-            )
-        await asyncio.sleep(_CRON_LOOP_SLEEP_S)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug(
+                    f"[edge-proxy-deploy-cron-alerts] loop iteration error: {exc}"
+                )
+            await asyncio.sleep(_CRON_LOOP_SLEEP_S)
+    finally:
+        try:
+            await asyncio.shield(_bglease.release_lease(
+                db, lock_id, owner_id,
+            ))
+        except Exception:
+            pass

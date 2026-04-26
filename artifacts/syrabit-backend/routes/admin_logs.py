@@ -81,12 +81,20 @@ CF_PULL_MAX_SUBDIVISIONS = int(
 # over after ``CF_PULL_LEASE_TTL_S`` of silence on the doc. TTL is
 # 3× the pull interval so a single missed tick (transient network
 # blip) doesn't trigger a needless leader fail-over.
+#
+# Task #950 — the actual lease state machine now lives in
+# ``background_lease`` so it can be reused by every leader-gated
+# background loop (LLM cache pre-warm, CF bot report, CF Pages
+# nightly deploy, internal-linker maintenance, …). The two wrappers
+# below keep the original names/signatures so the existing call sites
+# (and unit tests) stay unchanged.
 CF_PULL_LEASE_TTL_S = max(180, int(CF_PULL_INTERVAL_S) * 3)
-CF_PULL_LEASE_OWNER_FIELD = "lease_owner"
-CF_PULL_LEASE_EXPIRES_FIELD = "lease_expires_at"
+import background_lease as _bglease
+CF_PULL_LEASE_OWNER_FIELD = _bglease.LEASE_OWNER_FIELD
+CF_PULL_LEASE_EXPIRES_FIELD = _bglease.LEASE_EXPIRES_FIELD
 # Stable per-process id so renewals from the same replica don't trip
 # the takeover branch of the CAS.
-_CF_PULL_LEASE_OWNER_ID = f"{os.environ.get('HOSTNAME') or 'host'}-{uuid.uuid4().hex[:12]}"
+_CF_PULL_LEASE_OWNER_ID = _bglease.make_owner_id("cf-pull")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1001,95 +1009,35 @@ async def _try_acquire_cf_pull_lease(
     owner_id: Optional[str] = None,
     ttl_s: Optional[int] = None,
 ) -> bool:
-    """Atomic CAS on ``db.job_locks[CF_PULL_LOCK_ID]`` — only one
-    replica holds the lease at a time.
+    """CF-pull-specific wrapper around the shared lease helper.
 
-    Acquisition succeeds when ANY of these hold on the existing doc:
-
-    * ``lease_owner == _CF_PULL_LEASE_OWNER_ID`` — we already own it
-      (renewal path; refreshes ``lease_expires_at`` so peers stay
-      backed off).
-    * ``lease_expires_at <= now`` — the previous owner crashed / was
-      scaled down and never refreshed → this replica may take over.
-    * ``lease_owner`` is null / missing — legacy doc (created before
-      Task #947 added the lease fields) → bootstrap the lease in
-      place without losing the cursor.
-
-    If no doc exists at all (fresh deployment) we fall through to
-    ``insert_one``; ``DuplicateKeyError`` means a peer beat us to it,
-    which is the desired outcome (they hold the lease, we back off).
+    Kept as a thin shim so existing call sites and the Task #947
+    regression suite (``tests/test_unified_logs_cf_pull.py``) can keep
+    importing this name unchanged. See ``background_lease`` for the
+    underlying state-machine docstring (Task #950).
     """
-    if db_handle is None:
-        return False
-    owner = owner_id or _CF_PULL_LEASE_OWNER_ID
-    ttl = int(ttl_s if ttl_s is not None else CF_PULL_LEASE_TTL_S)
-    now = now or datetime.now(timezone.utc)
-    expires_at = now + timedelta(seconds=ttl)
-    set_payload = {
-        CF_PULL_LEASE_OWNER_FIELD: owner,
-        CF_PULL_LEASE_EXPIRES_FIELD: expires_at,
-        "lease_acquired_at": now.isoformat(),
-    }
-    try:
-        res = await db_handle.job_locks.find_one_and_update(
-            {
-                "_id": CF_PULL_LOCK_ID,
-                "$or": [
-                    {CF_PULL_LEASE_OWNER_FIELD: owner},
-                    {CF_PULL_LEASE_EXPIRES_FIELD: {"$lte": now}},
-                    {CF_PULL_LEASE_OWNER_FIELD: None},
-                ],
-            },
-            {"$set": set_payload},
-        )
-        if res is not None:
-            return True
-    except Exception as exc:
-        logger.debug("[unified_logs] CF pull lease CAS failed: %s", exc)
-        return False
-
-    # Bootstrap: no doc exists yet. ``insert_one`` is racy across
-    # replicas — the loser gets DuplicateKeyError, which we swallow:
-    # next iteration the CAS path will see the winner's lease and
-    # back off correctly.
-    try:
-        from pymongo.errors import DuplicateKeyError  # local import keeps test fakes happy
-    except Exception:  # pragma: no cover — pymongo is a hard dep in prod
-        DuplicateKeyError = Exception  # type: ignore[assignment, misc]
-    try:
-        await db_handle.job_locks.insert_one({
-            "_id": CF_PULL_LOCK_ID,
-            **set_payload,
-        })
-        return True
-    except DuplicateKeyError:
-        return False
-    except Exception as exc:
-        logger.debug("[unified_logs] CF pull lease bootstrap insert failed: %s", exc)
-        return False
+    return await _bglease.try_acquire_lease(
+        db_handle,
+        CF_PULL_LOCK_ID,
+        owner_id or _CF_PULL_LEASE_OWNER_ID,
+        int(ttl_s if ttl_s is not None else CF_PULL_LEASE_TTL_S),
+        now=now,
+    )
 
 
 async def _release_cf_pull_lease(
     db_handle, owner_id: Optional[str] = None,
 ) -> None:
-    """Best-effort release on graceful shutdown so peer replicas can
-    pick up the loop within the next loop tick instead of waiting out
-    the full ``CF_PULL_LEASE_TTL_S`` window. Scoped to docs we own so
-    we never clobber a peer that has already taken over."""
-    if db_handle is None:
-        return
-    owner = owner_id or _CF_PULL_LEASE_OWNER_ID
-    try:
-        await db_handle.job_locks.update_one(
-            {"_id": CF_PULL_LOCK_ID, CF_PULL_LEASE_OWNER_FIELD: owner},
-            {"$set": {
-                CF_PULL_LEASE_OWNER_FIELD: None,
-                CF_PULL_LEASE_EXPIRES_FIELD: None,
-                "released_at": datetime.now(timezone.utc).isoformat(),
-            }},
-        )
-    except Exception as exc:
-        logger.debug("[unified_logs] CF pull lease release failed: %s", exc)
+    """CF-pull-specific wrapper around the shared release helper.
+
+    Kept as a thin shim so existing call sites and the Task #947
+    regression suite can keep importing this name unchanged.
+    """
+    await _bglease.release_lease(
+        db_handle,
+        CF_PULL_LOCK_ID,
+        owner_id or _CF_PULL_LEASE_OWNER_ID,
+    )
 
 
 async def _unified_logs_cf_pull_loop():

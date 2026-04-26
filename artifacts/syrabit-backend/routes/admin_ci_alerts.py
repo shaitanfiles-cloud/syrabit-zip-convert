@@ -382,16 +382,43 @@ async def _check_and_alert_ci(
 
 
 async def _ci_alert_loop():
-    """Background poll loop. Cross-replica dedup is handled by the
-    per-workflow CAS so this loop is safe to run on every replica, but
-    in practice ``server.py`` only spawns it on the leader to keep
-    GitHub API calls cheap."""
+    """Background poll loop.
+
+    Cross-replica dedup (Task #950): every replica may run this loop,
+    but only the lease-holder calls ``_check_and_alert_ci`` (which
+    fans out a GitHub Actions REST request per watched workflow). The
+    per-workflow CAS inside that helper remains as defense-in-depth
+    for the fail-over edge case where the lease changes hands
+    mid-iteration.
+    """
     from deps import db, is_mongo_available  # type: ignore
+    import background_lease as _bglease
+    owner_id = _bglease.make_owner_id("ci-alert")
+    lock_id = "ci_alert_lease"
+    ttl_s = max(900, _CI_ALERT_LOOP_SLEEP_S * 3)
+    follower_s = max(60, min(300, _CI_ALERT_LOOP_SLEEP_S // 2))
     await asyncio.sleep(_CI_ALERT_WARMUP_S)
-    while True:
-        try:
-            if _cfg()["repo"] and await is_mongo_available():
+    try:
+        while True:
+            try:
+                if not (_cfg()["repo"] and await is_mongo_available()):
+                    await asyncio.sleep(follower_s)
+                    continue
+                if not await _bglease.try_acquire_lease(
+                    db, lock_id, owner_id, ttl_s,
+                ):
+                    await asyncio.sleep(follower_s)
+                    continue
                 await _check_and_alert_ci(db)
-        except Exception as exc:
-            logger.debug(f"[ci-alerts] loop iteration error: {exc}")
-        await asyncio.sleep(_CI_ALERT_LOOP_SLEEP_S)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug(f"[ci-alerts] loop iteration error: {exc}")
+            await asyncio.sleep(_CI_ALERT_LOOP_SLEEP_S)
+    finally:
+        try:
+            await asyncio.shield(_bglease.release_lease(
+                db, lock_id, owner_id,
+            ))
+        except Exception:
+            pass

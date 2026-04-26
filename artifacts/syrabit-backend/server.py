@@ -965,10 +965,13 @@ async def lifespan(app):
     asyncio.create_task(_seo_health_alert_loop())
     asyncio.create_task(_seo_weekly_digest_loop())
     # Task #940: weekly entity-SEO health worker (Wikidata, Wikipedia,
-    # Crunchbase, sameAs, Google KG). Leader-gated like the cf bot
-    # report so only one replica probes the upstream APIs per week.
-    if _is_leader:
-        asyncio.create_task(_entity_seo_loop())
+    # Crunchbase, sameAs, Google KG).
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``entity_seo_lease``), not the per-machine ``_is_leader`` file
+    # lock — Railway runs N replicas and each had its own file lock,
+    # so all of them previously fired the weekly Wikidata/KG probe.
+    # Followers stand down on each tick.
+    asyncio.create_task(_entity_seo_loop())
     # Task #937: nightly autonomous topic-discovery agent. Leader-gated
     # so only one replica fires the per-day run; the loop also holds an
     # atomic per-yyyy-mm-dd lock as a belt-and-braces guard.
@@ -987,15 +990,15 @@ async def lifespan(app):
         from seo_remediation_service import _seo_remediation_loop
         asyncio.create_task(_seo_remediation_loop(db))
     # Task #939: agentic internal-linker nightly maintenance loop.
-    # Leader-gated; the loop holds an atomic per-UTC-date marker on
-    # the budget doc so a leader fail-over inside the same day does
-    # not double-run the nightly pass. Stage 3 hits its
-    # fire-and-forget per-page entry point on every replica
-    # (no leader gate needed) — only the nightly maintenance pass
-    # is guarded.
-    if _is_leader:
-        from seo_internal_linker import _internal_linker_loop
-        asyncio.create_task(_internal_linker_loop(db))
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``internal_linker_lease``), not the per-machine ``_is_leader``
+    # file lock. The per-UTC-date marker on the budget doc remains as
+    # belt-and-braces against fail-over inside the same day. Stage 3
+    # still hits its fire-and-forget per-page entry point on every
+    # replica (no lease) — only the nightly maintenance pass is
+    # guarded.
+    from seo_internal_linker import _internal_linker_loop
+    asyncio.create_task(_internal_linker_loop(db))
     # Task #587 — nightly live grounded-recall benchmark + alerting.
     # Runs once per UTC day (configurable via GROUNDED_RECALL_NIGHTLY_*),
     # writes bench/results/latest.json so the admin tile reflects the
@@ -1057,31 +1060,35 @@ async def lifespan(app):
     # Task #491 — liveness heartbeat for the staleness monitor itself.
     # Every 6h, verify the monitor's lock-doc ``updated_at`` is younger
     # than ~3h (2x its 1h cadence) and page admins exactly once if not.
-    # Leader-gated so a multi-replica deployment doesn't N×-page when
-    # the monitor goes quiet; the per-doc CAS inside the loop is a
-    # defense-in-depth against leader fail-over mid-iteration.
-    if _is_leader:
-        try:
-            from seo_engine import _seo_staleness_heartbeat_loop
-            asyncio.create_task(_seo_staleness_heartbeat_loop())
-        except Exception as _sap_hb_err:
-            logger.warning(
-                f"seo staleness heartbeat loop not started: {_sap_hb_err}")
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``seo_staleness_heartbeat_lease``), not the per-machine
+    # ``_is_leader`` file lock — Railway runs N replicas and each had
+    # its own file lock, so all of them previously paged when the
+    # monitor went quiet. The per-doc CAS inside the alerter remains
+    # as defense-in-depth against fail-over mid-iteration.
+    try:
+        from seo_engine import _seo_staleness_heartbeat_loop
+        asyncio.create_task(_seo_staleness_heartbeat_loop())
+    except Exception as _sap_hb_err:
+        logger.warning(
+            f"seo staleness heartbeat loop not started: {_sap_hb_err}")
     # Task #484 — poll GitHub Actions every 10 min and email admins +
     # drop an in-app notification when the latest main-branch run for
     # backend-tests/frontend-tests flips to failure (or stays red past
     # the 6h re-page window). Recovery alert fires once on red→green.
-    # Leader-gated so multi-replica deployments don't burn the GitHub
-    # API quota N×; the per-workflow CAS inside the loop is a defense
-    # in depth in case leadership fails over mid-poll. No-ops cleanly
-    # when GITHUB_REPO is unset (e.g. local dev).
-    if _is_leader:
-        try:
-            from routes.admin_ci_alerts import _ci_alert_loop
-            asyncio.create_task(_ci_alert_loop())
-        except Exception as _ci_alert_err:
-            logger.warning(
-                f"ci alert loop not started: {_ci_alert_err}")
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``ci_alert_lease``), not the per-machine ``_is_leader`` file
+    # lock — Railway runs N replicas and each had its own file lock,
+    # so the GitHub API quota was being burned N×. The per-workflow
+    # CAS inside the loop remains as defense-in-depth in case
+    # leadership fails over mid-poll. No-ops cleanly when GITHUB_REPO
+    # is unset (e.g. local dev).
+    try:
+        from routes.admin_ci_alerts import _ci_alert_loop
+        asyncio.create_task(_ci_alert_loop())
+    except Exception as _ci_alert_err:
+        logger.warning(
+            f"ci alert loop not started: {_ci_alert_err}")
     # Task #728 — hourly poll of the in-process Trustpilot aggregate
     # cache; emails admins + drops an in-app notification when the
     # /api/config/trustpilot/aggregate feed has had no successful
@@ -1107,74 +1114,83 @@ async def lifespan(app):
     # GitHub Actions cron itself stops checking in (>36h since the last
     # heartbeat), distinct from the Task #728 data-staleness alert so
     # on-call can tell "Trustpilot is down" apart from "our cron has
-    # been disabled". Leader-gated: the Mongo state doc is global, so
-    # one replica is enough; running on every replica would just spam
-    # the CAS without changing behaviour.
-    if _is_leader:
-        try:
-            from routes.admin_trustpilot_cron_alerts import (
-                _trustpilot_refresh_cron_alert_loop,
-            )
-            asyncio.create_task(_trustpilot_refresh_cron_alert_loop())
-        except Exception as _tp_cron_alert_err:
-            logger.warning(
-                "trustpilot refresh-cron alert loop not started: "
-                f"{_tp_cron_alert_err}"
-            )
+    # been disabled".
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``trustpilot_refresh_cron_alert_lease``), not the per-machine
+    # ``_is_leader`` file lock — Railway runs N replicas and each
+    # had its own file lock, so all of them previously hammered the
+    # CAS each tick.
+    try:
+        from routes.admin_trustpilot_cron_alerts import (
+            _trustpilot_refresh_cron_alert_loop,
+        )
+        asyncio.create_task(_trustpilot_refresh_cron_alert_loop())
+    except Exception as _tp_cron_alert_err:
+        logger.warning(
+            "trustpilot refresh-cron alert loop not started: "
+            f"{_tp_cron_alert_err}"
+        )
     # Task #831 — symmetric silence alerter for the daily Cloudflare
     # firewall drift cron (.github/workflows/cf-waf-drift-daily.yml,
     # Task #828). The workflow already posts per-run Slack alerts on
     # drift; this loop adds the missing "the workflow itself stopped
     # running" signal, mirroring the Task #751 pattern. Leader-gated
-    # for the same reason: the Mongo state doc is global, so one
-    # replica is enough; running on every replica would just spam the
-    # CAS without changing behaviour.
-    if _is_leader:
-        try:
-            from routes.admin_cf_waf_drift_cron_alerts import (
-                _cf_waf_drift_cron_alert_loop,
-            )
-            asyncio.create_task(_cf_waf_drift_cron_alert_loop())
-        except Exception as _cfw_cron_alert_err:
-            logger.warning(
-                "cf-waf-drift cron alert loop not started: "
-                f"{_cfw_cron_alert_err}"
-            )
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``cf_waf_drift_cron_alert_lease``), not the per-machine
+    # ``_is_leader`` file lock — Railway runs N replicas and each had
+    # its own file lock, so all of them previously hammered the CAS
+    # each tick.
+    try:
+        from routes.admin_cf_waf_drift_cron_alerts import (
+            _cf_waf_drift_cron_alert_loop,
+        )
+        asyncio.create_task(_cf_waf_drift_cron_alert_loop())
+    except Exception as _cfw_cron_alert_err:
+        logger.warning(
+            "cf-waf-drift cron alert loop not started: "
+            f"{_cfw_cron_alert_err}"
+        )
     # Task #893 — silence-alerter for the edge-proxy-deploy CI workflow.
     # Task #882 added a red/amber/green pill to AdminHealth that polls
     # the GitHub Actions REST API for the latest edge-proxy-deploy run;
     # this loop pages on-call (email + in-app + best-effort Slack) when
     # that pill flips to silent (failure) or degraded (>7d stale) so a
     # red smoke-preview regression at 03:00 UTC doesn't wait for an
-    # admin to open the dashboard. Leader-gated for the same reason
-    # the cf-waf-drift loop is: the Mongo state doc is global, so one
-    # replica is enough; running on every replica would just spam the
-    # GitHub REST quota without changing alert behaviour.
-    if _is_leader:
-        try:
-            from routes.admin_edge_proxy_deploy_cron_alerts import (
-                _edge_proxy_deploy_cron_alert_loop,
-            )
-            asyncio.create_task(_edge_proxy_deploy_cron_alert_loop())
-        except Exception as _epd_cron_alert_err:
-            logger.warning(
-                "edge-proxy-deploy cron alert loop not started: "
-                f"{_epd_cron_alert_err}"
-            )
-    if _is_leader:
-        # Single-leader: only one replica should query the CF GraphQL API
-        # and write the per-UA report each Monday.
-        asyncio.create_task(_cf_bot_report_loop())
-    # Task #387 — leader-gated nightly Cloudflare Pages deploy hook so the
-    # prerendered subject/chapter HTML stays current even when no admin
-    # edits trigger a debounced refresh. No-ops if CF_PAGES_DEPLOY_HOOK_URL
-    # is unset.
-    if _is_leader:
-        try:
-            import pages_deploy as _pages_deploy
-            asyncio.create_task(_pages_deploy.nightly_loop())
-        except Exception as _pd_err:
-            logger.warning(f"pages_deploy nightly loop not started: {_pd_err}")
+    # admin to open the dashboard.
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``edge_proxy_deploy_cron_alert_lease``), not the per-machine
+    # ``_is_leader`` file lock — Railway runs N replicas and each had
+    # its own file lock, so the GitHub REST quota was being burned N×.
+    try:
+        from routes.admin_edge_proxy_deploy_cron_alerts import (
+            _edge_proxy_deploy_cron_alert_loop,
+        )
+        asyncio.create_task(_edge_proxy_deploy_cron_alert_loop())
+    except Exception as _epd_cron_alert_err:
+        logger.warning(
+            "edge-proxy-deploy cron alert loop not started: "
+            f"{_epd_cron_alert_err}"
+        )
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``cf_bot_report_lease``), not the per-machine ``_is_leader``
+    # file lock — Railway runs N replicas and each had its own file
+    # lock, so all of them previously polled the CF GraphQL API every
+    # 5 min, multiplying the analytics quota cost.
+    asyncio.create_task(_cf_bot_report_loop())
+    # Task #387 — nightly Cloudflare Pages deploy hook so the
+    # prerendered subject/chapter HTML stays current even when no
+    # admin edits trigger a debounced refresh. No-ops if
+    # CF_PAGES_DEPLOY_HOOK_URL is unset.
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``pages_deploy_nightly_lease``), not the per-machine
+    # ``_is_leader`` file lock — Railway runs N replicas and each
+    # had its own file lock, so the deploy hook fired N CF Pages
+    # builds per night.
+    try:
+        import pages_deploy as _pages_deploy
+        asyncio.create_task(_pages_deploy.nightly_loop())
+    except Exception as _pd_err:
+        logger.warning(f"pages_deploy nightly loop not started: {_pd_err}")
 
     # Task #314 uses atomic Mongo CAS via db.job_locks for dedup across
     # replicas, so it does not need a leader gate.
@@ -1184,10 +1200,12 @@ async def lifespan(app):
     from routes.admin_advanced import _collection_size_snapshot_loop, _cache_warm_loop
     asyncio.create_task(_collection_size_snapshot_loop())
     # Auto pre-warm AI response cache for the most common queries (Task #282 T004)
-    # Leader-gated so multi-worker deployments don't run the warm cycle N times
-    # and burn N× the LLM budget every 6h.
-    if _is_leader:
-        asyncio.create_task(_cache_warm_loop())
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``cache_warm_lease``), not the per-machine ``_is_leader`` file
+    # lock — Railway runs N replicas and each had its own file lock,
+    # so the warm cycle was burning N× the LLM budget every 6h.
+    # Followers stand down each tick.
+    asyncio.create_task(_cache_warm_loop())
 
     # Task #310 — rehydrate chat speed-up metrics from Redis and start the
     # periodic flush so the per-day counters and warm-run history survive

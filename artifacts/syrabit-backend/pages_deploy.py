@@ -24,7 +24,8 @@ import asyncio
 import logging
 import os
 import time
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Any, Optional
 
 import httpx
 
@@ -181,19 +182,117 @@ def status() -> dict:
     }
 
 
+# Task #950 — Mongo-backed lease so only ONE replica fires the
+# nightly Cloudflare Pages deploy hook. Previously gated by
+# ``_is_leader`` in server.py, which is per-machine and double-fires on
+# multi-replica Railway deployments — the deploy hook triggers a real
+# CF Pages build for each call, so every duplicate run wastes a build
+# minute and shows up as a redundant deploy in the dashboard.
+#
+# Followers poll at a sub-interval cadence (so a leader crash is
+# detected within one follower window), but the actual deploy hook is
+# only fired when the cycle elapses AND the lease is held. The cycle
+# clock is tracked via ``last_fired_at`` on the lease doc, so the
+# deploy hook fires at most once per ``NIGHTLY_INTERVAL_SEC`` across
+# the replica fleet — and the next replica to win the lease after a
+# fail-over picks up exactly where the dead leader left off, no
+# matter when in the cycle the death occurred.
+_NIGHTLY_DEPLOY_LOCK_ID = "pages_deploy_nightly_lease"
+_NIGHTLY_DEPLOY_FOLLOWER_INTERVAL_S = max(60, min(600, NIGHTLY_INTERVAL_SEC // 12 or 60))
+_NIGHTLY_DEPLOY_LAST_FIRED_FIELD = "last_fired_at"
+
+
+def _parse_iso_utc(s: Any) -> Optional[datetime]:
+    """Best-effort parse of an ISO-8601 UTC timestamp from Mongo."""
+    if isinstance(s, datetime):
+        return s if s.tzinfo else s.replace(tzinfo=timezone.utc)
+    if not isinstance(s, str) or not s:
+        return None
+    try:
+        # ``fromisoformat`` accepts both ``+00:00`` and naive strings.
+        out = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return out if out.tzinfo else out.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
 async def nightly_loop() -> None:
     """Fire the deploy hook once per `NIGHTLY_INTERVAL_SEC` as a safety net.
 
     Runs only when configured. Catches its own errors so a bad response
     never kills the loop.
+
+    Cross-replica dedup (Task #950): every replica may run this loop,
+    but only the lease-holder may fire the CF Pages deploy hook. The
+    loop polls at a follower interval so a leader crash is detected
+    quickly, and the deploy itself is gated on a ``last_fired_at``
+    marker stored next to the lease so the hook fires at most once
+    per ``NIGHTLY_INTERVAL_SEC`` across the fleet — including the
+    fail-over case where a follower takes over mid-cycle.
     """
     if not is_configured() or NIGHTLY_INTERVAL_SEC <= 0:
         return
-    while True:
+    # Local import keeps the module load order independent of deps/db.
+    import background_lease as _bglease
+    from deps import db
+    owner_id = _bglease.make_owner_id("pages-deploy-nightly")
+    ttl_s = max(NIGHTLY_INTERVAL_SEC * 3, 24 * 3600)
+    try:
+        while True:
+            try:
+                # Poll at the follower cadence so a leader crash is
+                # picked up within one follower interval, not after
+                # a full nightly cycle.
+                await asyncio.sleep(_NIGHTLY_DEPLOY_FOLLOWER_INTERVAL_S)
+                if not await _bglease.try_acquire_lease(
+                    db, _NIGHTLY_DEPLOY_LOCK_ID, owner_id, ttl_s,
+                ):
+                    continue
+                # Lease held — check whether the cycle has elapsed.
+                # ``last_fired_at`` lives on the lease doc; we use a
+                # plain find here (the lease doc was just upserted by
+                # try_acquire so it always exists at this point).
+                doc = await db.job_locks.find_one(
+                    {"_id": _NIGHTLY_DEPLOY_LOCK_ID})
+                last_fired = _parse_iso_utc(
+                    (doc or {}).get(_NIGHTLY_DEPLOY_LAST_FIRED_FIELD))
+                now = datetime.now(timezone.utc)
+                if last_fired is not None and (
+                    now - last_fired
+                ).total_seconds() < NIGHTLY_INTERVAL_SEC:
+                    # Still inside the current cycle — peer (or this
+                    # replica earlier in its lifetime) already fired.
+                    continue
+                fired_ok = await _fire_now(["nightly_safety_net"])
+                # Stamp the cycle ONLY on a successful fire so a
+                # transient deploy-hook failure (CF outage, 5xx, key
+                # rotation) is retried on the next follower tick
+                # instead of being silently suppressed for the rest
+                # of the cycle. ``_fire_now`` already logs the
+                # failure path, so we just skip the stamp here.
+                if not fired_ok:
+                    continue
+                try:
+                    await db.job_locks.update_one(
+                        {"_id": _NIGHTLY_DEPLOY_LOCK_ID},
+                        {"$set": {
+                            _NIGHTLY_DEPLOY_LAST_FIRED_FIELD:
+                                now.isoformat(),
+                        }},
+                    )
+                except Exception:
+                    logger.exception(
+                        "CF Pages nightly: failed to stamp last_fired_at"
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "CF Pages nightly deploy loop iteration failed")
+    finally:
         try:
-            await asyncio.sleep(NIGHTLY_INTERVAL_SEC)
-            await _fire_now(["nightly_safety_net"])
-        except asyncio.CancelledError:
-            raise
+            await asyncio.shield(_bglease.release_lease(
+                db, _NIGHTLY_DEPLOY_LOCK_ID, owner_id,
+            ))
         except Exception:
-            logger.exception("CF Pages nightly deploy loop iteration failed")
+            pass

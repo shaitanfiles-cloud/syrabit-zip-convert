@@ -1142,19 +1142,53 @@ async def _entity_seo_catchup_if_missed(db, now_utc: datetime) -> Dict[str, Any]
 
 async def _entity_seo_loop():
     """Background loop. Boots after a 15-min warmup, runs catch-up once,
-    then polls every 5 min and fires inside Mon 04:30 UTC ±15 min."""
+    then polls every 5 min and fires inside Mon 04:30 UTC ±15 min.
+
+    Cross-replica dedup (Task #950): every replica may run this loop,
+    but only the lease-holder polls/fires the weekly entity SEO pass.
+    The per-week CAS in ``_claim_entity_seo_slot`` remains as
+    defense-in-depth for the fail-over edge case where the lease
+    changes hands during the Mon 04:30 UTC window. Boot catch-up only
+    runs when we hold the lease — otherwise a fresh replica racing in
+    would replay the same catch-up the incumbent leader already did.
+    """
     from deps import db, is_mongo_available
+    import background_lease as _bglease
+    owner_id = _bglease.make_owner_id("entity-seo")
+    lock_id = "entity_seo_lease"
+    ttl_s = max(900, _LOOP_SLEEP_S * 3)
+    follower_s = max(60, _LOOP_SLEEP_S)
     await asyncio.sleep(_WARMUP_S)
     try:
-        if await is_mongo_available():
-            await _entity_seo_catchup_if_missed(db, datetime.now(timezone.utc))
-    except Exception as exc:
-        logger.debug("[entity SEO] catch-up error: %s", exc)
-    while True:
         try:
-            now_utc = datetime.now(timezone.utc)
-            if await is_mongo_available():
-                await _try_run_entity_seo_once(db, now_utc)
+            if await is_mongo_available() and await _bglease.try_acquire_lease(
+                db, lock_id, owner_id, ttl_s,
+            ):
+                await _entity_seo_catchup_if_missed(
+                    db, datetime.now(timezone.utc))
         except Exception as exc:
-            logger.debug("[entity SEO] loop iteration error: %s", exc)
-        await asyncio.sleep(_LOOP_SLEEP_S)
+            logger.debug("[entity SEO] catch-up error: %s", exc)
+        while True:
+            try:
+                now_utc = datetime.now(timezone.utc)
+                if not await is_mongo_available():
+                    await asyncio.sleep(follower_s)
+                    continue
+                if not await _bglease.try_acquire_lease(
+                    db, lock_id, owner_id, ttl_s,
+                ):
+                    await asyncio.sleep(follower_s)
+                    continue
+                await _try_run_entity_seo_once(db, now_utc)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug("[entity SEO] loop iteration error: %s", exc)
+            await asyncio.sleep(_LOOP_SLEEP_S)
+    finally:
+        try:
+            await asyncio.shield(_bglease.release_lease(
+                db, lock_id, owner_id,
+            ))
+        except Exception:
+            pass
