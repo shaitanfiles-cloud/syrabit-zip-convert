@@ -7,7 +7,7 @@ import logging
 
 from config import (
     mark_cf_gateway_down, get_provider_base_url,
-    byok_headers,
+    byok_headers, BYOK_PLACEHOLDER,
 )
 
 _log = logging.getLogger(__name__)
@@ -105,16 +105,23 @@ class LlmChat:
         #   cf-aig-byok-key:true      (CF MAY substitute the stored key upstream)
         #   cf-aig-cache-ttl:<N>      (cache hint)
         #   cf-aig-authorization:…    (only if Authenticated Gateway is on)
-        # We pass ``clear_upstream_auth=False`` because every caller in this
-        # module supplies a REAL provider api_key to AsyncGroq/AsyncOpenAI;
-        # the SDK auto-attaches ``Authorization: Bearer <real_key>`` and we
-        # want CF to forward that to the upstream provider. The previous
-        # default cleared the header, which produced upstream 400 "Missing
-        # or invalid Authorization header" responses whenever the CF
-        # dashboard's BYOK binding was missing or stale (Task #944 follow-up
-        # from the chat-broken triage on 2026-04-26). Returns None when the
-        # gateway is down so the SDK omits extra_headers entirely.
-        h = byok_headers(clear_upstream_auth=False)
+        #
+        # The decision of whether to clear the SDK's auto-attached
+        # ``Authorization: Bearer <self.api_key>`` is per-instance, derived
+        # from the api_key the caller is about to send (FIXED 2026-04-26
+        # after architect review surfaced a BYOK regression):
+        #   • self.api_key == BYOK_PLACEHOLDER ("x") → BYOK runtime, CF
+        #     must substitute the stored key upstream → CLEAR Authorization
+        #     so CF doesn't forward "Bearer x" (which 401s upstream).
+        #   • self.api_key is a REAL provider key → keep Authorization so
+        #     CF forwards it to the upstream provider. The original bug
+        #     (default cleared) produced 400 "Missing or invalid
+        #     Authorization header" from Google Gemini whenever the CF
+        #     dashboard's BYOK binding was missing or stale.
+        # Returns None when the gateway is down so the SDK omits
+        # extra_headers entirely.
+        clear = (self.api_key == BYOK_PLACEHOLDER)
+        h = byok_headers(clear_upstream_auth=clear)
         return h or None
 
     @staticmethod

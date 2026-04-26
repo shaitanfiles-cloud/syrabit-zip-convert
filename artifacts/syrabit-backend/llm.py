@@ -35,7 +35,7 @@ _MODEL_MAX_OUTPUT_TOKENS = {
 def _clamp_max_tokens(model: str, max_tokens: int) -> int:
     cap = _MODEL_MAX_OUTPUT_TOKENS.get(model)
     return min(max_tokens, cap) if cap else max_tokens
-from typing import Dict
+from typing import Dict, Optional
 from fastapi import HTTPException
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 from config import (
@@ -43,7 +43,7 @@ from config import (
     _GROQ_KEY, _GROQ_KEY_2, _GEMINI_KEY, _GEMINI_KEY_2, _OPENAI_KEY,
     _SARVAM_LLM_KEY, _SARVAM_LLM_KEY_2, _SARVAM_LLM_KEY_3, _CEREBRAS_KEY, _OPENROUTER_KEY, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
     is_cf_gateway_up, mark_cf_gateway_down, get_provider_base_url,
-    byok_headers,
+    byok_headers, BYOK_PLACEHOLDER,
     VERTEX_GEMINI_MODEL,
 )
 import vertex_chat as _vertex_chat
@@ -565,7 +565,7 @@ async def _call_sarvam_llm(messages: list, api_key: str, model: str, max_tokens:
     result = re.sub(r'<think>.*$', '', result, flags=re.DOTALL).strip()
     return result
 
-def _cf_cache_headers(clear_upstream_auth: bool = False) -> dict:
+def _cf_cache_headers(api_key: Optional[str] = None, *, clear_upstream_auth: Optional[bool] = None) -> dict:
     # Delegates to config.byok_headers() which returns:
     #   cf-aig-byok-key:true      — CF may substitute the stored BYOK key upstream
     #   cf-aig-cache-ttl:<N>      — cache TTL hint
@@ -573,16 +573,22 @@ def _cf_cache_headers(clear_upstream_auth: bool = False) -> dict:
     # Returns {} when the gateway is down — callers should raise or continue
     # without the caching hint.
     #
-    # IMPORTANT (default flipped 2026-04-26): we do NOT clear the upstream
-    # ``Authorization`` header by default. Every caller in llm.py passes a
-    # REAL provider api_key into the OpenAI SDK, which auto-attaches
-    # ``Authorization: Bearer <key>``. Clearing that header (the old default)
-    # caused CF to forward an empty Authorization header to the upstream
-    # provider, producing the long-running 400 "Missing or invalid
-    # Authorization header" error from Google Gemini even when GEMINI_API_KEY
-    # was healthy. Pass ``clear_upstream_auth=True`` only on true BYOK
-    # callsites that pass a placeholder api_key and rely on CF's stored
-    # BYOK key for the upstream.
+    # Auth-header behaviour (FIXED 2026-04-26 after architect review):
+    # The decision of whether to clear the SDK's auto-attached
+    # ``Authorization: Bearer <api_key>`` is per-call, derived from the
+    # api_key the caller is about to send:
+    #   • api_key == BYOK_PLACEHOLDER ("x")  → BYOK mode, CF must
+    #     substitute the stored key upstream → CLEAR Authorization
+    #     so CF doesn't forward "Bearer x" (which 401s upstream).
+    #   • api_key is a REAL provider key      → keep Authorization so
+    #     CF forwards it to the upstream provider. The original bug
+    #     (default cleared) produced 400 "Missing or invalid
+    #     Authorization header" from Google Gemini whenever the CF
+    #     dashboard's BYOK binding was missing or stale.
+    # Callers can still force a value via ``clear_upstream_auth=...``
+    # for tests or special bypass paths; otherwise pass ``api_key``.
+    if clear_upstream_auth is None:
+        clear_upstream_auth = (api_key == BYOK_PLACEHOLDER)
     return byok_headers(clear_upstream_auth=clear_upstream_auth)
 
 def _is_cf_connection_error(exc: Exception) -> bool:
@@ -606,7 +612,10 @@ async def _call_gemini(messages: list, api_key: str, model: str, max_tokens: int
     try:
         resp = await client.chat.completions.create(
             model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
-            extra_headers=_cf_cache_headers() or None,
+            # Pass api_key so the BYOK-aware helper can decide whether to
+            # clear the upstream Authorization (placeholder → clear so CF
+            # substitutes; real key → keep so SDK bearer reaches upstream).
+            extra_headers=_cf_cache_headers(api_key=api_key) or None,
         )
     except _oai.APIConnectionError as e:
         if base != direct_base and _is_cf_connection_error(e):
@@ -636,7 +645,9 @@ async def _call_openai_compat(messages: list, api_key: str, model: str, max_toke
     try:
         resp = await client.chat.completions.create(
             model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
-            extra_headers=_cf_cache_headers() or None,
+            # See _call_gemini for the rationale — pass api_key so BYOK
+            # placeholders correctly trigger the clear-Authorization branch.
+            extra_headers=_cf_cache_headers(api_key=api_key) or None,
         )
     except _oai.APIConnectionError as e:
         if base != fallback_base and _is_cf_connection_error(e):
