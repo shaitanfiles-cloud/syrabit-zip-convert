@@ -261,3 +261,46 @@ def test_clear_drops_logs_and_writes_breadcrumb(client):
                for rec in client._activity)  # type: ignore[attr-defined]
     # Backend record survived the scoped purge.
     assert len(db[dao.UNIFIED_LOGS_COLLECTION].docs) == 1
+
+
+def test_clear_rejects_unknown_sources_instead_of_full_purge(client):
+    """Footgun guard: ?sources=garbage MUST 400 — never silently
+    broaden into a full purge of every source."""
+    db = client._db  # type: ignore[attr-defined]
+    asyncio.run(dao.insert_logs(db, [
+        {"source": "edge",    "status": 200},
+        {"source": "backend", "status": 200},
+    ], default_source="edge"))
+    r = client.delete("/api/admin/logs?sources=blogspot,definitely_not_a_source")
+    assert r.status_code == 400, r.text
+    assert "Refusing destructive purge" in r.json()["detail"]
+    # Nothing should have been deleted by the rejected request.
+    assert len(db[dao.UNIFIED_LOGS_COLLECTION].docs) == 2
+
+
+def test_clear_with_mix_of_valid_and_invalid_sources_only_purges_valid(client):
+    db = client._db  # type: ignore[attr-defined]
+    asyncio.run(dao.insert_logs(db, [
+        {"source": "edge",    "status": 200},
+        {"source": "backend", "status": 200},
+    ], default_source="edge"))
+    # 'edge' is valid, 'garbage' is silently dropped — should purge
+    # only the edge row (NOT a full purge).
+    r = client.delete("/api/admin/logs?sources=edge,garbage")
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == 1
+    assert len(db[dao.UNIFIED_LOGS_COLLECTION].docs) == 1
+
+
+def test_clear_with_no_sources_param_does_full_purge(client):
+    """The ONLY way to trigger a full purge is to omit ?sources=
+    entirely. This is the documented intentional behaviour."""
+    db = client._db  # type: ignore[attr-defined]
+    asyncio.run(dao.insert_logs(db, [
+        {"source": "edge",    "status": 200},
+        {"source": "backend", "status": 200},
+    ], default_source="edge"))
+    r = client.delete("/api/admin/logs")
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == 2
+    assert len(db[dao.UNIFIED_LOGS_COLLECTION].docs) == 0

@@ -458,8 +458,35 @@ async def admin_clear_logs(
 ):
     """Destructive purge. Optionally scope by ``sources`` so an admin
     can clear (e.g.) only ``edge`` while keeping ``backend`` history.
-    Drops a self-audit breadcrumb in activity_log."""
-    filters = {"sources": _parse_csv_list(sources)}
+    Drops a self-audit breadcrumb in activity_log.
+
+    SAFETY: if the caller supplied ``sources=`` but every value was
+    rejected (typo, unknown name), we 400 instead of silently
+    broadening to a full purge. A full purge requires explicitly
+    omitting the parameter altogether — never ``sources=garbage``.
+    """
+    parsed_sources = _parse_csv_list(sources)
+    # Distinguish "user passed nothing → full purge is intentional"
+    # from "user passed a value that we couldn't honour → accidental
+    # full purge". The raw query string is the source of truth, NOT
+    # whether the parsed list is empty (which the same for both cases).
+    if sources is not None and sources.strip():
+        valid_sources = [s for s in parsed_sources if s in _dao.ALLOWED_SOURCES]
+        invalid_sources = [s for s in parsed_sources if s not in _dao.ALLOWED_SOURCES]
+        if not valid_sources:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Refusing destructive purge: 'sources' was supplied but "
+                    f"none of {invalid_sources or [sources]} are recognised. "
+                    f"Allowed values: {sorted(_dao.ALLOWED_SOURCES)}. "
+                    f"To purge ALL sources, omit the 'sources' query param entirely."
+                ),
+            )
+        # Drop unknown values silently from this point on so the DAO
+        # only ever sees recognised source names.
+        parsed_sources = valid_sources
+    filters = {"sources": parsed_sources}
     deleted = await _dao.clear_logs(db, filters=filters)
     await supa_insert_activity_log({
         "id": str(uuid.uuid4()),

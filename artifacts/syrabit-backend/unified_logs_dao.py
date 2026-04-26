@@ -82,8 +82,17 @@ _SLOW_THRESHOLD_MS = 1500
 
 
 def _ttl_days() -> int:
-    """Resolve TTL days at call-time so tests can monkeypatch the env."""
-    raw = (os.environ.get("LOG_RETENTION_DAYS") or "").strip()
+    """Resolve TTL days at call-time so tests can monkeypatch the env.
+
+    Canonical env var is ``LOG_RETENTION_DAYS``. ``UNIFIED_LOGS_TTL_DAYS``
+    is accepted as an alias to match the name surfaced in the admin UI
+    safeguards card and replit.md docs — historically the runtime
+    code used the shorter name and the docs/UI used the longer one,
+    so we honour both to remove operator footguns. If both are set,
+    the canonical ``LOG_RETENTION_DAYS`` wins.
+    """
+    raw = (os.environ.get("LOG_RETENTION_DAYS")
+           or os.environ.get("UNIFIED_LOGS_TTL_DAYS") or "").strip()
     if not raw:
         return DEFAULT_TTL_DAYS
     try:

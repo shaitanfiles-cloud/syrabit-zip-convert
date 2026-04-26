@@ -54,6 +54,11 @@ export interface EdgeLogShipperEnv {
   EDGE_LOG_SAMPLE_RATE?: string;
   EDGE_LOG_FLUSH_BATCH?: string;
   EDGE_LOG_FLUSH_AGE_MS?: string;
+  /** Wall-clock ms after which a single buffered record is flushed
+   *  even if the size/age thresholds haven't fired. Keeps low-traffic
+   *  windows from leaving a trickle of records in isolate memory
+   *  until eviction. Default 5000ms. */
+  EDGE_LOG_DEFERRED_FLUSH_MS?: string;
 }
 
 export type EdgeLogMeta = {
