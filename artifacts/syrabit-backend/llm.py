@@ -565,15 +565,25 @@ async def _call_sarvam_llm(messages: list, api_key: str, model: str, max_tokens:
     result = re.sub(r'<think>.*$', '', result, flags=re.DOTALL).strip()
     return result
 
-def _cf_cache_headers() -> dict:
+def _cf_cache_headers(clear_upstream_auth: bool = False) -> dict:
     # Delegates to config.byok_headers() which returns:
-    #   cf-aig-byok-key:default   — CF substitutes the stored BYOK key upstream
+    #   cf-aig-byok-key:true      — CF may substitute the stored BYOK key upstream
     #   cf-aig-cache-ttl:<N>      — cache TTL hint
     #   cf-aig-authorization:…    — only when Authenticated Gateway mode is on
     # Returns {} when the gateway is down — callers should raise or continue
-    # without the caching hint. With BYOK active the placeholder api_key in
-    # the openai client is ignored by CF; the stored BYOK key is used instead.
-    return byok_headers()
+    # without the caching hint.
+    #
+    # IMPORTANT (default flipped 2026-04-26): we do NOT clear the upstream
+    # ``Authorization`` header by default. Every caller in llm.py passes a
+    # REAL provider api_key into the OpenAI SDK, which auto-attaches
+    # ``Authorization: Bearer <key>``. Clearing that header (the old default)
+    # caused CF to forward an empty Authorization header to the upstream
+    # provider, producing the long-running 400 "Missing or invalid
+    # Authorization header" error from Google Gemini even when GEMINI_API_KEY
+    # was healthy. Pass ``clear_upstream_auth=True`` only on true BYOK
+    # callsites that pass a placeholder api_key and rely on CF's stored
+    # BYOK key for the upstream.
+    return byok_headers(clear_upstream_auth=clear_upstream_auth)
 
 def _is_cf_connection_error(exc: Exception) -> bool:
     err = str(exc).lower()

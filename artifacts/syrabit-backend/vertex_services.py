@@ -102,17 +102,25 @@ _EMBED_DIMENSIONS = 1024
 
 # ── Auth detection ──────────────────────────────────────────────────────────
 # Credential sources, in priority order:
-#   1. VERTEX_SERVICE_ACCOUNT          — explicit Syrabit-side SA JSON
-#   2. GOOGLE_APPLICATION_CREDENTIALS_JSON — canonical Google env var, used
-#      by the rest of the stack (admin tools, GCS clients, etc.). Adding it
-#      here means a single Google service-account secret can power both the
-#      AI client and any other GCP integration without duplication.
-#   3. GEMINI_API_KEY                  — AIza-style direct AI Studio key
-#      (or a JSON SA blob if someone parked it here historically).
+#   1. VERTEX_SERVICE_ACCOUNT          — explicit Syrabit-side SA JSON. When
+#      the operator deliberately wires this, they want the Vertex AI path
+#      (regional endpoint, IAM-bound), so it always wins.
+#   2. GEMINI_API_KEY                  — AIza-style direct AI Studio key.
+#      Preferred over the generic GCP SA below because it (a) targets
+#      generativelanguage.googleapis.com directly without needing
+#      ``roles/aiplatform.user`` granted on the SA's project, and (b) is
+#      the same key the LLM module successfully uses for chat — keeping
+#      both paths on the same auth avoids the long-running "chat works
+#      but vertex_services probe fails" split-brain we saw on 2026-04-26.
+#   3. GOOGLE_APPLICATION_CREDENTIALS_JSON — canonical Google env var,
+#      used by GCS/Cloud Run/admin tooling. Falls back here only when no
+#      AI-specific credential was provided, so a generic project-wide SA
+#      that happens to lack ``aiplatform.user`` cannot silently disable
+#      Gemini for the entire deploy.
 _KEY_RAW = (
     os.getenv("VERTEX_SERVICE_ACCOUNT", "").strip()
-    or os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON", "").strip()
     or os.getenv("GEMINI_API_KEY", "").strip()
+    or os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON", "").strip()
 )
 
 _SA_CREDS         = None

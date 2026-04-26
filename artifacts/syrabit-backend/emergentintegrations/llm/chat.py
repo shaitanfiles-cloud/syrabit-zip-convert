@@ -102,13 +102,19 @@ class LlmChat:
 
     def _cf_cache_headers(self) -> dict | None:
         # Delegates to config.byok_headers() — includes:
-        #   cf-aig-byok-key:default   (CF substitutes the stored key upstream)
+        #   cf-aig-byok-key:true      (CF MAY substitute the stored key upstream)
         #   cf-aig-cache-ttl:<N>      (cache hint)
         #   cf-aig-authorization:…    (only if Authenticated Gateway is on)
-        # The placeholder api_key passed to AsyncGroq/AsyncOpenAI is ignored
-        # by CF — upstream sees the real BYOK-stored key instead. Returns
-        # None when the gateway is down so openai SDK omits extra_headers.
-        h = byok_headers()
+        # We pass ``clear_upstream_auth=False`` because every caller in this
+        # module supplies a REAL provider api_key to AsyncGroq/AsyncOpenAI;
+        # the SDK auto-attaches ``Authorization: Bearer <real_key>`` and we
+        # want CF to forward that to the upstream provider. The previous
+        # default cleared the header, which produced upstream 400 "Missing
+        # or invalid Authorization header" responses whenever the CF
+        # dashboard's BYOK binding was missing or stale (Task #944 follow-up
+        # from the chat-broken triage on 2026-04-26). Returns None when the
+        # gateway is down so the SDK omits extra_headers entirely.
+        h = byok_headers(clear_upstream_auth=False)
         return h or None
 
     @staticmethod
