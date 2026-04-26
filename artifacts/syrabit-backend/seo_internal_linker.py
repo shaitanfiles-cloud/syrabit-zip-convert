@@ -964,18 +964,26 @@ async def revert_applied_suggestion(db, rec_id: str, admin_label: str) -> dict:
 # ---------------------------------------------------------------------------
 # Nightly maintenance pass
 # ---------------------------------------------------------------------------
-async def _top_traffic_pages(db, top_n: int) -> list[dict]:
+async def _top_traffic_pages(db, top_n: int) -> tuple[list[dict], str]:
     """Best-effort top-N traffic source. Uses the cloudflare_client
     helper when available; falls back to the most-recently-updated
     published pages so the loop still does useful work in dev / when
-    the analytics token is missing."""
+    the analytics token is missing.
+
+    Returns (pages, source) where source is one of ``"cloudflare"`` or
+    ``"recency_fallback"`` so the caller can log/observe whether the
+    analytics path was actually exercised."""
     try:
         from cloudflare_client import get_top_pages_cf  # type: ignore
-        rows = await get_top_pages_cf(top_n=top_n) or []
+        # NB: helper signature is ``(days: int = 30, limit: int = 20)``;
+        # pass ``limit`` keyword (NOT ``top_n``) — using the wrong kwarg
+        # silently forces the recency fallback every night.
+        rows = await get_top_pages_cf(limit=top_n) or []
         ids: list[str] = []
         for r in rows:
-            url = (r.get("url") or "").split("?", 1)[0]
-            slug_parts = [s for s in url.strip("/").split("/") if s]
+            # CF helper returns ``{"path": "/x/y", "views": N, ...}``.
+            path = (r.get("path") or r.get("url") or "").split("?", 1)[0]
+            slug_parts = [s for s in path.strip("/").split("/") if s]
             if not slug_parts:
                 continue
             doc = await db.seo_pages.find_one(
@@ -990,13 +998,15 @@ async def _top_traffic_pages(db, top_n: int) -> list[dict]:
                 d = await db.seo_pages.find_one({"id": i}, {"_id": 0})
                 if d:
                     docs.append(d)
-            return docs
-    except Exception:
-        pass
-    # Fallback path.
-    return await db.seo_pages.find(
+            if docs:
+                return docs, "cloudflare"
+    except Exception as exc:
+        logger.warning("internal_linker: CF top-pages lookup failed → recency fallback (%s)", exc)
+    # Fallback path: surfaces in nightly summary so prod can detect regressions.
+    docs = await db.seo_pages.find(
         {"status": "published"}, {"_id": 0},
     ).sort("updated_at", -1).limit(top_n).to_list(top_n)
+    return docs, "recency_fallback"
 
 
 async def nightly_maintenance_pass(db, *, top_n: Optional[int] = None) -> dict:
@@ -1006,7 +1016,7 @@ async def nightly_maintenance_pass(db, *, top_n: Optional[int] = None) -> dict:
     n = int(top_n if top_n is not None else cfg["nightly_top_n"])
     if n <= 0 or not cfg["enabled"]:
         return {"ran": False, "reason": "disabled or top_n=0"}
-    pages = await _top_traffic_pages(db, n)
+    pages, traffic_source = await _top_traffic_pages(db, n)
     auto = drafted = failed = 0
     for p in pages:
         rows = await propose_internal_links_for_page(db, p, source="nightly")
@@ -1019,7 +1029,8 @@ async def nightly_maintenance_pass(db, *, top_n: Optional[int] = None) -> dict:
             elif a == ACTION_FAILED:
                 failed += 1
     return {"ran": True, "pages_processed": len(pages),
-            "auto_applied": auto, "drafted": drafted, "failed": failed}
+            "auto_applied": auto, "drafted": drafted, "failed": failed,
+            "traffic_source": traffic_source}
 
 
 async def _internal_linker_loop(db) -> None:

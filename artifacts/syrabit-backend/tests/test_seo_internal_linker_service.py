@@ -11,6 +11,8 @@ helper can be validated against both at once.
 from __future__ import annotations
 
 import asyncio
+import sys
+import types
 from typing import Any, Dict, List
 from unittest.mock import patch
 
@@ -607,6 +609,68 @@ def test_embed_for_linker_swallows_backend_errors():
         assert out is None
     finally:
         sys.modules.pop("vertex_services", None)
+
+
+# ─── nightly maintenance: top-traffic source ──────────────────────────
+
+
+def test_top_traffic_pages_uses_cloudflare_when_available(monkeypatch):
+    """When the CF helper returns rows, _top_traffic_pages must (a) call
+    it with ``limit=top_n`` (NOT the previously-broken ``top_n=`` kwarg),
+    (b) resolve each ``path`` to its seo_pages doc, and (c) flag the
+    summary source as ``"cloudflare"`` so prod can detect when the
+    analytics path is actually used."""
+    db = _FakeDb()
+    p1 = _mk_page("P1", topic="Newton First Law")
+    p1["topic_slug"] = "newton-first-law"
+    p2 = _mk_page("P2", topic="Algebra")
+    p2["topic_slug"] = "algebra"
+    db.seo_pages.docs.extend([p1, p2])
+
+    captured: dict[str, object] = {}
+
+    async def fake_get_top_pages_cf(**kwargs):
+        captured["kwargs"] = kwargs
+        return [
+            {"path": "/notes/physics/newton-first-law", "views": 1234, "source": "cloudflare"},
+            {"path": "/notes/maths/algebra",            "views":  321, "source": "cloudflare"},
+        ]
+
+    fake_mod = types.ModuleType("cloudflare_client")
+    fake_mod.get_top_pages_cf = fake_get_top_pages_cf
+    monkeypatch.setitem(sys.modules, "cloudflare_client", fake_mod)
+
+    pages, source = _run(linker._top_traffic_pages(db, top_n=5))
+    # Correct kwarg used (regression guard for the original bug):
+    assert "limit" in captured["kwargs"]
+    assert "top_n" not in captured["kwargs"]
+    assert captured["kwargs"]["limit"] == 5
+    # CF rows resolved into seo_pages docs in traffic order:
+    assert [p["id"] for p in pages] == ["P1", "P2"]
+    assert source == "cloudflare"
+
+
+def test_top_traffic_pages_falls_back_to_recency_on_cf_error(monkeypatch):
+    """When the CF helper raises (token missing, network down) the
+    nightly pass must still return a sensible ``recency_fallback``
+    set of pages so the loop continues to do useful work."""
+    db = _FakeDb()
+    db.seo_pages.docs.extend([
+        {**_mk_page("P1", topic="Old"), "updated_at": "2020-01-01T00:00:00+00:00"},
+        {**_mk_page("P2", topic="New"), "updated_at": "2026-04-25T00:00:00+00:00"},
+    ])
+
+    async def boom(**_kw):
+        raise RuntimeError("CF token missing")
+
+    fake_mod = types.ModuleType("cloudflare_client")
+    fake_mod.get_top_pages_cf = boom
+    monkeypatch.setitem(sys.modules, "cloudflare_client", fake_mod)
+
+    pages, source = _run(linker._top_traffic_pages(db, top_n=2))
+    # Fallback path is exercised and returns useful work for the loop.
+    assert source == "recency_fallback"
+    assert {p["id"] for p in pages} == {"P1", "P2"}
 
 
 def test_select_candidates_blends_embedding_with_keyword():
