@@ -468,9 +468,22 @@ async def admin_clear_logs(
     parsed_sources = _parse_csv_list(sources)
     # Distinguish "user passed nothing → full purge is intentional"
     # from "user passed a value that we couldn't honour → accidental
-    # full purge". The raw query string is the source of truth, NOT
-    # whether the parsed list is empty (which the same for both cases).
-    if sources is not None and sources.strip():
+    # full purge". The raw query string presence is the source of truth,
+    # NOT whether the parsed list is empty. Crucially, ``?sources=`` or
+    # ``?sources=   `` (present-but-empty / whitespace-only) is also
+    # treated as invalid — operators must omit the parameter entirely
+    # to do a full purge, never pass an empty string.
+    if sources is not None:
+        if not parsed_sources:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Refusing destructive purge: 'sources' was supplied but "
+                    "empty (whitespace/comma only). To purge ALL sources, "
+                    "OMIT the 'sources' query param entirely; do not pass "
+                    "an empty string."
+                ),
+            )
         valid_sources = [s for s in parsed_sources if s in _dao.ALLOWED_SOURCES]
         invalid_sources = [s for s in parsed_sources if s not in _dao.ALLOWED_SOURCES]
         if not valid_sources:

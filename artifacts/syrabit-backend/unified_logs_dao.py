@@ -70,7 +70,11 @@ DEFAULT_TTL_DAYS = 14
 DEFAULT_QUERY_LIMIT = 200
 MAX_QUERY_LIMIT = 1000
 MAX_COUNT = 5000
-MAX_INGEST_BATCH = int(os.environ.get("LOGS_INGEST_MAX_BATCH", "500") or "500")
+MAX_INGEST_BATCH = int(
+    os.environ.get("LOGS_INGEST_MAX_BATCH")
+    or os.environ.get("UNIFIED_LOGS_MAX_INGEST_BATCH")
+    or "500"
+)
 
 _MAX_MESSAGE_LEN = 500
 _MAX_ROUTE_LEN = 256
@@ -723,7 +727,11 @@ _RUNTIME_PAUSED: Optional[bool] = None
 def _logs_paused_env() -> bool:
     if _RUNTIME_PAUSED is not None:
         return _RUNTIME_PAUSED
-    raw = (os.environ.get("LOGS_PAUSED") or "").strip().lower()
+    raw = (
+        os.environ.get("LOGS_PAUSED")
+        or os.environ.get("UNIFIED_LOGS_PAUSE")
+        or ""
+    ).strip().lower()
     return raw in ("1", "true", "yes", "on")
 
 

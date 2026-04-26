@@ -292,6 +292,22 @@ def test_clear_with_mix_of_valid_and_invalid_sources_only_purges_valid(client):
     assert len(db[dao.UNIFIED_LOGS_COLLECTION].docs) == 1
 
 
+def test_clear_rejects_empty_sources_param(client):
+    """``?sources=`` (present-but-empty) MUST 400 — operators must
+    omit the param entirely to do a full purge, never pass an empty
+    string."""
+    db = client._db  # type: ignore[attr-defined]
+    asyncio.run(dao.insert_logs(db, [
+        {"source": "edge", "status": 200},
+    ], default_source="edge"))
+    for empty in ("", "   ", ",", " , ,"):
+        r = client.delete(f"/api/admin/logs?sources={empty}")
+        assert r.status_code == 400, f"empty={empty!r}: {r.text}"
+        assert "empty" in r.json()["detail"].lower() or "Refusing" in r.json()["detail"]
+    # Original record untouched after every rejected attempt.
+    assert len(db[dao.UNIFIED_LOGS_COLLECTION].docs) == 1
+
+
 def test_clear_with_no_sources_param_does_full_purge(client):
     """The ONLY way to trigger a full purge is to omit ?sources=
     entirely. This is the documented intentional behaviour."""
