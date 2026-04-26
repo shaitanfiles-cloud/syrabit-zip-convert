@@ -696,12 +696,27 @@ async def get_trustpilot_jsonld_report(
     admin: dict = Depends(get_admin_user),
 ) -> dict[str, Any]:
     """Return the most recent verifier report for the AdminHealth tile.
-    Always 200; the UI branches on ``configured`` / ``ok``."""
+    Always 200; the UI branches on ``configured`` / ``ok``.
+
+    Task #968 — also surface ``slackConfigured`` (boolean) +
+    ``slackWebhookEnv`` (env var name) so the dashboard tile can
+    render the same "Slack ✓ / ✗" badge that Task #964 added to the
+    three cron pills (cf-waf-drift, edge-proxy-deploy,
+    unified-logs-cf-pull). The webhook URL itself must NEVER appear
+    in the response — only the *configuration health* of the
+    dedicated per-event Slack fan-out from
+    :func:`_post_jsonld_slack_alert`.
+    """
+    slack_configured = bool(_slack_webhook_url())
+    base = {
+        "slackConfigured": slack_configured,
+        "slackWebhookEnv": _SLACK_WEBHOOK_ENV,
+    }
     doc = await db.api_config.find_one({"_id": _DOC_ID})
     if not doc:
-        return {"configured": False, "report": None}
+        return {"configured": False, "report": None, **base}
     doc.pop("_id", None)
-    return {"configured": True, "report": doc}
+    return {"configured": True, "report": doc, **base}
 
 
 @router.get("/admin/trustpilot-jsonld/history")

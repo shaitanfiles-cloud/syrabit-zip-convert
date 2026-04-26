@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi, Copy, Check, Users, Activity, MessageSquare, TrendingUp, DollarSign, BarChart2, RotateCw, Clock, Undo2, Star, ExternalLink } from 'lucide-react';
-import CronHealthPill from './CronHealthPill';
+import CronHealthPill, { SlackConfigBadge } from './CronHealthPill';
 import CfWafDriftCronPill from './CfWafDriftCronPill';
 import TrustpilotRefreshCronPill from './TrustpilotRefreshCronPill';
 import EdgeProxyDeployCronPill from './EdgeProxyDeployCronPill';
@@ -2061,6 +2061,17 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                     {report?.origin ? ` · ${report.origin}` : ''}
                   </p>
                 </div>
+                {/* Task #968 — surface the dedicated Slack fan-out
+                    configuration health (SLACK_TRUSTPILOT_WEBHOOK_URL)
+                    next to the per-event verifier alerter, mirroring
+                    the badge Task #964 added to the three cron pills.
+                    Renders nothing when the backend hasn't published
+                    the field yet (in-flight rollout safe). */}
+                <SlackConfigBadge
+                  configured={tpJsonldReport?.slackConfigured}
+                  envName={tpJsonldReport?.slackWebhookEnv}
+                  testId="trustpilot-jsonld"
+                />
                 {report?.runUrl && (
                   <a
                     href={report.runUrl}

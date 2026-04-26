@@ -15,7 +15,7 @@ import { formatAlertStateCaption } from './cronCaptionHelpers';
 // routes/admin_health.py). When the field is absent (e.g. older
 // backend that hasn't shipped Task #964 yet) we render nothing so
 // the pill still looks correct against an in-flight rollout.
-function SlackConfigBadge({ configured, envName, testId }) {
+export function SlackConfigBadge({ configured, envName, testId }) {
   if (configured == null) return null;
   const cls = configured
     ? 'bg-emerald-50 text-emerald-700 border-emerald-200'

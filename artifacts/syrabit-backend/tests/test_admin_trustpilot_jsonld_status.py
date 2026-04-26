@@ -216,7 +216,11 @@ def test_get_report_returns_unconfigured_when_no_doc(authed_client):
         res = authed_client.get("/admin/trustpilot-jsonld/report")
     assert res.status_code == 200
     body = res.json()
-    assert body == {"configured": False, "report": None}
+    # Task #968 added the slackConfigured/slackWebhookEnv fields to
+    # every response — assert the verifier-state subset explicitly so
+    # this test is decoupled from the badge-presence assertions below.
+    assert body["configured"] is False
+    assert body["report"] is None
 
 
 def test_get_report_returns_latest_doc(authed_client):
@@ -1116,3 +1120,87 @@ def test_emit_jsonld_alert_schedules_slack_post_alongside_email():
         fake_email.assert_called_once()
         fake_slack.assert_called_once()
     asyncio.run(_inner())
+
+
+# ─── Task #968 — slackConfigured surfaces on the report endpoint ──────────
+
+
+def test_get_report_surfaces_slack_configured_true_when_env_set(authed_client):
+    """When ``SLACK_TRUSTPILOT_WEBHOOK_URL`` is set, the verifier
+    report endpoint must surface ``slackConfigured: True`` and the
+    env var name (so the AdminHealth Trustpilot JSON-LD tile renders
+    the same "Slack ✓" badge that Task #964 added to the three cron
+    pills). The webhook URL itself must NOT appear anywhere in the
+    response — only the *configuration health* of the dedicated Slack
+    fan-out from ``_post_jsonld_slack_alert``."""
+    from routes import admin_trustpilot_jsonld_status as mod
+
+    fake_find = AsyncMock(return_value=None)
+    secret = "https://hooks.slack.example.com/services/T000/B000/tp-secret"
+    with patch.object(mod.db, "api_config", create=True) as mock_coll, \
+            patch.dict(os.environ,
+                       {mod._SLACK_WEBHOOK_ENV: secret},
+                       clear=False):
+        mock_coll.find_one = fake_find
+        res = authed_client.get("/admin/trustpilot-jsonld/report")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["slackConfigured"] is True
+    assert body["slackWebhookEnv"] == "SLACK_TRUSTPILOT_WEBHOOK_URL"
+    import json
+    assert "tp-secret" not in json.dumps(body)
+
+
+def test_get_report_surfaces_slack_configured_false_when_env_unset(
+    authed_client, monkeypatch,
+):
+    """Slack-not-wired: ``slackConfigured: False`` so the dashboard
+    tile renders the neutral "Slack ✗" badge that names the env var
+    operators need to set. Whitespace-only values are also treated
+    as not configured (``_slack_webhook_url`` strips them) so an
+    accidental " " in a deploy template doesn't look like coverage.
+    Both the no-doc and has-doc branches must surface the same
+    badge fields so the UI never has to fall back to a default."""
+    from routes import admin_trustpilot_jsonld_status as mod
+
+    monkeypatch.delenv(mod._SLACK_WEBHOOK_ENV, raising=False)
+    fake_find_none = AsyncMock(return_value=None)
+    with patch.object(mod.db, "api_config", create=True) as mock_coll:
+        mock_coll.find_one = fake_find_none
+        res_none = authed_client.get("/admin/trustpilot-jsonld/report")
+    body_none = res_none.json()
+    assert body_none["slackConfigured"] is False
+    assert body_none["slackWebhookEnv"] == "SLACK_TRUSTPILOT_WEBHOOK_URL"
+
+    stored = {
+        "_id": mod._DOC_ID,
+        "schemaVersion": 1,
+        "generatedAt": "2026-04-23T06:00:00Z",
+        "ingestedAt": "2026-04-23T06:00:05Z",
+        "target": "remote",
+        "origin": "https://syrabit.ai",
+        "totalUrls": 2,
+        "passed": 2,
+        "failed": 0,
+        "ok": True,
+        "results": _PASSING_RESULTS,
+        "runUrl": None,
+    }
+    fake_find_doc = AsyncMock(return_value=dict(stored))
+    with patch.object(mod.db, "api_config", create=True) as mock_coll:
+        mock_coll.find_one = fake_find_doc
+        res_doc = authed_client.get("/admin/trustpilot-jsonld/report")
+    body_doc = res_doc.json()
+    assert body_doc["slackConfigured"] is False
+    assert body_doc["slackWebhookEnv"] == "SLACK_TRUSTPILOT_WEBHOOK_URL"
+    assert body_doc["configured"] is True
+    assert body_doc["report"]["ok"] is True
+
+    monkeypatch.setenv(mod._SLACK_WEBHOOK_ENV, "   ")
+    fake_find_blank = AsyncMock(return_value=None)
+    with patch.object(mod.db, "api_config", create=True) as mock_coll:
+        mock_coll.find_one = fake_find_blank
+        res_blank = authed_client.get("/admin/trustpilot-jsonld/report")
+    body_blank = res_blank.json()
+    assert body_blank["slackConfigured"] is False
+    assert body_blank["slackWebhookEnv"] == "SLACK_TRUSTPILOT_WEBHOOK_URL"
