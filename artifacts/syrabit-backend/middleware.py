@@ -1,6 +1,7 @@
 """Syrabit.ai — ASGI middleware classes."""
 import os, re, time as _time_mod, logging, uuid, contextvars, hashlib, asyncio
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.datastructures import MutableHeaders
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -482,6 +483,11 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
                 response = await _safe_call_next(call_next, request)
                 _metrics.record_request(path, response.status_code)
                 response.headers["X-Request-Id"] = rid
+                # Task #944 — feed the unified-log explorer with this
+                # request even though it bypassed the rate limiter; a
+                # silent /api/health flap is exactly the kind of thing
+                # the explorer must surface.
+                _record_unified_log(request, response, rid)
                 return response
             finally:
                 _metrics.dec_active()
@@ -597,9 +603,41 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
             elapsed = _time_mod.time() - request.state.start_time
             if elapsed > 1.0:
                 logger.info(f"[SLOW] {path} took {elapsed*1000:.0f}ms | rid={rid} uid={user_id or 'anon'}")
+            # Task #944 — sample this request into the unified-log
+            # explorer; sampling + 4xx-keep handled by the shipper.
+            _record_unified_log(request, response, rid, user_id=user_id,
+                                is_admin=is_admin_request)
             return response
         finally:
             _metrics.dec_active()
+
+
+# Task #944 — unified-log shipper hook. Imported lazily so a circular
+# import or a missing module never bricks the request path. Any failure
+# inside the shipper is swallowed.
+def _record_unified_log(request, response, rid: str, *,
+                        user_id: Optional[str] = None,
+                        is_admin: bool = False) -> None:
+    try:
+        from unified_logs_dao import get_backend_shipper
+        start = getattr(request.state, "start_time", None)
+        duration_ms = None
+        if start is not None:
+            try:
+                duration_ms = int((_time_mod.time() - float(start)) * 1000)
+            except Exception:
+                duration_ms = None
+        get_backend_shipper().record_request(
+            method=request.method,
+            route=request.url.path,
+            status=getattr(response, "status_code", None),
+            duration_ms=duration_ms,
+            request_id=rid,
+            user_agent=(request.headers.get("user-agent") or "")[:200] or None,
+            extra={"uid": user_id, "admin": bool(is_admin)} if (user_id or is_admin) else None,
+        )
+    except Exception:
+        pass
 
 
 _STATIC_ASSET_RE = re.compile(

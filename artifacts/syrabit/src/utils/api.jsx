@@ -956,3 +956,75 @@ export const adminSeoIndexNowSmoke = (token) =>
 // Task #564: smoke run history (manual + cron) for the trend strip
 export const adminSeoIndexNowSmokeHistory = (token, limit = 50) =>
   axios.get(`${API_BASE}/admin/seo/indexnow/smoke/history`, { headers: adminHeaders(token), withCredentials: true, params: { limit } });
+
+// ─────────────────────────────────────────────────────────────────────
+// Task #944 — Unified Log Explorer
+// ─────────────────────────────────────────────────────────────────────
+// Helper that turns the (mostly) flat filter state in AdminLogsExplorer
+// into the URLSearchParams shape the backend expects. The backend route
+// (admin_logs.admin_list_logs) accepts ``sources`` and ``levels`` as
+// comma-separated strings, so we pre-flatten arrays here to avoid
+// surprising serialisation by axios's default `paramsSerializer`.
+const _logsFiltersToParams = (filters = {}) => {
+  const out = {};
+  if (Array.isArray(filters.sources) && filters.sources.length)
+    out.sources = filters.sources.join(',');
+  if (Array.isArray(filters.levels) && filters.levels.length)
+    out.levels = filters.levels.join(',');
+  if (filters.status_min != null && filters.status_min !== '')
+    out.status_min = Number(filters.status_min);
+  if (filters.status_max != null && filters.status_max !== '')
+    out.status_max = Number(filters.status_max);
+  if (filters.route_prefix) out.route_prefix = filters.route_prefix;
+  if (filters.correlation_id) out.correlation_id = filters.correlation_id;
+  if (filters.q) out.q = filters.q;
+  if (filters.since) out.since = filters.since;
+  if (filters.until) out.until = filters.until;
+  return out;
+};
+
+export const adminLogsList = (token, { filters = {}, limit = 200, before } = {}) =>
+  axios.get(`${API_BASE}/admin/logs`, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+    params: { ..._logsFiltersToParams(filters), limit, ...(before ? { before } : {}) },
+  });
+
+export const adminLogsTrace = (token, correlationId) =>
+  axios.get(`${API_BASE}/admin/logs/trace/${encodeURIComponent(correlationId)}`,
+    { headers: adminHeaders(token), withCredentials: true });
+
+export const adminLogsStatus = (token) =>
+  axios.get(`${API_BASE}/admin/logs/status`,
+    { headers: adminHeaders(token), withCredentials: true });
+
+export const adminLogsPause = (token) =>
+  axios.post(`${API_BASE}/admin/logs/pause`, {},
+    { headers: adminHeaders(token), withCredentials: true });
+
+export const adminLogsResume = (token) =>
+  axios.post(`${API_BASE}/admin/logs/resume`, {},
+    { headers: adminHeaders(token), withCredentials: true });
+
+export const adminLogsRotateToken = (token) =>
+  axios.post(`${API_BASE}/admin/logs/rotate-token`, {},
+    { headers: adminHeaders(token), withCredentials: true });
+
+export const adminLogsClear = (token, sources = []) => {
+  const params = sources.length ? { sources: sources.join(',') } : undefined;
+  return axios.delete(`${API_BASE}/admin/logs`, {
+    headers: adminHeaders(token), withCredentials: true, params,
+  });
+};
+
+// Returns a fully-qualified URL (with query string) the browser can hit
+// directly via window.open or <a download>. Cookies + admin JWT auth
+// must already be in place.
+export const adminLogsExportUrl = ({ filters = {}, fmt = 'ndjson', limit = 5000 } = {}) => {
+  const sp = new URLSearchParams();
+  const params = _logsFiltersToParams(filters);
+  Object.entries(params).forEach(([k, v]) => sp.set(k, String(v)));
+  sp.set('fmt', fmt);
+  sp.set('limit', String(limit));
+  return `${API_BASE}/admin/logs/export?${sp.toString()}`;
+};

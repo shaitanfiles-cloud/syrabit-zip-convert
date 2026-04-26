@@ -1264,6 +1264,32 @@ async def lifespan(app):
     # instead of waiting for users to hit 502s.
     asyncio.create_task(_vertex_periodic_probe_loop())
 
+    # Task #944 — Unified Log Explorer.
+    #   * Ensure TTL + secondary indexes on the unified_logs collection
+    #     so the admin UI's filtered queries hit an index from minute
+    #     one (otherwise the first sort-by-timestamp pull on a fresh
+    #     deploy is a full collection scan).
+    #   * Hydrate the persisted runtime pause flag so a previous
+    #     "Pause ingest" click survives the restart.
+    #   * Boot the in-process backend log shipper which the global
+    #     middleware drips per-request samples into.
+    #   * Start the Cloudflare GraphQL pull loop on the leader only —
+    #     every replica polling the same window would multiply our CF
+    #     analytics quota cost N× for zero added coverage.
+    try:
+        import unified_logs_dao as _ulogs_dao
+        from routes.admin_logs import (
+            _hydrate_pause_state_from_db,
+            _unified_logs_cf_pull_loop,
+        )
+        await _ulogs_dao.ensure_indexes(db)
+        await _hydrate_pause_state_from_db()
+        await _ulogs_dao.get_backend_shipper().start(db)
+        if _is_leader:
+            asyncio.create_task(_unified_logs_cf_pull_loop())
+    except Exception as _ulogs_boot_err:
+        logger.warning(f"[unified_logs] startup wiring failed: {_ulogs_boot_err}")
+
     logger.info("Syrabit.ai API started")
     if sarvam_client:
         logger.info("Sarvam AI client ready")
@@ -1286,6 +1312,14 @@ async def lifespan(app):
         pass
     if _deps_mod._rate_cleanup_task:
         _deps_mod._rate_cleanup_task.cancel()
+    # Task #944 — drain the in-process unified-log shipper so the
+    # tail of records buffered between the last flush tick and the
+    # shutdown signal is not lost on restart.
+    try:
+        import unified_logs_dao as _ulogs_dao_shutdown
+        await _ulogs_dao_shutdown.get_backend_shipper().stop()
+    except Exception as _ulogs_stop_err:
+        logger.debug(f"[unified_logs] shutdown stop raised: {_ulogs_stop_err}")
     if sarvam_client:
         await sarvam_client.aclose()
     if sarvam_translate_client:
@@ -1403,6 +1437,10 @@ from routes.analytics import router as analytics_router
 from routes.admin_content import router as admin_content_router
 from routes.admin_pipeline import router as admin_pipeline_router
 from routes.admin_settings import router as admin_settings_router
+# Task #944 — Unified Log Explorer: admin filter/export/trace endpoints
+# + the public token-authed ingest endpoint that the edge worker posts
+# batched per-request log records to.
+from routes.admin_logs import router as admin_logs_router
 from routes.admin_notifications import router as admin_notifications_router
 from routes.admin_monetization import router as admin_monetization_router
 from routes.cms_sarvam_health import router as cms_sarvam_health_router
@@ -1453,6 +1491,11 @@ api.include_router(analytics_router)
 api.include_router(admin_content_router)
 api.include_router(admin_pipeline_router)
 api.include_router(admin_settings_router)
+# Task #944 — Unified Log Explorer routes. Mounted on the bare ``app``
+# instead of ``api`` because the routes already include ``/api/...``
+# prefixes (so the ingest endpoint stays at ``/api/logs/ingest`` and is
+# easy for the worker to target without reasoning about router nesting).
+app.include_router(admin_logs_router)
 api.include_router(admin_notifications_router)
 api.include_router(admin_monetization_router)
 api.include_router(cms_sarvam_health_router)

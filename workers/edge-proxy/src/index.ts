@@ -30,6 +30,10 @@ import {
   getUserSpecificPrefixes,
   DEFAULT_CACHE_TTL_SECONDS,
 } from "./monitored-urls";
+// Task #944 — Unified Log Explorer: per-request shipper that batches
+// records and POSTs them to /api/logs/ingest via ctx.waitUntil so it
+// never adds latency to user-visible responses.
+import { recordEdgeLog, type EdgeLogShipperEnv } from "./log-shipper";
 
 interface Env {
   BACKEND_URL: string;
@@ -1781,12 +1785,14 @@ async function handleScheduledSync(env: Env): Promise<void> {
   }
 }
 
-export default {
-  async fetch(
-    request: Request,
-    env: Env,
-    ctx: ExecutionContext
-  ): Promise<Response> {
+// Task #944 — extracted so the public ``fetch`` export can wrap a single
+// recordEdgeLog call around every return path of the original handler.
+// Behaviour of the inner handler is otherwise unchanged from before.
+async function _handleEdgeFetch(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
     const url = new URL(request.url);
     const { pathname } = url;
     const origin = request.headers.get("Origin");
@@ -2180,6 +2186,54 @@ export default {
     }
 
     return proxyToBackend(request, env, pathname, url.search, clientIp, cors, remaining);
+}
+
+export default {
+  async fetch(
+    request: Request,
+    env: Env,
+    ctx: ExecutionContext,
+  ): Promise<Response> {
+    // Wall-clock at handler entry — used for the duration_ms field on
+    // the unified-log record. Captured *before* the inner handler runs
+    // so the buffered record reflects the full edge processing time
+    // (cache lookup + KV ops + origin proxy round-trip), not just the
+    // origin's view.
+    const startMs = Date.now();
+    let response: Response;
+    let level: "info" | "warn" | "error" | "debug" | undefined;
+    try {
+      response = await _handleEdgeFetch(request, env, ctx);
+    } catch (err) {
+      // Worker-level crash — synthesize a 500 so the user sees a sane
+      // error AND the unified log captures the failure with level=error.
+      level = "error";
+      response = new Response(
+        JSON.stringify({ detail: "Edge worker error" }),
+        {
+          status: 500,
+          headers: { "Content-Type": "application/json", "X-Source": "edge" },
+        },
+      );
+      console.error("[edge] unhandled fetch error:", err);
+    }
+    // Cache disposition — preserves the X-Cache header the worker
+    // already sets on most responses (HIT / MISS / BYPASS / DYNAMIC).
+    const xCache = (response.headers.get("x-cache") || "").toLowerCase();
+    const cache: "hit" | "miss" | "bypass" | "dynamic" | null =
+      xCache === "hit" ? "hit" :
+      xCache === "miss" ? "miss" :
+      xCache === "bypass" ? "bypass" :
+      xCache === "dynamic" ? "dynamic" :
+      null;
+    recordEdgeLog(
+      request,
+      response,
+      { startMs, cache, level },
+      env as EdgeLogShipperEnv,
+      ctx,
+    );
+    return response;
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {

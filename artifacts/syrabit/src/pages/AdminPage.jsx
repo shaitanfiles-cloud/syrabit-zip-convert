@@ -37,6 +37,9 @@ const AdminIntelligence  = lazy(() => import('@/components/admin/AdminIntelligen
 const AdminFeedback      = lazy(() => import('@/components/admin/AdminFeedback'));
 const AdminBotSecurity   = lazy(() => import('@/components/admin/AdminBotSecurity'));
 const AdminEduBrowser    = lazy(() => import('@/components/admin/AdminEduBrowser'));
+// Task #944 — Unified Log Explorer: filter / search / live-tail / export
+// across edge worker + Cloudflare GraphQL + backend + cron sources.
+const AdminLogsExplorer  = lazy(() => import('@/components/admin/AdminLogsExplorer'));
 
 const SECTIONS = [
   { id: 'dashboard',     icon: LayoutDashboard, label: 'Dashboard',        group: 'main'     },
@@ -61,6 +64,7 @@ const SECTIONS = [
   { id: 'ratelimits',    icon: Shield,          label: 'Rate Limits',       group: 'system'   },
   { id: 'activitylog',   icon: Activity,        label: 'Activity Log',      group: 'system'   },
   { id: 'botsecurity',   icon: ShieldAlert,     label: 'Bot Security',      group: 'system'   },
+  { id: 'logsexplorer',  icon: Activity,        label: 'Logs Explorer',     group: 'system'   },
   { id: 'health',        icon: HeartPulse,      label: 'Health / Uptime',   group: 'system'   },
 ];
 
@@ -96,6 +100,7 @@ const SECTION_COMPONENTS = {
   activitylog:   AdminActivityLog,
   botsecurity:   AdminBotSecurity,
   edubrowser:    AdminEduBrowser,
+  logsexplorer:  AdminLogsExplorer,
   health:        AdminHealth,
   vertex:        AdminVertexPanel,
   intelligence:  AdminIntelligence,
