@@ -46,6 +46,12 @@
     "                            drift test accepts the file mentioning that identifier as a stand-in for",
     "                            the literal path string (use this for paths the file consumes via an",
     "                            import rather than inlining as a literal).",
+    "  smoke_skip_reason       — Task #917 — when present, the in-process probe-smoke test (which boots",
+    "                            the FastAPI app under TestClient and asserts every backend_paths entry",
+    "                            returns < 500) skips this entry, with the reason surfaced in pytest -v",
+    "                            output. Use this ONLY when the 5xx is a known test-stub artifact (e.g.",
+    "                            the handler awaits a motor cursor pattern that tests/_deps_stub.py does",
+    "                            not yet model) — never to paper over a real production 5xx.",
     "",
     "If you add a new probe / healthcheck / hard-coded backend URL anywhere, register it here. The drift",
     "test (artifacts/syrabit-backend/tests/test_monitoring_url_drift.py) gates merges on this manifest."
@@ -201,6 +207,7 @@
         "workers/edge-proxy/src/index.ts"
       ],
       "runtime_constant": "getCacheablePrefixes",
+      "smoke_skip_reason": "Task #917 — handler in seo_engine.py uses the motor cursor pattern `await db.seo_pages.find(...).to_list(50000)` which tests/_deps_stub.py does not yet model (the stub returns an AsyncMock for `find_one` but a plain MagicMock for `find`, so `find(...).to_list` is non-awaitable). Real production has motor + Mongo so this is not a runtime bug; remove this annotation once _deps_stub gains cursor support.",
       "edge_cache": {
         "behavior": "cacheable",
         "ttl_seconds": 3600

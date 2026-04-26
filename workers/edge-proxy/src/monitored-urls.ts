@@ -78,6 +78,16 @@ export interface MonitoredBackendPath {
    * `/api/webhooks` (POST), `/api/ai/chat` (POST).
    */
   method?: MonitoredHttpMethod;
+  /**
+   * Task #917 — when present, the in-process probe-smoke test (which
+   * boots the FastAPI app under TestClient and asserts every
+   * `backend_paths` entry returns < 500) skips this entry, surfacing
+   * the reason in pytest -v output. Use ONLY when the 5xx is a known
+   * test-stub artifact (e.g. the handler awaits a motor cursor pattern
+   * `tests/_deps_stub.py` does not yet model) — never to paper over
+   * a real production 5xx.
+   */
+  smoke_skip_reason?: string;
   edge_cache?: MonitoredEdgeCache;
 }
 

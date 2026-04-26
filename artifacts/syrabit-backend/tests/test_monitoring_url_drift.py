@@ -82,32 +82,29 @@ def manifest() -> dict[str, Any]:
 
 
 @pytest.fixture(scope="module")
-def openapi_methods() -> dict[str, set[str]]:
-    """Return ``{path: {METHOD, ...}}`` for the live FastAPI app.
+def fastapi_app():
+    """Boot the live FastAPI app once for the module, with the deps stub
+    installed.
 
-    We import ``server`` lazily inside the fixture (rather than at module
-    load) so collection of this test file does not pay the multi-second
-    cost of standing up the LLM key diagnostic, vertex client, etc.
+    All downstream fixtures (`openapi_methods` for Task #887/#916,
+    `test_client` for Task #917) depend on this so the multi-second app
+    boot — LLM key diagnostic, vertex client init, route registration —
+    happens exactly once per pytest session of this file.
 
-    Methods are uppercased so the manifest's `method` field (also
-    uppercase by convention) can be checked with a plain set membership.
-    Task #916 uses this richer view to verify a probe's declared verb
-    actually exists on the route — `openapi_paths` below is kept as a
-    derived set for tests that only need the path keys.
+    Mirrors the dummy-env / deps-stub setup the dump script uses, so
+    these tests run in the same environment as the production drift
+    check (which calls ``dump_openapi.py`` directly in CI).
+
+    ``config.py`` requires:
+      * ``JWT_SECRET`` and ``ADMIN_JWT_SECRET`` each ≥64 chars,
+      * the two values to be DISTINCT (reusing one raises
+        ``ADMIN_JWT_SECRET must be different from JWT_SECRET``).
+    Two independent ``token_hex(48)`` calls satisfy both rules.
+
+    We overwrite (not ``setdefault``) so a runner with stale
+    placeholders inherited from a parent shell (e.g. ``JWT_SECRET=test``)
+    doesn't break the gate.
     """
-    # Mirror the dummy-env / deps-stub setup the dump script uses, so this
-    # test runs in the same environment as the production drift check
-    # (which calls dump_openapi.py directly in CI).
-    #
-    # ``config.py`` requires:
-    #   * ``JWT_SECRET`` and ``ADMIN_JWT_SECRET`` each ≥64 chars,
-    #   * the two values to be DISTINCT (reusing one raises
-    #     ``ADMIN_JWT_SECRET must be different from JWT_SECRET``).
-    # Two independent ``token_hex(48)`` calls satisfy both rules.
-    #
-    # We overwrite (not ``setdefault``) so a runner with stale
-    # placeholders inherited from a parent shell (e.g.
-    # ``JWT_SECRET=test``) doesn't break the gate.
     import secrets as _secrets
 
     os.environ["MONGO_URL"] = "mongodb://localhost:27017/openapi-test"
@@ -123,12 +120,25 @@ def openapi_methods() -> dict[str, set[str]]:
 
     import server  # noqa: WPS433  (intentional in-fixture import)
 
+    return server.app
+
+
+@pytest.fixture(scope="module")
+def openapi_methods(fastapi_app) -> dict[str, set[str]]:
+    """Return ``{path: {METHOD, ...}}`` for the live FastAPI app.
+
+    Methods are uppercased so the manifest's `method` field (also
+    uppercase by convention) can be checked with a plain set membership.
+    Task #916 uses this richer view to verify a probe's declared verb
+    actually exists on the route — `openapi_paths` below is kept as a
+    derived set for tests that only need the path keys.
+    """
     # OpenAPI 3.x path-item keys are lowercase verb names plus a few
     # non-verb keys (``parameters``, ``summary``, ``description``,
     # ``servers``). Whitelist the verbs we care about so a future schema
     # extension cannot accidentally turn a stray key into a "method".
     verbs = ("get", "post", "put", "patch", "delete", "options", "head")
-    paths = server.app.openapi().get("paths", {})
+    paths = fastapi_app.openapi().get("paths", {})
     out: dict[str, set[str]] = {}
     for path, item in paths.items():
         if not isinstance(item, dict):
@@ -142,6 +152,21 @@ def openapi_paths(openapi_methods: dict[str, set[str]]) -> set[str]:
     """Back-compat view: just the path keys. Tests that don't care about
     the method (Task #887 string-existence gate) keep using this."""
     return set(openapi_methods.keys())
+
+
+@pytest.fixture(scope="module")
+def test_client(fastapi_app):
+    """In-process TestClient against the live FastAPI app — Task #917.
+
+    Reuses the same boot (and deps stub) as ``openapi_methods`` so we
+    pay the start-up cost exactly once. The client is module-scoped
+    because the only test using it does a read-only, idempotent loop
+    over the manifest entries — there is no per-test mutation that
+    would require a fresh client.
+    """
+    from fastapi.testclient import TestClient  # noqa: WPS433  (intentional in-fixture import)
+
+    return TestClient(fastapi_app)
 
 
 # ─── Manifest shape ────────────────────────────────────────────────────
@@ -412,6 +437,95 @@ def test_planted_wrong_method_is_caught_against_live_openapi(
         "must be flagged, otherwise a probe that POSTs a GET-only "
         "healthcheck would silently 405 forever (same outage shape as "
         "Task #877)."
+    )
+
+
+# ─── In-process probe smoke — every backend_paths entry returns < 500 ──
+#
+# Task #917 — the Task #877/#887/#901/#916 gates prove a path exists,
+# is referenced by the right source file, and exposes the declared
+# verb. None of them actually CALL the route. A handler that's
+# registered but raises 500 on every request (broken DI, missing
+# collection, malformed config, await on a non-awaitable) would pass
+# every existing gate and only blow up in production. This test boots
+# the FastAPI app under TestClient and hits each manifest entry
+# in-process, asserting the response is not 5xx.
+#
+# Auth-gated routes (e.g. /api/admin/diagnostics) are expected to
+# return 401/403 — that's < 500 and so satisfies the gate. POST
+# routes hit with an empty body typically return 422 / 401 / 405,
+# also < 500. Prefix entries that don't match a literal route (e.g.
+# /api/content/chapters/ → real route is /api/content/chapters/{id})
+# return 404, which is also fine: the gate is "does the app crash
+# when this URL is hit", not "does the URL serve real data".
+#
+# Skip-list — entries whose handler 5xxs only because of a
+# tests/_deps_stub.py limitation (e.g. motor cursor patterns the
+# stub does not yet model) declare ``smoke_skip_reason`` in the
+# manifest. That reason is surfaced verbatim in pytest -v output so
+# a future reader can decide whether to fix the stub or fix the route.
+
+
+def test_every_backend_probe_does_not_5xx(
+    manifest: dict[str, Any],
+    test_client,
+    request: pytest.FixtureRequest,
+) -> None:
+    failures: list[str] = []
+    skipped: list[str] = []
+
+    for entry in manifest["backend_paths"]:
+        path = entry.get("path", "<missing>")
+        method = (entry.get("method") or "GET").strip().upper()
+        skip_reason = (entry.get("smoke_skip_reason") or "").strip()
+
+        if skip_reason:
+            skipped.append(f"{method} {path} — skipped: {skip_reason}")
+            continue
+
+        try:
+            response = test_client.request(
+                method,
+                path,
+                follow_redirects=False,
+            )
+        except Exception as exc:  # noqa: BLE001  (surface ANY crash as a probe-smoke failure)
+            failures.append(
+                f"{method} {path} raised {type(exc).__name__}: {exc!r} "
+                "(handler crashed before producing a response — would "
+                "be a 502/503 from the worker in production)."
+            )
+            continue
+
+        if response.status_code >= 500:
+            body_preview = response.text[:200].replace("\n", " ").replace("\r", " ")
+            failures.append(
+                f"{method} {path} → HTTP {response.status_code}: {body_preview}"
+            )
+
+    # Surface skips so a reviewer can spot a manifest entry that's
+    # been silently skipping for too long. Pytest's `--capture=no`
+    # surfaces this; with default capture it shows up on failure.
+    if skipped:
+        terminalreporter = request.config.pluginmanager.get_plugin("terminalreporter")
+        if terminalreporter is not None:
+            terminalreporter.write_line(
+                f"\n[probe-smoke] skipped {len(skipped)} entr{'y' if len(skipped) == 1 else 'ies'} "
+                f"with smoke_skip_reason:"
+            )
+            for line in skipped:
+                terminalreporter.write_line(f"  - {line}")
+
+    assert not failures, (
+        "Task #917 — at least one monitored backend_paths probe target "
+        "raised a 5xx response under the in-process TestClient. The "
+        "route is registered (so the Task #877/#887/#901/#916 gates "
+        "pass) but broken in a way that would only show up in "
+        "production. Either fix the route, or — if the failure is a "
+        "known stub artifact (e.g. the handler awaits a motor cursor "
+        "the test stub does not model) — annotate the manifest entry "
+        "with `smoke_skip_reason` explaining why and pointing at the "
+        "tracking ticket:\n  - " + "\n  - ".join(failures)
     )
 
 
