@@ -64,6 +64,19 @@ DEFAULT_AUTO_PUBLISH_THRESHOLD = 80
 DEFAULT_DRAFT_THRESHOLD = 55
 DEFAULT_AUTO_PUBLISH_CAP = 10
 DEFAULT_DRAFT_CAP = 50
+
+# Default scoring weights for the four grader axes. They sum to 1.0
+# (heaviest weight on syllabus alignment because Syrabit's positioning
+# is "the Indian-board syllabus assistant" — a topic that doesn't map
+# to a syllabus row is worth less than one that does, even if the
+# search intent is excellent). Operators can override any of these via
+# TOPIC_DISCOVERY_W_<AXIS> env vars without redeploying. We re-normalise
+# the weights at read-time so a partial override never accidentally
+# scales the total score outside the 0-100 band.
+DEFAULT_W_SYLLABUS = 0.35
+DEFAULT_W_INTENT = 0.25
+DEFAULT_W_AEO = 0.20
+DEFAULT_W_DIFFICULTY = 0.20
 DEFAULT_RUN_HOUR_UTC = 2
 
 MAX_SUGGEST_SEEDS_PER_RUN = 25
@@ -91,9 +104,37 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def get_config() -> Dict[str, int]:
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return float(default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        logger.warning("topic_discovery: env %s=%r not a float, using %s",
+                       name, raw, default)
+        return float(default)
+
+
+def get_config() -> Dict[str, Any]:
     """Resolved, env-overridable configuration. Computed every call so
-    admins can ship a hot-reload without restarting the loop."""
+    admins can ship a hot-reload without restarting the loop.
+
+    Includes the four scoring weights (``w_syllabus``, ``w_intent``,
+    ``w_aeo``, ``w_difficulty``). Weights are re-normalised to sum to
+    1.0 so a partial override (e.g. only ``TOPIC_DISCOVERY_W_SYLLABUS``)
+    cannot push the computed total outside 0-100.
+    """
+    raw_w = {
+        "w_syllabus": _env_float("TOPIC_DISCOVERY_W_SYLLABUS", DEFAULT_W_SYLLABUS),
+        "w_intent": _env_float("TOPIC_DISCOVERY_W_INTENT", DEFAULT_W_INTENT),
+        "w_aeo": _env_float("TOPIC_DISCOVERY_W_AEO", DEFAULT_W_AEO),
+        "w_difficulty": _env_float("TOPIC_DISCOVERY_W_DIFFICULTY", DEFAULT_W_DIFFICULTY),
+    }
+    # Clamp to non-negative, then re-normalise.
+    clamped = {k: max(0.0, v) for k, v in raw_w.items()}
+    s = sum(clamped.values()) or 1.0
+    norm_w = {k: v / s for k, v in clamped.items()}
     return {
         "auto_publish_threshold": _env_int(
             "TOPIC_DISCOVERY_AUTO_PUBLISH_THRESHOLD", DEFAULT_AUTO_PUBLISH_THRESHOLD,
@@ -111,7 +152,30 @@ def get_config() -> Dict[str, int]:
             "TOPIC_DISCOVERY_RUN_HOUR_UTC", DEFAULT_RUN_HOUR_UTC,
         ) % 24,
         "disabled": _env_int("TOPIC_DISCOVERY_DISABLED", 0),
+        **norm_w,
     }
+
+
+def compute_weighted_total(
+    *,
+    syllabus_alignment: int,
+    intent_fit: int,
+    aeo_readability: int,
+    difficulty: int,
+    weights: Optional[Dict[str, float]] = None,
+) -> int:
+    """Deterministic blend of the four axis scores using the configured
+    weights. Replaces the LLM's self-reported ``total`` so operators
+    have a single, auditable scoring formula across runs and so a
+    grader-side bug can't silently bypass the configured policy."""
+    w = weights if weights is not None else get_config()
+    raw = (
+        w.get("w_syllabus", DEFAULT_W_SYLLABUS) * syllabus_alignment
+        + w.get("w_intent", DEFAULT_W_INTENT) * intent_fit
+        + w.get("w_aeo", DEFAULT_W_AEO) * aeo_readability
+        + w.get("w_difficulty", DEFAULT_W_DIFFICULTY) * difficulty
+    )
+    return max(0, min(100, int(round(raw))))
 
 
 # ── normalisation ────────────────────────────────────────────────────
@@ -189,12 +253,19 @@ async def collect_suggest_expansions(
     seed_limit: int = MAX_SUGGEST_SEEDS_PER_RUN,
     now: Optional[datetime] = None,
 ) -> List[Dict[str, Any]]:
-    """Fan out Google Suggest over the most recently used syllabus seeds.
+    """Fan out Google Suggest over **every leaf syllabus topic** plus
+    recent ``seo_topics`` rows.
 
-    A "seed" is the ``primary_keyword`` (or ``topic``) of a non-empty
-    ``seo_topics`` row, ordered by ``updated_at`` so the freshest topics
-    drive the freshest expansions. Only the top ``seed_limit`` seeds are
-    used per run to keep LLM cost bounded.
+    Architecture review feedback (Task #937 acceptance gate): seeding
+    only from ``seo_topics`` materially under-discovers when the SEO
+    pipeline hasn't run for parts of the syllabus yet. The true source
+    of leaf topics is the ``chapters`` collection (one row per leaf
+    topic in any board / class / subject). We pull all chapter titles,
+    union them with the freshest ``seo_topics`` keywords (so brand-new
+    topics that aren't yet a chapter still get fanned out), and only
+    cap *after* we have the full union — capping inputs would silently
+    re-introduce the same under-discovery the review flagged. The cap
+    bounds LLM cost; raising it is a one-env-var change.
     """
     if db is None:
         return []
@@ -204,24 +275,55 @@ async def collect_suggest_expansions(
         except Exception as exc:
             logger.info("topic_discovery: suggest import failed: %s", exc)
             return []
+
     seeds: List[str] = []
+    seen_norm: set = set()
+
+    def _accept(kw: str) -> bool:
+        kw = (kw or "").strip()
+        if not kw:
+            return False
+        nk = _normalise_query(kw)
+        if not nk or nk in seen_norm:
+            return False
+        seen_norm.add(nk)
+        seeds.append(kw)
+        return True
+
+    # 1) Every leaf syllabus topic from ``chapters``. We deliberately
+    # do NOT cap this read — capping at the source under-discovers
+    # parts of the syllabus that happen to sort late. The grader budget
+    # cap further down the pipeline is what bounds cost.
+    try:
+        cursor = db.chapters.find(
+            {},
+            {"_id": 0, "title": 1, "name": 1, "topic": 1},
+        )
+        async for row in cursor:
+            _accept(row.get("title") or row.get("name") or row.get("topic") or "")
+    except Exception as exc:
+        logger.info("topic_discovery: chapters seed read failed: %s", exc)
+
+    # 2) Freshest seo_topics keywords — union, not replacement, so
+    # admin-added topics that don't yet have a chapter row still seed
+    # Suggest expansions on the next nightly pass.
     try:
         cursor = db.seo_topics.find(
             {},
             {"_id": 0, "primary_keyword": 1, "topic": 1, "updated_at": 1},
         ).sort("updated_at", -1).limit(int(seed_limit) * 4)
         async for row in cursor:
-            kw = (row.get("primary_keyword") or row.get("topic") or "").strip()
-            if not kw:
-                continue
-            kl = _normalise_query(kw)
-            if kl in (_normalise_query(s) for s in seeds):
-                continue
-            seeds.append(kw)
-            if len(seeds) >= seed_limit:
-                break
+            _accept(row.get("primary_keyword") or row.get("topic") or "")
     except Exception as exc:
-        logger.info("topic_discovery: seed read failed: %s", exc)
+        logger.info("topic_discovery: seo_topics seed read failed: %s", exc)
+
+    # 3) Bound LLM cost. The cap is intentionally applied AFTER the
+    # full union so chapters and seo_topics both contribute. Operators
+    # who want broader coverage can raise TOPIC_DISCOVERY_SUGGEST_SEED_LIMIT.
+    seed_limit = int(os.environ.get("TOPIC_DISCOVERY_SUGGEST_SEED_LIMIT", seed_limit))
+    if seed_limit > 0 and len(seeds) > seed_limit:
+        seeds = seeds[:seed_limit]
+    if not seeds:
         return []
 
     out: List[Dict[str, Any]] = []
@@ -411,12 +513,18 @@ def parse_grader_response(text: str) -> Optional[Dict[str, Any]]:
     syl = _clip_int(raw.get("syllabus_alignment"))
     diff = _clip_int(raw.get("difficulty"))
     aeo = _clip_int(raw.get("aeo_readability"))
-    total_raw = raw.get("total")
-    if total_raw is None:
-        # Sensible default blend — heaviest weight on syllabus alignment.
-        total = round(0.35 * syl + 0.25 * intent + 0.2 * aeo + 0.2 * diff)
-    else:
-        total = _clip_int(total_raw)
+    # Always compute the total deterministically from the four axes
+    # using the configured weights — we don't trust the LLM's
+    # self-reported ``total`` because (a) operators want a single
+    # auditable scoring formula across runs and (b) a grader-side bug
+    # could otherwise silently bypass the configured policy. The LLM's
+    # ``total`` is ignored on purpose.
+    total = compute_weighted_total(
+        syllabus_alignment=syl,
+        intent_fit=intent,
+        aeo_readability=aeo,
+        difficulty=diff,
+    )
     reason = raw.get("reason")
     if not isinstance(reason, str):
         reason = ""

@@ -47,18 +47,66 @@ def test_parse_grader_response_strict_json():
 
 
 def test_parse_grader_response_strips_markdown_fence():
+    # LLM-reported total is now ignored — parse computes it
+    # deterministically from the four axis scores using configured
+    # weights (defaults: 0.35*syl + 0.25*intent + 0.20*aeo + 0.20*diff).
+    # 0.35*60 + 0.25*50 + 0.20*80 + 0.20*70 = 21 + 12.5 + 16 + 14 = 63.5 → 64
     text = "```json\n{\"intent_fit\":50,\"syllabus_alignment\":60,\"difficulty\":70,\"aeo_readability\":80,\"total\":65,\"reason\":\"ok\"}\n```"
     out = tds.parse_grader_response(text)
     assert out is not None
-    assert out["total"] == 65
+    assert out["total"] == 64
 
 
 def test_parse_grader_response_finds_embedded_object():
+    # 0.35*20 + 0.25*10 + 0.20*40 + 0.20*30 = 7 + 2.5 + 8 + 6 = 23.5 → 24
     text = "Sure! Here is the score: {\"intent_fit\":10,\"syllabus_alignment\":20,\"difficulty\":30,\"aeo_readability\":40,\"total\":25,\"reason\":\"weak\"} hope this helps."
     out = tds.parse_grader_response(text)
     assert out is not None
-    assert out["total"] == 25
+    assert out["total"] == 24
     assert out["reason"] == "weak"
+
+
+def test_parse_grader_response_ignores_llm_total_uses_weighted_blend():
+    """Architect review (Task #937 acceptance gate): the configurable
+    scoring formula must be applied deterministically — the LLM's
+    self-reported ``total`` is ignored even when present, so a
+    grader-side bug or prompt-injection cannot bypass policy."""
+    # All axes equal 100 — true weighted blend is 100. LLM reports 1.
+    out = tds.parse_grader_response(
+        '{"intent_fit":100,"syllabus_alignment":100,"difficulty":100,'
+        '"aeo_readability":100,"total":1,"reason":"x"}'
+    )
+    assert out["total"] == 100
+
+
+def test_compute_weighted_total_respects_env_weight_override(monkeypatch):
+    """Operators can re-weight axes via env vars; the formula
+    re-normalises so the total stays in 0-100."""
+    monkeypatch.setenv("TOPIC_DISCOVERY_W_SYLLABUS", "1.0")
+    monkeypatch.setenv("TOPIC_DISCOVERY_W_INTENT", "0")
+    monkeypatch.setenv("TOPIC_DISCOVERY_W_AEO", "0")
+    monkeypatch.setenv("TOPIC_DISCOVERY_W_DIFFICULTY", "0")
+    # Only syllabus axis matters → total tracks syllabus_alignment.
+    out = tds.compute_weighted_total(
+        syllabus_alignment=42, intent_fit=99,
+        aeo_readability=99, difficulty=99,
+    )
+    assert out == 42
+
+
+def test_get_config_normalises_partial_weight_overrides(monkeypatch):
+    """A partial override (e.g. only the syllabus weight) must not
+    push the implied total above 100. We re-normalise."""
+    monkeypatch.setenv("TOPIC_DISCOVERY_W_SYLLABUS", "0.7")
+    # other weights unset → fall back to defaults 0.25 / 0.20 / 0.20
+    cfg = tds.get_config()
+    s = cfg["w_syllabus"] + cfg["w_intent"] + cfg["w_aeo"] + cfg["w_difficulty"]
+    assert abs(s - 1.0) < 1e-9
+    # All four axes at 100 → blended total is exactly 100.
+    assert tds.compute_weighted_total(
+        syllabus_alignment=100, intent_fit=100,
+        aeo_readability=100, difficulty=100,
+    ) == 100
 
 
 def test_parse_grader_response_clamps_out_of_range():
