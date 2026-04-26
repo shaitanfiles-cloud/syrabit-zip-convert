@@ -70,6 +70,10 @@ class _FakeColl:
                     if not any(_matches(doc, sub) for sub in v):
                         return False
                     continue
+                if k == "$and":
+                    if not all(_matches(doc, sub) for sub in v):
+                        return False
+                    continue
                 actual = doc.get(k)
                 if isinstance(v, dict):
                     if "$ne" in v and actual == v["$ne"]:
@@ -262,6 +266,87 @@ def test_broken_outside_debounce_re_pages(fake_db):
         "action": "alerted", "kind": "broken", "sub_kind": "failed",
     }
     mock_send.assert_called_once()
+
+
+def test_same_run_does_not_re_page_after_debounce(fake_db):
+    """Task #903: a flaky-test re-run from the GitHub Actions UI 25h
+    after the original failure re-uses the same workflow run id and
+    head_sha. Without an explicit identity check the natural
+    "debounce elapsed → re-page" branch double-pages on-call for
+    what is effectively the same regression. Suppress that case
+    while leaving the lock doc untouched so the admin-pill
+    "last paged" timestamp keeps pointing at the original page."""
+    now = _now()
+    fake_db.job_locks._docs[alerter._LOCK_ID] = {
+        "_id": alerter._LOCK_ID,
+        "last_state": "broken",
+        "last_kind": "failed",
+        "last_alert_at": (now - timedelta(hours=25)).isoformat(),
+        "last_html_url": "https://github.com/o/r/actions/runs/9001",
+        "last_run_id": 9001,
+        "last_head_sha": "deadbee",
+    }
+    # Same run id + head sha as the previously-paged failure.
+    pill = _pill(status="silent", conclusion="failure", age_seconds=90000)
+    assert pill["runId"] == 9001
+    assert pill["headSha"] == "deadbee"
+
+    with _patch_send() as mock_send:
+        result = asyncio.run(
+            alerter._check_and_alert_edge_proxy_deploy_cron(
+                fake_db, now, pill,
+            )
+        )
+    assert result["action"] == "skip"
+    assert result["reason"] == "same_run"
+    assert result["run_id"] == 9001
+    assert result["head_sha"] == "deadbee"
+    mock_send.assert_not_called()
+    # Lock doc must remain untouched: the original page metadata
+    # (timestamp, run id, head sha) is what the admin pill renders.
+    saved = fake_db.job_locks._docs[alerter._LOCK_ID]
+    assert saved["last_run_id"] == 9001
+    assert saved["last_head_sha"] == "deadbee"
+    assert saved["last_alert_at"] == (
+        now - timedelta(hours=25)
+    ).isoformat()
+
+
+def test_different_run_re_pages_after_debounce(fake_db):
+    """Sibling of the same-run suppress test: a genuinely new failing
+    run (different run id / head sha) past the debounce IS still a
+    new alert. This guards against an over-eager dedup that would
+    otherwise wedge on the first failing run forever."""
+    now = _now()
+    fake_db.job_locks._docs[alerter._LOCK_ID] = {
+        "_id": alerter._LOCK_ID,
+        "last_state": "broken",
+        "last_kind": "failed",
+        "last_alert_at": (now - timedelta(hours=25)).isoformat(),
+        "last_html_url": "https://github.com/o/r/actions/runs/9001",
+        "last_run_id": 9001,
+        "last_head_sha": "deadbee",
+    }
+    pill = _pill(
+        status="silent", conclusion="failure", age_seconds=90000,
+        html_url="https://github.com/o/r/actions/runs/9999",
+        head_sha="cafef00",
+    )
+    pill["runId"] = 9999
+
+    with _patch_send() as mock_send:
+        result = asyncio.run(
+            alerter._check_and_alert_edge_proxy_deploy_cron(
+                fake_db, now, pill,
+            )
+        )
+    assert result == {
+        "action": "alerted", "kind": "broken", "sub_kind": "failed",
+    }
+    mock_send.assert_called_once()
+    saved = fake_db.job_locks._docs[alerter._LOCK_ID]
+    assert saved["last_run_id"] == 9999
+    assert saved["last_head_sha"] == "cafef00"
 
 
 def test_failed_to_stale_re_pages_inside_debounce(fake_db):

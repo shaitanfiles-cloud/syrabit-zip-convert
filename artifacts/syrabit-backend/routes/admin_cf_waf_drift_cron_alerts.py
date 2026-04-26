@@ -269,12 +269,30 @@ async def _claim_cron_alert_slot(
         cutoff_iso = (
             now_utc - timedelta(seconds=_CRON_REALERT_INTERVAL_S)
         ).isoformat()
+        cur_run_url = health.get("lastRunUrl")
+        # Task #903: re-page when state isn't silent (recovery flipped
+        # back), OR when the 24h debounce has elapsed (or last_alert_at
+        # is missing on a corrupt/legacy doc) AND the last run url has
+        # rolled over (a fresh heartbeat landed in between before
+        # silence resumed). The lone "debounce elapsed" branch used to
+        # fire even when nothing had changed since the prior page —
+        # re-paging on-call every 24h for the same already-acknowledged
+        # silent cron. The legacy-doc branch only fires together with
+        # the run-url change check, so a doc that's both missing the
+        # timestamp AND has the same last_run_url still gets dedup'd;
+        # that's intentional (the prior page already covered the same
+        # silent episode).
         guard = {
             "_id": _LOCK_ID,
             "$or": [
                 {"last_state": {"$ne": "silent"}},
-                {"last_alert_at": {"$lt": cutoff_iso}},
-                {"last_alert_at": {"$exists": False}},
+                {"$and": [
+                    {"$or": [
+                        {"last_alert_at": {"$lt": cutoff_iso}},
+                        {"last_alert_at": {"$exists": False}},
+                    ]},
+                    {"last_run_url": {"$ne": cur_run_url}},
+                ]},
             ],
         }
     else:
@@ -581,6 +599,21 @@ async def _check_and_alert_cf_waf_drift_cron(
             if elapsed_s < _CRON_REALERT_INTERVAL_S:
                 return {"action": "skip", "reason": "debounced",
                         "elapsed_s": elapsed_s}
+            # Task #903: past the 24h debounce, but the last observed
+            # run url hasn't rolled over since we paged. Nothing has
+            # changed about the silent state — re-paging on-call here
+            # would be a duplicate page for the same already-known
+            # silent cron. Surface explicitly so the report dict tells
+            # operators why we didn't page (vs. a CAS lost-race).
+            prior_run_url = prior.get("last_run_url")
+            cur_run_url = health.get("lastRunUrl")
+            if prior_run_url is not None and cur_run_url == prior_run_url:
+                return {
+                    "action": "skip",
+                    "reason": "same_run",
+                    "elapsed_s": elapsed_s,
+                    "run_url": cur_run_url,
+                }
         if not await _claim_cron_alert_slot(db, "silent", now_utc, health):
             return {"action": "skip", "reason": "lost_race"}
         await _send_cron_alert(db, "silent", health, now_utc)

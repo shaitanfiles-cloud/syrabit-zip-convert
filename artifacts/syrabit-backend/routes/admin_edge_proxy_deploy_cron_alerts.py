@@ -150,20 +150,38 @@ async def _claim_cron_alert_slot(
         cutoff_iso = (
             now_utc - timedelta(seconds=_CRON_REALERT_INTERVAL_S)
         ).isoformat()
+        cur_run_id = health.get("runId")
+        cur_head_sha = health.get("headSha")
         # Re-page when:
         #  - prior state isn't broken at all (first detection / recovery
         #    flipped back to broken), OR
         #  - prior broken sub-kind differs from the current one
         #    (failed↔stale transition — root cause changed), OR
-        #  - the 24h debounce has elapsed since the last page, OR
-        #  - we somehow have no last_alert_at (corrupt/legacy doc).
+        #  - the 24h debounce has elapsed (or last_alert_at is missing
+        #    on a corrupt/legacy doc) AND the failing run is genuinely
+        #    a different one (run_id or head_sha changed) — Task #903:
+        #    a flaky test re-run from the GitHub UI on the SAME run id
+        #    25h later shouldn't double-page on-call for what is
+        #    effectively the same regression. The legacy-doc branch
+        #    only fires together with the identity check, so a doc
+        #    that's both missing the timestamp AND has the same
+        #    run_id/head_sha still gets dedup'd; that's intentional
+        #    (the prior page already covered the same run).
         guard = {
             "_id": _LOCK_ID,
             "$or": [
                 {"last_state": {"$ne": "broken"}},
                 {"last_kind": {"$ne": sub_kind}},
-                {"last_alert_at": {"$lt": cutoff_iso}},
-                {"last_alert_at": {"$exists": False}},
+                {"$and": [
+                    {"$or": [
+                        {"last_alert_at": {"$lt": cutoff_iso}},
+                        {"last_alert_at": {"$exists": False}},
+                    ]},
+                    {"$or": [
+                        {"last_run_id": {"$ne": cur_run_id}},
+                        {"last_head_sha": {"$ne": cur_head_sha}},
+                    ]},
+                ]},
             ],
         }
     else:
@@ -523,6 +541,30 @@ async def _check_and_alert_edge_proxy_deploy_cron(
                     "reason": "debounced",
                     "elapsed_s": elapsed_s,
                     "kind": sub_kind,
+                }
+            # Task #903: past the 24h debounce, but the failing run's
+            # identity is unchanged. A flaky test re-run from the
+            # GitHub UI on the SAME run id (or a still-failing
+            # workflow whose latest run hasn't rolled over) shouldn't
+            # double-page on-call for what is effectively the same
+            # regression. Surface it explicitly so the report dict
+            # tells operators why we didn't page (vs. a CAS lost-race).
+            prior_run_id = prior.get("last_run_id")
+            prior_head_sha = prior.get("last_head_sha")
+            cur_run_id = health.get("runId")
+            cur_head_sha = health.get("headSha")
+            if (
+                cur_run_id is not None
+                and cur_run_id == prior_run_id
+                and cur_head_sha == prior_head_sha
+            ):
+                return {
+                    "action": "skip",
+                    "reason": "same_run",
+                    "elapsed_s": elapsed_s,
+                    "kind": sub_kind,
+                    "run_id": cur_run_id,
+                    "head_sha": cur_head_sha,
                 }
         if not await _claim_cron_alert_slot(
             db, "broken", sub_kind, now_utc, health,

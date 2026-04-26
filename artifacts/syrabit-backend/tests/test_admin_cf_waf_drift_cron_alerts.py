@@ -71,6 +71,10 @@ class _FakeColl:
                     if not any(_matches(doc, sub) for sub in v):
                         return False
                     continue
+                if k == "$and":
+                    if not all(_matches(doc, sub) for sub in v):
+                        return False
+                    continue
                 actual = doc.get(k)
                 if isinstance(v, dict):
                     if "$ne" in v and actual == v["$ne"]:
@@ -279,6 +283,70 @@ def test_silent_outside_debounce_re_pages(fake_db):
         )
     assert result == {"action": "alerted", "kind": "silent"}
     mock_send.assert_called_once()
+
+
+def test_same_run_does_not_re_page_after_debounce(fake_db):
+    """Task #903: while the cron is silent, the heartbeat snapshot's
+    ``lastRunUrl`` doesn't change (no new run posted a heartbeat).
+    Without an explicit identity check the natural "debounce
+    elapsed → re-page" branch double-pages on-call every 24h for
+    the same already-known silent cron. Suppress that case while
+    leaving the lock doc untouched so the admin-pill "last paged"
+    timestamp keeps pointing at the original page."""
+    now = _now()
+    fake_db.job_locks._docs[cron._LOCK_ID] = {
+        "_id": cron._LOCK_ID,
+        "last_state": "silent",
+        "last_alert_at": (now - timedelta(hours=25)).isoformat(),
+        "last_run_url": "https://github.com/o/r/runs/1",
+    }
+    # Heartbeat snapshot still references the same last-known run
+    # url (no fresh heartbeat landed in between).
+    health = _health(
+        last_heartbeat_age_s=60 * 3600,
+        last_status="failure",
+        last_run_url="https://github.com/o/r/runs/1",
+    )
+    with _patch_send() as mock_send:
+        result = asyncio.run(
+            cron._check_and_alert_cf_waf_drift_cron(fake_db, now, health),
+        )
+    assert result["action"] == "skip"
+    assert result["reason"] == "same_run"
+    assert result["run_url"] == "https://github.com/o/r/runs/1"
+    mock_send.assert_not_called()
+    saved = fake_db.job_locks._docs[cron._LOCK_ID]
+    assert saved["last_run_url"] == "https://github.com/o/r/runs/1"
+    assert saved["last_alert_at"] == (
+        now - timedelta(hours=25)
+    ).isoformat()
+
+
+def test_new_run_url_after_debounce_re_pages(fake_db):
+    """Sibling of the same-run suppress test: if a fresh heartbeat
+    DID land in between (lastRunUrl rolled over) and the cron then
+    fell silent again past the 24h window, that's a genuinely new
+    silent episode worth paging on."""
+    now = _now()
+    fake_db.job_locks._docs[cron._LOCK_ID] = {
+        "_id": cron._LOCK_ID,
+        "last_state": "silent",
+        "last_alert_at": (now - timedelta(hours=25)).isoformat(),
+        "last_run_url": "https://github.com/o/r/runs/1",
+    }
+    health = _health(
+        last_heartbeat_age_s=40 * 3600,
+        last_status="failure",
+        last_run_url="https://github.com/o/r/runs/2",
+    )
+    with _patch_send() as mock_send:
+        result = asyncio.run(
+            cron._check_and_alert_cf_waf_drift_cron(fake_db, now, health),
+        )
+    assert result == {"action": "alerted", "kind": "silent"}
+    mock_send.assert_called_once()
+    saved = fake_db.job_locks._docs[cron._LOCK_ID]
+    assert saved["last_run_url"] == "https://github.com/o/r/runs/2"
 
 
 def test_silent_to_healthy_fires_recovery_then_settles(fake_db):
