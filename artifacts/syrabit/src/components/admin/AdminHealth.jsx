@@ -4,6 +4,7 @@ import CronHealthPill from './CronHealthPill';
 import CfWafDriftCronPill from './CfWafDriftCronPill';
 import TrustpilotRefreshCronPill from './TrustpilotRefreshCronPill';
 import EdgeProxyDeployCronPill from './EdgeProxyDeployCronPill';
+import UnifiedLogsCfPullCronPill from './UnifiedLogsCfPullCronPill';
 import { toast } from 'sonner';
 import AdminQuickLinks from './AdminQuickLinks';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar, LineChart, Line } from 'recharts';
@@ -266,6 +267,31 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       .finally(() => setEdgeProxyDeployCronLoading(false));
   }, [adminToken]);
 
+  // Task #956 — unified-logs Cloudflare GraphQL pull silence health
+  // (Task #951 endpoint). Mirrors the cf-waf-drift / edge-proxy-deploy
+  // pills above; the data source is a backend cron loop polling
+  // db.job_locks[unified_logs_cf_pull_lock] rather than a GitHub
+  // Actions workflow, so the pill points its "Runs" link at the
+  // JSON status snapshot the backend exposes via ``statusUrl``.
+  // Endpoint shape: /admin/health/unified-logs/cf-pull/cron — status
+  // ∈ {healthy, silent, never_observed, not_configured} plus
+  // lastUpdatedAgeSeconds, leaseOwner, leaseExpiresAt, cursor,
+  // silentThresholdSeconds, statusUrl. The pill goes red on
+  // status: "silent" (cursor stale past threshold), gray on
+  // never_observed / not_configured, green otherwise.
+  const [unifiedLogsCfPullCronHealth, setUnifiedLogsCfPullCronHealth] = useState(null);
+  const [unifiedLogsCfPullCronLoading, setUnifiedLogsCfPullCronLoading] = useState(false);
+
+  const loadUnifiedLogsCfPullCronHealth = useCallback(() => {
+    setUnifiedLogsCfPullCronLoading(true);
+    axios.get(`${API_BASE}/admin/health/unified-logs/cf-pull/cron`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setUnifiedLogsCfPullCronHealth(r.data))
+      .catch(() => setUnifiedLogsCfPullCronHealth({ _error: true }))
+      .finally(() => setUnifiedLogsCfPullCronLoading(false));
+  }, [adminToken]);
+
   // Task #902 — alerter-state lock-doc snapshots for the three cron
   // pills above. The pill data answers "is the workflow currently
   // red?"; the alert-state data answers "have we paged on-call about
@@ -285,6 +311,11 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   const [edgeProxyDeployCronAlertState, setEdgeProxyDeployCronAlertState] = useState(null);
   const [cfDriftCronAlertState, setCfDriftCronAlertState] = useState(null);
   const [tpCronAlertState, setTpCronAlertState] = useState(null);
+  // Task #956 — alerter-state for the unified-logs CF pull silence
+  // alerter (Task #951). Same contract as the sibling alert-states
+  // above, sourced from
+  // /admin/health/unified-logs/cf-pull/cron/alert-state.
+  const [unifiedLogsCfPullCronAlertState, setUnifiedLogsCfPullCronAlertState] = useState(null);
 
   const loadEdgeProxyDeployCronAlertState = useCallback(() => {
     axios.get(`${API_BASE}/admin/health/edge-proxy-deploy/cron/alert-state`, {
@@ -310,6 +341,14 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       .catch(() => setTpCronAlertState(null));
   }, [adminToken]);
 
+  const loadUnifiedLogsCfPullCronAlertState = useCallback(() => {
+    axios.get(`${API_BASE}/admin/health/unified-logs/cf-pull/cron/alert-state`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setUnifiedLogsCfPullCronAlertState(r.data))
+      .catch(() => setUnifiedLogsCfPullCronAlertState(null));
+  }, [adminToken]);
+
   // Task #918 — paged-on-call audit log per pill, sourced from
   //   * /admin/health/edge-proxy-deploy/cron/alert-history
   //   * /admin/health/cf-waf-drift/cron/alert-history
@@ -326,6 +365,10 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   const [edgeProxyDeployCronAlertHistory, setEdgeProxyDeployCronAlertHistory] = useState(null);
   const [cfDriftCronAlertHistory, setCfDriftCronAlertHistory] = useState(null);
   const [tpCronAlertHistory, setTpCronAlertHistory] = useState(null);
+  // Task #956 — paged-on-call audit log for the unified-logs CF pull
+  // silence alerter. Same lazy contract as the sibling alert-history
+  // states above.
+  const [unifiedLogsCfPullCronAlertHistory, setUnifiedLogsCfPullCronAlertHistory] = useState(null);
 
   const loadEdgeProxyDeployCronAlertHistory = useCallback(() => {
     axios.get(`${API_BASE}/admin/health/edge-proxy-deploy/cron/alert-history`, {
@@ -349,6 +392,14 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     })
       .then((r) => setTpCronAlertHistory(r.data))
       .catch(() => setTpCronAlertHistory({ events: [] }));
+  }, [adminToken]);
+
+  const loadUnifiedLogsCfPullCronAlertHistory = useCallback(() => {
+    axios.get(`${API_BASE}/admin/health/unified-logs/cf-pull/cron/alert-history`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setUnifiedLogsCfPullCronAlertHistory(r.data))
+      .catch(() => setUnifiedLogsCfPullCronAlertHistory({ events: [] }));
   }, [adminToken]);
 
   const loadTpJsonldReport = useCallback(() => {
@@ -388,6 +439,11 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     loadTpCronHealth();
     loadCfDriftCronHealth();
     loadEdgeProxyDeployCronHealth();
+    // Task #956 — unified-logs CF pull silence pill polls on the
+    // same 60s cadence as the sibling cron pills so a freshly
+    // silent ingest shows up next to cf-waf-drift / edge-proxy-
+    // deploy without a page reload.
+    loadUnifiedLogsCfPullCronHealth();
     // Task #902 — pull alerter-state alongside the pill snapshots so
     // the "last paged Xh ago · in debounce ~Yh" caption stays in
     // sync with the pill's colour. Same 60s cadence as the rest;
@@ -395,6 +451,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     loadEdgeProxyDeployCronAlertState();
     loadCfDriftCronAlertState();
     loadTpCronAlertState();
+    loadUnifiedLogsCfPullCronAlertState();
     const id = setInterval(() => {
       loadTpJsonldReport();
       loadTpJsonldHistory();
@@ -402,16 +459,18 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       loadTpCronHealth();
       loadCfDriftCronHealth();
       loadEdgeProxyDeployCronHealth();
+      loadUnifiedLogsCfPullCronHealth();
       loadEdgeProxyDeployCronAlertState();
       loadCfDriftCronAlertState();
       loadTpCronAlertState();
+      loadUnifiedLogsCfPullCronAlertState();
     }, 60000);
     return () => clearInterval(id);
   }, [adminToken, loadTpJsonldReport, loadTpJsonldHistory,
       loadTpJsonldAlerts, loadTpCronHealth, loadCfDriftCronHealth,
-      loadEdgeProxyDeployCronHealth,
+      loadEdgeProxyDeployCronHealth, loadUnifiedLogsCfPullCronHealth,
       loadEdgeProxyDeployCronAlertState, loadCfDriftCronAlertState,
-      loadTpCronAlertState]);
+      loadTpCronAlertState, loadUnifiedLogsCfPullCronAlertState]);
 
   // Task #609 — managed AI response cache stats + admin purge controls.
   const [aiCacheStats, setAiCacheStats] = useState(null);
@@ -2373,6 +2432,31 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           alertState={edgeProxyDeployCronAlertState}
           alertHistory={edgeProxyDeployCronAlertHistory}
           onLoadAlertHistory={loadEdgeProxyDeployCronAlertHistory}
+        />
+        </SectionErrorBoundary>
+
+        <SectionErrorBoundary name="Cloudflare Log Ingest">
+        {/*
+          Task #956 — surface the unified-logs Cloudflare GraphQL pull
+          silence alerter (Task #951) on the AdminHealth dashboard
+          alongside the other cron pills. Until this pill shipped, the
+          only signal that ingest had stalled was the on-call page or
+          the cf_pull_last_run timestamp on /api/admin/logs/status
+          quietly growing old. The pill turns red when the lock doc's
+          updated_at is older than ~3× the configured pull interval
+          (default 5 min floor), shows the lease owner and last
+          successful cursor advance inline, and exposes the same
+          "last paged Xh ago · in debounce ~Yh" caption + paged
+          history disclosure as its siblings.
+          Endpoint: /admin/health/unified-logs/cf-pull/cron.
+        */}
+        <UnifiedLogsCfPullCronPill
+          data={unifiedLogsCfPullCronHealth}
+          loading={unifiedLogsCfPullCronLoading}
+          onRefresh={loadUnifiedLogsCfPullCronHealth}
+          alertState={unifiedLogsCfPullCronAlertState}
+          alertHistory={unifiedLogsCfPullCronAlertHistory}
+          onLoadAlertHistory={loadUnifiedLogsCfPullCronAlertHistory}
         />
         </SectionErrorBoundary>
 

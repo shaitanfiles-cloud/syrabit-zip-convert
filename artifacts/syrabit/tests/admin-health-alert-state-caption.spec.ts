@@ -34,10 +34,13 @@ import { installAdminApiMocks, seedAdminSession } from './admin-mocks';
 const EDGE_PROXY_PREFIX = 'edge-proxy-deploy-cron';
 const CF_WAF_DRIFT_PREFIX = 'cf-waf-drift-cron';
 const TRUSTPILOT_PREFIX = 'trustpilot-refresh-cron';
+const UNIFIED_LOGS_CF_PULL_PREFIX = 'unified-logs-cf-pull-cron';
 
 const EDGE_PROXY_CRON_ENDPOINT = '/api/admin/health/edge-proxy-deploy/cron';
 const CF_WAF_DRIFT_CRON_ENDPOINT = '/api/admin/health/cf-waf-drift/cron';
 const TRUSTPILOT_CRON_ENDPOINT = '/api/admin/health/trustpilot/refresh-cron';
+const UNIFIED_LOGS_CF_PULL_CRON_ENDPOINT =
+  '/api/admin/health/unified-logs/cf-pull/cron';
 
 const EDGE_PROXY_ALERT_STATE_ENDPOINT =
   '/api/admin/health/edge-proxy-deploy/cron/alert-state';
@@ -45,6 +48,8 @@ const CF_WAF_DRIFT_ALERT_STATE_ENDPOINT =
   '/api/admin/health/cf-waf-drift/cron/alert-state';
 const TRUSTPILOT_ALERT_STATE_ENDPOINT =
   '/api/admin/health/trustpilot/refresh-cron/alert-state';
+const UNIFIED_LOGS_CF_PULL_ALERT_STATE_ENDPOINT =
+  '/api/admin/health/unified-logs/cf-pull/cron/alert-state';
 
 // Healthy cron payloads — copy the same shapes the cron-pill
 // e2e suite uses (admin-health-cron-pills.spec.ts) so the pill
@@ -87,6 +92,23 @@ const baseTrustpilotHealthy = {
     'https://github.com/syrabit/syrabit/actions/workflows/trustpilot-aggregate-refresh.yml',
   staleThresholdSeconds: 36 * 3600,
   error: null,
+};
+
+// Task #956 — healthy fixture for the unified-logs Cloudflare
+// GraphQL pull silence pill. Same shape as the other base*Healthy
+// fixtures in this file so the pill renders green and the
+// alert-state caption is the only thing under test.
+const baseUnifiedLogsCfPullHealthy = {
+  configured: true,
+  status: 'healthy',
+  lastUpdatedTs: 1_700_000_000,
+  lastUpdatedAt: '2026-04-26T05:00:00Z',
+  lastUpdatedAgeSeconds: 1800,
+  leaseOwner: 'replica-A',
+  leaseExpiresAt: '2026-04-26T05:30:00Z',
+  cursor: 'cursor-xyz',
+  silentThresholdSeconds: 900,
+  statusUrl: '/api/admin/logs/status',
 };
 
 // Default alert-state shape mimicking
@@ -223,6 +245,33 @@ test.describe('AdminHealth alert-state caption', () => {
     await expect(caption).toHaveText('last paged 2h ago');
   });
 
+  test('unified-logs-cf-pull pill shows the "last paged Xh ago" caption when the alerter lock doc is seeded', async ({ page }) => {
+    // Task #956 — same contract as the sibling alerters above:
+    // when the unified-logs CF pull silence alerter has paged
+    // within the realert window, the pill must surface the
+    // "last paged Xh ago" caption sourced from
+    // /admin/health/unified-logs/cf-pull/cron/alert-state.
+    await seedAdminSession(page);
+    await installAdminApiMocks(page, {
+      overrides: {
+        [UNIFIED_LOGS_CF_PULL_CRON_ENDPOINT]: () => baseUnifiedLogsCfPullHealthy,
+        [UNIFIED_LOGS_CF_PULL_ALERT_STATE_ENDPOINT]: () => pagedNotInDebounce,
+      },
+    });
+
+    const alertStateRequest = page.waitForRequest((req) =>
+      req.url().includes(UNIFIED_LOGS_CF_PULL_ALERT_STATE_ENDPOINT)
+    );
+    await openAdminHealth(page);
+    await alertStateRequest;
+
+    const caption = page
+      .getByTestId(`${UNIFIED_LOGS_CF_PULL_PREFIX}-tile`)
+      .getByTestId(`${UNIFIED_LOGS_CF_PULL_PREFIX}-alert-state`);
+    await expect(caption).toBeVisible();
+    await expect(caption).toHaveText('last paged 2h ago');
+  });
+
   test('caption row is omitted on every pill when no alerter lock doc has been written', async ({ page }) => {
     // present:false from the backend means the alerter has never
     // paged — the caption short-circuits to null in the formatter
@@ -237,15 +286,17 @@ test.describe('AdminHealth alert-state caption', () => {
         [EDGE_PROXY_CRON_ENDPOINT]: () => baseEdgeProxyHealthy,
         [CF_WAF_DRIFT_CRON_ENDPOINT]: () => baseCfWafDriftHealthy,
         [TRUSTPILOT_CRON_ENDPOINT]: () => baseTrustpilotHealthy,
+        [UNIFIED_LOGS_CF_PULL_CRON_ENDPOINT]: () => baseUnifiedLogsCfPullHealthy,
         [EDGE_PROXY_ALERT_STATE_ENDPOINT]: () => neverPaged,
         [CF_WAF_DRIFT_ALERT_STATE_ENDPOINT]: () => neverPaged,
         [TRUSTPILOT_ALERT_STATE_ENDPOINT]: () => neverPaged,
+        [UNIFIED_LOGS_CF_PULL_ALERT_STATE_ENDPOINT]: () => neverPaged,
       },
     });
 
     // Arm the request waiters BEFORE navigating so we don't miss
     // the fetches if AdminHealth fires them eagerly on mount.
-    // Asserting that all three alert-state GETs actually fire
+    // Asserting that all four alert-state GETs actually fire
     // closes the false-negative gap where a typo in the endpoint
     // wiring would 404, fall through to the catch-all empty
     // payload, and silently satisfy the `toHaveCount(0)` check
@@ -261,6 +312,9 @@ test.describe('AdminHealth alert-state caption', () => {
     const trustpilotAlertStateRequest = page.waitForRequest((req) =>
       req.url().includes(TRUSTPILOT_ALERT_STATE_ENDPOINT)
     );
+    const unifiedLogsCfPullAlertStateRequest = page.waitForRequest((req) =>
+      req.url().includes(UNIFIED_LOGS_CF_PULL_ALERT_STATE_ENDPOINT)
+    );
 
     await openAdminHealth(page);
 
@@ -268,6 +322,7 @@ test.describe('AdminHealth alert-state caption', () => {
       edgeProxyAlertStateRequest,
       cfWafDriftAlertStateRequest,
       trustpilotAlertStateRequest,
+      unifiedLogsCfPullAlertStateRequest,
     ]);
 
     // Wait for at least one pill to render before asserting the
@@ -276,9 +331,11 @@ test.describe('AdminHealth alert-state caption', () => {
     await expect(page.getByTestId(`${EDGE_PROXY_PREFIX}-tile`)).toBeVisible();
     await expect(page.getByTestId(`${CF_WAF_DRIFT_PREFIX}-tile`)).toBeVisible();
     await expect(page.getByTestId(`${TRUSTPILOT_PREFIX}-tile`)).toBeVisible();
+    await expect(page.getByTestId(`${UNIFIED_LOGS_CF_PULL_PREFIX}-tile`)).toBeVisible();
 
     await expect(page.getByTestId(`${EDGE_PROXY_PREFIX}-alert-state`)).toHaveCount(0);
     await expect(page.getByTestId(`${CF_WAF_DRIFT_PREFIX}-alert-state`)).toHaveCount(0);
     await expect(page.getByTestId(`${TRUSTPILOT_PREFIX}-alert-state`)).toHaveCount(0);
+    await expect(page.getByTestId(`${UNIFIED_LOGS_CF_PULL_PREFIX}-alert-state`)).toHaveCount(0);
   });
 });

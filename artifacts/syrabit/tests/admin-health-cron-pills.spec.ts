@@ -25,10 +25,12 @@ import { installAdminApiMocks, seedAdminSession } from './admin-mocks';
 const EDGE_PROXY_PREFIX = 'edge-proxy-deploy-cron';
 const CF_WAF_DRIFT_PREFIX = 'cf-waf-drift-cron';
 const TRUSTPILOT_PREFIX = 'trustpilot-refresh-cron';
+const UNIFIED_LOGS_CF_PULL_PREFIX = 'unified-logs-cf-pull-cron';
 
 const EDGE_PROXY_ENDPOINT = '/api/admin/health/edge-proxy-deploy/cron';
 const CF_WAF_DRIFT_ENDPOINT = '/api/admin/health/cf-waf-drift/cron';
 const TRUSTPILOT_ENDPOINT = '/api/admin/health/trustpilot/refresh-cron';
+const UNIFIED_LOGS_CF_PULL_ENDPOINT = '/api/admin/health/unified-logs/cf-pull/cron';
 
 const baseEdgeProxyHealthy = {
   configured: true,
@@ -66,6 +68,24 @@ const baseTrustpilotHealthy = {
     'https://github.com/syrabit/syrabit/actions/workflows/trustpilot-aggregate-refresh.yml',
   staleThresholdSeconds: 36 * 3600,
   error: null,
+};
+
+// Task #956 — fixture matching the
+// /admin/health/unified-logs/cf-pull/cron response shape (no
+// GitHub workflow URL — the data source is a backend cron loop
+// polling Mongo, so the pill links to the JSON status snapshot
+// at ``statusUrl`` instead).
+const baseUnifiedLogsCfPullHealthy = {
+  configured: true,
+  status: 'healthy',
+  lastUpdatedTs: 1_700_000_000,
+  lastUpdatedAt: '2026-04-26T05:00:00Z',
+  lastUpdatedAgeSeconds: 1800,
+  leaseOwner: 'replica-A',
+  leaseExpiresAt: '2026-04-26T05:30:00Z',
+  cursor: 'cursor-xyz',
+  silentThresholdSeconds: 900,
+  statusUrl: '/api/admin/logs/status',
 };
 
 /**
@@ -249,5 +269,75 @@ test.describe('AdminHealth cron pills', () => {
     await expect(tile).toHaveClass(/bg-amber-50/);
     await expect(tile.getByTestId(`${TRUSTPILOT_PREFIX}-status`)).toHaveClass(/text-amber-600/);
     await expect(tile.getByTestId(`${TRUSTPILOT_PREFIX}-pill`)).toHaveClass(/bg-amber-100/);
+  });
+
+  test('unified-logs-cf-pull pill renders the healthy state with all convention testIds', async ({ page }) => {
+    await seedAdminSession(page);
+    await installAdminApiMocks(page, {
+      overrides: {
+        [UNIFIED_LOGS_CF_PULL_ENDPOINT]: () => baseUnifiedLogsCfPullHealthy,
+      },
+    });
+
+    // Asserting the GET fires confirms the loader useCallback +
+    // polling useEffect dependency array still wires up correctly
+    // for the Task #956 pill (the same regression mode the sibling
+    // pills already guard against).
+    const cfPullRequest = page.waitForRequest((req) =>
+      req.url().includes(UNIFIED_LOGS_CF_PULL_ENDPOINT)
+    );
+    await openAdminHealth(page);
+    await cfPullRequest;
+
+    const tile = await expectConventionTestIdsPresent(page, UNIFIED_LOGS_CF_PULL_PREFIX);
+
+    // Healthy → green container + green pill, with the
+    // unified-logs-specific copy from UnifiedLogsCfPullCronPill.
+    await expect(tile).toHaveClass(/bg-emerald-50/);
+    await expect(tile).toHaveClass(/border-emerald-200/);
+
+    const status = tile.getByTestId(`${UNIFIED_LOGS_CF_PULL_PREFIX}-status`);
+    await expect(status).toContainText('Cloudflare log ingest — flowing');
+    await expect(status).toHaveClass(/text-emerald-600/);
+
+    const pill = tile.getByTestId(`${UNIFIED_LOGS_CF_PULL_PREFIX}-pill`);
+    await expect(pill).toContainText('INGEST HEALTHY');
+    await expect(pill).toHaveClass(/bg-emerald-100/);
+
+    // The optional Status JSON deep-link points at the backend
+    // statusUrl (no GitHub Actions workflow exists for this cron).
+    await expect(tile.getByTestId(`${UNIFIED_LOGS_CF_PULL_PREFIX}-status-link`)).toHaveAttribute(
+      'href',
+      baseUnifiedLogsCfPullHealthy.statusUrl,
+    );
+  });
+
+  test('unified-logs-cf-pull pill turns red when ingest goes silent', async ({ page }) => {
+    await seedAdminSession(page);
+    await installAdminApiMocks(page, {
+      overrides: {
+        [UNIFIED_LOGS_CF_PULL_ENDPOINT]: () => ({
+          ...baseUnifiedLogsCfPullHealthy,
+          status: 'silent',
+          lastUpdatedAgeSeconds: 200000,
+          leaseOwner: 'replica-zombie',
+        }),
+      },
+    });
+
+    await openAdminHealth(page);
+
+    const tile = await expectConventionTestIdsPresent(page, UNIFIED_LOGS_CF_PULL_PREFIX);
+
+    await expect(tile).toHaveClass(/bg-red-50/);
+    await expect(tile).toHaveClass(/border-red-200/);
+
+    const status = tile.getByTestId(`${UNIFIED_LOGS_CF_PULL_PREFIX}-status`);
+    await expect(status).toContainText('Cloudflare log ingest — silent');
+    await expect(status).toHaveClass(/text-red-600/);
+
+    const pill = tile.getByTestId(`${UNIFIED_LOGS_CF_PULL_PREFIX}-pill`);
+    await expect(pill).toContainText('INGEST SILENT');
+    await expect(pill).toHaveClass(/bg-red-100/);
   });
 });
