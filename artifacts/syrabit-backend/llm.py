@@ -189,17 +189,37 @@ class _LlmBatcher:
 _llm_batcher = _LlmBatcher(batch_window_ms=_LLM_BATCH_WINDOW_MS)
 _content_batcher = _LlmBatcher(batch_window_ms=_CONTENT_BATCH_WINDOW_MS)
 
-_LLM_PROVIDERS = []
+# ── Sarvam provider list — Assamese-only ─────────────────────────────────────
+# Sarvam is intentionally segregated into its own provider list and is NEVER
+# added to `_LLM_PROVIDERS`, `_LLM_PROVIDERS_CHAT`, `_LLM_PROVIDERS_CONTENT`,
+# `_SLM_SLOT_CANDIDATES`, or `_CONTENT_SLOT_CANDIDATES`. Sarvam billing /
+# quota is reserved for the two Assamese paths that benefit from its native
+# Indic grounding:
+#
+#   1. Assamese chat response generation — the hedged Sarvam-key race in
+#      `call_llm_api_stream` (gated on `_indic_mode == _is_indic_lang(lang)`,
+#      where `_INDIC_LANG_CODES = {"as"}`). Indic resolution reads from
+#      `_SARVAM_PROVIDERS` to find a Sarvam key.
+#   2. Assamese translation — `routes/ai_chat.py` calls Sarvam's `/translate`
+#      endpoint only when `_SARVAM_LANG_MAP[lang]` is set, and that map only
+#      contains `{"as": "as-IN"}`.
+#
+# Any other request (English, Hindi, content-generation pools, admin notes,
+# PYQ, important questions, etc.) MUST NOT touch Sarvam — even if Sarvam's
+# key was working, it would drift to the wrong script for non-Assamese.
+_SARVAM_PROVIDERS: list[dict] = []
 if _SARVAM_LLM_KEY_3:
-    _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY_3, "default_model": "sarvam-m"})
+    _SARVAM_PROVIDERS.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY_3, "default_model": "sarvam-m"})
 if _SARVAM_LLM_KEY_2 and _SARVAM_LLM_KEY_2 != _SARVAM_LLM_KEY_3:
-    _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY_2, "default_model": "sarvam-m"})
+    _SARVAM_PROVIDERS.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY_2, "default_model": "sarvam-m"})
 if _SARVAM_LLM_KEY and _SARVAM_LLM_KEY not in (_SARVAM_LLM_KEY_3, _SARVAM_LLM_KEY_2):
-    _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
-# Gemini sits BEFORE Groq in the fallback chain so that when all Sarvam keys
-# return 429 (Indic primary exhausted), the next attempt is Gemini 2.5 Flash —
-# which speaks Assamese / Bengali / Hindi natively. Groq's Llama-4 Scout drifts
-# to English/Hinglish for Indic prompts and degrades student-facing quality.
+    _SARVAM_PROVIDERS.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+
+# General LLM fallback chain — used by every non-Assamese path. Gemini leads
+# because of native multilingual coverage (Hindi/Bengali/etc) AND huge RPM
+# headroom (600/min vs 30/min on Groq/Cerebras). Sarvam is deliberately
+# absent — see `_SARVAM_PROVIDERS` above for the rationale.
+_LLM_PROVIDERS = []
 if _GEMINI_KEY:
     _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
 if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
@@ -283,10 +303,14 @@ _SLM_SLOT_CANDIDATES = [
     ("openrouter",  "meta-llama/llama-4-scout",                          4, 2),
 ]
 
+# Content SmartKeyPool — serves `_CONTENT_INTENTS` (notes, important_questions,
+# pyq) for ALL languages. Sarvam is intentionally NOT in this pool — see
+# `_SARVAM_PROVIDERS` rationale above. Gemini Tier 0 carries the load
+# (600 RPM headroom + native multilingual); Cerebras qwen-235B is the
+# higher-quality fallback when Gemini is throttled or down.
 _CONTENT_SLOT_CANDIDATES = [
     ("gemini",      "gemini-2.5-flash",                                  6, 0),
-    ("sarvam",      "sarvam-m",                                          4, 1),
-    ("cerebras",    "qwen-3-235b-a22b-instruct-2507",                    4, 2),
+    ("cerebras",    "qwen-3-235b-a22b-instruct-2507",                    4, 1),
 ]
 
 _CONTENT_INTENTS = {"notes", "important_questions", "pyq"}
@@ -836,11 +860,15 @@ async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048
     Uses all providers including Emergent (admin content generation)."""
     return await _llm_batcher.call(messages, model, max_tokens)
 
+# Admin content batcher chain — Cerebras qwen-235B (high-quality, fast)
+# preferred, Gemini 2.5 Flash as fallback. Sarvam was previously inserted
+# between them but has been removed: this batcher serves admin notes,
+# important_questions and PYQ for ALL languages, and Sarvam quota is now
+# reserved for Assamese-only paths (see `_SARVAM_PROVIDERS` rationale at
+# top of this module).
 _LLM_PROVIDERS_CONTENT: list[dict] = []
 if _CEREBRAS_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "qwen-3-235b-a22b-instruct-2507"})
-if _SARVAM_LLM_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
 if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
@@ -852,8 +880,14 @@ logger.info(
 )
 
 async def call_llm_api_content(messages: list, model: str = None, max_tokens: int = 3072) -> str:
-    """LLM call for admin content generation — Cerebras preferred (qwen-3-235b, fast + high quality),
-    Sarvam secondary (sarvam-m), Gemini 2.5 Flash last resort.
+    """LLM call for admin content generation — Cerebras qwen-3-235b preferred
+    (fast + high quality), Gemini 2.5 Flash as fallback.
+
+    Sarvam was previously the secondary slot here but has been removed — admin
+    content generation runs across all languages, and Sarvam quota is now
+    reserved exclusively for the Assamese chat + translate paths (see
+    `_SARVAM_PROVIDERS` rationale at the top of this module).
+
     Uses dedicated content batcher with 300ms batch window (vs 5ms for chat).
     Retries with exponential backoff instead of instant failover."""
     if model is None and _LLM_PROVIDERS_CONTENT:
@@ -1208,9 +1242,13 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     _stream_t0 = time.monotonic()
 
     if _indic_mode:
+        # Indic (Assamese) path: resolve Sarvam-preferred model from the
+        # dedicated `_SARVAM_PROVIDERS` list. Sarvam is no longer in
+        # `_LLM_PROVIDERS`, so we MUST look it up from its own list to keep
+        # the Assamese hedged-key race functional.
         _resolved_indic_model = None
         for _pref_model in _SARVAM_INDIC_MODEL_PREFERENCE:
-            _prov, _pkey = _resolve_provider_for_model(_pref_model, _LLM_PROVIDERS)
+            _prov, _pkey = _resolve_provider_for_model(_pref_model, _SARVAM_PROVIDERS)
             if _prov == "sarvam" and _pkey:
                 _resolved_indic_model = _pref_model
                 break
@@ -1345,7 +1383,11 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             _indic_vertex_active = False  # Fallback → resolve normally
 
     use_model_resolved = _MODEL_ALIAS_MAP.get(use_model_raw, use_model_raw)
-    _prov_list = _LLM_PROVIDERS if _indic_mode else _LLM_PROVIDERS_CHAT
+    # In Indic (Assamese) mode, prepend `_SARVAM_PROVIDERS` so the resolver
+    # finds Sarvam keys first (Sarvam is no longer in `_LLM_PROVIDERS`),
+    # then falls through to the general chain (Gemini etc.) when no Sarvam
+    # key is configured. Non-Indic paths use the chat-only chain unchanged.
+    _prov_list = (_SARVAM_PROVIDERS + _LLM_PROVIDERS) if _indic_mode else _LLM_PROVIDERS_CHAT
     provider, key = _resolve_provider_for_model(use_model_resolved, _prov_list)
     if use_model_raw != use_model_resolved:
         logger.info(f"Model alias '{use_model_raw}' → '{use_model_resolved}' ({provider})")
@@ -1651,8 +1693,13 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     if _indic_mode and provider == "sarvam":
         _indic_candidates = []
 
-        _sarvam_keys = [p["key"] for p in _prov_list if p["provider"] == "sarvam"]
-        if key not in _sarvam_keys:
+        # Pull Sarvam keys from `_SARVAM_PROVIDERS` (the dedicated
+        # Assamese-only list). `_prov_list` may also contain Sarvam entries
+        # (we prepend `_SARVAM_PROVIDERS` to it in indic mode above), but
+        # reading from `_SARVAM_PROVIDERS` directly is more explicit and
+        # robust if the prepend logic ever changes.
+        _sarvam_keys = [p["key"] for p in _SARVAM_PROVIDERS if p.get("key")]
+        if key and key not in _sarvam_keys:
             _sarvam_keys.insert(0, key)
         _sarvam_keys = list(dict.fromkeys(_sarvam_keys))
         for _sk in _sarvam_keys:

@@ -71,7 +71,7 @@ The project utilizes a pnpm workspace monorepo, featuring a React + Vite fronten
 - **Databases:** PostgreSQL, MongoDB, Cloudflare D1.
 - **Authentication:** Supabase, JWT helpers, Google OAuth.
 - **Caching:** Cloudflare AI Gateway (upstream LLM cache), Cloudflare edge worker KV bindings (rate limiting, bot HTML cache).
-- **LLM Providers:** Groq, Cerebras, OpenRouter (for chat); Cerebras, Sarvam, Gemini (for content generation, vision, embeddings). All LLM traffic is routed through Cloudflare AI Gateway.
+- **LLM Providers:** Cerebras, Groq, OpenRouter (general English chat); Cerebras (qwen-235b) and Gemini 2.5 Flash (admin content generation — notes / important questions / PYQ); Gemini for vision and embeddings; **Sarvam is gated to Assamese-only paths** — Assamese chat response generation (the hedged-key race in `call_llm_api_stream` for `response_lang == "as"`) and the `/translate` endpoint when `_SARVAM_LANG_MAP[lang] == "as-IN"`. Sarvam is intentionally absent from `_LLM_PROVIDERS`, `_LLM_PROVIDERS_CHAT`, `_LLM_PROVIDERS_CONTENT`, `_SLM_SLOT_CANDIDATES`, and `_CONTENT_SLOT_CANDIDATES` — it lives in its own `_SARVAM_PROVIDERS` list and is reachable only through Indic-mode routing. All LLM traffic is routed through Cloudflare AI Gateway.
 - **Payment Gateways:** Razorpay (INR), Stripe (USD).
 - **Email Service:** Resend API.
 - **UI/UX Frameworks:** React, Vite, React Router, Tailwind CSS.
