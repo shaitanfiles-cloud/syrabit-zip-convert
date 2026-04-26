@@ -611,6 +611,32 @@ def test_embed_for_linker_swallows_backend_errors():
         sys.modules.pop("vertex_services", None)
 
 
+# ─── budget interactions ──────────────────────────────────────────────
+
+
+def test_consume_budget_after_nightly_marker_still_reserves_slot(monkeypatch):
+    """Regression: the nightly loop creates today's budget doc to claim
+    the once-per-day marker. If that upsert forgets to seed
+    ``auto_applied: 0``, the later ``{$lt: cap}`` reservation guard
+    won't match a missing field and every high-confidence proposal
+    would be silently downgraded to drafted for the rest of the day.
+    Simulate that ordering and assert auto-apply still succeeds."""
+    db = _FakeDb()
+    today = linker._today_key()
+    # Pre-create a doc that mimics what the nightly upsert leaves behind.
+    db.internal_link_budget.docs.append({
+        "_id": today,
+        "nightly_ran_at": "2026-04-26T00:00:00+00:00",
+        "auto_applied": 0,           # ← what the fixed upsert seeds
+        "created_at":   "2026-04-26T00:00:00+00:00",
+    })
+    ok = _run(linker._consume_auto_budget(db, cap=5))
+    assert ok is True
+    # And the counter actually advanced.
+    doc = _run(db.internal_link_budget.find_one({"_id": today}))
+    assert doc["auto_applied"] == 1
+
+
 # ─── nightly maintenance: top-traffic source ──────────────────────────
 
 

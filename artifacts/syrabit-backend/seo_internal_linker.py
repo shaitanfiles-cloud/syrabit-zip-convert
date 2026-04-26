@@ -1055,11 +1055,24 @@ async def _internal_linker_loop(db) -> None:
             # worker already claimed today's slot, so we move on.
             won = False
             try:
+                # IMPORTANT: this upsert may create today's budget doc
+                # *before* any auto-apply ever happens. We MUST seed
+                # ``auto_applied: 0`` here too, otherwise the later
+                # ``{auto_applied: {$lt: cap}}`` guard inside
+                # ``_consume_auto_budget`` won't match a missing field
+                # and every high-confidence proposal for the rest of
+                # the day silently downgrades to drafted.
                 res = await db.internal_link_budget.update_one(
                     {"_id": today, "nightly_ran_at": {"$exists": False}},
-                    {"$set": {
-                        "nightly_ran_at": datetime.now(timezone.utc).isoformat(),
-                    }},
+                    {
+                        "$set": {
+                            "nightly_ran_at": datetime.now(timezone.utc).isoformat(),
+                        },
+                        "$setOnInsert": {
+                            "auto_applied": 0,
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                        },
+                    },
                     upsert=True,
                 )
                 won = bool(
