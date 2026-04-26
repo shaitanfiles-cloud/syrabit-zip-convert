@@ -443,10 +443,11 @@ def test_run_topic_discovery_once_end_to_end_with_budget_cap():
     assert totals["rejected"] == 0
     assert summary["remaining_after_run"]["auto_publish"] == 0
 
-    # Every auto/draft candidate is enqueued; rejected/error are not.
-    assert len(upserts_recorded) == 6
+    # Safety gate: only auto_published candidates auto-enqueue. Drafted
+    # ones stay as discovery records until an admin promotes them.
+    assert len(upserts_recorded) == 2
     statuses = {u["doc"]["discovery_status"] for u in upserts_recorded}
-    assert statuses == {"auto_publish_pending", "draft_pending"}
+    assert statuses == {"auto_publish_pending"}
     # Run row was persisted.
     assert any(u["q"].get("id") == summary["id"]
                for u in db[tds.RUNS_COLLECTION].upserts)
@@ -525,20 +526,32 @@ def test_apply_override_reject_does_not_enqueue():
 
 
 
-def test_apply_override_skips_re_enqueue_when_already_queued():
+def test_apply_override_promote_reenqueues_to_reactivate_pipeline_row():
+    """Promoting drafted→auto_published OR rejected→auto_published must
+    upsert the seo_topics row so its status flips to auto_publish_pending,
+    even when an enqueued_topic already exists from a prior decision.
+    Without this, override-to-promote would not actually take effect on
+    a row that was previously dequeued (status=blocked) by a reject."""
     db = _FakeWritableDb()
     db[tds.CANDIDATES_COLLECTION].docs = [{
         "id": "cand_1", "run_id": "r1", "query": "already queued",
         "sources": ["gsc_near_miss"], "decision": "drafted",
         "enqueued_topic": "already queued",
     }]
-    fake = AsyncMock()
-    with patch("seo_writes.upsert_seo_topic", fake):
-        _run(tds.apply_override(
+    enqueue_calls: List[Dict[str, Any]] = []
+
+    async def fake_upsert(_db, key, doc):
+        enqueue_calls.append(doc)
+
+    with patch("seo_writes.upsert_seo_topic", fake_upsert):
+        out = _run(tds.apply_override(
             db, candidate_id="cand_1", new_decision="auto_published",
             admin_reason="bump tier", admin_id="admin-1",
         ))
-    fake.assert_not_called()
+    assert out["decision"] == "auto_published"
+    assert out["enqueued_topic"] == "already queued"
+    assert len(enqueue_calls) == 1
+    assert enqueue_calls[0]["discovery_status"] == "auto_publish_pending"
 
 
 

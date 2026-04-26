@@ -79,7 +79,9 @@ DEFAULT_W_AEO = 0.20
 DEFAULT_W_DIFFICULTY = 0.20
 DEFAULT_RUN_HOUR_UTC = 2
 
-MAX_SUGGEST_SEEDS_PER_RUN = 25
+MAX_SUGGEST_SEEDS_PER_RUN = 0  # 0 == no cap (every leaf topic). Operators
+# can set TOPIC_DISCOVERY_SUGGEST_SEED_LIMIT to a positive int to bound LLM
+# cost when the syllabus is unusually large.
 MAX_GSC_PER_RUN = 200
 MAX_TRENDING_PER_RUN = 100
 MAX_CANDIDATES_TO_GRADE = 300
@@ -253,10 +255,12 @@ async def collect_suggest_expansions(
     seed_limit: int = MAX_SUGGEST_SEEDS_PER_RUN,
     now: Optional[datetime] = None,
 ) -> List[Dict[str, Any]]:
-    """Fan out Google Suggest over every leaf syllabus topic (from the
+    """Fan out Google Suggest over EVERY leaf syllabus topic (from the
     ``chapters`` collection) unioned with recent ``seo_topics`` rows.
-    The cap is applied AFTER the union so chapters and seo_topics both
-    contribute; ``TOPIC_DISCOVERY_SUGGEST_SEED_LIMIT`` overrides it.
+    No cap by default — set ``TOPIC_DISCOVERY_SUGGEST_SEED_LIMIT`` to
+    a positive int to bound LLM cost on very large syllabi. When a
+    cap is applied, it runs AFTER the union so chapters and seo_topics
+    both contribute.
     """
     if db is None:
         return []
@@ -1022,17 +1026,17 @@ async def run_topic_discovery_once(
 
         enqueued_topic: Optional[str] = None
         enqueue_error: Optional[str] = None
-        if decision in ("auto_published", "drafted"):
+        # Safety gate: ONLY auto_published candidates are auto-enqueued
+        # into the Stage 1→3 pipeline. Drafted candidates remain
+        # discovery records until an admin promotes them via override
+        # (apply_override calls _enqueue_for_pipeline at that point).
+        if decision == "auto_published":
             enqueued_topic = await _enqueue_for_pipeline(
                 db, candidate=candidate, decision=decision, run_id=run_id,
             )
             if not enqueued_topic:
-                # Enqueue failed — keep the decision as a record of what
-                # the grader wanted, but flag it so admins can retry via
-                # an override. We do NOT downgrade ``decision`` because
-                # the override few-shot context wants the grader's
-                # original verdict; the surfaced ``enqueue_error`` lets
-                # the dashboard render a "needs retry" pill.
+                # Enqueue failed — preserve the grader's verdict but
+                # surface a retry signal for the admin dashboard.
                 enqueue_error = "enqueue failed — pipeline upsert rejected"
 
         cand_id = _hash_id("cand", run_id, candidate.get("normalised") or candidate.get("query", ""))
@@ -1266,7 +1270,10 @@ async def apply_override(
 
     enqueued_topic = cand.get("enqueued_topic")
     dequeued = False
-    if new_decision in ("auto_published", "drafted") and not enqueued_topic:
+    # Auto_published always (re)enqueues — covers drafted→auto_published
+    # promotion AND rejected→auto_published re-activation (the upsert
+    # flips status away from "blocked" set by a prior _dequeue).
+    if new_decision == "auto_published":
         enqueued_topic = await _enqueue_for_pipeline(
             db,
             candidate={
@@ -1275,7 +1282,7 @@ async def apply_override(
             },
             decision=new_decision,
             run_id=cand.get("run_id", "manual_override"),
-        )
+        ) or enqueued_topic
     elif new_decision == "rejected" and enqueued_topic:
         # Reject must cancel any prior queue, not just relabel.
         dequeued = await _dequeue_from_pipeline(
