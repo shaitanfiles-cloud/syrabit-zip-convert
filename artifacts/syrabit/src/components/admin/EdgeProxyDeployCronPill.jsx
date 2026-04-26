@@ -112,6 +112,12 @@ export default function EdgeProxyDeployCronPill({
   // `alertState` so a future caller can wire only one of the two
   // without coupling the contracts.
   alertHistory, onLoadAlertHistory,
+  // Task #974 — per-env missing-Slack-webhook nag snapshot for
+  // EDGE_PROXY_DEPLOY_SLACK_WEBHOOK, sourced from
+  // /admin/health/slack-webhook-missing/EDGE_PROXY_DEPLOY_SLACK_WEBHOOK/alert-state.
+  // Forwarded as-is to CronHealthPill; see SlackConfigBadge for how
+  // the "· paged Nh ago" decoration is rendered.
+  slackMissingAlertState,
 }) {
   return (
     <CronHealthPill
@@ -127,6 +133,7 @@ export default function EdgeProxyDeployCronPill({
       alertState={alertState}
       alertHistory={alertHistory}
       onLoadAlertHistory={onLoadAlertHistory}
+      slackMissingAlertState={slackMissingAlertState}
     />
   );
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi, Copy, Check, Users, Activity, MessageSquare, TrendingUp, DollarSign, BarChart2, RotateCw, Clock, Undo2, Star, ExternalLink } from 'lucide-react';
 import CronHealthPill, { SlackConfigBadge } from './CronHealthPill';
 import CfWafDriftCronPill from './CfWafDriftCronPill';
@@ -349,6 +349,41 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       .catch(() => setUnifiedLogsCfPullCronAlertState(null));
   }, [adminToken]);
 
+  // Task #974 — alerter-state for the missing-Slack-webhook nag
+  // (routes/admin_slack_webhook_missing_alerts.py, Task #970), one
+  // entry per monitored env. Fans out three GETs against
+  // /admin/health/slack-webhook-missing/<env>/alert-state in parallel
+  // and stashes the response keyed by env name so each cron pill
+  // can pick out its matching slot to feed the SlackConfigBadge's
+  // "· paged Nh ago" decoration. Best-effort: a missing entry just
+  // means the badge renders the pre-Task #974 shape (no decoration).
+  // Names are pinned here (not imported from a shared module) to
+  // keep the wiring obvious next to the pills they're rendered on;
+  // the source of truth lives in routes/slack_alerter_config.py and
+  // is mirrored into _MONITORED_ENV_NAMES on the alerter module.
+  const SLACK_WEBHOOK_MISSING_ENVS = useMemo(() => [
+    'UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK',
+    'CF_WAF_DRIFT_SLACK_WEBHOOK',
+    'EDGE_PROXY_DEPLOY_SLACK_WEBHOOK',
+  ], []);
+  const [slackWebhookMissingAlertStates, setSlackWebhookMissingAlertStates] = useState({});
+  const loadSlackWebhookMissingAlertStates = useCallback(() => {
+    Promise.all(SLACK_WEBHOOK_MISSING_ENVS.map((env) =>
+      axios.get(
+        `${API_BASE}/admin/health/slack-webhook-missing/${env}/alert-state`,
+        { headers: adminHeaders(adminToken), withCredentials: true },
+      )
+        .then((r) => [env, r.data])
+        .catch(() => [env, null])
+    )).then((pairs) => {
+      // Replace wholesale instead of merging so a per-env transition
+      // from "paged" to "recovered" (which clears `last_alert_at`)
+      // doesn't leave a stale `lastAlertAgeSeconds` lingering on the
+      // badge. The 60s polling cadence picks this up automatically.
+      setSlackWebhookMissingAlertStates(Object.fromEntries(pairs));
+    });
+  }, [adminToken, SLACK_WEBHOOK_MISSING_ENVS]);
+
   // Task #918 — paged-on-call audit log per pill, sourced from
   //   * /admin/health/edge-proxy-deploy/cron/alert-history
   //   * /admin/health/cf-waf-drift/cron/alert-history
@@ -452,6 +487,11 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     loadCfDriftCronAlertState();
     loadTpCronAlertState();
     loadUnifiedLogsCfPullCronAlertState();
+    // Task #974 — per-env missing-Slack-webhook nag state, batched
+    // into a single loader so the three GETs fire in parallel and
+    // the badges' "· paged Nh ago" decoration stays in lockstep
+    // with the rest of the 60s polling cadence.
+    loadSlackWebhookMissingAlertStates();
     const id = setInterval(() => {
       loadTpJsonldReport();
       loadTpJsonldHistory();
@@ -464,13 +504,15 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       loadCfDriftCronAlertState();
       loadTpCronAlertState();
       loadUnifiedLogsCfPullCronAlertState();
+      loadSlackWebhookMissingAlertStates();
     }, 60000);
     return () => clearInterval(id);
   }, [adminToken, loadTpJsonldReport, loadTpJsonldHistory,
       loadTpJsonldAlerts, loadTpCronHealth, loadCfDriftCronHealth,
       loadEdgeProxyDeployCronHealth, loadUnifiedLogsCfPullCronHealth,
       loadEdgeProxyDeployCronAlertState, loadCfDriftCronAlertState,
-      loadTpCronAlertState, loadUnifiedLogsCfPullCronAlertState]);
+      loadTpCronAlertState, loadUnifiedLogsCfPullCronAlertState,
+      loadSlackWebhookMissingAlertStates]);
 
   // Task #609 — managed AI response cache stats + admin purge controls.
   const [aiCacheStats, setAiCacheStats] = useState(null);
@@ -2421,6 +2463,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           alertState={cfDriftCronAlertState}
           alertHistory={cfDriftCronAlertHistory}
           onLoadAlertHistory={loadCfDriftCronAlertHistory}
+          slackMissingAlertState={slackWebhookMissingAlertStates['CF_WAF_DRIFT_SLACK_WEBHOOK']}
         />
         </SectionErrorBoundary>
 
@@ -2443,6 +2486,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           alertState={edgeProxyDeployCronAlertState}
           alertHistory={edgeProxyDeployCronAlertHistory}
           onLoadAlertHistory={loadEdgeProxyDeployCronAlertHistory}
+          slackMissingAlertState={slackWebhookMissingAlertStates['EDGE_PROXY_DEPLOY_SLACK_WEBHOOK']}
         />
         </SectionErrorBoundary>
 
@@ -2477,6 +2521,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           alertState={unifiedLogsCfPullCronAlertState}
           alertHistory={unifiedLogsCfPullCronAlertHistory}
           onLoadAlertHistory={loadUnifiedLogsCfPullCronAlertHistory}
+          slackMissingAlertState={slackWebhookMissingAlertStates['UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK']}
         />
         </SectionErrorBoundary>
 

@@ -31,7 +31,6 @@ _NON_ROUTER_MODULES = frozenset({
     "admin_ci_alerts",  # Task #484: leader-gated CI red-alert poller
     "slack_alerter_config",  # Task #969: tiny shared Slack-config helper
     "admin_edge_proxy_deploy_cron_alerts",  # Task #882: edge-proxy-deploy silence alerter loop
-    "admin_slack_webhook_missing_alerts",  # Task #970: missing-Slack-webhook nag loop
 })
 
 

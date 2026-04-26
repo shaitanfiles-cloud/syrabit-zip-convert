@@ -74,6 +74,12 @@ export default function CfWafDriftCronPill({
   // /admin/health/cf-waf-drift/cron/alert-history. Optional; see
   // EdgeProxyDeployCronPill for the same prop's behaviour.
   alertHistory, onLoadAlertHistory,
+  // Task #974 — per-env missing-Slack-webhook nag snapshot for
+  // CF_WAF_DRIFT_SLACK_WEBHOOK, sourced from
+  // /admin/health/slack-webhook-missing/CF_WAF_DRIFT_SLACK_WEBHOOK/alert-state.
+  // Forwarded as-is to CronHealthPill; see SlackConfigBadge for how
+  // the "· paged Nh ago" decoration is rendered.
+  slackMissingAlertState,
 }) {
   return (
     <CronHealthPill
@@ -88,6 +94,7 @@ export default function CfWafDriftCronPill({
       alertState={alertState}
       alertHistory={alertHistory}
       onLoadAlertHistory={onLoadAlertHistory}
+      slackMissingAlertState={slackMissingAlertState}
     />
   );
 }

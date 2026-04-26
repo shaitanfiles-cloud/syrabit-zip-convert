@@ -1566,6 +1566,13 @@ from routes.admin_logs_cf_pull_silence_alerts import (
 from routes.admin_logs_cf_pull_saturation_alerts import (
     router as admin_logs_cf_pull_saturation_alerts_router,
 )
+# Task #974 — admin-readable surfaces for the Task #970 missing-Slack-
+# webhook nag. Per-env alert-state + alert-history endpoints so the
+# AdminHealth dashboard can decorate each cron pill's "Slack ✗" badge
+# with "last paged Nh ago" inline.
+from routes.admin_slack_webhook_missing_alerts import (
+    router as admin_slack_webhook_missing_alerts_router,
+)
 from routes.synthetic_probe_secret_alert import router as synthetic_probe_secret_alert_router
 # Task #882 — surfaces the latest edge-proxy-deploy GitHub Actions run
 # as a cron pill in AdminHealth so a red `smoke-preview` regression
@@ -1620,6 +1627,7 @@ api.include_router(cf_waf_drift_cron_heartbeat_router)
 api.include_router(admin_cf_waf_drift_cron_alerts_router)
 api.include_router(admin_logs_cf_pull_silence_alerts_router)
 api.include_router(admin_logs_cf_pull_saturation_alerts_router)
+api.include_router(admin_slack_webhook_missing_alerts_router)
 api.include_router(synthetic_probe_secret_alert_router)
 api.include_router(admin_health_router)
 api.include_router(admin_ads_router)

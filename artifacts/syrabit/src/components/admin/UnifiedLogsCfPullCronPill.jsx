@@ -130,6 +130,12 @@ export default function UnifiedLogsCfPullCronPill({
   // /admin/health/unified-logs/cf-pull/cron/alert-history. Optional;
   // see EdgeProxyDeployCronPill for the same prop's behaviour.
   alertHistory, onLoadAlertHistory,
+  // Task #974 — per-env missing-Slack-webhook nag snapshot for
+  // UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK, sourced from
+  // /admin/health/slack-webhook-missing/UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK/alert-state.
+  // Forwarded as-is to CronHealthPill; see SlackConfigBadge for how
+  // the "· paged Nh ago" decoration is rendered.
+  slackMissingAlertState,
 }) {
   // The "Runs" link target falls back to the data's ``statusUrl``
   // (the only stable URL this cron exposes) before settling on the
@@ -151,6 +157,7 @@ export default function UnifiedLogsCfPullCronPill({
       alertState={alertState}
       alertHistory={alertHistory}
       onLoadAlertHistory={onLoadAlertHistory}
+      slackMissingAlertState={slackMissingAlertState}
     />
   );
 }

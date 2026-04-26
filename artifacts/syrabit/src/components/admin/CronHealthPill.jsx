@@ -15,33 +15,86 @@ import { formatAlertStateCaption } from './cronCaptionHelpers';
 // routes/admin_health.py). When the field is absent (e.g. older
 // backend that hasn't shipped Task #964 yet) we render nothing so
 // the pill still looks correct against an in-flight rollout.
-export function SlackConfigBadge({ configured, envName, testId }) {
+//
+// Task #974 — when the badge is red AND the missing-Slack-webhook
+// nag (routes/admin_slack_webhook_missing_alerts.py) has paged
+// on-call about *this* env, decorate the badge with a tiny
+// "· paged Nh ago" suffix so admins can tell "we know, on-call has
+// been paged" apart from "this just rolled out and the nag's 24h
+// grace window hasn't elapsed yet". The decoration is intentionally
+// gated on the badge being red so a recovered/healthy alerter
+// doesn't carry a confusing stale paged-Nh-ago tail.
+export function SlackConfigBadge({
+  configured,
+  envName,
+  testId,
+  missingAlertState,
+}) {
   if (configured == null) return null;
   const cls = configured
     ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
     : 'bg-gray-100 text-gray-500 border-gray-200';
   const label = configured ? 'Slack ✓' : 'Slack ✗';
+
+  // Task #974 — only decorate the red badge with paged context when
+  // the lock doc actually carries a `last_alert_at` (i.e. the nag
+  // has fired at least once). The endpoint always returns
+  // ``present: false`` until the first page lands, so checking
+  // ``lastAlertAgeSeconds`` directly handles both "no doc yet" and
+  // "doc exists but only carries first_observed_ts" without a
+  // separate truthiness dance.
+  const pagedAgeSecs = (
+    !configured
+    && missingAlertState
+    && missingAlertState.lastAlertAgeSeconds != null
+  ) ? missingAlertState.lastAlertAgeSeconds : null;
+  const pagedAge = ageLabel(pagedAgeSecs);
+  const inDebounce = pagedAge != null && !!missingAlertState?.inDebounce;
+  const debounceRemaining = inDebounce
+    ? ageLabel(missingAlertState?.debounceRemainingSeconds)
+    : null;
+
   // Title is the only place we mention the env var name so an admin
   // who sees a missing badge can copy/paste the exact env var to
   // ask infra to set it. Falls back to a generic hint when the
   // backend didn't publish the env var name. Task #963 — also
   // make the "third channel alongside in-app + email" relationship
   // explicit so on-call understands that the email + in-app pages
-  // still fire even when this badge is red.
-  const title = configured
+  // still fire even when this badge is red. Task #974 — append the
+  // missing-webhook nag's paged-on-call status to the red-badge
+  // tooltip so an admin hovering the badge sees both "here's how to
+  // fix it" and "here's whether on-call already knows" in one place.
+  let title = configured
     ? `Slack fan-out is wired up — paged alongside in-app + email${envName ? ` (env: ${envName})` : ''}.`
     : envName
       ? `Slack fan-out is NOT wired up — in-app + email pages still fire; set the ${envName} env var on the backend to enable the third Slack channel.`
       : 'Slack fan-out is NOT wired up — in-app + email pages still fire; set the alerter\'s webhook env var on the backend to enable the third Slack channel.';
+  if (pagedAge != null) {
+    title += inDebounce && debounceRemaining
+      ? ` On-call paged ${pagedAge} ago about this missing webhook; next nag suppressed for ~${debounceRemaining}.`
+      : ` On-call last paged ${pagedAge} ago about this missing webhook.`;
+  }
+
   return (
     <span
       className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold border ${cls}`}
       title={title}
       data-testid={testId ? `${testId}-slack-config` : undefined}
       data-slack-configured={configured ? 'true' : 'false'}
+      data-slack-missing-paged-age-seconds={
+        pagedAgeSecs != null ? String(pagedAgeSecs) : undefined
+      }
     >
       <MessageSquare size={10} aria-hidden />
       {label}
+      {pagedAge != null && (
+        <span
+          className="ml-0.5 font-normal opacity-80"
+          data-testid={testId ? `${testId}-slack-config-paged` : undefined}
+        >
+          · paged {pagedAge} ago
+        </span>
+      )}
     </span>
   );
 }
@@ -158,6 +211,17 @@ export default function CronHealthPill({
   // — see _build_alert_history_response in routes/admin_health.py.
   alertHistory,
   onLoadAlertHistory,
+  // Task #974 — optional snapshot of the per-env missing-Slack-webhook
+  // nag's lock doc, sourced from
+  // `/admin/health/slack-webhook-missing/<env>/alert-state`. When the
+  // wrapper passes it, the inline `SlackConfigBadge` decorates a red
+  // "Slack ✗" with "· paged Nh ago" so admins can see at a glance
+  // whether on-call has already been nagged about this env's missing
+  // webhook. Decoupled from `alertState` because the `alertState`
+  // above describes the cron's *own* silence/cron-failure alerter,
+  // while this one describes a sibling alerter that pages on-call
+  // when the cron's Slack webhook env stays unset post-deploy.
+  slackMissingAlertState,
 }) {
   const data = rawData && !rawData._error ? rawData : null;
   const status = data?.status || 'unknown';
@@ -280,6 +344,7 @@ export default function CronHealthPill({
               configured={data?.slackConfigured}
               envName={data?.slackWebhookEnv}
               testId={testId}
+              missingAlertState={slackMissingAlertState}
             />
           </div>
           {subText != null && (

@@ -732,6 +732,475 @@ def test_send_alert_recovery_uses_info_type(fake_db):
     assert EDGE_PROXY in captured["title"]
 
 
+# ─── Task #974 — record_cron_alert_event wired into _send_alert ───────────
+
+def test_send_alert_records_history_event_on_missing(fake_db):
+    """``_send_alert`` must schedule a ``record_cron_alert_event`` call
+    so the new ``/admin/health/slack-webhook-missing/<env>/alert-history``
+    endpoint can render this page next to the affected pill. The
+    persisted event must carry the per-env ``lock_id`` (so the
+    default one-pill-one-history view scopes correctly without any
+    client-side filtering), ``kind="missing"``, ``sub_kind=env_name``
+    (so a combined audit query can disambiguate which webhook the
+    page was about) and a small health payload with the env name +
+    missing-for duration.
+    """
+    now = _now()
+    first_obs = now.timestamp() - (alerter._BOOTSTRAP_GRACE_S + 7200)
+    captured: dict = {}
+
+    async def _fake_record(_db, *, lock_id, kind, sub_kind, health, now_utc):
+        captured.update({
+            "lock_id": lock_id,
+            "kind": kind,
+            "sub_kind": sub_kind,
+            "health": health,
+            "now_utc": now_utc,
+        })
+
+    async def _run():
+        with patch("db_ops.supa_insert_notification", new=AsyncMock()), \
+                patch.object(
+                    alerter, "_email_admins_about_missing", new=AsyncMock(),
+                ), \
+                patch(
+                    "routes.admin_health.record_cron_alert_event",
+                    new=_fake_record,
+                ):
+            await alerter._send_alert(
+                fake_db, CF_PULL, "missing", now,
+                first_observed_ts=first_obs,
+            )
+            # Yield once so the asyncio.create_task scheduled inside
+            # _send_alert (record_cron_alert_event is fire-and-forget
+            # mirroring the email fan-out) actually runs in the same
+            # loop before we tear the patches down.
+            await asyncio.sleep(0)
+
+    asyncio.run(_run())
+    assert captured["lock_id"] == alerter._lock_id_for(CF_PULL)
+    assert captured["kind"] == "missing"
+    assert captured["sub_kind"] == CF_PULL
+    assert captured["now_utc"] == now
+    assert captured["health"]["envName"] == CF_PULL
+    # Human label so an admin reading the audit log doesn't have to
+    # cross-reference env-var name → which alerter it disables.
+    assert "envLabel" in captured["health"]
+    # Missing-for surface so the audit row carries enough context to
+    # triage without re-reading the lock doc.
+    assert captured["health"]["firstObservedTs"] == first_obs
+    assert captured["health"]["missingForSeconds"] >= (
+        alerter._BOOTSTRAP_GRACE_S + 7200 - 1
+    )
+
+
+def test_send_alert_records_history_event_on_recovery(fake_db):
+    """The recovery side must also append an event so the audit log
+    shows the missing → recovered transition (otherwise admins would
+    only see the page-on side and never know when the env was
+    finally set, defeating the audit log's "what happened" use)."""
+    now = _now()
+    captured: dict = {}
+
+    async def _fake_record(_db, *, lock_id, kind, sub_kind, health, now_utc):
+        captured.update({
+            "lock_id": lock_id, "kind": kind,
+            "sub_kind": sub_kind, "health": health,
+        })
+
+    async def _run():
+        with patch("db_ops.supa_insert_notification", new=AsyncMock()), \
+                patch.object(
+                    alerter, "_email_admins_about_missing", new=AsyncMock(),
+                ), \
+                patch(
+                    "routes.admin_health.record_cron_alert_event",
+                    new=_fake_record,
+                ):
+            await alerter._send_alert(
+                fake_db, EDGE_PROXY, "recovered", now,
+            )
+            await asyncio.sleep(0)
+
+    asyncio.run(_run())
+    assert captured["lock_id"] == alerter._lock_id_for(EDGE_PROXY)
+    assert captured["kind"] == "recovered"
+    assert captured["sub_kind"] == EDGE_PROXY
+    # The recovered side has no first_observed_ts so the health
+    # payload omits ``firstObservedTs`` / ``missingForSeconds`` — but
+    # must still carry the env name so the audit row has scope.
+    assert captured["health"]["envName"] == EDGE_PROXY
+    assert "firstObservedTs" not in captured["health"]
+    assert "missingForSeconds" not in captured["health"]
+
+
+def test_send_alert_history_record_failure_does_not_break_alert(fake_db):
+    """A Mongo blip on the audit-log persist side must NOT undo the
+    in-app notification or kill the alert iteration. Mirrors the
+    ``except Exception`` guard already wrapping the call site
+    (a slow Mongo can't be allowed to stall the alert loop)."""
+    now = _now()
+    persisted: dict = {}
+
+    async def _fake_persist(payload):
+        persisted.update(payload)
+
+    def _broken_record(*_a, **_kw):
+        raise RuntimeError("mongo down")
+
+    async def _run():
+        with patch("db_ops.supa_insert_notification", new=_fake_persist), \
+                patch.object(
+                    alerter, "_email_admins_about_missing", new=AsyncMock(),
+                ), \
+                patch(
+                    "routes.admin_health.record_cron_alert_event",
+                    new=_broken_record,
+                ):
+            # Should not raise even though the helper call blows up.
+            await alerter._send_alert(
+                fake_db, CF_WAF, "missing", now,
+                first_observed_ts=now.timestamp() - (
+                    alerter._BOOTSTRAP_GRACE_S + 60
+                ),
+            )
+            await asyncio.sleep(0)
+
+    asyncio.run(_run())
+    # The in-app notification must still have landed — the audit log
+    # is best-effort decoration, not a precondition.
+    assert persisted["meta"]["env_name"] == CF_WAF
+
+
+# ─── Task #974 — admin-readable surfaces (alert-state + alert-history) ────
+
+@pytest.fixture
+def http_client_authed():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from auth_deps import get_admin_user
+    app = FastAPI()
+    app.include_router(alerter.router)
+    app.dependency_overrides = {
+        get_admin_user: lambda: {
+            "id": "admin-1", "email": "ops@syrabit.ai",
+            "is_admin": True, "sub": "admin-1",
+        },
+    }
+    return TestClient(app)
+
+
+@pytest.fixture
+def http_client_no_auth():
+    from fastapi import FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+    from auth_deps import get_admin_user
+    app = FastAPI()
+    app.include_router(alerter.router)
+
+    def _deny():
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    app.dependency_overrides = {get_admin_user: _deny}
+    return TestClient(app)
+
+
+class _RouteFakeJobLocks:
+    def __init__(self, doc=None):
+        self._doc = doc
+
+    async def find_one(self, query, projection=None, sort=None):
+        if not self._doc:
+            return None
+        if "_id" in query and self._doc.get("_id") != query["_id"]:
+            return None
+        return dict(self._doc)
+
+
+class _RouteFakeCursor:
+    def __init__(self, docs):
+        self._docs = list(docs)
+
+    def sort(self, *_a, **_kw):
+        return self
+
+    def limit(self, n):
+        self._docs = self._docs[: int(n)]
+        return self
+
+    async def to_list(self, length=None):
+        cap = length if length is not None else len(self._docs)
+        return list(self._docs)[: int(cap)]
+
+
+class _RouteFakeHistory:
+    """Honors the ``lock_id`` filter in the find query — the route
+    relies on per-lock-id scoping to keep one env's audit log out
+    of another's history view, so the fake must enforce that
+    rather than returning everything (which would hide a regression
+    where the helper widened the lookup)."""
+
+    def __init__(self, docs):
+        self._docs = list(docs)
+
+    def find(self, query, *_a, **_kw):
+        scoped_lock_id = (query or {}).get("lock_id") if query else None
+        if scoped_lock_id is None:
+            return _RouteFakeCursor(self._docs)
+        return _RouteFakeCursor(
+            [d for d in self._docs if d.get("lock_id") == scoped_lock_id]
+        )
+
+
+class _RouteFakeDb:
+    def __init__(self, lock_doc=None, history_docs=None):
+        self.job_locks = _RouteFakeJobLocks(lock_doc)
+        self._history_docs = list(history_docs or [])
+
+    def __getitem__(self, name):
+        if name == "cron_alert_history":
+            return _RouteFakeHistory(self._history_docs)
+        raise KeyError(name)
+
+
+def _patch_route_mongo(*, lock_doc=None, history_docs=None, available=True):
+    import deps
+    return patch.multiple(
+        deps,
+        db=_RouteFakeDb(lock_doc, history_docs),
+        is_mongo_available=AsyncMock(return_value=bool(available)),
+    )
+
+
+def test_alert_state_endpoint_requires_admin_auth(http_client_no_auth):
+    res = http_client_no_auth.get(
+        f"/admin/health/slack-webhook-missing/{CF_PULL}/alert-state",
+    )
+    assert res.status_code in (401, 403)
+
+
+def test_alert_state_endpoint_rejects_unknown_env(http_client_authed):
+    """Unknown env names must 404 — the lock-doc id is templated from
+    the path param so without this guard a caller could probe Mongo
+    for any ``slack_webhook_missing_alert_state__*`` doc and leak a
+    side channel for "is this env name something we monitor"."""
+    res = http_client_authed.get(
+        "/admin/health/slack-webhook-missing/NOT_A_REAL_ENV/alert-state",
+    )
+    assert res.status_code == 404
+
+
+def test_alert_state_endpoint_returns_present_false_when_no_doc(
+    http_client_authed,
+):
+    """No lock doc yet (alerter has never fired) → 200 with
+    ``present: false`` so the dashboard renders the pre-Task #974
+    badge shape rather than erroring out."""
+    with _patch_route_mongo(lock_doc=None):
+        res = http_client_authed.get(
+            f"/admin/health/slack-webhook-missing/{CF_PULL}/alert-state",
+        )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["present"] is False
+    assert body["lastAlertAt"] is None
+    assert body["lastAlertAgeSeconds"] is None
+    assert body["inDebounce"] is False
+    assert body["realertIntervalSeconds"] == int(
+        alerter._REALERT_INTERVAL_S
+    )
+
+
+def test_alert_state_endpoint_surfaces_missing_state_with_debounce(
+    http_client_authed,
+):
+    """A populated lock doc with ``last_state="missing"`` inside the
+    24h re-page debounce must surface ``inDebounce: true`` so the
+    badge can render the "next nag in Yh" tooltip suffix. The
+    ``broken_state_label="missing"`` argument on the route is what
+    distinguishes this alerter from the cf-waf-drift / cf-pull
+    siblings (which write ``last_state="silent"``)."""
+    lock_id = alerter._lock_id_for(CF_PULL)
+    paged_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    lock_doc = {
+        "_id": lock_id,
+        "env_name": CF_PULL,
+        "last_state": "missing",
+        "last_alert_at": paged_at.isoformat(),
+        "first_observed_ts": (
+            datetime.now(timezone.utc) - timedelta(hours=72)
+        ).timestamp(),
+    }
+    with _patch_route_mongo(lock_doc=lock_doc):
+        res = http_client_authed.get(
+            f"/admin/health/slack-webhook-missing/{CF_PULL}/alert-state",
+        )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["present"] is True
+    assert body["lastState"] == "missing"
+    assert body["envName"] == CF_PULL
+    # ~2h ago, comfortably inside the 24h debounce window.
+    assert body["lastAlertAgeSeconds"] is not None
+    assert 6900 < body["lastAlertAgeSeconds"] < 7500
+    assert body["inDebounce"] is True
+    assert body["debounceRemainingSeconds"] is not None
+    assert body["debounceRemainingSeconds"] > 0
+
+
+def test_alert_state_endpoint_recovered_state_clears_debounce(
+    http_client_authed,
+):
+    """After recovery (``last_state="healthy"``) the doc is still
+    "present" but the badge's "next nag in Yh" suffix must be off —
+    the alerter has stopped paging on this env, so a stale "in
+    debounce" caption would be actively misleading."""
+    lock_id = alerter._lock_id_for(EDGE_PROXY)
+    paged_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    lock_doc = {
+        "_id": lock_id,
+        "env_name": EDGE_PROXY,
+        "last_state": "healthy",
+        "last_alert_at": paged_at.isoformat(),
+    }
+    with _patch_route_mongo(lock_doc=lock_doc):
+        res = http_client_authed.get(
+            f"/admin/health/slack-webhook-missing/{EDGE_PROXY}"
+            "/alert-state",
+        )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["present"] is True
+    assert body["lastState"] == "healthy"
+    assert body["inDebounce"] is False
+    assert body["debounceRemainingSeconds"] is None
+
+
+def test_alert_state_endpoint_isolates_per_env_lock_docs(
+    http_client_authed,
+):
+    """A lock doc for env A must not bleed into env B's response —
+    the per-env state contract is the whole point of templating
+    ``_lock_id_for(env_name)`` into the lookup."""
+    lock_id_for_cf_pull = alerter._lock_id_for(CF_PULL)
+    only_cf_pull_doc = {
+        "_id": lock_id_for_cf_pull,
+        "env_name": CF_PULL,
+        "last_state": "missing",
+        "last_alert_at": datetime.now(timezone.utc).isoformat(),
+    }
+    with _patch_route_mongo(lock_doc=only_cf_pull_doc):
+        # Asking for the CF_WAF env must NOT pick up the cf-pull
+        # doc (the fake's _id check guards this; the test pins the
+        # contract so a future helper change can't silently widen
+        # the lookup).
+        res = http_client_authed.get(
+            f"/admin/health/slack-webhook-missing/{CF_WAF}/alert-state",
+        )
+    assert res.status_code == 200
+    assert res.json()["present"] is False
+
+
+def test_alert_history_endpoint_requires_admin_auth(http_client_no_auth):
+    res = http_client_no_auth.get(
+        f"/admin/health/slack-webhook-missing/{CF_PULL}/alert-history",
+    )
+    assert res.status_code in (401, 403)
+
+
+def test_alert_history_endpoint_rejects_unknown_env(http_client_authed):
+    res = http_client_authed.get(
+        "/admin/health/slack-webhook-missing/NOT_A_REAL_ENV/alert-history",
+    )
+    assert res.status_code == 404
+
+
+def test_alert_history_endpoint_returns_empty_when_no_events(
+    http_client_authed,
+):
+    with _patch_route_mongo(history_docs=[]):
+        res = http_client_authed.get(
+            f"/admin/health/slack-webhook-missing/{CF_PULL}/alert-history",
+        )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["events"] == []
+
+
+def test_alert_history_endpoint_isolates_per_env_lock_ids(
+    http_client_authed,
+):
+    """A combined ``cron_alert_history`` collection (events for ALL
+    three webhook envs interleaved) must be filtered down to the
+    requested env's own lock-id when the per-env endpoint is hit —
+    otherwise an admin reading the cf-pull pill's history would
+    see edge-proxy / cf-waf pages mixed in. The route relies on
+    ``lock_id``-scoped find queries; this test pins that contract."""
+    cf_pull_lock_id = alerter._lock_id_for(CF_PULL)
+    edge_proxy_lock_id = alerter._lock_id_for(EDGE_PROXY)
+    paged_at = datetime.now(timezone.utc) - timedelta(hours=4)
+    history_docs = [
+        {
+            "_id": "evt-cfpull",
+            "lock_id": cf_pull_lock_id,
+            "kind": "missing",
+            "sub_kind": CF_PULL,
+            "paged_at": paged_at.isoformat(),
+            "created_at": paged_at,
+        },
+        {
+            "_id": "evt-edge",
+            "lock_id": edge_proxy_lock_id,
+            "kind": "missing",
+            "sub_kind": EDGE_PROXY,
+            "paged_at": paged_at.isoformat(),
+            "created_at": paged_at,
+        },
+    ]
+    with _patch_route_mongo(history_docs=history_docs):
+        res = http_client_authed.get(
+            f"/admin/health/slack-webhook-missing/{CF_PULL}/alert-history",
+        )
+    assert res.status_code == 200
+    body = res.json()
+    # Only the cf-pull event must come back — the edge-proxy event
+    # belongs to a different pill's history view.
+    assert len(body["events"]) == 1
+    assert body["events"][0]["subKind"] == CF_PULL
+
+
+def test_alert_history_endpoint_returns_recorded_events(
+    http_client_authed,
+):
+    """A populated ``cron_alert_history`` collection must surface
+    its events on the per-env endpoint, scoped via ``lock_id`` to
+    the env's own lock-doc id (so cross-env events on the same
+    deployment don't bleed into one another's history view)."""
+    lock_id = alerter._lock_id_for(EDGE_PROXY)
+    paged_at = datetime.now(timezone.utc) - timedelta(hours=3)
+    history_docs = [
+        {
+            "_id": "evt-1",
+            "lock_id": lock_id,
+            "kind": "missing",
+            "sub_kind": EDGE_PROXY,
+            "paged_at": paged_at.isoformat(),
+            "created_at": paged_at,
+        },
+    ]
+    with _patch_route_mongo(history_docs=history_docs):
+        res = http_client_authed.get(
+            f"/admin/health/slack-webhook-missing/{EDGE_PROXY}"
+            "/alert-history",
+        )
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body["events"]) == 1
+    evt = body["events"][0]
+    assert evt["kind"] == "missing"
+    assert evt["subKind"] == EDGE_PROXY
+
+
 # ─── Slack-fan-out contract: this alerter explicitly does NOT post ─────────
 
 def test_alerter_module_does_not_post_to_slack():

@@ -67,6 +67,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+from fastapi import APIRouter, Depends, HTTPException
+
+from auth_deps import get_admin_user
 from routes.slack_alerter_config import (
     CF_WAF_DRIFT_SLACK_WEBHOOK_ENV,
     EDGE_PROXY_DEPLOY_SLACK_WEBHOOK_ENV,
@@ -75,6 +78,12 @@ from routes.slack_alerter_config import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Task #974 — admin-readable surfaces for this alerter. The router is
+# kept intentionally tiny (two GETs, both delegating to the shared
+# helpers in :mod:`routes.admin_health`) so the alerter module's
+# centre of gravity stays on the loop / alert-iteration logic above.
+router = APIRouter()
 
 # Process-boot anchor used as a last-resort deploy identifier when no
 # platform-supplied id is available. Captured at import time so all
@@ -555,6 +564,51 @@ async def _send_alert(
 
     asyncio.create_task(_email_admins_about_missing(title, msg, kind))
 
+    # Task #974 — append to the paged-on-call audit log so the per-env
+    # alert-history endpoint below (and the AdminHealth dashboard's
+    # "Slack ✗" badge decoration) can render this event next to the
+    # affected pill. Fire-and-forget for the same reason as the email
+    # fan-out above: a slow Mongo can't be allowed to stall the alert
+    # loop or undo the in-app notification that already succeeded.
+    # ``sub_kind=env_name`` so a single combined audit query (across
+    # the three monitored envs) can disambiguate which webhook the
+    # page was about; the per-env ``_lock_id_for(env_name)`` keeps the
+    # default one-pill-one-history view scoped correctly without any
+    # client-side filtering.
+    try:
+        from deps import db as _db  # type: ignore
+        from routes.admin_health import record_cron_alert_event
+        if first_observed_ts is not None:
+            try:
+                missing_for_s = max(
+                    0, int(now_utc.timestamp() - float(first_observed_ts)),
+                )
+            except Exception:
+                missing_for_s = None
+        else:
+            missing_for_s = None
+        history_health: dict[str, Any] = {
+            "envName": env_name,
+            "envLabel": label,
+        }
+        if first_observed_ts is not None:
+            history_health["firstObservedTs"] = first_observed_ts
+        if missing_for_s is not None:
+            history_health["missingForSeconds"] = missing_for_s
+        asyncio.create_task(record_cron_alert_event(
+            _db,
+            lock_id=_lock_id_for(env_name),
+            kind=kind,
+            sub_kind=env_name,
+            health=history_health,
+            now_utc=now_utc,
+        ))
+    except Exception as exc:
+        logger.debug(
+            f"[slack-webhook-missing] history record schedule failed "
+            f"for {env_name}: {exc}"
+        )
+
 
 # ─── Main alert iteration ─────────────────────────────────────────────────
 
@@ -740,3 +794,74 @@ async def _slack_webhook_missing_alert_loop():
             ))
         except Exception:
             pass
+
+
+# ─── Task #974 — admin-readable surfaces ───────────────────────────────────
+
+def _validate_env_name(env_name: str) -> str:
+    """Reject path-param env names not in the monitored set.
+
+    The lock-doc id is templated from the path param, so without this
+    guard an arbitrary string would let a caller probe Mongo for any
+    ``slack_webhook_missing_alert_state__*`` doc — and worse, leak a
+    side channel for "is this env name something this backend tracks
+    at all?". Restricting to :data:`_MONITORED_ENV_NAMES` keeps the
+    endpoint surface aligned with the loop that writes the docs.
+    """
+    if env_name not in _MONITORED_ENV_NAMES:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown monitored env name: {env_name}",
+        )
+    return env_name
+
+
+@router.get(
+    "/admin/health/slack-webhook-missing/{env_name}/alert-state"
+)
+async def admin_slack_webhook_missing_alert_state(
+    env_name: str,
+    admin: dict = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """Per-env lock-doc snapshot for the missing-Slack-webhook alerter.
+
+    Mirrors the cf-pull / cf-waf-drift / edge-proxy-deploy alert-state
+    routes so the AdminHealth dashboard can decorate each pill's
+    "Slack ✗" badge with a "last paged Nh ago" caption. Always 200;
+    ``present: False`` when this alerter has never fired against the
+    given env or when Mongo is unavailable.
+
+    The ``broken_state_label`` here is ``"missing"`` (not "broken" /
+    "silent") because :func:`_send_alert` writes ``last_state="missing"``
+    on the broken side — see :func:`_classify_env`.
+    """
+    _validate_env_name(env_name)
+    from routes.admin_health import _build_alert_state_response
+    return await _build_alert_state_response(
+        _lock_id_for(env_name),
+        _REALERT_INTERVAL_S,
+        broken_state_label="missing",
+    )
+
+
+@router.get(
+    "/admin/health/slack-webhook-missing/{env_name}/alert-history"
+)
+async def admin_slack_webhook_missing_alert_history(
+    env_name: str,
+    limit: int = 20,
+    admin: dict = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """Audit log of pages issued by the missing-Slack-webhook alerter
+    for one monitored env, most recent first.
+
+    Always 200; ``events: []`` when the alerter has never fired
+    against this env or when Mongo is unavailable. Mirrors the
+    contract of the sibling ``alert-history`` endpoints on the
+    cf-pull / cf-waf-drift / edge-proxy-deploy / Trustpilot pills.
+    """
+    _validate_env_name(env_name)
+    from routes.admin_health import _build_alert_history_response
+    return await _build_alert_history_response(
+        _lock_id_for(env_name), limit=limit,
+    )
