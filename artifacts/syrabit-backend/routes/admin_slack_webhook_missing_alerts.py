@@ -357,8 +357,11 @@ async def _apply_snooze(
     # Fire-and-forget audit log entry. Same swallow-all contract as
     # the page recording in :func:`_send_alert` so a slow Mongo can't
     # stall the POST handler or undo the write that already landed.
+    # Reuses the caller-supplied ``db`` handle (same Motor instance
+    # the upsert above just landed against) to keep this helper
+    # decoupled from ``deps`` — easier to inject a fake in tests and
+    # avoids a second module import on every snooze POST.
     try:
-        from deps import db as _db  # type: ignore
         from routes.admin_health import record_cron_alert_event
         history_health: dict[str, Any] = {
             "envName": env_name,
@@ -369,7 +372,7 @@ async def _apply_snooze(
         if snoozed_by is not None:
             history_health["snoozedBy"] = snoozed_by
         asyncio.create_task(record_cron_alert_event(
-            _db,
+            db,
             lock_id=lock_id,
             kind="snoozed",
             sub_kind=env_name,
@@ -1102,9 +1105,12 @@ async def admin_slack_webhook_missing_snooze(
         )
     now_utc = datetime.now(timezone.utc)
     admin_email = (admin or {}).get("email") if isinstance(admin, dict) else None
-    snooze_meta = await _apply_snooze(
-        db, env_name, until_hours, now_utc, admin_email,
-    )
+    # ``_apply_snooze`` returns the freshly-persisted snooze fields,
+    # but the route doesn't need them — the alert-state shaper below
+    # re-reads from Mongo to guarantee the response matches what a
+    # subsequent GET would see (avoids drifting from the camelCase
+    # contract the polling loop consumes). Discarding here.
+    await _apply_snooze(db, env_name, until_hours, now_utc, admin_email)
     # Re-read via the alert-state shaper so the caller gets the same
     # camelCase contract the polling loop consumes — including the
     # auto-projected raw fields plus the two derived snooze-status
