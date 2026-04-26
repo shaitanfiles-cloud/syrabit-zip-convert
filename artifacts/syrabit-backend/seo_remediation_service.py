@@ -544,9 +544,21 @@ async def _record_history(db, signal: Mapping[str, Any], page: Mapping[str, Any]
                           before_doc: Mapping[str, Any] | None,
                           after_doc: Mapping[str, Any] | None,
                           decision: Mapping[str, Any],
-                          error: Optional[str] = None) -> dict:
+                          error: Optional[str] = None,
+                          *,
+                          pipeline_run_id: Optional[str] = None) -> dict:
     """Insert a row into ``seo_remediation_history`` capturing
-    everything an admin needs to audit the agent's decision."""
+    everything an admin needs to audit the agent's decision.
+
+    ``page_id`` is taken from ``after_doc`` when available because
+    ``seo_engine._generate_single_page`` upserts seo_pages by
+    ``(topic_id, page_type)`` and stamps a fresh ``id`` on every
+    run — using the pre-regen id would leave a stale pointer that
+    the promote endpoint cannot resolve. Falling back to ``page``
+    keeps the field populated for skip rows where no regen ran.
+    """
+    after_id = (after_doc or {}).get("id")
+    page_id = after_id or (page or {}).get("id")
     rec = {
         "id": f"rem-{uuid.uuid4().hex[:10]}",
         "signal_id": signal.get("id"),
@@ -555,7 +567,11 @@ async def _record_history(db, signal: Mapping[str, Any], page: Mapping[str, Any]
         "signal_details": signal.get("details") or {},
         "detected_at": signal.get("detected_at"),
         "attempted_at": datetime.now(timezone.utc).isoformat(),
-        "page_id": (page or {}).get("id"),
+        # Per-attempt pipeline run id minted by _remediate_one. Lets
+        # admins correlate a history row with the LLM logs / cost
+        # accounting from the regenerate call.
+        "pipeline_run_id": pipeline_run_id,
+        "page_id": page_id,
         "topic_id": (page or {}).get("topic_id"),
         "topic_title": (page or {}).get("topic_title"),
         "page_type": (page or {}).get("page_type"),
@@ -577,22 +593,52 @@ async def _record_history(db, signal: Mapping[str, Any], page: Mapping[str, Any]
 # ---------------------------------------------------------------------------
 # Per-signal remediation
 # ---------------------------------------------------------------------------
-async def _restore_page_doc(db, page_id: str, before_doc: Mapping[str, Any]) -> None:
-    """Revert a seo_pages doc to its pre-remediation snapshot. Used
-    when the new draft is no improvement and we don't want to
-    silently demote a live page. We exclude only the `_id` (Mongo
-    immutable) and re-stamp `updated_at` so downstream cache-purge
-    consumers see the change."""
+async def _restore_page_doc(db, before_doc: Mapping[str, Any]) -> None:
+    """Revert a seo_pages doc to its pre-remediation snapshot.
+
+    The restore filter is the stable ``(topic_id, page_type)`` pair
+    — NOT the pre-regen ``id``. ``seo_engine._generate_single_page``
+    upserts by ``(topic_id, page_type)`` and overwrites the ``id``
+    field on every run, so an ``{"id": old_id}`` upsert would race
+    in a duplicate doc and break the unique-page-per-(topic,type)
+    invariant the rest of the app assumes. Excluding ``_id`` keeps
+    Mongo's immutable primary key intact while still restoring
+    every other field, and re-stamping ``updated_at`` lets cache
+    purge / IndexNow consumers notice the change.
+    """
     snapshot = {k: v for k, v in before_doc.items() if k != "_id"}
     snapshot["updated_at"] = datetime.now(timezone.utc).isoformat()
+    topic_id = snapshot.get("topic_id")
+    page_type = snapshot.get("page_type")
+    if not (topic_id and page_type):
+        # Defensive: without the stable key we'd create an orphan
+        # row. Fall back to the legacy id-based filter in that
+        # case, which is at worst no-worse than not restoring.
+        fallback_id = snapshot.get("id")
+        if not fallback_id:
+            return
+        from seo_writes import upsert_seo_page
+        await upsert_seo_page(db, {"id": fallback_id}, snapshot)
+        return
     from seo_writes import upsert_seo_page
-    await upsert_seo_page(db, {"id": page_id}, snapshot)
+    await upsert_seo_page(
+        db, {"topic_id": topic_id, "page_type": page_type}, snapshot,
+    )
 
 
 async def _remediate_one(db, signal: Mapping[str, Any]) -> dict:
     """Process a single signal end-to-end. Returns the inserted
     history record (also returned by the manual trigger endpoint
     so admins can see the decision immediately)."""
+    # Mint the per-attempt pipeline run id up front so even early-exit
+    # rows (skipped due to circuit/budget/missing-topic) carry an id
+    # admins can grep for in the LLM trace logs.
+    pipeline_run_id = f"remrun-{uuid.uuid4().hex[:10]}"
+    logger.info(
+        "remediation: starting attempt run_id=%s signal_id=%s kind=%s url=%s",
+        pipeline_run_id, signal.get("id"), signal.get("kind"), signal.get("url"),
+    )
+
     page = await _resolve_page_from_signal(db, signal)
     if not page:
         return await _record_history(
@@ -600,6 +646,7 @@ async def _remediate_one(db, signal: Mapping[str, Any]) -> dict:
             {"action": ACTION_SKIPPED_NOT_FOUND,
              "delta": {"before": 0, "after": 0, "delta": 0},
              "reason": "could not resolve page from signal"},
+            pipeline_run_id=pipeline_run_id,
         )
 
     if await _is_circuit_open(db):
@@ -608,6 +655,7 @@ async def _remediate_one(db, signal: Mapping[str, Any]) -> dict:
             {"action": ACTION_SKIPPED_CIRCUIT_OPEN,
              "delta": {"before": 0, "after": 0, "delta": 0},
              "reason": "circuit breaker open"},
+            pipeline_run_id=pipeline_run_id,
         )
 
     budget_mode = await _peek_budget_mode(db)
@@ -617,9 +665,14 @@ async def _remediate_one(db, signal: Mapping[str, Any]) -> dict:
             {"action": ACTION_SKIPPED_OVER_BUDGET,
              "delta": {"before": 0, "after": 0, "delta": 0},
              "reason": "daily caps exhausted"},
+            pipeline_run_id=pipeline_run_id,
         )
 
     before_snapshot = dict(page)
+    stable_filter = {
+        "topic_id": page["topic_id"],
+        "page_type": page["page_type"],
+    }
 
     # Lookup topic + hierarchy. seo_engine's _resolve_hierarchy is
     # the canonical builder used by the batch generator; reusing it
@@ -632,6 +685,7 @@ async def _remediate_one(db, signal: Mapping[str, Any]) -> dict:
             {"action": ACTION_SKIPPED_NOT_FOUND,
              "delta": {"before": 0, "after": 0, "delta": 0},
              "reason": "topic doc missing for page"},
+            pipeline_run_id=pipeline_run_id,
         )
 
     try:
@@ -643,13 +697,17 @@ async def _remediate_one(db, signal: Mapping[str, Any]) -> dict:
                 {"action": ACTION_SKIPPED_NOT_FOUND,
                  "delta": {"before": 0, "after": 0, "delta": 0},
                  "reason": "hierarchy could not be resolved"},
+                pipeline_run_id=pipeline_run_id,
             )
         new_page = await _generate_single_page(topic, page["page_type"], hierarchy)
     except Exception as exc:
-        logger.exception("remediation: regeneration failed for page %s", page.get("id"))
+        logger.exception(
+            "remediation: regeneration failed run_id=%s page=%s",
+            pipeline_run_id, page.get("id"),
+        )
         # Restore so a half-generated bad doc cannot persist.
         try:
-            await _restore_page_doc(db, page["id"], before_snapshot)
+            await _restore_page_doc(db, before_snapshot)
         except Exception as restore_exc:
             logger.error("remediation: revert after failure also failed: %s", restore_exc)
         decision = {"action": ACTION_FAILED,
@@ -657,11 +715,16 @@ async def _remediate_one(db, signal: Mapping[str, Any]) -> dict:
                     "reason": f"pipeline error: {str(exc)[:200]}"}
         await _record_attempt_in_circuit(db, ACTION_FAILED)
         return await _record_history(
-            db, signal, page, before_snapshot, None, decision, error=str(exc)[:500],
+            db, signal, page, before_snapshot, None, decision,
+            error=str(exc)[:500], pipeline_run_id=pipeline_run_id,
         )
 
+    # Re-fetch by the stable (topic_id, page_type) key — _generate_single_page
+    # upserts on that filter and stamps a fresh ``id`` field, so the
+    # in-memory ``new_page`` is the source of truth and a fallback
+    # find_one by stable key handles the (rare) None case.
     after_doc = new_page or await db.seo_pages.find_one(
-        {"id": page["id"]}, {"_id": 0})
+        stable_filter, {"_id": 0})
     decision = decide_action(
         before=before_snapshot, after=after_doc, budget_mode=budget_mode,
     )
@@ -673,36 +736,49 @@ async def _remediate_one(db, signal: Mapping[str, Any]) -> dict:
         # decision; we still want to record the history row that
         # tells admins the page may need a manual recovery.
         try:
-            await _restore_page_doc(db, page["id"], before_snapshot)
+            await _restore_page_doc(db, before_snapshot)
         except Exception as restore_exc:
             logger.error(
-                "remediation: restore failed for page %s after regression: %s",
-                page.get("id"), restore_exc,
+                "remediation: restore failed run_id=%s page=%s after regression: %s",
+                pipeline_run_id, page.get("id"), restore_exc,
             )
             decision = dict(decision)
             decision["reason"] = (
                 f"{decision.get('reason','regressed')}; "
                 f"RESTORE FAILED: {str(restore_exc)[:200]}"
             )
+        # The restored doc's ``id`` is the pre-regen one — surface that
+        # as the after_doc so the history row's page_id points at the
+        # row that's now actually on disk.
+        after_doc = before_snapshot
     elif action == ACTION_DRAFTED:
         # _generate_single_page already wrote the new doc; downgrade
         # it to draft if seo_engine had cleared it for publish but we
         # don't want it live yet (auto cap exhausted, or marginal).
+        # Filter by the stable key — the doc's ``id`` field was just
+        # rewritten by _generate_single_page so a stale ``id`` filter
+        # could miss.
         if (after_doc or {}).get("status") == "published":
             await db.seo_pages.update_one(
-                {"id": page["id"]},
+                stable_filter,
                 {"$set": {
                     "status": "draft",
                     "in_sitemap": False,
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 }},
             )
+            after_doc = dict(after_doc)
+            after_doc["status"] = "draft"
+            after_doc["in_sitemap"] = False
     # ACTION_AUTO_REPUBLISHED → leave the new doc as-is; seo_engine
     # has already published it and dispatched IndexNow fanout.
 
     await _record_budget_consumption(db, action)
     await _record_attempt_in_circuit(db, action)
-    return await _record_history(db, signal, page, before_snapshot, after_doc, decision)
+    return await _record_history(
+        db, signal, page, before_snapshot, after_doc, decision,
+        pipeline_run_id=pipeline_run_id,
+    )
 
 
 # ---------------------------------------------------------------------------

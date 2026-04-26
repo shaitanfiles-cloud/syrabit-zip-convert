@@ -65,6 +65,9 @@ def _shape_history_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "action": row.get("action"),
         "reason": row.get("reason"),
         "error": row.get("error"),
+        # Per-attempt pipeline run id minted by remediation worker.
+        # Surfaced so admins can correlate the row with LLM trace logs.
+        "pipelineRunId": row.get("pipeline_run_id"),
     }
 
 
@@ -144,8 +147,13 @@ async def remediation_promote(
     if rec.get("promoted_at"):
         raise HTTPException(status_code=409, detail="already promoted")
     page_id = rec.get("page_id")
-    if not page_id:
-        raise HTTPException(status_code=400, detail="record has no page_id")
+    topic_id = rec.get("topic_id")
+    page_type = rec.get("page_type")
+    if not page_id and not (topic_id and page_type):
+        raise HTTPException(
+            status_code=400,
+            detail="record has neither page_id nor (topic_id, page_type) — cannot resolve target page",
+        )
 
     now = datetime.now(timezone.utc).isoformat()
     admin_label = (_admin or {}).get("username") or "admin"
@@ -161,12 +169,18 @@ async def remediation_promote(
     if not claimed:
         raise HTTPException(status_code=409, detail="already promoted")
 
-    # 2) Atomically flip the page only if it is still in draft
-    #    state. If a concurrent admin/auto-publish already took
-    #    over the page, roll back the history stamp so the rec
-    #    becomes promotable again once the operator re-checks.
+    # 2) Atomically flip the page only if it is still in draft state.
+    #    Prefer the stable ``(topic_id, page_type)`` filter — that's the
+    #    upsert key seo_engine uses, and the doc's ``id`` field can be
+    #    overwritten by a subsequent regeneration. Fall back to the
+    #    recorded ``page_id`` for legacy rows that pre-date this fix.
+    page_filter: Dict[str, Any]
+    if topic_id and page_type:
+        page_filter = {"topic_id": topic_id, "page_type": page_type, "status": "draft"}
+    else:
+        page_filter = {"id": page_id, "status": "draft"}
     flipped = await db.seo_pages.find_one_and_update(
-        {"id": page_id, "status": "draft"},
+        page_filter,
         {"$set": {
             "status": "published",
             "in_sitemap": True,
@@ -183,8 +197,13 @@ async def remediation_promote(
             {"$set": {"promoted_at": None, "promoted_by": None}},
         )
         # Distinguish missing-page (404) from page-changed-state
-        # (409) for the operator.
-        page_now = await db.seo_pages.find_one({"id": page_id}, {"_id": 0})
+        # (409) for the operator. Probe by the same predicate space.
+        probe_filter = (
+            {"topic_id": topic_id, "page_type": page_type}
+            if topic_id and page_type
+            else {"id": page_id}
+        )
+        page_now = await db.seo_pages.find_one(probe_filter, {"_id": 0})
         if not page_now:
             raise HTTPException(status_code=404, detail="page no longer exists")
         raise HTTPException(
@@ -197,9 +216,7 @@ async def remediation_promote(
     # engine uses on direct publish; failure here is non-fatal.
     try:
         from seo_fanout import fanout_for_page
-        promoted_page = await db.seo_pages.find_one({"id": page_id}, {"_id": 0})
-        if promoted_page:
-            fanout_for_page(promoted_page, source="seo_remediation_promote")
+        fanout_for_page(flipped, source="seo_remediation_promote")
     except Exception as exc:
         logger.debug(f"remediation promote fan-out skipped: {exc}")
     return {"ok": True, "promoted_at": now}

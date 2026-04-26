@@ -226,7 +226,10 @@ def _hist_row(rec_id, *, action="auto_republished", at=None,
 def test_history_returns_camelcase_shape(client):
     db = _FakeDb()
     db.seo_remediation_history.docs = [
-        _hist_row("r1", action="auto_republished", before=60, after=80),
+        # First row carries an explicit pipeline_run_id so we can
+        # assert the API surface exposes it as ``pipelineRunId``.
+        {**_hist_row("r1", action="auto_republished", before=60, after=80),
+         "pipeline_run_id": "remrun-abc1234567"},
         _hist_row("r2", action="drafted", before=70, after=72),
         _hist_row("r3", action="skipped_no_improvement",
                   before=80, after=70),
@@ -250,6 +253,12 @@ def test_history_returns_camelcase_shape(client):
     assert "scoreAfter" in sample
     assert "scoreDelta" in sample
     assert sample["signalDetails"] == {"sitemap": "main"}
+    # New field surfaced by the page-identity / audit-trail fix —
+    # admins use this to grep LLM trace logs for the regen call.
+    assert "pipelineRunId" in sample, (
+        "history items must surface pipelineRunId for log correlation"
+    )
+    assert sample["pipelineRunId"] == "remrun-abc1234567"
 
 
 def test_history_filters_by_action(client):
@@ -301,7 +310,11 @@ def test_promote_publishes_drafted_attempt(client):
         _hist_row("r1", action="drafted"),
     ]
     db.seo_pages.docs = [
-        {"id": "p1", "status": "draft", "in_sitemap": False, "title": "X"},
+        # Real seo_pages docs always carry the (topic_id, page_type)
+        # stable key — promote uses that to resolve the page so a
+        # post-regen rewritten ``id`` doesn't strand the lookup.
+        {"id": "p1", "topic_id": "t1", "page_type": "notes",
+         "status": "draft", "in_sitemap": False, "title": "X"},
     ]
     patches = _patch_db(db)
     _enter(patches)
@@ -368,7 +381,8 @@ def test_promote_409s_when_page_no_longer_draft(client):
     avoids stomping a manual edit."""
     db = _FakeDb()
     db.seo_remediation_history.docs = [_hist_row("r1", action="drafted")]
-    db.seo_pages.docs = [{"id": "p1", "status": "published"}]
+    db.seo_pages.docs = [{"id": "p1", "topic_id": "t1", "page_type": "notes",
+                          "status": "published"}]
     patches = _patch_db(db)
     _enter(patches)
     try:

@@ -22,12 +22,15 @@ const ACTION_LABELS = {
   failed:                  { label: 'Failed',            color: '#ef4444', bg: '#fef2f2' },
 };
 
+// Kinds with active producers in the alerter (see
+// routes/bot_discovery.py::_seo_health_alert_loop and the manual
+// trigger admin endpoint). Keep this list in lockstep with
+// seo_remediation_service.VALID_SIGNAL_KINDS — the backend rejects
+// any signal whose kind is not in that allow-list.
 const SIGNAL_LABELS = {
   url_404_spike:        '404 spike',
   seo_health_degraded:  'Health degraded',
   seo_health_critical:  'Health critical',
-  orphan_page:          'Orphan page',
-  sitemap_regression:   'Sitemap regression',
   manual_trigger:       'Manual trigger',
 };
 
@@ -317,6 +320,7 @@ export default function RemediationTab({ adminToken }) {
               <th className="text-left px-3 py-2 font-semibold">When</th>
               <th className="text-left px-3 py-2 font-semibold">Trigger</th>
               <th className="text-left px-3 py-2 font-semibold">Page</th>
+              <th className="text-left px-3 py-2 font-semibold">Run</th>
               <th className="text-left px-3 py-2 font-semibold">Score Δ</th>
               <th className="text-left px-3 py-2 font-semibold">Action</th>
               <th className="text-left px-3 py-2 font-semibold">Reason</th>
@@ -325,11 +329,11 @@ export default function RemediationTab({ adminToken }) {
           </thead>
           <tbody className="divide-y divide-gray-100">
             {historyLoading && items.length === 0 ? (
-              <tr><td colSpan={7} className="px-3 py-6 text-center text-gray-400">
+              <tr><td colSpan={8} className="px-3 py-6 text-center text-gray-400">
                 <Loader2 size={14} className="inline animate-spin mr-2" /> Loading…
               </td></tr>
             ) : items.length === 0 ? (
-              <tr><td colSpan={7} className="px-3 py-6 text-center text-gray-400" data-testid="remediation-empty">
+              <tr><td colSpan={8} className="px-3 py-6 text-center text-gray-400" data-testid="remediation-empty">
                 No remediation attempts in this window.
               </td></tr>
             ) : items.map((row) => (
@@ -352,6 +356,9 @@ export default function RemediationTab({ adminToken }) {
                 <td className="px-3 py-2 text-gray-700">
                   <div className="font-medium">{row.topicTitle || '—'}</div>
                   <div className="text-[10px] text-gray-400">{row.pageType || ''}</div>
+                </td>
+                <td className="px-3 py-2 text-[10px] text-gray-400 font-mono whitespace-nowrap" title={row.pipelineRunId || ''} data-testid={`remediation-runid-${row.id}`}>
+                  {row.pipelineRunId || '—'}
                 </td>
                 <td className="px-3 py-2">
                   <DeltaCell before={row.scoreBefore} after={row.scoreAfter} delta={row.scoreDelta} />

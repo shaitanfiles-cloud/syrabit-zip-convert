@@ -568,14 +568,81 @@ def test_remediate_one_reverts_when_new_content_regresses(monkeypatch):
                                             "page_id": "p1"})
         assert res["action"] == ACTION_SKIPPED_NO_IMPROVEMENT
         # Snapshot was restored — upsert_seo_page called with the
-        # original `snapshot` doc.
+        # *stable* (topic_id, page_type) filter so a regenerated id
+        # cannot create a duplicate row. The pre-regen id is
+        # preserved in the doc itself via the snapshot.
         assert upsert_calls, "expected snapshot revert call"
         last = upsert_calls[-1]
-        assert last["q"] == {"id": "p1"}
+        assert last["q"] == {"topic_id": "t1", "page_type": "notes"}, (
+            f"restore must use stable (topic_id, page_type) filter, got {last['q']}"
+        )
         assert last["doc"]["combined_score"] == 80
         assert last["doc"]["title"] == "Before"
+        assert last["doc"]["id"] == "p1"
+        # History row carries a pipeline run id and references the
+        # restored doc's stable identity.
+        assert res.get("pipeline_run_id"), "history row must carry pipeline_run_id"
+        assert res.get("pipeline_run_id", "").startswith("remrun-")
+        assert res["page_id"] == "p1"
+        assert res["topic_id"] == "t1"
+        assert res["page_type"] == "notes"
 
     asyncio.run(_run())
+
+
+def test_remediate_one_records_post_regen_page_id_and_pipeline_run_id():
+    """When ``_generate_single_page`` rewrites the seo_pages doc with
+    a fresh ``id`` (its standard upsert behaviour), the history row
+    must reflect the *new* id so the promote endpoint can resolve
+    the page. Also asserts ``pipeline_run_id`` is minted and saved."""
+    from seo_remediation_service import _remediate_one, ACTION_DRAFTED, ACTION_AUTO_REPUBLISHED
+
+    snapshot = {"id": "p-old", "combined_score": 50, "status": "published",
+                "title": "Old", "topic_id": "t1", "page_type": "notes"}
+    # _generate_single_page returns a doc with a freshly minted id.
+    after = {"id": "p-new", "combined_score": 90, "status": "published",
+             "title": "New", "topic_id": "t1", "page_type": "notes",
+             "quality": {"combined_score": 90}}
+
+    db = _FakeDb()
+    db.seo_pages = _FakePagesColl(after)
+    db.seo_remediation_history = _FakeHistoryColl()
+    db.topics = _StubTopicColl()
+
+    async def _fake_resolve_page(_db, _sig):
+        return dict(snapshot)
+    async def _fake_resolve_hierarchy(_topic):
+        return {"topic": {"id": "t1", "title": "Topic 1"}}
+    async def _fake_generate(_topic, _page_type, _hier):
+        return after
+
+    async def _run():
+        with patch("seo_remediation_service._resolve_page_from_signal",
+                   side_effect=_fake_resolve_page), \
+             patch("seo_engine._resolve_hierarchy",
+                   side_effect=_fake_resolve_hierarchy), \
+             patch("seo_engine._generate_single_page",
+                   side_effect=_fake_generate):
+            return await _remediate_one(db, {"id": "sig-2", "kind": "manual_trigger",
+                                             "page_id": "p-old"})
+
+    res = asyncio.run(_run())
+    assert res["action"] in (ACTION_DRAFTED, ACTION_AUTO_REPUBLISHED), (
+        f"expected an improvement-path action, got {res['action']}"
+    )
+    # CRITICAL: page_id reflects the post-regen id, not the stale
+    # pre-regen one. Otherwise the promote endpoint cannot find the
+    # row that's actually on disk.
+    assert res["page_id"] == "p-new", (
+        f"history must carry post-regen page_id 'p-new', got {res['page_id']}"
+    )
+    assert res["topic_id"] == "t1"
+    assert res["page_type"] == "notes"
+    # Pipeline run id is required for audit / log correlation.
+    rid = res.get("pipeline_run_id")
+    assert rid and rid.startswith("remrun-"), (
+        f"expected remrun-* pipeline_run_id, got {rid!r}"
+    )
 
 
 class _StubTopicColl:
