@@ -468,6 +468,46 @@ async function fetchChapterPublishedTopics(chapterId) {
   }
 }
 
+// Topical-mapping (Task: topical mapping + topical authority) —
+// bake the related-topic graph (siblings + cross-chapter) into the
+// chapter preload so SSR / curl-no-JS already ships the full
+// internal-linking graph on first byte. Mirrors the runtime
+// useEffect in ChapterPage; same null-on-failure semantics.
+async function fetchChapterTopicsRelated(chapterId) {
+  if (!chapterId) return null;
+  const url = `${BACKEND.replace(/\/$/, "")}/api/content/chapters/${encodeURIComponent(chapterId)}/topics-related?limit=12`;
+  try {
+    const payload = await fetchJson(url);
+    if (!payload || typeof payload !== "object") return null;
+    const siblings = Array.isArray(payload.siblings) ? payload.siblings : [];
+    const crossChapter = Array.isArray(payload.cross_chapter) ? payload.cross_chapter : [];
+    if (siblings.length === 0 && crossChapter.length === 0) return null;
+    return { siblings, cross_chapter: crossChapter };
+  } catch {
+    return null;
+  }
+}
+
+// Topical-mapping pillar — bake the subject's full topic index into
+// the SubjectLandingPage preload via `window.__SUBJECT_PRELOAD__`.
+// Same null-on-failure semantics as the chapter helpers.
+async function fetchSubjectTopicIndex(subjectId) {
+  if (!subjectId) return null;
+  const url = `${BACKEND.replace(/\/$/, "")}/api/content/subjects/${encodeURIComponent(subjectId)}/topic-index`;
+  try {
+    const payload = await fetchJson(url);
+    if (!payload || typeof payload !== "object") return null;
+    const chapters = Array.isArray(payload.chapters) ? payload.chapters : [];
+    if (chapters.length === 0) return null;
+    return {
+      chapters,
+      total_topics: Number(payload.total_topics || 0),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function enumerateSubjectRoutes(bundle) {
   const boards = new Map((bundle.boards || []).map((b) => [b.id, b]));
   const classes = new Map((bundle.classes || []).map((c) => [c.id, c]));
@@ -710,10 +750,30 @@ async function main() {
       `<script>window.__SSR_QUERIES__=${JSON.stringify(queries).replace(/</g, "\\u003c")};</script>`,
     ];
 
+    // Topical-mapping pillar — bake the full topic index for this
+    // subject into the SSR pass via `seed.subjectPreload` (which
+    // entry-server.jsx mirrors onto `globalThis.__SSR_SUBJECT_PRELOAD__`)
+    // AND mirror the same payload onto `window.__SUBJECT_PRELOAD__`
+    // for the client-side hydration / SPA navigation path. Failure is
+    // non-fatal; the runtime useEffect on the SPA path takes over.
+    let subjectPreload = null;
+    if (subjectIdForKey) {
+      const topicIndex = await fetchSubjectTopicIndex(subjectIdForKey);
+      if (topicIndex) {
+        subjectPreload = {
+          subject_id: subjectIdForKey,
+          topic_index: topicIndex,
+        };
+        inlineScripts.push(
+          `<script>window.__SUBJECT_PRELOAD__=${JSON.stringify(subjectPreload).replace(/</g, "\\u003c")};</script>`,
+        );
+      }
+    }
+
     try {
       const html = await renderOne(renderRoute, htmlTemplate, {
         url,
-        seed: { queries },
+        seed: { queries, subjectPreload },
         hydrateKind: "subject",
         inlineScripts,
         head: {
@@ -806,6 +866,13 @@ async function main() {
       const publishedTopics = await fetchChapterPublishedTopics(chapterData.chapter_id);
       if (publishedTopics) {
         chapterData.published_topics = publishedTopics;
+      }
+      // Topical-mapping — bake siblings + cross-chapter related
+      // topics into the preload so bots / curl-no-JS see the full
+      // internal-linking graph in the SSR HTML.
+      const topicsRelated = await fetchChapterTopicsRelated(chapterData.chapter_id);
+      if (topicsRelated) {
+        chapterData.topics_related = topicsRelated;
       }
       const preload = {
         board, classSlug, subjectSlug, chapterSlug,

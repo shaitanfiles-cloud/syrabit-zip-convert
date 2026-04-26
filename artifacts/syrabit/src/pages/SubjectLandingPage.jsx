@@ -10,6 +10,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useResolveSubject, useChapters } from '@/hooks/useContent';
 import ContinueLearning from '@/components/content/ContinueLearning';
 import TrustpilotReviewsSection from '@/components/content/TrustpilotReviewsSection';
+import SubjectTopicIndex from '@/components/subject/SubjectTopicIndex';
+import { apiClient } from '@/utils/api';
 import { MobileNavSwitch } from '@/components/layout/MobileNavSwitch';
 import { useContentLang } from '@/context/LanguageContext';
 import { seoRelatedByChapter } from '@/utils/api';
@@ -42,6 +44,55 @@ export default function SubjectLandingPage() {
   // Pull SEO related-topics for the first chapter to seed the
   // ContinueLearning rail, then backfill with sibling chapters until ≥4 links.
   const [seoRelated, setSeoRelated] = useState([]);
+  // Topical-mapping (Task: topical mapping + topical authority) —
+  // pillar-page topic index for the subject. Seeded from the
+  // prerendered preload (`window.__SUBJECT_PRELOAD__.topic_index`)
+  // when present so SSR / curl-no-JS already ships the index;
+  // otherwise we lazy-fetch on the client once `subjectId` resolves.
+  const [topicIndex, setTopicIndex] = useState(() => {
+    // SSR path — entry-server.jsx mirrors `seed.subjectPreload` onto
+    // `globalThis.__SSR_SUBJECT_PRELOAD__` for the request lifetime so
+    // the prerendered HTML carries the topic index in the linear DOM
+    // (no client-only fallback). On client hydration the bootstrap
+    // script puts the same payload on `window.__SUBJECT_PRELOAD__`.
+    if (typeof window === 'undefined') {
+      const ssr = globalThis.__SSR_SUBJECT_PRELOAD__?.topic_index;
+      if (ssr && Array.isArray(ssr.chapters)) return ssr;
+      return { chapters: [], total_topics: 0 };
+    }
+    const seed = window.__SUBJECT_PRELOAD__?.topic_index;
+    if (seed && Array.isArray(seed.chapters)) return seed;
+    return { chapters: [], total_topics: 0 };
+  });
+  useEffect(() => {
+    let cancelled = false;
+    if (!subjectId) return;
+    // Skip refetch when the preload's index belongs to this same
+    // subject (avoids a redundant network round-trip on the SSR
+    // hydration pass).
+    if (
+      typeof window !== 'undefined'
+      && window.__SUBJECT_PRELOAD__?.subject_id === subjectId
+      && Array.isArray(window.__SUBJECT_PRELOAD__?.topic_index?.chapters)
+      && (window.__SUBJECT_PRELOAD__.topic_index.chapters.length > 0)
+    ) {
+      return;
+    }
+    apiClient()
+      .get(`/content/subjects/${subjectId}/topic-index`)
+      .then((r) => {
+        if (cancelled) return;
+        const payload = r.data || {};
+        setTopicIndex({
+          chapters: Array.isArray(payload.chapters) ? payload.chapters : [],
+          total_topics: Number(payload.total_topics || 0),
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setTopicIndex({ chapters: [], total_topics: 0 });
+      });
+    return () => { cancelled = true; };
+  }, [subjectId]);
   const seedChapterId = chapters[0]?.id || chapters[0]?._id || null;
   useEffect(() => {
     let cancelled = false;
@@ -308,6 +359,13 @@ export default function SubjectLandingPage() {
             })
           )}
         </div>
+
+        {/* Topical-mapping pillar — surface every citable topic across
+            every chapter as a real <a href> graph. Same DOM in SSR /
+            prerender / SPA so bots see the full internal-linking
+            structure on first byte (no JS required). Renders nothing
+            when the index is empty. */}
+        <SubjectTopicIndex index={topicIndex} />
 
         {chapters.length > 0 && (
           <ContinueLearning

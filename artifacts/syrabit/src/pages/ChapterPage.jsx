@@ -3,6 +3,7 @@ import { useParams, Link, useSearchParams } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import MarkdownRenderer from '@/components/MarkdownRenderer';
 import TopicAnswerCard from '@/components/chapter/TopicAnswerCard';
+import ChapterTopicGraph from '@/components/chapter/ChapterTopicGraph';
 import { slugifyHeading } from '@/utils/slugifyHeading';
 import { useHashScroll } from '@/hooks/useHashScroll';
 import {
@@ -304,6 +305,15 @@ export default function ChapterPage() {
       ? initialChapterData.published_topics
       : [],
   );
+  // Topical-mapping (Task: topical mapping + topical authority) —
+  // sibling + cross-chapter related topics fetched from
+  // `/content/chapters/{id}/topics-related`. Seeded from the
+  // prerendered preload so SSR / curl-no-JS already ships the graph.
+  const [topicGraph, setTopicGraph] = useState(
+    initialChapterData?.topics_related && typeof initialChapterData.topics_related === 'object'
+      ? initialChapterData.topics_related
+      : { siblings: [], cross_chapter: [] },
+  );
   // Task #914 Step 2 — deep-link 404 gating. When the route is
   // `/.../<chapter>/topic/<slug>` we must NOT render the chapter
   // for an unknown / unpublished / definition_missing slug; we
@@ -353,6 +363,39 @@ export default function ChapterPage() {
         setPublishedTopics(list);
       })
       .catch(() => { if (!cancelled) setPublishedTopics([]); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.chapter_id]);
+
+  // Topical-mapping — fetch the related-topic graph (siblings +
+  // cross-chapter) once we know the chapter_id. Skipped on the
+  // first paint when the prerender preload already supplied it for
+  // this exact chapter, so we don't double-fetch on the SSR hot
+  // path. SPA navigations between chapters always refetch since
+  // the graph is chapter-scoped.
+  useEffect(() => {
+    let cancelled = false;
+    if (!data?.chapter_id) return;
+    if (
+      initialChapterData?.topics_related
+      && initialChapterData?.chapter_id === data.chapter_id
+      && (topicGraph.siblings.length > 0 || topicGraph.cross_chapter.length > 0)
+    ) {
+      return;
+    }
+    apiClient()
+      .get(`/content/chapters/${data.chapter_id}/topics-related?limit=12`)
+      .then((r) => {
+        if (cancelled) return;
+        const payload = r.data || {};
+        setTopicGraph({
+          siblings: Array.isArray(payload.siblings) ? payload.siblings : [],
+          cross_chapter: Array.isArray(payload.cross_chapter) ? payload.cross_chapter : [],
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setTopicGraph({ siblings: [], cross_chapter: [] });
+      });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.chapter_id]);
@@ -1050,13 +1093,18 @@ export default function ChapterPage() {
         tags={[chapterTitle, subjectName, boardName, className, data.chapter_title || ''].filter(Boolean)}
         pageType="chapter"
         pageData={{
-          // Merge async-loaded FAQ entries into the chapter data so the
-          // existing chapterSchema() builder emits a FAQPage @graph node.
-          // Falls back to plain `data` when faqEntries is null (404 from
-          // the FAQ endpoint = no parseable MCQs for this chapter).
-          data: (faqEntries && faqEntries.length > 0)
-            ? { ...data, faq_entries: faqEntries }
-            : data,
+          // Merge async-loaded FAQ entries + the published-topics
+          // list into the chapter data so the existing chapterSchema()
+          // builder can emit a FAQPage @graph node AND one
+          // LearningResource per citable topic + Article.mentions[].
+          // Both fall back gracefully when the source data is absent.
+          data: {
+            ...data,
+            ...(faqEntries && faqEntries.length > 0 ? { faq_entries: faqEntries } : {}),
+            // `publishedTopics` is the runtime/SPA source; preload
+            // already baked it onto `data.published_topics` for SSR.
+            published_topics: publishedTopics.length > 0 ? publishedTopics : (data.published_topics || []),
+          },
           basePath,
         }}
         hasAssamese={hasAssamese}
@@ -1092,6 +1140,31 @@ export default function ChapterPage() {
               {data.meta_description && (
                 <p className="text-muted-foreground mt-1.5 text-sm leading-relaxed max-w-2xl line-clamp-2">{data.meta_description}</p>
               )}
+              {/* Topical-authority byline — visible last-updated +
+                  author signal that mirrors the JSON-LD `dateModified`
+                  / `author` fields. Crawlers and humans see the same
+                  freshness cue (single source of truth). Falls back to
+                  `created_at` and finally hides when neither exists. */}
+              {(() => {
+                const stamp = data.updated_at || data.modified_at || data.generated_at || data.created_at;
+                if (!stamp) return null;
+                let formatted;
+                try {
+                  formatted = new Date(stamp).toLocaleDateString('en-IN', {
+                    year: 'numeric', month: 'short', day: 'numeric',
+                  });
+                } catch { return null; }
+                if (!formatted) return null;
+                const author = data.author_name || 'Syrabit Editors';
+                return (
+                  <p
+                    className="text-[11px] text-muted-foreground/80 mt-1.5"
+                    data-testid="chapter-byline"
+                  >
+                    Updated <time dateTime={stamp}>{formatted}</time> · by <span className="font-medium">{author}</span>
+                  </p>
+                );
+              })()}
               <div className="flex items-center gap-3 mt-2.5 text-xs sm:text-sm text-muted-foreground">
                 {readMins && (
                   <span className="flex items-center gap-1"><Clock size={12} />{readMins} {contentLang === 'as' ? 'মিনিট পঢ়া' : 'min read'}</span>
@@ -1195,6 +1268,17 @@ export default function ChapterPage() {
                   ))}
                 </div>
               )}
+              {/* Topical-mapping — siblings + cross-chapter related
+                  topics rendered as real <a href> links so bots see the
+                  full internal-linking graph in the linear DOM (no JS
+                  required). Sibling links jump in-page to the
+                  matching answer card; cross-chapter links use the
+                  Task #914 deep-link route. Renders nothing when both
+                  arrays are empty. */}
+              <ChapterTopicGraph
+                siblings={topicGraph.siblings}
+                crossChapter={topicGraph.cross_chapter}
+              />
               <Suspense fallback={
                 <div className="space-y-3">
                   {[...Array(6)].map((_, i) => (

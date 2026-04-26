@@ -325,8 +325,60 @@ export function chapterSchema(data, url, basePath = '') {
     mainEntityOfPage: { '@type': 'WebPage', '@id': url },
     image: `${SITE_ORIGIN}/opengraph.jpg`,
   };
+  // Topical-authority pack — give the Article node a STABLE @id so the
+  // per-topic LearningResource entries can `isPartOf` it without
+  // colliding with the WebPage node (which already owns @id == url).
+  // Convention used everywhere else in this file: `${url}#article`.
+  const articleNodeId = `${url}#article`;
+  articleNode['@id'] = articleNodeId;
   if (datePublished) articleNode.datePublished = datePublished;
   if (dateModified) articleNode.dateModified = dateModified;
+
+  // Topical-authority pack (Task: topical mapping + topical authority).
+  // Per-topic LearningResource entries — one structured datum per
+  // citable topic on this chapter, each pointing at its anchor on the
+  // chapter URL (which is the canonical location per the Task #914
+  // contract; the deep-link route just rewrites canonical back here).
+  // We also add Article.mentions[] referencing the same topic anchors,
+  // which gives crawlers an explicit topic-graph signal that this
+  // chapter "covers" each named subtopic.
+  const publishedTopics = Array.isArray(data.published_topics) ? data.published_topics : [];
+  const topicLearningResources = [];
+  const topicMentions = [];
+  // Dedupe by topic_slug — upstream data shouldn't surface duplicates,
+  // but if it ever does we'd otherwise emit two LearningResource nodes
+  // sharing the same `@id` (the topic anchor URL), which is invalid
+  // JSON-LD and confuses Schema validators / Google Rich Results.
+  const seenTopicSlugs = new Set();
+  for (const t of publishedTopics) {
+    if (!t || !t.topic_slug || !t.title) continue;
+    if (seenTopicSlugs.has(t.topic_slug)) continue;
+    seenTopicSlugs.add(t.topic_slug);
+    const topicAnchorUrl = `${url}#topic-${t.topic_slug}`;
+    const definition = (t.definition || '').trim();
+    topicLearningResources.push({
+      '@type': 'LearningResource',
+      '@id': topicAnchorUrl,
+      name: t.title,
+      description: definition || `${t.title} — definition and study notes from ${chapterTitle}.`,
+      learningResourceType: 'Definition',
+      educationalLevel: `${className} ${boardName}`.trim(),
+      teaches: t.title,
+      // Use the Article node's stable `#article` @id (set above) so the
+      // graph reference resolves cleanly. Pointing at `url` instead
+      // would silently bind to the WebPage node, which already owns
+      // that @id — making the topical-authority signal incorrect.
+      isPartOf: { '@type': 'Article', '@id': articleNodeId },
+      inLanguage,
+      isAccessibleForFree: true,
+      url: topicAnchorUrl,
+      provider: { '@type': 'Organization', name: 'Syrabit.ai', url: SITE_ORIGIN },
+    });
+    topicMentions.push({ '@type': 'Thing', name: t.title, url: topicAnchorUrl });
+  }
+  if (topicMentions.length > 0) {
+    articleNode.mentions = topicMentions;
+  }
 
   const graph = [
     articleNode,
@@ -343,6 +395,7 @@ export function chapterSchema(data, url, basePath = '') {
       url,
       about: { '@type': 'Thing', name: chapterTitle },
     },
+    ...topicLearningResources,
     {
       '@type': 'WebPage',
       '@id': url,

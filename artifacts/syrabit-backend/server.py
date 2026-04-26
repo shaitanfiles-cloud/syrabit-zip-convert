@@ -1357,6 +1357,10 @@ from routes.topic_faq_jsonld import router as topic_faq_jsonld_router
 #     the persistent `topic_slug` and `definition_status` fields.
 from routes.topic_answer_cards import router as topic_answer_cards_router
 from routes.admin_topic_audit import router as admin_topic_audit_router
+# topic_graph: sibling + cross-chapter related topics, plus the
+# subject-wide topic index that powers the pillar SubjectLandingPage.
+# Same auth surface as topic_answer_cards (public, edge-cached).
+from routes.topic_graph import router as topic_graph_router
 from routes.syllabus import router as syllabus_router
 from routes.ai_chat import router as ai_chat_router
 from routes.conversations import router as conversations_router
@@ -1401,6 +1405,7 @@ api.include_router(content_router)
 api.include_router(topic_faq_jsonld_router)
 api.include_router(topic_answer_cards_router)
 api.include_router(admin_topic_audit_router)
+api.include_router(topic_graph_router)
 api.include_router(syllabus_router)
 api.include_router(ai_chat_router)
 api.include_router(conversations_router)
