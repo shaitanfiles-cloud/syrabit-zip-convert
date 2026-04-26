@@ -381,6 +381,15 @@ export default function AdminLogsExplorer({ adminToken }) {
           </div>
         </div>
 
+        {/* ── Task #952 — Saturation alert banner ────────────────────
+            Surfaces the same `cf_pull_last_saturated_windows` /
+            `cf_pull_saturated_minutes_24h` fields the admin pill +
+            in-app notification fire on, so an operator opening the
+            explorer sees the active incident inline (instead of
+            having to scroll into the Safeguards card or wait on the
+            in-app notification fan-out to land). */}
+        <CfPullSaturationBanner status={status} />
+
         {/* ── Safeguards card (sampling, retention, rate caps) ───── */}
         {status && (
           <div className="border rounded bg-white">
@@ -428,6 +437,16 @@ export default function AdminLogsExplorer({ adminToken }) {
                     <CfPullCostWidget agg={status.cf_pull_24h} />
                   </div>
                 )}
+                {/* Task #952 — rolling 24h saturation count. Mirrors
+                    the email/in-app alert text so an operator sees
+                    the same number across surfaces. */}
+                <SafeguardRow label="CF pull saturated minutes (24h)"
+                  value={`${status.cf_pull_saturated_minutes_24h ?? 0} min`}
+                  hint={
+                    (status.cf_pull_saturated_minutes_24h ?? 0) > 0
+                      ? 'A non-zero count means the GraphQL bucket cap (200 distinct buckets/minute) is being hit and some traffic was dropped from the explorer for those minutes. If this stays non-zero across days, drop `country` or `coloCode` from the dimension cut.'
+                      : 'No 1-minute windows hit the GraphQL bucket cap (200 distinct buckets) in the last 24h.'
+                  } />
               </div>
             )}
           </div>
@@ -844,6 +863,77 @@ export default function AdminLogsExplorer({ adminToken }) {
         )}
       </div>
     </SectionErrorBoundary>
+  );
+}
+
+/**
+ * Task #952 — In-app banner for the Cloudflare-pull saturation alerter.
+ *
+ * Renders a red callout when:
+ *   - the most recent CF pull tick reported one or more saturated
+ *     1-minute windows (i.e. the >200-buckets cap was hit even at the
+ *     pagination floor and some traffic was dropped from the
+ *     explorer for those minutes), OR
+ *   - the rolling 24h count of saturated minutes is non-zero (i.e.
+ *     traffic was lost at some point in the last day even if the
+ *     latest tick fit cleanly).
+ *
+ * The same fields are surfaced via in-app notification + email by
+ * the saturation alerter; this banner is the "operator opens the
+ * explorer" entry point so they don't have to wait on the inbox.
+ */
+function CfPullSaturationBanner({ status }) {
+  if (!status) return null;
+  const lastWindows = Array.isArray(status.cf_pull_last_saturated_windows)
+    ? status.cf_pull_last_saturated_windows
+    : [];
+  const count24h = Number(status.cf_pull_saturated_minutes_24h ?? 0);
+  if (lastWindows.length === 0 && count24h <= 0) return null;
+  const sample = lastWindows.slice(0, 3).map((w) => {
+    if (Array.isArray(w) && w[0]) return fmtTime(w[0]);
+    if (typeof w === 'string') return fmtTime(w);
+    return '—';
+  });
+  const more = lastWindows.length > sample.length
+    ? `, +${lastWindows.length - sample.length} more`
+    : '';
+  return (
+    <div
+      className="border border-red-300 bg-red-50 rounded p-3 flex items-start gap-3"
+      role="alert"
+      data-testid="cf-pull-saturation-banner"
+    >
+      <AlertOctagon className="w-5 h-5 text-red-600 mt-0.5 shrink-0" />
+      <div className="flex-1 text-sm">
+        <div className="font-semibold text-red-800">
+          Cloudflare pull saturation —{' '}
+          {lastWindows.length > 0
+            ? `${lastWindows.length} minute${lastWindows.length === 1 ? '' : 's'} hit the 200-bucket cap`
+            : `${count24h} saturated minute${count24h === 1 ? '' : 's'} in last 24h`}
+        </div>
+        <div className="text-red-700 mt-1">
+          The CF GraphQL pull truncates at {status.cf_pull_limit ?? 200} distinct
+          (path, status, colo, host, country, cache, method) buckets per minute.
+          For the listed minutes the cap was hit even at the 1-minute floor, so
+          some edge traffic was dropped from the explorer and will not appear
+          in any filter or export.
+          {lastWindows.length > 0 && (
+            <>
+              {' '}
+              Latest saturated windows:{' '}
+              <span className="font-mono">{sample.join(', ')}{more}</span>.
+            </>
+          )}
+        </div>
+        <div className="text-red-700 mt-1">
+          Saturated minutes in last 24h:{' '}
+          <span className="font-mono font-semibold">{count24h}</span>.{' '}
+          {count24h > 5
+            ? 'Trend is structural — drop `country` or `coloCode` from the GraphQL group-by so buckets aggregate to a coarser cut that fits.'
+            : 'If this stays at 0 across days, no action needed — a single saturated minute under traffic surge is expected.'}
+        </div>
+      </div>
+    </div>
   );
 }
 

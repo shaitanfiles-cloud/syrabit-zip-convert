@@ -1331,6 +1331,19 @@ async def lifespan(app):
             _unified_logs_cf_pull_loop,
         )
         await _ulogs_dao.ensure_indexes(db)
+        # Task #952 — TTL index on the rolling-24h saturation log so the
+        # admin dashboard's "saturated minutes in last 24h" counter has
+        # a bounded collection to scan.
+        try:
+            from routes.admin_logs_cf_pull_saturation_alerts import (
+                ensure_saturation_indexes,
+            )
+            await ensure_saturation_indexes(db)
+        except Exception as _sat_idx_err:
+            logger.debug(
+                f"[unified_logs] saturation index bootstrap failed: "
+                f"{_sat_idx_err}"
+            )
         await _hydrate_pause_state_from_db()
         await _ulogs_dao.get_backend_shipper().start(db)
         _unified_logs_cf_task = asyncio.create_task(_unified_logs_cf_pull_loop())
@@ -1525,6 +1538,13 @@ from routes.admin_cf_waf_drift_cron_alerts import router as admin_cf_waf_drift_c
 from routes.admin_logs_cf_pull_silence_alerts import (
     router as admin_logs_cf_pull_silence_alerts_router,
 )
+# Task #952 — pages on-call when busy hours saturate the 200-buckets
+# CF GraphQL cap and the unified-logs explorer starts losing rows
+# (the failure mode Task #948's pagination surfaces but doesn't
+# itself remediate).
+from routes.admin_logs_cf_pull_saturation_alerts import (
+    router as admin_logs_cf_pull_saturation_alerts_router,
+)
 from routes.synthetic_probe_secret_alert import router as synthetic_probe_secret_alert_router
 # Task #882 — surfaces the latest edge-proxy-deploy GitHub Actions run
 # as a cron pill in AdminHealth so a red `smoke-preview` regression
@@ -1578,6 +1598,7 @@ api.include_router(admin_trustpilot_cron_alerts_router)
 api.include_router(cf_waf_drift_cron_heartbeat_router)
 api.include_router(admin_cf_waf_drift_cron_alerts_router)
 api.include_router(admin_logs_cf_pull_silence_alerts_router)
+api.include_router(admin_logs_cf_pull_saturation_alerts_router)
 api.include_router(synthetic_probe_secret_alert_router)
 api.include_router(admin_health_router)
 api.include_router(admin_ads_router)

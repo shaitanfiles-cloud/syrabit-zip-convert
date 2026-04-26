@@ -460,6 +460,11 @@ async def admin_logs_status(admin: dict = Depends(get_admin_user)):
     cf_last_saturated_windows: Optional[List[Any]] = None
     # Task #953 — rolling 24h pagination-cost aggregate.
     cf_pull_24h: Optional[Dict[str, Any]] = None
+    # Task #952 — rolling 24h count of distinct saturated minutes,
+    # backed by the ``cf_pull_saturated_minutes`` collection (TTL 25h).
+    # Surfaced here so the AdminLogsExplorer can show a trend at a
+    # glance instead of forcing the operator to dig through Mongo.
+    cf_saturated_minutes_24h: int = 0
     if db is not None:
         try:
             lock = await db.job_locks.find_one({"_id": CF_PULL_LOCK_ID})
@@ -484,6 +489,13 @@ async def admin_logs_status(admin: dict = Depends(get_admin_user)):
                 )
         except Exception:
             pass
+        try:
+            from routes.admin_logs_cf_pull_saturation_alerts import (
+                count_saturated_minutes_24h,
+            )
+            cf_saturated_minutes_24h = await count_saturated_minutes_24h(db)
+        except Exception:
+            cf_saturated_minutes_24h = 0
     counts: Dict[str, Any] = {}
     if db is not None:
         try:
@@ -529,6 +541,11 @@ async def admin_logs_status(admin: dict = Depends(get_admin_user)):
         # fresh deploy with no completed pulls yet; the UI hides the
         # widget in that case).
         "cf_pull_24h": cf_pull_24h,
+        # Task #952 — rolling 24h count of saturated minutes (TTL'd
+        # to 25h in ``cf_pull_saturated_minutes``). Lets the operator
+        # see at a glance whether saturation is a one-off spike or a
+        # structural problem that needs the dimension cut widened.
+        "cf_pull_saturated_minutes_24h": cf_saturated_minutes_24h,
         "shipper_stats": {
             "accepted": shipper.accepted,
             "flushed": shipper.flushed,
@@ -1124,6 +1141,25 @@ async def _try_run_cf_pull_once(now_utc: Optional[datetime] = None,
         )
     except Exception as exc:
         logger.warning("[unified_logs] CF pull cursor write failed: %s", exc)
+
+    # Task #952 — fire-and-forget: persist any saturated minutes to the
+    # rolling-24h collection and page on-call when fresh saturations
+    # are observed (debounced to one page per 24h). Wrapped in its own
+    # ``create_task`` so a slow Mongo / email provider on the alert
+    # side cannot stall the CF pull loop or block the cursor advance
+    # above. The handler itself is best-effort and never raises.
+    if pulled.get("saturated_windows"):
+        try:
+            from routes.admin_logs_cf_pull_saturation_alerts import (
+                record_and_maybe_alert,
+            )
+            asyncio.create_task(record_and_maybe_alert(
+                db, pulled["saturated_windows"], now,
+            ))
+        except Exception as exc:
+            logger.debug(
+                "[unified_logs] saturation alert schedule failed: %s", exc,
+            )
 
     return {
         "ok": True,
