@@ -1150,9 +1150,18 @@ async def health_check() -> dict:
     # success criterion. ``return_exceptions=True`` keeps a failure in
     # one probe from cancelling the other so we still get a useful
     # diagnostic dict back instead of half-blank fields.
+    # NOTE: ``max_tokens`` must accommodate "thinking" models (e.g.
+    # gemini-2.5-flash) which spend tokens on internal reasoning before
+    # emitting a response. With a tight cap (the previous value was 5),
+    # the model would hit ``MAX_TOKENS`` after a single thinking-tail
+    # token like "The", returning content that does not contain "OK"
+    # — a false negative that made every probe report
+    # ``generation=False`` even when the upstream was perfectly
+    # healthy. 64 leaves enough room for thinking + an "OK" reply
+    # without inflating probe latency or cost meaningfully.
     test, gen_test = await asyncio.gather(
         embed_text("test", task_type="SEMANTIC_SIMILARITY"),
-        _generate("Reply with just the word: OK", max_tokens=5),
+        _generate("Reply with just the word: OK", max_tokens=64),
         return_exceptions=True,
     )
     if isinstance(test, BaseException):
@@ -1162,7 +1171,13 @@ async def health_check() -> dict:
         logger.warning(f"vertex health_check generate raised: {gen_test!r}")
         gen_test = None
     embed_ok = test is not None and len(test) == _EMBED_DIMENSIONS
-    gen_ok = gen_test is not None and "OK" in (gen_test or "")
+    # Accept any non-empty text as a healthy generation. The "OK"
+    # substring check was overly literal — thinking models often wrap
+    # their reply ("Sure, OK", "The answer is OK") and the previous
+    # exact-match logic flagged those as failures. A non-empty string
+    # back from ``_generate`` already proves auth + routing + the model
+    # itself are all working end-to-end.
+    gen_ok = bool(gen_test and gen_test.strip())
     # `ok` reflects actual probe success (not just credential presence)
     # so health dashboards can't show green when calls are silently
     # failing upstream.
