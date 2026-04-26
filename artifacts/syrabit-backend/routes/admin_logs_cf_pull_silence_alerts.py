@@ -119,11 +119,24 @@ _STATUS_URL = "/api/admin/logs/status"
 # them per-channel later without code changes. Best-effort: a missing
 # env var or a failing POST never blocks the email + in-app channels
 # above and never raises out of the alert loop.
-_CRON_SLACK_WEBHOOK_ENV = "UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK"
+#
+# Task #969 — the env-var name and the read-and-strip helper now live
+# in ``routes.slack_alerter_config`` so all three cron silence-alerter
+# modules share a single source of truth and admin_health.py can
+# surface the same ``slackConfigured`` / ``slackWebhookEnv`` pair
+# without late-importing private symbols from this module. The
+# ``_CRON_SLACK_WEBHOOK_ENV`` / ``_slack_webhook_url`` aliases below
+# preserve the in-module API the rest of this file (and the existing
+# tests) rely on.
+from routes.slack_alerter_config import (
+    UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK_ENV as _CRON_SLACK_WEBHOOK_ENV,
+    slack_config_for,
+    slack_webhook_url_for,
+)
 
 
 def _slack_webhook_url() -> str:
-    return (os.environ.get(_CRON_SLACK_WEBHOOK_ENV) or "").strip()
+    return slack_webhook_url_for(_CRON_SLACK_WEBHOOK_ENV)
 
 
 # ─── Health snapshot ───────────────────────────────────────────────────────
@@ -258,9 +271,10 @@ async def admin_unified_logs_cf_pull_cron_health(
         # "Slack ✓ / ✗" badge next to the pill. We deliberately
         # publish only the boolean, never the URL itself, since
         # webhook URLs are sensitive and admin-readable JSON
-        # surfaces should not leak them.
-        "slackConfigured": bool(_slack_webhook_url()),
-        "slackWebhookEnv": _CRON_SLACK_WEBHOOK_ENV,
+        # surfaces should not leak them. Task #969 collapsed the
+        # boolean + env-name pair into a single shared helper that
+        # all three cron silence-alerter health endpoints call into.
+        **slack_config_for(_CRON_SLACK_WEBHOOK_ENV),
     }
 
 

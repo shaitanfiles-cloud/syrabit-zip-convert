@@ -29,6 +29,7 @@ ROUTES_DIR = pathlib.Path(__file__).resolve().parent.parent / "routes"
 # is skipped.
 _NON_ROUTER_MODULES = frozenset({
     "admin_ci_alerts",  # Task #484: leader-gated CI red-alert poller
+    "slack_alerter_config",  # Task #969: tiny shared Slack-config helper
 })
 
 

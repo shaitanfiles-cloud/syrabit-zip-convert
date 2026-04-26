@@ -274,18 +274,18 @@ async def admin_edge_proxy_deploy_cron(
     cf-pull cron health endpoints. The webhook URL itself is never
     returned (the boolean only) so this admin-readable JSON surface
     does not leak it.
+
+    Task #969 — both the env-var name and the boolean+name pair come
+    from ``routes.slack_alerter_config`` so this no longer late-imports
+    private ``_``-prefixed symbols from the alerter module just to
+    dodge a circular import.
     """
-    # Late import keeps the module-level dependency graph tidy: the
-    # alerter module imports things from admin_health, so importing
-    # it back at module level would create a circular import. The
-    # call site is per-request and rare, so the cost is negligible.
-    from routes.admin_edge_proxy_deploy_cron_alerts import (
-        _slack_webhook_url as _edge_proxy_slack_webhook_url,
-        _CRON_SLACK_WEBHOOK_ENV as _edge_proxy_slack_webhook_env,
+    from routes.slack_alerter_config import (
+        EDGE_PROXY_DEPLOY_SLACK_WEBHOOK_ENV,
+        slack_config_for,
     )
     payload = await get_edge_proxy_deploy_cron_health()
-    payload["slackConfigured"] = bool(_edge_proxy_slack_webhook_url())
-    payload["slackWebhookEnv"] = _edge_proxy_slack_webhook_env
+    payload.update(slack_config_for(EDGE_PROXY_DEPLOY_SLACK_WEBHOOK_ENV))
     return payload
 
 

@@ -93,11 +93,21 @@ _DEFAULT_WORKFLOW_URL = (
 # inbox to catch a silent cron. Best-effort: a missing env var or a
 # failed POST never duplicates the alert and never breaks the email +
 # in-app channels above.
-_CRON_SLACK_WEBHOOK_ENV = "CF_WAF_DRIFT_SLACK_WEBHOOK"
+#
+# Task #969 — the env-var name and the read-and-strip helper now live
+# in ``routes.slack_alerter_config`` so all three cron silence-alerter
+# modules share a single source of truth. The ``_CRON_SLACK_WEBHOOK_ENV``
+# / ``_slack_webhook_url`` aliases below preserve the in-module API
+# the rest of this file (and existing tests) rely on.
+from routes.slack_alerter_config import (
+    CF_WAF_DRIFT_SLACK_WEBHOOK_ENV as _CRON_SLACK_WEBHOOK_ENV,
+    slack_config_for,
+    slack_webhook_url_for,
+)
 
 
 def _slack_webhook_url() -> str:
-    return (os.environ.get(_CRON_SLACK_WEBHOOK_ENV) or "").strip()
+    return slack_webhook_url_for(_CRON_SLACK_WEBHOOK_ENV)
 
 
 # ─── Admin health endpoint ─────────────────────────────────────────────────
@@ -157,8 +167,10 @@ async def admin_cf_waf_drift_cron_health(
         # "Slack ✓ / ✗" badge next to the pill. Sibling fields on
         # the cf-pull and edge-proxy-deploy cron endpoints carry the
         # same shape. The boolean only — never the URL itself.
-        "slackConfigured": bool(_slack_webhook_url()),
-        "slackWebhookEnv": _CRON_SLACK_WEBHOOK_ENV,
+        # Task #969 collapsed the boolean + env-name pair into a
+        # single shared helper used by all three cron silence-alerter
+        # health endpoints.
+        **slack_config_for(_CRON_SLACK_WEBHOOK_ENV),
     }
 
 

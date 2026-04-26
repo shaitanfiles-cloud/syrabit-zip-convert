@@ -72,11 +72,24 @@ _DEFAULT_WORKFLOW_URL = (
 # contract: env-gated, non-blocking, never raises. Operators who want
 # the same channel they already get drift / Trustpilot pages on can
 # point this at the same incoming webhook.
-_CRON_SLACK_WEBHOOK_ENV = "EDGE_PROXY_DEPLOY_SLACK_WEBHOOK"
+#
+# Task #969 — the env-var name and the read-and-strip helper now live
+# in ``routes.slack_alerter_config`` so all three cron silence-alerter
+# modules share a single source of truth and ``admin_health.py`` (which
+# hosts the edge-proxy-deploy cron pill) can surface the same
+# ``slackConfigured`` / ``slackWebhookEnv`` pair without late-importing
+# private symbols from this module to dodge a circular import. The
+# ``_CRON_SLACK_WEBHOOK_ENV`` / ``_slack_webhook_url`` aliases below
+# preserve the in-module API the rest of this file (and existing
+# tests) rely on.
+from routes.slack_alerter_config import (
+    EDGE_PROXY_DEPLOY_SLACK_WEBHOOK_ENV as _CRON_SLACK_WEBHOOK_ENV,
+    slack_webhook_url_for,
+)
 
 
 def _slack_webhook_url() -> str:
-    return (os.environ.get(_CRON_SLACK_WEBHOOK_ENV) or "").strip()
+    return slack_webhook_url_for(_CRON_SLACK_WEBHOOK_ENV)
 
 
 # ─── Classification ────────────────────────────────────────────────────────
