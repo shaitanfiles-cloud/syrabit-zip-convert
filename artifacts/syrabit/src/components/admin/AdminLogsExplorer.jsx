@@ -13,10 +13,11 @@
  * of rows. The UI virtualises by simply rendering only the current
  * page; a "Load older" button grabs the next cursor-paginated page.
  */
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   RefreshCw, Download, Search, Pause, Play, Trash2, Link as LinkIcon,
   Activity, AlertTriangle, AlertOctagon, Info, X, KeyRound, Filter,
+  Copy, ChevronDown, ChevronRight, Shield,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -116,6 +117,40 @@ export default function AdminLogsExplorer({ adminToken }) {
   const [rotating, setRotating] = useState(false);
   const [rotatedToken, setRotatedToken] = useState(null);
   const [pendingPause, setPendingPause] = useState(false);
+  // Set of row _id strings that are currently expanded to show full
+  // JSON payload. Using a Set keeps O(1) toggle/lookup even when the
+  // page renders the full PAGE_SIZE rows.
+  const [expandedIds, setExpandedIds] = useState(() => new Set());
+  const [showSafeguards, setShowSafeguards] = useState(false);
+
+  const rowKeyOf = (row) => row?._id || `${row?.timestamp}|${row?.correlation_id || ''}|${row?.message || ''}`;
+  const toggleExpanded = (key) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+  const copyToClipboard = async (text, label = 'value') => {
+    if (!text) return;
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(String(text));
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = String(text);
+        ta.style.position = 'fixed';
+        ta.style.left = '-1000px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      toast.success(`Copied ${label}`);
+    } catch {
+      toast.error(`Failed to copy ${label}`);
+    }
+  };
 
   const window_ = useMemo(() => {
     const p = TIME_PRESETS.find((x) => x.id === preset) || TIME_PRESETS[1];
@@ -346,6 +381,53 @@ export default function AdminLogsExplorer({ adminToken }) {
           </div>
         </div>
 
+        {/* ── Safeguards card (sampling, retention, rate caps) ───── */}
+        {status && (
+          <div className="border rounded bg-white">
+            <button
+              type="button"
+              onClick={() => setShowSafeguards((v) => !v)}
+              className="w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-slate-50"
+              aria-expanded={showSafeguards}
+              data-testid="safeguards-toggle"
+            >
+              <span className="inline-flex items-center gap-2">
+                <Shield className="w-4 h-4 text-slate-500" />
+                <span className="font-medium">Ingest safeguards</span>
+                <span className="text-xs text-slate-500">
+                  retention {status.ttl_days ?? '—'}d · backend sample {Math.round((status.backend_sample_rate ?? 0) * 100)}% ·
+                  batch cap {status.max_ingest_batch ?? '—'} · pull every {status.cf_pull_interval_s ?? '—'}s
+                </span>
+              </span>
+              {showSafeguards
+                ? <ChevronDown className="w-4 h-4 text-slate-400" />
+                : <ChevronRight className="w-4 h-4 text-slate-400" />}
+            </button>
+            {showSafeguards && (
+              <div className="px-3 py-3 border-t bg-slate-50/60 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                <SafeguardRow label="Retention TTL"
+                  value={`${status.ttl_days ?? '—'} days`}
+                  hint="Set via UNIFIED_LOGS_TTL_DAYS env. Mongo enforces server-side; rows past TTL are auto-deleted." />
+                <SafeguardRow label="Backend sample rate"
+                  value={`${Math.round((status.backend_sample_rate ?? 0) * 100)}%`}
+                  hint="2xx requests sampled at this rate. 4xx/5xx and slow (>1.5s) requests are always kept." />
+                <SafeguardRow label="Edge sample rate"
+                  value={`env: ${status.edge_sample_rate_env || 'EDGE_LOG_SAMPLE_RATE'}`}
+                  hint="Edge worker reads this from its own env binding. Same always-keep rule for errors / slow." />
+                <SafeguardRow label="Max ingest batch"
+                  value={`${status.max_ingest_batch ?? '—'} records`}
+                  hint="Posts above this size are rejected with 413. Set via LOGS_INGEST_MAX_BATCH." />
+                <SafeguardRow label="CF GraphQL pull"
+                  value={`every ${status.cf_pull_interval_s ?? '—'}s`}
+                  hint={`Last run: ${status.cf_pull_last_run ? fmtTime(status.cf_pull_last_run) : 'never'}`} />
+                <SafeguardRow label="Ingest token"
+                  value={status.ingest_token_configured ? 'configured' : 'missing'}
+                  hint="Rotate via the KEY button above. Old token keeps working until the worker secret is updated." />
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ── Filter bar ──────────────────────────────────────────── */}
         <div className="bg-slate-50 border rounded p-3 space-y-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -479,6 +561,7 @@ export default function AdminLogsExplorer({ adminToken }) {
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
               <tr>
+                <th className="px-2 py-2 w-6"></th>
                 <th className="text-left px-3 py-2">Time</th>
                 <th className="text-left px-3 py-2">Source</th>
                 <th className="text-left px-3 py-2">Level</th>
@@ -491,58 +574,113 @@ export default function AdminLogsExplorer({ adminToken }) {
               </tr>
             </thead>
             <tbody>
-              {logs.map((row) => {
+              {logs.map((row, idx) => {
                 const lvl = LEVEL_ICON[row.level] || LEVEL_ICON.info;
                 const Icon = lvl.Icon;
+                const key = `${rowKeyOf(row)}|${idx}`;
+                const expandKey = rowKeyOf(row);
+                const isExpanded = expandedIds.has(expandKey);
                 return (
-                  <tr key={`${row.timestamp}-${row.correlation_id || row.message}-${Math.random()}`}
-                      className="border-t hover:bg-slate-50">
-                    <td className="px-3 py-1.5 whitespace-nowrap font-mono text-xs">
-                      {fmtTime(row.timestamp)}
-                    </td>
-                    <td className="px-3 py-1.5 whitespace-nowrap">
-                      <span className={`inline-block px-2 py-0.5 text-xs rounded border ${SOURCE_BADGE[row.source] || 'bg-slate-100 text-slate-700'}`}>
-                        {row.source}
-                      </span>
-                    </td>
-                    <td className="px-3 py-1.5">
-                      <span className={`inline-flex items-center gap-1 text-xs ${lvl.color}`}>
-                        <Icon className="w-3 h-3" /> {row.level}
-                      </span>
-                    </td>
-                    <td className={`px-3 py-1.5 font-mono text-xs ${statusClass(row.status)}`}>
-                      {row.status ?? '—'}
-                    </td>
-                    <td className="px-3 py-1.5 max-w-md truncate font-mono text-xs"
-                        title={row.message || row.route}>
-                      <span className="text-slate-400 mr-1">{row.method || '—'}</span>
-                      {row.route || row.message || '—'}
-                    </td>
-                    <td className="px-3 py-1.5 whitespace-nowrap text-xs">
-                      {row.country || '—'}{row.colo ? ` / ${row.colo}` : ''}
-                    </td>
-                    <td className="px-3 py-1.5 text-xs">{row.cache || '—'}</td>
-                    <td className="px-3 py-1.5 text-right font-mono text-xs">
-                      {fmtMs(row.duration_ms)}
-                    </td>
-                    <td className="px-3 py-1.5">
-                      {row.correlation_id ? (
+                  <Fragment key={key}>
+                    <tr className="border-t hover:bg-slate-50">
+                      <td className="px-2 py-1.5 align-top">
                         <button
                           type="button"
-                          onClick={() => openTrace(row.correlation_id)}
-                          className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:underline font-mono"
-                          title="Open trace for this correlation id"
+                          onClick={() => toggleExpanded(expandKey)}
+                          className="text-slate-400 hover:text-slate-700"
+                          title={isExpanded ? 'Collapse row' : 'Expand to see full JSON'}
+                          aria-label={isExpanded ? 'Collapse row' : 'Expand row'}
+                          aria-expanded={isExpanded}
+                          data-testid={`row-expand-${idx}`}
                         >
-                          <LinkIcon className="w-3 h-3" />
-                          {String(row.correlation_id).slice(0, 14)}
+                          {isExpanded
+                            ? <ChevronDown className="w-4 h-4" />
+                            : <ChevronRight className="w-4 h-4" />}
                         </button>
-                      ) : '—'}
-                    </td>
-                  </tr>
+                      </td>
+                      <td className="px-3 py-1.5 whitespace-nowrap font-mono text-xs">
+                        {fmtTime(row.timestamp)}
+                      </td>
+                      <td className="px-3 py-1.5 whitespace-nowrap">
+                        <span className={`inline-block px-2 py-0.5 text-xs rounded border ${SOURCE_BADGE[row.source] || 'bg-slate-100 text-slate-700'}`}>
+                          {row.source}
+                        </span>
+                      </td>
+                      <td className="px-3 py-1.5">
+                        <span className={`inline-flex items-center gap-1 text-xs ${lvl.color}`}>
+                          <Icon className="w-3 h-3" /> {row.level}
+                        </span>
+                      </td>
+                      <td className={`px-3 py-1.5 font-mono text-xs ${statusClass(row.status)}`}>
+                        {row.status ?? '—'}
+                      </td>
+                      <td className="px-3 py-1.5 max-w-md truncate font-mono text-xs"
+                          title={row.message || row.route}>
+                        <span className="text-slate-400 mr-1">{row.method || '—'}</span>
+                        {row.route || row.message || '—'}
+                      </td>
+                      <td className="px-3 py-1.5 whitespace-nowrap text-xs">
+                        {row.country || '—'}{row.colo ? ` / ${row.colo}` : ''}
+                      </td>
+                      <td className="px-3 py-1.5 text-xs">{row.cache || '—'}</td>
+                      <td className="px-3 py-1.5 text-right font-mono text-xs">
+                        {fmtMs(row.duration_ms)}
+                      </td>
+                      <td className="px-3 py-1.5">
+                        {row.correlation_id ? (
+                          <span className="inline-flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => openTrace(row.correlation_id)}
+                              className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:underline font-mono"
+                              title="Open trace for this correlation id"
+                            >
+                              <LinkIcon className="w-3 h-3" />
+                              {String(row.correlation_id).slice(0, 14)}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => copyToClipboard(row.correlation_id, 'correlation id')}
+                              className="text-slate-400 hover:text-slate-700"
+                              title="Copy correlation id to clipboard"
+                              aria-label="Copy correlation id"
+                              data-testid={`copy-cid-${idx}`}
+                            >
+                              <Copy className="w-3 h-3" />
+                            </button>
+                          </span>
+                        ) : '—'}
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr className="border-t bg-slate-50/60">
+                        <td colSpan={10} className="px-4 py-3">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="text-xs text-slate-500 font-mono">
+                              Full JSON payload · _id={String(row._id || '—').slice(0, 32)}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => copyToClipboard(JSON.stringify(row, null, 2), 'JSON payload')}
+                              className="inline-flex items-center gap-1 text-xs text-slate-600 hover:text-slate-900 border rounded px-2 py-0.5 bg-white"
+                              title="Copy full JSON payload"
+                              data-testid={`copy-json-${idx}`}
+                            >
+                              <Copy className="w-3 h-3" /> Copy JSON
+                            </button>
+                          </div>
+                          <pre className="text-[11px] leading-snug font-mono whitespace-pre-wrap break-all bg-white border rounded p-3 max-h-80 overflow-auto"
+                               data-testid={`row-json-${idx}`}>
+{JSON.stringify(row, null, 2)}
+                          </pre>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
               {!loading && logs.length === 0 && (
-                <tr><td colSpan={9} className="text-center py-10 text-slate-400">
+                <tr><td colSpan={10} className="text-center py-10 text-slate-400">
                   No log entries match the current filters.
                 </td></tr>
               )}
@@ -701,6 +839,18 @@ export default function AdminLogsExplorer({ adminToken }) {
         )}
       </div>
     </SectionErrorBoundary>
+  );
+}
+
+function SafeguardRow({ label, value, hint }) {
+  return (
+    <div className="bg-white border rounded p-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-slate-500">{label}</span>
+        <span className="font-mono text-slate-900">{value}</span>
+      </div>
+      {hint && <div className="mt-1 text-[11px] text-slate-500">{hint}</div>}
+    </div>
   );
 }
 

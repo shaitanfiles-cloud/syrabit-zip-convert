@@ -200,7 +200,18 @@ def test_admin_status_reports_token_and_pause(client):
     assert body["ingest_token_configured"] is True
     assert body["ttl_days"] >= 1
     assert body["max_ingest_batch"] >= 1
-    assert "counts_by_source" in body or "counts" in body or True
+    # Status MUST surface per-source counts so the live-tail header
+    # can render "edge: N • backend: M • cloudflare: K". We assert the
+    # exact key + that every allowed source has a numeric counter.
+    assert "counts" in body, body
+    counts = body["counts"]
+    for src in dao.ALLOWED_SOURCES:
+        assert src in counts, f"missing source {src} in {counts}"
+        assert isinstance(counts[src], int)
+    # Also assert the CF-pull observability fields are present so the
+    # admin can see when the last pull tick ran.
+    assert "cf_pull_interval_s" in body
+    assert "shipper_stats" in body
 
 
 # ─── pause / resume ───────────────────────────────────────────────────
