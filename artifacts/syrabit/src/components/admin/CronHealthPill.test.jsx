@@ -353,6 +353,119 @@ describe('alertState rendering', () => {
   });
 });
 
+// Task #918 — paged-on-call audit-log disclosure. The pill renders
+// a "Show paged history" toggle when the wrapper passes
+// `onLoadAlertHistory`; clicking it lazy-fetches via the parent's
+// loader and expands an inline panel listing alerter events. Locked
+// down here so the testIds + visibility rules can't drift from the
+// AdminHealth wiring (loadEdgeProxyDeployCronAlertHistory et al.).
+describe('alertHistory panel', () => {
+  it('does NOT render the toggle when onLoadAlertHistory is missing', () => {
+    // Backwards-compat: callers (snapshot-style tests, the
+    // mockup-sandbox) that never opted into the history feature
+    // should see no extra DOM.
+    const html = renderToStaticMarkup(
+      <CronHealthPill
+        data={{ status: 'healthy' }}
+        testId="foo"
+        defaultWorkflowUrl="https://example.test/workflow"
+      />,
+    );
+    expect(html).not.toContain('foo-history-toggle');
+    expect(html).not.toContain('foo-history-panel');
+  });
+
+  it('renders the collapsed toggle with event count when onLoadAlertHistory is provided', () => {
+    // History pre-loaded by the parent (e.g. a polling cycle that
+    // ran before the admin clicked) — count appears in the toggle
+    // label so admins know there's something worth opening before
+    // they expand the panel.
+    const html = renderToStaticMarkup(
+      <CronHealthPill
+        data={{ status: 'silent' }}
+        testId="foo"
+        defaultWorkflowUrl="https://example.test/workflow"
+        alertHistory={{ events: [
+          { id: 'e1', kind: 'broken', subKind: 'failed',
+            pagedAt: new Date(Date.now() - 3600 * 1000).toISOString(),
+            lastConclusion: 'failure', lastRunId: 42,
+            lastRunUrl: 'https://gh.test/runs/42' },
+          { id: 'e2', kind: 'recovered', subKind: null,
+            pagedAt: new Date(Date.now() - 600 * 1000).toISOString(),
+            lastConclusion: 'success', lastRunId: 43 },
+        ] }}
+        onLoadAlertHistory={() => {}}
+      />,
+    );
+    expect(html).toContain('foo-history-toggle');
+    expect(html).toContain('Show paged history (2)');
+    // Panel stays collapsed until the user clicks; static-render
+    // sees only the toggle, not the panel itself.
+    expect(html).not.toContain('foo-history-panel');
+  });
+
+  it('expands the panel and fires the loader on click', async () => {
+    // Use @testing-library/react for the click + state-update path
+    // since renderToStaticMarkup can't run effects. The static
+    // colour-mapping tests above stay on the static renderer
+    // because they don't need state — keeping that fast path
+    // unchanged.
+    const { render, fireEvent, cleanup } = await import('@testing-library/react');
+    const calls = { n: 0 };
+    const onLoad = () => { calls.n += 1; };
+    const { getByTestId, queryByTestId, queryAllByTestId } = render(
+      <CronHealthPill
+        data={{ status: 'silent' }}
+        testId="foo"
+        defaultWorkflowUrl="https://example.test/workflow"
+        alertHistory={{ events: [
+          { id: 'e1', kind: 'broken', subKind: 'failed',
+            pagedAt: new Date(Date.now() - 7200 * 1000).toISOString(),
+            lastConclusion: 'failure', lastRunId: 42,
+            lastRunUrl: 'https://gh.test/runs/42' },
+        ] }}
+        onLoadAlertHistory={onLoad}
+      />,
+    );
+    const toggle = getByTestId('foo-history-toggle');
+    expect(queryByTestId('foo-history-panel')).toBeNull();
+    fireEvent.click(toggle);
+    // First open: panel renders + loader fires exactly once.
+    expect(queryByTestId('foo-history-panel')).not.toBeNull();
+    expect(queryAllByTestId('foo-history-event').length).toBe(1);
+    expect(calls.n).toBe(1);
+    // Closing the panel does NOT re-fire the loader (no fetch on
+    // the way down) but the panel is gone from the DOM.
+    fireEvent.click(toggle);
+    expect(queryByTestId('foo-history-panel')).toBeNull();
+    expect(calls.n).toBe(1);
+    // Re-opening DOES re-fire the loader — opening is the admin's
+    // explicit "show me the latest" gesture and history is not
+    // covered by AdminHealth's 60s polling, so without this
+    // refresh-on-open the panel could go stale indefinitely.
+    fireEvent.click(toggle);
+    expect(queryByTestId('foo-history-panel')).not.toBeNull();
+    expect(calls.n).toBe(2);
+    cleanup();
+  });
+
+  it('renders the empty-state row when the alerter has never fired', async () => {
+    const { render, fireEvent, cleanup } = await import('@testing-library/react');
+    const { getByTestId, queryByTestId } = render(
+      <CronHealthPill
+        data={{ status: 'healthy' }}
+        testId="foo"
+        defaultWorkflowUrl="https://example.test/workflow"
+        alertHistory={{ events: [] }}
+        onLoadAlertHistory={() => {}}
+      />,
+    );
+    fireEvent.click(getByTestId('foo-history-toggle'));
+    expect(queryByTestId('foo-history-empty')).not.toBeNull();
+    cleanup();
+  });
+});
+
 describe('ageLabel helper', () => {
   const cases = [
     { input: null, expected: null, why: 'null input -> null' },

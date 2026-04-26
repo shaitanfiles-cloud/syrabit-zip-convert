@@ -184,6 +184,29 @@ async def admin_cf_waf_drift_cron_alert_state(
     )
 
 
+# ─── Task #918 — paged-on-call audit log ──────────────────────────────────
+#
+# Sibling of ``/admin/health/cf-waf-drift/cron/alert-state`` above.
+# Surfaces the last ~20 alerter events (page + recovery) for the
+# cf-waf-drift cron so the AdminHealth pill can render a small
+# "show paged history" panel. The audit collection + shaping helper
+# live in :mod:`routes.admin_health` so all three pills share one
+# implementation; this route is a thin wrapper that pins the
+# ``_LOCK_ID`` for this specific alerter.
+@router.get("/admin/health/cf-waf-drift/cron/alert-history")
+async def admin_cf_waf_drift_cron_alert_history(
+    limit: int = 20,
+    admin: dict = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """Audit-log of pages issued by the cf-waf-drift silence alerter
+    (Task #831), most recent first. Always 200; returns
+    ``events: []`` when the alerter has never fired or when Mongo is
+    unavailable.
+    """
+    from routes.admin_health import _build_alert_history_response
+    return await _build_alert_history_response(_LOCK_ID, limit=limit)
+
+
 # ─── Alerting ──────────────────────────────────────────────────────────────
 
 def _classify_cron(
@@ -547,6 +570,29 @@ async def _send_cron_alert(
     # so a slow/dead webhook can't stall the alert loop or the in-app
     # notification persist that already succeeded.
     asyncio.create_task(_post_slack_cron_alert(title, msg, kind, health))
+    # Task #918 — append to the paged-on-call audit log so the
+    # AdminHealth dashboard's "show paged history" panel can render
+    # this event next to the pill. Fire-and-forget for the same
+    # reason as the email + Slack fan-outs above (a slow Mongo can't
+    # be allowed to stall the alert loop). This alerter only carries
+    # one broken sub_kind ("silent" — the cron stopped heartbeating),
+    # so sub_kind is always None on the broken side; the helper
+    # accepts None so the doc shape stays uniform across pills.
+    try:
+        from routes.admin_health import record_cron_alert_event
+        asyncio.create_task(record_cron_alert_event(
+            db,
+            lock_id=_LOCK_ID,
+            kind=kind,
+            sub_kind=None,
+            health=health,
+            now_utc=now_utc,
+        ))
+    except Exception as exc:
+        logger.debug(
+            f"[cf-waf-drift-cron-alerts] history record schedule "
+            f"failed: {exc}"
+        )
 
 
 async def _check_and_alert_cf_waf_drift_cron(

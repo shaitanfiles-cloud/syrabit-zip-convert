@@ -1,5 +1,8 @@
-import React from 'react';
-import { AlertTriangle, ShieldCheck, Clock, RefreshCw, ExternalLink } from 'lucide-react';
+import React, { useState, useCallback } from 'react';
+import {
+  AlertTriangle, ShieldCheck, Clock, RefreshCw, ExternalLink,
+  ChevronDown, ChevronUp, History,
+} from 'lucide-react';
 import { formatAlertStateCaption } from './cronCaptionHelpers';
 
 const DEFAULT_PILL_LABELS = {
@@ -18,6 +21,69 @@ export const ageLabel = (secs) => {
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   return `${Math.floor(s / 86400)}d`;
 };
+
+// Task #918 — render a single audit-log row inside the history panel.
+// One paged-on-call event ("paged Xh ago · failure · run #123") with
+// a deep-link to the offending GitHub Actions run when present. Kept
+// inline so the panel stays self-contained and the pill's wrappers
+// don't need to know anything about the row layout.
+function HistoryEventRow({ event, ageLabel: fmt, testId, index }) {
+  const pagedAt = event?.pagedAt ? new Date(event.pagedAt) : null;
+  // Recompute the "Xh ago" label client-side off the persisted
+  // ISO timestamp so it stays accurate as the panel sits open
+  // across the 60s polling interval (the backend can't predict
+  // when the admin will look at it).
+  const ageSecs = pagedAt
+    ? Math.max(0, Math.floor((Date.now() - pagedAt.getTime()) / 1000))
+    : null;
+  const ageStr = fmt(ageSecs);
+  const kindRaw = (event?.kind || '').toString();
+  const kindLabel = kindRaw === 'recovered'
+    ? 'recovered'
+    : kindRaw === 'broken' || kindRaw === 'silent'
+      ? 'paged'
+      : kindRaw || 'event';
+  const kindCls = kindRaw === 'recovered'
+    ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+    : kindRaw === 'broken' || kindRaw === 'silent'
+      ? 'bg-red-100 text-red-700 border-red-200'
+      : 'bg-gray-100 text-gray-600 border-gray-200';
+  const subKindLabel = event?.subKind ? ` (${event.subKind})` : '';
+  const conclusion = event?.lastConclusion;
+  const runUrl = event?.lastRunUrl || event?.lastHtmlUrl;
+  const runId = event?.lastRunId;
+  const tooltipDate = pagedAt ? pagedAt.toISOString() : '';
+  return (
+    <li
+      className="flex items-center gap-2 py-1 text-[11px] text-gray-600"
+      data-testid={`${testId}-history-event`}
+      data-history-event-index={index}
+    >
+      <span
+        className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold border ${kindCls}`}
+      >
+        {kindLabel.toUpperCase()}{subKindLabel}
+      </span>
+      <span title={tooltipDate} className="text-gray-500">
+        {ageStr ? `${ageStr} ago` : 'just now'}
+      </span>
+      {conclusion && (
+        <span className="text-gray-400">· {conclusion}</span>
+      )}
+      {runUrl && (
+        <a
+          href={runUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="ml-auto text-violet-600 hover:text-violet-700 inline-flex items-center gap-1"
+          title="Open the offending workflow run"
+        >
+          {runId ? `run #${runId}` : 'run'} <ExternalLink size={10} />
+        </a>
+      )}
+    </li>
+  );
+}
 
 export default function CronHealthPill({
   data: rawData,
@@ -38,6 +104,19 @@ export default function CronHealthPill({
   // debounce" without having to query Mongo. The shape is
   // documented on `formatAlertStateCaption` in cronCaptionHelpers.
   alertState,
+  // Task #918 — optional paged-on-call audit log from
+  // `/admin/health/<pill>/cron/alert-history`. When `onLoadAlertHistory`
+  // is provided the pill renders a "Show paged history" disclosure
+  // button under the alert-state caption; clicking it lazy-fetches
+  // (via the parent's loader) and expands an inline panel listing
+  // up to ~20 alerter events (page + recovery), most recent first.
+  // Decoupled from `alertState` so the wrappers can opt into one,
+  // both, or neither without coupling the two contracts. Shape:
+  //   { events: [{ pagedAt, kind, subKind, lastRunUrl,
+  //                lastConclusion, lastRunId, ... }], lockId, limit }
+  // — see _build_alert_history_response in routes/admin_health.py.
+  alertHistory,
+  onLoadAlertHistory,
 }) {
   const data = rawData && !rawData._error ? rawData : null;
   const status = data?.status || 'unknown';
@@ -92,6 +171,30 @@ export default function CronHealthPill({
     ? 'text-amber-600'
     : 'text-gray-500';
 
+  // Task #918 — paged-on-call audit-log disclosure. The toggle is
+  // only rendered when the wrapper opted in by passing
+  // `onLoadAlertHistory`; this keeps existing callers (and the
+  // `<CronHealthPill />` snapshot tests above) untouched. The panel
+  // is lazy — page load does NOT pre-fetch history (would carry
+  // N×20 events nobody asked for) and the parent's 60s polling
+  // intentionally skips it too. Instead the loader fires on every
+  // open: admin opens → fresh data, admin closes (no fetch),
+  // admin reopens → fresh data again. Closing is free; opening
+  // is the user's explicit "show me the latest" gesture.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const events = alertHistory?.events || [];
+  const eventCount = events.length;
+  const historyEnabled = typeof onLoadAlertHistory === 'function';
+  const onToggleHistory = useCallback(() => {
+    setHistoryOpen((prev) => {
+      const next = !prev;
+      if (next && historyEnabled) {
+        try { onLoadAlertHistory(); } catch (_e) { /* best-effort */ }
+      }
+      return next;
+    });
+  }, [historyEnabled, onLoadAlertHistory]);
+
   return (
     <div className={`rounded-2xl p-4 border ${containerCls}`} data-testid={`${testId}-tile`}>
       <div className="flex items-center gap-3">
@@ -130,6 +233,62 @@ export default function CronHealthPill({
             >
               {alertCaption}
             </p>
+          )}
+          {historyEnabled && (
+            <button
+              type="button"
+              onClick={onToggleHistory}
+              className="mt-1 text-[11px] text-violet-600 hover:text-violet-700 inline-flex items-center gap-1"
+              data-testid={`${testId}-history-toggle`}
+              aria-expanded={historyOpen}
+              title={historyOpen
+                ? 'Hide the paged-on-call history for this cron'
+                : 'Show the recent paged-on-call history for this cron'}
+            >
+              <History size={11} />
+              {historyOpen
+                ? 'Hide paged history'
+                : (alertHistory && eventCount > 0
+                    ? `Show paged history (${eventCount})`
+                    : 'Show paged history')}
+              {historyOpen
+                ? <ChevronUp size={11} />
+                : <ChevronDown size={11} />}
+            </button>
+          )}
+          {historyEnabled && historyOpen && (
+            <div
+              className="mt-1.5 rounded-lg border border-gray-200 bg-white/60 px-2 py-1"
+              data-testid={`${testId}-history-panel`}
+            >
+              {!alertHistory ? (
+                <p
+                  className="text-[11px] text-gray-400 py-1"
+                  data-testid={`${testId}-history-loading`}
+                >
+                  Loading paged history…
+                </p>
+              ) : eventCount === 0 ? (
+                <p
+                  className="text-[11px] text-gray-400 py-1"
+                  data-testid={`${testId}-history-empty`}
+                >
+                  No on-call pages recorded yet for this cron.
+                </p>
+              ) : (
+                <ul className="divide-y divide-gray-100">
+                  {events.map((ev, idx) => (
+                    <HistoryEventRow
+                      key={ev?.id || idx}
+                      event={ev}
+                      ageLabel={ageLabel}
+                      testId={testId}
+                      index={idx}
+                    />
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
         </div>
         {extraActions}

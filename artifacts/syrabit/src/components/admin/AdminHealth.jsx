@@ -310,6 +310,47 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       .catch(() => setTpCronAlertState(null));
   }, [adminToken]);
 
+  // Task #918 — paged-on-call audit log per pill, sourced from
+  //   * /admin/health/edge-proxy-deploy/cron/alert-history
+  //   * /admin/health/cf-waf-drift/cron/alert-history
+  //   * /admin/health/trustpilot/refresh-cron/alert-history
+  // Lazy-fetched on first toggle of the pill's "Show paged history"
+  // disclosure (NOT included in the 60s polling above) so the
+  // page-load payload doesn't carry N×20 history events nobody
+  // asked for. Once an admin opens the panel, the data sticks until
+  // the next page reload — the 60s polling cadence above is the
+  // canonical refresh path; admins click the pill's RefreshCw to
+  // force a manual refresh of the rest, and the loader below also
+  // re-fires on every disclosure open so a long-open panel reflects
+  // the latest events without a full page reload.
+  const [edgeProxyDeployCronAlertHistory, setEdgeProxyDeployCronAlertHistory] = useState(null);
+  const [cfDriftCronAlertHistory, setCfDriftCronAlertHistory] = useState(null);
+  const [tpCronAlertHistory, setTpCronAlertHistory] = useState(null);
+
+  const loadEdgeProxyDeployCronAlertHistory = useCallback(() => {
+    axios.get(`${API_BASE}/admin/health/edge-proxy-deploy/cron/alert-history`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setEdgeProxyDeployCronAlertHistory(r.data))
+      .catch(() => setEdgeProxyDeployCronAlertHistory({ events: [] }));
+  }, [adminToken]);
+
+  const loadCfDriftCronAlertHistory = useCallback(() => {
+    axios.get(`${API_BASE}/admin/health/cf-waf-drift/cron/alert-history`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setCfDriftCronAlertHistory(r.data))
+      .catch(() => setCfDriftCronAlertHistory({ events: [] }));
+  }, [adminToken]);
+
+  const loadTpCronAlertHistory = useCallback(() => {
+    axios.get(`${API_BASE}/admin/health/trustpilot/refresh-cron/alert-history`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setTpCronAlertHistory(r.data))
+      .catch(() => setTpCronAlertHistory({ events: [] }));
+  }, [adminToken]);
+
   const loadTpJsonldReport = useCallback(() => {
     setTpJsonldLoading(true);
     axios.get(`${API_BASE}/admin/trustpilot-jsonld/report`, {
@@ -2271,6 +2312,8 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           loading={tpCronLoading}
           onRefresh={loadTpCronHealth}
           alertState={tpCronAlertState}
+          alertHistory={tpCronAlertHistory}
+          onLoadAlertHistory={loadTpCronAlertHistory}
         />
         </SectionErrorBoundary>
 
@@ -2295,6 +2338,8 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           loading={cfDriftCronLoading}
           onRefresh={loadCfDriftCronHealth}
           alertState={cfDriftCronAlertState}
+          alertHistory={cfDriftCronAlertHistory}
+          onLoadAlertHistory={loadCfDriftCronAlertHistory}
         />
         </SectionErrorBoundary>
 
@@ -2315,6 +2360,8 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           loading={edgeProxyDeployCronLoading}
           onRefresh={loadEdgeProxyDeployCronHealth}
           alertState={edgeProxyDeployCronAlertState}
+          alertHistory={edgeProxyDeployCronAlertHistory}
+          onLoadAlertHistory={loadEdgeProxyDeployCronAlertHistory}
         />
         </SectionErrorBoundary>
 

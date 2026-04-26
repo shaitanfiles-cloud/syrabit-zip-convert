@@ -85,6 +85,10 @@ export default function TrustpilotRefreshCronPill({
   // /admin/health/trustpilot/refresh-cron/alert-state. Optional;
   // see EdgeProxyDeployCronPill for the same prop's behaviour.
   alertState,
+  // Task #918 — paged-on-call audit log from
+  // /admin/health/trustpilot/refresh-cron/alert-history. Optional;
+  // see EdgeProxyDeployCronPill for the same prop's behaviour.
+  alertHistory, onLoadAlertHistory,
 }) {
   return (
     <>
@@ -97,6 +101,8 @@ export default function TrustpilotRefreshCronPill({
         headerTextByStatus={HEADER_TEXT_BY_STATUS}
         renderSubText={renderSubText}
         alertState={alertState}
+        alertHistory={alertHistory}
+        onLoadAlertHistory={onLoadAlertHistory}
       />
       <div hidden aria-hidden="true" data-legacy-alias-for="trustpilot-refresh-cron">
         {LEGACY_TESTID_SUFFIXES.map((suffix) => (

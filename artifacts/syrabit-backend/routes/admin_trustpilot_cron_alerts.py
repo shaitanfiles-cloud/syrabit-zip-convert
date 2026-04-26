@@ -136,6 +136,29 @@ async def admin_trustpilot_refresh_cron_alert_state(
     )
 
 
+# ─── Task #918 — paged-on-call audit log ──────────────────────────────────
+#
+# Sibling of ``/admin/health/trustpilot/refresh-cron/alert-state``
+# above. Surfaces the last ~20 alerter events (page + recovery) for
+# the Trustpilot refresh cron so the AdminHealth pill can render a
+# small "show paged history" panel. The audit collection + shaping
+# helper live in :mod:`routes.admin_health` so all three pills share
+# one implementation; this route is a thin wrapper that pins the
+# ``_LOCK_ID`` for this specific alerter.
+@router.get("/admin/health/trustpilot/refresh-cron/alert-history")
+async def admin_trustpilot_refresh_cron_alert_history(
+    limit: int = 20,
+    admin: dict = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """Audit-log of pages issued by the Trustpilot refresh-cron
+    silence alerter (Task #751), most recent first. Always 200;
+    returns ``events: []`` when the alerter has never fired or when
+    Mongo is unavailable.
+    """
+    from routes.admin_health import _build_alert_history_response
+    return await _build_alert_history_response(_LOCK_ID, limit=limit)
+
+
 # ─── Alerting ──────────────────────────────────────────────────────────────
 
 def _classify_cron(
@@ -430,6 +453,27 @@ async def _send_cron_alert(
         logger.debug(f"[trustpilot-cron-alerts] notification persist failed: {exc}")
 
     asyncio.create_task(_email_admins_about_cron(title, msg, kind))
+    # Task #918 — append to the paged-on-call audit log so the
+    # AdminHealth dashboard's "show paged history" panel can render
+    # this event next to the pill. Fire-and-forget for the same
+    # reason as the email fan-out above (a slow Mongo can't be
+    # allowed to stall the alert loop), and the helper itself is
+    # best-effort by contract — never raises.
+    try:
+        from routes.admin_health import record_cron_alert_event
+        asyncio.create_task(record_cron_alert_event(
+            db,
+            lock_id=_LOCK_ID,
+            kind=kind,
+            sub_kind=None,
+            health=health,
+            now_utc=now_utc,
+        ))
+    except Exception as exc:
+        logger.debug(
+            f"[trustpilot-cron-alerts] history record schedule "
+            f"failed: {exc}"
+        )
 
 
 async def _check_and_alert_refresh_cron(

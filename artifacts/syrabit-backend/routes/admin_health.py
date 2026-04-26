@@ -406,3 +406,226 @@ async def admin_edge_proxy_deploy_cron_alert_state(
     return await _build_alert_state_response(
         _LOCK_ID, _CRON_REALERT_INTERVAL_S, broken_state_label="broken",
     )
+
+
+# ─── Task #918 — paged-on-call audit log ──────────────────────────────────
+#
+# The Task #902 ``/alert-state`` endpoint above only carries the *most
+# recent* page from the alerter lock doc. Admins seeing red can tell
+# whether the on-call has been paged "Xh ago" but cannot tell whether
+# the workflow has been flapping (paged-recovered-paged-recovered) or
+# has been broken steadily for a week. Task #918 adds a tiny audit-log
+# Mongo collection (``cron_alert_history``) that every alerter appends
+# to on every page + recovery, plus three thin GET endpoints (one per
+# pill) so the AdminHealth dashboard can render a "show paged history"
+# panel without admins having to dig through Slack logs.
+#
+# Schema is intentionally flat (one doc per event, indexed by
+# ``lock_id`` + ``created_at``) so the same collection serves all
+# three pills and a future pill (Task #905+) only has to call the
+# shared ``record_cron_alert_event`` helper. The recording side is
+# best-effort and never raises (it's already running inside the
+# alerter's "fire-and-forget" notification block); the read side
+# always returns 200 with an empty ``events`` list when Mongo is down
+# or the alerter has never fired (mirrors the ``/alert-state``
+# defensive contract so the dashboard never crashes on infra hiccups).
+
+_HISTORY_COLLECTION = "cron_alert_history"
+# Defensive cap on stored events per pill. 200 ≫ the 20 the dashboard
+# renders, so admins still get history across replica restarts /
+# brief Mongo blips, but the collection cannot grow unbounded if the
+# alerter ever flaps repeatedly. Trim runs best-effort on every
+# insert; a missed trim just means the next insert will catch up.
+_HISTORY_MAX_PER_LOCK = 200
+# Default page size returned by the GET endpoints. Matches the task
+# spec ("the last ~20 alerter events per pill"). Callers can override
+# via ``?limit=`` on the endpoint up to a hard cap of _HISTORY_MAX_PER_LOCK
+# (so a misbehaving client can't page through every event in one shot).
+_HISTORY_DEFAULT_LIMIT = 20
+
+
+async def record_cron_alert_event(
+    db,
+    *,
+    lock_id: str,
+    kind: str,
+    sub_kind: Optional[str],
+    health: dict[str, Any],
+    now_utc: datetime,
+) -> None:
+    """Append one alerter event to the ``cron_alert_history`` collection.
+
+    Called from each alerter's ``_send_cron_alert`` after the in-app
+    notification has been persisted, so a recorded history event
+    always corresponds to a notification that actually went out (or
+    at least an attempt — the email + Slack fan-outs are themselves
+    best-effort, but the in-app notification persists synchronously
+    and is the canonical "we paged" signal).
+
+    Best-effort by contract:
+      * never raises — wrap the whole body in a broad ``except`` and
+        log at DEBUG, mirroring the alerter's notification persist
+        block which already swallows Mongo errors;
+      * does NOT block on the trim — a missed trim just means the
+        next insert will catch up, and the read endpoint caps results
+        anyway;
+      * keeps the doc shape parallel to the lock-doc fields the
+        ``/alert-state`` helper above projects, so the dashboard's
+        history panel can render the same primitives the inline
+        alert-state caption uses (status, run url, conclusion, age).
+
+    ``kind`` is ``"broken"`` / ``"silent"`` (the alerter's own label)
+    on the broken side and ``"recovered"`` after a recovery. Stored
+    verbatim so the panel can render the alerter's vocabulary
+    instead of reverse-mapping it.
+    """
+    try:
+        import uuid as _uuid
+        doc = {
+            "_id": str(_uuid.uuid4()),
+            "lock_id": lock_id,
+            "kind": kind,
+            "sub_kind": sub_kind,
+            "paged_at": now_utc.isoformat(),
+            # Indexed for the bounded-cap trim below + the
+            # /alert-history endpoint's sort. Stored as a real datetime
+            # (not the ISO string) so motor's BSON encoder roundtrips
+            # cleanly and Mongo can sort numerically.
+            "created_at": now_utc,
+            "last_html_url": health.get("html_url"),
+            "last_run_url": (
+                health.get("lastRunUrl") or health.get("html_url")
+            ),
+            "last_workflow_url": health.get("workflowUrl"),
+            "last_conclusion": health.get("conclusion"),
+            "last_age_seconds": health.get("ageSeconds"),
+            "last_run_id": health.get("runId"),
+            "last_head_sha": health.get("headSha"),
+            "last_pill_status": health.get("status"),
+        }
+        await db[_HISTORY_COLLECTION].insert_one(doc)
+    except Exception as exc:
+        logger.debug(
+            f"[admin-health] alert-history insert failed for "
+            f"{lock_id}: {exc}"
+        )
+        return
+    # Best-effort cap: if the collection has grown past the per-lock
+    # ceiling, drop the oldest events. Done in a separate try so a
+    # trim failure can't undo the insert above.
+    try:
+        count = await db[_HISTORY_COLLECTION].count_documents(
+            {"lock_id": lock_id}
+        )
+        excess = int(count) - _HISTORY_MAX_PER_LOCK
+        if excess > 0:
+            cursor = (
+                db[_HISTORY_COLLECTION]
+                .find({"lock_id": lock_id}, {"_id": 1})
+                .sort("created_at", 1)
+                .limit(excess)
+            )
+            stale_ids: list[Any] = []
+            async for doc in cursor:
+                stale_ids.append(doc.get("_id"))
+            if stale_ids:
+                await db[_HISTORY_COLLECTION].delete_many(
+                    {"_id": {"$in": stale_ids}}
+                )
+    except Exception as exc:
+        logger.debug(
+            f"[admin-health] alert-history trim failed for "
+            f"{lock_id}: {exc}"
+        )
+
+
+def _shape_history_event(doc: dict[str, Any]) -> dict[str, Any]:
+    """Project a stored ``cron_alert_history`` doc into the JSON
+    shape the dashboard's history panel renders. Mirrors the
+    snake_case→camelCase convention ``_build_alert_state_response``
+    uses so the two payloads can share frontend rendering primitives.
+    """
+    paged_at = doc.get("paged_at")
+    if paged_at is None and isinstance(doc.get("created_at"), datetime):
+        paged_at = doc["created_at"].isoformat()
+    return {
+        "id": str(doc.get("_id")) if doc.get("_id") is not None else None,
+        "pagedAt": paged_at,
+        "kind": doc.get("kind"),
+        "subKind": doc.get("sub_kind"),
+        "lastHtmlUrl": doc.get("last_html_url"),
+        "lastRunUrl": doc.get("last_run_url"),
+        "lastWorkflowUrl": doc.get("last_workflow_url"),
+        "lastConclusion": doc.get("last_conclusion"),
+        "lastAgeSeconds": doc.get("last_age_seconds"),
+        "lastRunId": doc.get("last_run_id"),
+        "lastHeadSha": doc.get("last_head_sha"),
+        "lastPillStatus": doc.get("last_pill_status"),
+    }
+
+
+async def _build_alert_history_response(
+    lock_id: str,
+    *,
+    limit: int = _HISTORY_DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    """Read the last ``limit`` events for ``lock_id`` and shape for JSON.
+
+    Always 200-ready. Mongo unavailable / no events / stub returns
+    cursor errors → ``events: []`` so the dashboard's history panel
+    renders an empty-state row instead of a server error. Mirrors
+    the ``_build_alert_state_response`` defensive contract above.
+
+    ``limit`` is clamped to ``[1, _HISTORY_MAX_PER_LOCK]`` so a
+    misbehaving caller cannot page through every stored event in one
+    shot. The caller (FastAPI route) is responsible for parsing the
+    ``?limit=`` query param; the helper enforces the bounds.
+    """
+    safe_limit = max(1, min(int(limit or _HISTORY_DEFAULT_LIMIT),
+                            _HISTORY_MAX_PER_LOCK))
+    base: dict[str, Any] = {
+        "lockId": lock_id,
+        "limit": safe_limit,
+        "events": [],
+    }
+    try:
+        from deps import db, is_mongo_available  # type: ignore
+        if not await is_mongo_available():
+            return base
+        cursor = (
+            db[_HISTORY_COLLECTION]
+            .find({"lock_id": lock_id})
+            .sort("created_at", -1)
+            .limit(safe_limit)
+        )
+        docs = await cursor.to_list(length=safe_limit)
+    except Exception as exc:
+        logger.debug(
+            f"[admin-health] alert-history read failed for {lock_id}: {exc}"
+        )
+        return base
+    base["events"] = [_shape_history_event(d) for d in (docs or [])]
+    return base
+
+
+@router.get("/admin/health/edge-proxy-deploy/cron/alert-history")
+async def admin_edge_proxy_deploy_cron_alert_history(
+    limit: int = _HISTORY_DEFAULT_LIMIT,
+    admin: dict = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """Audit-log of pages issued by the edge-proxy-deploy silence
+    alerter (Task #893), most recent first.
+
+    Closes the gap left by Task #902 — the lock-doc snapshot at
+    ``/alert-state`` only carries the most recent page, so admins
+    couldn't tell whether the workflow had been flapping
+    (paged-recovered-paged-recovered) or broken steadily. Each entry
+    here is one alerter event (``kind`` ∈ {``"broken"``,
+    ``"recovered"``}), and the dashboard renders them as a small
+    expandable panel under the pill.
+
+    Always 200; returns ``events: []`` when the alerter has never
+    fired or when Mongo is unavailable.
+    """
+    from routes.admin_edge_proxy_deploy_cron_alerts import _LOCK_ID
+    return await _build_alert_history_response(_LOCK_ID, limit=limit)

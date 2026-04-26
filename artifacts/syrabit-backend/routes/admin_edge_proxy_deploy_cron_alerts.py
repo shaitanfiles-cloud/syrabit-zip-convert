@@ -485,6 +485,27 @@ async def _send_cron_alert(
     asyncio.create_task(
         _post_slack_cron_alert(title, msg, kind, sub_kind, health)
     )
+    # Task #918 — append to the paged-on-call audit log so the
+    # AdminHealth dashboard's "show paged history" panel can render
+    # this event next to the pill. Fire-and-forget for the same
+    # reason as the email + Slack fan-outs above (a slow Mongo can't
+    # be allowed to stall the alert loop), and the helper itself is
+    # best-effort by contract — never raises.
+    try:
+        from routes.admin_health import record_cron_alert_event
+        asyncio.create_task(record_cron_alert_event(
+            db,
+            lock_id=_LOCK_ID,
+            kind=kind,
+            sub_kind=sub_kind,
+            health=health,
+            now_utc=now_utc,
+        ))
+    except Exception as exc:
+        logger.debug(
+            f"[edge-proxy-deploy-cron-alerts] history record schedule "
+            f"failed: {exc}"
+        )
 
 
 # ─── Main alert iteration ─────────────────────────────────────────────────

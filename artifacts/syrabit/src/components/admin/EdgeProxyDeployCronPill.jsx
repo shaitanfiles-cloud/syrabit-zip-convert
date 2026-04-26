@@ -104,6 +104,14 @@ export default function EdgeProxyDeployCronPill({
   // "red but we're already in the 24h debounce window after the
   // last page".
   alertState,
+  // Task #918 — paged-on-call audit log from
+  // /admin/health/edge-proxy-deploy/cron/alert-history. Optional;
+  // when both are passed the shared <CronHealthPill> renders a
+  // "Show paged history" disclosure that lazy-fetches via
+  // `onLoadAlertHistory` on first open. Decoupled from
+  // `alertState` so a future caller can wire only one of the two
+  // without coupling the contracts.
+  alertHistory, onLoadAlertHistory,
 }) {
   return (
     <CronHealthPill
@@ -117,6 +125,8 @@ export default function EdgeProxyDeployCronPill({
       renderSubText={renderSubText}
       renderExtraActions={renderExtraActions}
       alertState={alertState}
+      alertHistory={alertHistory}
+      onLoadAlertHistory={onLoadAlertHistory}
     />
   );
 }

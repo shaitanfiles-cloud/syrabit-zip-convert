@@ -70,6 +70,10 @@ export default function CfWafDriftCronPill({
   // /admin/health/cf-waf-drift/cron/alert-state. Optional; see
   // EdgeProxyDeployCronPill for the same prop's behaviour.
   alertState,
+  // Task #918 — paged-on-call audit log from
+  // /admin/health/cf-waf-drift/cron/alert-history. Optional; see
+  // EdgeProxyDeployCronPill for the same prop's behaviour.
+  alertHistory, onLoadAlertHistory,
 }) {
   return (
     <CronHealthPill
@@ -82,6 +86,8 @@ export default function CfWafDriftCronPill({
       renderSubText={renderSubText}
       renderExtraActions={renderExtraActions}
       alertState={alertState}
+      alertHistory={alertHistory}
+      onLoadAlertHistory={onLoadAlertHistory}
     />
   );
 }
