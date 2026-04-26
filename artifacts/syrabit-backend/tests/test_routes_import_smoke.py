@@ -30,20 +30,8 @@ ROUTES_DIR = pathlib.Path(__file__).resolve().parent.parent / "routes"
 _NON_ROUTER_MODULES = frozenset({
     "admin_ci_alerts",  # Task #484: leader-gated CI red-alert poller
     "slack_alerter_config",  # Task #969: tiny shared Slack-config helper
-    # Task #973: leader-gated background loop for the GitHub-Actions
-    # `edge-proxy-deploy` workflow's silence alerter. Its HTTP surface
-    # (the AdminHealth pill) lives in `admin_health.py`; this module
-    # is the alerter loop + its Slack/email helpers, intentionally
-    # router-less. Pre-existing failure on master, surfaced when
-    # Task #969 added `slack_alerter_config` and made the smoke test
-    # green for everything else.
-    "admin_edge_proxy_deploy_cron_alerts",
-    # Task #973: leader-gated background loop (Task #970) that pages
-    # admins when a sibling alerter's Slack webhook env var stays
-    # unset > 24h after deploy. Intentionally router-less — the
-    # AdminHealth "Slack ✓ / ✗" badge from Task #964 is the HTTP
-    # surface; this module is the daily nag loop only.
-    "admin_slack_webhook_missing_alerts",
+    "admin_edge_proxy_deploy_cron_alerts",  # Task #882: edge-proxy-deploy silence alerter loop
+    "admin_slack_webhook_missing_alerts",  # Task #970: missing-Slack-webhook nag loop
 })
 
 
