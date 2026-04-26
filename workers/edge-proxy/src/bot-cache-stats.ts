@@ -17,17 +17,33 @@
  * once they leave the rolling window.
  *
  * The aggregated snapshot is surfaced under
- * `bot_cache: { hit, miss, conditional_304, fallback }` in the
- * `/api/edge/kv-usage` admin response (handleKvUsage in src/index.ts).
+ * `bot_cache: { hit, miss, conditional_304, fallback, legacy_upgrade }` in
+ * the `/api/edge/kv-usage` admin response (handleKvUsage in src/index.ts).
+ *
+ * Task #908 — `legacy_upgrade` tracks how often the bot HTML cache reads
+ * a legacy plain-string KV entry (pre Task #896) and rewrites it to the
+ * JSON wrapper in the background. It is a SUB-event of a `hit`: the
+ * legacy branch only fires from inside a successful KV read. We count
+ * it separately so the dashboard can watch the migration burn-down and
+ * decide when it's safe to delete the legacy branch from the code path.
+ * Because every legacy_upgrade is also a hit, it is intentionally
+ * EXCLUDED from `hit_rate` / fallback-rate denominators — including it
+ * would double-count the request.
  */
 
-export type BotCacheEvent = "hit" | "miss" | "conditional_304" | "fallback";
+export type BotCacheEvent =
+  | "hit"
+  | "miss"
+  | "conditional_304"
+  | "fallback"
+  | "legacy_upgrade";
 
 export const BOT_CACHE_EVENTS: BotCacheEvent[] = [
   "hit",
   "miss",
   "conditional_304",
   "fallback",
+  "legacy_upgrade",
 ];
 
 /** 5-minute buckets over a rolling hour = 12 buckets. */
@@ -80,6 +96,10 @@ export interface BotCacheBucketStats {
   miss: number;
   conditional_304: number;
   fallback: number;
+  /** Task #908 — count of legacy plain-string KV entries that were
+   *  served from a hit AND rewritten to the JSON wrapper in the
+   *  background. A sub-counter of `hit`, NOT additive to it. */
+  legacy_upgrade: number;
 }
 
 export interface BotCacheStats {
@@ -88,14 +108,21 @@ export interface BotCacheStats {
   miss: number;
   conditional_304: number;
   fallback: number;
+  /** Task #908 — rolling-hour total of legacy KV entries upgraded to
+   *  the JSON wrapper. Watch this trend toward zero to know when the
+   *  Task #896 migration is effectively complete and the legacy branch
+   *  in `handleBotContentRequest` can be deleted. */
+  legacy_upgrade: number;
   /** Hit rate over the window (0..1) computed as
    *  `hit / (hit + miss + fallback)`. 304s are excluded from the
    *  denominator because they're a successful cache outcome from a
-   *  freshness-revalidation perspective, not a separate render. The
-   *  numerator is `hit` only — a value below ~0.6 in production
-   *  indicates either a cache-key drift, a very high churn rate of
-   *  freshly-published pages, or an aggressive crawler hitting cold
-   *  URLs. The dashboard should alarm on a sudden drop. */
+   *  freshness-revalidation perspective, not a separate render.
+   *  `legacy_upgrade` is also excluded — it is a sub-event of `hit`,
+   *  so adding it would double-count the request. The numerator is
+   *  `hit` only — a value below ~0.6 in production indicates either a
+   *  cache-key drift, a very high churn rate of freshly-published
+   *  pages, or an aggressive crawler hitting cold URLs. The dashboard
+   *  should alarm on a sudden drop. */
   hit_rate: number;
   /** Per-bucket breakdown, oldest → newest, length = 12. */
   buckets: BotCacheBucketStats[];
@@ -116,6 +143,7 @@ export async function getBotCacheStats(
     miss: 0,
     conditional_304: 0,
     fallback: 0,
+    legacy_upgrade: 0,
   };
 
   // Build the bucket index list oldest → newest so the response array
@@ -137,18 +165,20 @@ export async function getBotCacheStats(
           }
         }),
       );
-      const [hit, miss, conditional_304, fallback] = reads;
+      const [hit, miss, conditional_304, fallback, legacy_upgrade] = reads;
       buckets.push({
         ts: new Date(b * BOT_CACHE_BUCKET_MS).toISOString(),
         hit,
         miss,
         conditional_304,
         fallback,
+        legacy_upgrade,
       });
       totals.hit += hit;
       totals.miss += miss;
       totals.conditional_304 += conditional_304;
       totals.fallback += fallback;
+      totals.legacy_upgrade += legacy_upgrade;
     }),
   );
 

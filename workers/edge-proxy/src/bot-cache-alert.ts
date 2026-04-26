@@ -184,22 +184,36 @@ interface WindowAggregate {
   miss: number;
   conditional_304: number;
   fallback: number;
+  /** Task #908 — sub-counter of `hit`. Carried through the alert payload
+   *  so the on-call can see the migration burn-down alongside the
+   *  drop/fallback signals, but intentionally excluded from `total`. */
+  legacy_upgrade: number;
   /** hit + miss + fallback — denominator of hit_rate / fallback_rate. */
   total: number;
 }
 
 function aggregateBuckets(buckets: BotCacheBucketStats[]): WindowAggregate {
-  const agg: WindowAggregate = { hit: 0, miss: 0, conditional_304: 0, fallback: 0, total: 0 };
+  const agg: WindowAggregate = {
+    hit: 0,
+    miss: 0,
+    conditional_304: 0,
+    fallback: 0,
+    legacy_upgrade: 0,
+    total: 0,
+  };
   for (const b of buckets) {
     agg.hit += b.hit;
     agg.miss += b.miss;
     agg.conditional_304 += b.conditional_304;
     agg.fallback += b.fallback;
+    agg.legacy_upgrade += b.legacy_upgrade;
   }
   // 304s are excluded from the denominator for the same reason the
   // dashboard hit_rate excludes them: they're a successful cache
   // outcome from a freshness-revalidation perspective, not a separate
-  // render. Keep this in sync with the formula in bot-cache-stats.ts.
+  // render. `legacy_upgrade` is also excluded — it is a sub-event of
+  // a `hit` (Task #908), so adding it would double-count the request.
+  // Keep this in sync with the formula in bot-cache-stats.ts.
   agg.total = agg.hit + agg.miss + agg.fallback;
   return agg;
 }
@@ -224,6 +238,7 @@ async function readBuckets(
         miss: 0,
         conditional_304: 0,
         fallback: 0,
+        legacy_upgrade: 0,
       };
       await Promise.all(
         BOT_CACHE_EVENTS.map(async (kind) => {

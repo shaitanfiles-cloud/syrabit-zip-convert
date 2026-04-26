@@ -515,6 +515,122 @@ describe("BOT_HTML_CACHE end-to-end via worker.fetch (verifiedBot=true)", () => 
     ).toHaveLength(1);
   });
 
+  it("legacy plain-string KV entry: increments the bot_cache.legacy_upgrade counter exactly once per legacy hit (Task #908)", async () => {
+    const LEGACY_HTML =
+      "<html><body>legacy-counter-" + "k".repeat(400) + "</body></html>";
+
+    const botCache = makeExpiringKv();
+    const rateLimit = makeExpiringKv();
+    const env = makeEnv({ botCache, rateLimit });
+    const cacheKey = `bot:content:${CONTENT_PATH}`;
+
+    // Pre-seed BOT_HTML_CACHE with the legacy plain-HTML format —
+    // the only path that should fire the legacy_upgrade counter.
+    botCache.store.set(cacheKey, { value: LEGACY_HTML, expiresAt: null });
+
+    // recordBotCacheEvent schedules its KV writes via ctx.waitUntil, so
+    // we need a context that lets us await those promises — otherwise
+    // the assertion races the counter write.
+    const writes: Promise<unknown>[] = [];
+    const ctxAwait = {
+      waitUntil: (p: Promise<unknown>) => {
+        writes.push(p);
+      },
+      passThroughOnException: () => {},
+    } as unknown as ExecutionContext;
+
+    // Pin time so the bot-cache bucket index is stable across both
+    // requests in this test — proves the second request bumps the
+    // SAME bucket counter from "1" to "2", not a fresh bucket to "1".
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-25T07:30:00Z"));
+    // bot_cache:count:<kind>:<bucket> — bucket = floor(now / (5 * 60 * 1000))
+    const bucket = Math.floor(Date.now() / (5 * 60 * 1000));
+    const counterKey = `bot_cache:count:legacy_upgrade:${bucket}`;
+
+    // First legacy hit.
+    const r1 = await workerHandler.fetch(
+      botRequest(CONTENT_PATH),
+      env,
+      ctxAwait,
+    );
+    await Promise.all(writes.splice(0));
+    expect(r1.status).toBe(200);
+    expect(r1.headers.get("X-Source")).toBe("bot-cache");
+    await r1.text();
+
+    // Exactly one write to the legacy_upgrade counter, value "1", with
+    // the rolling-hour TTL. The counter must be namespaced under the
+    // bot_cache:count:legacy_upgrade:* key family so it shows up
+    // alongside hit/miss/conditional_304/fallback in the bot-cache
+    // dashboard (and is read by getBotCacheStats /
+    // bot-cache-alert::readBuckets via BOT_CACHE_EVENTS).
+    const counterWrites1 = rateLimit.putSpy.mock.calls.filter(
+      (c) => c[0] === counterKey,
+    );
+    expect(counterWrites1).toHaveLength(1);
+    expect(counterWrites1[0][1]).toBe("1");
+    expect(counterWrites1[0][2]?.expirationTtl).toBe(3600);
+
+    // Sibling hit counter must also have fired exactly once (same
+    // request) — proves legacy_upgrade is a SUB-event of hit, not a
+    // replacement for it. Without this assertion a refactor that
+    // accidentally swapped the hit counter for legacy_upgrade would
+    // pass.
+    const hitCounterKey = `bot_cache:count:hit:${bucket}`;
+    expect(
+      rateLimit.putSpy.mock.calls.filter((c) => c[0] === hitCounterKey),
+    ).toHaveLength(1);
+
+    // Crucially: a SECOND legacy hit must increment to "2" (not
+    // re-write "1"). This guards against the easy bug of recording
+    // the event from a code path that only fires on the upgrade
+    // write itself — the upgrade only happens once per entry, but
+    // the legacy_upgrade COUNTER must fire once per legacy READ so
+    // operators can see how much legacy traffic the rolling hour
+    // is absorbing.
+    //
+    // Re-seed because the background upgrade from the first request
+    // rewrote the KV entry to the JSON wrapper.
+    botCache.store.set(cacheKey, { value: LEGACY_HTML, expiresAt: null });
+
+    const r2 = await workerHandler.fetch(
+      botRequest(CONTENT_PATH),
+      env,
+      ctxAwait,
+    );
+    await Promise.all(writes.splice(0));
+    expect(r2.status).toBe(200);
+    await r2.text();
+
+    const counterWrites2 = rateLimit.putSpy.mock.calls.filter(
+      (c) => c[0] === counterKey,
+    );
+    expect(counterWrites2).toHaveLength(2);
+    expect(counterWrites2[1][1]).toBe("2");
+
+    // And — the parsed-wrapper path (a normal hit, NOT legacy) must
+    // NOT fire the counter. After the first legacy upgrade the entry
+    // is stored as the JSON wrapper; a follow-up read of THAT entry
+    // is a regular hit and must be invisible to the legacy counter.
+    const beforeWrites = rateLimit.putSpy.mock.calls.filter(
+      (c) => c[0] === counterKey,
+    ).length;
+    const r3 = await workerHandler.fetch(
+      botRequest(CONTENT_PATH),
+      env,
+      ctxAwait,
+    );
+    await Promise.all(writes.splice(0));
+    expect(r3.status).toBe(200);
+    expect(r3.headers.get("X-Source")).toBe("bot-cache");
+    await r3.text();
+    const afterWrites = rateLimit.putSpy.mock.calls.filter(
+      (c) => c[0] === counterKey,
+    ).length;
+    expect(afterWrites).toBe(beforeWrites);
+  });
+
   it("non-verified Googlebot UA falls through to Pages-origin proxy without writing BOT_HTML_CACHE", async () => {
     const kv = makeExpiringKv();
     const env = makeEnv({ botCache: kv });

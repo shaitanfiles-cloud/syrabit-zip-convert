@@ -1457,6 +1457,14 @@ export async function handleBotContentRequest(
           const etag = await computeEtag(raw);
           const synthesizedLm = formatRfc7231(new Date());
           entry = { body: raw, lastmod: synthesizedLm, etag };
+          // Task #908 — count this legacy hit so the bot-cache dashboard
+          // shows the migration burn-down alongside hit/miss/304/fallback.
+          // Recorded once per legacy hit (before we enqueue the rewrite)
+          // so the counter equals "legacy entries observed in the rolling
+          // hour", not "rewrite attempts". When the counter trends to
+          // zero we know the Task #896 migration is done and the legacy
+          // branch can be removed.
+          recordBotCacheEvent(env.RATE_LIMIT, "legacy_upgrade", ctx);
           // Upgrade the KV value to the JSON wrapper in the background so
           // subsequent reads of this key return a stable Last-Modified
           // instead of a fresh "now" each time — which would otherwise
