@@ -11,6 +11,12 @@ name: frontend-tests
 # `gh api repos/actions/checkout/git/refs/tags/v4.3.0 --jq .object.sha`) and
 # update both the SHA and the trailing tag comment.
 #
+# Least-privilege scopes (Task #905): every workflow declares an explicit
+# top-level `permissions:` block granting only the `GITHUB_TOKEN` scopes its
+# jobs actually need — read-only by default. Omitting `permissions:` falls
+# back to the repo default (`contents: write`), which would defeat the
+# SHA-pinning hardening if a pinned action were ever compromised.
+#
 # Task #470 — Real CI gate for the frontend.
 #
 # Runs the syrabit web artifact's unit tests + production build on every
@@ -23,6 +29,12 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+
+# Read-only token: this job checks out the repo, runs vitest in two
+# packages, and produces a Vite build under each package's local dist/.
+# It does not write back to the repo, publish packages, or open PRs.
+permissions:
+  contents: read
 
 jobs:
   build-and-test:

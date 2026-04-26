@@ -11,6 +11,12 @@ name: admin-smoke
 # `gh api repos/actions/checkout/git/refs/tags/v4.3.0 --jq .object.sha`) and
 # update both the SHA and the trailing tag comment.
 #
+# Least-privilege scopes (Task #905): every workflow declares an explicit
+# top-level `permissions:` block granting only the `GITHUB_TOKEN` scopes its
+# jobs actually need — read-only by default. Omitting `permissions:` falls
+# back to the repo default (`contents: write`), which would defeat the
+# SHA-pinning hardening if a pinned action were ever compromised.
+#
 # Task #571 — Catch admin dashboard crashes early.
 # Task #614 — Same gate now also runs the Phase-3 study-flows suite
 # (highlight → save, quiz, flashcards, guardian-PIN). The job already
@@ -93,6 +99,12 @@ on:
       - "artifacts/syrabit/tests/**"
       - "artifacts/syrabit/playwright.config.ts"
       - ".github/workflows/admin-smoke.yml"
+
+# Read-only token: this job checks out the repo, runs Playwright in headless
+# Chromium, and uploads a run-scoped report artifact on failure (uploads
+# attached to a workflow run do not require any extra `GITHUB_TOKEN` scope).
+permissions:
+  contents: read
 
 jobs:
   admin-smoke:

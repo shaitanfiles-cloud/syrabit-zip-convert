@@ -11,6 +11,12 @@ name: grounded-recall-nightly
 # `gh api repos/actions/checkout/git/refs/tags/v4.3.0 --jq .object.sha`) and
 # update both the SHA and the trailing tag comment.
 #
+# Least-privilege scopes (Task #905): every workflow declares an explicit
+# top-level `permissions:` block granting only the `GITHUB_TOKEN` scopes its
+# jobs actually need — read-only by default. Omitting `permissions:` falls
+# back to the repo default (`contents: write`), which would defeat the
+# SHA-pinning hardening if a pinned action were ever compromised.
+#
 # Task #587 — explicit ops scheduling artifact for the nightly grounded
 # recall benchmark. Belt-and-suspenders alongside the in-process loop
 # in server.py: if the backend is down (mid-deploy, restarting, etc.)
@@ -45,6 +51,12 @@ on:
       - "artifacts/syrabit-backend/bench/**"
       - "artifacts/syrabit-backend/grounded_answer.py"
       - ".github/workflows/grounded-recall-nightly.yml"
+
+# Read-only token: this job checks out the repo, runs the offline bench
+# against a committed fixture, and uploads a run-scoped artifact on failure.
+# It does not write back to the repo, hit prod, or open PRs.
+permissions:
+  contents: read
 
 jobs:
   grounded-recall:

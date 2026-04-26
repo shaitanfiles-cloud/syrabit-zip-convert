@@ -11,6 +11,12 @@ name: cf-waf-drift-daily
 # `gh api repos/actions/checkout/git/refs/tags/v4.3.0 --jq .object.sha`) and
 # update both the SHA and the trailing tag comment.
 #
+# Least-privilege scopes (Task #905): every workflow declares an explicit
+# top-level `permissions:` block granting only the `GITHUB_TOKEN` scopes its
+# jobs actually need — read-only by default. Omitting `permissions:` falls
+# back to the repo default (`contents: write`), which would defeat the
+# SHA-pinning hardening if a pinned action were ever compromised.
+#
 # Task #828 — Daily drift detection for the Cloudflare firewall invariants
 # established by Tasks #825 (OWASP 949110 trip-rule disable + leaked-credential
 # rate-limit demotion) and #826 (path-scoped bot-management Skip rule for
@@ -90,6 +96,12 @@ on:
         description: "rule id passed to `aggregate` (default = Task #826 bot rule)"
         required: false
         default: "874a3e315c344b1281ad4f00046aab6f"
+
+# Read-only token: this job reads the repo, calls the Cloudflare API
+# (auth via repo secrets, not the `GITHUB_TOKEN`), and posts a Slack
+# webhook. It never needs to write back to the repo or open PRs.
+permissions:
+  contents: read
 
 jobs:
   drift-check:

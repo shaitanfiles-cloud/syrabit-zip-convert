@@ -38,6 +38,12 @@ The project utilizes a pnpm workspace monorepo, featuring a React + Vite fronten
 - **Performance Optimizations:** Bounded content caching, efficient JWT decoding, thread pooling, MongoDB compound indexes, hierarchy caching, AsyncOpenAI client pooling, parallelized chat pre-processing, and throttled LLM health probes. Achieves sub-1s chat latency for English queries.
 - **Educational Browser Backend:** Infrastructure for an in-app educational browser with grounded AI chat, including domain allowlisting, content fetching, and kid-safe content filtering.
 
+## GitHub Actions supply-chain hardening
+
+- **SHA-pinned actions (Task #883):** every `uses:` reference under `.github/workflows/*.yml` is pinned to a full 40-char commit SHA with a trailing `# vX.Y.Z` tag comment. Float tags like `actions/checkout@v4` are forbidden because a compromise of the upstream tag — as with `tj-actions/changed-files` in 2025 — would silently exfiltrate repo secrets on the next push.
+- **Self-enforcing pin gate (Task #895):** `.github/workflows/pinned-actions-check.yml` greps every `uses:` line on each PR and fails the merge unless the ref matches `@[a-f0-9]{40}`. Wired as a required check on master branch protection. Dependabot's weekly bumps update the SHA and trailing comment in lockstep.
+- **Least-privilege `GITHUB_TOKEN` (Task #905):** every workflow declares an explicit top-level `permissions:` block (or per-job blocks) granting only the scopes its jobs actually need — `contents: read` by default. Without an explicit block the repo default (`contents: write`) applies, which would let a hypothetically-compromised pinned action push commits, open PRs, or write packages from inside any job. Today only two workflows escalate: `backend-tests.yml` (`pull-requests: write` for the PR-coverage comment, downgraded to read-only on forked PRs) and `trustpilot-aggregate-refresh.yml` (`contents: write` for its auto-commit of the Trustpilot cache file). The convention is documented in the supply-chain header comment block at the top of every workflow file; new workflows MUST set `permissions:`.
+
 ## External Dependencies
 
 - **Databases:** PostgreSQL, MongoDB, Cloudflare D1.

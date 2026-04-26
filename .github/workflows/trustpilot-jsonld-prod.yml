@@ -11,6 +11,12 @@ name: trustpilot-jsonld-prod
 # `gh api repos/actions/checkout/git/refs/tags/v4.3.0 --jq .object.sha`) and
 # update both the SHA and the trailing tag comment.
 #
+# Least-privilege scopes (Task #905): every workflow declares an explicit
+# top-level `permissions:` block granting only the `GITHUB_TOKEN` scopes its
+# jobs actually need — read-only by default. Omitting `permissions:` falls
+# back to the repo default (`contents: write`), which would defeat the
+# SHA-pinning hardening if a pinned action were ever compromised.
+#
 # Task #748 — second half of the gate.
 #
 # The build-time check (artifacts/syrabit/scripts/build.mjs step 5a.1)
@@ -37,6 +43,13 @@ on:
     paths:
       - "artifacts/syrabit/scripts/verify-trustpilot-jsonld.mjs"
       - ".github/workflows/trustpilot-jsonld-prod.yml"
+
+# Read-only token: this job checks out the repo, hits the live origin
+# with a Googlebot UA, posts a report to the backend (auth via the
+# TRUSTPILOT_REFRESH_SECRET, not the `GITHUB_TOKEN`), and uploads a
+# run-scoped artifact. It never writes back to the repo or opens PRs.
+permissions:
+  contents: read
 
 jobs:
   verify-prod:
