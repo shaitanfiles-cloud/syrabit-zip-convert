@@ -1,9 +1,47 @@
 import React, { useState, useCallback } from 'react';
 import {
   AlertTriangle, ShieldCheck, Clock, RefreshCw, ExternalLink,
-  ChevronDown, ChevronUp, History,
+  ChevronDown, ChevronUp, History, MessageSquare,
 } from 'lucide-react';
 import { formatAlertStateCaption } from './cronCaptionHelpers';
+
+// Task #964 — small badge that surfaces whether the alerter's Slack
+// fan-out has its webhook env var set on the backend. The intent is
+// to make a deploy-without-Slack-coverage gap visible at a glance,
+// without leaking the webhook URL itself (the backend only publishes
+// the boolean — see the cron health endpoints in
+// routes/admin_logs_cf_pull_silence_alerts.py,
+// routes/admin_cf_waf_drift_cron_alerts.py and
+// routes/admin_health.py). When the field is absent (e.g. older
+// backend that hasn't shipped Task #964 yet) we render nothing so
+// the pill still looks correct against an in-flight rollout.
+function SlackConfigBadge({ configured, envName, testId }) {
+  if (configured == null) return null;
+  const cls = configured
+    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+    : 'bg-gray-100 text-gray-500 border-gray-200';
+  const label = configured ? 'Slack ✓' : 'Slack ✗';
+  // Title is the only place we mention the env var name so an admin
+  // who sees a missing badge can copy/paste the exact env var to
+  // ask infra to set it. Falls back to a generic hint when the
+  // backend didn't publish the env var name.
+  const title = configured
+    ? `Slack fan-out is wired up${envName ? ` (env: ${envName})` : ''}.`
+    : envName
+      ? `Slack fan-out is NOT wired up — set the ${envName} env var on the backend to enable Slack pages for this alerter.`
+      : 'Slack fan-out is NOT wired up — set the alerter\'s webhook env var on the backend to enable Slack pages.';
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold border ${cls}`}
+      title={title}
+      data-testid={testId ? `${testId}-slack-config` : undefined}
+      data-slack-configured={configured ? 'true' : 'false'}
+    >
+      <MessageSquare size={10} aria-hidden />
+      {label}
+    </span>
+  );
+}
 
 const DEFAULT_PILL_LABELS = {
   healthy: 'CRON HEALTHY',
@@ -225,6 +263,21 @@ export default function CronHealthPill({
             >
               {pillLabel}
             </a>
+            {/*
+              Task #964 — Slack-config indicator. Renders nothing
+              when the backend hasn't published `slackConfigured`
+              (older API or endpoints that don't fan out to Slack
+              at all), so adding this prop is a no-op for any pill
+              wrapper that doesn't pass it. The neutral grey "Slack
+              ✗" makes a missing-webhook deploy obvious next to the
+              status pill without changing the pill colour itself
+              (Slack coverage is independent of cron health).
+            */}
+            <SlackConfigBadge
+              configured={data?.slackConfigured}
+              envName={data?.slackWebhookEnv}
+              testId={testId}
+            />
           </div>
           {subText != null && (
             <p className="text-[11px] text-gray-500 mt-0.5">

@@ -298,3 +298,62 @@ def test_token_is_attached_when_set(app_client_authed):
         res = app_client_authed.get("/admin/health/edge-proxy-deploy/cron")
     assert res.status_code == 200
     assert captured["headers"].get("Authorization") == "Bearer secret-pat"
+
+
+# ─── Task #964 — slackConfigured surfaces on the cron health endpoint ─────
+
+_EDGE_PROXY_SLACK_ENV = "EDGE_PROXY_DEPLOY_SLACK_WEBHOOK"
+
+
+def test_slack_configured_true_when_webhook_env_set(app_client_authed):
+    """When ``EDGE_PROXY_DEPLOY_SLACK_WEBHOOK`` is set, the endpoint
+    must surface ``slackConfigured: True`` and the env var name so
+    the AdminHealth pill can render the "Slack ✓" badge. The webhook
+    URL itself must NOT appear in the response — admin-readable JSON
+    surfaces should never leak it."""
+    fake = _FakeAsyncClient(_mock_response(200, {"workflow_runs": [
+        _run(conclusion="success", age_seconds=3600),
+    ]}))
+    secret_url = "https://hooks.slack.example.com/services/T0/B0/edge-secret"
+    with patch.dict(
+        os.environ,
+        {"GITHUB_REPO": "x/y", _EDGE_PROXY_SLACK_ENV: secret_url},
+        clear=False,
+    ), patch("routes.admin_health.httpx.AsyncClient", return_value=fake):
+        res = app_client_authed.get("/admin/health/edge-proxy-deploy/cron")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["slackConfigured"] is True
+    assert body["slackWebhookEnv"] == _EDGE_PROXY_SLACK_ENV
+    import json
+    assert "edge-secret" not in json.dumps(body)
+
+
+def test_slack_configured_false_when_webhook_env_unset(monkeypatch, app_client_authed):
+    """When the Slack webhook env var is unset OR whitespace-only,
+    the endpoint must surface ``slackConfigured: False`` so the
+    AdminHealth pill renders the neutral "Slack ✗" badge that tells
+    the admin which env var to set."""
+    fake = _FakeAsyncClient(_mock_response(200, {"workflow_runs": [
+        _run(conclusion="success", age_seconds=3600),
+    ]}))
+    monkeypatch.delenv(_EDGE_PROXY_SLACK_ENV, raising=False)
+    with patch.dict(os.environ, {"GITHUB_REPO": "x/y"}, clear=False), \
+            patch("routes.admin_health.httpx.AsyncClient", return_value=fake):
+        res = app_client_authed.get("/admin/health/edge-proxy-deploy/cron")
+    body = res.json()
+    assert body["slackConfigured"] is False
+    assert body["slackWebhookEnv"] == _EDGE_PROXY_SLACK_ENV
+
+    # Whitespace-only is not configured — guards against stray spaces
+    # in deploy templates looking like coverage.
+    fake2 = _FakeAsyncClient(_mock_response(200, {"workflow_runs": [
+        _run(conclusion="success", age_seconds=3600),
+    ]}))
+    with patch.dict(
+        os.environ,
+        {"GITHUB_REPO": "x/y", _EDGE_PROXY_SLACK_ENV: "   "},
+        clear=False,
+    ), patch("routes.admin_health.httpx.AsyncClient", return_value=fake2):
+        res2 = app_client_authed.get("/admin/health/edge-proxy-deploy/cron")
+    assert res2.json()["slackConfigured"] is False

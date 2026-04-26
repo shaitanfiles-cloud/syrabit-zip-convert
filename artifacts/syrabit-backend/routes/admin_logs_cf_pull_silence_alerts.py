@@ -252,6 +252,15 @@ async def admin_unified_logs_cf_pull_cron_health(
         "status": status,
         "silentThresholdSeconds": threshold,
         "statusUrl": _STATUS_URL,
+        # Task #964 — surface whether the Slack fan-out for this
+        # alerter has its webhook env var (`UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK`)
+        # set, so the AdminHealth dashboard can render a small
+        # "Slack ✓ / ✗" badge next to the pill. We deliberately
+        # publish only the boolean, never the URL itself, since
+        # webhook URLs are sensitive and admin-readable JSON
+        # surfaces should not leak them.
+        "slackConfigured": bool(_slack_webhook_url()),
+        "slackWebhookEnv": _CRON_SLACK_WEBHOOK_ENV,
     }
 
 

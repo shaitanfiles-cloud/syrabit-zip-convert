@@ -151,6 +151,14 @@ async def admin_cf_waf_drift_cron_health(
         "status": status,
         "silentThresholdSeconds": _CRON_SILENT_THRESHOLD_S,
         "workflowUrl": health.get("lastWorkflowUrl") or _DEFAULT_WORKFLOW_URL,
+        # Task #964 — surface whether the Slack fan-out for this
+        # alerter has its webhook env var (`CF_WAF_DRIFT_SLACK_WEBHOOK`)
+        # set, so the AdminHealth dashboard can render a small
+        # "Slack ✓ / ✗" badge next to the pill. Sibling fields on
+        # the cf-pull and edge-proxy-deploy cron endpoints carry the
+        # same shape. The boolean only — never the URL itself.
+        "slackConfigured": bool(_slack_webhook_url()),
+        "slackWebhookEnv": _CRON_SLACK_WEBHOOK_ENV,
     }
 
 

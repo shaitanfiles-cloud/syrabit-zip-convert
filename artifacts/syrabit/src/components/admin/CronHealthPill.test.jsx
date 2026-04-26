@@ -466,6 +466,81 @@ describe('alertHistory panel', () => {
   });
 });
 
+// Task #964 — Slack-config badge surfaces whether the alerter has its
+// webhook env var set on the backend. The badge sits next to the
+// status pill in the header and:
+//   * renders nothing when `data.slackConfigured` is missing (older
+//     backend / pills that don't fan out to Slack at all);
+//   * renders "Slack ✓" with emerald colors when configured;
+//   * renders "Slack ✗" with neutral grey colors when not configured.
+// In both rendered cases, `data.slackWebhookEnv` (when present) shows
+// up in the title attribute so an admin can copy/paste the missing
+// env var name. The webhook URL itself must NEVER appear — the
+// backend only publishes the boolean.
+describe('CronHealthPill — Slack-config badge (Task #964)', () => {
+  it('renders nothing when slackConfigured is absent', () => {
+    const html = renderPill({
+      data: { status: 'healthy' },
+      testId: 'foo',
+    });
+    expect(html).not.toMatch(/Slack/);
+    expect(html).not.toMatch(/foo-slack-config/);
+  });
+
+  it('renders "Slack ✓" in emerald when slackConfigured is true', () => {
+    const html = renderPill({
+      data: {
+        status: 'healthy',
+        slackConfigured: true,
+        slackWebhookEnv: 'CF_WAF_DRIFT_SLACK_WEBHOOK',
+      },
+      testId: 'foo',
+    });
+    expect(html).toMatch(/data-testid="foo-slack-config"/);
+    expect(html).toMatch(/data-slack-configured="true"/);
+    expect(html).toMatch(/Slack \u2713/);
+    expect(html).toMatch(/bg-emerald-50/);
+    expect(html).toMatch(/CF_WAF_DRIFT_SLACK_WEBHOOK/);
+  });
+
+  it('renders "Slack ✗" in neutral grey when slackConfigured is false', () => {
+    const html = renderPill({
+      data: {
+        status: 'healthy',
+        slackConfigured: false,
+        slackWebhookEnv: 'UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK',
+      },
+      testId: 'foo',
+    });
+    expect(html).toMatch(/data-testid="foo-slack-config"/);
+    expect(html).toMatch(/data-slack-configured="false"/);
+    expect(html).toMatch(/Slack \u2717/);
+    expect(html).toMatch(/bg-gray-100/);
+    // The hint must mention the missing env var so admins know what
+    // to set without grepping the codebase.
+    expect(html).toMatch(/UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK/);
+  });
+
+  it('never leaks the webhook URL into the rendered markup', () => {
+    // Defense-in-depth check: even if a future backend regression
+    // accidentally returned the URL on the slackConfigured field,
+    // the badge component should only ever read `slackConfigured`
+    // and `slackWebhookEnv` — so a sentinel URL passed in those
+    // fields-of-the-wrong-name must never appear.
+    const html = renderPill({
+      data: {
+        status: 'healthy',
+        slackConfigured: true,
+        slackWebhookEnv: 'CF_WAF_DRIFT_SLACK_WEBHOOK',
+        slackWebhookUrl: 'https://hooks.slack.example.com/SECRET-LEAK-XYZ',
+      },
+      testId: 'foo',
+    });
+    expect(html).not.toMatch(/SECRET-LEAK-XYZ/);
+    expect(html).not.toMatch(/hooks\.slack\.example\.com/);
+  });
+});
+
 describe('ageLabel helper', () => {
   const cases = [
     { input: null, expected: null, why: 'null input -> null' },

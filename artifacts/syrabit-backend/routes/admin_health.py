@@ -267,8 +267,26 @@ async def admin_edge_proxy_deploy_cron(
     this mirrors ``routes.admin_ci_status``'s defensive contract so
     the AdminHealth tile renders an "unavailable" banner instead of
     going blank.
+
+    Task #964 — also surfaces ``slackConfigured`` / ``slackWebhookEnv``
+    so the AdminHealth dashboard can render a small "Slack ✓ / ✗"
+    badge next to the pill, matching the sibling cf-waf-drift and
+    cf-pull cron health endpoints. The webhook URL itself is never
+    returned (the boolean only) so this admin-readable JSON surface
+    does not leak it.
     """
-    return await get_edge_proxy_deploy_cron_health()
+    # Late import keeps the module-level dependency graph tidy: the
+    # alerter module imports things from admin_health, so importing
+    # it back at module level would create a circular import. The
+    # call site is per-request and rare, so the cost is negligible.
+    from routes.admin_edge_proxy_deploy_cron_alerts import (
+        _slack_webhook_url as _edge_proxy_slack_webhook_url,
+        _CRON_SLACK_WEBHOOK_ENV as _edge_proxy_slack_webhook_env,
+    )
+    payload = await get_edge_proxy_deploy_cron_health()
+    payload["slackConfigured"] = bool(_edge_proxy_slack_webhook_url())
+    payload["slackWebhookEnv"] = _edge_proxy_slack_webhook_env
+    return payload
 
 
 # ─── Task #902 — alert-state lock-doc snapshot ─────────────────────────────

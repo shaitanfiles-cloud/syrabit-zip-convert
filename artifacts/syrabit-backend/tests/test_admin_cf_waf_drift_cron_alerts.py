@@ -29,6 +29,7 @@ Covers:
   silence alerter).
 """
 import asyncio
+import os
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, AsyncMock
 
@@ -707,3 +708,51 @@ def test_send_cron_alert_schedules_slack_fan_out(fake_db):
     assert captured.get("kind") == "silent"
     assert "silent" in captured.get("title", "").lower()
     assert captured.get("health") is health
+
+
+# ─── Task #964 — slackConfigured surfaces on the cron health endpoint ─────
+
+def test_admin_cron_health_endpoint_surfaces_slack_configured_true_when_env_set():
+    """When ``CF_WAF_DRIFT_SLACK_WEBHOOK`` is set, the cron health
+    endpoint must surface ``slackConfigured: True`` and the env var
+    name (so the AdminHealth dashboard pill renders the "Slack ✓"
+    badge alongside the other indicators). The webhook URL itself
+    must NOT appear anywhere in the response."""
+    async def _call(env_value):
+        async def _fake():
+            return _health(last_heartbeat_age_s=120, last_status="success")
+        with patch.object(cron, "get_cf_waf_drift_cron_health", new=_fake), \
+                patch.dict(os.environ,
+                           {cron._CRON_SLACK_WEBHOOK_ENV: env_value},
+                           clear=False):
+            return await cron.admin_cf_waf_drift_cron_health(admin={})
+
+    payload = asyncio.run(_call(
+        "https://hooks.slack.example.com/services/T000/B000/cf-secret"
+    ))
+    assert payload["slackConfigured"] is True
+    assert payload["slackWebhookEnv"] == "CF_WAF_DRIFT_SLACK_WEBHOOK"
+    import json
+    assert "cf-secret" not in json.dumps(payload)
+
+
+def test_admin_cron_health_endpoint_surfaces_slack_configured_false_when_env_unset(monkeypatch):
+    """Slack-not-wired: ``slackConfigured: False`` so the dashboard
+    pill renders the neutral "Slack ✗" badge that names the env var
+    operators need to set. Whitespace-only values are also treated
+    as not configured (``_slack_webhook_url`` strips them) so an
+    accidental " " in a deploy template doesn't look like coverage."""
+    async def _call():
+        async def _fake():
+            return _health(last_heartbeat_age_s=120, last_status="success")
+        with patch.object(cron, "get_cf_waf_drift_cron_health", new=_fake):
+            return await cron.admin_cf_waf_drift_cron_health(admin={})
+
+    monkeypatch.delenv(cron._CRON_SLACK_WEBHOOK_ENV, raising=False)
+    payload_unset = asyncio.run(_call())
+    assert payload_unset["slackConfigured"] is False
+    assert payload_unset["slackWebhookEnv"] == "CF_WAF_DRIFT_SLACK_WEBHOOK"
+
+    monkeypatch.setenv(cron._CRON_SLACK_WEBHOOK_ENV, "   ")
+    payload_blank = asyncio.run(_call())
+    assert payload_blank["slackConfigured"] is False

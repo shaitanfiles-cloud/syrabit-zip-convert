@@ -26,6 +26,7 @@ implementation deliberately copies that pattern. Pins:
   against a brand-new deployment.
 """
 import asyncio
+import os
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, AsyncMock
 
@@ -819,3 +820,62 @@ def test_send_recovery_alert_uses_info_level(fake_db):
     assert captured["type"] == "info"
     assert "recovered" in captured["title"].lower()
     assert captured["meta"]["state"] == "recovered"
+
+
+# ─── Task #964 — slackConfigured surfaces on the cron health endpoint ─────
+
+def test_admin_health_endpoint_surfaces_slack_configured_true_when_env_set():
+    """When ``UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK`` is set, the cron
+    health endpoint must surface ``slackConfigured: True`` and the
+    env var name (so the AdminHealth dashboard pill can render the
+    "Slack ✓" badge and the inverse hint can name the missing env
+    var). The webhook URL itself must NOT appear anywhere in the
+    response — admin-readable JSON should never leak it."""
+    async def _call(env_value):
+        async def _fake():
+            return _health(last_updated_age_s=60)
+        with patch.object(cron, "get_cf_pull_health", new=_fake), \
+                patch.dict(os.environ,
+                           {cron._CRON_SLACK_WEBHOOK_ENV: env_value},
+                           clear=False), \
+                _patch_threshold(600):
+            return await cron.admin_unified_logs_cf_pull_cron_health(
+                admin={},
+            )
+
+    payload = asyncio.run(_call(
+        "https://hooks.slack.example.com/services/T000/B000/abc-secret"
+    ))
+    assert payload["slackConfigured"] is True
+    assert payload["slackWebhookEnv"] == "UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK"
+    # Defense in depth: the URL must never appear anywhere in the
+    # JSON shape returned to the dashboard.
+    import json
+    assert "abc-secret" not in json.dumps(payload)
+
+
+def test_admin_health_endpoint_surfaces_slack_configured_false_when_env_unset(monkeypatch):
+    """When the Slack webhook env var is unset OR set to whitespace,
+    the endpoint must surface ``slackConfigured: False`` so the
+    AdminHealth dashboard pill renders the neutral "Slack ✗" badge
+    that points operators at the env var to set."""
+    async def _call():
+        async def _fake():
+            return _health(last_updated_age_s=60)
+        with patch.object(cron, "get_cf_pull_health", new=_fake), \
+                _patch_threshold(600):
+            return await cron.admin_unified_logs_cf_pull_cron_health(
+                admin={},
+            )
+
+    monkeypatch.delenv(cron._CRON_SLACK_WEBHOOK_ENV, raising=False)
+    payload_unset = asyncio.run(_call())
+    assert payload_unset["slackConfigured"] is False
+    assert payload_unset["slackWebhookEnv"] == "UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK"
+
+    # Whitespace-only value should still classify as not configured —
+    # ``_slack_webhook_url`` strips the value so an accidental " "
+    # in a deploy template doesn't look like coverage.
+    monkeypatch.setenv(cron._CRON_SLACK_WEBHOOK_ENV, "   ")
+    payload_blank = asyncio.run(_call())
+    assert payload_blank["slackConfigured"] is False
