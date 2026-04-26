@@ -2943,6 +2943,60 @@ async def _try_send_weekly_digest_once(db, now_utc: datetime) -> dict:
     return {"claimed": True, "sent": result.get("sent", False), "reason": result.get("reason")}
 
 
+def _fan_out_remediation_signals(snapshot: Dict, kind: str) -> int:
+    """Task #938 — fire-and-forget hand-off from the alerter to the
+    closed-loop remediation worker.
+
+    For URL-spike / health-degraded / health-critical events we walk
+    ``snapshot["by_sitemap"][].failing_urls`` and enqueue one
+    structured remediation signal per failing URL, capped to the
+    per-event fan-out budget so a 100-URL outage cannot enqueue 100
+    signals at once (would burn the whole daily remediation budget
+    on a single detector firing).
+
+    Returns the number of signals enqueued so the caller can log it.
+    Never raises — the alerter must keep paging on-call even if the
+    remediation pipeline is wedged.
+    """
+    try:
+        from seo_remediation_service import enqueue_remediation_signal, get_config
+        cap = int(get_config().get("fanout_cap_per_event", 5))
+    except Exception as exc:
+        logger.debug(f"remediation fan-out helper import failed: {exc}")
+        return 0
+    by_sm = (snapshot or {}).get("by_sitemap") or []
+    enqueued = 0
+    for sm in by_sm:
+        if enqueued >= cap:
+            break
+        for fu in (sm.get("failing_urls") or []):
+            if enqueued >= cap:
+                break
+            url = fu.get("url") if isinstance(fu, dict) else None
+            if not url:
+                continue
+            ok = enqueue_remediation_signal({
+                "kind": kind,
+                "url": url,
+                "details": {
+                    "sitemap": sm.get("name"),
+                    "status": fu.get("status") if isinstance(fu, dict) else None,
+                    "snapshot_status": snapshot.get("status"),
+                    "url_check_success_rate": (
+                        (snapshot.get("summary") or {}).get("url_check_success_rate")
+                    ),
+                },
+            })
+            if ok:
+                enqueued += 1
+    if enqueued:
+        logger.info(
+            "remediation: enqueued %d signals from %s (fan-out cap %d)",
+            enqueued, kind, cap,
+        )
+    return enqueued
+
+
 async def _seo_health_alert_loop():
     """Hourly: snapshot /seo/health. Fires two independent admin alerts via
     metrics._dispatch_alert (Resend email + persisted to db.alerts):
@@ -3037,6 +3091,15 @@ async def _seo_health_alert_loop():
                                 },
                             )
                             _seo_url_spike_alert_last_fired = now_ts
+                            # Task #938 — hand the failing URLs off to
+                            # the closed-loop remediation worker so it
+                            # can re-run the existing pipeline against
+                            # each affected page (capped per event;
+                            # daily caps gate the worker itself).
+                            try:
+                                _fan_out_remediation_signals(snapshot, "url_404_spike")
+                            except Exception as rem_exc:
+                                logger.debug(f"remediation fan-out (url_404_spike) failed: {rem_exc}")
                         except Exception as exc:
                             logger.debug(f"Failed to dispatch seo_url_spike alert: {exc}")
             except Exception as exc:
@@ -3123,6 +3186,15 @@ async def _seo_health_alert_loop():
                             "digest_count": 0,
                             "recovered_at": None,
                         })
+                        # Task #938 — close the loop on the offending
+                        # pages. Status maps directly to the signal kind
+                        # so the remediation history shows whether the
+                        # incident was a degradation or a hard critical.
+                        try:
+                            sig_kind = "seo_health_critical" if status == "critical" else "seo_health_degraded"
+                            _fan_out_remediation_signals(snapshot, sig_kind)
+                        except Exception as rem_exc:
+                            logger.debug(f"remediation fan-out (initial) failed: {rem_exc}")
                     except Exception as exc:
                         logger.debug(f"Failed to dispatch initial seo_health_degraded alert: {exc}")
 
@@ -3173,6 +3245,15 @@ async def _seo_health_alert_loop():
                             "escalated_at": datetime.now(timezone.utc),
                             "escalated_at_ts": now,
                         })
+                        # Task #938 — re-fan-out on escalation. The
+                        # initial alert may have been hours ago, the
+                        # failing-URL set may have shifted, and the
+                        # bump to CRITICAL means we want another shot
+                        # at auto-fixing before the digest.
+                        try:
+                            _fan_out_remediation_signals(snapshot, "seo_health_critical")
+                        except Exception as rem_exc:
+                            logger.debug(f"remediation fan-out (escalated) failed: {rem_exc}")
                     except Exception as exc:
                         logger.debug(f"Failed to dispatch escalated seo_health_degraded alert: {exc}")
 

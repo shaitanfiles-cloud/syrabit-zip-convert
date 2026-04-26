@@ -547,6 +547,37 @@ export const adminTopicDiscoveryOverride = (token, candidateId, decision, reason
     { headers: adminHeaders(token), withCredentials: true },
   );
 
+// Task #938 — closed-loop content remediation agent.
+export const adminSeoRemediationStatus = (token) =>
+  axios.get(`${API_BASE}/admin/seo/remediation/status`, {
+    headers: adminHeaders(token), withCredentials: true,
+  });
+
+export const adminSeoRemediationHistory = (token, { days = 7, limit = 50, action = null } = {}) => {
+  const params = { days, limit };
+  if (action) params.action = action;
+  return axios.get(`${API_BASE}/admin/seo/remediation/history`, {
+    headers: adminHeaders(token), withCredentials: true, params,
+  });
+};
+
+export const adminSeoRemediationPromote = (token, recId) =>
+  axios.post(
+    `${API_BASE}/admin/seo/remediation/${encodeURIComponent(recId)}/promote`,
+    null,
+    { headers: adminHeaders(token), withCredentials: true },
+  );
+
+export const adminSeoRemediationTrigger = (token, payload) =>
+  axios.post(`${API_BASE}/admin/seo/remediation/trigger`, payload, {
+    headers: adminHeaders(token), withCredentials: true,
+  });
+
+export const adminSeoRemediationCircuitReset = (token) =>
+  axios.post(`${API_BASE}/admin/seo/remediation/circuit/reset`, null, {
+    headers: adminHeaders(token), withCredentials: true,
+  });
+
 export const adminSeoReviewQueue = (token, status = 'draft', limit = 200) =>
   axios.get(`${API_BASE}/seo/review-queue`, { headers: adminHeaders(token), withCredentials: true, params: { status, limit } });
 
