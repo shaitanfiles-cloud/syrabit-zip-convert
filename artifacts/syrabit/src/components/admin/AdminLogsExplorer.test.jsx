@@ -14,6 +14,13 @@ vi.mock('@/utils/api', () => ({
   adminLogsList:        vi.fn(() => Promise.resolve({ data: { logs: [], total: 0 } })),
   adminLogsStatus:      vi.fn(() => Promise.resolve({ data: {
     paused: false, ttl_days: 14, ingest_token_configured: true,
+    cf_pull_24h: {
+      ticks: 5, total_calls: 61, total_subdivisions: 9, total_saturated: 2,
+      max_calls: 50, max_subdivisions: 6,
+      subdivided_ticks: 2, subdivided_pct: 40.0,
+      window_s: 86400, oldest_ts: '2026-04-25T12:00:00+00:00',
+      newest_ts: '2026-04-26T12:00:00+00:00',
+    },
   } })),
   adminLogsTrace:       vi.fn(() => Promise.resolve({ data: { logs: [] } })),
   adminLogsPause:       vi.fn(),
@@ -84,6 +91,80 @@ describe('AdminLogsExplorer', () => {
     }
   });
 
+});
+
+// Task #953 — CF pull cost (24h) widget render.
+import { describe as describe3, it as it3, expect as expect3, afterEach as afterEach3, vi as vi3 } from 'vitest';
+import { render as render3, screen as screen3, fireEvent as fireEvent3, cleanup as cleanup3, waitFor as waitFor3 } from '@testing-library/react';
+
+describe3('AdminLogsExplorer — CF pull cost (24h) widget', () => {
+  afterEach3(() => { cleanup3(); vi3.clearAllMocks(); });
+
+  it3('shows the 24h aggregate inside the safeguards section when the status payload includes cf_pull_24h', async () => {
+    const apiMod = await import('@/utils/api');
+    apiMod.adminLogsList.mockResolvedValue({ data: { logs: [], total: 0 } });
+    apiMod.adminLogsStatus.mockResolvedValue({ data: {
+      paused: false, ttl_days: 14, ingest_token_configured: true,
+      backend_sample_rate: 0.05, edge_sample_rate: 0.05,
+      max_ingest_batch: 500, cf_pull_interval_s: 60,
+      cf_pull_24h: {
+        ticks: 5, total_calls: 61, total_subdivisions: 9, total_saturated: 2,
+        max_calls: 50, max_subdivisions: 6,
+        subdivided_ticks: 2, subdivided_pct: 40.0,
+        window_s: 86400,
+        oldest_ts: '2026-04-25T12:00:00+00:00',
+        newest_ts: '2026-04-26T12:00:00+00:00',
+      },
+    } });
+
+    render3(<AdminLogsExplorer adminToken="t" />);
+
+    // Open the collapsible "Ingest safeguards" section so the widget is in the DOM.
+    await waitFor3(() => {
+      const safeguards = screen3.queryByText(/Ingest safeguards/i);
+      expect3(safeguards).toBeTruthy();
+      fireEvent3.click(safeguards);
+    });
+
+    const widget = await screen3.findByTestId('cf-pull-cost-widget');
+    expect3(widget).toBeTruthy();
+    // Totals + worst-tick + paginated-% must all render.
+    expect3(widget.textContent).toContain('61 calls');
+    expect3(widget.textContent).toContain('9 subdivisions');
+    expect3(widget.textContent).toContain('5 ticks aggregated');
+    expect3(widget.textContent).toContain('peak: 50 calls');
+    expect3(widget.textContent).toContain('40% of ticks paginated');
+    // Saturated minutes (data lost) must surface as a warning chip.
+    expect3(screen3.getByTestId('cf-pull-cost-saturated').textContent)
+      .toMatch(/2 saturated minutes/);
+  });
+
+  it3('hides the widget entirely when the status payload has no cf_pull_24h (fresh deploy)', async () => {
+    const apiMod = await import('@/utils/api');
+    apiMod.adminLogsList.mockResolvedValue({ data: { logs: [], total: 0 } });
+    apiMod.adminLogsStatus.mockResolvedValue({ data: {
+      paused: false, ttl_days: 14, ingest_token_configured: true,
+      backend_sample_rate: 0.05, edge_sample_rate: 0.05,
+      max_ingest_batch: 500, cf_pull_interval_s: 60,
+      cf_pull_24h: null,
+    } });
+
+    render3(<AdminLogsExplorer adminToken="t" />);
+
+    await waitFor3(() => {
+      const safeguards = screen3.queryByText(/Ingest safeguards/i);
+      expect3(safeguards).toBeTruthy();
+      fireEvent3.click(safeguards);
+    });
+
+    // The "CF GraphQL pull" SafeguardRow still renders, but the
+    // dedicated 24h widget must NOT — a fresh deploy with no
+    // history would otherwise show a misleading "0 calls" row.
+    await waitFor3(() => {
+      expect3(screen3.queryByText(/CF GraphQL pull/)).toBeTruthy();
+    });
+    expect3(screen3.queryByTestId('cf-pull-cost-widget')).toBeNull();
+  });
 });
 
 // Live DOM tests for row expansion + copy-correlation-id workflows.

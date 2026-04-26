@@ -70,6 +70,23 @@ CF_PULL_MAX_SUBDIVISIONS = int(
     os.environ.get("UNIFIED_LOGS_CF_PULL_MAX_SUBDIVISIONS", "12") or "12"
 )
 
+# Task #953 — rolling 24h pagination-cost history. Each tick appends a
+# small ``{ts, calls, subdivisions, saturated}`` entry to ``cf_pull_history``
+# in the cursor doc; the admin /status endpoint computes the trend
+# aggregate (totals, max, % subdivided) over the last 24h. Without
+# this, an operator only ever sees the LAST tick's numbers and would
+# miss a slow drift from "1 call/tick" to "8 calls/tick" as traffic
+# grows.
+#
+# Window: 24 hours (matches the CF GraphQL daily quota cycle).
+# Hard cap: 2000 entries — safety guard against a misconfigured
+# ``CF_PULL_INTERVAL_S`` (e.g. 1s) blowing up the cursor doc. At the
+# default 60s interval, 24h = 1440 entries (well under the cap); at
+# the 30s minimum interval, 24h = 2880 → cap kicks in and trims to the
+# most recent 2000 (~16h trend, still useful).
+CF_PULL_HISTORY_WINDOW_S = 24 * 3600
+CF_PULL_HISTORY_MAX_ENTRIES = 2000
+
 # Task #947 — Mongo-backed lease so only ONE replica runs the CF pull
 # loop at any moment, even when Railway scales the backend out to N
 # copies. The previous file-lock approach (`_is_leader` in server.py)
@@ -350,6 +367,78 @@ async def _stream_ndjson(filters: Dict[str, Any], limit: int):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _compute_cf_pull_24h_aggregate(
+    history: List[Dict[str, Any]],
+    now: Optional[datetime] = None,
+) -> Optional[Dict[str, Any]]:
+    """Task #953 — collapse the rolling per-tick history into a single
+    24h aggregate the admin dashboard can render as a "CF pull cost"
+    widget. Returns None when there is no usable history (so the UI
+    can hide the widget on a fresh deploy).
+
+    The aggregate exposes:
+      * ``ticks``                — number of pulls in the window
+      * ``total_calls``          — sum of GraphQL calls across all ticks
+      * ``total_subdivisions``   — sum of times we halved a window to
+                                   stay under CF_PULL_LIMIT
+      * ``total_saturated``      — sum of minute-buckets that hit the
+                                   limit even at the floor (i.e. lost
+                                   data)
+      * ``max_calls``            — worst-tick GraphQL fan-out (for the
+                                   "we suddenly went from 1→50" drift)
+      * ``max_subdivisions``     — worst-tick subdivision depth
+      * ``subdivided_ticks``     — count of ticks that paginated at all
+      * ``subdivided_pct``       — % of ticks that paginated (0..100)
+      * ``window_s``             — actual span covered (oldest→newest),
+                                   so the UI can label "X% of 24h"
+                                   when the deploy is younger than 24h
+      * ``oldest_ts`` / ``newest_ts`` — for tooltips
+    """
+    cutoff_now = now or datetime.now(timezone.utc)
+    cutoff = cutoff_now - timedelta(seconds=CF_PULL_HISTORY_WINDOW_S)
+    in_window: List[Dict[str, Any]] = []
+    for entry in history or []:
+        if not isinstance(entry, dict):
+            continue
+        ts_raw = entry.get("ts")
+        try:
+            ts_dt = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if ts_dt < cutoff:
+            continue
+        in_window.append({
+            "ts_dt": ts_dt,
+            "calls": int(entry.get("calls") or 0),
+            "subdivisions": int(entry.get("subdivisions") or 0),
+            "saturated": int(entry.get("saturated") or 0),
+        })
+    if not in_window:
+        return None
+    total_calls = sum(e["calls"] for e in in_window)
+    total_subdivisions = sum(e["subdivisions"] for e in in_window)
+    total_saturated = sum(e["saturated"] for e in in_window)
+    max_calls = max(e["calls"] for e in in_window)
+    max_subdivisions = max(e["subdivisions"] for e in in_window)
+    subdivided_ticks = sum(1 for e in in_window if e["subdivisions"] > 0)
+    ticks = len(in_window)
+    oldest = min(e["ts_dt"] for e in in_window)
+    newest = max(e["ts_dt"] for e in in_window)
+    return {
+        "ticks": ticks,
+        "total_calls": total_calls,
+        "total_subdivisions": total_subdivisions,
+        "total_saturated": total_saturated,
+        "max_calls": max_calls,
+        "max_subdivisions": max_subdivisions,
+        "subdivided_ticks": subdivided_ticks,
+        "subdivided_pct": round(100.0 * subdivided_ticks / ticks, 1),
+        "window_s": int((newest - oldest).total_seconds()),
+        "oldest_ts": oldest.isoformat(),
+        "newest_ts": newest.isoformat(),
+    }
+
+
 @router.get("/api/admin/logs/status")
 async def admin_logs_status(admin: dict = Depends(get_admin_user)):
     shipper = _dao.get_backend_shipper()
@@ -369,6 +458,8 @@ async def admin_logs_status(admin: dict = Depends(get_admin_user)):
     cf_last_calls: Optional[int] = None
     cf_last_subdivisions: Optional[int] = None
     cf_last_saturated_windows: Optional[List[Any]] = None
+    # Task #953 — rolling 24h pagination-cost aggregate.
+    cf_pull_24h: Optional[Dict[str, Any]] = None
     if db is not None:
         try:
             lock = await db.job_locks.find_one({"_id": CF_PULL_LOCK_ID})
@@ -388,6 +479,9 @@ async def admin_logs_status(admin: dict = Depends(get_admin_user)):
                 cf_last_calls = lock.get("last_calls")
                 cf_last_subdivisions = lock.get("last_subdivisions")
                 cf_last_saturated_windows = lock.get("last_saturated_windows")
+                cf_pull_24h = _compute_cf_pull_24h_aggregate(
+                    lock.get("cf_pull_history") or []
+                )
         except Exception:
             pass
     counts: Dict[str, Any] = {}
@@ -431,6 +525,10 @@ async def admin_logs_status(admin: dict = Depends(get_admin_user)):
         "cf_pull_last_calls": cf_last_calls,
         "cf_pull_last_subdivisions": cf_last_subdivisions,
         "cf_pull_last_saturated_windows": cf_last_saturated_windows,
+        # Task #953 — rolling 24h pagination-cost trend (None on a
+        # fresh deploy with no completed pulls yet; the UI hides the
+        # widget in that case).
+        "cf_pull_24h": cf_pull_24h,
         "shipper_stats": {
             "accepted": shipper.accepted,
             "flushed": shipper.flushed,
@@ -969,6 +1067,37 @@ async def _try_run_cf_pull_once(now_utc: Optional[datetime] = None,
     cursor_filter: Dict[str, Any] = {"_id": CF_PULL_LOCK_ID}
     if lease_owner is not None:
         cursor_filter[CF_PULL_LEASE_OWNER_FIELD] = lease_owner
+    # Task #953 — append this tick to the rolling 24h pagination-cost
+    # history. We compute the trimmed list in Python (rather than
+    # using `$push`+`$slice`) because (a) we already loaded ``lock``
+    # at the top so no extra read is needed, and (b) the lease (Task
+    # #947) ensures only one writer per tick, so the read-modify-write
+    # window is race-safe in practice. The unfenced manual-pull path
+    # could in theory race with the leader, but that's at most one
+    # entry of drift per manual call — acceptable.
+    new_history_entry = {
+        "ts": now.isoformat(),
+        "calls": int(pulled.get("calls") or 0),
+        "subdivisions": int(pulled.get("subdivisions") or 0),
+        "saturated": len(pulled.get("saturated_windows") or []),
+    }
+    history_cutoff = now - timedelta(seconds=CF_PULL_HISTORY_WINDOW_S)
+    prior_history = lock.get("cf_pull_history") or []
+    pruned_history: List[Dict[str, Any]] = []
+    for entry in prior_history:
+        if not isinstance(entry, dict):
+            continue
+        ts = entry.get("ts")
+        try:
+            entry_dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if entry_dt >= history_cutoff:
+            pruned_history.append(entry)
+    pruned_history.append(new_history_entry)
+    # Hard safety cap (see CF_PULL_HISTORY_MAX_ENTRIES rationale).
+    if len(pruned_history) > CF_PULL_HISTORY_MAX_ENTRIES:
+        pruned_history = pruned_history[-CF_PULL_HISTORY_MAX_ENTRIES:]
     try:
         await db.job_locks.update_one(
             cursor_filter,
@@ -986,6 +1115,10 @@ async def _try_run_cf_pull_once(now_utc: Optional[datetime] = None,
                 "last_calls": pulled["calls"],
                 "last_subdivisions": pulled["subdivisions"],
                 "last_saturated_windows": pulled["saturated_windows"],
+                # Task #953 — rolling 24h window of per-tick pagination
+                # cost so the admin dashboard can render a trend (not
+                # just the most recent tick).
+                "cf_pull_history": pruned_history,
             }},
             upsert=(lease_owner is None),
         )

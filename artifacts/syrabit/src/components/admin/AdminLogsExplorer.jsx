@@ -423,6 +423,11 @@ export default function AdminLogsExplorer({ adminToken }) {
                 <SafeguardRow label="Ingest token"
                   value={status.ingest_token_configured ? 'configured' : 'missing'}
                   hint="Rotate via the KEY button above. Old token keeps working until the worker secret is updated." />
+                {status.cf_pull_24h && (
+                  <div className="md:col-span-2">
+                    <CfPullCostWidget agg={status.cf_pull_24h} />
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -850,6 +855,47 @@ function SafeguardRow({ label, value, hint }) {
         <span className="font-mono text-slate-900">{value}</span>
       </div>
       {hint && <div className="mt-1 text-[11px] text-slate-500">{hint}</div>}
+    </div>
+  );
+}
+
+function CfPullCostWidget({ agg }) {
+  if (!agg || typeof agg !== 'object') return null;
+  const ticks = agg.ticks ?? 0;
+  const totalCalls = agg.total_calls ?? 0;
+  const totalSubs = agg.total_subdivisions ?? 0;
+  const totalSat = agg.total_saturated ?? 0;
+  const maxCalls = agg.max_calls ?? 0;
+  const maxSubs = agg.max_subdivisions ?? 0;
+  const subdividedPct = agg.subdivided_pct ?? 0;
+  const windowS = agg.window_s ?? 0;
+  const windowH = windowS > 0 ? Math.max(1, Math.round(windowS / 3600)) : 0;
+  const windowLabel = windowH > 0
+    ? (windowH >= 23 ? '24h' : `~${windowH}h`)
+    : '<1h';
+  const heavy = subdividedPct >= 50 || maxSubs >= 4 || totalSat > 0;
+  return (
+    <div
+      className={`border rounded p-2 ${heavy ? 'bg-amber-50 border-amber-300' : 'bg-white'}`}
+      data-testid="cf-pull-cost-widget"
+    >
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-slate-500">CF pull cost ({windowLabel})</span>
+        <span className="font-mono text-slate-900" data-testid="cf-pull-cost-totals">
+          {totalCalls.toLocaleString()} calls
+          {totalSubs > 0 && <> · {totalSubs.toLocaleString()} subdivisions</>}
+        </span>
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500 flex flex-wrap gap-x-3 gap-y-0.5">
+        <span>{ticks} {ticks === 1 ? 'tick' : 'ticks'} aggregated</span>
+        <span>peak: {maxCalls} calls / {maxSubs} subdivisions per tick</span>
+        <span data-testid="cf-pull-cost-subdivided-pct">{subdividedPct}% of ticks paginated</span>
+        {totalSat > 0 && (
+          <span className="text-amber-700 font-semibold" data-testid="cf-pull-cost-saturated">
+            {totalSat} saturated minute{totalSat === 1 ? '' : 's'} (data lost)
+          </span>
+        )}
+      </div>
     </div>
   );
 }
