@@ -133,6 +133,11 @@ CF_PULL = alerter.UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK_ENV
 CF_WAF = alerter.CF_WAF_DRIFT_SLACK_WEBHOOK_ENV
 EDGE_PROXY = alerter.EDGE_PROXY_DEPLOY_SLACK_WEBHOOK_ENV
 
+# Captured at import time so the dedicated "exercise the real gate"
+# tests below can restore it after the autouse stub fixture overrides
+# ``_sibling_alerter_configured`` on the module to default-True.
+_real_sibling_configured = alerter._sibling_alerter_configured
+
 
 def _now():
     return datetime(2026, 4, 26, 12, 0, 0, tzinfo=timezone.utc)
@@ -159,6 +164,31 @@ def _stable_deploy_id(monkeypatch):
         "GIT_COMMIT_SHA",
     ):
         monkeypatch.delenv(env, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _siblings_configured_by_default(monkeypatch):
+    """Task #975 — pin the sibling-alerter "is this deployed?" gates
+    to ``True`` for every existing test. The new
+    ``_sibling_alerter_configured`` branch in ``_classify_env``
+    suppresses the missing/unknown classification on a bare-bones
+    deployment that hasn't wired up the underlying alerter; the
+    existing test corpus pre-dates that gate and assumes the gate
+    is open. The dedicated "sibling not configured → unknown" tests
+    below opt OUT of this fixture per-env to pin the new branch.
+
+    We patch the ``_sibling_alerter_configured`` helper directly
+    rather than setting env vars because the cf-pull leg of the
+    gate (``_cf_configured``) reads from the ``config`` module's
+    module-load-time-cached ``CF_ZONE_ID`` / ``CF_ANALYTICS_API_TOKEN``
+    constants, which a runtime ``monkeypatch.setenv`` can't change.
+    The dedicated unit tests for ``_sibling_alerter_configured``
+    below patch the underlying helpers directly to exercise the
+    real gate.
+    """
+    monkeypatch.setattr(
+        alerter, "_sibling_alerter_configured", lambda env_name: True,
+    )
 
 
 _CURRENT_DEPLOY_ID = "test-deploy-current"
@@ -226,6 +256,197 @@ def test_classify_treats_whitespace_as_unset():
         assert alerter._classify_env(
             CF_PULL, now_ts, now_ts - (alerter._BOOTSTRAP_GRACE_S + 60),
         ) == "missing"
+
+
+# ─── Sibling-alerter "is this deployed?" gate (Task #975) ─────────────────
+#
+# These tests opt OUT of the autouse ``_siblings_configured_by_default``
+# fixture by re-patching ``_sibling_alerter_configured`` (or the per-env
+# primitives the helper consults) so the real gate logic gets exercised.
+# Each per-env test patches the actual primitive that env reads from:
+#
+#  * cf-pull → ``_cf_configured`` on the sibling silence-alerter module
+#    (the helper reads from there; the underlying ``config.CF_ZONE_ID``
+#    constant is module-load-time cached so monkeypatch.setenv doesn't
+#    propagate to it).
+#  * cf-waf-drift → ``CF_WAF_DRIFT_HEARTBEAT_SECRET`` env var (read
+#    direct from os.environ at call time).
+#  * edge-proxy-deploy → ``GITHUB_REPO`` env var (same — direct read).
+
+
+def test_sibling_alerter_configured_cf_pull_gates_on_cf_env(monkeypatch):
+    """``UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK`` must mirror the cf-pull
+    alerter's own ``_cf_configured`` helper: Slack-webhook nags only
+    make sense when the underlying Cloudflare-pull alerter is itself
+    deployed (``CF_ZONE_ID`` + ``CF_ANALYTICS_API_TOKEN`` both set,
+    which is what ``_cf_configured`` reports)."""
+    # Restore the real helper for this test (the autouse fixture
+    # otherwise stubs it to a no-op True).
+    monkeypatch.setattr(
+        alerter, "_sibling_alerter_configured", _real_sibling_configured,
+    )
+    from routes import admin_logs_cf_pull_silence_alerts as cf_pull_alerter
+    monkeypatch.setattr(cf_pull_alerter, "_cf_configured", lambda: True)
+    assert alerter._sibling_alerter_configured(CF_PULL) is True
+    monkeypatch.setattr(cf_pull_alerter, "_cf_configured", lambda: False)
+    assert alerter._sibling_alerter_configured(CF_PULL) is False
+    # Import-time blowup must collapse to ``False`` so an infra hiccup
+    # never paints "configured" on a deployment that isn't.
+    def _boom():
+        raise RuntimeError("simulated import / lookup failure")
+    monkeypatch.setattr(cf_pull_alerter, "_cf_configured", _boom)
+    assert alerter._sibling_alerter_configured(CF_PULL) is False
+
+
+def test_sibling_alerter_configured_cf_waf_gates_on_heartbeat_secret(
+    monkeypatch,
+):
+    """``CF_WAF_DRIFT_SLACK_WEBHOOK`` must gate on
+    ``CF_WAF_DRIFT_HEARTBEAT_SECRET``: without the secret the
+    heartbeat route 503s every cron run, so the silence alerter
+    can never fire even if its Slack webhook were wired."""
+    monkeypatch.setattr(
+        alerter, "_sibling_alerter_configured", _real_sibling_configured,
+    )
+    monkeypatch.setenv("CF_WAF_DRIFT_HEARTBEAT_SECRET", "s3cr3t")
+    assert alerter._sibling_alerter_configured(CF_WAF) is True
+    monkeypatch.setenv("CF_WAF_DRIFT_HEARTBEAT_SECRET", "")
+    assert alerter._sibling_alerter_configured(CF_WAF) is False
+    monkeypatch.setenv("CF_WAF_DRIFT_HEARTBEAT_SECRET", "   ")
+    assert alerter._sibling_alerter_configured(CF_WAF) is False
+    monkeypatch.delenv("CF_WAF_DRIFT_HEARTBEAT_SECRET", raising=False)
+    assert alerter._sibling_alerter_configured(CF_WAF) is False
+
+
+def test_sibling_alerter_configured_edge_proxy_gates_on_github_repo(
+    monkeypatch,
+):
+    """``EDGE_PROXY_DEPLOY_SLACK_WEBHOOK`` must gate on ``GITHUB_REPO``:
+    the edge-proxy-deploy CI alerter short-circuits to
+    ``status="not_configured"`` when ``GITHUB_REPO`` isn't set, so
+    nagging about its missing webhook would be a noise page."""
+    monkeypatch.setattr(
+        alerter, "_sibling_alerter_configured", _real_sibling_configured,
+    )
+    monkeypatch.setenv("GITHUB_REPO", "syrabit/syrabit")
+    assert alerter._sibling_alerter_configured(EDGE_PROXY) is True
+    monkeypatch.setenv("GITHUB_REPO", "")
+    assert alerter._sibling_alerter_configured(EDGE_PROXY) is False
+    monkeypatch.setenv("GITHUB_REPO", "  ")
+    assert alerter._sibling_alerter_configured(EDGE_PROXY) is False
+    monkeypatch.delenv("GITHUB_REPO", raising=False)
+    assert alerter._sibling_alerter_configured(EDGE_PROXY) is False
+
+
+def test_sibling_alerter_configured_unknown_env_defaults_open(monkeypatch):
+    """An unrecognised env name must NOT silently suppress paging —
+    the ``_MONITORED_ENV_NAMES`` gate upstream already restricts the
+    set, so this is a defence-in-depth invariant: if a future env
+    gets added without a matching gate clause, the alerter should
+    keep its existing "page after grace" behaviour rather than
+    silently degrading to "never page"."""
+    monkeypatch.setattr(
+        alerter, "_sibling_alerter_configured", _real_sibling_configured,
+    )
+    assert alerter._sibling_alerter_configured("NOT_A_REAL_ENV") is True
+
+
+def _patch_sibling(env_name: str, configured: bool):
+    """Override the autouse ``_sibling_alerter_configured`` stub for
+    one specific env so we can pin the "sibling not configured →
+    unknown" branch in ``_classify_env`` without monkeypatching deep
+    config primitives."""
+    real_default_true = lambda _name: True  # noqa: E731
+    return patch.object(
+        alerter, "_sibling_alerter_configured",
+        side_effect=lambda name: configured if name == env_name
+        else real_default_true(name),
+    )
+
+
+def test_classify_returns_unknown_when_cf_pull_sibling_not_configured():
+    """The headline branch from the Task #975 spec for the cf-pull
+    env: even past the bootstrap grace window, a deployment without
+    the underlying CF analytics env vars must NOT page about a
+    missing cf-pull Slack webhook (the silence alerter is itself a
+    no-op on this deployment, so the webhook would never get used).
+    """
+    now_ts = _now().timestamp()
+    with _clear_envs(), _patch_sibling(CF_PULL, configured=False):
+        assert alerter._classify_env(
+            CF_PULL, now_ts, now_ts - (alerter._BOOTSTRAP_GRACE_S + 7200),
+        ) == "unknown"
+        # Same answer regardless of bootstrap-grace state — the gate
+        # short-circuits before grace is even consulted.
+        assert alerter._classify_env(
+            CF_PULL, now_ts, now_ts - 60,
+        ) == "unknown"
+        assert alerter._classify_env(CF_PULL, now_ts, None) == "unknown"
+
+
+def test_classify_returns_unknown_when_cf_waf_sibling_not_configured():
+    """Same shape as the cf-pull test, but for the cf-waf-drift env
+    (gated on the heartbeat secret)."""
+    now_ts = _now().timestamp()
+    with _clear_envs(), _patch_sibling(CF_WAF, configured=False):
+        assert alerter._classify_env(
+            CF_WAF, now_ts, now_ts - (alerter._BOOTSTRAP_GRACE_S + 7200),
+        ) == "unknown"
+
+
+def test_classify_returns_unknown_when_edge_proxy_sibling_not_configured():
+    """Same shape as the cf-pull test, but for the edge-proxy-deploy
+    env (gated on ``GITHUB_REPO``)."""
+    now_ts = _now().timestamp()
+    with _clear_envs(), _patch_sibling(EDGE_PROXY, configured=False):
+        assert alerter._classify_env(
+            EDGE_PROXY, now_ts, now_ts - (alerter._BOOTSTRAP_GRACE_S + 7200),
+        ) == "unknown"
+
+
+def test_classify_healthy_unaffected_by_sibling_not_configured():
+    """The healthy path (env IS set) must NOT be gated on the sibling
+    being configured: a recovery (missing→healthy) needs to fire even
+    if the operator is concurrently un-deploying the underlying
+    feature, so the "good job, you fixed it" signal isn't swallowed
+    by an unrelated config rollback on the same redeploy.
+    """
+    now_ts = _now().timestamp()
+    with _set_env(CF_PULL, "https://hooks.slack.test/abc"), \
+            _patch_sibling(CF_PULL, configured=False):
+        assert alerter._classify_env(
+            CF_PULL, now_ts, now_ts - (alerter._BOOTSTRAP_GRACE_S + 60),
+        ) == "healthy"
+
+
+def test_check_and_alert_skips_when_sibling_not_configured(fake_db):
+    """End-to-end: a fresh deployment whose CF analytics env vars
+    aren't set must NOT page on a missing cf-pull Slack webhook,
+    even when the per-env state doc's ``first_observed_ts`` is well
+    past the bootstrap grace window. ``_send_alert`` must NOT be
+    called and the per-env state doc must NOT gain a ``last_state``
+    field (otherwise a later deploy that flips the sibling on would
+    immediately re-page on the stale missing state).
+    """
+    now = _now()
+    fake_db.job_locks._docs[alerter._lock_id_for(CF_PULL)] = {
+        "_id": alerter._lock_id_for(CF_PULL),
+        "env_name": CF_PULL,
+        "first_observed_ts": (
+            now.timestamp() - (alerter._BOOTSTRAP_GRACE_S + 7200)
+        ),
+        "deploy_id": _CURRENT_DEPLOY_ID,
+    }
+    with _clear_envs(), _patch_sibling(CF_PULL, configured=False), \
+            _patch_send() as mock_send:
+        result = asyncio.run(
+            alerter._check_and_alert_one_env(fake_db, CF_PULL, now)
+        )
+    assert result["action"] == "skip"
+    assert result["reason"] == "inconclusive"
+    mock_send.assert_not_called()
+    saved = fake_db.job_locks._docs[alerter._lock_id_for(CF_PULL)]
+    assert saved.get("last_state") in (None, "")
 
 
 # ─── Alert lifecycle ────────────────────────────────────────────────────────

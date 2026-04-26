@@ -397,15 +397,79 @@ async def _apply_snooze(
 
 # ─── Classification ────────────────────────────────────────────────────────
 
+def _sibling_alerter_configured(env_name: str) -> bool:
+    """Return whether the underlying alerter that ``env_name`` fans out
+    to is itself wired up on this deployment.
+
+    Task #975 — the bootstrap grace window correctly stops the alerter
+    pestering on-call about a webhook the operator is still rolling
+    out, but it does NOT cover the case where the underlying alerter
+    is itself a no-op on this deployment (e.g. a fresh backend that
+    hasn't been pointed at a Cloudflare zone, so the cf-pull silence
+    alerter would never fire even if its Slack webhook were wired).
+    Without this gate, that bare-bones deployment gets pestered every
+    24h to set a webhook for a feature it isn't even using.
+
+    Mirrors the per-alerter "is this deployed?" gate each sibling
+    silence-alerter already exposes:
+
+    * ``UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK`` — gated on
+      ``CF_ZONE_ID`` + ``CF_ANALYTICS_API_TOKEN`` (mirrors
+      :func:`routes.admin_logs_cf_pull_silence_alerts._cf_configured`,
+      which is also what the cf-pull alerter's own ``configured``
+      health field reports).
+    * ``CF_WAF_DRIFT_SLACK_WEBHOOK`` — gated on
+      ``CF_WAF_DRIFT_HEARTBEAT_SECRET`` (the shared secret the daily
+      drift workflow signs its heartbeats with; without it the
+      heartbeat route 503s every cron run, so the silence alerter
+      would never fire even if its Slack webhook were wired —
+      mirrors :func:`routes.cf_waf_drift_cron_heartbeat.get_cf_waf_drift_cron_health`'s
+      ``configured`` flag).
+    * ``EDGE_PROXY_DEPLOY_SLACK_WEBHOOK`` — gated on ``GITHUB_REPO``
+      (mirrors :func:`routes.admin_health.get_edge_proxy_deploy_cron_health`,
+      which short-circuits to ``status="not_configured"`` when the
+      repo env var is unset and never produces a ``broken`` pill the
+      alerter could page on).
+
+    Best-effort — any import / lookup error collapses to ``False`` so
+    a transient hiccup never paints "configured" on a deployment that
+    isn't (i.e. errs on the side of suppressing the nag, never on the
+    side of paging spuriously).
+    """
+    if env_name == UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK_ENV:
+        try:
+            from routes.admin_logs_cf_pull_silence_alerts import (
+                _cf_configured,
+            )
+            return bool(_cf_configured())
+        except Exception:
+            return False
+    if env_name == CF_WAF_DRIFT_SLACK_WEBHOOK_ENV:
+        return bool(
+            (os.environ.get("CF_WAF_DRIFT_HEARTBEAT_SECRET") or "").strip()
+        )
+    if env_name == EDGE_PROXY_DEPLOY_SLACK_WEBHOOK_ENV:
+        return bool((os.environ.get("GITHUB_REPO") or "").strip())
+    # Defensive default for an env name we don't know about — leave
+    # the existing classification semantics in place rather than
+    # silently suppressing.
+    return True
+
+
 def _classify_env(
     env_name: str, now_ts: float, first_observed_ts: Optional[float],
 ) -> str:
     """Reduce one env to ``missing`` / ``healthy`` / ``unknown``.
 
-    * ``unknown`` — the env is unset BUT we are still inside the
-      bootstrap grace window (operator hasn't had a chance to set
-      the secret yet, or first observation hasn't even been seeded).
-    * ``missing`` — the env is unset AND the bootstrap grace window
+    * ``unknown`` — the env is unset AND either (a) the sibling
+      alerter that would consume the webhook is itself not deployed
+      on this backend (no point nagging about a feature this
+      deployment isn't using — Task #975), or (b) we are still
+      inside the bootstrap grace window (operator hasn't had a
+      chance to set the secret yet, or first observation hasn't even
+      been seeded).
+    * ``missing`` — the env is unset, the sibling alerter IS
+      configured on this deployment, AND the bootstrap grace window
       has elapsed since the alerter first observed this deployment.
     * ``healthy`` — the env is set to a non-blank value.
 
@@ -414,9 +478,22 @@ def _classify_env(
     we delegate to so this alerter and the silence alerters
     (and the AdminHealth ``slackConfigured`` badge) all agree on
     what "configured" means.
+
+    The healthy path intentionally does NOT consult the sibling-
+    configured gate: a recovery (missing→healthy) should still fire
+    even if the operator is concurrently un-deploying the underlying
+    feature, so the "good job, you fixed it" signal isn't swallowed
+    by an unrelated config rollback on the same redeploy.
     """
     if slack_webhook_url_for(env_name):
         return "healthy"
+    # Sibling-not-deployed gate runs BEFORE the grace check so a
+    # bare-bones deployment never reaches the "missing" classification
+    # at all, regardless of how long ``first_observed_ts`` has been
+    # sitting around. Matches the task spec: "fails to `unknown` for
+    # that env (no page) regardless of bootstrap-grace state".
+    if not _sibling_alerter_configured(env_name):
+        return "unknown"
     if first_observed_ts is None:
         return "unknown"
     bootstrap_age = now_ts - float(first_observed_ts)
