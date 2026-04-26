@@ -1084,59 +1084,64 @@ async def _try_run_cf_pull_once(now_utc: Optional[datetime] = None,
     cursor_filter: Dict[str, Any] = {"_id": CF_PULL_LOCK_ID}
     if lease_owner is not None:
         cursor_filter[CF_PULL_LEASE_OWNER_FIELD] = lease_owner
-    # Task #953 — append this tick to the rolling 24h pagination-cost
-    # history. We compute the trimmed list in Python (rather than
-    # using `$push`+`$slice`) because (a) we already loaded ``lock``
-    # at the top so no extra read is needed, and (b) the lease (Task
-    # #947) ensures only one writer per tick, so the read-modify-write
-    # window is race-safe in practice. The unfenced manual-pull path
-    # could in theory race with the leader, but that's at most one
-    # entry of drift per manual call — acceptable.
+    # Task #953/#961 — append this tick to the rolling 24h
+    # pagination-cost history.
+    #
+    # The new entry is pushed via an atomic ``$push`` with
+    # ``$slice: -CF_PULL_HISTORY_MAX_ENTRIES`` rather than a Python
+    # read-modify-write. This makes the append race-proof: the
+    # background leader runs under the Task #947 lease, but the
+    # manual admin "run CF pull now" endpoint bypasses the lease, so
+    # an operator click during a normal tick used to be able to drop
+    # one entry of history.  The atomic operator means both writers
+    # land their entries; ``$slice`` keeps the list bounded.
+    #
+    # 24h pruning is handled at READ time inside
+    # ``_compute_cf_pull_24h_aggregate`` (which already filters
+    # entries older than ``CF_PULL_HISTORY_WINDOW_S``). The
+    # ``$slice`` here only enforces the absolute size cap so the
+    # cursor doc cannot grow without bound under a misconfigured
+    # tick interval (e.g. dev mode at 10s/tick = 8640 ticks/day).
     new_history_entry = {
         "ts": now.isoformat(),
         "calls": int(pulled.get("calls") or 0),
         "subdivisions": int(pulled.get("subdivisions") or 0),
         "saturated": len(pulled.get("saturated_windows") or []),
     }
-    history_cutoff = now - timedelta(seconds=CF_PULL_HISTORY_WINDOW_S)
-    prior_history = lock.get("cf_pull_history") or []
-    pruned_history: List[Dict[str, Any]] = []
-    for entry in prior_history:
-        if not isinstance(entry, dict):
-            continue
-        ts = entry.get("ts")
-        try:
-            entry_dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-        except Exception:
-            continue
-        if entry_dt >= history_cutoff:
-            pruned_history.append(entry)
-    pruned_history.append(new_history_entry)
-    # Hard safety cap (see CF_PULL_HISTORY_MAX_ENTRIES rationale).
-    if len(pruned_history) > CF_PULL_HISTORY_MAX_ENTRIES:
-        pruned_history = pruned_history[-CF_PULL_HISTORY_MAX_ENTRIES:]
     try:
         await db.job_locks.update_one(
             cursor_filter,
-            {"$set": {
-                CF_PULL_CURSOR_FIELD: until.isoformat(),
-                "updated_at": now.isoformat(),
-                "last_accepted": result["accepted"],
-                "last_dropped": result["dropped"],
-                # Task #948 — pagination telemetry. ``last_calls`` lets
-                # an operator notice "we suddenly went from 1 call/tick
-                # to 50" (i.e. someone is hammering the zone).
-                # ``last_saturated_windows`` lists the minute-buckets
-                # that hit the cap even at the floor — if it's
-                # consistently non-empty we need a finer dimension cut.
-                "last_calls": pulled["calls"],
-                "last_subdivisions": pulled["subdivisions"],
-                "last_saturated_windows": pulled["saturated_windows"],
+            {
+                "$set": {
+                    CF_PULL_CURSOR_FIELD: until.isoformat(),
+                    "updated_at": now.isoformat(),
+                    "last_accepted": result["accepted"],
+                    "last_dropped": result["dropped"],
+                    # Task #948 — pagination telemetry. ``last_calls``
+                    # lets an operator notice "we suddenly went from 1
+                    # call/tick to 50" (i.e. someone is hammering the
+                    # zone). ``last_saturated_windows`` lists the
+                    # minute-buckets that hit the cap even at the floor
+                    # — if it's consistently non-empty we need a finer
+                    # dimension cut.
+                    "last_calls": pulled["calls"],
+                    "last_subdivisions": pulled["subdivisions"],
+                    "last_saturated_windows": pulled["saturated_windows"],
+                },
                 # Task #953 — rolling 24h window of per-tick pagination
                 # cost so the admin dashboard can render a trend (not
                 # just the most recent tick).
-                "cf_pull_history": pruned_history,
-            }},
+                # Task #961 — atomic append. ``$slice: -N`` keeps only
+                # the last N entries so two simultaneous pushes (e.g.
+                # background leader + manual admin trigger) both land
+                # without either losing its entry.
+                "$push": {
+                    "cf_pull_history": {
+                        "$each": [new_history_entry],
+                        "$slice": -CF_PULL_HISTORY_MAX_ENTRIES,
+                    },
+                },
+            },
             upsert=(lease_owner is None),
         )
     except Exception as exc:

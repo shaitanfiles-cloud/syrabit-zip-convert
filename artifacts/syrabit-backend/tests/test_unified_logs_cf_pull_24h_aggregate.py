@@ -177,9 +177,12 @@ def test_try_run_cf_pull_once_appends_to_cf_pull_history(monkeypatch):
     asyncio.run(_inner())
 
 
-def test_try_run_cf_pull_once_prunes_history_older_than_24h(monkeypatch):
-    """Entries from > 24h ago in the existing history must be pruned
-    out at write time, so the cursor doc cannot grow without bound."""
+def test_try_run_cf_pull_once_keeps_old_entries_in_raw_history_but_aggregate_filters_them(monkeypatch):
+    """Task #961 — write-time pruning was dropped in favour of an
+    atomic ``$push`` + ``$slice``. Old (>24h) entries therefore stay
+    in the raw cursor doc until they age out of the size cap, but
+    ``_compute_cf_pull_24h_aggregate`` already filters them at read
+    time so the dashboard never shows stale-window data."""
     async def _inner():
         db = _FakeDb()
         monkeypatch.setattr(routes, "db", db, raising=False)
@@ -211,11 +214,105 @@ def test_try_run_cf_pull_once_prunes_history_older_than_24h(monkeypatch):
         lock = next(d for d in db.job_locks.docs
                     if d.get("_id") == routes.CF_PULL_LOCK_ID)
         history = lock["cf_pull_history"]
-        # 25h-old entry MUST be gone; recent + this-tick entries kept.
+        # All three entries (old + recent + this-tick) are present in
+        # the raw list — the size cap, not a time filter, bounds it.
         ts_set = {e["ts"] for e in history}
-        assert old_ts not in ts_set
+        assert old_ts in ts_set
         assert recent_ts in ts_set
         assert now.isoformat() in ts_set
+        assert len(history) == 3
+        # But the aggregate filters the >24h entry out at read time:
+        agg = routes._compute_cf_pull_24h_aggregate(history, now=now)
+        assert agg is not None
+        assert agg["ticks"] == 2  # only the in-window entries count
+        # The runaway 999 calls / 9 saturated from the stale entry
+        # must NOT contaminate the trend the dashboard renders.
+        assert agg["max_calls"] < 999
+        assert agg["total_saturated"] == 0
+    asyncio.run(_inner())
+
+
+def test_try_run_cf_pull_once_atomic_push_does_not_lose_concurrent_appends(monkeypatch):
+    """Task #961 — the previous implementation used a Python
+    read-modify-write to append to ``cf_pull_history``, which meant a
+    manual admin "run CF pull now" click during a normal background
+    tick could stomp the leader's append (or vice versa). The atomic
+    ``$push`` operator must let both writers' entries land. We
+    simulate the race by interleaving two pulls' update_one calls
+    around a yield point."""
+    async def _inner():
+        db = _FakeDb()
+        monkeypatch.setattr(routes, "db", db, raising=False)
+        monkeypatch.setattr("config.CF_ZONE_ID", "zone-1", raising=False)
+        monkeypatch.setattr("config.CF_ANALYTICS_API_TOKEN", "tok", raising=False)
+
+        # Seed the cursor so both pulls have a tiny non-empty window.
+        now_a = datetime(2026, 4, 26, 12, 0, 0, tzinfo=timezone.utc)
+        now_b = datetime(2026, 4, 26, 12, 0, 30, tzinfo=timezone.utc)
+        db.job_locks.docs.append({
+            "_id": routes.CF_PULL_LOCK_ID,
+            routes.CF_PULL_CURSOR_FIELD:
+                (now_a - timedelta(minutes=1)).isoformat(),
+        })
+
+        # Each call resolves on its own asyncio event so we can
+        # deterministically interleave the two pulls and force them
+        # to read the same cursor doc state before either writes.
+        gate_a = asyncio.Event()
+        gate_b = asyncio.Event()
+        call_order: list[str] = []
+
+        async def fake_graphql_a(query, variables):
+            call_order.append("a_graphql")
+            # Wait for B to also have read the cursor before either
+            # writes — this is the worst case for read-modify-write.
+            await gate_a.wait()
+            return {"data": {"viewer": {"zones": [{
+                "httpRequestsAdaptiveGroups": [
+                    _make_cf_group("2026-04-26T11:59:00+00:00", 0),
+                ],
+            }]}}}
+
+        async def fake_graphql_b(query, variables):
+            call_order.append("b_graphql")
+            await gate_b.wait()
+            return {"data": {"viewer": {"zones": [{
+                "httpRequestsAdaptiveGroups": [
+                    _make_cf_group("2026-04-26T11:59:30+00:00", 1),
+                ],
+            }]}}}
+
+        task_a = asyncio.create_task(routes._try_run_cf_pull_once(
+            now_utc=now_a, graphql_callable=fake_graphql_a))
+        task_b = asyncio.create_task(routes._try_run_cf_pull_once(
+            now_utc=now_b, graphql_callable=fake_graphql_b))
+
+        # Give both pulls a chance to load the cursor doc and reach
+        # their graphql await point before either is allowed to
+        # finish and write.
+        for _ in range(5):
+            await asyncio.sleep(0)
+        # Release A first, then B — both will write back with their
+        # own ``$push``. Under the old read-modify-write, B's write
+        # would clobber A's appended entry.
+        gate_a.set()
+        gate_b.set()
+        res_a, res_b = await asyncio.gather(task_a, task_b)
+        assert res_a["ok"] is True
+        assert res_b["ok"] is True
+
+        lock = next(d for d in db.job_locks.docs
+                    if d.get("_id") == routes.CF_PULL_LOCK_ID)
+        history = lock["cf_pull_history"]
+        ts_set = {e["ts"] for e in history}
+        # BOTH ticks' entries must be present — neither writer
+        # silently lost its append to the other.
+        assert now_a.isoformat() in ts_set, (
+            f"writer A's entry missing; history={history}"
+        )
+        assert now_b.isoformat() in ts_set, (
+            f"writer B's entry missing; history={history}"
+        )
         assert len(history) == 2
     asyncio.run(_inner())
 

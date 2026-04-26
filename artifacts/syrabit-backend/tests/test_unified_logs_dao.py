@@ -109,18 +109,45 @@ class _FakeColl:
         return None
 
     async def update_one(self, q, update, upsert=False):
-        # Tiny subset of mongo update: handles ``$set`` only — enough
-        # for the unified-logs route's ``api_config`` and
-        # ``job_locks`` writes.
+        # Tiny subset of mongo update. Handles:
+        #   * ``$set`` — used by the api_config / job_locks writes.
+        #   * ``$push`` with ``{$each: [...], $slice: -N}`` — Task #961
+        #     uses this for atomic, race-proof appends to the rolling
+        #     ``cf_pull_history`` list on the CF pull cursor doc. The
+        #     ``$slice`` keeps only the last N entries (negative means
+        #     "from the end") so the list stays bounded without a
+        #     separate read-modify-write trim pass.
+        def _apply(doc):
+            if "$set" in update:
+                doc.update(update["$set"])
+            for field, spec in (update.get("$push") or {}).items():
+                if isinstance(spec, dict) and "$each" in spec:
+                    items = list(spec["$each"])
+                    sl = spec.get("$slice")
+                else:
+                    items = [spec]
+                    sl = None
+                existing = doc.get(field)
+                if not isinstance(existing, list):
+                    existing = []
+                existing = list(existing) + items
+                if isinstance(sl, int):
+                    # Mongo: positive ``$slice`` keeps the first N,
+                    # negative keeps the last N. We support both.
+                    existing = existing[sl:] if sl < 0 else existing[:sl]
+                doc[field] = existing
+
         for d in self.docs:
             if _match(d, q or {}):
-                if "$set" in update:
-                    d.update(update["$set"])
+                _apply(d)
                 return None
         if upsert:
-            new = dict(q or {})
-            if "$set" in update:
-                new.update(update["$set"])
+            # Build the upserted doc from the (non-operator) fields of
+            # the query, then apply the same $set/$push pipeline so
+            # upsert + $push reaches the same final state as a
+            # subsequent match would.
+            new = {k: v for k, v in (q or {}).items() if not isinstance(v, dict) or not any(str(op).startswith("$") for op in v)}
+            _apply(new)
             self.docs.append(new)
         return None
 
