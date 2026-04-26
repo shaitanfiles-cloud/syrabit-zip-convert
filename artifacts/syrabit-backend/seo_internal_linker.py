@@ -456,7 +456,10 @@ async def _select_candidate_sources(
 
     # Pre-truncate to a manageable size for the embedding pass — there's
     # no point spending a vector call on a doc with zero keyword signal.
-    keyword_scored.sort(key=lambda t: t[0], reverse=True)
+    # Secondary sort by ``id`` ensures deterministic ordering when two
+    # candidates have identical scores (test stability + reproducible
+    # nightly runs).
+    keyword_scored.sort(key=lambda t: (-t[0], str(t[1].get("id") or "")))
     short_pool = keyword_scored[: max(pool * 3, 60)]
 
     # ── Stage 2b: embedding cosine (best-effort) ─────────────────────
@@ -491,7 +494,7 @@ async def _select_candidate_sources(
             # No embeddings available — fall back to keyword-only.
             blended = kscore
         final.append((blended, d))
-    final.sort(key=lambda t: t[0], reverse=True)
+    final.sort(key=lambda t: (-t[0], str(t[1].get("id") or "")))
     return [d for _, d in final[:pool]]
 
 
@@ -885,12 +888,21 @@ async def apply_pending_suggestion(db, rec_id: str, admin_label: str) -> dict:
     tid = rec.get("target_page_id")
     if not sid or not tid:
         return {"ok": False, "error": "missing source/target id"}
+    # Defence-in-depth: target_url is admin-mediated and produced by
+    # _build_page_url at draft time, but tighten the contract anyway so
+    # a hand-edited / corrupted history row can't insert a foreign-host
+    # anchor or a javascript: URL into a published page body.
+    target_url = (rec.get("target_url") or "").strip()
+    if not target_url.startswith("/") or target_url.startswith("//"):
+        return {"ok": False, "error": "target_url must be a site-relative path"}
+    if any(c in target_url for c in ('"', "'", "<", ">", "\n", "\r")):
+        return {"ok": False, "error": "target_url contains illegal characters"}
     source = await db.seo_pages.find_one({"id": sid}, {"_id": 0})
     if not source:
         return {"ok": False, "error": "source page no longer exists"}
     new_body, did = insert_anchor(
         source.get("content") or "", anchor_text=rec.get("anchor_text") or "",
-        target_url=rec.get("target_url") or "",
+        target_url=target_url,
         target_page_id=tid,
     )
     if not did:
@@ -991,6 +1003,14 @@ async def _top_traffic_pages(db, top_n: int) -> tuple[list[dict], str]:
         # pass ``limit`` keyword (NOT ``top_n``) — using the wrong kwarg
         # silently forces the recency fallback every night.
         rows = await get_top_pages_cf(limit=top_n) or []
+        # Page-type suffixes that follow a topic slug on this site
+        # (e.g. /<board>/<class>/<subject>/<topic>/mcqs). When the
+        # last URL segment is one of these, the *previous* segment
+        # is the actual ``topic_slug`` we want to look up.
+        PAGE_TYPE_SUFFIXES = {
+            "notes", "mcqs", "mcq", "flashcards", "pyq",
+            "summary", "syllabus", "questions",
+        }
         ids: list[str] = []
         for r in rows:
             # CF helper returns ``{"path": "/x/y", "views": N, ...}``.
@@ -998,10 +1018,20 @@ async def _top_traffic_pages(db, top_n: int) -> tuple[list[dict], str]:
             slug_parts = [s for s in path.strip("/").split("/") if s]
             if not slug_parts:
                 continue
-            doc = await db.seo_pages.find_one(
-                {"topic_slug": slug_parts[-1], "status": "published"},
-                {"_id": 0},
-            )
+            # Try the leaf first, then walk one segment back if it
+            # was a page-type suffix — covers both /…/topic and
+            # /…/topic/<page-type> URL shapes.
+            candidates = [slug_parts[-1]]
+            if len(slug_parts) >= 2 and slug_parts[-1].lower() in PAGE_TYPE_SUFFIXES:
+                candidates.append(slug_parts[-2])
+            doc = None
+            for slug in candidates:
+                doc = await db.seo_pages.find_one(
+                    {"topic_slug": slug, "status": "published"},
+                    {"_id": 0},
+                )
+                if doc:
+                    break
             if doc and doc.get("id") not in ids:
                 ids.append(doc.get("id"))
         if ids:
