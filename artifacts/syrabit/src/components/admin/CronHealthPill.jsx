@@ -189,7 +189,12 @@ export default function CronHealthPill({
     setHistoryOpen((prev) => {
       const next = !prev;
       if (next && historyEnabled) {
-        try { onLoadAlertHistory(); } catch (_e) { /* best-effort */ }
+        // No try/catch — the parent loader is contractually
+        // responsible for swallowing its own fetch errors and
+        // surfacing them via `alertHistory.error` / loading state.
+        // Catching here would hide real bugs (TypeError on a
+        // misnamed prop, etc.) and silently break the panel.
+        onLoadAlertHistory();
       }
       return next;
     });
