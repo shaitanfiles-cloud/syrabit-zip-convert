@@ -28,10 +28,12 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _isolate_queue():
-    from seo_remediation_service import reset_queue_for_tests
-    reset_queue_for_tests()
+    """Pre-Mongo-queue tests reset an in-process asyncio queue.
+    The durable Mongo-backed queue is now per-test thanks to the
+    ``_FakeDb()`` instance constructed in each test, so this
+    fixture is a no-op kept for forward-compat with any future
+    module-level state we might re-introduce."""
     yield
-    reset_queue_for_tests()
 
 
 @pytest.fixture
@@ -100,6 +102,19 @@ class _FakeColl:
         if upsert:
             self.docs.append({**q, **sets})
 
+    async def update_many(self, q, update):
+        sets = update.get("$set") or {}
+        n = 0
+        for d in self.docs:
+            if all(d.get(k) == v for k, v in q.items()):
+                d.update(sets)
+                n += 1
+        return type("R", (), {"modified_count": n})()
+
+    async def insert_one(self, doc):
+        self.docs.append(dict(doc))
+        return type("R", (), {"inserted_id": doc.get("_id")})()
+
     async def find_one_and_update(self, q, update, projection=None,
                                   return_document=None, **_kw):
         """Mimic motor's atomic find_and_update — returns the
@@ -130,6 +145,7 @@ class _FakeDb:
         self.seo_remediation_history = _FakeColl()
         self.seo_remediation_budget = _FakeColl()
         self.seo_remediation_circuit = _FakeColl()
+        self.seo_remediation_signals = _FakeColl()
         self.seo_pages = _FakeColl()
 
 
@@ -380,12 +396,18 @@ def test_trigger_enqueues_signal_and_returns_id(client):
     body = r.json()
     assert body["ok"] is True
     assert body["enqueued"] is True
-    # Drain the queue and verify the signal carries the admin context.
-    from seo_remediation_service import _get_queue
-    sig = _get_queue().get_nowait()
-    assert sig["kind"] == "manual_trigger"
-    assert sig["url"] == "/board/x/biology/photosynthesis"
-    assert sig["details"]["triggered_by"] == "ops"
+    assert body["signal_id"]
+    # The trigger persisted a single PENDING signal to the durable
+    # Mongo queue so the leader's poller can pick it up — verify
+    # the admin context (URL + triggered_by) is carried through.
+    docs = db.seo_remediation_signals.docs
+    assert len(docs) == 1
+    sig_doc = docs[0]
+    assert sig_doc["status"] == "pending"
+    assert sig_doc["kind"] == "manual_trigger"
+    assert sig_doc["url"] == "/board/x/biology/photosynthesis"
+    assert sig_doc["payload"]["details"]["triggered_by"] == "ops"
+    assert sig_doc["_id"] == body["signal_id"]
 
 
 def test_trigger_400s_when_no_target(client):

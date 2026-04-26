@@ -1731,3 +1731,58 @@ def test_e2e_severity_escalation_scenario():
         ("escalated", "critical"),
         ("recovered", "ok"),
     ], f"Unexpected dispatch sequence: {sequence}"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Task #938 regression — `_seo_health_alert_loop` once referenced bare
+# ``db`` in the URL-spike fan-out branch *before* the function-local
+# ``from deps import db`` rebind further down the same function. Because
+# Python performs scope resolution statically, that bare reference
+# always raised UnboundLocalError at runtime and the surrounding
+# try/except silently dropped every URL-spike remediation signal.
+# Lock this in via AST so a future refactor cannot re-introduce it.
+# ─────────────────────────────────────────────────────────────────────
+def test_seo_health_alert_loop_does_not_use_bare_db_before_local_rebind():
+    import ast
+    import inspect
+
+    src = inspect.getsource(bot_discovery)
+    tree = ast.parse(src)
+    fn = next(
+        (n for n in ast.walk(tree)
+         if isinstance(n, ast.AsyncFunctionDef) and n.name == "_seo_health_alert_loop"),
+        None,
+    )
+    assert fn is not None, "_seo_health_alert_loop must exist"
+
+    # Find the line of the function-local ``from deps import db`` rebind
+    # (the bare alias, not ``db as _db``).
+    rebind_line = None
+    for node in ast.walk(fn):
+        if isinstance(node, ast.ImportFrom) and node.module == "deps":
+            for alias in node.names:
+                if alias.name == "db" and (alias.asname is None):
+                    rebind_line = node.lineno
+                    break
+            if rebind_line is not None:
+                break
+    assert rebind_line is not None, (
+        "Expected a function-local `from deps import db` rebind inside "
+        "_seo_health_alert_loop (the rebind that creates the scoping hazard)."
+    )
+
+    # Any bare-Name Load of ``db`` before that line raises UnboundLocalError
+    # at runtime — the URL-spike fan-out is the canonical regression site.
+    offenders = [
+        node.lineno for node in ast.walk(fn)
+        if isinstance(node, ast.Name)
+        and node.id == "db"
+        and isinstance(node.ctx, ast.Load)
+        and node.lineno < rebind_line
+    ]
+    assert not offenders, (
+        f"_seo_health_alert_loop references bare `db` before its function-local "
+        f"`from deps import db` rebind at lines {offenders}. This will raise "
+        f"UnboundLocalError at runtime and silently drop remediation fan-out. "
+        f"Use the aliased `_db` (from `from deps import db as _db`) instead."
+    )

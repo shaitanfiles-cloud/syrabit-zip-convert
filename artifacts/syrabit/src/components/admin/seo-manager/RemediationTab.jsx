@@ -16,7 +16,7 @@ const ACTION_LABELS = {
   auto_republished:        { label: 'Auto-republished',  color: '#10b981', bg: '#ecfdf5' },
   drafted:                 { label: 'Drafted',           color: '#f59e0b', bg: '#fffbeb' },
   skipped_no_improvement:  { label: 'Skipped (regression)', color: '#9ca3af', bg: '#f9fafb' },
-  skipped_over_budget:     { label: 'Skipped (budget)',  color: '#9ca3af', bg: '#f9fafb' },
+  skipped_budget:          { label: 'Skipped (budget)',  color: '#9ca3af', bg: '#f9fafb' },
   skipped_circuit_open:    { label: 'Skipped (circuit)', color: '#9ca3af', bg: '#f9fafb' },
   skipped_page_not_found:  { label: 'Page not found',    color: '#9ca3af', bg: '#f9fafb' },
   failed:                  { label: 'Failed',            color: '#ef4444', bg: '#fef2f2' },

@@ -233,13 +233,13 @@ async def remediation_trigger(
             "triggered_by": (_admin or {}).get("username") or "admin",
         },
     }
-    ok = rem.enqueue_remediation_signal(signal)
-    if not ok:
+    sid = await rem.enqueue_remediation_signal(db, signal)
+    if not sid:
         raise HTTPException(
             status_code=503,
-            detail="signal queue is full or invalid; try again shortly",
+            detail="failed to persist signal; try again shortly",
         )
-    return {"ok": True, "signal_id": signal.get("id"), "enqueued": True}
+    return {"ok": True, "signal_id": sid, "enqueued": True}
 
 
 @router.post("/admin/seo/remediation/circuit/reset")

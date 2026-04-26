@@ -13,15 +13,20 @@ producing weak output).
 
 Public surface
 --------------
-* ``enqueue_remediation_signal(signal)`` — fire-and-forget pubsub
-  entry point used by the alerter.
-* ``_seo_remediation_loop()`` — long-running worker started from
-  ``server.py`` under the leader gate.
+* ``await enqueue_remediation_signal(db, signal)`` — durable
+  fire-and-forget entry point used by the alerter and the admin
+  trigger endpoint. Persists the signal to Mongo so any replica
+  (not just the one that observed the alert) can pick it up.
+* ``_seo_remediation_loop(db)`` — long-running worker started
+  from ``server.py`` under the leader gate. Polls the Mongo
+  signal collection, atomically claims the next pending one,
+  processes it, then marks it done.
 * ``decide_action(...)`` / ``compute_quality_delta(...)`` — pure
   helpers exposed for unit tests.
-* History collection: ``seo_remediation_history``
-* Budget collection: ``seo_remediation_budget`` (one doc per UTC date)
-* Circuit doc: ``seo_remediation_circuit`` (single doc id ``state``)
+* Signal queue collection: ``seo_remediation_signals``
+* History collection:    ``seo_remediation_history``
+* Budget collection:     ``seo_remediation_budget`` (one doc/UTC date)
+* Circuit doc:           ``seo_remediation_circuit`` (id ``state``)
 """
 from __future__ import annotations
 
@@ -34,22 +39,39 @@ from typing import Any, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
-SIGNAL_QUEUE_MAXSIZE = 500
 HISTORY_RETENTION_DAYS = 30
+# Signals that are still ``pending`` after this many hours are
+# treated as stale (the original incident is already over) and
+# auto-failed by the loop. This stops a one-off alert from
+# replaying days later when the leader finally picks it up.
+SIGNAL_STALE_HOURS = 24
 
+# Per #938 spec the closed loop subscribes to URL spike + SEO
+# health degraded/critical signals plus manual admin triggers.
+# Keep the set tight so the alerter cannot accidentally enqueue a
+# kind we have no decision logic for. Adding a new kind requires
+# a corresponding _resolve_page_from_signal branch.
 VALID_SIGNAL_KINDS = frozenset({
     "url_404_spike",
     "seo_health_degraded",
     "seo_health_critical",
-    "orphan_page",
-    "sitemap_regression",
     "manual_trigger",
 })
+
+# Signal lifecycle on the durable queue.
+SIGNAL_STATUS_PENDING = "pending"
+SIGNAL_STATUS_CLAIMED = "claimed"
+SIGNAL_STATUS_DONE = "done"
+SIGNAL_STATUS_FAILED = "failed"
 
 ACTION_AUTO_REPUBLISHED = "auto_republished"
 ACTION_DRAFTED = "drafted"
 ACTION_SKIPPED_NO_IMPROVEMENT = "skipped_no_improvement"
-ACTION_SKIPPED_OVER_BUDGET = "skipped_over_budget"
+# Spec wording: "skipped_budget". The constant name keeps the
+# `_OVER_` suffix for code-search continuity, but the *value*
+# (which is what flows into history rows, the admin filter
+# dropdown, and external consumers) matches the spec exactly.
+ACTION_SKIPPED_OVER_BUDGET = "skipped_budget"
 ACTION_SKIPPED_CIRCUIT_OPEN = "skipped_circuit_open"
 ACTION_SKIPPED_NOT_FOUND = "skipped_page_not_found"
 ACTION_FAILED = "failed"
@@ -94,63 +116,114 @@ def get_config() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Signal queue (in-process pubsub)
+# Durable signal queue (Mongo-backed cross-replica pubsub)
 # ---------------------------------------------------------------------------
-_signal_queue: Optional[asyncio.Queue] = None
+# We persist signals to ``db.seo_remediation_signals`` instead of an
+# in-process ``asyncio.Queue`` because the producers
+# (``_seo_health_alert_loop`` in ``routes/bot_discovery.py``) run on
+# every gunicorn worker, while the consumer
+# (``_seo_remediation_loop``) only runs on the leader. With an
+# in-memory queue, signals fired by non-leader replicas would be
+# silently lost (the leader would never see them, since the queue is
+# per-process). Mongo is the cheapest cross-replica transport we
+# already operate, and the existing alerter state machine is
+# already Mongo-backed so we are not adding a new dependency.
+async def enqueue_remediation_signal(db, signal: Mapping[str, Any]) -> Optional[str]:
+    """Persist a remediation signal so any replica's worker loop
+    can pick it up.
 
-
-def _get_queue() -> asyncio.Queue:
-    """Lazy queue construction — must happen inside the asyncio
-    loop, so the loop binding is correct. Production callers always
-    invoke from inside the FastAPI loop."""
-    global _signal_queue
-    if _signal_queue is None:
-        _signal_queue = asyncio.Queue(maxsize=SIGNAL_QUEUE_MAXSIZE)
-    return _signal_queue
-
-
-def reset_queue_for_tests() -> None:
-    """Drop the module-level queue so each test gets a fresh one
-    bound to its event loop. Callers in production must NEVER use
-    this — it would silently lose pending signals."""
-    global _signal_queue
-    _signal_queue = None
-
-
-def enqueue_remediation_signal(signal: Mapping[str, Any]) -> bool:
-    """Fire-and-forget entry point used by the alerter.
-
-    Returns True on enqueue, False on drop (queue full or invalid).
-    Never raises — the alerter must continue paging on-call even if
-    the remediation pipeline is wedged.
+    Returns the signal id on success, ``None`` on a validation drop
+    (unknown kind, malformed payload) or a transient persistence
+    error. Never raises — the alerter must continue paging on-call
+    even if the remediation pipeline is wedged.
     """
     if not isinstance(signal, Mapping):
         logger.warning("remediation: rejected non-mapping signal %r", type(signal))
-        return False
+        return None
     kind = signal.get("kind")
     if kind not in VALID_SIGNAL_KINDS:
         logger.warning("remediation: rejected unknown signal kind=%r", kind)
-        return False
-    enriched = dict(signal)
-    enriched.setdefault("id", f"sig-{uuid.uuid4().hex[:10]}")
-    enriched.setdefault("detected_at", datetime.now(timezone.utc).isoformat())
+        return None
+    sid = signal.get("id") or f"sig-{uuid.uuid4().hex[:10]}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    payload = dict(signal)
+    payload.setdefault("id", sid)
+    payload.setdefault("detected_at", now_iso)
+    doc = {
+        "_id": sid,
+        "id": sid,
+        "kind": kind,
+        "url": payload.get("url"),
+        "payload": payload,
+        "status": SIGNAL_STATUS_PENDING,
+        "created_at": now_iso,
+        "claimed_at": None,
+        "processed_at": None,
+        "attempts": 0,
+        "fail_reason": None,
+    }
     try:
-        q = _get_queue()
-    except RuntimeError:
-        # No running loop — caller is outside FastAPI (e.g. a sync
-        # script). Drop quietly; not the alerter's job to bootstrap
-        # the loop.
-        logger.debug("remediation: no running loop, signal dropped")
-        return False
-    try:
-        q.put_nowait(enriched)
-        return True
-    except asyncio.QueueFull:
+        await db.seo_remediation_signals.insert_one(doc)
+        return sid
+    except Exception as exc:
+        # Includes DuplicateKeyError on a re-fire of the same
+        # alerter event — that's safe to swallow because it means
+        # the signal is already in the queue.
         logger.warning(
-            "remediation: signal queue full (max=%d), dropped kind=%s url=%s",
-            SIGNAL_QUEUE_MAXSIZE, kind, enriched.get("url"),
+            "remediation: failed to persist signal kind=%s url=%s: %s",
+            kind, payload.get("url"), exc,
         )
-        return False
+        return None
+
+
+async def _expire_stale_signals(db) -> int:
+    """Mark any signal that has been pending longer than
+    ``SIGNAL_STALE_HOURS`` as failed. Returns the number expired.
+    Called from the worker loop on every poll cycle so a one-off
+    incident from days ago doesn't replay when the leader recovers.
+    """
+    cutoff_iso = (datetime.now(timezone.utc)
+                  - timedelta(hours=SIGNAL_STALE_HOURS)).isoformat()
+    res = await db.seo_remediation_signals.update_many(
+        {"status": SIGNAL_STATUS_PENDING,
+         "created_at": {"$lt": cutoff_iso}},
+        {"$set": {
+            "status": SIGNAL_STATUS_FAILED,
+            "processed_at": datetime.now(timezone.utc).isoformat(),
+            "fail_reason": f"expired before claim ({SIGNAL_STALE_HOURS}h)",
+        }},
+    )
+    n = getattr(res, "modified_count", 0) or 0
+    if n:
+        logger.info("remediation: expired %d stale pending signals", n)
+    return n
+
+
+async def _claim_next_signal(db) -> Optional[dict]:
+    """Atomically claim the oldest pending signal. Multi-replica
+    safe — the ``find_one_and_update`` predicate on ``status`` is
+    a single Mongo round-trip so two leaders racing during
+    fail-over cannot both win the same signal."""
+    return await db.seo_remediation_signals.find_one_and_update(
+        {"status": SIGNAL_STATUS_PENDING},
+        {"$set": {
+            "status": SIGNAL_STATUS_CLAIMED,
+            "claimed_at": datetime.now(timezone.utc).isoformat(),
+        },
+         "$inc": {"attempts": 1}},
+        sort=[("created_at", 1)],
+    )
+
+
+async def _mark_signal_done(db, sid: str, *, ok: bool,
+                            reason: Optional[str] = None) -> None:
+    update = {"$set": {
+        "status": SIGNAL_STATUS_DONE if ok else SIGNAL_STATUS_FAILED,
+        "processed_at": datetime.now(timezone.utc).isoformat(),
+    }}
+    if reason:
+        update["$set"]["fail_reason"] = str(reason)[:500]
+    await db.seo_remediation_signals.update_one({"_id": sid}, update)
 
 
 # ---------------------------------------------------------------------------
@@ -635,29 +708,55 @@ async def _remediate_one(db, signal: Mapping[str, Any]) -> dict:
 # ---------------------------------------------------------------------------
 # Worker loop
 # ---------------------------------------------------------------------------
-async def _seo_remediation_loop():
-    """Long-running worker started from server.py under the leader
-    gate. Consumes signals one at a time so the LLM-bound pipeline
-    never runs concurrently with itself (avoid blowing the
-    OpenRouter QPS budget)."""
-    from deps import db
+async def _seo_remediation_loop(db=None):
+    """Long-running worker started from ``server.py`` under the
+    leader gate. Polls the durable Mongo signal collection,
+    atomically claims the next pending one, processes it, then
+    marks it done. Serial (one-signal-at-a-time) so the LLM-bound
+    pipeline never runs concurrently with itself and we don't blow
+    the OpenRouter QPS budget."""
+    if db is None:
+        from deps import db as _default_db
+        db = _default_db
     if db is None:
         logger.warning("remediation: deps.db is None, loop will not run")
         return
-    logger.info("remediation: loop starting")
-    queue = _get_queue()
+    logger.info("remediation: loop starting (durable Mongo queue)")
     while True:
-        cfg = get_config()
-        if not cfg["enabled"]:
-            await asyncio.sleep(cfg["idle_backoff_secs"])
-            continue
         try:
-            signal = await asyncio.wait_for(queue.get(), timeout=cfg["idle_backoff_secs"])
-        except asyncio.TimeoutError:
-            continue
-        try:
-            await _remediate_one(db, signal)
+            cfg = get_config()
+            if not cfg["enabled"]:
+                await asyncio.sleep(cfg["idle_backoff_secs"])
+                continue
+            # Cheap maintenance step — sweep stale pending signals
+            # before we try to claim the head of the queue. Bounded
+            # by Mongo so it costs nothing on idle.
+            try:
+                await _expire_stale_signals(db)
+            except Exception:
+                logger.exception("remediation: stale-signal sweep failed")
+
+            sig_doc = await _claim_next_signal(db)
+            if not sig_doc:
+                await asyncio.sleep(cfg["idle_backoff_secs"])
+                continue
+            sid = sig_doc["_id"]
+            payload = sig_doc.get("payload") or {}
+            try:
+                await _remediate_one(db, payload)
+                await _mark_signal_done(db, sid, ok=True)
+            except Exception as exc:
+                logger.exception(
+                    "remediation: unhandled error processing signal %s", sid)
+                try:
+                    await _mark_signal_done(db, sid, ok=False, reason=str(exc))
+                except Exception:
+                    logger.exception(
+                        "remediation: also failed to mark signal failed: %s", sid)
+        except asyncio.CancelledError:
+            logger.info("remediation: loop cancelled")
+            raise
         except Exception:
-            logger.exception("remediation: unhandled error processing signal %s", signal.get("id"))
-        finally:
-            queue.task_done()
+            # Belt-and-braces — never let the loop die.
+            logger.exception("remediation: unexpected loop error")
+            await asyncio.sleep(get_config()["idle_backoff_secs"])

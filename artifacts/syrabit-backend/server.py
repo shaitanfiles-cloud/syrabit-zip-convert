@@ -969,14 +969,17 @@ async def lifespan(app):
     if _is_leader:
         from topic_discovery_service import _topic_discovery_loop
         asyncio.create_task(_topic_discovery_loop())
-    # Task #938: closed-loop content remediation worker. Leader-gated
-    # so only one replica drains the in-process signal queue (the
-    # alerter on every replica fans out signals only on its own loop,
-    # so the queue is always empty on the non-leader replicas — we
-    # gate the consumer too as belt-and-braces).
+    # Task #938: closed-loop content remediation worker.
+    # Leader-gated so only one replica processes signals — the
+    # alerter on every replica enqueues into the durable Mongo
+    # ``seo_remediation_signals`` collection, and the leader's
+    # poller atomically claims (find_one_and_update) the next
+    # pending signal. Cross-replica safe: producers can fire from
+    # any worker, the consumer drains them one at a time without
+    # double-processing.
     if _is_leader:
         from seo_remediation_service import _seo_remediation_loop
-        asyncio.create_task(_seo_remediation_loop())
+        asyncio.create_task(_seo_remediation_loop(db))
     # Task #587 — nightly live grounded-recall benchmark + alerting.
     # Runs once per UTC day (configurable via GROUNDED_RECALL_NIGHTLY_*),
     # writes bench/results/latest.json so the admin tile reflects the
