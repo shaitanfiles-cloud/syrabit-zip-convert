@@ -16,6 +16,7 @@ import QualityTab from './seo-manager/QualityTab';
 import SchedulePanel from './seo-manager/SchedulePanel';
 import TopicDiscoveryTab from './seo-manager/TopicDiscoveryTab';
 import RemediationTab from './seo-manager/RemediationTab';
+import EntitySeoTab from './seo-manager/EntitySeoTab';
 import useSeoManager from './seo-manager/useSeoManager';
 
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
@@ -37,6 +38,7 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
     { id: 'schedule', label: '🗓 Schedule', count: null },
     { id: 'discovery', label: '🤖 Discovery', count: null },
     { id: 'remediation', label: '♻️ Remediation', count: null },
+    { id: 'entity', label: '🪪 Entity SEO', count: null },
   ];
 
   return (
@@ -198,6 +200,10 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
 
         {s.tab === 'remediation' && (
           <RemediationTab adminToken={adminToken} />
+        )}
+
+        {s.tab === 'entity' && (
+          <EntitySeoTab adminToken={adminToken} />
         )}
 
         <AdminQuickLinks links={['content','vertex','analytics','dashboard','editor']} onNavigate={onNavigate} />

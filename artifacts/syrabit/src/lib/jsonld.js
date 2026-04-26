@@ -33,6 +33,36 @@ const ORG_NODE = {
 
 const ORG_REF = { '@id': `${SITE_ORIGIN}/#organization` };
 
+/**
+ * Task #940 (closes #558) — verified off-site identities for the
+ * Syrabit.ai entity + its founder. These are the same lists the
+ * backend `entity_seo_health` worker probes weekly to detect drift,
+ * so any future profile addition gets the JSON-LD `sameAs` for free
+ * once it's added here.
+ *
+ * Only include profiles you actually control + want crawlers to map
+ * back to the canonical Syrabit.ai entity — a stale or 404 entry
+ * weakens the Knowledge Panel signal.
+ */
+export const ORG_SAMEAS = [
+  'https://www.linkedin.com/company/syrabit-ai/',
+  'https://twitter.com/SyrabitAI',
+  'https://github.com/syrabit',
+  'https://www.youtube.com/@syrabit',
+];
+
+export const FOUNDER = {
+  name: 'Dipak Rai',
+  jobTitle: 'Founder & CEO',
+  sameAs: [
+    'https://www.linkedin.com/in/dipakrai/',
+    'https://github.com/dipakrai',
+    'https://twitter.com/dipakraix',
+  ],
+};
+
+const FOUNDER_NODE_ID = `${SITE_ORIGIN}/#founder`;
+
 // Single source of truth for the publisher's address/geo. Reused by the
 // chapter Article publisher node, the global LocalBusiness emission, and
 // any future PostalAddress consumers so the AI crawlers see the exact
@@ -100,10 +130,23 @@ export function globalSiteSchema(url) {
         alternateName: 'Syrabit',
         url: SITE_ORIGIN,
         logo: { '@type': 'ImageObject', url: SITE_LOGO, width: 192, height: 192 },
-        sameAs: [SITE_ORIGIN],
+        // Task #940 / closes #558 — emit verified social profiles so
+        // the Knowledge Graph + AI crawlers can map every off-site
+        // mention back to the canonical Syrabit.ai entity. SITE_ORIGIN
+        // stays first so existing test snapshots don't shift.
+        sameAs: [SITE_ORIGIN, ...ORG_SAMEAS],
         address: SYRABIT_ADDRESS,
         areaServed: { '@type': 'AdministrativeArea', name: 'Assam, India' },
         knowsLanguage: ['en', 'as'],
+        founder: { '@id': FOUNDER_NODE_ID },
+      },
+      {
+        '@type': 'Person',
+        '@id': FOUNDER_NODE_ID,
+        name: FOUNDER.name,
+        jobTitle: FOUNDER.jobTitle,
+        worksFor: { '@id': `${SITE_ORIGIN}/#organization` },
+        sameAs: FOUNDER.sameAs,
       },
       {
         '@type': 'LocalBusiness',

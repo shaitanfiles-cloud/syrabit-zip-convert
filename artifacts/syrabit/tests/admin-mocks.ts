@@ -78,6 +78,61 @@ const FIXTURES: Array<[string, Fixture]> = [
     pages_total: 0, published_today: 0,
   })],
   ['/api/seo/health', () => ({ sitemaps: [] })],
+
+  // Task #940 — Entity SEO admin panel.
+  // Default fixture surfaces a "healthy / nothing missing" snapshot so
+  // the dashboard renders the panel chrome without erroring. Drift
+  // scenarios are wired via per-test `overrides`.
+  ['/api/admin/seo/entity/status', () => ({
+    configured: true,
+    snapshot: {
+      generated_at: '2026-04-26T04:30:00.000Z',
+      iso_week: '2026-W17',
+      aggregate_status: 'ok',
+      summary: {
+        wikidata_claims: 7, wikidata_missing: 0,
+        sameas_total: 7, sameas_broken: 0,
+        wikipedia_present: true, crunchbase_present: true, google_kg_present: true,
+      },
+      signals: {
+        wikidata:   { name: 'wikidata',   status: 'ok',
+          summary: 'Syrabit.ai (Q123) — 7 claims, 0 desired claims missing.',
+          fields: { qid: 'Q123', claim_count: 7, present_claims: ['P31','P17'],
+                    missing_claims: [], edit_url: 'https://www.wikidata.org/wiki/Q123' } },
+        wikipedia:  { name: 'wikipedia',  status: 'ok',
+          summary: 'Article live: Syrabit.ai',
+          fields: { title: 'Syrabit.ai', page_url: 'https://en.wikipedia.org/wiki/Syrabit.ai' } },
+        crunchbase: { name: 'crunchbase', status: 'ok',
+          summary: 'Crunchbase profile reachable (100% of tracked fields detected).',
+          fields: { permalink: 'syrabit-ai', completeness_pct: 100,
+                    page_url: 'https://www.crunchbase.com/organization/syrabit-ai' } },
+        sameas:     { name: 'sameas',     status: 'ok',
+          summary: 'All 7 verified profiles live.',
+          fields: { total: 7, broken: [] } },
+        google_kg:  { name: 'google_kg',  status: 'ok',
+          summary: 'Panel entry: "Syrabit.ai" (score 950).',
+          fields: { configured: true, name: 'Syrabit.ai' } },
+      },
+      missing_claims: [],
+    },
+    previous: null,
+    drift: { hadBaseline: false, regressions: [], improvements: [],
+             summaryDeltas: {
+               wikidata_claims:  { current: 7, previous: 7, delta: 0 },
+               wikidata_missing: { current: 0, previous: 0, delta: 0 },
+               sameas_broken:    { current: 0, previous: 0, delta: 0 },
+             } },
+    missingClaims: [],
+    alertState: null,
+  })],
+  ['/api/admin/seo/entity/history', () => ({ items: [] })],
+  ['/api/admin/seo/entity/refresh', () => ({
+    configured: true,
+    snapshot: null, previous: null,
+    drift: { hadBaseline: false, regressions: [], improvements: [], summaryDeltas: {} },
+    missingClaims: [], alertState: null,
+    refresh: { claimed: true, stored: true, regression_count: 0, paged: false },
+  })],
 ];
 
 interface InstallOptions {

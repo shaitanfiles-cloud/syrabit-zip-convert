@@ -120,6 +120,7 @@ from seed import ensure_seeded
 from db_ops import supa_insert_activity_log
 from metrics import _bg_health_loop, _alerting_loop
 from routes.bot_discovery import _endpoint_health_alert_loop, _seo_health_alert_loop, _seo_weekly_digest_loop, _cf_bot_report_loop
+from entity_seo_health import _entity_seo_loop
 from routes.bot_traffic_report import _bot_traffic_report_loop
 
 from syllabus_embedder import SyllabusEmbedder
@@ -963,6 +964,11 @@ async def lifespan(app):
         asyncio.create_task(_bing_keyword_refresh_loop())
     asyncio.create_task(_seo_health_alert_loop())
     asyncio.create_task(_seo_weekly_digest_loop())
+    # Task #940: weekly entity-SEO health worker (Wikidata, Wikipedia,
+    # Crunchbase, sameAs, Google KG). Leader-gated like the cf bot
+    # report so only one replica probes the upstream APIs per week.
+    if _is_leader:
+        asyncio.create_task(_entity_seo_loop())
     # Task #937: nightly autonomous topic-discovery agent. Leader-gated
     # so only one replica fires the per-day run; the loop also holds an
     # atomic per-yyyy-mm-dd lock as a belt-and-braces guard.
@@ -1429,6 +1435,7 @@ from routes.admin_seo_keywords import router as admin_seo_keywords_router
 from routes.admin_topic_discovery import router as admin_topic_discovery_router
 from routes.admin_seo_remediation import router as admin_seo_remediation_router
 from routes.admin_seo_internal_linker import router as admin_seo_internal_linker_router
+from routes.admin_entity_seo import router as admin_entity_seo_router
 
 api.include_router(auth_router)
 api.include_router(content_router)
@@ -1471,6 +1478,7 @@ api.include_router(admin_seo_keywords_router)
 api.include_router(admin_topic_discovery_router)
 api.include_router(admin_seo_remediation_router)
 api.include_router(admin_seo_internal_linker_router)
+api.include_router(admin_entity_seo_router)
 
 from llm import call_llm_api_content
 from auth_deps import get_admin_user

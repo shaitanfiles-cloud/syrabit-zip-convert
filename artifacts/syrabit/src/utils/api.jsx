@@ -200,6 +200,31 @@ export const adminPublishSubject = (token, subjectId) =>
     { headers: adminHeaders(token), withCredentials: true },
   );
 
+// Task #940 — Entity SEO + Knowledge Graph health panel. Mirrors the
+// FastAPI router shape from `routes/admin_entity_seo.py`:
+//   GET  /admin/seo/entity/status     — current snapshot + WoW deltas
+//   GET  /admin/seo/entity/history    — recent snapshots for the chart
+//   POST /admin/seo/entity/refresh    — manual re-probe (admin override)
+export const adminEntitySeoStatus = (token) =>
+  axios.get(`${API_BASE}/admin/seo/entity/status`, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+  });
+
+export const adminEntitySeoHistory = (token, limit = 20) =>
+  axios.get(`${API_BASE}/admin/seo/entity/history`, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+    params: { limit },
+  });
+
+export const adminEntitySeoRefresh = (token) =>
+  axios.post(`${API_BASE}/admin/seo/entity/refresh`, {}, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+    timeout: 60000,
+  });
+
 export const adminSeoHealthHistory = (token, limit = 168) =>
   axios.get(`${API_BASE}/admin/seo/health-history`, {
     headers: adminHeaders(token),

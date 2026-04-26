@@ -26,6 +26,8 @@ import {
   detectHowToFromDoc,
   dedupeGraphTypes,
   buildSchemaForPageType,
+  ORG_SAMEAS,
+  FOUNDER,
 } from '../src/lib/jsonld.js';
 
 const types = (g) => g['@graph'].map((n) => n['@type']);
@@ -264,6 +266,27 @@ test('globalSiteSchema → Organization + LocalBusiness with Guwahati address', 
   const org = g['@graph'].find((n) => Array.isArray(n['@type']) && n['@type'].includes('Organization'));
   assert.equal(org['@id'], 'https://syrabit.ai/#organization');
   assert.deepEqual(org.knowsLanguage, ['en', 'as']);
+
+  // Task #940 / closes #558 — Org.sameAs must include every verified
+  // social profile so AI crawlers map off-site mentions back to the
+  // canonical Syrabit.ai entity. SITE_ORIGIN stays first; the rest
+  // are exactly the entries the backend probes weekly.
+  assert.ok(Array.isArray(org.sameAs) && org.sameAs.length === 1 + ORG_SAMEAS.length,
+    `Org.sameAs should be SITE_ORIGIN + every verified profile (got ${JSON.stringify(org.sameAs)})`);
+  for (const url of ORG_SAMEAS) {
+    assert.ok(org.sameAs.includes(url), `Org.sameAs missing ${url}`);
+  }
+
+  // Task #940 / closes #558 — founder Person node + worksFor link.
+  assert.equal(org.founder?.['@id'], 'https://syrabit.ai/#founder',
+    'Org.founder should reference the founder Person node by @id');
+  const founder = g['@graph'].find((n) => n['@type'] === 'Person'
+    && n['@id'] === 'https://syrabit.ai/#founder');
+  assert.ok(founder, 'globalSiteSchema should emit a founder Person node');
+  assert.equal(founder.name, FOUNDER.name);
+  assert.equal(founder.jobTitle, FOUNDER.jobTitle);
+  assert.deepEqual(founder.sameAs, FOUNDER.sameAs);
+  assert.equal(founder.worksFor['@id'], 'https://syrabit.ai/#organization');
 });
 
 test('extractHowToSteps detects numbered steps and returns >=2 step nodes', () => {
