@@ -521,6 +521,32 @@ export const adminSeoRefreshMeta = (token) =>
 export const adminSeoGoogleIndexingStats = (token) =>
   axios.get(`${API_BASE}/admin/seo/google-indexing-stats`, { headers: adminHeaders(token), withCredentials: true });
 
+export const adminTopicDiscoveryRuns = (token, limit = 20) =>
+  axios.get(`${API_BASE}/admin/seo/topic-discovery/runs`, {
+    headers: adminHeaders(token), withCredentials: true, params: { limit },
+  });
+
+export const adminTopicDiscoveryCandidates = (token, { runId = null, decision = null, limit = 100, skip = 0 } = {}) => {
+  const params = { limit, skip };
+  if (runId) params.run_id = runId;
+  if (decision) params.decision = decision;
+  return axios.get(`${API_BASE}/admin/seo/topic-discovery/candidates`, {
+    headers: adminHeaders(token), withCredentials: true, params,
+  });
+};
+
+export const adminTopicDiscoveryRunNow = (token) =>
+  axios.post(`${API_BASE}/admin/seo/topic-discovery/run-now`, null, {
+    headers: adminHeaders(token), withCredentials: true,
+  });
+
+export const adminTopicDiscoveryOverride = (token, candidateId, decision, reason = '') =>
+  axios.post(
+    `${API_BASE}/admin/seo/topic-discovery/${encodeURIComponent(candidateId)}/override`,
+    { decision, reason },
+    { headers: adminHeaders(token), withCredentials: true },
+  );
+
 export const adminSeoReviewQueue = (token, status = 'draft', limit = 200) =>
   axios.get(`${API_BASE}/seo/review-queue`, { headers: adminHeaders(token), withCredentials: true, params: { status, limit } });
 

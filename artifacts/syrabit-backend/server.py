@@ -963,6 +963,12 @@ async def lifespan(app):
         asyncio.create_task(_bing_keyword_refresh_loop())
     asyncio.create_task(_seo_health_alert_loop())
     asyncio.create_task(_seo_weekly_digest_loop())
+    # Task #937: nightly autonomous topic-discovery agent. Leader-gated
+    # so only one replica fires the per-day run; the loop also holds an
+    # atomic per-yyyy-mm-dd lock as a belt-and-braces guard.
+    if _is_leader:
+        from topic_discovery_service import _topic_discovery_loop
+        asyncio.create_task(_topic_discovery_loop())
     # Task #587 — nightly live grounded-recall benchmark + alerting.
     # Runs once per UTC day (configurable via GROUNDED_RECALL_NIGHTLY_*),
     # writes bench/results/latest.json so the admin tile reflects the
@@ -1399,6 +1405,7 @@ from routes.admin_review_prompts import router as admin_review_prompts_router
 from routes.edu_browser import router as edu_browser_router
 from routes.edu_study import router as edu_study_router
 from routes.admin_seo_keywords import router as admin_seo_keywords_router
+from routes.admin_topic_discovery import router as admin_topic_discovery_router
 
 api.include_router(auth_router)
 api.include_router(content_router)
@@ -1438,6 +1445,7 @@ api.include_router(admin_review_prompts_router)
 api.include_router(edu_browser_router)
 api.include_router(edu_study_router)
 api.include_router(admin_seo_keywords_router)
+api.include_router(admin_topic_discovery_router)
 
 from llm import call_llm_api_content
 from auth_deps import get_admin_user
