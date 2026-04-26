@@ -177,6 +177,71 @@ def test_try_run_cf_pull_once_appends_to_cf_pull_history(monkeypatch):
     asyncio.run(_inner())
 
 
+def test_try_run_cf_pull_once_cold_start_creates_cursor_doc_with_history_entry(monkeypatch):
+    """Task #965 — fresh-deploy cold-start regression. The very first
+    background tick after a brand-new deploy hits an empty
+    ``db.job_locks`` collection, so the cursor doc has to be created
+    by the upsert. Task #961 swapped the history append from a Python
+    read-modify-write to an atomic ``$set`` + ``$push`` + ``$slice``.
+    This combination on an upsert MUST also create the
+    ``cf_pull_history`` list with the very first entry — otherwise
+    the admin dashboard's 24h pagination-cost widget would stay blank
+    for the first 24h after every fresh deploy and we'd never notice
+    in CI (every other test in this module pre-seeds a cursor doc).
+    """
+    async def _inner():
+        db = _FakeDb()
+        monkeypatch.setattr(routes, "db", db, raising=False)
+        monkeypatch.setattr("config.CF_ZONE_ID", "zone-1", raising=False)
+        monkeypatch.setattr("config.CF_ANALYTICS_API_TOKEN", "tok", raising=False)
+
+        async def fake_graphql(query, variables):
+            return {"data": {"viewer": {"zones": [{
+                "httpRequestsAdaptiveGroups": [
+                    _make_cf_group("2026-04-26T09:59:00+00:00", 0),
+                ],
+            }]}}}
+
+        # Deliberately do NOT seed db.job_locks — this is the
+        # fresh-deploy state where no cursor doc exists yet.
+        assert db.job_locks.docs == []
+
+        now = datetime(2026, 4, 26, 10, 0, tzinfo=timezone.utc)
+        # Manual / unfenced path (lease_owner=None) is the one that
+        # carries upsert=True and is used both for the very first
+        # background pull on a brand-new deploy and for the admin
+        # "run CF pull now" button.
+        res = await routes._try_run_cf_pull_once(
+            now_utc=now, graphql_callable=fake_graphql)
+        assert res["ok"] is True
+
+        # The upsert must have created exactly one cursor doc...
+        assert len(db.job_locks.docs) == 1
+        lock = db.job_locks.docs[0]
+        assert lock["_id"] == routes.CF_PULL_LOCK_ID
+        # ...with the cursor advanced to ``until``...
+        assert lock[routes.CF_PULL_CURSOR_FIELD]
+        # ...and the rolling-history list initialised with this
+        # tick's entry. Without the cold-start coverage, a regression
+        # that drops $push on upsert (or stores it as a non-list)
+        # would leave the dashboard widget blank until a *second*
+        # tick happens to land on a non-empty doc.
+        history = lock.get("cf_pull_history")
+        assert isinstance(history, list), (
+            f"cf_pull_history not a list on cold-start upsert: {history!r}"
+        )
+        assert len(history) == 1, (
+            f"cold-start upsert should record exactly one history entry, "
+            f"got {history!r}"
+        )
+        entry = history[0]
+        assert entry["ts"] == now.isoformat()
+        assert entry["calls"] == res["calls"]
+        assert entry["subdivisions"] == res["subdivisions"]
+        assert entry["saturated"] == len(res["saturated_windows"])
+    asyncio.run(_inner())
+
+
 def test_try_run_cf_pull_once_keeps_old_entries_in_raw_history_but_aggregate_filters_them(monkeypatch):
     """Task #961 — write-time pruning was dropped in favour of an
     atomic ``$push`` + ``$slice``. Old (>24h) entries therefore stay
