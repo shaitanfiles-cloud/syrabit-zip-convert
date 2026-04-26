@@ -219,6 +219,126 @@ def test_fetch_google_kg_no_panel_entry():
     assert sig["status"] == "missing"
 
 
+# ─── fetch_google_kg multi-query mode ──────────────────────────────────
+
+
+class _KgQueryAwareTransport:
+    """Like _MockTransport but inspects the ``query`` query-string param so
+    each tracked KG query can return a different response."""
+
+    def __init__(self, by_query: Dict[str, Dict[str, Any]]):
+        self._by_query = by_query
+        self.calls: List[str] = []
+
+    async def __call__(self, url, *, method="GET", params=None, headers=None, timeout=10.0):
+        self.calls.append((params or {}).get("query") or "")
+        q = (params or {}).get("query") or ""
+        if q in self._by_query:
+            return dict(self._by_query[q])
+        return {"status_code": 200, "json": {"itemListElement": []}, "text": None, "error": None}
+
+
+def test_fetch_google_kg_multi_query_aggregates_per_query_status():
+    """Probing ('Syrabit', 'Syrabit.ai') where one query has a panel and
+    the other doesn't must aggregate to ``status="missing"`` and surface
+    a per-query rows array so the panel can show which name to push."""
+    panel = {
+        "itemListElement": [
+            {"resultScore": 950,
+             "result": {"@id": "kg:/m/syrabit", "name": "Syrabit.ai",
+                        "description": "Education-technology company"}},
+        ],
+    }
+    mock = _KgQueryAwareTransport({
+        "Syrabit":     {"status_code": 200, "json": panel,                       "text": None, "error": None},
+        "Syrabit.ai":  {"status_code": 200, "json": {"itemListElement": []},     "text": None, "error": None},
+    })
+    sig = _run(esh.fetch_google_kg(
+        queries=("Syrabit", "Syrabit.ai"), http_get=mock, api_key="abc"))
+    assert sig["status"] == "missing"
+    rows = sig["fields"]["queries"]
+    assert len(rows) == 2
+    by_q = {r["query"]: r for r in rows}
+    assert by_q["Syrabit"]["status"] == "ok"
+    assert by_q["Syrabit"]["kg_id"] == "kg:/m/syrabit"
+    assert by_q["Syrabit.ai"]["status"] == "missing"
+    # Aggregate summary names the queries that are still missing.
+    assert "Syrabit.ai" in sig["summary"]
+
+
+def test_fetch_google_kg_multi_query_all_errors_aggregates_to_error():
+    """When every tracked query fails in transport the aggregate must be
+    ``error`` (not ``missing``) so the panel surfaces a transport
+    incident instead of a content gap."""
+    mock = _KgQueryAwareTransport({
+        "Syrabit":    {"status_code": 0, "json": None, "text": None, "error": "boom"},
+        "Syrabit.ai": {"status_code": 0, "json": None, "text": None, "error": "boom"},
+    })
+    sig = _run(esh.fetch_google_kg(
+        queries=("Syrabit", "Syrabit.ai"), http_get=mock, api_key="abc"))
+    assert sig["status"] == "error"
+    assert all(r["status"] == "error" for r in sig["fields"]["queries"])
+
+
+def test_fetch_google_kg_multi_query_all_ok():
+    panel = {
+        "itemListElement": [
+            {"resultScore": 900,
+             "result": {"@id": "kg:/m/x", "name": "Syrabit.ai"}},
+        ],
+    }
+    mock = _KgQueryAwareTransport({
+        "Syrabit":    {"status_code": 200, "json": panel, "text": None, "error": None},
+        "Syrabit.ai": {"status_code": 200, "json": panel, "text": None, "error": None},
+    })
+    sig = _run(esh.fetch_google_kg(
+        queries=("Syrabit", "Syrabit.ai"), http_get=mock, api_key="abc"))
+    assert sig["status"] == "ok"
+    assert all(r["status"] == "ok" for r in sig["fields"]["queries"])
+
+
+# ─── fetch_mention_opportunities ───────────────────────────────────────
+
+
+def test_fetch_mention_opportunities_partial_missing():
+    """One Wikipedia page mentions us, two don't → status=missing and
+    the missing rows are surfaced for the admin panel."""
+    targets = (
+        {"id": "p1", "label": "Page 1", "url": "https://example.com/p1", "expected_term": "Syrabit"},
+        {"id": "p2", "label": "Page 2", "url": "https://example.com/p2", "expected_term": "Syrabit"},
+        {"id": "p3", "label": "Page 3", "url": "https://example.com/p3", "expected_term": "Syrabit"},
+    )
+    mock = _MockTransport({
+        "p1": {"status_code": 200, "json": None, "text": "Syrabit is great",      "error": None},
+        "p2": {"status_code": 200, "json": None, "text": "no mention here",       "error": None},
+        "p3": {"status_code": 200, "json": None, "text": "another article body",  "error": None},
+    })
+    sig = _run(esh.fetch_mention_opportunities(targets=targets, http_get=mock))
+    assert sig["status"] == "missing"
+    assert sig["fields"]["total"] == 3
+    missing = sig["fields"]["missing"]
+    assert {m["id"] for m in missing} == {"p2", "p3"}
+    # Term match is case-insensitive.
+    mock2 = _MockTransport({
+        "p1": {"status_code": 200, "json": None, "text": "syrabit lowercase",     "error": None},
+    })
+    sig2 = _run(esh.fetch_mention_opportunities(
+        targets=({"id": "p1", "label": "P1", "url": "https://example.com/p1", "expected_term": "Syrabit"},),
+        http_get=mock2))
+    assert sig2["status"] == "ok"
+
+
+def test_fetch_mention_opportunities_all_errors():
+    targets = (
+        {"id": "p1", "label": "P1", "url": "https://example.com/p1", "expected_term": "Syrabit"},
+    )
+    mock = _MockTransport({
+        "p1": {"status_code": 0, "json": None, "text": None, "error": "boom"},
+    })
+    sig = _run(esh.fetch_mention_opportunities(targets=targets, http_get=mock))
+    assert sig["status"] == "error"
+
+
 # ─── aggregate_snapshot wires everything ──────────────────────────────
 
 

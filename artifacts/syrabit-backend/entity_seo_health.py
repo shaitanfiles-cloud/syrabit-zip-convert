@@ -82,6 +82,32 @@ SYRABIT_WIKIPEDIA_TITLE = os.environ.get(
 SYRABIT_CRUNCHBASE_PERMALINK = os.environ.get(
     "ENTITY_SEO_CRUNCHBASE_PERMALINK", "syrabit-ai")
 SYRABIT_KG_QUERY = "Syrabit.ai"
+# Knowledge Panel monitoring tracks BOTH the brand short-name and the
+# full domain so we catch the (common) case where Google indexes one
+# but not the other. The aggregate google_kg signal is "ok" iff every
+# tracked query returns a panel entry.
+SYRABIT_KG_QUERIES: Tuple[str, ...] = ("Syrabit", "Syrabit.ai")
+
+# Pages/sites where we *expect* a Syrabit.ai mention to surface but
+# don't yet. Each target gets a weekly probe — if the body doesn't
+# contain ``expected_term`` (case-insensitive) it's surfaced in the
+# admin panel as a "missing mention opportunity" with a deep-link to
+# the page so an admin can pitch the editor / file the suggestion.
+# Keep this list under code review (not env) so changes are auditable.
+MENTION_OPPORTUNITY_TARGETS: Tuple[Dict[str, str], ...] = (
+    {"id": "wikipedia_education_in_assam",
+     "label": "Wikipedia — Education in Assam",
+     "url": "https://en.wikipedia.org/wiki/Education_in_Assam",
+     "expected_term": "Syrabit"},
+    {"id": "wikipedia_education_in_guwahati",
+     "label": "Wikipedia — Education in Guwahati",
+     "url": "https://en.wikipedia.org/wiki/Guwahati",
+     "expected_term": "Syrabit"},
+    {"id": "wikipedia_indian_edtech",
+     "label": "Wikipedia — Education technology in India",
+     "url": "https://en.wikipedia.org/wiki/Education_in_India",
+     "expected_term": "Syrabit"},
+)
 
 # Verified founder + organization sameAs profiles. The admin panel
 # probes each entry and surfaces a regression when one starts 404'ing.
@@ -475,16 +501,68 @@ async def fetch_sameas(
 async def fetch_google_kg(
     *,
     query: str = SYRABIT_KG_QUERY,
+    queries: Optional[Tuple[str, ...]] = None,
     http_get: HttpGet = _default_http_get,
     api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Probe the Google Knowledge Graph Search API for the panel entry.
+
+    When ``queries`` is supplied (e.g. ``("Syrabit", "Syrabit.ai")``)
+    each query is probed and the per-query results are surfaced in
+    ``fields.queries`` as a list of ``{query, status, kg_id, name,
+    score, summary}`` dicts. The aggregate ``status`` is ``ok`` iff
+    every query returned a panel; ``missing`` if at least one returned
+    no panel; ``error`` if all failed in transport.
+
+    Single-query behaviour (legacy ``query=`` parameter) is preserved
+    for backwards compatibility with the existing collector tests.
 
     Free tier: requires ``GOOGLE_KG_API_KEY``. Returns ``status=missing``
     when the panel has no entry, ``status=error`` for transport faults,
     and ``status=ok`` with the matched entity's ``@id`` + ``description``
     when a panel result exists.
     """
+    # Multi-query mode — probe each, then collapse.
+    if queries:
+        per_query = await asyncio.gather(*[
+            fetch_google_kg(query=q, http_get=http_get, api_key=api_key)
+            for q in queries
+        ])
+        rows = []
+        for q, sig in zip(queries, per_query):
+            f = sig.get("fields") or {}
+            rows.append({
+                "query":   q,
+                "status":  sig.get("status"),
+                "summary": sig.get("summary"),
+                "kg_id":   f.get("kg_id"),
+                "name":    f.get("name"),
+                "score":   f.get("result_score"),
+            })
+        statuses = [r["status"] for r in rows]
+        if all(s == "ok" for s in statuses):
+            agg, summary = "ok", (
+                f"Knowledge Panel present for all {len(rows)} tracked queries.")
+        elif all(s == "error" for s in statuses):
+            agg, summary = "error", "Knowledge Graph probe failed for all queries."
+        else:
+            missing_qs = [r["query"] for r in rows if r["status"] != "ok"]
+            agg, summary = "missing", (
+                f"No Knowledge Panel for: {', '.join(missing_qs)}.")
+        return _signal(
+            name="google_kg", status=agg, summary=summary,
+            fields={
+                "queries": rows,
+                "configured": all((sig.get("fields") or {}).get("configured", False)
+                                  for sig in per_query),
+                # Keep the first-query convenience fields for any legacy
+                # consumer that only reads the headline.
+                "query":   rows[0]["query"] if rows else "",
+                "kg_id":   rows[0]["kg_id"] if rows else None,
+                "name":    rows[0]["name"]  if rows else None,
+                "result_score": rows[0]["score"] if rows else None,
+            },
+        )
     api_key = (api_key or os.environ.get("GOOGLE_KG_API_KEY") or "").strip()
     if not api_key:
         return _signal(
@@ -527,6 +605,66 @@ async def fetch_google_kg(
     )
 
 
+# ── Mention-opportunity collector ───────────────────────────────────────────
+
+
+async def fetch_mention_opportunities(
+    *,
+    targets: Tuple[Dict[str, str], ...] = MENTION_OPPORTUNITY_TARGETS,
+    http_get: HttpGet = _default_http_get,
+) -> Dict[str, Any]:
+    """For each tracked target page, fetch the body and check whether
+    ``expected_term`` appears (case-insensitive). Pages without the
+    mention surface as actionable rows in the admin panel — these are
+    *opportunities* (someone should pitch the editor / file the
+    suggestion), not regressions.
+
+    Status semantics:
+      * ``ok``      — every target already mentions us.
+      * ``missing`` — at least one target is missing the mention.
+      * ``error``   — every target probe failed in transport.
+    """
+    async def _probe(t: Dict[str, str]) -> Dict[str, Any]:
+        url = t["url"]
+        resp = await http_get(url, method="GET", timeout=10.0,
+                              headers={"User-Agent": "Syrabit.ai/EntitySEOMonitor"})
+        if resp.get("error"):
+            return {**t, "status": "error", "mentioned": False,
+                    "summary": f"fetch error: {resp['error']}"}
+        sc = int(resp.get("status_code") or 0)
+        body = (resp.get("text") or "")
+        if not (200 <= sc < 400):
+            return {**t, "status": "error", "mentioned": False,
+                    "summary": f"target HTTP {sc}"}
+        term = (t.get("expected_term") or "").lower()
+        mentioned = bool(term and term in body.lower())
+        return {**t, "status": "ok" if mentioned else "missing",
+                "mentioned": mentioned,
+                "summary": "Mention present." if mentioned
+                           else f'No mention of "{t.get("expected_term")}" found.'}
+
+    rows = await asyncio.gather(*[_probe(t) for t in targets])
+    statuses = [r["status"] for r in rows]
+    missing = [r for r in rows if r["status"] == "missing"]
+    if not rows:
+        agg, summary = "ok", "No mention targets configured."
+    elif all(s == "ok" for s in statuses):
+        agg, summary = "ok", f"All {len(rows)} mention targets cover us."
+    elif all(s == "error" for s in statuses):
+        agg, summary = "error", "All mention-target probes failed."
+    else:
+        agg, summary = "missing", (
+            f"{len(missing)} of {len(rows)} mention opportunities still open.")
+    return _signal(
+        name="mentions", status=agg, summary=summary,
+        fields={
+            "targets": list(rows),
+            "missing": list(missing),
+            "total":   len(rows),
+        },
+    )
+
+
 # ── Aggregation + diff ──────────────────────────────────────────────────────
 
 
@@ -535,14 +673,21 @@ async def aggregate_snapshot(
     http_get: HttpGet = _default_http_get,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    """Fan-out every collector and return one snapshot doc."""
+    """Fan-out every collector and return one snapshot doc.
+
+    The Knowledge Panel signal probes BOTH the brand short-name
+    (``"Syrabit"``) and the full domain (``"Syrabit.ai"``) — see
+    ``SYRABIT_KG_QUERIES`` — so the admin panel can see when one is
+    indexed and the other isn't.
+    """
     now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    wikidata, wikipedia, crunchbase, sameas, kg = await asyncio.gather(
+    wikidata, wikipedia, crunchbase, sameas, kg, mentions = await asyncio.gather(
         fetch_wikidata(http_get=http_get),
         fetch_wikipedia(http_get=http_get),
         fetch_crunchbase(http_get=http_get),
         fetch_sameas(http_get=http_get),
-        fetch_google_kg(http_get=http_get),
+        fetch_google_kg(http_get=http_get, queries=SYRABIT_KG_QUERIES),
+        fetch_mention_opportunities(http_get=http_get),
     )
     signals = {
         "wikidata":   wikidata,
@@ -550,6 +695,7 @@ async def aggregate_snapshot(
         "crunchbase": crunchbase,
         "sameas":     sameas,
         "google_kg":  kg,
+        "mentions":   mentions,
     }
     # Aggregate health: ok iff every signal is ok; missing if any
     # tracked signal is missing (no errors); else degraded.
@@ -563,12 +709,16 @@ async def aggregate_snapshot(
     missing_claims: List[Dict[str, Any]] = []
     if wikidata["status"] in {"ok", "missing"}:
         missing_claims = list(wikidata["fields"].get("missing_claims") or [])
+    missing_mentions = list((mentions.get("fields") or {}).get("missing") or [])
+    kg_queries = list((kg.get("fields") or {}).get("queries") or [])
+    kg_present_count = sum(1 for q in kg_queries if q.get("status") == "ok")
     return {
         "generated_at": now_utc,
         "iso_week": _iso_week_tag(now_utc),
         "aggregate_status": agg,
         "signals": signals,
         "missing_claims": missing_claims,
+        "missing_mentions": missing_mentions,
         "summary": {
             "wikidata_claims":      int(wikidata["fields"].get("claim_count", 0)),
             "wikidata_missing":     len(missing_claims),
@@ -577,6 +727,10 @@ async def aggregate_snapshot(
             "wikipedia_present":    wikipedia["status"] == "ok",
             "crunchbase_present":   crunchbase["status"] == "ok",
             "google_kg_present":    kg["status"] == "ok",
+            "google_kg_queries_total":   len(kg_queries),
+            "google_kg_queries_present": kg_present_count,
+            "mentions_total":       int((mentions.get("fields") or {}).get("total", 0)),
+            "mentions_missing":     len(missing_mentions),
         },
     }
 

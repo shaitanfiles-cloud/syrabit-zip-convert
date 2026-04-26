@@ -48,6 +48,9 @@ def _build_status_payload(latest: Optional[Dict[str, Any]],
                           previous: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Shape the panel's main payload from raw snapshots."""
     if not latest:
+        # Empty-state — surface the canonical "what we'd track" lists so
+        # an admin can start filing claims / pitching mentions even
+        # before the first weekly snapshot has run.
         return {
             "configured": True,
             "snapshot": None,
@@ -57,6 +60,11 @@ def _build_status_payload(latest: Optional[Dict[str, Any]],
             "missingClaims": [
                 {**c, "edit_url": esh.wikidata_edit_url("", c["prop"])}
                 for c in esh.DESIRED_WIKIDATA_CLAIMS
+            ],
+            "missingMentions": [
+                {**t, "status": "missing", "mentioned": False,
+                 "summary": "Pending first weekly probe."}
+                for t in esh.MENTION_OPPORTUNITY_TARGETS
             ],
             "alertState": None,
         }
@@ -72,6 +80,7 @@ def _build_status_payload(latest: Optional[Dict[str, Any]],
             "summaryDeltas": drift.get("summary_deltas") or {},
         },
         "missingClaims": list(latest.get("missing_claims") or []),
+        "missingMentions": list(latest.get("missing_mentions") or []),
     }
 
 

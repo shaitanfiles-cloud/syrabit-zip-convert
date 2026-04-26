@@ -95,6 +95,33 @@ describe('EntitySeoTab', () => {
     expect(screen.getByTestId('entity-missing-claim-P112')).toBeInTheDocument();
   });
 
+  it('renders missing mention opportunities with deep-link buttons', async () => {
+    api.adminEntitySeoStatus.mockResolvedValue({ data: {
+      ...HEALTHY_PAYLOAD,
+      missingMentions: [
+        { id: 'wikipedia_education_in_assam',
+          label: 'Wikipedia — Education in Assam',
+          url: 'https://en.wikipedia.org/wiki/Education_in_Assam',
+          expected_term: 'Syrabit', status: 'missing', mentioned: false,
+          summary: 'No mention of "Syrabit" found.' },
+        { id: 'wikipedia_education_in_guwahati',
+          label: 'Wikipedia — Education in Guwahati',
+          url: 'https://en.wikipedia.org/wiki/Guwahati',
+          expected_term: 'Syrabit', status: 'missing', mentioned: false,
+          summary: 'No mention of "Syrabit" found.' },
+      ],
+    }});
+    render(<EntitySeoTab adminToken="tok" />);
+    const list = await screen.findByTestId('entity-missing-mentions');
+    expect(list).toHaveTextContent('2 mention opportunities');
+    expect(list).toHaveTextContent('Education in Assam');
+    const link = screen.getByTestId('entity-missing-mention-wikipedia_education_in_assam');
+    expect(link).toHaveAttribute('href', 'https://en.wikipedia.org/wiki/Education_in_Assam');
+    expect(link).toHaveAttribute('target', '_blank');
+    // The mentions signal card is rendered alongside the other signals.
+    expect(screen.getByTestId('entity-signal-mentions')).toBeInTheDocument();
+  });
+
   it('surfaces regressions when the snapshot drift contains them', async () => {
     api.adminEntitySeoStatus.mockResolvedValue({ data: {
       ...HEALTHY_PAYLOAD,

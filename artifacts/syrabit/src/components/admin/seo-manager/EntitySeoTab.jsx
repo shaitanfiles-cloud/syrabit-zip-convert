@@ -13,6 +13,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Loader2, RefreshCw, AlertTriangle, CheckCircle2,
   ExternalLink, Globe, Activity, Award, Link as LinkIcon,
+  MessageSquare,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -26,6 +27,7 @@ const SIGNAL_LABELS = {
   crunchbase: { label: 'Crunchbase',         icon: Activity },
   sameas:     { label: 'sameAs profiles',    icon: LinkIcon },
   google_kg:  { label: 'Knowledge Graph',    icon: Award },
+  mentions:   { label: 'Mention Opportunities', icon: MessageSquare },
 };
 
 const STATUS_COLORS = {
@@ -182,6 +184,54 @@ function MissingClaimsList({ claims }) {
   );
 }
 
+function MissingMentionsList({ mentions }) {
+  if (!mentions || mentions.length === 0) {
+    return (
+      <div
+        className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 flex items-center gap-2"
+        data-testid="entity-missing-mentions-empty"
+      >
+        <CheckCircle2 size={14} className="text-emerald-600" />
+        <span className="text-[12px] text-emerald-700 font-medium">
+          All tracked mention opportunities already cover us.
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div
+      className="rounded-xl border border-sky-200 bg-sky-50/60 overflow-hidden"
+      data-testid="entity-missing-mentions"
+    >
+      <div className="px-3 py-2 border-b border-sky-200 flex items-center gap-2">
+        <MessageSquare size={14} className="text-sky-600" />
+        <span className="text-[12px] font-semibold text-sky-800">
+          {mentions.length} mention opportunit{mentions.length === 1 ? 'y' : 'ies'} to pitch
+        </span>
+      </div>
+      <ul className="divide-y divide-sky-100">
+        {mentions.map((m) => (
+          <li key={m.id || m.url} className="px-3 py-2 flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[12px] font-semibold text-gray-900">{m.label || m.url}</div>
+              {m.summary && (
+                <div className="text-[11px] text-gray-500 mt-0.5">{m.summary}</div>
+              )}
+            </div>
+            <a
+              href={m.url} target="_blank" rel="noreferrer"
+              className="shrink-0 inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border border-sky-300 text-sky-800 hover:bg-sky-100"
+              data-testid={`entity-missing-mention-${m.id || m.url}`}
+            >
+              Open page <ExternalLink size={11} />
+            </a>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function RegressionList({ regressions }) {
   if (!regressions || regressions.length === 0) return null;
   return (
@@ -329,6 +379,8 @@ export default function EntitySeoTab({ adminToken }) {
       </div>
 
       <MissingClaimsList claims={data?.missingClaims || snapshot?.missing_claims || []} />
+
+      <MissingMentionsList mentions={data?.missingMentions || snapshot?.missing_mentions || []} />
 
       {data?.alertState?.lastPagedAt && (
         <div className="text-[11px] text-gray-500" data-testid="entity-alert-state">
