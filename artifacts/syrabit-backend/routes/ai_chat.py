@@ -125,6 +125,183 @@ def _record_llm_cost(model, prompt_tokens, completion_tokens, provider="gemini",
     from routes.admin_advanced import record_llm_cost
     record_llm_cost(model, prompt_tokens, completion_tokens, provider, user_id)
 
+
+# ────────────────────────────────────────────────────────────────────────────
+# Assamese translation: Gemini main + Sarvam polish
+# ────────────────────────────────────────────────────────────────────────────
+# User-mandated routing (2026-04-26):
+#   • English → Assamese translation: Gemini does the heavy lifting
+#     (vertex_services.translate, 600 RPM headroom, reliable native
+#     multilingual). Sarvam then polishes the Gemini output for native
+#     Assamese fluency (sarvam-m chat, ~30 RPM but excellent for Indic).
+#   • For chat *response* generation (not translation), the routing is
+#     the inverse: Sarvam main + Gemini fallback — see `llm.py` indic
+#     race phase logic.
+#
+# Tradeoffs documented in `_make_assamese_translate_callable` docstring.
+# ────────────────────────────────────────────────────────────────────────────
+
+# Polish only kicks in for substantive output. Below this length the polish
+# round-trip cost (~0.8-1.5s) outweighs the marginal quality lift, and N
+# small fragments would compound into multi-second post-stream latency.
+_POLISH_MIN_LEN = 80
+
+# Hard ceiling on the Sarvam polish call so a slow/dead Sarvam never holds
+# up the translation pipeline. On timeout we return the un-polished Gemini
+# output (graceful degradation).
+_SARVAM_POLISH_TIMEOUT_SEC = 1.8
+
+# Hard ceiling on the Gemini translate call. vertex_services.translate
+# already has its own internal timeout (60s), but we wrap it so a stalled
+# Gemini call cannot block the chat path indefinitely.
+_GEMINI_TRANSLATE_TIMEOUT_SEC = 4.0
+
+_POLISH_SYSTEM_PROMPT = (
+    "You are a native Assamese (অসমীয়া) editor. The user message is an "
+    "Assamese text that may sound slightly machine-translated or "
+    "English-influenced. Polish it so it reads naturally to a native "
+    "Assamese speaker: fix unnatural word choices, smooth grammar, and "
+    "use idiomatic Assamese phrasing. Preserve the original meaning "
+    "exactly — do NOT add information, do NOT remove information. "
+    "Latin script is allowed ONLY for: pure numbers, scientific units "
+    "(cm, kg, °C, eV…), math symbols/equations, code, URLs, and "
+    "well-known proper nouns/acronyms (NCERT, SEBA, AHSEC, DNA, GDP, "
+    "Newton). Return ONLY the polished Assamese text — no explanations, "
+    "no preamble, no quote marks."
+)
+
+
+async def _assamese_translate_gemini_main_sarvam_polish(
+    text: str,
+    *,
+    target_lang_code: str = "as-IN",
+) -> str:
+    """User-mandated Assamese translation pipeline: Gemini-main + Sarvam-polish.
+
+    Step 1 (main): English text → Assamese via Gemini (vertex_services.translate).
+    Step 2 (polish, optional): Gemini Assamese output → polished Assamese
+        via Sarvam-m chat. Skipped for short fragments (< _POLISH_MIN_LEN
+        chars) where the polish round-trip overhead is not justified.
+
+    Failure modes:
+        • Gemini fails or returns empty → returns "" (caller falls back to
+          its own strip / original-text path).
+        • Sarvam polish fails / times out → returns the un-polished Gemini
+          output (graceful degradation — translation still landed).
+
+    Args:
+        text: Source English text to translate.
+        target_lang_code: Sarvam-style language code (e.g., "as-IN"). The
+            Gemini translator only uses the bare language ("as"); the full
+            code is kept in the signature for symmetry with the legacy
+            Sarvam /translate API and forward-compatibility if other Indic
+            targets are ever added.
+
+    Returns:
+        Polished Assamese string, or un-polished Gemini output, or "".
+    """
+    src = (text or "").strip()
+    if not src:
+        return ""
+
+    # Derive bare language ("as-IN" → "as") for the Gemini translator.
+    _bare_lang = (target_lang_code or "as-IN").split("-", 1)[0].lower() or "as"
+
+    # ── Step 1: Gemini main ─────────────────────────────────────────────
+    gemini_out = ""
+    try:
+        import vertex_services  # local import — keeps cold-start cost off the main chat path
+        gemini_out = await asyncio.wait_for(
+            vertex_services.translate(src[:4000], target_lang=_bare_lang, source_lang="en"),
+            timeout=_GEMINI_TRANSLATE_TIMEOUT_SEC,
+        ) or ""
+        gemini_out = gemini_out.strip()
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"[INDIC-TRANSLATE] Gemini main timed out after "
+            f"{_GEMINI_TRANSLATE_TIMEOUT_SEC}s for {src[:60]!r}"
+        )
+        return ""
+    except Exception as _e:  # pragma: no cover — network defensive
+        logger.warning(
+            f"[INDIC-TRANSLATE] Gemini main failed for {src[:60]!r}: "
+            f"{type(_e).__name__}: {str(_e)[:160]}"
+        )
+        return ""
+
+    if not gemini_out:
+        logger.info(f"[INDIC-TRANSLATE] Gemini main returned empty for {src[:60]!r}")
+        return ""
+
+    # ── Step 2: Sarvam polish (optional, best-effort) ───────────────────
+    if len(gemini_out) < _POLISH_MIN_LEN:
+        # Short fragment — skip polish, return Gemini output verbatim.
+        return gemini_out
+
+    # Read the live `sarvam_llm_client` attribute off the deps module so
+    # tests that monkey-patch `deps.sarvam_llm_client = None` see the
+    # current value rather than the import-time snapshot.
+    _sarvam_chat = getattr(deps, "sarvam_llm_client", None)
+    if _sarvam_chat is None:
+        # No Sarvam client configured — return un-polished Gemini.
+        return gemini_out
+
+    try:
+        polish_resp = await asyncio.wait_for(
+            _sarvam_chat.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "sarvam-m",
+                    "messages": [
+                        {"role": "system", "content": _POLISH_SYSTEM_PROMPT},
+                        {"role": "user", "content": gemini_out[:4000]},
+                    ],
+                    "max_tokens": min(1200, len(gemini_out) * 3 + 200),
+                    "temperature": 0.05,
+                    "top_p": 0.9,
+                    "stream": False,
+                    "thinking": {"enabled": False},
+                    "response_language": target_lang_code,
+                },
+            ),
+            timeout=_SARVAM_POLISH_TIMEOUT_SEC,
+        )
+        if polish_resp.status_code == 200:
+            _body = polish_resp.json()
+            _polished = (
+                _body.get("choices", [{}])[0].get("message", {}).get("content", "")
+                or ""
+            ).strip()
+            # Strip any sarvam-m <think> blocks (defense; we asked it to skip them).
+            _polished = re.sub(r"<think>[\s\S]*?</think>", "", _polished).strip()
+            # Also strip wrapping quote marks that LLMs sometimes add.
+            if _polished.startswith(('"', "'", "“", "‘")) and _polished.endswith(('"', "'", "”", "’")):
+                _polished = _polished[1:-1].strip()
+            if _polished:
+                return _polished
+            logger.info(
+                f"[INDIC-TRANSLATE] Sarvam polish returned empty body for "
+                f"{gemini_out[:60]!r} — using un-polished Gemini output"
+            )
+        else:
+            logger.warning(
+                f"[INDIC-TRANSLATE] Sarvam polish HTTP {polish_resp.status_code} "
+                f"for {gemini_out[:60]!r} — using un-polished Gemini output"
+            )
+    except asyncio.TimeoutError:
+        logger.info(
+            f"[INDIC-TRANSLATE] Sarvam polish timed out after "
+            f"{_SARVAM_POLISH_TIMEOUT_SEC}s — using un-polished Gemini output"
+        )
+    except Exception as _pe:  # pragma: no cover — network defensive
+        logger.warning(
+            f"[INDIC-TRANSLATE] Sarvam polish exception "
+            f"({type(_pe).__name__}: {str(_pe)[:120]}) — using un-polished Gemini output"
+        )
+
+    return gemini_out
+
+
 router = APIRouter()
 
 _subject_ctx_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=256, ttl=3600)
@@ -1081,33 +1258,33 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
     def _make_assamese_translate_callable(_target: str):
         """Build an `async (str) -> str` callable that translates a single
-        English fragment to the requested Indic target language via the
-        Sarvam `/translate` endpoint. Used by the Assamese leakage
-        sanitiser to splice cleaned Assamese text in place of leaked
-        English runs (Task #419). Returns "" on any failure so the
-        sanitiser falls back to its existing `strip` path."""
+        English fragment to Assamese for the leakage-sanitiser splice path
+        (Task #419).
+
+        Routing contract (user-mandated 2026-04-26 — see replit.md
+        "LLM Providers"):
+          • English → Assamese translation: **Gemini main + Sarvam polish**
+          • Gemini does the heavy translation via `vertex_services.translate`
+            (high RPM headroom, native multilingual quality).
+          • For substantive output (≥ `_POLISH_MIN_LEN` chars), Sarvam
+            polishes the Gemini text via `sarvam-m` chat to lift it to
+            native-Assamese fluency.
+          • For short fragments (< `_POLISH_MIN_LEN` chars) — the common
+            sanitiser case where leaked English runs are typically just a
+            few words — polish is **skipped** because the per-fragment
+            polish round-trip (~0.8-1.5s) would compound across N
+            fragments into multi-second post-stream latency. Gemini's
+            translation is already high-quality at that length.
+          • All Sarvam polish failures degrade gracefully to the
+            un-polished Gemini output. Gemini failure returns "" so the
+            sanitiser falls back to its existing `strip` behaviour.
+        """
         async def _translate(fragment: str) -> str:
-            frag = (fragment or "").strip()
-            if not frag or sarvam_client is None:
-                return ""
-            try:
-                resp = await asyncio.wait_for(
-                    sarvam_client.post("/translate", json={
-                        "input": frag[:1000],
-                        "source_language_code": "en-IN",
-                        "target_language_code": _target,
-                        "mode": "formal",
-                        "model": "sarvam-translate:v1",
-                        "enable_preprocessing": False,
-                    }),
-                    timeout=2.5,
-                )
-                if resp.status_code == 200:
-                    return (resp.json().get("translated_text") or "").strip()
-            except Exception as _te:  # pragma: no cover - network defensive
-                logger.warning(f"[INDIC-SANITIZE] /translate failed for {frag[:40]!r}: {_te}")
-            return ""
+            return await _assamese_translate_gemini_main_sarvam_polish(
+                fragment, target_lang_code=_target
+            )
         return _translate
+
     _resp_lang = (msg.response_lang or "").lower().strip()
     _sarvam_target = _SARVAM_LANG_MAP.get(_resp_lang)
     _want_translate = bool(_sarvam_target and _resp_lang != "en")
@@ -1115,22 +1292,17 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _instant_s = get_instant_response(msg.message) if _stream_intent == "casual" else None
     if _instant_s:
         if _want_translate and _instant_s:
-            try:
-                _tr_resp = await asyncio.wait_for(
-                    sarvam_client.post("/translate", json={
-                        "input": _instant_s[:2000],
-                        "source_language_code": "en-IN",
-                        "target_language_code": _sarvam_target,
-                        "mode": "formal",
-                        "model": "sarvam-translate:v1",
-                        "enable_preprocessing": False,
-                    }),
-                    timeout=2.0,
-                )
-                if _tr_resp.status_code == 200:
-                    _instant_s = _tr_resp.json().get("translated_text") or _instant_s
-            except Exception:
-                pass
+            # Gemini-main + Sarvam-polish translation (user-mandated routing).
+            # Polish is applied here because the instant fast-path is a single
+            # substantive translation, not a fragment splice — the polish
+            # quality lift is worth the extra ~1-1.5s round-trip.
+            _translated_full = await _assamese_translate_gemini_main_sarvam_polish(
+                _instant_s, target_lang_code=_sarvam_target,
+            )
+            if _translated_full:
+                _instant_s = _translated_full
+            # else: keep the original English instant response — better than
+            # blocking the fast-path on a translator outage.
         logger.info(f"[STREAM] INSTANT casual fast-path: '{msg.message[:30]}' → {len(_instant_s)} chars (0 LLM calls)")
         _speedup.record_instant_fastpath()
         _instant_ms = (_time_mod.time() - _stream_t0) * 1000

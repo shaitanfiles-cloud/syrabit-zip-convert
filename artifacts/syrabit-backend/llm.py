@@ -1687,12 +1687,28 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         yield f"data: {json.dumps({'error': 'All AI providers temporarily unavailable'})}\n\n"
         return
 
-    # ── Indic Sarvam with hedged key racing ─────────────────────────────────────
+    # ── Indic (Assamese) response: Sarvam-MAIN + Gemini-FALLBACK ───────────────
+    # User-mandated routing (2026-04-26): for Assamese chat *response*
+    # generation, Sarvam is the primary provider; Gemini is reached only
+    # when ALL Sarvam keys fail before the first token. This is the inverse
+    # of the translation pipeline (Gemini-main + Sarvam-polish — see
+    # `routes/ai_chat.py::_assamese_translate_gemini_main_sarvam_polish`).
+    #
+    # Implementation = two phases, never simultaneous:
+    #   Phase 1 — Sarvam-only race across all available Sarvam keys
+    #             (still hedged across keys for key-level resilience). The
+    #             first Sarvam key to emit a chunk wins; the rest are
+    #             cancelled. This preserves Sarvam-quality output whenever
+    #             at least one Sarvam key responds within
+    #             _SARVAM_TTFT_TIMEOUT.
+    #   Phase 2 — Triggered ONLY if Phase 1 emits zero chunks (all Sarvam
+    #             keys errored, were rate-limited, or timed out). Streams
+    #             directly from Gemini 2.5 Flash. This is a fallback path,
+    #             not a hedged co-runner — Gemini cannot "steal" the
+    #             first-token slot from Sarvam due to network jitter.
     _SARVAM_TTFT_TIMEOUT = 3.0
     _SARVAM_SLOT_TIMEOUT = 1.2
     if _indic_mode and provider == "sarvam":
-        _indic_candidates = []
-
         # Pull Sarvam keys from `_SARVAM_PROVIDERS` (the dedicated
         # Assamese-only list). `_prov_list` may also contain Sarvam entries
         # (we prepend `_SARVAM_PROVIDERS` to it in indic mode above), but
@@ -1702,12 +1718,10 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         if key and key not in _sarvam_keys:
             _sarvam_keys.insert(0, key)
         _sarvam_keys = list(dict.fromkeys(_sarvam_keys))
-        for _sk in _sarvam_keys:
-            _indic_candidates.append({"provider": "sarvam", "key": _sk, "model": use_model})
-
-        _gemini_keys_for_indic = [p["key"] for p in _LLM_PROVIDERS if p["provider"] == "gemini" and p.get("key")]
-        for _gk in _gemini_keys_for_indic[:1]:
-            _indic_candidates.append({"provider": "gemini", "key": _gk, "model": "gemini-2.5-flash"})
+        _sarvam_candidates = [
+            {"provider": "sarvam", "key": _sk, "model": use_model}
+            for _sk in _sarvam_keys
+        ]
 
         _indic_q: asyncio.Queue = asyncio.Queue()
 
@@ -1726,36 +1740,59 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} failed ({type(_e).__name__}: {str(_e)[:120]}) rate_limit={_is_rate}")
                 await _indic_q.put((_cand_idx, "error", None))
 
-        _indic_tasks = [asyncio.create_task(_indic_producer(c, i)) for i, c in enumerate(_indic_candidates)]
-        _race_providers = ", ".join(f"{c['provider']}/{c['model']}" for c in _indic_candidates)
-        logger.info(f"[INDIC] Hedged racing {len(_indic_candidates)} candidates for {response_lang}: {_race_providers}")
-
         _sarvam_winner = None
-        _sarvam_finished: set = set()
         _sarvam_race_t0 = time.monotonic()
-        try:
-            _deadline = time.monotonic() + _SARVAM_TTFT_TIMEOUT
-            while _sarvam_winner is None and len(_sarvam_finished) < len(_indic_candidates):
-                _rem = _deadline - time.monotonic()
-                if _rem <= 0:
-                    break
-                try:
-                    _sid, _evt, _data = await asyncio.wait_for(_indic_q.get(), timeout=_rem)
-                except asyncio.TimeoutError:
-                    break
-                if _evt == "chunk":
-                    _sarvam_winner = _sid
-                elif _evt in ("done", "error"):
-                    _sarvam_finished.add(_sid)
-        except Exception:
-            pass
+        _phase1_tasks: list = []
 
+        # ── Phase 1: Sarvam-only race ────────────────────────────────────
+        if _sarvam_candidates:
+            _phase1_tasks = [
+                asyncio.create_task(_indic_producer(c, i))
+                for i, c in enumerate(_sarvam_candidates)
+            ]
+            _phase1_providers = ", ".join(
+                f"{c['provider']}/{c['model']}" for c in _sarvam_candidates
+            )
+            logger.info(
+                f"[INDIC] Phase 1 (Sarvam-MAIN): racing "
+                f"{len(_sarvam_candidates)} Sarvam keys for {response_lang}: "
+                f"{_phase1_providers}"
+            )
+
+            _sarvam_finished: set = set()
+            try:
+                _deadline = time.monotonic() + _SARVAM_TTFT_TIMEOUT
+                while _sarvam_winner is None and len(_sarvam_finished) < len(_sarvam_candidates):
+                    _rem = _deadline - time.monotonic()
+                    if _rem <= 0:
+                        break
+                    try:
+                        _sid, _evt, _data = await asyncio.wait_for(_indic_q.get(), timeout=_rem)
+                    except asyncio.TimeoutError:
+                        break
+                    if _evt == "chunk":
+                        _sarvam_winner = _sid
+                    elif _evt in ("done", "error"):
+                        _sarvam_finished.add(_sid)
+            except Exception:
+                pass
+        else:
+            logger.warning(
+                f"[INDIC] No Sarvam keys configured — skipping Phase 1, "
+                f"jumping straight to Gemini fallback for {response_lang}"
+            )
+
+        # ── Phase 1 winner: emit Sarvam stream ──────────────────────────
         if _sarvam_winner is not None:
-            _win_cand = _indic_candidates[_sarvam_winner]
+            _win_cand = _sarvam_candidates[_sarvam_winner]
             _ttft_ms = (time.monotonic() - _sarvam_race_t0) * 1000
-            logger.info(f"[INDIC-PERF] TTFT={_ttft_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']} idx={_sarvam_winner}")
+            logger.info(
+                f"[INDIC-PERF] Phase 1 WIN — TTFT={_ttft_ms:.0f}ms "
+                f"lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']} "
+                f"idx={_sarvam_winner}"
+            )
 
-            for i, t in enumerate(_indic_tasks):
+            for i, t in enumerate(_phase1_tasks):
                 if i != _sarvam_winner:
                     t.cancel()
 
@@ -1775,27 +1812,91 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                     break
 
             _total_ms = (time.monotonic() - _sarvam_race_t0) * 1000
-            logger.info(f"[INDIC-PERF] Total={_total_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']}")
+            logger.info(
+                f"[INDIC-PERF] Phase 1 Total={_total_ms:.0f}ms "
+                f"lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']}"
+            )
 
-            for t in _indic_tasks:
+            for t in _phase1_tasks:
                 t.cancel()
-            for t in _indic_tasks:
+            for t in _phase1_tasks:
                 try:
                     await t
                 except (asyncio.CancelledError, Exception):
                     pass
 
             yield f"data: {json.dumps({'__provider': _win_cand['provider']})}\n\n"
-        else:
-            for t in _indic_tasks:
-                t.cancel()
-            for t in _indic_tasks:
-                try:
-                    await t
-                except (asyncio.CancelledError, Exception):
-                    pass
-            logger.warning(f"[INDIC] All {len(_indic_candidates)} candidates failed/timed out")
+            return
+
+        # ── Phase 1 LOST → Phase 2: Gemini fallback ─────────────────────
+        # Cancel any straggler Sarvam tasks before starting Gemini so we
+        # don't double-stream. We don't await them here — they'll be GC'd
+        # by the event loop. (`_emit_tokens` is cancellation-safe.)
+        for t in _phase1_tasks:
+            t.cancel()
+
+        _phase1_elapsed = (time.monotonic() - _sarvam_race_t0) * 1000
+        if _sarvam_candidates:
+            logger.warning(
+                f"[INDIC] Phase 1 LOST — all {len(_sarvam_candidates)} "
+                f"Sarvam keys failed/timed out in {_phase1_elapsed:.0f}ms — "
+                f"falling back to Gemini (Phase 2)"
+            )
+
+        _gemini_keys_for_indic = [
+            p["key"] for p in _LLM_PROVIDERS
+            if p["provider"] == "gemini" and p.get("key")
+        ]
+        if not _gemini_keys_for_indic:
+            logger.warning(
+                f"[INDIC] Phase 2 unavailable — no Gemini key configured. "
+                f"Returning error for {response_lang}."
+            )
             yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
+            return
+
+        _gemini_key = _gemini_keys_for_indic[0]
+        _gemini_model = "gemini-2.5-flash"
+        _phase2_t0 = time.monotonic()
+        logger.info(
+            f"[INDIC] Phase 2 (Gemini-FALLBACK): streaming from "
+            f"gemini/{_gemini_model} for {response_lang}"
+        )
+        _phase2_first_token = False
+        try:
+            async for chunk in _emit_tokens(
+                _stream_from_provider("gemini", _gemini_key, _gemini_model)
+            ):
+                if not _phase2_first_token:
+                    _ttft_ms = (time.monotonic() - _phase2_t0) * 1000
+                    logger.info(
+                        f"[INDIC-PERF] Phase 2 TTFT={_ttft_ms:.0f}ms "
+                        f"lang={response_lang} provider=gemini/{_gemini_model}"
+                    )
+                    _phase2_first_token = True
+                yield chunk
+        except Exception as _ge:
+            if _phase2_first_token:
+                # We already streamed something to the client — can't restart.
+                logger.warning(
+                    f"[INDIC] Phase 2 mid-stream error: "
+                    f"{type(_ge).__name__}: {str(_ge)[:160]}"
+                )
+                yield f"data: {json.dumps({'error': 'AI service interrupted'})}\n\n"
+                return
+            logger.warning(
+                f"[INDIC] Phase 2 failed before first token: "
+                f"{type(_ge).__name__}: {str(_ge)[:160]}"
+            )
+            yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
+            return
+
+        _phase2_total_ms = (time.monotonic() - _phase2_t0) * 1000
+        logger.info(
+            f"[INDIC-PERF] Phase 2 Total={_phase2_total_ms:.0f}ms "
+            f"lang={response_lang} provider=gemini/{_gemini_model}"
+        )
+        yield f"data: {json.dumps({'__provider': 'gemini'})}\n\n"
         return
 
     # ── All other models: single provider ───────────────────────────────────────
