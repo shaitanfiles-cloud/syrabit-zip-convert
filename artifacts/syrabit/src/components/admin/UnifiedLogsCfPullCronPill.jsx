@@ -36,6 +36,18 @@ import { captionLine, joinCaptionParts } from './cronCaptionHelpers';
 // testIds follow the AdminHealth cron-pill convention (replit.md
 // § "AdminHealth cron-pill testId convention"):
 //   unified-logs-cf-pull-cron-{tile,status,pill,run-link,refresh}.
+//
+// Notification channels (Tasks #957 / #963):
+//   The alerter behind this pill pages on three channels —
+//   in-app notification + admin email + best-effort Slack
+//   fan-out — matching the cf-waf-drift / edge-proxy-deploy
+//   sibling pills. Slack is gated on the backend env var
+//   `UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK`; when unset, the
+//   email + in-app channels still fire and the shared
+//   <SlackConfigBadge> next to this pill renders "Slack ✗"
+//   so on-call can spot the missing webhook at a glance.
+//   See CLOUDFLARE_ZERO_TRUST.md §8.7.7 for the sibling-webhook
+//   table that documents all three env vars together.
 
 const HEADER_TEXT_BY_STATUS = {
   healthy: 'Cloudflare log ingest — flowing',

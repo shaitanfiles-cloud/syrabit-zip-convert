@@ -24,12 +24,15 @@ function SlackConfigBadge({ configured, envName, testId }) {
   // Title is the only place we mention the env var name so an admin
   // who sees a missing badge can copy/paste the exact env var to
   // ask infra to set it. Falls back to a generic hint when the
-  // backend didn't publish the env var name.
+  // backend didn't publish the env var name. Task #963 — also
+  // make the "third channel alongside in-app + email" relationship
+  // explicit so on-call understands that the email + in-app pages
+  // still fire even when this badge is red.
   const title = configured
-    ? `Slack fan-out is wired up${envName ? ` (env: ${envName})` : ''}.`
+    ? `Slack fan-out is wired up — paged alongside in-app + email${envName ? ` (env: ${envName})` : ''}.`
     : envName
-      ? `Slack fan-out is NOT wired up — set the ${envName} env var on the backend to enable Slack pages for this alerter.`
-      : 'Slack fan-out is NOT wired up — set the alerter\'s webhook env var on the backend to enable Slack pages.';
+      ? `Slack fan-out is NOT wired up — in-app + email pages still fire; set the ${envName} env var on the backend to enable the third Slack channel.`
+      : 'Slack fan-out is NOT wired up — in-app + email pages still fire; set the alerter\'s webhook env var on the backend to enable the third Slack channel.';
   return (
     <span
       className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold border ${cls}`}

@@ -2449,6 +2449,15 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           "last paged Xh ago · in debounce ~Yh" caption + paged
           history disclosure as its siblings.
           Endpoint: /admin/health/unified-logs/cf-pull/cron.
+          Tasks #957 / #963 — the alerter pages on three channels
+          (in-app + email + Slack), matching the cf-waf-drift /
+          edge-proxy-deploy pills. Slack is the third best-effort
+          channel and is gated on `UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK`
+          being set on the backend; the shared SlackConfigBadge
+          inside <CronHealthPill> renders a "Slack ✓ / ✗" indicator
+          next to this pill so a deploy-without-Slack-coverage gap is
+          visible at a glance. See §8.7.7 of CLOUDFLARE_ZERO_TRUST.md
+          for the sibling-webhook table.
         */}
         <UnifiedLogsCfPullCronPill
           data={unifiedLogsCfPullCronHealth}

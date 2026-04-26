@@ -1363,6 +1363,37 @@ and confirm:
    workflow in production — that would lose drift coverage
    during the test window.
 
+**Sibling silence-alerter Slack webhooks (Task #963)**
+
+The cf-waf-drift silence alerter above is one of three sibling
+silence alerters that all fan out to Slack via the same
+"env-var-per-alerter, no-op when unset" contract. Each alerter
+keeps email + in-app notifications as the primary channels and
+treats Slack as a third best-effort channel — a missing or
+empty webhook env var skips the POST silently, a failed POST is
+logged but never duplicates the alert or breaks the loop, and
+the URL itself is never published on the admin health JSON
+(only the `slackConfigured` boolean + the env var name, so the
+AdminHealth pill can render a "Slack ✓ / ✗" badge without
+leaking the secret).
+
+Point all three at the same on-call channel today; split them
+per-channel later by setting different webhook URLs without any
+code change:
+
+| Backend env var                      | Alerter                                                                | Notes                                                                                                      |
+| ------------------------------------ | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `CF_WAF_DRIFT_SLACK_WEBHOOK`         | `routes/admin_cf_waf_drift_cron_alerts.py` (Task #834)                 | Same value as the GitHub repo secret of the same name used by the per-run drift alert (cf-waf-drift-daily). |
+| `EDGE_PROXY_DEPLOY_SLACK_WEBHOOK`    | `routes/admin_edge_proxy_deploy_cron_alerts.py` (Task #882 alerter)    | Cron-silence + recovery pages for the `edge-proxy-deploy` GitHub Actions workflow.                          |
+| `UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK` | `routes/admin_logs_cf_pull_silence_alerts.py` (Tasks #951 / #957)      | Silence + recovery pages for the unified-logs Cloudflare GraphQL pull (Task #963 — listed here so on-call sets it at the same time as the two siblings; otherwise the Slack fan-out added in Task #957 stays a no-op). |
+
+When any of the three is unset on the backend, that alerter's
+email + in-app channels still fire unchanged — the AdminHealth
+pill's "Slack ✗" badge is the operator-visible signal that the
+fan-out is missing. Configure the new var the same way you'd
+configure the two siblings: in the backend deploy environment
+(Railway), pointing at the same Slack incoming webhook URL.
+
 ## 9. What is **not** in scope here
 
 - WARP enrollment of every team device (separate task; required before
