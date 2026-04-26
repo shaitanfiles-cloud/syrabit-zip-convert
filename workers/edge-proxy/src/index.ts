@@ -1185,21 +1185,13 @@ function _botResponseCacheTtl(pathname: string): number {
   return BOT_CACHE_TTL_CONTENT;
 }
 
-async function fetchBotRenderedHtml(
-  env: Env,
-  pathname: string,
-  clientIp: string,
-  request: Request,
-): Promise<Response | null> {
+function resolveBotApiUrl(env: Env, pathname: string): string | null {
   const clean = pathname.replace(/\/+$/, "") || "/";
   const seoBase = `${env.BACKEND_URL}/api/seo`;
-  let apiUrl: string;
 
-  if (clean === "/" || clean === "/library") {
-    apiUrl = `${seoBase}/html/homepage`;
-  } else if (clean === "/about") {
-    apiUrl = `${seoBase}/html/about`;
-  } else if (
+  if (clean === "/" || clean === "/library") return `${seoBase}/html/homepage`;
+  if (clean === "/about") return `${seoBase}/html/about`;
+  if (
     // Task #499: route every audited public/auth-shell page directly
     // to the origin so BotRenderMiddleware emits its route-specific
     // canonical (https://syrabit.ai/<path>) — including /home, which
@@ -1211,27 +1203,74 @@ async function fetchBotRenderedHtml(
     clean === "/login" || clean === "/signup" || clean === "/profile" ||
     clean === "/admin/login"
   ) {
-    apiUrl = `${env.BACKEND_URL}${clean}`;
-  } else if (clean.startsWith("/learn/")) {
-    apiUrl = `${env.BACKEND_URL}${clean}`;
-  } else if (clean.startsWith("/pyq/")) {
-    apiUrl = `${env.BACKEND_URL}${clean}`;
-  } else {
-    const parts = clean.split("/").filter(Boolean);
-    if (parts.length === 1 && _KNOWN_BOARDS.has(parts[0])) {
-      apiUrl = `${env.BACKEND_URL}${clean}`;
-    } else if (parts.length === 2 && _KNOWN_BOARDS.has(parts[0])) {
-      apiUrl = `${env.BACKEND_URL}${clean}`;
-    } else if (parts.length === 3) {
-      apiUrl = `${seoBase}/html/subject/${parts[0]}/${parts[1]}/${parts[2]}`;
-    } else if (parts.length === 4) {
-      apiUrl = `${seoBase}/html/${parts[0]}/${parts[1]}/${parts[2]}/${parts[3]}`;
-    } else if (parts.length === 5) {
-      apiUrl = `${seoBase}/html/${parts[0]}/${parts[1]}/${parts[2]}/${parts[3]}/${parts[4]}`;
-    } else {
-      return null;
-    }
+    return `${env.BACKEND_URL}${clean}`;
   }
+  if (clean.startsWith("/learn/")) return `${env.BACKEND_URL}${clean}`;
+  if (clean.startsWith("/pyq/")) return `${env.BACKEND_URL}${clean}`;
+
+  const parts = clean.split("/").filter(Boolean);
+  if (parts.length === 1 && _KNOWN_BOARDS.has(parts[0])) return `${env.BACKEND_URL}${clean}`;
+  if (parts.length === 2 && _KNOWN_BOARDS.has(parts[0])) return `${env.BACKEND_URL}${clean}`;
+  if (parts.length === 3) return `${seoBase}/html/subject/${parts[0]}/${parts[1]}/${parts[2]}`;
+  if (parts.length === 4) return `${seoBase}/html/${parts[0]}/${parts[1]}/${parts[2]}/${parts[3]}`;
+  if (parts.length === 5) return `${seoBase}/html/${parts[0]}/${parts[1]}/${parts[2]}/${parts[3]}/${parts[4]}`;
+  return null;
+}
+
+/**
+ * Task #907 — Cheap HEAD probe to recover the backend's authoritative
+ * `Last-Modified` for an existing legacy KV entry that pre-dates the
+ * JSON wrapper introduced in Task #896. We use this only on the
+ * background upgrade path so first-hit latency is unaffected. Returns
+ * the upstream RFC 7231 date string when present and parseable; null
+ * otherwise (e.g. backend doesn't support HEAD, omits the header, or
+ * the network request fails) — callers must fall back to the
+ * synthesized "now" timestamp.
+ */
+export async function probeBotLastModified(
+  env: Env,
+  pathname: string,
+  clientIp: string,
+  request: Request,
+): Promise<string | null> {
+  const apiUrl = resolveBotApiUrl(env, pathname);
+  if (!apiUrl) return null;
+  try {
+    const proxyHeaders = buildProxyHeaders(request, clientIp, env);
+    proxyHeaders.set("X-Bot-Request", "1");
+    // Tell the backend this is a metadata-only probe so it can skip
+    // any expensive render work and just emit headers.
+    proxyHeaders.set("X-Bot-Probe", "1");
+    // Strip any inbound conditional headers — a crawler that arrived
+    // with `If-None-Match` / `If-Modified-Since` would otherwise
+    // induce a 304 from the backend, which carries no
+    // `Last-Modified` and would force us back to the synthesized
+    // fallback even when the upstream has an authoritative date.
+    proxyHeaders.delete("If-None-Match");
+    proxyHeaders.delete("If-Modified-Since");
+    proxyHeaders.delete("If-Match");
+    proxyHeaders.delete("If-Unmodified-Since");
+    proxyHeaders.delete("If-Range");
+    const resp = await fetch(apiUrl, { method: "HEAD", headers: proxyHeaders });
+    if (!resp.ok) return null;
+    const lm = resp.headers.get("Last-Modified");
+    if (!lm) return null;
+    if (parseHttpDate(lm) === null) return null;
+    return lm;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchBotRenderedHtml(
+  env: Env,
+  pathname: string,
+  clientIp: string,
+  request: Request,
+): Promise<Response | null> {
+  const apiUrl = resolveBotApiUrl(env, pathname);
+  if (apiUrl === null) return null;
+  const clean = pathname.replace(/\/+$/, "") || "/";
 
   try {
     const proxyHeaders = buildProxyHeaders(request, clientIp, env);
@@ -1416,19 +1455,42 @@ export async function handleBotContentRequest(
           // so we still emit conditional headers — the worst case is a
           // single full-body response per legacy entry until it expires.
           const etag = await computeEtag(raw);
-          entry = { body: raw, lastmod: formatRfc7231(new Date()), etag };
+          const synthesizedLm = formatRfc7231(new Date());
+          entry = { body: raw, lastmod: synthesizedLm, etag };
           // Upgrade the KV value to the JSON wrapper in the background so
           // subsequent reads of this key return a stable Last-Modified
-          // (the synthesized one) instead of a fresh "now" each time —
-          // which would otherwise mislead crawlers about content age
-          // (Task #896).
+          // instead of a fresh "now" each time — which would otherwise
+          // mislead crawlers about content age (Task #896). Task #907 —
+          // before persisting, try a cheap HEAD probe at the backend so
+          // we can prefer its authoritative `Last-Modified` over the
+          // synthesized "now-at-first-read"; falls back to the
+          // synthesized value when the probe is unavailable so there's
+          // no regression vs. Task #896.
           if (env.BOT_HTML_CACHE) {
-            const upgraded = entry;
-            ctx.waitUntil(
-              env.BOT_HTML_CACHE
-                .put(cacheKey, JSON.stringify(upgraded), { expirationTtl: cacheTtl })
-                .catch(() => {}),
-            );
+            const baseEntry = entry;
+            const cache = env.BOT_HTML_CACHE;
+            ctx.waitUntil((async () => {
+              let upgradedLm = baseEntry.lastmod;
+              try {
+                const probedLm = await probeBotLastModified(
+                  env,
+                  pathname,
+                  clientIp,
+                  request,
+                );
+                if (probedLm) upgradedLm = probedLm;
+              } catch { /* keep synthesized */ }
+              const upgraded: BotCacheEntry = {
+                body: baseEntry.body,
+                etag: baseEntry.etag,
+                lastmod: upgradedLm,
+              };
+              await cache
+                .put(cacheKey, JSON.stringify(upgraded), {
+                  expirationTtl: cacheTtl,
+                })
+                .catch(() => {});
+            })());
           }
         }
         const lastmodMs = parseHttpDate(entry.lastmod) ?? Date.now();

@@ -102,11 +102,20 @@ function botRequest(
   return req;
 }
 
-function installRenderedFetch() {
+function installRenderedFetch(opts: { headLastModified?: string | null } = {}) {
+  // The HEAD probe added in Task #907 fires from the legacy-upgrade
+  // background job. By default we mirror the GET response's
+  // Last-Modified so the cheap probe behaves like a real backend that
+  // honours conditional metadata. Pass `headLastModified: null` to
+  // simulate a backend that doesn't expose Last-Modified on HEAD —
+  // this exercises the synthesized fallback path.
+  const headLm =
+    opts.headLastModified === undefined ? BACKEND_LM : opts.headLastModified;
   return vi
     .spyOn(globalThis, "fetch")
-    .mockImplementation((async (input: RequestInfo | URL) => {
+    .mockImplementation((async (input: RequestInfo | URL, init?: RequestInit) => {
       const u = typeof input === "string" ? input : input.toString();
+      const method = (init?.method ?? "GET").toUpperCase();
       if (u.startsWith("https://pages.test")) {
         return new Response(
           "<html><body>pages-spa-shell</body></html>",
@@ -115,6 +124,13 @@ function installRenderedFetch() {
             headers: { "Content-Type": "text/html; charset=utf-8" },
           },
         );
+      }
+      if (method === "HEAD") {
+        const headers: Record<string, string> = {
+          "Content-Type": "text/html; charset=utf-8",
+        };
+        if (headLm) headers["Last-Modified"] = headLm;
+        return new Response(null, { status: 200, headers });
       }
       // Default: backend bot-render endpoint.
       return new Response(RENDERED_HTML, {
@@ -240,11 +256,23 @@ describe("BOT_HTML_CACHE end-to-end via worker.fetch (verifiedBot=true)", () => 
     const cacheWrites = () =>
       kv.putSpy.mock.calls.filter((c) => c[0] === cacheKey).length;
 
+    // The Task #896 upgrade and the Task #907 HEAD probe both run on the
+    // background path through ctx.waitUntil. Collect those promises so
+    // we can await them deterministically before asserting on the
+    // post-conditions.
+    const writes: Promise<unknown>[] = [];
+    const ctxAwait = {
+      waitUntil: (p: Promise<unknown>) => {
+        writes.push(p);
+      },
+      passThroughOnException: () => {},
+    } as unknown as ExecutionContext;
+
     const callsBefore = fetchSpy.mock.calls.length;
     const r1 = await workerHandler.fetch(
       botRequest(CONTENT_PATH),
       env,
-      ctxNoop,
+      ctxAwait,
     );
     expect(r1.status).toBe(200);
     expect(r1.headers.get("X-Source")).toBe("bot-cache");
@@ -253,36 +281,53 @@ describe("BOT_HTML_CACHE end-to-end via worker.fetch (verifiedBot=true)", () => 
     expect(r1.headers.get("Last-Modified")).toBeTruthy();
     expect(await r1.text()).toBe(LEGACY_HTML);
 
-    // Legacy hit must not trigger a backend re-render. The cache entry is
-    // upgraded to the JSON wrapper exactly once on first read (Task #896);
-    // see the dedicated upgrade test below for the wrapper-shape assertions.
-    expect(fetchSpy.mock.calls.length).toBe(callsBefore);
+    await Promise.all(writes.splice(0));
+
+    // Legacy hit must not trigger a backend re-render. The Task #907
+    // upgrade job is allowed to fire a cheap metadata-only HEAD probe,
+    // but no full GET re-render is permitted. The KV upgrade itself
+    // happens exactly once per legacy entry (Task #896).
+    const newCalls = fetchSpy.mock.calls.slice(callsBefore);
+    for (const [, init] of newCalls) {
+      const method = ((init as RequestInit | undefined)?.method ?? "GET").toUpperCase();
+      expect(method).toBe("HEAD");
+    }
     expect(cacheWrites()).toBe(1);
 
     // Conditional GET against the synthesized etag must yield 304.
+    const callsBeforeCond = fetchSpy.mock.calls.length;
     const r2 = await workerHandler.fetch(
       botRequest(CONTENT_PATH, { "If-None-Match": `"${expectedEtag}"` }),
       env,
-      ctxNoop,
+      ctxAwait,
     );
     expect(r2.status).toBe(304);
     expect(r2.headers.get("ETag")).toBe(`"${expectedEtag}"`);
     expect(r2.headers.get("X-Source")).toBe("bot-cache");
     expect(await r2.text()).toBe("");
 
-    // Still no backend re-render. Second hit reads the upgraded JSON wrapper
-    // — no further rewrites, so the per-key write count stays at 1.
-    expect(fetchSpy.mock.calls.length).toBe(callsBefore);
+    await Promise.all(writes.splice(0));
+
+    // Still no backend re-render. The wrapper now parses cleanly so the
+    // legacy-upgrade branch is skipped — no HEAD probe, no rewrites.
+    expect(fetchSpy.mock.calls.length).toBe(callsBeforeCond);
     expect(cacheWrites()).toBe(1);
   });
 
-  it("legacy plain-string KV entry is upgraded to the JSON wrapper on first read, and subsequent reads return a stable Last-Modified (Task #896)", async () => {
+  it("legacy plain-string KV entry is upgraded to the JSON wrapper on first read; when the backend HEAD probe omits Last-Modified, the synthesized timestamp is preserved (Task #896 fallback)", async () => {
     const LEGACY_HTML =
       "<html><body>legacy-upgrade-" + "z".repeat(400) + "</body></html>";
     const expectedEtag = createHash("sha256")
       .update(LEGACY_HTML)
       .digest("hex")
       .slice(0, 12);
+
+    // Reinstall the fetch mock to simulate a backend that doesn't expose
+    // Last-Modified on HEAD responses — this is the regression-guard for
+    // Task #907's fallback contract: the synthesized "now-at-first-read"
+    // must still flow through to the JSON wrapper unchanged.
+    fetchSpy.mockRestore();
+    fetchSpy = installRenderedFetch({ headLastModified: null });
 
     const kv = makeExpiringKv();
     const env = makeEnv({ botCache: kv });
@@ -321,6 +366,7 @@ describe("BOT_HTML_CACHE end-to-end via worker.fetch (verifiedBot=true)", () => 
     expect(await r1.text()).toBe(LEGACY_HTML);
 
     // The KV value is now the JSON wrapper, with the synthesized lastmod
+    // (the backend HEAD probe returned no Last-Modified, so we fall back)
     // and body-derived etag preserved. TTL matches the configured page TTL.
     const writeCalls = kv.putSpy.mock.calls.filter((c) => c[0] === cacheKey);
     expect(writeCalls).toHaveLength(1);
@@ -351,6 +397,119 @@ describe("BOT_HTML_CACHE end-to-end via worker.fetch (verifiedBot=true)", () => 
     expect(await r2.text()).toBe(LEGACY_HTML);
 
     // No further rewrites — upgrade happens exactly once.
+    expect(
+      kv.putSpy.mock.calls.filter((c) => c[0] === cacheKey),
+    ).toHaveLength(1);
+  });
+
+  it("legacy plain-string KV entry: background upgrade prefers the upstream Last-Modified from the HEAD probe over the synthesized timestamp (Task #907)", async () => {
+    const LEGACY_HTML =
+      "<html><body>legacy-probe-" + "q".repeat(400) + "</body></html>";
+    const expectedEtag = createHash("sha256")
+      .update(LEGACY_HTML)
+      .digest("hex")
+      .slice(0, 12);
+
+    const kv = makeExpiringKv();
+    const env = makeEnv({ botCache: kv });
+    const cacheKey = `bot:content:${CONTENT_PATH}`;
+
+    // Pre-seed the old plain-HTML format.
+    kv.store.set(cacheKey, { value: LEGACY_HTML, expiresAt: null });
+
+    const writes: Promise<unknown>[] = [];
+    const ctxAwait = {
+      waitUntil: (p: Promise<unknown>) => {
+        writes.push(p);
+      },
+      passThroughOnException: () => {},
+    } as unknown as ExecutionContext;
+
+    // Pin time so we can prove the persisted Last-Modified is the
+    // upstream value, NOT the "now-at-first-read" timestamp.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-22T03:14:15Z"));
+    const synthesizedLm = new Date().toUTCString();
+    expect(synthesizedLm).not.toBe(BACKEND_LM); // sanity
+
+    // First read — the served response still uses the synthesized
+    // timestamp (we built `entry` inline before the background probe
+    // could resolve), but the *persisted* wrapper must carry the
+    // upstream Last-Modified surfaced by the cheap HEAD probe.
+    //
+    // The crawler arrives with `If-None-Match` of an unrelated etag
+    // (it doesn't match our entry, so the served response is 200) —
+    // this asserts the probe path correctly strips the conditional
+    // header before talking to the backend, otherwise the backend
+    // could 304 the probe with no `Last-Modified`.
+    const r1 = await workerHandler.fetch(
+      botRequest(CONTENT_PATH, { "If-None-Match": '"deadbeefdead"' }),
+      env,
+      ctxAwait,
+    );
+    await Promise.all(writes.splice(0));
+
+    expect(r1.status).toBe(200);
+    expect(r1.headers.get("X-Source")).toBe("bot-cache");
+    expect(r1.headers.get("ETag")).toBe(`"${expectedEtag}"`);
+    expect(r1.headers.get("Last-Modified")).toBe(synthesizedLm);
+    expect(await r1.text()).toBe(LEGACY_HTML);
+
+    // The handler must have issued exactly one HEAD probe at the
+    // backend's resolved bot-render endpoint — the metadata-only path
+    // (no full re-render).
+    const headCalls = fetchSpy.mock.calls.filter(([, init]) => {
+      const method = ((init as RequestInit | undefined)?.method ?? "GET")
+        .toUpperCase();
+      return method === "HEAD";
+    });
+    expect(headCalls.length).toBe(1);
+    const [headUrl, headInit] = headCalls[0];
+    expect(String(headUrl)).toBe(
+      `https://backend.test/api/seo/html/ahsec/class-12/physics/electric-field`,
+    );
+    // The probe must carry the bot-probe marker and must NOT forward any
+    // inbound conditional headers — otherwise a crawler that arrived
+    // with `If-None-Match` could induce a 304 from the backend (no
+    // `Last-Modified` body), and we'd silently drop back to the
+    // synthesized fallback even when the upstream has an authoritative
+    // date.
+    const probeHeaders = new Headers(
+      (headInit as RequestInit | undefined)?.headers ?? {},
+    );
+    expect(probeHeaders.get("X-Bot-Probe")).toBe("1");
+    expect(probeHeaders.get("X-Bot-Request")).toBe("1");
+    expect(probeHeaders.get("If-None-Match")).toBeNull();
+    expect(probeHeaders.get("If-Modified-Since")).toBeNull();
+
+    // The upgraded JSON wrapper now carries the upstream Last-Modified
+    // (Task #907) — this is the assertion the task explicitly calls for.
+    const writeCalls = kv.putSpy.mock.calls.filter((c) => c[0] === cacheKey);
+    expect(writeCalls).toHaveLength(1);
+    const [, writtenValue, writtenOpts] = writeCalls[0];
+    expect(writtenOpts?.expirationTtl).toBe(3600);
+    const wrapper = JSON.parse(writtenValue);
+    expect(wrapper.body).toBe(LEGACY_HTML);
+    expect(wrapper.etag).toBe(expectedEtag);
+    expect(wrapper.lastmod).toBe(BACKEND_LM);
+
+    // Subsequent reads must return the upstream Last-Modified — Google's
+    // index dates can now line up with reality without forcing a full
+    // re-render on every legacy hit.
+    vi.setSystemTime(Date.now() + 5 * 60 * 1000);
+    const r2 = await workerHandler.fetch(
+      botRequest(CONTENT_PATH),
+      env,
+      ctxAwait,
+    );
+    await Promise.all(writes.splice(0));
+
+    expect(r2.status).toBe(200);
+    expect(r2.headers.get("X-Source")).toBe("bot-cache");
+    expect(r2.headers.get("Last-Modified")).toBe(BACKEND_LM);
+    expect(await r2.text()).toBe(LEGACY_HTML);
+
+    // Wrapper now parses cleanly — no further upgrade writes, no probe.
     expect(
       kv.putSpy.mock.calls.filter((c) => c[0] === cacheKey),
     ).toHaveLength(1);
