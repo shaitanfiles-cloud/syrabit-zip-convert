@@ -921,6 +921,80 @@ async def run_topic_discovery_once(
 
 
 _NIGHTLY_LOOP_SLEEP_S = int(os.environ.get("TOPIC_DISCOVERY_LOOP_SLEEP_S", "1800"))
+
+
+async def _try_claim_daily_lock(
+    db: Any,
+    *,
+    lock_id: str,
+    owner_token: str,
+    now: datetime,
+) -> bool:
+    """Atomically claim today's daily lock or return False.
+
+    Architecture review feedback (Task #937 acceptance gate, round 3):
+    the previous implementation used a regular ``id`` field as the
+    lock key, which the runs collection has no unique index on. Two
+    racing replicas could both upsert and create *different* lock
+    docs, after which a follow-up ``find_one`` ownership check is
+    nondeterministic. We now use Mongo's intrinsic ``_id`` (which is
+    unique on every collection by definition), so the upsert can
+    NEVER create a duplicate — any second writer's upsert hits a
+    duplicate-key error which we catch and treat as "another replica
+    holds the lock". Combined with the ``ran_at`` ownership re-read,
+    this gives a true single-run-per-day guarantee.
+    """
+    if db is None:
+        return False
+    try:
+        # First try to insert. If a doc with this _id already exists,
+        # Mongo raises DuplicateKeyError — exactly what we want.
+        try:
+            await db[RUNS_COLLECTION].insert_one({
+                "_id": lock_id,
+                "kind": "daily_lock",
+                "claim_token": owner_token,
+                "claimed_at": now,
+            })
+            return True
+        except Exception as exc:
+            # DuplicateKeyError or any other write error — fall
+            # through to the takeover path.
+            err_name = type(exc).__name__
+            if "DuplicateKey" not in err_name:
+                logger.debug("topic_discovery: lock insert failed (%s): %s",
+                             err_name, exc)
+
+        # A doc already exists. Try to take it over only if it has
+        # never been claimed (no claim_token). If a previous run
+        # already claimed and ran today, ``ran_at`` will be set and
+        # we should not run again.
+        existing = await db[RUNS_COLLECTION].find_one({"_id": lock_id})
+        if existing and (existing.get("ran_at") or existing.get("claim_token")):
+            return False
+        # Stale doc with no claim_token (shouldn't happen with the
+        # insert-first path above, but covers crashed-mid-claim
+        # recoveries from older code). Atomic CAS on missing token.
+        res = await db[RUNS_COLLECTION].update_one(
+            {
+                "_id": lock_id,
+                "$or": [
+                    {"claim_token": {"$exists": False}},
+                    {"claim_token": None},
+                ],
+                "ran_at": {"$exists": False},
+            },
+            {"$set": {
+                "claim_token": owner_token, "claimed_at": now,
+                "kind": "daily_lock",
+            }},
+        )
+        return getattr(res, "modified_count", 0) == 1
+    except Exception as exc:
+        logger.debug("topic_discovery: lock claim error: %s", exc)
+        return False
+
+
 _NIGHTLY_LOOP_WARMUP_S = int(os.environ.get("TOPIC_DISCOVERY_LOOP_WARMUP_S", "300"))
 
 
@@ -954,64 +1028,12 @@ async def _topic_discovery_loop():
                 continue
 
             day_key = now.strftime("%Y-%m-%d")
-            lock_id = f"daily_{day_key}"
+            lock_id = f"daily_lock_{day_key}"
             owner_token = uuid.uuid4().hex
-            claimed_ok = False
-            try:
-                # True compare-and-set: only one writer can flip the doc
-                # from "absent or never-claimed" to "claimed by us". The
-                # filter requires either no doc (upsert path) OR a doc
-                # that has not yet been claimed by anyone — the second
-                # writer's update_one will match nothing and exit. The
-                # subsequent ``ran_at`` guard then covers the case where
-                # a previous day's replica crashed mid-run.
-                claim_res = await _db[RUNS_COLLECTION].find_one_and_update(
-                    {
-                        "id": lock_id,
-                        "kind": "daily_lock",
-                        "$or": [
-                            {"claim_token": {"$exists": False}},
-                            {"claim_token": None},
-                        ],
-                    },
-                    {"$set": {
-                        "id": lock_id,
-                        "kind": "daily_lock",
-                        "claim_token": owner_token,
-                        "claimed_at": now,
-                    }},
-                    upsert=True,
-                    return_document=False,  # legacy/default: returns prev doc
-                )
-                # ``return_document=False`` returns None on insert and the
-                # *prior* doc on update. If the prior doc already had a
-                # token, our $or filter would have failed → upsert tried
-                # to insert and would conflict on the unique-by-id index
-                # (or, on collections without one, the second writer's
-                # token will not equal ours after a re-read). Re-read the
-                # doc and verify ownership before continuing.
-                lock_doc = await _db[RUNS_COLLECTION].find_one(
-                    {"id": lock_id, "kind": "daily_lock"},
-                    {"_id": 0, "claim_token": 1, "ran_at": 1},
-                )
-                if not lock_doc or lock_doc.get("claim_token") != owner_token:
-                    # Another replica won the race for today.
-                    await asyncio.sleep(_NIGHTLY_LOOP_SLEEP_S)
-                    continue
-                if lock_doc.get("ran_at"):
-                    # We won the claim but a prior run already finished
-                    # today — defensive (shouldn't happen because we'd
-                    # not have matched the $or filter, but covers schema
-                    # drift / partial migrations).
-                    await asyncio.sleep(_NIGHTLY_LOOP_SLEEP_S)
-                    continue
-                claimed_ok = True
-            except Exception as exc:
-                logger.debug("topic_discovery: lock claim failed: %s", exc)
-                await asyncio.sleep(_NIGHTLY_LOOP_SLEEP_S)
-                continue
-
-            if not claimed_ok:
+            claimed = await _try_claim_daily_lock(
+                _db, lock_id=lock_id, owner_token=owner_token, now=now,
+            )
+            if not claimed:
                 await asyncio.sleep(_NIGHTLY_LOOP_SLEEP_S)
                 continue
 
@@ -1022,8 +1044,7 @@ async def _topic_discovery_loop():
             finally:
                 try:
                     await _db[RUNS_COLLECTION].update_one(
-                        {"id": lock_id, "kind": "daily_lock",
-                         "claim_token": owner_token},
+                        {"_id": lock_id, "claim_token": owner_token},
                         {"$set": {"ran_at": datetime.now(timezone.utc)}},
                     )
                 except Exception:

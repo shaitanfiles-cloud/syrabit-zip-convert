@@ -698,3 +698,132 @@ def test_get_config_respects_env(monkeypatch):
     assert cfg["draft_cap"] == 20
     assert cfg["run_hour_utc"] == 2
     assert cfg["disabled"] == 1
+
+
+# ── daily lock semantics ─────────────────────────────────────────────
+
+
+class _DupKeyError(Exception):
+    """Stand-in for pymongo.errors.DuplicateKeyError; the production
+    code only inspects ``type(exc).__name__`` to detect it."""
+
+    def __init__(self, msg="duplicate key"):
+        super().__init__(msg)
+
+
+# Force the name match used by _try_claim_daily_lock's exception filter.
+_DupKeyError.__name__ = "DuplicateKeyError"
+
+
+class _LockColl:
+    """Tiny fake that enforces _id uniqueness and supports the three
+    operations the lock helper needs: insert_one, find_one,
+    update_one."""
+
+    def __init__(self):
+        self.docs: List[Dict[str, Any]] = []
+
+    async def insert_one(self, doc):
+        for d in self.docs:
+            if d.get("_id") == doc.get("_id"):
+                raise _DupKeyError()
+        self.docs.append(dict(doc))
+
+    async def find_one(self, q, _proj=None):
+        for d in self.docs:
+            if all(d.get(k) == v for k, v in q.items()):
+                return dict(d)
+        return None
+
+    async def update_one(self, q, update, upsert=False):
+        sets = (update.get("$set") or {})
+        for d in self.docs:
+            ok = True
+            for k, v in q.items():
+                if k == "$or":
+                    if not any(
+                        all(
+                            (d.get(kk) == vv if not isinstance(vv, dict)
+                             else (kk in d) == (not vv.get("$exists", True)))
+                            for kk, vv in branch.items()
+                        )
+                        for branch in v
+                    ):
+                        ok = False
+                        break
+                    continue
+                if isinstance(v, dict):
+                    if "$exists" in v:
+                        if (k in d) != v["$exists"]:
+                            ok = False
+                            break
+                    continue
+                if d.get(k) != v:
+                    ok = False
+                    break
+            if ok:
+                d.update(sets)
+
+                class _R:
+                    modified_count = 1
+                return _R()
+
+        class _R0:
+            modified_count = 0
+        return _R0()
+
+
+class _LockDb:
+    def __init__(self):
+        self._coll = _LockColl()
+
+    def __getitem__(self, _name):
+        return self._coll
+
+
+def test_try_claim_daily_lock_first_writer_wins_and_second_is_blocked():
+    db = _LockDb()
+    now = datetime.now(timezone.utc)
+    lock_id = "daily_lock_2026-04-26"
+
+    a = _run(tds._try_claim_daily_lock(
+        db, lock_id=lock_id, owner_token="A", now=now,
+    ))
+    b = _run(tds._try_claim_daily_lock(
+        db, lock_id=lock_id, owner_token="B", now=now,
+    ))
+
+    assert a is True
+    assert b is False
+    # Single doc only — no duplicate _id rows under contention.
+    assert len(db._coll.docs) == 1
+    assert db._coll.docs[0]["_id"] == lock_id
+    assert db._coll.docs[0]["claim_token"] == "A"
+
+
+def test_try_claim_daily_lock_blocks_after_ran_at_set():
+    db = _LockDb()
+    now = datetime.now(timezone.utc)
+    lock_id = "daily_lock_2026-04-27"
+
+    # Pre-seed a "completed" daily lock from earlier in the day.
+    db._coll.docs.append({
+        "_id": lock_id,
+        "kind": "daily_lock",
+        "claim_token": "earlier",
+        "claimed_at": now,
+        "ran_at": now,
+    })
+
+    out = _run(tds._try_claim_daily_lock(
+        db, lock_id=lock_id, owner_token="late", now=now,
+    ))
+    assert out is False
+    assert len(db._coll.docs) == 1
+
+
+def test_try_claim_daily_lock_safe_when_db_none():
+    now = datetime.now(timezone.utc)
+    assert _run(tds._try_claim_daily_lock(
+        None, lock_id="x", owner_token="y", now=now,
+    )) is False

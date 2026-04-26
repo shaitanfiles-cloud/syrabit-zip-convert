@@ -79,47 +79,39 @@ interface OverrideCall {
 }
 
 function setupTopicDiscoveryRoutes(page: Page) {
+  // Reserved for future test cases that don't need the POST body —
+  // the override flow asserts via a dedicated page.route hook below.
   const overrideCalls: OverrideCall[] = [];
-  return {
-    overrideCalls,
-    overrides: {
-      '/api/admin/seo/topic-discovery/runs': () => RUNS_PAYLOAD,
-      '/api/admin/seo/topic-discovery/candidates': () => CANDIDATES_PAYLOAD,
-      '/api/admin/seo/topic-discovery/override': (url: string) => {
-        // Capture the override call for assertion. The mock framework
-        // doesn't expose the request body to the URL-based callback,
-        // so we record the URL and rely on a separate page.route hook
-        // (installed below) to capture the body.
-        overrideCalls.push({ url, body: null });
-        return { ok: true, candidateId: 'cand_drafted_002' };
-      },
-    },
-  };
+  void page;
+  return { overrideCalls };
 }
 
 test.describe('Topic Discovery tab', () => {
   test('renders runs + candidates and submits an admin override', async ({ page }) => {
     const { overrideCalls } = setupTopicDiscoveryRoutes(page);
 
-    // Capture POST bodies for the override endpoint specifically — the
-    // shared admin-mocks framework only exposes the URL to its
-    // fixture callback, but we want to assert the body shape too.
+    // Capture POST bodies for the override endpoint. The real route
+    // is /api/admin/seo/topic-discovery/{candidateId}/override — the
+    // candidate id is in the path, not the body.
     const captured: OverrideCall[] = [];
-    await page.route('**/api/admin/seo/topic-discovery/override', async (route) => {
-      const req = route.request();
-      let body: unknown = null;
-      try {
-        body = req.postDataJSON();
-      } catch {
-        body = req.postData();
-      }
-      captured.push({ url: req.url(), body });
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ ok: true, candidateId: 'cand_drafted_002' }),
-      });
-    });
+    await page.route(
+      '**/api/admin/seo/topic-discovery/*/override',
+      async (route) => {
+        const req = route.request();
+        let body: unknown = null;
+        try {
+          body = req.postDataJSON();
+        } catch {
+          body = req.postData();
+        }
+        captured.push({ url: req.url(), body });
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, candidateId: 'cand_drafted_002' }),
+        });
+      },
+    );
 
     await seedAdminSession(page);
     await installAdminApiMocks(page, {
@@ -173,23 +165,26 @@ test.describe('Topic Discovery tab', () => {
     await expect(promoteBtn).toBeVisible();
     await promoteBtn.click();
 
-    // Assert the override endpoint was hit with a JSON body that
-    // includes the candidate id. Wait briefly for the request to land.
-    await expect.poll(() => captured.length, { timeout: 5_000 }).toBeGreaterThan(0);
+    // Assert the override endpoint was hit. The candidate id lives in
+    // the URL path; the JSON body carries {decision, reason} as
+    // produced by adminTopicDiscoveryOverride() in utils/api.jsx.
+    await expect
+      .poll(() => captured.length, { timeout: 5_000 })
+      .toBeGreaterThan(0);
     const call = captured[0];
-    expect(call.url).toContain('/api/admin/seo/topic-discovery/override');
-    if (call.body && typeof call.body === 'object') {
-      const body = call.body as Record<string, unknown>;
-      // Body shape comes from adminTopicDiscoveryOverride() in api.jsx.
-      expect(body).toHaveProperty('candidate_id');
-      expect(body.candidate_id).toBe('cand_drafted_002');
-      expect(body).toHaveProperty('decision');
-    }
+    expect(call.url).toContain(
+      '/api/admin/seo/topic-discovery/cand_drafted_002/override',
+    );
+    expect(call.body && typeof call.body === 'object').toBe(true);
+    const body = call.body as Record<string, unknown>;
+    expect(body).toHaveProperty('decision');
+    // The promote button issues an "auto_published" override; reason
+    // comes from our stubbed prompt() above.
+    expect(body.decision).toBe('auto_published');
+    expect(body).toHaveProperty('reason');
+    expect(typeof body.reason).toBe('string');
+    expect((body.reason as string).length).toBeGreaterThan(0);
 
-    // Suppress unused var lint — overrideCalls captured the URL-only
-    // shape from the shared mocks framework; ``captured`` is the
-    // authoritative assertion. We keep the helper to demonstrate
-    // wiring for future tests that don't need the POST body.
     void overrideCalls;
   });
 });
