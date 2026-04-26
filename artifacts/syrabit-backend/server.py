@@ -1273,9 +1273,17 @@ async def lifespan(app):
     #     "Pause ingest" click survives the restart.
     #   * Boot the in-process backend log shipper which the global
     #     middleware drips per-request samples into.
-    #   * Start the Cloudflare GraphQL pull loop on the leader only —
-    #     every replica polling the same window would multiply our CF
-    #     analytics quota cost N× for zero added coverage.
+    #   * Start the Cloudflare GraphQL pull loop on EVERY replica.
+    #     Cross-replica dedup is enforced inside the loop via a
+    #     Mongo-backed lease (Task #947, ``_try_acquire_cf_pull_lease``).
+    #     The previous ``_is_leader`` gate was a per-machine file
+    #     lock, so two Railway replicas would each consider themselves
+    #     "leader" and double-poll the CF GraphQL API, multiplying
+    #     analytics quota cost. Followers stand down on each tick
+    #     instead of firing the GraphQL query, so quota cost stays
+    #     at 1× regardless of replica count, and a leader fail-over
+    #     is picked up within one follower interval.
+    _unified_logs_cf_task = None
     try:
         import unified_logs_dao as _ulogs_dao
         from routes.admin_logs import (
@@ -1285,8 +1293,7 @@ async def lifespan(app):
         await _ulogs_dao.ensure_indexes(db)
         await _hydrate_pause_state_from_db()
         await _ulogs_dao.get_backend_shipper().start(db)
-        if _is_leader:
-            asyncio.create_task(_unified_logs_cf_pull_loop())
+        _unified_logs_cf_task = asyncio.create_task(_unified_logs_cf_pull_loop())
     except Exception as _ulogs_boot_err:
         logger.warning(f"[unified_logs] startup wiring failed: {_ulogs_boot_err}")
 
@@ -1320,6 +1327,16 @@ async def lifespan(app):
         await _ulogs_dao_shutdown.get_backend_shipper().stop()
     except Exception as _ulogs_stop_err:
         logger.debug(f"[unified_logs] shutdown stop raised: {_ulogs_stop_err}")
+    # Task #947 — cancel the CF pull loop so its CancelledError
+    # handler releases the Mongo lease, letting a peer replica pick
+    # up the loop on its next follower tick instead of waiting out
+    # the full ``CF_PULL_LEASE_TTL_S`` window.
+    if _unified_logs_cf_task is not None and not _unified_logs_cf_task.done():
+        _unified_logs_cf_task.cancel()
+        try:
+            await _unified_logs_cf_task
+        except (asyncio.CancelledError, Exception):
+            pass
     if sarvam_client:
         await sarvam_client.aclose()
     if sarvam_translate_client:

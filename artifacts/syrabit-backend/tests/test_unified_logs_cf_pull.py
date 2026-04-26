@@ -11,7 +11,7 @@ that:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
@@ -173,4 +173,303 @@ def test_try_run_cf_pull_once_returns_reason_when_cf_unconfigured(monkeypatch):
         res = await routes._try_run_cf_pull_once(graphql_callable=None)
         assert res["ok"] is False
         assert res["reason"] == "cf_not_configured"
+    asyncio.run(_inner())
+
+
+# ─── Task #947 — cross-replica lease for the CF pull loop ─────────────
+
+
+def _lease_doc(db: _FakeDb):
+    """Helper: pluck the lease/cursor doc from the fake job_locks coll."""
+    return next(
+        (d for d in db.job_locks.docs if d.get("_id") == routes.CF_PULL_LOCK_ID),
+        None,
+    )
+
+
+def test_acquire_cf_pull_lease_bootstraps_when_no_doc_exists():
+    """Fresh deployment: no doc in job_locks → insert path wins,
+    lease_owner is set to OUR id, lease_expires_at is in the future."""
+    async def _inner():
+        db = _FakeDb()
+        now = datetime(2026, 4, 26, 10, 0, tzinfo=timezone.utc)
+        ok = await routes._try_acquire_cf_pull_lease(
+            db, now=now, owner_id="replica-A", ttl_s=120,
+        )
+        assert ok is True
+        doc = _lease_doc(db)
+        assert doc is not None
+        assert doc[routes.CF_PULL_LEASE_OWNER_FIELD] == "replica-A"
+        assert doc[routes.CF_PULL_LEASE_EXPIRES_FIELD] > now
+    asyncio.run(_inner())
+
+
+def test_acquire_cf_pull_lease_renews_when_already_owned():
+    """Renewal path: same owner re-acquires every tick. lease_expires_at
+    is pushed forward; ownership does not change."""
+    async def _inner():
+        db = _FakeDb()
+        now1 = datetime(2026, 4, 26, 10, 0, tzinfo=timezone.utc)
+        await routes._try_acquire_cf_pull_lease(
+            db, now=now1, owner_id="replica-A", ttl_s=120,
+        )
+        first_expiry = _lease_doc(db)[routes.CF_PULL_LEASE_EXPIRES_FIELD]
+        now2 = now1 + timedelta(seconds=30)
+        ok = await routes._try_acquire_cf_pull_lease(
+            db, now=now2, owner_id="replica-A", ttl_s=120,
+        )
+        assert ok is True
+        doc = _lease_doc(db)
+        assert doc[routes.CF_PULL_LEASE_OWNER_FIELD] == "replica-A"
+        assert doc[routes.CF_PULL_LEASE_EXPIRES_FIELD] > first_expiry
+    asyncio.run(_inner())
+
+
+def test_acquire_cf_pull_lease_blocks_when_other_replica_is_alive():
+    """Anti-spam path: replica-A holds an unexpired lease → replica-B
+    cannot acquire and the doc still belongs to replica-A. This is the
+    core of Task #947 — without it, two Railway replicas would both
+    enter the pull-and-write branch on the same tick."""
+    async def _inner():
+        db = _FakeDb()
+        now = datetime(2026, 4, 26, 10, 0, tzinfo=timezone.utc)
+        ok_a = await routes._try_acquire_cf_pull_lease(
+            db, now=now, owner_id="replica-A", ttl_s=120,
+        )
+        assert ok_a is True
+        # Replica-B tries to grab it 5 seconds later, well inside TTL.
+        ok_b = await routes._try_acquire_cf_pull_lease(
+            db, now=now + timedelta(seconds=5),
+            owner_id="replica-B", ttl_s=120,
+        )
+        assert ok_b is False
+        doc = _lease_doc(db)
+        assert doc[routes.CF_PULL_LEASE_OWNER_FIELD] == "replica-A"
+    asyncio.run(_inner())
+
+
+def test_acquire_cf_pull_lease_takes_over_after_expiry():
+    """Fail-over path: replica-A acquired then died (no renewal). After
+    lease_expires_at passes, replica-B can take over without waiting on
+    a human."""
+    async def _inner():
+        db = _FakeDb()
+        t0 = datetime(2026, 4, 26, 10, 0, tzinfo=timezone.utc)
+        await routes._try_acquire_cf_pull_lease(
+            db, now=t0, owner_id="replica-A", ttl_s=60,
+        )
+        # Replica-B wakes up after the lease expired.
+        ok_b = await routes._try_acquire_cf_pull_lease(
+            db, now=t0 + timedelta(seconds=120),
+            owner_id="replica-B", ttl_s=60,
+        )
+        assert ok_b is True
+        doc = _lease_doc(db)
+        assert doc[routes.CF_PULL_LEASE_OWNER_FIELD] == "replica-B"
+    asyncio.run(_inner())
+
+
+def test_acquire_cf_pull_lease_bootstraps_legacy_doc_without_lease_fields():
+    """Migration path: a job_locks doc may already exist from before
+    Task #947 (just ``cursor`` + ``updated_at``, no lease fields).
+    The CAS branch matching ``lease_owner == None`` lets us upgrade
+    in place without losing the cursor."""
+    async def _inner():
+        db = _FakeDb()
+        # Seed the legacy doc shape — cursor + updated_at only.
+        db.job_locks.docs.append({
+            "_id": routes.CF_PULL_LOCK_ID,
+            routes.CF_PULL_CURSOR_FIELD: "2026-04-26T09:00:00+00:00",
+            "updated_at": "2026-04-26T09:00:00+00:00",
+        })
+        now = datetime(2026, 4, 26, 10, 0, tzinfo=timezone.utc)
+        ok = await routes._try_acquire_cf_pull_lease(
+            db, now=now, owner_id="replica-A", ttl_s=120,
+        )
+        assert ok is True
+        doc = _lease_doc(db)
+        assert doc[routes.CF_PULL_LEASE_OWNER_FIELD] == "replica-A"
+        # Cursor must survive the lease bootstrap.
+        assert doc[routes.CF_PULL_CURSOR_FIELD] == "2026-04-26T09:00:00+00:00"
+    asyncio.run(_inner())
+
+
+def test_release_cf_pull_lease_clears_owner_for_self_only():
+    """Graceful shutdown: the owning replica clears lease_owner so peers
+    can take over on their next follower tick. A non-owner calling
+    release must NOT clobber a peer's lease."""
+    async def _inner():
+        db = _FakeDb()
+        now = datetime(2026, 4, 26, 10, 0, tzinfo=timezone.utc)
+        await routes._try_acquire_cf_pull_lease(
+            db, now=now, owner_id="replica-A", ttl_s=120,
+        )
+        # Replica-B's release is a no-op — must not touch A's lease.
+        await routes._release_cf_pull_lease(db, owner_id="replica-B")
+        assert _lease_doc(db)[routes.CF_PULL_LEASE_OWNER_FIELD] == "replica-A"
+        # Replica-A releases properly → owner cleared, replica-B can
+        # acquire on its next tick without waiting out the TTL.
+        await routes._release_cf_pull_lease(db, owner_id="replica-A")
+        assert _lease_doc(db)[routes.CF_PULL_LEASE_OWNER_FIELD] is None
+        ok_b = await routes._try_acquire_cf_pull_lease(
+            db, now=now + timedelta(seconds=1),
+            owner_id="replica-B", ttl_s=120,
+        )
+        assert ok_b is True
+        assert _lease_doc(db)[routes.CF_PULL_LEASE_OWNER_FIELD] == "replica-B"
+    asyncio.run(_inner())
+
+
+def test_acquire_cf_pull_lease_is_a_noop_when_db_is_none():
+    """Defensive: if Mongo is unreachable at boot ``deps.db`` is None;
+    the loop must back off gracefully rather than throw, otherwise the
+    backend would die instead of just losing the CF pull until Mongo
+    comes back."""
+    async def _inner():
+        ok = await routes._try_acquire_cf_pull_lease(None)
+        assert ok is False
+    asyncio.run(_inner())
+
+
+def test_cursor_write_is_fenced_on_lease_owner(monkeypatch):
+    """Fencing guard: if a slow GraphQL call returns AFTER the caller's
+    lease has been taken over by a peer, the late cursor write must
+    NOT clobber the new owner's cursor. Same hazard the reviewer
+    flagged on Task #947 — without this, a slow tick could rewind the
+    cursor and trigger duplicate ingest of an already-pulled window.
+    """
+    async def _inner():
+        dao._reset_backend_shipper_for_tests()
+        db = _FakeDb()
+        monkeypatch.setattr(routes, "db", db, raising=False)
+        monkeypatch.setattr("config.CF_ZONE_ID", "zone-1", raising=False)
+        monkeypatch.setattr("config.CF_ANALYTICS_API_TOKEN", "tok", raising=False)
+
+        async def fake_graphql(query, variables):
+            return {"data": {"viewer": {"zones": [{"httpRequestsAdaptiveGroups": [
+                {"dimensions": {
+                    "datetimeMinute": "2026-04-26T10:00:00Z",
+                    "edgeResponseStatus": 200, "cacheStatus": "HIT",
+                    "clientRequestPath": "/", "clientRequestHTTPMethodName": "GET",
+                    "clientRequestHTTPHost": "syrabit.ai",
+                    "clientCountryName": "IN", "coloCode": "BLR"},
+                 "avg": {}, "count": 1},
+            ]}]}}}
+
+        # Peer-B currently holds the lease + has already advanced the
+        # cursor to a "newer" timestamp.
+        db.job_locks.docs.append({
+            "_id": routes.CF_PULL_LOCK_ID,
+            routes.CF_PULL_LEASE_OWNER_FIELD: "peer-B",
+            routes.CF_PULL_CURSOR_FIELD: "2026-04-26T11:00:00+00:00",
+            "updated_at": "2026-04-26T11:00:00+00:00",
+        })
+        # Stale leader-A's slow pull finally returns and tries to write
+        # back its cursor while fencing on its own (now-defunct) lease.
+        now = datetime(2026, 4, 26, 10, 5, tzinfo=timezone.utc)
+        res = await routes._try_run_cf_pull_once(
+            now_utc=now, graphql_callable=fake_graphql,
+            lease_owner="leader-A",
+        )
+        assert res["ok"] is True  # the pull itself succeeded
+        # …but the cursor must STILL belong to peer-B's view of the
+        # world. Leader-A's stale write was filtered out by the
+        # `lease_owner` predicate on update_one.
+        doc = next(d for d in db.job_locks.docs
+                   if d.get("_id") == routes.CF_PULL_LOCK_ID)
+        assert doc[routes.CF_PULL_LEASE_OWNER_FIELD] == "peer-B"
+        assert doc[routes.CF_PULL_CURSOR_FIELD] == "2026-04-26T11:00:00+00:00"
+    asyncio.run(_inner())
+
+
+def test_pull_loop_releases_lease_when_cancelled_during_sleep(monkeypatch):
+    """Regression for the most likely shutdown race: SIGTERM lands
+    while the loop is parked in its post-tick ``asyncio.sleep`` (the
+    state it spends ~95% of its life in). The outer ``try/finally``
+    must still run ``_release_cf_pull_lease`` so a peer can take over
+    on its next follower tick — without this fix the lease lingers
+    until full TTL and the "clean handover" criterion of Task #947
+    silently fails in production.
+    """
+    async def _inner():
+        db = _FakeDb()
+        monkeypatch.setattr(routes, "db", db, raising=False)
+        # Pre-seed the lease as held by us so the loop's first tick
+        # immediately enters the "leader" path → completes the GraphQL
+        # call → drops into the outer sleep, where we'll cancel it.
+        # Skip the GraphQL path entirely by stubbing
+        # _try_run_cf_pull_once to a no-op success.
+        async def fake_pull(now_utc=None, lease_owner=None, **_):
+            return {"ok": True, "accepted": 0, "dropped": 0,
+                    "since": "x", "until": "y"}
+        monkeypatch.setattr(routes, "_try_run_cf_pull_once", fake_pull)
+        # Skip the 30s warmup and shorten intervals so the test runs
+        # in milliseconds, not seconds.
+        orig_sleep = asyncio.sleep
+        async def fast_sleep(delay):
+            # First call is the 30s warmup → make it instant. Once the
+            # loop is past warmup, normal sleeps stay normal so the
+            # test can cancel mid-sleep.
+            await orig_sleep(0)
+        monkeypatch.setattr(routes.asyncio, "sleep", fast_sleep)
+        # Kick the loop. After it's clearly past warmup + first tick
+        # (one event-loop turn is enough with our fast_sleep), cancel.
+        task = asyncio.create_task(routes._unified_logs_cf_pull_loop())
+        # Yield enough turns for: warmup sleep → acquire lease →
+        # fake_pull → enter outer sleep.
+        for _ in range(20):
+            await orig_sleep(0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        # The lease doc should have its owner cleared (CAS scoped
+        # release). If the bug regressed, owner would still be set to
+        # _CF_PULL_LEASE_OWNER_ID.
+        doc = next((d for d in db.job_locks.docs
+                    if d.get("_id") == routes.CF_PULL_LOCK_ID), None)
+        assert doc is not None, "lease doc should have been created"
+        assert doc.get(routes.CF_PULL_LEASE_OWNER_FIELD) is None, (
+            "lease must be released on cancellation, even when "
+            "cancellation lands during asyncio.sleep"
+        )
+    asyncio.run(_inner())
+
+
+def test_pull_loop_handover_when_leader_is_cancelled(monkeypatch):
+    """Integration-style: simulate the Railway "scale down by 1"
+    sequence — leader replica's loop is cancelled (SIGTERM ⇒ asyncio
+    cancellation), it must release the lease so the peer replica can
+    take over on its NEXT follower tick instead of waiting out the
+    full ``CF_PULL_LEASE_TTL_S``. This is the round-trip Task #947's
+    "Replicas hand the lease over cleanly when one is restarted/scaled
+    down" acceptance criterion describes.
+    """
+    async def _inner():
+        db = _FakeDb()
+        monkeypatch.setattr(routes, "db", db, raising=False)
+        # Leader-A claims the lease.
+        await routes._try_acquire_cf_pull_lease(
+            db, owner_id="leader-A", ttl_s=120,
+        )
+        doc = next(d for d in db.job_locks.docs
+                   if d.get("_id") == routes.CF_PULL_LOCK_ID)
+        assert doc[routes.CF_PULL_LEASE_OWNER_FIELD] == "leader-A"
+        # Peer-B sees the lease still held by A → cannot acquire.
+        ok_b = await routes._try_acquire_cf_pull_lease(
+            db, owner_id="peer-B", ttl_s=120,
+        )
+        assert ok_b is False
+        # Now leader-A is cancelled → release runs.
+        await routes._release_cf_pull_lease(db, owner_id="leader-A")
+        # Peer-B retries IMMEDIATELY on its next follower tick (not
+        # waiting out the 120s TTL) and wins.
+        ok_b = await routes._try_acquire_cf_pull_lease(
+            db, owner_id="peer-B", ttl_s=120,
+        )
+        assert ok_b is True
+        doc = next(d for d in db.job_locks.docs
+                   if d.get("_id") == routes.CF_PULL_LOCK_ID)
+        assert doc[routes.CF_PULL_LEASE_OWNER_FIELD] == "peer-B"
     asyncio.run(_inner())

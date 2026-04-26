@@ -71,10 +71,41 @@ class _FakeColl:
         # via query_logs separately.
         self.docs.extend(list(docs))
 
+    async def insert_one(self, doc):
+        # Task #947 — needed for the CF pull lease bootstrap path.
+        # Enforce the _id uniqueness invariant so the racy
+        # "two replicas insert at the same time" branch in
+        # ``_try_acquire_cf_pull_lease`` exercises a realistic
+        # ``DuplicateKeyError`` path.
+        new_id = doc.get("_id")
+        if new_id is not None:
+            for existing in self.docs:
+                if existing.get("_id") == new_id:
+                    try:
+                        from pymongo.errors import DuplicateKeyError
+                    except Exception:
+                        DuplicateKeyError = Exception  # type: ignore[assignment, misc]
+                    raise DuplicateKeyError(f"duplicate _id={new_id!r}")
+        self.docs.append(dict(doc))
+        return None
+
     async def find_one(self, q=None, *_a, **_kw):
         for d in self.docs:
             if _match(d, q or {}):
                 return d
+        return None
+
+    async def find_one_and_update(self, q, update, upsert=False, **_kw):
+        # Task #947 — atomic CAS used by ``_try_acquire_cf_pull_lease``.
+        # Returns the *pre-update* doc on a hit (matching the default
+        # ``ReturnDocument.BEFORE`` behaviour Motor exposes), or None
+        # when no doc matches.
+        for d in self.docs:
+            if _match(d, q or {}):
+                pre = dict(d)
+                if "$set" in update:
+                    d.update(update["$set"])
+                return pre
         return None
 
     async def update_one(self, q, update, upsert=False):

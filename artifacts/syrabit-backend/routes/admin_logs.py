@@ -51,6 +51,24 @@ CF_PULL_LOOKBACK_MIN = int(os.environ.get("UNIFIED_LOGS_CF_PULL_LOOKBACK_MIN", "
 CF_PULL_MAX_LOOKBACK_MIN = 60
 CF_PULL_LIMIT = int(os.environ.get("UNIFIED_LOGS_CF_PULL_LIMIT", "200") or "200")
 
+# Task #947 — Mongo-backed lease so only ONE replica runs the CF pull
+# loop at any moment, even when Railway scales the backend out to N
+# copies. The previous file-lock approach (`_is_leader` in server.py)
+# is per-machine, so two Railway replicas would each consider
+# themselves "the leader" and double-poll the CF GraphQL API.
+#
+# The lease is refreshed on every loop tick; if the owning replica
+# dies (or is scaled down between ticks) any other replica can take
+# over after ``CF_PULL_LEASE_TTL_S`` of silence on the doc. TTL is
+# 3× the pull interval so a single missed tick (transient network
+# blip) doesn't trigger a needless leader fail-over.
+CF_PULL_LEASE_TTL_S = max(180, int(CF_PULL_INTERVAL_S) * 3)
+CF_PULL_LEASE_OWNER_FIELD = "lease_owner"
+CF_PULL_LEASE_EXPIRES_FIELD = "lease_expires_at"
+# Stable per-process id so renewals from the same replica don't trip
+# the takeover branch of the CAS.
+_CF_PULL_LEASE_OWNER_ID = f"{os.environ.get('HOSTNAME') or 'host'}-{uuid.uuid4().hex[:12]}"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Token storage — env first, then api_config (admin can rotate at runtime)
@@ -311,12 +329,31 @@ async def admin_logs_status(admin: dict = Depends(get_admin_user)):
     paused = _dao._logs_paused_env()
     last_cf_pull: Optional[str] = None
     cf_cursor: Optional[str] = None
+    # Task #947 — expose lease state so an operator can see WHICH
+    # replica is currently driving the CF pull (and how stale the
+    # lease is). Without this, "did the leader die / did fail-over
+    # happen?" is invisible from the dashboard in a multi-replica
+    # Railway deploy.
+    cf_lease_owner: Optional[str] = None
+    cf_lease_expires_at: Optional[str] = None
+    cf_lease_age_s: Optional[int] = None
+    cf_lease_is_self: Optional[bool] = None
     if db is not None:
         try:
             lock = await db.job_locks.find_one({"_id": CF_PULL_LOCK_ID})
             if lock:
                 last_cf_pull = lock.get("updated_at")
                 cf_cursor = lock.get(CF_PULL_CURSOR_FIELD)
+                cf_lease_owner = lock.get(CF_PULL_LEASE_OWNER_FIELD)
+                expires = lock.get(CF_PULL_LEASE_EXPIRES_FIELD)
+                if isinstance(expires, datetime):
+                    cf_lease_expires_at = expires.isoformat()
+                    cf_lease_age_s = max(
+                        0,
+                        int((datetime.now(timezone.utc) - expires).total_seconds())
+                        + CF_PULL_LEASE_TTL_S,
+                    )
+                cf_lease_is_self = (cf_lease_owner == _CF_PULL_LEASE_OWNER_ID)
         except Exception:
             pass
     counts: Dict[str, Any] = {}
@@ -339,6 +376,15 @@ async def admin_logs_status(admin: dict = Depends(get_admin_user)):
         "cf_pull_interval_s": CF_PULL_INTERVAL_S,
         "cf_pull_last_run": last_cf_pull,
         "cf_pull_cursor": cf_cursor,
+        # Task #947 — lease telemetry. ``cf_pull_lease_is_self`` lets the
+        # admin UI tell "this replica is currently driving the pull"
+        # apart from "another replica owns it" without needing to know
+        # the per-process owner id format.
+        "cf_pull_lease_owner": cf_lease_owner,
+        "cf_pull_lease_expires_at": cf_lease_expires_at,
+        "cf_pull_lease_age_s": cf_lease_age_s,
+        "cf_pull_lease_ttl_s": CF_PULL_LEASE_TTL_S,
+        "cf_pull_lease_is_self": cf_lease_is_self,
         "shipper_stats": {
             "accepted": shipper.accepted,
             "flushed": shipper.flushed,
@@ -663,11 +709,22 @@ query UnifiedLogsPull($zone: String!, $since: Time!, $until: Time!, $limit: Int!
 
 
 async def _try_run_cf_pull_once(now_utc: Optional[datetime] = None,
-                                graphql_callable=None) -> Dict[str, Any]:
+                                graphql_callable=None,
+                                lease_owner: Optional[str] = None) -> Dict[str, Any]:
     """One iteration of the Cloudflare pull. Factored out so tests can
     inject a fake ``_graphql_query`` and assert on the return shape.
 
     Returns ``{ok, accepted, dropped, since, until, reason?}``.
+
+    ``lease_owner`` (Task #947 fencing): when supplied, the cursor
+    write at the end is conditioned on the lease still being held by
+    the same owner. This protects against the rare slow-pull race
+    where this iteration started under our lease but a peer replica
+    took over (after lease expiry) before the GraphQL call returned —
+    in that case the *new* leader has already advanced the cursor and
+    we MUST NOT roll it backwards. The manual admin endpoint passes
+    ``None`` (unfenced) so an operator can force a pull regardless of
+    lease state.
     """
     if db is None:
         return {"ok": False, "reason": "no_db"}
@@ -728,16 +785,26 @@ async def _try_run_cf_pull_once(now_utc: Optional[datetime] = None,
         result = await _dao.insert_logs(db, rows, default_source="cloudflare")
     # Advance cursor to ``until`` so the next iteration picks up only
     # new data.
+    #
+    # Task #947 fencing: when we're running under a lease, the cursor
+    # write is keyed on `lease_owner == <us>` so a slow pull that
+    # spilled past TTL into a peer's term cannot rewind the cursor.
+    # ``upsert=True`` is intentionally kept ONLY for the unfenced
+    # (admin-manual) path so the very first pull on a brand-new
+    # deployment still bootstraps the cursor doc.
+    cursor_filter: Dict[str, Any] = {"_id": CF_PULL_LOCK_ID}
+    if lease_owner is not None:
+        cursor_filter[CF_PULL_LEASE_OWNER_FIELD] = lease_owner
     try:
         await db.job_locks.update_one(
-            {"_id": CF_PULL_LOCK_ID},
+            cursor_filter,
             {"$set": {
                 CF_PULL_CURSOR_FIELD: until.isoformat(),
                 "updated_at": now.isoformat(),
                 "last_accepted": result["accepted"],
                 "last_dropped": result["dropped"],
             }},
-            upsert=True,
+            upsert=(lease_owner is None),
         )
     except Exception as exc:
         logger.warning("[unified_logs] CF pull cursor write failed: %s", exc)
@@ -751,9 +818,112 @@ async def _try_run_cf_pull_once(now_utc: Optional[datetime] = None,
     }
 
 
+async def _try_acquire_cf_pull_lease(
+    db_handle, now: Optional[datetime] = None,
+    owner_id: Optional[str] = None,
+    ttl_s: Optional[int] = None,
+) -> bool:
+    """Atomic CAS on ``db.job_locks[CF_PULL_LOCK_ID]`` — only one
+    replica holds the lease at a time.
+
+    Acquisition succeeds when ANY of these hold on the existing doc:
+
+    * ``lease_owner == _CF_PULL_LEASE_OWNER_ID`` — we already own it
+      (renewal path; refreshes ``lease_expires_at`` so peers stay
+      backed off).
+    * ``lease_expires_at <= now`` — the previous owner crashed / was
+      scaled down and never refreshed → this replica may take over.
+    * ``lease_owner`` is null / missing — legacy doc (created before
+      Task #947 added the lease fields) → bootstrap the lease in
+      place without losing the cursor.
+
+    If no doc exists at all (fresh deployment) we fall through to
+    ``insert_one``; ``DuplicateKeyError`` means a peer beat us to it,
+    which is the desired outcome (they hold the lease, we back off).
+    """
+    if db_handle is None:
+        return False
+    owner = owner_id or _CF_PULL_LEASE_OWNER_ID
+    ttl = int(ttl_s if ttl_s is not None else CF_PULL_LEASE_TTL_S)
+    now = now or datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=ttl)
+    set_payload = {
+        CF_PULL_LEASE_OWNER_FIELD: owner,
+        CF_PULL_LEASE_EXPIRES_FIELD: expires_at,
+        "lease_acquired_at": now.isoformat(),
+    }
+    try:
+        res = await db_handle.job_locks.find_one_and_update(
+            {
+                "_id": CF_PULL_LOCK_ID,
+                "$or": [
+                    {CF_PULL_LEASE_OWNER_FIELD: owner},
+                    {CF_PULL_LEASE_EXPIRES_FIELD: {"$lte": now}},
+                    {CF_PULL_LEASE_OWNER_FIELD: None},
+                ],
+            },
+            {"$set": set_payload},
+        )
+        if res is not None:
+            return True
+    except Exception as exc:
+        logger.debug("[unified_logs] CF pull lease CAS failed: %s", exc)
+        return False
+
+    # Bootstrap: no doc exists yet. ``insert_one`` is racy across
+    # replicas — the loser gets DuplicateKeyError, which we swallow:
+    # next iteration the CAS path will see the winner's lease and
+    # back off correctly.
+    try:
+        from pymongo.errors import DuplicateKeyError  # local import keeps test fakes happy
+    except Exception:  # pragma: no cover — pymongo is a hard dep in prod
+        DuplicateKeyError = Exception  # type: ignore[assignment, misc]
+    try:
+        await db_handle.job_locks.insert_one({
+            "_id": CF_PULL_LOCK_ID,
+            **set_payload,
+        })
+        return True
+    except DuplicateKeyError:
+        return False
+    except Exception as exc:
+        logger.debug("[unified_logs] CF pull lease bootstrap insert failed: %s", exc)
+        return False
+
+
+async def _release_cf_pull_lease(
+    db_handle, owner_id: Optional[str] = None,
+) -> None:
+    """Best-effort release on graceful shutdown so peer replicas can
+    pick up the loop within the next loop tick instead of waiting out
+    the full ``CF_PULL_LEASE_TTL_S`` window. Scoped to docs we own so
+    we never clobber a peer that has already taken over."""
+    if db_handle is None:
+        return
+    owner = owner_id or _CF_PULL_LEASE_OWNER_ID
+    try:
+        await db_handle.job_locks.update_one(
+            {"_id": CF_PULL_LOCK_ID, CF_PULL_LEASE_OWNER_FIELD: owner},
+            {"$set": {
+                CF_PULL_LEASE_OWNER_FIELD: None,
+                CF_PULL_LEASE_EXPIRES_FIELD: None,
+                "released_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+    except Exception as exc:
+        logger.debug("[unified_logs] CF pull lease release failed: %s", exc)
+
+
 async def _unified_logs_cf_pull_loop():
     """Periodic Cloudflare pull. Runs every ``CF_PULL_INTERVAL_S``
     seconds, idempotent across multiple isolates via the cursor doc.
+
+    Cross-replica dedup is handled by ``_try_acquire_cf_pull_lease``
+    (Task #947): every replica may run this loop, but only the one
+    holding the Mongo-backed lease actually fires the GraphQL pull.
+    Followers wake up at a sub-interval cadence so they can take
+    over within seconds if the leader dies, rather than waiting out
+    the full lease TTL.
 
     On consecutive failures (raised exceptions OR ``ok=False`` results
     that aren't a benign no-op like ``empty_window``/``cf_not_configured``)
@@ -766,37 +936,71 @@ async def _unified_logs_cf_pull_loop():
     await asyncio.sleep(30)
     consecutive_failures = 0
     base_interval = max(15, int(CF_PULL_INTERVAL_S))
+    # Followers poll the lease at a sub-interval (capped at 30s) so
+    # leader fail-over kicks in promptly without hammering Mongo.
+    follower_interval = max(15, min(30, base_interval // 2 or base_interval))
     max_backoff = 30 * 60  # 30 min ceiling
-    while True:
-        try:
-            res = await _try_run_cf_pull_once()
-            reason = (res or {}).get("reason")
-            # ``empty_window`` and ``cf_not_configured`` are not actual
-            # failures — treat them as success for backoff purposes so
-            # we don't punish a quiet zone or a deployment without CF.
-            if (res or {}).get("ok") or reason in ("empty_window", "cf_not_configured"):
-                consecutive_failures = 0
-            else:
+    # Outer try/finally ensures lease release runs no matter where the
+    # CancelledError lands — including (and especially) during the
+    # post-iteration ``asyncio.sleep`` which is the most likely state
+    # at SIGTERM. Without this, a leader that's mid-sleep at shutdown
+    # would hold the lease until full TTL, defeating the "clean
+    # handover on restart/scale-down" criterion of Task #947.
+    try:
+        while True:
+            try:
+                now = datetime.now(timezone.utc)
+                have_lease = await _try_acquire_cf_pull_lease(db, now=now)
+                if not have_lease:
+                    # Another replica owns the lease and it's still fresh;
+                    # stand down for one follower-interval and re-check.
+                    # Crucially, this branch does NOT call the GraphQL
+                    # pull, so the CF analytics quota cost stays at 1×
+                    # regardless of replica count.
+                    await asyncio.sleep(follower_interval)
+                    continue
+                res = await _try_run_cf_pull_once(
+                    now_utc=now,
+                    lease_owner=_CF_PULL_LEASE_OWNER_ID,
+                )
+                reason = (res or {}).get("reason")
+                # ``empty_window`` and ``cf_not_configured`` are not actual
+                # failures — treat them as success for backoff purposes so
+                # we don't punish a quiet zone or a deployment without CF.
+                if (res or {}).get("ok") or reason in ("empty_window", "cf_not_configured"):
+                    consecutive_failures = 0
+                else:
+                    consecutive_failures += 1
+            except asyncio.CancelledError:
+                # Re-raise so the outer ``finally`` runs the release.
+                raise
+            except Exception as exc:
                 consecutive_failures += 1
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            consecutive_failures += 1
-            logger.warning("[unified_logs] CF pull loop tick failed: %s", exc)
+                logger.warning("[unified_logs] CF pull loop tick failed: %s", exc)
 
-        if consecutive_failures == 0:
-            sleep_for = base_interval
-        else:
-            # 2^n backoff, capped, with ±25% jitter to spread retries
-            # across replicas.
-            backoff = min(max_backoff, base_interval * (2 ** min(consecutive_failures, 8)))
-            jitter = backoff * 0.25 * (random.random() * 2 - 1)
-            sleep_for = max(base_interval, int(backoff + jitter))
-            logger.info(
-                "[unified_logs] CF pull backoff: failures=%d sleeping=%ds",
-                consecutive_failures, sleep_for,
-            )
-        await asyncio.sleep(sleep_for)
+            if consecutive_failures == 0:
+                sleep_for = base_interval
+            else:
+                # 2^n backoff, capped, with ±25% jitter to spread retries
+                # across replicas.
+                backoff = min(max_backoff, base_interval * (2 ** min(consecutive_failures, 8)))
+                jitter = backoff * 0.25 * (random.random() * 2 - 1)
+                sleep_for = max(base_interval, int(backoff + jitter))
+                logger.info(
+                    "[unified_logs] CF pull backoff: failures=%d sleeping=%ds",
+                    consecutive_failures, sleep_for,
+                )
+            await asyncio.sleep(sleep_for)
+    finally:
+        # Best-effort release. Wrapped in shield+try so a second
+        # cancellation (rare, e.g. SIGKILL) or a flaky Mongo doesn't
+        # mask the outer CancelledError. Only releases if WE still
+        # hold the lease — the scoped CAS in _release_cf_pull_lease
+        # makes this safe even if a peer has already taken over.
+        try:
+            await asyncio.shield(_release_cf_pull_lease(db))
+        except Exception:
+            pass
 
 
 # Test-only knob: lets pytest force the loop body without actually
