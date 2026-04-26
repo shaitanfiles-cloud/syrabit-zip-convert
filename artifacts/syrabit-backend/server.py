@@ -1150,6 +1150,28 @@ async def lifespan(app):
             "cf-waf-drift cron alert loop not started: "
             f"{_cfw_cron_alert_err}"
         )
+    # Task #951 — symmetric silence alerter for the unified-logs
+    # Cloudflare GraphQL pull. Task #947 made the pull single-leader
+    # via a Mongo lease; the flip side is that if every replica is
+    # unhealthy (or the lease doc gets stuck owned by a zombie process
+    # whose ``lease_expires_at`` is being refreshed by a frozen task),
+    # the unified log explorer silently stops ingesting Cloudflare
+    # data. This loop watches ``unified_logs_cf_pull_lock.updated_at``
+    # — only stamped after a successful pull's cursor advance, so it
+    # rules out the zombie-lease case the lease TTL alone cannot
+    # detect — and pages on-call when the cursor goes stale. Mirrors
+    # the cf-waf-drift cron alert loop above for cross-replica dedup
+    # via :mod:`background_lease`.
+    try:
+        from routes.admin_logs_cf_pull_silence_alerts import (
+            _cf_pull_silence_alert_loop,
+        )
+        asyncio.create_task(_cf_pull_silence_alert_loop())
+    except Exception as _ulogs_silence_err:
+        logger.warning(
+            "unified-logs cf-pull silence alert loop not started: "
+            f"{_ulogs_silence_err}"
+        )
     # Task #893 — silence-alerter for the edge-proxy-deploy CI workflow.
     # Task #882 added a red/amber/green pill to AdminHealth that polls
     # the GitHub Actions REST API for the latest edge-proxy-deploy run;
@@ -1494,6 +1516,15 @@ from routes.admin_trustpilot_jsonld_status import router as admin_trustpilot_jso
 from routes.admin_trustpilot_cron_alerts import router as admin_trustpilot_cron_alerts_router
 from routes.cf_waf_drift_cron_heartbeat import router as cf_waf_drift_cron_heartbeat_router
 from routes.admin_cf_waf_drift_cron_alerts import router as admin_cf_waf_drift_cron_alerts_router
+# Task #951 — silence alerter for the unified-logs Cloudflare GraphQL
+# pull. Pages on-call when every backend replica has stopped advancing
+# the ``unified_logs_cf_pull_lock.updated_at`` cursor (e.g. all
+# replicas unhealthy, or a zombie holds the lease but never completes
+# a tick) — the failure mode introduced by Task #947's single-leader
+# guarantee.
+from routes.admin_logs_cf_pull_silence_alerts import (
+    router as admin_logs_cf_pull_silence_alerts_router,
+)
 from routes.synthetic_probe_secret_alert import router as synthetic_probe_secret_alert_router
 # Task #882 — surfaces the latest edge-proxy-deploy GitHub Actions run
 # as a cron pill in AdminHealth so a red `smoke-preview` regression
@@ -1546,6 +1577,7 @@ api.include_router(admin_trustpilot_jsonld_status_router)
 api.include_router(admin_trustpilot_cron_alerts_router)
 api.include_router(cf_waf_drift_cron_heartbeat_router)
 api.include_router(admin_cf_waf_drift_cron_alerts_router)
+api.include_router(admin_logs_cf_pull_silence_alerts_router)
 api.include_router(synthetic_probe_secret_alert_router)
 api.include_router(admin_health_router)
 api.include_router(admin_ads_router)
