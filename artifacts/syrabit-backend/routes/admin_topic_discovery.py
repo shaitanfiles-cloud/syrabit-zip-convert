@@ -102,7 +102,7 @@ async def list_runs(
 async def list_candidates(
     run_id: Optional[str] = Query(None, max_length=64),
     decision: Optional[str] = Query(
-        None, regex="^(auto_published|drafted|rejected|error)$",
+        None, pattern="^(auto_published|drafted|rejected|error)$",
     ),
     limit: int = Query(100, ge=1, le=500),
     skip: int = Query(0, ge=0, le=10000),
