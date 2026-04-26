@@ -74,7 +74,10 @@ ACTION_DRAFTED = "drafted"
 ACTION_REJECTED = "rejected"
 ACTION_REVERTED = "reverted"
 ACTION_FAILED = "failed"
-ACTION_SKIPPED_OVER_BUDGET = "skipped_budget"
+# NB: there is no "skipped_budget" action — by spec, suggestions that
+# exceed the daily auto-apply cap fall through to ``ACTION_DRAFTED`` so
+# the work is preserved for admin review rather than discarded. Keeping
+# the action taxonomy minimal here keeps downstream analytics clean.
 ACTION_SKIPPED_DUPLICATE = "skipped_duplicate"
 ACTION_SKIPPED_NO_ANCHOR = "skipped_no_anchor"
 
@@ -84,7 +87,6 @@ VALID_ACTIONS = frozenset({
     ACTION_REJECTED,
     ACTION_REVERTED,
     ACTION_FAILED,
-    ACTION_SKIPPED_OVER_BUDGET,
     ACTION_SKIPPED_DUPLICATE,
     ACTION_SKIPPED_NO_ANCHOR,
 })

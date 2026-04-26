@@ -20,7 +20,6 @@ const LINKER_ACTION_LABELS = {
   rejected:            { label: 'Rejected',        color: '#9ca3af', bg: '#f9fafb' },
   reverted:            { label: 'Reverted',        color: '#9ca3af', bg: '#f9fafb' },
   failed:              { label: 'Failed',          color: '#ef4444', bg: '#fef2f2' },
-  skipped_budget:      { label: 'Skipped (budget)', color: '#9ca3af', bg: '#f9fafb' },
   skipped_duplicate:   { label: 'Skipped (dup)',   color: '#9ca3af', bg: '#f9fafb' },
   skipped_no_anchor:   { label: 'Skipped (anchor)', color: '#9ca3af', bg: '#f9fafb' },
 };

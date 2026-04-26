@@ -33,12 +33,23 @@ const PENDING_PAYLOAD = {
   ],
 };
 
+// Mirror the actual backend contract from
+// routes/admin_seo_internal_linker.py (nested ``budget`` and ``config``
+// sub-objects). Using the real shape here means any future drift in
+// the route response would actually fail the e2e instead of silently
+// passing on a fake fixture shape.
 const STATUS_PAYLOAD = {
   enabled: true,
-  autoUsed: 4,
-  autoCap: 100,
-  threshold: 0.75,
+  budget: { auto_used: 4, auto_cap: 100 },
   pendingCount: 1,
+  recentAutoApplied24h: 4,
+  config: {
+    autoApplyThreshold: 0.75,
+    minLinksPerTarget: 3,
+    maxLinksPerTarget: 5,
+    candidatePoolSize: 30,
+    nightlyTopN: 50,
+  },
 };
 
 interface ApproveCall {

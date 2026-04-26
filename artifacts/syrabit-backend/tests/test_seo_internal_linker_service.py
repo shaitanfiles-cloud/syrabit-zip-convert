@@ -392,6 +392,61 @@ def test_propose_auto_applies_high_confidence():
     assert "Newton" in rows[0]["diff"]["after_excerpt"]
 
 
+def test_auto_apply_triggers_fanout_and_prerender_refresh():
+    """Auto-applied rows must fan out to IndexNow + prerender refresh
+    so search engines and the static cache pick up the new anchor.
+    We exercise ``_persist_body_update`` in isolation here (rather
+    than re-driving the whole propose pipeline), since the contract
+    we want to lock in is "if persist runs to completion, both
+    downstream dispatchers get a single best-effort call"."""
+    import sys, types
+    fanout_calls: list[dict] = []
+    prerender_calls: list[str] = []
+
+    fake_fanout = types.ModuleType("seo_fanout")
+    def _fanout_for_page(page, source=""):
+        fanout_calls.append({"id": page.get("id"), "source": source})
+    fake_fanout.fanout_for_page = _fanout_for_page  # type: ignore[attr-defined]
+
+    fake_admin_content = types.ModuleType("routes.admin_content")
+    def _schedule_prerender_refresh(reason: str = ""):
+        prerender_calls.append(reason)
+    fake_admin_content._schedule_prerender_refresh = (  # type: ignore[attr-defined]
+        _schedule_prerender_refresh
+    )
+
+    saved_fanout = sys.modules.get("seo_fanout")
+    saved_admin = sys.modules.get("routes.admin_content")
+    sys.modules["seo_fanout"] = fake_fanout
+    sys.modules["routes.admin_content"] = fake_admin_content
+    try:
+        async def _stub_upsert(_db, _filt, _update):
+            return None
+
+        with patch("seo_writes.upsert_seo_page", new=_stub_upsert):
+            _run(linker._persist_body_update(
+                _FakeDb(),
+                {"id": "S1", "topic_id": "topic-S1", "page_type": "notes"},
+                "<p>new body</p>",
+            ))
+    finally:
+        if saved_fanout is not None:
+            sys.modules["seo_fanout"] = saved_fanout
+        else:
+            sys.modules.pop("seo_fanout", None)
+        if saved_admin is not None:
+            sys.modules["routes.admin_content"] = saved_admin
+        else:
+            sys.modules.pop("routes.admin_content", None)
+
+    # Both downstream dispatchers were invoked exactly once for this
+    # auto-apply, with the linker as the source label.
+    assert len(fanout_calls) == 1
+    assert fanout_calls[0]["id"] == "S1"
+    assert fanout_calls[0]["source"] == "internal_linker_apply"
+    assert prerender_calls == ["internal_linker_apply"]
+
+
 def test_propose_drafts_low_confidence():
     db = _FakeDb()
     target = _mk_page("T", topic="Calculus")

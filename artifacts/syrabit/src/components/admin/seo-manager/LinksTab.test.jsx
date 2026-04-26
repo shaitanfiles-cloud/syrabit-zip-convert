@@ -43,8 +43,23 @@ const baseProps = {
 };
 
 function setupApi({ pending = [], history = [], status = null }) {
+  // Status payload mirrors the real backend contract from
+  // routes/admin_seo_internal_linker.py (nested ``budget`` + ``config``
+  // sub-objects). Keeping the test fixture aligned to the real shape
+  // protects us from silent regressions where the UI only renders
+  // because the test mock happens to use a flatter shape.
   api.adminSeoInternalLinksStatus.mockResolvedValue({ data: status || {
-    enabled: true, autoUsed: 0, autoCap: 100, threshold: 0.75,
+    enabled: true,
+    budget: { auto_used: 0, auto_cap: 100 },
+    pendingCount: 0,
+    recentAutoApplied24h: 0,
+    config: {
+      autoApplyThreshold: 0.75,
+      minLinksPerTarget: 3,
+      maxLinksPerTarget: 5,
+      candidatePoolSize: 30,
+      nightlyTopN: 50,
+    },
   }});
   api.adminSeoInternalLinksPending.mockResolvedValue({ data: { items: pending }});
   api.adminSeoInternalLinksHistory.mockResolvedValue({ data: { items: history }});
