@@ -170,6 +170,7 @@ export default function UnifiedLogsCfPullCronPill({
       alertHistory={alertHistory}
       onLoadAlertHistory={onLoadAlertHistory}
       slackMissingAlertState={slackMissingAlertState}
+      slackMissingAlertHistory={slackMissingAlertHistory}
       onSnoozeSlackMissing={onSnoozeSlackMissing}
     />
   );

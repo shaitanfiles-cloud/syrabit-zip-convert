@@ -202,4 +202,49 @@ describe('UnifiedLogsCfPullCronPill', () => {
     expect(tile).toHaveTextContent('Last cursor advance 1h ago');
     expect(tile).not.toHaveTextContent('lease:');
   });
+
+  // Task #979 — wrapper-level forwarding test for the per-env
+  // missing-Slack-webhook page-history disclosure. The badge is
+  // rendered inside the shared <CronHealthPill>, but reaches it
+  // *only* through this wrapper. If the wrapper drops the
+  // `slackMissingAlertHistory` prop on the floor, AdminHealth's
+  // 60s polling load would still happen but the disclosure would
+  // never appear for this env. This test pins the passthrough so a
+  // refactor that renames or forgets the prop fails loudly here.
+  it('forwards slackMissingAlertHistory so the SlackConfigBadge renders the "Recent pages" disclosure when the env is red', () => {
+    render(
+      <UnifiedLogsCfPullCronPill
+        data={{
+          ...baseHealthy,
+          status: 'silent',
+          slackConfigured: false,
+          slackWebhookEnv: 'UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK',
+        }}
+        loading={false}
+        onRefresh={() => {}}
+        slackMissingAlertHistory={{
+          lockId: 'slack_webhook_missing/UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK',
+          limit: 10,
+          events: [
+            {
+              id: 'evt-1',
+              pagedAt: '2026-04-26T10:00:00.000Z',
+              kind: 'broken',
+              subKind: 'missing',
+            },
+            {
+              id: 'evt-2',
+              pagedAt: '2026-04-26T08:00:00.000Z',
+              kind: 'recovered',
+            },
+          ],
+        }}
+      />,
+    );
+    const tile = screen.getByTestId(TILE);
+    // The disclosure toggle uses the shared
+    // `<prefix>-slack-config-history-toggle` test-id convention.
+    const toggle = within(tile).getByTestId('unified-logs-cf-pull-cron-slack-config-history-toggle');
+    expect(toggle).toHaveTextContent('Recent pages (2)');
+  });
 });
