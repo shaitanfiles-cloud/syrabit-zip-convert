@@ -253,19 +253,10 @@ async def collect_suggest_expansions(
     seed_limit: int = MAX_SUGGEST_SEEDS_PER_RUN,
     now: Optional[datetime] = None,
 ) -> List[Dict[str, Any]]:
-    """Fan out Google Suggest over **every leaf syllabus topic** plus
-    recent ``seo_topics`` rows.
-
-    Architecture review feedback (Task #937 acceptance gate): seeding
-    only from ``seo_topics`` materially under-discovers when the SEO
-    pipeline hasn't run for parts of the syllabus yet. The true source
-    of leaf topics is the ``chapters`` collection (one row per leaf
-    topic in any board / class / subject). We pull all chapter titles,
-    union them with the freshest ``seo_topics`` keywords (so brand-new
-    topics that aren't yet a chapter still get fanned out), and only
-    cap *after* we have the full union — capping inputs would silently
-    re-introduce the same under-discovery the review flagged. The cap
-    bounds LLM cost; raising it is a one-env-var change.
+    """Fan out Google Suggest over every leaf syllabus topic (from the
+    ``chapters`` collection) unioned with recent ``seo_topics`` rows.
+    The cap is applied AFTER the union so chapters and seo_topics both
+    contribute; ``TOPIC_DISCOVERY_SUGGEST_SEED_LIMIT`` overrides it.
     """
     if db is None:
         return []
@@ -362,19 +353,12 @@ async def collect_bing_suggest(
     api_key: Optional[str] = None,
     now: Optional[datetime] = None,
 ) -> List[Dict[str, Any]]:
-    """Bing-side keyword expansion as a second discovery surface.
+    """Bing-side keyword expansion as a second Suggest surface.
 
-    Architecture review feedback (Task #937 acceptance gate, round 4):
-    Google Suggest alone misses Bing-only phrasings, especially in the
-    long-tail "how to / what is" intent space we want to capture. We
-    reuse the existing ``bing_keyword_client.fetch_top_keywords``
-    helper (already cache-backed and rate-friendly) so this is purely
-    additive — no new external service to operate.
-
-    Behaviour matches ``collect_suggest_expansions`` for symmetry:
-    seeds = chapters ∪ recent seo_topics, capped after the union.
-    Gracefully no-ops when ``BING_WEBMASTER_API_KEY`` is unset so the
-    nightly run keeps working in environments without a Bing key.
+    Reuses ``bing_keyword_client.fetch_top_keywords`` (already
+    cache-backed). Seeds match ``collect_suggest_expansions`` for
+    symmetry: chapters ∪ recent seo_topics, capped after the union.
+    Gracefully no-ops when ``BING_WEBMASTER_API_KEY`` is unset.
     """
     if db is None:
         return []
@@ -806,16 +790,10 @@ def _kw_token_set(text: str) -> set:
 
 async def _match_to_chapter(db: Any, query: str) -> Optional[str]:
     """Find the best-matching chapter id for a discovered query so the
-    enqueued ``seo_topics`` row uses the same ``{linked_chapter_id,
-    topic}`` contract as the existing Stage 1→3 pipeline writes (see
-    ``routes/admin_pipeline.py:374`` and `:1882`).
-
-    Architecture review feedback (Task #937 acceptance gate, round 4):
-    without ``linked_chapter_id``, our discovered topics live in
-    ``seo_topics`` but are not surfaced by the existing SEO engine.
-    Linking each candidate to its closest chapter makes the row
-    indistinguishable in shape from rows the AI-notes pipeline
-    already produces, which the engine demonstrably consumes.
+    enqueued ``seo_topics`` row uses the same
+    ``{linked_chapter_id, topic}`` contract the existing Stage 1→3
+    pipeline writes (see ``routes/admin_pipeline.py:374`` / `:1882`).
+    Returns ``None`` when no chapter shares any meaningful token.
     """
     if db is None or not query:
         return None
@@ -856,15 +834,12 @@ async def _match_to_chapter(db: Any, query: str) -> Optional[str]:
 
 async def _enqueue_for_pipeline(db: Any, *, candidate: Dict[str, Any], decision: str,
                                 run_id: str) -> Optional[str]:
-    """Hand the candidate over to the existing Stage 1→3 pipeline by
-    upserting a ``seo_topics`` row with the SAME shape the existing
-    AI-notes pipeline writes (``{linked_chapter_id, topic}`` filter,
-    ``primary_keyword`` payload, see ``routes/admin_pipeline.py:374``
-    / ``:1882``). The discovery-specific fields ride alongside so
-    admins can audit the source without breaking pipeline consumers.
-
-    Returns the ``topic`` string on success (for backward compat with
-    callers that store it), or ``None`` if enqueue failed."""
+    """Enqueue a candidate into the existing Stage 1→3 pipeline by
+    upserting a ``seo_topics`` row with the same
+    ``{linked_chapter_id, topic}`` shape ``routes/admin_pipeline.py``
+    writes. Discovery-specific fields ride alongside so admins can
+    audit the source. Returns the ``topic`` string on success or
+    ``None`` on failure."""
     if db is None:
         return None
     try:
@@ -906,17 +881,10 @@ async def _enqueue_for_pipeline(db: Any, *, candidate: Dict[str, Any], decision:
 async def _dequeue_from_pipeline(db: Any, *, query: str, run_id: str,
                                  admin_id: str, reason: str) -> bool:
     """Cancel a previously-enqueued discovery row when an admin
-    rejects an already-queued candidate. Marks the ``seo_topics`` row
-    with ``discovery_status="cancelled"`` and ``status="blocked"``
-    so the engine's ``_eligible_topic_filter`` (which excludes
-    ``status in ("blocked", "duplicate", "irrelevant")``) skips it
-    on the next pass.
-
-    Architecture review feedback (Task #937 acceptance gate, round 4):
-    apply_override(reject) previously updated decision metadata only;
-    if a candidate had already been enqueued (auto_published or
-    drafted), generation could still proceed. This closes the loop.
-    """
+    rejects an already-queued candidate. Sets the ``seo_topics`` row
+    to ``status="blocked"`` so the engine's ``_eligible_topic_filter``
+    (which excludes ``status in ("blocked", "duplicate", "irrelevant")``)
+    skips it on the next pass."""
     if db is None or not query:
         return False
     try:
@@ -987,9 +955,22 @@ async def run_topic_discovery_once(
     run_id = _hash_id("run", now.isoformat())
     started_at = now
 
-    # 1) collect — three discovery surfaces (architect round 4 added
-    # Bing as the second Suggest source). The dedupe step further down
-    # collapses duplicates, so cross-source overlap is harmless.
+    # 0) Live ingest into the source-of-truth Mongo collections so the
+    # collectors below see fresh data even if no out-of-band cron is
+    # populating them. Each ingest gracefully no-ops when its
+    # configuration is missing.
+    try:
+        from gsc_search_console_client import ingest_near_miss_into_mongo as _gsc_ingest
+        await _gsc_ingest(db, now=now)
+    except Exception as exc:
+        logger.info("topic_discovery: gsc ingest failed: %s", exc)
+    try:
+        from trending_rss_client import ingest_trending_into_mongo as _rss_ingest
+        await _rss_ingest(db, now=now)
+    except Exception as exc:
+        logger.info("topic_discovery: rss ingest failed: %s", exc)
+
+    # 1) collect from all three surfaces; dedupe collapses overlap.
     gsc_rows = await collect_gsc_near_misses(db, now=now)
     suggest_rows = await collect_suggest_expansions(
         db, suggest_fetcher=suggest_fetcher, now=now,
@@ -1138,17 +1119,10 @@ async def _try_claim_daily_lock(
 ) -> bool:
     """Atomically claim today's daily lock or return False.
 
-    Architecture review feedback (Task #937 acceptance gate, round 3):
-    the previous implementation used a regular ``id`` field as the
-    lock key, which the runs collection has no unique index on. Two
-    racing replicas could both upsert and create *different* lock
-    docs, after which a follow-up ``find_one`` ownership check is
-    nondeterministic. We now use Mongo's intrinsic ``_id`` (which is
-    unique on every collection by definition), so the upsert can
-    NEVER create a duplicate — any second writer's upsert hits a
-    duplicate-key error which we catch and treat as "another replica
-    holds the lock". Combined with the ``ran_at`` ownership re-read,
-    this gives a true single-run-per-day guarantee.
+    Uses Mongo's intrinsic ``_id`` (unique on every collection) so a
+    racing second insert hits ``DuplicateKeyError`` and is rejected
+    without creating duplicate lock docs. The ``ran_at`` ownership
+    re-read covers crashed-mid-run recovery from older code.
     """
     if db is None:
         return False
@@ -1303,9 +1277,7 @@ async def apply_override(
             run_id=cand.get("run_id", "manual_override"),
         )
     elif new_decision == "rejected" and enqueued_topic:
-        # Architecture review feedback (round 4): rejecting a candidate
-        # that was previously auto-queued must actually cancel the
-        # downstream generation, not just relabel the candidate row.
+        # Reject must cancel any prior queue, not just relabel.
         dequeued = await _dequeue_from_pipeline(
             db,
             query=enqueued_topic,
