@@ -533,6 +533,112 @@ def test_revert_removes_anchor_from_body():
     assert "link" in captured["body"]  # original anchor text preserved
 
 
+def test_revert_already_reverted_is_idempotent():
+    """Calling revert on an already-reverted row must be a no-op success
+    so admin double-clicks don't surface confusing failures."""
+    db = _FakeDb()
+    db.internal_link_history.docs.append({
+        "id": "r1", "source_page_id": "S1", "target_page_id": "T",
+        "action": linker.ACTION_REVERTED,
+        "reverted_at": "2026-04-26T09:00:00+00:00",
+        "reverted_by": "bob",
+    })
+    persist_called = {"n": 0}
+
+    async def _spy(_db, _src, _body):
+        persist_called["n"] += 1
+
+    with patch("seo_internal_linker._persist_body_update", new=_spy):
+        out = _run(linker.revert_applied_suggestion(db, "r1", "alice"))
+    assert out["ok"] is True
+    assert out.get("idempotent") is True
+    assert out.get("reverted_by") == "bob"  # original revert author preserved
+    assert persist_called["n"] == 0  # body never touched on idempotent revert
+
+
+def test_revert_rejects_drafted_action():
+    """Drafted rows have never been auto-applied so they can't be reverted —
+    they should be rejected (or the caller should call /reject instead)."""
+    db = _FakeDb()
+    db.internal_link_history.docs.append({
+        "id": "r1", "action": linker.ACTION_DRAFTED,
+    })
+    out = _run(linker.revert_applied_suggestion(db, "r1", "alice"))
+    assert out["ok"] is False
+    assert "only auto_applied" in out["error"]
+
+
+# ─── hybrid retrieval ──────────────────────────────────────────────────
+
+
+def test_select_candidates_falls_back_to_keyword_when_embeddings_unavailable():
+    """When the embedding helper returns ``None`` (no creds, offline),
+    candidate selection must still return a sensible keyword-only
+    ranking instead of crashing — Stage 3 generation depends on it."""
+    db = _FakeDb()
+    target = _mk_page("T", topic="Newton's First Law of Motion")
+    # Strong overlap → should rank highest under keyword-only fallback.
+    strong = _mk_page("S1", topic="Newton's Second Law", body="<p>Newton motion law.</p>")
+    weak = _mk_page("S2", topic="Algebra Basics", body="<p>Equations.</p>")
+    db.seo_pages.docs.extend([target, strong, weak])
+
+    async def _none(*_a, **_kw):
+        return None  # mimics embed backend unavailable
+
+    with patch("seo_internal_linker._embed_for_linker", new=_none):
+        out = _run(linker._select_candidate_sources(db, target))
+    ids = [d.get("id") for d in out]
+    assert "S1" in ids
+    # Weak/no-overlap candidate dropped entirely (keyword score == 0).
+    assert "S2" not in ids
+
+
+def test_embed_for_linker_swallows_backend_errors():
+    """Defence-in-depth: even if vertex_services itself raises, the
+    helper must return None and never propagate to the caller."""
+    import sys, types
+    fake_mod = types.ModuleType("vertex_services")
+    async def _boom(*_a, **_kw):
+        raise RuntimeError("backend down")
+    fake_mod.embed_text = _boom
+    sys.modules["vertex_services"] = fake_mod
+    try:
+        out = _run(linker._embed_for_linker("hello", task_type="RETRIEVAL_QUERY"))
+        assert out is None
+    finally:
+        sys.modules.pop("vertex_services", None)
+
+
+def test_select_candidates_blends_embedding_with_keyword():
+    """When embeddings are available, the combined score must prefer a
+    candidate that has a moderate keyword score *and* a strong cosine
+    over a candidate that only wins on keywords."""
+    db = _FakeDb()
+    target = _mk_page("T", topic="Newton First Law Motion Inertia")
+    a = _mk_page("S_kw", topic="Newton motion law force",  # strong keyword overlap
+                 body="<p>Newton motion force law.</p>")
+    b = _mk_page("S_emb", topic="Inertia explained simply",  # weaker keyword
+                 body="<p>Resting bodies stay at rest.</p>")
+    db.seo_pages.docs.extend([target, a, b])
+
+    # Stub embeddings: target points one way, S_emb is identical, S_kw is orthogonal.
+    async def _embed(text, *, task_type):
+        if "Newton First Law Motion Inertia" in text:
+            return [1.0, 0.0]
+        if "Inertia explained" in text:
+            return [1.0, 0.0]  # cosine = 1.0
+        if "Newton motion law force" in text:
+            return [0.0, 1.0]  # cosine = 0.0
+        return [0.5, 0.5]
+
+    with patch("seo_internal_linker._embed_for_linker", new=_embed):
+        out = _run(linker._select_candidate_sources(db, target))
+    ids = [d.get("id") for d in out]
+    # Both should appear; embedding-strong candidate must rank above
+    # the keyword-only candidate after the 0.6 / 0.4 blend.
+    assert ids.index("S_emb") < ids.index("S_kw")
+
+
 # ─── helpers ───────────────────────────────────────────────────────────
 
 

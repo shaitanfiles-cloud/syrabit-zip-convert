@@ -334,24 +334,80 @@ def _tokenize(s: str) -> set[str]:
     return {t for t in toks if t not in _STOPWORDS}
 
 
-def _score_candidate(target_tokens: set[str], cand: Mapping[str, Any]) -> int:
-    """Cheap lexical relevance: count overlapping content tokens
-    between target and candidate. We deliberately do NOT pull a
-    vector index call here — keeping the signal simple keeps the
-    latency budget for the LLM rerank phase."""
+def _score_candidate(target_tokens: set[str], cand: Mapping[str, Any]) -> float:
+    """BM25-lite keyword relevance: count overlapping topical tokens
+    between target and candidate, normalised by candidate token-set
+    size so longer titles don't dominate."""
     cand_tokens = _tokenize(cand.get("topic_title", "")) | \
                   _tokenize(cand.get("title", "")) | \
                   _tokenize(cand.get("subject_name", ""))
-    return len(target_tokens & cand_tokens)
+    if not cand_tokens:
+        return 0.0
+    overlap = len(target_tokens & cand_tokens)
+    if overlap == 0:
+        return 0.0
+    # Saturate so the signal lives in [0, 1]; matches BM25's diminishing
+    # returns shape closely enough for a coarse first-stage filter.
+    return overlap / (overlap + 2.0)
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    import math
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+
+async def _embed_for_linker(text: str, *, task_type: str) -> Optional[list[float]]:
+    """Best-effort embedding via existing vertex_services helper.
+    Returns ``None`` when embeddings are unavailable so the rest of
+    the pipeline degrades cleanly to keyword-only ranking (offline /
+    rate-limited / dev-without-creds)."""
+    if not text:
+        return None
+    try:
+        import vertex_services  # local import — keeps test envs offline-safe.
+        vec = await vertex_services.embed_text(text, task_type=task_type)
+        if isinstance(vec, list) and vec:
+            return [float(x) for x in vec]
+    except Exception as exc:  # pragma: no cover - logged only.
+        logger.debug("internal_linker: embed_text failed (%s) — falling back to keyword-only", exc)
+    return None
+
+
+def _candidate_embed_text(d: Mapping[str, Any]) -> str:
+    parts = [d.get("topic_title") or "", d.get("title") or ""]
+    body = (d.get("content") or "")
+    # Strip HTML tags cheaply and trim — we only need a topical fingerprint.
+    body = re.sub(r"<[^>]+>", " ", body)
+    parts.append(body[:600])
+    return " ".join(p for p in parts if p).strip()
 
 
 async def _select_candidate_sources(
     db, target: Mapping[str, Any], *, exclude_ids: Iterable[str] = (),
     pool_size: Optional[int] = None,
 ) -> list[dict]:
-    """Pull ~pool_size candidate source pages biased to the same
-    subject as the target, scored by token overlap. Excludes the
-    target itself, drafts, and any explicitly-excluded ids."""
+    """Hybrid retrieval pipeline:
+
+    1. Pull a wide candidate pool (~500 same-subject, fall back to
+       whole site) from Mongo.
+    2. Score each candidate with **BM25-lite** keyword overlap and
+       **embedding cosine** similarity (target topic + summary vs.
+       candidate topic + content), then combine ``0.6 * cosine +
+       0.4 * keyword`` into a single relevance score.
+    3. Truncate to the configured pool size (default ~30) — this is
+       the input the LLM ranker actually sees.
+
+    Embeddings are best-effort: if ``vertex_services.embed_text``
+    fails, the pipeline degrades to keyword-only ranking, which keeps
+    Stage 3 generation resilient when the embedding backend is down.
+    """
     cfg = get_config()
     pool = int(pool_size or cfg["candidate_pool_size"])
     target_id = target.get("id")
@@ -362,7 +418,7 @@ async def _select_candidate_sources(
     if not target_tokens:
         return []
 
-    # Same-subject query first; widen if too few hits.
+    # ── Stage 1: wide Mongo pool ──────────────────────────────────────
     query: dict = {"status": "published"}
     if target.get("subject_id"):
         query["subject_id"] = target["subject_id"]
@@ -375,25 +431,68 @@ async def _select_candidate_sources(
     }
     docs = await db.seo_pages.find(query, projection).limit(500).to_list(500)
     if len(docs) < pool and target.get("subject_id"):
-        # Widen to whole site when the same subject didn't produce
-        # enough overlap candidates (newly-seeded subjects).
         docs = await db.seo_pages.find(
             {"status": "published"}, projection,
         ).limit(800).to_list(800)
-    scored = []
+
+    eligible = []
     for d in docs:
         if d.get("id") in excluded:
             continue
         if target_topic_id and d.get("topic_id") == target_topic_id:
-            # Same topic as target — don't link a topic to itself
-            # via one of its sibling pages either.
             continue
-        score = _score_candidate(target_tokens, d)
-        if score <= 0:
-            continue
-        scored.append((score, d))
-    scored.sort(key=lambda t: t[0], reverse=True)
-    return [d for _, d in scored[:pool]]
+        eligible.append(d)
+    if not eligible:
+        return []
+
+    # ── Stage 2a: keyword (BM25-lite) score ───────────────────────────
+    keyword_scored: list[tuple[float, dict]] = []
+    for d in eligible:
+        s = _score_candidate(target_tokens, d)
+        if s > 0:
+            keyword_scored.append((s, d))
+    if not keyword_scored:
+        return []
+
+    # Pre-truncate to a manageable size for the embedding pass — there's
+    # no point spending a vector call on a doc with zero keyword signal.
+    keyword_scored.sort(key=lambda t: t[0], reverse=True)
+    short_pool = keyword_scored[: max(pool * 3, 60)]
+
+    # ── Stage 2b: embedding cosine (best-effort) ─────────────────────
+    target_text = " ".join([
+        target.get("topic_title") or "",
+        target.get("title") or "",
+        re.sub(r"<[^>]+>", " ", target.get("content") or "")[:600],
+    ]).strip()
+    target_vec = await _embed_for_linker(target_text, task_type="RETRIEVAL_QUERY")
+    cand_vecs: dict[str, list[float]] = {}
+    if target_vec is not None:
+        # Embed candidates serially; the pool is small (≤90) and the
+        # embedding helper already pools/caches under the hood.
+        for _, d in short_pool:
+            v = await _embed_for_linker(
+                _candidate_embed_text(d), task_type="RETRIEVAL_DOCUMENT",
+            )
+            if v is not None:
+                cand_vecs[d.get("id", "")] = v
+
+    # ── Stage 3: hybrid blend ────────────────────────────────────────
+    final: list[tuple[float, dict]] = []
+    for kscore, d in short_pool:
+        cscore = 0.0
+        if target_vec is not None:
+            v = cand_vecs.get(d.get("id", ""))
+            if v is not None:
+                cscore = max(0.0, _cosine(target_vec, v))
+        if target_vec is not None and cand_vecs:
+            blended = 0.6 * cscore + 0.4 * kscore
+        else:
+            # No embeddings available — fall back to keyword-only.
+            blended = kscore
+        final.append((blended, d))
+    final.sort(key=lambda t: t[0], reverse=True)
+    return [d for _, d in final[:pool]]
 
 
 # ---------------------------------------------------------------------------
@@ -824,6 +923,13 @@ async def revert_applied_suggestion(db, rec_id: str, admin_label: str) -> dict:
     rec = await db.internal_link_history.find_one({"id": rec_id}, {"_id": 0})
     if not rec:
         return {"ok": False, "error": "not_found"}
+    # True idempotency — calling revert on an already-reverted row is a
+    # no-op rather than an error so admin double-clicks don't surface
+    # confusing failures.
+    if rec.get("action") == ACTION_REVERTED:
+        return {"ok": True, "idempotent": True,
+                "reverted_at": rec.get("reverted_at"),
+                "reverted_by": rec.get("reverted_by")}
     if rec.get("action") != ACTION_AUTO_APPLIED:
         return {"ok": False, "error": f"only auto_applied rows can be reverted (got {rec.get('action')})"}
     sid = rec.get("source_page_id")
