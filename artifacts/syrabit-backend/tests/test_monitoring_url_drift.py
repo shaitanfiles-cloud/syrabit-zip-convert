@@ -82,12 +82,18 @@ def manifest() -> dict[str, Any]:
 
 
 @pytest.fixture(scope="module")
-def openapi_paths() -> set[str]:
-    """Return the set of paths the live FastAPI app exposes.
+def openapi_methods() -> dict[str, set[str]]:
+    """Return ``{path: {METHOD, ...}}`` for the live FastAPI app.
 
     We import ``server`` lazily inside the fixture (rather than at module
     load) so collection of this test file does not pay the multi-second
     cost of standing up the LLM key diagnostic, vertex client, etc.
+
+    Methods are uppercased so the manifest's `method` field (also
+    uppercase by convention) can be checked with a plain set membership.
+    Task #916 uses this richer view to verify a probe's declared verb
+    actually exists on the route — `openapi_paths` below is kept as a
+    derived set for tests that only need the path keys.
     """
     # Mirror the dummy-env / deps-stub setup the dump script uses, so this
     # test runs in the same environment as the production drift check
@@ -117,7 +123,25 @@ def openapi_paths() -> set[str]:
 
     import server  # noqa: WPS433  (intentional in-fixture import)
 
-    return set(server.app.openapi().get("paths", {}).keys())
+    # OpenAPI 3.x path-item keys are lowercase verb names plus a few
+    # non-verb keys (``parameters``, ``summary``, ``description``,
+    # ``servers``). Whitelist the verbs we care about so a future schema
+    # extension cannot accidentally turn a stray key into a "method".
+    verbs = ("get", "post", "put", "patch", "delete", "options", "head")
+    paths = server.app.openapi().get("paths", {})
+    out: dict[str, set[str]] = {}
+    for path, item in paths.items():
+        if not isinstance(item, dict):
+            continue
+        out[path] = {verb.upper() for verb in verbs if verb in item}
+    return out
+
+
+@pytest.fixture(scope="module")
+def openapi_paths(openapi_methods: dict[str, set[str]]) -> set[str]:
+    """Back-compat view: just the path keys. Tests that don't care about
+    the method (Task #887 string-existence gate) keep using this."""
+    return set(openapi_methods.keys())
 
 
 # ─── Manifest shape ────────────────────────────────────────────────────
@@ -175,34 +199,72 @@ def test_external_entries_carry_rationale_and_provenance(manifest: dict[str, Any
 # ─── backend_paths — must each resolve to a real OpenAPI route ────────
 
 
-def _path_resolves(path: str, match: str, openapi_paths: set[str]) -> bool:
-    """Does ``path`` correspond to a real FastAPI route?
+# Methods the manifest is allowed to declare. Limited to the verbs the
+# worker is realistically going to send; OPTIONS / HEAD / TRACE are not
+# probe targets and have no business in the manifest.
+_ALLOWED_METHODS: frozenset[str] = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
+
+
+def _entry_method(entry: dict[str, Any]) -> str:
+    """Return the uppercase HTTP method declared by ``entry``.
+
+    Defaults to ``"GET"`` when the field is absent — the overwhelming
+    majority of monitored URLs are probes / cacheable reads, so requiring
+    every existing entry to spell out ``"method": "GET"`` would be noise.
+    """
+    raw = (entry.get("method") or "GET").strip().upper()
+    return raw
+
+
+def _path_resolves(
+    path: str,
+    match: str,
+    method: str,
+    openapi_methods: dict[str, set[str]],
+) -> bool:
+    """Does ``path`` correspond to a real FastAPI route that accepts
+    ``method``?
 
     ``exact``  — the path string must appear verbatim in the OpenAPI
-                 schema. This is the strictest mode and the right
-                 default for healthcheck / probe targets.
+                 schema *and* the path item must expose ``method``.
+                 This is the strictest mode and the right default for
+                 healthcheck / probe targets where the worker hits one
+                 specific endpoint with one specific verb.
     ``prefix`` — the path string must be a prefix of at least one
-                 OpenAPI path. Use this for paths the worker treats as
-                 a routing prefix (e.g. ``/api/content/chapters/`` is a
-                 valid prefix for ``/api/content/chapters/{chapter_id}``).
-                 Path-parameter segments (``{id}``) are honoured during
-                 the prefix comparison so the literal text up to the
-                 first ``{`` decides the match.
+                 OpenAPI path that itself exposes ``method``. Use this
+                 for paths the worker treats as a routing prefix (e.g.
+                 ``/api/content/chapters/`` is a valid prefix for
+                 ``/api/content/chapters/{chapter_id}``). The
+                 method-on-prefix check is intentionally weaker than the
+                 exact variant: a prefix is a route family, not a
+                 single endpoint, so requiring every path under the
+                 prefix to support the method would be wrong (e.g.
+                 ``/api/auth`` covers both GET ``/auth/me`` and POST
+                 ``/auth/login``). The check still catches the Task
+                 #877 / #916 failure mode of "the entire prefix has no
+                 route at all that accepts this verb".
+
+    Path-parameter segments (``{id}``) are honoured during the prefix
+    comparison so the literal text up to the first ``{`` decides the
+    match.
     """
     if match == "exact":
-        return path in openapi_paths
+        return method in openapi_methods.get(path, set())
     if match == "prefix":
         # Compare against the literal-prefix portion of each OpenAPI
         # path. ``startswith(path)`` would already match
         # ``/api/foo/{id}`` for the prefix ``/api/foo/`` because the
         # first 9 chars are identical, so a plain startswith is enough.
-        return any(p.startswith(path) for p in openapi_paths)
+        return any(
+            p.startswith(path) and method in methods
+            for p, methods in openapi_methods.items()
+        )
     raise ValueError(f"unknown match mode: {match!r}")
 
 
 def test_every_backend_path_exists_in_openapi(
     manifest: dict[str, Any],
-    openapi_paths: set[str],
+    openapi_methods: dict[str, set[str]],
 ) -> None:
     failures: list[str] = []
     for entry in manifest["backend_paths"]:
@@ -210,6 +272,7 @@ def test_every_backend_path_exists_in_openapi(
         match = entry.get("match", "exact")
         rationale = (entry.get("rationale") or "").strip()
         registered_in = entry.get("registered_in") or []
+        method = _entry_method(entry)
 
         if not rationale:
             failures.append(
@@ -227,19 +290,128 @@ def test_every_backend_path_exists_in_openapi(
                 "(use 'exact' or 'prefix')."
             )
             continue
-        if not _path_resolves(path, match, openapi_paths):
+        if method not in _ALLOWED_METHODS:
             failures.append(
-                f"backend_paths entry {path!r} (match={match}, "
-                f"registered in {registered_in}) does NOT resolve to any "
-                "FastAPI route in the live OpenAPI schema. Either the route "
-                "was renamed/removed (update the hard-coded URL in the file "
-                "above to match the new path AND update monitored-urls.json), "
-                "or the entry is stale and should be removed from the manifest."
+                f"backend_paths entry {path!r}: invalid method {method!r} "
+                f"(allowed: {sorted(_ALLOWED_METHODS)}). Task #916 — annotate "
+                "with the uppercase HTTP verb the worker actually sends."
             )
+            continue
+        if not _path_resolves(path, match, method, openapi_methods):
+            # Tailor the failure message to whether the path itself is
+            # missing (Task #877) or only the method is missing (Task
+            # #916). The two failure modes call for different fixes so
+            # the on-call should not have to guess.
+            path_known = path in openapi_methods or any(
+                p.startswith(path) for p in openapi_methods
+            )
+            if path_known:
+                failures.append(
+                    f"backend_paths entry {path!r} (match={match}, "
+                    f"registered in {registered_in}) resolves to a real "
+                    f"FastAPI route, but no route under it accepts {method!r}. "
+                    "Either fix the manifest's `method` to match what the "
+                    "route actually exposes, or fix the worker to send the "
+                    "right verb (Task #916 — a probe that GETs a POST-only "
+                    "endpoint will 405 forever, same silent-failure shape "
+                    "as Task #877)."
+                )
+            else:
+                failures.append(
+                    f"backend_paths entry {path!r} (match={match}, "
+                    f"method={method}, registered in {registered_in}) does "
+                    "NOT resolve to any FastAPI route in the live OpenAPI "
+                    "schema. Either the route was renamed/removed (update "
+                    "the hard-coded URL in the file above to match the new "
+                    "path AND update monitored-urls.json), or the entry is "
+                    "stale and should be removed from the manifest."
+                )
 
     assert not failures, (
-        "monitored-URL drift detected — see Task #877 for the failure mode "
-        "this test guards against:\n  - " + "\n  - ".join(failures)
+        "monitored-URL drift detected — see Task #877 / Task #916 for the "
+        "failure modes this test guards against:\n  - " + "\n  - ".join(failures)
+    )
+
+
+# ─── Negative test — the method gate actually catches wrong-verb drift ──
+#
+# Task #916 — without this, a future refactor that accidentally
+# loosens `_path_resolves` (e.g. dropping the method check from the
+# prefix branch) would silently re-open the gap. Drive the resolver
+# against a hand-built openapi_methods view so the assertions don't
+# depend on which routes the live FastAPI app happens to expose at
+# any given moment.
+
+
+def test_path_resolves_enforces_method() -> None:
+    fake_openapi: dict[str, set[str]] = {
+        "/api/livez": {"GET"},
+        "/api/ai/chat": {"POST"},
+        "/api/ai/chat/stream": {"POST"},
+        "/api/auth/me": {"GET"},
+        "/api/auth/login": {"POST"},
+    }
+
+    # Exact match — verb must be present on the literal path.
+    assert _path_resolves("/api/livez", "exact", "GET", fake_openapi), (
+        "sanity: /api/livez exposes GET in the planted schema"
+    )
+    assert not _path_resolves("/api/livez", "exact", "POST", fake_openapi), (
+        "Task #916 gate is broken: a probe that POSTs a GET-only endpoint "
+        "should be flagged."
+    )
+
+    # Prefix match — verb must be present on at least one path under
+    # the prefix, but NOT on every one.
+    assert _path_resolves("/api/ai/chat", "prefix", "POST", fake_openapi), (
+        "sanity: /api/ai/chat covers POST routes"
+    )
+    assert not _path_resolves("/api/ai/chat", "prefix", "GET", fake_openapi), (
+        "Task #916 prefix gate is broken: no route under /api/ai/chat "
+        "exposes GET, so a worker GETting this prefix should be flagged."
+    )
+    # Mixed-method prefix: /api/auth has both verbs; either should pass.
+    assert _path_resolves("/api/auth", "prefix", "GET", fake_openapi)
+    assert _path_resolves("/api/auth", "prefix", "POST", fake_openapi)
+    # And a prefix that matches nothing must fail regardless of method.
+    assert not _path_resolves("/api/missing/", "prefix", "GET", fake_openapi)
+
+
+def test_entry_method_defaults_to_get() -> None:
+    # Backward-compat: existing manifest entries that omit `method`
+    # must continue to behave as GET probes — anything else would
+    # silently break every entry in the manifest.
+    assert _entry_method({}) == "GET"
+    assert _entry_method({"method": "post"}) == "POST"  # case-insensitive
+    assert _entry_method({"method": "  PUT  "}) == "PUT"  # whitespace tolerant
+
+
+def test_planted_wrong_method_is_caught_against_live_openapi(
+    openapi_methods: dict[str, set[str]],
+) -> None:
+    # Drive the resolver against a manifest entry that points at a real
+    # path but lies about the method. This proves the gate is wired up
+    # end-to-end against the live FastAPI app, not just the synthetic
+    # fake above.
+    livez_methods = openapi_methods.get("/api/livez", set())
+    if not livez_methods:
+        pytest.skip(
+            "live FastAPI app does not expose /api/livez — skipping the "
+            "live-schema half of the Task #916 gate. The synthetic "
+            "test_path_resolves_enforces_method test above still proves "
+            "the resolver behaves correctly."
+        )
+    assert "GET" in livez_methods, (
+        "fixture sanity: /api/livez should still be a GET healthcheck."
+    )
+    # If the manifest claimed /api/livez accepts POST, the resolver
+    # must say "no" — the gate is what stops a future probe refactor
+    # from quietly POSTing the healthcheck.
+    assert not _path_resolves("/api/livez", "exact", "POST", openapi_methods), (
+        "Task #916 — a manifest entry claiming /api/livez accepts POST "
+        "must be flagged, otherwise a probe that POSTs a GET-only "
+        "healthcheck would silently 405 forever (same outage shape as "
+        "Task #877)."
     )
 
 

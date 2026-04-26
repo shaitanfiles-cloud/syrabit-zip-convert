@@ -25,7 +25,18 @@
     "                        homepage served by Cloudflare Pages, an external webhook endpoint). Each entry",
     "                        MUST carry a non-empty 'rationale' or the drift test fails.",
     "",
+    "Task #916 added an HTTP-method gate: backend_paths entries can declare a `method` (defaults to",
+    "'GET'). The drift test asserts the live OpenAPI path item actually exposes that verb — catching the",
+    "Task #877 sibling failure mode where a probe GETs a POST-only endpoint and 405s forever. For",
+    "match='exact' entries the method must be exposed by that exact path; for match='prefix' entries at",
+    "least one path under the prefix must expose the method (the prefix is a route family, not a single",
+    "endpoint, so a strict per-path check would be meaningless).",
+    "",
     "Optional fields on backend_paths / intentionally_external entries:",
+    "  method                  — uppercase HTTP verb the worker actually sends (GET|POST|PUT|PATCH|DELETE).",
+    "                            Defaults to 'GET'. Annotate any entry whose worker-side caller is NOT a",
+    "                            GET — e.g. webhooks (POST), AI streaming chat (POST) — so the Task #916",
+    "                            method-drift gate can verify the live route actually accepts that verb.",
     "  edge_cache.behavior     — 'cacheable' (worker stores in CF cache) or 'bypass' (worker forbids caching).",
     "  edge_cache.ttl_seconds  — cache TTL when behavior='cacheable'. Required for cacheable entries.",
     "  edge_cache.user_keyed   — when true, the cache key includes a per-user identity header so each user",
@@ -251,7 +262,8 @@
     {
       "path": "/api/ai/chat",
       "match": "prefix",
-      "rationale": "edge bypass — streaming AI responses are non-idempotent and per-session; must never be cached (Task #900)",
+      "method": "POST",
+      "rationale": "edge bypass — streaming AI responses are non-idempotent and per-session; must never be cached (Task #900). All routes under this prefix are POST-only (Task #916).",
       "registered_in": [
         "workers/edge-proxy/src/index.ts"
       ],
@@ -263,7 +275,8 @@
     {
       "path": "/api/webhooks",
       "match": "prefix",
-      "rationale": "edge bypass — inbound POST events from payment / push providers; must never be cached (Task #900)",
+      "method": "POST",
+      "rationale": "edge bypass — inbound POST events from payment / push providers; must never be cached (Task #900). Webhook receivers are POST-only (Task #916).",
       "registered_in": [
         "workers/edge-proxy/src/index.ts"
       ],

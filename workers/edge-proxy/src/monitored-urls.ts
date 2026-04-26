@@ -45,6 +45,14 @@ export interface MonitoredEdgeCache {
   user_keyed?: boolean;
 }
 
+/**
+ * HTTP verbs the worker is allowed to declare on a manifest entry.
+ * Task #916 — the drift test asserts the live OpenAPI path item exposes
+ * this verb, catching the Task #877 sibling failure mode where a probe
+ * GETs a POST-only endpoint and 405s forever.
+ */
+export type MonitoredHttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
 export interface MonitoredBackendPath {
   path: string;
   match: "exact" | "prefix";
@@ -58,6 +66,18 @@ export interface MonitoredBackendPath {
    * identifier as a stand-in for the literal path.
    */
   runtime_constant?: string;
+  /**
+   * HTTP verb the worker actually sends when hitting this path. Defaults
+   * to "GET" when omitted. Task #916 — the drift test verifies the live
+   * OpenAPI path item actually exposes this method:
+   *   * `match: "exact"` → the exact path must support this method.
+   *   * `match: "prefix"` → at least one path under the prefix must
+   *     support this method (a prefix is a route family, not a single
+   *     endpoint, so a strict per-path check would be meaningless).
+   * Annotate any entry whose worker-side caller is NOT a GET — e.g.
+   * `/api/webhooks` (POST), `/api/ai/chat` (POST).
+   */
+  method?: MonitoredHttpMethod;
   edge_cache?: MonitoredEdgeCache;
 }
 
@@ -67,6 +87,8 @@ export interface MonitoredExternalUrl {
   registered_in: string[];
   /** See `MonitoredBackendPath.runtime_constant`. */
   runtime_constant?: string;
+  /** See `MonitoredBackendPath.method`. Defaults to "GET" when omitted. */
+  method?: MonitoredHttpMethod;
 }
 
 export interface MonitoredUrlsManifest {
