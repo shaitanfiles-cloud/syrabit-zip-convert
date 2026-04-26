@@ -1316,7 +1316,13 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
           // it's only used for one paint and the active-range refresh
           // immediately replaces it.
           const visitorsLockedTotal = cfVisitors30d?.totals?.visits ?? totals.visits ?? totals.visitors;
-          const visitorsLabel = cfVisitorsWindow === '7d' ? 'Total Visitors (7d)' : 'Total Visitors';
+          // The locked-window fetcher transparently degrades 30d → 7d
+          // when Cloudflare's adaptive-groups dataset can't return a
+          // complete 30-day series. Per product feedback, the tile
+          // label should NOT advertise that fallback — always read
+          // "Total Visitors", regardless of which window the data
+          // ended up coming from.
+          const visitorsLabel = 'Total Visitors';
           const visitorsToday = useOverview ? (lastBucket?.visits ?? lastBucket?.visitors) : cf.visitors_today;
           const tiles = [
             { key: 'requests',   label: 'Interactions',     total: totals.requests,       today: useOverview ? lastBucket?.requests   : cf.requests_today,   fmt: fmtNum },
