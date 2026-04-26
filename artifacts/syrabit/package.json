@@ -45,7 +45,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test",
+    "test:e2e": "bash scripts/run-e2e.sh",
     "test:e2e:install": "playwright install --with-deps chromium",
     "test:edge-cache": "node tests/edge-cache-live.mjs",
     "lint:ads": "node scripts/verify-no-ads.mjs",
