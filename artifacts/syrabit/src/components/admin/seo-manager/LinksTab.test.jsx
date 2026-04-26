@@ -88,6 +88,26 @@ describe('LinkerAgentPanel (LinksTab)', () => {
     expect(screen.getByTestId('linker-reject-rec-1')).toBeInTheDocument();
   });
 
+  it('Reject button calls the reject helper with the row id', async () => {
+    setupApi({
+      pending: [{
+        id: 'rec-2',
+        sourcePageId: 'p-src', sourceTopicTitle: 'Inertia',
+        targetPageId: 'p-tgt', targetTopicTitle: "Newton's First Law",
+        anchorText: 'Newton', confidence: 0.40, reason: 'low-conf draft',
+        diff: { beforeExcerpt: 'a', afterExcerpt: 'b' },
+      }],
+    });
+    api.adminSeoInternalLinksReject.mockResolvedValue({ data: { ok: true }});
+
+    render(<LinksTab {...baseProps} />);
+    const btn = await screen.findByTestId('linker-reject-rec-2');
+    fireEvent.click(btn);
+    await waitFor(() => {
+      expect(api.adminSeoInternalLinksReject).toHaveBeenCalledWith('tok', 'rec-2');
+    });
+  });
+
   it('Approve button calls the approve helper with the row id and refreshes', async () => {
     setupApi({
       pending: [{

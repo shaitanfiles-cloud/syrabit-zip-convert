@@ -11,6 +11,7 @@ helper can be validated against both at once.
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import types
 from typing import Any, Dict, List
@@ -500,6 +501,56 @@ def test_apply_pending_inserts_anchor_and_flips_action():
     after = _run(db.internal_link_history.find_one({"id": "rec1"}))
     assert after["action"] == linker.ACTION_AUTO_APPLIED
     assert after["approved_by"] == "alice"
+
+
+def test_llm_rank_clamps_to_max_links_per_target(monkeypatch):
+    """The prompt asks for 3-5 links but a chatty LLM might return more.
+    The service must hard-clamp the parsed list to ``max_links_per_target``
+    (default 5), keeping the highest-confidence rows."""
+    target = _mk_page("T", topic="Newton")
+    candidates = [
+        {"id": f"S{i}", "topic_title": f"Source {i}", "snippet": "txt"}
+        for i in range(10)
+    ]
+    too_many = [
+        {"source_index": i, "anchor_text": f"a{i}",
+         "confidence": 0.10 * (i + 1), "reason": ""}
+        for i in range(10)  # 10 items > 5 cap, varying confidence
+    ]
+
+    async def fake_llm(*_a, **_kw):
+        return json.dumps({"links": too_many})
+
+    fake_mod = types.ModuleType("llm")
+    fake_mod.call_llm_api_content_with_retry = fake_llm
+    monkeypatch.setitem(sys.modules, "llm", fake_mod)
+
+    out = _run(linker._llm_rank(target, candidates))
+    assert len(out) == 5  # default max_links_per_target
+    # Highest-confidence kept (0.10*10=1.0 down through 0.10*6=0.6).
+    confs = [r["confidence"] for r in out]
+    assert confs == sorted(confs, reverse=True)
+    assert min(confs) >= 0.55  # the bottom 5 (0.1..0.5) were dropped
+
+
+def test_apply_pending_rejects_non_drafted_state():
+    """Approve must operate only on the pending queue (drafted rows).
+    Re-approving a row that was previously rejected or auto-applied
+    would corrupt the audit trail and let admins resurrect rejected
+    suggestions from the history view by mistake."""
+    db = _FakeDb()
+    src = _mk_page("S1", topic="X", body="<p>Hello world.</p>")
+    db.seo_pages.docs.append(src)
+    for action in (linker.ACTION_REJECTED, linker.ACTION_AUTO_APPLIED):
+        rec_id = f"rec-{action}"
+        db.internal_link_history.docs.append({
+            "id": rec_id, "source_page_id": "S1", "target_page_id": "T",
+            "anchor_text": "Hello", "target_url": "/x",
+            "action": action,
+        })
+        out = _run(linker.apply_pending_suggestion(db, rec_id, "alice"))
+        assert out["ok"] is False
+        assert "drafted" in (out.get("error") or "")
 
 
 def test_reject_pending_only_works_for_drafted():

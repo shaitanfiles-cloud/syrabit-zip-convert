@@ -609,7 +609,15 @@ async def _llm_rank(target: Mapping[str, Any],
     except Exception as exc:
         logger.warning("internal_linker: LLM call failed: %s", exc)
         return []
-    return _parse_llm_response(raw)
+    parsed = _parse_llm_response(raw)
+    # Hard-clamp server-side to the configured per-target window so a
+    # chatty LLM cannot blow past the 3-5 cap promised in the spec.
+    cap = max(1, int(cfg["max_links_per_target"]))
+    if len(parsed) > cap:
+        # Highest-confidence first so the cap drops the weakest tail.
+        parsed.sort(key=lambda r: float(r.get("confidence") or 0.0), reverse=True)
+        parsed = parsed[:cap]
+    return parsed
 
 
 # ---------------------------------------------------------------------------
@@ -867,8 +875,12 @@ async def apply_pending_suggestion(db, rec_id: str, admin_label: str) -> dict:
     rec = await db.internal_link_history.find_one({"id": rec_id}, {"_id": 0})
     if not rec:
         return {"ok": False, "error": "not_found"}
-    if rec.get("action") not in (ACTION_DRAFTED, ACTION_REJECTED):
-        return {"ok": False, "error": f"cannot apply from action={rec.get('action')}"}
+    # Approve only operates on the pending queue. To re-approve a row that
+    # was previously rejected, an admin must explicitly re-trigger the
+    # linker — that keeps the audit trail honest and prevents accidental
+    # resurrection of rejected suggestions from the history view.
+    if rec.get("action") != ACTION_DRAFTED:
+        return {"ok": False, "error": f"can only approve drafted suggestions (got action={rec.get('action')})"}
     sid = rec.get("source_page_id")
     tid = rec.get("target_page_id")
     if not sid or not tid:
