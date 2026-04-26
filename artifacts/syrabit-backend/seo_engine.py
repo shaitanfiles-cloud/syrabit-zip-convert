@@ -1798,6 +1798,17 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
                 await indexnow_batcher.queue_page(page)
             except Exception:
                 pass
+        # Task #939 — agentic internal-linker. Schedule a background
+        # task that picks 3-5 best contextual link sources elsewhere
+        # on the site and either auto-applies (>= confidence
+        # threshold) or files them for admin review. Fire-and-forget
+        # so generation latency is unaffected; the linker swallows
+        # its own errors so a failure here can never break Stage 3.
+        try:
+            from seo_internal_linker import schedule_propose
+            schedule_propose(_db, page, source="stage3")
+        except Exception as e:
+            logger.debug(f"internal_linker dispatch failed: {e}")
     return page
 
 

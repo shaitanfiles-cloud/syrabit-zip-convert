@@ -150,7 +150,8 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
         )}
 
         {s.tab === 'links' && (
-          <LinksTab linksData={s.linksData} linksLoading={s.linksLoading}
+          <LinksTab adminToken={adminToken}
+            linksData={s.linksData} linksLoading={s.linksLoading}
             handleLinksAnalyze={s.handleLinksAnalyze} injectSlug={s.injectSlug}
             setInjectSlug={s.setInjectSlug} injecting={s.injecting}
             handleLinksInject={s.handleLinksInject} />

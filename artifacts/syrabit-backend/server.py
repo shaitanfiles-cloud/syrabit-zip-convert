@@ -980,6 +980,16 @@ async def lifespan(app):
     if _is_leader:
         from seo_remediation_service import _seo_remediation_loop
         asyncio.create_task(_seo_remediation_loop(db))
+    # Task #939: agentic internal-linker nightly maintenance loop.
+    # Leader-gated; the loop holds an atomic per-UTC-date marker on
+    # the budget doc so a leader fail-over inside the same day does
+    # not double-run the nightly pass. Stage 3 hits its
+    # fire-and-forget per-page entry point on every replica
+    # (no leader gate needed) — only the nightly maintenance pass
+    # is guarded.
+    if _is_leader:
+        from seo_internal_linker import _internal_linker_loop
+        asyncio.create_task(_internal_linker_loop(db))
     # Task #587 — nightly live grounded-recall benchmark + alerting.
     # Runs once per UTC day (configurable via GROUNDED_RECALL_NIGHTLY_*),
     # writes bench/results/latest.json so the admin tile reflects the
@@ -1418,6 +1428,7 @@ from routes.edu_study import router as edu_study_router
 from routes.admin_seo_keywords import router as admin_seo_keywords_router
 from routes.admin_topic_discovery import router as admin_topic_discovery_router
 from routes.admin_seo_remediation import router as admin_seo_remediation_router
+from routes.admin_seo_internal_linker import router as admin_seo_internal_linker_router
 
 api.include_router(auth_router)
 api.include_router(content_router)
@@ -1459,6 +1470,7 @@ api.include_router(edu_study_router)
 api.include_router(admin_seo_keywords_router)
 api.include_router(admin_topic_discovery_router)
 api.include_router(admin_seo_remediation_router)
+api.include_router(admin_seo_internal_linker_router)
 
 from llm import call_llm_api_content
 from auth_deps import get_admin_user

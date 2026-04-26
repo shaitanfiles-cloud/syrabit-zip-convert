@@ -578,6 +578,51 @@ export const adminSeoRemediationCircuitReset = (token) =>
     headers: adminHeaders(token), withCredentials: true,
   });
 
+// Task #939 — agentic internal-linker.
+export const adminSeoInternalLinksStatus = (token) =>
+  axios.get(`${API_BASE}/admin/seo/internal-links/status`, {
+    headers: adminHeaders(token), withCredentials: true,
+  });
+
+export const adminSeoInternalLinksPending = (token, { limit = 50 } = {}) =>
+  axios.get(`${API_BASE}/admin/seo/internal-links/pending`, {
+    headers: adminHeaders(token), withCredentials: true, params: { limit },
+  });
+
+export const adminSeoInternalLinksHistory = (token, { days = 7, limit = 100, action = null } = {}) => {
+  const params = { days, limit };
+  if (action) params.action = action;
+  return axios.get(`${API_BASE}/admin/seo/internal-links/history`, {
+    headers: adminHeaders(token), withCredentials: true, params,
+  });
+};
+
+export const adminSeoInternalLinksApprove = (token, recId) =>
+  axios.post(
+    `${API_BASE}/admin/seo/internal-links/${encodeURIComponent(recId)}/approve`,
+    null,
+    { headers: adminHeaders(token), withCredentials: true },
+  );
+
+export const adminSeoInternalLinksReject = (token, recId) =>
+  axios.post(
+    `${API_BASE}/admin/seo/internal-links/${encodeURIComponent(recId)}/reject`,
+    null,
+    { headers: adminHeaders(token), withCredentials: true },
+  );
+
+export const adminSeoInternalLinksRevert = (token, recId) =>
+  axios.post(
+    `${API_BASE}/admin/seo/internal-links/${encodeURIComponent(recId)}/revert`,
+    null,
+    { headers: adminHeaders(token), withCredentials: true },
+  );
+
+export const adminSeoInternalLinksTrigger = (token, payload) =>
+  axios.post(`${API_BASE}/admin/seo/internal-links/trigger`, payload, {
+    headers: adminHeaders(token), withCredentials: true,
+  });
+
 export const adminSeoReviewQueue = (token, status = 'draft', limit = 200) =>
   axios.get(`${API_BASE}/seo/review-queue`, { headers: adminHeaders(token), withCredentials: true, params: { status, limit } });
 
