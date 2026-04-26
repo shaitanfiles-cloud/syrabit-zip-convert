@@ -513,10 +513,20 @@ def normalize_cf_http_request_row(row: Dict[str, Any]) -> Dict[str, Any]:
               or dim.get("clientRequestHTTPMethod") or "")
     path = dim.get("clientRequestPath") or dim.get("requestPath") or ""
     colo = dim.get("coloCode") or dim.get("colo") or ""
-    # Deterministic id collapses retries of the same (minute,path,
-    # method,status,colo,cache) bucket onto the same Mongo doc so a
-    # restart-or-retry inside the same window cannot double-count.
-    idem = f"cf|{minute_iso}|{method}|{path}|{status}|{colo}|{cache or ''}"
+    # The idempotency key MUST include every dimension the GraphQL
+    # ``httpRequestsAdaptiveGroups`` query groups by — otherwise two
+    # legitimately-distinct buckets (e.g. same minute+path+status from
+    # two different countries or hosts) would collide on the same _id
+    # and the second one would be silently dropped as an E11000
+    # duplicate. The dimensions list MUST stay in lockstep with the
+    # ``dimensions`` block in ``_CF_QUERY``.
+    host = dim.get("clientRequestHTTPHost") or dim.get("host") or ""
+    country = dim.get("clientCountryName") or dim.get("countryName") or ""
+    edge_status = dim.get("edgeResponseStatus")
+    origin_status = dim.get("originResponseStatus")
+    cache_status_raw = dim.get("cacheStatus") or ""
+    idem = (f"cf|{minute_iso}|{method}|{path}|{host}|{country}|{colo}"
+            f"|{edge_status}|{origin_status}|{cache_status_raw}")
     rec_id = "cf_" + hashlib.sha1(idem.encode("utf-8")).hexdigest()
     return {
         "_id": rec_id,

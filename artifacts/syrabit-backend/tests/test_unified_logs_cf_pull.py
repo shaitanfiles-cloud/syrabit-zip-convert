@@ -66,6 +66,44 @@ def test_normalize_cf_row_uses_warn_for_4xx_and_error_for_5xx():
     assert routes.normalize_cf_http_request_row(base)["level"] == "error"
 
 
+def test_normalize_cf_row_idempotency_key_includes_all_grouping_dims():
+    """Two CF buckets that share minute+method+path+status+colo+cache
+    but differ on host or country are *legitimately distinct* rows
+    coming out of httpRequestsAdaptiveGroups. The deterministic _id
+    must NOT collapse them — otherwise insert_logs() would silently
+    drop the second one as an E11000 duplicate, undercounting traffic.
+    """
+    base_dim = {
+        "datetimeMinute": "2026-04-26T10:00:00Z",
+        "edgeResponseStatus": 200,
+        "originResponseStatus": 200,
+        "cacheStatus": "HIT",
+        "clientRequestPath": "/",
+        "clientRequestHTTPMethodName": "GET",
+        "coloCode": "BLR",
+    }
+    row_in = {**base_dim, "clientRequestHTTPHost": "syrabit.ai",
+              "clientCountryName": "IN"}
+    row_us = {**base_dim, "clientRequestHTTPHost": "syrabit.ai",
+              "clientCountryName": "US"}
+    row_other_host = {**base_dim, "clientRequestHTTPHost": "blog.syrabit.ai",
+                      "clientCountryName": "IN"}
+    n_in = routes.normalize_cf_http_request_row({"dimensions": row_in,
+                                                 "avg": {}, "count": 3})
+    n_us = routes.normalize_cf_http_request_row({"dimensions": row_us,
+                                                 "avg": {}, "count": 5})
+    n_other = routes.normalize_cf_http_request_row({"dimensions": row_other_host,
+                                                    "avg": {}, "count": 7})
+    assert n_in["_id"] != n_us["_id"], "country should split the bucket"
+    assert n_in["_id"] != n_other["_id"], "host should split the bucket"
+    assert n_us["_id"] != n_other["_id"]
+    # Sanity: re-normalising the *same* bucket yields the same id —
+    # that's the retry-dedupe behaviour we want to keep.
+    n_in_again = routes.normalize_cf_http_request_row({"dimensions": row_in,
+                                                       "avg": {}, "count": 99})
+    assert n_in["_id"] == n_in_again["_id"]
+
+
 def test_normalize_cf_row_collapses_dynamic_cache_status():
     row = {
         "dimensions": {"cacheStatus": "DYNAMIC", "edgeResponseStatus": 200,
