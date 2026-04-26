@@ -569,11 +569,22 @@ async def _emit_jsonld_alert(
 # is a true no-op when the env var is unset (no network call, no logs at
 # anything noisier than DEBUG).
 
-_SLACK_WEBHOOK_ENV = "SLACK_TRUSTPILOT_WEBHOOK_URL"
+# Task #972 — the env-var name and the read-and-strip helper now live
+# in ``routes.slack_alerter_config`` alongside the three cron silence-
+# alerter env-var names that Task #969 collapsed there. Keeping the
+# in-module ``_SLACK_WEBHOOK_ENV`` / ``_slack_webhook_url`` aliases
+# preserves the symbols this module's tests
+# (``tests/test_admin_trustpilot_jsonld_status.py``) and other call
+# sites already reference.
+from routes.slack_alerter_config import (
+    SLACK_TRUSTPILOT_WEBHOOK_ENV as _SLACK_WEBHOOK_ENV,
+    slack_config_for,
+    slack_webhook_url_for,
+)
 
 
 def _slack_webhook_url() -> str:
-    return (os.environ.get(_SLACK_WEBHOOK_ENV) or "").strip()
+    return slack_webhook_url_for(_SLACK_WEBHOOK_ENV)
 
 
 def _slack_payload_for_jsonld_alert(
@@ -707,11 +718,7 @@ async def get_trustpilot_jsonld_report(
     dedicated per-event Slack fan-out from
     :func:`_post_jsonld_slack_alert`.
     """
-    slack_configured = bool(_slack_webhook_url())
-    base = {
-        "slackConfigured": slack_configured,
-        "slackWebhookEnv": _SLACK_WEBHOOK_ENV,
-    }
+    base = slack_config_for(_SLACK_WEBHOOK_ENV)
     doc = await db.api_config.find_one({"_id": _DOC_ID})
     if not doc:
         return {"configured": False, "report": None, **base}

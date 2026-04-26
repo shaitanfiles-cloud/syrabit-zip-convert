@@ -46,6 +46,14 @@ from typing import TypedDict
 EDGE_PROXY_DEPLOY_SLACK_WEBHOOK_ENV = "EDGE_PROXY_DEPLOY_SLACK_WEBHOOK"
 CF_WAF_DRIFT_SLACK_WEBHOOK_ENV = "CF_WAF_DRIFT_SLACK_WEBHOOK"
 UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK_ENV = "UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK"
+# Task #972 — the Trustpilot AggregateRating JSON-LD verifier alerter
+# (``routes.admin_trustpilot_jsonld_status``) posts to its own dedicated
+# webhook so the JSON-LD ops channel is independent of the cron silence
+# channels above. It was added by Task #757 with a private helper and
+# was kept out of the original Task #969 consolidation to preserve
+# scope; migrating it here finishes the consolidation so the env-var
+# name lives in exactly one place across the whole codebase.
+SLACK_TRUSTPILOT_WEBHOOK_ENV = "SLACK_TRUSTPILOT_WEBHOOK_URL"
 
 
 class SlackAlerterConfig(TypedDict):
