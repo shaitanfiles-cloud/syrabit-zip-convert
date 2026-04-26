@@ -384,6 +384,37 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     });
   }, [adminToken, SLACK_WEBHOOK_MISSING_ENVS]);
 
+  // Task #980 — POST a snooze for one missing-Slack-webhook env and
+  // refresh the per-env alert-state so the SlackConfigBadge's
+  // tooltip + decoration update atomically without waiting for the
+  // next 60s polling tick. The snooze endpoint already echoes back
+  // the ``/alert-state`` shape, so the optimistic update can just
+  // patch the relevant slot in ``slackWebhookMissingAlertStates``;
+  // the next polling tick reconciles in the (vanishingly rare) case
+  // where two admins click the button from two tabs at once.
+  const snoozeSlackWebhookMissing = useCallback(async (envName, untilHours) => {
+    if (!envName || !untilHours) return;
+    try {
+      const r = await axios.post(
+        `${API_BASE}/admin/health/slack-webhook-missing/${envName}/snooze`,
+        { untilHours },
+        { headers: adminHeaders(adminToken), withCredentials: true },
+      );
+      if (r && r.data) {
+        setSlackWebhookMissingAlertStates((prev) => ({
+          ...prev,
+          [envName]: r.data,
+        }));
+      }
+    } catch (_e) {
+      // Best-effort — the badge's local "snoozing…" flag clears on
+      // its finally branch, and the next 60s polling tick re-fetches
+      // canonical state. A persistent failure (e.g. Mongo down ⇒ 503)
+      // simply leaves the badge in its current shape; the admin can
+      // retry.
+    }
+  }, [adminToken]);
+
   // Task #918 — paged-on-call audit log per pill, sourced from
   //   * /admin/health/edge-proxy-deploy/cron/alert-history
   //   * /admin/health/cf-waf-drift/cron/alert-history
@@ -2464,6 +2495,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           alertHistory={cfDriftCronAlertHistory}
           onLoadAlertHistory={loadCfDriftCronAlertHistory}
           slackMissingAlertState={slackWebhookMissingAlertStates['CF_WAF_DRIFT_SLACK_WEBHOOK']}
+          onSnoozeSlackMissing={snoozeSlackWebhookMissing}
         />
         </SectionErrorBoundary>
 
@@ -2487,6 +2519,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           alertHistory={edgeProxyDeployCronAlertHistory}
           onLoadAlertHistory={loadEdgeProxyDeployCronAlertHistory}
           slackMissingAlertState={slackWebhookMissingAlertStates['EDGE_PROXY_DEPLOY_SLACK_WEBHOOK']}
+          onSnoozeSlackMissing={snoozeSlackWebhookMissing}
         />
         </SectionErrorBoundary>
 
@@ -2522,6 +2555,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           alertHistory={unifiedLogsCfPullCronAlertHistory}
           onLoadAlertHistory={loadUnifiedLogsCfPullCronAlertHistory}
           slackMissingAlertState={slackWebhookMissingAlertStates['UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK']}
+          onSnoozeSlackMissing={snoozeSlackWebhookMissing}
         />
         </SectionErrorBoundary>
 

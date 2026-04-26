@@ -118,6 +118,11 @@ export default function EdgeProxyDeployCronPill({
   // Forwarded as-is to CronHealthPill; see SlackConfigBadge for how
   // the "· paged Nh ago" decoration is rendered.
   slackMissingAlertState,
+  // Task #980 — async ``(envName, untilHours) => Promise<void>``
+  // forwarded as-is to ``CronHealthPill``'s SlackConfigBadge so the
+  // dashboard's "Snooze 7d" button can mute the missing-webhook nag
+  // for ``EDGE_PROXY_DEPLOY_SLACK_WEBHOOK`` directly from this pill.
+  onSnoozeSlackMissing,
 }) {
   return (
     <CronHealthPill
@@ -134,6 +139,7 @@ export default function EdgeProxyDeployCronPill({
       alertHistory={alertHistory}
       onLoadAlertHistory={onLoadAlertHistory}
       slackMissingAlertState={slackMissingAlertState}
+      onSnoozeSlackMissing={onSnoozeSlackMissing}
     />
   );
 }

@@ -916,6 +916,26 @@ class _RouteFakeJobLocks:
             return None
         return dict(self._doc)
 
+    async def update_one(self, query, update, upsert=False):
+        """Task #980 — minimal upsert path so the snooze POST endpoint
+        can persist ``snoozed_*`` fields against a per-env lock doc
+        the route fixture didn't pre-seed. Mirrors the shape the real
+        Motor collection returns (``None``-ish; we ignore the result
+        in the route handler, just like the alerter loop does)."""
+        _id = (query or {}).get("_id")
+        if self._doc is None:
+            if not upsert:
+                return None
+            self._doc = {"_id": _id}
+            self._doc.update(update.get("$setOnInsert", {}))
+            self._doc.update(update.get("$set", {}))
+            return None
+        if "_id" in query and self._doc.get("_id") != _id:
+            return None
+        for k, v in (update.get("$set") or {}).items():
+            self._doc[k] = v
+        return None
+
 
 class _RouteFakeCursor:
     def __init__(self, docs):
@@ -1223,3 +1243,331 @@ def test_alerter_module_does_not_post_to_slack():
         f"slack-webhook-missing alerter must not expose Slack POST "
         f"helpers; found: {forbidden}"
     )
+
+
+# ─── Task #980 — admin snooze affordance ───────────────────────────────────
+
+def test_snooze_remaining_seconds_helper_handles_missing_blank_and_corrupt():
+    """Pure unit test pinning the gate's "no snooze on file" semantics.
+
+    The gate inside ``_check_and_alert_one_env`` and the derived
+    ``snoozeRemainingSeconds`` field on ``/alert-state`` both delegate
+    to this helper; if it lies about an unset doc, the dashboard
+    starts rendering "snoozed for 0s" forever and the alerter starts
+    silencing pages it should be sending.
+    """
+    now = _now()
+    assert alerter._snooze_remaining_seconds({}, now) == 0
+    assert alerter._snooze_remaining_seconds({"snoozed_until": ""}, now) == 0
+    assert alerter._snooze_remaining_seconds(
+        {"snoozed_until": "not-an-iso-timestamp"}, now,
+    ) == 0
+    # Past timestamp (already expired) → 0, NOT a negative number.
+    expired = (now - timedelta(hours=2)).isoformat()
+    assert alerter._snooze_remaining_seconds(
+        {"snoozed_until": expired}, now,
+    ) == 0
+    # Future timestamp → positive seconds remaining, clamped to int.
+    future = (now + timedelta(hours=24)).isoformat()
+    remaining = alerter._snooze_remaining_seconds(
+        {"snoozed_until": future}, now,
+    )
+    assert 24 * 3600 - 2 <= remaining <= 24 * 3600 + 2
+    # Trailing-Z (Mongo BSON sometimes emits this) parses cleanly.
+    z_form = (now + timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+    z_remaining = alerter._snooze_remaining_seconds(
+        {"snoozed_until": z_form}, now,
+    )
+    assert 3600 - 2 <= z_remaining <= 3600 + 2
+
+
+def test_clamp_snooze_hours_accepts_bounds_and_rejects_garbage():
+    """Both the floor and ceiling must be inclusive — the dashboard's
+    "Snooze 7d" button POSTs 168 (the ceiling) and a hand-crafted
+    1h request must succeed on the floor. Booleans must be rejected
+    explicitly (``True`` / ``False`` pass ``isinstance(_, int)`` in
+    Python and would otherwise be coerced into a 1h or 0h snooze)."""
+    from fastapi import HTTPException
+    assert alerter._clamp_snooze_hours(alerter._SNOOZE_MIN_HOURS) == (
+        alerter._SNOOZE_MIN_HOURS
+    )
+    assert alerter._clamp_snooze_hours(alerter._SNOOZE_MAX_HOURS) == (
+        alerter._SNOOZE_MAX_HOURS
+    )
+    for bad in (
+        0, -1, alerter._SNOOZE_MAX_HOURS + 1, "168", 168.0,
+        None, True, False,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            alerter._clamp_snooze_hours(bad)
+        assert exc_info.value.status_code == 400
+
+
+def test_missing_branch_short_circuits_when_snooze_active(fake_db):
+    """The whole point of the snooze: with the env unset and the
+    grace window elapsed, ``_check_and_alert_one_env`` must return
+    ``action=skip`` with ``reason=snoozed`` instead of paging on-call.
+    Pinned because a regression that gates snooze AFTER the
+    debounce check would silently re-page on the first tick where
+    the 24h debounce expires inside the snooze window.
+    """
+    now = _now()
+    lock_id = alerter._lock_id_for(CF_PULL)
+    fake_db.job_locks._docs[lock_id] = {
+        "_id": lock_id,
+        "env_name": CF_PULL,
+        "first_observed_ts": (
+            now.timestamp() - (alerter._BOOTSTRAP_GRACE_S + 3600)
+        ),
+        "deploy_id": _CURRENT_DEPLOY_ID,
+        # Past last-alert timestamp so the 24h debounce would not
+        # otherwise suppress this iteration — the snooze gate is the
+        # ONLY thing keeping this from paging.
+        "last_state": "missing",
+        "last_alert_at": (now - timedelta(hours=48)).isoformat(),
+        "snoozed_until": (now + timedelta(hours=12)).isoformat(),
+        "snoozed_at": (now - timedelta(minutes=30)).isoformat(),
+        "snoozed_by": "ops@syrabit.ai",
+        "snooze_hours": 24,
+    }
+    with _clear_envs(), _patch_send() as mock_send:
+        report = asyncio.run(
+            alerter._check_and_alert_one_env(fake_db, CF_PULL, now)
+        )
+    assert report["action"] == "skip"
+    assert report["reason"] == "snoozed"
+    assert report["env_name"] == CF_PULL
+    assert report["snooze_remaining_seconds"] > 0
+    mock_send.assert_not_awaited()
+
+
+def test_recovery_branch_ignores_snooze_and_still_pages(fake_db):
+    """Snooze ONLY suppresses missing-side pages — once the operator
+    lands the missing webhook, the missing→healthy recovery page
+    must still fire so the admin gets the "good job, you fixed it"
+    confirmation. Without this asymmetry, a snooze that outlives the
+    fix would hide the recovery and admins wouldn't know the secret
+    rotation actually landed.
+    """
+    now = _now()
+    lock_id = alerter._lock_id_for(CF_PULL)
+    fake_db.job_locks._docs[lock_id] = {
+        "_id": lock_id,
+        "env_name": CF_PULL,
+        "first_observed_ts": (
+            now.timestamp() - (alerter._BOOTSTRAP_GRACE_S + 3600)
+        ),
+        "deploy_id": _CURRENT_DEPLOY_ID,
+        "last_state": "missing",
+        "last_alert_at": (now - timedelta(hours=48)).isoformat(),
+        "snoozed_until": (now + timedelta(hours=12)).isoformat(),
+        "snooze_hours": 24,
+    }
+    with _set_env(CF_PULL, "https://hooks.slack.test/abc"), _patch_send() as mock_send:
+        report = asyncio.run(
+            alerter._check_and_alert_one_env(fake_db, CF_PULL, now)
+        )
+    assert report["action"] == "alerted"
+    assert report["kind"] == "recovered"
+    mock_send.assert_awaited_once()
+    args, _kwargs = mock_send.call_args
+    assert args[1] == CF_PULL
+    assert args[2] == "recovered"
+
+
+def test_expired_snooze_does_not_suppress_paging(fake_db):
+    """An expired snooze must NOT keep silencing the nag — the
+    intent is "shut up for X hours", not "shut up forever". A
+    regression that compares timestamps in the wrong direction (or
+    treats ``snooze_remaining_seconds == 0`` as truthy) would extend
+    the snooze indefinitely.
+    """
+    now = _now()
+    lock_id = alerter._lock_id_for(CF_PULL)
+    fake_db.job_locks._docs[lock_id] = {
+        "_id": lock_id,
+        "env_name": CF_PULL,
+        "first_observed_ts": (
+            now.timestamp() - (alerter._BOOTSTRAP_GRACE_S + 3600)
+        ),
+        "deploy_id": _CURRENT_DEPLOY_ID,
+        # Snoozed_until is in the past → should no longer suppress.
+        "snoozed_until": (now - timedelta(hours=2)).isoformat(),
+        "snooze_hours": 1,
+    }
+    with _clear_envs(), _patch_send() as mock_send:
+        report = asyncio.run(
+            alerter._check_and_alert_one_env(fake_db, CF_PULL, now)
+        )
+    assert report["action"] == "alerted"
+    assert report["kind"] == "missing"
+    mock_send.assert_awaited_once()
+
+
+def test_snooze_endpoint_requires_admin_auth(http_client_no_auth):
+    """The snooze endpoint mutates per-env state — without auth a
+    drive-by request could silence pages the admin team doesn't
+    even know about. Mirrors the GET endpoints' auth contract."""
+    res = http_client_no_auth.post(
+        f"/admin/health/slack-webhook-missing/{CF_PULL}/snooze",
+        json={"untilHours": 24},
+    )
+    assert res.status_code in (401, 403)
+
+
+def test_snooze_endpoint_rejects_unknown_env(http_client_authed):
+    """Unknown env names must 404 — same surface-tightening reason
+    as the GETs (path param feeds the lock-doc id template)."""
+    res = http_client_authed.post(
+        "/admin/health/slack-webhook-missing/NOT_A_REAL_ENV/snooze",
+        json={"untilHours": 24},
+    )
+    assert res.status_code == 404
+
+
+@pytest.mark.parametrize("payload", [
+    {"untilHours": 0},
+    {"untilHours": -1},
+    {"untilHours": 169},
+    {"untilHours": "24"},
+    {"untilHours": 24.5},
+    {"untilHours": None},
+    {"untilHours": True},
+    {},
+])
+def test_snooze_endpoint_rejects_invalid_until_hours(
+    http_client_authed, payload,
+):
+    """The clamp helper is the single source of validation truth;
+    pin the route's HTTP surface so a future refactor can't bypass
+    it (e.g. by accidentally accepting a default value or coercing
+    the body before validation)."""
+    with _patch_route_mongo(lock_doc=None):
+        res = http_client_authed.post(
+            f"/admin/health/slack-webhook-missing/{CF_PULL}/snooze",
+            json=payload,
+        )
+    assert res.status_code == 400
+
+
+def test_snooze_endpoint_persists_fields_and_returns_alert_state(
+    http_client_authed,
+):
+    """The happy path: a valid POST must persist ``snoozed_until`` /
+    ``snoozed_at`` / ``snoozed_by`` / ``snooze_hours`` on the lock
+    doc, schedule a ``record_cron_alert_event(kind="snoozed")`` audit
+    entry, and echo back the same shape the GET ``/alert-state``
+    returns (with the derived ``snoozeRemainingSeconds`` /
+    ``snoozeActive`` fields populated) so the dashboard can update
+    its tooltip atomically without waiting for the 60s polling tick.
+    """
+    with _patch_route_mongo(lock_doc=None) as _mongo, \
+         patch(
+             "routes.admin_health.record_cron_alert_event",
+             new_callable=AsyncMock,
+         ) as mock_record:
+        res = http_client_authed.post(
+            f"/admin/health/slack-webhook-missing/{CF_PULL}/snooze",
+            json={"untilHours": 24},
+        )
+    assert res.status_code == 200
+    body = res.json()
+    # Auto-projected raw fields from the lock doc.
+    assert body["present"] is True
+    assert body.get("snoozeHours") == 24
+    assert body.get("snoozedBy") == "ops@syrabit.ai"
+    assert body["snoozedUntil"]
+    assert body["snoozedAt"]
+    # Derived gate fields layered on by the route handler.
+    assert body["snoozeActive"] is True
+    assert body["snoozeRemainingSeconds"] > 0
+    assert body["snoozeRemainingSeconds"] <= 24 * 3600
+    # Best-effort audit log entry was scheduled (fire-and-forget via
+    # asyncio.create_task — give the loop one tick to drain it).
+    asyncio.run(asyncio.sleep(0))
+    mock_record.assert_called_once()
+    _args, kwargs = mock_record.call_args
+    assert kwargs["kind"] == "snoozed"
+    assert kwargs["sub_kind"] == CF_PULL
+    assert kwargs["lock_id"] == alerter._lock_id_for(CF_PULL)
+    assert kwargs["health"]["envName"] == CF_PULL
+    assert kwargs["health"]["snoozeHours"] == 24
+    assert kwargs["health"]["snoozedBy"] == "ops@syrabit.ai"
+
+
+def test_snooze_endpoint_returns_503_when_mongo_unavailable(
+    http_client_authed,
+):
+    """When Mongo is down we must NOT cheerfully claim the snooze
+    landed — otherwise the badge updates but the alerter keeps
+    paging. 503 mirrors how the alerter loop itself stands down on
+    Mongo unavailability and matches the FE's retry semantics."""
+    with _patch_route_mongo(available=False):
+        res = http_client_authed.post(
+            f"/admin/health/slack-webhook-missing/{CF_PULL}/snooze",
+            json={"untilHours": 24},
+        )
+    assert res.status_code == 503
+
+
+def test_alert_state_endpoint_surfaces_snooze_derived_fields(
+    http_client_authed,
+):
+    """A pre-existing snooze on the lock doc must round-trip through
+    ``/alert-state`` with both the raw camelCase fields (auto-projected
+    by ``_build_alert_state_response``) and the derived
+    ``snoozeRemainingSeconds`` / ``snoozeActive`` gate fields. Pinned
+    so the dashboard's tooltip stays in lockstep with the alerter
+    loop's gate without re-implementing ISO parsing client-side.
+    """
+    now = datetime.now(timezone.utc)
+    lock_doc = {
+        "_id": alerter._lock_id_for(CF_PULL),
+        "env_name": CF_PULL,
+        "snoozed_until": (now + timedelta(hours=10)).isoformat(),
+        "snoozed_at": now.isoformat(),
+        "snoozed_by": "ops@syrabit.ai",
+        "snooze_hours": 10,
+    }
+    with _patch_route_mongo(lock_doc=lock_doc):
+        res = http_client_authed.get(
+            f"/admin/health/slack-webhook-missing/{CF_PULL}/alert-state",
+        )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["present"] is True
+    assert body["snoozedBy"] == "ops@syrabit.ai"
+    assert body["snoozeHours"] == 10
+    assert body["snoozeActive"] is True
+    assert body["snoozeRemainingSeconds"] > 0
+    assert body["snoozeRemainingSeconds"] <= 10 * 3600
+
+
+def test_alert_state_endpoint_marks_expired_snooze_inactive(
+    http_client_authed,
+):
+    """A stale snooze (snoozed_until in the past) must surface as
+    ``snoozeActive=false`` / ``snoozeRemainingSeconds=0`` so the
+    dashboard hides the "snoozed for Xh" caption and re-enables the
+    Snooze button. Without this branch the badge would lie about an
+    active snooze the alerter has already silently expired through.
+    """
+    now = datetime.now(timezone.utc)
+    lock_doc = {
+        "_id": alerter._lock_id_for(CF_PULL),
+        "env_name": CF_PULL,
+        "snoozed_until": (now - timedelta(hours=2)).isoformat(),
+        "snoozed_at": (now - timedelta(hours=4)).isoformat(),
+        "snooze_hours": 1,
+    }
+    with _patch_route_mongo(lock_doc=lock_doc):
+        res = http_client_authed.get(
+            f"/admin/health/slack-webhook-missing/{CF_PULL}/alert-state",
+        )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["snoozeActive"] is False
+    assert body["snoozeRemainingSeconds"] == 0
+    # Raw projected fields still come through so an admin can see
+    # "this was last snoozed at X for Y hours" in the history view.
+    assert body["snoozeHours"] == 1

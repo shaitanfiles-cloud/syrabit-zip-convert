@@ -67,7 +67,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 
 from auth_deps import get_admin_user
 from routes.slack_alerter_config import (
@@ -181,6 +181,24 @@ _LEASE_TTL_CEILING_S = int(
     os.environ.get("SLACK_WEBHOOK_MISSING_LEASE_TTL_CEILING_S") or 3600
 )
 
+# Task #980 — admin-driven snooze bounds. The dashboard's "Snooze 7d"
+# button POSTs an integer ``untilHours`` value the alerter clamps into
+# ``[_SNOOZE_MIN_HOURS, _SNOOZE_MAX_HOURS]`` before persisting. The
+# floor (1h) keeps an admin from accidentally setting a 0h snooze
+# that would no-op and confuse the badge UI; the ceiling (1 week)
+# keeps a fat-fingered "9999" from silencing the nag for years and
+# defeating its whole point. One week was chosen because it lines up
+# with a typical sprint / on-call rotation — long enough to cover a
+# planned secret-rotation window where the env will legitimately be
+# unset, short enough that a forgotten snooze surfaces again before
+# the next deploy cycle ships another change that needs the badge.
+_SNOOZE_MIN_HOURS = int(
+    os.environ.get("SLACK_WEBHOOK_MISSING_SNOOZE_MIN_HOURS") or 1
+)
+_SNOOZE_MAX_HOURS = int(
+    os.environ.get("SLACK_WEBHOOK_MISSING_SNOOZE_MAX_HOURS") or 168
+)
+
 # The three env-var names we monitor. Stored as a tuple (not a set)
 # so the iteration order is deterministic — simplifies tests + makes
 # the per-env state docs predictable for an operator hand-querying
@@ -217,6 +235,161 @@ def _human_label_for(env_name: str) -> str:
     if env_name == EDGE_PROXY_DEPLOY_SLACK_WEBHOOK_ENV:
         return "the edge-proxy-deploy CI alerter (Task #893)"
     return env_name
+
+
+# ─── Task #980 — admin snooze helpers ──────────────────────────────────────
+
+def _parse_snooze_until_dt(prior: dict) -> Optional[datetime]:
+    """Best-effort ISO parse of the per-env lock doc's ``snoozed_until``.
+
+    Returns ``None`` for missing, blank, or unparseable values so the
+    caller can treat "no snooze on file" and "corrupt timestamp" the
+    same way (no suppression). ``Z`` is normalised to ``+00:00`` and
+    naive timestamps are pinned to UTC, mirroring the parsing dance
+    in :func:`_build_alert_state_response`.
+    """
+    raw = prior.get("snoozed_until") if isinstance(prior, dict) else None
+    if not raw:
+        return None
+    try:
+        s = str(raw)
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+def _snooze_remaining_seconds(prior: dict, now_utc: datetime) -> int:
+    """Seconds remaining on an active snooze, or 0 if not snoozed.
+
+    Used both as the gate that suppresses missing-side pages inside
+    :func:`_check_and_alert_one_env` and as the derived field the
+    ``/alert-state`` endpoint layers on top of the auto-projected
+    raw lock-doc fields. Always returns a non-negative integer so
+    the JSON contract stays predictable for the dashboard.
+    """
+    until_dt = _parse_snooze_until_dt(prior)
+    if until_dt is None:
+        return 0
+    remaining = int((until_dt - now_utc).total_seconds())
+    return max(0, remaining)
+
+
+def _clamp_snooze_hours(value: Any) -> int:
+    """Validate + clamp the snooze duration sent by the dashboard.
+
+    Rejects non-int / non-positive payloads with a 400 so a buggy
+    client doesn't accidentally snooze the nag for centuries (or for
+    zero hours, which would persist a snooze field that the gate
+    treats as inactive — confusing the badge tooltip). Booleans are
+    explicitly rejected because in Python ``True``/``False`` pass
+    ``isinstance(_, int)`` and would otherwise be coerced into a 1h
+    or 0h snooze that nobody asked for.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "untilHours must be an integer between "
+                f"{_SNOOZE_MIN_HOURS} and {_SNOOZE_MAX_HOURS} (inclusive)."
+            ),
+        )
+    if value < _SNOOZE_MIN_HOURS or value > _SNOOZE_MAX_HOURS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "untilHours must be between "
+                f"{_SNOOZE_MIN_HOURS} and {_SNOOZE_MAX_HOURS} (inclusive); "
+                f"got {value}."
+            ),
+        )
+    return value
+
+
+async def _apply_snooze(
+    db,
+    env_name: str,
+    until_hours: int,
+    now_utc: datetime,
+    admin_email: Optional[str],
+) -> dict[str, Any]:
+    """Stamp ``snoozed_*`` fields on the per-env lock doc + audit-log.
+
+    Uses the same upsert-with-``$setOnInsert`` shape as
+    :func:`_seed_first_observed_if_missing` so a snooze landing on a
+    fresh deployment whose state doc doesn't exist yet still creates
+    a usable doc (carrying ``env_name`` so the iteration loop can
+    keep its invariant of one-doc-per-env). Audit log goes through
+    the shared ``record_cron_alert_event`` helper with
+    ``kind="snoozed"`` so the dashboard's "Show paged history"
+    disclosure renders the snooze alongside real pages.
+
+    Returns the snooze metadata the route handler echoes back to the
+    client so the dashboard can update its tooltip atomically without
+    waiting for the 60s polling cycle.
+    """
+    until_dt = now_utc + timedelta(hours=until_hours)
+    snoozed_until_iso = until_dt.isoformat()
+    snoozed_at_iso = now_utc.isoformat()
+    snoozed_by = (admin_email or "").strip() or None
+    set_payload: dict[str, Any] = {
+        "env_name": env_name,
+        "snoozed_until": snoozed_until_iso,
+        "snoozed_at": snoozed_at_iso,
+        "snooze_hours": int(until_hours),
+        "updated_at": snoozed_at_iso,
+    }
+    if snoozed_by is not None:
+        set_payload["snoozed_by"] = snoozed_by
+    lock_id = _lock_id_for(env_name)
+    await db.job_locks.update_one(
+        {"_id": lock_id},
+        {
+            "$set": set_payload,
+            "$setOnInsert": {"_id": lock_id, "env_name": env_name},
+        },
+        upsert=True,
+    )
+    # Fire-and-forget audit log entry. Same swallow-all contract as
+    # the page recording in :func:`_send_alert` so a slow Mongo can't
+    # stall the POST handler or undo the write that already landed.
+    try:
+        from deps import db as _db  # type: ignore
+        from routes.admin_health import record_cron_alert_event
+        history_health: dict[str, Any] = {
+            "envName": env_name,
+            "envLabel": _human_label_for(env_name),
+            "snoozedUntil": snoozed_until_iso,
+            "snoozeHours": int(until_hours),
+        }
+        if snoozed_by is not None:
+            history_health["snoozedBy"] = snoozed_by
+        asyncio.create_task(record_cron_alert_event(
+            _db,
+            lock_id=lock_id,
+            kind="snoozed",
+            sub_kind=env_name,
+            health=history_health,
+            now_utc=now_utc,
+        ))
+    except Exception as exc:
+        logger.debug(
+            f"[slack-webhook-missing] snooze audit schedule failed for "
+            f"{env_name}: {exc}"
+        )
+    return {
+        "snoozed_until": snoozed_until_iso,
+        "snoozed_at": snoozed_at_iso,
+        "snooze_hours": int(until_hours),
+        "snoozed_by": snoozed_by,
+        "snooze_remaining_seconds": max(
+            0, int((until_dt - now_utc).total_seconds()),
+        ),
+    }
 
 
 # ─── Classification ────────────────────────────────────────────────────────
@@ -660,6 +833,23 @@ async def _check_and_alert_one_env(
             last_alert_dt = None
 
     if state == "missing":
+        # Task #980 — honor an active admin snooze BEFORE the missing-
+        # state debounce check so the in-app + email pages stay quiet
+        # for the snooze window even when the 24h debounce would
+        # otherwise allow a new page (e.g. ``last_alert_at`` is past
+        # the cutoff but the admin explicitly said "I know, hush"
+        # because they're mid-secret-rotation). Recovery is
+        # intentionally NOT gated by snooze further down — admins want
+        # the "good job, you fixed it" page even if they had silenced
+        # the missing-side nag.
+        snooze_remaining = _snooze_remaining_seconds(prior, now_utc)
+        if snooze_remaining > 0:
+            return {
+                "action": "skip",
+                "reason": "snoozed",
+                "snooze_remaining_seconds": snooze_remaining,
+                "env_name": env_name,
+            }
         if prior_state == "missing" and last_alert_dt is not None:
             elapsed_s = (now_utc - last_alert_dt).total_seconds()
             if elapsed_s < _REALERT_INTERVAL_S:
@@ -837,10 +1027,90 @@ async def admin_slack_webhook_missing_alert_state(
     """
     _validate_env_name(env_name)
     from routes.admin_health import _build_alert_state_response
-    return await _build_alert_state_response(
+    base = await _build_alert_state_response(
         _lock_id_for(env_name),
         _REALERT_INTERVAL_S,
         broken_state_label="missing",
+    )
+    # Task #980 — derive ``snoozeRemainingSeconds`` + ``snoozeActive``
+    # from the auto-projected raw ``snoozedUntil`` field so the
+    # dashboard can render the snoozed caption + suppress the
+    # default "paged Nh ago" decoration without re-implementing the
+    # ISO parse/clock-skew dance client-side. The auto-projection in
+    # :func:`_build_alert_state_response` already exposes
+    # ``snoozedUntil`` / ``snoozedAt`` / ``snoozedBy`` / ``snoozeHours``
+    # verbatim — these two derived fields are the only things that
+    # change tick-over-tick (the rest are write-once until the next
+    # snooze lands), so computing them here keeps the lock-doc shape
+    # narrow and the polling cadence honest.
+    snoozed_until = base.get("snoozedUntil")
+    if snoozed_until:
+        from datetime import datetime as _dt, timezone as _tz
+        prior_like = {"snoozed_until": snoozed_until}
+        remaining = _snooze_remaining_seconds(
+            prior_like, _dt.now(_tz.utc),
+        )
+        base["snoozeRemainingSeconds"] = remaining
+        base["snoozeActive"] = remaining > 0
+    else:
+        base["snoozeRemainingSeconds"] = 0
+        base["snoozeActive"] = False
+    return base
+
+
+@router.post(
+    "/admin/health/slack-webhook-missing/{env_name}/snooze"
+)
+async def admin_slack_webhook_missing_snooze(
+    env_name: str,
+    payload: dict[str, Any] = Body(...),
+    admin: dict = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """Suppress missing-Slack-webhook pages for one env for N hours.
+
+    Persists ``snoozed_until`` (ISO), ``snoozed_at`` (ISO),
+    ``snooze_hours`` (int) and ``snoozed_by`` (admin email when
+    available) on the per-env lock doc and audit-logs the action via
+    :func:`record_cron_alert_event` with ``kind="snoozed"``. The
+    next iteration of :func:`_check_and_alert_one_env` short-circuits
+    the missing-state branch as long as ``snoozed_until`` is in the
+    future, so on-call stops getting paged + emailed about the env
+    while the snooze is active. The recovery branch is intentionally
+    NOT gated by snooze — the "good job, you fixed it" page still
+    fires when an admin lands the missing webhook.
+
+    The endpoint echoes back the same shape the ``/alert-state``
+    GET returns (with ``snoozedUntil`` / ``snoozedAt`` /
+    ``snoozeRemainingSeconds`` / ``snoozeActive`` already populated)
+    so the dashboard can update its tooltip atomically without
+    waiting for the next 60s polling tick.
+    """
+    _validate_env_name(env_name)
+    until_hours = _clamp_snooze_hours(payload.get("untilHours"))
+    from deps import db, is_mongo_available  # type: ignore
+    if not await is_mongo_available():
+        # 503 keeps the badge from cheerfully reporting "snoozed!"
+        # when nothing actually persisted. Mirrors how the GETs
+        # surface ``present: false`` on Mongo outage instead of
+        # returning a fake-success payload.
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Mongo is unavailable; snooze cannot be persisted. "
+                "Try again once the database is reachable."
+            ),
+        )
+    now_utc = datetime.now(timezone.utc)
+    admin_email = (admin or {}).get("email") if isinstance(admin, dict) else None
+    snooze_meta = await _apply_snooze(
+        db, env_name, until_hours, now_utc, admin_email,
+    )
+    # Re-read via the alert-state shaper so the caller gets the same
+    # camelCase contract the polling loop consumes — including the
+    # auto-projected raw fields plus the two derived snooze-status
+    # fields layered on by the GET above.
+    return await admin_slack_webhook_missing_alert_state(
+        env_name=env_name, admin=admin,
     )
 
 

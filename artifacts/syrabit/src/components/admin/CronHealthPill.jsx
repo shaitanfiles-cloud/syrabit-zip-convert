@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import {
   AlertTriangle, ShieldCheck, Clock, RefreshCw, ExternalLink,
-  ChevronDown, ChevronUp, History, MessageSquare,
+  ChevronDown, ChevronUp, History, MessageSquare, BellOff,
 } from 'lucide-react';
 import { formatAlertStateCaption } from './cronCaptionHelpers';
 
@@ -24,12 +24,37 @@ import { formatAlertStateCaption } from './cronCaptionHelpers';
 // grace window hasn't elapsed yet". The decoration is intentionally
 // gated on the badge being red so a recovered/healthy alerter
 // doesn't carry a confusing stale paged-Nh-ago tail.
+// Task #980 — default snooze duration in hours. One week matches
+// the backend's ``_SNOOZE_MAX_HOURS`` ceiling and lines up with a
+// typical on-call rotation; the button label and POST body are
+// derived from this constant so changing the cadence in one place
+// updates the badge UI + the audit-log entry the backend writes.
+const DEFAULT_SNOOZE_HOURS = 168;
+
 export function SlackConfigBadge({
   configured,
   envName,
   testId,
   missingAlertState,
+  // Task #980 — async ``(envName, untilHours) => Promise<void>``
+  // wired by the AdminHealth dashboard. When provided AND the badge
+  // is red AND the missing-webhook nag has paged on-call (the same
+  // gates the "· paged Nh ago" decoration uses), the badge renders a
+  // small "Snooze 7d" button that POSTs to the snooze endpoint and
+  // refreshes the alert-state. Decoupled from the badge's local
+  // state so the dashboard owns the actual fetch + retry contract
+  // (the badge only cares whether a snooze is currently in flight
+  // for the disabled-button affordance).
+  onSnooze,
 }) {
+  // Local "POST in flight" flag so the button stays disabled while
+  // the backend is persisting the snooze. The dashboard's onSnooze
+  // also triggers an alert-state re-fetch on success, but the
+  // button can't depend on the parent's loading state without a
+  // second prop — a local ref is enough since "another admin clicked
+  // it from a second tab" is handled by the 60s polling.
+  const [snoozing, setSnoozing] = useState(false);
+
   if (configured == null) return null;
   const cls = configured
     ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -54,6 +79,21 @@ export function SlackConfigBadge({
     ? ageLabel(missingAlertState?.debounceRemainingSeconds)
     : null;
 
+  // Task #980 — surface an active snooze even when the missing-side
+  // page hasn't fired yet: an admin who pre-emptively snoozes a
+  // soon-to-be-paged env (e.g. they know a planned secret rotation
+  // is about to land) should still see the "snoozed for Xh" caption
+  // so they don't double-snooze on the next dashboard load. Gating
+  // on ``!configured`` keeps the caption from lingering on a
+  // recovered/healthy badge after the env was finally set —
+  // re-snoozing a green badge would be confusing.
+  const snoozeRemaining = (!configured && missingAlertState?.snoozeActive)
+    ? Number(missingAlertState?.snoozeRemainingSeconds || 0)
+    : 0;
+  const snoozeRemainingLabel = snoozeRemaining > 0
+    ? ageLabel(snoozeRemaining)
+    : null;
+
   // Title is the only place we mention the env var name so an admin
   // who sees a missing badge can copy/paste the exact env var to
   // ask infra to set it. Falls back to a generic hint when the
@@ -74,6 +114,45 @@ export function SlackConfigBadge({
       ? ` On-call paged ${pagedAge} ago about this missing webhook; next nag suppressed for ~${debounceRemaining}.`
       : ` On-call last paged ${pagedAge} ago about this missing webhook.`;
   }
+  // Task #980 — append snooze status to the tooltip so a hover
+  // tells the admin both "here's how long the page is silenced" and
+  // "the recovery page still fires", matching the behaviour the
+  // backend implements. Recovery exception is in the docstring of
+  // ``admin_slack_webhook_missing_snooze`` and intentionally NOT
+  // gated on snooze in ``_check_and_alert_one_env``.
+  if (snoozeRemainingLabel) {
+    const snoozedBy = missingAlertState?.snoozedBy
+      ? ` by ${missingAlertState.snoozedBy}`
+      : '';
+    title += ` Snoozed${snoozedBy} for ~${snoozeRemainingLabel} more — missing-side pages suppressed; the recovery page still fires when the env lands.`;
+  }
+
+  // Snooze button gate: only render when the dashboard wired
+  // onSnooze AND the badge is red AND the nag has actually paged
+  // on-call (so we don't offer "snooze" for an env we've never
+  // paged about — the bootstrap grace window is doing its job).
+  // While a snooze is already active we hide the button so an admin
+  // can't stack multiple snoozes by clicking through the alert-state
+  // 60s polling lag.
+  const showSnoozeButton = (
+    typeof onSnooze === 'function'
+    && !configured
+    && pagedAge != null
+    && envName
+    && snoozeRemaining <= 0
+  );
+
+  const onSnoozeClick = useCallback(async (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (!envName || typeof onSnooze !== 'function' || snoozing) return;
+    setSnoozing(true);
+    try {
+      await onSnooze(envName, DEFAULT_SNOOZE_HOURS);
+    } finally {
+      setSnoozing(false);
+    }
+  }, [envName, onSnooze, snoozing]);
 
   return (
     <span
@@ -84,16 +163,41 @@ export function SlackConfigBadge({
       data-slack-missing-paged-age-seconds={
         pagedAgeSecs != null ? String(pagedAgeSecs) : undefined
       }
+      data-slack-snooze-remaining-seconds={
+        snoozeRemaining > 0 ? String(snoozeRemaining) : undefined
+      }
     >
       <MessageSquare size={10} aria-hidden />
       {label}
-      {pagedAge != null && (
+      {snoozeRemainingLabel ? (
+        <span
+          className="ml-0.5 font-normal opacity-80 inline-flex items-center gap-0.5"
+          data-testid={testId ? `${testId}-slack-config-snoozed` : undefined}
+        >
+          <BellOff size={10} aria-hidden />
+          snoozed {snoozeRemainingLabel}
+        </span>
+      ) : pagedAge != null && (
         <span
           className="ml-0.5 font-normal opacity-80"
           data-testid={testId ? `${testId}-slack-config-paged` : undefined}
         >
           · paged {pagedAge} ago
         </span>
+      )}
+      {showSnoozeButton && (
+        <button
+          type="button"
+          onClick={onSnoozeClick}
+          disabled={snoozing}
+          className="ml-1 px-1 py-0 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50 inline-flex items-center gap-0.5 text-[9px] font-semibold"
+          data-testid={testId ? `${testId}-slack-config-snooze` : undefined}
+          title={`Suppress missing-webhook pages for ${envName} for 7 days. The recovery page still fires when the env is set.`}
+          aria-label={`Snooze missing-webhook nag for ${envName} for 7 days`}
+        >
+          <BellOff size={9} aria-hidden />
+          {snoozing ? '…' : 'Snooze 7d'}
+        </button>
       )}
     </span>
   );
@@ -222,6 +326,19 @@ export default function CronHealthPill({
   // while this one describes a sibling alerter that pages on-call
   // when the cron's Slack webhook env stays unset post-deploy.
   slackMissingAlertState,
+  // Task #980 — optional snooze handler forwarded down to
+  // `SlackConfigBadge`. When provided AND the missing-Slack-webhook
+  // nag is currently red+paged for this env, the badge surfaces a
+  // "Snooze 7d" button that POSTs to
+  // `/admin/health/slack-webhook-missing/<env>/snooze`. Decoupled
+  // from `slackMissingAlertState` so a wrapper pill can render the
+  // "· paged Nh ago" caption (read-only) without exposing the
+  // mutation; the snooze action only appears when the wrapper opts
+  // in by passing this callback. Signature: `(envName, hours) =>
+  // Promise<AlertState>` — resolved value is patched optimistically
+  // into the parent's state map so the caption flips to
+  // "snoozed for Xh remaining" without waiting on the 60s poll.
+  onSnoozeSlackMissing,
 }) {
   const data = rawData && !rawData._error ? rawData : null;
   const status = data?.status || 'unknown';
@@ -345,6 +462,7 @@ export default function CronHealthPill({
               envName={data?.slackWebhookEnv}
               testId={testId}
               missingAlertState={slackMissingAlertState}
+              onSnooze={onSnoozeSlackMissing}
             />
           </div>
           {subText != null && (

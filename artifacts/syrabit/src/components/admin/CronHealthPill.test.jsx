@@ -70,6 +70,11 @@ const renderPill = (overrides = {}) =>
       defaultWorkflowUrl={overrides.defaultWorkflowUrl ?? 'https://example.com/workflow'}
       renderSubText={overrides.renderSubText}
       renderExtraActions={overrides.renderExtraActions}
+      alertState={overrides.alertState}
+      alertHistory={overrides.alertHistory}
+      onLoadAlertHistory={overrides.onLoadAlertHistory}
+      slackMissingAlertState={overrides.slackMissingAlertState}
+      onSnoozeSlackMissing={overrides.onSnoozeSlackMissing}
     />
   );
 
@@ -538,6 +543,117 @@ describe('CronHealthPill — Slack-config badge (Task #964)', () => {
     });
     expect(html).not.toMatch(/SECRET-LEAK-XYZ/);
     expect(html).not.toMatch(/hooks\.slack\.example\.com/);
+  });
+});
+
+describe('CronHealthPill — Snooze button wiring (Task #980)', () => {
+  // The snooze button lives on `SlackConfigBadge`, but the only
+  // way wrappers (CfWafDriftCronPill, EdgeProxyDeployCronPill,
+  // UnifiedLogsCfPullCronPill) reach the badge is THROUGH the
+  // `<CronHealthPill>` shell. So if `CronHealthPill` forgets to
+  // forward `onSnoozeSlackMissing` down to the badge, the wrappers
+  // ship a dead button. These tests pin that wiring contract end
+  // to end (wrapper -> shell -> badge) so a refactor that drops
+  // the prop name fails loudly here instead of silently in prod.
+
+  const REDDISH_DATA = {
+    status: 'silent',
+    slackConfigured: false,
+    slackWebhookEnv: 'CF_WAF_DRIFT_SLACK_WEBHOOK',
+  };
+
+  // The badge gates the "paged Nh ago" caption on
+  // ``lastAlertAgeSeconds`` (server-computed seconds-since-last-page),
+  // not on a raw timestamp. Pin the same shape these tests use so a
+  // schema rename here fails loud instead of silently turning the
+  // gate off.
+  const PAGED_ALERT_STATE = {
+    envName: 'CF_WAF_DRIFT_SLACK_WEBHOOK',
+    present: false,
+    lastAlertAgeSeconds: 3600,
+    snoozeActive: false,
+  };
+
+  it('renders the "Snooze 7d" button when shell is red+paged+envName known and onSnoozeSlackMissing is provided', () => {
+    const html = renderPill({
+      data: REDDISH_DATA,
+      testId: 'foo',
+      slackMissingAlertState: PAGED_ALERT_STATE,
+      onSnoozeSlackMissing: () => Promise.resolve({}),
+    });
+    expect(html).toMatch(/Snooze 7d/);
+    expect(html).toMatch(/data-testid="foo-slack-config-snooze"/);
+  });
+
+  it('does NOT render the snooze button when onSnoozeSlackMissing is missing (button is dead without callback)', () => {
+    const html = renderPill({
+      data: REDDISH_DATA,
+      testId: 'foo',
+      slackMissingAlertState: PAGED_ALERT_STATE,
+      // no onSnoozeSlackMissing — pins the contract that wrappers
+      // which forget to forward the prop ship a no-op badge.
+    });
+    expect(html).not.toMatch(/Snooze 7d/);
+    expect(html).not.toMatch(/foo-slack-config-snooze/);
+  });
+
+  it('does NOT render the snooze button when no page has been recorded yet (red but never paged)', () => {
+    const html = renderPill({
+      data: REDDISH_DATA,
+      testId: 'foo',
+      slackMissingAlertState: {
+        envName: 'CF_WAF_DRIFT_SLACK_WEBHOOK',
+        present: false,
+        lastAlertAgeSeconds: null,
+        snoozeActive: false,
+      },
+      onSnoozeSlackMissing: () => Promise.resolve({}),
+    });
+    expect(html).not.toMatch(/Snooze 7d/);
+  });
+
+  it('does NOT render the snooze button when a snooze is already active (no double-snooze)', () => {
+    const html = renderPill({
+      data: REDDISH_DATA,
+      testId: 'foo',
+      slackMissingAlertState: {
+        ...PAGED_ALERT_STATE,
+        snoozeActive: true,
+        snoozeRemainingSeconds: 6 * 3600,
+      },
+      onSnoozeSlackMissing: () => Promise.resolve({}),
+    });
+    expect(html).not.toMatch(/Snooze 7d/);
+  });
+
+  it('does NOT render the snooze button when the badge is green (Slack configured)', () => {
+    const html = renderPill({
+      data: { ...REDDISH_DATA, slackConfigured: true },
+      testId: 'foo',
+      slackMissingAlertState: PAGED_ALERT_STATE,
+      onSnoozeSlackMissing: () => Promise.resolve({}),
+    });
+    expect(html).not.toMatch(/Snooze 7d/);
+  });
+
+  it('replaces the "paged Nh ago" caption with a snoozed caption when snoozeActive is true', () => {
+    const html = renderPill({
+      data: REDDISH_DATA,
+      testId: 'foo',
+      slackMissingAlertState: {
+        ...PAGED_ALERT_STATE,
+        snoozeActive: true,
+        snoozeRemainingSeconds: 12 * 3600,
+      },
+      onSnoozeSlackMissing: () => Promise.resolve({}),
+    });
+    // Snoozed caption present — exact wording is owned by the
+    // badge but we pin the word + the dedicated test-id so a
+    // refactor that accidentally drops the caption fails loudly.
+    expect(html).toMatch(/snoozed/);
+    expect(html).toMatch(/data-testid="foo-slack-config-snoozed"/);
+    // And the page-age caption is suppressed.
+    expect(html).not.toMatch(/foo-slack-config-paged/);
   });
 });
 
