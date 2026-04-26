@@ -43,6 +43,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Task #906 — strip the GITHUB_TOKEN from .git/config after
+          # checkout. This job only greps workflow files; it never pushes
+          # back to the repo, so credentials are not needed afterwards.
+          persist-credentials: false
 
       - name: Verify SHA-pinned `uses:` references
         run: |

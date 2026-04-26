@@ -195,6 +195,13 @@ jobs:
 
       - name: Fail job if refresh script reported an error
         if: ${{ steps.refresh.outputs.rc != '0' }}
+        env:
+          # Task #906 — pass the refresh step's rc through an env var
+          # rather than direct ${{ ... }} interpolation into the shell.
+          # The value is a numeric exit code we wrote ourselves, but
+          # env-var indirection means a future change can never escape
+          # into a different shell command (template-injection class).
+          REFRESH_RC: ${{ steps.refresh.outputs.rc }}
         run: |
-          echo "Trustpilot refresh script exited with rc=${{ steps.refresh.outputs.rc }}"
+          echo "Trustpilot refresh script exited with rc=${REFRESH_RC}"
           exit 1

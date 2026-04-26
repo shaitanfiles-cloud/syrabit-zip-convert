@@ -72,6 +72,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Task #906 — strip the GITHUB_TOKEN from .git/config after
+          # checkout. This job runs the edge-cache smoke probe; it does
+          # not push back to the repo, so persisting credentials would
+          # only widen the blast radius of an accidental .git/ artifact
+          # upload.
+          persist-credentials: false
 
       - name: Set up pnpm
         uses: pnpm/action-setup@a3252b78c470c02df07e9d59298aecedc3ccdd6d # v3.0.0

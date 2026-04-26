@@ -60,6 +60,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Task #906 — strip the GITHUB_TOKEN from .git/config after
+          # checkout. This job hits the live origin, posts to the
+          # backend (auth via TRUSTPILOT_REFRESH_SECRET), and uploads a
+          # JSON report (no .git/), so persisting credentials would only
+          # widen the blast radius of an accidental .git/ artifact upload.
+          persist-credentials: false
 
       - name: Set up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -134,6 +141,13 @@ jobs:
 
       - name: Fail job if verifier reported a regression
         if: ${{ steps.verify.outputs.rc != '0' }}
+        env:
+          # Task #906 — pass the verify step's rc through an env var
+          # rather than direct ${{ ... }} interpolation into the shell.
+          # The value is a numeric exit code we wrote ourselves, but
+          # env-var indirection means a future change can never escape
+          # into a different shell command (template-injection class).
+          VERIFY_RC: ${{ steps.verify.outputs.rc }}
         run: |
-          echo "verify-trustpilot-jsonld.mjs exited with rc=${{ steps.verify.outputs.rc }}"
+          echo "verify-trustpilot-jsonld.mjs exited with rc=${VERIFY_RC}"
           exit 1

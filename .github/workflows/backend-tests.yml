@@ -53,6 +53,13 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          # Task #906 — strip the GITHUB_TOKEN from .git/config after
+          # checkout. The base-branch fetch step below re-supplies the
+          # token inline via `git -c http.extraheader=...` so the
+          # coverage-diff flow keeps working on private repos without
+          # leaving the token sitting on disk for the artifact-upload
+          # step to glob into.
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -108,9 +115,19 @@ jobs:
         id: base_cov
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          # Task #906 — re-supply the GITHUB_TOKEN inline for this fetch
+          # only. The initial checkout above runs with
+          # `persist-credentials: false`, so .git/config no longer holds
+          # the token after that step. We pass the token via
+          # `git -c http.extraheader=...` here so the base-branch fetch
+          # still works on private repos, but the token is never
+          # written back to disk where a future artifact-upload could
+          # glob it in.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
-          git fetch origin "$BASE_REF" --depth=1
+          git -c http.extraheader="AUTHORIZATION: bearer $GH_TOKEN" \
+            fetch origin "$BASE_REF" --depth=1
           git worktree add /tmp/base-checkout "origin/$BASE_REF"
           cd /tmp/base-checkout/artifacts/syrabit-backend
           pip install -r requirements.txt >/dev/null 2>&1
@@ -125,13 +142,19 @@ jobs:
       - name: Compute head coverage and diff
         if: github.event_name == 'pull_request'
         id: head_cov
+        env:
+          # Task #906 — pass the previous step's output through an env
+          # var rather than direct ${{ ... }} interpolation. The value
+          # is a number we computed ourselves, but env-var indirection
+          # means a future change can never escape into a different
+          # shell command (template-injection class).
+          BASE_PCT: ${{ steps.base_cov.outputs.base_pct }}
         run: |
           HEAD=$(python -c "import xml.etree.ElementTree as ET; \
             r=ET.parse('coverage.xml').getroot(); \
             print(round(float(r.attrib.get('line-rate','0'))*100,2))")
           echo "head_pct=$HEAD" >> "$GITHUB_OUTPUT"
-          BASE="${{ steps.base_cov.outputs.base_pct }}"
-          DIFF=$(python -c "print(round(${HEAD} - ${BASE:-0}, 2))")
+          DIFF=$(python -c "print(round(${HEAD} - ${BASE_PCT:-0}, 2))")
           echo "diff_pct=$DIFF" >> "$GITHUB_OUTPUT"
 
       # Only comment when coverage actually drops > 1pp — keeps PR
@@ -144,11 +167,20 @@ jobs:
           fromJSON(steps.head_cov.outputs.diff_pct) < -1
         continue-on-error: true
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          # Task #906 — pass step outputs through env vars rather than
+          # direct ${{ ... }} interpolation into the inline script. The
+          # values are numbers we computed ourselves, but env-var
+          # indirection means a future change can never escape into
+          # JavaScript code (template-injection class).
+          HEAD_PCT: ${{ steps.head_cov.outputs.head_pct }}
+          BASE_PCT: ${{ steps.base_cov.outputs.base_pct }}
+          DIFF_PCT: ${{ steps.head_cov.outputs.diff_pct }}
         with:
           script: |
-            const head = parseFloat("${{ steps.head_cov.outputs.head_pct }}" || "0");
-            const base = parseFloat("${{ steps.base_cov.outputs.base_pct }}" || "0");
-            const diff = parseFloat("${{ steps.head_cov.outputs.diff_pct }}" || "0");
+            const head = parseFloat(process.env.HEAD_PCT || "0");
+            const base = parseFloat(process.env.BASE_PCT || "0");
+            const diff = parseFloat(process.env.DIFF_PCT || "0");
             const sign = diff >= 0 ? "+" : "";
             const marker = "<!-- syrabit-backend-coverage-bot -->";
             const body = [
@@ -183,6 +215,12 @@ jobs:
 
       - name: Fail if coverage dropped > 1pp on PR
         if: github.event_name == 'pull_request'
+        env:
+          # Task #906 — pass the diff through an env var rather than
+          # direct ${{ ... }} interpolation. The value is a number we
+          # computed ourselves, but env-var indirection means a future
+          # change can never escape into a different shell command
+          # (template-injection class).
+          DIFF: ${{ steps.head_cov.outputs.diff_pct }}
         run: |
-          DIFF="${{ steps.head_cov.outputs.diff_pct }}"
           python -c "import sys; d=float('$DIFF' or '0'); sys.exit(1 if d < -1.0 else 0)"

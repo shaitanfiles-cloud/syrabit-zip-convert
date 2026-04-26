@@ -115,6 +115,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Task #906 — strip the GITHUB_TOKEN from .git/config after the
+          # checkout so a future upload-artifact step that accidentally
+          # globs in .git/ cannot leak the token. This job does not push
+          # back to the repo, so credentials are not needed afterwards.
+          persist-credentials: false
 
       - name: Set up pnpm
         uses: pnpm/action-setup@a3252b78c470c02df07e9d59298aecedc3ccdd6d # v3.0.0
