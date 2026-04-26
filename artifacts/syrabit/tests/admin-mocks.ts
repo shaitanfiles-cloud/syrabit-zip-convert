@@ -100,7 +100,15 @@ interface InstallOptions {
 
 export async function installAdminApiMocks(page: Page, opts: InstallOptions = {}) {
   const failPatterns = opts.failPatterns ?? [];
-  const overrides = Object.entries(opts.overrides ?? {});
+  // Match the more-specific override first so a key like
+  // `/api/admin/health/edge-proxy-deploy/cron` doesn't shadow
+  // `/api/admin/health/edge-proxy-deploy/cron/alert-state` (the
+  // first is a prefix of the second, and `Array.find` returns
+  // the first hit). Sorting by descending key length means
+  // longer/more-specific patterns always win — author order
+  // inside the `overrides` object then doesn't matter.
+  const overrides = Object.entries(opts.overrides ?? {})
+    .sort(([a], [b]) => b.length - a.length);
 
   await page.route('**/api/**', async (route: Route) => {
     const req = route.request();

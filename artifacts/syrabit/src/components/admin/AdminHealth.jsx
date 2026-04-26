@@ -566,6 +566,39 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     setAsmRevertPreview(row);
   }, []);
 
+  // NOTE: `loadAsmCfg` MUST be declared before `confirmAsmRevert`
+  // (and any other useCallback that captures it). It's a `const`
+  // declaration so it lives in the temporal dead zone until this
+  // line runs — referencing it earlier in component-body order
+  // (even inside a useCallback body that won't actually invoke
+  // until later) crashes the whole AdminHealth component with
+  // "Cannot access 'loadAsmCfg' before initialization" the moment
+  // React executes the body, which trips the
+  // <SectionErrorBoundary> wrapper and replaces the entire Health
+  // tab with the "failed to load" card. Do not move this back
+  // below `confirmAsmRevert`.
+  const loadAsmCfg = useCallback(() => {
+    setAsmLoading(true);
+    axios.get(`${API_BASE}/admin/assamese-purity`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => {
+        setAsmCfg(r.data);
+        const cfg = r.data?.config || {};
+        setAsmDraft({
+          behaviour: cfg.behaviour || '',
+          threshold: cfg.threshold != null ? String(cfg.threshold) : '',
+          indic_provider: cfg.indic_provider || '',
+        });
+        setAsmTestSample(r.data?.test_sample || '');
+      })
+      .catch((e) => {
+        const msg = e?.response?.data?.detail || 'Failed to load purity config';
+        toast.error(msg);
+      })
+      .finally(() => setAsmLoading(false));
+  }, [adminToken]);
+
   const confirmAsmRevert = useCallback(async () => {
     const row = asmRevertPreview;
     if (!row?.id) return;
@@ -622,28 +655,6 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       })
       .finally(() => setAsmStatsLoading(false));
   }, [adminToken, asmStatsWindow]);
-
-  const loadAsmCfg = useCallback(() => {
-    setAsmLoading(true);
-    axios.get(`${API_BASE}/admin/assamese-purity`, {
-      headers: adminHeaders(adminToken), withCredentials: true,
-    })
-      .then((r) => {
-        setAsmCfg(r.data);
-        const cfg = r.data?.config || {};
-        setAsmDraft({
-          behaviour: cfg.behaviour || '',
-          threshold: cfg.threshold != null ? String(cfg.threshold) : '',
-          indic_provider: cfg.indic_provider || '',
-        });
-        setAsmTestSample(r.data?.test_sample || '');
-      })
-      .catch((e) => {
-        const msg = e?.response?.data?.detail || 'Failed to load purity config';
-        toast.error(msg);
-      })
-      .finally(() => setAsmLoading(false));
-  }, [adminToken]);
 
   const saveAsmOverride = useCallback(async () => {
     const body = {};
