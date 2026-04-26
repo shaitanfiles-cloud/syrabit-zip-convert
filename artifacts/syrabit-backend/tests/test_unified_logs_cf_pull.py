@@ -437,6 +437,209 @@ def test_pull_loop_releases_lease_when_cancelled_during_sleep(monkeypatch):
     asyncio.run(_inner())
 
 
+# ─── Task #948 — adaptive window subdivision (no dropped buckets) ────
+
+
+def _make_cf_group(minute_iso: str, idx: int) -> dict:
+    """Synthesize a unique CF httpRequestsAdaptiveGroups row.
+
+    ``idx`` varies one of the dimensions so each row gets a distinct
+    deterministic id (otherwise the dedup in insert_logs would mask
+    pagination bugs by collapsing the rows back down).
+    """
+    return {
+        "dimensions": {
+            "datetimeMinute": minute_iso,
+            "edgeResponseStatus": 200,
+            "originResponseStatus": 200,
+            "cacheStatus": "HIT",
+            "clientRequestPath": f"/api/r/{idx}",
+            "clientRequestHTTPMethodName": "GET",
+            "clientRequestHTTPHost": "syrabit.ai",
+            "clientCountryName": "IN",
+            "coloCode": "BLR",
+        },
+        "avg": {"originResponseDurationMs": 10.0},
+        "count": 1,
+    }
+
+
+def test_paginated_pull_does_nothing_when_window_under_limit(monkeypatch):
+    """Common-case: a quiet window returns < limit rows in a single
+    GraphQL call. The pagination machinery must NOT subdivide just
+    because it can — that would multiply the API quota cost on every
+    tick of every quiet hour."""
+    async def _inner():
+        monkeypatch.setattr("config.CF_ZONE_ID", "zone-1", raising=False)
+        calls = []
+
+        async def fake_graphql(query, variables):
+            calls.append((variables["since"], variables["until"]))
+            return {"data": {"viewer": {"zones": [{
+                "httpRequestsAdaptiveGroups": [
+                    _make_cf_group("2026-04-26T10:00:00Z", 0),
+                    _make_cf_group("2026-04-26T10:01:00Z", 1),
+                ]
+            }]}}}
+
+        since = datetime(2026, 4, 26, 10, 0, tzinfo=timezone.utc)
+        until = datetime(2026, 4, 26, 10, 5, tzinfo=timezone.utc)
+        out = await routes._pull_cf_window_paginated(fake_graphql, since, until)
+        assert out["calls"] == 1
+        assert out["subdivisions"] == 0
+        assert out["saturated_windows"] == []
+        assert len(out["rows"]) == 2
+        assert len(calls) == 1
+    asyncio.run(_inner())
+
+
+def test_paginated_pull_subdivides_when_window_hits_limit(monkeypatch):
+    """Critical Task #948 path: when the limit is hit, the window MUST
+    be split on a minute boundary and each half pulled separately so
+    the surplus buckets aren't silently dropped by CF."""
+    async def _inner():
+        monkeypatch.setattr("config.CF_ZONE_ID", "zone-1", raising=False)
+        # Force a low limit so we don't have to fabricate 200 fake rows.
+        monkeypatch.setattr(routes, "CF_PULL_LIMIT", 4, raising=False)
+
+        calls = []
+
+        async def fake_graphql(query, variables):
+            since_iso = variables["since"]
+            until_iso = variables["until"]
+            calls.append((since_iso, until_iso))
+            since_dt = datetime.fromisoformat(since_iso.replace("Z", "+00:00"))
+            until_dt = datetime.fromisoformat(until_iso.replace("Z", "+00:00"))
+            span_min = int((until_dt - since_dt).total_seconds() // 60)
+            # The full 4-minute window saturates at the cap. Each half
+            # (2-minute) returns 2 rows — plenty of headroom — so the
+            # recursion stops after a single split.
+            if span_min >= 4:
+                rows = [_make_cf_group(
+                    since_iso.replace("Z", "+00:00"), i) for i in range(4)]
+            else:
+                rows = [_make_cf_group(
+                    since_iso.replace("Z", "+00:00"), 100 + i)
+                    for i in range(2)]
+            return {"data": {"viewer": {"zones": [{
+                "httpRequestsAdaptiveGroups": rows,
+            }]}}}
+
+        since = datetime(2026, 4, 26, 10, 0, tzinfo=timezone.utc)
+        until = datetime(2026, 4, 26, 10, 4, tzinfo=timezone.utc)
+        out = await routes._pull_cf_window_paginated(fake_graphql, since, until)
+        # 1 saturated parent call + 2 half-window calls = 3 total.
+        assert out["calls"] == 3, calls
+        assert out["subdivisions"] == 1
+        assert out["saturated_windows"] == []
+        # Rows from the two halves should be merged AND distinct —
+        # this is the bug Task #948 fixes (previously the surplus
+        # was dropped wholesale. The two halves cover disjoint
+        # minute buckets, so their per-row deterministic ids must
+        # differ and the merged set must have all 4 rows (2 per
+        # half), NOT just 2 (parent-only) or 0 (lost).
+        ids = {routes.normalize_cf_http_request_row(r)["_id"]
+               for r in out["rows"]}
+        assert len(ids) == 4, (
+            f"expected 4 distinct rows after split (2 per half), "
+            f"got {len(ids)}: {ids}")
+    asyncio.run(_inner())
+
+
+def test_paginated_pull_recurses_until_floor_then_logs_saturation(monkeypatch):
+    """Pathological window: every minute bucket has ≥ limit distinct
+    (path, status, ...) combos. The recursion must NOT loop forever —
+    it bottoms out at CF_PULL_MIN_WINDOW_S and surfaces the affected
+    minutes via ``saturated_windows`` so an operator can react."""
+    async def _inner():
+        monkeypatch.setattr("config.CF_ZONE_ID", "zone-1", raising=False)
+        monkeypatch.setattr(routes, "CF_PULL_LIMIT", 2, raising=False)
+
+        async def fake_graphql(query, variables):
+            # Every single window — no matter how small — returns at
+            # the cap. Simulates an extremely-busy zone.
+            since_iso = variables["since"]
+            return {"data": {"viewer": {"zones": [{
+                "httpRequestsAdaptiveGroups": [
+                    _make_cf_group(since_iso.replace("Z", "+00:00"), 0),
+                    _make_cf_group(since_iso.replace("Z", "+00:00"), 1),
+                ],
+            }]}}}
+
+        since = datetime(2026, 4, 26, 10, 0, tzinfo=timezone.utc)
+        until = datetime(2026, 4, 26, 10, 4, tzinfo=timezone.utc)
+        out = await routes._pull_cf_window_paginated(fake_graphql, since, until)
+        # The full window subdivides 4m → 2m → 1m on each branch.
+        # We MUST end up with at least one saturated_windows entry per
+        # minute that hit the floor; the exact number depends on the
+        # split tree, but it must be > 0 (else the bug regressed).
+        assert out["saturated_windows"], (
+            "minute-granularity saturation must be reported, otherwise "
+            "operators cannot tell that buckets were lost")
+        # Every saturated entry must be a 1-minute span (the floor).
+        for since_iso, until_iso in out["saturated_windows"]:
+            s = datetime.fromisoformat(since_iso)
+            u = datetime.fromisoformat(until_iso)
+            assert (u - s).total_seconds() <= routes.CF_PULL_MIN_WINDOW_S
+        # The recursion must terminate (Task #948's hard guard) — if
+        # CF_PULL_MAX_SUBDIVISIONS were missing this test would hang.
+        assert out["calls"] > 0
+    asyncio.run(_inner())
+
+
+def test_try_run_cf_pull_once_persists_pagination_telemetry(monkeypatch):
+    """End-to-end: when a pull subdivides, the cursor doc must record
+    last_calls / last_subdivisions / last_saturated_windows so the
+    admin /status endpoint can show the operator what happened on
+    that tick — without these fields, busy-hour bucket loss would
+    be invisible from the dashboard."""
+    async def _inner():
+        dao._reset_backend_shipper_for_tests()
+        db = _FakeDb()
+        monkeypatch.setattr(routes, "db", db, raising=False)
+        monkeypatch.setattr("config.CF_ZONE_ID", "zone-1", raising=False)
+        monkeypatch.setattr("config.CF_ANALYTICS_API_TOKEN", "tok", raising=False)
+        monkeypatch.setattr(routes, "CF_PULL_LIMIT", 4, raising=False)
+
+        async def fake_graphql(query, variables):
+            since_iso = variables["since"]
+            since_dt = datetime.fromisoformat(since_iso.replace("Z", "+00:00"))
+            until_dt = datetime.fromisoformat(
+                variables["until"].replace("Z", "+00:00"))
+            span_min = int((until_dt - since_dt).total_seconds() // 60)
+            if span_min >= 4:
+                rows = [_make_cf_group(
+                    since_iso.replace("Z", "+00:00"), i) for i in range(4)]
+            else:
+                rows = [_make_cf_group(
+                    since_iso.replace("Z", "+00:00"), 100 + i)
+                    for i in range(2)]
+            return {"data": {"viewer": {"zones": [{
+                "httpRequestsAdaptiveGroups": rows,
+            }]}}}
+
+        now = datetime(2026, 4, 26, 10, 4, tzinfo=timezone.utc)
+        # Seed the cursor 4 minutes back so the window saturates.
+        db.job_locks.docs.append({
+            "_id": routes.CF_PULL_LOCK_ID,
+            routes.CF_PULL_CURSOR_FIELD: "2026-04-26T10:00:00+00:00",
+        })
+        res = await routes._try_run_cf_pull_once(
+            now_utc=now, graphql_callable=fake_graphql)
+        assert res["ok"] is True
+        # Fan-out telemetry must travel back in the result for the
+        # manual-pull admin endpoint.
+        assert res["calls"] >= 2
+        assert res["subdivisions"] >= 1
+        # …and must be persisted to the cursor doc for /status.
+        lock = next(d for d in db.job_locks.docs
+                    if d.get("_id") == routes.CF_PULL_LOCK_ID)
+        assert lock["last_calls"] == res["calls"]
+        assert lock["last_subdivisions"] == res["subdivisions"]
+        assert lock["last_saturated_windows"] == res["saturated_windows"]
+    asyncio.run(_inner())
+
+
 def test_pull_loop_handover_when_leader_is_cancelled(monkeypatch):
     """Integration-style: simulate the Railway "scale down by 1"
     sequence — leader replica's loop is cancelled (SIGTERM ⇒ asyncio

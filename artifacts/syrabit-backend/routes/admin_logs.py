@@ -50,6 +50,25 @@ CF_PULL_INTERVAL_S = int(os.environ.get("UNIFIED_LOGS_CF_PULL_INTERVAL_S", "60")
 CF_PULL_LOOKBACK_MIN = int(os.environ.get("UNIFIED_LOGS_CF_PULL_LOOKBACK_MIN", "5") or "5")
 CF_PULL_MAX_LOOKBACK_MIN = 60
 CF_PULL_LIMIT = int(os.environ.get("UNIFIED_LOGS_CF_PULL_LIMIT", "200") or "200")
+# Task #948 — CF httpRequestsAdaptiveGroups asks for AT MOST
+# `CF_PULL_LIMIT` grouped buckets per call. On busy hours a single
+# window can produce far more distinct (path, status, colo, host,
+# country, cache, method) buckets than that, and the surplus is
+# silently dropped — but the cursor still advances past the window,
+# so the surplus is never backfilled.
+#
+# CF's GraphQL `httpRequestsAdaptiveGroups` does not expose proper
+# cursor pagination, so we paginate by recursively halving the time
+# window on minute boundaries (CF aggregates per minute, so 60s is
+# the natural floor — we cannot subdivide finer than that without
+# losing the time dimension entirely). When the floor is reached and
+# the bucket count STILL hits the limit, we record the saturation in
+# the cursor doc so an operator sees the gap instead of silently
+# losing data.
+CF_PULL_MIN_WINDOW_S = 60
+CF_PULL_MAX_SUBDIVISIONS = int(
+    os.environ.get("UNIFIED_LOGS_CF_PULL_MAX_SUBDIVISIONS", "12") or "12"
+)
 
 # Task #947 — Mongo-backed lease so only ONE replica runs the CF pull
 # loop at any moment, even when Railway scales the backend out to N
@@ -338,6 +357,10 @@ async def admin_logs_status(admin: dict = Depends(get_admin_user)):
     cf_lease_expires_at: Optional[str] = None
     cf_lease_age_s: Optional[int] = None
     cf_lease_is_self: Optional[bool] = None
+    # Task #948 — pagination telemetry from the most recent pull.
+    cf_last_calls: Optional[int] = None
+    cf_last_subdivisions: Optional[int] = None
+    cf_last_saturated_windows: Optional[List[Any]] = None
     if db is not None:
         try:
             lock = await db.job_locks.find_one({"_id": CF_PULL_LOCK_ID})
@@ -354,6 +377,9 @@ async def admin_logs_status(admin: dict = Depends(get_admin_user)):
                         + CF_PULL_LEASE_TTL_S,
                     )
                 cf_lease_is_self = (cf_lease_owner == _CF_PULL_LEASE_OWNER_ID)
+                cf_last_calls = lock.get("last_calls")
+                cf_last_subdivisions = lock.get("last_subdivisions")
+                cf_last_saturated_windows = lock.get("last_saturated_windows")
         except Exception:
             pass
     counts: Dict[str, Any] = {}
@@ -385,6 +411,18 @@ async def admin_logs_status(admin: dict = Depends(get_admin_user)):
         "cf_pull_lease_age_s": cf_lease_age_s,
         "cf_pull_lease_ttl_s": CF_PULL_LEASE_TTL_S,
         "cf_pull_lease_is_self": cf_lease_is_self,
+        # Task #948 — pagination telemetry. ``last_calls`` shows how
+        # many GraphQL calls the most recent tick made (1 means the
+        # window fit; >1 means we subdivided to avoid dropping
+        # buckets). ``last_saturated_windows`` is the list of minute
+        # buckets whose row count hit the limit even at the floor —
+        # if it's consistently non-empty the dimension cut needs to
+        # be widened.
+        "cf_pull_limit": CF_PULL_LIMIT,
+        "cf_pull_max_subdivisions": CF_PULL_MAX_SUBDIVISIONS,
+        "cf_pull_last_calls": cf_last_calls,
+        "cf_pull_last_subdivisions": cf_last_subdivisions,
+        "cf_pull_last_saturated_windows": cf_last_saturated_windows,
         "shipper_stats": {
             "accepted": shipper.accepted,
             "flushed": shipper.flushed,
@@ -708,13 +746,146 @@ query UnifiedLogsPull($zone: String!, $since: Time!, $until: Time!, $limit: Int!
 """.strip()
 
 
+async def _fetch_cf_window(graphql_callable, since: datetime,
+                           until: datetime) -> List[Dict[str, Any]]:
+    """Single GraphQL call for one [since, until) window.
+
+    Returns the raw ``httpRequestsAdaptiveGroups`` rows (un-normalized)
+    so the caller can detect saturation by row count *before* the row
+    shape is collapsed into the unified-log schema. Raises whatever
+    the underlying GraphQL client raises so the caller can decide
+    between hard-fail and partial-success behaviour.
+    """
+    from config import CF_ZONE_ID
+    resp = await graphql_callable(_CF_QUERY, {
+        "zone": CF_ZONE_ID,
+        "since": since.isoformat().replace("+00:00", "Z"),
+        "until": until.isoformat().replace("+00:00", "Z"),
+        "limit": CF_PULL_LIMIT,
+    })
+    out: List[Dict[str, Any]] = []
+    zones = (((resp or {}).get("data") or {}).get("viewer") or {}).get("zones") or []
+    for z in zones:
+        for grp in (z.get("httpRequestsAdaptiveGroups") or []):
+            out.append(grp)
+    return out
+
+
+async def _pull_cf_window_paginated(
+    graphql_callable, since: datetime, until: datetime,
+    depth: int = 0,
+) -> Dict[str, Any]:
+    """Recursively fetch [since, until) by halving the window on
+    minute boundaries whenever the limit is hit.
+
+    The CF GraphQL ``httpRequestsAdaptiveGroups`` query has no native
+    cursor/offset support so we cannot page in the usual REST sense.
+    Instead, when we get back exactly ``CF_PULL_LIMIT`` rows — the
+    signal that the response was likely truncated — we split the
+    window in half on a minute boundary (the dataset's aggregation
+    granularity) and pull each half independently. Recursion bottoms
+    out at ``CF_PULL_MIN_WINDOW_S`` (60s, one CF minute bucket); if
+    even a single-minute window is saturated we surface that to the
+    caller via ``saturated_windows`` so the operator can see the gap.
+
+    Returns ``{rows, calls, subdivisions, saturated_windows}``:
+        * ``rows`` — raw, deduped (by deterministic id) groups
+        * ``calls`` — total GraphQL calls made for this window
+        * ``subdivisions`` — number of split events that fired
+        * ``saturated_windows`` — list of (since_iso, until_iso) tuples
+          where the limit was hit at the minimum window size
+
+    The two halves use disjoint ranges (`datetime_geq` / `datetime_lt`
+    on minute boundaries), so de-dup is defensive only — but bounding
+    by deterministic id makes the result independent of split order.
+    """
+    rows = await _fetch_cf_window(graphql_callable, since, until)
+    span_s = (until - since).total_seconds()
+
+    # Strict less-than would miss the (uncommon but real) case where
+    # the response is exactly CF_PULL_LIMIT distinct buckets with no
+    # truncation; subdividing in that edge case costs one extra call
+    # which then returns < limit and the recursion stops cleanly.
+    if len(rows) < CF_PULL_LIMIT:
+        return {
+            "rows": rows, "calls": 1, "subdivisions": 0,
+            "saturated_windows": [],
+        }
+
+    # Hit the cap. Try to subdivide unless we'd cross the floor or
+    # blow past the recursion guard.
+    if span_s <= CF_PULL_MIN_WINDOW_S or depth >= CF_PULL_MAX_SUBDIVISIONS:
+        logger.warning(
+            "[unified_logs] CF pull window saturated at minimum granularity: "
+            "since=%s until=%s rows=%d limit=%d depth=%d — bucket loss "
+            "possible for this minute",
+            since.isoformat(), until.isoformat(), len(rows), CF_PULL_LIMIT,
+            depth,
+        )
+        return {
+            "rows": rows, "calls": 1, "subdivisions": 0,
+            "saturated_windows": [(since.isoformat(), until.isoformat())],
+        }
+
+    # Snap the midpoint to the nearest whole minute so each half is
+    # composed of clean CF buckets — the GraphQL filter is
+    # datetime_geq/datetime_lt, so a minute aligned with `mid` falls
+    # into the right half exactly once.
+    mid = since + (until - since) / 2
+    mid = mid.replace(second=0, microsecond=0)
+    if mid <= since or mid >= until:
+        # Snapping collapsed the span (e.g. <2 minute window where
+        # both ends share a minute boundary). Cannot subdivide
+        # without crossing the floor — accept saturation.
+        logger.warning(
+            "[unified_logs] CF pull window cannot be subdivided "
+            "(snapping collapsed midpoint): since=%s until=%s rows=%d",
+            since.isoformat(), until.isoformat(), len(rows),
+        )
+        return {
+            "rows": rows, "calls": 1, "subdivisions": 0,
+            "saturated_windows": [(since.isoformat(), until.isoformat())],
+        }
+
+    left = await _pull_cf_window_paginated(
+        graphql_callable, since, mid, depth + 1)
+    right = await _pull_cf_window_paginated(
+        graphql_callable, mid, until, depth + 1)
+
+    # Defensive de-dup: even though the halves are disjoint by
+    # construction, the row payload includes the per-minute bucket id
+    # so collapsing on it makes us robust to any future change in how
+    # CF interprets the boundary.
+    merged: Dict[str, Dict[str, Any]] = {}
+    for grp in (*left["rows"], *right["rows"]):
+        try:
+            key = normalize_cf_http_request_row(grp)["_id"]
+        except Exception:
+            key = id(grp)  # fall back to object identity rather than crash
+        merged.setdefault(key, grp)
+
+    return {
+        "rows": list(merged.values()),
+        "calls": 1 + left["calls"] + right["calls"],
+        "subdivisions": 1 + left["subdivisions"] + right["subdivisions"],
+        "saturated_windows": (
+            left["saturated_windows"] + right["saturated_windows"]
+        ),
+    }
+
+
 async def _try_run_cf_pull_once(now_utc: Optional[datetime] = None,
                                 graphql_callable=None,
                                 lease_owner: Optional[str] = None) -> Dict[str, Any]:
     """One iteration of the Cloudflare pull. Factored out so tests can
     inject a fake ``_graphql_query`` and assert on the return shape.
 
-    Returns ``{ok, accepted, dropped, since, until, reason?}``.
+    Returns ``{ok, accepted, dropped, since, until, calls,
+    subdivisions, saturated_windows, reason?}``. The pagination
+    telemetry (``calls``/``subdivisions``/``saturated_windows``) is
+    persisted to the cursor doc so the admin status endpoint can
+    surface "this hour was so busy we ran out of granularity" without
+    digging through logs.
 
     ``lease_owner`` (Task #947 fencing): when supplied, the cursor
     write at the end is conditioned on the lease still being held by
@@ -755,27 +926,22 @@ async def _try_run_cf_pull_once(now_utc: Optional[datetime] = None,
     if until <= since:
         return {"ok": True, "accepted": 0, "dropped": 0,
                 "since": since.isoformat(), "until": until.isoformat(),
+                "calls": 0, "subdivisions": 0, "saturated_windows": [],
                 "reason": "empty_window"}
     # Cap lookback so a long isolate sleep doesn't pull a huge window.
     if (until - since) > timedelta(minutes=CF_PULL_MAX_LOOKBACK_MIN):
         since = until - timedelta(minutes=CF_PULL_MAX_LOOKBACK_MIN)
 
     try:
-        resp = await graphql_callable(_CF_QUERY, {
-            "zone": CF_ZONE_ID,
-            "since": since.isoformat().replace("+00:00", "Z"),
-            "until": until.isoformat().replace("+00:00", "Z"),
-            "limit": CF_PULL_LIMIT,
-        })
+        pulled = await _pull_cf_window_paginated(graphql_callable, since, until)
     except Exception as exc:
         logger.warning("[unified_logs] CF pull GraphQL failed: %s", exc)
         return {"ok": False, "reason": "graphql_error"}
+
     rows: List[Dict[str, Any]] = []
     try:
-        zones = (((resp or {}).get("data") or {}).get("viewer") or {}).get("zones") or []
-        for z in zones:
-            for grp in (z.get("httpRequestsAdaptiveGroups") or []):
-                rows.append(normalize_cf_http_request_row(grp))
+        for grp in pulled["rows"]:
+            rows.append(normalize_cf_http_request_row(grp))
     except Exception as exc:
         logger.warning("[unified_logs] CF pull parse failed: %s", exc)
         return {"ok": False, "reason": "parse_error"}
@@ -803,6 +969,15 @@ async def _try_run_cf_pull_once(now_utc: Optional[datetime] = None,
                 "updated_at": now.isoformat(),
                 "last_accepted": result["accepted"],
                 "last_dropped": result["dropped"],
+                # Task #948 — pagination telemetry. ``last_calls`` lets
+                # an operator notice "we suddenly went from 1 call/tick
+                # to 50" (i.e. someone is hammering the zone).
+                # ``last_saturated_windows`` lists the minute-buckets
+                # that hit the cap even at the floor — if it's
+                # consistently non-empty we need a finer dimension cut.
+                "last_calls": pulled["calls"],
+                "last_subdivisions": pulled["subdivisions"],
+                "last_saturated_windows": pulled["saturated_windows"],
             }},
             upsert=(lease_owner is None),
         )
@@ -815,6 +990,9 @@ async def _try_run_cf_pull_once(now_utc: Optional[datetime] = None,
         "dropped": result["dropped"],
         "since": since.isoformat(),
         "until": until.isoformat(),
+        "calls": pulled["calls"],
+        "subdivisions": pulled["subdivisions"],
+        "saturated_windows": pulled["saturated_windows"],
     }
 
 
