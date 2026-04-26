@@ -78,6 +78,43 @@ _TP_FEED_WARMUP_S = int(os.environ.get("TRUSTPILOT_FEED_WARMUP_S") or 900)
 
 _LOCK_ID = "trustpilot_feed_alert_state"
 
+# Task #971 — fan out the data-feed alerter to a dedicated Slack
+# incoming webhook so on-call gets paged in the same channel they
+# already watch for the per-event JSON-LD alerter (Task #757), the
+# refresh-cron silence alerter (Task #834), the cf-waf-drift cron
+# silence alerter, and the unified-logs cf-pull silence alerter.
+# Until this task, the feed alerter only fanned out to in-app + email,
+# leaving a coverage gap for the most user-visible Trustpilot incident
+# (SERP stars disappearing). Best-effort: a missing env var or a failed
+# POST never duplicates the alert and never breaks the email + in-app
+# channels above.
+_FEED_SLACK_WEBHOOK_ENV = "SLACK_TRUSTPILOT_FEED_WEBHOOK_URL"
+
+
+def _slack_webhook_url() -> str:
+    """Return the trimmed Slack webhook URL, or ``""`` when unset.
+
+    Whitespace-only values are treated as not configured: an accidental
+    ``"  "`` from a broken secret-manager render would otherwise make
+    ``bool(...)`` return ``True`` and the dashboard claim Slack was
+    wired even though every POST would 400.
+    """
+    return (os.environ.get(_FEED_SLACK_WEBHOOK_ENV) or "").strip()
+
+
+def _slack_config() -> dict[str, Any]:
+    """Compute the ``slackConfigured`` / ``slackWebhookEnv`` pair the
+    admin pill renders next to the data-feed status. Mirrors the shape
+    surfaced by the cron silence-alerter health endpoints (Task #964).
+    The webhook URL itself is deliberately never included — only the
+    boolean configured-ness and the env-var name — so admin-readable
+    JSON surfaces never leak it.
+    """
+    return {
+        "slackConfigured": bool(_slack_webhook_url()),
+        "slackWebhookEnv": _FEED_SLACK_WEBHOOK_ENV,
+    }
+
 
 # ─── Admin health endpoint ─────────────────────────────────────────────────
 
@@ -110,6 +147,14 @@ async def admin_trustpilot_health(
         **health,
         "status": status,
         "staleThresholdSeconds": _TP_FEED_STALE_THRESHOLD_S,
+        # Task #971 — surface whether the Slack fan-out for this
+        # alerter has its webhook env var
+        # (`SLACK_TRUSTPILOT_FEED_WEBHOOK_URL`) set, so the AdminHealth
+        # data-feed pill can render a small "Slack ✓ / ✗" badge next
+        # to the status string. Sibling fields on the cron health
+        # endpoints (Task #964 / Task #968) carry the same shape.
+        # The boolean only — never the URL itself.
+        **_slack_config(),
     }
 
 
@@ -244,6 +289,91 @@ async def _email_admins_about_trustpilot(
             )
 
 
+def _slack_payload_for_feed_alert(
+    title: str, message: str, kind: str, health: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the Slack incoming-webhook JSON body for the data-feed
+    broken / recovered alert.
+
+    Mirrors the per-event JSON-LD alerter (Task #757) and the cron
+    silence alerters' payload shape so the Slack channel reads
+    consistently across every Trustpilot incident channel: a
+    ``:rotating_light:`` (or ``:white_check_mark:`` on recovery)
+    section with the same mrkdwn header, plus a follow-up section
+    listing the freshness metadata that motivated the page.
+
+    The ``text`` fallback is required by Slack so push notifications
+    and clients that don't render Block Kit still show something.
+    """
+    last_age = health.get("lastSuccessAgeSeconds")
+    age_h = (
+        f"{last_age / 3600:.1f}h"
+        if isinstance(last_age, (int, float)) else "never"
+    )
+    last_error = health.get("lastError") or "n/a"
+
+    if kind == "recovered":
+        emoji = ":white_check_mark:"
+        header_md = (
+            f"{emoji} *Trustpilot data feed recovered*\n"
+            f"Aggregate fetch is fresh again "
+            f"(last success {age_h} ago).\n"
+            f"Endpoint: `/api/config/trustpilot/aggregate`"
+        )
+    else:
+        emoji = ":rotating_light:"
+        header_md = (
+            f"{emoji} *Trustpilot data feed broken*\n"
+            f"No successful aggregate fetch in `{age_h}` "
+            f"(threshold `{_TP_FEED_STALE_THRESHOLD_S // 3600}h`).\n"
+            f"Endpoint: `/api/config/trustpilot/aggregate`"
+        )
+
+    detail_md = (
+        "*Last freshness metadata*\n"
+        f"```lastError={last_error}\n"
+        f"lastSuccessAge={age_h}```"
+    )
+
+    blocks: list[dict[str, Any]] = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": header_md}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": detail_md}},
+        # Slack section text caps at 3000 chars; truncate defensively
+        # for the same reason the sibling helpers do (Task #757).
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": (message or "")[:2900]},
+        },
+    ]
+    return {"text": f"{emoji} {title}", "blocks": blocks}
+
+
+async def _post_slack_feed_alert(
+    title: str, message: str, kind: str, health: dict[str, Any],
+) -> None:
+    """Best-effort POST to ``SLACK_TRUSTPILOT_FEED_WEBHOOK_URL``.
+    No-op when the env var is unset; never raises. Mirrors
+    ``routes/admin_cf_waf_drift_cron_alerts._post_slack_cron_alert`` so
+    the failure modes are uniform across the admin alert surface."""
+    webhook_url = _slack_webhook_url()
+    if not webhook_url:
+        return
+    payload = _slack_payload_for_feed_alert(title, message, kind, health)
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(webhook_url, json=payload)
+            if resp.status_code >= 400:
+                logger.warning(
+                    "[trustpilot-alerts] slack webhook %s: %s",
+                    resp.status_code, resp.text[:200],
+                )
+    except Exception as exc:
+        logger.debug(
+            "[trustpilot-alerts] slack webhook post failed: %s", exc,
+        )
+
+
 async def _send_trustpilot_alert(
     db, kind: str, health: dict[str, Any], now_utc: datetime,
 ) -> None:
@@ -303,6 +433,11 @@ async def _send_trustpilot_alert(
         logger.debug(f"[trustpilot-alerts] notification persist failed: {exc}")
 
     asyncio.create_task(_email_admins_about_trustpilot(title, msg, kind))
+    # Task #971 — fan out to the Trustpilot ops Slack channel as well.
+    # Scheduled as a background task (matching the email fan-out above)
+    # so a slow/dead webhook can't stall the alert loop or the in-app
+    # notification persist that already succeeded.
+    asyncio.create_task(_post_slack_feed_alert(title, msg, kind, health))
 
 
 async def _check_and_alert_trustpilot_feed(

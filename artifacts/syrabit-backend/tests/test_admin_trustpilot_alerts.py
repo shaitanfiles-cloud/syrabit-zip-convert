@@ -495,3 +495,284 @@ def test_get_trustpilot_aggregate_cached_persists_first_fail_ts_across_retries(
     finally:
         cfg._tp_aggregate_cache.clear()
         cfg._tp_aggregate_cache.update(saved)
+
+
+# ─── Task #971 — Slack fan-out for the data-feed alerter ──────────────────
+#
+# Mirrors the cf-waf-drift cron silence-alerter Slack tests
+# (``tests/test_admin_cf_waf_drift_cron_alerts.py``) so the failure
+# modes are uniform across the admin alert surface: payload shape,
+# noop-on-missing-env, transport-failure swallow, and the end-to-end
+# scheduling check that pins ``_send_trustpilot_alert`` actually
+# fans out to the Slack helper alongside the email + in-app channels.
+# Plus the Task #964-style health-endpoint tests pinning the new
+# ``slackConfigured`` / ``slackWebhookEnv`` pair (env-set → True,
+# env-unset/whitespace → False, webhook URL never serialized).
+
+import os  # noqa: E402  — late import to avoid reordering the file
+
+
+def test_slack_payload_broken_has_drift_alert_style():
+    """The Slack body for a broken page must mirror the per-event
+    JSON-LD alerter (Task #757) so the channel reads consistently:
+    ``:rotating_light:`` header text, mrkdwn blocks, and the freshness
+    metadata that motivated the page."""
+    health = _health(
+        last_success_age_s=25 * 3600,
+        last_error="http_403",
+        last_error_age_s=600,
+    )
+    payload = admin_trustpilot_alerts._slack_payload_for_feed_alert(
+        title="Trustpilot feed broken: aggregate rating is stale",
+        message="body...",
+        kind="broken",
+        health=health,
+    )
+    assert payload["text"].startswith(":rotating_light:")
+    blocks = payload["blocks"]
+    assert all(b["type"] == "section" for b in blocks)
+    assert all(b["text"]["type"] == "mrkdwn" for b in blocks)
+    header_md = blocks[0]["text"]["text"]
+    assert "Trustpilot data feed broken" in header_md
+    assert "25.0h" in header_md
+    assert "/api/config/trustpilot/aggregate" in header_md
+    detail_md = blocks[1]["text"]["text"]
+    assert "lastError=http_403" in detail_md
+    assert "lastSuccessAge=25.0h" in detail_md
+
+
+def test_slack_payload_recovered_uses_check_emoji():
+    health = _health(last_success_age_s=120)
+    payload = admin_trustpilot_alerts._slack_payload_for_feed_alert(
+        title="Trustpilot feed recovered: aggregate rating is fresh again",
+        message="body...",
+        kind="recovered",
+        health=health,
+    )
+    assert payload["text"].startswith(":white_check_mark:")
+    header_md = payload["blocks"][0]["text"]["text"]
+    assert "recovered" in header_md.lower()
+    assert "/api/config/trustpilot/aggregate" in header_md
+
+
+def test_slack_payload_truncates_long_message_body():
+    """Defensively cap the free-form message section under Slack's
+    3000-char per-section limit so an unusually verbose alert body
+    can't 400 the webhook."""
+    huge = "x" * 5000
+    payload = admin_trustpilot_alerts._slack_payload_for_feed_alert(
+        title="t", message=huge, kind="broken",
+        health=_health(last_success_age_s=25 * 3600),
+    )
+    body_md = payload["blocks"][2]["text"]["text"]
+    assert len(body_md) <= 2900
+
+
+def test_post_slack_feed_alert_noop_when_env_unset():
+    """No env var → no network call, no logs above DEBUG, never raises."""
+    captured = {"called": False}
+
+    class _SentinelClient:
+        def __init__(self, *a, **kw):
+            captured["called"] = True
+
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("SLACK_TRUSTPILOT_FEED_WEBHOOK_URL", None)
+        with patch("httpx.AsyncClient", _SentinelClient):
+            asyncio.run(admin_trustpilot_alerts._post_slack_feed_alert(
+                "t", "m", "broken",
+                _health(last_success_age_s=25 * 3600),
+            ))
+    assert captured["called"] is False
+
+
+def test_post_slack_feed_alert_treats_whitespace_as_unset():
+    """Whitespace-only env values must be treated as not configured —
+    an accidental ``"  "`` from a broken secret-manager render would
+    otherwise fire a doomed POST every page."""
+    captured = {"called": False}
+
+    class _SentinelClient:
+        def __init__(self, *a, **kw):
+            captured["called"] = True
+
+    with patch.dict(
+        os.environ,
+        {"SLACK_TRUSTPILOT_FEED_WEBHOOK_URL": "   "},
+        clear=False,
+    ):
+        with patch("httpx.AsyncClient", _SentinelClient):
+            asyncio.run(admin_trustpilot_alerts._post_slack_feed_alert(
+                "t", "m", "broken",
+                _health(last_success_age_s=25 * 3600),
+            ))
+    assert captured["called"] is False
+
+
+def test_post_slack_feed_alert_posts_when_env_set():
+    """When the env var is set the helper POSTs the rendered payload
+    to that URL with a JSON body."""
+    posted: dict = {}
+
+    class _Resp:
+        status_code = 200
+        text = "ok"
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None):
+            posted["url"] = url
+            posted["json"] = json
+            return _Resp()
+
+    with patch.dict(
+        os.environ,
+        {"SLACK_TRUSTPILOT_FEED_WEBHOOK_URL": "https://hooks.slack.test/abc"},
+        clear=False,
+    ):
+        with patch("httpx.AsyncClient", _Client):
+            asyncio.run(admin_trustpilot_alerts._post_slack_feed_alert(
+                "t", "m", "broken",
+                _health(last_success_age_s=25 * 3600),
+            ))
+    assert posted["url"] == "https://hooks.slack.test/abc"
+    assert posted["json"]["text"].startswith(":rotating_light:")
+    assert posted["json"]["blocks"]
+
+
+def test_post_slack_feed_alert_swallows_transport_failures():
+    """A 500 / network error from the webhook must NOT propagate —
+    the alerter's email + in-app channels already succeeded by the
+    time the Slack task runs in the background."""
+
+    class _BoomClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **kw):
+            raise RuntimeError("network dead")
+
+    with patch.dict(
+        os.environ,
+        {"SLACK_TRUSTPILOT_FEED_WEBHOOK_URL": "https://hooks.slack.test/abc"},
+        clear=False,
+    ):
+        with patch("httpx.AsyncClient", _BoomClient):
+            # Must not raise.
+            asyncio.run(admin_trustpilot_alerts._post_slack_feed_alert(
+                "t", "m", "broken",
+                _health(last_success_age_s=25 * 3600),
+            ))
+
+
+def test_send_trustpilot_alert_schedules_slack_fan_out(fake_db):
+    """End-to-end: ``_send_trustpilot_alert`` must schedule a Slack
+    POST alongside the email + in-app channels (Task #971). Patch
+    the Slack helper itself so the test pins the contract — title,
+    kind, and the same ``health`` dict — without exercising httpx."""
+    now = _now()
+    health = _health(last_success_age_s=25 * 3600, last_error="http_403",
+                     last_error_age_s=600)
+    captured: dict = {}
+
+    async def _fake_slack(title, msg, kind, h):
+        captured["title"] = title
+        captured["kind"] = kind
+        captured["health"] = h
+
+    async def _run():
+        with patch.object(
+            admin_trustpilot_alerts, "_post_slack_feed_alert",
+            new=_fake_slack,
+        ):
+            with patch.object(
+                admin_trustpilot_alerts, "_email_admins_about_trustpilot",
+                new=AsyncMock(),
+            ):
+                await admin_trustpilot_alerts._send_trustpilot_alert(
+                    fake_db, "broken", health, now,
+                )
+                # Background tasks scheduled via asyncio.create_task —
+                # yield once so they run in the same loop before the
+                # context managers tear the patches back down.
+                await asyncio.sleep(0)
+
+    asyncio.run(_run())
+    assert captured.get("kind") == "broken"
+    assert "broken" in captured.get("title", "").lower()
+    assert captured.get("health") is health
+
+
+# ─── Task #971 — slackConfigured surfaces on the data-feed health endpoint ─
+
+def test_admin_health_endpoint_surfaces_slack_configured_true_when_env_set():
+    """When ``SLACK_TRUSTPILOT_FEED_WEBHOOK_URL`` is set, the data-feed
+    health endpoint must surface ``slackConfigured: True`` and the env
+    var name (so the AdminHealth dashboard pill renders the "Slack ✓"
+    badge alongside the other indicators). The webhook URL itself must
+    NOT appear anywhere in the response."""
+    async def _call(env_value):
+        async def _fake_global():
+            return _health(last_success_age_s=120)
+        with patch.object(
+            admin_trustpilot_alerts, "get_trustpilot_global_health",
+            new=_fake_global,
+        ), patch.dict(
+            os.environ,
+            {"SLACK_TRUSTPILOT_FEED_WEBHOOK_URL": env_value},
+            clear=False,
+        ):
+            return await admin_trustpilot_alerts.admin_trustpilot_health(
+                admin={},
+            )
+
+    payload = asyncio.run(_call(
+        "https://hooks.slack.example.com/services/T000/B000/feed-secret"
+    ))
+    assert payload["slackConfigured"] is True
+    assert payload["slackWebhookEnv"] == "SLACK_TRUSTPILOT_FEED_WEBHOOK_URL"
+    import json
+    assert "feed-secret" not in json.dumps(payload)
+
+
+def test_admin_health_endpoint_surfaces_slack_configured_false_when_env_unset(
+    monkeypatch,
+):
+    """Slack-not-wired: ``slackConfigured: False`` so the dashboard pill
+    renders the neutral "Slack ✗" badge that names the env var operators
+    need to set. Whitespace-only values are also treated as not
+    configured (``_slack_webhook_url`` strips them) so an accidental
+    ``" "`` in a deploy template doesn't look like coverage."""
+    async def _call():
+        async def _fake_global():
+            return _health(last_success_age_s=120)
+        with patch.object(
+            admin_trustpilot_alerts, "get_trustpilot_global_health",
+            new=_fake_global,
+        ):
+            return await admin_trustpilot_alerts.admin_trustpilot_health(
+                admin={},
+            )
+
+    monkeypatch.delenv("SLACK_TRUSTPILOT_FEED_WEBHOOK_URL", raising=False)
+    payload_unset = asyncio.run(_call())
+    assert payload_unset["slackConfigured"] is False
+    assert payload_unset["slackWebhookEnv"] == "SLACK_TRUSTPILOT_FEED_WEBHOOK_URL"
+
+    monkeypatch.setenv("SLACK_TRUSTPILOT_FEED_WEBHOOK_URL", "   ")
+    payload_blank = asyncio.run(_call())
+    assert payload_blank["slackConfigured"] is False
