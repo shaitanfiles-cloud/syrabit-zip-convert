@@ -231,7 +231,7 @@ async def admin_trace_logs(correlation_id: str, admin: dict = Depends(get_admin_
 
 @router.get("/api/admin/logs/export")
 async def admin_export_logs(
-    fmt: str = Query("ndjson", regex="^(csv|ndjson)$"),
+    fmt: str = Query("ndjson", pattern="^(csv|ndjson)$"),
     sources: Optional[str] = Query(None),
     levels: Optional[str] = Query(None),
     status_min: Optional[int] = Query(None, ge=0, le=999),
@@ -500,7 +500,11 @@ async def admin_clear_logs(
         "admin_email": admin.get("email", ""),
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
-    return {"deleted": deleted, "sources": _parse_csv_list(sources)}
+    # Echo back the *validated* sources list (parsed_sources is the
+    # post-guard, post-filter list — never the raw user input). This
+    # avoids operator confusion when a mixed valid/invalid input was
+    # supplied: the response shows precisely what we honoured.
+    return {"deleted": deleted, "sources": parsed_sources}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
