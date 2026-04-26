@@ -80,6 +80,13 @@ export default function CfWafDriftCronPill({
   // Forwarded as-is to CronHealthPill; see SlackConfigBadge for how
   // the "· paged Nh ago" decoration is rendered.
   slackMissingAlertState,
+  // Task #979 — per-env missing-Slack-webhook page-history snapshot
+  // (~10 events) sourced from
+  // /admin/health/slack-webhook-missing/CF_WAF_DRIFT_SLACK_WEBHOOK/alert-history.
+  // Forwarded as-is to ``CronHealthPill``'s SlackConfigBadge so a
+  // red badge can expand a "Recent pages" disclosure next to the
+  // "· paged Nh ago" decoration.
+  slackMissingAlertHistory,
   // Task #980 — async ``(envName, untilHours) => Promise<void>``
   // forwarded as-is to ``CronHealthPill``'s SlackConfigBadge. When
   // wired by AdminHealth, the badge renders a "Snooze 7d" affordance
@@ -101,6 +108,7 @@ export default function CfWafDriftCronPill({
       alertHistory={alertHistory}
       onLoadAlertHistory={onLoadAlertHistory}
       slackMissingAlertState={slackMissingAlertState}
+      slackMissingAlertHistory={slackMissingAlertHistory}
       onSnoozeSlackMissing={onSnoozeSlackMissing}
     />
   );

@@ -74,6 +74,7 @@ const renderPill = (overrides = {}) =>
       alertHistory={overrides.alertHistory}
       onLoadAlertHistory={overrides.onLoadAlertHistory}
       slackMissingAlertState={overrides.slackMissingAlertState}
+      slackMissingAlertHistory={overrides.slackMissingAlertHistory}
       onSnoozeSlackMissing={overrides.onSnoozeSlackMissing}
     />
   );
@@ -654,6 +655,119 @@ describe('CronHealthPill — Snooze button wiring (Task #980)', () => {
     expect(html).toMatch(/data-testid="foo-slack-config-snoozed"/);
     // And the page-age caption is suppressed.
     expect(html).not.toMatch(/foo-slack-config-paged/);
+  });
+});
+
+describe('CronHealthPill — Slack-missing recent-pages disclosure (Task #979)', () => {
+  // The disclosure lives on `SlackConfigBadge` and surfaces the
+  // ~10 most-recent missing-Slack-webhook pages for the env
+  // (sourced from the alert-history endpoint, polled in AdminHealth
+  // on the same 60s cadence as alert-state). These tests pin the
+  // gating contract so an empty-history env (bootstrap grace
+  // window or audit-log retention trim) stays visually quiet, and
+  // a green badge never carries the disclosure.
+
+  const REDDISH_DATA = {
+    status: 'silent',
+    slackConfigured: false,
+    slackWebhookEnv: 'CF_WAF_DRIFT_SLACK_WEBHOOK',
+  };
+
+  const SAMPLE_HISTORY = {
+    lockId: 'slack_webhook_missing/CF_WAF_DRIFT_SLACK_WEBHOOK',
+    limit: 10,
+    events: [
+      {
+        id: 'evt-1',
+        pagedAt: '2026-04-26T11:00:00.000Z',
+        kind: 'broken',
+        subKind: 'missing',
+        lastConclusion: 'failure',
+        lastRunUrl: 'https://github.example/run/1',
+        lastRunId: 1,
+      },
+      {
+        id: 'evt-2',
+        pagedAt: '2026-04-26T09:00:00.000Z',
+        kind: 'recovered',
+      },
+    ],
+  };
+
+  it('renders the "Recent pages (N)" toggle when red AND history has events', () => {
+    const html = renderPill({
+      data: REDDISH_DATA,
+      testId: 'foo',
+      slackMissingAlertHistory: SAMPLE_HISTORY,
+    });
+    expect(html).toMatch(/Recent pages \(2\)/);
+    expect(html).toMatch(/data-testid="foo-slack-config-history-toggle"/);
+    // Disclosure starts collapsed — panel must NOT be in the
+    // server-rendered markup. Pinning this so the SSR snapshot
+    // stays compact on first paint.
+    expect(html).not.toMatch(/foo-slack-config-history-panel/);
+  });
+
+  it('does NOT render the toggle when history is empty (only "· paged Nh ago" stays)', () => {
+    const html = renderPill({
+      data: REDDISH_DATA,
+      testId: 'foo',
+      slackMissingAlertState: {
+        envName: 'CF_WAF_DRIFT_SLACK_WEBHOOK',
+        present: false,
+        lastAlertAgeSeconds: 7200,
+        snoozeActive: false,
+      },
+      slackMissingAlertHistory: { lockId: 'x', limit: 10, events: [] },
+    });
+    expect(html).not.toMatch(/Recent pages/);
+    expect(html).not.toMatch(/foo-slack-config-history-toggle/);
+    // The "· paged Nh ago" decoration survives on its own.
+    expect(html).toMatch(/data-testid="foo-slack-config-paged"/);
+  });
+
+  it('does NOT render the toggle when history snapshot is missing/null', () => {
+    const html = renderPill({
+      data: REDDISH_DATA,
+      testId: 'foo',
+      // no slackMissingAlertHistory at all — pre-poll initial render.
+    });
+    expect(html).not.toMatch(/Recent pages/);
+    expect(html).not.toMatch(/foo-slack-config-history-toggle/);
+  });
+
+  it('does NOT render the toggle when the badge is green (Slack configured)', () => {
+    const html = renderPill({
+      data: { ...REDDISH_DATA, slackConfigured: true },
+      testId: 'foo',
+      // Even with events, a green badge has nothing to disclose —
+      // the env is wired up; any historical pages are stale noise.
+      slackMissingAlertHistory: SAMPLE_HISTORY,
+    });
+    expect(html).not.toMatch(/Recent pages/);
+    expect(html).not.toMatch(/foo-slack-config-history-toggle/);
+  });
+
+  it('caps the disclosure title at the event count it actually got (no fixed limit baked into the UI)', () => {
+    // Backend caps at limit=10 (AdminHealth requests ?limit=10),
+    // but the UI must render whatever count it received — never
+    // hardcode a number that would fall out of sync if the cap
+    // changes. Verify with a 5-event payload.
+    const fiveEvents = {
+      lockId: 'x',
+      limit: 10,
+      events: Array.from({ length: 5 }, (_, i) => ({
+        id: `e-${i}`,
+        pagedAt: '2026-04-26T10:00:00.000Z',
+        kind: 'broken',
+      })),
+    };
+    const html = renderPill({
+      data: REDDISH_DATA,
+      testId: 'foo',
+      slackMissingAlertHistory: fiveEvents,
+    });
+    expect(html).toMatch(/Recent pages \(5\)/);
   });
 });
 

@@ -36,6 +36,22 @@ export function SlackConfigBadge({
   envName,
   testId,
   missingAlertState,
+  // Task #979 — optional snapshot of recent missing-Slack-webhook
+  // pages for this env, sourced from
+  // /admin/health/slack-webhook-missing/<env>/alert-history. When
+  // the badge is red AND this snapshot has at least one event, the
+  // badge renders a "Recent pages (N)" disclosure under itself
+  // listing up to ~10 events (most recent first). Empty history
+  // shows only the existing "· paged Nh ago" decoration — no
+  // disclosure UI — so an env that's never been paged about stays
+  // visually quiet. Decoupled from ``missingAlertState`` so a parent
+  // can opt into either the "· paged Nh ago" caption, the "Recent
+  // pages" panel, or both. Shape:
+  //   { events: [{ id, pagedAt, kind, subKind, lastRunUrl,
+  //                lastConclusion, lastRunId, ... }], lockId, limit }
+  // — see _build_alert_history_response in
+  // routes/admin_slack_webhook_missing_alerts.py.
+  missingAlertHistory,
   // Task #980 — async ``(envName, untilHours) => Promise<void>``
   // wired by the AdminHealth dashboard. When provided AND the badge
   // is red AND the missing-webhook nag has paged on-call (the same
@@ -54,6 +70,12 @@ export function SlackConfigBadge({
   // second prop — a local ref is enough since "another admin clicked
   // it from a second tab" is handled by the 60s polling.
   const [snoozing, setSnoozing] = useState(false);
+  // Task #979 — disclosure open/closed flag. Starts collapsed so a
+  // red badge stays visually compact; the admin opts in by clicking
+  // the "Recent pages (N)" toggle. The events list itself is
+  // already in props (the dashboard polls it on the same 60s cadence
+  // as alert-state) so opening is instant — no lazy fetch needed.
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   if (configured == null) return null;
   const cls = configured
@@ -154,50 +176,115 @@ export function SlackConfigBadge({
     }
   }, [envName, onSnooze, snoozing]);
 
+  // Task #979 — disclosure gating. Only render the "Recent pages"
+  // toggle when (a) the badge is red (a green badge has nothing to
+  // disclose), (b) the parent passed a history snapshot, and (c)
+  // that snapshot has at least one event. An empty events list
+  // means either the env was never paged about (bootstrap grace
+  // window) or all pages were trimmed by the audit-log retention
+  // policy — either way, surfacing an empty disclosure adds noise
+  // without information, so we leave only the existing
+  // "· paged Nh ago" decoration in that case.
+  const historyEvents = (!configured && missingAlertHistory && Array.isArray(missingAlertHistory.events))
+    ? missingAlertHistory.events
+    : [];
+  const historyEventCount = historyEvents.length;
+  const showHistoryDisclosure = historyEventCount > 0;
+  const onToggleHistory = useCallback((ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    setHistoryOpen((prev) => !prev);
+  }, []);
+
+  // The badge itself stays an inline pill, but the optional
+  // "Recent pages" disclosure is a block element underneath, so
+  // wrap both in an inline-block flow container to keep the badge
+  // hugging its content while the panel stretches to the full
+  // available width of the badge row.
   return (
-    <span
-      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold border ${cls}`}
-      title={title}
-      data-testid={testId ? `${testId}-slack-config` : undefined}
-      data-slack-configured={configured ? 'true' : 'false'}
-      data-slack-missing-paged-age-seconds={
-        pagedAgeSecs != null ? String(pagedAgeSecs) : undefined
-      }
-      data-slack-snooze-remaining-seconds={
-        snoozeRemaining > 0 ? String(snoozeRemaining) : undefined
-      }
-    >
-      <MessageSquare size={10} aria-hidden />
-      {label}
-      {snoozeRemainingLabel ? (
-        <span
-          className="ml-0.5 font-normal opacity-80 inline-flex items-center gap-0.5"
-          data-testid={testId ? `${testId}-slack-config-snoozed` : undefined}
+    <span className="inline-flex flex-col items-start gap-0.5">
+      <span
+        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold border ${cls}`}
+        title={title}
+        data-testid={testId ? `${testId}-slack-config` : undefined}
+        data-slack-configured={configured ? 'true' : 'false'}
+        data-slack-missing-paged-age-seconds={
+          pagedAgeSecs != null ? String(pagedAgeSecs) : undefined
+        }
+        data-slack-snooze-remaining-seconds={
+          snoozeRemaining > 0 ? String(snoozeRemaining) : undefined
+        }
+      >
+        <MessageSquare size={10} aria-hidden />
+        {label}
+        {snoozeRemainingLabel ? (
+          <span
+            className="ml-0.5 font-normal opacity-80 inline-flex items-center gap-0.5"
+            data-testid={testId ? `${testId}-slack-config-snoozed` : undefined}
+          >
+            <BellOff size={10} aria-hidden />
+            snoozed {snoozeRemainingLabel}
+          </span>
+        ) : pagedAge != null && (
+          <span
+            className="ml-0.5 font-normal opacity-80"
+            data-testid={testId ? `${testId}-slack-config-paged` : undefined}
+          >
+            · paged {pagedAge} ago
+          </span>
+        )}
+        {showSnoozeButton && (
+          <button
+            type="button"
+            onClick={onSnoozeClick}
+            disabled={snoozing}
+            className="ml-1 px-1 py-0 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50 inline-flex items-center gap-0.5 text-[9px] font-semibold"
+            data-testid={testId ? `${testId}-slack-config-snooze` : undefined}
+            title={`Suppress missing-webhook pages for ${envName} for 7 days. The recovery page still fires when the env is set.`}
+            aria-label={`Snooze missing-webhook nag for ${envName} for 7 days`}
+          >
+            <BellOff size={9} aria-hidden />
+            {snoozing ? '…' : 'Snooze 7d'}
+          </button>
+        )}
+        {showHistoryDisclosure && (
+          <button
+            type="button"
+            onClick={onToggleHistory}
+            className="ml-1 px-1 py-0 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 inline-flex items-center gap-0.5 text-[9px] font-semibold"
+            data-testid={testId ? `${testId}-slack-config-history-toggle` : undefined}
+            aria-expanded={historyOpen}
+            title={historyOpen
+              ? `Hide the recent missing-webhook pages for ${envName}`
+              : `Show the ${historyEventCount} most recent missing-webhook pages for ${envName}`}
+          >
+            <History size={9} aria-hidden />
+            {historyOpen
+              ? 'Hide pages'
+              : `Recent pages (${historyEventCount})`}
+            {historyOpen
+              ? <ChevronUp size={9} aria-hidden />
+              : <ChevronDown size={9} aria-hidden />}
+          </button>
+        )}
+      </span>
+      {showHistoryDisclosure && historyOpen && (
+        <div
+          className="mt-1 rounded-lg border border-gray-200 bg-white/80 px-2 py-1 max-w-md"
+          data-testid={testId ? `${testId}-slack-config-history-panel` : undefined}
         >
-          <BellOff size={10} aria-hidden />
-          snoozed {snoozeRemainingLabel}
-        </span>
-      ) : pagedAge != null && (
-        <span
-          className="ml-0.5 font-normal opacity-80"
-          data-testid={testId ? `${testId}-slack-config-paged` : undefined}
-        >
-          · paged {pagedAge} ago
-        </span>
-      )}
-      {showSnoozeButton && (
-        <button
-          type="button"
-          onClick={onSnoozeClick}
-          disabled={snoozing}
-          className="ml-1 px-1 py-0 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50 inline-flex items-center gap-0.5 text-[9px] font-semibold"
-          data-testid={testId ? `${testId}-slack-config-snooze` : undefined}
-          title={`Suppress missing-webhook pages for ${envName} for 7 days. The recovery page still fires when the env is set.`}
-          aria-label={`Snooze missing-webhook nag for ${envName} for 7 days`}
-        >
-          <BellOff size={9} aria-hidden />
-          {snoozing ? '…' : 'Snooze 7d'}
-        </button>
+          <ul className="divide-y divide-gray-100">
+            {historyEvents.map((ev, idx) => (
+              <HistoryEventRow
+                key={ev?.id || idx}
+                event={ev}
+                ageLabel={ageLabel}
+                testId={testId ? `${testId}-slack-config` : 'slack-config'}
+                index={idx}
+              />
+            ))}
+          </ul>
+        </div>
       )}
     </span>
   );
@@ -326,6 +413,17 @@ export default function CronHealthPill({
   // while this one describes a sibling alerter that pages on-call
   // when the cron's Slack webhook env stays unset post-deploy.
   slackMissingAlertState,
+  // Task #979 — optional snapshot of recent missing-Slack-webhook
+  // pages for this env, sourced from
+  // `/admin/health/slack-webhook-missing/<env>/alert-history`.
+  // Forwarded as-is to ``SlackConfigBadge`` which renders a "Recent
+  // pages (N)" disclosure next to the badge when it's red and the
+  // snapshot has at least one event. Decoupled from
+  // ``slackMissingAlertState`` so a wrapper can opt into the
+  // disclosure without exposing the read-only paged caption (or
+  // vice versa) — both are best-effort and gated on the badge being
+  // red, so passing one without the other is safe.
+  slackMissingAlertHistory,
   // Task #980 — optional snooze handler forwarded down to
   // `SlackConfigBadge`. When provided AND the missing-Slack-webhook
   // nag is currently red+paged for this env, the badge surfaces a
@@ -462,6 +560,7 @@ export default function CronHealthPill({
               envName={data?.slackWebhookEnv}
               testId={testId}
               missingAlertState={slackMissingAlertState}
+              missingAlertHistory={slackMissingAlertHistory}
               onSnooze={onSnoozeSlackMissing}
             />
           </div>
