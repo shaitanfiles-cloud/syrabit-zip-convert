@@ -1193,6 +1193,27 @@ async def lifespan(app):
             "edge-proxy-deploy cron alert loop not started: "
             f"{_epd_cron_alert_err}"
         )
+    # Task #970 — page on-call when one of the three sibling cron Slack
+    # webhook env vars (UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK,
+    # CF_WAF_DRIFT_SLACK_WEBHOOK, EDGE_PROXY_DEPLOY_SLACK_WEBHOOK) stays
+    # unset for >24h after deploy. Task #963 documented the env vars and
+    # Task #964 added the AdminHealth "Slack ✓ / ✗" badge for at-a-glance
+    # visibility, but a deploy that ships without a webhook can sit
+    # "Slack ✗" indefinitely until an admin happens to look at the
+    # dashboard. This loop closes that gap by paging via in-app + email
+    # (no Slack — the whole point is "your Slack webhook is missing")
+    # using the same leader-gated lease + per-state CAS dedup the
+    # silence alerters above use.
+    try:
+        from routes.admin_slack_webhook_missing_alerts import (
+            _slack_webhook_missing_alert_loop,
+        )
+        asyncio.create_task(_slack_webhook_missing_alert_loop())
+    except Exception as _swm_alert_err:
+        logger.warning(
+            "slack-webhook-missing alert loop not started: "
+            f"{_swm_alert_err}"
+        )
     # Task #950: dedup is now via Mongo lease inside the loop
     # (``cf_bot_report_lease``), not the per-machine ``_is_leader``
     # file lock — Railway runs N replicas and each had its own file
