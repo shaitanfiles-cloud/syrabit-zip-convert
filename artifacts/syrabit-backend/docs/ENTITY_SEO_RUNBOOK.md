@@ -37,7 +37,13 @@ without a redeploy.
 | `ENTITY_SEO_WIKIDATA_QID`          | Syrabit.ai's Wikidata QID. Empty until the entity is approved — collector reports `missing` cleanly. | `Q123456789`             |
 | `ENTITY_SEO_WIKIPEDIA_TITLE`       | Article title (URL-encoded form is fine).                                                            | `Syrabit.ai`             |
 | `ENTITY_SEO_CRUNCHBASE_PERMALINK`  | The slug after `/organization/` on the Crunchbase URL.                                               | `syrabit-ai`             |
-| `GOOGLE_KG_API_KEY`                | Free-tier Google Knowledge Graph Search API key. Without it the `google_kg` signal reports `error` (configured=false). | (set in admin secrets)   |
+| `GOOGLE_KG_API_KEY`                | Free-tier Google Knowledge Graph Search API key. Without it the `google_kg` signal reports `error` (configured=false). Read at *call time* per request — no API restart needed when rotated. | (set in admin secrets) |
+
+> **Restart caveat**: every env var in this table except `GOOGLE_KG_API_KEY`
+> is read once at module import (`os.environ.get(...)` at file scope), so
+> rotating a value requires restarting the `artifacts/syrabit: api`
+> workflow before the new value takes effect. The KG API key is read
+> per-request, so rotating it is hot.
 
 Stable, code-reviewed lists (kept in `entity_seo_health.py` rather than
 env so changes are auditable):

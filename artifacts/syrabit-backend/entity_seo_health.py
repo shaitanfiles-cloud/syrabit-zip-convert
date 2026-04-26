@@ -447,6 +447,18 @@ async def verify_sameas_profile(
         return {"url": url, "status": "error", "http_status": 0,
                 "summary": f"fetch error: {resp['error']}", "final_url": None}
     sc = int(resp.get("status_code") or 0)
+    # Some providers (LinkedIn, Twitter behind anti-bot, certain CDNs)
+    # treat HEAD atypically — 405 Method Not Allowed and 403 Forbidden
+    # are common false positives. Fall back to GET so we don't flag a
+    # live profile as "missing" just because the upstream dislikes HEAD.
+    if sc in (403, 405):
+        resp = await http_get(url, method="GET", timeout=8.0,
+                              headers={"User-Agent": "Syrabit.ai/EntitySEOMonitor"})
+        if resp.get("error"):
+            return {"url": url, "status": "error", "http_status": 0,
+                    "summary": f"fetch error (GET fallback): {resp['error']}",
+                    "final_url": None}
+        sc = int(resp.get("status_code") or 0)
     final_url = resp.get("final_url") or url
     expected_host = _registrable_host(_hostname(url))
     actual_host = _registrable_host(_hostname(final_url))

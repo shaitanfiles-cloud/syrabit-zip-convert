@@ -151,6 +151,32 @@ def test_verify_sameas_profile_ok_and_broken():
     assert bad["status"] == "missing" and bad["http_status"] == 404
 
 
+def test_verify_sameas_profile_head_405_falls_back_to_get():
+    """Some providers (LinkedIn, Twitter behind anti-bot, certain CDNs)
+    return 405 / 403 to HEAD probes even though the URL is live. The
+    verifier must fall back to GET to avoid false-positive "missing"
+    flags."""
+    head_status: List[int] = []
+    get_status:  List[int] = []
+    seen_methods: List[str] = []
+
+    async def transport(url, *, method="GET", params=None, headers=None, timeout=10.0):
+        seen_methods.append(method)
+        if method == "HEAD":
+            head_status.append(405)
+            return {"status_code": 405, "json": None, "text": None,
+                    "error": None, "final_url": url}
+        get_status.append(200)
+        return {"status_code": 200, "json": None, "text": "ok",
+                "error": None, "final_url": url}
+
+    res = _run(esh.verify_sameas_profile(
+        "https://www.linkedin.com/in/syrabit", http_get=transport))
+    assert seen_methods[:2] == ["HEAD", "GET"]
+    assert res["status"] == "ok"
+    assert res["http_status"] == 200
+
+
 def test_verify_sameas_profile_offsite_redirect_flagged_as_missing():
     """A 200 from a URL that 301'd to a different brand host is still
     a broken profile from an SEO perspective — the canonical link is
