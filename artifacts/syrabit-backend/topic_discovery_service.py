@@ -354,6 +354,107 @@ async def collect_suggest_expansions(
     return out
 
 
+async def collect_bing_suggest(
+    db: Any,
+    *,
+    bing_fetcher=None,
+    seed_limit: int = MAX_SUGGEST_SEEDS_PER_RUN,
+    api_key: Optional[str] = None,
+    now: Optional[datetime] = None,
+) -> List[Dict[str, Any]]:
+    """Bing-side keyword expansion as a second discovery surface.
+
+    Architecture review feedback (Task #937 acceptance gate, round 4):
+    Google Suggest alone misses Bing-only phrasings, especially in the
+    long-tail "how to / what is" intent space we want to capture. We
+    reuse the existing ``bing_keyword_client.fetch_top_keywords``
+    helper (already cache-backed and rate-friendly) so this is purely
+    additive — no new external service to operate.
+
+    Behaviour matches ``collect_suggest_expansions`` for symmetry:
+    seeds = chapters ∪ recent seo_topics, capped after the union.
+    Gracefully no-ops when ``BING_WEBMASTER_API_KEY`` is unset so the
+    nightly run keeps working in environments without a Bing key.
+    """
+    if db is None:
+        return []
+    api_key = api_key if api_key is not None else os.environ.get("BING_WEBMASTER_API_KEY", "")
+    api_key = (api_key or "").strip()
+    if not api_key:
+        return []
+    if bing_fetcher is None:
+        try:
+            from bing_keyword_client import fetch_top_keywords as bing_fetcher  # type: ignore
+        except Exception as exc:
+            logger.info("topic_discovery: bing import failed: %s", exc)
+            return []
+
+    seeds: List[str] = []
+    seen_norm: set = set()
+
+    def _accept(kw: str) -> bool:
+        kw = (kw or "").strip()
+        if not kw:
+            return False
+        nk = _normalise_query(kw)
+        if not nk or nk in seen_norm:
+            return False
+        seen_norm.add(nk)
+        seeds.append(kw)
+        return True
+
+    try:
+        cursor = db.chapters.find(
+            {}, {"_id": 0, "title": 1, "name": 1, "topic": 1},
+        )
+        async for row in cursor:
+            _accept(row.get("title") or row.get("name") or row.get("topic") or "")
+    except Exception as exc:
+        logger.info("topic_discovery: bing chapters seed read failed: %s", exc)
+
+    try:
+        cursor = db.seo_topics.find(
+            {}, {"_id": 0, "primary_keyword": 1, "topic": 1, "updated_at": 1},
+        ).sort("updated_at", -1).limit(int(seed_limit) * 4)
+        async for row in cursor:
+            _accept(row.get("primary_keyword") or row.get("topic") or "")
+    except Exception as exc:
+        logger.info("topic_discovery: bing seo_topics seed read failed: %s", exc)
+
+    seed_limit = int(os.environ.get("TOPIC_DISCOVERY_BING_SEED_LIMIT", seed_limit))
+    if seed_limit > 0 and len(seeds) > seed_limit:
+        seeds = seeds[:seed_limit]
+    if not seeds:
+        return []
+
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for seed in seeds:
+        try:
+            res = await bing_fetcher(api_key, seed, db=db, now=now)
+        except Exception as exc:
+            logger.info("topic_discovery: bing(%r) failed: %s", seed, exc)
+            continue
+        for s in (res or {}).get("keywords", []) or []:
+            kw = (s.get("keyword") if isinstance(s, dict) else s) or ""
+            kw = str(kw).strip()
+            if not kw:
+                continue
+            nk = _normalise_query(kw)
+            if not nk or nk in seen or nk == _normalise_query(seed):
+                continue
+            seen.add(nk)
+            out.append({
+                "source": "bing_suggest",
+                "query": kw,
+                "signal": {
+                    "seed": seed,
+                    "volume": (s.get("volume") if isinstance(s, dict) else None),
+                },
+            })
+    return out
+
+
 async def collect_trending(
     db: Any,
     *,
@@ -697,13 +798,73 @@ async def _load_recent_overrides(db: Any, *, lookback_days: int = OVERRIDE_FEW_S
 # ── auto-enqueue ─────────────────────────────────────────────────────
 
 
+def _kw_token_set(text: str) -> set:
+    if not text:
+        return set()
+    return {t for t in _normalise_query(text).split() if len(t) > 2}
+
+
+async def _match_to_chapter(db: Any, query: str) -> Optional[str]:
+    """Find the best-matching chapter id for a discovered query so the
+    enqueued ``seo_topics`` row uses the same ``{linked_chapter_id,
+    topic}`` contract as the existing Stage 1→3 pipeline writes (see
+    ``routes/admin_pipeline.py:374`` and `:1882`).
+
+    Architecture review feedback (Task #937 acceptance gate, round 4):
+    without ``linked_chapter_id``, our discovered topics live in
+    ``seo_topics`` but are not surfaced by the existing SEO engine.
+    Linking each candidate to its closest chapter makes the row
+    indistinguishable in shape from rows the AI-notes pipeline
+    already produces, which the engine demonstrably consumes.
+    """
+    if db is None or not query:
+        return None
+    q_tokens = _kw_token_set(query)
+    if not q_tokens:
+        return None
+    best_id: Optional[str] = None
+    best_score = 0.0
+    try:
+        cursor = db.chapters.find(
+            {}, {"_id": 0, "id": 1, "title": 1, "name": 1, "topic": 1},
+        )
+        async for row in cursor:
+            cid = row.get("id")
+            if not cid:
+                continue
+            title = row.get("title") or row.get("name") or row.get("topic") or ""
+            t_tokens = _kw_token_set(title)
+            if not t_tokens:
+                continue
+            inter = len(q_tokens & t_tokens)
+            if inter == 0:
+                continue
+            # Jaccard-ish — biased toward the query side so that short
+            # chapter titles ("Motion") still match long queries
+            # ("equations of motion neet").
+            score = inter / max(len(q_tokens), 1)
+            if score > best_score:
+                best_score = score
+                best_id = cid
+    except Exception as exc:
+        logger.info("topic_discovery: chapter match read failed: %s", exc)
+        return None
+    # Require at least one shared meaningful token; arbitrary single-
+    # word matches (e.g. "best") would otherwise dominate.
+    return best_id if best_score > 0.0 else None
+
+
 async def _enqueue_for_pipeline(db: Any, *, candidate: Dict[str, Any], decision: str,
                                 run_id: str) -> Optional[str]:
     """Hand the candidate over to the existing Stage 1→3 pipeline by
-    upserting a ``seo_topics`` row with a discovery-aware status. The
-    existing SEO Manager UI / pipeline cron picks up rows tagged
-    ``source="topic_discovery"``. We never bypass the existing
-    validators — we only put things in the queue."""
+    upserting a ``seo_topics`` row with the SAME shape the existing
+    AI-notes pipeline writes (``{linked_chapter_id, topic}`` filter,
+    ``primary_keyword`` payload, see ``routes/admin_pipeline.py:374``
+    / ``:1882``). The discovery-specific fields ride alongside so
+    admins can audit the source without breaking pipeline consumers.
+
+    Returns the ``topic`` string on success (for backward compat with
+    callers that store it), or ``None`` if enqueue failed."""
     if db is None:
         return None
     try:
@@ -716,6 +877,7 @@ async def _enqueue_for_pipeline(db: Any, *, candidate: Dict[str, Any], decision:
     if not query:
         return None
 
+    chapter_id = await _match_to_chapter(db, query)
     topic_status = "auto_publish_pending" if decision == "auto_published" else "draft_pending"
     topic_doc = {
         "topic": query,
@@ -725,16 +887,57 @@ async def _enqueue_for_pipeline(db: Any, *, candidate: Dict[str, Any], decision:
         "discovery_run_id": run_id,
         "discovery_sources": list(candidate.get("sources") or []),
     }
+    if chapter_id:
+        topic_doc["linked_chapter_id"] = chapter_id
+        filt = {"linked_chapter_id": chapter_id, "topic": query}
+    else:
+        # Fall back to source-keyed row so we still record the keyword
+        # for keyword-weaving consumers; the engine just won't auto-
+        # generate a page for it without a chapter.
+        filt = {"topic": query, "source": "topic_discovery"}
     try:
-        await upsert_seo_topic(
-            db,
-            {"topic": query, "source": "topic_discovery"},
-            topic_doc,
-        )
+        await upsert_seo_topic(db, filt, topic_doc)
         return query
     except Exception as exc:
         logger.info("topic_discovery: enqueue failed for %r: %s", query, exc)
         return None
+
+
+async def _dequeue_from_pipeline(db: Any, *, query: str, run_id: str,
+                                 admin_id: str, reason: str) -> bool:
+    """Cancel a previously-enqueued discovery row when an admin
+    rejects an already-queued candidate. Marks the ``seo_topics`` row
+    with ``discovery_status="cancelled"`` and ``status="blocked"``
+    so the engine's ``_eligible_topic_filter`` (which excludes
+    ``status in ("blocked", "duplicate", "irrelevant")``) skips it
+    on the next pass.
+
+    Architecture review feedback (Task #937 acceptance gate, round 4):
+    apply_override(reject) previously updated decision metadata only;
+    if a candidate had already been enqueued (auto_published or
+    drafted), generation could still proceed. This closes the loop.
+    """
+    if db is None or not query:
+        return False
+    try:
+        # Match either the chapter-linked row or the legacy fallback.
+        res = await db.seo_topics.update_many(
+            {
+                "topic": query,
+                "source": "topic_discovery",
+            },
+            {"$set": {
+                "discovery_status": "cancelled",
+                "status": "blocked",
+                "cancelled_by": admin_id,
+                "cancelled_reason": (reason or "")[:280],
+                "cancelled_run_id": run_id,
+            }},
+        )
+        return getattr(res, "modified_count", 0) > 0
+    except Exception as exc:
+        logger.info("topic_discovery: dequeue failed for %r: %s", query, exc)
+        return False
 
 
 # ── orchestrator ─────────────────────────────────────────────────────
@@ -784,13 +987,16 @@ async def run_topic_discovery_once(
     run_id = _hash_id("run", now.isoformat())
     started_at = now
 
-    # 1) collect
+    # 1) collect — three discovery surfaces (architect round 4 added
+    # Bing as the second Suggest source). The dedupe step further down
+    # collapses duplicates, so cross-source overlap is harmless.
     gsc_rows = await collect_gsc_near_misses(db, now=now)
     suggest_rows = await collect_suggest_expansions(
         db, suggest_fetcher=suggest_fetcher, now=now,
     )
+    bing_rows = await collect_bing_suggest(db, now=now)
     trending_rows = await collect_trending(db, now=now)
-    raw_rows = gsc_rows + suggest_rows + trending_rows
+    raw_rows = gsc_rows + suggest_rows + bing_rows + trending_rows
     candidates = _dedupe_candidates(raw_rows)
 
     # 2) context
@@ -1085,6 +1291,7 @@ async def apply_override(
         raise LookupError(f"candidate not found: {candidate_id!r}")
 
     enqueued_topic = cand.get("enqueued_topic")
+    dequeued = False
     if new_decision in ("auto_published", "drafted") and not enqueued_topic:
         enqueued_topic = await _enqueue_for_pipeline(
             db,
@@ -1095,6 +1302,17 @@ async def apply_override(
             decision=new_decision,
             run_id=cand.get("run_id", "manual_override"),
         )
+    elif new_decision == "rejected" and enqueued_topic:
+        # Architecture review feedback (round 4): rejecting a candidate
+        # that was previously auto-queued must actually cancel the
+        # downstream generation, not just relabel the candidate row.
+        dequeued = await _dequeue_from_pipeline(
+            db,
+            query=enqueued_topic,
+            run_id=cand.get("run_id", "manual_override"),
+            admin_id=admin_id,
+            reason=admin_reason,
+        )
 
     update = {
         "decision": new_decision,
@@ -1104,6 +1322,7 @@ async def apply_override(
         "admin_id": admin_id,
         "admin_override_at": now,
         "enqueued_topic": enqueued_topic,
+        "pipeline_dequeued": dequeued,
     }
     await db[CANDIDATES_COLLECTION].update_one(
         {"id": candidate_id},

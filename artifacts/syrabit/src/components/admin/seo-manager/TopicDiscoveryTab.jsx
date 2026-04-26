@@ -55,6 +55,8 @@ export default function TopicDiscoveryTab({ adminToken }) {
   const [filterDecision, setFilterDecision] = useState('');
   const [running, setRunning]           = useState(false);
   const [overriding, setOverriding]     = useState(null);
+  const [page, setPage]                 = useState(0);
+  const PAGE_SIZE                       = 50;
 
   const loadRuns = useCallback(async () => {
     setRunsLoading(true);
@@ -77,7 +79,8 @@ export default function TopicDiscoveryTab({ adminToken }) {
       const res = await adminTopicDiscoveryCandidates(adminToken, {
         runId: selectedRunId,
         decision: filterDecision || null,
-        limit: 200,
+        limit: PAGE_SIZE,
+        skip: page * PAGE_SIZE,
       });
       setCandidates(res.data?.candidates || []);
     } catch {
@@ -85,7 +88,11 @@ export default function TopicDiscoveryTab({ adminToken }) {
     } finally {
       setCandidatesLoading(false);
     }
-  }, [adminToken, selectedRunId, filterDecision]);
+  }, [adminToken, selectedRunId, filterDecision, page]);
+
+  // Reset to page 0 whenever the run/filter changes so admins don't
+  // land on an empty page from the previous filter's tail.
+  useEffect(() => { setPage(0); }, [selectedRunId, filterDecision]);
 
   useEffect(() => { loadRuns(); }, [loadRuns]);
   useEffect(() => { loadCandidates(); }, [loadCandidates]);
@@ -324,6 +331,41 @@ export default function TopicDiscoveryTab({ adminToken }) {
                 </tbody>
               </table>
             )}
+          </div>
+          {/* Pagination — backend supports skip/limit; the table page is
+              50 rows. We can't know total without an extra count call,
+              so Next is enabled whenever the current page is full. */}
+          <div
+            className="flex items-center justify-between px-3 py-2 border-t border-gray-200 text-xs text-gray-600"
+            data-testid="topic-discovery-pagination"
+          >
+            <div>
+              Showing rows {candidates.length === 0 ? 0 : page * PAGE_SIZE + 1}–
+              {page * PAGE_SIZE + candidates.length}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={page === 0 || candidatesLoading}
+                className="px-2 py-1 rounded border border-gray-300 disabled:opacity-50"
+                data-testid="topic-discovery-page-prev"
+              >
+                ← Prev
+              </button>
+              <span data-testid="topic-discovery-page-current">
+                Page {page + 1}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => p + 1)}
+                disabled={candidates.length < PAGE_SIZE || candidatesLoading}
+                className="px-2 py-1 rounded border border-gray-300 disabled:opacity-50"
+                data-testid="topic-discovery-page-next"
+              >
+                Next →
+              </button>
+            </div>
           </div>
         </div>
       </div>

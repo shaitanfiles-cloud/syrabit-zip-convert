@@ -827,3 +827,162 @@ def test_try_claim_daily_lock_safe_when_db_none():
     assert _run(tds._try_claim_daily_lock(
         None, lock_id="x", owner_token="y", now=now,
     )) is False
+
+
+# ── pipeline integration (architect round 4) ─────────────────────────
+
+
+def test_match_to_chapter_picks_strongest_token_overlap():
+    db = _FakeWritableDb()
+    db.chapters.docs = [
+        {"id": "ch_motion", "title": "Motion in a Straight Line"},
+        {"id": "ch_thermo", "title": "Thermodynamics"},
+        {"id": "ch_optics", "title": "Wave Optics"},
+    ]
+    out = _run(tds._match_to_chapter(db, "equations of motion neet 2026"))
+    assert out == "ch_motion"
+
+
+def test_match_to_chapter_returns_none_when_no_overlap():
+    db = _FakeWritableDb()
+    db.chapters.docs = [{"id": "ch_chem", "title": "Organic Chemistry"}]
+    out = _run(tds._match_to_chapter(db, "something completely unrelated xyz"))
+    assert out is None
+
+
+def test_enqueue_for_pipeline_uses_chapter_linked_filter():
+    """The enqueue path must mirror routes/admin_pipeline.py:374's
+    contract — {linked_chapter_id, topic} filter — so the existing
+    SEO engine consumes the row identically to AI-notes outputs."""
+    db = _FakeWritableDb()
+    db.chapters.docs = [{"id": "ch_motion", "title": "Motion in a Plane"}]
+
+    out = _run(tds._enqueue_for_pipeline(
+        db,
+        candidate={"query": "projectile motion derivation", "sources": ["gsc_near_miss"]},
+        decision="auto_published",
+        run_id="run_test",
+    ))
+    assert out == "projectile motion derivation"
+    # The upsert hit seo_topics with the chapter-linked filter shape.
+    assert len(db.seo_topics.upserts) == 1
+    upsert = db.seo_topics.upserts[0]
+    assert upsert["q"] == {
+        "linked_chapter_id": "ch_motion",
+        "topic": "projectile motion derivation",
+    }
+    sets = upsert["update"]["$set"]
+    assert sets["linked_chapter_id"] == "ch_motion"
+    assert sets["primary_keyword"] == "projectile motion derivation"
+    assert sets["source"] == "topic_discovery"
+    assert sets["discovery_status"] == "auto_publish_pending"
+
+
+def test_enqueue_for_pipeline_falls_back_when_no_chapter_match():
+    db = _FakeWritableDb()
+    db.chapters.docs = [{"id": "ch_chem", "title": "Organic Chemistry"}]
+
+    out = _run(tds._enqueue_for_pipeline(
+        db,
+        candidate={"query": "best laptop for jee aspirants 2026", "sources": ["trending"]},
+        decision="drafted",
+        run_id="run_test",
+    ))
+    assert out == "best laptop for jee aspirants 2026"
+    upsert = db.seo_topics.upserts[0]
+    assert "linked_chapter_id" not in upsert["q"]
+    assert upsert["q"]["source"] == "topic_discovery"
+
+
+def test_apply_override_reject_dequeues_already_queued_candidate():
+    """Reject after auto-publish must mark the queued seo_topics row
+    as cancelled/blocked so the SEO engine skips it — addresses the
+    architect's round-4 'reject doesn't actually cancel generation'
+    finding."""
+
+    db = _FakeWritableDb()
+    # Seed a candidate that's already been auto-published (enqueued).
+    db[tds.CANDIDATES_COLLECTION].docs = [{
+        "id": "cand_x",
+        "query": "wave optics interference",
+        "sources": ["gsc_near_miss"],
+        "decision": "auto_published",
+        "run_id": "run_a",
+        "enqueued_topic": "wave optics interference",
+    }]
+    # And the corresponding seo_topics row the enqueue would have
+    # written.
+    db.seo_topics.docs = [{
+        "linked_chapter_id": "ch_optics",
+        "topic": "wave optics interference",
+        "source": "topic_discovery",
+        "discovery_status": "auto_publish_pending",
+    }]
+
+    # Patch update_many on the fake (it only exposes update_one by
+    # default) so the dequeue path can mark the row.
+    async def _update_many(q, update):
+        sets = (update.get("$set") or {})
+        n = 0
+        for d in db.seo_topics.docs:
+            if all(d.get(k) == v for k, v in q.items()):
+                d.update(sets)
+                n += 1
+
+        class _R:
+            modified_count = n
+        return _R()
+    db.seo_topics.update_many = _update_many
+
+    out = _run(tds.apply_override(
+        db,
+        candidate_id="cand_x",
+        new_decision="rejected",
+        admin_reason="off-topic for our audience",
+        admin_id="admin_alice",
+    ))
+    assert out["decision"] == "rejected"
+    assert out["pipeline_dequeued"] is True
+    # The seo_topics row is now blocked → engine's filter excludes it.
+    row = db.seo_topics.docs[0]
+    assert row["discovery_status"] == "cancelled"
+    assert row["status"] == "blocked"
+    assert row["cancelled_by"] == "admin_alice"
+
+
+def test_collect_bing_suggest_no_op_without_api_key(monkeypatch):
+    monkeypatch.delenv("BING_WEBMASTER_API_KEY", raising=False)
+    db = _FakeWritableDb()
+    db.chapters.docs = [{"id": "ch1", "title": "Motion"}]
+    out = _run(tds.collect_bing_suggest(db, now=datetime.now(timezone.utc)))
+    assert out == []
+
+
+def test_collect_bing_suggest_fans_out_when_key_present(monkeypatch):
+    monkeypatch.setenv("BING_WEBMASTER_API_KEY", "test-key")
+    db = _FakeWritableDb()
+    db.chapters.docs = [
+        {"id": "ch1", "title": "Photosynthesis"},
+        {"id": "ch2", "title": "Cellular Respiration"},
+    ]
+    db.seo_topics.docs = []
+    seen_seeds = []
+
+    async def fake_bing(api_key, seed, *, db=None, now=None):
+        seen_seeds.append(seed)
+        return {"keywords": [
+            {"keyword": f"{seed} ncert notes", "volume": 100},
+            {"keyword": f"{seed} mcq", "volume": 50},
+            seed,  # echoed seed must be filtered
+        ]}
+
+    out = _run(tds.collect_bing_suggest(
+        db, bing_fetcher=fake_bing, now=datetime.now(timezone.utc),
+    ))
+    assert sorted(seen_seeds) == ["Cellular Respiration", "Photosynthesis"]
+    queries = sorted(r["query"] for r in out)
+    assert "Photosynthesis ncert notes" in queries
+    assert "Cellular Respiration mcq" in queries
+    assert all(r["source"] == "bing_suggest" for r in out)
+    # Echoed seed must not appear.
+    assert "Photosynthesis" not in queries
