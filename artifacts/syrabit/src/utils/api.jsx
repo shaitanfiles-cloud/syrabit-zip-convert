@@ -1019,7 +1019,8 @@ export const adminLogsClear = (token, sources = []) => {
 
 // Returns a fully-qualified URL (with query string) the browser can hit
 // directly via window.open or <a download>. Cookies + admin JWT auth
-// must already be in place.
+// must already be in place. Kept for any caller that already relies
+// on cookie-only admin auth.
 export const adminLogsExportUrl = ({ filters = {}, fmt = 'ndjson', limit = 5000 } = {}) => {
   const sp = new URLSearchParams();
   const params = _logsFiltersToParams(filters);
@@ -1027,4 +1028,33 @@ export const adminLogsExportUrl = ({ filters = {}, fmt = 'ndjson', limit = 5000 
   sp.set('fmt', fmt);
   sp.set('limit', String(limit));
   return `${API_BASE}/admin/logs/export?${sp.toString()}`;
+};
+
+// Authenticated download — fetches the export as a Blob with the admin
+// Bearer token in the Authorization header, then triggers a browser
+// download. Use this in environments where admin auth is Bearer-only
+// (no cookie). Returns the filename used for the download so callers
+// can surface a confirmation toast.
+export const adminLogsDownloadExport = async (token,
+                                              { filters = {}, fmt = 'ndjson', limit = 5000 } = {}) => {
+  const params = _logsFiltersToParams(filters);
+  const resp = await axios.get(`${API_BASE}/admin/logs/export`, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+    responseType: 'blob',
+    params: { ...params, fmt, limit },
+  });
+  const ext = fmt === 'csv' ? 'csv' : 'ndjson';
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filename = `unified_logs_${stamp}.${ext}`;
+  const url = window.URL.createObjectURL(new Blob([resp.data]));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Defer revoke so Safari has time to begin the download.
+  setTimeout(() => window.URL.revokeObjectURL(url), 1000);
+  return filename;
 };

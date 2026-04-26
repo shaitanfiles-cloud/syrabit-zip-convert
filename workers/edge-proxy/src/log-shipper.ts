@@ -273,10 +273,29 @@ export async function shipBatch(
 }
 
 /**
+ * Module-local "deferred flush in flight" guard so we don't stack a
+ * dozen overlapping setTimeout chains during a tiny burst of two
+ * requests. Reset by the deferred callback when it actually flushes
+ * (or finds the buffer empty).
+ */
+let _DEFERRED_FLUSH_PENDING = false;
+const DEFAULT_DEFERRED_FLUSH_MS = 5_000;
+
+export function _resetDeferredFlushForTests(): void {
+  _DEFERRED_FLUSH_PENDING = false;
+}
+
+/**
  * One-shot helper used at every return path of the worker's ``fetch``
  * handler. Records the request + flushes when the buffer is ready —
  * both wrapped in ``ctx.waitUntil`` so neither the buffer write nor
  * the POST can extend user-perceived latency.
+ *
+ * Low-traffic safeguard: if the buffer has data but the flush
+ * thresholds (size + age) are not yet reached, schedule a deferred
+ * flush via ``ctx.waitUntil(setTimeout(...))`` so a single trickle
+ * of requests on a quiet day doesn't sit in memory for minutes
+ * before getting shipped (or get lost on isolate eviction).
  */
 export function recordEdgeLog(
   request: Request,
@@ -287,11 +306,37 @@ export function recordEdgeLog(
 ): void {
   try {
     const shipper = getSharedShipper();
-    shipper.record(request, response, meta, env);
+    const r = shipper.record(request, response, meta, env);
     if (shipper.shouldFlush()) {
       ctx.waitUntil(shipper.flush(env));
+      return;
+    }
+    // Time-based deferred flush — only schedule one at a time so a
+    // burst of N quiet requests doesn't queue N timers. The deferred
+    // task piggy-backs on ``waitUntil`` so the worker isolate is
+    // kept alive long enough for the timer to fire even if no new
+    // requests arrive in the meantime.
+    if (r === "buffered" && !_DEFERRED_FLUSH_PENDING) {
+      _DEFERRED_FLUSH_PENDING = true;
+      const delay = parseFloatEnv(
+        env.EDGE_LOG_DEFERRED_FLUSH_MS,
+        DEFAULT_DEFERRED_FLUSH_MS,
+      );
+      ctx.waitUntil(
+        new Promise<void>((resolve) => {
+          setTimeout(async () => {
+            try {
+              await shipper.flush(env);
+            } finally {
+              _DEFERRED_FLUSH_PENDING = false;
+              resolve();
+            }
+          }, Math.max(250, delay));
+        }),
+      );
     }
   } catch {
     // Never let logging break the response.
+    _DEFERRED_FLUSH_PENDING = false;
   }
 }

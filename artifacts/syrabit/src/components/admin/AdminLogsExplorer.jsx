@@ -22,7 +22,7 @@ import { toast } from 'sonner';
 import {
   adminLogsList, adminLogsStatus, adminLogsTrace, adminLogsPause,
   adminLogsResume, adminLogsRotateToken, adminLogsClear,
-  adminLogsExportUrl,
+  adminLogsExportUrl, adminLogsDownloadExport,
 } from '@/utils/api';
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 
@@ -240,13 +240,30 @@ export default function AdminLogsExplorer({ adminToken }) {
     }
   };
 
-  const exportCsv = () => {
-    const url = adminLogsExportUrl({ filters: fullFilters, fmt: 'csv' });
-    window.open(url, '_blank', 'noopener');
+  // Authenticated downloads — go through the Bearer-authed blob helper
+  // so the export works in environments where the admin only has a
+  // JWT (no admin cookie). Falls back to a new-tab open if the
+  // download itself errors (e.g. CORS) so the admin always has a way
+  // to recover the file.
+  const exportCsv = async () => {
+    try {
+      const fname = await adminLogsDownloadExport(adminToken, { filters: fullFilters, fmt: 'csv' });
+      toast.success(`Downloaded ${fname}`);
+    } catch (e) {
+      const url = adminLogsExportUrl({ filters: fullFilters, fmt: 'csv' });
+      window.open(url, '_blank', 'noopener');
+      toast.error('Bearer download failed — opened legacy URL fallback');
+    }
   };
-  const exportNdjson = () => {
-    const url = adminLogsExportUrl({ filters: fullFilters, fmt: 'ndjson' });
-    window.open(url, '_blank', 'noopener');
+  const exportNdjson = async () => {
+    try {
+      const fname = await adminLogsDownloadExport(adminToken, { filters: fullFilters, fmt: 'ndjson' });
+      toast.success(`Downloaded ${fname}`);
+    } catch (e) {
+      const url = adminLogsExportUrl({ filters: fullFilters, fmt: 'ndjson' });
+      window.open(url, '_blank', 'noopener');
+      toast.error('Bearer download failed — opened legacy URL fallback');
+    }
   };
 
   return (
