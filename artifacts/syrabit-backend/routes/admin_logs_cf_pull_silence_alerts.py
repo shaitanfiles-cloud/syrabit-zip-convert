@@ -109,6 +109,22 @@ _BOOTSTRAP_GRACE_S = int(
 _LOCK_ID = "unified_logs_cf_pull_silence_alert_state"
 _STATUS_URL = "/api/admin/logs/status"
 
+# Task #957 — fan out silence / recovery pages to Slack as well, so
+# on-call sees them in the same channel they already watch for the
+# sibling cf-waf-drift / edge-proxy-deploy alerters (which post via
+# ``CF_WAF_DRIFT_SLACK_WEBHOOK`` and ``EDGE_PROXY_DEPLOY_SLACK_WEBHOOK``
+# respectively). We mirror that env-var-per-alerter pattern with a
+# dedicated ``UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK`` so operators can
+# point all three at the same incoming-webhook URL today and split
+# them per-channel later without code changes. Best-effort: a missing
+# env var or a failing POST never blocks the email + in-app channels
+# above and never raises out of the alert loop.
+_CRON_SLACK_WEBHOOK_ENV = "UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK"
+
+
+def _slack_webhook_url() -> str:
+    return (os.environ.get(_CRON_SLACK_WEBHOOK_ENV) or "").strip()
+
 
 # ─── Health snapshot ───────────────────────────────────────────────────────
 
@@ -467,6 +483,101 @@ async def _email_admins_about_silence(
             )
 
 
+def _slack_payload_for_silence_alert(
+    title: str, message: str, kind: str, health: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the Slack incoming-webhook JSON body for the silence /
+    recovered alert.
+
+    Mirrors :func:`routes.admin_cf_waf_drift_cron_alerts._slack_payload_for_cron_alert`
+    so the channel reads consistently against the sibling alerter:
+    a ``:rotating_light:`` (or ``:white_check_mark:`` on recovery)
+    section header, plus a follow-up section listing the lock-doc
+    metadata that motivated the page (age + lease owner + status URL),
+    so on-call has the same triage context as the in-app notification
+    body without having to context-switch to email.
+
+    The ``text`` fallback is required by Slack so push notifications
+    and clients that don't render Block Kit still show something.
+    """
+    age_s = health.get("lastUpdatedAgeSeconds")
+    age_h = (
+        f"{age_s / 3600:.1f}h"
+        if isinstance(age_s, (int, float)) else "never"
+    )
+    threshold = _silent_threshold_s()
+    threshold_min = threshold / 60.0
+    lease_owner = health.get("leaseOwner") or "<none>"
+    last_updated_at = health.get("lastUpdatedAt") or "<never>"
+
+    if kind == "recovered":
+        emoji = ":white_check_mark:"
+        header_md = (
+            f"{emoji} *Unified-logs Cloudflare pull recovered*\n"
+            f"Last successful pull: {age_h} ago\n"
+            f"<{_STATUS_URL}|Status endpoint>"
+        )
+    else:
+        emoji = ":rotating_light:"
+        header_md = (
+            f"{emoji} *Unified-logs Cloudflare pull silent*\n"
+            f"No successful tick in `{age_h}` "
+            f"(threshold `{threshold_min:.0f} min`)\n"
+            f"<{_STATUS_URL}|Status endpoint>"
+        )
+
+    detail_md = (
+        "*Last lock-doc snapshot*\n"
+        f"```last_updated_at={last_updated_at}\n"
+        f"age={age_h}\n"
+        f"lease_owner={lease_owner}```"
+    )
+
+    blocks: list[dict[str, Any]] = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": header_md}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": detail_md}},
+        # Slack section text caps at 3000 chars; defensively truncate
+        # the free-form notification body for the same reason the
+        # cf-waf-drift / Trustpilot helpers do.
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": (message or "")[:2900]},
+        },
+    ]
+    return {"text": f"{emoji} {title}", "blocks": blocks}
+
+
+async def _post_slack_silence_alert(
+    title: str, message: str, kind: str, health: dict[str, Any],
+) -> None:
+    """Best-effort POST to ``UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK``.
+    No-op when the env var is unset; never raises. Mirrors
+    :func:`routes.admin_cf_waf_drift_cron_alerts._post_slack_cron_alert`
+    so the failure modes are uniform across the admin alert surface —
+    a 4xx response is logged at WARNING with the body snippet,
+    transport / connection failures are logged at DEBUG and swallowed
+    so the email + in-app notifications that already succeeded aren't
+    undone."""
+    webhook_url = _slack_webhook_url()
+    if not webhook_url:
+        return
+    payload = _slack_payload_for_silence_alert(title, message, kind, health)
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(webhook_url, json=payload)
+            if resp.status_code >= 400:
+                logger.warning(
+                    "[unified-logs-cf-pull-silence] slack webhook %s: %s",
+                    resp.status_code, resp.text[:200],
+                )
+    except Exception as exc:
+        logger.debug(
+            "[unified-logs-cf-pull-silence] slack webhook post failed: %s",
+            exc,
+        )
+
+
 async def _send_silence_alert(
     db, kind: str, health: dict[str, Any], now_utc: datetime,
 ) -> None:
@@ -572,6 +683,13 @@ async def _send_silence_alert(
         )
 
     asyncio.create_task(_email_admins_about_silence(title, msg, kind))
+    # Task #957 — fan out to the on-call Slack channel as well, so the
+    # page lands alongside the sibling cf-waf-drift / edge-proxy-deploy
+    # silence alerts on-call already watches. Scheduled as a background
+    # task (matching the email fan-out above) so a slow / dead webhook
+    # can't stall the alert loop or undo the in-app notification that
+    # already succeeded.
+    asyncio.create_task(_post_slack_silence_alert(title, msg, kind, health))
     # Task #918 — append to the paged-on-call audit log so the
     # AdminHealth dashboard's "show paged history" panel can render
     # this event next to the pill. Fire-and-forget for the same

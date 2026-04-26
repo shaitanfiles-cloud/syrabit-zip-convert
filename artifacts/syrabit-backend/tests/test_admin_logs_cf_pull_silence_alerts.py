@@ -497,6 +497,302 @@ def test_send_silence_alert_persists_in_app_notification(fake_db):
     assert captured["meta"]["last_updated_ts"] == health["lastUpdatedTs"]
 
 
+# ─── Task #957 — Slack fan-out ─────────────────────────────────────────────
+
+def test_slack_payload_silent_has_silence_alert_style():
+    """The Slack body for a silence page must mirror the sibling
+    cf-waf-drift alerter's shape: ``:rotating_light:`` text fallback,
+    mrkdwn section blocks, header with the silent age + threshold,
+    and the status URL the in-app notification already points to."""
+    health = _health(last_updated_age_s=4 * 3600)
+    with _patch_threshold(600):
+        payload = cron._slack_payload_for_silence_alert(
+            title="Unified-logs Cloudflare pull silent: no successful tick in 4.0h",
+            message="body...",
+            kind="silent",
+            health=health,
+        )
+    assert payload["text"].startswith(":rotating_light:")
+    blocks = payload["blocks"]
+    assert all(b["type"] == "section" for b in blocks)
+    assert all(b["text"]["type"] == "mrkdwn" for b in blocks)
+    header_md = blocks[0]["text"]["text"]
+    assert "Unified-logs Cloudflare pull silent" in header_md
+    assert "4.0h" in header_md
+    assert cron._STATUS_URL in header_md
+    assert "10 min" in header_md  # threshold rendered as minutes
+    detail_md = blocks[1]["text"]["text"]
+    assert "lease_owner=cf-pull-host-abc" in detail_md
+    assert health["lastUpdatedAt"] in detail_md
+
+
+def test_slack_payload_recovered_uses_check_emoji():
+    healthy = _health(last_updated_age_s=120)
+    with _patch_threshold(600):
+        payload = cron._slack_payload_for_silence_alert(
+            title="Unified-logs Cloudflare pull recovered: ingest resumed",
+            message="body...",
+            kind="recovered",
+            health=healthy,
+        )
+    assert payload["text"].startswith(":white_check_mark:")
+    header_md = payload["blocks"][0]["text"]["text"]
+    assert "recovered" in header_md.lower()
+    assert cron._STATUS_URL in header_md
+
+
+def test_slack_payload_truncates_long_message_body():
+    """Defensively cap the free-form message section under Slack's
+    3000-char per-section limit so an unusually verbose alert body
+    can't 400 the webhook."""
+    huge = "x" * 5000
+    with _patch_threshold(600):
+        payload = cron._slack_payload_for_silence_alert(
+            title="t", message=huge, kind="silent",
+            health=_health(last_updated_age_s=4 * 3600),
+        )
+    body_md = payload["blocks"][2]["text"]["text"]
+    assert len(body_md) <= 2900
+
+
+def test_post_slack_silence_alert_noop_when_env_unset():
+    """No env var → no network call and the helper never raises."""
+    import os
+    captured = {"called": False}
+
+    class _SentinelClient:
+        def __init__(self, *a, **kw):
+            captured["called"] = True
+
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK", None)
+        with patch("httpx.AsyncClient", _SentinelClient):
+            with _patch_threshold(600):
+                asyncio.run(cron._post_slack_silence_alert(
+                    "t", "m", "silent",
+                    _health(last_updated_age_s=4 * 3600),
+                ))
+    assert captured["called"] is False
+
+
+def test_post_slack_silence_alert_posts_when_env_set():
+    """When the env var is set the helper POSTs the rendered payload
+    to that URL with a JSON body."""
+    import os
+    posted: dict = {}
+
+    class _Resp:
+        status_code = 200
+        text = "ok"
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None):
+            posted["url"] = url
+            posted["json"] = json
+            return _Resp()
+
+    with patch.dict(
+        os.environ,
+        {"UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK": "https://hooks.slack.test/abc"},
+        clear=False,
+    ):
+        with patch("httpx.AsyncClient", _Client):
+            with _patch_threshold(600):
+                asyncio.run(cron._post_slack_silence_alert(
+                    "t", "m", "silent",
+                    _health(last_updated_age_s=4 * 3600),
+                ))
+    assert posted["url"] == "https://hooks.slack.test/abc"
+    assert posted["json"]["text"].startswith(":rotating_light:")
+    assert posted["json"]["blocks"]
+
+
+def test_post_slack_silence_alert_swallows_transport_failures():
+    """A network error from the webhook must NOT propagate — the
+    alerter's email + in-app channels already succeeded by the time
+    the Slack task runs in the background, so a failed POST cannot
+    be allowed to undo them or stall the loop."""
+    import os
+
+    class _BoomClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **kw):
+            raise RuntimeError("network dead")
+
+    with patch.dict(
+        os.environ,
+        {"UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK": "https://hooks.slack.test/abc"},
+        clear=False,
+    ):
+        with patch("httpx.AsyncClient", _BoomClient):
+            with _patch_threshold(600):
+                # Must not raise.
+                asyncio.run(cron._post_slack_silence_alert(
+                    "t", "m", "silent",
+                    _health(last_updated_age_s=4 * 3600),
+                ))
+
+
+def test_post_slack_silence_alert_swallows_4xx_responses():
+    """A 4xx response from the webhook is logged at WARNING but never
+    raised — same discipline as the cf-waf-drift sibling so a Slack
+    misconfig can't take down the alert loop."""
+    import os
+
+    class _Resp:
+        status_code = 404
+        text = "no_team"
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **kw):
+            return _Resp()
+
+    with patch.dict(
+        os.environ,
+        {"UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK": "https://hooks.slack.test/abc"},
+        clear=False,
+    ):
+        with patch("httpx.AsyncClient", _Client):
+            with _patch_threshold(600):
+                # Must not raise even though the webhook 404'd.
+                asyncio.run(cron._post_slack_silence_alert(
+                    "t", "m", "silent",
+                    _health(last_updated_age_s=4 * 3600),
+                ))
+
+
+def test_send_silence_alert_schedules_slack_fan_out(fake_db):
+    """End-to-end: ``_send_silence_alert`` must schedule a Slack POST
+    on the silent transition alongside the email + in-app channels.
+    Patch the Slack helper itself so the test pins the contract —
+    title, kind, and the same ``health`` dict — without exercising
+    httpx."""
+    now = _now()
+    health = _health(last_updated_age_s=4 * 3600)
+    captured: dict = {}
+
+    async def _fake_slack(title, msg, kind, h):
+        captured["title"] = title
+        captured["msg"] = msg
+        captured["kind"] = kind
+        captured["health"] = h
+
+    async def _run():
+        with patch("db_ops.supa_insert_notification", new=AsyncMock()):
+            with patch.object(cron, "_post_slack_silence_alert",
+                              new=_fake_slack):
+                with patch.object(cron, "_email_admins_about_silence",
+                                  new=AsyncMock()):
+                    await cron._send_silence_alert(
+                        fake_db, "silent", health, now,
+                    )
+                    # Background tasks scheduled via asyncio.create_task —
+                    # yield once so they run in the same loop before the
+                    # context managers tear the patches back down.
+                    await asyncio.sleep(0)
+
+    with _patch_threshold(600):
+        asyncio.run(_run())
+    assert captured.get("kind") == "silent"
+    assert "silent" in captured.get("title", "").lower()
+    assert captured.get("health") is health
+    # Slack copy must mirror the in-app notification body so on-call
+    # has the same triage context — at minimum the age, lease owner
+    # and status URL the in-app body carries.
+    assert "4.0h" in captured.get("msg", "")
+    assert "cf-pull-host-abc" in captured.get("msg", "")
+    assert cron._STATUS_URL in captured.get("msg", "")
+
+
+def test_send_recovery_alert_schedules_slack_fan_out(fake_db):
+    """The recovery transition must also fan out to Slack so on-call
+    sees the all-clear in the same channel as the original page."""
+    now = _now()
+    healthy = _health(last_updated_age_s=120)
+    captured: dict = {}
+
+    async def _fake_slack(title, msg, kind, h):
+        captured["title"] = title
+        captured["kind"] = kind
+
+    async def _run():
+        with patch("db_ops.supa_insert_notification", new=AsyncMock()):
+            with patch.object(cron, "_post_slack_silence_alert",
+                              new=_fake_slack):
+                with patch.object(cron, "_email_admins_about_silence",
+                                  new=AsyncMock()):
+                    await cron._send_silence_alert(
+                        fake_db, "recovered", healthy, now,
+                    )
+                    await asyncio.sleep(0)
+
+    with _patch_threshold(600):
+        asyncio.run(_run())
+    assert captured.get("kind") == "recovered"
+    assert "recovered" in captured.get("title", "").lower()
+
+
+def test_send_silence_alert_in_app_succeeds_when_slack_post_fails(fake_db):
+    """A failing Slack POST must NOT undo the in-app notification
+    persist that already ran — the in-app channel is the canonical
+    "we paged" signal and Slack is purely best-effort."""
+    now = _now()
+    health = _health(last_updated_age_s=4 * 3600)
+    persisted: dict = {}
+
+    async def _fake_persist(payload):
+        persisted.update(payload)
+
+    async def _boom_slack(*a, **kw):
+        raise RuntimeError("slack down")
+
+    async def _run():
+        with patch("db_ops.supa_insert_notification", new=_fake_persist):
+            with patch.object(cron, "_post_slack_silence_alert",
+                              new=_boom_slack):
+                with patch.object(cron, "_email_admins_about_silence",
+                                  new=AsyncMock()):
+                    await cron._send_silence_alert(
+                        fake_db, "silent", health, now,
+                    )
+                    # Yield so the background Slack task runs and
+                    # raises (its raise must not surface here either —
+                    # ``asyncio.create_task`` swallows the exception
+                    # into the task object, which we don't await).
+                    await asyncio.sleep(0)
+
+    with _patch_threshold(600):
+        asyncio.run(_run())
+    assert persisted.get("channel") == "in_app"
+    assert persisted.get("meta", {}).get("state") == "silent"
+
+
 def test_send_recovery_alert_uses_info_level(fake_db):
     """Recovery side: notification level flips to ``info`` and the
     title speaks to the resumed ingest. Patch the fan-outs so the
