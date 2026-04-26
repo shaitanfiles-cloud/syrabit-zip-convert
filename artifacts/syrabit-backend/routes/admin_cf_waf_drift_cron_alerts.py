@@ -154,6 +154,36 @@ async def admin_cf_waf_drift_cron_health(
     }
 
 
+# ─── Task #902 — alert-state lock-doc snapshot ─────────────────────────────
+#
+# Mirror of ``/admin/health/edge-proxy-deploy/cron/alert-state``: surfaces
+# the cf-waf-drift silence alerter's persisted dedup state so the
+# AdminHealth tile next to the pill can show "last paged Nh ago" and
+# the remaining 24h debounce window. The lock doc already exists
+# (the alerter writes it on every CAS claim); this route just exposes
+# it. Reuses the shared shaping helper from
+# :mod:`routes.admin_health` so all three admin pills (edge-proxy,
+# cf-waf-drift, Trustpilot) surface the same JSON shape.
+@router.get("/admin/health/cf-waf-drift/cron/alert-state")
+async def admin_cf_waf_drift_cron_alert_state(
+    admin: dict = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """Lock-doc snapshot for the cf-waf-drift silence alerter.
+
+    Always 200; surfaces ``present: False`` when the alerter hasn't
+    fired even once (the lock doc gets created on the first CAS
+    claim) or when Mongo is unavailable. ``last_state`` is
+    ``"silent"`` while the alerter is pending re-page and
+    ``"healthy"`` after a recovery, so the shared helper below uses
+    ``broken_state_label="silent"`` to compute the ``inDebounce`` /
+    ``debounceRemainingSeconds`` derived fields.
+    """
+    from routes.admin_health import _build_alert_state_response
+    return await _build_alert_state_response(
+        _LOCK_ID, _CRON_REALERT_INTERVAL_S, broken_state_label="silent",
+    )
+
+
 # ─── Alerting ──────────────────────────────────────────────────────────────
 
 def _classify_cron(

@@ -271,6 +271,88 @@ describe('CronHealthPill — workflow URL fallback', () => {
   });
 });
 
+// Task #902 — alerter-state caption surfaced under subText.
+// `formatAlertStateCaption` is itself unit-tested in
+// `cronCaptionHelpers.test.js`; here we just verify the pill wires
+// it up correctly: renders nothing without alertState, renders the
+// caption testId when provided, and uses amber-vs-gray text colour
+// based on `inDebounce`.
+describe('alertState rendering', () => {
+  it('renders no alert-state caption when no alertState prop is passed', () => {
+    const html = renderToStaticMarkup(
+      <CronHealthPill
+        data={{ status: 'silent' }}
+        testId="foo"
+        defaultWorkflowUrl="https://example.test/workflow"
+      />,
+    );
+    expect(html).not.toContain('foo-alert-state');
+  });
+
+  it('renders no alert-state caption when alertState.present is false', () => {
+    // Brand-new deployment: alerter has never fired. The pill must
+    // not render an orphan "last paged: never" line — the colour
+    // already conveys "no page has been sent".
+    const html = renderToStaticMarkup(
+      <CronHealthPill
+        data={{ status: 'healthy' }}
+        testId="foo"
+        defaultWorkflowUrl="https://example.test/workflow"
+        alertState={{ present: false, lastAlertAt: null,
+                      lastAlertAgeSeconds: null, inDebounce: false,
+                      debounceRemainingSeconds: null }}
+      />,
+    );
+    expect(html).not.toContain('foo-alert-state');
+  });
+
+  it('renders the caption in amber when inDebounce=true', () => {
+    // Amber so admins glance at the pill and know "yes we paged,
+    // and the next page is auto-suppressed for another ~22h".
+    const html = renderToStaticMarkup(
+      <CronHealthPill
+        data={{ status: 'silent' }}
+        testId="foo"
+        defaultWorkflowUrl="https://example.test/workflow"
+        alertState={{
+          present: true,
+          lastAlertAt: '2026-04-25T00:00:00+00:00',
+          lastAlertAgeSeconds: 2 * 3600,
+          inDebounce: true,
+          debounceRemainingSeconds: 22 * 3600,
+        }}
+      />,
+    );
+    expect(html).toContain('foo-alert-state');
+    expect(html).toContain('last paged 2h ago · in debounce ~22h remaining');
+    // Amber colour class on the caption <p>.
+    expect(html).toMatch(/text-amber-600[^"]*"[^>]*data-testid="foo-alert-state"/);
+  });
+
+  it('renders the caption in gray when inDebounce=false', () => {
+    // Past the realert window: still informative ("we did page on
+    // this") but neutral colour because the next poll can re-page.
+    const html = renderToStaticMarkup(
+      <CronHealthPill
+        data={{ status: 'silent' }}
+        testId="foo"
+        defaultWorkflowUrl="https://example.test/workflow"
+        alertState={{
+          present: true,
+          lastAlertAt: '2026-04-23T00:00:00+00:00',
+          lastAlertAgeSeconds: 30 * 3600,
+          inDebounce: false,
+          debounceRemainingSeconds: null,
+        }}
+      />,
+    );
+    expect(html).toContain('foo-alert-state');
+    expect(html).toContain('last paged 1d ago');
+    expect(html).not.toContain('in debounce');
+    expect(html).toMatch(/text-gray-500[^"]*"[^>]*data-testid="foo-alert-state"/);
+  });
+});
+
 describe('ageLabel helper', () => {
   const cases = [
     { input: null, expected: null, why: 'null input -> null' },

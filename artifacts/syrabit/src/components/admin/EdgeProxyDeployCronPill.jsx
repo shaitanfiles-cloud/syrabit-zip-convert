@@ -94,7 +94,17 @@ const renderExtraActions = ({ data }) => {
   );
 };
 
-export default function EdgeProxyDeployCronPill({ data, loading, onRefresh }) {
+export default function EdgeProxyDeployCronPill({
+  data, loading, onRefresh,
+  // Task #902 — alerter-state lock-doc snapshot from
+  // /admin/health/edge-proxy-deploy/cron/alert-state. Optional;
+  // when present the shared <CronHealthPill> renders an extra
+  // "last paged Xh ago · in debounce ~Yh remaining" caption so
+  // admins can tell apart "red but nobody's been paged yet" from
+  // "red but we're already in the 24h debounce window after the
+  // last page".
+  alertState,
+}) {
   return (
     <CronHealthPill
       data={data}
@@ -106,6 +116,7 @@ export default function EdgeProxyDeployCronPill({ data, loading, onRefresh }) {
       pillLabelByStatus={PILL_LABEL_BY_STATUS}
       renderSubText={renderSubText}
       renderExtraActions={renderExtraActions}
+      alertState={alertState}
     />
   );
 }

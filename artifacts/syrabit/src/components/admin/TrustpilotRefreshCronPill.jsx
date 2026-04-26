@@ -79,7 +79,13 @@ const renderSubText = ({ data, ageLabel: fmt }) => {
 // alias once external selector migration is complete".
 const LEGACY_TESTID_SUFFIXES = ['tile', 'status', 'pill', 'run-link', 'refresh'];
 
-export default function TrustpilotRefreshCronPill({ data, loading, onRefresh }) {
+export default function TrustpilotRefreshCronPill({
+  data, loading, onRefresh,
+  // Task #902 — alerter-state lock-doc snapshot from
+  // /admin/health/trustpilot/refresh-cron/alert-state. Optional;
+  // see EdgeProxyDeployCronPill for the same prop's behaviour.
+  alertState,
+}) {
   return (
     <>
       <CronHealthPill
@@ -90,6 +96,7 @@ export default function TrustpilotRefreshCronPill({ data, loading, onRefresh }) 
         defaultWorkflowUrl={DEFAULT_WORKFLOW_URL}
         headerTextByStatus={HEADER_TEXT_BY_STATUS}
         renderSubText={renderSubText}
+        alertState={alertState}
       />
       <div hidden aria-hidden="true" data-legacy-alias-for="trustpilot-refresh-cron">
         {LEGACY_TESTID_SUFFIXES.map((suffix) => (

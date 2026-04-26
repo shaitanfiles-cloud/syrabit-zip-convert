@@ -64,7 +64,13 @@ const renderExtraActions = ({ data }) => {
   );
 };
 
-export default function CfWafDriftCronPill({ data, loading, onRefresh }) {
+export default function CfWafDriftCronPill({
+  data, loading, onRefresh,
+  // Task #902 — alerter-state lock-doc snapshot from
+  // /admin/health/cf-waf-drift/cron/alert-state. Optional; see
+  // EdgeProxyDeployCronPill for the same prop's behaviour.
+  alertState,
+}) {
   return (
     <CronHealthPill
       data={data}
@@ -75,6 +81,7 @@ export default function CfWafDriftCronPill({ data, loading, onRefresh }) {
       headerTextByStatus={HEADER_TEXT_BY_STATUS}
       renderSubText={renderSubText}
       renderExtraActions={renderExtraActions}
+      alertState={alertState}
     />
   );
 }

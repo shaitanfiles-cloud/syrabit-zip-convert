@@ -266,6 +266,50 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       .finally(() => setEdgeProxyDeployCronLoading(false));
   }, [adminToken]);
 
+  // Task #902 — alerter-state lock-doc snapshots for the three cron
+  // pills above. The pill data answers "is the workflow currently
+  // red?"; the alert-state data answers "have we paged on-call about
+  // that yet?" by surfacing each alerter's persisted dedup state
+  // (last paged when, against which run, currently inside the 24h
+  // re-page debounce or not). Endpoints — all admin-gated, all
+  // 200-or-200, returning ``present: false`` when the alerter
+  // hasn't fired yet or Mongo is unavailable:
+  //   * /admin/health/edge-proxy-deploy/cron/alert-state
+  //     (Task #893 alerter, lock _id="edge_proxy_deploy_cron_alert_state")
+  //   * /admin/health/cf-waf-drift/cron/alert-state
+  //     (Task #831 alerter, lock _id="cf_waf_drift_cron_alert_state")
+  //   * /admin/health/trustpilot/refresh-cron/alert-state
+  //     (Task #751 alerter, lock _id="trustpilot_refresh_cron_alert_state")
+  // Each pill renders the snapshot inline as a small "last paged Xh
+  // ago · in debounce ~Yh remaining" caption.
+  const [edgeProxyDeployCronAlertState, setEdgeProxyDeployCronAlertState] = useState(null);
+  const [cfDriftCronAlertState, setCfDriftCronAlertState] = useState(null);
+  const [tpCronAlertState, setTpCronAlertState] = useState(null);
+
+  const loadEdgeProxyDeployCronAlertState = useCallback(() => {
+    axios.get(`${API_BASE}/admin/health/edge-proxy-deploy/cron/alert-state`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setEdgeProxyDeployCronAlertState(r.data))
+      .catch(() => setEdgeProxyDeployCronAlertState(null));
+  }, [adminToken]);
+
+  const loadCfDriftCronAlertState = useCallback(() => {
+    axios.get(`${API_BASE}/admin/health/cf-waf-drift/cron/alert-state`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setCfDriftCronAlertState(r.data))
+      .catch(() => setCfDriftCronAlertState(null));
+  }, [adminToken]);
+
+  const loadTpCronAlertState = useCallback(() => {
+    axios.get(`${API_BASE}/admin/health/trustpilot/refresh-cron/alert-state`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setTpCronAlertState(r.data))
+      .catch(() => setTpCronAlertState(null));
+  }, [adminToken]);
+
   const loadTpJsonldReport = useCallback(() => {
     setTpJsonldLoading(true);
     axios.get(`${API_BASE}/admin/trustpilot-jsonld/report`, {
@@ -303,6 +347,13 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     loadTpCronHealth();
     loadCfDriftCronHealth();
     loadEdgeProxyDeployCronHealth();
+    // Task #902 — pull alerter-state alongside the pill snapshots so
+    // the "last paged Xh ago · in debounce ~Yh" caption stays in
+    // sync with the pill's colour. Same 60s cadence as the rest;
+    // the lock-doc reads are tiny (single Mongo find by _id).
+    loadEdgeProxyDeployCronAlertState();
+    loadCfDriftCronAlertState();
+    loadTpCronAlertState();
     const id = setInterval(() => {
       loadTpJsonldReport();
       loadTpJsonldHistory();
@@ -310,11 +361,16 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       loadTpCronHealth();
       loadCfDriftCronHealth();
       loadEdgeProxyDeployCronHealth();
+      loadEdgeProxyDeployCronAlertState();
+      loadCfDriftCronAlertState();
+      loadTpCronAlertState();
     }, 60000);
     return () => clearInterval(id);
   }, [adminToken, loadTpJsonldReport, loadTpJsonldHistory,
       loadTpJsonldAlerts, loadTpCronHealth, loadCfDriftCronHealth,
-      loadEdgeProxyDeployCronHealth]);
+      loadEdgeProxyDeployCronHealth,
+      loadEdgeProxyDeployCronAlertState, loadCfDriftCronAlertState,
+      loadTpCronAlertState]);
 
   // Task #609 — managed AI response cache stats + admin purge controls.
   const [aiCacheStats, setAiCacheStats] = useState(null);
@@ -2214,6 +2270,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           data={tpCronHealth}
           loading={tpCronLoading}
           onRefresh={loadTpCronHealth}
+          alertState={tpCronAlertState}
         />
         </SectionErrorBoundary>
 
@@ -2237,6 +2294,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           data={cfDriftCronHealth}
           loading={cfDriftCronLoading}
           onRefresh={loadCfDriftCronHealth}
+          alertState={cfDriftCronAlertState}
         />
         </SectionErrorBoundary>
 
@@ -2256,6 +2314,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           data={edgeProxyDeployCronHealth}
           loading={edgeProxyDeployCronLoading}
           onRefresh={loadEdgeProxyDeployCronHealth}
+          alertState={edgeProxyDeployCronAlertState}
         />
         </SectionErrorBoundary>
 

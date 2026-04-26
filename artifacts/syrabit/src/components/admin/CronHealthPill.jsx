@@ -1,5 +1,6 @@
 import React from 'react';
 import { AlertTriangle, ShieldCheck, Clock, RefreshCw, ExternalLink } from 'lucide-react';
+import { formatAlertStateCaption } from './cronCaptionHelpers';
 
 const DEFAULT_PILL_LABELS = {
   healthy: 'CRON HEALTHY',
@@ -28,6 +29,15 @@ export default function CronHealthPill({
   defaultWorkflowUrl,
   renderSubText,
   renderExtraActions,
+  // Task #902 — optional alerter-state lock-doc snapshot from
+  // `/admin/health/<pill>/cron/alert-state`. When provided, the
+  // pill renders a small "last paged Xh ago · in debounce ~Yh
+  // remaining" line below subText so admins can distinguish "I'm
+  // seeing red because nobody has been paged yet" from "I'm
+  // seeing red because we already paged Nh ago and are in
+  // debounce" without having to query Mongo. The shape is
+  // documented on `formatAlertStateCaption` in cronCaptionHelpers.
+  alertState,
 }) {
   const data = rawData && !rawData._error ? rawData : null;
   const status = data?.status || 'unknown';
@@ -67,6 +77,20 @@ export default function CronHealthPill({
   const ctx = { data, status, isFailed, isDegraded, isUnknown, ageLabel };
   const subText = renderSubText ? renderSubText(ctx) : null;
   const extraActions = renderExtraActions ? renderExtraActions(ctx) : null;
+  // Task #902 — alerter-state caption (e.g. "last paged 2h ago ·
+  // in debounce ~22h remaining"). Returns null when there's no
+  // recorded page so we don't render an orphan line on a fresh
+  // deployment with a healthy pill.
+  const alertCaption = formatAlertStateCaption(alertState);
+  // The caption colour follows whether we're inside the debounce
+  // window: amber when on-call has been paged but the next re-page
+  // is still suppressed (so admins don't expect a new email if the
+  // pill stays red), gray otherwise (just informational —
+  // e.g. recovery, or a broken state past the debounce so the next
+  // poll can re-page).
+  const alertCaptionCls = alertState && alertState.inDebounce
+    ? 'text-amber-600'
+    : 'text-gray-500';
 
   return (
     <div className={`rounded-2xl p-4 border ${containerCls}`} data-testid={`${testId}-tile`}>
@@ -97,6 +121,14 @@ export default function CronHealthPill({
           {subText != null && (
             <p className="text-[11px] text-gray-500 mt-0.5">
               {subText}
+            </p>
+          )}
+          {alertCaption && (
+            <p
+              className={`text-[11px] mt-0.5 ${alertCaptionCls}`}
+              data-testid={`${testId}-alert-state`}
+            >
+              {alertCaption}
             </p>
           )}
         </div>

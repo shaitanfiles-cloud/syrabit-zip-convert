@@ -269,3 +269,140 @@ async def admin_edge_proxy_deploy_cron(
     going blank.
     """
     return await get_edge_proxy_deploy_cron_health()
+
+
+# ─── Task #902 — alert-state lock-doc snapshot ─────────────────────────────
+#
+# The cron pill above answers "is the workflow currently red?". The
+# silence alerter (Task #893, ``routes.admin_edge_proxy_deploy_cron_alerts``)
+# answers "have we paged on-call about that yet?" by persisting its
+# dedup state to a Mongo ``job_locks`` doc keyed by
+# ``edge_proxy_deploy_cron_alert_state``. That state was previously
+# only visible by querying Mongo directly, so admins seeing a red
+# pill couldn't tell whether on-call had already been paged (and the
+# alerter is in its 24h debounce window) or whether the page is
+# still pending. The endpoint below surfaces the lock doc next to
+# the pill so the dashboard can render that distinction inline.
+#
+# The same helper is reused by the cf-waf-drift and Trustpilot
+# alert-state endpoints (defined alongside their own pill routes —
+# see ``routes.admin_cf_waf_drift_cron_alerts`` and
+# ``routes.admin_trustpilot_cron_alerts``) so all three admin
+# pills surface the same shape.
+
+
+def _snake_to_camel(s: str) -> str:
+    """``"last_alert_at"`` → ``"lastAlertAt"``. Used to project the
+    alerter's snake_case lock-doc fields into the camelCase that the
+    rest of the AdminHealth JSON surface uses (matches the existing
+    ``lastHeartbeatTs`` / ``lastRunUrl`` convention so the React
+    pill props don't have to mix conventions)."""
+    parts = s.split("_")
+    return parts[0] + "".join(p.title() for p in parts[1:])
+
+
+async def _build_alert_state_response(
+    lock_id: str,
+    realert_interval_s: int,
+    broken_state_label: str = "broken",
+) -> dict[str, Any]:
+    """Read an alerter's ``job_locks`` doc and shape it for the dashboard.
+
+    Always returns 200-ready JSON. When Mongo is unavailable or the
+    lock doc doesn't exist yet (the alerter hasn't fired even once),
+    we surface ``present: False`` so the UI renders "no alert state on
+    file" rather than erroring out.
+
+    The response always includes the static
+    ``realertIntervalSeconds`` (the alerter's debounce cadence) plus
+    derived ``lastAlertAgeSeconds`` / ``inDebounce`` /
+    ``debounceRemainingSeconds`` fields so the frontend doesn't have
+    to re-implement timestamp parsing or the debounce-window check.
+    Every other lock-doc field is passed through verbatim with its
+    snake_case key projected to camelCase (``last_state`` →
+    ``lastState``, ``last_html_url`` → ``lastHtmlUrl``, etc.).
+
+    ``broken_state_label`` differs across alerters: the edge-proxy
+    alerter writes ``last_state="broken"`` on the broken side, while
+    the cf-waf-drift and Trustpilot alerters write
+    ``last_state="silent"`` (mirroring the pill colour-mapping).
+    Either label is treated as "currently alerting" for the purposes
+    of the ``inDebounce`` flag.
+    """
+    base: dict[str, Any] = {
+        "present": False,
+        "realertIntervalSeconds": int(realert_interval_s),
+        "lastState": None,
+        "lastAlertAt": None,
+        "lastAlertAgeSeconds": None,
+        "inDebounce": False,
+        "debounceRemainingSeconds": None,
+    }
+    try:
+        from deps import db, is_mongo_available  # type: ignore
+        if not await is_mongo_available():
+            return base
+        doc = await db.job_locks.find_one({"_id": lock_id})
+    except Exception as exc:
+        logger.debug(
+            f"[admin-health] alert-state read failed for {lock_id}: {exc}"
+        )
+        return base
+    if not doc:
+        return base
+    base["present"] = True
+    for key, val in doc.items():
+        if key == "_id":
+            continue
+        base[_snake_to_camel(key)] = val
+    last_alert_at = doc.get("last_alert_at")
+    if last_alert_at:
+        try:
+            s = str(last_alert_at)
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            age = int(
+                (datetime.now(timezone.utc) - dt).total_seconds()
+            )
+            base["lastAlertAgeSeconds"] = max(0, age)
+            if (
+                doc.get("last_state") == broken_state_label
+                and age < realert_interval_s
+            ):
+                base["inDebounce"] = True
+                base["debounceRemainingSeconds"] = max(
+                    0, realert_interval_s - age,
+                )
+        except Exception as exc:
+            logger.debug(
+                f"[admin-health] alert-state ts parse failed "
+                f"for {lock_id}: {exc}"
+            )
+    return base
+
+
+@router.get("/admin/health/edge-proxy-deploy/cron/alert-state")
+async def admin_edge_proxy_deploy_cron_alert_state(
+    admin: dict = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """Lock-doc snapshot for the edge-proxy-deploy silence alerter.
+
+    Surfaces what the alerter (Task #893) has on file — last paged
+    state, when it last paged, against which run, and how long the
+    24h debounce window has left to run — so on-call can distinguish
+    "I'm seeing red because nobody has been paged yet" from "I'm
+    seeing red because we already paged Nh ago and are in debounce"
+    without having to query Mongo directly. Always 200; returns
+    ``present: False`` when the alerter hasn't fired even once or
+    when Mongo is unavailable.
+    """
+    from routes.admin_edge_proxy_deploy_cron_alerts import (
+        _CRON_REALERT_INTERVAL_S,
+        _LOCK_ID,
+    )
+    return await _build_alert_state_response(
+        _LOCK_ID, _CRON_REALERT_INTERVAL_S, broken_state_label="broken",
+    )

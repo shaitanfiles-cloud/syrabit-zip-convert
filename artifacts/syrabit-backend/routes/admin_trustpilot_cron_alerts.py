@@ -110,6 +110,32 @@ async def admin_trustpilot_refresh_cron_health(
     }
 
 
+# ─── Task #902 — alert-state lock-doc snapshot ─────────────────────────────
+#
+# Mirror of ``/admin/health/edge-proxy-deploy/cron/alert-state``: surfaces
+# the Trustpilot refresh-cron silence alerter's persisted dedup state
+# so the AdminHealth tile next to the pill can show "last paged Nh
+# ago" and the remaining 24h debounce window. The lock doc already
+# exists (the alerter writes it on every CAS claim); this route just
+# exposes it via the shared shaping helper from
+# :mod:`routes.admin_health`. ``broken_state_label="silent"`` matches
+# the alerter's CAS payload (it writes ``last_state="silent"`` while
+# pending re-page and ``"healthy"`` after a recovery).
+@router.get("/admin/health/trustpilot/refresh-cron/alert-state")
+async def admin_trustpilot_refresh_cron_alert_state(
+    admin: dict = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """Lock-doc snapshot for the Trustpilot refresh-cron silence alerter.
+
+    Always 200; ``present: False`` when the alerter hasn't fired even
+    once or when Mongo is unavailable.
+    """
+    from routes.admin_health import _build_alert_state_response
+    return await _build_alert_state_response(
+        _LOCK_ID, _CRON_REALERT_INTERVAL_S, broken_state_label="silent",
+    )
+
+
 # ─── Alerting ──────────────────────────────────────────────────────────────
 
 def _classify_cron(
