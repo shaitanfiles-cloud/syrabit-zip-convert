@@ -139,6 +139,104 @@ describe3('AdminLogsExplorer — CF pull cost (24h) widget', () => {
       .toMatch(/2 saturated minutes/);
   });
 
+  // Task #960 — inline sparkline rendered next to the totals so a
+  // sudden 1→50 calls/tick spike is visible without leaving the
+  // safeguards card.
+  it3('renders an inline sparkline (with worst-tick highlight + per-point hover) when cf_pull_history_recent is present', async () => {
+    const apiMod = await import('@/utils/api');
+    apiMod.adminLogsList.mockResolvedValue({ data: { logs: [], total: 0 } });
+    const recent = [
+      { ts: '2026-04-26T11:55:00+00:00', calls:  1, subdivisions: 0, saturated: 0 },
+      { ts: '2026-04-26T11:56:00+00:00', calls:  1, subdivisions: 0, saturated: 0 },
+      { ts: '2026-04-26T11:57:00+00:00', calls:  1, subdivisions: 0, saturated: 0 },
+      { ts: '2026-04-26T11:58:00+00:00', calls:  8, subdivisions: 3, saturated: 0 },
+      { ts: '2026-04-26T11:59:00+00:00', calls: 50, subdivisions: 6, saturated: 2 },
+    ];
+    apiMod.adminLogsStatus.mockResolvedValue({ data: {
+      paused: false, ttl_days: 14, ingest_token_configured: true,
+      backend_sample_rate: 0.05, edge_sample_rate: 0.05,
+      max_ingest_batch: 500, cf_pull_interval_s: 60,
+      cf_pull_24h: {
+        ticks: 5, total_calls: 61, total_subdivisions: 9, total_saturated: 2,
+        max_calls: 50, max_subdivisions: 6,
+        subdivided_ticks: 2, subdivided_pct: 40.0,
+        window_s: 300,
+        oldest_ts: '2026-04-26T11:55:00+00:00',
+        newest_ts: '2026-04-26T11:59:00+00:00',
+      },
+      cf_pull_history_recent: recent,
+    } });
+
+    render3(<AdminLogsExplorer adminToken="t" />);
+    await waitFor3(() => {
+      const safeguards = screen3.queryByText(/Ingest safeguards/i);
+      expect3(safeguards).toBeTruthy();
+      fireEvent3.click(safeguards);
+    });
+
+    const sparkline = await screen3.findByTestId('cf-pull-cost-sparkline');
+    expect3(sparkline).toBeTruthy();
+    // Accessibility: aria-label summarises the peak so screen readers
+    // (and anyone who can't see the chart) get the same information.
+    expect3(sparkline.getAttribute('aria-label')).toMatch(/peak 50 call/);
+    expect3(sparkline.getAttribute('aria-label'))
+      .toContain('2026-04-26T11:59:00+00:00');
+    // The two series — calls (solid) and subdivisions (dashed overlay)
+    // — must both render so a slow drift in subdivision depth is also
+    // visible, not just call count.
+    expect3(screen3.getByTestId('cf-pull-cost-sparkline-calls')).toBeTruthy();
+    expect3(screen3.getByTestId('cf-pull-cost-sparkline-subs')).toBeTruthy();
+    // The worst-tick datapoint is marked so the operator can see WHEN
+    // the spike happened, not just THAT it happened.
+    const worst = screen3.getByTestId('cf-pull-cost-sparkline-worst');
+    expect3(worst).toBeTruthy();
+    // Per-point hover tooltip exposes the timestamp + values.
+    const worstTitle = worst.querySelector('title');
+    expect3(worstTitle).toBeTruthy();
+    expect3(worstTitle.textContent).toContain('2026-04-26T11:59:00+00:00');
+    expect3(worstTitle.textContent).toContain('50 calls');
+    expect3(worstTitle.textContent).toContain('6 subdivisions');
+    // Screen-reader fallback so accessibility doesn't depend on hover.
+    expect3(screen3.getByTestId('cf-pull-cost-sparkline-sr').textContent)
+      .toMatch(/Worst tick at 2026-04-26T11:59:00\+00:00.*50 calls/);
+  });
+
+  it3('omits the sparkline when there is too little history to plot a trend', async () => {
+    const apiMod = await import('@/utils/api');
+    apiMod.adminLogsList.mockResolvedValue({ data: { logs: [], total: 0 } });
+    apiMod.adminLogsStatus.mockResolvedValue({ data: {
+      paused: false, ttl_days: 14, ingest_token_configured: true,
+      backend_sample_rate: 0.05, edge_sample_rate: 0.05,
+      max_ingest_batch: 500, cf_pull_interval_s: 60,
+      cf_pull_24h: {
+        ticks: 1, total_calls: 1, total_subdivisions: 0, total_saturated: 0,
+        max_calls: 1, max_subdivisions: 0,
+        subdivided_ticks: 0, subdivided_pct: 0.0,
+        window_s: 0,
+        oldest_ts: '2026-04-26T11:59:00+00:00',
+        newest_ts: '2026-04-26T11:59:00+00:00',
+      },
+      // Single datapoint — no trend to draw, so the sparkline must
+      // hide entirely (the totals row alone is the right surface for
+      // a one-tick deploy).
+      cf_pull_history_recent: [
+        { ts: '2026-04-26T11:59:00+00:00', calls: 1, subdivisions: 0, saturated: 0 },
+      ],
+    } });
+
+    render3(<AdminLogsExplorer adminToken="t" />);
+    await waitFor3(() => {
+      const safeguards = screen3.queryByText(/Ingest safeguards/i);
+      expect3(safeguards).toBeTruthy();
+      fireEvent3.click(safeguards);
+    });
+
+    // Widget itself still renders (it's the totals card).
+    await screen3.findByTestId('cf-pull-cost-widget');
+    // Sparkline does NOT.
+    expect3(screen3.queryByTestId('cf-pull-cost-sparkline')).toBeNull();
+  });
+
   it3('hides the widget entirely when the status payload has no cf_pull_24h (fresh deploy)', async () => {
     const apiMod = await import('@/utils/api');
     apiMod.adminLogsList.mockResolvedValue({ data: { logs: [], total: 0 } });

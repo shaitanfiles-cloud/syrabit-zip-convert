@@ -434,7 +434,10 @@ export default function AdminLogsExplorer({ adminToken }) {
                   hint="Rotate via the KEY button above. Old token keeps working until the worker secret is updated." />
                 {status.cf_pull_24h && (
                   <div className="md:col-span-2">
-                    <CfPullCostWidget agg={status.cf_pull_24h} />
+                    <CfPullCostWidget
+                      agg={status.cf_pull_24h}
+                      history={status.cf_pull_history_recent}
+                    />
                   </div>
                 )}
                 {/* Task #952 — rolling 24h saturation count. Mirrors
@@ -949,7 +952,122 @@ function SafeguardRow({ label, value, hint }) {
   );
 }
 
-function CfPullCostWidget({ agg }) {
+/**
+ * Task #960 — Inline SVG sparkline of per-tick CF GraphQL `calls` (and
+ * a faint subdivisions overlay) over the last few hours. The worst
+ * tick is highlighted with a red dot so a sudden 1→50 calls/tick
+ * fan-out drift jumps out at a glance — without forcing the operator
+ * to leave the safeguards card.
+ *
+ * Each datapoint gets an SVG `<title>` element so hover reveals
+ * timestamp + values; a sibling sr-only summary lists every point so
+ * screen readers (and tests) don't depend on visual hover state.
+ */
+function CfPullSparkline({ points }) {
+  if (!Array.isArray(points) || points.length < 2) return null;
+  const width = 160;
+  const height = 36;
+  const pad = 3;
+  const innerH = height - pad * 2;
+  const innerW = width - pad * 2;
+  const calls = points.map((p) => Math.max(0, Number(p.calls) || 0));
+  const subs  = points.map((p) => Math.max(0, Number(p.subdivisions) || 0));
+  const yMax  = Math.max(1, ...calls, ...subs);
+  const xStep = (points.length - 1) > 0 ? innerW / (points.length - 1) : 0;
+  const xAt   = (i) => pad + i * xStep;
+  const yAt   = (v) => pad + innerH - (v / yMax) * innerH;
+  const callsPath = calls.map((c, i) => `${i === 0 ? 'M' : 'L'}${xAt(i).toFixed(2)},${yAt(c).toFixed(2)}`).join(' ');
+  const subsPath  = subs .map((s, i) => `${i === 0 ? 'M' : 'L'}${xAt(i).toFixed(2)},${yAt(s).toFixed(2)}`).join(' ');
+  // Worst tick = max calls (ties → earliest, so the FIRST spike is
+  // what gets highlighted, which matches "when did the drift start?").
+  let worstIdx = 0;
+  for (let i = 1; i < calls.length; i++) {
+    if (calls[i] > calls[worstIdx]) worstIdx = i;
+  }
+  const worst = points[worstIdx];
+  const ariaLabel =
+    `CF pull cost sparkline: ${points.length} ticks, ` +
+    `peak ${calls[worstIdx]} call${calls[worstIdx] === 1 ? '' : 's'} ` +
+    `at ${worst.ts}`;
+  const showSubs = subs.some((s) => s > 0);
+  return (
+    <span className="inline-flex items-center" data-testid="cf-pull-cost-sparkline-wrap">
+      <svg
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label={ariaLabel}
+        data-testid="cf-pull-cost-sparkline"
+        className="block"
+      >
+        <title>{ariaLabel}</title>
+        {showSubs && (
+          <path
+            d={subsPath}
+            fill="none"
+            stroke="#f59e0b"
+            strokeWidth="1"
+            strokeDasharray="2,2"
+            opacity="0.7"
+            data-testid="cf-pull-cost-sparkline-subs"
+          />
+        )}
+        <path
+          d={callsPath}
+          fill="none"
+          stroke="#4f46e5"
+          strokeWidth="1.5"
+          data-testid="cf-pull-cost-sparkline-calls"
+        />
+        {points.map((p, i) => {
+          const isWorst = i === worstIdx;
+          const tip =
+            `${p.ts} — ${p.calls} call${p.calls === 1 ? '' : 's'}` +
+            `, ${p.subdivisions ?? 0} subdivision${(p.subdivisions ?? 0) === 1 ? '' : 's'}` +
+            ((p.saturated ?? 0) > 0 ? `, ${p.saturated} saturated` : '');
+          // Render a tiny visible dot for every datapoint (so hover
+          // is actually discoverable — operators shouldn't have to
+          // know an invisible target is there) plus an oversized
+          // transparent hit-area to make the tooltip easy to grab
+          // even when the sparkline is dense.
+          return (
+            <Fragment key={i}>
+              <circle
+                cx={xAt(i)}
+                cy={yAt(calls[i])}
+                r={isWorst ? 2.5 : 1.25}
+                fill={isWorst ? '#dc2626' : '#4f46e5'}
+                opacity={isWorst ? 1 : 0.55}
+                data-testid={isWorst ? 'cf-pull-cost-sparkline-worst' : undefined}
+              >
+                <title>{tip}</title>
+              </circle>
+              {/* Oversized transparent overlay so hover discovers the
+                  tooltip even on the dense interior datapoints. */}
+              <circle
+                cx={xAt(i)}
+                cy={yAt(calls[i])}
+                r={5}
+                fill="transparent"
+                style={{ pointerEvents: 'all' }}
+              >
+                <title>{tip}</title>
+              </circle>
+            </Fragment>
+          );
+        })}
+      </svg>
+      <span className="sr-only" data-testid="cf-pull-cost-sparkline-sr">
+        Worst tick at {worst.ts}: {calls[worstIdx]} calls,{' '}
+        {worst.subdivisions ?? 0} subdivisions
+        {(worst.saturated ?? 0) > 0 ? `, ${worst.saturated} saturated minutes` : ''}.
+      </span>
+    </span>
+  );
+}
+
+function CfPullCostWidget({ agg, history }) {
   if (!agg || typeof agg !== 'object') return null;
   const ticks = agg.ticks ?? 0;
   const totalCalls = agg.total_calls ?? 0;
@@ -964,17 +1082,21 @@ function CfPullCostWidget({ agg }) {
     ? (windowH >= 23 ? '24h' : `~${windowH}h`)
     : '<1h';
   const heavy = subdividedPct >= 50 || maxSubs >= 4 || totalSat > 0;
+  const hasSparkline = Array.isArray(history) && history.length >= 2;
   return (
     <div
       className={`border rounded p-2 ${heavy ? 'bg-amber-50 border-amber-300' : 'bg-white'}`}
       data-testid="cf-pull-cost-widget"
     >
-      <div className="flex items-baseline justify-between gap-2">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <span className="text-slate-500">CF pull cost ({windowLabel})</span>
-        <span className="font-mono text-slate-900" data-testid="cf-pull-cost-totals">
-          {totalCalls.toLocaleString()} calls
-          {totalSubs > 0 && <> · {totalSubs.toLocaleString()} subdivisions</>}
-        </span>
+        <div className="flex items-center gap-2 ml-auto">
+          {hasSparkline && <CfPullSparkline points={history} />}
+          <span className="font-mono text-slate-900" data-testid="cf-pull-cost-totals">
+            {totalCalls.toLocaleString()} calls
+            {totalSubs > 0 && <> · {totalSubs.toLocaleString()} subdivisions</>}
+          </span>
+        </div>
       </div>
       <div className="mt-1 text-[11px] text-slate-500 flex flex-wrap gap-x-3 gap-y-0.5">
         <span>{ticks} {ticks === 1 ? 'tick' : 'ticks'} aggregated</span>
@@ -983,6 +1105,12 @@ function CfPullCostWidget({ agg }) {
         {totalSat > 0 && (
           <span className="text-amber-700 font-semibold" data-testid="cf-pull-cost-saturated">
             {totalSat} saturated minute{totalSat === 1 ? '' : 's'} (data lost)
+          </span>
+        )}
+        {hasSparkline && (
+          <span className="text-slate-400">
+            sparkline: last {history.length} {history.length === 1 ? 'tick' : 'ticks'} (calls
+            {history.some((p) => (p.subdivisions ?? 0) > 0) && <> + subdivisions overlay</>})
           </span>
         )}
       </div>

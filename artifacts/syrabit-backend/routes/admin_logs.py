@@ -439,6 +439,76 @@ def _compute_cf_pull_24h_aggregate(
     }
 
 
+# Cap on the per-tick datapoints returned to the admin sparkline. At the
+# default 60s pull interval this is the last ~2h of pulls — enough to
+# spot a sudden 1→50 calls/tick drift without bloating the /status JSON
+# (each entry is ~60 bytes, so 120 entries ≈ 7KB).
+CF_PULL_HISTORY_RECENT_MAX_POINTS = 120
+
+
+def _extract_cf_pull_history_recent(
+    history: List[Dict[str, Any]],
+    now: Optional[datetime] = None,
+    max_points: int = CF_PULL_HISTORY_RECENT_MAX_POINTS,
+) -> Optional[List[Dict[str, Any]]]:
+    """Task #960 — return the most recent per-tick datapoints from the
+    rolling ``cf_pull_history``, suitable for an inline sparkline in the
+    admin Logs Explorer's "CF pull cost" widget.
+
+    Filters out entries older than the 24h aggregation window (matching
+    ``_compute_cf_pull_24h_aggregate``), sorts oldest→newest so the
+    sparkline plots left-to-right in time, and returns at most
+    ``max_points`` entries (most recent kept) so the JSON payload stays
+    small even if the cursor history is full. Returns ``None`` when no
+    usable entries exist so the UI hides the sparkline on a fresh
+    deploy instead of rendering an empty chart.
+    """
+    def _safe_nonneg_int(v: Any) -> int:
+        # Telemetry rows are written by the CF pull loop in this same
+        # process, so the values SHOULD already be ints — but a stray
+        # string / float / None from a forwards-compat schema bump
+        # must not crash the dashboard.
+        try:
+            n = int(v or 0)
+        except (TypeError, ValueError):
+            return 0
+        return n if n > 0 else 0
+
+    cutoff_now = now or datetime.now(timezone.utc)
+    cutoff = cutoff_now - timedelta(seconds=CF_PULL_HISTORY_WINDOW_S)
+    items: List[Dict[str, Any]] = []
+    for entry in history or []:
+        if not isinstance(entry, dict):
+            continue
+        ts_raw = entry.get("ts")
+        try:
+            ts_dt = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if ts_dt < cutoff:
+            continue
+        items.append({
+            "ts_dt": ts_dt,
+            "calls": _safe_nonneg_int(entry.get("calls")),
+            "subdivisions": _safe_nonneg_int(entry.get("subdivisions")),
+            "saturated": _safe_nonneg_int(entry.get("saturated")),
+        })
+    if not items:
+        return None
+    items.sort(key=lambda e: e["ts_dt"])
+    if max_points > 0 and len(items) > max_points:
+        items = items[-max_points:]
+    return [
+        {
+            "ts": e["ts_dt"].isoformat(),
+            "calls": e["calls"],
+            "subdivisions": e["subdivisions"],
+            "saturated": e["saturated"],
+        }
+        for e in items
+    ]
+
+
 @router.get("/api/admin/logs/status")
 async def admin_logs_status(admin: dict = Depends(get_admin_user)):
     shipper = _dao.get_backend_shipper()
@@ -460,6 +530,10 @@ async def admin_logs_status(admin: dict = Depends(get_admin_user)):
     cf_last_saturated_windows: Optional[List[Any]] = None
     # Task #953 — rolling 24h pagination-cost aggregate.
     cf_pull_24h: Optional[Dict[str, Any]] = None
+    # Task #960 — per-tick datapoints (most recent ~120) so the admin
+    # widget can render an inline sparkline of GraphQL fan-out and
+    # spot a sudden 1→50 calls/tick drift visually.
+    cf_pull_history_recent: Optional[List[Dict[str, Any]]] = None
     # Task #952 — rolling 24h count of distinct saturated minutes,
     # backed by the ``cf_pull_saturated_minutes`` collection (TTL 25h).
     # Surfaced here so the AdminLogsExplorer can show a trend at a
@@ -485,6 +559,9 @@ async def admin_logs_status(admin: dict = Depends(get_admin_user)):
                 cf_last_subdivisions = lock.get("last_subdivisions")
                 cf_last_saturated_windows = lock.get("last_saturated_windows")
                 cf_pull_24h = _compute_cf_pull_24h_aggregate(
+                    lock.get("cf_pull_history") or []
+                )
+                cf_pull_history_recent = _extract_cf_pull_history_recent(
                     lock.get("cf_pull_history") or []
                 )
         except Exception:
@@ -541,6 +618,11 @@ async def admin_logs_status(admin: dict = Depends(get_admin_user)):
         # fresh deploy with no completed pulls yet; the UI hides the
         # widget in that case).
         "cf_pull_24h": cf_pull_24h,
+        # Task #960 — per-tick datapoints for the inline sparkline
+        # rendered next to the totals. Same nullability rule as
+        # ``cf_pull_24h``: None on a fresh deploy so the chart hides
+        # instead of rendering an empty plot.
+        "cf_pull_history_recent": cf_pull_history_recent,
         # Task #952 — rolling 24h count of saturated minutes (TTL'd
         # to 25h in ``cf_pull_saturated_minutes``). Lets the operator
         # see at a glance whether saturation is a one-off spike or a

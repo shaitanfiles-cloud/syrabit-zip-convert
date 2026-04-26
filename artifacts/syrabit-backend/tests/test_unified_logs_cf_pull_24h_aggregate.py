@@ -418,3 +418,147 @@ def test_admin_logs_status_returns_none_for_cf_pull_24h_on_fresh_deploy(monkeypa
         assert "cf_pull_24h" in payload
         assert payload["cf_pull_24h"] is None
     asyncio.run(_inner())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# D. Task #960 — per-tick sparkline payload
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_extract_history_recent_returns_none_for_empty_or_all_stale():
+    """No usable entries → None so the UI hides the sparkline rather
+    than rendering an empty chart."""
+    assert routes._extract_cf_pull_history_recent([]) is None
+    assert routes._extract_cf_pull_history_recent(None) is None
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    stale = [
+        {"ts": (now - timedelta(hours=25)).isoformat(),
+         "calls": 3, "subdivisions": 1, "saturated": 0},
+    ]
+    assert routes._extract_cf_pull_history_recent(stale, now=now) is None
+
+
+def test_extract_history_recent_filters_24h_and_sorts_oldest_first():
+    """The sparkline must plot left-to-right by time and exclude
+    entries older than the 24h aggregation window — otherwise a stale
+    spike from 25h ago would falsely appear as "recent drift"."""
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    history = [
+        # Out of order on purpose to exercise the sort.
+        {"ts": (now - timedelta(hours=1)).isoformat(),
+         "calls": 5, "subdivisions": 2, "saturated": 0},
+        {"ts": (now - timedelta(hours=25)).isoformat(),
+         "calls": 999, "subdivisions": 99, "saturated": 9},  # stale → dropped
+        {"ts": (now - timedelta(hours=2)).isoformat(),
+         "calls": 1, "subdivisions": 0, "saturated": 0},
+    ]
+    out = routes._extract_cf_pull_history_recent(history, now=now)
+    assert out is not None
+    assert len(out) == 2
+    assert out[0]["calls"] == 1     # 2h-old entry first (oldest)
+    assert out[1]["calls"] == 5     # 1h-old entry last (newest)
+    # Stale entry's runaway numbers must NOT leak into the sparkline.
+    assert all(p["calls"] != 999 for p in out)
+    # Each datapoint exposes exactly the fields the frontend needs.
+    for p in out:
+        assert set(p.keys()) == {"ts", "calls", "subdivisions", "saturated"}
+
+
+def test_extract_history_recent_coerces_malformed_numeric_fields_to_zero():
+    """Forwards-compat guard: a stray string / float / negative value in
+    the persisted telemetry must not crash the dashboard render path —
+    bad fields silently coerce to 0 so the rest of the trend still
+    plots correctly."""
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    history = [
+        {"ts": (now - timedelta(minutes=3)).isoformat(),
+         "calls": "abc", "subdivisions": None, "saturated": -7},
+        {"ts": (now - timedelta(minutes=2)).isoformat(),
+         "calls": 12.7, "subdivisions": "2", "saturated": 0},
+        {"ts": (now - timedelta(minutes=1)).isoformat(),
+         "calls": 5, "subdivisions": 1, "saturated": 0},
+    ]
+    out = routes._extract_cf_pull_history_recent(history, now=now)
+    assert out is not None
+    assert len(out) == 3
+    # Garbage row → all zeros, but still emitted (so the time axis on
+    # the sparkline is contiguous).
+    assert out[0]["calls"] == 0
+    assert out[0]["subdivisions"] == 0
+    assert out[0]["saturated"] == 0
+    # Float coerces (truncates) to int; numeric string parses normally.
+    assert out[1]["calls"] == 12
+    assert out[1]["subdivisions"] == 2
+    # Healthy row unchanged.
+    assert out[2]["calls"] == 5
+
+
+def test_extract_history_recent_caps_at_max_points_keeping_most_recent():
+    """A nearly-full 24h history must be downsampled by trimming the
+    oldest entries — the sparkline is for spotting RECENT drift, and
+    the JSON payload should stay small even with a misconfigured
+    sub-minute pull interval."""
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    # 200 entries, 1 minute apart, all within 24h.
+    history = [
+        {"ts": (now - timedelta(minutes=200 - i)).isoformat(),
+         "calls": i, "subdivisions": 0, "saturated": 0}
+        for i in range(200)
+    ]
+    out = routes._extract_cf_pull_history_recent(history, now=now, max_points=50)
+    assert out is not None
+    assert len(out) == 50
+    # The most-recent 50 (by call count, since we used i as calls) must
+    # be the ones kept — if the cap silently trimmed the new end, the
+    # operator would be looking at a 4h-stale chart.
+    assert out[0]["calls"] == 150
+    assert out[-1]["calls"] == 199
+
+
+def test_admin_logs_status_exposes_cf_pull_history_recent_when_present(monkeypatch):
+    """End-to-end: when the cursor doc has rolling history, the /status
+    payload must surface ``cf_pull_history_recent`` alongside the
+    aggregate so the dashboard sparkline can render."""
+    async def _inner():
+        db = _FakeDb()
+        monkeypatch.setattr(routes, "db", db, raising=False)
+        from unified_logs_dao import _reset_backend_shipper_for_tests
+        _reset_backend_shipper_for_tests()
+
+        now = datetime.now(timezone.utc)
+        db.job_locks.docs.append({
+            "_id": routes.CF_PULL_LOCK_ID,
+            routes.CF_PULL_CURSOR_FIELD: now.isoformat(),
+            "updated_at": now.isoformat(),
+            "cf_pull_history": [
+                {"ts": (now - timedelta(minutes=2)).isoformat(),
+                 "calls": 1, "subdivisions": 0, "saturated": 0},
+                {"ts": (now - timedelta(minutes=1)).isoformat(),
+                 "calls": 7, "subdivisions": 3, "saturated": 1},
+            ],
+        })
+        payload = await routes.admin_logs_status(admin={"id": "test"})
+        assert "cf_pull_history_recent" in payload
+        recent = payload["cf_pull_history_recent"]
+        assert isinstance(recent, list)
+        assert len(recent) == 2
+        # Oldest first so the sparkline plots left-to-right by time.
+        assert recent[0]["calls"] == 1
+        assert recent[1]["calls"] == 7
+        assert recent[1]["subdivisions"] == 3
+        assert recent[1]["saturated"] == 1
+    asyncio.run(_inner())
+
+
+def test_admin_logs_status_returns_none_for_cf_pull_history_recent_on_fresh_deploy(monkeypatch):
+    """No cursor doc → ``cf_pull_history_recent`` is None so the UI
+    hides the sparkline (and renders nothing instead of a blank chart)."""
+    async def _inner():
+        db = _FakeDb()
+        monkeypatch.setattr(routes, "db", db, raising=False)
+        from unified_logs_dao import _reset_backend_shipper_for_tests
+        _reset_backend_shipper_for_tests()
+
+        payload = await routes.admin_logs_status(admin={"id": "test"})
+        assert "cf_pull_history_recent" in payload
+        assert payload["cf_pull_history_recent"] is None
+    asyncio.run(_inner())
