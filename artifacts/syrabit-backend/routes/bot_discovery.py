@@ -21,6 +21,22 @@ _BACKOFF_MAX_SECONDS = 600
 _DEAD_LETTER_THRESHOLD = 5
 
 
+# Task #986 — Feature flag so environments without outbound access to the
+# IndexNow endpoints (api.indexnow.org, www.bing.com/indexnow,
+# yandex.com/indexnow) don't generate misleading "endpoint_down /
+# Last success: never" alerts. The notify path *is* the probe in this
+# codebase — every push hits the real endpoint via the same `push_indexnow`
+# call — so when the env can't talk to those hosts we'd otherwise spam an
+# alert per endpoint every backoff cycle. Default is "1" (enabled) so prod
+# behaviour is preserved; set INDEXNOW_ENABLED=0 in dev/preview to silence.
+_INDEXNOW_DISABLED_LOG_ONCE = False
+
+
+def _indexnow_enabled() -> bool:
+    val = (os.environ.get("INDEXNOW_ENABLED", "1") or "").strip().lower()
+    return val in ("1", "true", "yes", "on")
+
+
 _HEALTH_STALE_SECONDS = 3600
 
 class _EndpointHealth:
@@ -85,6 +101,7 @@ class _EndpointHealth:
         remaining = 0.0
         if self.backoff_until and now < self.backoff_until:
             remaining = round(self.backoff_until - now, 1)
+        enabled = _indexnow_enabled()
         return {
             "endpoint": self.endpoint,
             "consecutive_failures": self.consecutive_failures,
@@ -93,6 +110,9 @@ class _EndpointHealth:
             "is_available": self.is_available(),
             "backoff_remaining_seconds": remaining,
             "is_dead_lettered": self.consecutive_failures >= _DEAD_LETTER_THRESHOLD,
+            "enabled": enabled,
+            "last_success_time": self.last_success_time,
+            "last_failure_time": self.last_failure_time,
         }
 
     def to_persist_dict(self) -> dict:
@@ -221,6 +241,13 @@ async def _endpoint_health_alert_loop():
     await asyncio.sleep(120)
     while True:
         try:
+            # Task #986 — when IndexNow is disabled in this environment we
+            # never push and never update health, so any stale "down" state
+            # is meaningless. Skip the whole alert pass.
+            if not _indexnow_enabled():
+                _, check_interval_s = _get_endpoint_down_thresholds()
+                await asyncio.sleep(check_interval_s)
+                continue
             threshold_s, _ = _get_endpoint_down_thresholds()
             now = time.time()
             for ep, health in list(_endpoint_health.items()):
@@ -811,6 +838,25 @@ async def push_indexnow(
     target_endpoints: Optional[List[str]] = None,
 ) -> Dict[str, bool]:
     if not urls:
+        return {}
+    # Task #986 — feature-flag short-circuit. When INDEXNOW_ENABLED=0 we
+    # don't touch the network and don't mutate endpoint health (so the
+    # admin "Last success" view doesn't lie about failures that never
+    # actually happened). Returning {} keeps `IndexNowBatcher._do_push`
+    # from queueing endless retries — no endpoint is reported as failed
+    # and no endpoint is reported as succeeded.
+    if not _indexnow_enabled():
+        global _INDEXNOW_DISABLED_LOG_ONCE
+        if not _INDEXNOW_DISABLED_LOG_ONCE:
+            logger.info(
+                "IndexNow disabled (INDEXNOW_ENABLED=0): skipping %d URL(s) source=%s",
+                len(urls), source,
+            )
+            _INDEXNOW_DISABLED_LOG_ONCE = True
+        else:
+            logger.debug(
+                "IndexNow disabled: skipping %d URL(s) source=%s", len(urls), source,
+            )
         return {}
     import httpx
     unique_urls = list(dict.fromkeys(urls))
