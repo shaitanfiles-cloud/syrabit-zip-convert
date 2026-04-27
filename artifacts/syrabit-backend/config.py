@@ -412,12 +412,12 @@ SARVAM_API_KEY_2 = os.environ.get('SARVAM_API_KEY_2', '').strip()
 SARVAM_TRANSLATE_KEY = SARVAM_API_KEY or SARVAM_API_KEY_2
 SARVAM_BASE_URL = 'https://api.sarvam.ai'
 
-# ── Distributed cache (legacy compatibility shim) ────────────────────────────
-# Upstash REST has been removed (2026-04). LLM upstream caching now lives at
-# Cloudflare AI Gateway (cache_ttl=3600s, configured in CF_CACHE_TTL above)
-# and rate limiting moved to the edge worker's KV binding (RATE_LIMIT). These
-# constants stay as empty strings so legacy callers that import them keep
-# working — every call site already guards with `if REDIS_URL:` / `if redis_client:`.
+# ── Distributed cache (Cloudflare-native architecture) ────────────────────────
+# Cloudflare AI Gateway handles LLM upstream caching (cache_ttl=3600s).
+# Edge worker's RATE_LIMIT KV binding handles distributed rate limiting.
+# Per-worker L1 in-memory cache handles hot-path dedupe.
+# These constants remain as empty strings for backward compatibility —
+# every call site guards with `if redis_client:`.
 REDIS_URL   = ''
 REDIS_TOKEN = ''
 REDIS_AI_CACHE_TTL = int(os.environ.get('REDIS_AI_CACHE_TTL', '3600') or '3600')
@@ -430,23 +430,23 @@ REDIS_RATE_WINDOW = 60
 # ── Memorystore-backed AI response cache (Task #609) ────────────────────────
 # Single configurable Redis URL — Google Memorystore preferred, any
 # Redis-compatible endpoint (rediss:// for TLS, redis:// otherwise) accepted.
-# When unset, the AI cache falls back to the existing Upstash REST client and
-# finally to the in-memory L1 cache. All values can be tuned per environment
-# without code changes.
+# When unset (current default), the AI cache uses per-worker L1 in-memory only.
+# LLM upstream caching is handled by Cloudflare AI Gateway with 3600s TTL.
+# All values can be tuned per environment without code changes.
 def _extract_redis_url(raw: str) -> str:
     """Defensive parser for MEMORYSTORE_REDIS_URL.
 
     Two common copy-paste mistakes are corrected here so a single bad
     secret doesn't silently degrade the entire AI cache to memory_only:
 
-    1. Operators paste the full Upstash "Connect → Redis CLI" line,
+    1. Operators paste the full Redis CLI command line,
        e.g. ``redis-cli --tls -u rediss://default:TOKEN@host:6379``.
        We extract the substring starting with ``redis://`` /
        ``rediss://`` / ``unix://``.
-    2. Operators paste an Upstash URL with ``redis://`` (plain TCP)
-       instead of ``rediss://`` (TLS). Upstash *requires* TLS and
-       closes plain connections immediately. We auto-upgrade any
-       ``redis://*.upstash.io`` URL to ``rediss://``.
+    2. Operators paste a URL with ``redis://`` (plain TCP)
+       instead of ``rediss://`` (TLS). Managed Redis services typically
+       require TLS and close plain connections immediately. We auto-upgrade
+       any ``redis://*.redis.*`` URL to ``rediss://``.
     """
     raw = (raw or '').strip().strip('"').strip("'")
     if not raw:
@@ -454,12 +454,13 @@ def _extract_redis_url(raw: str) -> str:
     import re as _re
     m = _re.search(r'\b(?:rediss?|unix)://\S+', raw)
     url = m.group(0) if m else raw
-    if url.startswith('redis://') and 'upstash.io' in url:
+    # Auto-upgrade plain redis:// to rediss:// for managed Redis services
+    if url.startswith('redis://') and any(domain in url for domain in ('upstash.io', 'redis.', 'memorystore.')):
         url = 'rediss://' + url[len('redis://'):]
     return url
 
 
-# MEMORYSTORE_REDIS_URL intentionally pinned to empty (2026-04).
+# MEMORYSTORE_REDIS_URL intentionally pinned to empty (Cloudflare-native).
 # Cloudflare AI Gateway handles upstream LLM cache (cache_ttl=3600s).
 # Edge worker's RATE_LIMIT KV binding handles distributed rate limiting.
 # Per-worker L1 in-memory cache handles hot-path dedupe.
