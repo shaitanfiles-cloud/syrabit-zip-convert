@@ -9,6 +9,7 @@ import { useTurnstile } from '@/hooks/useTurnstile';
 import { formatAuthError } from '@/lib/authErrors';
 import { toast } from 'sonner';
 import { LogoFull } from '@/components/Logo';
+import GoogleSignInButton from '@/components/GoogleSignInButton';
 
 
 const BENEFITS = [
@@ -194,6 +195,33 @@ export default function LoginPage() {
                 {error}
               </div>
             )}
+
+            <div className="mb-5">
+              <GoogleSignInButton
+                text="signin_with"
+                disabled={loading}
+                getTurnstileToken={turnstileEnabled ? getTurnstileToken : undefined}
+                onSuccess={(user) => {
+                  toast.success('Welcome back!');
+                  setTimeout(() => {
+                    if (!user.onboarding_done) {
+                      navigate('/onboarding');
+                    } else {
+                      navigate('/library');
+                    }
+                  }, 100);
+                }}
+                onError={(err) => {
+                  try { resetTurnstile(); } catch {}
+                  setError(formatAuthError(err, 'Google sign-in failed. Please try again.'));
+                }}
+              />
+              <div className="flex items-center gap-3 mt-5 text-[11px] uppercase tracking-wider text-muted-foreground/70">
+                <div className="flex-1 h-px bg-border/70" />
+                <span>or continue with email</span>
+                <div className="flex-1 h-px bg-border/70" />
+              </div>
+            </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">

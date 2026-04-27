@@ -9,6 +9,7 @@ import { useTurnstile } from '@/hooks/useTurnstile';
 import { formatAuthError } from '@/lib/authErrors';
 import { toast } from 'sonner';
 import { LogoFull } from '@/components/Logo';
+import GoogleSignInButton from '@/components/GoogleSignInButton';
 
 
 const getPasswordStrength = (password) => {
@@ -193,6 +194,34 @@ export default function SignupPage() {
                 {error}
               </div>
             )}
+
+            <div className="mb-5">
+              <GoogleSignInButton
+                text="signup_with"
+                disabled={loading}
+                getTurnstileToken={turnstileEnabled ? getTurnstileToken : undefined}
+                onSuccess={() => {
+                  toast.success('Account created! Welcome to Syrabit.ai!');
+                  navigate('/onboarding');
+                }}
+                onError={(err) => {
+                  try { resetTurnstile(); } catch {}
+                  setError(formatAuthError(err, 'Google sign-up failed. Please try again.'));
+                }}
+              />
+              <p className="text-[11px] text-center text-muted-foreground/80 mt-3 leading-relaxed">
+                By continuing with Google, you agree to our{' '}
+                <Link to="/terms" target="_blank" rel="noopener noreferrer" className="font-medium text-violet-600 hover:text-violet-700 transition-colors">Terms</Link>
+                {' '}and consent to data processing per our{' '}
+                <Link to="/privacy" target="_blank" rel="noopener noreferrer" className="font-medium text-violet-600 hover:text-violet-700 transition-colors">Privacy Policy</Link>
+                {' '}under the DPDP Act, 2023.
+              </p>
+              <div className="flex items-center gap-3 mt-5 text-[11px] uppercase tracking-wider text-muted-foreground/70">
+                <div className="flex-1 h-px bg-border/70" />
+                <span>or sign up with email</span>
+                <div className="flex-1 h-px bg-border/70" />
+              </div>
+            </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">
