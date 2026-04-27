@@ -2410,6 +2410,28 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             _src_class_slug = _src_ctx_s.get("class_slug") or ""
             _src_subject_slug = _src_ctx_s.get("subject_slug") or ""
 
+            # Re-build the inline-citation source list now that the
+            # board/class/subject slugs have actually resolved — this
+            # is what powers the clickable [PAGE: ...] markers in the
+            # answer body and the source card under the bubble.  Without
+            # this rebuild, chapter sources would have empty URLs and
+            # the markdown layer would silently degrade citations to
+            # bold text.  Web sources are kept as-is.
+            try:
+                _rebuilt = _sources_from_rag_ctx(
+                    rag_ctx,
+                    board_slug=_src_board_slug,
+                    class_slug=_src_class_slug,
+                    subject_slug=_src_subject_slug,
+                )
+                if web_results:
+                    _rebuilt.extend(_sources_from_web_results(web_results))
+                rag_sources = _rebuilt
+            except Exception:
+                # Keep the partial sources we built earlier rather than
+                # erroring out the SSE on a sources-list bug.
+                pass
+
             # ── syrabit_done event with credits metadata + RAG-derived sources + slugs ────
             done_payload = {
                 "event": "syrabit_done",

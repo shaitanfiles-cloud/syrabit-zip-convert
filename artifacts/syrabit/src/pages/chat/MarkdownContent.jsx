@@ -81,10 +81,19 @@ export const MarkdownContent = memo(function MarkdownContent({ content, streamin
       }
       return '';
     };
+    // Append `?topic=<title>` to inline-citation links so the
+    // ChapterPage's existing topic-highlight pipeline (200ms scroll +
+    // 5s green flash, see ChapterPage.jsx ~line 637) fires when the
+    // student clicks an inline citation.  Skip the param for content
+    // cards (`/learn/...`) — they don't honour `?topic=`.
     return content.replace(/\[(PAGE|CHAPTER|TOPIC|LESSON|SECTION):\s*([^\]]+)\]/gi, (_, _type, rawTitle) => {
       const title = rawTitle.trim();
       const url = findUrl(title);
-      return url ? `[${title}](${url})` : `**${title}**`;
+      if (!url) return `**${title}**`;
+      const isLearn = url.startsWith('/learn/');
+      const sep = url.includes('?') ? '&' : '?';
+      const finalUrl = isLearn ? url : `${url}${sep}topic=${encodeURIComponent(title)}`;
+      return `[${title}](${finalUrl})`;
     });
   }, [content, sources, streaming]);
 
