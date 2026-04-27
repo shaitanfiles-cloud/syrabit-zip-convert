@@ -37,7 +37,7 @@ import {
 import AudioTrimPreview from './AudioTrimPreview';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import axios from 'axios';
-import { adminGetDashboard, adminGetCfOverview, seoPipelineStatus, adminSeoHealthHistory, adminSeoHealthSnapshotNow, seoHealthLive, seoHealthDeepScan, adminSeoDeepScanHistory, API_BASE } from '@/utils/api';
+import { adminGetDashboard, adminGetCfOverview, seoPipelineStatus, adminSeoHealthHistory, adminSeoHealthSnapshotNow, seoHealthLive, seoHealthDeepScan, adminSeoDeepScanHistory, adminGetAlertCooldowns, API_BASE } from '@/utils/api';
 import CloudflareAnalyticsBanner from './analytics/CloudflareAnalyticsBanner';
 import { pushChannelTone } from '@/utils/pushChannelTone';
 import { TODAY_BUCKET_CAPTION, UTC_MIDNIGHT_IN_IST } from '@/utils/time';
@@ -332,6 +332,13 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
   const [resubmittingIndexNow, setResubmittingIndexNow] = useState(false);
   const [resubmitMessage, setResubmitMessage] = useState('');
   const [alertHistory, setAlertHistory] = useState(null);
+  // Task #991 — surface the persistent alert-cooldown active count
+  // (from `/admin/alerts/cooldowns?only_active=true`) directly on the
+  // dashboard so on-call admins can spot "alert is being suppressed"
+  // without having to drill into Bot Security → Suppressed Alerts.
+  // Polled every 60s on the same cadence as the rest of the dashboard
+  // header counters (see AdminPage.jsx unack-alerts polling).
+  const [cooldownActiveCount, setCooldownActiveCount] = useState(0);
   const [seoHealth, setSeoHealth] = useState(null);
   const [seoHealthRefreshing, setSeoHealthRefreshing] = useState(false);
   const [seoLive, setSeoLive] = useState(null);
@@ -727,6 +734,25 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
     const interval = setInterval(() => load(true), 60000);
     return () => clearInterval(interval);
   }, [load, loadNotifPrefs]);
+
+  // Task #991 — poll the persistent alert-cooldown active count so the
+  // Alert History header can surface a "N on hold" pill whenever the
+  // 6h cross-worker cooldown is silencing alerts that would otherwise
+  // fire. Cheap call (the route returns just `active_count` plus the
+  // first row); we ask for limit=1 because the badge only needs the
+  // count, never the body. Failures are swallowed — the badge simply
+  // hides, matching the unack-count poll's behaviour in AdminPage.
+  useEffect(() => {
+    if (!adminToken) return undefined;
+    const fetchCount = () => {
+      adminGetAlertCooldowns(adminToken, { only_active: true, limit: 1 })
+        .then((res) => setCooldownActiveCount(res.data?.active_count ?? 0))
+        .catch(() => {});
+    };
+    fetchCount();
+    const id = setInterval(fetchCount, 60000);
+    return () => clearInterval(id);
+  }, [adminToken]);
 
   // Cloudflare Account Analytics overview — fetch on mount and whenever
   // the user clicks a different range pill on the Traffic card.
@@ -2422,6 +2448,25 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-semibold">
                 {alertHistory.alerts.filter(a => !a.acknowledged).length} unacknowledged
               </span>
+            )}
+            {/*
+              Task #991 — at-a-glance "alert is being suppressed" badge.
+              Hidden when nothing is on hold so it's never misleading
+              (per the task's "Done looks like" spec). Click jumps into
+              Bot Security with the Suppressed Alerts panel auto-
+              expanded + scrolled into view (see AlertCooldownsPanel's
+              `navContext` handler in AdminBotSecurity.jsx).
+            */}
+            {cooldownActiveCount > 0 && (
+              <button
+                type="button"
+                onClick={() => onNavigate && onNavigate('botsecurity', { panel: 'alert-cooldowns' })}
+                className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-semibold hover:bg-amber-200 transition-colors cursor-pointer"
+                title={`${cooldownActiveCount} alert${cooldownActiveCount === 1 ? '' : 's'} silenced by the 6h cooldown — click to review in Bot Security`}
+              >
+                <Clock size={10} />
+                {cooldownActiveCount} on hold
+              </button>
             )}
             <div className="ml-auto flex items-center gap-2">
               <button

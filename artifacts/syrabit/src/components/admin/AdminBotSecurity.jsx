@@ -1143,7 +1143,7 @@ function _formatCooldownType(type) {
   return (type || 'unknown').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
-function AlertCooldownsPanel({ adminToken }) {
+function AlertCooldownsPanel({ adminToken, navContext }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -1155,6 +1155,12 @@ function AlertCooldownsPanel({ adminToken }) {
   const [releasingKey, setReleasingKey] = useState(null);
   const [releaseError, setReleaseError] = useState(null);
   const [tick, setTick] = useState(0);
+  // Task #991 — when an admin clicks the dashboard's "N on hold" pill,
+  // AdminPage routes them here with navContext.panel === 'alert-cooldowns'.
+  // We auto-expand the panel and scroll its container into view so the
+  // suppressed list is the first thing they see, mirroring the
+  // existing AlertThresholdPanel `panel === 'alert-settings'` flow.
+  const containerRef = useRef(null);
 
   const fetchCooldowns = useCallback(async () => {
     setLoading(true);
@@ -1177,6 +1183,23 @@ function AlertCooldownsPanel({ adminToken }) {
   useEffect(() => {
     if (expanded) fetchCooldowns();
   }, [expanded, fetchCooldowns]);
+
+  // Task #991 — auto-expand + scroll into view when arriving from the
+  // dashboard's "N on hold" badge. We delay the scroll one tick so the
+  // expansion has had a chance to lay out the table; otherwise the
+  // smooth scroll lands on the still-collapsed header. Mirrors the
+  // pattern in AlertThresholdPanel above.
+  useEffect(() => {
+    if (navContext?.panel !== 'alert-cooldowns') return undefined;
+    setExpanded(true);
+    const t = setTimeout(() => {
+      const el = containerRef.current;
+      if (el && typeof el.scrollIntoView === 'function') {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 100);
+    return () => clearTimeout(t);
+  }, [navContext]);
 
   // Re-render every 10s while expanded so the countdown column ticks
   // down without the user having to hit refresh. Cheap (in-memory math
@@ -1224,6 +1247,7 @@ function AlertCooldownsPanel({ adminToken }) {
   });
 
   return (
+    <div ref={containerRef}>
     <GlassCard>
       <button
         onClick={() => setExpanded(!expanded)}
@@ -1365,6 +1389,7 @@ function AlertCooldownsPanel({ adminToken }) {
         </div>
       )}
     </GlassCard>
+    </div>
   );
 }
 
@@ -1930,7 +1955,7 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
 
         <SectionErrorBoundary name="Alert History" resetKeys={[refreshCounter]}><AlertHistoryPanel adminToken={adminToken} /></SectionErrorBoundary>
 
-        <SectionErrorBoundary name="Suppressed Alerts" resetKeys={[refreshCounter]}><AlertCooldownsPanel adminToken={adminToken} /></SectionErrorBoundary>
+        <SectionErrorBoundary name="Suppressed Alerts" resetKeys={[refreshCounter]}><AlertCooldownsPanel adminToken={adminToken} navContext={navContext} /></SectionErrorBoundary>
 
         <SectionErrorBoundary name="TTL Monitor" resetKeys={[refreshCounter]}><TtlMonitorPanel adminToken={adminToken} /></SectionErrorBoundary>
 
