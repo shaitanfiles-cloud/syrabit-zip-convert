@@ -1,78 +1,44 @@
-# See https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
+```
+# Logs and temp files
+*.log
+*.tmp
+*.swp
 
-# ── Node.js ───────────────────────────────────────────────────────────────────
+# Environment
+.env
+.env.local
+.env.*
+
+# Editors
+.vscode/
+.idea/
+
+# Dependencies
 node_modules/
-dist/
-tmp/
-out-tsc/
-*.tsbuildinfo
-.expo
-.expo-shared
-npm-debug.log
-yarn-error.log
-testem.log
-/typings
-coverage/
-
-# ── Python ────────────────────────────────────────────────────────────────────
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-*.egg-info/
-.Python
-venv/
 .venv/
-.venv-prod/
-.pythonlibs/
-.python-deps/
-env/
-ENV/
+venv/
+__pycache__/
+.mypy_cache/
 .pytest_cache/
+
+# Build artifacts
+dist/
+build/
+target/
+
+# Python
+*.pyc
 *.pyo
 *.pyd
 
-# ── Environment / Secrets ─────────────────────────────────────────────────────
-.env
-.env.*
-!.env.example
-
-# ── Build outputs ─────────────────────────────────────────────────────────────
-artifacts/syrabit/dist/
-artifacts/syrabit-backend/static/
-
-# ── IDEs and editors ─────────────────────────────────────────────────────────
-/.idea
-.project
-.classpath
-.c9/
-*.launch
-.settings/
-*.sublime-workspace
-.vscode/*
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
-.cursor/rules/nx-rules.mdc
-.github/instructions/nx.instructions.md
-
-# ── OS files ─────────────────────────────────────────────────────────────────
+# OS
 .DS_Store
 Thumbs.db
-/.sass-cache
-/connect.lock
-/libpeerconnection.log
 
-# ── Replit internals (not needed in clone) ────────────────────────────────────
-.cache/
-.local/
-dist-ssr/
-
-# Playwright (Task #571 admin smoke)
-artifacts/syrabit/test-results/
-artifacts/syrabit/playwright-report/
-artifacts/syrabit/blob-report/
+# Coverage
+coverage/
+htmlcov/
+.coverage
 
 
 # Cloudflare WAF orchestrator state — per-incident artifact, never durable

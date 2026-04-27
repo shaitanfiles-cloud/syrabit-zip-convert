@@ -1318,7 +1318,7 @@ async def lifespan(app):
 
     # Task #609 — initialise the managed AI response cache. Safe no-op when
     # MEMORYSTORE_REDIS_URL is unset; the cache transparently falls back to
-    # the existing Upstash REST client and finally to the in-memory L1.
+    # in-memory L1. LLM upstream caching is handled by Cloudflare AI Gateway.
     try:
         import ai_cache as _ai_cache
         await _ai_cache.init_async_client()
