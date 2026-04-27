@@ -148,7 +148,8 @@ async def _redis_get_async(prefix: str, key: str) -> Optional[str]:
 
 async def _redis_get_ai_cache_async(key: str) -> Optional[str]:
     """Async AI-cache GET. Routes through the managed Memorystore client when
-    initialised, falling back to the legacy Upstash REST helper otherwise."""
+    initialised. When MEMORYSTORE_REDIS_URL is unset (current default), LLM
+    caching is handled by Cloudflare AI Gateway at the edge."""
     mod = _ai_cache_mod()
     if mod is not None and getattr(mod, "_async_pool", None) is not None:
         return await mod.aget(key)

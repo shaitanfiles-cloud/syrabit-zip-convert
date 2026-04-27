@@ -150,8 +150,8 @@ def _detect_initial_backend() -> str:
 
 def _detect_fallback_backend() -> str:
     """Last-resort backend when a configured Memorystore endpoint is
-    unreachable at startup. Upstash REST has been removed (2026-04) — LLM
-    upstream caching now lives at Cloudflare AI Gateway."""
+    unreachable at startup. LLM upstream caching lives at Cloudflare AI
+    Gateway; this fallback only affects the per-worker L1 cache."""
     return "memory_only"
 
 

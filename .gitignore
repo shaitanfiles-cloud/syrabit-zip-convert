@@ -1,76 +1,17 @@
-# See https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
+```
+# Dependencies
+artifacts/
 
-# ── Node.js ───────────────────────────────────────────────────────────────────
-node_modules/
-dist/
-tmp/
-out-tsc/
-*.tsbuildinfo
-.expo
-.expo-shared
-npm-debug.log
-yarn-error.log
-testem.log
-/typings
-coverage/
+# Logs and temp files
+*.log
+*.tmp
 
-# ── Python ────────────────────────────────────────────────────────────────────
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-*.egg-info/
-.Python
-venv/
-.venv/
-.venv-prod/
-.pythonlibs/
-.python-deps/
-env/
-ENV/
-.pytest_cache/
-*.pyo
-*.pyd
-
-# ── Environment / Secrets ─────────────────────────────────────────────────────
+# Environment
 .env
+.env.local
 .env.*
-!.env.example
 
-# ── Build outputs ─────────────────────────────────────────────────────────────
-artifacts/syrabit/dist/
-artifacts/syrabit-backend/static/
-
-# ── IDEs and editors ─────────────────────────────────────────────────────────
-/.idea
-.project
-.classpath
-.c9/
-*.launch
-.settings/
-*.sublime-workspace
-.vscode/*
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
-.cursor/rules/nx-rules.mdc
-.github/instructions/nx.instructions.md
-
-# ── OS files ─────────────────────────────────────────────────────────────────
-.DS_Store
-Thumbs.db
-/.sass-cache
-/connect.lock
-/libpeerconnection.log
-
-# ── Replit internals (not needed in clone) ────────────────────────────────────
-.cache/
-.local/
-dist-ssr/
-
-# Playwright (Task #571 admin smoke)
-artifacts/syrabit/test-results/
-artifacts/syrabit/playwright-report/
-artifacts/syrabit/blob-report/
-
+# Editors
+.vscode/
+.idea/
+```
