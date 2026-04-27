@@ -1,4 +1,4 @@
-"""Syrabit.ai — AI chat & search routes"""
+"""SEO/GEO/AEO ENHANCED CHAT ROUTES - Upgraded with RAG citations, cognitive anchors & cliffhanger hooks"""
 import re, json, asyncio, time, time as _time_mod, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
 
 from typing import Optional, List, Dict, Any, Union
@@ -84,6 +84,17 @@ from tracing import (
 )
 from followup_context import detect_followup, build_followup_context, merge_followup_into_query
 from pipeline import should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query, get_instant_response
+
+# SEO/GEO/AEO Enhancement Layer imports
+try:
+    from chat_enhancement_layer import chat_enhancement_layer
+    from cliffhanger_engine import cliffhanger_engine
+    from cognitive_anchor_injector import cognitive_anchor_injector
+    from reddit_oracle import reddit_oracle
+    GEO_ENHANCEMENTS_ENABLED = True
+except ImportError as e:
+    logger.warning(f"GEO enhancements not loaded: {e}")
+    GEO_ENHANCEMENTS_ENABLED = False
 
 _CONTENT_INTENTS_SET = {"notes", "important_questions", "pyq"}
 
@@ -781,8 +792,12 @@ async def _persist_chat_turn(
     rag_topic_name: str | None = None,
     rag_chunk_snippet: str | None = None,
     followup_context: dict | None = None,
+    # SEO/GEO/AEO Enhancement metadata
+    enhancements_applied: list | None = None,
+    geo_score_boost: float = 0.0,
+    cognitive_anchor: str | None = None,
 ):
-    """Background: save conversation messages. Optionally deduct 1 credit. Non-blocking."""
+    """Background: save conversation messages with GEO enhancements. Optionally deduct 1 credit. Non-blocking."""
     try:
         now = datetime.now(timezone.utc).isoformat()
         assistant_msg = {
@@ -815,6 +830,15 @@ async def _persist_chat_turn(
             assistant_msg["rag_topic_name"] = rag_topic_name
         if rag_chunk_snippet:
             assistant_msg["rag_chunk_snippet"] = rag_chunk_snippet
+        
+        # Add GEO enhancement metadata
+        if enhancements_applied:
+            assistant_msg["enhancements_applied"] = enhancements_applied
+        if geo_score_boost > 0:
+            assistant_msg["geo_score_boost"] = geo_score_boost
+        if cognitive_anchor:
+            assistant_msg["cognitive_anchor"] = cognitive_anchor
+        
         new_msgs = [
             {"role": "user", "content": user_msg, "timestamp": now},
             assistant_msg,
@@ -2238,6 +2262,25 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                             completed=_prev_fu_completed,
                             remaining=_prev_fu_remaining,
                         )
+                    # Apply SEO/GEO/AEO enhancements to the response
+                    _enhanced_result = None
+                    if GEO_ENHANCEMENTS_ENABLED:
+                        try:
+                            _enhanced_result = chat_enhancement_layer.enhance_response(
+                                answer=answer,
+                                rag_sources=rag_sources or [],
+                                intent=_stream_intent,
+                                topic=msg.subject_name or msg.message[:100],
+                                user_context={"user_id": user_id}
+                            )
+                            # Use enhanced answer if available
+                            if _enhanced_result.get("answer") != answer:
+                                answer = _enhanced_result["answer"]
+                                logger.info(f"[GEO] Enhanced response with {len(_enhanced_result.get('enhancements_applied', []))} upgrades")
+                        except Exception as _enh_err:
+                            logger.warning(f"[GEO] Enhancement failed (non-fatal): {_enh_err}")
+                            _enhanced_result = None
+                    
                     asyncio.create_task(_persist_chat_turn(
                         conv_id, user_id,
                         user_msg_saved, answer,
@@ -2257,6 +2300,10 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                         rag_topic_name=rag_topic_name,
                         rag_chunk_snippet=rag_chunk_snippet,
                         followup_context=_stream_followup_ctx,
+                        # GEO enhancement metadata
+                        enhancements_applied=_enhanced_result.get("enhancements_applied", []) if _enhanced_result else None,
+                        geo_score_boost=_enhanced_result.get("geo_score_boost", 0.0) if _enhanced_result else 0.0,
+                        cognitive_anchor=_enhanced_result.get("metadata", {}).get("framework_used") if _enhanced_result else None,
                     ))
                     asyncio.create_task(_log_chat_message(
                         user_id=user_id,
