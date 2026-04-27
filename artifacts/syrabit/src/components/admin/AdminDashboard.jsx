@@ -747,7 +747,11 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
     const fetchCount = () => {
       adminGetAlertCooldowns(adminToken, { only_active: true, limit: 1 })
         .then((res) => setCooldownActiveCount(res.data?.active_count ?? 0))
-        .catch(() => {});
+        // On a transient failure, reset to 0 so a stale positive
+        // count from an earlier successful poll doesn't keep the
+        // badge visible and misleading. The next successful poll
+        // will repopulate the real number.
+        .catch(() => setCooldownActiveCount(0));
     };
     fetchCount();
     const id = setInterval(fetchCount, 60000);
@@ -2438,6 +2442,32 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       </SectionErrorBoundary>
       
 
+      {/*
+        Task #991 — standalone fallback for the "N on hold" badge that
+        runs *outside* the Alert History gate. The richer inline pill
+        below (inside the Alert History header) is what admins see in
+        the normal case, but if `/admin/alerts?limit=50` ever fails
+        (the source for `alertHistory`) the cooldown indicator stays
+        visible because its own poll is independent. Hidden when
+        nothing is on hold OR when alertHistory is present (the inline
+        pill takes over and avoids double-rendering).
+      */}
+      {!alertHistory && cooldownActiveCount > 0 && (
+        <SectionErrorBoundary name="Suppressed Alert Badge">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onNavigate && onNavigate('botsecurity', { panel: 'alert-cooldowns' })}
+              className="inline-flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-800 font-semibold hover:bg-amber-100 transition-colors cursor-pointer"
+              title={`${cooldownActiveCount} alert${cooldownActiveCount === 1 ? '' : 's'} silenced by the 6h cooldown — click to review in Bot Security`}
+            >
+              <Clock size={12} />
+              {cooldownActiveCount} alert{cooldownActiveCount === 1 ? '' : 's'} on hold
+            </button>
+          </div>
+        </SectionErrorBoundary>
+      )}
+
       <SectionErrorBoundary name="Alert History">
       {alertHistory && (
         <GlassCard className="p-5">
@@ -2455,7 +2485,10 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
               (per the task's "Done looks like" spec). Click jumps into
               Bot Security with the Suppressed Alerts panel auto-
               expanded + scrolled into view (see AlertCooldownsPanel's
-              `navContext` handler in AdminBotSecurity.jsx).
+              `navContext` handler in AdminBotSecurity.jsx). A
+              standalone fallback above this card covers the
+              alertHistory-fetch-failed case so the indicator never
+              disappears just because a sibling API blipped.
             */}
             {cooldownActiveCount > 0 && (
               <button
