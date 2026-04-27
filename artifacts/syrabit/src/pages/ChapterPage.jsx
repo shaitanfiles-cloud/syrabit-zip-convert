@@ -718,12 +718,20 @@ export default function ChapterPage() {
       }
 
       if (!el && decoded) {
-        const slugified = decoded.replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-        el = document.getElementById(slugified);
-        if (!el) {
-          const allH = articleRef.current?.querySelectorAll('h2[id], h3[id]') || [];
-          for (const h of allH) {
-            if (h.id.includes(slugified) || slugified.includes(h.id)) { el = h; break; }
+        const slugified = decoded.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+        // For non-Latin scripts (Assamese, Hindi, Bengali, etc.) the
+        // ASCII-only slug above collapses to '' or '-', which would
+        // false-match any heading whose id happens to contain a hyphen.
+        // Only attempt the slug-id lookup when the slug carries real
+        // alphanumeric content; otherwise fall straight through to the
+        // Unicode-safe keyword-scoring path below.
+        if (slugified && /[a-z0-9]/.test(slugified)) {
+          el = document.getElementById(slugified);
+          if (!el) {
+            const allH = articleRef.current?.querySelectorAll('h2[id], h3[id]') || [];
+            for (const h of allH) {
+              if (h.id.includes(slugified) || slugified.includes(h.id)) { el = h; break; }
+            }
           }
         }
         if (!el) {
