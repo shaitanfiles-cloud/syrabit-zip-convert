@@ -9,7 +9,7 @@ import {
   LineChart, Line, BarChart, Bar, AreaChart, Area, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts';
-import { adminGetSpoofedBots, adminGetBlockedIps, adminGetBlockTrends, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings, adminTestAlertDelivery, adminGetTtlMonitor, adminGetCollectionSizeHistory, adminGetAlerts, adminAcknowledgeAlert, adminAcknowledgeAllAlerts, adminBackfillThresholds, adminSendReviewPromptWeeklyDigest } from '@/utils/api';
+import { adminGetSpoofedBots, adminGetBlockedIps, adminGetBlockTrends, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings, adminTestAlertDelivery, adminGetTtlMonitor, adminGetCollectionSizeHistory, adminGetAlerts, adminAcknowledgeAlert, adminAcknowledgeAllAlerts, adminBackfillThresholds, adminSendReviewPromptWeeklyDigest, adminGetAlertCooldowns, adminReleaseAlertCooldown } from '@/utils/api';
 import { Database, Activity, CheckCircle2, XCircle } from 'lucide-react';
 
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
@@ -1126,6 +1126,248 @@ const DATE_RANGE_OPTIONS = [
   { label: 'Last 90 days', value: '90' },
 ];
 
+function _formatCountdown(seconds) {
+  if (!seconds || seconds <= 0) return 'expired';
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  if (m < 60) {
+    const s = seconds % 60;
+    return s ? `${m}m ${s}s` : `${m}m`;
+  }
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  return remM ? `${h}h ${remM}m` : `${h}h`;
+}
+
+function _formatCooldownType(type) {
+  return (type || 'unknown').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function AlertCooldownsPanel({ adminToken }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [expanded, setExpanded] = useState(false);
+  const [onlyActive, setOnlyActive] = useState(true);
+  const [cooldownWindow, setCooldownWindow] = useState(6 * 3600);
+  const [serverNow, setServerNow] = useState(null);
+  const [activeCount, setActiveCount] = useState(0);
+  const [releasingKey, setReleasingKey] = useState(null);
+  const [releaseError, setReleaseError] = useState(null);
+  const [tick, setTick] = useState(0);
+
+  const fetchCooldowns = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setReleaseError(null);
+    try {
+      const res = await adminGetAlertCooldowns(adminToken, { limit: 200, only_active: onlyActive });
+      const fetched = res.data?.cooldowns || [];
+      setRows(fetched);
+      setActiveCount(res.data?.active_count ?? fetched.filter(r => r.active).length);
+      setCooldownWindow(res.data?.cooldown_window_seconds || 6 * 3600);
+      setServerNow(res.data?.now || null);
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to load alert cooldowns');
+    } finally {
+      setLoading(false);
+    }
+  }, [adminToken, onlyActive]);
+
+  useEffect(() => {
+    if (expanded) fetchCooldowns();
+  }, [expanded, fetchCooldowns]);
+
+  // Re-render every 10s while expanded so the countdown column ticks
+  // down without the user having to hit refresh. Cheap (in-memory math
+  // only — no network call).
+  useEffect(() => {
+    if (!expanded) return undefined;
+    const id = setInterval(() => setTick((n) => n + 1), 10000);
+    return () => clearInterval(id);
+  }, [expanded]);
+
+  const handleRelease = async (dedupKey) => {
+    if (!dedupKey) return;
+    if (typeof window !== 'undefined' && !window.confirm(`Release cooldown for "${dedupKey}"? The next matching alert will be allowed to fire immediately.`)) {
+      return;
+    }
+    setReleasingKey(dedupKey);
+    setReleaseError(null);
+    try {
+      await adminReleaseAlertCooldown(adminToken, dedupKey);
+      // Only decrement the active counter when the row we just released
+      // was actually still suppressing; releasing an already-expired row
+      // shouldn't change the "X on hold" badge.
+      const released = rows.find((r) => r.dedup_key === dedupKey);
+      const wasActive = released && (released._live_active ?? released.active);
+      setRows((prev) => prev.filter((r) => r.dedup_key !== dedupKey));
+      if (wasActive) {
+        setActiveCount((prev) => Math.max(0, prev - 1));
+      }
+    } catch (err) {
+      setReleaseError(err.response?.data?.detail || 'Failed to release cooldown');
+    } finally {
+      setReleasingKey(null);
+    }
+  };
+
+  const cooldownHours = Math.round(cooldownWindow / 3600);
+  // Recompute remaining seconds locally so the countdown stays fresh
+  // between refreshes (the server-side value is only accurate at the
+  // moment of the API response).
+  const nowMs = serverNow ? new Date(serverNow).getTime() + (tick * 10000) : Date.now();
+  const liveRows = rows.map((r) => {
+    if (!r.cooldown_expires_at) return r;
+    const remaining = Math.max(0, Math.floor((new Date(r.cooldown_expires_at).getTime() - nowMs) / 1000));
+    return { ...r, _live_remaining: remaining, _live_active: remaining > 0 };
+  });
+
+  return (
+    <GlassCard>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full p-5 flex items-center justify-between hover:bg-gray-50 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-amber-50">
+            <Clock size={16} className="text-amber-500" />
+          </div>
+          <div className="text-left">
+            <h3 className="text-sm font-semibold text-gray-900">Suppressed Alerts (Cooldowns)</h3>
+            <p className="text-[10px] text-gray-400 mt-0.5">
+              {loading && expanded
+                ? 'Loading...'
+                : `${activeCount} active${cooldownWindow ? ` · ${cooldownHours}h window` : ''}`}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {activeCount > 0 && !expanded && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-700">
+              {activeCount} on hold
+            </span>
+          )}
+          <AlertTriangle size={14} className={`text-gray-400 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-gray-100">
+          <div className="p-4 flex flex-wrap items-center gap-3 border-b border-gray-50">
+            <p className="text-[11px] text-gray-500 max-w-2xl">
+              These alerts WOULD have fired in the last {cooldownHours}h but were
+              suppressed by the persistent cooldown. Release a row to allow the next
+              matching dispatch through immediately.
+            </p>
+            <label className="flex items-center gap-1.5 text-[11px] text-gray-600 cursor-pointer select-none ml-auto">
+              <input
+                type="checkbox"
+                checked={onlyActive}
+                onChange={(e) => setOnlyActive(e.target.checked)}
+                className="h-3 w-3 rounded border-gray-300 text-violet-600 focus:ring-violet-200"
+              />
+              Active only
+            </label>
+            <button
+              onClick={fetchCooldowns}
+              disabled={loading}
+              className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+              title="Refresh cooldowns"
+            >
+              <RefreshCw size={12} className={`text-gray-400 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+
+          {(error || releaseError) && (
+            <div className="p-4 space-y-2">
+              {error && (
+                <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">
+                  <AlertTriangle size={12} />
+                  {error}
+                </div>
+              )}
+              {releaseError && (
+                <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">
+                  <AlertTriangle size={12} />
+                  {releaseError}
+                </div>
+              )}
+            </div>
+          )}
+
+          {loading ? (
+            <div className="p-5 flex items-center gap-2 text-sm text-gray-400">
+              <Loader2 size={14} className="animate-spin" />
+              Loading cooldowns...
+            </div>
+          ) : liveRows.length === 0 ? (
+            <div className="px-5 py-8 text-center text-sm text-gray-400">
+              {onlyActive
+                ? 'No alerts are currently being suppressed by cooldown.'
+                : 'No cooldown rows on file.'}
+            </div>
+          ) : (
+            <div className="max-h-[500px] overflow-y-auto divide-y divide-gray-50">
+              {liveRows.map((row) => {
+                const isReleasing = releasingKey === row.dedup_key;
+                const remaining = row._live_remaining ?? row.seconds_until_expires ?? 0;
+                const isActive = row._live_active ?? row.active;
+                return (
+                  <div key={row.dedup_key} className="p-4 hover:bg-gray-50 transition-colors">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider bg-amber-50 text-amber-700">
+                            {_formatCooldownType(row.alert_type)}
+                          </span>
+                          {isActive ? (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[9px] font-semibold">
+                              Suppressing
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 text-[9px] font-semibold">
+                              Expired
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs font-mono text-gray-900 mt-1 break-all">{row.dedup_key}</p>
+                        <div className="mt-2 flex items-center gap-3 text-[10px] text-gray-400 flex-wrap">
+                          <span className="flex items-center gap-1">
+                            <Clock size={10} />
+                            Last fired: {row.fired_at ? new Date(row.fired_at).toLocaleString() : '—'}
+                          </span>
+                          {row.cooldown_expires_at && (
+                            <span className="flex items-center gap-1">
+                              <Calendar size={10} />
+                              {isActive
+                                ? `Expires in ${_formatCountdown(remaining)}`
+                                : `Expired ${new Date(row.cooldown_expires_at).toLocaleString()}`}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleRelease(row.dedup_key)}
+                        disabled={isReleasing}
+                        className="flex-shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium bg-violet-50 text-violet-700 hover:bg-violet-100 transition-colors disabled:opacity-50"
+                        title="Delete this dedup_key row so the next matching alert is free to fire"
+                      >
+                        {isReleasing ? <Loader2 size={10} className="animate-spin" /> : <Unlock size={10} />}
+                        Release
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </GlassCard>
+  );
+}
+
 function AlertHistoryPanel({ adminToken }) {
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1687,6 +1929,8 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
         <SectionErrorBoundary name="Alert Thresholds" resetKeys={[refreshCounter]}><AlertThresholdPanel adminToken={adminToken} navContext={navContext} /></SectionErrorBoundary>
 
         <SectionErrorBoundary name="Alert History" resetKeys={[refreshCounter]}><AlertHistoryPanel adminToken={adminToken} /></SectionErrorBoundary>
+
+        <SectionErrorBoundary name="Suppressed Alerts" resetKeys={[refreshCounter]}><AlertCooldownsPanel adminToken={adminToken} /></SectionErrorBoundary>
 
         <SectionErrorBoundary name="TTL Monitor" resetKeys={[refreshCounter]}><TtlMonitorPanel adminToken={adminToken} /></SectionErrorBoundary>
 

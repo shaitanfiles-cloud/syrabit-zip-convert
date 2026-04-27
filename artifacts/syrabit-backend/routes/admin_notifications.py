@@ -1175,6 +1175,129 @@ async def admin_acknowledge_all_alerts(
     return {"ok": True, "modified": result.modified_count}
 
 
+# ─────────────────────────────────────────────
+# Task #987 — Visibility into suppressed alerts
+# ─────────────────────────────────────────────
+#
+# `metrics._dispatch_alert` writes one row per (alert_type, target) to
+# `db.alert_dispatch_log` whenever it claims a dispatch slot. While the
+# row's `ts` is within the persistent cooldown window (6h, see
+# `metrics._PERSISTENT_ALERT_COOLDOWN_S`) any retry of the same alert is
+# silently dropped. Without surfacing that log, "no recent alerts" can
+# mean either "everything is healthy" or "alert is being suppressed by
+# cooldown" — admins need to be able to tell those two states apart.
+#
+# These endpoints expose the cooldown holds to the admin Alert History
+# UI and let on-call operators release a specific dedup_key when they
+# want a fresh alert to fire (e.g. while investigating an incident).
+@router.get("/admin/alerts/cooldowns")
+async def admin_get_alert_cooldowns(
+    limit: int = Query(200, ge=1, le=1000),
+    only_active: bool = Query(False),
+    admin: dict = Depends(get_admin_user),
+):
+    """List dispatch-log rows so admins can see which alerts are
+    currently being suppressed by the 6h persistent cooldown.
+
+    Each row reports its dedup_key, alert_type, last fired_at, the
+    cooldown expiry time, seconds remaining (0 once expired), and
+    whether the cooldown is still actively suppressing retries.
+    Sorted by `ts` desc so the freshest holds appear first.
+    """
+    try:
+        # Lazy-import the cooldown window so this module doesn't take a
+        # hard import dependency on metrics at startup.
+        try:
+            from metrics import _PERSISTENT_ALERT_COOLDOWN_S as _COOLDOWN_S
+        except Exception:
+            _COOLDOWN_S = 6 * 3600
+        import time as _time_mod
+        now_ts = _time_mod.time()
+        cutoff = now_ts - _COOLDOWN_S
+        query: Dict[str, Any] = {}
+        if only_active:
+            query["ts"] = {"$gte": cutoff}
+        cursor = db.alert_dispatch_log.find(query).sort("ts", -1).limit(limit)
+        rows = []
+        active_count = 0
+        async for doc in cursor:
+            ts = doc.get("ts")
+            fired_at = doc.get("fired_at")
+            fired_at_iso = None
+            if isinstance(fired_at, datetime):
+                fired_at_iso = fired_at.astimezone(timezone.utc).isoformat()
+            elif isinstance(fired_at, str):
+                fired_at_iso = fired_at
+            cooldown_expires_iso = None
+            seconds_until_expires = 0
+            active = False
+            if isinstance(ts, (int, float)):
+                expires_ts = ts + _COOLDOWN_S
+                cooldown_expires_iso = datetime.fromtimestamp(
+                    expires_ts, tz=timezone.utc
+                ).isoformat()
+                seconds_until_expires = max(0, int(expires_ts - now_ts))
+                active = expires_ts > now_ts
+            if active:
+                active_count += 1
+            rows.append({
+                "dedup_key": doc.get("dedup_key"),
+                "alert_type": doc.get("alert_type"),
+                "fired_at": fired_at_iso,
+                "ts": ts,
+                "cooldown_expires_at": cooldown_expires_iso,
+                "seconds_until_expires": seconds_until_expires,
+                "active": active,
+            })
+        return {
+            "cooldowns": rows,
+            "total": len(rows),
+            "active_count": active_count,
+            "cooldown_window_seconds": int(_COOLDOWN_S),
+            "now": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as exc:
+        logger.error(f"Failed to fetch alert cooldowns: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to fetch alert cooldowns")
+
+
+@router.delete("/admin/alerts/cooldowns/{dedup_key:path}")
+async def admin_release_alert_cooldown(
+    dedup_key: str = Path(..., description="dedup_key of the alert_dispatch_log row to release"),
+    admin: dict = Depends(get_admin_user),
+):
+    """Delete a specific alert_dispatch_log row so the next matching
+    alert is allowed to fire immediately. Useful when investigating a
+    live incident where the cooldown is hiding a recurring alert.
+
+    Also drops the in-memory mirror in metrics so the in-process
+    cooldown doesn't immediately re-suppress the next dispatch.
+    """
+    if not dedup_key:
+        raise HTTPException(status_code=400, detail="Missing dedup_key")
+    try:
+        result = await db.alert_dispatch_log.delete_one({"dedup_key": dedup_key})
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Cooldown row not found")
+        # Best-effort: also clear the in-memory cooldown mirror so the
+        # next dispatch in this worker isn't blocked by the 30-min
+        # _ALERT_COOLDOWN_S backstop. The dedup_key is `alert_type` for
+        # generic alerts and `alert_type|<key>=<value>` for per-target
+        # alerts, so split on the first `|` to recover the type.
+        try:
+            from metrics import _alert_last_fired
+            alert_type = dedup_key.split("|", 1)[0]
+            _alert_last_fired.pop(alert_type, None)
+        except Exception as _mirror_exc:
+            logger.debug(f"in-memory cooldown clear failed for {dedup_key}: {_mirror_exc}")
+        return {"ok": True, "dedup_key": dedup_key, "released_by": admin.get("email", "admin")}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to release alert cooldown {dedup_key}: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to release alert cooldown")
+
+
 _BACKFILL_TYPE_TO_METRIC = {
     "high_error_rate": "error_rate_pct",
     "high_latency": "latency_p95_ms",

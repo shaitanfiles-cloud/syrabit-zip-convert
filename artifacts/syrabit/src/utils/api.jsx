@@ -927,6 +927,15 @@ export const adminAcknowledgeAllAlerts = (token) =>
 export const adminBackfillThresholds = (token) =>
   axios.post(`${API_BASE}/admin/alerts/backfill-thresholds`, {}, { headers: adminHeaders(token), withCredentials: true });
 
+export const adminGetAlertCooldowns = (token, { limit = 200, only_active } = {}) => {
+  const params = { limit };
+  if (only_active) params.only_active = true;
+  return axios.get(`${API_BASE}/admin/alerts/cooldowns`, { headers: adminHeaders(token), withCredentials: true, params });
+};
+
+export const adminReleaseAlertCooldown = (token, dedupKey) =>
+  axios.delete(`${API_BASE}/admin/alerts/cooldowns/${encodeURIComponent(dedupKey)}`, { headers: adminHeaders(token), withCredentials: true });
+
 const adminIndexNowPing = (token, urls = []) =>
   axios.post(`${API_BASE}/admin/indexnow/ping`, { urls }, { headers: adminHeaders(token), withCredentials: true });
 
