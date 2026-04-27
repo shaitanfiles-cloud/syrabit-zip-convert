@@ -1468,8 +1468,20 @@ async def _evaluate_smoke_failure_streak(
             tzinfo=timezone.utc,
         )
         try:
+            # Quiet-day skips (no published page touched today) carry a
+            # ``skipped_reason`` and must NOT count as failures — the
+            # chain wasn't exercised, so we have no signal either way.
+            # Filter them out at the query level so the streak window
+            # only sees real pass / fail rows.
             cursor = real_db.indexnow_smoke_log.find(
-                {"ran_at": {"$gte": start, "$lt": end}},
+                {
+                    "ran_at": {"$gte": start, "$lt": end},
+                    "$or": [
+                        {"skipped_reason": {"$exists": False}},
+                        {"skipped_reason": None},
+                        {"skipped_reason": ""},
+                    ],
+                },
                 {"_id": 0, "ran_at": 1, "ok": 1, "url": 1, "error": 1},
             )
             rows = await cursor.to_list(1000)
@@ -1496,16 +1508,29 @@ async def _evaluate_smoke_failure_streak(
                     bucket["last_url"] = r.get("url") or ""
                 if r.get("error"):
                     bucket["last_error"] = r.get("error")
-        # Streak only matches if every day in the window has ≥1 failure
-        # and 0 passes.
+        # Streak matches when:
+        #   • no day in the window has a successful run, AND
+        #   • at least ``threshold_days`` distinct calendar days had ≥1
+        #     failure (skipped / no-run days are neutral, not streak-
+        #     breakers — otherwise a quiet weekend would mask an
+        #     ongoing real failure that started Friday).
+        # The previous "every day must have a failure" rule meant a
+        # single quiet day (no published page that day) silently broke
+        # the streak even when the chain was genuinely broken.
+        failure_days = 0
         for bucket in per_day.values():
-            if bucket["passes"] > 0 or bucket["failures"] == 0:
+            if bucket["passes"] > 0:
                 return None
+            if bucket["failures"] > 0:
+                failure_days += 1
+        if failure_days < int(threshold_days):
+            return None
         return {
             "threshold_days": int(threshold_days),
             "window_start": days[-1].isoformat(),
             "window_end": days[0].isoformat(),
             "per_day": per_day,
+            "failure_days": failure_days,
         }
     except Exception as exc:
         logger.debug("Failed to evaluate smoke streak: %s", exc)
@@ -1588,6 +1613,7 @@ async def _persist_smoke_run(summary: dict, source: str) -> None:
             "lastmod_fresh": bool(summary.get("lastmod_fresh")),
             "push_log_written": bool(summary.get("push_log_written")),
             "error": summary.get("error"),
+            "skipped_reason": summary.get("skipped_reason"),
             "summary": summary,
         }
         await real_db.indexnow_smoke_log.insert_one(doc)
@@ -1613,6 +1639,12 @@ async def _run_daily_publish_indexnow_smoke():
             await _maybe_dispatch_smoke_streak_alert()
         except Exception as exc:
             logger.debug("Smoke-streak post-cron check failed: %s", exc)
+        # Quiet-day skips (no published page was updated today) are not
+        # failures — the chain wasn't exercised, so there's nothing to
+        # alert on. The persisted log row keeps ``skipped_reason`` so
+        # the streak evaluator below can ignore these rows too.
+        if summary.get("skipped_reason"):
+            return
         if summary.get("ok"):
             return
         now = time.time()

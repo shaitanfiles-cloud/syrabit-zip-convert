@@ -36,6 +36,7 @@ async def run_publish_indexnow_smoke() -> dict:
         "lastmod_fresh": False,
         "push_log_written": False,
         "error": None,
+        "skipped_reason": None,
     }
     try:
         import seo_engine
@@ -65,6 +66,22 @@ async def run_publish_indexnow_smoke() -> dict:
         if not page:
             summary["error"] = "no_published_seo_page"
             return summary
+
+        # Quiet-day guard: the chain check below asserts that the picked
+        # page's <lastmod> in the live sitemap equals today's UTC date.
+        # When nothing was published or re-touched today, that assertion
+        # is guaranteed to fail even if the publish→IndexNow chain is
+        # perfectly healthy — there's just no fresh signal to verify.
+        # Treat this as a skipped run (ok=True, skipped_reason set) so
+        # cron / streak alerters don't conflate "nothing happened today"
+        # with "the chain is broken".
+        page_updated_at = str(page.get("updated_at") or "")[:10]
+        if page_updated_at != today:
+            summary["url"] = bd._page_doc_to_url(page) or ""
+            summary["skipped_reason"] = "no_publish_today"
+            summary["ok"] = True
+            return summary
+
         url = bd._page_doc_to_url(page)
         if not url:
             summary["error"] = "page_doc_to_url_failed"

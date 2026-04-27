@@ -780,6 +780,21 @@ async def lifespan(app):
                 name="ran_at_desc",
             )
 
+            # Persistent cross-worker alert dedup log (paired with
+            # metrics._dispatch_alert). Unique by ``dedup_key`` so the
+            # upsert at dispatch time has a single row per (alert_type,
+            # target) pair. TTL prunes rows ~30d after the last fire so
+            # the collection doesn't grow unbounded — the alert cooldown
+            # window itself is only 6h.
+            await db.alert_dispatch_log.create_index(
+                "dedup_key", unique=True, name="dedup_key_unique",
+            )
+            await db.alert_dispatch_log.create_index(
+                "fired_at",
+                expireAfterSeconds=30 * 24 * 3600,
+                name="fired_at_ttl_30d",
+            )
+
             await db.collection_size_history.create_index(
                 [("collection", 1), ("date", 1)],
                 unique=True,

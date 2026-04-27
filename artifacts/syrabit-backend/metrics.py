@@ -1195,6 +1195,18 @@ async def _bg_health_loop():
 
 _ALERT_COOLDOWN_S = 1800   # 30 min between same alert type
 _alert_last_fired: dict = {}   # { "alert_key": timestamp }
+
+# Cross-worker / cross-restart dedup window. The in-memory ``_alert_last_fired``
+# above resets every time a gunicorn worker recycles (max_requests=5000) and
+# isn't shared between workers, so the same alert can fire 3-N× per real
+# incident. This persistent backstop is keyed by ``(alert_type, dedup_key)``
+# where ``dedup_key`` is derived from threshold_snapshot fields like
+# ``endpoint`` / ``url`` / ``service`` so per-target alerts (e.g. one alert per
+# IndexNow endpoint) still fire independently. Default window is 6h — long
+# enough to suppress repeated firings within the same incident, short enough
+# that a recurrent issue still pages on-call after a working day.
+_PERSISTENT_ALERT_COOLDOWN_S = 6 * 3600
+_PERSISTENT_DEDUP_KEYS = ("endpoint", "url", "page_id", "service", "host", "domain")
 # Task #453: per-alert-type debounce for the inline "no working browser
 # push endpoints" warning that gets attached to email/webhook bodies when
 # Task #452's pre-check finds zero active admin push subs. Without this,
@@ -1675,7 +1687,65 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
     if not force and now - _alert_last_fired.get(alert_type, 0) < _ALERT_COOLDOWN_S:
         outcomes["skipped_cooldown"] = True
         return outcomes
+
+    # ── Persistent cross-worker dedup (atomic claim) ──────────────────────
+    # Build a dedup key that's stable per real incident. Generic alerts
+    # (no per-target context) collapse to just ``alert_type``; per-target
+    # alerts (e.g. one per IndexNow endpoint) include the target so different
+    # endpoints still alert independently. Forced dispatches bypass both the
+    # in-memory and persistent backstops the same way (synthetic test
+    # deliveries from the admin dashboard always use ``force=True``).
+    dedup_key = alert_type
+    if threshold_snapshot:
+        for _k in _PERSISTENT_DEDUP_KEYS:
+            _v = threshold_snapshot.get(_k)
+            if _v:
+                dedup_key = f"{alert_type}|{_k}={_v}"
+                break
+    persistent_claimed = False
+    if not force:
+        # Atomic claim: a single conditional upsert that wins iff the existing
+        # row's ts is older than the cooldown cutoff (or no row exists). Using
+        # find_one_and_update with the cutoff predicate + upsert leverages the
+        # unique index on dedup_key — a racing worker that tries to insert
+        # against an already-fresh row trips DuplicateKeyError, which we catch
+        # and treat as "lost the race → skip". This is the cross-worker
+        # equivalent of compare-and-swap.
+        cutoff = now - _PERSISTENT_ALERT_COOLDOWN_S
+        try:
+            from pymongo.errors import DuplicateKeyError
+            try:
+                await db.alert_dispatch_log.find_one_and_update(
+                    {
+                        "dedup_key": dedup_key,
+                        "$or": [
+                            {"ts": {"$lt": cutoff}},
+                            {"ts": {"$exists": False}},
+                        ],
+                    },
+                    {"$set": {
+                        "dedup_key": dedup_key,
+                        "alert_type": alert_type,
+                        "ts": now,
+                        "fired_at": datetime.now(timezone.utc),
+                    }},
+                    upsert=True,
+                )
+                persistent_claimed = True
+            except DuplicateKeyError:
+                # Another worker (or a recent fire) already holds the slot
+                # within the cooldown window. Drop this dispatch.
+                outcomes["skipped_cooldown"] = True
+                _alert_last_fired[alert_type] = now  # keep in-memory mirror in sync
+                return outcomes
+        except Exception as _dedup_exc:
+            # Mongo unavailable or some other failure: fall back to the
+            # in-memory cooldown (defense-in-depth). Don't drop a real alert
+            # just because the dedup backstop is sick.
+            logger.debug(f"persistent cooldown claim failed for {dedup_key}: {_dedup_exc}")
+
     _alert_last_fired[alert_type] = now
+
     logger.warning(f"ALERT [{alert_type}] {title}: {body}")
 
     # Task #453: detect zero active admin push endpoints up-front so the
@@ -1948,6 +2018,29 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
         _record_outcome(ch, outcomes[ch], alert_type, now_iso)
     await _recompute_push_channel_status()
     await _persist_channel_status()
+
+    # ── Roll back the persistent claim if every delivery channel failed ──
+    # The atomic claim above prevents racing workers from double-firing the
+    # same alert, but it would also lock out retries for the full 6h window
+    # if all delivery channels happened to be down at claim time. When we
+    # observe that nothing was attempted-and-succeeded (push is fire-and-
+    # forget, so we ignore it for this check; the persisted alert doc and
+    # email/webhook are the synchronous truth), drop the claim so the next
+    # alerter tick is free to re-fire.
+    if persistent_claimed:
+        synchronous_delivered = (
+            outcomes.get("persisted", {}).get("ok")
+            or outcomes.get("email", {}).get("ok")
+            or outcomes.get("webhook", {}).get("ok")
+        )
+        if not synchronous_delivered:
+            try:
+                await db.alert_dispatch_log.delete_one(
+                    {"dedup_key": dedup_key, "ts": now}
+                )
+                _alert_last_fired.pop(alert_type, None)
+            except Exception as _rb_exc:
+                logger.debug(f"persistent cooldown rollback failed for {dedup_key}: {_rb_exc}")
 
     return outcomes
 
