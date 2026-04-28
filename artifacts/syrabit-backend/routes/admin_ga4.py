@@ -12,12 +12,12 @@ Routes (all ``/api/admin/ga4/*``):
   * GET  /test       — call GA4 with the stored token to prove it works
 """
 import logging
-import os
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 import ga4_client
 from auth_deps import get_admin_user
+from config import Configurator
 from deps import db
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ router = APIRouter()
 
 @router.get("/admin/ga4/status")
 async def ga4_status(admin: dict = Depends(get_admin_user)):
-    token_env = os.getenv("GA4_REFRESH_TOKEN", "")
+    token_env = Configurator.get("GA4_REFRESH_TOKEN", "")
     # Also check db.api_config in case token was persisted there
     token_db = ""
     try:
@@ -38,9 +38,9 @@ async def ga4_status(admin: dict = Depends(get_admin_user)):
     return {
         "connected": connected,
         "token_source": "env" if token_env else ("db" if token_db else "none"),
-        "property_id": os.getenv("GA4_PROPERTY_ID", ""),
-        "client_id_set": bool(os.getenv("GOOGLE_OAUTH_CLIENT_ID")),
-        "client_secret_set": bool(os.getenv("GOOGLE_CLIENT_SECRET")),
+        "property_id": Configurator.get("GA4_PROPERTY_ID", ""),
+        "client_id_set": bool(Configurator.get("GOOGLE_OAUTH_CLIENT_ID")),
+        "client_secret_set": bool(Configurator.get("GOOGLE_CLIENT_SECRET")),
     }
 
 
@@ -63,10 +63,11 @@ async def ga4_connect(
     # Persist to MongoDB so it survives process restarts
     await db.api_config.update_one({}, {"$set": {"ga4.refresh_token": refresh_token}}, upsert=True)
     # Also update current process env so GA4 works immediately without restart
-    os.environ["GA4_REFRESH_TOKEN"] = refresh_token
+    from config import Configurator
+    Configurator.set_runtime_env("GA4_REFRESH_TOKEN", refresh_token)
     ga4_client._db_token_cache["token"] = refresh_token
     ga4_client._db_token_cache["loaded"] = True
-    logger.info("GA4 refresh token stored in db.api_config and os.environ")
+    logger.info("GA4 refresh token stored in db.api_config and via Configurator")
     return {
         "status": "connected",
         "message": "GA4 connected. Token persisted to database — no Replit Secret needed.",

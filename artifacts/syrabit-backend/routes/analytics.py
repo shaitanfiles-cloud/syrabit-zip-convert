@@ -1,5 +1,5 @@
 """Syrabit.ai — Analytics tracking routes"""
-import re, asyncio, time, logging, os
+import re, asyncio, time, logging
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone, timedelta
 from fastapi import (
@@ -7,6 +7,7 @@ from fastapi import (
 )
 from starlette.requests import Request as StarletteRequest
 
+from config import Configurator
 from deps import (
     db,
     is_mongo_available,
@@ -102,7 +103,7 @@ async def admin_analytics(days: int = 30, admin: dict = Depends(get_admin_user))
     cf_connected = cf_data is not None and any(
         k in cf_data for k in ("total_visitors", "visitors_today", "page_views_today", "daily_visitors")
     )
-    ga4_connected = bool(os.getenv("GA4_REFRESH_TOKEN"))
+    ga4_connected = bool(Configurator.get("GA4_REFRESH_TOKEN"))
 
     visitor_stats: dict = {}
     if cf_connected:

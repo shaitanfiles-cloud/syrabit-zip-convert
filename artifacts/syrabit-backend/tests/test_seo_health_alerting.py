@@ -638,7 +638,8 @@ def test_dispatch_alert_email_includes_by_sitemap_html():
     sys.modules["resend"] = _FakeResend
     metrics._notification_channels = {"email": "admin@example.com", "webhook_url": ""}
     import os as _os
-    _os.environ["RESEND_API_KEY"] = "test-key"
+    from config import Configurator
+    Configurator.set_runtime_env("RESEND_API_KEY", "test-key")
 
     by_sitemap_html = (
         "<table><tr><td>sitemap-learn.xml</td><td>2/10</td></tr></table>"

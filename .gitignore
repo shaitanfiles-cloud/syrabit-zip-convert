@@ -1,32 +1,47 @@
 ```
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+# Environment variables and config backups
+.env
+.env.*
+config.py.bak
 
-# Virtual environments
-venv/
+# Python specific
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
 env/
-ENV/
+venv/
 .venv/
-.env/
+.venv.bak/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+*.pot
+*.pyc
+*.pyo
+*.pyd
+.MF
+tags
+TAGS
+*.tmproj
+*.sw*
+*~
+.DS_Store
+Thumbs.db
+
+# Dependencies
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
 
 # IDE
 .vscode/
@@ -35,31 +50,24 @@ ENV/
 *.swo
 *.tmp
 
-# Logs
-*.log
+# Build artifacts
+dist/
+build/
+target/
+*.out
+*.exe
+*.dll
+*.so
+*.a
+*.class
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+htmlcov/
+coverage/
 
 # OS
 .DS_Store
 Thumbs.db
-
-# Environment variables
-.env
-.env.local
-*.env.*
-
-# Coverage
-.coverage
-coverage/
-htmlcov/
-
-# MyPy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pytest
-.pytest_cache/
-
-# Build outputs
-target/
 ```

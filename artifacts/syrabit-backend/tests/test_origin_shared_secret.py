@@ -19,14 +19,15 @@ from starlette.testclient import TestClient
 
 
 def _build_app(secret: str | None, header: str | None = None):
+    from config import Configurator
     if secret is None:
         os.environ.pop("ORIGIN_SHARED_SECRET", None)
     else:
-        os.environ["ORIGIN_SHARED_SECRET"] = secret
+        Configurator.set_runtime_env("ORIGIN_SHARED_SECRET", secret)
     if header is None:
         os.environ.pop("ORIGIN_SHARED_SECRET_HEADER", None)
     else:
-        os.environ["ORIGIN_SHARED_SECRET_HEADER"] = header
+        Configurator.set_runtime_env("ORIGIN_SHARED_SECRET_HEADER", header)
 
     import middleware
     importlib.reload(middleware)

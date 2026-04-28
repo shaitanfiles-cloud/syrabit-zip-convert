@@ -3,10 +3,11 @@ GA4 Analytics Data API helper for Syrabit.
 Uses service-account-less OAuth with the Analytics Data API.
 Falls back gracefully when credentials are missing/invalid.
 """
-import os
 import logging
 from datetime import datetime, timezone
 from typing import Optional
+
+from config import Configurator
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ async def _load_db_refresh_token() -> str:
             token = (cfg or {}).get("ga4", {}).get("refresh_token", "")
             if token:
                 _db_token_cache["token"] = token
-                os.environ["GA4_REFRESH_TOKEN"] = token
+                Configurator.set_runtime_env("GA4_REFRESH_TOKEN", token)
             _db_token_cache["loaded"] = True
             return token
     except Exception as e:
@@ -45,10 +46,10 @@ async def _load_db_refresh_token() -> str:
 def _cfg():
     """Read GA4 credentials from environment at call time (never cached at module level)."""
     return {
-        "property_id":    os.getenv("GA4_PROPERTY_ID", ""),
-        "client_id":      os.getenv("GOOGLE_OAUTH_CLIENT_ID", "") or os.getenv("GOOGLE_CLIENT_ID", ""),
-        "client_secret":  os.getenv("GOOGLE_CLIENT_SECRET", ""),
-        "refresh_token":  os.getenv("GA4_REFRESH_TOKEN", ""),
+        "property_id":    Configurator.get("GA4_PROPERTY_ID", ""),
+        "client_id":      Configurator.get("GOOGLE_OAUTH_CLIENT_ID", "") or Configurator.get("GOOGLE_CLIENT_ID", ""),
+        "client_secret":  Configurator.get("GOOGLE_CLIENT_SECRET", ""),
+        "refresh_token":  Configurator.get("GA4_REFRESH_TOKEN", ""),
     }
 
 

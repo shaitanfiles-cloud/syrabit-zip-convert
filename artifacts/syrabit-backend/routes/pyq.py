@@ -1,5 +1,5 @@
 """Syrabit.ai — PYQ upload, processing, and serving"""
-import re, json, asyncio, uuid, logging, os, base64, httpx
+import re, json, asyncio, uuid, logging, base64, httpx
 from typing import List
 from datetime import datetime, timezone
 from fastapi import (
@@ -7,6 +7,7 @@ from fastapi import (
 )
 from pydantic import BaseModel
 
+from config import Configurator
 from deps import (
     db,
     supa,
