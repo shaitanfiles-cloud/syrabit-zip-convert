@@ -1,5 +1,22 @@
 name: frontend-tests
 
+#
+# Supply-chain hardening: every `uses:` reference in this file is pinned to a
+# full 40-char commit SHA (with a trailing `# vX.Y.Z` tag comment for
+# readability). Float tags like `actions/checkout@v4` are forbidden because a
+# compromise of the upstream tag — as happened with tj-actions/changed-files in
+# 2025 — would let an attacker silently exfiltrate this repo's secrets on the
+# next push. See https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#using-third-party-actions
+# To upgrade an action: look up the SHA for the new tag (e.g.
+# `gh api repos/actions/checkout/git/refs/tags/v4.3.0 --jq .object.sha`) and
+# update both the SHA and the trailing tag comment.
+#
+# Least-privilege scopes (Task #905): every workflow declares an explicit
+# top-level `permissions:` block granting only the `GITHUB_TOKEN` scopes its
+# jobs actually need — read-only by default. Omitting `permissions:` falls
+# back to the repo default (`contents: write`), which would defeat the
+# SHA-pinning hardening if a pinned action were ever compromised.
+#
 # Task #470 — Real CI gate for the frontend.
 #
 # Runs the syrabit web artifact's unit tests + production build on every
@@ -13,6 +30,12 @@ on:
   pull_request:
     branches: [master]
 
+# Read-only token: this job checks out the repo, runs vitest in two
+# packages, and produces a Vite build under each package's local dist/.
+# It does not write back to the repo, publish packages, or open PRs.
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     name: pnpm test + build
@@ -21,15 +44,22 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Task #906 — strip the GITHUB_TOKEN from .git/config after
+          # checkout. This job runs vitest and a vite build; it does not
+          # push back to the repo, so credentials are not needed
+          # afterwards and persisting them would only widen the blast
+          # radius of an accidental .git/ artifact upload.
+          persist-credentials: false
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v3
+        uses: pnpm/action-setup@a3252b78c470c02df07e9d59298aecedc3ccdd6d # v3.0.0
         with:
           version: 9
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
           cache: pnpm
@@ -40,6 +70,13 @@ jobs:
       - name: Run edge worker tests (vitest)
         run: pnpm --filter ./workers/edge-proxy run test --run
         # vitest exit code is non-zero on failure → blocks the merge.
+
+      - name: Run syrabit web unit tests (vitest)
+        run: pnpm --filter @workspace/syrabit run test
+        # Task #722 — gate the syrabit web suite (BreakGlassBanner,
+        # pushChannelTone, highlightSegments, AdminEduBrowser,
+        # AlertReasonsRow, …). vitest exits non-zero on failure so a
+        # broken polled-field name or peer-dep churn blocks merge.
 
       - name: Build syrabit web artifact
         run: pnpm --filter @workspace/syrabit run build:vite-only || pnpm --filter @workspace/syrabit run build

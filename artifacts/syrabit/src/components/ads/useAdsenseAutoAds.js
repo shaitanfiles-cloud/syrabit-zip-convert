@@ -87,4 +87,4 @@ export default function useAdsenseAutoAds() {
   }, []);
 }
 
-export { ADSENSE_CLIENT, ADSENSE_SRC };
+;

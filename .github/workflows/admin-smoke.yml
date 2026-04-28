@@ -1,11 +1,34 @@
 name: admin-smoke
 
+#
+# Supply-chain hardening: every `uses:` reference in this file is pinned to a
+# full 40-char commit SHA (with a trailing `# vX.Y.Z` tag comment for
+# readability). Float tags like `actions/checkout@v4` are forbidden because a
+# compromise of the upstream tag — as happened with tj-actions/changed-files in
+# 2025 — would let an attacker silently exfiltrate this repo's secrets on the
+# next push. See https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#using-third-party-actions
+# To upgrade an action: look up the SHA for the new tag (e.g.
+# `gh api repos/actions/checkout/git/refs/tags/v4.3.0 --jq .object.sha`) and
+# update both the SHA and the trailing tag comment.
+#
+# Least-privilege scopes (Task #905): every workflow declares an explicit
+# top-level `permissions:` block granting only the `GITHUB_TOKEN` scopes its
+# jobs actually need — read-only by default. Omitting `permissions:` falls
+# back to the repo default (`contents: write`), which would defeat the
+# SHA-pinning hardening if a pinned action were ever compromised.
+#
 # Task #571 — Catch admin dashboard crashes early.
 # Task #614 — Same gate now also runs the Phase-3 study-flows suite
 # (highlight → save, quiz, flashcards, guardian-PIN). The job already
 # invokes `pnpm run test:e2e` which runs every spec under
 # artifacts/syrabit/tests; we just had to expand the path filters so a
 # regression in those flows actually triggers the workflow.
+# Task #772 — `payment-flow.spec.ts` (added by Task #767) is also
+# auto-included by `pnpm run test:e2e`, but the path filter below
+# previously didn't list any of the payment surfaces, so a payment-only
+# change (admin_monetization route, ProfilePage, PaymentModal,
+# SubscriptionPlans) shipped without exercising the spec. The payment
+# paths added below close that gap.
 #
 # Task #567 was a runtime ReferenceError in a single admin widget that
 # fell through the global ErrorBoundary and replaced the dashboard with
@@ -43,6 +66,12 @@ on:
       - "artifacts/syrabit/src/pages/StudyTestHarnessPage.jsx"
       - "artifacts/syrabit/src/utils/studyApi.js"
       - "artifacts/syrabit/src/App.jsx"
+      # Task #772 — payment surfaces. Touch any of these → run the
+      # payment-flow.spec.ts that ships with the e2e suite.
+      - "artifacts/syrabit/src/pages/ProfilePage.jsx"
+      - "artifacts/syrabit/src/pages/profile/**"
+      - "artifacts/syrabit-backend/routes/admin_monetization.py"
+      - "artifacts/syrabit-backend/tests/test_payments_*.py"
       - "artifacts/syrabit/tests/**"
       - "artifacts/syrabit/playwright.config.ts"
       - ".github/workflows/admin-smoke.yml"
@@ -62,9 +91,20 @@ on:
       - "artifacts/syrabit/src/pages/StudyTestHarnessPage.jsx"
       - "artifacts/syrabit/src/utils/studyApi.js"
       - "artifacts/syrabit/src/App.jsx"
+      # Task #772 — payment surfaces (mirrors push filter above).
+      - "artifacts/syrabit/src/pages/ProfilePage.jsx"
+      - "artifacts/syrabit/src/pages/profile/**"
+      - "artifacts/syrabit-backend/routes/admin_monetization.py"
+      - "artifacts/syrabit-backend/tests/test_payments_*.py"
       - "artifacts/syrabit/tests/**"
       - "artifacts/syrabit/playwright.config.ts"
       - ".github/workflows/admin-smoke.yml"
+
+# Read-only token: this job checks out the repo, runs Playwright in headless
+# Chromium, and uploads a run-scoped report artifact on failure (uploads
+# attached to a workflow run do not require any extra `GITHUB_TOKEN` scope).
+permissions:
+  contents: read
 
 jobs:
   admin-smoke:
@@ -74,15 +114,21 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Task #906 — strip the GITHUB_TOKEN from .git/config after the
+          # checkout so a future upload-artifact step that accidentally
+          # globs in .git/ cannot leak the token. This job does not push
+          # back to the repo, so credentials are not needed afterwards.
+          persist-credentials: false
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v3
+        uses: pnpm/action-setup@a3252b78c470c02df07e9d59298aecedc3ccdd6d # v3.0.0
         with:
           version: 9
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
           cache: pnpm
@@ -100,7 +146,7 @@ jobs:
 
       - name: Upload Playwright report on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: admin-smoke-playwright-report
           path: |

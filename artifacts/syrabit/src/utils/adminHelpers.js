@@ -10,6 +10,6 @@ export function autoSlug(text) {
   return (text || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
 }
 
-export function wordCount(text) {
+function wordCount(text) {
   return (text || '').trim().split(/\s+/).filter(Boolean).length;
 }

@@ -32,4 +32,4 @@ export function buildHighlightedSegments(text, tokens) {
     }));
 }
 
-export { escapeRegex as _escapeRegex };
+;

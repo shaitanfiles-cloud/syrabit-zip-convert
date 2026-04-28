@@ -1,5 +1,12 @@
 # Cloudflare Edge Proxy Worker — Deployment Guide
 
+> **Rotating a worker secret?** (`D1_SYNC_SECRET`,
+> `BACKEND_ORIGIN_SECRET`, `EDGE_AI_FALLBACK_SECRET`, etc.) See the
+> end-to-end runbook at
+> [`docs/SECRET_ROTATION.md`](../../docs/SECRET_ROTATION.md) — it
+> documents which other places each secret needs to be updated and in
+> what order, so rotation doesn't take down `api.syrabit.ai`.
+
 ## Architecture
 
 ```
@@ -44,6 +51,18 @@ Browser → api.syrabit.ai (Cloudflare Worker)
 >   echo "$(curl -s -o /dev/null -w '%{http_code}' https://api.syrabit.ai$p) $p"
 > done
 > # Expected: 200, 200, 405 (405 = POST-only handler reachable)
+>
+> # 3a. Task #672/#685 -- canonical /sitemap.xml alias must stay live for
+> #     crawlers (Google, Bing). The edge worker rewrites it internally to
+> #     /api/seo/sitemap-index.xml. A unit test in
+> #     workers/edge-proxy/tests/sitemap-alias.test.ts guards the handler
+> #     shape, but verify the live edge after every deploy too:
+> curl -sI https://syrabit.ai/sitemap.xml | grep -i "HTTP\|content-type"
+> #   HTTP/2 200
+> #   content-type: application/xml; charset=utf-8
+> curl -s  https://syrabit.ai/sitemap.xml | head -c 120
+> #   <?xml version="1.0" encoding="UTF-8"?>
+> #   <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"> ...
 >
 > # 4. Confirm backend exposes no zip/convert/epub endpoints
 > curl -s https://workspacesyrabit-production-0ddc.up.railway.app/openapi.json \
@@ -285,6 +304,8 @@ crons = ["0 */6 * * *"]
 
 ```bash
 wrangler d1 migrations apply syrabit-content --remote
+# AND, if a preview DB exists, keep it in lockstep:
+wrangler d1 migrations apply syrabit-content-preview --remote
 ```
 
 This creates 8 tables with indexes:
@@ -294,6 +315,15 @@ Verify with:
 ```bash
 wrangler d1 execute syrabit-content --remote --command "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
 ```
+
+> **Drift guard (Task #880).** The `deploy` and `deploy:preview` scripts
+> chain `scripts/check-d1-drift.sh && wrangler deploy …`, so every deploy
+> first compares the `d1_migrations` rows on both DBs against the
+> `migrations/` directory. A forgotten `--env preview` apply (or vice-versa)
+> blocks the deploy with a clear diff. Run on demand with
+> `pnpm --filter syrabit-edge run d1:check-drift` (add `VERBOSE=1` to
+> surface wrangler stderr on failure). Emergency override:
+> `SKIP_D1_DRIFT_CHECK=1`.
 
 ---
 

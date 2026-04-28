@@ -1,24 +1,14 @@
 """Syrabit.ai — Content & library routes"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
+import re, json, asyncio, logging, base64
 import cachetools
-from typing import Optional, List, Dict, Any, Union
-from datetime import datetime, timezone, timedelta
+from typing import Optional
+from datetime import datetime, timezone
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    APIRouter, HTTPException, Depends, Query, Response,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
-import mistune as _mistune
 
 from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
+    DocumentUpload, LibraryBundleOut,
 )
 from deps import (
     db,
@@ -27,6 +17,7 @@ from deps import (
 from cache import (
     _cache_key,
     _get_content_cache,
+    _invalidate_content_cache,
     _redis_cache_search,
     _redis_get_search,
     _set_content_cache,
@@ -34,11 +25,8 @@ from cache import (
     set_hierarchy_cache,
 )
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional,
+    get_admin_user,
 )
-from llm import call_llm_api, call_llm_api_stream
 from utils import (
     _slow_query,
     slugify_title,
@@ -49,6 +37,123 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _PUBLISHED_OR_LEGACY = {"$or": [{"status": {"$exists": False}}, {"status": "published"}]}
+
+# Task #701 — track subjects served via the relaxed status filter introduced
+# in Task #700. The public chapter resolver tolerates draft/unpublished
+# subjects so live URLs no longer 404, but we want the admin Control Center
+# to surface that drift (subject id, last-served timestamp, hit count) so an
+# operator can flip the status to "published" with one click and silence the
+# WARN logs.
+#
+# Storage is a Redis hash so all Gunicorn workers see the same state and the
+# one-click publish flow is reliably self-healing across the fleet (preload_app
+# + workers=3 means an in-memory dict would split per worker). When Redis is
+# unavailable (unit tests, local dev without Redis) we fall back to an in-
+# memory dict — single-process callers still get correct behaviour.
+_DRAFT_SERVED_REDIS_KEY = "syrabit:draft_served_subjects"
+_DRAFT_SERVED_FALLBACK: dict = {}
+
+def _draft_served_redis():
+    """Return the Redis client if available, else None (fall back to memory)."""
+    try:
+        from deps import redis_client
+        return redis_client
+    except Exception:
+        return None
+
+def _record_draft_served(subj: dict) -> None:
+    """Record (or refresh) a subject that was served via the relaxed filter."""
+    if not subj:
+        return
+    sid = subj.get("id")
+    if not sid:
+        return
+    now_iso = datetime.now(timezone.utc).isoformat()
+    rc = _draft_served_redis()
+    if rc is not None:
+        try:
+            raw = rc.hget(_DRAFT_SERVED_REDIS_KEY, sid)
+            if raw:
+                try:
+                    entry = json.loads(raw)
+                except Exception:
+                    entry = None
+            else:
+                entry = None
+            if entry:
+                entry["count"] = int(entry.get("count", 0)) + 1
+                entry["last_served_at"] = now_iso
+                entry["status"] = subj.get("status")
+                entry["name"] = subj.get("name") or entry.get("name") or ""
+                entry["slug"] = subj.get("slug") or entry.get("slug") or ""
+            else:
+                entry = {
+                    "id": sid,
+                    "name": subj.get("name") or "",
+                    "slug": subj.get("slug") or "",
+                    "status": subj.get("status"),
+                    "first_served_at": now_iso,
+                    "last_served_at": now_iso,
+                    "count": 1,
+                }
+            rc.hset(_DRAFT_SERVED_REDIS_KEY, sid, json.dumps(entry, default=str))
+            return
+        except Exception as exc:
+            logger.warning("draft-served Redis record failed (%s); using fallback", exc)
+    # In-memory fallback (no Redis configured).
+    entry = _DRAFT_SERVED_FALLBACK.get(sid)
+    if entry:
+        entry["count"] = entry.get("count", 0) + 1
+        entry["last_served_at"] = now_iso
+        entry["status"] = subj.get("status")
+        entry["name"] = subj.get("name") or entry.get("name") or ""
+        entry["slug"] = subj.get("slug") or entry.get("slug") or ""
+    else:
+        _DRAFT_SERVED_FALLBACK[sid] = {
+            "id": sid,
+            "name": subj.get("name") or "",
+            "slug": subj.get("slug") or "",
+            "status": subj.get("status"),
+            "first_served_at": now_iso,
+            "last_served_at": now_iso,
+            "count": 1,
+        }
+
+def get_draft_served_subjects() -> list:
+    """Return the tracked entries sorted by most-recently-served first."""
+    items: list = []
+    rc = _draft_served_redis()
+    if rc is not None:
+        try:
+            raw_map = rc.hgetall(_DRAFT_SERVED_REDIS_KEY) or {}
+            for raw in raw_map.values():
+                try:
+                    items.append(json.loads(raw))
+                except Exception:
+                    continue
+        except Exception as exc:
+            logger.warning("draft-served Redis read failed (%s); using fallback", exc)
+            items = list(_DRAFT_SERVED_FALLBACK.values())
+    else:
+        items = list(_DRAFT_SERVED_FALLBACK.values())
+    return sorted(items, key=lambda e: e.get("last_served_at") or "", reverse=True)
+
+def clear_draft_served_subject(subject_id: str) -> bool:
+    """Remove a subject from the tracker (e.g. after it's been published).
+
+    Always clears both Redis and the in-memory fallback so a publish action
+    is single-source-of-truth across the worker fleet.
+    """
+    cleared = False
+    rc = _draft_served_redis()
+    if rc is not None:
+        try:
+            cleared = bool(rc.hdel(_DRAFT_SERVED_REDIS_KEY, subject_id))
+        except Exception as exc:
+            logger.warning("draft-served Redis clear failed (%s); using fallback", exc)
+    if _DRAFT_SERVED_FALLBACK.pop(subject_id, None) is not None:
+        cleared = True
+    return cleared
 
 @router.get("/content/library-bundle", response_model=LibraryBundleOut)
 async def get_library_bundle(nocache: Optional[str] = None, include_seo: Optional[str] = None, slim: Optional[str] = None, boot: Optional[str] = None, response: Response = None):
@@ -605,6 +710,13 @@ async def upload_subject_document(
         }}
     )
     logger.info(f"Admin uploaded document '{data.document_name}' for subject {subject_id}")
+    # Task #795: rewriting `document_*` + `has_document` on the subject
+    # changes what `/api/content/subjects` and the library bundle return,
+    # so the edge cache must drop the stale subject list.
+    _invalidate_content_cache("subjects")
+    logger.info(
+        f"admin.purge route=admin.subject_document_upload prefixes=['subjects'] id={subject_id}"
+    )
     return {
         "message": "Document uploaded",
         "subject_id": subject_id,
@@ -618,6 +730,12 @@ async def delete_subject_document(subject_id: str, admin: dict = Depends(get_adm
     await db.subjects.update_one(
         {"id": subject_id},
         {"$unset": {"document_name": "", "document_text": "", "document_type": "", "document_uploaded_at": "", "has_document": ""}}
+    )
+    # Task #795: same reason as the POST handler above — the unset of
+    # `has_document` flips a public-payload field, so purge subjects.
+    _invalidate_content_cache("subjects")
+    logger.info(
+        f"admin.purge route=admin.subject_document_delete prefixes=['subjects'] id={subject_id}"
     )
     return {"message": "Document removed"}
 
@@ -673,6 +791,36 @@ async def _resolve_slug_hierarchy(board_slug, class_slug, subject_slug):
             {"_id": 0},
         )
     if not subj:
+        # Task #700 — chapter pages were 404ing whenever an admin flipped
+        # a subject's status to "draft"/"unpublished" (or never set the
+        # field at all on legacy rows). The chapter content itself still
+        # existed, but the strict ``status: "published"`` filter above
+        # would skip the subject and the resolver returned None, surfacing
+        # as "Chapter not found" to the user. We now retry with status
+        # filtered out (only excluding the explicit "archived" tombstone),
+        # log a WARN so admins can see and fix the drift, and let the
+        # chapter render. SEO surfaces (sitemaps, library) keep their own
+        # ``published`` filters — this relaxation is local to the
+        # public chapter URL resolver only.
+        relaxed_filter = {
+            "slug": subject_slug,
+            "stream_id": {"$in": stream_ids},
+            "status": {"$ne": "archived"},
+        }
+        subj = await db.subjects.find_one(relaxed_filter, {"_id": 0})
+        if not subj:
+            subj = await db.subjects.find_one(
+                {**relaxed_filter, "slug": re.compile(f"^{re.escape(subject_slug)}$", re.IGNORECASE)},
+                {"_id": 0},
+            )
+        if subj:
+            logger.warning(
+                "chapter resolver matched subject %r via relaxed status filter "
+                "(status=%r). Publish the subject to silence this warning.",
+                subject_slug, subj.get("status"),
+            )
+            _record_draft_served(subj)
+    if not subj:
         return None
     stream = next((s for s in streams if s["id"] == subj.get("stream_id")), None)
     result = {"board": board, "cls": cls, "subj": subj, "stream": stream}
@@ -705,6 +853,26 @@ async def _chapter_fallback_search(subject_slug: str, chapter_slug: str, respons
         subj = await db.subjects.find_one(
             {"slug": re.compile(f"^{re.escape(subject_slug)}$", re.IGNORECASE), "status": "published"}, {"_id": 0}
         )
+    if not subj:
+        # Task #700 — match the relaxed-status policy in the main resolver
+        # so the streamSlug-fallback path doesn't 404 chapters whose
+        # subject is in draft/unpublished/no-status state.
+        subj = await db.subjects.find_one(
+            {"slug": subject_slug, "status": {"$ne": "archived"}}, {"_id": 0}
+        )
+        if not subj:
+            subj = await db.subjects.find_one(
+                {"slug": re.compile(f"^{re.escape(subject_slug)}$", re.IGNORECASE),
+                 "status": {"$ne": "archived"}},
+                {"_id": 0},
+            )
+        if subj:
+            logger.warning(
+                "chapter fallback matched subject %r via relaxed status filter "
+                "(status=%r). Publish the subject to silence this warning.",
+                subject_slug, subj.get("status"),
+            )
+            _record_draft_served(subj)
     if not subj:
         raise HTTPException(404, "Subject not found")
     stream = await db.streams.find_one({"id": subj.get("stream_id")}, {"_id": 0, "id": 1, "name": 1, "class_id": 1})

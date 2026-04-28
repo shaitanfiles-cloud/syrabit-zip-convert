@@ -75,7 +75,9 @@ export default function AdminAutomation({ adminToken }) {
     try {
       const res = await axios.get(`${API_BASE}/admin/automation/insights`, headers);
       setData(res.data);
-    } catch {}
+    } catch (err) {
+      console.warn('AdminAutomation: failed to load /admin/automation/insights:', err);
+    }
     finally { setLoading(false); }
   }, []);
 
@@ -99,7 +101,9 @@ export default function AdminAutomation({ adminToken }) {
       const res = await axios.post(`${API_BASE}/admin/automation/auto-generate`, {}, headers);
       setGenerated(res.data);
       load();
-    } catch {}
+    } catch (err) {
+      console.warn('AdminAutomation: auto-generate failed:', err);
+    }
     finally { setGenerating(false); }
   };
 

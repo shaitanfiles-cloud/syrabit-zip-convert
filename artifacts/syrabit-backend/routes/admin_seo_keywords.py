@@ -11,7 +11,6 @@ Card, and `LearningResource` JSON-LD for a chapter or topic page.
 from __future__ import annotations
 
 import os
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 

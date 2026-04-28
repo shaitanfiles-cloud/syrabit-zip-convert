@@ -36,6 +36,14 @@ export default function AdminActivityLog({ adminToken, onNavigate }) {
   const [level, setLevel]   = useState('all');
   const [loading, setLoading] = useState(true);
   const [error, setError]   = useState(null);
+  // Confirmation panel state (Audit #9): the trash button now reveals
+  // an inline danger panel that requires the admin to type "CLEAR" to
+  // arm the destructive action, instead of a single-keystroke browser
+  // confirm() dialog. ``confirmText`` mirrors the input value so we can
+  // gate the submit button on an exact-match comparison.
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+  const [clearing, setClearing] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -55,16 +63,45 @@ export default function AdminActivityLog({ adminToken, onNavigate }) {
 
   useEffect(() => { load(); }, [load]);
 
-  const handleClear = async () => {
-    if (!confirm('Clear activity log?')) return;
+  // Audit #9: open the typed-confirmation panel instead of triggering
+  // an immediate destructive action behind a one-keystroke browser
+  // confirm(). The actual delete now lives in handleClearConfirmed().
+  const handleClear = () => {
+    setConfirmText('');
+    setConfirmOpen(true);
+  };
+
+  const handleClearCancel = () => {
+    setConfirmOpen(false);
+    setConfirmText('');
+  };
+
+  const handleClearConfirmed = async () => {
+    if (confirmText !== 'CLEAR' || clearing) return;
+    setClearing(true);
     try {
-      await axios.delete(`${API_BASE}/admin/activity-log`, {
+      const res = await axios.delete(`${API_BASE}/admin/activity-log`, {
         headers: adminHeaders(adminToken),
         withCredentials: true,
       });
-      setLogs([]);
-      toast.success('Activity log cleared');
-    } catch { toast.error('Failed to clear log'); }
+      const cleared = Number.isFinite(res?.data?.cleared) ? res.data.cleared : null;
+      // The backend immediately inserts a self-audit "activity_log_cleared"
+      // entry attributed to this admin, so we reload rather than blanking
+      // the list — the next render will show that single danger-level
+      // entry on top, which doubles as visual proof the purge ran.
+      load();
+      setConfirmOpen(false);
+      setConfirmText('');
+      toast.success(
+        cleared != null
+          ? `Cleared ${cleared} ${cleared === 1 ? 'entry' : 'entries'} — purge has been logged`
+          : 'Activity log cleared — purge has been logged'
+      );
+    } catch {
+      toast.error('Failed to clear log');
+    } finally {
+      setClearing(false);
+    }
   };
 
   const handleExport = () => {
@@ -114,6 +151,56 @@ export default function AdminActivityLog({ adminToken, onNavigate }) {
 
         {error && (
           <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-600">{error}</div>
+        )}
+
+        {confirmOpen && (
+          <div className="p-4 rounded-xl bg-red-50 border-2 border-red-300 space-y-3" role="alertdialog" aria-labelledby="clear-log-title">
+            <div className="flex items-start gap-2">
+              <AlertOctagon size={18} className="text-red-600 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <h3 id="clear-log-title" className="text-sm font-bold text-red-900">
+                  Permanently delete the activity log?
+                </h3>
+                <p className="text-xs text-red-700 mt-1 leading-relaxed">
+                  This will erase <strong>every entry</strong> from the admin audit trail (currently showing {logs.length}; the GET endpoint is paged at 200 so the true count may be higher). This cannot be undone. A single replacement entry attributing the purge to you will be created automatically so the action itself stays audited.
+                </p>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="clear-log-confirm" className="text-xs font-medium text-red-900">
+                Type <code className="px-1 py-0.5 bg-white rounded border border-red-200 font-mono">CLEAR</code> to confirm:
+              </label>
+              <input
+                id="clear-log-confirm"
+                type="text"
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                disabled={clearing}
+                autoFocus
+                placeholder="CLEAR"
+                className="w-full h-9 px-3 rounded-xl text-sm font-mono text-gray-900 outline-none bg-white border border-red-200 focus:border-red-400 focus:ring-2 focus:ring-red-500/20 disabled:opacity-50"
+              />
+            </div>
+            <div className="flex items-center gap-2 justify-end">
+              <button
+                type="button"
+                onClick={handleClearCancel}
+                disabled={clearing}
+                className="px-3 py-1.5 rounded-xl text-xs font-medium text-gray-600 hover:text-gray-900 hover:bg-white border border-gray-200 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleClearConfirmed}
+                disabled={confirmText !== 'CLEAR' || clearing}
+                className="px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-red-600 hover:bg-red-700 disabled:opacity-30 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
+              >
+                {clearing && <RefreshCw size={12} className="animate-spin" />}
+                {clearing ? 'Clearing…' : 'Permanently clear log'}
+              </button>
+            </div>
+          </div>
         )}
 
         <div className="flex items-center gap-2">

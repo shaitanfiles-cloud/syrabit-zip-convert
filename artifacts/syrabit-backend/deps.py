@@ -1,7 +1,6 @@
 """Syrabit.ai — Shared mutable state, client initialization, and core dependencies."""
-import os, logging, json, asyncio, time, time as _time_mod, httpx, contextvars
+import logging, asyncio, time as _time_mod, httpx, contextvars
 from typing import Optional, Any
-from datetime import datetime, timezone
 
 __all__ = [
     "db", "mongo_client", "redis_client", "supa", "pg_pool", "pwd_ctx", "security",
@@ -26,10 +25,9 @@ from passlib.context import CryptContext
 from fastapi.security import HTTPBearer
 from motor.motor_asyncio import AsyncIOMotorClient
 from config import (
-    MONGO_URL, DB_NAME, SARVAM_API_KEY, SARVAM_TRANSLATE_KEY, SARVAM_BASE_URL, BYOK_PLACEHOLDER,
-    SUPABASE_URL, SUPABASE_SERVICE_KEY,
+    MONGO_URL, DB_NAME, SARVAM_API_KEY, SARVAM_TRANSLATE_KEY, SARVAM_BASE_URL, SUPABASE_URL, SUPABASE_SERVICE_KEY,
     _PG_DSN,
-    CF_GATEWAY_ENABLED, get_provider_base_url, cf_gateway_url, _CF_PROVIDER_SLUGS,
+    CF_GATEWAY_ENABLED, cf_gateway_url, _CF_PROVIDER_SLUGS,
     CF_AI_GATEWAY_TOKEN, CF_CACHE_TTL,
 )
 

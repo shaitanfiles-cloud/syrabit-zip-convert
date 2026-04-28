@@ -27,7 +27,7 @@ if str(_BACKEND) not in sys.path:
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def _fake_report(

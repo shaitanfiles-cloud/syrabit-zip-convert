@@ -27,11 +27,13 @@ _MAX_CONTENT_CHARS = 3000
 
 _MIN_USEFUL_CONTENT_LEN = 80
 
-_FETCH_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; SyrabitBot/1.0; +https://syrabit.ai)",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
-}
+from internal_user_agents import web_content_headers as _web_content_headers
+
+# Self-identifying SyrabitBot UA + the shared `X-Syrabit-Internal: 1`
+# header so Cloudflare bot analytics can tag this as our own internal
+# traffic instead of bucketing it as "unknown bot" (Task #820). Source
+# of truth: `internal_user_agents.py`.
+_FETCH_HEADERS = _web_content_headers()
 
 _playwright_available: Optional[bool] = None
 

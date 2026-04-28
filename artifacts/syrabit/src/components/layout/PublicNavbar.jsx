@@ -222,5 +222,3 @@ export const PublicNavbar = () => {
     </nav>
   );
 };
-
-export default PublicNavbar;

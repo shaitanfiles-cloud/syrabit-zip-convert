@@ -1,8 +1,33 @@
-"""D1 Edge Database Sync — export content from MongoDB for D1 ingestion and trigger edge sync."""
+"""D1 Edge Database Sync — export content from MongoDB and fan it out to one
+or more Cloudflare edge Workers.
+
+Fan-out targets (Task #879)
+---------------------------
+Historically this module only POSTed to a single hostname (``EDGE_WORKER_URL``,
+which points at the prod Worker on ``api.syrabit.ai``). That left the
+preview Worker's D1 (``syrabit-content-preview``, id
+``35e59391-218e-4e94-bbf5-972baa0d0b30``) starting empty after every deploy
+and made every preview-tier smoke test that hit a content endpoint return
+zero rows — masking regressions that depended on real data.
+
+We now treat sync as a fan-out: prod is always the primary target, and an
+optional preview target receives the same payload when the operator sets
+
+    EDGE_WORKER_PREVIEW_URL=https://syrabit-edge-preview.<account>.workers.dev
+    D1_SYNC_SECRET_PREVIEW=<value-set-via-wrangler-secret-put-env-preview>
+
+on the Railway service. A different secret is required because Wrangler v4
+keeps secrets per-env (`wrangler secret put D1_SYNC_SECRET --env preview`
+does NOT inherit the prod value — see ``workers/edge-proxy/wrangler.toml``
+§ ``[env.preview]``).
+
+Failure to reach the preview hostname is logged at WARNING and never blocks
+the prod sync — preview is best-effort by design.
+"""
 import os
 import logging
 import asyncio
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -10,6 +35,13 @@ _d1_http: Optional["httpx.AsyncClient"] = None
 
 D1_SYNC_SECRET = os.getenv("D1_SYNC_SECRET", "").strip()
 EDGE_WORKER_URL = os.getenv("EDGE_WORKER_URL", "https://api.syrabit.ai").strip().rstrip("/")
+
+# Optional preview fan-out (Task #879). Both must be set to enable.
+# A sentinel placeholder ("REPLACE_..." / "your-...") is treated as unset so
+# leftover .env.example values cannot accidentally fan-out.
+_PLACEHOLDER_TOKENS = {"", "REPLACE_WITH_SECURE_RANDOM_SECRET", "your-sync-secret"}
+EDGE_WORKER_PREVIEW_URL = os.getenv("EDGE_WORKER_PREVIEW_URL", "").strip().rstrip("/")
+D1_SYNC_SECRET_PREVIEW = os.getenv("D1_SYNC_SECRET_PREVIEW", "").strip()
 
 
 def _get_http():
@@ -20,8 +52,34 @@ def _get_http():
     return _d1_http
 
 
+def _is_real_secret(value: str) -> bool:
+    return bool(value) and value not in _PLACEHOLDER_TOKENS
+
+
 def is_d1_configured() -> bool:
-    return bool(D1_SYNC_SECRET and D1_SYNC_SECRET != "REPLACE_WITH_SECURE_RANDOM_SECRET")
+    return _is_real_secret(D1_SYNC_SECRET)
+
+
+def is_preview_fanout_configured() -> bool:
+    """True iff a real preview hostname AND a real preview secret are set."""
+    return bool(EDGE_WORKER_PREVIEW_URL) and _is_real_secret(D1_SYNC_SECRET_PREVIEW)
+
+
+def _sync_targets() -> List[Tuple[str, str, str]]:
+    """Return the list of ``(label, url, secret)`` tuples to fan-out to.
+
+    Prod is always first when configured; preview is appended when both
+    ``EDGE_WORKER_PREVIEW_URL`` and ``D1_SYNC_SECRET_PREVIEW`` are real
+    (non-placeholder) values. Order matters: callers treat the first entry
+    as the primary target (the one whose return value drives the sync's
+    overall success/failure flag).
+    """
+    targets: List[Tuple[str, str, str]] = []
+    if is_d1_configured():
+        targets.append(("prod", EDGE_WORKER_URL, D1_SYNC_SECRET))
+    if is_preview_fanout_configured():
+        targets.append(("preview", EDGE_WORKER_PREVIEW_URL, D1_SYNC_SECRET_PREVIEW))
+    return targets
 
 
 async def export_content_catalog(db) -> Dict[str, Any]:
@@ -67,18 +125,15 @@ async def export_content_catalog(db) -> Dict[str, Any]:
     }
 
 
-async def trigger_d1_sync(payload: Dict[str, Any]) -> bool:
-    if not is_d1_configured():
-        logger.info("D1 sync not configured — skipping")
-        return False
-
+async def _post_one_target(label: str, url: str, secret: str, payload: Dict[str, Any]) -> bool:
+    """POST the sync payload to a single edge target. Never raises."""
     try:
         client = _get_http()
         resp = await client.post(
-            f"{EDGE_WORKER_URL}/api/edge/d1-sync",
+            f"{url}/api/edge/d1-sync",
             json=payload,
             headers={
-                "Authorization": f"Bearer {D1_SYNC_SECRET}",
+                "Authorization": f"Bearer {secret}",
                 "Content-Type": "application/json",
             },
             timeout=60,
@@ -86,15 +141,57 @@ async def trigger_d1_sync(payload: Dict[str, Any]) -> bool:
         if resp.status_code == 200:
             data = resp.json()
             if data.get("success"):
-                logger.info(f"D1 sync success: {data.get('synced', {})}")
+                logger.info(f"D1 sync success ({label}): {data.get('synced', {})}")
                 return True
-            logger.warning(f"D1 sync returned errors: {data.get('errors', [])}")
+            logger.warning(f"D1 sync ({label}) returned errors: {data.get('errors', [])}")
             return False
-        logger.warning(f"D1 sync HTTP {resp.status_code}: {resp.text[:200]}")
+        logger.warning(f"D1 sync ({label}) HTTP {resp.status_code}: {resp.text[:200]}")
         return False
     except Exception as e:
-        logger.warning(f"D1 sync trigger error: {e}")
+        logger.warning(f"D1 sync ({label}) trigger error: {e}")
         return False
+
+
+async def trigger_d1_sync(payload: Dict[str, Any]) -> bool:
+    """Fan the payload out to every configured edge target.
+
+    Returns True iff the *primary* target (prod when configured, otherwise
+    the only configured target) succeeded. Preview-target failures are
+    logged but never demote the overall return to False — preview is
+    best-effort and should not block CRUD / cron paths that depend on
+    this function.
+    """
+    targets = _sync_targets()
+    if not targets:
+        logger.info("D1 sync not configured — skipping")
+        return False
+
+    primary_label, primary_url, primary_secret = targets[0]
+    primary_ok = await _post_one_target(primary_label, primary_url, primary_secret, payload)
+
+    if len(targets) > 1:
+        # Fire secondary targets concurrently with each other (prod is
+        # already done by this point). We DO await them before returning
+        # so the caller gets stable logging — most callers in the repo
+        # already wrap us in `asyncio.create_task(...)` (see
+        # `_schedule_d1_sync_fire` in routes/admin_content.py and the
+        # `seo_pages` autosync in seo_engine.py) so the preview wait
+        # never blocks the user-visible CRUD response. The handful of
+        # synchronous callers (manual `POST /api/admin/d1-sync`,
+        # `POST /admin/d1/sync-full`) are admin-only and tolerate the
+        # extra round-trip.
+        secondary = targets[1:]
+        results = await asyncio.gather(
+            *[_post_one_target(lbl, u, s, payload) for (lbl, u, s) in secondary],
+            return_exceptions=True,
+        )
+        for (lbl, _u, _s), res in zip(secondary, results):
+            if isinstance(res, Exception):
+                logger.warning(f"D1 sync ({lbl}) raised: {res}")
+            elif not res:
+                logger.warning(f"D1 sync ({lbl}) reported failure (best-effort)")
+
+    return primary_ok
 
 
 async def sync_full(db) -> Dict[str, Any]:
@@ -102,7 +199,12 @@ async def sync_full(db) -> Dict[str, Any]:
     if not payload:
         return {"success": False, "error": "Export returned empty"}
     ok = await trigger_d1_sync(payload)
-    return {"success": ok, "tables_exported": list(payload.keys()), "row_counts": {k: len(v) for k, v in payload.items()}}
+    return {
+        "success": ok,
+        "tables_exported": list(payload.keys()),
+        "row_counts": {k: len(v) for k, v in payload.items()},
+        "targets": [t[0] for t in _sync_targets()],
+    }
 
 
 async def sync_tables(db, tables: List[str]) -> Dict[str, Any]:
@@ -113,4 +215,9 @@ async def sync_tables(db, tables: List[str]) -> Dict[str, Any]:
     if not payload:
         return {"success": False, "error": f"No matching tables: {tables}"}
     ok = await trigger_d1_sync(payload)
-    return {"success": ok, "tables_synced": list(payload.keys()), "row_counts": {k: len(v) for k, v in payload.items()}}
+    return {
+        "success": ok,
+        "tables_synced": list(payload.keys()),
+        "row_counts": {k: len(v) for k, v in payload.items()},
+        "targets": [t[0] for t in _sync_targets()],
+    }

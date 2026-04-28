@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, memo, lazy, Suspense } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCw, Copy, Check, FileText, Globe, ThumbsUp, ThumbsDown, MessageSquare, Share2, Send, HelpCircle, ShieldAlert, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
+import { RefreshCw, Copy, Check, FileText, Globe, BookOpen, ThumbsUp, ThumbsDown, MessageSquare, Share2, Send, HelpCircle, ShieldAlert, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { ReadAloudButton } from '@/components/study/ReadAloudButton';
 import { QuizModal } from '@/components/study/QuizModal';
 import { useShare } from '@/hooks/useShare';
@@ -256,42 +256,65 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
               const subjectUrl = chapterUrl || basePath || (msg.rag_subject_id ? `/subject/${msg.rag_subject_id}` : null);
               const isDocument = msg.rag_source === 'document';
               const isWeb = msg.rag_source === 'web';
+              // Library, cache, and any other RAG-grounded source (anything
+              // that isn't an uploaded user document, an external web hit,
+              // or 'none') should render the same clickable card so the
+              // student can deep-link from the answer back to the source
+              // chapter — previously this only fired for ``rag_source ===
+              // 'web'``, which meant the most common case (library /
+              // cached library answers) showed no clickable badge at all.
+              const isLibrary = msg.rag_source && !isDocument && !isWeb && msg.rag_source !== 'none';
               const hasContext = boardLabel || subjectLabel || (msg.rag_source && msg.rag_source !== 'none');
 
               const hasAnything = hasContext || sourceLine;
               if (!hasAnything) return null;
 
+              const sourceMeta = isWeb
+                ? { Icon: Globe, kindLabel: 'Web Search' }
+                : isDocument
+                  ? { Icon: FileText, kindLabel: 'Uploaded Document' }
+                  : { Icon: BookOpen, kindLabel: 'Syrabit Library' };
+              const showClickableCard = (isWeb || isLibrary) && subjectUrl && subjectLabel;
+              const showStaticBadge = !showClickableCard && (isWeb || isDocument || isLibrary);
+              const handleSourceCardClick = () => {
+                if (chapterUrl) {
+                  const topicText = msg.rag_topic_name || chapterLabel || '';
+                  const params = new URLSearchParams();
+                  if (topicText) params.set('topic', topicText);
+                  const rawContent = (msg.content || '').replace(/[#*_`>\[\]()]/g, '').replace(/\s+/g, ' ').trim();
+                  const sentences = rawContent.split(/(?<=[.!?])\s+/).filter(s => s.length > 20);
+                  const coreSnippet = sentences.length > 1 ? sentences.slice(1, 4).join(' ') : rawContent;
+                  const responseSnippet = coreSnippet.slice(0, 300);
+                  if (responseSnippet) params.set('rchunk', responseSnippet);
+                  const qs = params.toString();
+                  navigate(qs ? `${chapterUrl}?${qs}` : chapterUrl);
+                } else if (subjectUrl) {
+                  navigate(subjectUrl);
+                }
+              };
+
               return (
                 <>
-                  {isWeb && subjectUrl && subjectLabel && (
+                  {showClickableCard && (
                     <div
-                      onClick={() => {
-                        if (chapterUrl) {
-                          const topicText = msg.rag_topic_name || chapterLabel || '';
-                          const params = new URLSearchParams();
-                          params.set('topic', topicText);
-                          const rawContent = (msg.content || '').replace(/[#*_`>\[\]()]/g, '').replace(/\s+/g, ' ').trim();
-                          const sentences = rawContent.split(/(?<=[.!?])\s+/).filter(s => s.length > 20);
-                          const coreSnippet = sentences.length > 1 ? sentences.slice(1, 4).join(' ') : rawContent;
-                          const responseSnippet = coreSnippet.slice(0, 300);
-                          if (responseSnippet) params.set('rchunk', responseSnippet);
-                          navigate(`${chapterUrl}?${params.toString()}`);
-                        } else {
-                          navigate(subjectUrl);
-                        }
-                      }}
+                      onClick={handleSourceCardClick}
                       className="source-card-container mt-3 rounded-xl overflow-hidden cursor-pointer active:scale-[0.98]"
                       role="button"
                       tabIndex={0}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.currentTarget.click(); }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          handleSourceCardClick();
+                        }
+                      }}
                       aria-label={`Open ${chapterLabel || subjectLabel} in Syrabit Browser`}
                     >
                       <div className="px-3 py-2.5">
                         <div className="flex items-center gap-1.5 mb-1">
-                          <Globe size={11} className="source-card-icon" />
+                          <sourceMeta.Icon size={11} className="source-card-icon" />
                           <span className="source-card-label text-[10px] font-semibold uppercase tracking-wider">Source</span>
                           <span className="text-[10px] text-muted-foreground" aria-hidden="true">·</span>
-                          <span className="source-card-browser text-[10.5px] font-medium">Web Search</span>
+                          <span className="source-card-browser text-[10.5px] font-medium">{sourceMeta.kindLabel}</span>
                         </div>
                         {chapterLabel && (
                           <h4 className="source-card-title font-semibold leading-tight truncate" style={{ fontSize: '0.85rem', letterSpacing: '0.01em' }}>
@@ -316,20 +339,18 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                       </div>
                     </div>
                   )}
-                  {isWeb && !subjectUrl && (
-                    <div className="flex items-center gap-2.5 mt-3 px-3 py-2 rounded-xl" style={{ background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.18)', maxWidth: 'fit-content' }}>
-                      <div className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(56,189,248,0.15)' }}>
-                        <Globe size={16} style={{ color: '#38bdf8' }} />
+                  {showStaticBadge && (
+                    <div className="flex items-center gap-2.5 mt-3 px-3 py-2 rounded-xl" style={{
+                      background: isWeb ? 'rgba(56,189,248,0.08)' : isDocument ? 'rgba(139,92,246,0.08)' : 'rgba(34,197,94,0.08)',
+                      border: isWeb ? '1px solid rgba(56,189,248,0.18)' : isDocument ? '1px solid rgba(139,92,246,0.18)' : '1px solid rgba(34,197,94,0.18)',
+                      maxWidth: 'fit-content',
+                    }}>
+                      <div className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{
+                        background: isWeb ? 'rgba(56,189,248,0.15)' : isDocument ? 'rgba(167,139,250,0.15)' : 'rgba(34,197,94,0.15)',
+                      }}>
+                        <sourceMeta.Icon size={16} style={{ color: isWeb ? '#38bdf8' : isDocument ? '#a78bfa' : '#22c55e' }} />
                       </div>
-                      <span className="text-[13px] font-bold text-foreground" style={{ textTransform: 'uppercase', letterSpacing: '0.03em' }}>Web Search</span>
-                    </div>
-                  )}
-                  {isDocument && (
-                    <div className="flex items-center gap-2.5 mt-3 px-3 py-2 rounded-xl" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.18)', maxWidth: 'fit-content' }}>
-                      <div className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(167,139,250,0.15)' }}>
-                        <FileText size={16} style={{ color: '#a78bfa' }} />
-                      </div>
-                      <span className="text-[13px] font-bold text-foreground" style={{ textTransform: 'uppercase', letterSpacing: '0.03em' }}>Uploaded Document</span>
+                      <span className="text-[13px] font-bold text-foreground" style={{ textTransform: 'uppercase', letterSpacing: '0.03em' }}>{sourceMeta.kindLabel}</span>
                     </div>
                   )}
                   <div className={`flex items-center gap-1.5 mt-1 transition-opacity ${responseLang && responseLang !== 'en' ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>

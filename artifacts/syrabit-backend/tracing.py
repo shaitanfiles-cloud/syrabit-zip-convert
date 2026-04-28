@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import contextmanager
-from typing import Any, Iterator, Optional
+from typing import Any, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -249,7 +249,7 @@ def init_tracing(app: Any) -> bool:
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
         FastAPIInstrumentor.instrument_app(
             app,
-            excluded_urls="/health,/api/health,/api/metrics,/api/admin/health,/favicon.ico",
+            excluded_urls="/health,/api/health,/api/livez,/api/readyz,/api/metrics,/api/admin/health,/favicon.ico",
         )
     except Exception as exc:
         logger.warning("[tracing] FastAPI auto-instrumentation failed: %s", exc)

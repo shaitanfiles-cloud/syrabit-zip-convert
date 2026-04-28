@@ -455,3 +455,258 @@ def test_email_skipped_without_resend_key(monkeypatch):
         ))
     assert result["sent"] is False
     assert result["reason"] == "no_resend_key"
+
+
+# -------- Task #822: pin the self-check User-Agent contract --------
+# Background: Task #819's bug was that every internal SEO probe got
+# Cloudflare 403'd because `seo_health_check` and `_deep_scan_sitemap`
+# constructed `httpx.AsyncClient` without a UA, so SBFM classified
+# them as "definitely automated". The fix routed both through
+# ``_SEO_SELF_CHECK_HEADERS`` (sourced from ``internal_user_agents.
+# seo_self_check_headers``). These tests are the regression net so a
+# future refactor cannot silently drop the ``headers=`` kwarg again
+# and re-trigger the SEO alert spam.
+#
+# Two complementary checks:
+#   1. AST inspection — guarantees the source code of both functions
+#      contains an ``async with httpx.AsyncClient(...)`` call whose
+#      kwargs include ``headers=_SEO_SELF_CHECK_HEADERS``. Catches a
+#      drop of the kwarg even if the function is never executed.
+#   2. Behavioural — monkey-patches ``httpx.AsyncClient`` inside
+#      ``bot_discovery`` to capture kwargs at runtime, then drives
+#      both functions with stub responses. Catches a refactor that
+#      keeps the literal ``headers=`` kwarg but routes it to a
+#      different (empty) dict.
+
+import ast
+import inspect
+
+import pytest
+
+from internal_user_agents import (  # noqa: E402
+    INTERNAL_HEADER_NAME,
+    INTERNAL_HEADER_VALUE,
+    SEO_SELF_CHECK_USER_AGENT,
+)
+
+
+def _httpx_asyncclient_kwarg_names(func) -> list[str]:
+    """Return the keyword-argument names of every
+    ``async with httpx.AsyncClient(...)`` call inside ``func``.
+
+    Returns one list-of-names per call site, so a function with two
+    such blocks returns a list of two lists."""
+    src = inspect.getsource(func)
+    tree = ast.parse(textwrap_dedent(src))
+    out: list[list[str]] = []
+
+    class _Visitor(ast.NodeVisitor):
+        def visit_AsyncWith(self, node: ast.AsyncWith):  # noqa: N802
+            for item in node.items:
+                ce = item.context_expr
+                if isinstance(ce, ast.Call):
+                    fn = ce.func
+                    is_httpx = (
+                        isinstance(fn, ast.Attribute)
+                        and fn.attr == "AsyncClient"
+                        and isinstance(fn.value, ast.Name)
+                        and fn.value.id == "httpx"
+                    )
+                    if is_httpx:
+                        out.append([kw.arg for kw in ce.keywords if kw.arg])
+            self.generic_visit(node)
+
+    _Visitor().visit(tree)
+    return out
+
+
+def textwrap_dedent(s: str) -> str:
+    # inspect.getsource for nested defs / methods can include leading
+    # indentation; ast.parse needs column-zero source.
+    import textwrap
+    return textwrap.dedent(s)
+
+
+def _httpx_call_with_named_headers(func, expected_kwarg: str) -> bool:
+    """Returns True iff at least one ``async with
+    httpx.AsyncClient(...)`` call in ``func`` passes
+    ``headers=<expected_kwarg>`` as a keyword argument (where
+    ``<expected_kwarg>`` is the name of a module-level constant)."""
+    src = textwrap_dedent(inspect.getsource(func))
+    tree = ast.parse(src)
+    found = False
+
+    class _Visitor(ast.NodeVisitor):
+        def visit_AsyncWith(self, node):  # noqa: N802
+            nonlocal found
+            for item in node.items:
+                ce = item.context_expr
+                if not isinstance(ce, ast.Call):
+                    continue
+                fn = ce.func
+                if not (isinstance(fn, ast.Attribute) and fn.attr == "AsyncClient"
+                        and isinstance(fn.value, ast.Name) and fn.value.id == "httpx"):
+                    continue
+                for kw in ce.keywords:
+                    if (kw.arg == "headers"
+                            and isinstance(kw.value, ast.Name)
+                            and kw.value.id == expected_kwarg):
+                        found = True
+                        return
+            self.generic_visit(node)
+
+    _Visitor().visit(tree)
+    return found
+
+
+# ---- 1. AST inspection ----
+
+def test_seo_health_check_constructs_client_with_self_check_headers_in_source():
+    """Source-level pin: ``seo_health_check`` must construct its
+    httpx client with ``headers=_SEO_SELF_CHECK_HEADERS``.
+
+    Failure means a future edit dropped the ``headers=`` kwarg or
+    routed it to a different constant — re-introducing the
+    Cloudflare 403 storm that triggered Task #819 / #821.
+    """
+    assert _httpx_call_with_named_headers(
+        bot_discovery.seo_health_check, "_SEO_SELF_CHECK_HEADERS"
+    ), (
+        "seo_health_check no longer constructs httpx.AsyncClient with "
+        "`headers=_SEO_SELF_CHECK_HEADERS`. This will cause every "
+        "internal SEO probe to be served a Cloudflare 403 (default "
+        "python-httpx UA is classified by SBFM as automated). "
+        "Restore `headers=_SEO_SELF_CHECK_HEADERS` on the "
+        "`async with httpx.AsyncClient(...)` line."
+    )
+
+
+def test_deep_scan_sitemap_constructs_client_with_self_check_headers_in_source():
+    """Same source-level pin as above but for ``_deep_scan_sitemap``.
+
+    Both call-sites must stay covered because they share the same
+    failure mode — a CF 403 on a deep scan would also report every
+    URL as failing and re-trigger the SEO health alert spam."""
+    assert _httpx_call_with_named_headers(
+        bot_discovery._deep_scan_sitemap, "_SEO_SELF_CHECK_HEADERS"
+    ), (
+        "_deep_scan_sitemap no longer constructs httpx.AsyncClient "
+        "with `headers=_SEO_SELF_CHECK_HEADERS`. See "
+        "test_seo_health_check_constructs_client_with_self_check_headers_in_source "
+        "for context."
+    )
+
+
+# ---- 2. Behavioural — capture kwargs at runtime ----
+
+class _CapturingAsyncClient:
+    """httpx.AsyncClient stand-in that records the kwargs it was
+    constructed with. All HTTP methods return canned 404s so the
+    callers exit on the first sitemap fetch."""
+
+    captured_kwargs: list[dict] = []
+
+    def __init__(self, *_a, **kwargs):
+        type(self).captured_kwargs.append(kwargs)
+        # Both seo_health_check and _deep_scan_sitemap exit with a
+        # non-200 sitemap response without doing any further probing,
+        # which keeps the test fast and focused on the construction
+        # contract rather than the protocol behaviour.
+        async def _resp(*_a, **_kw):
+            r = MagicMock()
+            r.status_code = 404
+            r.text = ""
+            r.json = MagicMock(return_value={})
+            return r
+        self.get = AsyncMock(side_effect=_resp)
+        self.head = AsyncMock(side_effect=_resp)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+
+@pytest.fixture
+def reset_capture():
+    _CapturingAsyncClient.captured_kwargs = []
+    yield
+    _CapturingAsyncClient.captured_kwargs = []
+
+
+def _assert_self_check_headers(headers: dict) -> None:
+    assert isinstance(headers, dict), \
+        f"headers kwarg must be a dict, got {type(headers).__name__}"
+    ua = headers.get("User-Agent", "")
+    assert ua == SEO_SELF_CHECK_USER_AGENT, (
+        f"User-Agent header is {ua!r}; expected exactly "
+        f"{SEO_SELF_CHECK_USER_AGENT!r}. If you intended to change the "
+        f"UA string, update SEO_SELF_CHECK_USER_AGENT in "
+        f"internal_user_agents.py — and update any Cloudflare WAF rule "
+        f"that allowlists the previous string."
+    )
+    # The X-Syrabit-Internal header is the Cloudflare-side hook for
+    # tagging our own traffic without enumerating UA substrings.
+    # Dropping it would silently re-merge our self-checks with public
+    # bot traffic in CF analytics (Task #820 regression).
+    assert headers.get(INTERNAL_HEADER_NAME) == INTERNAL_HEADER_VALUE, (
+        f"{INTERNAL_HEADER_NAME} header is missing or wrong; expected "
+        f"{INTERNAL_HEADER_VALUE!r}. The Cloudflare WAF Custom Rule "
+        f"keys on this header (see docs/CLOUDFLARE_INTERNAL_BOT_TAGGING.md)."
+    )
+
+
+def test_seo_health_check_passes_self_check_headers_at_runtime(reset_capture):
+    """Behavioural pin: when ``seo_health_check`` actually runs, the
+    httpx client receives the expected ``headers={...}`` kwarg
+    (User-Agent + ``X-Syrabit-Internal: 1``)."""
+    with patch("httpx.AsyncClient", _CapturingAsyncClient), \
+         patch("deps.is_mongo_available", AsyncMock(return_value=False)):
+        # Run with no admin (deep_scan=None branch); function will
+        # iterate sitemaps, get 404 on each, and return.
+        asyncio.run(bot_discovery.seo_health_check(request=None, deep_scan=None))
+
+    assert len(_CapturingAsyncClient.captured_kwargs) >= 1, (
+        "seo_health_check did not construct an httpx.AsyncClient — "
+        "did the function signature change?"
+    )
+    headers = _CapturingAsyncClient.captured_kwargs[0].get("headers")
+    assert headers is not None, (
+        "seo_health_check constructed httpx.AsyncClient WITHOUT a "
+        "`headers` kwarg. This re-introduces the Cloudflare 403 storm "
+        "from Task #819. Restore `headers=_SEO_SELF_CHECK_HEADERS`."
+    )
+    _assert_self_check_headers(headers)
+
+
+def test_deep_scan_sitemap_passes_self_check_headers_at_runtime(reset_capture):
+    """Behavioural pin for ``_deep_scan_sitemap`` — same contract as
+    ``seo_health_check`` but exercised via the deep-scan code path."""
+    with patch("httpx.AsyncClient", _CapturingAsyncClient):
+        asyncio.run(bot_discovery._deep_scan_sitemap("sitemap-learn.xml"))
+
+    assert len(_CapturingAsyncClient.captured_kwargs) >= 1, (
+        "_deep_scan_sitemap did not construct an httpx.AsyncClient."
+    )
+    headers = _CapturingAsyncClient.captured_kwargs[0].get("headers")
+    assert headers is not None, (
+        "_deep_scan_sitemap constructed httpx.AsyncClient WITHOUT a "
+        "`headers` kwarg. This re-introduces the Cloudflare 403 storm "
+        "from Task #819 on the admin deep-scan path."
+    )
+    _assert_self_check_headers(headers)
+
+
+def test_seo_self_check_headers_module_constant_matches_registry():
+    """Sanity check: the module-level cached
+    ``_SEO_SELF_CHECK_HEADERS`` value in ``bot_discovery`` is exactly
+    what the registry's ``seo_self_check_headers()`` returns. Catches
+    a future edit that re-defines the constant inline (the bug Task
+    #820's rebase already had to resolve once)."""
+    from internal_user_agents import seo_self_check_headers
+    assert bot_discovery._SEO_SELF_CHECK_HEADERS == seo_self_check_headers(), (
+        "_SEO_SELF_CHECK_HEADERS in routes/bot_discovery.py has drifted "
+        "from internal_user_agents.seo_self_check_headers(). Re-import "
+        "from the registry instead of re-defining the dict inline."
+    )

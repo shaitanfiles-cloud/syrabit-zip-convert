@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import time
 import logging
-from typing import Optional, Iterable
+from typing import Optional
 from urllib.parse import urlparse
 
 from deps import db, is_mongo_available

@@ -281,6 +281,153 @@ def classify_intent(query: str) -> tuple[str, str | None]:
     return intent, db_category
 
 
+# ─── Smart per-request answer budget ──────────────────────────────────────────
+# Replaces the old "always use the plan ceiling" behaviour. The plan ceiling
+# (config.PLAN_LIMITS[plan]["max_tokens"]) is now the UPPER BOUND; this
+# function picks a sensible per-request budget so a one-line factual question
+# doesn't burn the same token allowance as a 10-step worked solution.
+#
+# Shape: (intent, query) → starting budget, then upgraded by signals in the
+# query itself (length, "in detail", numbered multi-part, "all chapters",
+# etc.). Result is clamped to the plan ceiling — so on the free plan a very
+# heavy question can still grow up to 10 000 tokens, but the median question
+# stays comfortably medium-length (~1024 tokens).
+
+# Default starting budgets per intent. "general" / chapter_meta sit at the
+# medium default; the more inherently long-form intents (syllabus list, PYQ
+# solve, important-questions roundup) start higher because their FORMAT_RULES
+# already produce a multi-section reply.
+_INTENT_BASE_BUDGET: dict[str, int] = {
+    "casual":               256,
+    "general":              1024,
+    "chapter_meta":         1024,
+    "notes":                2048,
+    "important_questions":  4096,
+    "syllabus":             4096,
+    "pyq":                  6000,
+}
+_DEFAULT_BASE_BUDGET = 1024
+
+# Phrases that strongly imply the student wants a long, exhaustive answer.
+# When any of these match we lift the cap to the plan ceiling instead of the
+# intent base. Kept lowercase + simple so cheap to evaluate per request.
+_LONG_ANSWER_HINTS: tuple[str, ...] = (
+    "in detail", "in-detail", "in depth", "in-depth", "detailed",
+    "step by step", "step-by-step", "stepwise", "step wise",
+    "explain everything", "explain all", "explain fully", "full explanation",
+    "all chapters", "all topics", "all sub", "every chapter", "every topic",
+    "complete answer", "long answer", "long-form", "essay", "elaborate",
+    "comprehensive", "exhaustive", "thorough",
+    "with examples", "give examples", "many examples", "multiple examples",
+    "list everything", "list all",
+    # NOTE: "all the" was previously included here but is too broad — it
+    # matches everyday phrases like "what are all the planets" that don't
+    # actually warrant a plan-ceiling-sized reply. Specific list-everything
+    # / all-chapters phrases above are sufficient.
+    "derive", "derivation", "proof", "prove that", "prove the",
+    "with diagram", "with diagrams", "draw and explain",
+)
+# Even stronger signals that the student really wants the maximum
+# possible answer length (textbook-chapter-style). Only these escalate
+# all the way to the plan ceiling; ordinary long hints just double the
+# base budget. Keeps free-plan token spend reasonable on the median
+# "explain X step by step" question while still allowing the rare
+# heavy "derive every formula in this chapter exhaustively" request to
+# use the full 10 000-token allowance.
+_VERY_LONG_ANSWER_HINTS: tuple[str, ...] = (
+    "exhaustive", "comprehensive", "every chapter", "every topic",
+    "all chapters", "all topics", "list everything", "explain everything",
+    "full explanation", "complete answer",
+)
+# Medium-strength hints — we bump one tier up but don't go all the way to the
+# plan ceiling. Useful for "explain", "describe", "discuss" without an
+# exhaustive qualifier.
+_MEDIUM_ANSWER_HINTS: tuple[str, ...] = (
+    "explain", "describe", "discuss", "compare and contrast", "differentiate",
+    "summarise", "summarize", "summary of", "outline", "walk through",
+    "what is the meaning", "meaning of", "definition of", "define",
+)
+# Strong "make it short" signals — student wants a quick answer; clamp to
+# the small budget regardless of intent.
+_SHORT_ANSWER_HINTS: tuple[str, ...] = (
+    "in one line", "in 1 line", "one-liner", "tl;dr", "tldr",
+    "in short", "briefly", "in brief", "short answer", "quick answer",
+    "yes or no", "true or false",
+)
+
+
+def compute_answer_budget(query: str, intent: str, plan_max: int) -> int:
+    """Pick a per-request ``max_tokens`` budget for the LLM call.
+
+    Behaviour:
+
+    * Short / casual queries → small budget (256–512), regardless of
+      plan ceiling, so the LLM doesn't ramble in a quick chat reply.
+    * Default factual question → ``_INTENT_BASE_BUDGET[intent]``
+      (~1024–2048 — "medium").
+    * Query contains a ``_LONG_ANSWER_HINTS`` phrase → expand to the
+      full ``plan_max`` ceiling.
+    * Query contains only a ``_MEDIUM_ANSWER_HINTS`` phrase → bump
+      one tier (~1.5× base, capped at plan_max).
+    * Query contains a ``_SHORT_ANSWER_HINTS`` phrase → clamp down
+      to 512 tokens.
+    * Long input questions (>= 320 chars) → bump to at least the
+      "long" tier — students who type that much detail expect a
+      matching answer.
+
+    Result is always clamped to ``plan_max`` (so free plan is hard-
+    capped at 10 000) and floored at 256 (so we never starve a reply).
+    """
+    if plan_max <= 0:
+        return 0
+    q = (query or "").strip()
+    q_lower = q.lower()
+    # Multi-part question heuristic: numbered list ("1.", "2.") or
+    # a chain of "and" clauses suggests the student wants several
+    # things answered at once → treat as long-form.
+    has_numbered = bool(_re_compile_safe(r"\b[1-9]\.\s|\(i+\)|first.*second|part\s*[1-9]").search(q_lower))
+    long_input = len(q) >= 320  # ~50–60 words
+
+    base = _INTENT_BASE_BUDGET.get(intent, _DEFAULT_BASE_BUDGET)
+
+    # Short clamp wins outright — the student literally asked for brevity.
+    for hint in _SHORT_ANSWER_HINTS:
+        if hint in q_lower:
+            return max(256, min(512, plan_max))
+
+    very_long_hit = any(h in q_lower for h in _VERY_LONG_ANSWER_HINTS)
+    long_hit = any(h in q_lower for h in _LONG_ANSWER_HINTS) or has_numbered or long_input
+    if very_long_hit:
+        # Strongest signals — go to the plan ceiling. These phrases
+        # ("exhaustive", "every chapter", etc.) reliably indicate the
+        # student wants the maximum possible answer length.
+        return min(plan_max, max(base * 2, plan_max))
+    if long_hit:
+        # Ordinary long-form signals — double the base, with a sensible
+        # floor so a "long" question always gets at least 4 096 tokens
+        # (one comfortable textbook page) but doesn't automatically
+        # consume the full 10 000-token plan allowance every time.
+        return min(plan_max, max(base * 2, 4096))
+
+    medium_hit = any(h in q_lower for h in _MEDIUM_ANSWER_HINTS)
+    if medium_hit:
+        # Bump one tier (1.5×) but never beyond plan ceiling.
+        return min(plan_max, max(base, int(base * 1.5)))
+
+    return min(plan_max, max(256, base))
+
+
+def _re_compile_safe(pattern: str):
+    """Tiny memoising wrapper so the multi-part regex above isn't
+    recompiled per request. Defined inline to keep this whole budget
+    helper self-contained inside ``prompts.py``.
+    """
+    cache = _re_compile_safe.__dict__.setdefault("_cache", {})
+    if pattern not in cache:
+        cache[pattern] = re.compile(pattern, re.I)
+    return cache[pattern]
+
+
 def _classify_question(query: str) -> str:
     intent = _classify_intent(query)
     return INTENT_TO_MODE.get(intent, "structured")

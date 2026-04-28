@@ -1,6 +1,7 @@
 """Syrabit.ai — ASGI middleware classes."""
 import os, re, time as _time_mod, logging, uuid, contextvars, hashlib, asyncio
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.datastructures import MutableHeaders
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -86,6 +87,11 @@ _ORIGIN_AUTH_HEADER = os.environ.get("ORIGIN_SHARED_SECRET_HEADER", "X-Origin-Au
 # header when ORIGIN_SHARED_SECRET is set.
 _ORIGIN_AUTH_OPEN_PATHS = (
     "/api/health",
+    "/api/livez",   # Task #848 — Railway liveness probe, no I/O
+    "/api/readyz",  # Task #848 — load-balancer readiness probe
+    "/api/ready",   # Legacy readiness — kept open for back-compat with
+                    # any external monitor still pointing at the old path
+                    # (Task #848 follow-up review).
     "/health",
 )
 
@@ -176,6 +182,90 @@ class SecurityHeadersMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_security_headers)
+
+
+# ── DeviceCookieMiddleware (Task #793) ────────────────────────────────
+# The chat rate-limit dependency (``auth_deps.rate_limit_chat_optional``)
+# may need to mint a fresh ``syrabit_device`` cookie for first-visit
+# anonymous traffic. It tries to do so by calling ``set_cookie`` on
+# the ``Response`` parameter FastAPI injects into the dependency.
+#
+# That works fine when the route handler returns a JSON-serialisable
+# value (FastAPI builds the response from the injected ``Response``
+# object), but it does **not** work when the route handler returns a
+# concrete ``Response`` instance of its own — the most common case
+# here is ``StreamingResponse`` on ``/ai/chat/stream``, which is the
+# user-facing chat path. In that case FastAPI uses the route's
+# response and discards the dependency-injected one, so the freshly
+# minted device cookie is silently dropped on the floor and the
+# client never persists it. Effective behaviour collapses back to
+# coarse per-IP enforcement, which defeats the entire point of
+# Task #793.
+#
+# This middleware is the safety net: when the dependency mints a
+# cookie it also stashes the value on ``request.state.device_cookie_to_set``;
+# we read that back on the way out and append the ``Set-Cookie``
+# header to whichever response the handler ultimately produced — but
+# only if no ``syrabit_device`` cookie is already on the response (so
+# we don't double-set when FastAPI's normal merge actually did work,
+# e.g. on the JSON ``/ai/chat`` path).
+class DeviceCookieMiddleware:
+    """Re-apply the freshly-minted device cookie to whatever response
+    the route handler returned. See module-level comment above for
+    the failure mode this guards against.
+    """
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        # Lazy import so this module stays importable even when
+        # device_token / auth_deps haven't been initialised yet (e.g.
+        # in test bootstrap).
+        from device_token import DEVICE_COOKIE_NAME
+        from auth_deps import _set_device_cookie  # type: ignore
+        from starlette.responses import Response as _Response
+
+        # Build a real Starlette request once so we can read its
+        # ``state`` after the inner app has run. ``state`` is a plain
+        # attribute namespace shared between the request and any
+        # ASGI-level code that pulls a Request out of the scope.
+        request = StarletteRequest(scope, receive)
+
+        async def send_with_device_cookie(message):
+            if message["type"] == "http.response.start":
+                pending = getattr(request.state, "device_cookie_to_set", None)
+                if pending:
+                    headers = MutableHeaders(scope=message)
+                    # Skip if the route handler already set the same
+                    # cookie (e.g. JSON /ai/chat where the injected
+                    # Response did get merged in normally) so we
+                    # never double-emit Set-Cookie.
+                    already = any(
+                        v.startswith(f"{DEVICE_COOKIE_NAME}=")
+                        for v in headers.getlist("set-cookie")
+                    )
+                    if not already:
+                        # Use a throwaway Response purely to format
+                        # the Set-Cookie value with the same flags
+                        # (HttpOnly / Secure / SameSite / max-age /
+                        # domain) the dependency uses, then transplant
+                        # it onto the live outgoing headers.
+                        scratch = _Response()
+                        try:
+                            _set_device_cookie(request, scratch, pending)
+                            for cookie_value in scratch.headers.getlist("set-cookie"):
+                                headers.append("set-cookie", cookie_value)
+                        except Exception as exc:  # pragma: no cover — defensive
+                            logger.warning(
+                                f"DeviceCookieMiddleware: failed to apply pending cookie: {exc}"
+                            )
+            await send(message)
+
+        await self.app(scope, receive, send_with_device_cookie)
+
 
 from utils import _SEARCH_BOT_UA_RE, _ABUSIVE_SCRAPER_UA_RE, _TRAINING_SCRAPER_UA_RE, verify_bot_ip
 
@@ -352,6 +442,9 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
         "/api/auth/me",
         "/api/analytics/",
         "/api/health",
+        "/api/livez",   # Task #848 — never rate-limit the Railway liveness probe
+        "/api/readyz",  # Task #848 — never rate-limit the readiness probe
+        "/api/ready",   # Legacy readiness — same treatment as /api/readyz
     )
 
     async def dispatch(self, request: StarletteRequest, call_next):
@@ -390,12 +483,18 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
                 response = await _safe_call_next(call_next, request)
                 _metrics.record_request(path, response.status_code)
                 response.headers["X-Request-Id"] = rid
+                # Task #944 — feed the unified-log explorer with this
+                # request even though it bypassed the rate limiter; a
+                # silent /api/health flap is exactly the kind of thing
+                # the explorer must surface.
+                _record_unified_log(request, response, rid)
                 return response
             finally:
                 _metrics.dec_active()
 
         user_id = None
         ip_limit = PLAN_LIMITS["free"]["req_per_min_ip"]
+        is_admin_request = False
         try:
             token = None
             auth = request.headers.get("authorization", "")
@@ -413,6 +512,21 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
                         user_plan = cached_user.get("plan", user_plan)
                 plan_cfg = PLAN_LIMITS.get(user_plan, PLAN_LIMITS["free"])
                 ip_limit = plan_cfg["req_per_min_ip"]
+                # Admin requests bypass the IP-based rate limit. The admin
+                # dashboard fan-outs (~30+ panels in parallel on first
+                # load, plus the BreakGlassBanner's /admin/diagnostics
+                # poll every 60s) routinely exceed the per-IP free-plan
+                # cap of 60/min from a single browser session, which used
+                # to 429-storm the whole UI for the first ~minute after
+                # login and silently mask break-glass-mode visibility
+                # during a real Cloudflare Access incident — the exact
+                # moment the diagnostics endpoint must remain reachable.
+                # The admin endpoints themselves are gated by
+                # ``Depends(get_admin_user)`` (which re-validates the
+                # admin role against the DB / cache), so the IP cap was
+                # never the real authorization boundary for them.
+                if payload.get("is_admin") or payload.get("role") == "admin":
+                    is_admin_request = True
         except Exception:
             pass
 
@@ -463,7 +577,7 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
                 except Exception as e:
                     logger.debug(f"spoof persist failed: {e}")
             asyncio.create_task(_bg_persist_spoof())
-        if not is_legit_bot:
+        if not is_legit_bot and not is_admin_request:
             if not check_rate_limit(f"ip:{client_ip}", max_requests=ip_limit, window_seconds=60):
                 from fastapi.responses import JSONResponse
                 _metrics.record_request(path, 429)
@@ -489,9 +603,41 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
             elapsed = _time_mod.time() - request.state.start_time
             if elapsed > 1.0:
                 logger.info(f"[SLOW] {path} took {elapsed*1000:.0f}ms | rid={rid} uid={user_id or 'anon'}")
+            # Task #944 — sample this request into the unified-log
+            # explorer; sampling + 4xx-keep handled by the shipper.
+            _record_unified_log(request, response, rid, user_id=user_id,
+                                is_admin=is_admin_request)
             return response
         finally:
             _metrics.dec_active()
+
+
+# Task #944 — unified-log shipper hook. Imported lazily so a circular
+# import or a missing module never bricks the request path. Any failure
+# inside the shipper is swallowed.
+def _record_unified_log(request, response, rid: str, *,
+                        user_id: Optional[str] = None,
+                        is_admin: bool = False) -> None:
+    try:
+        from unified_logs_dao import get_backend_shipper
+        start = getattr(request.state, "start_time", None)
+        duration_ms = None
+        if start is not None:
+            try:
+                duration_ms = int((_time_mod.time() - float(start)) * 1000)
+            except Exception:
+                duration_ms = None
+        get_backend_shipper().record_request(
+            method=request.method,
+            route=request.url.path,
+            status=getattr(response, "status_code", None),
+            duration_ms=duration_ms,
+            request_id=rid,
+            user_agent=(request.headers.get("user-agent") or "")[:200] or None,
+            extra={"uid": user_id, "admin": bool(is_admin)} if (user_id or is_admin) else None,
+        )
+    except Exception:
+        pass
 
 
 _STATIC_ASSET_RE = re.compile(
@@ -501,7 +647,8 @@ _STATIC_ASSET_RE = re.compile(
 
 _SKIP_TRACKING_PREFIXES = (
     "/api/auth/", "/api/admin/", "/api/ai/", "/api/analytics/",
-    "/api/health", "/api/billing/",
+    "/api/health", "/api/livez", "/api/readyz", "/api/ready",  # Task #848 + legacy
+    "/api/billing/",
     "/static/", "/assets/", "/icons/", "/fonts/",
     "/health", "/docs", "/openapi.json", "/robots.txt", "/sitemap",
     "/__mockup", "/favicon",
@@ -538,7 +685,22 @@ class ServerSideTrackingMiddleware(BaseHTTPMiddleware):
         ua = request.headers.get("user-agent", "")
         bot_match = _SERVER_BOT_RE.search(ua) if ua else None
         is_bot = bool(bot_match)
-        bot_name = bot_match.group(0).lower() if bot_match else ""
+        # Use the canonical classifier so e.g. "Googlebot-Image/1.0" is
+        # stored as "Googlebot-Image" (not just "googlebot"), and so AI
+        # crawlers (GPTBot, PerplexityBot, ClaudeBot, OAI-SearchBot,
+        # Google-Extended, Applebot-Extended, …) get readable names in
+        # the admin dashboard's top_bots / per_bot_pages aggregations.
+        # Fall back to the raw regex match for UAs that match the bot
+        # regex but aren't in the canonical patterns list.
+        if bot_match:
+            try:
+                from cf_bot_report import _classify_ua as _classify_bot_ua
+                _canonical = _classify_bot_ua(ua)
+            except Exception:
+                _canonical = None
+            bot_name = _canonical or bot_match.group(0)
+        else:
+            bot_name = ""
         cf_connecting_ip = request.headers.get("cf-connecting-ip", "")
         x_forwarded = request.headers.get("x-forwarded-for", "")
         client_ip = cf_connecting_ip or (x_forwarded.split(",")[0].strip() if x_forwarded else "") or (request.client.host if request.client else "unknown")

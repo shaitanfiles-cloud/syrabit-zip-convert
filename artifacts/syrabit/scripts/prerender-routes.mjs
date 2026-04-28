@@ -206,6 +206,45 @@ function rewriteHead(html, { title, description, canonical }) {
   return html;
 }
 
+// P0 #1 of the AI-visibility plan — inject schema.org FAQPage JSON-LD
+// directly into the prerendered <head> as a static <script> tag so AI
+// crawlers (Googlebot, Perplexity, ChatGPT, Claude) see it on first
+// byte without executing JavaScript.
+//
+// PageMeta also emits the same JSON-LD client-side via syncJsonLd, but
+// uses a `data-pm` marker to tag its own scripts. The script we inject
+// here CARRIES the same marker so PageMeta's client-side cleanup
+// (`querySelectorAll("script[type='application/ld+json'][data-pm]")
+// .forEach(remove)`) replaces this static script with the React-built
+// equivalent on hydration — no duplicate FAQPage scripts, no SEO
+// penalty for "double markup".
+function injectFaqJsonLdIntoHead(html, faqEntries) {
+  if (!Array.isArray(faqEntries) || faqEntries.length < 2) return html;
+  const mainEntity = faqEntries.slice(0, 10).map((e) => ({
+    "@type": "Question",
+    name: String(e.question || "").trim(),
+    acceptedAnswer: {
+      "@type": "Answer",
+      text: String(e.answer || "").trim(),
+    },
+  })).filter((q) => q.name && q.acceptedAnswer.text);
+  if (mainEntity.length < 2) return html;
+  const ld = {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity,
+  };
+  // Escape `</` so a stray sequence in user content can't close our
+  // script tag; mirrors the SSR queries inline-script escape pattern.
+  const json = JSON.stringify(ld).replace(/<\//g, "<\\/");
+  const tag =
+    `    <script type="application/ld+json" data-pm="1">${json}</script>\n  `;
+  if (html.includes("</head>")) {
+    return html.replace("</head>", `${tag}</head>`);
+  }
+  return html;
+}
+
 // Task #395: page-chunk preload helper, lazily resolved on first use
 // so the import cost doesn't hit unrelated routes.
 let _pageChunkHelper = null;
@@ -369,10 +408,104 @@ function pickChapterPayload(c) {
     "chapter_slug", "content", "content_as", "content_type",
     "has_assamese", "meta_description", "word_count",
     "generated_at", "updated_at", "bing_keywords",
+    // P0 #1 of the AI-visibility plan — FAQPage JSON-LD seed pulled
+    // from /api/content/chapters/{id}/faq-jsonld and merged into the
+    // chapter preload below. Listed here so the keep-list filter
+    // doesn't strip it.
+    "faq_entries",
+    // Task #914 Step 3 — published topics seed for the per-topic
+    // AI answer cards. Baking these into the preload means the
+    // first-byte HTML already contains the citable definitions and
+    // attribution sentences, so AI crawlers don't need to execute
+    // JS to see them.
+    "published_topics",
   ];
   const out = {};
   for (const k of keys) if (c[k] !== undefined) out[k] = c[k];
   return out;
+}
+
+// Fetch FAQPage entries (built from MCQ Q+A) for a chapter so the
+// prerendered HTML ships schema.org FAQPage JSON-LD on first byte —
+// this is what crawlers (Googlebot, Perplexity, ChatGPT) see, and
+// missing it is the gap P0 #1 of the AI-visibility plan addresses.
+//
+// Returns `null` (not throws) on any failure so a backend hiccup or a
+// chapter without parseable MCQs never blocks the rest of the chapter
+// snapshot. The runtime useEffect in ChapterPage will still try to
+// fetch on the client for non-prerendered routes.
+async function fetchChapterFaqEntries(chapterId) {
+  if (!chapterId) return null;
+  const url = `${BACKEND.replace(/\/$/, "")}/api/content/chapters/${encodeURIComponent(chapterId)}/faq-jsonld`;
+  try {
+    const payload = await fetchJson(url);
+    const entries = Array.isArray(payload?.entries) ? payload.entries : null;
+    if (!entries || entries.length < 2) return null; // chapterSchema() also requires >= 2
+    return entries;
+  } catch {
+    // 404 (no parseable MCQs) and transient network errors are both fine —
+    // we just skip baking FAQ into this chapter snapshot.
+    return null;
+  }
+}
+
+// Task #914 Step 3 — fetch the published-topics list (already
+// filtered server-side to those with `definition_status=ok`) so the
+// prerendered HTML ships every AI answer card on first byte. Same
+// failure semantics as fetchChapterFaqEntries: any error returns
+// null and the runtime useEffect in ChapterPage takes over for the
+// SPA path.
+async function fetchChapterPublishedTopics(chapterId) {
+  if (!chapterId) return null;
+  const url = `${BACKEND.replace(/\/$/, "")}/api/content/chapters/${encodeURIComponent(chapterId)}/topics-published`;
+  try {
+    const payload = await fetchJson(url);
+    const topics = Array.isArray(payload?.topics) ? payload.topics : null;
+    if (!topics || topics.length === 0) return null;
+    return topics;
+  } catch {
+    return null;
+  }
+}
+
+// Topical-mapping (Task: topical mapping + topical authority) —
+// bake the related-topic graph (siblings + cross-chapter) into the
+// chapter preload so SSR / curl-no-JS already ships the full
+// internal-linking graph on first byte. Mirrors the runtime
+// useEffect in ChapterPage; same null-on-failure semantics.
+async function fetchChapterTopicsRelated(chapterId) {
+  if (!chapterId) return null;
+  const url = `${BACKEND.replace(/\/$/, "")}/api/content/chapters/${encodeURIComponent(chapterId)}/topics-related?limit=12`;
+  try {
+    const payload = await fetchJson(url);
+    if (!payload || typeof payload !== "object") return null;
+    const siblings = Array.isArray(payload.siblings) ? payload.siblings : [];
+    const crossChapter = Array.isArray(payload.cross_chapter) ? payload.cross_chapter : [];
+    if (siblings.length === 0 && crossChapter.length === 0) return null;
+    return { siblings, cross_chapter: crossChapter };
+  } catch {
+    return null;
+  }
+}
+
+// Topical-mapping pillar — bake the subject's full topic index into
+// the SubjectLandingPage preload via `window.__SUBJECT_PRELOAD__`.
+// Same null-on-failure semantics as the chapter helpers.
+async function fetchSubjectTopicIndex(subjectId) {
+  if (!subjectId) return null;
+  const url = `${BACKEND.replace(/\/$/, "")}/api/content/subjects/${encodeURIComponent(subjectId)}/topic-index`;
+  try {
+    const payload = await fetchJson(url);
+    if (!payload || typeof payload !== "object") return null;
+    const chapters = Array.isArray(payload.chapters) ? payload.chapters : [];
+    if (chapters.length === 0) return null;
+    return {
+      chapters,
+      total_topics: Number(payload.total_topics || 0),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function enumerateSubjectRoutes(bundle) {
@@ -617,10 +750,30 @@ async function main() {
       `<script>window.__SSR_QUERIES__=${JSON.stringify(queries).replace(/</g, "\\u003c")};</script>`,
     ];
 
+    // Topical-mapping pillar — bake the full topic index for this
+    // subject into the SSR pass via `seed.subjectPreload` (which
+    // entry-server.jsx mirrors onto `globalThis.__SSR_SUBJECT_PRELOAD__`)
+    // AND mirror the same payload onto `window.__SUBJECT_PRELOAD__`
+    // for the client-side hydration / SPA navigation path. Failure is
+    // non-fatal; the runtime useEffect on the SPA path takes over.
+    let subjectPreload = null;
+    if (subjectIdForKey) {
+      const topicIndex = await fetchSubjectTopicIndex(subjectIdForKey);
+      if (topicIndex) {
+        subjectPreload = {
+          subject_id: subjectIdForKey,
+          topic_index: topicIndex,
+        };
+        inlineScripts.push(
+          `<script>window.__SUBJECT_PRELOAD__=${JSON.stringify(subjectPreload).replace(/</g, "\\u003c")};</script>`,
+        );
+      }
+    }
+
     try {
       const html = await renderOne(renderRoute, htmlTemplate, {
         url,
-        seed: { queries },
+        seed: { queries, subjectPreload },
         hydrateKind: "subject",
         inlineScripts,
         head: {
@@ -690,6 +843,37 @@ async function main() {
       }
 
       const chapterData = clean(pickChapterPayload(chapterPayload));
+      // P0 #1 of the AI-visibility plan — fetch FAQPage entries built
+      // from the chapter's MCQs and bake them into BOTH:
+      //   (a) the chapter preload, so the runtime useEffect in
+      //       ChapterPage skips its fetch and the client-side
+      //       PageMeta builds the same JSON-LD on first render
+      //       (no double-fetch, no flash of missing schema)
+      //   (b) a `<script type="application/ld+json">` injected into
+      //       the prerendered HTML head below — this is what AI/SEO
+      //       crawlers read on first byte (PageMeta currently emits
+      //       JSON-LD only via client useEffect, which Googlebot
+      //       executes but Perplexity/ChatGPT often do not).
+      // Failure here is logged but never fatal: the runtime useEffect
+      // in ChapterPage will still try to fetch on the client.
+      const faqEntries = await fetchChapterFaqEntries(chapterData.chapter_id);
+      if (faqEntries) {
+        chapterData.faq_entries = faqEntries;
+      }
+      // Task #914 Step 3 — bake published topics so the answer
+      // cards render server-side (no JS, no flash, single source
+      // of truth for bots and humans).
+      const publishedTopics = await fetchChapterPublishedTopics(chapterData.chapter_id);
+      if (publishedTopics) {
+        chapterData.published_topics = publishedTopics;
+      }
+      // Topical-mapping — bake siblings + cross-chapter related
+      // topics into the preload so bots / curl-no-JS see the full
+      // internal-linking graph in the SSR HTML.
+      const topicsRelated = await fetchChapterTopicsRelated(chapterData.chapter_id);
+      if (topicsRelated) {
+        chapterData.topics_related = topicsRelated;
+      }
       const preload = {
         board, classSlug, subjectSlug, chapterSlug,
         data: chapterData,
@@ -709,7 +893,7 @@ async function main() {
       ];
 
       try {
-        const html = await renderOne(renderRoute, htmlTemplate, {
+        let html = await renderOne(renderRoute, htmlTemplate, {
           url: chapterUrl,
           seed: { chapterPreload: preload },
           hydrateKind: "chapter",
@@ -722,6 +906,11 @@ async function main() {
             canonical: chapterCanonical,
           },
         });
+        // P0 #1 — bake FAQPage JSON-LD into byte-zero HTML so AI
+        // crawlers see Q+A structure without executing JS.
+        if (faqEntries) {
+          html = injectFaqJsonLdIntoHead(html, faqEntries);
+        }
         const out = writeRoute(chapterUrl, html);
         chaptersWritten++;
         console.log(

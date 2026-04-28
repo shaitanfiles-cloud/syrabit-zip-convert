@@ -198,7 +198,7 @@ class TestRecorderInstallation:
                 await asyncio.sleep(0)
                 await asyncio.sleep(0)
 
-        asyncio.new_event_loop().run_until_complete(_run())
+        asyncio.run(_run())
         # `ratio` in the persisted doc is the PRE-cleanup ratio, not the
         # post-cleanup ratio — that's what the dashboard charts.
         assert recorded.get("ratio") == pytest.approx(0.18)

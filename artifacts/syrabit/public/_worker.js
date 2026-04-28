@@ -21,11 +21,19 @@
 // Static assets (/assets/*, /icons/*, sitemaps, feeds, etc.) are
 // excluded in `_routes.json` and never reach this worker.
 
-// Matches the SAME UA list the edge proxy at api.syrabit.ai uses
-// (workers/edge-proxy/src/index.ts SEARCH_BOT_UA) so behaviour is
-// consistent across both surfaces. AI-search crawlers are included
-// because they ground their answers in the same HTML they fetch.
-const SEARCH_BOT_UA = /googlebot|google-extended|googleother|google-inspectiontool|bingbot|yandexbot|duckduckbot|slurp|applebot|chatgpt-user|oai-searchbot|perplexitybot|claudebot|meta-externalagent|facebookexternalhit|twitterbot|linkedinbot|whatsapp|telegrambot|discordbot/i;
+// ─── CANONICAL BOT REGEX — DO NOT DRIFT ─────────────────────────────────────
+// MUST stay aligned with three other locations:
+//   * artifacts/syrabit-backend/utils.py        → _SEARCH_BOT_UA_RE (Python source of truth)
+//   * artifacts/syrabit/vite.config.js          → BOT_UA (build-time / dev SSR)
+//   * workers/edge-proxy/src/index.ts           → SEARCH_BOT_UA (api.syrabit.ai)
+// Any UA we want to (a) prerender HTML for, (b) serve sitemaps to, or
+// (c) count as a verified crawler in analytics MUST appear in ALL FOUR.
+// AI-search crawlers are included because they ground their answers in
+// the same HTML they fetch, and AI training crawlers (GPTBot, CCBot,
+// Bytespider, …) are included so we can serve them llms.txt via this
+// same prerender path instead of the SPA shell.
+// ────────────────────────────────────────────────────────────────────────────
+const SEARCH_BOT_UA = /googlebot|google-extended|googleother|google-inspectiontool|bingbot|yandexbot|duckduckbot|slurp|baiduspider|applebot|applebot-extended|chatgpt-user|oai-searchbot|gptbot|perplexitybot|perplexity-user|claudebot|claude-web|anthropic-ai|meta-externalagent|bytespider|ccbot|amazonbot|facebookexternalhit|facebookbot|twitterbot|linkedinbot|whatsapp|telegrambot|discordbot/i;
 
 // Backend that serves bot-rendered HTML. Configured at build time via
 // the BACKEND_BOT_URL env var on the Pages project; falls back to the
@@ -50,7 +58,13 @@ const DEFAULT_BACKEND = "https://api.syrabit.ai";
 // the matching backend route and force the correct Content-Type. Cached
 // at the edge for an hour (matches _headers s-maxage).
 const SEO_PASSTHROUGH_RE =
-  /^\/(sitemap[a-z0-9_-]*\.xml|sitemap-index\.xml|feed\.xml|rss\.xml|feed\/[a-z0-9_-]+\.xml|llms\.txt|llms-full\.txt|robots\.txt|\.well-known\/ai-plugin\.json|[a-f0-9]{32}\.txt|[a-z0-9_-]*indexnow[a-z0-9_-]*\.txt)$/i;
+  /^\/(sitemap[a-z0-9_-]*\.xml|sitemap-index\.xml|feed\.xml|rss\.xml|feed\/[a-z0-9_-]+\.xml|llms\.txt|llms-full\.txt|robots\.txt|\.well-known\/ai-plugin\.json)$/i;
+// IndexNow keyfiles (32-hex .txt or *indexnow*.txt) are intentionally
+// excluded — they're shipped as static assets in dist/ so the Pages
+// ASSETS pipeline serves them directly. Routing them through the
+// backend hit "Direct origin access denied" because the Pages worker
+// fetches BACKEND_URL without the X-Origin-Auth header that
+// the edge worker injects.
 
 // Map a public path to the corresponding backend path. Sitemaps live
 // under `/api/seo/` on the backend; feeds, llms, robots, .well-known

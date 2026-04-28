@@ -19,7 +19,7 @@ import LibrarySkeleton from './library/LibrarySkeleton';
 import FilterChip from './library/FilterChip';
 import ScrollableFilterRow from './library/ScrollableFilterRow';
 
-import GoogleReviewsSection, { ReviewsAggregateRatingJsonLd } from '@/components/content/GoogleReviewsSection';
+import TrustpilotReviewsSection from '@/components/content/TrustpilotReviewsSection';
 
 const LazyCmsDocsSection = lazy(() => import('./library/CmsDocsSection'));
 const LazyCmsPostsGrid = lazy(() => import('./library/CmsPostsGrid'));
@@ -745,13 +745,8 @@ export default function LibraryPage() {
               <LazyCmsPostsGrid />
             </Suspense>
           </LazyOnVisible>
-          <GoogleReviewsSection
-            subheading="Real Google reviews from students using Syrabit.ai across Assam."
-          />
-          <ReviewsAggregateRatingJsonLd
-            id="library-google-reviews-jsonld"
-            name="Syrabit.ai Library"
-            url="https://syrabit.ai/library"
+          <TrustpilotReviewsSection
+            subheading="Verified Trustpilot reviews from students using Syrabit.ai across Assam."
           />
         </div>
 

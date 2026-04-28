@@ -182,7 +182,7 @@ const PLACEMENTS = {
 // ── Opt-out flag (Task #527) ─────────────────────────────────────────────────
 // User-controlled localStorage flag. Read by `adsConsentGranted()` below and
 // toggled from the Privacy section on the Profile page.
-export const ADS_OPT_OUT_KEY = 'syrabit_ads_optout';
+const ADS_OPT_OUT_KEY = 'syrabit_ads_optout';
 
 export function getAdsOptOut() {
   if (typeof window === 'undefined') return false;
@@ -331,7 +331,7 @@ export function setAdsUserPlan(plan) {
  * (Starter / Pro). Exported for tests and for any future caller that
  * needs to branch on the same gate that suppresses ads.
  */
-export function isPaidPlanActive() {
+function isPaidPlanActive() {
   return !!(_userPlan && PAID_PLAN_KEYS.has(_userPlan));
 }
 

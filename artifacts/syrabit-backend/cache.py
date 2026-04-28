@@ -1,6 +1,6 @@
 """Syrabit.ai — Redis + in-memory caching helpers."""
 import asyncio, hashlib, json, logging, os, time
-from typing import Optional, Dict, Any
+from typing import Optional
 import cachetools
 from deps import redis_client
 

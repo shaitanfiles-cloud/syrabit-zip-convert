@@ -1,30 +1,16 @@
 """Syrabit.ai — Admin notifications, push, exam schedule, export, rate policies"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
-from typing import Optional, List, Dict, Any, Union
+import re, json, asyncio, uuid, logging, csv, base64
+from typing import Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
 from fastapi import (
     APIRouter, HTTPException, Depends, Query, Body,
     Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    File, UploadFile, Response,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
-import mistune as _mistune
 
-from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
-)
 from deps import db
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional,
+    get_current_user, get_admin_user,
 )
 from db_ops import (
     _ADMIN_NOTIF_PREFS_DEFAULTS,
@@ -37,7 +23,6 @@ from db_ops import (
     supa_list_users,
     upsert_admin_notification_prefs,
 )
-from llm import call_llm_api, call_llm_api_stream
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +218,12 @@ async def _dispatch_push(payload: dict, admin_only: bool = False):
             user_id = sub.get("user_id", "")
             role = sub.get("role", "unknown")
             try:
-                webpush(
+                # pywebpush.webpush is a blocking requests.post call.
+                # Without to_thread it stalls the entire FastAPI worker
+                # for every slow gateway (FCM/autopush) — one bad
+                # endpoint blocks every other admin's push.
+                await asyncio.to_thread(
+                    webpush,
                     subscription_info=sub["subscription_info"],
                     data=json.dumps(payload),
                     vapid_private_key=private_pem,
@@ -488,6 +478,9 @@ async def _exam_reminder_loop():
     """
     import zoneinfo
     from datetime import timedelta as _td
+    if db is None:
+        logger.info("Exam reminder loop disabled — MongoDB unavailable.")
+        return
     IST = zoneinfo.ZoneInfo("Asia/Kolkata")
     await asyncio.sleep(30)   # let startup settle
     while True:
@@ -626,7 +619,6 @@ async def admin_exam_schedule_toggle(exam_id: str, data: dict, admin: dict = Dep
 # ─────────────────────────────────────────────
 # ADMIN EXPORT — CSV/JSON
 # ─────────────────────────────────────────────
-import csv
 import io as _io
 
 @router.get("/admin/export/users")
@@ -1034,6 +1026,51 @@ async def admin_update_alert_settings(
         if not isinstance(hyd_val, bool):
             raise HTTPException(status_code=400, detail="hydrate_slack_enabled must be a boolean")
         validated_channels["hydrate_slack_enabled"] = hyd_val
+    # Task #660: separate recipient list for the Monday review-prompt
+    # weekly digest, distinct from the incident-alert ``email`` channel.
+    # Accept either an array of strings or a comma-separated string so
+    # the admin UI can post whichever is convenient. Empty entries are
+    # dropped, addresses are deduped case-insensitively while preserving
+    # order, and any obviously-bogus value (no ``@``) is rejected with a
+    # specific error so the form can show it inline.
+    if "review_prompt_digest_emails" in notification_channels:
+        raw_list = notification_channels["review_prompt_digest_emails"]
+        if isinstance(raw_list, str):
+            parts = [p.strip() for p in raw_list.split(",")]
+        elif isinstance(raw_list, list):
+            parts = []
+            for item in raw_list:
+                if item is None:
+                    continue
+                if not isinstance(item, str):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="review_prompt_digest_emails entries must be strings",
+                    )
+                parts.append(item.strip())
+        elif raw_list is None:
+            parts = []
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="review_prompt_digest_emails must be a list or comma-separated string",
+            )
+        seen_dg: set = set()
+        cleaned_dg: list = []
+        for entry in parts:
+            if not entry:
+                continue
+            if "@" not in entry:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid review-prompt digest recipient: {entry!r}",
+                )
+            key = entry.lower()
+            if key in seen_dg:
+                continue
+            seen_dg.add(key)
+            cleaned_dg.append(entry)
+        validated_channels["review_prompt_digest_emails"] = cleaned_dg
     try:
         existing = await db.api_config.find_one({}, {"_id": 0})
         if existing is None:
@@ -1138,6 +1175,129 @@ async def admin_acknowledge_all_alerts(
     return {"ok": True, "modified": result.modified_count}
 
 
+# ─────────────────────────────────────────────
+# Task #987 — Visibility into suppressed alerts
+# ─────────────────────────────────────────────
+#
+# `metrics._dispatch_alert` writes one row per (alert_type, target) to
+# `db.alert_dispatch_log` whenever it claims a dispatch slot. While the
+# row's `ts` is within the persistent cooldown window (6h, see
+# `metrics._PERSISTENT_ALERT_COOLDOWN_S`) any retry of the same alert is
+# silently dropped. Without surfacing that log, "no recent alerts" can
+# mean either "everything is healthy" or "alert is being suppressed by
+# cooldown" — admins need to be able to tell those two states apart.
+#
+# These endpoints expose the cooldown holds to the admin Alert History
+# UI and let on-call operators release a specific dedup_key when they
+# want a fresh alert to fire (e.g. while investigating an incident).
+@router.get("/admin/alerts/cooldowns")
+async def admin_get_alert_cooldowns(
+    limit: int = Query(200, ge=1, le=1000),
+    only_active: bool = Query(False),
+    admin: dict = Depends(get_admin_user),
+):
+    """List dispatch-log rows so admins can see which alerts are
+    currently being suppressed by the 6h persistent cooldown.
+
+    Each row reports its dedup_key, alert_type, last fired_at, the
+    cooldown expiry time, seconds remaining (0 once expired), and
+    whether the cooldown is still actively suppressing retries.
+    Sorted by `ts` desc so the freshest holds appear first.
+    """
+    try:
+        # Lazy-import the cooldown window so this module doesn't take a
+        # hard import dependency on metrics at startup.
+        try:
+            from metrics import _PERSISTENT_ALERT_COOLDOWN_S as _COOLDOWN_S
+        except Exception:
+            _COOLDOWN_S = 6 * 3600
+        import time as _time_mod
+        now_ts = _time_mod.time()
+        cutoff = now_ts - _COOLDOWN_S
+        query: Dict[str, Any] = {}
+        if only_active:
+            query["ts"] = {"$gte": cutoff}
+        cursor = db.alert_dispatch_log.find(query).sort("ts", -1).limit(limit)
+        rows = []
+        active_count = 0
+        async for doc in cursor:
+            ts = doc.get("ts")
+            fired_at = doc.get("fired_at")
+            fired_at_iso = None
+            if isinstance(fired_at, datetime):
+                fired_at_iso = fired_at.astimezone(timezone.utc).isoformat()
+            elif isinstance(fired_at, str):
+                fired_at_iso = fired_at
+            cooldown_expires_iso = None
+            seconds_until_expires = 0
+            active = False
+            if isinstance(ts, (int, float)):
+                expires_ts = ts + _COOLDOWN_S
+                cooldown_expires_iso = datetime.fromtimestamp(
+                    expires_ts, tz=timezone.utc
+                ).isoformat()
+                seconds_until_expires = max(0, int(expires_ts - now_ts))
+                active = expires_ts > now_ts
+            if active:
+                active_count += 1
+            rows.append({
+                "dedup_key": doc.get("dedup_key"),
+                "alert_type": doc.get("alert_type"),
+                "fired_at": fired_at_iso,
+                "ts": ts,
+                "cooldown_expires_at": cooldown_expires_iso,
+                "seconds_until_expires": seconds_until_expires,
+                "active": active,
+            })
+        return {
+            "cooldowns": rows,
+            "total": len(rows),
+            "active_count": active_count,
+            "cooldown_window_seconds": int(_COOLDOWN_S),
+            "now": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as exc:
+        logger.error(f"Failed to fetch alert cooldowns: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to fetch alert cooldowns")
+
+
+@router.delete("/admin/alerts/cooldowns/{dedup_key:path}")
+async def admin_release_alert_cooldown(
+    dedup_key: str = Path(..., description="dedup_key of the alert_dispatch_log row to release"),
+    admin: dict = Depends(get_admin_user),
+):
+    """Delete a specific alert_dispatch_log row so the next matching
+    alert is allowed to fire immediately. Useful when investigating a
+    live incident where the cooldown is hiding a recurring alert.
+
+    Also drops the in-memory mirror in metrics so the in-process
+    cooldown doesn't immediately re-suppress the next dispatch.
+    """
+    if not dedup_key:
+        raise HTTPException(status_code=400, detail="Missing dedup_key")
+    try:
+        result = await db.alert_dispatch_log.delete_one({"dedup_key": dedup_key})
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Cooldown row not found")
+        # Best-effort: also clear the in-memory cooldown mirror so the
+        # next dispatch in this worker isn't blocked by the 30-min
+        # _ALERT_COOLDOWN_S backstop. The dedup_key is `alert_type` for
+        # generic alerts and `alert_type|<key>=<value>` for per-target
+        # alerts, so split on the first `|` to recover the type.
+        try:
+            from metrics import _alert_last_fired
+            alert_type = dedup_key.split("|", 1)[0]
+            _alert_last_fired.pop(alert_type, None)
+        except Exception as _mirror_exc:
+            logger.debug(f"in-memory cooldown clear failed for {dedup_key}: {_mirror_exc}")
+        return {"ok": True, "dedup_key": dedup_key, "released_by": admin.get("email", "admin")}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to release alert cooldown {dedup_key}: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to release alert cooldown")
+
+
 _BACKFILL_TYPE_TO_METRIC = {
     "high_error_rate": "error_rate_pct",
     "high_latency": "latency_p95_ms",
@@ -1183,6 +1343,8 @@ async def ensure_synthetic_alerts_ttl_index() -> None:
     """Create the partial TTL index on db.alerts so synthetic test
     alerts auto-expire ~7 days after they fire. Idempotent — safe to
     call on every startup."""
+    if db is None:
+        return
     try:
         await db.alerts.create_index(
             "expires_at",
@@ -1200,6 +1362,8 @@ async def cleanup_synthetic_alerts(ttl_seconds: int = _SYNTHETIC_ALERT_TTL_SECON
     string `fired_at` ISO timestamp (lexicographic compare works because
     we always write `datetime.now(tz.utc).isoformat()`). Returns the
     deleted count."""
+    if db is None:
+        return 0
     cutoff_dt = datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds)
     cutoff_iso = cutoff_dt.isoformat()
     try:

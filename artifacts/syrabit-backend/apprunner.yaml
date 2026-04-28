@@ -29,8 +29,9 @@ run:
       value: ""
     - name: GROQ_API_KEY
       value: ""
-    - name: GEMINI_API_KEY
-      value: ""
+    # Gemini auth is BYOK via the Cloudflare AI Gateway binding (Task #666).
+    # Do NOT set GEMINI_API_KEY here — the backend reads the user-supplied
+    # key from the AI Gateway request context, not from this env block.
     - name: FIREWORKS_API_KEY
       value: ""
     - name: XAI_API_KEY

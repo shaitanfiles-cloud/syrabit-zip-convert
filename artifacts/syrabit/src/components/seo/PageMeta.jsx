@@ -16,7 +16,7 @@
 //
 // By returning null, SSR body and client first-render body are identical
 // (both empty for this component) → no hydration mismatch.
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { buildSchemaForPageType, dedupeGraphTypes } from "@/lib/jsonld";
 
 const SITE_NAME = "Syrabit.ai";
@@ -96,6 +96,20 @@ export default function PageMeta({
   pageData,
   hasAssamese = false,
 }) {
+  // Stable, content-derived signatures so the JSON-LD effect re-runs
+  // only when the underlying schema content changes, not on every
+  // render that hands us a referentially-new pageData/jsonLd object.
+  // We hash the JSON-stringified inputs (cheap, short — these payloads
+  // are small) instead of relying on object identity.
+  const pageDataSig = useMemo(() => {
+    if (!pageData) return "";
+    try { return JSON.stringify(pageData); } catch { return ""; }
+  }, [pageData]);
+  const jsonLdSig = useMemo(() => {
+    if (!jsonLd) return "";
+    try { return JSON.stringify(jsonLd); } catch { return ""; }
+  }, [jsonLd]);
+
   useEffect(() => {
     if (typeof document === "undefined") return;
 
@@ -183,9 +197,15 @@ export default function PageMeta({
   }, [
     title, description, url, image, keywords, type, section,
     publishedTime, modifiedTime, hasAssamese, pageType,
-    // intentionally leaving tags/jsonLd/pageData out of deps to avoid
-    // triggering on referentially-new arrays/objects each render; the
-    // string-y deps capture the meaningful changes.
+    // Tags / jsonLd / pageData are intentionally NOT raw deps — each
+    // render produces a referentially-new array/object that would
+    // thrash the effect. Instead we feed in `pageDataSig` and
+    // `jsonLdSig`, content-derived signatures that change only when
+    // schema-relevant data changes (e.g. `pageData.data.faq_entries`
+    // arriving from the async FAQ-JSON-LD fetch on chapter pages —
+    // P0 #1 of the AI-visibility plan).
+    pageDataSig,
+    jsonLdSig,
   ]);
 
   return null;

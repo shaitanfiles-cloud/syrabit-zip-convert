@@ -34,6 +34,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from internal_user_agents import google_suggest_headers as _google_suggest_headers
+
 logger = logging.getLogger(__name__)
 
 GOOGLE_SUGGEST_URL = "https://suggestqueries.google.com/complete/search"
@@ -97,7 +99,7 @@ async def _suggest_get(
         resp = await client.get(
             GOOGLE_SUGGEST_URL,
             params={"client": "firefox", "q": seed, "hl": language, "gl": country},
-            headers={"User-Agent": "Mozilla/5.0 (compatible; SyrabitSEOBot/1.0)"},
+            headers=_google_suggest_headers(),
         )
         if resp.status_code != 200:
             logger.debug(

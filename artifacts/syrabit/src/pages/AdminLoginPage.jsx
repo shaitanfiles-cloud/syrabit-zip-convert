@@ -20,7 +20,12 @@ export default function AdminLoginPage() {
     setLoading(true);
     try {
       const res = await adminLogin(email, password);
-      localStorage.setItem('admin_token', res.data.access_token);
+      // Session is the httponly `syrabit_admin_session` cookie set by
+      // the backend — do NOT mirror the JWT into localStorage. Storing
+      // it there exposes it to any XSS on the admin domain (the cookie
+      // is httponly precisely to defend against that) and creates a
+      // second source of truth that drifts apart from the cookie's
+      // expiry, leading to "logged-in UI / 401 API" states.
       toast.success(`Welcome back, ${res.data.name || 'Admin'}!`, {
         description: 'Admin session started',
       });

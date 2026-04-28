@@ -9,6 +9,8 @@ import { toast } from 'sonner';
 import axios from 'axios';
 import { LogoFull } from '@/components/Logo';
 import { API_BASE } from '@/utils/api';
+import { useTurnstile } from '@/hooks/useTurnstile';
+import { formatAuthError } from '@/lib/authErrors';
 
 export default function ResetPasswordPage() {
   const [email, setEmail] = useState('');
@@ -17,16 +19,28 @@ export default function ResetPasswordPage() {
   const [showPass, setShowPass] = useState(false);
   const [step, setStep] = useState('request');
   const [loading, setLoading] = useState(false);
+  const {
+    getToken: getTurnstileToken,
+    ready: turnstileReady,
+    enabled: turnstileEnabled,
+    reset: resetTurnstile,
+  } = useTurnstile();
 
   const handleRequest = async (e) => {
     e.preventDefault();
     setLoading(true);
     try {
-      await axios.post(`${API_BASE}/auth/reset-request`, { email });
+      let turnstileToken = '';
+      if (turnstileEnabled) {
+        turnstileToken = await getTurnstileToken();
+      }
+      const headers = turnstileToken ? { 'x-turnstile-token': turnstileToken } : undefined;
+      await axios.post(`${API_BASE}/auth/reset-request`, { email }, { headers });
       setStep('confirm');
       toast.success('Reset token sent! Check your email or ask admin.');
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Request failed');
+      toast.error(formatAuthError(err, 'Request failed. Please try again.'));
+      try { resetTurnstile(); } catch {}
     } finally {
       setLoading(false);
     }
@@ -36,11 +50,25 @@ export default function ResetPasswordPage() {
     e.preventDefault();
     setLoading(true);
     try {
-      await axios.post(`${API_BASE}/auth/reset-confirm`, { token, new_password: newPassword });
+      // Task #699 — mirror /auth/reset-request: forward an
+      // x-turnstile-token header so the backend can fail-closed on
+      // direct POST attempts. Header omitted when no token is
+      // available so dev / Turnstile-disabled envs keep working.
+      let turnstileToken = '';
+      if (turnstileEnabled) {
+        turnstileToken = await getTurnstileToken();
+      }
+      const headers = turnstileToken ? { 'x-turnstile-token': turnstileToken } : undefined;
+      await axios.post(
+        `${API_BASE}/auth/reset-confirm`,
+        { token, new_password: newPassword },
+        { headers },
+      );
       setStep('done');
       toast.success('Password updated!');
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Reset failed');
+      try { resetTurnstile(); } catch {}
+      toast.error(formatAuthError(err, 'Reset failed. Please try again.'));
     } finally {
       setLoading(false);
     }
@@ -77,7 +105,11 @@ export default function ResetPasswordPage() {
                     />
                   </div>
                 </div>
-                <Button type="submit" disabled={loading} className="w-full bg-violet-600 hover:bg-violet-500 text-white">
+                <Button
+                  type="submit"
+                  disabled={loading || (turnstileEnabled && !turnstileReady)}
+                  className="w-full bg-violet-600 hover:bg-violet-500 text-white"
+                >
                   {loading ? <Loader2 size={16} className="animate-spin mr-2" /> : null}
                   Send Reset Link
                 </Button>
@@ -122,7 +154,11 @@ export default function ResetPasswordPage() {
                     </button>
                   </div>
                 </div>
-                <Button type="submit" disabled={loading} className="w-full bg-violet-600 hover:bg-violet-500 text-white">
+                <Button
+                  type="submit"
+                  disabled={loading || (turnstileEnabled && !turnstileReady)}
+                  className="w-full bg-violet-600 hover:bg-violet-500 text-white"
+                >
                   {loading ? <Loader2 size={16} className="animate-spin mr-2" /> : null}
                   Update Password
                 </Button>

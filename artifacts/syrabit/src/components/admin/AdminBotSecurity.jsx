@@ -9,7 +9,7 @@ import {
   LineChart, Line, BarChart, Bar, AreaChart, Area, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts';
-import { adminGetSpoofedBots, adminGetBlockedIps, adminGetBlockTrends, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings, adminTestAlertDelivery, adminGetTtlMonitor, adminGetCollectionSizeHistory, adminGetAlerts, adminAcknowledgeAlert, adminAcknowledgeAllAlerts, adminBackfillThresholds } from '@/utils/api';
+import { adminGetSpoofedBots, adminGetBlockedIps, adminGetBlockTrends, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings, adminTestAlertDelivery, adminGetTtlMonitor, adminGetCollectionSizeHistory, adminGetAlerts, adminAcknowledgeAlert, adminAcknowledgeAllAlerts, adminBackfillThresholds, adminSendReviewPromptWeeklyDigest, adminGetAlertCooldowns, adminReleaseAlertCooldown } from '@/utils/api';
 import { Database, Activity, CheckCircle2, XCircle } from 'lucide-react';
 
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
@@ -167,7 +167,14 @@ function ChannelStatusPanel({ status, testing, testResult, testError, onTest }) 
 
 function AlertThresholdPanel({ adminToken, navContext }) {
   const [settings, setSettings] = useState(null);
-  const [form, setForm] = useState({ spoof_rpm: 50, auto_block_threshold: 100, auto_block_expiry_hours: 168, collection_growth_per_day: 500, email: '', webhook_url: '', seo_slack_enabled: true, hydrate_slack_enabled: true });
+  const [form, setForm] = useState({ spoof_rpm: 50, auto_block_threshold: 100, auto_block_expiry_hours: 168, collection_growth_per_day: 500, email: '', webhook_url: '', seo_slack_enabled: true, hydrate_slack_enabled: true, review_prompt_digest_emails: '' });
+  // Task #660: dedicated "send me a test" state for the weekly
+  // review-prompt digest, distinct from the synthetic-alert
+  // test-delivery flow above so admins can verify the digest send path
+  // end-to-end without firing a synthetic CTR-low alert.
+  const [digestSending, setDigestSending] = useState(false);
+  const [digestResult, setDigestResult] = useState(null);
+  const [digestError, setDigestError] = useState(null);
   const [defaults, setDefaults] = useState(null);
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -247,6 +254,13 @@ function AlertThresholdPanel({ adminToken, navContext }) {
           webhook_url: d.notification_channels?.webhook_url ?? '',
           seo_slack_enabled: d.notification_channels?.seo_slack_enabled ?? true,
           hydrate_slack_enabled: d.notification_channels?.hydrate_slack_enabled ?? true,
+          // Task #660: render the persisted list as a comma-separated
+          // string in the textarea — matches how admins typically paste
+          // multiple addresses and round-trips back through the same
+          // parser on save.
+          review_prompt_digest_emails: Array.isArray(d.notification_channels?.review_prompt_digest_emails)
+            ? d.notification_channels.review_prompt_digest_emails.join(', ')
+            : (d.notification_channels?.review_prompt_digest_emails ?? ''),
         });
       } catch {
         setSettingsError('Failed to load alert settings');
@@ -297,6 +311,16 @@ function AlertThresholdPanel({ adminToken, navContext }) {
       if (!value) return null;
       if (!value.startsWith('http://') && !value.startsWith('https://')) return 'Must start with http:// or https://';
       try { new URL(value); } catch { return 'Enter a valid URL'; }
+      return null;
+    }
+    if (field === 'review_prompt_digest_emails') {
+      if (!value) return null;
+      const parts = String(value).split(',').map(p => p.trim()).filter(Boolean);
+      for (const p of parts) {
+        if (!p.includes('@') || !p.includes('.')) {
+          return `Invalid email: ${p}`;
+        }
+      }
       return null;
     }
     return null;
@@ -351,6 +375,7 @@ function AlertThresholdPanel({ adminToken, navContext }) {
     errors.collection_growth_per_day = validateField('collection_growth_per_day', form.collection_growth_per_day);
     errors.email = validateField('email', form.email);
     errors.webhook_url = validateField('webhook_url', form.webhook_url);
+    errors.review_prompt_digest_emails = validateField('review_prompt_digest_emails', form.review_prompt_digest_emails);
     const cleaned = {};
     for (const [k, v] of Object.entries(errors)) { if (v) cleaned[k] = v; }
     setFieldErrors(cleaned);
@@ -377,6 +402,13 @@ function AlertThresholdPanel({ adminToken, navContext }) {
           webhook_url: form.webhook_url.trim(),
           seo_slack_enabled: !!form.seo_slack_enabled,
           hydrate_slack_enabled: !!form.hydrate_slack_enabled,
+          // Task #660: send the digest list as an array so the backend
+          // doesn't have to re-split (it accepts both, but the array
+          // form has no ambiguity around literal commas in a name).
+          review_prompt_digest_emails: String(form.review_prompt_digest_emails || '')
+            .split(',')
+            .map(p => p.trim())
+            .filter(Boolean),
         },
       });
       setFieldErrors({});
@@ -390,6 +422,28 @@ function AlertThresholdPanel({ adminToken, navContext }) {
       else if (!Object.keys(fields).length) setSettingsError('Failed to save settings');
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Task #660: "send me a test now" — exercises the digest send path
+  // end-to-end. We post the *current* draft list (parsed from the
+  // textarea, before save) so admins can validate a new recipient
+  // without having to commit it first.
+  const handleSendDigestTest = async () => {
+    setDigestSending(true);
+    setDigestError(null);
+    setDigestResult(null);
+    try {
+      const drafted = String(form.review_prompt_digest_emails || '')
+        .split(',').map(p => p.trim()).filter(Boolean);
+      const res = await adminSendReviewPromptWeeklyDigest(adminToken, {
+        to: drafted.length ? drafted : null,
+      });
+      setDigestResult(res.data || null);
+    } catch (err) {
+      setDigestError(err.response?.data?.detail || err.message || 'Failed to send test digest');
+    } finally {
+      setDigestSending(false);
     }
   };
 
@@ -419,6 +473,9 @@ function AlertThresholdPanel({ adminToken, navContext }) {
         webhook_url: defaults.notification_channels?.webhook_url ?? '',
         seo_slack_enabled: defaults.notification_channels?.seo_slack_enabled ?? true,
         hydrate_slack_enabled: defaults.notification_channels?.hydrate_slack_enabled ?? true,
+        review_prompt_digest_emails: Array.isArray(defaults.notification_channels?.review_prompt_digest_emails)
+          ? defaults.notification_channels.review_prompt_digest_emails.join(', ')
+          : '',
       });
       setFieldErrors({});
       setSettingsError(null);
@@ -652,6 +709,69 @@ function AlertThresholdPanel({ adminToken, navContext }) {
               </span>
             </label>
 
+            {/* Task #660: dedicated recipient list + "send me a test
+                now" button for the Monday review-prompt weekly digest.
+                Distinct from the incident-alert email above so ops can
+                fan-out the digest to product / growth / support without
+                spamming everyone with every CTR-low alert. */}
+            <div className="mt-4 border-t border-dashed border-gray-200 pt-4">
+              <label className="block text-[11px] font-medium text-gray-600 mb-1 flex items-center gap-1.5">
+                <Mail size={11} className="text-gray-400" />
+                Review-prompt weekly digest recipients
+              </label>
+              <textarea
+                rows={2}
+                placeholder="ops@example.com, growth@example.com"
+                value={form.review_prompt_digest_emails}
+                onChange={(e) => handleFieldChange('review_prompt_digest_emails', e.target.value)}
+                className={`w-full text-sm border rounded-lg px-3 py-2 bg-white text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 ${
+                  fieldErrors.review_prompt_digest_emails
+                    ? 'border-red-300 focus:ring-red-200 focus:border-red-300'
+                    : 'border-gray-200 focus:ring-violet-200 focus:border-violet-300'
+                }`}
+              />
+              {fieldErrors.review_prompt_digest_emails ? (
+                <p className="text-[11px] text-red-500 mt-1">{fieldErrors.review_prompt_digest_emails}</p>
+              ) : (
+                <p className="text-[10px] text-gray-400 mt-1">
+                  Comma-separated. Receives the Monday review-prompt summary email. Leave blank to fall back to the alert email above.
+                </p>
+              )}
+              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={handleSendDigestTest}
+                  disabled={digestSending || !!fieldErrors.review_prompt_digest_emails}
+                  className="text-[11px] font-medium px-3 py-1.5 rounded-lg border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
+                >
+                  {digestSending ? <Loader2 size={11} className="animate-spin" /> : <Mail size={11} />}
+                  {digestSending ? 'Sending test…' : 'Send me a test now'}
+                </button>
+                {digestResult && (
+                  digestResult.sent ? (
+                    <span className="text-[11px] text-emerald-700 inline-flex items-center gap-1">
+                      <CheckCircle2 size={11} />
+                      Sent to {(digestResult.recipients || []).join(', ') || digestResult.to}
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-amber-700 inline-flex items-center gap-1">
+                      <AlertTriangle size={11} />
+                      Not sent — {digestResult.reason || 'unknown'}
+                      {digestResult.recipients && digestResult.recipients.length
+                        ? ` (would target: ${digestResult.recipients.join(', ')})`
+                        : ''}
+                    </span>
+                  )
+                )}
+                {digestError && (
+                  <span className="text-[11px] text-red-600 inline-flex items-center gap-1">
+                    <AlertTriangle size={11} />
+                    {digestError}
+                  </span>
+                )}
+              </div>
+            </div>
+
             {/* Task #418: Per-channel last-success status + test delivery button. */}
             <ChannelStatusPanel
               status={channelStatus}
@@ -764,7 +884,9 @@ function TtlMonitorPanel({ adminToken }) {
       const res = await adminGetCollectionSizeHistory(adminToken, historyDays);
       setSizeHistory(res.data.history || []);
       setSizeGrowthRate(res.data.growth_rate_per_day);
-    } catch {}
+    } catch (err) {
+      console.warn('AdminBotSecurity: collection-size history fetch failed:', err);
+    }
   }, [adminToken, historyDays]);
 
   useEffect(() => { fetchTtl(); }, [fetchTtl]);
@@ -1003,6 +1125,273 @@ const DATE_RANGE_OPTIONS = [
   { label: 'Last 30 days', value: '30' },
   { label: 'Last 90 days', value: '90' },
 ];
+
+function _formatCountdown(seconds) {
+  if (!seconds || seconds <= 0) return 'expired';
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  if (m < 60) {
+    const s = seconds % 60;
+    return s ? `${m}m ${s}s` : `${m}m`;
+  }
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  return remM ? `${h}h ${remM}m` : `${h}h`;
+}
+
+function _formatCooldownType(type) {
+  return (type || 'unknown').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function AlertCooldownsPanel({ adminToken, navContext }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [expanded, setExpanded] = useState(false);
+  const [onlyActive, setOnlyActive] = useState(true);
+  const [cooldownWindow, setCooldownWindow] = useState(6 * 3600);
+  const [serverNow, setServerNow] = useState(null);
+  const [activeCount, setActiveCount] = useState(0);
+  const [releasingKey, setReleasingKey] = useState(null);
+  const [releaseError, setReleaseError] = useState(null);
+  const [tick, setTick] = useState(0);
+  // Task #991 — when an admin clicks the dashboard's "N on hold" pill,
+  // AdminPage routes them here with navContext.panel === 'alert-cooldowns'.
+  // We auto-expand the panel and scroll its container into view so the
+  // suppressed list is the first thing they see, mirroring the
+  // existing AlertThresholdPanel `panel === 'alert-settings'` flow.
+  const containerRef = useRef(null);
+
+  const fetchCooldowns = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setReleaseError(null);
+    try {
+      const res = await adminGetAlertCooldowns(adminToken, { limit: 200, only_active: onlyActive });
+      const fetched = res.data?.cooldowns || [];
+      setRows(fetched);
+      setActiveCount(res.data?.active_count ?? fetched.filter(r => r.active).length);
+      setCooldownWindow(res.data?.cooldown_window_seconds || 6 * 3600);
+      setServerNow(res.data?.now || null);
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to load alert cooldowns');
+    } finally {
+      setLoading(false);
+    }
+  }, [adminToken, onlyActive]);
+
+  useEffect(() => {
+    if (expanded) fetchCooldowns();
+  }, [expanded, fetchCooldowns]);
+
+  // Task #991 — auto-expand + scroll into view when arriving from the
+  // dashboard's "N on hold" badge. We delay the scroll one tick so the
+  // expansion has had a chance to lay out the table; otherwise the
+  // smooth scroll lands on the still-collapsed header. Mirrors the
+  // pattern in AlertThresholdPanel above.
+  useEffect(() => {
+    if (navContext?.panel !== 'alert-cooldowns') return undefined;
+    setExpanded(true);
+    const t = setTimeout(() => {
+      const el = containerRef.current;
+      if (el && typeof el.scrollIntoView === 'function') {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 100);
+    return () => clearTimeout(t);
+  }, [navContext]);
+
+  // Re-render every 10s while expanded so the countdown column ticks
+  // down without the user having to hit refresh. Cheap (in-memory math
+  // only — no network call).
+  useEffect(() => {
+    if (!expanded) return undefined;
+    const id = setInterval(() => setTick((n) => n + 1), 10000);
+    return () => clearInterval(id);
+  }, [expanded]);
+
+  const handleRelease = async (dedupKey) => {
+    if (!dedupKey) return;
+    if (typeof window !== 'undefined' && !window.confirm(`Release cooldown for "${dedupKey}"? The next matching alert will be allowed to fire immediately.`)) {
+      return;
+    }
+    setReleasingKey(dedupKey);
+    setReleaseError(null);
+    try {
+      await adminReleaseAlertCooldown(adminToken, dedupKey);
+      // Only decrement the active counter when the row we just released
+      // was actually still suppressing; releasing an already-expired row
+      // shouldn't change the "X on hold" badge.
+      const released = rows.find((r) => r.dedup_key === dedupKey);
+      const wasActive = released && (released._live_active ?? released.active);
+      setRows((prev) => prev.filter((r) => r.dedup_key !== dedupKey));
+      if (wasActive) {
+        setActiveCount((prev) => Math.max(0, prev - 1));
+      }
+    } catch (err) {
+      setReleaseError(err.response?.data?.detail || 'Failed to release cooldown');
+    } finally {
+      setReleasingKey(null);
+    }
+  };
+
+  const cooldownHours = Math.round(cooldownWindow / 3600);
+  // Recompute remaining seconds locally so the countdown stays fresh
+  // between refreshes (the server-side value is only accurate at the
+  // moment of the API response).
+  const nowMs = serverNow ? new Date(serverNow).getTime() + (tick * 10000) : Date.now();
+  const liveRows = rows.map((r) => {
+    if (!r.cooldown_expires_at) return r;
+    const remaining = Math.max(0, Math.floor((new Date(r.cooldown_expires_at).getTime() - nowMs) / 1000));
+    return { ...r, _live_remaining: remaining, _live_active: remaining > 0 };
+  });
+
+  return (
+    <div ref={containerRef}>
+    <GlassCard>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full p-5 flex items-center justify-between hover:bg-gray-50 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-amber-50">
+            <Clock size={16} className="text-amber-500" />
+          </div>
+          <div className="text-left">
+            <h3 className="text-sm font-semibold text-gray-900">Suppressed Alerts (Cooldowns)</h3>
+            <p className="text-[10px] text-gray-400 mt-0.5">
+              {loading && expanded
+                ? 'Loading...'
+                : `${activeCount} active${cooldownWindow ? ` · ${cooldownHours}h window` : ''}`}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {activeCount > 0 && !expanded && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-700">
+              {activeCount} on hold
+            </span>
+          )}
+          <AlertTriangle size={14} className={`text-gray-400 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-gray-100">
+          <div className="p-4 flex flex-wrap items-center gap-3 border-b border-gray-50">
+            <p className="text-[11px] text-gray-500 max-w-2xl">
+              These alerts WOULD have fired in the last {cooldownHours}h but were
+              suppressed by the persistent cooldown. Release a row to allow the next
+              matching dispatch through immediately.
+            </p>
+            <label className="flex items-center gap-1.5 text-[11px] text-gray-600 cursor-pointer select-none ml-auto">
+              <input
+                type="checkbox"
+                checked={onlyActive}
+                onChange={(e) => setOnlyActive(e.target.checked)}
+                className="h-3 w-3 rounded border-gray-300 text-violet-600 focus:ring-violet-200"
+              />
+              Active only
+            </label>
+            <button
+              onClick={fetchCooldowns}
+              disabled={loading}
+              className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+              title="Refresh cooldowns"
+            >
+              <RefreshCw size={12} className={`text-gray-400 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+
+          {(error || releaseError) && (
+            <div className="p-4 space-y-2">
+              {error && (
+                <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">
+                  <AlertTriangle size={12} />
+                  {error}
+                </div>
+              )}
+              {releaseError && (
+                <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">
+                  <AlertTriangle size={12} />
+                  {releaseError}
+                </div>
+              )}
+            </div>
+          )}
+
+          {loading ? (
+            <div className="p-5 flex items-center gap-2 text-sm text-gray-400">
+              <Loader2 size={14} className="animate-spin" />
+              Loading cooldowns...
+            </div>
+          ) : liveRows.length === 0 ? (
+            <div className="px-5 py-8 text-center text-sm text-gray-400">
+              {onlyActive
+                ? 'No alerts are currently being suppressed by cooldown.'
+                : 'No cooldown rows on file.'}
+            </div>
+          ) : (
+            <div className="max-h-[500px] overflow-y-auto divide-y divide-gray-50">
+              {liveRows.map((row) => {
+                const isReleasing = releasingKey === row.dedup_key;
+                const remaining = row._live_remaining ?? row.seconds_until_expires ?? 0;
+                const isActive = row._live_active ?? row.active;
+                return (
+                  <div key={row.dedup_key} className="p-4 hover:bg-gray-50 transition-colors">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider bg-amber-50 text-amber-700">
+                            {_formatCooldownType(row.alert_type)}
+                          </span>
+                          {isActive ? (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[9px] font-semibold">
+                              Suppressing
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 text-[9px] font-semibold">
+                              Expired
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs font-mono text-gray-900 mt-1 break-all">{row.dedup_key}</p>
+                        <div className="mt-2 flex items-center gap-3 text-[10px] text-gray-400 flex-wrap">
+                          <span className="flex items-center gap-1">
+                            <Clock size={10} />
+                            Last fired: {row.fired_at ? new Date(row.fired_at).toLocaleString() : '—'}
+                          </span>
+                          {row.cooldown_expires_at && (
+                            <span className="flex items-center gap-1">
+                              <Calendar size={10} />
+                              {isActive
+                                ? `Expires in ${_formatCountdown(remaining)}`
+                                : `Expired ${new Date(row.cooldown_expires_at).toLocaleString()}`}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleRelease(row.dedup_key)}
+                        disabled={isReleasing}
+                        className="flex-shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium bg-violet-50 text-violet-700 hover:bg-violet-100 transition-colors disabled:opacity-50"
+                        title="Delete this dedup_key row so the next matching alert is free to fire"
+                      >
+                        {isReleasing ? <Loader2 size={10} className="animate-spin" /> : <Unlock size={10} />}
+                        Release
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </GlassCard>
+    </div>
+  );
+}
 
 function AlertHistoryPanel({ adminToken }) {
   const [alerts, setAlerts] = useState([]);
@@ -1565,6 +1954,8 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
         <SectionErrorBoundary name="Alert Thresholds" resetKeys={[refreshCounter]}><AlertThresholdPanel adminToken={adminToken} navContext={navContext} /></SectionErrorBoundary>
 
         <SectionErrorBoundary name="Alert History" resetKeys={[refreshCounter]}><AlertHistoryPanel adminToken={adminToken} /></SectionErrorBoundary>
+
+        <SectionErrorBoundary name="Suppressed Alerts" resetKeys={[refreshCounter]}><AlertCooldownsPanel adminToken={adminToken} navContext={navContext} /></SectionErrorBoundary>
 
         <SectionErrorBoundary name="TTL Monitor" resetKeys={[refreshCounter]}><TtlMonitorPanel adminToken={adminToken} /></SectionErrorBoundary>
 

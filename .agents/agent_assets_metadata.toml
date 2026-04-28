@@ -90,3 +90,9 @@ id = "AYIiVYb6BABVXoss0R8Yn"
 uri = "file://.local/audits/syrabit-page-load-speed-audit.md"
 type = "text"
 title = "Syrabit.ai Page Load Speed Audit"
+
+[[outputs]]
+id = "6UmfQtAUmQjJo09HMZGyS"
+uri = "file://docs/audits/FULL_APP_AUDIT_2026-04-23.md"
+type = "text"
+title = "Syrabit.ai Full Codebase Audit — 2026-04-23"

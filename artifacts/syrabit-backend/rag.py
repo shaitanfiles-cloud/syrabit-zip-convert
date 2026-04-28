@@ -1,14 +1,10 @@
 """Syrabit.ai — LLM knowledge-based responses (web search and RAG removed)."""
-import os, re, asyncio, time, uuid, hashlib, logging
+import re, asyncio, time, hashlib, logging
 from typing import Optional, Dict, List
 from datetime import datetime, timezone
-from fastapi import HTTPException
-from deps import db, logger as _dep_logger, _assert_not_cms_context, is_mongo_available
-from cache import (
-    _cache_key, _redis_get_search, _redis_cache_search,
-    _redis_get_ai_cache, _redis_set,
-)
-from utils import _extract_keywords, _slow_query
+from deps import db, is_mongo_available
+from internal_user_agents import rag_fetch_headers as _rag_fetch_headers
+from utils import _extract_keywords
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +217,7 @@ async def _fetch_page_content(url: str, max_chars: int = 3000) -> str:
             return ""
         client = _get_httpx_client()
         resp, final_url, redirect_reason = await safe_get_with_redirects(
-            client, url, headers={"User-Agent": "Mozilla/5.0 SyrabitBot/1.0"},
+            client, url, headers=_rag_fetch_headers(),
         )
         if redirect_reason != "ok" or resp is None:
             return ""
@@ -574,9 +570,27 @@ def _trim_history(messages: list, token_budget: int = _HISTORY_TOKEN_BUDGET, max
     return capped
 
 
-def _sources_from_rag_ctx(rag_ctx: dict) -> list:
-    seen = set()
-    sources = []
+def _sources_from_rag_ctx(
+    rag_ctx: dict,
+    board_slug: str = "",
+    class_slug: str = "",
+    subject_slug: str = "",
+) -> list:
+    """Build the inline-citation `sources` list the frontend uses to
+    resolve `[PAGE: ...]` markers inside the answer body and the source
+    card under the bubble.
+
+    When ``board_slug``/``class_slug``/``subject_slug`` are supplied (the
+    routes layer resolves them right before emitting ``syrabit_done``),
+    chapter entries get a deep-link URL of the form
+    ``/{board}/{class}/{subject}/{chapter_slug}`` so the frontend can
+    navigate straight to the source chapter and trigger the topic
+    highlight.  Without slugs we still emit a chapter source (slug +
+    title) so the markdown lookup can match titles deterministically.
+    """
+    seen_chapters: set[str] = set()
+    seen_subjects: set[str] = set()
+    sources: list[dict] = []
 
     _cc_meta = rag_ctx.get("content_card_meta")
     if _cc_meta and (_cc_meta.get("card_name") or _cc_meta.get("lesson_name")):
@@ -594,11 +608,39 @@ def _sources_from_rag_ctx(rag_ctx: dict) -> list:
             "url":          _cc_url,
         })
 
+    # Internal chapters retrieved by RAG (the dominant source for
+    # library/cache answers).  These show up under both ``chapters`` and
+    # ``chunks`` depending on the retrieval path; dedup by slug.
+    _chap_base = ""
+    if board_slug and class_slug and subject_slug:
+        _chap_base = f"/{board_slug}/{class_slug}/{subject_slug}"
+    for ch in (rag_ctx.get("chapters") or rag_ctx.get("chunks") or []):
+        if not isinstance(ch, dict):
+            continue
+        c_slug = (ch.get("slug") or "").strip()
+        c_title = (ch.get("title") or "").strip()
+        if not c_slug and not c_title:
+            continue
+        key = c_slug or c_title.lower()
+        if key in seen_chapters:
+            continue
+        seen_chapters.add(key)
+        url = f"{_chap_base}/{c_slug}" if (_chap_base and c_slug) else ""
+        sources.append({
+            "type":  "chapter",
+            "slug":  c_slug,
+            "title": c_title,
+            "url":   url,
+        })
+
     for subj in rag_ctx.get("subjects", []):
         slug = subj.get("slug", "")
-        if slug and slug not in seen:
-            seen.add(slug)
-            sources.append({"slug": slug, "title": subj.get("name", ""), "url": subj.get("url", "")})
+        if slug and slug not in seen_subjects:
+            seen_subjects.add(slug)
+            url = subj.get("url", "")
+            if not url and _chap_base and slug == subject_slug:
+                url = _chap_base
+            sources.append({"slug": slug, "title": subj.get("name", ""), "url": url})
 
     return sources
 
@@ -630,7 +672,6 @@ def build_rag_system_prompt(
     response_lang: str = "",
 ) -> str:
     from prompts import build_system_prompt, classify_intent, _format_board_label as _fbl, get_intent_extraction_rules
-    import re as _re
     base_prompt = build_system_prompt(
         context, user_info=user_info, query=query,
         resolved_intent=resolved_intent, response_lang=response_lang,

@@ -1207,3 +1207,582 @@ def test_probe_with_retry_records_retry_status_when_still_failing():
     assert result["status"] == 0
     assert result["retry_status"] == 404
     assert "connection reset" in result.get("error", "")
+
+
+# -------- Task #821: transition-based SEO health alerting --------
+# These tests exercise the new state-machine that replaced the
+# fire-on-every-bad-tick behaviour. Coverage:
+#   1. _decide_seo_health_alert pure logic (all branches in the truth table)
+#   2. _load_seo_alert_state / _save_seo_alert_state Mongo round-trip
+#   3. End-to-end: ok → bad → bad → ok produces exactly one initial
+#      alert + one recovered alert, no duplicates.
+
+# ---- 1. _decide_seo_health_alert pure logic ----
+
+def test_decide_no_alert_when_ok_and_was_ok():
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="ok", consecutive_bad=0,
+        prev_state={}, now_ts=1000.0,
+    ) is None
+
+
+def test_decide_no_alert_when_unknown_and_was_ok():
+    # /api/seo/health failed for an unrelated reason — don't fire.
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="unknown", consecutive_bad=0,
+        prev_state={}, now_ts=1000.0,
+    ) is None
+
+
+def test_decide_no_alert_on_single_bad_snapshot():
+    # First bad snapshot — could be a transient blip; wait for confirmation.
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="critical", consecutive_bad=1,
+        prev_state={}, now_ts=1000.0,
+    ) is None
+
+
+def test_decide_fires_initial_on_two_consecutive_bad():
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="critical", consecutive_bad=2,
+        prev_state={}, now_ts=1000.0,
+    ) == "fire_initial"
+
+
+def test_decide_fires_initial_on_two_consecutive_degraded():
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="degraded", consecutive_bad=2,
+        prev_state={}, now_ts=1000.0,
+    ) == "fire_initial"
+
+
+def test_decide_no_repeat_alert_within_digest_interval():
+    # Already alerting; recent notification — should stay quiet.
+    prev = {"active": True, "last_notified_at_ts": 1000.0}
+    # 6h later, digest interval is 12h, so still suppressed.
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="critical", consecutive_bad=2,
+        prev_state=prev, now_ts=1000.0 + 6 * 3600,
+    ) is None
+
+
+def test_decide_fires_digest_after_interval_when_still_bad():
+    prev = {"active": True, "last_notified_at_ts": 1000.0}
+    # 12h later — digest fires.
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="critical", consecutive_bad=2,
+        prev_state=prev, now_ts=1000.0 + 12 * 3600,
+    ) == "fire_digest"
+
+
+def test_decide_fires_digest_with_custom_interval():
+    prev = {"active": True, "last_notified_at_ts": 1000.0}
+    # Custom 1h interval — second tick at +1h fires.
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="degraded", consecutive_bad=2,
+        prev_state=prev, now_ts=1000.0 + 3600,
+        digest_interval_s=3600,
+    ) == "fire_digest"
+
+
+def test_decide_fires_recovered_when_bad_then_ok():
+    prev = {"active": True, "last_notified_at_ts": 1000.0,
+            "last_alert_status": "critical"}
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="ok", consecutive_bad=0,
+        prev_state=prev, now_ts=1000.0 + 60,
+    ) == "fire_recovered"
+
+
+def test_decide_does_not_fire_recovered_on_unknown_status():
+    # Unknown could be a Mongo blip — don't claim recovery yet.
+    prev = {"active": True, "last_notified_at_ts": 1000.0,
+            "last_alert_status": "critical"}
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="unknown", consecutive_bad=0,
+        prev_state=prev, now_ts=1000.0 + 60,
+    ) is None
+
+
+def test_decide_does_not_re_recover_when_already_inactive():
+    prev = {"active": False}
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="ok", consecutive_bad=0,
+        prev_state=prev, now_ts=1000.0,
+    ) is None
+
+
+def test_decide_first_bad_when_active_but_only_one_in_a_row_still_digests_on_interval():
+    # Active=True, status currently bad, only 1 in a row (because the
+    # immediately-prior snapshot was ok) — the consecutive_bad guard is
+    # only for the INITIAL transition. While already active, any bad
+    # snapshot at all qualifies for a digest if interval elapsed.
+    prev = {"active": True, "last_notified_at_ts": 1000.0}
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="critical", consecutive_bad=1,
+        prev_state=prev, now_ts=1000.0 + 13 * 3600,
+    ) == "fire_digest"
+
+
+# ---- 2. _load_seo_alert_state / _save_seo_alert_state ----
+
+def test_load_state_returns_empty_when_mongo_unavailable():
+    with patch("deps.is_mongo_available", AsyncMock(return_value=False)):
+        out = asyncio.run(bot_discovery._load_seo_alert_state())
+    assert out == {}
+
+
+def test_load_state_returns_doc_when_present():
+    fake_db = MagicMock()
+    fake_db.seo_alert_state.find_one = AsyncMock(return_value={
+        "_id": "seo_health", "active": True, "last_notified_at_ts": 100.0,
+    })
+    with patch("deps.db", fake_db), \
+         patch("deps.is_mongo_available", AsyncMock(return_value=True)):
+        out = asyncio.run(bot_discovery._load_seo_alert_state())
+    assert out["active"] is True
+    assert out["last_notified_at_ts"] == 100.0
+
+
+def test_save_state_upserts_with_updated_at():
+    fake_db = MagicMock()
+    fake_db.seo_alert_state.update_one = AsyncMock()
+    with patch("deps.db", fake_db), \
+         patch("deps.is_mongo_available", AsyncMock(return_value=True)):
+        asyncio.run(bot_discovery._save_seo_alert_state(
+            {"active": True, "last_notified_at_ts": 200.0}
+        ))
+    fake_db.seo_alert_state.update_one.assert_awaited_once()
+    args, kwargs = fake_db.seo_alert_state.update_one.call_args
+    # Filter is keyed by _id
+    assert args[0] == {"_id": "seo_health"}
+    set_payload = args[1]["$set"]
+    assert set_payload["active"] is True
+    assert set_payload["last_notified_at_ts"] == 200.0
+    # updated_at is auto-added so the doc always has a freshness signal
+    assert "updated_at" in set_payload
+    assert kwargs.get("upsert") is True
+
+
+def test_save_state_silently_swallows_mongo_failure():
+    # The alert loop must never crash because of state-write failure.
+    fake_db = MagicMock()
+    fake_db.seo_alert_state.update_one = AsyncMock(
+        side_effect=RuntimeError("mongo timeout"))
+    with patch("deps.db", fake_db), \
+         patch("deps.is_mongo_available", AsyncMock(return_value=True)):
+        # No exception should propagate
+        asyncio.run(bot_discovery._save_seo_alert_state({"active": False}))
+
+
+# ---- 3. End-to-end alert deduplication scenarios ----
+
+def test_e2e_critical_then_critical_then_ok_dedupes_and_recovers():
+    """Three loop ticks: first bad (no alert — only 1 in a row), second bad
+    (initial alert fires once), third ok (recovered alert fires once).
+    Verifies the exact dispatch sequence and that the state doc is
+    flipped between active/inactive correctly."""
+
+    state_holder = {"doc": {}}  # simulates Mongo round-trip
+
+    async def _fake_load():
+        return dict(state_holder["doc"])
+
+    async def _fake_save(updates):
+        state_holder["doc"].update(updates)
+
+    fake_dispatch = AsyncMock()
+
+    async def _tick(status: str, consecutive_bad: int, now: float):
+        prev = await _fake_load()
+        action = bot_discovery._decide_seo_health_alert(
+            current_status=status, consecutive_bad=consecutive_bad,
+            prev_state=prev, now_ts=now,
+        )
+        if action == "fire_initial":
+            await fake_dispatch("seo_health_degraded", "init", "init body")
+            await _fake_save({"active": True, "first_bad_at_ts": now,
+                              "last_alert_status": status,
+                              "last_notified_at_ts": now,
+                              "digest_count": 0})
+        elif action == "fire_digest":
+            await fake_dispatch("seo_health_degraded", "digest", "digest body")
+            await _fake_save({"last_notified_at_ts": now,
+                              "digest_count": int(prev.get("digest_count", 0)) + 1})
+        elif action == "fire_recovered":
+            await fake_dispatch("seo_health_recovered", "recovered", "recovered body")
+            await _fake_save({"active": False, "last_alert_status": None,
+                              "recovered_at_ts": now})
+
+    async def _scenario():
+        # T+0: first bad tick — no alert (only 1 in a row)
+        await _tick("critical", consecutive_bad=1, now=1000.0)
+        # T+1h: second bad tick — initial alert
+        await _tick("critical", consecutive_bad=2, now=1000.0 + 3600)
+        # T+2h: third bad tick — should NOT re-fire (digest interval not up)
+        await _tick("critical", consecutive_bad=2, now=1000.0 + 7200)
+        # T+3h: still bad — should NOT re-fire
+        await _tick("critical", consecutive_bad=2, now=1000.0 + 3 * 3600)
+        # T+4h: recovered — fires recovered alert
+        await _tick("ok", consecutive_bad=0, now=1000.0 + 4 * 3600)
+        # T+5h: still ok — should NOT fire anything
+        await _tick("ok", consecutive_bad=0, now=1000.0 + 5 * 3600)
+
+    asyncio.run(_scenario())
+
+    types_dispatched = [c.args[0] for c in fake_dispatch.await_args_list]
+    assert types_dispatched == ["seo_health_degraded", "seo_health_recovered"], \
+        f"Expected exactly 1 initial + 1 recovered, got {types_dispatched}"
+    assert state_holder["doc"]["active"] is False
+    assert state_holder["doc"]["recovered_at_ts"] == 1000.0 + 4 * 3600
+
+
+def test_e2e_long_outage_triggers_digest_after_interval():
+    """Sustained 24h outage: initial alert at hour 1, then digest at hour
+    13 (≥ 12h interval), then digest at hour 25 (≥ another 12h)."""
+
+    state_holder = {"doc": {}}
+
+    async def _fake_load():
+        return dict(state_holder["doc"])
+
+    async def _fake_save(updates):
+        state_holder["doc"].update(updates)
+
+    fake_dispatch = AsyncMock()
+
+    async def _tick(status, cb, now):
+        prev = await _fake_load()
+        action = bot_discovery._decide_seo_health_alert(
+            current_status=status, consecutive_bad=cb,
+            prev_state=prev, now_ts=now,
+        )
+        if action == "fire_initial":
+            await fake_dispatch("init", now)
+            await _fake_save({"active": True, "first_bad_at_ts": now,
+                              "last_notified_at_ts": now, "digest_count": 0,
+                              "last_alert_status": status})
+        elif action == "fire_digest":
+            await fake_dispatch("digest", now)
+            await _fake_save({"last_notified_at_ts": now,
+                              "digest_count": int(prev.get("digest_count", 0)) + 1})
+
+    async def _scenario():
+        # Tick once per hour for 26 hours, all critical
+        for h in range(0, 27):
+            cb = 1 if h == 0 else 2  # second hour onwards has 2 in a row
+            await _tick("critical", cb=cb, now=h * 3600.0)
+
+    asyncio.run(_scenario())
+
+    # Expected dispatches: initial at h=1, digest at h=13, digest at h=25
+    dispatched = [(c.args[0], c.args[1] / 3600) for c in fake_dispatch.await_args_list]
+    assert len(dispatched) == 3, f"Expected 3 alerts in 26h, got {len(dispatched)}: {dispatched}"
+    assert dispatched[0][0] == "init" and dispatched[0][1] == 1
+    assert dispatched[1][0] == "digest" and dispatched[1][1] == 13
+    assert dispatched[2][0] == "digest" and dispatched[2][1] == 25
+    # Digest counter persists across ticks
+    assert state_holder["doc"]["digest_count"] == 2
+
+
+def test_e2e_regression_recurrence_within_cooldown_still_fires_initial():
+    """Regression for code-review finding on Task #821:
+
+    initial → recovered → new bad within < `_SEO_HEALTH_ALERT_COOLDOWN_S`
+    must fire a new initial alert. Previously the in-memory cooldown
+    `_seo_health_alert_last_fired` was applied to `fire_initial` too,
+    which would silently drop the second incident's first alert if it
+    recurred within 6h of recovery.
+
+    This test simulates the loop body's gating logic (cooldown only
+    applies to fire_digest, never to fire_initial / fire_recovered).
+    """
+    state_holder = {"doc": {}}
+    last_fired_holder = {"ts": 0.0}
+    cooldown_s = 6 * 3600  # bot_discovery._SEO_HEALTH_ALERT_COOLDOWN_S
+
+    async def _fake_load():
+        return dict(state_holder["doc"])
+
+    async def _fake_save(updates):
+        state_holder["doc"].update(updates)
+
+    fake_dispatch = AsyncMock()
+
+    async def _tick(status, cb, now):
+        prev = await _fake_load()
+        action = bot_discovery._decide_seo_health_alert(
+            current_status=status, consecutive_bad=cb,
+            prev_state=prev, now_ts=now,
+        )
+        # Mirror the production gating logic exactly: cooldown gates ONLY
+        # fire_digest.
+        if action == "fire_digest":
+            if (now - last_fired_holder["ts"]) < cooldown_s:
+                action = None
+
+        if action == "fire_initial":
+            await fake_dispatch("seo_health_degraded", "init", now)
+            last_fired_holder["ts"] = now
+            await _fake_save({"active": True, "first_bad_at_ts": now,
+                              "last_alert_status": status,
+                              "last_notified_at_ts": now,
+                              "digest_count": 0})
+        elif action == "fire_digest":
+            await fake_dispatch("seo_health_degraded", "digest", now)
+            last_fired_holder["ts"] = now
+            await _fake_save({"last_notified_at_ts": now,
+                              "digest_count": int(prev.get("digest_count", 0)) + 1})
+        elif action == "fire_recovered":
+            await fake_dispatch("seo_health_recovered", "recovered", now)
+            await _fake_save({"active": False, "last_alert_status": None,
+                              "recovered_at_ts": now})
+            # Production also zeroes the in-memory cooldown on recovery.
+            last_fired_holder["ts"] = 0.0
+
+    async def _scenario():
+        # T+0: 1st bad (no alert — only 1 in a row)
+        await _tick("critical", cb=1, now=0.0)
+        # T+1h: 2nd bad — initial alert fires
+        await _tick("critical", cb=2, now=3600.0)
+        # T+1h30m: recovered — recovery alert fires
+        await _tick("ok", cb=0, now=3600.0 + 1800.0)
+        # T+2h: bad again, only 1 in a row — no alert
+        await _tick("critical", cb=1, now=2 * 3600.0)
+        # T+3h: 2nd bad in this NEW incident — must fire a new initial
+        # even though only ~2h has passed since the previous initial
+        # (well within the legacy 6h cooldown). This is the regression.
+        await _tick("critical", cb=2, now=3 * 3600.0)
+        # T+3h30m: recovered again
+        await _tick("ok", cb=0, now=3 * 3600.0 + 1800.0)
+
+    asyncio.run(_scenario())
+
+    types = [c.args[0] for c in fake_dispatch.await_args_list]
+    assert types == [
+        "seo_health_degraded",   # incident 1 initial
+        "seo_health_recovered",  # incident 1 recovered
+        "seo_health_degraded",   # incident 2 initial — MUST fire
+        "seo_health_recovered",  # incident 2 recovered
+    ], f"Recurrence within cooldown was suppressed: {types}"
+
+
+def test_e2e_regression_in_memory_cooldown_still_caps_runaway_digests():
+    """The in-memory cooldown is intentionally still applied to
+    `fire_digest`. Verify that even if the persisted state were
+    corrupted to claim 12h passed twice in a row, the in-memory
+    cooldown still caps digest dispatches at one per cooldown window.
+    """
+    last_fired_holder = {"ts": 0.0}
+    cooldown_s = 6 * 3600
+    fake_dispatch = AsyncMock()
+
+    async def _maybe_fire_digest(now):
+        # Simulate _decide_seo_health_alert returning fire_digest
+        action = "fire_digest"
+        if (now - last_fired_holder["ts"]) < cooldown_s:
+            action = None
+        if action == "fire_digest":
+            await fake_dispatch("digest", now)
+            last_fired_holder["ts"] = now
+
+    # Use realistic epoch-style timestamps; production starts with
+    # ``_seo_health_alert_last_fired = 0.0`` so the very first call
+    # at time.time()≈1.7e9 always exceeds the cooldown.
+    base = 1_700_000_000.0
+
+    async def _scenario():
+        await _maybe_fire_digest(now=base)               # fires (last=0)
+        await _maybe_fire_digest(now=base + 3600.0)      # +1h — capped
+        await _maybe_fire_digest(now=base + 2 * 3600.0)  # +2h — capped
+        await _maybe_fire_digest(now=base + 7 * 3600.0)  # +7h — fires
+
+    asyncio.run(_scenario())
+    assert fake_dispatch.await_count == 2
+
+
+# -------- Task #821 (review-driven): severity-transition alerts --------
+# The reviewer asked for `degraded ↔ critical` transition coverage.
+# Decision: degraded → critical fires `fire_escalated` (broadening
+# incident — pages on-call). critical → degraded is silent (improvement;
+# the eventual `fire_recovered` summarizes the worst-case for the whole
+# outage). The transitions ok ↔ bad and the digest cadence are
+# already covered by the tests above.
+
+def test_decide_fires_escalated_on_degraded_to_critical():
+    prev = {"active": True, "last_alert_status": "degraded",
+            "last_notified_at_ts": 1000.0}
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="critical", consecutive_bad=2,
+        prev_state=prev, now_ts=1000.0 + 60,
+    ) == "fire_escalated"
+
+
+def test_decide_silent_on_critical_to_degraded_within_interval():
+    # Improvement-while-still-bad — no page, the interval gate stays in
+    # control. Even though the status changed, we don't fire.
+    prev = {"active": True, "last_alert_status": "critical",
+            "last_notified_at_ts": 1000.0}
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="degraded", consecutive_bad=2,
+        prev_state=prev, now_ts=1000.0 + 60,
+    ) is None
+
+
+def test_decide_critical_to_degraded_after_interval_still_just_digests():
+    # Even after the digest interval, critical → degraded is just a
+    # normal digest, not an "improvement" alert (we deliberately don't
+    # have one of those).
+    prev = {"active": True, "last_alert_status": "critical",
+            "last_notified_at_ts": 1000.0}
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="degraded", consecutive_bad=2,
+        prev_state=prev, now_ts=1000.0 + 13 * 3600,
+    ) == "fire_digest"
+
+
+def test_decide_no_repeat_escalation_when_already_critical():
+    # Once last_alert_status is "critical", subsequent critical ticks
+    # must not re-fire fire_escalated (that would re-introduce the
+    # spam this whole task is about).
+    prev = {"active": True, "last_alert_status": "critical",
+            "last_notified_at_ts": 1000.0}
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="critical", consecutive_bad=2,
+        prev_state=prev, now_ts=1000.0 + 60,
+    ) is None
+
+
+def test_decide_escalation_then_recovery_fires_recovered():
+    # degraded → critical → ok: escalation handled by previous tests,
+    # this verifies the recovered branch still fires after escalation
+    # bumped last_alert_status to "critical".
+    prev = {"active": True, "last_alert_status": "critical",
+            "last_notified_at_ts": 1000.0,
+            "first_bad_at_ts": 500.0}
+    assert bot_discovery._decide_seo_health_alert(
+        current_status="ok", consecutive_bad=0,
+        prev_state=prev, now_ts=1000.0 + 120,
+    ) == "fire_recovered"
+
+
+def test_e2e_severity_escalation_scenario():
+    """ok → degraded(2) → degraded → critical → critical → ok must
+    dispatch exactly: initial(degraded), escalated(critical),
+    recovered. Two consecutive criticals must NOT cause a duplicate
+    escalation, and critical → critical between escalation and
+    recovery must stay silent."""
+    state_holder = {"doc": {}}
+
+    async def _fake_load():
+        return dict(state_holder["doc"])
+
+    async def _fake_save(updates):
+        state_holder["doc"].update(updates)
+
+    fake_dispatch = AsyncMock()
+
+    async def _tick(status, cb, now):
+        prev = await _fake_load()
+        action = bot_discovery._decide_seo_health_alert(
+            current_status=status, consecutive_bad=cb,
+            prev_state=prev, now_ts=now,
+        )
+        if action == "fire_initial":
+            await fake_dispatch("initial", status, now)
+            await _fake_save({"active": True, "first_bad_at_ts": now,
+                              "last_alert_status": status,
+                              "last_notified_at_ts": now,
+                              "digest_count": 0})
+        elif action == "fire_escalated":
+            await fake_dispatch("escalated", status, now)
+            await _fake_save({"last_alert_status": "critical",
+                              "last_notified_at_ts": now})
+        elif action == "fire_digest":
+            await fake_dispatch("digest", status, now)
+            await _fake_save({"last_notified_at_ts": now,
+                              "digest_count": int(prev.get("digest_count", 0)) + 1})
+        elif action == "fire_recovered":
+            await fake_dispatch("recovered", status, now)
+            await _fake_save({"active": False, "last_alert_status": None,
+                              "recovered_at_ts": now})
+
+    async def _scenario():
+        # T+0: degraded, 1 in a row — no alert
+        await _tick("degraded", cb=1, now=0.0)
+        # T+1h: degraded, 2 in a row — initial alert
+        await _tick("degraded", cb=2, now=3600.0)
+        # T+2h: still degraded — no alert (within digest interval)
+        await _tick("degraded", cb=2, now=2 * 3600.0)
+        # T+3h: ESCALATION to critical — fires immediately
+        await _tick("critical", cb=2, now=3 * 3600.0)
+        # T+4h: still critical — no alert (already escalated)
+        await _tick("critical", cb=2, now=4 * 3600.0)
+        # T+5h: critical → degraded (improvement, still bad) — silent
+        await _tick("degraded", cb=2, now=5 * 3600.0)
+        # T+6h: recovered
+        await _tick("ok", cb=0, now=6 * 3600.0)
+
+    asyncio.run(_scenario())
+
+    sequence = [(c.args[0], c.args[1]) for c in fake_dispatch.await_args_list]
+    assert sequence == [
+        ("initial", "degraded"),
+        ("escalated", "critical"),
+        ("recovered", "ok"),
+    ], f"Unexpected dispatch sequence: {sequence}"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Task #938 regression — `_seo_health_alert_loop` once referenced bare
+# ``db`` in the URL-spike fan-out branch *before* the function-local
+# ``from deps import db`` rebind further down the same function. Because
+# Python performs scope resolution statically, that bare reference
+# always raised UnboundLocalError at runtime and the surrounding
+# try/except silently dropped every URL-spike remediation signal.
+# Lock this in via AST so a future refactor cannot re-introduce it.
+# ─────────────────────────────────────────────────────────────────────
+def test_seo_health_alert_loop_does_not_use_bare_db_before_local_rebind():
+    import ast
+    import inspect
+
+    src = inspect.getsource(bot_discovery)
+    tree = ast.parse(src)
+    fn = next(
+        (n for n in ast.walk(tree)
+         if isinstance(n, ast.AsyncFunctionDef) and n.name == "_seo_health_alert_loop"),
+        None,
+    )
+    assert fn is not None, "_seo_health_alert_loop must exist"
+
+    # Find the line of the function-local ``from deps import db`` rebind
+    # (the bare alias, not ``db as _db``).
+    rebind_line = None
+    for node in ast.walk(fn):
+        if isinstance(node, ast.ImportFrom) and node.module == "deps":
+            for alias in node.names:
+                if alias.name == "db" and (alias.asname is None):
+                    rebind_line = node.lineno
+                    break
+            if rebind_line is not None:
+                break
+    assert rebind_line is not None, (
+        "Expected a function-local `from deps import db` rebind inside "
+        "_seo_health_alert_loop (the rebind that creates the scoping hazard)."
+    )
+
+    # Any bare-Name Load of ``db`` before that line raises UnboundLocalError
+    # at runtime — the URL-spike fan-out is the canonical regression site.
+    offenders = [
+        node.lineno for node in ast.walk(fn)
+        if isinstance(node, ast.Name)
+        and node.id == "db"
+        and isinstance(node.ctx, ast.Load)
+        and node.lineno < rebind_line
+    ]
+    assert not offenders, (
+        f"_seo_health_alert_loop references bare `db` before its function-local "
+        f"`from deps import db` rebind at lines {offenders}. This will raise "
+        f"UnboundLocalError at runtime and silently drop remediation fan-out. "
+        f"Use the aliased `_db` (from `from deps import db as _db`) instead."
+    )

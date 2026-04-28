@@ -111,7 +111,9 @@ export default function TopicsTab({
                           topicSlug:  topic.slug        || '',
                           timestamp:  Date.now(),
                         }));
-                      } catch {}
+                      } catch (err) {
+                        console.warn('TopicsTab: failed to stash editor prefill in localStorage:', err);
+                      }
                       onNavigate('editor');
                     }}
                     className="flex-shrink-0 flex items-center gap-1 h-6 px-2 rounded text-[10px] font-semibold transition-all hover:opacity-80"

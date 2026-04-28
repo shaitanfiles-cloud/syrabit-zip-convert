@@ -115,7 +115,7 @@ Set every variable listed below. Values marked **required** must be set for the 
 | `DB_NAME` | MongoDB database name (e.g. `syrabit_prod`) |
 | `JWT_SECRET` | Long random secret for user JWTs |
 | `ADMIN_JWT_SECRET` | Separate random secret for admin JWTs |
-| `LLM_PROVIDER` | LLM provider: `sarvam`, `openai`, `groq`, `gemini`, `fireworks` |
+| `LLM_PROVIDER` | LLM provider: `sarvam`, `openai`, `groq`, `fireworks` (Gemini is BYOK via the Cloudflare AI Gateway binding — see note below — and is not selectable as a backend provider) |
 | `LLM_MODEL` | Model identifier (e.g. `sarvam-m`) |
 | `SARVAM_API_KEY` | API key for chosen LLM provider |
 | `VERTEX_PROJECT_ID` | (Task #607) GCP project for Vertex AI Gemini Flash chat — leaving blank disables Vertex and forces the legacy SLM pool |
@@ -153,13 +153,19 @@ Set every variable listed below. Values marked **required** must be set for the 
 | `EMAIL_FROM` | `noreply@syrabit.ai` | Sender address for emails |
 | `OPENAI_API_KEY` | — | OpenAI key (if using OpenAI provider) |
 | `GROQ_API_KEY` | — | Groq key (if using Groq provider) |
-| `GEMINI_API_KEY` | — | Gemini key (if using Gemini provider) |
 | `XAI_API_KEY` | — | xAI key (if using xAI provider) |
 | `AWS_ACCESS_KEY_ID` | — | AWS key (if using Bedrock provider) |
 | `AWS_SECRET_ACCESS_KEY` | — | AWS secret (if using Bedrock provider) |
 | `AWS_REGION` | `us-east-1` | AWS region for Bedrock |
 | `REDIS_URL` | — | Plain Redis URL (fallback if Upstash not set) |
 | `APPRUNNER_SERVICE_URL` | — | App Runner default domain (additionally added to CORS allow list) |
+
+> **Gemini / BYOK (Task #666):** `GEMINI_API_KEY` is intentionally absent
+> from both tables above. After the BYOK migration, Gemini auth is
+> provided by the Cloudflare AI Gateway BYOK binding using the
+> user-supplied key — not by a backend-side env var. Do not set
+> `GEMINI_API_KEY` on Railway, Cloud Run, or App Runner. The chat path
+> will ignore it and you only re-introduce a shared secret on the origin.
 
 > **CORS and App Runner domains**: The backend automatically allows any `*.awsapprunner.com` origin via regex matching, so the API works immediately after first deploy before a custom domain is configured. No manual setup is needed. Optionally, set `APPRUNNER_SERVICE_URL` to your specific App Runner URL for an additional explicit CORS entry.
 

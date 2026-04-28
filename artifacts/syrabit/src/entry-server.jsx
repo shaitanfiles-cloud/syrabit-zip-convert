@@ -1,7 +1,8 @@
 import { Suspense } from "react";
 import { renderToString } from "react-dom/server";
 import { StaticRouter } from "react-router-dom";
-import { AppShell, AppRoutes, queryClient, preloadPageForKind } from "./App";
+import { AppShell, AppRoutes, preloadPageForKind } from "./App";
+import { queryClient } from "./queryClient";
 
 // Map a request URL to the prerendered route's hydration kind so we
 // can pre-await the matching page chunk BEFORE renderToString runs.
@@ -42,16 +43,29 @@ export async function renderRoute({ url, bundleSlim, seed } = {}) {
       try { queryClient.setQueryData(key, data); } catch {}
     }
   }
-  if (seed?.chapterPreload) {
-    globalThis.__SSR_CHAPTER_PRELOAD__ = seed.chapterPreload;
-  }
-
   // Pre-await the page chunk so React.lazy() resolves synchronously
   // inside renderToString — otherwise SSR aborts with
   // "A component suspended while responding to synchronous input."
   const kind = kindFromUrl(url);
   if (kind) {
     try { await preloadPageForKind(kind); } catch {}
+  }
+  // Mirror per-request preloads onto `globalThis` AFTER the only
+  // `await` between us and `renderToString`, so concurrent
+  // `renderRoute()` calls (the prerender script runs them with
+  // pMap concurrency 8) cannot interleave-overwrite each other's
+  // preload between the assignment and the synchronous render.
+  // We restore each previous value in the `finally` block so we
+  // don't leak across renders.
+  // ChapterPage / SubjectLandingPage useState initializers read
+  // these globals on the SSR pass; the matching client-side
+  // bootstrap script puts the same payload on `window.*` for
+  // hydration / SPA navigation.
+  if (seed?.chapterPreload) {
+    globalThis.__SSR_CHAPTER_PRELOAD__ = seed.chapterPreload;
+  }
+  if (seed?.subjectPreload) {
+    globalThis.__SSR_SUBJECT_PRELOAD__ = seed.subjectPreload;
   }
 
   // Task #499: capture Helmet's SSR output so prerender scripts can
@@ -79,6 +93,7 @@ export async function renderRoute({ url, bundleSlim, seed } = {}) {
     );
   } finally {
     if (seed?.chapterPreload) delete globalThis.__SSR_CHAPTER_PRELOAD__;
+    if (seed?.subjectPreload) delete globalThis.__SSR_SUBJECT_PRELOAD__;
   }
 
   // helmetContext.helmet is populated synchronously by react-helmet-

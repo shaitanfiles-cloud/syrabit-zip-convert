@@ -1,24 +1,13 @@
 """Syrabit.ai — Payments, plan config, API config, webhooks, credit topup"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod, hmac
-from typing import Optional, List, Dict, Any, Union
-from datetime import datetime, timezone, timedelta
+import re, json, asyncio, time, logging, hashlib, os, hmac
+from typing import Optional
+from datetime import datetime, timezone
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    APIRouter, HTTPException, Depends,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel
 import mistune as _mistune
 
-from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
-)
 from config import FRONTEND_URL
 from deps import (
     _create_supa,
@@ -28,9 +17,7 @@ from deps import (
 import deps
 from cache import _redis_invalidate_session
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional,
+    get_current_user, get_admin_user, get_user_credits,
 )
 from db_ops import (
     _supa_mirror,
@@ -38,7 +25,6 @@ from db_ops import (
     supa_count_users,
     supa_get_conversations,
 )
-from llm import call_llm_api, call_llm_api_stream
 import email_templates
 
 logger = logging.getLogger(__name__)
@@ -130,6 +116,95 @@ PLAN_PRICES_INR = {"starter": 9900, "pro": 99900}  # amount in paise (₹99 = 99
 PLAN_CREDITS    = {"starter": 300, "pro": 4000}
 PLAN_DOC_ACCESS = {"starter": "limited", "pro": "full"}
 PLAN_RANK_MAP   = {"free": 0, "starter": 1, "pro": 2}
+
+
+# ─────────────────────────────────────────────
+# Task #731 — Money truth: unify payment row schema
+# ─────────────────────────────────────────────
+async def _enrich_payment_record(record: dict) -> dict:
+    """Add canonical `amount_inr` (rupees, float, 2dp) plus FX audit
+    fields to every payment row before insert.
+
+    Rules:
+      * Razorpay rows already have `amount_paise` (always INR), so
+        amount_inr = amount_paise / 100 — no FX needed.
+      * Stripe rows have `amount_cents` + `currency` (typically "usd").
+        We convert to INR via the FX helper and persist the rate +
+        source + fetched_at on the row itself, so a row stays
+        self-describing months later when the live rate has moved.
+      * Records that already carry amount_inr (e.g. from migrations)
+        are passed through unchanged.
+
+    The helper mutates a copy and returns it; callers should pass the
+    return value to `db.payments.insert_one`.
+    """
+    out = dict(record)
+    if "amount_inr" in out:
+        return out
+
+    paise = out.get("amount_paise")
+    cents = out.get("amount_cents")
+    currency = (out.get("currency") or "").lower().strip()
+
+    if isinstance(paise, (int, float)) and paise:
+        # Razorpay path — paise is always INR.
+        out["amount_inr"] = round(float(paise) / 100.0, 2)
+        out.setdefault("currency_original", "INR")
+        out.setdefault("amount_original", float(paise) / 100.0)
+        # Razorpay rows don't need FX, but we mark the row so admin UI
+        # can still render a uniform "FX as of …" caption when listing
+        # mixed-provider revenue.
+        out.setdefault("fx_rate", 1.0)
+        out.setdefault("fx_source", "inr_native")
+        out.setdefault("fx_fetched_at", None)
+        return out
+
+    if isinstance(cents, (int, float)) and cents:
+        if currency in ("", "usd"):
+            try:
+                from fx import usd_to_inr, FxRateUnavailable
+                conv = await usd_to_inr(float(cents) / 100.0)
+                out["amount_inr"] = float(conv["inr"])
+                out["currency_original"] = "USD"
+                out["amount_original"] = float(cents) / 100.0
+                out["fx_rate"] = float(conv["rate"])
+                out["fx_source"] = conv["source"]
+                out["fx_fetched_at"] = conv["fetched_at"]
+            except FxRateUnavailable as e:
+                # Refuse to write a row we can't price correctly. The
+                # caller's exception path will surface this to the user.
+                raise
+        elif currency == "inr":
+            out["amount_inr"] = round(float(cents) / 100.0, 2)
+            out["currency_original"] = "INR"
+            out["amount_original"] = float(cents) / 100.0
+            out["fx_rate"] = 1.0
+            out["fx_source"] = "inr_native"
+            out["fx_fetched_at"] = None
+        else:
+            # Unknown currency — record what we know and leave amount_inr
+            # explicitly None so rollups exclude this row instead of
+            # inflating totals with the wrong unit.
+            logger.warning(
+                "_enrich_payment_record: unsupported currency=%s amount_cents=%s",
+                currency, cents,
+            )
+            out["amount_inr"] = None
+            out["currency_original"] = currency.upper() or "UNKNOWN"
+            out["amount_original"] = float(cents) / 100.0
+            out["fx_rate"] = None
+            out["fx_source"] = "unsupported_currency"
+            out["fx_fetched_at"] = None
+        return out
+
+    # Zero-amount / activation_skipped row — keep schema consistent.
+    out["amount_inr"] = 0.0
+    out["currency_original"] = (currency.upper() if currency else "INR")
+    out["amount_original"] = 0.0
+    out["fx_rate"] = 1.0
+    out["fx_source"] = "zero"
+    out["fx_fetched_at"] = None
+    return out
 
 class PaymentOrderRequest(BaseModel):
     plan: str  # "starter" or "pro"
@@ -253,6 +328,7 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
         "razorpay_payment_id":body.razorpay_payment_id,
         "verified_at":        now_iso,
     }
+    payment_record = await _enrich_payment_record(payment_record)
 
     _payment_inserted = False
     _pg_updated       = False
@@ -502,14 +578,32 @@ async def stripe_webhook(request: StarletteRequest2):
                 credits = PLAN_CREDITS[plan]
                 doc_acc = PLAN_DOC_ACCESS[plan]
                 now_iso = datetime.now(timezone.utc).isoformat()
-                wh_user = await db.users.find_one({"id": user_id}, {"plan": 1})
-                wh_current_plan = (wh_user or {}).get("plan", "free")
+                # Task #773: read the *pre-update* user doc once and use
+                # it for the downgrade guard, the supa-mirror credit
+                # math, and the activation-email recipient. Reading
+                # again *after* the mongo $inc would observe the
+                # already-incremented credits_limit and double-count
+                # it on the supa side.
+                wh_user = await db.users.find_one({"id": user_id}) or {}
+                wh_current_plan = wh_user.get("plan", "free")
+                # Defensive cast: a stale row could carry None or a
+                # stringified int (legacy import). Crashing the webhook
+                # over a numeric anomaly would force Stripe into
+                # at-least-once retry hell — fall back to 0 instead.
+                try:
+                    wh_prev_credits = int(wh_user.get("credits_limit") or 0)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        f"Stripe webhook: non-numeric credits_limit on user={user_id} "
+                        f"(value={wh_user.get('credits_limit')!r}) — treating as 0"
+                    )
+                    wh_prev_credits = 0
                 if PLAN_RANK_MAP.get(plan, 0) < PLAN_RANK_MAP.get(wh_current_plan, 0):
                     logger.warning(
                         f"Stripe webhook: skipping downgrade {wh_current_plan}→{plan} "
                         f"for user={user_id} session={stripe_session_id} — payment logged only"
                     )
-                    await db.payments.insert_one({
+                    await db.payments.insert_one(await _enrich_payment_record({
                         "user_id": user_id, "plan": plan, "provider": "stripe",
                         "status": "skipped",
                         "stripe_session_id": stripe_session_id,
@@ -517,9 +611,9 @@ async def stripe_webhook(request: StarletteRequest2):
                         "currency": session.get("currency", "usd"),
                         "verified_at": now_iso, "activation_skipped": True,
                         "skip_reason": f"user already on higher plan ({wh_current_plan})",
-                    })
+                    }))
                     return {"received": True}
-                await db.payments.insert_one({
+                await db.payments.insert_one(await _enrich_payment_record({
                     "user_id": user_id,
                     "plan": plan,
                     "provider": "stripe",
@@ -528,7 +622,7 @@ async def stripe_webhook(request: StarletteRequest2):
                     "amount_cents": session.get("amount_total", 0),
                     "currency": session.get("currency", "usd"),
                     "verified_at": now_iso,
-                })
+                }))
                 await db.users.update_one(
                     {"id": user_id},
                     {"$set": {"plan": plan, "document_access": doc_acc, "updated_at": now_iso},
@@ -540,8 +634,93 @@ async def stripe_webhook(request: StarletteRequest2):
                             "UPDATE users SET plan=$1, credits_limit=credits_limit+$2, document_access=$3, updated_at=$4 WHERE id=$5",
                             plan, credits, doc_acc, now_iso, user_id,
                         )
+                # Task #773: bring Stripe webhook to parity with the
+                # Razorpay webhook + verify path — mirror to Supabase
+                # and queue the activation email so a paying customer
+                # who funnels through Stripe Checkout actually receives
+                # confirmation and the supa-side users mirror reflects
+                # their new plan. `wh_prev_credits` was captured BEFORE
+                # the mongo $inc above, so `_new_limit` is exactly the
+                # post-update value (re-reading users.find_one here
+                # would observe the already-incremented row and
+                # double-count the grant on the supa side).
+                _new_limit = wh_prev_credits + credits
+                _supa_mirror(lambda: supa.table("users").update({
+                    "plan": plan, "document_access": doc_acc,
+                    "credits_limit": _new_limit, "updated_at": now_iso,
+                }).eq("id", str(user_id)).execute())
                 _redis_invalidate_session(user_id)
                 logger.info(f"Stripe payment: user={user_id} plan={plan} credits+={credits}")
+                asyncio.create_task(email_templates.send_plan_activation(
+                    email=wh_user.get("email", ""),
+                    name=wh_user.get("name", wh_user.get("email", "")),
+                    plan=plan,
+                    credits=credits,
+                    # Stripe charges in USD cents; activation email
+                    # shows the INR price the customer was quoted at
+                    # checkout-create time so the receipt matches the
+                    # plan card they clicked.
+                    amount_paise=PLAN_PRICES_INR.get(plan, 0),
+                ))
+
+        elif event.get("type") == "invoice.paid":
+            # Task #773: subscription renewals. The one-time
+            # /payments/stripe/create-checkout above uses
+            # mode="payment", but customers on a Stripe-managed
+            # subscription (created out-of-band or via a future
+            # subscription endpoint) will fire `invoice.paid` on
+            # every renewal. We must top up credits for the same
+            # plan, but never re-flip the plan column (the user
+            # already owns it from the original checkout) and
+            # never downgrade.
+            invoice = event["data"]["object"]
+            inv_id = invoice.get("id", "")
+            if not inv_id:
+                return {"received": True}
+            # Stripe puts subscription metadata on the invoice's
+            # `subscription_details.metadata` (API >= 2024-09); fall
+            # back to the first line item's metadata for older API
+            # versions / hand-rolled subscriptions.
+            inv_meta = (invoice.get("subscription_details") or {}).get("metadata") or {}
+            if not inv_meta:
+                lines = ((invoice.get("lines") or {}).get("data") or [{}])
+                inv_meta = (lines[0] or {}).get("metadata") or {}
+            user_id = inv_meta.get("user_id")
+            plan = inv_meta.get("plan")
+            if not user_id or plan not in PLAN_CREDITS:
+                logger.info(f"Stripe invoice.paid ignored (no user/plan metadata): invoice={inv_id}")
+                return {"received": True}
+            existing = await db.payments.find_one({"stripe_invoice_id": inv_id})
+            if existing and existing.get("status") == "completed":
+                logger.info(f"Stripe duplicate invoice.paid ignored: invoice={inv_id}")
+                return {"received": True}
+            credits = PLAN_CREDITS[plan]
+            now_iso = datetime.now(timezone.utc).isoformat()
+            await db.payments.insert_one(await _enrich_payment_record({
+                "user_id": user_id,
+                "plan": plan,
+                "provider": "stripe",
+                "status": "completed",
+                "stripe_invoice_id": inv_id,
+                "stripe_subscription_id": invoice.get("subscription", ""),
+                "amount_cents": invoice.get("amount_paid", 0),
+                "currency": invoice.get("currency", "usd"),
+                "verified_at": now_iso,
+                "renewal": True,
+            }))
+            await db.users.update_one(
+                {"id": user_id},
+                {"$set": {"updated_at": now_iso},
+                 "$inc": {"credits_limit": credits}},
+            )
+            if deps.pg_pool:
+                async with deps.pg_pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE users SET credits_limit=credits_limit+$1, updated_at=$2 WHERE id=$3",
+                        credits, now_iso, user_id,
+                    )
+            _redis_invalidate_session(user_id)
+            logger.info(f"Stripe renewal: user={user_id} plan={plan} credits+={credits} invoice={inv_id}")
         return {"received": True}
     except ImportError:
         raise HTTPException(503, "Stripe SDK not installed.")
@@ -591,7 +770,7 @@ async def razorpay_webhook(request: StarletteRequest2):
             if plan == "topup":
                 topup_credits = int(notes.get("credits", 0))
                 if topup_credits > 0:
-                    await db.payments.insert_one({
+                    await db.payments.insert_one(await _enrich_payment_record({
                         "user_id": user_id,
                         "plan": "topup",
                         "provider": "razorpay",
@@ -600,7 +779,7 @@ async def razorpay_webhook(request: StarletteRequest2):
                         "amount_paise": entity.get("amount", 0),
                         "credits_added": topup_credits,
                         "verified_at": now_iso,
-                    })
+                    }))
                     await db.users.update_one(
                         {"id": user_id},
                         {"$set": {"updated_at": now_iso},
@@ -625,26 +804,26 @@ async def razorpay_webhook(request: StarletteRequest2):
                         f"Razorpay webhook: skipping downgrade {wh_current_plan}→{plan} "
                         f"for user={user_id} payment={rp_payment_id} — payment logged only"
                     )
-                    await db.payments.insert_one({
+                    await db.payments.insert_one(await _enrich_payment_record({
                         "user_id": user_id, "plan": plan, "provider": "razorpay",
                         "status": "skipped",
                         "razorpay_payment_id": rp_payment_id,
                         "amount_paise": entity.get("amount", 0),
                         "verified_at": now_iso, "activation_skipped": True,
                         "skip_reason": f"user already on higher plan ({wh_current_plan})",
-                    })
+                    }))
                 else:
                     _wh_payment_inserted = False
                     _wh_mongo_updated    = False
                     _wh_pg_updated       = False
                     try:
-                        await db.payments.insert_one({
+                        await db.payments.insert_one(await _enrich_payment_record({
                             "user_id": user_id, "plan": plan, "provider": "razorpay",
                             "status": "completed",
                             "razorpay_payment_id": rp_payment_id,
                             "amount_paise": entity.get("amount", 0),
                             "verified_at": now_iso,
-                        })
+                        }))
                         _wh_payment_inserted = True
                         await db.users.update_one(
                             {"id": user_id},
@@ -795,7 +974,7 @@ async def credit_topup_verify(body: CreditTopUpVerifyRequest, user: dict = Depen
     _tu_mongo_updated    = False
     try:
         # 1. Record payment
-        await db.payments.insert_one({
+        await db.payments.insert_one(await _enrich_payment_record({
             "user_id": str(user_id),
             "plan": "topup",
             "provider": "razorpay",
@@ -805,7 +984,7 @@ async def credit_topup_verify(body: CreditTopUpVerifyRequest, user: dict = Depen
             "amount_paise": TOPUP_PRICES_INR[body.credits],
             "credits_added": body.credits,
             "verified_at": now_iso,
-        })
+        }))
         _tu_payment_inserted = True
 
         # 2. Update PostgreSQL
@@ -997,12 +1176,31 @@ async def admin_usage_summary(admin: dict = Depends(get_admin_user)):
     payments = await db.payments.find({}, {"_id": 0}).sort("verified_at", -1).to_list(1000)
     total_revenue_inr = sum(p.get("amount_paise", 0) for p in payments if p.get("provider") != "stripe")
     total_revenue_usd = sum(p.get("amount_cents", 0) for p in payments if p.get("provider") == "stripe")
+    # Task #731 S3 — Stripe-aware unified INR total. Prefers persisted
+    # `amount_inr` (set by S2's enrich helper at insert time using the
+    # FX rate of the moment) so this number actually answers "how much
+    # money have we made, in rupees" — including Stripe payments. The
+    # legacy split fields above stay for back-compat with older admin
+    # dashboards still in the wild.
+    def _row_inr_local(p: dict) -> float:
+        v = p.get("amount_inr")
+        if isinstance(v, (int, float)) and v >= 0:
+            return float(v)
+        if p.get("provider") != "stripe":
+            paise = p.get("amount_paise") or 0
+            if isinstance(paise, (int, float)):
+                return float(paise) / 100.0
+        return 0.0
+    total_revenue_inr_unified = round(sum(_row_inr_local(p) for p in payments), 2)
     return {
         "total_users": total_users,
         "total_conversations": total_convs,
         "total_payments": len(payments),
         "revenue_inr_paise": total_revenue_inr,
         "revenue_usd_cents": total_revenue_usd,
+        # Single source-of-truth INR figure for revenue tiles.
+        "revenue_inr_unified": total_revenue_inr_unified,
+        "revenue_includes_stripe": True,
         "recent_payments": payments[:20],
     }
 

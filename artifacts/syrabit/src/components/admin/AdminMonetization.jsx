@@ -14,6 +14,7 @@ import { API_BASE, adminGetPlanConfig } from '@/utils/api';
 import { toast } from 'sonner';
 
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
+import CurrencyProvenanceCaption from './analytics/CurrencyProvenanceCaption';
 const LIGHT_TOOLTIP = {
   contentStyle: {
     background: '#ffffff',
@@ -192,6 +193,29 @@ export default function AdminMonetization({ adminToken, onNavigate }) {
               <MetricCard icon={Users} label="Paid Users" value={overview.total_paid_users} color="#8b5cf6" />
               <MetricCard icon={Percent} label="Conversion Rate" value={overview.conversion_rate + '%'} color="#f59e0b" />
             </div>
+            {/* Task #731 S3 + S9, Task #740 — shared provenance caption so
+                Monetization, Funnel, Revenue, and Conversions tabs all
+                display the same wording. CurrencyProvenanceCaption uses
+                the new currency_breakdown payload to render real numbers
+                ("Razorpay ₹X + Stripe $Y → ₹Z"), gracefully shortening
+                to "Includes Razorpay only" when usd_native is 0. */}
+            {overview.currency_breakdown ? (
+              <div className="-mt-1 pl-1">
+                <CurrencyProvenanceCaption breakdown={overview.currency_breakdown} />
+                {typeof overview.total_lifetime_revenue_inr === 'number' && (
+                  <p className="text-[11px] text-gray-500 leading-snug">
+                    Lifetime: ₹{overview.total_lifetime_revenue_inr.toLocaleString('en-IN', { maximumFractionDigits: 2 })}.
+                  </p>
+                )}
+              </div>
+            ) : overview.revenue_includes_stripe && (
+              <div className="text-[11px] text-gray-500 -mt-1 pl-1 leading-snug">
+                Includes Razorpay (INR) + Stripe (USD→INR @ rate captured at payment time).
+                {typeof overview.total_lifetime_revenue_inr === 'number' && (
+                  <> Lifetime: ₹{overview.total_lifetime_revenue_inr.toLocaleString('en-IN', { maximumFractionDigits: 2 })}.</>
+                )}
+              </div>
+            )}
 
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               <MetricCard icon={Star} label="ARPU (INR)" value={overview.arpu_inr} prefix="₹" color="#ec4899" />
@@ -218,8 +242,45 @@ export default function AdminMonetization({ adminToken, onNavigate }) {
                       }`}>
                         {txn.plan}
                       </span>
-                      <span className="text-gray-900 text-sm font-medium ml-auto">
-                        {txn.currency === 'INR' ? '₹' : '$'}{txn.amount}
+                      {/* Task #731 S3 — primary INR + small original-currency caption.
+                          For Stripe rows (currency_original=USD) admins see both
+                          ₹X.XX (the unified rollup figure) and "$Y.YY" (the receipt
+                          of record), so the row reconciles with Stripe's dashboard. */}
+                      <span className="ml-auto flex flex-col items-end leading-tight">
+                        <span className="text-gray-900 text-sm font-medium">
+                          ₹{Number(txn.amount_inr ?? txn.amount ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                        </span>
+                        {txn.currency_original && txn.currency_original !== 'INR' && txn.amount_original ? (() => {
+                          // Per-row stale detection mirrors isFxStale() in
+                          // CurrencyProvenanceCaption: trust backend's
+                          // "<provider>_stale" suffix on fx_source, treat
+                          // missing/old fx_fetched_at as stale too. Keeps the
+                          // staleness contract identical to the aggregate
+                          // caption above so admins don't see contradictory
+                          // signals.
+                          const src = String(txn.fx_source || '');
+                          let stale = !txn.fx_rate || src.endsWith('_stale');
+                          if (!stale && txn.fx_fetched_at) {
+                            const ts = new Date(txn.fx_fetched_at).getTime();
+                            stale = Number.isNaN(ts) || (Date.now() - ts) / 36e5 > 24;
+                          } else if (!stale && !txn.fx_fetched_at) {
+                            stale = true;
+                          }
+                          const baseTitle = txn.fx_rate
+                            ? `FX rate ${Number(txn.fx_rate).toFixed(4)} (${txn.fx_source || 'unknown source'})`
+                            : '';
+                          const title = stale && baseTitle
+                            ? `${baseTitle} — FX RATE STALE, refresh upstream provider`
+                            : baseTitle;
+                          return (
+                            <span className={`text-[10px] ${stale ? 'text-amber-700' : 'text-gray-400'}`} title={title}>
+                              {stale && (
+                                <span aria-label="Foreign exchange rate is stale" className="mr-1">⚠</span>
+                              )}
+                              {txn.currency_original === 'USD' ? '$' : ''}{Number(txn.amount_original).toFixed(2)} {txn.currency_original}
+                            </span>
+                          );
+                        })() : null}
                       </span>
                       <span className="text-gray-400 text-xs">{txn.date}</span>
                     </button>

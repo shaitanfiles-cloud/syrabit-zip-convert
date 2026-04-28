@@ -164,7 +164,47 @@ async function main() {
     }),
   );
 
-  // 5. Verify — single dist/ walk + headless hydration check.
+  // 5a. Inject the Trustpilot aggregate-rating JSON-LD into every
+  //     dist/ HTML (Task #729). Runs AFTER prerender so prerendered
+  //     route HTMLs also receive the inject. Honest no-op when no
+  //     live source returns positive review counts — never blocks
+  //     the build.
+  await record(
+    "inject:trustpilot-jsonld",
+    node(path.join(__dirname, "inject-trustpilot-jsonld.mjs"), [], {
+      budgetMs: 30_000,
+    }),
+  );
+
+  // 5a.1. Verify the inject above actually landed the AggregateRating
+  //       JSON-LD on every Task #729 target path. Runs against the
+  //       freshly-built dist/ (not the network) so a regression in the
+  //       inject step or a drift in TARGET_PATHS fails the build
+  //       instead of silently shipping pages without stars (Task #748).
+  await record(
+    "verify:trustpilot-jsonld",
+    node(path.join(__dirname, "verify-trustpilot-jsonld.mjs"), ["--target=dist"], {
+      budgetMs: 60_000,
+    }),
+  );
+
+  // 5a.2. Critical-CSS extraction (Task #856). Walks every dist/ HTML,
+  //       inlines the above-the-fold CSS rules into <head>, and rewrites
+  //       the 141 KB main stylesheet link into a non-blocking preload+swap
+  //       (with a <noscript> fallback). Runs AFTER prerender so the
+  //       prerendered route HTMLs also receive inlined critical CSS, and
+  //       BEFORE verify so verify-hydration sees the production link
+  //       pattern. Soft-fails per file — a parser failure on one HTML
+  //       degrades that page back to render-blocking CSS rather than
+  //       failing the build.
+  await record(
+    "inline:critical-css",
+    node(path.join(__dirname, "inline-critical-css.mjs"), [], {
+      budgetMs: 60_000,
+    }),
+  );
+
+  // 5b. Verify — single dist/ walk + headless hydration check.
   await record(
     "verify",
     node(path.join(__dirname, "verify-all.mjs"), [], {

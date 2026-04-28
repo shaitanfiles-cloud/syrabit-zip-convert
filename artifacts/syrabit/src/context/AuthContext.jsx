@@ -15,7 +15,7 @@ const AuthContext = createContext(null);
 
 let _inMemoryToken = null;
 
-export const getInMemoryToken = () => _inMemoryToken;
+const getInMemoryToken = () => _inMemoryToken;
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
@@ -177,8 +177,9 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const login = async (email, password) => {
-    const res = await axios.post(`${API_BASE}/auth/login`, { email, password }, { withCredentials: true });
+  const login = async (email, password, turnstileToken = '') => {
+    const headers = turnstileToken ? { 'x-turnstile-token': turnstileToken } : undefined;
+    const res = await axios.post(`${API_BASE}/auth/login`, { email, password }, { withCredentials: true, headers });
     const { user: userData, access_token } = res.data;
     if (access_token) _storeToken(access_token);
     justAuthenticated.current = true;
@@ -188,10 +189,11 @@ export const AuthProvider = ({ children }) => {
     return userData;
   };
 
-  const signup = async (name, email, password, consent_dpdp = false) => {
+  const signup = async (name, email, password, consent_dpdp = false, turnstileToken = '') => {
+    const headers = turnstileToken ? { 'x-turnstile-token': turnstileToken } : undefined;
     const res = await axios.post(`${API_BASE}/auth/signup`, {
       name, email, password, consent_dpdp,
-    }, { withCredentials: true });
+    }, { withCredentials: true, headers });
     const { user: userData, access_token } = res.data;
     if (access_token) _storeToken(access_token);
     justAuthenticated.current = true;
@@ -201,8 +203,15 @@ export const AuthProvider = ({ children }) => {
     return userData;
   };
 
-  const googleLogin = async (credential) => {
-    const res = await axios.post(`${API_BASE}/auth/google`, { credential }, { withCredentials: true });
+  const googleLogin = async (credential, turnstileToken = '') => {
+    // Task #697 — mirror the email/password flow: forward the
+    // Turnstile token (when the call site obtained one) as the
+    // `x-turnstile-token` header so the backend can fail-closed on
+    // automated attempts. Header is omitted entirely when no token is
+    // supplied so callers in dev / Turnstile-disabled environments
+    // remain backwards-compatible.
+    const headers = turnstileToken ? { 'x-turnstile-token': turnstileToken } : undefined;
+    const res = await axios.post(`${API_BASE}/auth/google`, { credential }, { withCredentials: true, headers });
     const { user: userData, access_token } = res.data;
     if (access_token) _storeToken(access_token);
     justAuthenticated.current = true;

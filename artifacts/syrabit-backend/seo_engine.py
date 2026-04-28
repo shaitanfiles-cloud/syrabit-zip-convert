@@ -1798,6 +1798,17 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
                 await indexnow_batcher.queue_page(page)
             except Exception:
                 pass
+        # Task #939 — agentic internal-linker. Schedule a background
+        # task that picks 3-5 best contextual link sources elsewhere
+        # on the site and either auto-applies (>= confidence
+        # threshold) or files them for admin review. Fire-and-forget
+        # so generation latency is unaffected; the linker swallows
+        # its own errors so a failure here can never break Stage 3.
+        try:
+            from seo_internal_linker import schedule_propose
+            schedule_propose(_db, page, source="stage3")
+        except Exception as e:
+            logger.debug(f"internal_linker dispatch failed: {e}")
     return page
 
 
@@ -6920,20 +6931,45 @@ async def _check_and_alert_staleness_heartbeat(
 
 async def _seo_staleness_heartbeat_loop():
     """Background loop: every 6h, verify the staleness monitor itself
-    is still heartbeating. Leader-gated by ``server.py`` so a multi-
-    replica deployment doesn't N×-page admins when the monitor goes
-    quiet — the per-doc CAS is defense-in-depth in case leadership
-    fails over mid-loop."""
+    is still heartbeating.
+
+    Cross-replica dedup (Task #950): every replica may run this loop,
+    but only the lease-holder runs ``_check_and_alert_staleness_heartbeat``.
+    The per-doc CAS inside that helper is defense-in-depth for the
+    fail-over edge case where the lease changes hands mid-iteration.
+    """
     from deps import db, is_mongo_available  # type: ignore
+    import background_lease as _bglease
+    owner_id = _bglease.make_owner_id("seo-staleness-heartbeat")
+    lock_id = "seo_staleness_heartbeat_lease"
+    ttl_s = _SEO_STALENESS_HEARTBEAT_LOOP_SLEEP_S * 3
+    follower_s = max(900, _SEO_STALENESS_HEARTBEAT_LOOP_SLEEP_S // 4)
     await asyncio.sleep(_SEO_STALENESS_HEARTBEAT_WARMUP_S)
-    while True:
-        try:
-            if await is_mongo_available():
+    try:
+        while True:
+            try:
+                if not await is_mongo_available():
+                    await asyncio.sleep(follower_s)
+                    continue
+                if not await _bglease.try_acquire_lease(
+                    db, lock_id, owner_id, ttl_s,
+                ):
+                    await asyncio.sleep(follower_s)
+                    continue
                 await _check_and_alert_staleness_heartbeat(db)
-        except Exception as exc:
-            logger.debug(
-                f"[seo-staleness-heartbeat] loop iteration error: {exc}")
-        await asyncio.sleep(_SEO_STALENESS_HEARTBEAT_LOOP_SLEEP_S)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug(
+                    f"[seo-staleness-heartbeat] loop iteration error: {exc}")
+            await asyncio.sleep(_SEO_STALENESS_HEARTBEAT_LOOP_SLEEP_S)
+    finally:
+        try:
+            await asyncio.shield(_bglease.release_lease(
+                db, lock_id, owner_id,
+            ))
+        except Exception:
+            pass
 
 
 # ─── ADMIN: Scheduled auto-publish status ───────────────────────────────────

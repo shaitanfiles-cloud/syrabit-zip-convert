@@ -192,7 +192,10 @@ export default function AudioTrimPreview({ file, onConfirm, onCancel, uploading 
 
   const stopPlayback = useCallback(() => {
     if (sourceRef.current) {
-      try { sourceRef.current.stop(); } catch {}
+      // AudioBufferSourceNode.stop() throws InvalidStateError if the
+      // node was never started or has already been stopped — both are
+      // safe no-ops here, so log at debug level rather than warn.
+      try { sourceRef.current.stop(); } catch (err) { console.debug('AudioTrimPreview: source.stop() (already stopped):', err?.message); }
       sourceRef.current = null;
     }
     if (animFrameRef.current) {

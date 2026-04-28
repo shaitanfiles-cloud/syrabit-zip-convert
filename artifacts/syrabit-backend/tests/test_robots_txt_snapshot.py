@@ -93,8 +93,16 @@ def test_no_worker_robots_override_diverges():
     #   3. A `text/plain` Response constructor whose body string starts
     #      with a `User-agent:` line.
     has_inlined_block = bool(re.search(r'["`]\s*User-agent:\s', src))
+    # Refined: a *route literal* means a comparison/match pattern that
+    # would dispatch the request (e.g.
+    # ``pathname === "/robots.txt"``) — NOT mere membership in a set
+    # of paths the worker only proxies (the latter is e.g.
+    # ``BOT_DISCOVERY_PATHS = new Set(["/robots.txt", ...])`` which
+    # forwards to the backend without authoring a body).
     has_route_literal = bool(re.search(
-        r'(?<!api)["\']/robots\.txt["\']', src
+        r'(?:pathname|path|url\.pathname)\s*[=!]==?\s*'
+        r'["\']/robots\.txt["\']',
+        src,
     ))
     has_response_with_robots = bool(re.search(
         r'new\s+Response\s*\(\s*[`"\']\s*User-agent:', src

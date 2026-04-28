@@ -23,6 +23,7 @@ from cf_bot_crosscheck import (
     compute_comparison,
     format_crosscheck_markdown,
     load_external_totals,
+    load_external_totals_with_issues,
 )
 
 
@@ -91,6 +92,95 @@ def test_load_skips_zero_or_negative_entries(tmp_path):
         "bingbot":   {"requests": -5, "source": "BWT"},
     }}}))
     assert load_external_totals("2026-W16", path=p) == {}
+
+
+# ── load_external_totals_with_issues (schema validation, audit #6) ──────────
+
+def test_validation_flags_lowercased_week_key(tmp_path):
+    p = tmp_path / "external.json"
+    p.write_text(json.dumps({"weeks": {"2026-w16": {
+        "googlebot": {"requests": 4200, "source": "GSC"},
+    }}}))
+    out = load_external_totals_with_issues("2026-W16", path=p)
+    # Totals are empty because the typo'd key doesn't match the lookup,
+    # but the operator gets a clear message instead of a silent miss.
+    assert out["totals"] == {}
+    assert any("uppercased to `2026-W16`" in m for m in out["issues"]), out["issues"]
+
+
+def test_validation_flags_unknown_bot_key_typo(tmp_path):
+    p = tmp_path / "external.json"
+    p.write_text(json.dumps({"weeks": {"2026-W16": {
+        "googelbot": {"requests": 4200, "source": "GSC"},  # typo
+        "bingbot":   {"requests":  900, "source": "BWT"},
+    }}}))
+    out = load_external_totals_with_issues("2026-W16", path=p)
+    # Bingbot still loads — the typo only loses Googlebot.
+    assert out["totals"] == {"bingbot": {"requests": 900, "source": "BWT"}}
+    assert any("googelbot" in m and "unknown bot key" in m
+               for m in out["issues"]), out["issues"]
+
+
+def test_validation_flags_non_integer_requests(tmp_path):
+    p = tmp_path / "external.json"
+    p.write_text(json.dumps({"weeks": {"2026-W16": {
+        "googlebot": {"requests": "lots", "source": "GSC"},
+    }}}))
+    out = load_external_totals_with_issues("2026-W16", path=p)
+    assert out["totals"] == {}
+    assert any("not an integer" in m for m in out["issues"]), out["issues"]
+
+
+def test_validation_flags_missing_source_field(tmp_path):
+    p = tmp_path / "external.json"
+    p.write_text(json.dumps({"weeks": {"2026-W16": {
+        "googlebot": {"requests": 4200},  # missing `source`
+    }}}))
+    out = load_external_totals_with_issues("2026-W16", path=p)
+    # Still loadable — operator just lost provenance attribution.
+    assert out["totals"]["googlebot"]["requests"] == 4200
+    assert any("missing required field `source`" in m
+               for m in out["issues"]), out["issues"]
+
+
+def test_validation_flags_missing_weeks_top_level(tmp_path):
+    p = tmp_path / "external.json"
+    p.write_text(json.dumps({"source": "operator", "totals": {}}))  # wrong key
+    out = load_external_totals_with_issues("2026-W16", path=p)
+    assert out["totals"] == {}
+    assert any("`weeks` key is missing" in m for m in out["issues"]), out["issues"]
+
+
+def test_validation_clean_file_yields_no_issues(tmp_path):
+    p = tmp_path / "external.json"
+    p.write_text(json.dumps({"weeks": {"2026-W16": {
+        "googlebot": {"requests": 4200, "source": "GSC"},
+        "bingbot":   {"requests":  900, "source": "BWT"},
+    }}}))
+    out = load_external_totals_with_issues("2026-W16", path=p)
+    assert out["issues"] == []
+    assert out["totals"]["googlebot"]["requests"] == 4200
+
+
+def test_validation_missing_file_is_not_an_error(tmp_path):
+    """File absence is the documented bootstrap state — never an issue."""
+    out = load_external_totals_with_issues("2026-W16",
+                                            path=tmp_path / "missing.json")
+    assert out["totals"] == {}
+    assert out["issues"] == []
+
+
+def test_build_section_surfaces_typo_in_markdown(tmp_path):
+    p = tmp_path / "external.json"
+    p.write_text(json.dumps({"weeks": {"2026-W16": {
+        "googelbot": {"requests": 4200, "source": "GSC"},  # typo
+    }}}))
+    cf = _sample_cf_data(googlebot=1000)
+    section = build_crosscheck_section(cf, "2026-W16", path=p)
+    assert section["schema_issues"], section
+    md = section["markdown"]
+    assert "Operator config issue" in md
+    assert "googelbot" in md
 
 
 # ── compute_comparison ───────────────────────────────────────────────────────

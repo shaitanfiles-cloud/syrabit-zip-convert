@@ -1,0 +1,649 @@
+"""Task #882 — AdminHealth pill for the edge-proxy-deploy CI workflow.
+
+The ``edge-proxy-deploy`` GitHub Actions workflow
+(``.github/workflows/edge-proxy-deploy.yml``) runs unattended on every
+push to master that touches ``workers/edge-proxy/**``. Its
+``smoke-preview`` job is the canonical signal that the latest worker
+build still passes the burst / D1 / KV / bot-cache checks the
+``smoke:preview`` script exercises (see replit.md § "Cloudflare
+Workers edge-proxy"). When that job goes red the only current signal
+is a red badge in the GitHub Actions UI — the AdminHealth dashboard
+that on-call already keeps open is silent.
+
+This module surfaces the latest run via the same cron-pill convention
+as the Trustpilot / cf-waf-drift pills (Task #751, Task #831). The
+shape returned here intentionally differs from those two: this cron
+does NOT post a heartbeat to the backend (no point — the GitHub
+Actions REST API is the source of truth for whether the workflow ran
+and what it concluded), so we hit
+``/repos/<owner>/<repo>/actions/workflows/edge-proxy-deploy.yml/runs?per_page=1``
+and translate the response into the
+``healthy/silent/degraded/never_observed/not_configured`` status keys
+the shared ``<CronHealthPill>`` component understands. Concretely:
+
+* ``conclusion == "failure"`` → ``silent`` (red) — the smoke job
+  regressed and on-call should look right now.
+* run age > 7 days → ``degraded`` (amber) — deploys this rare are
+  themselves suspicious (the workflow only fires on
+  ``workers/edge-proxy/**`` pushes, but a 7-day silent gap usually
+  means master hasn't moved, which is the signal we want to see).
+* otherwise (``success``, in-progress, queued) → ``healthy``.
+* No runs returned → ``never_observed``.
+* ``GITHUB_REPO`` not set → ``not_configured`` (mirrors
+  ``routes.admin_ci_status`` so the same setup hint can render).
+
+The configuration env vars are deliberately the same as
+``routes.admin_ci_status`` (``GITHUB_REPO``, ``GITHUB_TOKEN``) so a
+single PAT covers every admin GitHub-Actions surface; the workflow
+file name is overridable via ``EDGE_PROXY_DEPLOY_WORKFLOW`` in case
+someone renames it but otherwise defaults to
+``edge-proxy-deploy.yml``. Failures to reach GitHub are surfaced via
+``error`` so the UI can render "status temporarily unavailable"
+rather than going blank — same defensive shape as
+``admin_ci_status``.
+"""
+from __future__ import annotations
+
+import logging
+import os
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+import httpx
+from fastapi import APIRouter, Depends
+
+from auth_deps import get_admin_user
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+_FETCH_TIMEOUT_S = 5.0
+_DEFAULT_WORKFLOW = "edge-proxy-deploy.yml"
+# 7 days — the task spec: "a run older than 7 days (deploys this rare
+# are themselves suspicious)". Override knob exists so the threshold
+# can be tuned without a redeploy if the cadence changes.
+_STALE_RUN_THRESHOLD_S = int(
+    os.environ.get("EDGE_PROXY_DEPLOY_STALE_THRESHOLD_S") or 7 * 86400
+)
+
+
+def _cfg() -> dict[str, str]:
+    return {
+        "repo": (os.environ.get("GITHUB_REPO") or "").strip(),
+        "token": (os.environ.get("GITHUB_TOKEN") or "").strip(),
+        "workflow": (
+            os.environ.get("EDGE_PROXY_DEPLOY_WORKFLOW") or _DEFAULT_WORKFLOW
+        ).strip(),
+    }
+
+
+def _workflow_url(repo: str, workflow: str) -> str:
+    """Public URL of the workflow's runs page on github.com."""
+    return f"https://github.com/{repo}/actions/workflows/{workflow}"
+
+
+def _age_seconds(iso_ts: Optional[str]) -> Optional[int]:
+    if not iso_ts:
+        return None
+    try:
+        # GitHub returns Z-suffixed UTC timestamps.
+        dt = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+        return int((datetime.now(timezone.utc) - dt).total_seconds())
+    except Exception:
+        return None
+
+
+def _classify(
+    *,
+    conclusion: Optional[str],
+    age_seconds: Optional[int],
+) -> str:
+    """Map a GitHub run to the shared CronHealthPill status keys.
+
+    Precedence is deliberate: a ``failure`` is the most actionable
+    signal so it wins regardless of age — an old red run is still red
+    until someone fixes it. A successful run that is simply stale is
+    only amber: the smoke gate passed, the box just hasn't been
+    touched, which is mildly suspicious but not on-call-page-worthy.
+    Anything else (success within window, in-progress, queued) is
+    green.
+    """
+    if (conclusion or "").lower() == "failure":
+        return "silent"
+    if age_seconds is not None and age_seconds > _STALE_RUN_THRESHOLD_S:
+        return "degraded"
+    return "healthy"
+
+
+async def get_edge_proxy_deploy_cron_health() -> dict[str, Any]:
+    """Return the latest ``edge-proxy-deploy`` run shaped for the pill.
+
+    Same return shape as :func:`admin_edge_proxy_deploy_cron` (which
+    is just a thin auth-gated wrapper). Factored out so the silence
+    alerter (Task #893, ``routes.admin_edge_proxy_deploy_cron_alerts``)
+    can poll the same snapshot without smuggling a fake admin past
+    the FastAPI dependency. Always returns a dict; never raises.
+    """
+    cfg = _cfg()
+    workflow_url = _workflow_url(cfg["repo"] or "syrabit/syrabit", cfg["workflow"])
+
+    if not cfg["repo"]:
+        return {
+            "configured": False,
+            "status": "not_configured",
+            "conclusion": None,
+            "html_url": None,
+            "updated_at": None,
+            "lastRunUrl": None,
+            "workflowUrl": workflow_url,
+            "ageSeconds": None,
+            "staleThresholdSeconds": _STALE_RUN_THRESHOLD_S,
+            "error": None,
+        }
+
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if cfg["token"]:
+        headers["Authorization"] = f"Bearer {cfg['token']}"
+
+    url = (
+        f"https://api.github.com/repos/{cfg['repo']}"
+        f"/actions/workflows/{cfg['workflow']}/runs?per_page=1"
+    )
+
+    base = {
+        "configured": True,
+        "workflowUrl": workflow_url,
+        "staleThresholdSeconds": _STALE_RUN_THRESHOLD_S,
+    }
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=_FETCH_TIMEOUT_S, headers=headers
+        ) as client:
+            resp = await client.get(url)
+    except Exception as exc:
+        logger.warning(f"[edge-proxy-deploy-cron] fetch failed: {exc}")
+        return {
+            **base,
+            "status": "unknown",
+            "conclusion": None,
+            "html_url": None,
+            "updated_at": None,
+            "lastRunUrl": None,
+            "ageSeconds": None,
+            "error": f"github unreachable: {type(exc).__name__}",
+        }
+
+    if resp.status_code == 404:
+        # Workflow file not present (e.g. renamed). Treat as
+        # never_observed so the gray "no run yet" pill renders rather
+        # than the red "silent" pill — a 404 here is a config issue,
+        # not a CI regression.
+        return {
+            **base,
+            "status": "never_observed",
+            "conclusion": None,
+            "html_url": None,
+            "updated_at": None,
+            "lastRunUrl": None,
+            "ageSeconds": None,
+            "error": None,
+        }
+
+    if resp.status_code != 200:
+        return {
+            **base,
+            "status": "unknown",
+            "conclusion": None,
+            "html_url": None,
+            "updated_at": None,
+            "lastRunUrl": None,
+            "ageSeconds": None,
+            "error": f"github returned {resp.status_code}",
+        }
+
+    try:
+        data = resp.json() or {}
+    except Exception:
+        data = {}
+    items = data.get("workflow_runs") or []
+    if not items:
+        return {
+            **base,
+            "status": "never_observed",
+            "conclusion": None,
+            "html_url": None,
+            "updated_at": None,
+            "lastRunUrl": None,
+            "ageSeconds": None,
+            "error": None,
+        }
+
+    run = items[0]
+    conclusion = run.get("conclusion")
+    html_url = run.get("html_url")
+    updated_at = run.get("updated_at") or run.get("created_at")
+    age_s = _age_seconds(updated_at)
+    pill_status = _classify(conclusion=conclusion, age_seconds=age_s)
+
+    return {
+        **base,
+        "status": pill_status,
+        "conclusion": conclusion,
+        "html_url": html_url,
+        "updated_at": updated_at,
+        # Alias used by the shared CronHealthPill wrapper convention
+        # (matches lastRunUrl on the cf-waf-drift heartbeat shape) so
+        # the pill can render the "Last run" deep-link without the
+        # wrapper having to know about the GitHub-specific html_url.
+        "lastRunUrl": html_url,
+        "ageSeconds": age_s,
+        "runStatus": run.get("status"),
+        "runId": run.get("id"),
+        "runNumber": run.get("run_number"),
+        "headSha": (run.get("head_sha") or "")[:7] or None,
+        "headBranch": run.get("head_branch"),
+        "event": run.get("event"),
+        "actor": (run.get("actor") or {}).get("login"),
+        "error": None,
+    }
+
+
+@router.get("/admin/health/edge-proxy-deploy/cron")
+async def admin_edge_proxy_deploy_cron(
+    admin: dict = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """Auth-gated wrapper for :func:`get_edge_proxy_deploy_cron_health`.
+
+    Always 200 — surfaces ``configured: false`` / ``status:
+    not_configured`` when ``GITHUB_REPO`` isn't set so the dashboard
+    can render a setup hint instead of an error. Surfaces ``status:
+    never_observed`` when the workflow exists but has not produced any
+    runs yet (e.g. brand-new workflow file, or repo just renamed).
+    GitHub-side errors land in ``error`` with ``status: unknown``;
+    this mirrors ``routes.admin_ci_status``'s defensive contract so
+    the AdminHealth tile renders an "unavailable" banner instead of
+    going blank.
+
+    Task #964 — also surfaces ``slackConfigured`` / ``slackWebhookEnv``
+    so the AdminHealth dashboard can render a small "Slack ✓ / ✗"
+    badge next to the pill, matching the sibling cf-waf-drift and
+    cf-pull cron health endpoints. The webhook URL itself is never
+    returned (the boolean only) so this admin-readable JSON surface
+    does not leak it.
+
+    Task #969 — both the env-var name and the boolean+name pair come
+    from ``routes.slack_alerter_config`` so this no longer late-imports
+    private ``_``-prefixed symbols from the alerter module just to
+    dodge a circular import.
+    """
+    from routes.slack_alerter_config import (
+        EDGE_PROXY_DEPLOY_SLACK_WEBHOOK_ENV,
+        slack_config_for,
+    )
+    payload = await get_edge_proxy_deploy_cron_health()
+    payload.update(slack_config_for(EDGE_PROXY_DEPLOY_SLACK_WEBHOOK_ENV))
+    return payload
+
+
+# ─── Task #902 — alert-state lock-doc snapshot ─────────────────────────────
+#
+# The cron pill above answers "is the workflow currently red?". The
+# silence alerter (Task #893, ``routes.admin_edge_proxy_deploy_cron_alerts``)
+# answers "have we paged on-call about that yet?" by persisting its
+# dedup state to a Mongo ``job_locks`` doc keyed by
+# ``edge_proxy_deploy_cron_alert_state``. That state was previously
+# only visible by querying Mongo directly, so admins seeing a red
+# pill couldn't tell whether on-call had already been paged (and the
+# alerter is in its 24h debounce window) or whether the page is
+# still pending. The endpoint below surfaces the lock doc next to
+# the pill so the dashboard can render that distinction inline.
+#
+# The same helper is reused by the cf-waf-drift and Trustpilot
+# alert-state endpoints (defined alongside their own pill routes —
+# see ``routes.admin_cf_waf_drift_cron_alerts`` and
+# ``routes.admin_trustpilot_cron_alerts``) so all three admin
+# pills surface the same shape.
+
+
+def _snake_to_camel(s: str) -> str:
+    """``"last_alert_at"`` → ``"lastAlertAt"``. Used to project the
+    alerter's snake_case lock-doc fields into the camelCase that the
+    rest of the AdminHealth JSON surface uses (matches the existing
+    ``lastHeartbeatTs`` / ``lastRunUrl`` convention so the React
+    pill props don't have to mix conventions)."""
+    parts = s.split("_")
+    return parts[0] + "".join(p.title() for p in parts[1:])
+
+
+async def _build_alert_state_response(
+    lock_id: str,
+    realert_interval_s: int,
+    broken_state_label: str = "broken",
+) -> dict[str, Any]:
+    """Read an alerter's ``job_locks`` doc and shape it for the dashboard.
+
+    Always returns 200-ready JSON. When Mongo is unavailable or the
+    lock doc doesn't exist yet (the alerter hasn't fired even once),
+    we surface ``present: False`` so the UI renders "no alert state on
+    file" rather than erroring out.
+
+    The response always includes the static
+    ``realertIntervalSeconds`` (the alerter's debounce cadence) plus
+    derived ``lastAlertAgeSeconds`` / ``inDebounce`` /
+    ``debounceRemainingSeconds`` fields so the frontend doesn't have
+    to re-implement timestamp parsing or the debounce-window check.
+    Every other lock-doc field is passed through verbatim with its
+    snake_case key projected to camelCase (``last_state`` →
+    ``lastState``, ``last_html_url`` → ``lastHtmlUrl``, etc.).
+
+    ``broken_state_label`` differs across alerters: the edge-proxy
+    alerter writes ``last_state="broken"`` on the broken side, while
+    the cf-waf-drift and Trustpilot alerters write
+    ``last_state="silent"`` (mirroring the pill colour-mapping).
+    Either label is treated as "currently alerting" for the purposes
+    of the ``inDebounce`` flag.
+    """
+    base: dict[str, Any] = {
+        "present": False,
+        "realertIntervalSeconds": int(realert_interval_s),
+        "lastState": None,
+        "lastAlertAt": None,
+        "lastAlertAgeSeconds": None,
+        "inDebounce": False,
+        "debounceRemainingSeconds": None,
+    }
+    try:
+        from deps import db, is_mongo_available  # type: ignore
+        if not await is_mongo_available():
+            return base
+        doc = await db.job_locks.find_one({"_id": lock_id})
+    except Exception as exc:
+        logger.debug(
+            f"[admin-health] alert-state read failed for {lock_id}: {exc}"
+        )
+        return base
+    if not doc:
+        return base
+    base["present"] = True
+    for key, val in doc.items():
+        if key == "_id":
+            continue
+        base[_snake_to_camel(key)] = val
+    last_alert_at = doc.get("last_alert_at")
+    if last_alert_at:
+        try:
+            s = str(last_alert_at)
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            age = int(
+                (datetime.now(timezone.utc) - dt).total_seconds()
+            )
+            base["lastAlertAgeSeconds"] = max(0, age)
+            if (
+                doc.get("last_state") == broken_state_label
+                and age < realert_interval_s
+            ):
+                base["inDebounce"] = True
+                base["debounceRemainingSeconds"] = max(
+                    0, realert_interval_s - age,
+                )
+        except Exception as exc:
+            logger.debug(
+                f"[admin-health] alert-state ts parse failed "
+                f"for {lock_id}: {exc}"
+            )
+    return base
+
+
+@router.get("/admin/health/edge-proxy-deploy/cron/alert-state")
+async def admin_edge_proxy_deploy_cron_alert_state(
+    admin: dict = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """Lock-doc snapshot for the edge-proxy-deploy silence alerter.
+
+    Surfaces what the alerter (Task #893) has on file — last paged
+    state, when it last paged, against which run, and how long the
+    24h debounce window has left to run — so on-call can distinguish
+    "I'm seeing red because nobody has been paged yet" from "I'm
+    seeing red because we already paged Nh ago and are in debounce"
+    without having to query Mongo directly. Always 200; returns
+    ``present: False`` when the alerter hasn't fired even once or
+    when Mongo is unavailable.
+    """
+    from routes.admin_edge_proxy_deploy_cron_alerts import (
+        _CRON_REALERT_INTERVAL_S,
+        _LOCK_ID,
+    )
+    return await _build_alert_state_response(
+        _LOCK_ID, _CRON_REALERT_INTERVAL_S, broken_state_label="broken",
+    )
+
+
+# ─── Task #918 — paged-on-call audit log ──────────────────────────────────
+#
+# The Task #902 ``/alert-state`` endpoint above only carries the *most
+# recent* page from the alerter lock doc. Admins seeing red can tell
+# whether the on-call has been paged "Xh ago" but cannot tell whether
+# the workflow has been flapping (paged-recovered-paged-recovered) or
+# has been broken steadily for a week. Task #918 adds a tiny audit-log
+# Mongo collection (``cron_alert_history``) that every alerter appends
+# to on every page + recovery, plus three thin GET endpoints (one per
+# pill) so the AdminHealth dashboard can render a "show paged history"
+# panel without admins having to dig through Slack logs.
+#
+# Schema is intentionally flat (one doc per event, indexed by
+# ``lock_id`` + ``created_at``) so the same collection serves all
+# three pills and a future pill (Task #905+) only has to call the
+# shared ``record_cron_alert_event`` helper. The recording side is
+# best-effort and never raises (it's already running inside the
+# alerter's "fire-and-forget" notification block); the read side
+# always returns 200 with an empty ``events`` list when Mongo is down
+# or the alerter has never fired (mirrors the ``/alert-state``
+# defensive contract so the dashboard never crashes on infra hiccups).
+
+_HISTORY_COLLECTION = "cron_alert_history"
+# Defensive cap on stored events per pill. 200 ≫ the 20 the dashboard
+# renders, so admins still get history across replica restarts /
+# brief Mongo blips, but the collection cannot grow unbounded if the
+# alerter ever flaps repeatedly. Trim runs best-effort on every
+# insert; a missed trim just means the next insert will catch up.
+_HISTORY_MAX_PER_LOCK = 200
+# Default page size returned by the GET endpoints. Matches the task
+# spec ("the last ~20 alerter events per pill"). Callers can override
+# via ``?limit=`` on the endpoint up to a hard cap of _HISTORY_MAX_PER_LOCK
+# (so a misbehaving client can't page through every event in one shot).
+_HISTORY_DEFAULT_LIMIT = 20
+
+
+async def record_cron_alert_event(
+    db,
+    *,
+    lock_id: str,
+    kind: str,
+    sub_kind: Optional[str],
+    health: dict[str, Any],
+    now_utc: datetime,
+) -> None:
+    """Append one alerter event to the ``cron_alert_history`` collection.
+
+    Called from each alerter's ``_send_cron_alert`` after the in-app
+    notification has been persisted, so a recorded history event
+    always corresponds to a notification that actually went out (or
+    at least an attempt — the email + Slack fan-outs are themselves
+    best-effort, but the in-app notification persists synchronously
+    and is the canonical "we paged" signal).
+
+    Best-effort by contract:
+      * never raises — wrap the whole body in a broad ``except`` and
+        log at DEBUG, mirroring the alerter's notification persist
+        block which already swallows Mongo errors;
+      * does NOT block on the trim — a missed trim just means the
+        next insert will catch up, and the read endpoint caps results
+        anyway;
+      * keeps the doc shape parallel to the lock-doc fields the
+        ``/alert-state`` helper above projects, so the dashboard's
+        history panel can render the same primitives the inline
+        alert-state caption uses (status, run url, conclusion, age).
+
+    ``kind`` is ``"broken"`` / ``"silent"`` (the alerter's own label)
+    on the broken side and ``"recovered"`` after a recovery. Stored
+    verbatim so the panel can render the alerter's vocabulary
+    instead of reverse-mapping it.
+    """
+    try:
+        import uuid as _uuid
+        doc = {
+            "_id": str(_uuid.uuid4()),
+            "lock_id": lock_id,
+            "kind": kind,
+            "sub_kind": sub_kind,
+            "paged_at": now_utc.isoformat(),
+            # Indexed for the bounded-cap trim below + the
+            # /alert-history endpoint's sort. Stored as a real datetime
+            # (not the ISO string) so motor's BSON encoder roundtrips
+            # cleanly and Mongo can sort numerically.
+            "created_at": now_utc,
+            "last_html_url": health.get("html_url"),
+            "last_run_url": (
+                health.get("lastRunUrl") or health.get("html_url")
+            ),
+            "last_workflow_url": health.get("workflowUrl"),
+            "last_conclusion": health.get("conclusion"),
+            "last_age_seconds": health.get("ageSeconds"),
+            "last_run_id": health.get("runId"),
+            "last_head_sha": health.get("headSha"),
+            "last_pill_status": health.get("status"),
+        }
+        await db[_HISTORY_COLLECTION].insert_one(doc)
+    except Exception as exc:
+        logger.debug(
+            f"[admin-health] alert-history insert failed for "
+            f"{lock_id}: {exc}"
+        )
+        return
+    # Best-effort cap: if the collection has grown past the per-lock
+    # ceiling, drop the oldest events. Done in a separate try so a
+    # trim failure can't undo the insert above.
+    try:
+        count = await db[_HISTORY_COLLECTION].count_documents(
+            {"lock_id": lock_id}
+        )
+        excess = int(count) - _HISTORY_MAX_PER_LOCK
+        if excess > 0:
+            cursor = (
+                db[_HISTORY_COLLECTION]
+                .find({"lock_id": lock_id}, {"_id": 1})
+                .sort("created_at", 1)
+                .limit(excess)
+            )
+            stale_ids: list[Any] = []
+            async for doc in cursor:
+                stale_ids.append(doc.get("_id"))
+            if stale_ids:
+                await db[_HISTORY_COLLECTION].delete_many(
+                    {"_id": {"$in": stale_ids}}
+                )
+    except Exception as exc:
+        logger.debug(
+            f"[admin-health] alert-history trim failed for "
+            f"{lock_id}: {exc}"
+        )
+
+
+def _shape_history_event(doc: dict[str, Any]) -> dict[str, Any]:
+    """Project a stored ``cron_alert_history`` doc into the JSON
+    shape the dashboard's history panel renders. Mirrors the
+    snake_case→camelCase convention ``_build_alert_state_response``
+    uses so the two payloads can share frontend rendering primitives.
+    """
+    paged_at = doc.get("paged_at")
+    if paged_at is None and isinstance(doc.get("created_at"), datetime):
+        paged_at = doc["created_at"].isoformat()
+    return {
+        "id": str(doc.get("_id")) if doc.get("_id") is not None else None,
+        "pagedAt": paged_at,
+        "kind": doc.get("kind"),
+        "subKind": doc.get("sub_kind"),
+        "lastHtmlUrl": doc.get("last_html_url"),
+        "lastRunUrl": doc.get("last_run_url"),
+        "lastWorkflowUrl": doc.get("last_workflow_url"),
+        "lastConclusion": doc.get("last_conclusion"),
+        "lastAgeSeconds": doc.get("last_age_seconds"),
+        "lastRunId": doc.get("last_run_id"),
+        "lastHeadSha": doc.get("last_head_sha"),
+        "lastPillStatus": doc.get("last_pill_status"),
+    }
+
+
+async def _build_alert_history_response(
+    lock_id: str,
+    *,
+    limit: int = _HISTORY_DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    """Read the last ``limit`` events for ``lock_id`` and shape for JSON.
+
+    Always 200-ready. Mongo unavailable / no events / stub returns
+    cursor errors → ``events: []`` so the dashboard's history panel
+    renders an empty-state row instead of a server error. Mirrors
+    the ``_build_alert_state_response`` defensive contract above.
+
+    ``limit`` is clamped to ``[1, _HISTORY_MAX_PER_LOCK]`` so a
+    misbehaving caller cannot page through every stored event in one
+    shot. The caller (FastAPI route) is responsible for parsing the
+    ``?limit=`` query param; the helper enforces the bounds.
+    """
+    safe_limit = max(1, min(int(limit or _HISTORY_DEFAULT_LIMIT),
+                            _HISTORY_MAX_PER_LOCK))
+    base: dict[str, Any] = {
+        "lockId": lock_id,
+        "limit": safe_limit,
+        "events": [],
+    }
+    try:
+        from deps import db, is_mongo_available  # type: ignore
+        if not await is_mongo_available():
+            return base
+        cursor = (
+            db[_HISTORY_COLLECTION]
+            .find({"lock_id": lock_id})
+            .sort("created_at", -1)
+            .limit(safe_limit)
+        )
+        docs = await cursor.to_list(length=safe_limit)
+    except Exception as exc:
+        logger.debug(
+            f"[admin-health] alert-history read failed for {lock_id}: {exc}"
+        )
+        return base
+    base["events"] = [_shape_history_event(d) for d in (docs or [])]
+    return base
+
+
+@router.get("/admin/health/edge-proxy-deploy/cron/alert-history")
+async def admin_edge_proxy_deploy_cron_alert_history(
+    limit: int = _HISTORY_DEFAULT_LIMIT,
+    admin: dict = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """Audit-log of pages issued by the edge-proxy-deploy silence
+    alerter (Task #893), most recent first.
+
+    Closes the gap left by Task #902 — the lock-doc snapshot at
+    ``/alert-state`` only carries the most recent page, so admins
+    couldn't tell whether the workflow had been flapping
+    (paged-recovered-paged-recovered) or broken steadily. Each entry
+    here is one alerter event (``kind`` ∈ {``"broken"``,
+    ``"recovered"``}), and the dashboard renders them as a small
+    expandable panel under the pill.
+
+    Always 200; returns ``events: []`` when the alerter has never
+    fired or when Mongo is unavailable.
+    """
+    from routes.admin_edge_proxy_deploy_cron_alerts import _LOCK_ID
+    return await _build_alert_history_response(_LOCK_ID, limit=limit)

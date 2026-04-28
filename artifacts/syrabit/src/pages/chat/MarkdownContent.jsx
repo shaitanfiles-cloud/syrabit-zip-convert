@@ -55,7 +55,27 @@ export const MarkdownContent = memo(function MarkdownContent({ content, streamin
   const processed = useMemo(() => {
     if (!content) return content;
     if (streaming) return content;
-    const normalize = (s) => (s || '').trim().toLowerCase().replace(/[\s\-_]+/g, ' ').replace(/[^a-z0-9 ]/g, '');
+    // Unicode-aware normalization so non-Latin scripts (Assamese,
+    // Bengali, Hindi, etc.) match correctly. The previous implementation
+    // stripped everything outside `[a-z0-9 ]`, which collapsed any
+    // Assamese title (e.g. "প্ৰাণী জগত") to a single space — meaning
+    // every non-Latin source collided on the same key and inline
+    // `[PAGE: ...]` citations silently degraded to bold text in
+    // Assamese answers. We keep Unicode letters (`\p{L}`) and numbers
+    // (`\p{N}`) with the `u` flag, and use `.normalize('NFC')` so the
+    // same visual character composed two different ways still matches.
+    const normalize = (s) => {
+      try {
+        return (s || '')
+          .normalize('NFC')
+          .trim()
+          .toLowerCase()
+          .replace(/[\s\-_]+/g, ' ')
+          .replace(/[^\p{L}\p{M}\p{N} ]/gu, '');
+      } catch {
+        return (s || '').trim().toLowerCase().replace(/[\s\-_]+/g, ' ').replace(/[^a-z0-9 ]/g, '');
+      }
+    };
     const toSlug = (s) => normalize(s).replace(/\s+/g, '-');
     const urlMap = new Map();
     for (const s of (sources || [])) {
@@ -81,10 +101,19 @@ export const MarkdownContent = memo(function MarkdownContent({ content, streamin
       }
       return '';
     };
+    // Append `?topic=<title>` to inline-citation links so the
+    // ChapterPage's existing topic-highlight pipeline (200ms scroll +
+    // 5s green flash, see ChapterPage.jsx ~line 637) fires when the
+    // student clicks an inline citation.  Skip the param for content
+    // cards (`/learn/...`) — they don't honour `?topic=`.
     return content.replace(/\[(PAGE|CHAPTER|TOPIC|LESSON|SECTION):\s*([^\]]+)\]/gi, (_, _type, rawTitle) => {
       const title = rawTitle.trim();
       const url = findUrl(title);
-      return url ? `[${title}](${url})` : `**${title}**`;
+      if (!url) return `**${title}**`;
+      const isLearn = url.startsWith('/learn/');
+      const sep = url.includes('?') ? '&' : '?';
+      const finalUrl = isLearn ? url : `${url}${sep}topic=${encodeURIComponent(title)}`;
+      return `[${title}](${finalUrl})`;
     });
   }, [content, sources, streaming]);
 

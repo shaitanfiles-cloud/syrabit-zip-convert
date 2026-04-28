@@ -5,8 +5,11 @@ import { usePublicStats } from '@/hooks/usePublicStats';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
+import { useTurnstile } from '@/hooks/useTurnstile';
+import { formatAuthError } from '@/lib/authErrors';
 import { toast } from 'sonner';
 import { LogoFull } from '@/components/Logo';
+import GoogleSignInButton from '@/components/GoogleSignInButton';
 
 
 const getPasswordStrength = (password) => {
@@ -44,6 +47,7 @@ export default function SignupPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const { signup } = useAuth();
+  const { getToken: getTurnstileToken, ready: turnstileReady, enabled: turnstileEnabled, reset: resetTurnstile } = useTurnstile();
   const navigate = useNavigate();
 
   const strength = getPasswordStrength(password);
@@ -72,11 +76,16 @@ export default function SignupPage() {
     }
     setLoading(true);
     try {
-      await signup(name, email, password, consentDpdp);
+      let turnstileToken = '';
+      if (turnstileEnabled) {
+        turnstileToken = await getTurnstileToken();
+      }
+      await signup(name, email, password, consentDpdp, turnstileToken);
       toast.success('Account created! Welcome to Syrabit.ai!');
       navigate('/onboarding');
     } catch (err) {
-      setError(err.response?.data?.detail || 'Signup failed. Please try again.');
+      try { resetTurnstile(); } catch {}
+      setError(formatAuthError(err, 'Signup failed. Please try again.'));
     } finally {
       setLoading(false);
     }
@@ -185,6 +194,34 @@ export default function SignupPage() {
                 {error}
               </div>
             )}
+
+            <div className="mb-5">
+              <GoogleSignInButton
+                text="signup_with"
+                disabled={loading}
+                getTurnstileToken={turnstileEnabled ? getTurnstileToken : undefined}
+                onSuccess={() => {
+                  toast.success('Account created! Welcome to Syrabit.ai!');
+                  navigate('/onboarding');
+                }}
+                onError={(err) => {
+                  try { resetTurnstile(); } catch {}
+                  setError(formatAuthError(err, 'Google sign-up failed. Please try again.'));
+                }}
+              />
+              <p className="text-[11px] text-center text-muted-foreground/80 mt-3 leading-relaxed">
+                By continuing with Google, you agree to our{' '}
+                <Link to="/terms" target="_blank" rel="noopener noreferrer" className="font-medium text-violet-600 hover:text-violet-700 transition-colors">Terms</Link>
+                {' '}and consent to data processing per our{' '}
+                <Link to="/privacy" target="_blank" rel="noopener noreferrer" className="font-medium text-violet-600 hover:text-violet-700 transition-colors">Privacy Policy</Link>
+                {' '}under the DPDP Act, 2023.
+              </p>
+              <div className="flex items-center gap-3 mt-5 text-[11px] uppercase tracking-wider text-muted-foreground/70">
+                <div className="flex-1 h-px bg-border/70" />
+                <span>or sign up with email</span>
+                <div className="flex-1 h-px bg-border/70" />
+              </div>
+            </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">
@@ -353,7 +390,7 @@ export default function SignupPage() {
 
               <button
                 type="submit"
-                disabled={loading}
+                disabled={loading || (turnstileEnabled && !turnstileReady)}
                 className="w-full flex items-center justify-center gap-2 h-11 rounded-xl text-sm font-bold text-white transition-all duration-150 active:scale-[0.97] disabled:opacity-60 btn-gradient"
                 data-testid="auth-submit-button"
               >

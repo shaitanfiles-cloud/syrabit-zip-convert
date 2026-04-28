@@ -38,7 +38,7 @@ import { requestReviewPrompt } from '@/components/ReviewPrompt';
 
 // ── ChatPage ──────────────────────────────────────────────────────────────────
 export default function ChatPage() {
-  const { user } = useAuth();
+  const { user, authChecked } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const convId     = searchParams.get('id');
@@ -78,7 +78,6 @@ export default function ChatPage() {
   // the Cloudflare script. Otherwise a logged-in user briefly sees `user=null`
   // during initial /me hydration and we'd inject the script anyway, defeating
   // the optimization. (Task #282 T001)
-  const { authChecked } = useAuth();
   const skipTurnstile = !authChecked || !!user;
   const { getToken: getTurnstileToken, ready: turnstileReady, enabled: turnstileEnabled } = useTurnstile({ skip: skipTurnstile });
   const handleCopy = useCallback((msgId) => setCopiedMsgId(msgId), []);
@@ -107,7 +106,20 @@ export default function ChatPage() {
     const lastMsg = messages[messages.length - 1];
     const isStreaming = lastMsg?.streaming;
     const contentLen = (lastMsg?.content || '').length;
-    if (isStreaming && contentLen - lastMsgLenRef.current < 80 && lastMsgLenRef.current > 0) return;
+    // Throttle: while an answer is streaming, only re-scroll once we've
+    // accumulated ≥80 new characters since the last scroll. BUT if a
+    // brand-new user message just got sent (``pendingSendScroll`` is
+    // true) we MUST always run the effect this tick, otherwise the
+    // pin-to-top scroll is starved when the previous answer was long
+    // (lastMsgLenRef still holds e.g. 2000 from the prior reply, while
+    // the new streaming bubble starts at 0 — the delta is negative and
+    // the early-return swallows the very scroll the user came here for).
+    if (
+      !pendingSendScroll.current &&
+      isStreaming &&
+      contentLen - lastMsgLenRef.current < 80 &&
+      lastMsgLenRef.current > 0
+    ) return;
     lastMsgLenRef.current = contentLen;
     if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
     scrollTimeoutRef.current = setTimeout(() => {
@@ -127,15 +139,29 @@ export default function ChatPage() {
     return () => { if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current); };
   }, [messages]);
 
+  // Task #796 — also fetch credits for anonymous students so the
+  // composer can render "X / 30 free messages left today" against the
+  // device-keyed daily counter that rate_limit_chat_optional charges.
+  // The /user/credits endpoint peeks the same Redis key without
+  // incrementing it, so polling here on every mount / send is safe and
+  // never burns a free message. Bumped by ``creditsRefreshKey`` after
+  // each anon send so the badge stays in sync (the SSE stream only
+  // emits credits_used_total / remaining_credits for logged-in users —
+  // anon users would otherwise need a hard refresh to see the count
+  // tick down).
+  const [creditsRefreshKey, setCreditsRefreshKey] = useState(0);
   useEffect(() => {
-    if (!user) return;
+    // Wait for the /me round-trip so logged-in students don't fire a
+    // throwaway anonymous request first; on the very first paint
+    // ``user`` is null even for them.
+    if (!authChecked) return;
     apiClient().get('/user/credits')
       .then((res) => {
         const c = res.data;
         setCredits({ used: c.used ?? 0, limit: c.limit ?? null });
       })
       .catch(() => {});
-  }, [user]);
+  }, [authChecked, user, creditsRefreshKey]);
 
   useEffect(() => {
     if (!subjectId) return;
@@ -257,6 +283,12 @@ export default function ChatPage() {
     setInput('');
     setIsLoading(true);
     pendingSendScroll.current = true;
+    // Reset the streaming-throttle baseline so the scroll effect doesn't
+    // skip the pin-to-top run because the previous answer's length is
+    // still cached in ``lastMsgLenRef`` (the new assistant bubble starts
+    // empty, so without this reset the delta check wrongly suppresses
+    // the scroll on the second-and-later sends in a conversation).
+    lastMsgLenRef.current = 0;
     setSyncState('syncing');
     if (abortControllerRef.current) abortControllerRef.current.abort();
     const controller = new AbortController();
@@ -410,6 +442,17 @@ export default function ChatPage() {
           }
         }
       }
+      // Task #796 — anon SSE stream omits credits_used_total /
+      // remaining_credits (the chat route only emits them when
+      // ``not is_anon``). Bump the refresh key so the credits
+      // effect re-peeks the device-keyed Redis counter and the
+      // "X / 30 free messages left today" badge ticks down without
+      // a page reload. No-op for logged-in users (their counts
+      // already came back inline above) but still cheap (one tiny
+      // GET to a Redis-backed endpoint).
+      if (!user) {
+        setCreditsRefreshKey((k) => k + 1);
+      }
       if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
       if (pendingChunk) { fullContent += pendingChunk; pendingChunk = ''; }
       if (meta.convId && meta.convId !== conversationId) {
@@ -423,7 +466,7 @@ export default function ChatPage() {
           : m
       ));
       setSyncState('idle');
-      // Task #653 — Ask for a Google review after a clearly successful,
+      // Task #653 (Trustpilot per #724) — Ask for a Trustpilot review after a clearly successful,
       // engaged chat session. Heuristic: this send completed without an
       // error AND the conversation now has at least 8 messages exchanged
       // (~4 back-and-forth turns) — long enough that the student got real
@@ -519,6 +562,14 @@ export default function ChatPage() {
       }>
       <div className="flex flex-col chat-viewport-height">
         {isOutOfCredits && (
+          /*
+            Task #796 — for anonymous students this banner is the
+            soft-CTA conversion lever the spec asks for: instead of
+            "Upgrade →" (which dumps them on /profile, where they then
+            still have to sign in), they get "Sign in →" pointing
+            straight at /login. Logged-in students keep the original
+            "Credits exhausted — upgrade →" copy.
+          */
           <div
             className="flex items-center justify-between px-4 py-2.5 text-sm flex-shrink-0"
             style={{ background: 'rgba(239,68,68,0.08)', borderBottom: '1px solid rgba(239,68,68,0.15)' }}
@@ -526,9 +577,32 @@ export default function ChatPage() {
           >
             <div className="flex items-center gap-2 text-red-400">
               <AlertTriangle size={14} aria-hidden="true" />
-              <span>{credits.limit === 0 ? 'Free plan has no credits — upgrade to start chatting' : 'Credits exhausted — upgrade to continue'}</span>
+              <span>
+                {!user
+                  ? `Free daily messages used (${effectiveLimit ?? 30}/day) — sign in for more`
+                  : credits.limit === 0
+                  ? 'Free plan has no credits — upgrade to start chatting'
+                  : 'Credits exhausted — upgrade to continue'}
+              </span>
             </div>
-            <button onClick={() => navigate('/profile')} className="text-xs font-semibold text-red-300 hover:text-red-200 transition-colors underline" aria-label="Go to profile to upgrade plan">Upgrade →</button>
+            {!user ? (
+              <button
+                onClick={() => navigate('/login')}
+                className="text-xs font-semibold text-red-300 hover:text-red-200 transition-colors underline"
+                aria-label="Sign in for more daily messages"
+                data-testid="chat-out-of-credits-signin"
+              >
+                Sign in →
+              </button>
+            ) : (
+              <button
+                onClick={() => navigate('/profile')}
+                className="text-xs font-semibold text-red-300 hover:text-red-200 transition-colors underline"
+                aria-label="Go to profile to upgrade plan"
+              >
+                Upgrade →
+              </button>
+            )}
           </div>
         )}
         <div className="flex-1 overflow-y-auto min-h-0 pb-[calc(8rem+68px+env(safe-area-inset-bottom,0px))] md:pb-32" onClick={() => setShowModelMenu(false)} role="log" aria-label="Chat messages" aria-live="polite">
@@ -551,6 +625,36 @@ export default function ChatPage() {
                 });
                 return out;
               })()}
+            {/*
+              ChatGPT-style "pin user message to top while answer streams":
+              the scroll effect above calls scrollIntoView({block: 'start'})
+              on the most recent user message after each send, but the
+              browser can only scroll as far as the container's content
+              allows. With a freshly-sent message the streaming AI bubble
+              starts empty, so without this spacer there isn't enough room
+              below the user message to actually push it to the top of the
+              viewport — the message ends up centred or near-bottom.
+              Reserving ~one viewport of empty space below the messages
+              while the assistant is still streaming gives the browser the
+              headroom it needs. The spacer collapses to 0 once streaming
+              ends so the chat doesn't end with a giant blank gap.
+            */}
+            {(() => {
+              const lastMsg = messages[messages.length - 1];
+              const showSpacer = !!(lastMsg && lastMsg.role === 'assistant' && lastMsg.streaming);
+              if (!showSpacer) return null;
+              return (
+                <div
+                  aria-hidden="true"
+                  data-testid="chat-scroll-spacer"
+                  // 100vh - composer height (~196px sticky at bottom) keeps
+                  // the spacer from pushing the page taller than the screen
+                  // so the scrollbar doesn't suddenly grow when streaming
+                  // finishes and the spacer disappears.
+                  style={{ minHeight: 'calc(100vh - 220px)' }}
+                />
+              );
+            })()}
             <div ref={messagesEndRef} />
           </div>
         </div>
@@ -560,6 +664,9 @@ export default function ChatPage() {
           isOutOfCredits={isOutOfCredits} isLow={isLow} credits={credits}
           effectiveLimit={effectiveLimit} remaining={remaining} creditPercent={creditPercent}
           textareaRef={textareaRef} adjustTextarea={adjustTextarea} sendMsg={sendMsg} handleStop={handleStop}
+          isAnon={!user}
+          getTurnstileToken={getTurnstileToken}
+          turnstileEnabled={turnstileEnabled}
         />
       </div>
       </AppLayout>

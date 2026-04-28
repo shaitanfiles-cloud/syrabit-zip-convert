@@ -12,6 +12,7 @@ import axios from 'axios';
 import { adminVerify, adminLogout, adminGetSettings, adminGetUnacknowledgedAlertCount, API_BASE } from '@/utils/api';
 import { toast } from 'sonner';
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
+import BreakGlassBanner from '@/components/admin/BreakGlassBanner';
 
 const AdminDashboard     = lazy(() => import('@/components/admin/AdminDashboard'));
 const AdminRoadmap       = lazy(() => import('@/components/admin/AdminRoadmap'));
@@ -36,6 +37,9 @@ const AdminIntelligence  = lazy(() => import('@/components/admin/AdminIntelligen
 const AdminFeedback      = lazy(() => import('@/components/admin/AdminFeedback'));
 const AdminBotSecurity   = lazy(() => import('@/components/admin/AdminBotSecurity'));
 const AdminEduBrowser    = lazy(() => import('@/components/admin/AdminEduBrowser'));
+// Task #944 — Unified Log Explorer: filter / search / live-tail / export
+// across edge worker + Cloudflare GraphQL + backend + cron sources.
+const AdminLogsExplorer  = lazy(() => import('@/components/admin/AdminLogsExplorer'));
 
 const SECTIONS = [
   { id: 'dashboard',     icon: LayoutDashboard, label: 'Dashboard',        group: 'main'     },
@@ -60,6 +64,7 @@ const SECTIONS = [
   { id: 'ratelimits',    icon: Shield,          label: 'Rate Limits',       group: 'system'   },
   { id: 'activitylog',   icon: Activity,        label: 'Activity Log',      group: 'system'   },
   { id: 'botsecurity',   icon: ShieldAlert,     label: 'Bot Security',      group: 'system'   },
+  { id: 'logsexplorer',  icon: Activity,        label: 'Logs Explorer',     group: 'system'   },
   { id: 'health',        icon: HeartPulse,      label: 'Health / Uptime',   group: 'system'   },
 ];
 
@@ -95,6 +100,7 @@ const SECTION_COMPONENTS = {
   activitylog:   AdminActivityLog,
   botsecurity:   AdminBotSecurity,
   edubrowser:    AdminEduBrowser,
+  logsexplorer:  AdminLogsExplorer,
   health:        AdminHealth,
   vertex:        AdminVertexPanel,
   intelligence:  AdminIntelligence,
@@ -135,36 +141,51 @@ export default function AdminPage() {
     return () => clearInterval(alertPollRef.current);
   }, [adminToken, verifying]);
 
+  // Cookie-only admin auth: the httponly `syrabit_admin_session`
+  // cookie set by `/admin/login` is the sole source of truth.
+  // `adminVerify()` sends `withCredentials: true` so the cookie rides
+  // along, and the backend slides its expiry forward on every call.
+  // `adminToken` is kept purely as a "session ready" sentinel so that
+  // downstream effects + children gate on a verified session; it does
+  // NOT hold a real JWT (the cookie does, in httponly form). Helpers
+  // call `adminHeaders(token)` which already filters non-JWT values to
+  // `{}`, so passing the sentinel falls through to cookie auth.
   useEffect(() => {
-    const storedToken = localStorage.getItem('admin_token');
-    adminVerify(storedToken)
+    adminVerify()
       .then((res) => {
         if (res.data?.name) setAdminName(res.data.name);
         if (res.data?.email) setAdminEmail(res.data.email);
-        if (res.data?.access_token) localStorage.setItem('admin_token', res.data.access_token);
-        setAdminToken(res.data?.access_token || storedToken || 'verified');
+        setAdminToken('verified');
         setVerifying(false);
       })
       .catch(() => {
-        localStorage.removeItem('admin_token');
         navigate('/admin/login');
       });
   }, [navigate]);
 
+  // Periodic keep-alive: reach `/admin/verify` so the backend re-issues
+  // the cookie before its 24h max_age lapses. No localStorage hop —
+  // the cookie carries itself via `withCredentials: true`.
+  //
+  // Audit #10: the previous 20-minute cadence was hitting the API 72×
+  // per day per open admin tab for a cookie that lives 24 hours. None
+  // of the other admin endpoints (dashboard polls, alerts, etc.) re-
+  // issue the session cookie — only `/admin/verify` slides the expiry —
+  // so we still need *some* interval, but the standard "refresh at
+  // half-life" pattern is 12 hours: refreshes well before the 24h
+  // expiry, recovers from short network blips on the next tick, and
+  // cuts API churn ~36× while keeping active sessions sliding
+  // indefinitely.
   useEffect(() => {
     if (verifying) return;
     const id = setInterval(() => {
-      const t = localStorage.getItem('admin_token');
-      adminVerify(t)
-        .then((res) => {
-          if (res.data?.access_token) localStorage.setItem('admin_token', res.data.access_token);
-        })
+      adminVerify()
         .catch(() => {
-          localStorage.removeItem('admin_token');
+          setAdminToken(null);
           toast.error('Session expired. Please log in again.');
           navigate('/admin/login');
         });
-    }, 20 * 60 * 1000);
+    }, 12 * 60 * 60 * 1000);
     return () => clearInterval(id);
   }, [verifying, navigate]);
 
@@ -199,8 +220,10 @@ export default function AdminPage() {
   }, [verifying, adminToken]);
 
   const handleLogout = async () => {
+    // Backend `/admin/logout` clears the httponly `syrabit_admin_session`
+    // cookie — that's the entire session teardown. No localStorage to
+    // wipe (cookie-only auth).
     await adminLogout().catch(() => {});
-    localStorage.removeItem('admin_token');
     setAdminToken(null);
     toast.success('Logged out');
     navigate('/admin/login');
@@ -360,6 +383,8 @@ export default function AdminPage() {
             <span className="text-[11px]">{sc.label}</span>
           </div>
         </header>
+
+        <BreakGlassBanner adminToken={adminToken} />
 
         <main className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'contenthub' ? '' : 'overflow-y-auto p-3 sm:p-4 md:p-6'}`}>
           <SectionErrorBoundary key={activeSection} name={activeLabel}>

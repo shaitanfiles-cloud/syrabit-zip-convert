@@ -1,8 +1,8 @@
 """Syrabit.ai — JWT helpers, authentication dependencies, and rate limiting."""
-import time, asyncio, logging
+import os, time, asyncio, logging
 from typing import Optional, List, Dict
 from datetime import datetime, timezone, timedelta
-from fastapi import Depends, HTTPException, Cookie, Request
+from fastapi import Depends, HTTPException, Cookie, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials
 import jwt
 from jwt.exceptions import PyJWTError as JWTError
@@ -10,10 +10,96 @@ from config import (
     JWT_SECRET, JWT_ALGORITHM, JWT_ACCESS_EXPIRE_MINUTES,
     JWT_REFRESH_EXPIRE_MINUTES, JWT_EXPIRE_MINUTES,
     ADMIN_JWT_SECRET, PLAN_LIMITS,
+    COOKIE_DOMAIN, COOKIE_SAMESITE, SECURE_COOKIES,
+    IP_COARSE_DAILY_CAP, DEVICE_COOKIE_MINTS_PER_MIN,
 )
-from deps import security, redis_client, logger as _dep_logger
+from deps import security, redis_client
 from cache import _redis_get_session, _redis_cache_session
 from cf_access import require_cf_access_admin
+from device_token import (
+    DEVICE_COOKIE_NAME, DEVICE_COOKIE_MAX_AGE_SECONDS,
+    mint_device_token, device_token_id,
+)
+
+
+def _real_client_ip(request: Request) -> str:
+    """Return the best-effort real client IP for rate limiting.
+
+    Header preference order (Task #793):
+
+    1. ``cf-connecting-ip`` — Cloudflare always sets this on requests
+       it forwards to origin, and it always carries the **real**
+       client IP (not the CF edge POP). This is the highest-trust
+       source when traffic actually comes from the CF edge.
+    2. ``x-forwarded-for`` (first comma-separated entry) — what our
+       own ``workers/edge-proxy`` rewrites onto the upstream request
+       after stripping CF-Connecting-IP, and the de-facto standard
+       header that any HTTP-aware proxy in front of us will set.
+    3. ``request.client.host`` — the immediate peer the ASGI server
+       sees, which behind any proxy will be the proxy's address (a
+       Replit gateway, the Cloud Run frontend, etc.) and is therefore
+       the worst signal of "who is actually talking to us". Used only
+       as a last resort.
+
+    Previously :func:`rate_limit_chat_optional` checked
+    ``request.client.host`` *first*, which on Replit/Cloud Run pinned
+    the entire daily quota to a single shared upstream IP and made
+    every test environment look like an exhausted attacker.
+    """
+    cf_ip = (request.headers.get("cf-connecting-ip") or "").strip()
+    if cf_ip:
+        return cf_ip
+    xff = request.headers.get("x-forwarded-for") or ""
+    if xff:
+        first = xff.split(",")[0].strip()
+        if first:
+            return first
+    return (request.client.host if request.client else "") or "unknown"
+
+
+def _set_device_cookie(request: Request, response: Response, value: str) -> None:
+    """Attach the signed device-token cookie to ``response`` *and* stash
+    the value on ``request.state`` so the
+    :class:`middleware.DeviceCookieMiddleware` fall-back can re-apply
+    it when the route handler returns its own ``Response`` instance
+    (FastAPI discards the dependency-injected ``Response`` object in
+    that case — the most common path here is ``StreamingResponse`` on
+    ``/ai/chat/stream``, which is the user-facing chat endpoint).
+
+    Cookie attributes mirror the existing ``syrabit_session`` cookie
+    set by :mod:`routes.auth`: HttpOnly (so client JS cannot read or
+    tamper with it), Secure when running over HTTPS, SameSite=Lax (so
+    ordinary navigations from search results / WhatsApp link previews
+    still send the cookie and the user keeps their device-keyed
+    quota), and a 400-day max-age (the longest browsers will honour).
+    """
+    cookie_kwargs = dict(
+        key=DEVICE_COOKIE_NAME,
+        value=value,
+        httponly=True,
+        secure=SECURE_COOKIES,
+        samesite=COOKIE_SAMESITE,
+        max_age=DEVICE_COOKIE_MAX_AGE_SECONDS,
+        path="/",
+    )
+    if COOKIE_DOMAIN:
+        cookie_kwargs["domain"] = COOKIE_DOMAIN
+    response.set_cookie(**cookie_kwargs)
+    # Stash for the middleware fall-back. Using ``request.state`` (an
+    # arbitrary attribute namespace per Starlette docs) keeps the
+    # cookie payload bound to this single request and avoids any
+    # global mutable state that could leak between concurrent
+    # requests.
+    try:
+        request.state.device_cookie_to_set = value
+    except Exception:
+        # ``request.state`` is always available on a real Starlette
+        # request; the only way this raises is in unit tests that
+        # pass a hand-rolled stub without a ``state`` attribute. The
+        # tests that exercise the dependency directly read the cookie
+        # off ``response.headers`` so they don't need the stash, and
+        # the middleware fall-back is irrelevant for them.
+        pass
 
 
 logger = logging.getLogger(__name__)
@@ -294,9 +380,62 @@ async def rate_limit_chat(user: dict = Depends(get_current_user)):
 
 async def rate_limit_chat_optional(
     request: Request,
+    response: Response,
     user: Optional[dict] = Depends(get_current_user_optional),
+    syrabit_device: Optional[str] = Cookie(default=None),
 ):
-    """Like rate_limit_chat but allows anonymous users with IP-based rate limiting."""
+    """Anonymous-friendly chat rate limiter.
+
+    Logged-in users keep their plan-aware per-minute limit (unchanged
+    since Task #768).
+
+    For anonymous users (Task #793), the daily 30-message budget is
+    keyed on a **signed HttpOnly device-token cookie**, not on the
+    public IP. The IP is kept only as a coarse abuse cap.
+
+    The change exists to fix the single biggest funnel-killer on the
+    site: AHSEC/SEBA students almost always reach us through shared
+    egress IPs (Jio/Airtel mobile CGNAT, school/college WiFi,
+    hostel/cyber-café WiFi). When the daily budget was per-IP, the
+    first ~30 messages from any one of those networks drained the
+    pool for every other student behind the same NAT, so the second
+    visitor saw "Daily free quota exhausted" before sending a single
+    message.
+
+    Per-anonymous-request logic, top to bottom:
+
+    1. **Per-minute throttle** — sliding-window rate limit, keyed on
+       the device-token id when one is present, else on the IP. This
+       mirrors the previous behaviour (a fresh device on a busy NAT
+       still doesn't get throttled because each device gets its own
+       per-minute window once the cookie is issued).
+
+    2. **Coarse per-IP daily ceiling** — ``IP_COARSE_DAILY_CAP``
+       requests/day per real client IP. Set high enough (default
+       1500/day) that a classroom or hostel of students sharing one
+       NAT never hits it; meant only to stop a single host from
+       scripting thousands of requests.
+
+    3. **Per-device daily quota** — 30/day from the free-plan config,
+       enforced via :func:`db_ops.atomic_deduct_device_credit` (the
+       same atomic Lua script used by the user credit ledger so
+       concurrent abusers can't push a counter past its limit). The
+       counter is keyed on either the verified incoming token or the
+       freshly minted one (see (4) below), so the very first request
+       counts toward the device's daily budget — preserving the
+       documented contract that anonymous browsers get exactly 30
+       successful messages a day, with the 31st blocked.
+
+    4. **Cookie issuance** — every anonymous response that comes
+       through here either re-confirms the existing valid cookie or
+       mints a fresh one (and stashes it on ``request.state`` for
+       :class:`middleware.DeviceCookieMiddleware` to apply onto any
+       ``StreamingResponse`` the route returns). A brand-new browser
+       therefore receives its cookie *and* is charged 1 against that
+       fresh token's 30/day budget on the same request — never let a
+       missing cookie produce a hard 429 outside of the per-device
+       cap, but never give it a free ride either.
+    """
     if user:
         user_id = user.get("id", "anonymous")
         plan = user.get("plan", "free")
@@ -309,12 +448,295 @@ async def rate_limit_chat_optional(
                 headers={"Retry-After": "60", "X-RateLimit-Limit": str(limit)},
             )
         return user
-    ip = (request.client.host if request.client else None) or request.headers.get("x-forwarded-for", "").split(",")[0].strip() or "unknown"
+
     free_cfg = PLAN_LIMITS["free"]
-    if not check_rate_limit(f"chat:ip:{ip}", max_requests=free_cfg["req_per_min"], window_seconds=60):
+    daily_cap = int(free_cfg.get("credits_per_day") or 30)
+    per_min_cap = int(free_cfg.get("req_per_min") or 15)
+    ip = _real_client_ip(request)
+
+    # ── 1. Resolve / mint device cookie ──────────────────────────────
+    # ``device_token_id`` returns a printable hex id when the signed
+    # cookie verifies, else None. When the incoming cookie is missing
+    # or forged we mint a fresh one and use *its* token id for the
+    # rest of this request — so a brand-new browser still gets a
+    # valid token id keyed counter and is charged 1 against the
+    # 30/day device cap on its very first message (preserving the
+    # "30 successful, 31st blocked" UX contract).
+    token_id = device_token_id(syrabit_device)
+    if token_id is None:
+        # Task #797 — rate-limit fresh-cookie issuance per IP. The
+        # first-visit branch is a deliberate UX softener: a brand-new
+        # browser must be able to send its first message even though
+        # the cookie round-trip hasn't completed. A scripted client
+        # can abuse it by simply discarding the cookie on every
+        # request and looking like an endless stream of "first
+        # visits", capped only by the much higher 1500/day per-IP
+        # coarse cap. Gating the mint itself at a small per-minute
+        # ceiling shuts that loophole without affecting any real
+        # browser (real browsers retain the cookie they're handed and
+        # never come back through this branch). On (truly) unknown
+        # IPs we skip the gate so loopback/test paths aren't broken.
+        if ip and ip != "unknown" and not check_rate_limit(
+            f"chat:mint:ip:{ip}",
+            max_requests=DEVICE_COOKIE_MINTS_PER_MIN,
+            window_seconds=60,
+        ):
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    "Too many new sessions from this network in a short window. "
+                    "Wait a minute and retry — make sure cookies are enabled."
+                ),
+                headers={
+                    "Retry-After": "60",
+                    "X-RateLimit-Limit": str(DEVICE_COOKIE_MINTS_PER_MIN),
+                },
+            )
+        new_cookie = mint_device_token()
+        _set_device_cookie(request, response, new_cookie)
+        token_id = device_token_id(new_cookie)
+
+    # ── 2. Per-minute throttle (device-scoped when possible) ─────────
+    rl_key = f"chat:dev:{token_id}" if token_id else f"chat:ip:{ip}"
+    if not check_rate_limit(rl_key, max_requests=per_min_cap, window_seconds=60):
         raise HTTPException(
             status_code=429,
             detail="Rate limit exceeded. Sign in for higher limits.",
             headers={"Retry-After": "60"},
         )
+
+    # ── 3. Coarse per-IP abuse cap ───────────────────────────────────
+    # Skip on truly unknown IPs so we don't lock out the loopback /
+    # offline test paths; in production cf-connecting-ip / xff are
+    # always populated upstream of this dependency.
+    if ip and ip != "unknown":
+        from db_ops import atomic_deduct_ip_credit
+        if not atomic_deduct_ip_credit(ip, daily_limit=IP_COARSE_DAILY_CAP):
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Daily request ceiling reached for this network "
+                    f"(>{IP_COARSE_DAILY_CAP} requests/day). Sign in or try again "
+                    "tomorrow — resets at midnight UTC."
+                ),
+                headers={"Retry-After": "3600", "X-RateLimit-Limit": str(IP_COARSE_DAILY_CAP)},
+            )
+
+    # ── 4. Per-device daily quota (30/day) ───────────────────────────
+    # Always charged. ``token_id`` here is either the verified
+    # incoming cookie's id, or — on first visit — the freshly-minted
+    # token id from step (1). Either way, the request consumes 1
+    # against this device's daily budget; the 31st request from the
+    # same device on the same day will trip the cap.
+    if token_id:
+        from db_ops import atomic_deduct_device_credit
+        if not atomic_deduct_device_credit(token_id, daily_limit=daily_cap):
+            # Task #798 — emit `chat.anon_quota_exhausted` so we can
+            # tell how many anonymous students hit the wall each day
+            # and what fraction of them sign up vs bounce. Wrapped in
+            # try/except because a metric crash must never block a
+            # real user request — the 429 has to fire either way.
+            #
+            # ``atomic_deduct_device_credit`` returns False in **two**
+            # very different states: (a) quota is genuinely exhausted,
+            # and (b) Redis is unreachable / errored (fail-closed). We
+            # peek the counter to disambiguate so a Redis outage isn't
+            # misclassified as a wave of "wall-hits" in the metric.
+            # When the peek itself fails (returns 0 because Redis is
+            # also down for it), we deliberately skip the metric — a
+            # zero is better than a phantom spike.
+            try:
+                from db_ops import peek_device_credit_used
+                if peek_device_credit_used(token_id) >= daily_cap:
+                    from metrics import record_anon_quota_exhausted
+                    # Task #808 — pass through Cloudflare's geo/ASN
+                    # tags so support can investigate angry "I keep
+                    # getting blocked" tickets in seconds via the
+                    # admin "Recent" tab. ``cf-ipcountry`` is the
+                    # standard 2-letter ISO code; ASN is exposed by
+                    # CF Workers as ``cf-ipasn`` / ``cf-asn``
+                    # depending on origin config — try both so
+                    # whichever one our edge proxy forwards lands
+                    # on the metric. Falls back to "" when the
+                    # request didn't traverse Cloudflare (e.g.
+                    # local/dev), which the recorder treats as
+                    # "unknown" without crashing.
+                    cf_country = (
+                        request.headers.get("cf-ipcountry") or ""
+                    ).strip()
+                    cf_asn = (
+                        request.headers.get("cf-ipasn")
+                        or request.headers.get("cf-asn")
+                        or request.headers.get("x-asn")
+                        or ""
+                    ).strip()
+                    record_anon_quota_exhausted(
+                        token_id, ip=ip, plan_target="free",
+                        country=cf_country, asn=cf_asn,
+                    )
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Daily free quota exhausted ({daily_cap} requests/day). "
+                    "Sign in for higher limits — resets at midnight UTC."
+                ),
+                headers={"Retry-After": "3600", "X-RateLimit-Limit": str(daily_cap)},
+            )
+
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Task #819 — OCR-only rate limiter
+#
+# The chat composer's image-upload (Plus → Camera/Gallery → OCR) used
+# to share ``rate_limit_chat_optional``, which burned 1 chat-message
+# credit on every OCR call. That doubled the cost of "snap a photo
+# and ask a question" — the very flow the feature was built for —
+# and chewed through anonymous students' 30/day budget twice as fast,
+# tripping "Daily free quota exhausted" after just ~15 photo Q&As.
+#
+# This dep enforces the same anti-abuse layers as chat (per-minute
+# throttle, coarse per-IP daily ceiling, device-cookie issuance) but
+# **does not** deduct from the per-device daily message budget. The
+# follow-up chat send still costs 1 credit as usual; OCR itself is
+# free.
+#
+# A separate per-minute throttle (``OCR_PER_MIN_CAP``) is used so a
+# scripted client cannot just spam Vertex Vision calls — Vision
+# requests are an order of magnitude more expensive than a chat call,
+# so we keep this bound tight (10/min per device, vs 15/min for chat).
+# The per-IP coarse cap (1500/day) is shared with chat — it counts
+# *all* requests off a single egress IP, so OCR abuse still trips it.
+# ─────────────────────────────────────────────────────────────────────
+
+OCR_PER_MIN_CAP = 10            # per-device or per-IP per-minute cap on OCR calls.
+OCR_DAILY_CAP_ANON = 50         # per-device daily OCR cap for anonymous callers.
+OCR_DAILY_CAP_USER = 100        # per-user daily OCR cap for logged-in callers.
+# Per-IP daily OCR ceiling — separate bucket from the chat coarse cap
+# (``IP_COARSE_DAILY_CAP``) so OCR uploads do NOT eat into the per-IP
+# chat budget. Sized for shared egress IPs (school WiFi, hostel,
+# Jio/Airtel CGNAT): a class of ~100 students × 50 anon OCR/day each
+# fits comfortably under 5000/day. A single IP scripting thousands of
+# Vertex Vision calls still trips it, which is the only abuse case
+# the per-IP layer is meant to catch (per-device + per-minute caps
+# already handle real-user throttling).
+OCR_IP_DAILY_CAP = int(os.environ.get("OCR_IP_DAILY_CAP", "5000"))
+
+async def rate_limit_ocr_optional(
+    request: Request,
+    response: Response,
+    user: Optional[dict] = Depends(get_current_user_optional),
+    syrabit_device: Optional[str] = Cookie(default=None),
+):
+    """OCR-only rate limiter.
+
+    See module-level docstring above the function for the rationale.
+    Returns the resolved user dict (or ``None`` for anonymous callers)
+    so the OCR route can branch on auth state without re-parsing the
+    cookie.
+    """
+    # Logged-in users: per-minute throttle + generous daily cap on Vertex
+    # Vision spend. Daily cap is intentionally separate from the chat
+    # credit budget (Task #819 — OCR no longer burns chat credits).
+    if user:
+        user_id = user.get("id", "anonymous")
+        if not check_rate_limit(f"ocr:{user_id}", max_requests=OCR_PER_MIN_CAP, window_seconds=60):
+            raise HTTPException(
+                status_code=429,
+                detail=f"OCR rate limit exceeded — {OCR_PER_MIN_CAP} uploads/minute. Try again in a moment.",
+                headers={"Retry-After": "60", "X-RateLimit-Limit": str(OCR_PER_MIN_CAP)},
+            )
+        if not check_rate_limit(f"ocr:day:{user_id}", max_requests=OCR_DAILY_CAP_USER, window_seconds=86400):
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Daily OCR limit reached ({OCR_DAILY_CAP_USER} image uploads/day). "
+                    "Resets at midnight UTC."
+                ),
+                headers={"Retry-After": "3600", "X-RateLimit-Limit": str(OCR_DAILY_CAP_USER)},
+            )
+        return user
+
+    # Anonymous: device-cookie + per-minute throttle + coarse per-IP daily cap.
+    ip = _real_client_ip(request)
+
+    # 1. Resolve / mint device cookie (parity with chat dep so the
+    #    follow-up chat send keys on the same device id).
+    token_id = device_token_id(syrabit_device)
+    if token_id is None:
+        if ip and ip != "unknown" and not check_rate_limit(
+            f"chat:mint:ip:{ip}",
+            max_requests=DEVICE_COOKIE_MINTS_PER_MIN,
+            window_seconds=60,
+        ):
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    "Too many new sessions from this network in a short window. "
+                    "Wait a minute and retry — make sure cookies are enabled."
+                ),
+                headers={
+                    "Retry-After": "60",
+                    "X-RateLimit-Limit": str(DEVICE_COOKIE_MINTS_PER_MIN),
+                },
+            )
+        new_cookie = mint_device_token()
+        _set_device_cookie(request, response, new_cookie)
+        token_id = device_token_id(new_cookie)
+
+    # 2. Per-minute throttle (device-scoped when possible).
+    rl_key = f"ocr:dev:{token_id}" if token_id else f"ocr:ip:{ip}"
+    if not check_rate_limit(rl_key, max_requests=OCR_PER_MIN_CAP, window_seconds=60):
+        raise HTTPException(
+            status_code=429,
+            detail=f"OCR rate limit exceeded — {OCR_PER_MIN_CAP} uploads/minute. Try again in a moment.",
+            headers={"Retry-After": "60", "X-RateLimit-Limit": str(OCR_PER_MIN_CAP)},
+        )
+
+    # 3. Per-IP daily OCR ceiling — uses a SEPARATE Redis bucket from
+    #    the chat coarse cap (``IP_COARSE_DAILY_CAP`` / ``ip_daily_credits:``)
+    #    so a busy classroom uploading photos doesn't drain the chat
+    #    quota for that same egress IP. Sized for shared NAT use
+    #    (~5000/day, see ``OCR_IP_DAILY_CAP`` constant). Falls back
+    #    open on Redis outage instead of blocking real users — abuse
+    #    is still bounded by the per-device + per-minute caps below.
+    if ip and ip != "unknown":
+        if not check_rate_limit(
+            f"ocr:ip:day:{ip}",
+            max_requests=OCR_IP_DAILY_CAP,
+            window_seconds=86400,
+        ):
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Daily OCR ceiling reached for this network "
+                    f"(>{OCR_IP_DAILY_CAP} uploads/day). Try again tomorrow — "
+                    "resets at midnight UTC."
+                ),
+                headers={"Retry-After": "3600", "X-RateLimit-Limit": str(OCR_IP_DAILY_CAP)},
+            )
+
+    # 4. Per-device daily OCR cap (separate from chat's 30/day budget —
+    #    Task #819 keeps OCR off the chat credit ledger but still bounds
+    #    total Vertex Vision spend per device).
+    if token_id and not check_rate_limit(
+        f"ocr:day:dev:{token_id}",
+        max_requests=OCR_DAILY_CAP_ANON,
+        window_seconds=86400,
+    ):
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Daily OCR limit reached ({OCR_DAILY_CAP_ANON} image uploads/day). "
+                "Sign in for higher limits — resets at midnight UTC."
+            ),
+            headers={"Retry-After": "3600", "X-RateLimit-Limit": str(OCR_DAILY_CAP_ANON)},
+        )
+
+    # NOTE: deliberately NOT calling atomic_deduct_device_credit here
+    # — OCR is free and does not consume the 30/day chat budget.
+
     return None

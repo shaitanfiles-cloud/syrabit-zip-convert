@@ -10,7 +10,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isProd = process.env.NODE_ENV === 'production';
 const BACKEND_TARGET = process.env.VITE_BACKEND_URL || 'http://localhost:8000';
 
-const BOT_UA = /googlebot|google-extended|googleother|google-inspectiontool|bingbot|yandexbot|yandex|duckduckbot|slurp|baiduspider|facebookexternalhit|facebookbot|twitterbot|linkedinbot|telegrambot|whatsapp|applebot|applebot-extended|ia_archiver|msnbot|ahrefsbot|semrushbot|petalbot|gptbot|oai-searchbot|chatgpt-user|claudebot|anthropic-ai|perplexitybot|meta-externalagent|cohere-ai|bytespider|ccbot/i;
+// ─── CANONICAL BOT REGEX — DO NOT DRIFT ─────────────────────────────────────
+// This regex MUST stay aligned with three other locations:
+//   * artifacts/syrabit-backend/utils.py        → _SEARCH_BOT_UA_RE (Python source of truth)
+//   * artifacts/syrabit/public/_worker.js       → SEARCH_BOT_UA (Pages Worker)
+//   * workers/edge-proxy/src/index.ts           → SEARCH_BOT_UA (api.syrabit.ai)
+// Any UA we want to (a) prerender HTML for, (b) serve sitemaps to, or
+// (c) count as a verified crawler in analytics MUST appear in ALL FOUR.
+// When you add a new crawler here, grep for the next-most-recent neighbour
+// in the list (e.g. `perplexitybot`) across the repo and add it there too.
+// ────────────────────────────────────────────────────────────────────────────
+const BOT_UA = /googlebot|google-extended|googleother|google-inspectiontool|bingbot|yandexbot|yandex|duckduckbot|slurp|baiduspider|facebookexternalhit|facebookbot|twitterbot|linkedinbot|telegrambot|whatsapp|applebot|applebot-extended|ia_archiver|msnbot|ahrefsbot|semrushbot|petalbot|gptbot|oai-searchbot|chatgpt-user|claudebot|claude-web|anthropic-ai|perplexitybot|perplexity-user|meta-externalagent|cohere-ai|bytespider|ccbot|amazonbot|discordbot/i;
 
 const SKIP_ROUTES = new Set([
   'library', 'chat', 'history', 'profile', 'pricing', 'signup', 'login',

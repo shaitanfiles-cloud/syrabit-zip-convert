@@ -1,4 +1,3 @@
-```markdown
 # Configuration and setup files
 *.env
 *.env.local
@@ -71,4 +70,7 @@ htmlcov/
 *.tar.bz2
 *.tar.xz
 *.tar.zst
-```
+
+# Cloudflare WAF orchestrator state — per-incident artifact, never durable
+# (see artifacts/syrabit-backend/scripts/cf_waf_override.py header for why)
+artifacts/syrabit-backend/scripts/cf_waf_override_state.json

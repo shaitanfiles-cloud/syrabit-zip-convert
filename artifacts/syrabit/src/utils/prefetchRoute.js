@@ -64,6 +64,6 @@ export function prefetchRoute(path) {
   pending.set(path, timer);
 }
 
-export function warmLibraryApi() {
+function warmLibraryApi() {
   warmApi('/library');
 }

@@ -1,161 +1,161 @@
-import { useState, useEffect, useRef } from 'react';
-import { useAuth } from '@/context/AuthContext';
-import { useNavigate } from 'react-router-dom';
-import { toast } from 'sonner';
-import { Loader2 } from 'lucide-react';
-import { API_BASE } from '@/utils/api';
+import { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
+import { Loader2 } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
 
-const GOOGLE_G_SVG = (
-  <svg width="18" height="18" viewBox="0 0 48 48">
-    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
-    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
-    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
-    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
-  </svg>
-);
+const GIS_SRC = 'https://accounts.google.com/gsi/client';
 
-export default function GoogleSignInButton({ mode = 'login' }) {
-  const [loading, setLoading] = useState(false);
-  const [clientId, setClientId] = useState(null);
-  const [gsiReady, setGsiReady] = useState(false);
-  const { googleLogin } = useAuth();
-  const navigate = useNavigate();
-  const callbackRef = useRef(null);
-  const mountedRef = useRef(true);
-  const btnContainerRef = useRef(null);
+let _scriptPromise = null;
+function loadGisScript() {
+  if (_scriptPromise) return _scriptPromise;
+  _scriptPromise = new Promise((resolve, reject) => {
+    if (typeof window === 'undefined') return reject(new Error('window unavailable'));
+    if (window.google?.accounts?.id) return resolve();
 
-  callbackRef.current = async (response) => {
-    if (!mountedRef.current) return;
-    setLoading(true);
-    try {
-      const user = await googleLogin(response.credential);
-      if (!mountedRef.current) return;
-      toast.success(mode === 'signup' ? 'Account created! Welcome!' : 'Welcome back!');
-      if (!user.onboarding_done) {
-        navigate('/onboarding');
-      } else {
-        navigate('/library');
-      }
-    } catch (err) {
-      if (!mountedRef.current) return;
-      const detail = err.response?.data?.detail || 'Google sign-in failed. Please try again.';
-      toast.error(detail);
-    } finally {
-      if (mountedRef.current) setLoading(false);
+    const existing = document.querySelector(`script[src="${GIS_SRC}"]`);
+    if (existing) {
+      existing.addEventListener('load', () => resolve());
+      existing.addEventListener('error', () =>
+        reject(new Error('Failed to load Google Identity Services'))
+      );
+      return;
     }
-  };
 
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
+    const s = document.createElement('script');
+    s.src = GIS_SRC;
+    s.async = true;
+    s.defer = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('Failed to load Google Identity Services'));
+    document.head.appendChild(s);
+  });
+  return _scriptPromise;
+}
+
+let _clientIdPromise = null;
+function fetchClientId(apiBase) {
+  if (_clientIdPromise) return _clientIdPromise;
+  _clientIdPromise = axios
+    .get(`${apiBase}/auth/google/client-id`)
+    .then((r) => r.data?.client_id || null)
+    .catch(() => null);
+  return _clientIdPromise;
+}
+
+export default function GoogleSignInButton({
+  text = 'signin_with',
+  onSuccess,
+  onError,
+  getTurnstileToken,
+  disabled = false,
+}) {
+  const { googleLogin, API } = useAuth();
+  const containerRef = useRef(null);
+  const [state, setState] = useState('loading');
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  busyRef.current = busy;
 
   useEffect(() => {
     let cancelled = false;
-    axios.get(`${API_BASE}/auth/google/client-id`).then(res => {
-      if (!cancelled && res.data?.client_id) {
-        setClientId(res.data.client_id);
-      }
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
 
-  useEffect(() => {
-    if (!clientId) return;
+    (async () => {
+      try {
+        const clientId = await fetchClientId(API);
+        if (cancelled) return;
+        if (!clientId) {
+          setState('unavailable');
+          return;
+        }
 
-    let interval;
-    let timeout;
+        await loadGisScript();
+        if (cancelled) return;
+        if (!window.google?.accounts?.id || !containerRef.current) {
+          setState('error');
+          return;
+        }
 
-    const stableCallback = (response) => {
-      callbackRef.current?.(response);
-    };
-
-    const initGsi = () => {
-      if (!window.google?.accounts?.id) return false;
-      window.google.accounts.id.initialize({
-        client_id: clientId,
-        callback: stableCallback,
-        auto_select: false,
-        cancel_on_tap_outside: true,
-        use_fedcm_for_prompt: false,
-        ux_mode: 'popup',
-      });
-      if (btnContainerRef.current) {
-        window.google.accounts.id.renderButton(btnContainerRef.current, {
-          type: 'standard',
-          size: 'large',
-          theme: 'outline',
-          width: 300,
+        window.google.accounts.id.initialize({
+          client_id: clientId,
+          callback: async (response) => {
+            if (busyRef.current) return;
+            setBusy(true);
+            try {
+              let ttoken = '';
+              if (typeof getTurnstileToken === 'function') {
+                try {
+                  ttoken = await getTurnstileToken();
+                } catch {
+                  ttoken = '';
+                }
+              }
+              const user = await googleLogin(response.credential, ttoken);
+              if (!cancelled) onSuccess?.(user);
+            } catch (err) {
+              if (!cancelled) onError?.(err);
+            } finally {
+              if (!cancelled) setBusy(false);
+            }
+          },
+          ux_mode: 'popup',
+          auto_select: false,
+          itp_support: true,
+          context: text === 'signup_with' ? 'signup' : 'signin',
         });
-      }
-      setGsiReady(true);
-      return true;
-    };
 
-    if (!initGsi()) {
-      interval = setInterval(() => {
-        if (initGsi()) clearInterval(interval);
-      }, 200);
-      timeout = setTimeout(() => { if (interval) clearInterval(interval); }, 10000);
-    }
+        const width = Math.max(
+          240,
+          Math.min(400, containerRef.current.offsetWidth || 320)
+        );
+
+        window.google.accounts.id.renderButton(containerRef.current, {
+          type: 'standard',
+          theme: 'outline',
+          size: 'large',
+          text,
+          shape: 'rectangular',
+          logo_alignment: 'left',
+          width,
+        });
+
+        setState('ready');
+      } catch (e) {
+        if (!cancelled) setState('error');
+      }
+    })();
 
     return () => {
-      if (interval) clearInterval(interval);
-      if (timeout) clearTimeout(timeout);
+      cancelled = true;
     };
-  }, [clientId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  if (!clientId) return null;
+  if (state === 'unavailable') return null;
 
-  const handleClick = () => {
-    if (!gsiReady || loading) return;
-    try {
-      window.google.accounts.id.prompt((notification) => {
-        if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-          const rendered = btnContainerRef.current?.querySelector('div[role="button"]');
-          if (rendered) rendered.click();
-        }
-      });
-    } catch {
-      const rendered = btnContainerRef.current?.querySelector('div[role="button"]');
-      if (rendered) rendered.click();
-    }
-  };
+  if (state === 'error') {
+    return (
+      <p className="text-xs text-muted-foreground text-center py-2">
+        Google sign-in is temporarily unavailable — please use email and password below.
+      </p>
+    );
+  }
 
   return (
-    <div className="w-full">
-      <button
-        type="button"
-        onClick={handleClick}
-        disabled={loading || !gsiReady}
-        className="w-full flex items-center justify-center gap-3 h-11 rounded-xl text-sm font-semibold transition-all duration-150 active:scale-[0.97] disabled:opacity-60"
-        style={{
-          background: 'hsl(var(--muted) / 0.5)',
-          border: '1px solid hsl(var(--border))',
-          color: 'hsl(var(--foreground))',
-        }}
-        data-testid="google-signin-button"
-      >
-        {loading ? (
-          <Loader2 size={17} className="animate-spin" />
-        ) : (
-          GOOGLE_G_SVG
-        )}
-        {loading ? 'Signing in...' : 'Continue with Google'}
-      </button>
-
-      <div className="flex items-center gap-3 mt-4">
-        <div className="flex-1 h-px bg-border/30" />
-        <span className="text-xs font-medium text-muted-foreground">or</span>
-        <div className="flex-1 h-px bg-border/30" />
-      </div>
-
+    <div className="relative w-full flex justify-center">
       <div
-        ref={btnContainerRef}
-        className="overflow-hidden"
-        style={{ height: 0, width: 0, opacity: 0, position: 'absolute', pointerEvents: 'none' }}
+        ref={containerRef}
+        className={
+          disabled || busy
+            ? 'pointer-events-none opacity-60 w-full flex justify-center'
+            : 'w-full flex justify-center'
+        }
+        style={{ minHeight: 44 }}
       />
+      {(state === 'loading' || busy) && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <Loader2 size={16} className="animate-spin text-muted-foreground" />
+        </div>
+      )}
     </div>
   );
 }

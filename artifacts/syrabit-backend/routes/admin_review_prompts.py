@@ -1,4 +1,10 @@
-"""Syrabit.ai — Google review prompt funnel (Task #654).
+"""Syrabit.ai — Trustpilot review prompt funnel (Task #654, relabeled #726).
+
+Originally tracked Google review prompts; the user-facing widget moved to
+Trustpilot in Task #724, so all admin/digest copy now references Trustpilot.
+The collection name, PostHog event names, and metric keys are intentionally
+unchanged (review_prompt_shown / clicked / dismissed) so historical
+analytics, dashboards, and alerting continue to work without a backfill.
 
 Mirrors the client-side `review_prompt_shown` / `review_prompt_clicked` /
 `review_prompt_dismissed` PostHog events into our own collection so the
@@ -17,6 +23,7 @@ because a UI regression broke the prompt CTA / `writeReviewUrl`).
 """
 import asyncio
 import logging
+import math
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -107,7 +114,7 @@ async def admin_review_prompt_stats(
     days: int = Query(30, ge=1, le=180),
     admin: dict = Depends(get_admin_user),
 ):
-    """Funnel rollup for the admin Google-review-prompt tile.
+    """Funnel rollup for the admin Trustpilot-review-prompt tile.
 
     Returns:
       shown, clicked, dismissed: totals over the window.
@@ -143,22 +150,84 @@ async def admin_review_prompt_stats(
         clicked = int(totals.get("clicked") or 0)
         dismissed = int(totals.get("dismissed") or 0)
 
+        # Task #659 — also pull the immediately-preceding equal-sized
+        # window so we can surface per-reason week-over-week deltas
+        # (shown count + CTR) on the admin tile. Reasons that newly
+        # appeared / disappeared get a `status` flag so ops can see
+        # them at a glance.
+        prev_until = since
+        prev_since = since - (now - since)
+        prev_agg = await _aggregate_review_prompt_window(prev_since, prev_until)
+        prev_by_reason_map: Dict[str, Dict[str, int]] = {
+            (row.get("reason") or "unknown"): {
+                "shown": int(row.get("shown") or 0),
+                "clicked": int(row.get("clicked") or 0),
+                "dismissed": int(row.get("dismissed") or 0),
+            }
+            for row in prev_agg["by_reason"]
+        }
+
         # Decorate the by-reason rows with per-reason CTR + dismiss-rate
         # (the shared helper returns raw counts only).
         by_reason: List[Dict[str, Any]] = []
+        seen_reasons: set = set()
         for row in agg["by_reason"]:
+            reason = row.get("reason") or "unknown"
+            seen_reasons.add(reason)
             r_shown = int(row.get("shown") or 0)
             r_clicked = int(row.get("clicked") or 0)
             r_dismissed = int(row.get("dismissed") or 0)
+            prev = prev_by_reason_map.get(reason, {})
+            p_shown = int(prev.get("shown") or 0)
+            p_clicked = int(prev.get("clicked") or 0)
+            p_ctr = _ctr(p_clicked, p_shown)
+            r_ctr = _ctr(r_clicked, r_shown)
+            ctr_delta = (
+                round(r_ctr - p_ctr, 1)
+                if (r_ctr is not None and p_ctr is not None) else None
+            )
+            if p_shown == 0 and p_clicked == 0:
+                status = "new"
+            else:
+                status = "active"
             by_reason.append({
-                "reason": row.get("reason") or "unknown",
+                "reason": reason,
                 "shown": r_shown,
                 "clicked": r_clicked,
                 "dismissed": r_dismissed,
-                "ctr_pct": _ctr(r_clicked, r_shown),
+                "ctr_pct": r_ctr,
                 "dismiss_rate_pct": _ctr(r_dismissed, r_shown),
+                "prev_shown": p_shown,
+                "prev_clicked": p_clicked,
+                "prev_ctr_pct": p_ctr,
+                "shown_delta": r_shown - p_shown,
+                "ctr_delta_pct": ctr_delta,
+                "status": status,
             })
-        # Sort by shown desc so the most-fired surfaces appear first.
+        # Reasons that fired last week but are gone this week — surface
+        # them too so a regression that silenced a trigger is obvious.
+        for reason, prev in prev_by_reason_map.items():
+            if reason in seen_reasons:
+                continue
+            p_shown = int(prev.get("shown") or 0)
+            p_clicked = int(prev.get("clicked") or 0)
+            p_ctr = _ctr(p_clicked, p_shown)
+            by_reason.append({
+                "reason": reason,
+                "shown": 0,
+                "clicked": 0,
+                "dismissed": 0,
+                "ctr_pct": None,
+                "dismiss_rate_pct": None,
+                "prev_shown": p_shown,
+                "prev_clicked": p_clicked,
+                "prev_ctr_pct": p_ctr,
+                "shown_delta": -p_shown,
+                "ctr_delta_pct": None,
+                "status": "gone",
+            })
+        # Sort by shown desc so the most-fired surfaces appear first;
+        # gone reasons sink to the bottom because their shown == 0.
         by_reason.sort(key=lambda r: (r["shown"], r["clicked"]), reverse=True)
 
         # Recent events for spot-checks — kept inline because the digest
@@ -191,6 +260,344 @@ async def admin_review_prompt_stats(
         return empty
 
 
+# ─────────────────────────────────────────────
+# Task #662 — per-reason 8-week trend (drill-down)
+# ─────────────────────────────────────────────
+@router.get("/admin/analytics/review-prompt-stats/by-reason-trend")
+async def admin_review_prompt_by_reason_trend(
+    reason: str = Query(..., min_length=1, max_length=64),
+    weeks: int = Query(8, ge=1, le=26),
+    compare: Optional[str] = Query(None, max_length=64),
+    admin: dict = Depends(get_admin_user),
+):
+    """Weekly shown / clicked / CTR buckets for a single trigger reason.
+
+    Powers the inline sparkline that expands when an admin clicks a
+    reason row in the review-prompt funnel tile. Buckets are rolling
+    7-day windows aligned to ``now`` so the most-recent bucket matches
+    the totals the tile already displays. Oldest bucket first.
+
+    Task #673 — when ``compare`` is supplied (and differs from
+    ``reason``), the same weekly windows are also bucketed for that
+    second reason so the admin UI can overlay both series on one
+    chart. ``available_reasons`` is the deduped, sorted list of
+    reasons that fired ≥1 event during the requested window — the
+    picker uses it to avoid offering empty options.
+    """
+    reason_clean = (reason or "").strip()[:64] or "unknown"
+    # ``compare`` may be the FastAPI ``Query`` sentinel when called
+    # directly from tests — coerce non-str inputs to None defensively.
+    compare_clean = (compare.strip()[:64] or None) if isinstance(compare, str) else None
+    if compare_clean == reason_clean:
+        # Comparing a reason to itself adds no information — treat as
+        # "no compare" so the response is unambiguous downstream.
+        compare_clean = None
+    empty = {
+        "reason": reason_clean,
+        "weeks": weeks,
+        "buckets": [],
+        "compare_reason": compare_clean,
+        "compare_buckets": [],
+        "available_reasons": [],
+    }
+    if not await is_mongo_available():
+        return empty
+    try:
+        await _ensure_review_prompt_indexes()
+        now = datetime.now(timezone.utc)
+        since = now - timedelta(days=7 * weeks)
+
+        # Task #674 — collapse the per-week aggregation loop into a
+        # single Mongo round-trip. We bucket each event by its
+        # week-offset-from-newest (``floor((now - created_at) /
+        # 7 days)``) so the post-loop only re-shapes the in-memory
+        # counts into the existing oldest-first response. Keeps the
+        # per-reason / per-event grouping so primary, compare, and
+        # ``available_reasons`` all come from the same scan.
+        ms_per_week = 7 * 24 * 60 * 60 * 1000
+        pipeline = [
+            {"$match": {
+                "created_at": {"$gte": since, "$lt": now},
+                "event": {"$in": list(_REVIEW_PROMPT_VALID_EVENTS)},
+            }},
+            {"$group": {
+                "_id": {
+                    "wk": {"$floor": {"$divide": [
+                        {"$subtract": [now, "$created_at"]},
+                        ms_per_week,
+                    ]}},
+                    "reason": "$reason",
+                    "event": "$event",
+                },
+                "count": {"$sum": 1},
+            }},
+        ]
+
+        # counts[wk_offset_from_newest][reason] = {shown, clicked, dismissed}
+        counts: Dict[int, Dict[str, Dict[str, int]]] = {}
+        available_reasons: set = set()
+        async for row in db.review_prompt_events.aggregate(pipeline):
+            key = row.get("_id") or {}
+            try:
+                wk = int(key.get("wk"))
+            except (TypeError, ValueError):
+                continue
+            if wk < 0 or wk >= weeks:
+                continue
+            rname = key.get("reason") or "unknown"
+            ev = key.get("event")
+            n = int(row.get("count") or 0)
+            available_reasons.add(rname)
+            bucket = counts.setdefault(wk, {}).setdefault(
+                rname, {"shown": 0, "clicked": 0, "dismissed": 0},
+            )
+            if ev == "review_prompt_shown":
+                bucket["shown"] += n
+            elif ev == "review_prompt_clicked":
+                bucket["clicked"] += n
+            elif ev == "review_prompt_dismissed":
+                bucket["dismissed"] += n
+
+        buckets: List[Dict[str, Any]] = []
+        compare_buckets: List[Dict[str, Any]] = []
+        # Re-emit oldest-first so the response shape stays identical to
+        # the previous per-week-loop implementation.
+        for i in range(weeks - 1, -1, -1):
+            end = now - timedelta(days=7 * i)
+            start = end - timedelta(days=7)
+            wk_bucket = counts.get(i, {})
+            primary = wk_bucket.get(reason_clean, {})
+            shown = int(primary.get("shown") or 0)
+            clicked = int(primary.get("clicked") or 0)
+            dismissed = int(primary.get("dismissed") or 0)
+            buckets.append({
+                "week_start": start.isoformat(),
+                "week_end": end.isoformat(),
+                "shown": shown,
+                "clicked": clicked,
+                "dismissed": dismissed,
+                "ctr_pct": _ctr(clicked, shown),
+            })
+            if compare_clean:
+                cmp_row = wk_bucket.get(compare_clean, {})
+                c_shown = int(cmp_row.get("shown") or 0)
+                c_clicked = int(cmp_row.get("clicked") or 0)
+                c_dismissed = int(cmp_row.get("dismissed") or 0)
+                compare_buckets.append({
+                    "week_start": start.isoformat(),
+                    "week_end": end.isoformat(),
+                    "shown": c_shown,
+                    "clicked": c_clicked,
+                    "dismissed": c_dismissed,
+                    "ctr_pct": _ctr(c_clicked, c_shown),
+                })
+        # Always include the primary reason itself so the row that
+        # opened the panel never disappears from the picker, even if
+        # all of its events landed in a single bucket that the loop's
+        # sample shape happens to drop.
+        available_reasons.add(reason_clean)
+        return {
+            "reason": reason_clean,
+            "weeks": weeks,
+            "buckets": buckets,
+            "compare_reason": compare_clean,
+            "compare_buckets": compare_buckets,
+            "available_reasons": sorted(available_reasons),
+        }
+    except Exception as e:
+        logger.warning(f"review-prompt by-reason-trend query failed: {e}")
+        return empty
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Task #681 — surface per-reason baseline noise on the admin tile.
+#
+# The auto-tuned collapse alert (Task #670) computes a per-reason CTR
+# mean + rolling stddev over the last N weeks and adds a sigma gate on
+# top of the absolute pp drop. Until now those numbers were only
+# rendered in the alert body — admins had no way to eyeball the noise
+# band ahead of an alert (or to tune the sigma multiplier with
+# confidence). This endpoint exposes the same baseline rollup as a
+# read-only snapshot the dashboard funnel tile renders alongside each
+# trigger reason.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def _compute_review_prompt_reason_baseline(
+    *,
+    window_days: int = 7,
+) -> Dict[str, Any]:
+    """Return the per-reason baseline noise snapshot the admin tile renders.
+
+    Computes — without firing any alert — the same per-reason mean
+    CTR + sample-stddev that the auto-tuned collapse alert uses
+    (Task #670), plus the current week's CTR and z-score so admins can
+    eyeball volatility at a glance.
+
+    Shape::
+
+        {
+          "window_days": int,
+          "baseline_weeks": int,        # configured baseline length
+          "min_shown": int,             # sample-size gate per week
+          "sigma_mult": float,          # current sigma multiplier
+          "by_reason": {
+            "<reason>": {
+              "baseline_weeks_used": int,
+              "baseline_mean_ctr_pct": float | None,
+              "baseline_stddev_pp": float | None,
+              "current_ctr_pct": float | None,
+              "current_shown": int,
+              "current_z_score": float | None,
+              "sigma_threshold_pp": float | None,
+            },
+            ...
+          },
+        }
+
+    A reason whose baseline has fewer than 2 qualifying weekly samples
+    (after the ``min_shown`` gate) gets ``baseline_mean_ctr_pct`` /
+    ``baseline_stddev_pp`` / ``current_z_score`` = ``None`` so the UI
+    can render an "insufficient data" pill instead of a misleading
+    point estimate. The mean / stddev are computed with the same
+    Bessel-corrected formula the alert path uses so the tile and the
+    alert body never show drifting numbers.
+    """
+    (
+        min_shown,
+        _drop_pp,
+        sigma_mult,
+        baseline_weeks,
+    ) = _effective_review_prompt_reason_drop_thresholds()
+    empty: Dict[str, Any] = {
+        "window_days": window_days,
+        "baseline_weeks": baseline_weeks,
+        "min_shown": min_shown,
+        "sigma_mult": sigma_mult,
+        "by_reason": {},
+    }
+    if not await is_mongo_available():
+        return empty
+    try:
+        await _ensure_review_prompt_indexes()
+        now_dt = datetime.now(timezone.utc)
+        curr_start = now_dt - timedelta(days=window_days)
+        curr = await _aggregate_review_prompt_window(curr_start, now_dt)
+        baseline_windows: List[Dict[str, Any]] = []
+        for i in range(baseline_weeks):
+            w_until = curr_start - timedelta(days=window_days * i)
+            w_since = w_until - timedelta(days=window_days)
+            baseline_windows.append(
+                await _aggregate_review_prompt_window(w_since, w_until)
+            )
+    except Exception as exc:
+        logger.debug(f"review-prompt baseline snapshot failed: {exc}")
+        return empty
+
+    # Index baseline weeks by reason so we can pluck per-reason samples
+    # in one pass — same shape the alert evaluator builds.
+    baseline_by_reason: Dict[str, List[Dict[str, int]]] = {}
+    for w in baseline_windows:
+        for r in (w.get("by_reason") or []):
+            reason = str(r.get("reason") or "unknown")
+            baseline_by_reason.setdefault(reason, []).append({
+                "shown": int(r.get("shown") or 0),
+                "clicked": int(r.get("clicked") or 0),
+            })
+
+    curr_by_reason: Dict[str, Dict[str, int]] = {
+        str(r.get("reason") or "unknown"): {
+            "shown": int(r.get("shown") or 0),
+            "clicked": int(r.get("clicked") or 0),
+        }
+        for r in (curr.get("by_reason") or [])
+    }
+
+    out: Dict[str, Dict[str, Any]] = {}
+    # Walk the union of reasons seen in either the current or any
+    # baseline window so reasons that only fired historically (and the
+    # ops team is now looking for) still surface in the snapshot.
+    all_reasons = set(curr_by_reason) | set(baseline_by_reason)
+    for reason in all_reasons:
+        baseline_ctrs: List[float] = []
+        for sample in baseline_by_reason.get(reason, []):
+            s_shown = sample["shown"]
+            if s_shown < min_shown:
+                continue
+            baseline_ctrs.append((sample["clicked"] / s_shown) * 100)
+        baseline_mean = baseline_stddev = None
+        sigma_threshold_pp = None
+        if len(baseline_ctrs) >= 2:
+            baseline_mean = sum(baseline_ctrs) / len(baseline_ctrs)
+            var = sum(
+                (x - baseline_mean) ** 2 for x in baseline_ctrs
+            ) / (len(baseline_ctrs) - 1)
+            baseline_stddev = math.sqrt(var)
+            if sigma_mult > 0 and baseline_stddev > 0:
+                sigma_threshold_pp = sigma_mult * baseline_stddev
+
+        c = curr_by_reason.get(reason, {})
+        c_shown = int(c.get("shown") or 0)
+        c_clicked = int(c.get("clicked") or 0)
+        current_ctr = (c_clicked / c_shown) * 100 if c_shown > 0 else None
+        # z-score is only meaningful when we have a non-zero stddev AND
+        # a current CTR — anything else collapses to None so the UI
+        # doesn't divide by zero or compare against a missing point.
+        current_z = None
+        if (
+            current_ctr is not None
+            and baseline_mean is not None
+            and baseline_stddev is not None
+            and baseline_stddev > 0
+        ):
+            current_z = (current_ctr - baseline_mean) / baseline_stddev
+
+        out[reason] = {
+            "baseline_weeks_used": len(baseline_ctrs),
+            "baseline_mean_ctr_pct": (
+                round(baseline_mean, 2) if baseline_mean is not None else None
+            ),
+            "baseline_stddev_pp": (
+                round(baseline_stddev, 2)
+                if baseline_stddev is not None else None
+            ),
+            "current_ctr_pct": (
+                round(current_ctr, 2) if current_ctr is not None else None
+            ),
+            "current_shown": c_shown,
+            "current_z_score": (
+                round(current_z, 2) if current_z is not None else None
+            ),
+            "sigma_threshold_pp": (
+                round(sigma_threshold_pp, 2)
+                if sigma_threshold_pp is not None else None
+            ),
+        }
+
+    return {
+        "window_days": window_days,
+        "baseline_weeks": baseline_weeks,
+        "min_shown": min_shown,
+        "sigma_mult": sigma_mult,
+        "by_reason": out,
+    }
+
+
+@router.get("/admin/analytics/review-prompt-stats/baseline-noise")
+async def admin_review_prompt_baseline_noise(
+    window_days: int = Query(7, ge=1, le=30),
+    admin: dict = Depends(get_admin_user),
+):
+    """Per-reason baseline mean CTR + stddev + current z-score.
+
+    Powers the noise band the funnel tile renders next to each trigger
+    reason. The numbers come from the same baseline aggregation the
+    auto-tuned collapse alert (Task #670) uses, so the tile and the
+    alert body can never drift.
+    """
+    return await _compute_review_prompt_reason_baseline(window_days=window_days)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Task #656 — alert ops when the review-prompt CTR collapses
 #
@@ -215,6 +622,21 @@ REVIEW_PROMPT_CTR_FLOOR_PCT = 5.0          # ctr_pct < this → alert
 REVIEW_PROMPT_ALERT_WINDOW_DAYS = 7
 REVIEW_PROMPT_ALERT_COOLDOWN_S = 6 * 60 * 60   # 6 h per incident
 REVIEW_PROMPT_ALERT_INTERVAL_S = 30 * 60       # poll every 30 min
+
+# Task #661 — per-reason CTR collapse defaults. Both knobs are
+# overridable from the Alert Settings panel via
+# ``metrics._ALERT_THRESHOLDS``.
+REVIEW_PROMPT_REASON_CTR_DROP_PP = 5.0     # min pp drop WoW to alert
+REVIEW_PROMPT_REASON_CTR_MIN_SHOWN = 30    # min shown in BOTH windows
+# Task #670 — auto-tune the per-reason collapse threshold from baseline
+# noise. ``REVIEW_PROMPT_REASON_CTR_DROP_SIGMA`` is the multiple of the
+# per-reason rolling stddev the WoW drop must additionally exceed; the
+# stddev is computed over the last ``REVIEW_PROMPT_REASON_CTR_BASELINE_WEEKS``
+# weeks (excluding the current week). When stddev is 0 or <2 weekly
+# samples qualify, the sigma gate is skipped so the alert degrades to
+# the original absolute-pp check.
+REVIEW_PROMPT_REASON_CTR_DROP_SIGMA = 2.0
+REVIEW_PROMPT_REASON_CTR_BASELINE_WEEKS = 4
 _REVIEW_PROMPT_DASHBOARD_URL = (
     "https://syrabit.ai/admin/dashboard?tab=overview#review-prompt-funnel"
 )
@@ -342,6 +764,280 @@ async def _evaluate_review_prompt_ctr_alerts(
     return alerts
 
 
+def _effective_review_prompt_reason_drop_thresholds() -> tuple:
+    """Return ``(min_shown, drop_pp, sigma_mult, baseline_weeks)`` for
+    the per-reason CTR-collapse alert, applying admin overrides from
+    ``metrics._ALERT_THRESHOLDS`` on top of the module-level defaults.
+    Mirrors the resolution pattern used by
+    ``_effective_review_prompt_thresholds``.
+
+    Task #670: ``sigma_mult`` and ``baseline_weeks`` drive the
+    auto-tuned noise gate layered on top of the absolute pp floor.
+    A non-positive ``sigma_mult`` or ``baseline_weeks < 2`` disables
+    the sigma gate so the alert degrades to absolute-pp-only.
+    """
+    min_shown = REVIEW_PROMPT_REASON_CTR_MIN_SHOWN
+    drop_pp = REVIEW_PROMPT_REASON_CTR_DROP_PP
+    sigma_mult = REVIEW_PROMPT_REASON_CTR_DROP_SIGMA
+    baseline_weeks = REVIEW_PROMPT_REASON_CTR_BASELINE_WEEKS
+    try:
+        from metrics import _ALERT_THRESHOLDS
+        try:
+            min_shown = int(float(_ALERT_THRESHOLDS.get(
+                "review_prompt_reason_ctr_min_shown", min_shown,
+            )))
+        except (TypeError, ValueError):
+            pass
+        try:
+            drop_pp = float(_ALERT_THRESHOLDS.get(
+                "review_prompt_reason_ctr_drop_pp", drop_pp,
+            ))
+        except (TypeError, ValueError):
+            pass
+        try:
+            sigma_mult = float(_ALERT_THRESHOLDS.get(
+                "review_prompt_reason_ctr_drop_sigma", sigma_mult,
+            ))
+        except (TypeError, ValueError):
+            pass
+        try:
+            baseline_weeks = int(float(_ALERT_THRESHOLDS.get(
+                "review_prompt_reason_ctr_baseline_weeks", baseline_weeks,
+            )))
+        except (TypeError, ValueError):
+            pass
+    except Exception:
+        pass
+    if baseline_weeks < 1:
+        baseline_weeks = 1
+    return min_shown, drop_pp, sigma_mult, baseline_weeks
+
+
+async def _evaluate_review_prompt_reason_ctr_drop_alerts(
+    now_ts: Optional[float] = None,
+    *,
+    window_days: int = REVIEW_PROMPT_ALERT_WINDOW_DAYS,
+) -> List[Dict[str, Any]]:
+    """Pure evaluator for Task #661.
+
+    Compares per-trigger-reason CTR for the most recent ``window_days``
+    against the immediately-preceding equal-sized window. Flags every
+    reason whose CTR fell by ≥ ``drop_pp`` percentage points, *provided*
+    both windows have at least ``min_shown`` shown events for that
+    reason — without the sample-size gate, low-volume reasons would
+    page on noise alone.
+
+    The flagged reasons are batched into a single
+    ``review_prompt_reason_ctr_drop`` alert (so a regression that hits
+    multiple reasons at once doesn't create an inbox storm). Cooldown
+    is also at the alert-type level — same pattern as
+    ``_evaluate_review_prompt_ctr_alerts``.
+
+    Returns the (possibly empty) list of dispatch-kwarg dicts. The
+    caller is responsible for marking
+    ``_REVIEW_PROMPT_ALERT_LAST_FIRED`` only after a successful send.
+    """
+    if now_ts is None:
+        now_ts = time.time()
+    if not await is_mongo_available():
+        return []
+
+    (
+        min_shown,
+        drop_pp,
+        sigma_mult,
+        baseline_weeks,
+    ) = _effective_review_prompt_reason_drop_thresholds()
+    now_dt = datetime.now(timezone.utc)
+    curr_start = now_dt - timedelta(days=window_days)
+
+    # Task #670: pull ``baseline_weeks`` prior weekly windows (each
+    # ``window_days`` long, ending at ``curr_start``) so we can compute
+    # the per-reason CTR mean + stddev that drives the auto-tuned
+    # noise gate. The most recent of these IS the "prev" window the
+    # WoW delta is computed against — keeps the sample shape
+    # consistent and avoids a redundant aggregation call.
+    try:
+        curr = await _aggregate_review_prompt_window(curr_start, now_dt)
+        baseline_windows: List[Dict[str, Any]] = []
+        for i in range(baseline_weeks):
+            w_until = curr_start - timedelta(days=window_days * i)
+            w_since = w_until - timedelta(days=window_days)
+            baseline_windows.append(
+                await _aggregate_review_prompt_window(w_since, w_until)
+            )
+    except Exception as exc:
+        logger.debug(f"reason-ctr-drop window aggregation failed: {exc}")
+        return []
+
+    # Index each baseline week's by_reason rows by reason name so we
+    # can pluck per-reason samples in one pass below.
+    baseline_by_reason: Dict[str, List[Dict[str, int]]] = {}
+    for w in baseline_windows:
+        for r in (w.get("by_reason") or []):
+            reason = str(r.get("reason") or "unknown")
+            baseline_by_reason.setdefault(reason, []).append({
+                "shown": int(r.get("shown") or 0),
+                "clicked": int(r.get("clicked") or 0),
+            })
+
+    # Most-recent baseline week is the WoW comparison ("prev") window.
+    prev_map: Dict[str, Dict[str, int]] = {
+        str(r.get("reason") or "unknown"): {
+            "shown": int(r.get("shown") or 0),
+            "clicked": int(r.get("clicked") or 0),
+        }
+        for r in (baseline_windows[0].get("by_reason") or [])
+    } if baseline_windows else {}
+
+    flagged: List[Dict[str, Any]] = []
+    for row in (curr.get("by_reason") or []):
+        reason = str(row.get("reason") or "unknown")
+        c_shown = int(row.get("shown") or 0)
+        c_clicked = int(row.get("clicked") or 0)
+        prev_row = prev_map.get(reason, {})
+        p_shown = int(prev_row.get("shown") or 0)
+        p_clicked = int(prev_row.get("clicked") or 0)
+        # Sample-size gate on BOTH WoW windows — protects against
+        # pages on the noise of a barely-fired reason.
+        if c_shown < min_shown or p_shown < min_shown:
+            continue
+        c_ctr = (c_clicked / c_shown) * 100
+        p_ctr = (p_clicked / p_shown) * 100
+        delta_pp = round(c_ctr - p_ctr, 2)
+        # Absolute-pp floor — required leg of the AND.
+        if delta_pp > -drop_pp:
+            continue
+
+        # Auto-tuned sigma gate: collect per-reason weekly CTRs from
+        # the baseline windows that clear the same min_shown bar, then
+        # require the absolute drop magnitude to also exceed
+        # ``sigma_mult`` × stddev. Skipped when stddev is 0 / not
+        # enough samples / sigma_mult <= 0 — the alert then degrades
+        # cleanly to the original absolute-only behaviour.
+        baseline_ctrs: List[float] = []
+        for sample in baseline_by_reason.get(reason, []):
+            s_shown = sample["shown"]
+            if s_shown < min_shown:
+                continue
+            baseline_ctrs.append((sample["clicked"] / s_shown) * 100)
+        baseline_mean = baseline_stddev = None
+        sigma_threshold_pp = None
+        if len(baseline_ctrs) >= 2:
+            baseline_mean = sum(baseline_ctrs) / len(baseline_ctrs)
+            # Sample stddev (Bessel-corrected) — matches what an admin
+            # eyeballing the weekly digest would compute.
+            var = sum(
+                (x - baseline_mean) ** 2 for x in baseline_ctrs
+            ) / (len(baseline_ctrs) - 1)
+            baseline_stddev = math.sqrt(var)
+            if sigma_mult > 0 and baseline_stddev > 0:
+                sigma_threshold_pp = sigma_mult * baseline_stddev
+                # ``-delta_pp`` is the drop magnitude in pp; require
+                # it to clear the noise-scaled bar too.
+                if (-delta_pp) < sigma_threshold_pp:
+                    continue
+
+        flagged.append({
+            "reason": reason,
+            "curr_shown": c_shown,
+            "curr_clicked": c_clicked,
+            "curr_ctr_pct": round(c_ctr, 2),
+            "prev_shown": p_shown,
+            "prev_clicked": p_clicked,
+            "prev_ctr_pct": round(p_ctr, 2),
+            "delta_pp": delta_pp,
+            "baseline_weeks_used": len(baseline_ctrs),
+            "baseline_mean_ctr_pct": (
+                round(baseline_mean, 2) if baseline_mean is not None else None
+            ),
+            "baseline_stddev_pp": (
+                round(baseline_stddev, 2) if baseline_stddev is not None else None
+            ),
+            "sigma_threshold_pp": (
+                round(sigma_threshold_pp, 2)
+                if sigma_threshold_pp is not None else None
+            ),
+        })
+
+    if not flagged:
+        return []
+
+    # Sort worst-collapse-first so the alert body leads with the most
+    # damaging regression.
+    flagged.sort(key=lambda r: r["delta_pp"])
+
+    last = _REVIEW_PROMPT_ALERT_LAST_FIRED.get("review_prompt_reason_ctr_drop")
+    if last is not None and (now_ts - last) < REVIEW_PROMPT_ALERT_COOLDOWN_S:
+        return []
+
+    reason_lines: List[str] = []
+    for r in flagged:
+        # Append a "(noise: μ X% ± Y pp)" tail when we had enough
+        # baseline samples to compute it — gives the on-call engineer
+        # immediate context for whether this is a true regression or
+        # a normally-volatile reason that finally cleared the bar.
+        noise_tail = ""
+        if (
+            r.get("baseline_stddev_pp") is not None
+            and r.get("baseline_mean_ctr_pct") is not None
+        ):
+            noise_tail = (
+                f"; baseline μ {r['baseline_mean_ctr_pct']:.1f}% "
+                f"± {r['baseline_stddev_pp']:.1f} pp over "
+                f"{r['baseline_weeks_used']}w"
+            )
+        reason_lines.append(
+            f"  · {r['reason']}: CTR {r['prev_ctr_pct']:.1f}% → "
+            f"{r['curr_ctr_pct']:.1f}% ({r['delta_pp']:+.1f} pp, "
+            f"{r['curr_clicked']}/{r['curr_shown']} this week, "
+            f"{r['prev_clicked']}/{r['prev_shown']} prev{noise_tail})"
+        )
+    sigma_clause = ""
+    if sigma_mult > 0:
+        sigma_clause = (
+            f" AND ≥ {sigma_mult:.1f}× the per-reason rolling stddev "
+            f"({baseline_weeks}-week baseline)"
+        )
+    body_lines = [
+        (
+            f"{len(flagged)} review-prompt trigger reason(s) saw a "
+            f"CTR drop ≥ {drop_pp:.1f} pp week-over-week{sigma_clause} "
+            f"with ≥ {min_shown} shown events in both windows:"
+        ),
+        *reason_lines,
+        (
+            "A regression confined to one reason is invisible to the "
+            "aggregate `review_prompt_ctr_low` alert — investigate the "
+            "specific trigger surface(s) before it washes out the "
+            "overall number."
+        ),
+        f"Dashboard: {_REVIEW_PROMPT_DASHBOARD_URL}",
+    ]
+    title_reason = flagged[0]["reason"]
+    if len(flagged) == 1:
+        title = f"Review-prompt CTR collapsed for `{title_reason}` (WoW)"
+    else:
+        title = (
+            f"Review-prompt CTR collapsed for {len(flagged)} reasons "
+            f"(worst: `{title_reason}`)"
+        )
+    return [{
+        "alert_type": "review_prompt_reason_ctr_drop",
+        "title": title,
+        "body": "\n".join(body_lines),
+        "threshold_snapshot": {
+            "metric": "review_prompt_reason_ctr_delta_pp",
+            "value": -drop_pp,
+            "min_shown": min_shown,
+            "window_days": window_days,
+            "sigma_mult": sigma_mult,
+            "baseline_weeks": baseline_weeks,
+            "reasons": flagged,
+        },
+    }]
+
+
 async def _review_prompt_alert_loop():
     """Background loop: poll review_prompt_events and fire admin alerts
     when the 7-day CTR falls below the configured floor. Modeled on
@@ -362,6 +1058,14 @@ async def _review_prompt_alert_loop():
             except Exception:
                 pass
             alerts = await _evaluate_review_prompt_ctr_alerts()
+            try:
+                alerts = list(alerts) + list(
+                    await _evaluate_review_prompt_reason_ctr_drop_alerts()
+                )
+            except Exception as exc:
+                logger.debug(
+                    f"reason-ctr-drop evaluator raised; skipping this tick: {exc}"
+                )
             if alerts:
                 try:
                     from metrics import _dispatch_alert, _alert_last_fired
@@ -394,8 +1098,8 @@ async def _review_prompt_alert_loop():
 # Task #655 — weekly review-prompt summary email
 #
 # Background loop (modeled on `_seo_weekly_digest_loop` in
-# `routes.bot_discovery`) that emails ops a 7-day rollup of the Google
-# review-prompt funnel every Monday ~09:00 IST (= 03:30 UTC):
+# `routes.bot_discovery`) that emails ops a 7-day rollup of the
+# Trustpilot review-prompt funnel every Monday ~09:00 IST (= 03:30 UTC):
 #   - shown / clicked / dismissed totals + CTR
 #   - week-over-week CTR delta vs the previous 7 days
 #   - top trigger reason in the window
@@ -461,10 +1165,12 @@ def _compose_review_prompt_weekly_digest(
     curr_totals: Dict[str, int],
     curr_by_reason: List[Dict[str, Any]],
     prev_totals: Dict[str, int],
+    prev_by_reason: Optional[List[Dict[str, Any]]] = None,
     *,
     now: Optional[datetime] = None,
     dashboard_url: str = _REVIEW_PROMPT_DIGEST_DASHBOARD_URL,
     window_days: int = REVIEW_PROMPT_WEEKLY_DIGEST_WINDOW_DAYS,
+    baseline: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Pure aggregator: turn raw per-window event counts into the digest
     payload consumed by ``_format_review_prompt_weekly_digest_html`` and
@@ -503,20 +1209,93 @@ def _compose_review_prompt_weekly_digest(
         else:
             ctr_trend = "flat"
 
-    # Normalise + sort by-reason; compute per-reason CTR.
+    # Normalise + sort by-reason; compute per-reason CTR + WoW deltas
+    # (Task #659) so the digest table can show which trigger reason
+    # is responsible for the swing instead of just the overall CTR.
+    prev_by_reason_map: Dict[str, Dict[str, int]] = {}
+    for row in prev_by_reason or []:
+        prev_by_reason_map[str(row.get("reason") or "unknown")] = {
+            "shown": int(row.get("shown") or 0),
+            "clicked": int(row.get("clicked") or 0),
+            "dismissed": int(row.get("dismissed") or 0),
+        }
+
     by_reason: List[Dict[str, Any]] = []
+    seen_reasons: set = set()
     for row in curr_by_reason or []:
+        reason = str(row.get("reason") or "unknown")
+        seen_reasons.add(reason)
         r_shown = int(row.get("shown") or 0)
         r_clicked = int(row.get("clicked") or 0)
         r_dismissed = int(row.get("dismissed") or 0)
+        prev = prev_by_reason_map.get(reason, {})
+        p_shown = int(prev.get("shown") or 0)
+        p_clicked = int(prev.get("clicked") or 0)
+        p_ctr = _ctr_pct_or_none(p_clicked, p_shown)
+        r_ctr = _ctr_pct_or_none(r_clicked, r_shown)
+        ctr_delta = (
+            round(r_ctr - p_ctr, 1)
+            if (r_ctr is not None and p_ctr is not None) else None
+        )
+        status = "new" if (p_shown == 0 and p_clicked == 0) else "active"
         by_reason.append({
-            "reason": str(row.get("reason") or "unknown"),
+            "reason": reason,
             "shown": r_shown,
             "clicked": r_clicked,
             "dismissed": r_dismissed,
-            "ctr_pct": _ctr_pct_or_none(r_clicked, r_shown),
+            "ctr_pct": r_ctr,
+            "prev_shown": p_shown,
+            "prev_clicked": p_clicked,
+            "prev_ctr_pct": p_ctr,
+            "shown_delta": r_shown - p_shown,
+            "ctr_delta_pct": ctr_delta,
+            "status": status,
+        })
+    # Reasons that fired last week but disappeared this week — call them
+    # out so a regression that silenced a trigger surface is visible.
+    for reason, prev in prev_by_reason_map.items():
+        if reason in seen_reasons:
+            continue
+        p_shown = int(prev.get("shown") or 0)
+        p_clicked = int(prev.get("clicked") or 0)
+        p_ctr = _ctr_pct_or_none(p_clicked, p_shown)
+        by_reason.append({
+            "reason": reason,
+            "shown": 0,
+            "clicked": 0,
+            "dismissed": 0,
+            "ctr_pct": None,
+            "prev_shown": p_shown,
+            "prev_clicked": p_clicked,
+            "prev_ctr_pct": p_ctr,
+            "shown_delta": -p_shown,
+            "ctr_delta_pct": None,
+            "status": "gone",
         })
     by_reason.sort(key=lambda r: (r["shown"], r["clicked"]), reverse=True)
+
+    # Task #694 — fold per-reason baseline noise (μ% / σ pp / current
+    # week's z-score) into the rows so the email matches the dashboard
+    # noise band. ``baseline`` is the snapshot from
+    # ``_compute_review_prompt_reason_baseline`` (or ``None`` if the
+    # caller couldn't compute it — e.g. Mongo down). Reasons whose
+    # baseline has fewer than 2 qualifying weekly samples come back
+    # with mean / stddev / z = ``None`` so the email renders an
+    # explicit "n/a" instead of a misleading point estimate.
+    baseline_by_reason: Dict[str, Dict[str, Any]] = {}
+    if isinstance(baseline, dict):
+        baseline_by_reason = baseline.get("by_reason") or {}
+    for row in by_reason:
+        b = baseline_by_reason.get(row["reason"]) or {}
+        row["baseline_mean_ctr_pct"] = b.get("baseline_mean_ctr_pct")
+        row["baseline_stddev_pp"] = b.get("baseline_stddev_pp")
+        row["baseline_z_score"] = b.get("current_z_score")
+        row["baseline_weeks_used"] = b.get("baseline_weeks_used", 0)
+    baseline_meta = {
+        "baseline_weeks": (baseline or {}).get("baseline_weeks"),
+        "min_shown": (baseline or {}).get("min_shown"),
+        "sigma_mult": (baseline or {}).get("sigma_mult"),
+    } if isinstance(baseline, dict) else None
 
     # Top trigger reason = highest shown count in the window. Tie-broken
     # by clicked (already enforced by the sort above).
@@ -540,6 +1319,7 @@ def _compose_review_prompt_weekly_digest(
         "ctr_trend": ctr_trend,
         "top_reason": top_reason,
         "by_reason": by_reason,
+        "baseline_meta": baseline_meta,
         "dashboard_url": dashboard_url,
     }
 
@@ -582,6 +1362,74 @@ def _format_review_prompt_weekly_digest_html(stats: Dict[str, Any]) -> str:
     else:
         top_html = "<span style='color:#94a3b8'>no events recorded</span>"
 
+    def _fmt_shown_delta(row: Dict[str, Any]) -> str:
+        status = row.get("status")
+        if status == "new":
+            return (
+                "<span style='color:#16a34a;font-weight:bold'>new</span>"
+            )
+        if status == "gone":
+            return (
+                "<span style='color:#c0392b;font-weight:bold'>gone</span>"
+            )
+        d = row.get("shown_delta")
+        if d is None:
+            return "<span style='color:#475569'>n/a</span>"
+        if d > 0:
+            return f"<span style='color:#16a34a'>+{int(d):,}</span>"
+        if d < 0:
+            return f"<span style='color:#c0392b'>{int(d):,}</span>"
+        return "<span style='color:#475569'>0</span>"
+
+    def _fmt_ctr_delta(row: Dict[str, Any]) -> str:
+        status = row.get("status")
+        if status in ("new", "gone"):
+            # CTR delta isn't meaningful when one side is missing.
+            return "<span style='color:#94a3b8'>—</span>"
+        d = row.get("ctr_delta_pct")
+        if d is None:
+            return "<span style='color:#475569'>n/a</span>"
+        if d > 0:
+            return f"<span style='color:#16a34a;font-weight:bold'>▲ +{d:.1f} pp</span>"
+        if d < 0:
+            return f"<span style='color:#c0392b;font-weight:bold'>▼ {d:.1f} pp</span>"
+        return "<span style='color:#475569'>▬ 0.0 pp</span>"
+
+    # Task #694 — render baseline noise columns next to the raw counts
+    # so recipients can answer "is this a real regression?" without
+    # opening the dashboard. The numbers come from the same helper
+    # the dashboard funnel tile uses, so the email and the dashboard
+    # never show drifting figures.
+    def _fmt_baseline_mean(row: Dict[str, Any]) -> str:
+        m = row.get("baseline_mean_ctr_pct")
+        if m is None:
+            return "<span style='color:#94a3b8'>n/a</span>"
+        return f"{m:.1f}%"
+
+    def _fmt_baseline_stddev(row: Dict[str, Any]) -> str:
+        s = row.get("baseline_stddev_pp")
+        if s is None:
+            return "<span style='color:#94a3b8'>n/a</span>"
+        return f"±{s:.1f} pp"
+
+    def _fmt_baseline_z(row: Dict[str, Any]) -> str:
+        z = row.get("baseline_z_score")
+        if z is None:
+            return "<span style='color:#94a3b8'>n/a</span>"
+        # Match the dashboard band: |z| ≥ sigma_mult is "outside the
+        # noise band" and worth a closer look. Color downside (drop)
+        # red, upside green, in-band gray.
+        meta = stats.get("baseline_meta") or {}
+        thr = float(meta.get("sigma_mult") or 2.0)
+        if z <= -thr:
+            color = "#c0392b"; weight = "bold"
+        elif z >= thr:
+            color = "#16a34a"; weight = "bold"
+        else:
+            color = "#475569"; weight = "normal"
+        sign = "+" if z > 0 else ""
+        return f"<span style='color:{color};font-weight:{weight}'>{sign}{z:.1f}σ</span>"
+
     by_reason = stats.get("by_reason") or []
     rows_html: List[str] = []
     for row in by_reason[:8]:
@@ -593,24 +1441,51 @@ def _format_review_prompt_weekly_digest_html(stats: Dict[str, Any]) -> str:
             f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{int(row.get('clicked') or 0)}</td>"
             f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{int(row.get('dismissed') or 0)}</td>"
             f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'><b>{r_ctr}</b></td>"
+            f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{_fmt_baseline_mean(row)}</td>"
+            f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{_fmt_baseline_stddev(row)}</td>"
+            f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{_fmt_baseline_z(row)}</td>"
+            f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{_fmt_shown_delta(row)}</td>"
+            f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{_fmt_ctr_delta(row)}</td>"
             "</tr>"
         )
     by_reason_table = (
-        "<table style='border-collapse:collapse;width:100%;font-size:13px;margin:8px 0 18px'>"
+        "<table style='border-collapse:collapse;width:100%;font-size:13px;margin:8px 0 6px'>"
         "<tr style='background:#f3f4f6'>"
         "<th style='text-align:left;padding:6px 10px;border:1px solid #e2e8f0'>Trigger reason</th>"
         "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Shown</th>"
         "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Clicked</th>"
         "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Dismissed</th>"
         "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>CTR</th>"
+        "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Baseline μ</th>"
+        "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>σ (noise)</th>"
+        "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>This week z</th>"
+        "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Δ shown vs prev week</th>"
+        "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Δ CTR vs prev week</th>"
         "</tr>"
         + "".join(rows_html)
         + "</table>"
     ) if rows_html else "<p style='color:#94a3b8;font-size:13px'>No per-reason breakdown — no events fired this week.</p>"
 
+    # Task #694 — short legend explaining the noise band, mirroring
+    # the dashboard funnel tile so the wording is identical.
+    meta = stats.get("baseline_meta") or {}
+    bw = meta.get("baseline_weeks")
+    sm = meta.get("sigma_mult")
+    if rows_html and bw is not None and sm is not None:
+        baseline_legend_html = (
+            "<p style='color:#64748b;font-size:11px;margin:0 0 18px'>"
+            f"Baseline μ / σ are the per-reason mean CTR and standard deviation across the prior {int(bw)} weeks. "
+            f"<b>z</b> is how many σ this week sits from that baseline — anything outside ±{float(sm):.1f}σ "
+            "(red drop / green spike) is outside the expected noise band. "
+            "Reasons without enough history show \u201cn/a\u201d."
+            "</p>"
+        )
+    else:
+        baseline_legend_html = ""
+
     return (
         "<div style='font-family:sans-serif;max-width:560px;margin:auto;padding:24px;color:#0f172a'>"
-        "<h2 style='color:#7c3aed;margin:0 0 4px'>Syrabit.ai · Google review prompt — weekly summary</h2>"
+        "<h2 style='color:#7c3aed;margin:0 0 4px'>Syrabit.ai · Trustpilot review prompt — weekly summary</h2>"
         f"<p style='color:#64748b;margin:0 0 18px;font-size:13px'>"
         f"Window: {stats.get('window_start','')[:10]} → {stats.get('window_end','')[:10]} "
         f"(ISO week {stats.get('iso_week','')}, last {window_days}d)"
@@ -633,6 +1508,7 @@ def _format_review_prompt_weekly_digest_html(stats: Dict[str, Any]) -> str:
         "</table>"
         "<h3 style='color:#0f172a;margin:16px 0 6px;font-size:14px'>Per-reason breakdown</h3>"
         f"{by_reason_table}"
+        f"{baseline_legend_html}"
         f"<p style='margin:18px 0'><a href='{dashboard}' style='display:inline-block;background:#7c3aed;"
         "color:white;text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:600;font-size:14px'>"
         "Open review-prompt funnel</a></p>"
@@ -722,38 +1598,124 @@ async def _gather_review_prompt_weekly_digest_inputs(
 
     curr = await _aggregate_review_prompt_window(curr_start, _now)
     prev = await _aggregate_review_prompt_window(prev_start, curr_start)
+    # Task #694 — pull the per-reason baseline noise snapshot so the
+    # digest table can render μ% / σ pp / z alongside the raw counts.
+    # We swallow exceptions here so a baseline aggregation failure
+    # never blocks the digest itself; rows just fall back to the
+    # ``baseline_weeks_used=0`` / "n/a" path.
+    try:
+        baseline_snapshot = await _compute_review_prompt_reason_baseline(
+            window_days=window_days
+        )
+    except Exception as exc:
+        logger.debug(f"weekly digest baseline snapshot failed: {exc}")
+        baseline_snapshot = None
     return _compose_review_prompt_weekly_digest(
         curr["totals"], curr["by_reason"], prev["totals"],
+        prev_by_reason=prev["by_reason"],
         now=_now, window_days=window_days,
+        baseline=baseline_snapshot,
     )
 
 
+def _resolve_review_prompt_digest_recipients(
+    override: Optional[Any] = None,
+) -> List[str]:
+    """Return the ordered, deduped list of recipients for the weekly
+    review-prompt digest.
+
+    Resolution order (Task #660):
+      1. ``override`` (str / list / comma-separated) — used by the manual
+         "send me a test" button so admins can target an arbitrary
+         address without first persisting it.
+      2. ``metrics._notification_channels["review_prompt_digest_emails"]``
+         — the dedicated digest list configured from the admin
+         notifications panel.
+      3. ``metrics._notification_channels["email"]`` — the legacy
+         single-admin alert email, kept as a fallback so existing
+         installs that haven't configured the new field keep working.
+      4. ``ALERT_EMAIL`` env var — last-ditch fallback.
+
+    Anything obviously bogus (no ``@``, blank, non-string) is dropped
+    and addresses are deduped case-insensitively while preserving order.
+    """
+    candidates: List[str] = []
+
+    def _extend(raw: Any) -> None:
+        if raw is None:
+            return
+        if isinstance(raw, str):
+            for part in raw.split(","):
+                p = part.strip()
+                if p:
+                    candidates.append(p)
+        elif isinstance(raw, (list, tuple, set)):
+            for item in raw:
+                if isinstance(item, str):
+                    p = item.strip()
+                    if p:
+                        candidates.append(p)
+
+    if override is not None:
+        _extend(override)
+    if not candidates:
+        try:
+            from metrics import _notification_channels
+            _extend(_notification_channels.get("review_prompt_digest_emails"))
+            if not candidates:
+                _extend(_notification_channels.get("email"))
+        except Exception:
+            pass
+    if not candidates:
+        _extend(os.environ.get("ALERT_EMAIL", ""))
+
+    seen: set = set()
+    cleaned: List[str] = []
+    for c in candidates:
+        if "@" not in c:
+            continue
+        key = c.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(c)
+    return cleaned
+
+
 async def _send_review_prompt_weekly_digest_email(
-    stats: Dict[str, Any], *, to: Optional[str] = None,
+    stats: Dict[str, Any], *, to: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Send the rendered digest via Resend. Returns
-    ``{sent, to, reason?, subject?}`` so the loop and the manual-trigger
-    endpoint can surface the outcome.
+    ``{sent, to, recipients, reason?, subject?}`` so the loop and the
+    manual-trigger / test-send endpoints can surface the outcome.
+
+    ``to`` may be ``None`` (use the configured recipient list), a single
+    address string, a comma-separated string, or a list of addresses
+    (Task #660 — admin-configurable recipient list distinct from the
+    incident-alert email channel).
     """
     if not stats:
-        return {"sent": False, "to": "", "reason": "no_stats"}
+        return {"sent": False, "to": "", "recipients": [], "reason": "no_stats"}
     try:
-        from metrics import _notification_channels, _load_alert_settings
+        from metrics import _load_alert_settings
         try:
             await _load_alert_settings()
         except Exception:
             pass
-        admin_email = (
-            to or _notification_channels.get("email")
-            or os.environ.get("ALERT_EMAIL", "")
-        ).strip()
     except Exception:
-        admin_email = (to or os.environ.get("ALERT_EMAIL", "")).strip()
+        pass
+    recipients = _resolve_review_prompt_digest_recipients(to)
     resend_key = os.environ.get("RESEND_API_KEY", "").strip()
-    if not admin_email:
-        return {"sent": False, "to": "", "reason": "no_admin_email"}
+    if not recipients:
+        return {"sent": False, "to": "", "recipients": [], "reason": "no_admin_email"}
+    # Preserve legacy single-string ``to`` field for callers / tests that
+    # only inspected the first recipient (the digest used to be 1:1).
+    primary = recipients[0]
     if not resend_key:
-        return {"sent": False, "to": admin_email, "reason": "no_resend_key"}
+        return {
+            "sent": False, "to": primary, "recipients": recipients,
+            "reason": "no_resend_key",
+        }
     try:
         from email_templates import EMAIL_FROM as _from
     except Exception:
@@ -773,19 +1735,22 @@ async def _send_review_prompt_weekly_digest_email(
         _resend_sdk.api_key = resend_key
         _resend_sdk.Emails.send({
             "from": _from,
-            "to": [admin_email],
+            "to": list(recipients),
             "subject": subject,
             "html": html,
         })
         logger.info(
-            f"[review-prompt digest] sent → {admin_email} "
+            f"[review-prompt digest] sent → {', '.join(recipients)} "
             f"({stats.get('iso_week','')})"
         )
-        return {"sent": True, "to": admin_email, "subject": subject}
+        return {
+            "sent": True, "to": primary, "recipients": recipients,
+            "subject": subject,
+        }
     except Exception as exc:
         logger.warning(f"[review-prompt digest] Resend send failed: {exc}")
         return {
-            "sent": False, "to": admin_email,
+            "sent": False, "to": primary, "recipients": recipients,
             "reason": f"send_error:{type(exc).__name__}",
         }
 
@@ -892,6 +1857,7 @@ async def _review_prompt_weekly_digest_loop():
 
 @router.post("/admin/analytics/review-prompt-weekly-digest/send")
 async def admin_review_prompt_weekly_digest_send(
+    body: Optional[Dict[str, Any]] = Body(None),
     preview_only: bool = Query(
         False,
         description="If true, return the rendered stats/HTML without sending the email.",
@@ -901,15 +1867,34 @@ async def admin_review_prompt_weekly_digest_send(
     """Manually trigger (or preview) the weekly review-prompt digest.
     Useful for QA and for catching up after an outage. Does not advance
     the ISO-week dedup marker so the regular Monday send still happens.
+
+    Optional JSON body:
+      ``{"to": "ops@example.com" | ["a@x", "b@y"]}`` overrides the
+      configured recipient list — used by the admin "send me a test
+      now" button so admins can sanity-check delivery before saving the
+      list (Task #660).
     """
+    override_to: Optional[Any] = None
+    if isinstance(body, dict):
+        override_to = body.get("to")
     stats = await _gather_review_prompt_weekly_digest_inputs()
     html = _format_review_prompt_weekly_digest_html(stats) if stats else ""
     if preview_only:
-        return {"sent": False, "preview": True, "stats": stats, "html": html}
-    result = await _send_review_prompt_weekly_digest_email(stats)
+        # Surface the resolved recipient list so the admin UI can show
+        # who *would* receive a non-preview send without actually firing
+        # email — useful for confirming the configured list is valid.
+        return {
+            "sent": False,
+            "preview": True,
+            "stats": stats,
+            "html": html,
+            "recipients": _resolve_review_prompt_digest_recipients(override_to),
+        }
+    result = await _send_review_prompt_weekly_digest_email(stats, to=override_to)
     return {
         "sent": result.get("sent", False),
         "to": result.get("to", ""),
+        "recipients": result.get("recipients", []),
         "reason": result.get("reason"),
         "subject": result.get("subject"),
         "stats": stats,

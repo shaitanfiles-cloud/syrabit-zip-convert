@@ -5,8 +5,11 @@ import { usePublicStats } from '@/hooks/usePublicStats';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
+import { useTurnstile } from '@/hooks/useTurnstile';
+import { formatAuthError } from '@/lib/authErrors';
 import { toast } from 'sonner';
 import { LogoFull } from '@/components/Logo';
+import GoogleSignInButton from '@/components/GoogleSignInButton';
 
 
 const BENEFITS = [
@@ -45,6 +48,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const { login } = useAuth();
+  const { getToken: getTurnstileToken, ready: turnstileReady, enabled: turnstileEnabled, reset: resetTurnstile } = useTurnstile();
   const navigate = useNavigate();
 
   const handleInputFocus = useCallback((e) => {
@@ -58,7 +62,11 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      const user = await login(email, password);
+      let turnstileToken = '';
+      if (turnstileEnabled) {
+        turnstileToken = await getTurnstileToken();
+      }
+      const user = await login(email, password, turnstileToken);
       toast.success('Welcome back!');
       setTimeout(() => {
         if (!user.onboarding_done) {
@@ -68,7 +76,8 @@ export default function LoginPage() {
         }
       }, 100);
     } catch (err) {
-      setError(err.response?.data?.detail || 'Login failed. Please check your credentials.');
+      try { resetTurnstile(); } catch {}
+      setError(formatAuthError(err, 'Login failed. Please check your credentials.'));
     } finally {
       setLoading(false);
     }
@@ -187,6 +196,33 @@ export default function LoginPage() {
               </div>
             )}
 
+            <div className="mb-5">
+              <GoogleSignInButton
+                text="signin_with"
+                disabled={loading}
+                getTurnstileToken={turnstileEnabled ? getTurnstileToken : undefined}
+                onSuccess={(user) => {
+                  toast.success('Welcome back!');
+                  setTimeout(() => {
+                    if (!user.onboarding_done) {
+                      navigate('/onboarding');
+                    } else {
+                      navigate('/library');
+                    }
+                  }, 100);
+                }}
+                onError={(err) => {
+                  try { resetTurnstile(); } catch {}
+                  setError(formatAuthError(err, 'Google sign-in failed. Please try again.'));
+                }}
+              />
+              <div className="flex items-center gap-3 mt-5 text-[11px] uppercase tracking-wider text-muted-foreground/70">
+                <div className="flex-1 h-px bg-border/70" />
+                <span>or continue with email</span>
+                <div className="flex-1 h-px bg-border/70" />
+              </div>
+            </div>
+
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">
                 <Label htmlFor="email" className="text-sm font-medium text-foreground/70">
@@ -249,7 +285,7 @@ export default function LoginPage() {
 
               <button
                 type="submit"
-                disabled={loading}
+                disabled={loading || (turnstileEnabled && !turnstileReady)}
                 className="w-full flex items-center justify-center gap-2 h-11 rounded-xl text-sm font-bold text-white transition-all duration-150 active:scale-[0.97] disabled:opacity-60 btn-gradient"
                 data-testid="auth-submit-button"
               >

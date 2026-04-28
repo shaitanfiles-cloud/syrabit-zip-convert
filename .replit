@@ -57,18 +57,13 @@ SUPABASE_URL = "https://czeznmqogtwecidhpysa.supabase.co"
 GOOGLE_OAUTH_CLIENT_ID = "562571664721-d4pji8dnp263qmafctfhdsts09u3h3jc.apps.googleusercontent.com"
 VITE_SITE_URL = "https://syrabit.ai"
 TRUSTPILOT_BUSINESS_UNIT_ID = "6831bda2e0dd12f40d94de6c"
-D1_SYNC_SECRET = "5b5b091800ea2e552e8f600956ca7df609e25d90cecdcce502c8688df276250e"
 EDGE_WORKER_URL = "https://api.syrabit.ai"
-CF_ZONE_ID = "5b8c97df4431491dc7f60ea72fb61871"
 CF_AI_GATEWAY_ACCOUNT_ID = "d66e40eac539fff1db270fddf384a5ec"
-SUPABASE_DB_URL = "postgresql://postgres.czeznmqogtwecidhpysa:Rimjhimiya%405490@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres"
-CLOUDFLARE_ACCOUNT_ID = "d66e40eac539fff1db270fddf384a5ec"
 
 [userenv.development]
 ENABLE_E2E_ADMIN = "true"
 
 [userenv.production]
-VITE_BACKEND_URL = "https://api.syrabit.ai"
 VITE_ADS_PROPELLERADS_SCRIPT_URL = "https://quge5.com/88/tag.min.js"
 VITE_ADS_PROPELLERADS_LEARN_AFTER_PYQS_ZONE = "231351"
 VITE_ADS_PROPELLERADS_LEARN_END_ZONE = "231351"
@@ -77,6 +72,7 @@ OTEL_EXPORTER = "cloud_trace"
 OTEL_SERVICE_NAME = "syrabit-backend"
 TRACE_SAMPLE_RATIO = "0.1"
 DEPLOYMENT_ENV = "production"
+VITE_BACKEND_URL = "https://api.syrabit.ai"
 
 [[ports]]
 localPort = 7766
@@ -99,9 +95,37 @@ localPort = 8082
 externalPort = 5173
 
 [[ports]]
+localPort = 8083
+externalPort = 3003
+
+[[ports]]
+localPort = 8084
+externalPort = 8000
+
+[[ports]]
+localPort = 8086
+externalPort = 9000
+
+[[ports]]
 localPort = 25144
 externalPort = 3000
 
 [[ports]]
 localPort = 25145
 externalPort = 3001
+
+[[ports]]
+localPort = 25146
+externalPort = 6800
+
+[[ports]]
+localPort = 25147
+externalPort = 6000
+
+[[ports]]
+localPort = 25148
+externalPort = 8008
+
+[[ports]]
+localPort = 25149
+externalPort = 8099

@@ -28,21 +28,21 @@ startup path.
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import csv
 import json
-import time
 import uuid
 import hmac
-import base64
 import hashlib
 import logging
+import random
 import re
 from datetime import datetime, timezone, timedelta, date
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from auth_deps import get_current_user, get_current_user_optional, check_rate_limit, get_user_credits
@@ -173,7 +173,11 @@ def _note_row_to_dict(row) -> dict:
         "tags": list(row["tags"] or []),
         "created_at": row["created_at"].isoformat(),
         "updated_at": row["updated_at"].isoformat(),
-        "claimed_at": row["claimed_at"].isoformat() if row["claimed_at"] else None,
+        "claimed_at": (
+            row["claimed_at"].isoformat()
+            if "claimed_at" in row.keys() and row["claimed_at"]
+            else None
+        ),
         "generated": bool(row["generated"]) if "generated" in row.keys() else False,
         "structured": structured,
         "citations": citations or [],
@@ -198,7 +202,7 @@ Return a STRICT JSON object (no prose, no markdown fences) of the form:
 {
   "questions": [
     {
-      "q": "Question text (concise, factual, single-best-answer MCQ)",
+      "q": "Question text (single-best-answer MCQ that probes a CORE concept)",
       "choices": ["A choice", "Another", "Third", "Fourth"],
       "answer": 0,
       "explanation": "1-2 sentence reason for the correct choice."
@@ -208,9 +212,39 @@ Return a STRICT JSON object (no prose, no markdown fences) of the form:
 Rules:
 - Exactly 4 choices per question.
 - "answer" is the 0-based index of the correct choice.
-- Cover key facts/definitions/applications from the supplied context.
-- Avoid trick questions; aim for board-exam style clarity.
+- Each question MUST test the student's CORE CONCEPTUAL UNDERSTANDING of
+  the chapter — not surface-level recall. Prefer "why does X happen",
+  "which principle explains Y", "predict the outcome of Z", "identify the
+  best example of W", "compare/contrast", "apply to a new scenario".
+  AVOID trivia, dates-only, name-dropping, or copy-pasted definitions.
+- Distractors must be PLAUSIBLE — common misconceptions, near-misses, or
+  partially-correct ideas — so a student who only memorised the surface
+  facts cannot eliminate them by elimination alone.
+- Cover the WHOLE chapter. Spread questions across the major sub-topics
+  proportionally; do not bunch all questions on a single section.
+- Diversify Bloom's levels — mix understand / apply / analyse questions.
+- Avoid duplicate questions and avoid questions that are merely
+  rephrasings of each other.
+- Avoid trick questions or questions that hinge on ambiguous wording;
+  aim for board-exam style clarity.
 - Never quote PII, never include personal opinions, never reference Syrabit."""
+
+
+# How many questions to keep in the per-chapter pool. Generated ONCE at
+# chapter-creation time (or lazily on the first miss) and then sampled +
+# shuffled for every student request, so each student sees a distinct
+# selection of questions in a distinct order with distinct choice
+# orderings — without ever paying another LLM round-trip. Sized to ≈3-4
+# quizzes worth of unique questions (the on-screen quiz is 7 by
+# default), giving thousands of distinct (question-set × ordering)
+# combinations from a single generation.
+_QUIZ_POOL_SIZE = 24
+
+# Larger token budget for the one-shot pool generation. 24 questions of
+# ~150 tokens each + JSON structural overhead ≈ 4-5k; pad to 6k for
+# safety. Per-request cache hits do not pay this — only the very first
+# (admin pre-gen or first-student) write call.
+_QUIZ_POOL_MAX_TOKENS = 6000
 
 
 def _coerce_quiz_payload(raw: str) -> dict:
@@ -229,6 +263,11 @@ def _coerce_quiz_payload(raw: str) -> dict:
 
 
 QUIZ_DAILY_CAP = 200          # Task #615: per-actor LLM call budget per UTC day.
+
+# Task #739: daily caps reset at UTC midnight (DB-friendly), but the
+# user base is in IST. Show both so a 9 PM IST student isn't confused
+# by "midnight UTC" (which is 5:30 AM IST the next morning).
+DAILY_RESET_LABEL = "midnight UTC (5:30 AM IST)"
 QUIZ_DAY_WINDOW_SEC = 86400
 
 
@@ -238,50 +277,308 @@ def _quiz_daily_key(kind: str, actor: str) -> str:
     return f"edu_quiz_day:{kind}:{actor}"
 
 
-@router.post("/edu/quiz/generate")
-async def quiz_generate(req: QuizGenReq, request: Request,
-                        user=Depends(get_current_user_optional)):
-    ip = _client_ip(request)
-    if not check_rate_limit(f"edu_quiz:{ip}", max_requests=15, window_seconds=300):
-        raise HTTPException(status_code=429, detail="Too many quiz requests; try again later.")
-    # Task #615: even within the per-IP burst limit, cap the absolute number
-    # of LLM-backed quiz generations any single actor (signed-in user OR
-    # device anon-id, falling back to a salted IP hash) can request per UTC
-    # day. This bounds worst-case spend for grinders behind the burst limit.
-    kind, actor = _actor(request, user)
-    if not check_rate_limit(_quiz_daily_key(kind, actor),
-                            max_requests=QUIZ_DAILY_CAP,
-                            window_seconds=QUIZ_DAY_WINDOW_SEC):
-        raise HTTPException(
-            status_code=429,
-            detail={
-                "error": "quiz_daily_cap",
-                "limit": QUIZ_DAILY_CAP,
-                "scope": "day",
-                "resets_at": "midnight UTC",
-                "message": (
-                    f"Daily quiz limit reached ({QUIZ_DAILY_CAP}/day). "
-                    f"Try again after midnight UTC."
-                ),
-            },
-            headers={
-                "Retry-After": "3600",
-                "X-RateLimit-Limit": str(QUIZ_DAILY_CAP),
-                "X-RateLimit-Scope": "day",
-            },
+# ─── Permanent per-chapter quiz cache ──────────────────────────────────
+# Chapter quizzes are now generated ONCE and reused forever instead of
+# re-rolling a fresh batch on every "Quiz me" click. The intent (per the
+# user request "make quiz at chapter creation time only, one permanent,
+# no regeneration"):
+#   * Admin creates a chapter        → background task generates the
+#                                       quiz and stores it.
+#   * Student clicks "Quiz me"       → cache hit returns the pinned
+#                                       quiz instantly, no LLM call,
+#                                       no rate-limit charge.
+#   * Cache miss for a legacy chapter → fall back to the existing
+#                                        on-the-fly LLM path AND store
+#                                        the result so subsequent clicks
+#                                        also hit the cache.
+#
+# Storage: MongoDB ``chapter_quizzes`` collection (Mongo, like the rest
+# of the syllabus / chapter content, so the same admin tooling and
+# backup story applies). Cache key is the pair
+# ``(chapter_ref, response_lang)`` because the questions themselves are
+# translated per-language. Index is created lazily on first use so we
+# don't touch the global startup path.
+
+_QUIZ_CACHE_INDEXES_READY = False
+
+
+def _normalize_chapter_ref(ref: str) -> str:
+    """Cache lookups must be order- and case-stable across the various
+    spots that produce a chapter_ref (frontend ChapterPage builds
+    ``board/class/subject/chapter`` without a leading slash; the
+    backend ``_build_chapter_url`` returns it WITH a leading slash;
+    admin tooling may have trailing slashes from copy-pasted URLs).
+    Strip slashes and lowercase so all callers map to the same key."""
+    return (ref or "").strip().strip("/").lower()
+
+
+async def _ensure_quiz_cache_indexes() -> None:
+    global _QUIZ_CACHE_INDEXES_READY
+    if _QUIZ_CACHE_INDEXES_READY:
+        return
+    if not getattr(deps, "db", None):
+        return
+    try:
+        await deps.db.chapter_quizzes.create_index(
+            [("chapter_ref", 1), ("response_lang", 1)], unique=True
         )
-    ctx_text = (req.context or "").strip()
-    if not ctx_text and not req.topic:
+        await deps.db.chapter_quizzes.create_index("chapter_id")
+        _QUIZ_CACHE_INDEXES_READY = True
+    except Exception as e:
+        # Best-effort — a missing index just means slower lookups, not
+        # a broken feature. Don't fail the request over it.
+        logger.warning(f"[edu_quiz] cache index create failed: {e}")
+
+
+async def _lookup_cached_quiz(chapter_ref: str, response_lang: str) -> Optional[dict]:
+    """Return the persisted quiz dict for this chapter+language, or
+    ``None`` if there is no cached entry yet. Always safe to call —
+    swallows transport errors so a flaky Mongo never blocks the LLM
+    fallback path."""
+    if not chapter_ref:
+        return None
+    if not getattr(deps, "db", None):
+        return None
+    await _ensure_quiz_cache_indexes()
+    try:
+        doc = await deps.db.chapter_quizzes.find_one(
+            {
+                "chapter_ref": _normalize_chapter_ref(chapter_ref),
+                "response_lang": (response_lang or "en").lower()[:8],
+            },
+            # Pull `chapter_id` too so the lazy-upgrade path in
+            # quiz_generate can re-fetch the chapter doc without a
+            # second round-trip through `_resolve_quiz_cache_chapter_ref`.
+            {"_id": 0, "questions": 1, "count": 1, "chapter_id": 1},
+        )
+    except Exception as e:
+        logger.warning(f"[edu_quiz] cache lookup failed for {chapter_ref!r}: {e}")
+        return None
+    if not doc or not doc.get("questions"):
+        return None
+    return doc
+
+
+# Per-process dedupe for the lazy "legacy 7-question row → 24-question
+# pool" upgrade. Multiple students hitting a legacy chapter at once
+# would otherwise queue N parallel pool-regenerations of the same
+# chapter and waste LLM spend on duplicate work. Membership is removed
+# in a `finally` so a crashed upgrade can be retried by the next click.
+_QUIZ_POOL_UPGRADE_INFLIGHT: set[str] = set()
+
+
+async def _resolve_chapter_id_from_ref(chapter_ref: str) -> str:
+    """Inverse of ``_resolve_quiz_cache_chapter_ref``: given the
+    ``board/class/subject/chapter`` slug path the frontend sends,
+    walk the four parent collections and return the chapter id, or
+    "" if any segment is missing or unmatched. Used as a fallback
+    by the legacy-pool upgrade when a cache row was written by the
+    lazy-backfill code path (which historically did not stamp
+    chapter_id on the row). Non-fatal — returns "" on any error."""
+    if not getattr(deps, "db", None):
+        return ""
+    try:
+        parts = _normalize_chapter_ref(chapter_ref).split("/")
+        if len(parts) < 4:
+            return ""
+        board_slug, cls_slug, subj_slug, ch_slug = parts[:4]
+        board = await deps.db.boards.find_one(
+            {"slug": board_slug}, {"_id": 0, "id": 1}
+        )
+        if not board:
+            return ""
+        cls = await deps.db.classes.find_one(
+            {"slug": cls_slug, "board_id": board["id"]}, {"_id": 0, "id": 1},
+        )
+        if not cls:
+            return ""
+        subj = await deps.db.subjects.find_one(
+            {"slug": subj_slug, "class_id": cls["id"]}, {"_id": 0, "id": 1},
+        )
+        if not subj:
+            return ""
+        ch = await deps.db.chapters.find_one(
+            {"slug": ch_slug, "subject_id": subj["id"]}, {"_id": 0, "id": 1},
+        )
+        return (ch or {}).get("id", "") or ""
+    except Exception as e:
+        logger.warning(
+            f"[edu_quiz] _resolve_chapter_id_from_ref crashed for "
+            f"{chapter_ref!r}: {e}"
+        )
+        return ""
+
+
+async def _maybe_upgrade_legacy_quiz_pool(
+    chapter_id: str, chapter_ref: str, response_lang: str,
+) -> None:
+    """Background task: if a cache hit returned a small pool (a row
+    written before `_QUIZ_POOL_SIZE` was raised to 24), regenerate
+    the FULL conceptual pool and overwrite the cache. Idempotent and
+    deduped. Best-effort — failure just leaves the legacy row in
+    place and the next click attempts again."""
+    key = f"{_normalize_chapter_ref(chapter_ref)}::{(response_lang or 'en').lower()[:8]}"
+    if key in _QUIZ_POOL_UPGRADE_INFLIGHT:
+        return
+    _QUIZ_POOL_UPGRADE_INFLIGHT.add(key)
+    try:
+        if not getattr(deps, "db", None):
+            return
+        # Cache rows written by the older lazy-backfill code path do
+        # NOT carry chapter_id (it was only stamped on rows written
+        # by the admin pre-gen hook). Resolve it from the chapter_ref
+        # slug so those rows can still auto-upgrade.
+        if not chapter_id:
+            chapter_id = await _resolve_chapter_id_from_ref(chapter_ref)
+        if not chapter_id:
+            logger.info(
+                f"[edu_quiz] legacy pool upgrade skipped for "
+                f"{chapter_ref!r} — could not resolve chapter_id"
+            )
+            return
+        chapter_doc = await deps.db.chapters.find_one({"id": chapter_id})
+        if not chapter_doc:
+            logger.info(
+                f"[edu_quiz] legacy pool upgrade skipped — chapter {chapter_id} "
+                f"no longer exists"
+            )
+            return
+        upgraded = await pregenerate_chapter_quiz(
+            chapter_doc, count=_QUIZ_POOL_SIZE, response_lang=response_lang,
+        )
+        if upgraded:
+            logger.info(
+                f"[edu_quiz] upgraded legacy small-pool cache to "
+                f"{_QUIZ_POOL_SIZE}-question pool for chapter_id={chapter_id} "
+                f"chapter_ref={chapter_ref!r} lang={response_lang}"
+            )
+    except Exception as e:
+        logger.warning(
+            f"[edu_quiz] legacy pool upgrade crashed for {chapter_ref!r}: {e}"
+        )
+    finally:
+        _QUIZ_POOL_UPGRADE_INFLIGHT.discard(key)
+
+
+async def _save_quiz_cache(
+    chapter_ref: str,
+    response_lang: str,
+    questions: list[dict],
+    *,
+    chapter_id: str = "",
+) -> None:
+    """Pin a freshly-generated quiz so the next click serves it
+    without an LLM round-trip. Upsert (instead of insert) so a race
+    between two simultaneous cache misses can't 500 the second
+    request — the loser just overwrites with an equivalent payload."""
+    norm = _normalize_chapter_ref(chapter_ref)
+    if not norm or not questions:
+        return
+    if not getattr(deps, "db", None):
+        return
+    await _ensure_quiz_cache_indexes()
+    payload = {
+        "chapter_ref": norm,
+        "response_lang": (response_lang or "en").lower()[:8],
+        "chapter_id": chapter_id or "",
+        "questions": questions,
+        "count": len(questions),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await deps.db.chapter_quizzes.update_one(
+            {"chapter_ref": norm,
+             "response_lang": payload["response_lang"]},
+            {"$set": payload},
+            upsert=True,
+        )
+    except Exception as e:
+        logger.warning(f"[edu_quiz] cache save failed for {chapter_ref!r}: {e}")
+
+
+def _sample_and_shuffle(pool: list[dict], count: int) -> list[dict]:
+    """Pick ``count`` random questions from the cached pool, shuffle
+    their order, AND shuffle the four choices inside each question
+    (re-mapping the ``answer`` index so it still points at the correct
+    choice in its new position).
+
+    Why three layers of shuffling:
+      1. Subset sampling — different students see different questions
+         out of the chapter's 24-question pool.
+      2. Question-order shuffle — even two students who happen to draw
+         the same subset see them in different orders.
+      3. Choice-order shuffle — students can't share "the answer to
+         Q3 is C" with each other.
+
+    All three layers use the standard library RNG (Mersenne Twister) —
+    we don't need cryptographic randomness, just enough variety that
+    no two students see the same paper. ``count`` is clamped to the
+    pool size so we never raise ``ValueError`` on a too-small pool."""
+    if not pool:
+        return []
+    n = max(1, min(count or 1, len(pool)))
+    sampled = random.sample(pool, n)
+    out: list[dict] = []
+    for q in sampled:
+        choices = list(q.get("choices") or [])
+        if len(choices) != 4:
+            # Defensive — never happens for cleaned questions but
+            # guards against forward-incompat cache rows.
+            out.append(q)
+            continue
+        try:
+            old_ans = int(q.get("answer", 0))
+        except Exception:
+            old_ans = 0
+        if old_ans < 0 or old_ans > 3:
+            old_ans = 0
+        perm = list(range(4))
+        random.shuffle(perm)
+        new_choices = [choices[i] for i in perm]
+        new_answer = perm.index(old_ans)
+        out.append({
+            **q,
+            "choices": new_choices,
+            "answer": new_answer,
+        })
+    return out
+
+
+async def _generate_and_clean_quiz(
+    *,
+    context: str,
+    topic: str,
+    chapter_ref: str,
+    subject_name: str,
+    count: int,
+    response_lang: str,
+    max_tokens: int = 2000,
+) -> list[dict]:
+    """Pure LLM-call + parse + clean + safety-validate path. Extracted
+    from ``quiz_generate`` so the admin background pre-generation hook
+    can reuse the exact same generation contract without duplicating
+    the prompt template, JSON tolerant-parse, choice validation,
+    answer-index clamp, or guardrails pass.
+
+    ``max_tokens`` lets the pool-generation caller raise the LLM
+    output budget (24 questions need ≈3-5k tokens; the legacy
+    7-question request fits well inside the 2000-token default).
+
+    Returns the cleaned list of question dicts. Raises ``HTTPException``
+    on any failure so the route handler can propagate the same status
+    codes the original inline code did."""
+    ctx_text = (context or "").strip()
+    if not ctx_text and not topic:
         raise HTTPException(status_code=400, detail="context or topic required")
     if len(ctx_text) > 12000:
         ctx_text = ctx_text[:12000]
     user_msg_parts = [
-        f"Subject: {req.subject_name}" if req.subject_name else "",
-        f"Chapter: {req.chapter_ref}" if req.chapter_ref else "",
-        f"Topic focus: {req.topic}" if req.topic else "",
-        f"Generate exactly {req.count} MCQs.",
+        f"Subject: {subject_name}" if subject_name else "",
+        f"Chapter: {chapter_ref}" if chapter_ref else "",
+        f"Topic focus: {topic}" if topic else "",
+        f"Generate exactly {count} MCQs.",
     ]
-    if req.response_lang and req.response_lang.lower().startswith("as"):
+    if response_lang and response_lang.lower().startswith("as"):
         user_msg_parts.append("Write the questions, choices and explanations in Assamese (as-IN).")
     if ctx_text:
         user_msg_parts.append("\n--- SOURCE TEXT ---\n" + ctx_text)
@@ -290,14 +587,14 @@ async def quiz_generate(req: QuizGenReq, request: Request,
         {"role": "user",   "content": "\n".join([p for p in user_msg_parts if p])},
     ]
     try:
-        raw = await call_llm_api(messages, max_tokens=2000)
+        raw = await call_llm_api(messages, max_tokens=max_tokens)
     except Exception as e:
         logger.warning(f"[edu_quiz] LLM call failed: {e}")
         raise HTTPException(status_code=502, detail="quiz_llm_failed")
     payload = _coerce_quiz_payload(raw)
     questions = payload.get("questions") or []
     cleaned: list[dict] = []
-    for q in questions[: req.count]:
+    for q in questions[:count]:
         if not isinstance(q, dict):
             continue
         choices = q.get("choices") or []
@@ -318,12 +615,268 @@ async def quiz_generate(req: QuizGenReq, request: Request,
         })
     if not cleaned:
         raise HTTPException(status_code=502, detail="quiz_no_questions")
-    # Light safety pass on the generated text.
     flat = " ".join(c["q"] + " " + c["explanation"] for c in cleaned)
     ok, _why = validate_llm_output(flat)
     if not ok:
         raise HTTPException(status_code=502, detail="quiz_safety_block")
-    return {"ok": True, "questions": cleaned, "count": len(cleaned)}
+    return cleaned
+
+
+async def _resolve_quiz_cache_chapter_ref(chapter_doc: dict) -> str:
+    """Resolve the canonical cache key for a chapter — the SAME
+    `board/class/subject/chapter` slug path the frontend's ChapterPage
+    builds at runtime when calling /edu/quiz/generate.
+
+    IMPORTANT: this intentionally drops the stream segment even when
+    the subject lives under a stream (e.g. AHSEC Class 12 → Science).
+    ``ChapterPage.jsx`` constructs ``${board}/${classSlug}/${subjectSlug}/${chapterSlug}``
+    without a stream level, and ``App.jsx`` further redirects any
+    stream-bearing chapter URL down to the no-stream shape, so the
+    student request never carries the stream slug. Reusing the
+    stream-aware ``_build_chapter_url`` here would key the cache under
+    a path the frontend never asks for and the pre-generated quiz
+    would silently never be hit. Returns "" if any required parent
+    slug is missing — caller logs and skips."""
+    try:
+        ch_slug = (chapter_doc.get("slug") or "").strip()
+        subj_id = (chapter_doc.get("subject_id") or "").strip()
+        if not (ch_slug and subj_id):
+            return ""
+        subj = await deps.db.subjects.find_one(
+            {"id": subj_id},
+            {"_id": 0, "slug": 1, "class_id": 1, "board_id": 1, "stream_id": 1},
+        )
+        if not subj:
+            return ""
+        subj_slug = (subj.get("slug") or "").strip()
+        cls_id = (subj.get("class_id") or "").strip()
+        board_id = (subj.get("board_id") or "").strip()
+        stream_id = (subj.get("stream_id") or "").strip()
+        # Stream-only subjects don't denormalise class_id/board_id, so
+        # walk one extra hop via streams → class → board to fill them
+        # in. Mirrors the same fallback in `_build_chapter_url`.
+        if stream_id and not (cls_id and board_id):
+            stream = await deps.db.streams.find_one(
+                {"id": stream_id}, {"_id": 0, "class_id": 1}
+            )
+            if stream:
+                cls_id = cls_id or stream.get("class_id") or ""
+        if cls_id and not board_id:
+            cls = await deps.db.classes.find_one(
+                {"id": cls_id}, {"_id": 0, "board_id": 1}
+            )
+            if cls:
+                board_id = cls.get("board_id") or ""
+        if not (cls_id and board_id and subj_slug):
+            return ""
+        cls = await deps.db.classes.find_one({"id": cls_id}, {"_id": 0, "slug": 1})
+        board = await deps.db.boards.find_one({"id": board_id}, {"_id": 0, "slug": 1})
+        if not (cls and board):
+            return ""
+        cls_slug = (cls.get("slug") or "").strip()
+        board_slug = (board.get("slug") or "").strip()
+        if not (cls_slug and board_slug):
+            return ""
+        return _normalize_chapter_ref(
+            f"{board_slug}/{cls_slug}/{subj_slug}/{ch_slug}"
+        )
+    except Exception as e:
+        logger.warning(f"[edu_quiz] _resolve_quiz_cache_chapter_ref crashed: {e}")
+        return ""
+
+
+async def pregenerate_chapter_quiz(
+    chapter_doc: dict, *, count: int = _QUIZ_POOL_SIZE, response_lang: str = "en",
+) -> bool:
+    """Public hook called from ``admin_create_chapter`` (and any future
+    bulk-import / migration script) to materialise the permanent quiz
+    cache entry for a chapter at the moment it is created. Best-effort:
+    returns True on success, False on any failure (logged). Never
+    raises — the chapter creation flow must not be blocked by a flaky
+    LLM, and the lazy fallback in ``quiz_generate`` will recover the
+    miss the first time a student opens the quiz anyway.
+
+    Resolves the chapter_ref slug-path the SAME way the frontend
+    constructs it (board/class/subject/chapter, no stream segment) via
+    ``_resolve_quiz_cache_chapter_ref`` so the cache key the admin
+    pre-gen writes is the SAME key ``quiz_generate`` will look up on
+    a student click. Skips quietly if the chapter has no body content
+    (no source text → not enough material to write a meaningful MCQ
+    set)."""
+    try:
+        title = (chapter_doc.get("title") or "").strip()
+        content = (chapter_doc.get("content") or "").strip()
+        chapter_id = chapter_doc.get("id") or ""
+        if not (title and content and len(content) > 200):
+            logger.info(
+                f"[edu_quiz] pregenerate skipped for {chapter_id} — no body content"
+            )
+            return False
+        chapter_ref = await _resolve_quiz_cache_chapter_ref(chapter_doc)
+        if not chapter_ref:
+            logger.info(
+                f"[edu_quiz] pregenerate skipped for {chapter_id} — could not "
+                f"resolve parent slugs (board/class/subject/chapter)"
+            )
+            return False
+        # Resolve the parent subject's display name for the prompt
+        # (improves question quality and matches what the frontend
+        # sends from ChapterPage.jsx).
+        subject_name = ""
+        try:
+            subj = await deps.db.subjects.find_one(
+                {"id": chapter_doc.get("subject_id") or ""},
+                {"_id": 0, "name": 1, "title": 1},
+            )
+            if subj:
+                subject_name = (subj.get("name") or subj.get("title") or "")[:200]
+        except Exception:
+            pass
+        cleaned = await _generate_and_clean_quiz(
+            context=content,
+            topic=title,
+            chapter_ref=chapter_ref,
+            subject_name=subject_name,
+            count=count,
+            response_lang=response_lang,
+            # Pool generation needs a much larger output budget than
+            # the legacy 7-question request — see _QUIZ_POOL_MAX_TOKENS.
+            max_tokens=(_QUIZ_POOL_MAX_TOKENS if count >= 12 else 2000),
+        )
+        await _save_quiz_cache(
+            chapter_ref, response_lang, cleaned, chapter_id=chapter_id
+        )
+        logger.info(
+            f"[edu_quiz] pregenerated and cached pool of {len(cleaned)} questions "
+            f"for chapter_id={chapter_id} chapter_ref={chapter_ref!r} "
+            f"lang={response_lang} (target pool size={count})"
+        )
+        return True
+    except HTTPException as e:
+        logger.warning(
+            f"[edu_quiz] pregenerate failed for "
+            f"{chapter_doc.get('id')!r}: {e.detail}"
+        )
+        return False
+    except Exception as e:
+        logger.warning(
+            f"[edu_quiz] pregenerate crashed for {chapter_doc.get('id')!r}: {e}"
+        )
+        return False
+
+
+@router.post("/edu/quiz/generate")
+async def quiz_generate(req: QuizGenReq, request: Request,
+                        user=Depends(get_current_user_optional)):
+    # Permanent-per-chapter cache short-circuit. Keyed by chapter_ref
+    # (the slug path the frontend already sends) + response_lang. Cache
+    # hits skip BOTH the per-IP burst limit AND the per-actor daily cap
+    # because they cost zero LLM tokens — the student isn't really
+    # "generating" a quiz, just opening the one that already exists.
+    if req.chapter_ref:
+        cached = await _lookup_cached_quiz(req.chapter_ref, req.response_lang)
+        if cached:
+            # Each student gets a DIFFERENT random subset of the
+            # chapter's question pool, in a randomised order, with the
+            # four choices of every question shuffled. This is the
+            # "3-4 quizzes per chapter, shuffle and provide to user"
+            # behaviour: one stored pool of ~24 conceptual questions
+            # at chapter creation, but every click serves a fresh
+            # shuffled paper drawn from it.
+            pool = cached["questions"]
+            qs = _sample_and_shuffle(pool, req.count)
+            # Lazy upgrade: rows written before _QUIZ_POOL_SIZE was
+            # raised to 24 only have ~7 questions, which limits the
+            # shuffle variety to "same 7 in a different order". Kick
+            # off a background regeneration of the full pool so the
+            # NEXT student to open this chapter gets the new pool.
+            # The current student still gets the (smaller) shuffled
+            # paper immediately — no extra latency on this request.
+            if len(pool) < 12:
+                try:
+                    asyncio.create_task(_maybe_upgrade_legacy_quiz_pool(
+                        # May be empty for legacy lazy-backfilled rows —
+                        # the upgrade helper will resolve via slug as a
+                        # fallback before giving up.
+                        chapter_id=cached.get("chapter_id") or "",
+                        chapter_ref=req.chapter_ref,
+                        response_lang=req.response_lang,
+                    ))
+                except RuntimeError:
+                    # No running loop in some test contexts — safe to ignore.
+                    pass
+            return {
+                "ok": True,
+                "questions": qs,
+                "count": len(qs),
+                "cached": True,
+                "pool_size": len(pool),
+            }
+
+    ip = _client_ip(request)
+    if not check_rate_limit(f"edu_quiz:{ip}", max_requests=15, window_seconds=300):
+        raise HTTPException(status_code=429, detail="Too many quiz requests; try again later.")
+    # Task #615: even within the per-IP burst limit, cap the absolute number
+    # of LLM-backed quiz generations any single actor (signed-in user OR
+    # device anon-id, falling back to a salted IP hash) can request per UTC
+    # day. This bounds worst-case spend for grinders behind the burst limit.
+    kind, actor = _actor(request, user)
+    if not check_rate_limit(_quiz_daily_key(kind, actor),
+                            max_requests=QUIZ_DAILY_CAP,
+                            window_seconds=QUIZ_DAY_WINDOW_SEC):
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "quiz_daily_cap",
+                "limit": QUIZ_DAILY_CAP,
+                "scope": "day",
+                "resets_at": DAILY_RESET_LABEL,
+                "message": (
+                    f"Daily quiz limit reached ({QUIZ_DAILY_CAP}/day). "
+                    f"Try again after {DAILY_RESET_LABEL}."
+                ),
+            },
+            headers={
+                "Retry-After": "3600",
+                "X-RateLimit-Limit": str(QUIZ_DAILY_CAP),
+                "X-RateLimit-Scope": "day",
+            },
+        )
+    # Cache miss path: when the request carries a chapter_ref (the
+    # normal student flow), generate the FULL pool (~24 conceptual
+    # questions) so every subsequent student gets an instant shuffled
+    # subset. When chapter_ref is empty (ad-hoc quiz from arbitrary
+    # context — e.g. selected text), keep the original lightweight
+    # behaviour of generating exactly the requested count.
+    pool_target = _QUIZ_POOL_SIZE if req.chapter_ref else req.count
+    cleaned = await _generate_and_clean_quiz(
+        context=req.context,
+        topic=req.topic,
+        chapter_ref=req.chapter_ref,
+        subject_name=req.subject_name,
+        count=pool_target,
+        response_lang=req.response_lang,
+        max_tokens=(_QUIZ_POOL_MAX_TOKENS if pool_target >= 12 else 2000),
+    )
+    # Lazy backfill — pin the freshly-generated POOL to the cache so
+    # the next click on this same chapter is a cache hit (and so the
+    # student community as a whole only ever pays the LLM cost once
+    # per chapter+language combo).
+    if req.chapter_ref:
+        await _save_quiz_cache(req.chapter_ref, req.response_lang, cleaned)
+        # Sample + shuffle the just-generated pool for THIS request
+        # too, so the first student gets the same variety experience
+        # as every cache-hit student that follows.
+        qs = _sample_and_shuffle(cleaned, req.count)
+        return {
+            "ok": True,
+            "questions": qs,
+            "count": len(qs),
+            "cached": False,
+            "pool_size": len(cleaned),
+        }
+    # No chapter_ref → ad-hoc one-off quiz, no caching, return as-is.
+    return {"ok": True, "questions": cleaned, "count": len(cleaned), "cached": False}
 
 
 # ───────────────────────── Notebook (notes) ─────────────────────────
@@ -1122,10 +1675,10 @@ async def generate_notes(req: NotesGenReq, request: Request,
                 "error": "notes_gen_daily_cap",
                 "limit": NOTES_GEN_DAILY_CAP,
                 "scope": "day",
-                "resets_at": "midnight UTC",
+                "resets_at": DAILY_RESET_LABEL,
                 "message": (
                     f"Daily AI-notes limit reached ({NOTES_GEN_DAILY_CAP}/day). "
-                    f"Try again after midnight UTC."
+                    f"Try again after {DAILY_RESET_LABEL}."
                 ),
             },
             headers={"Retry-After": "3600",
@@ -1145,7 +1698,7 @@ async def generate_notes(req: NotesGenReq, request: Request,
                 "remaining": remaining,
                 "message": (
                     f"This action costs {NOTES_GEN_CREDIT_COST} credits but you have "
-                    f"{remaining} remaining today. Resets at midnight UTC."
+                    f"{remaining} remaining today. Resets at {DAILY_RESET_LABEL}."
                 ),
             },
         )

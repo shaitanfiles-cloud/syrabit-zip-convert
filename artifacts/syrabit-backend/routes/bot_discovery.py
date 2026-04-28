@@ -1,11 +1,10 @@
 """Syrabit.ai — Bot discovery routes: RSS feeds, llms-full.txt, IndexNow, ai-plugin.json, bot analytics."""
-import asyncio, html as _html, json, logging, os, time, uuid, hashlib
+import asyncio, html as _html, json, logging, os, re, time, uuid, hashlib
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict
 from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks, Request
-from fastapi.responses import Response
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +19,22 @@ _INDEXNOW_COOLDOWN_SECONDS = 300
 _BACKOFF_BASE_SECONDS = 30
 _BACKOFF_MAX_SECONDS = 600
 _DEAD_LETTER_THRESHOLD = 5
+
+
+# Task #986 — Feature flag so environments without outbound access to the
+# IndexNow endpoints (api.indexnow.org, www.bing.com/indexnow,
+# yandex.com/indexnow) don't generate misleading "endpoint_down /
+# Last success: never" alerts. The notify path *is* the probe in this
+# codebase — every push hits the real endpoint via the same `push_indexnow`
+# call — so when the env can't talk to those hosts we'd otherwise spam an
+# alert per endpoint every backoff cycle. Default is "1" (enabled) so prod
+# behaviour is preserved; set INDEXNOW_ENABLED=0 in dev/preview to silence.
+_INDEXNOW_DISABLED_LOG_ONCE = False
+
+
+def _indexnow_enabled() -> bool:
+    val = (os.environ.get("INDEXNOW_ENABLED", "1") or "").strip().lower()
+    return val in ("1", "true", "yes", "on")
 
 
 _HEALTH_STALE_SECONDS = 3600
@@ -86,6 +101,7 @@ class _EndpointHealth:
         remaining = 0.0
         if self.backoff_until and now < self.backoff_until:
             remaining = round(self.backoff_until - now, 1)
+        enabled = _indexnow_enabled()
         return {
             "endpoint": self.endpoint,
             "consecutive_failures": self.consecutive_failures,
@@ -94,6 +110,9 @@ class _EndpointHealth:
             "is_available": self.is_available(),
             "backoff_remaining_seconds": remaining,
             "is_dead_lettered": self.consecutive_failures >= _DEAD_LETTER_THRESHOLD,
+            "enabled": enabled,
+            "last_success_time": self.last_success_time,
+            "last_failure_time": self.last_failure_time,
         }
 
     def to_persist_dict(self) -> dict:
@@ -222,6 +241,13 @@ async def _endpoint_health_alert_loop():
     await asyncio.sleep(120)
     while True:
         try:
+            # Task #986 — when IndexNow is disabled in this environment we
+            # never push and never update health, so any stale "down" state
+            # is meaningless. Skip the whole alert pass.
+            if not _indexnow_enabled():
+                _, check_interval_s = _get_endpoint_down_thresholds()
+                await asyncio.sleep(check_interval_s)
+                continue
             threshold_s, _ = _get_endpoint_down_thresholds()
             now = time.time()
             for ep, health in list(_endpoint_health.items()):
@@ -676,10 +702,18 @@ async def _schedule_indexnow_for_url(url: str, source: str = "fanout") -> bool:
 # tax — which is why the 7-day Googlebot cache-hit ratio sits at ~33.6%.
 # ---------------------------------------------------------------------------
 
-_PREWARM_USER_AGENT = (
-    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html) "
-    "syrabit-prewarm/1.0"
+# Internal-bot UAs and headers live in `internal_user_agents.py`
+# (Task #820) so Cloudflare bot analytics can identify our own
+# self-checks via a single `X-Syrabit-Internal: 1` header instead of
+# enumerating every per-call-site UA substring. The legacy module-level
+# names below are kept as thin aliases so existing call-sites in this
+# file (and any test that imports them) still resolve.
+from internal_user_agents import (  # noqa: E402
+    PREWARM_USER_AGENT as _PREWARM_USER_AGENT,
+    seo_self_check_headers as _seo_self_check_headers,
+    prewarm_headers as _prewarm_headers,
 )
+_SEO_SELF_CHECK_HEADERS = _seo_self_check_headers()
 _PREWARM_RPS = 1.5
 _PREWARM_TIMEOUT = 8.0
 _prewarm_lock = asyncio.Lock()
@@ -702,12 +736,7 @@ async def prewarm_bot_cache(urls: list[str], rps: float = _PREWARM_RPS) -> bool:
     import httpx
     success = 0
     timeout = httpx.Timeout(_PREWARM_TIMEOUT)
-    headers = {
-        "User-Agent": _PREWARM_USER_AGENT,
-        "Accept": "text/html,application/xhtml+xml",
-        "Accept-Language": "en-IN,en;q=0.9,as;q=0.8",
-        "X-Syrabit-Prewarm": "1",
-    }
+    headers = _prewarm_headers()
     deduped = list(dict.fromkeys(u for u in urls if u))
     if not deduped:
         return False
@@ -809,6 +838,25 @@ async def push_indexnow(
     target_endpoints: Optional[List[str]] = None,
 ) -> Dict[str, bool]:
     if not urls:
+        return {}
+    # Task #986 — feature-flag short-circuit. When INDEXNOW_ENABLED=0 we
+    # don't touch the network and don't mutate endpoint health (so the
+    # admin "Last success" view doesn't lie about failures that never
+    # actually happened). Returning {} keeps `IndexNowBatcher._do_push`
+    # from queueing endless retries — no endpoint is reported as failed
+    # and no endpoint is reported as succeeded.
+    if not _indexnow_enabled():
+        global _INDEXNOW_DISABLED_LOG_ONCE
+        if not _INDEXNOW_DISABLED_LOG_ONCE:
+            logger.info(
+                "IndexNow disabled (INDEXNOW_ENABLED=0): skipping %d URL(s) source=%s",
+                len(urls), source,
+            )
+            _INDEXNOW_DISABLED_LOG_ONCE = True
+        else:
+            logger.debug(
+                "IndexNow disabled: skipping %d URL(s) source=%s", len(urls), source,
+            )
         return {}
     import httpx
     unique_urls = list(dict.fromkeys(urls))
@@ -1466,8 +1514,20 @@ async def _evaluate_smoke_failure_streak(
             tzinfo=timezone.utc,
         )
         try:
+            # Quiet-day skips (no published page touched today) carry a
+            # ``skipped_reason`` and must NOT count as failures — the
+            # chain wasn't exercised, so we have no signal either way.
+            # Filter them out at the query level so the streak window
+            # only sees real pass / fail rows.
             cursor = real_db.indexnow_smoke_log.find(
-                {"ran_at": {"$gte": start, "$lt": end}},
+                {
+                    "ran_at": {"$gte": start, "$lt": end},
+                    "$or": [
+                        {"skipped_reason": {"$exists": False}},
+                        {"skipped_reason": None},
+                        {"skipped_reason": ""},
+                    ],
+                },
                 {"_id": 0, "ran_at": 1, "ok": 1, "url": 1, "error": 1},
             )
             rows = await cursor.to_list(1000)
@@ -1494,16 +1554,29 @@ async def _evaluate_smoke_failure_streak(
                     bucket["last_url"] = r.get("url") or ""
                 if r.get("error"):
                     bucket["last_error"] = r.get("error")
-        # Streak only matches if every day in the window has ≥1 failure
-        # and 0 passes.
+        # Streak matches when:
+        #   • no day in the window has a successful run, AND
+        #   • at least ``threshold_days`` distinct calendar days had ≥1
+        #     failure (skipped / no-run days are neutral, not streak-
+        #     breakers — otherwise a quiet weekend would mask an
+        #     ongoing real failure that started Friday).
+        # The previous "every day must have a failure" rule meant a
+        # single quiet day (no published page that day) silently broke
+        # the streak even when the chain was genuinely broken.
+        failure_days = 0
         for bucket in per_day.values():
-            if bucket["passes"] > 0 or bucket["failures"] == 0:
+            if bucket["passes"] > 0:
                 return None
+            if bucket["failures"] > 0:
+                failure_days += 1
+        if failure_days < int(threshold_days):
+            return None
         return {
             "threshold_days": int(threshold_days),
             "window_start": days[-1].isoformat(),
             "window_end": days[0].isoformat(),
             "per_day": per_day,
+            "failure_days": failure_days,
         }
     except Exception as exc:
         logger.debug("Failed to evaluate smoke streak: %s", exc)
@@ -1586,6 +1659,7 @@ async def _persist_smoke_run(summary: dict, source: str) -> None:
             "lastmod_fresh": bool(summary.get("lastmod_fresh")),
             "push_log_written": bool(summary.get("push_log_written")),
             "error": summary.get("error"),
+            "skipped_reason": summary.get("skipped_reason"),
             "summary": summary,
         }
         await real_db.indexnow_smoke_log.insert_one(doc)
@@ -1611,6 +1685,12 @@ async def _run_daily_publish_indexnow_smoke():
             await _maybe_dispatch_smoke_streak_alert()
         except Exception as exc:
             logger.debug("Smoke-streak post-cron check failed: %s", exc)
+        # Quiet-day skips (no published page was updated today) are not
+        # failures — the chain wasn't exercised, so there's nothing to
+        # alert on. The persisted log row keeps ``skipped_reason`` so
+        # the streak evaluator below can ignore these rows too.
+        if summary.get("skipped_reason"):
+            return
         if summary.get("ok"):
             return
         now = time.time()
@@ -1761,36 +1841,58 @@ async def admin_bot_traffic(
             if alert_level != "red":
                 alert_level = "yellow"
 
-        missing_bots = []
-        absent_bots = []
-        recent_cutoff = (datetime.now(timezone.utc) - timedelta(days=BOT_MISSING_DAYS)).strftime("%Y-%m-%d")
-        for key_bot in ["Googlebot", "Bingbot"]:
-            total_key = await db.server_hits.count_documents({
+        # ── Absent-bot alerts ───────────────────────────────────────────
+        # Two tiers because a missing Googlebot is an SEO emergency,
+        # but a missing PerplexityBot is a "nice to know — your site
+        # may not be in the LLM answer pool". We surface both tiers so
+        # the operator can act on whichever matters today.
+        #
+        # Search engines: any one missing → yellow; both missing → red.
+        # AI crawlers: at least one present → green; ALL missing → yellow
+        # (bundled into a single alert to avoid alert spam).
+        SEARCH_KEY_BOTS = ["Googlebot", "Bingbot"]
+        AI_KEY_BOTS = [
+            "GPTBot", "OAI-SearchBot", "ChatGPT-User",
+            "PerplexityBot", "ClaudeBot",
+            "Google-Extended", "Applebot-Extended",
+        ]
+
+        async def _bot_window_hits(canonical_name: str, since: str) -> int:
+            return await db.server_hits.count_documents({
                 "is_bot": True,
-                "bot_name": {"$regex": f"^{key_bot}$", "$options": "i"},
-                "date": {"$gte": start_date},
+                "bot_name": {"$regex": f"^{re.escape(canonical_name)}$", "$options": "i"},
+                "date": {"$gte": since},
             })
+
+        missing_bots: list[str] = []
+        absent_search_bots: list[str] = []
+        absent_ai_bots: list[str] = []
+        recent_cutoff = (datetime.now(timezone.utc) - timedelta(days=BOT_MISSING_DAYS)).strftime("%Y-%m-%d")
+
+        for key_bot in SEARCH_KEY_BOTS:
+            total_key = await _bot_window_hits(key_bot, start_date)
             if total_key == 0:
-                absent_bots.append(key_bot)
+                absent_search_bots.append(key_bot)
                 continue
             if days > BOT_MISSING_DAYS:
-                recent_hits = await db.server_hits.count_documents({
-                    "is_bot": True,
-                    "bot_name": {"$regex": f"^{key_bot}$", "$options": "i"},
-                    "date": {"$gte": recent_cutoff},
-                })
+                recent_hits = await _bot_window_hits(key_bot, recent_cutoff)
                 if recent_hits == 0:
                     missing_bots.append(key_bot)
 
-        if len(absent_bots) == 2 and total_bot > 0:
+        for ai_bot in AI_KEY_BOTS:
+            if await _bot_window_hits(ai_bot, start_date) == 0:
+                absent_ai_bots.append(ai_bot)
+
+        # Search-engine severity ladder.
+        if len(absent_search_bots) == len(SEARCH_KEY_BOTS) and total_bot > 0:
             alerts.append({
                 "type": "key_bot_missing",
                 "severity": "red",
                 "message": "No Googlebot or Bingbot activity detected in this period",
             })
             alert_level = "red"
-        elif absent_bots:
-            for ab in absent_bots:
+        elif absent_search_bots:
+            for ab in absent_search_bots:
                 alerts.append({
                     "type": "key_bot_missing",
                     "severity": "yellow",
@@ -1806,6 +1908,36 @@ async def admin_bot_traffic(
                 "message": f"{mb} was previously active but hasn't crawled in {BOT_MISSING_DAYS}+ days",
             })
             alert_level = "red"
+
+        # AI crawler tier — bundle so we don't fire 7 yellow alerts for a
+        # site that simply hasn't been picked up by any LLM yet.
+        if absent_ai_bots and len(absent_ai_bots) == len(AI_KEY_BOTS):
+            alerts.append({
+                "type": "ai_bot_missing",
+                "severity": "yellow",
+                "message": (
+                    "No AI crawlers (GPTBot, PerplexityBot, ClaudeBot, "
+                    "Google-Extended, Applebot-Extended, OAI-SearchBot, "
+                    "ChatGPT-User) detected — site is likely absent from "
+                    "LLM answer pools. Check robots.txt and llms.txt."
+                ),
+            })
+            if alert_level == "green":
+                alert_level = "yellow"
+        elif absent_ai_bots and len(absent_ai_bots) >= len(AI_KEY_BOTS) - 2:
+            # Most AI bots silent but one or two trickling in. Still worth
+            # a soft heads-up but not an alarm.
+            alerts.append({
+                "type": "ai_bot_missing",
+                "severity": "yellow",
+                "message": (
+                    f"Most AI crawlers silent in this period: "
+                    f"{', '.join(absent_ai_bots)} not seen. "
+                    f"Site visibility in LLM answers may be limited."
+                ),
+            })
+            if alert_level == "green":
+                alert_level = "yellow"
 
         if len(daily_bot_hits) >= 7:
             first_half = daily_bot_hits[:len(daily_bot_hits)//2]
@@ -1977,6 +2109,19 @@ async def _probe_sitemap_url_with_retry(client, url: str) -> Dict:
     return check
 
 
+@router.get("/seo/" + INDEXNOW_KEY + ".txt", include_in_schema=False)
+async def indexnow_keyfile():
+    """Serve the IndexNow ownership keyfile.
+
+    IndexNow validates ownership by fetching ``https://syrabit.ai/<key>.txt``
+    and checking the body equals the key string. The CF Pages ``_worker.js``
+    rewrites that URL to ``/api/seo/<key>.txt``, so this route satisfies the
+    ownership probe end-to-end.
+    """
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(INDEXNOW_KEY, media_type="text/plain; charset=utf-8")
+
+
 @router.get("/seo/health")
 async def seo_health_check(
     request: Request = None,
@@ -2034,7 +2179,7 @@ async def seo_health_check(
     import random
     import xml.etree.ElementTree as ET
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with httpx.AsyncClient(timeout=15.0, headers=_SEO_SELF_CHECK_HEADERS) as client:
         for sm_url in sitemap_urls:
             sm_name = sm_url.split("/")[-1]
             sm_result = {"name": sm_name, "url": sm_url, "valid_xml": False, "url_count": 0, "sample_checks": []}
@@ -2116,6 +2261,28 @@ _seo_url_spike_alert_last_fired: float = 0.0
 _SEO_HEALTH_ALERT_COOLDOWN_S = 6 * 3600
 _SEO_URL_SPIKE_ALERT_COOLDOWN_S = 6 * 3600
 _SEO_HEALTH_HISTORY_RETENTION_DAYS = 30
+
+# ── Task #821: alert deduplication for SEO health ────────────────────────────
+# Previously the hourly SEO health loop fired ``seo_health_degraded`` on every
+# tick where the last 2 snapshots were both bad (subject only to a 6h
+# in-memory cooldown). For a sustained outage that meant 4+ duplicate alerts
+# and zero "all-clear" message on recovery — making it impossible to tell from
+# the inbox whether the incident was new, ongoing, or resolved.
+#
+# The new model is transition-based and persisted in MongoDB
+# (``db.seo_alert_state`` keyed by ``_id="seo_health"``):
+#   • "fire_initial"   — first time status flips ok → degraded/critical
+#                        (still requires 2 consecutive bad snapshots so a
+#                        single transient blip cannot trigger an alert)
+#   • "fire_digest"    — still bad and ≥ digest interval (12h) since the
+#                        last notification (initial alert OR previous digest)
+#   • "fire_recovered" — status flips bad → ok (single ok snapshot is enough,
+#                        we want fast recovery confirmation)
+#   • None             — no notification needed
+_SEO_HEALTH_ALERT_STATE_KEY = "seo_health"
+_SEO_HEALTH_DIGEST_INTERVAL_S = 12 * 3600
+_SEO_HEALTH_RECOVERED_ALERT_TYPE = "seo_health_recovered"
+_SEO_HEALTH_INITIAL_ALERT_TYPE = "seo_health_degraded"
 
 # ── Weekly digest ────────────────────────────────────────────────────────────
 # Target: Monday 09:00 IST = Monday 03:30 UTC. The loop polls every 5 minutes
@@ -2306,6 +2473,126 @@ def _format_by_sitemap_text(by_sitemap,
         for f in (r.get("failing_urls") or []):
             lines.append(f"      [{f.get('status', 0)}] {f.get('url', '')}")
     return "\nPer-sitemap breakdown:\n" + "\n".join(lines)
+
+
+async def _load_seo_alert_state() -> dict:
+    """Read the persisted SEO health alert state doc.
+
+    Returns ``{}`` when Mongo is unavailable or the doc has never been
+    written. Callers must treat empty/missing as "not currently alerting"
+    so a fresh deploy never re-fires on already-known-bad state.
+    """
+    from deps import db, is_mongo_available
+    if not await is_mongo_available():
+        return {}
+    try:
+        doc = await db.seo_alert_state.find_one(
+            {"_id": _SEO_HEALTH_ALERT_STATE_KEY}
+        )
+        return doc or {}
+    except Exception as exc:
+        logger.debug(f"_load_seo_alert_state failed: {exc}")
+        return {}
+
+
+async def _save_seo_alert_state(updates: dict) -> None:
+    """Upsert the SEO health alert state doc.
+
+    Only the keys present in ``updates`` are merged — the document is
+    intentionally tiny (active flag + a handful of timestamps + counters)
+    so a single ``$set`` upsert is fine. Failures are logged at debug
+    level and do not propagate, so a transient Mongo blip never breaks
+    the alert loop itself.
+    """
+    from deps import db, is_mongo_available
+    if not await is_mongo_available():
+        return
+    try:
+        payload = dict(updates)
+        payload["updated_at"] = datetime.now(timezone.utc)
+        await db.seo_alert_state.update_one(
+            {"_id": _SEO_HEALTH_ALERT_STATE_KEY},
+            {"$set": payload},
+            upsert=True,
+        )
+    except Exception as exc:
+        logger.debug(f"_save_seo_alert_state failed: {exc}")
+
+
+def _decide_seo_health_alert(
+    *,
+    current_status: str,
+    consecutive_bad: int,
+    prev_state: dict,
+    now_ts: float,
+    digest_interval_s: int = _SEO_HEALTH_DIGEST_INTERVAL_S,
+) -> Optional[str]:
+    """Pure decision function for the SEO health alert loop.
+
+    Inputs:
+      - ``current_status``: the latest snapshot's aggregate status
+        (``"ok"`` / ``"degraded"`` / ``"critical"`` / ``"unknown"``).
+      - ``consecutive_bad``: how many of the most-recent snapshots are
+        in ``("degraded", "critical")``. Caller computes from history.
+      - ``prev_state``: the persisted alert state doc from
+        ``_load_seo_alert_state`` (may be ``{}``).
+      - ``now_ts``: monotonic-style epoch seconds (``time.time()``).
+      - ``digest_interval_s``: how long the loop must wait between
+        sustained-outage digests while still bad.
+
+    Returns one of ``"fire_initial"``, ``"fire_escalated"``,
+    ``"fire_digest"``, ``"fire_recovered"``, or ``None``
+    (no notification this tick).
+
+    Behaviour matrix:
+      | prev_active | last_alert | current   | action            |
+      |-------------|------------|-----------|-------------------|
+      | False       | —          | ok/unknown| None              |
+      | False       | —          | bad, 1    | None (transient)  |
+      | False       | —          | bad, ≥2   | fire_initial      |
+      | True        | degraded   | critical  | fire_escalated    |
+      | True        | critical   | degraded  | None (improvement)|
+      | True        | bad        | bad,      | None              |
+      |             |            |  <interval|                   |
+      | True        | bad        | bad,      | fire_digest       |
+      |             |            |  ≥interval|                   |
+      | True        | bad        | ok        | fire_recovered    |
+      | True        | bad        | unknown   | None              |
+
+    The "unknown" while active case is intentionally a no-op: the
+    health endpoint failed for an unrelated reason (Mongo timeout,
+    snapshot exception) and we don't want to spam a recovery alert
+    that might reverse on the next tick.
+
+    The ``critical → degraded`` case (incident is improving but still
+    bad) is intentionally silent — the eventual ``fire_recovered``
+    will summarize the whole outage including the previous worst
+    status, and a "downgrade" page-out adds noise without action
+    value. ``degraded → critical`` (escalation) DOES fire because
+    it usually signals the incident is broadening and the on-call
+    needs to know immediately, independent of the digest timer.
+    """
+    prev_active = bool(prev_state.get("active"))
+    bad = current_status in ("degraded", "critical")
+
+    if bad:
+        if not prev_active:
+            if consecutive_bad >= 2:
+                return "fire_initial"
+            return None
+        # Already-active incident — check for severity escalation
+        # before falling through to the digest-interval gate.
+        last_alert_status = (prev_state.get("last_alert_status") or "").lower()
+        if current_status == "critical" and last_alert_status == "degraded":
+            return "fire_escalated"
+        last_notified = float(prev_state.get("last_notified_at_ts") or 0.0)
+        if (now_ts - last_notified) >= digest_interval_s:
+            return "fire_digest"
+        return None
+
+    if prev_active and current_status == "ok":
+        return "fire_recovered"
+    return None
 
 
 async def _record_seo_health_snapshot() -> Dict:
@@ -2734,6 +3021,70 @@ async def _try_send_weekly_digest_once(db, now_utc: datetime) -> dict:
     return {"claimed": True, "sent": result.get("sent", False), "reason": result.get("reason")}
 
 
+async def _fan_out_remediation_signals(db, snapshot: Dict, kind: str) -> int:
+    """Task #938 — fire-and-forget hand-off from the alerter to the
+    closed-loop remediation worker.
+
+    For URL-spike / health-degraded / health-critical events we walk
+    ``snapshot["by_sitemap"][].failing_urls`` and enqueue one
+    structured remediation signal per failing URL, capped to the
+    per-event fan-out budget so a 100-URL outage cannot enqueue 100
+    signals at once (would burn the whole daily remediation budget
+    on a single detector firing).
+
+    Signals are persisted to ``db.seo_remediation_signals`` so any
+    replica's worker loop can pick them up — the alerter loop runs
+    on every gunicorn worker but the consumer only runs on the
+    leader, so an in-process queue would silently drop fan-outs
+    fired from non-leader replicas.
+
+    Returns the number of signals enqueued so the caller can log it.
+    Never raises — the alerter must keep paging on-call even if the
+    remediation pipeline is wedged.
+    """
+    try:
+        from seo_remediation_service import enqueue_remediation_signal, get_config
+        cap = int(get_config().get("fanout_cap_per_event", 5))
+    except Exception as exc:
+        logger.debug(f"remediation fan-out helper import failed: {exc}")
+        return 0
+    by_sm = (snapshot or {}).get("by_sitemap") or []
+    enqueued = 0
+    for sm in by_sm:
+        if enqueued >= cap:
+            break
+        for fu in (sm.get("failing_urls") or []):
+            if enqueued >= cap:
+                break
+            url = fu.get("url") if isinstance(fu, dict) else None
+            if not url:
+                continue
+            try:
+                sid = await enqueue_remediation_signal(db, {
+                    "kind": kind,
+                    "url": url,
+                    "details": {
+                        "sitemap": sm.get("name"),
+                        "status": fu.get("status") if isinstance(fu, dict) else None,
+                        "snapshot_status": snapshot.get("status"),
+                        "url_check_success_rate": (
+                            (snapshot.get("summary") or {}).get("url_check_success_rate")
+                        ),
+                    },
+                })
+            except Exception as exc:
+                logger.debug(f"remediation enqueue failed for {url}: {exc}")
+                sid = None
+            if sid:
+                enqueued += 1
+    if enqueued:
+        logger.info(
+            "remediation: enqueued %d signals from %s (fan-out cap %d)",
+            enqueued, kind, cap,
+        )
+    return enqueued
+
+
 async def _seo_health_alert_loop():
     """Hourly: snapshot /seo/health. Fires two independent admin alerts via
     metrics._dispatch_alert (Resend email + persisted to db.alerts):
@@ -2828,15 +3179,36 @@ async def _seo_health_alert_loop():
                                 },
                             )
                             _seo_url_spike_alert_last_fired = now_ts
+                            # Task #938 — hand the failing URLs off to
+                            # the closed-loop remediation worker so it
+                            # can re-run the existing pipeline against
+                            # each affected page (capped per event;
+                            # daily caps gate the worker itself).
+                            try:
+                                # NOTE: must use ``_db`` here (not bare ``db``) — the outer
+                                # scope of this function rebinds ``db`` via
+                                # ``from deps import db`` further below, which makes ``db``
+                                # a function-local for the *entire* function body. A bare
+                                # reference here would raise UnboundLocalError and silently
+                                # drop the URL-spike fan-out.
+                                await _fan_out_remediation_signals(_db, snapshot, "url_404_spike")
+                            except Exception as rem_exc:
+                                logger.debug(f"remediation fan-out (url_404_spike) failed: {rem_exc}")
                         except Exception as exc:
                             logger.debug(f"Failed to dispatch seo_url_spike alert: {exc}")
             except Exception as exc:
                 logger.debug(f"seo_url_spike check skipped: {exc}")
 
-            if status in ("degraded", "critical"):
+            # ── (1) Transition-based seo_health_degraded / seo_health_recovered
+            # Task #821: replace the hourly-while-bad firing pattern with a
+            # state machine persisted in db.seo_alert_state. The legacy
+            # in-memory ``_seo_health_alert_last_fired`` cooldown is kept as
+            # a defence-in-depth so a corrupted state doc still cannot spam
+            # more than once every ``_SEO_HEALTH_ALERT_COOLDOWN_S``.
+            try:
                 from deps import db, is_mongo_available
-                consecutive_bad = 1
-                if await is_mongo_available():
+                consecutive_bad = 1 if status in ("degraded", "critical") else 0
+                if status in ("degraded", "critical") and await is_mongo_available():
                     try:
                         recent = await db.seo_health_history.find(
                             {}, {"_id": 0, "status": 1, "recorded_at": 1}
@@ -2846,20 +3218,157 @@ async def _seo_health_alert_loop():
                     except Exception:
                         pass
 
+                prev_state = await _load_seo_alert_state()
                 now = time.time()
-                if consecutive_bad >= 2 and (now - _seo_health_alert_last_fired) >= _SEO_HEALTH_ALERT_COOLDOWN_S:
+                action = _decide_seo_health_alert(
+                    current_status=status,
+                    consecutive_bad=consecutive_bad,
+                    prev_state=prev_state,
+                    now_ts=now,
+                )
+
+                # Defence-in-depth cooldown is scoped to ``fire_digest`` ONLY.
+                # Applying it to ``fire_initial`` would silently swallow a
+                # legitimate new incident if it recurs within
+                # ``_SEO_HEALTH_ALERT_COOLDOWN_S`` after a recovery — exactly
+                # the scenario this task was filed to fix in reverse. The
+                # state machine already prevents over-firing of initials
+                # (only one fire_initial per active=False → bad transition).
+                # ``fire_recovered`` is also intentionally never gated by the
+                # in-memory cooldown so the all-clear always lands.
+                if action == "fire_digest":
+                    if (now - _seo_health_alert_last_fired) < _SEO_HEALTH_ALERT_COOLDOWN_S:
+                        action = None
+
+                if action == "fire_initial":
                     try:
                         from metrics import _dispatch_alert, _alert_last_fired as _ml
-                        _ml.pop("seo_health_degraded", None)
+                        _ml.pop(_SEO_HEALTH_INITIAL_ALERT_TYPE, None)
                         s = snapshot.get("summary") or {}
                         await _dispatch_alert(
-                            "seo_health_degraded",
+                            _SEO_HEALTH_INITIAL_ALERT_TYPE,
                             f"SEO health: {status.upper()}",
                             (
                                 f"/api/seo/health reported {status.upper()} for two consecutive hourly checks. "
                                 f"Sitemaps valid: {s.get('valid_sitemaps', 0)}/{s.get('total_sitemaps', 0)} · "
                                 f"URL spot-checks OK: {s.get('ok_url_checks', 0)}/{s.get('total_url_checks', 0)} "
                                 f"({s.get('url_check_success_rate', 0)}%). "
+                                f"Inspect /api/seo/health and the SEO Manager dashboard. "
+                                f"You will not get another alert for this incident "
+                                f"unless it persists for more than "
+                                f"{_SEO_HEALTH_DIGEST_INTERVAL_S // 3600}h "
+                                f"(sustained-outage digest) or until it recovers."
+                            ),
+                            threshold_snapshot={
+                                "metric": "seo_health_status",
+                                "value": "ok",
+                                "actual": status,
+                                "valid_sitemaps": s.get("valid_sitemaps", 0),
+                                "total_sitemaps": s.get("total_sitemaps", 0),
+                                "url_check_success_rate": s.get("url_check_success_rate", 0),
+                                "phase": "initial",
+                            },
+                        )
+                        _seo_health_alert_last_fired = now
+                        await _save_seo_alert_state({
+                            "active": True,
+                            "first_bad_at": datetime.now(timezone.utc),
+                            "first_bad_at_ts": now,
+                            "first_bad_status": status,
+                            "last_alert_status": status,
+                            "last_notified_at_ts": now,
+                            "digest_count": 0,
+                            "recovered_at": None,
+                        })
+                        # Task #938 — close the loop on the offending
+                        # pages. Status maps directly to the signal kind
+                        # so the remediation history shows whether the
+                        # incident was a degradation or a hard critical.
+                        try:
+                            sig_kind = "seo_health_critical" if status == "critical" else "seo_health_degraded"
+                            await _fan_out_remediation_signals(db, snapshot, sig_kind)
+                        except Exception as rem_exc:
+                            logger.debug(f"remediation fan-out (initial) failed: {rem_exc}")
+                    except Exception as exc:
+                        logger.debug(f"Failed to dispatch initial seo_health_degraded alert: {exc}")
+
+                elif action == "fire_escalated":
+                    # Severity transition degraded → critical while incident
+                    # is already active. Fires immediately (no digest gate),
+                    # uses an "[Escalated]" subject so on-call can tell it
+                    # apart from initial / digest alerts at a glance.
+                    try:
+                        from metrics import _dispatch_alert, _alert_last_fired as _ml
+                        _ml.pop(_SEO_HEALTH_INITIAL_ALERT_TYPE, None)
+                        s = snapshot.get("summary") or {}
+                        first_bad_ts = float(prev_state.get("first_bad_at_ts") or now)
+                        ongoing_h = int(max(0.0, (now - first_bad_ts)) // 3600)
+                        prev_status = (prev_state.get("last_alert_status") or "degraded").upper()
+                        await _dispatch_alert(
+                            _SEO_HEALTH_INITIAL_ALERT_TYPE,
+                            f"[Escalated to CRITICAL] SEO health (was {prev_status}, {ongoing_h}h)",
+                            (
+                                f"/api/seo/health escalated from {prev_status} to CRITICAL "
+                                f"{ongoing_h}h into the incident. "
+                                f"Sitemaps valid: {s.get('valid_sitemaps', 0)}/{s.get('total_sitemaps', 0)} · "
+                                f"URL spot-checks OK: {s.get('ok_url_checks', 0)}/{s.get('total_url_checks', 0)} "
+                                f"({s.get('url_check_success_rate', 0)}%). "
+                                f"Inspect /api/seo/health and the SEO Manager dashboard immediately."
+                            ),
+                            threshold_snapshot={
+                                "metric": "seo_health_status",
+                                "value": "ok",
+                                "actual": "critical",
+                                "valid_sitemaps": s.get("valid_sitemaps", 0),
+                                "total_sitemaps": s.get("total_sitemaps", 0),
+                                "url_check_success_rate": s.get("url_check_success_rate", 0),
+                                "phase": "escalated",
+                                "previous_status": prev_status.lower(),
+                                "ongoing_hours": ongoing_h,
+                            },
+                        )
+                        # Note: escalation does NOT bump the in-memory cooldown
+                        # because it's a new event that we explicitly want to
+                        # surface — the next genuine fire_digest 12h later
+                        # should still be allowed through the cooldown gate
+                        # (which is already permissive at 6h ≤ 12h).
+                        await _save_seo_alert_state({
+                            "active": True,
+                            "last_alert_status": "critical",
+                            "last_notified_at_ts": now,
+                            "escalated_at": datetime.now(timezone.utc),
+                            "escalated_at_ts": now,
+                        })
+                        # Task #938 — re-fan-out on escalation. The
+                        # initial alert may have been hours ago, the
+                        # failing-URL set may have shifted, and the
+                        # bump to CRITICAL means we want another shot
+                        # at auto-fixing before the digest.
+                        try:
+                            await _fan_out_remediation_signals(db, snapshot, "seo_health_critical")
+                        except Exception as rem_exc:
+                            logger.debug(f"remediation fan-out (escalated) failed: {rem_exc}")
+                    except Exception as exc:
+                        logger.debug(f"Failed to dispatch escalated seo_health_degraded alert: {exc}")
+
+                elif action == "fire_digest":
+                    try:
+                        from metrics import _dispatch_alert, _alert_last_fired as _ml
+                        _ml.pop(_SEO_HEALTH_INITIAL_ALERT_TYPE, None)
+                        s = snapshot.get("summary") or {}
+                        first_bad_ts = float(prev_state.get("first_bad_at_ts") or now)
+                        ongoing_h = int(max(0.0, (now - first_bad_ts)) // 3600)
+                        digest_count = int(prev_state.get("digest_count") or 0) + 1
+                        await _dispatch_alert(
+                            _SEO_HEALTH_INITIAL_ALERT_TYPE,
+                            f"[Still ongoing — {ongoing_h}h] SEO health: {status.upper()}",
+                            (
+                                f"/api/seo/health is still {status.upper()} {ongoing_h}h after the "
+                                f"initial alert (digest #{digest_count}). "
+                                f"Sitemaps valid: {s.get('valid_sitemaps', 0)}/{s.get('total_sitemaps', 0)} · "
+                                f"URL spot-checks OK: {s.get('ok_url_checks', 0)}/{s.get('total_url_checks', 0)} "
+                                f"({s.get('url_check_success_rate', 0)}%). "
+                                f"Next digest in {_SEO_HEALTH_DIGEST_INTERVAL_S // 3600}h if still bad. "
                                 f"Inspect /api/seo/health and the SEO Manager dashboard."
                             ),
                             threshold_snapshot={
@@ -2869,11 +3378,69 @@ async def _seo_health_alert_loop():
                                 "valid_sitemaps": s.get("valid_sitemaps", 0),
                                 "total_sitemaps": s.get("total_sitemaps", 0),
                                 "url_check_success_rate": s.get("url_check_success_rate", 0),
+                                "phase": "digest",
+                                "ongoing_hours": ongoing_h,
+                                "digest_count": digest_count,
                             },
                         )
                         _seo_health_alert_last_fired = now
+                        await _save_seo_alert_state({
+                            "active": True,
+                            "last_alert_status": status,
+                            "last_notified_at_ts": now,
+                            "digest_count": digest_count,
+                        })
                     except Exception as exc:
-                        logger.debug(f"Failed to dispatch seo_health_degraded alert: {exc}")
+                        logger.debug(f"Failed to dispatch sustained-outage seo_health_degraded digest: {exc}")
+
+                elif action == "fire_recovered":
+                    try:
+                        from metrics import _dispatch_alert, _alert_last_fired as _ml
+                        _ml.pop(_SEO_HEALTH_RECOVERED_ALERT_TYPE, None)
+                        s = snapshot.get("summary") or {}
+                        first_bad_ts = float(prev_state.get("first_bad_at_ts") or now)
+                        outage_min = int(max(0.0, (now - first_bad_ts)) // 60)
+                        prev_status = (prev_state.get("last_alert_status") or "").upper() or "DEGRADED"
+                        await _dispatch_alert(
+                            _SEO_HEALTH_RECOVERED_ALERT_TYPE,
+                            f"SEO health: RECOVERED (was {prev_status} for ~{outage_min}m)",
+                            (
+                                f"/api/seo/health is back to OK after ~{outage_min}m of "
+                                f"{prev_status}. Sitemaps valid: "
+                                f"{s.get('valid_sitemaps', 0)}/{s.get('total_sitemaps', 0)} · "
+                                f"URL spot-checks OK: {s.get('ok_url_checks', 0)}/{s.get('total_url_checks', 0)} "
+                                f"({s.get('url_check_success_rate', 0)}%). "
+                                f"No further alerts will fire for this incident."
+                            ),
+                            threshold_snapshot={
+                                "metric": "seo_health_status",
+                                "value": "ok",
+                                "actual": "ok",
+                                "valid_sitemaps": s.get("valid_sitemaps", 0),
+                                "total_sitemaps": s.get("total_sitemaps", 0),
+                                "url_check_success_rate": s.get("url_check_success_rate", 0),
+                                "phase": "recovered",
+                                "previous_status": prev_status.lower(),
+                                "outage_minutes": outage_min,
+                            },
+                        )
+                        await _save_seo_alert_state({
+                            "active": False,
+                            "last_alert_status": None,
+                            "recovered_at": datetime.now(timezone.utc),
+                            "recovered_at_ts": now,
+                            "digest_count": 0,
+                        })
+                        # Belt-and-braces: zero the in-memory cooldown so a
+                        # quick recurrence within the next
+                        # ``_SEO_HEALTH_ALERT_COOLDOWN_S`` is not silently
+                        # swallowed even if a future change re-introduces
+                        # the cooldown gate on ``fire_initial``.
+                        _seo_health_alert_last_fired = 0.0
+                    except Exception as exc:
+                        logger.debug(f"Failed to dispatch seo_health_recovered alert: {exc}")
+            except Exception as exc:
+                logger.debug(f"seo_health alert decision iteration error: {exc}")
         except Exception as exc:
             logger.debug(f"SEO health alert loop iteration error: {exc}")
 
@@ -3403,7 +3970,7 @@ async def _deep_scan_sitemap(sitemap_name: str) -> dict:
         "failing": [],
     }
 
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    async with httpx.AsyncClient(timeout=20.0, headers=_SEO_SELF_CHECK_HEADERS) as client:
         try:
             resp = await client.get(sitemap_url)
         except Exception as fetch_err:
@@ -4533,6 +5100,25 @@ async def _cf_bot_report_catchup_if_missed(db, now_utc: datetime) -> dict:
     return {"ran": True, "iso_week": cur_iso_week}
 
 
+# Task #950 — Mongo-backed lease so only ONE replica polls and fires
+# the weekly CF bot report. Previously gated by ``_is_leader`` in
+# server.py, which is per-machine and double-fires on multi-replica
+# Railway deployments. The report itself is dedup'd via
+# ``_claim_cf_bot_report_slot``, but each replica without the lease
+# would still hit the CF GraphQL API on every 5-min poll, multiplying
+# the analytics quota cost. Followers stand down on each tick.
+#
+# TTL is 3× the loop interval (~15 min) so a single missed renewal
+# does not trigger a needless leader fail-over. Lease tied to the
+# per-week catch-up too — boot catch-up runs only when we hold the
+# lease.
+_CF_BOT_REPORT_LEASE_LOCK_ID = "cf_bot_report_lease"
+_CF_BOT_REPORT_LEASE_TTL_S = max(900, _CF_BOT_REPORT_LOOP_SLEEP_S * 3)
+_CF_BOT_REPORT_FOLLOWER_INTERVAL_S = max(60, _CF_BOT_REPORT_LOOP_SLEEP_S)
+import background_lease as _bglease_cfbr
+_CF_BOT_REPORT_OWNER_ID = _bglease_cfbr.make_owner_id("cf-bot-report")
+
+
 async def _cf_bot_report_loop():
     """Background loop for the weekly Cloudflare per-UA crawler report.
 
@@ -4540,23 +5126,54 @@ async def _cf_bot_report_loop():
     once so a service outage during the Monday window doesn't silently
     skip a week. Then polls every 5 min and fires inside Mon 04:00 UTC
     ±15 min, dedup'd via `_claim_cf_bot_report_slot`.
+
+    Cross-replica dedup (Task #950): every replica runs this loop, but
+    only the lease-holder fires the CF GraphQL pull and the weekly
+    catch-up. Followers stand down for one follower interval per tick,
+    so the CF analytics quota cost stays at 1× regardless of replica
+    count.
     """
     from deps import db, is_mongo_available
     await asyncio.sleep(_CF_BOT_REPORT_WARMUP_S)
-    # Boot-time catch-up: heal any missed Monday window.
     try:
-        if await is_mongo_available():
-            await _cf_bot_report_catchup_if_missed(db, datetime.now(timezone.utc))
-    except Exception as exc:
-        logger.debug(f"[CF bot report] catch-up error: {exc}")
-    while True:
+        # Boot-time catch-up only fires when we win the lease — otherwise
+        # a fresh replica racing in would replay the same catch-up the
+        # incumbent leader already did.
         try:
-            now_utc = datetime.now(timezone.utc)
-            if await is_mongo_available():
-                await _try_run_cf_bot_report_once(db, now_utc)
+            if await is_mongo_available() and await _bglease_cfbr.try_acquire_lease(
+                db, _CF_BOT_REPORT_LEASE_LOCK_ID, _CF_BOT_REPORT_OWNER_ID,
+                _CF_BOT_REPORT_LEASE_TTL_S,
+            ):
+                await _cf_bot_report_catchup_if_missed(
+                    db, datetime.now(timezone.utc))
         except Exception as exc:
-            logger.debug(f"[CF bot report] loop iteration error: {exc}")
-        await asyncio.sleep(_CF_BOT_REPORT_LOOP_SLEEP_S)
+            logger.debug(f"[CF bot report] catch-up error: {exc}")
+        while True:
+            try:
+                now_utc = datetime.now(timezone.utc)
+                if not await is_mongo_available():
+                    await asyncio.sleep(_CF_BOT_REPORT_FOLLOWER_INTERVAL_S)
+                    continue
+                if not await _bglease_cfbr.try_acquire_lease(
+                    db, _CF_BOT_REPORT_LEASE_LOCK_ID,
+                    _CF_BOT_REPORT_OWNER_ID,
+                    _CF_BOT_REPORT_LEASE_TTL_S,
+                ):
+                    await asyncio.sleep(_CF_BOT_REPORT_FOLLOWER_INTERVAL_S)
+                    continue
+                await _try_run_cf_bot_report_once(db, now_utc)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug(f"[CF bot report] loop iteration error: {exc}")
+            await asyncio.sleep(_CF_BOT_REPORT_LOOP_SLEEP_S)
+    finally:
+        try:
+            await asyncio.shield(_bglease_cfbr.release_lease(
+                db, _CF_BOT_REPORT_LEASE_LOCK_ID, _CF_BOT_REPORT_OWNER_ID,
+            ))
+        except Exception:
+            pass
 
 
 @router.post("/admin/cf-bot-report/external-totals")
@@ -5324,3 +5941,240 @@ async def admin_bing_submit_stats(
         "quota": quota,
         "days": rows[:days],
     }
+
+
+@router.get("/admin/analytics/cf-ai-crawl-control")
+async def admin_cf_ai_crawl_control(
+    days: int = Query(7, ge=1, le=30),
+    admin: dict = Depends(get_admin_user),
+):
+    """Mirror of Cloudflare's AI Crawl Control dashboard for the admin
+    panel. Sourced from CF GraphQL httpRequestsAdaptiveGroups filtered
+    to verified bots — the same dataset CF's own dashboard reads.
+
+    Returns ``available: false`` with a clear reason when CF analytics
+    credentials are missing or the upstream call fails so the UI can
+    render an empty-state card instead of a 5xx."""
+    try:
+        from cf_bot_report import fetch_admin_summary, aggregate_per_operator
+        from analytics_helpers import (
+            get_ai_referrals_by_operator,
+            get_search_referrals_by_engine,
+        )
+        # Run the CF crawler aggregation and the two Mongo-backed
+        # referral tallies in parallel — they hit independent backends
+        # and the referral lookups are the slower of the three (one
+        # $regex per host pattern), so serialising would visibly hurt
+        # the dashboard's first-paint time. Three-way gather keeps the
+        # critical path equal to the single slowest call instead of
+        # the sum of all three.
+        summary, ai_refs_by_op, search_refs_by_eng = await asyncio.gather(
+            fetch_admin_summary(days=days),
+            get_ai_referrals_by_operator(days=days),
+            get_search_referrals_by_engine(days=days),
+        )
+    except Exception as exc:
+        logger.warning(f"cf-ai-crawl-control fetch failed: {exc}")
+        summary = None
+        ai_refs_by_op = {}
+        search_refs_by_eng = {}
+
+    # Sorted-desc list of (operator, referrals) — used by the dashboard's
+    # standalone "AI assistant referrals" block. Built up here once so
+    # both the empty-state and populated branches return the same shape.
+    ai_refs_list = sorted(
+        ({"operator": op, "referrals": int(refs)}
+         for op, refs in (ai_refs_by_op or {}).items() if int(refs) > 0),
+        key=lambda r: (-r["referrals"], r["operator"]),
+    )
+    ai_refs_total = sum(int(v) for v in (ai_refs_by_op or {}).values())
+
+    # Sorted-desc list of (engine, referrals) — sibling block to the AI
+    # one above. Same shape so the frontend can render them with a
+    # shared component pattern. ``engine`` key (not ``operator``) keeps
+    # the two response branches distinguishable in the payload.
+    search_refs_list = sorted(
+        ({"engine": eng, "referrals": int(refs)}
+         for eng, refs in (search_refs_by_eng or {}).items() if int(refs) > 0),
+        key=lambda r: (-r["referrals"], r["engine"]),
+    )
+    search_refs_total = sum(int(v) for v in (search_refs_by_eng or {}).values())
+
+    if summary is None:
+        return {
+            "available": False,
+            "reason": (
+                "Cloudflare analytics not configured or unreachable. "
+                "Set CLOUDFLARE_ANALYTICS_TOKEN with Account Analytics:Read "
+                "and Zone Analytics:Read scopes to enable this card."
+            ),
+            "period_days": days,
+            "totals": {"requests": 0, "bytes": 0, "bots": 0},
+            "ai_totals": {"requests": 0, "bots": 0},
+            "search_totals": {"requests": 0, "bots": 0},
+            "allowed_total": 0,
+            "unsuccessful_total": 0,
+            "per_bot": [],
+            "per_operator": [],
+            "daily_series": {"top_bots": [], "rows": []},
+            "ai_referrals_total": ai_refs_total,
+            "ai_referrals_per_operator": ai_refs_list,
+            "search_referrals_total": search_refs_total,
+            "search_referrals_per_engine": search_refs_list,
+        }
+
+    # ─── Strip AI crawlers from the response ──────────────────────────────
+    # Per the user's policy decision (see edge-proxy AI_BOT_UA block and
+    # robots.txt), AI training/answer crawlers are blocked at the edge
+    # AND hidden from this card. The CF GraphQL backend keeps reporting
+    # them (they hit the edge, get 403'd, and CF still counts the request
+    # against the verified-bot category), but the admin dashboard should
+    # only show the search-engine traffic the site actually wants.
+    #
+    # We filter at this single seam so:
+    #   * `per_bot` keeps only category == "search" entries.
+    #   * `per_operator` is *re-aggregated* from the filtered per_bot
+    #     instead of just dropping AI tiles — otherwise a mixed-bag
+    #     operator like Google (Googlebot + Google-Extended) would
+    #     vanish entirely because the original aggregator marks the
+    #     whole tile "ai" as soon as one contributing bot is AI.
+    #   * Daily-series top-bots and per-row keys lose AI names so the
+    #     stacked chart doesn't carry orphan AI columns.
+    #   * `totals` and `ai_totals` are recomputed from the filtered list
+    #     so the headline numbers match what the user sees below.
+    full_per_bot = summary.get("per_bot") or []
+    search_per_bot = [b for b in full_per_bot if b.get("category") != "ai"]
+
+    # Re-aggregate operators from the search-only per_bot so allowed /
+    # unsuccessful / requests totals add up without AI contamination.
+    # ``aggregate_per_operator`` carries the same sort & tie-break as
+    # the unfiltered call, so ordering is preserved.
+    search_per_operator = aggregate_per_operator(search_per_bot)
+
+    # Recompute headline totals from the filtered list. Bots count is
+    # "distinct bots with at least one request" — same definition the
+    # original aggregator uses (see fetch_admin_summary).
+    search_total_requests = sum(int(b.get("requests") or 0) for b in search_per_bot)
+    search_distinct_bots = sum(1 for b in search_per_bot if int(b.get("requests") or 0) > 0)
+    search_allowed = sum(int(t.get("allowed") or 0) for t in search_per_operator)
+    search_unsuccessful = sum(int(t.get("unsuccessful") or 0) for t in search_per_operator)
+
+    summary["per_bot"] = search_per_bot
+    summary["per_operator"] = search_per_operator
+    summary["totals"] = {
+        "requests": search_total_requests,
+        # Preserve any byte total the upstream provided, but recompute it
+        # from the filtered list when present so AI bot bytes don't show.
+        "bytes": sum(int(b.get("bytes") or 0) for b in search_per_bot),
+        "bots": search_distinct_bots,
+    }
+    summary["allowed_total"] = search_allowed
+    summary["unsuccessful_total"] = search_unsuccessful
+    # AI bots are no longer reported in this card — keep the field for
+    # frontend-compat (older builds may still read it) but zero it out.
+    summary["ai_totals"] = {"requests": 0, "bots": 0}
+    summary["search_totals"] = {
+        "requests": search_total_requests,
+        "bots": search_distinct_bots,
+    }
+
+    # Filter daily series: drop AI bot names from top_bots and remove
+    # their keys from each row. We deliberately don't try to re-bucket
+    # dropped traffic into "Other" because it would inflate "Other"
+    # with AI volume and defeat the purpose of hiding AI activity.
+    ai_bot_names = {b.get("name") for b in full_per_bot if b.get("category") == "ai"}
+    daily = summary.get("daily_series") or {"top_bots": [], "rows": []}
+    if ai_bot_names:
+        daily_top = [n for n in (daily.get("top_bots") or []) if n not in ai_bot_names]
+        daily_rows = []
+        for row in daily.get("rows") or []:
+            new_row = {k: v for k, v in row.items() if k not in ai_bot_names}
+            daily_rows.append(new_row)
+        summary["daily_series"] = {"top_bots": daily_top, "rows": daily_rows}
+
+    # AI assistant referrals (humans clicking from AI chats) are a
+    # SEPARATE signal from crawler activity — the chats render answers
+    # citing syrabit.ai and a fraction of users click through. We expose
+    # this as its own top-level payload so the frontend can render a
+    # standalone "AI assistant referrals" block beside the crawler card.
+    summary["ai_referrals_total"] = ai_refs_total
+    summary["ai_referrals_per_operator"] = ai_refs_list
+
+    # Search-engine referrals — sibling block. Same intent as the AI
+    # referrals fields above (humans clicking through to the site from
+    # an external surface), but for organic search engines instead of
+    # AI chats. Rendered as its own pill grid on the dashboard so the
+    # two acquisition channels can be compared at a glance.
+    summary["search_referrals_total"] = search_refs_total
+    summary["search_referrals_per_engine"] = search_refs_list
+
+    # ── Unified Crawlers grid (matches CF "AI Crawl Control → Overview"
+    # ── design exactly: one tile per operator, both AI and search,
+    # ── footer shows "Allowed requests" + "Total referrals"). ─────────
+    #
+    # Built from the *unfiltered* full_per_bot so AI operators (OpenAI,
+    # Anthropic, Perplexity, Common Crawl, Meta) appear in the grid the
+    # same way they do on Cloudflare's own dashboard. The "AI is hidden
+    # at the edge" policy still holds — the headline `totals.requests`
+    # / `allowed_total` / `unsuccessful_total` numbers above remain
+    # search-only — but the grid itself follows CF's layout so admins
+    # can see who is hitting the edge (and therefore what's being
+    # blocked) at a glance.
+    #
+    # Each tile is enriched with a ``referrals`` field that merges:
+    #   * search_referrals_per_engine[engine] for the operator's owned
+    #     search engine (Google → Google, Microsoft → Bing, Yandex →
+    #     Yandex, etc.). Apple / Common Crawl have no consumer search
+    #     surface so their search referrals contribute 0.
+    #   * ai_referrals_per_operator[operator_name] for the operator's
+    #     AI assistant referrals (OpenAI ChatGPT, Anthropic Claude,
+    #     Google Gemini, Microsoft Copilot, etc.). Operators that share
+    #     a parent company with a search engine (Google, Microsoft) get
+    #     BOTH contributions summed onto a single tile, mirroring how
+    #     CF's dashboard shows a single Google tile combining Googlebot
+    #     + Google-Extended traffic.
+    # Allowlist — only the operators the product cares about appear in
+    # the dashboard tile grid. Mix of pure search engines (Google, MS,
+    # DuckDuckGo, Yandex, Apple) and AI-assistant operators we want
+    # visibility into (Perplexity, You.com, Meta). Everything else
+    # (OpenAI, Anthropic, Common Crawl, Baidu, Amazon, ByteDance, …)
+    # is hidden from this card by request — they're still counted in
+    # the headline totals via CF GraphQL, just not displayed as tiles.
+    _CRAWLER_TILE_ALLOWLIST = {
+        "Google", "Microsoft", "DuckDuckGo", "Apple",
+        "Yandex", "Perplexity", "You.com", "OpenAI",
+    }
+    crawlers_grid = [
+        op for op in aggregate_per_operator(full_per_bot)
+        if op.get("operator") in _CRAWLER_TILE_ALLOWLIST
+    ]
+    # Operator-name → search-engine-name lookup (the search referrals
+    # map is keyed by engine display name from _SEARCH_REFERRER_HOSTS,
+    # which doesn't always match the CF operator-tile name — e.g. CF's
+    # "Microsoft" tile carries Bingbot but the search referral key is
+    # "Bing", because users see "bing.com" in their address bar, not
+    # "microsoft.com"). Operators absent from this map have no search
+    # surface, so their search referral contribution is 0.
+    _OPERATOR_TO_ENGINE = {
+        "Google": "Google",
+        "Microsoft": "Bing",
+        "Yandex": "Yandex",
+        "DuckDuckGo": "DuckDuckGo",
+        "Baidu": "Baidu",
+    }
+    for tile in crawlers_grid:
+        op_name = tile.get("operator", "")
+        eng_name = _OPERATOR_TO_ENGINE.get(op_name)
+        s_refs = int((search_refs_by_eng or {}).get(eng_name, 0)) if eng_name else 0
+        a_refs = int((ai_refs_by_op or {}).get(op_name, 0))
+        tile["referrals"] = s_refs + a_refs
+
+    # Re-sort by allowed-requests desc with referrals as tie-break so
+    # operators that drive real traffic (high referrals) outrank
+    # crawler-only operators with the same allowed count. Matches
+    # CF dashboard ordering.
+    crawlers_grid.sort(key=lambda t: (-int(t.get("allowed") or 0), -int(t.get("referrals") or 0), t.get("operator", "")))
+    summary["crawlers_grid"] = crawlers_grid
+    summary["total_referrals"] = ai_refs_total + search_refs_total
+
+    return {"available": True, **summary}

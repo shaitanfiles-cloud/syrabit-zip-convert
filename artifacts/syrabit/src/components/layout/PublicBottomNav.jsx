@@ -95,5 +95,3 @@ export const PublicBottomNav = memo(function PublicBottomNav() {
     </nav>
   );
 });
-
-export default PublicBottomNav;

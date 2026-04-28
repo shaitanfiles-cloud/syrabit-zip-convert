@@ -1,8 +1,13 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi, Copy, Check, Users, Activity, MessageSquare, TrendingUp, DollarSign, BarChart2, RotateCw, Clock, Undo2 } from 'lucide-react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi, Copy, Check, Users, Activity, MessageSquare, TrendingUp, DollarSign, BarChart2, RotateCw, Clock, Undo2, Star, ExternalLink } from 'lucide-react';
+import CronHealthPill, { SlackConfigBadge } from './CronHealthPill';
+import CfWafDriftCronPill from './CfWafDriftCronPill';
+import TrustpilotRefreshCronPill from './TrustpilotRefreshCronPill';
+import EdgeProxyDeployCronPill from './EdgeProxyDeployCronPill';
+import UnifiedLogsCfPullCronPill from './UnifiedLogsCfPullCronPill';
 import { toast } from 'sonner';
 import AdminQuickLinks from './AdminQuickLinks';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar, LineChart, Line } from 'recharts';
 import axios from 'axios';
 import { llmCosts, API_BASE } from '@/utils/api';
 import { buildHighlightedSegments } from '@/utils/highlightSegments';
@@ -180,6 +185,410 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   const [prerenderLoading, setPrerenderLoading] = useState(false);
   const [prerenderTriggering, setPrerenderTriggering] = useState(false);
 
+  // Task #750 — Trustpilot AggregateRating JSON-LD verifier report.
+  // Polled on the same cadence as other infra widgets so a regression
+  // (build-time inject + daily prod re-check) shows up here without
+  // ops/marketing having to read GitHub Actions failure email.
+  const [tpJsonldReport, setTpJsonldReport] = useState(null);
+  const [tpJsonldLoading, setTpJsonldLoading] = useState(false);
+
+  // Task #754 — 30-day pass-rate history backing the sparkline shown
+  // beside the per-URL table. Polled less frequently than the latest
+  // report (which moves on every verifier run) since the trend only
+  // changes once per scheduled run anyway.
+  const [tpJsonldHistory, setTpJsonldHistory] = useState(null);
+
+  // Task #758 — last N regression / recovery / streak alert events
+  // from the notifications store, rendered as a compact history strip
+  // inside the Trustpilot JSON-LD tile so ops can spot a flappy URL
+  // that single-fire email dedup would hide.
+  const [tpJsonldAlerts, setTpJsonldAlerts] = useState(null);
+
+  // Task #755 — refresh-cron heartbeat snapshot. Surfaces whether the
+  // daily GitHub Actions cron (.github/workflows/trustpilot-aggregate-
+  // refresh.yml) is still checking in. Endpoint added in Task #751;
+  // this just renders its status alongside the other Trustpilot tiles
+  // so a silent cron is visible at a glance instead of waiting for the
+  // email/in-app alert to fire.
+  const [tpCronHealth, setTpCronHealth] = useState(null);
+  const [tpCronLoading, setTpCronLoading] = useState(false);
+
+  const loadTpCronHealth = useCallback(() => {
+    setTpCronLoading(true);
+    axios.get(`${API_BASE}/admin/health/trustpilot/refresh-cron`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setTpCronHealth(r.data))
+      .catch(() => setTpCronHealth({ _error: true }))
+      .finally(() => setTpCronLoading(false));
+  }, [adminToken]);
+
+  // Task #833 — cf-waf-drift daily cron heartbeat snapshot. Mirrors the
+  // Trustpilot refresh-cron pill above so admins can spot a silent
+  // firewall-drift cron at a glance instead of waiting for the >36h
+  // silence email/in-app notification (Task #831). Endpoint shape:
+  // /admin/health/cf-waf-drift/cron — status ∈ {healthy, silent,
+  // degraded, never_observed, not_configured} plus lastHeartbeatAge,
+  // lastVerifyRc/lastAggregateRc, lastRunUrl, workflowUrl.
+  const [cfDriftCronHealth, setCfDriftCronHealth] = useState(null);
+  const [cfDriftCronLoading, setCfDriftCronLoading] = useState(false);
+
+  const loadCfDriftCronHealth = useCallback(() => {
+    setCfDriftCronLoading(true);
+    axios.get(`${API_BASE}/admin/health/cf-waf-drift/cron`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setCfDriftCronHealth(r.data))
+      .catch(() => setCfDriftCronHealth({ _error: true }))
+      .finally(() => setCfDriftCronLoading(false));
+  }, [adminToken]);
+
+  // Task #882 — edge-proxy-deploy CI cron snapshot. Mirrors the
+  // cf-waf-drift pill above but the data source is the GitHub
+  // Actions REST API rather than a workflow-posted heartbeat (this
+  // workflow doesn't post one — see routes/admin_health.py for the
+  // full reasoning). Endpoint shape: /admin/health/edge-proxy-deploy/
+  // cron — status ∈ {healthy, silent, degraded, never_observed,
+  // not_configured, unknown} plus conclusion, html_url/lastRunUrl,
+  // updated_at, ageSeconds, runStatus, workflowUrl. The pill goes
+  // red on conclusion: "failure", amber on runs older than 7 days
+  // (deploys this rare are themselves suspicious — the workflow
+  // only fires on workers/edge-proxy/** pushes), green otherwise.
+  const [edgeProxyDeployCronHealth, setEdgeProxyDeployCronHealth] = useState(null);
+  const [edgeProxyDeployCronLoading, setEdgeProxyDeployCronLoading] = useState(false);
+
+  const loadEdgeProxyDeployCronHealth = useCallback(() => {
+    setEdgeProxyDeployCronLoading(true);
+    axios.get(`${API_BASE}/admin/health/edge-proxy-deploy/cron`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setEdgeProxyDeployCronHealth(r.data))
+      .catch(() => setEdgeProxyDeployCronHealth({ _error: true }))
+      .finally(() => setEdgeProxyDeployCronLoading(false));
+  }, [adminToken]);
+
+  // Task #956 — unified-logs Cloudflare GraphQL pull silence health
+  // (Task #951 endpoint). Mirrors the cf-waf-drift / edge-proxy-deploy
+  // pills above; the data source is a backend cron loop polling
+  // db.job_locks[unified_logs_cf_pull_lock] rather than a GitHub
+  // Actions workflow, so the pill points its "Runs" link at the
+  // JSON status snapshot the backend exposes via ``statusUrl``.
+  // Endpoint shape: /admin/health/unified-logs/cf-pull/cron — status
+  // ∈ {healthy, silent, never_observed, not_configured} plus
+  // lastUpdatedAgeSeconds, leaseOwner, leaseExpiresAt, cursor,
+  // silentThresholdSeconds, statusUrl. The pill goes red on
+  // status: "silent" (cursor stale past threshold), gray on
+  // never_observed / not_configured, green otherwise.
+  const [unifiedLogsCfPullCronHealth, setUnifiedLogsCfPullCronHealth] = useState(null);
+  const [unifiedLogsCfPullCronLoading, setUnifiedLogsCfPullCronLoading] = useState(false);
+
+  const loadUnifiedLogsCfPullCronHealth = useCallback(() => {
+    setUnifiedLogsCfPullCronLoading(true);
+    axios.get(`${API_BASE}/admin/health/unified-logs/cf-pull/cron`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setUnifiedLogsCfPullCronHealth(r.data))
+      .catch(() => setUnifiedLogsCfPullCronHealth({ _error: true }))
+      .finally(() => setUnifiedLogsCfPullCronLoading(false));
+  }, [adminToken]);
+
+  // Task #902 — alerter-state lock-doc snapshots for the three cron
+  // pills above. The pill data answers "is the workflow currently
+  // red?"; the alert-state data answers "have we paged on-call about
+  // that yet?" by surfacing each alerter's persisted dedup state
+  // (last paged when, against which run, currently inside the 24h
+  // re-page debounce or not). Endpoints — all admin-gated, all
+  // 200-or-200, returning ``present: false`` when the alerter
+  // hasn't fired yet or Mongo is unavailable:
+  //   * /admin/health/edge-proxy-deploy/cron/alert-state
+  //     (Task #893 alerter, lock _id="edge_proxy_deploy_cron_alert_state")
+  //   * /admin/health/cf-waf-drift/cron/alert-state
+  //     (Task #831 alerter, lock _id="cf_waf_drift_cron_alert_state")
+  //   * /admin/health/trustpilot/refresh-cron/alert-state
+  //     (Task #751 alerter, lock _id="trustpilot_refresh_cron_alert_state")
+  // Each pill renders the snapshot inline as a small "last paged Xh
+  // ago · in debounce ~Yh remaining" caption.
+  const [edgeProxyDeployCronAlertState, setEdgeProxyDeployCronAlertState] = useState(null);
+  const [cfDriftCronAlertState, setCfDriftCronAlertState] = useState(null);
+  const [tpCronAlertState, setTpCronAlertState] = useState(null);
+  // Task #956 — alerter-state for the unified-logs CF pull silence
+  // alerter (Task #951). Same contract as the sibling alert-states
+  // above, sourced from
+  // /admin/health/unified-logs/cf-pull/cron/alert-state.
+  const [unifiedLogsCfPullCronAlertState, setUnifiedLogsCfPullCronAlertState] = useState(null);
+
+  const loadEdgeProxyDeployCronAlertState = useCallback(() => {
+    axios.get(`${API_BASE}/admin/health/edge-proxy-deploy/cron/alert-state`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setEdgeProxyDeployCronAlertState(r.data))
+      .catch(() => setEdgeProxyDeployCronAlertState(null));
+  }, [adminToken]);
+
+  const loadCfDriftCronAlertState = useCallback(() => {
+    axios.get(`${API_BASE}/admin/health/cf-waf-drift/cron/alert-state`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setCfDriftCronAlertState(r.data))
+      .catch(() => setCfDriftCronAlertState(null));
+  }, [adminToken]);
+
+  const loadTpCronAlertState = useCallback(() => {
+    axios.get(`${API_BASE}/admin/health/trustpilot/refresh-cron/alert-state`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setTpCronAlertState(r.data))
+      .catch(() => setTpCronAlertState(null));
+  }, [adminToken]);
+
+  const loadUnifiedLogsCfPullCronAlertState = useCallback(() => {
+    axios.get(`${API_BASE}/admin/health/unified-logs/cf-pull/cron/alert-state`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setUnifiedLogsCfPullCronAlertState(r.data))
+      .catch(() => setUnifiedLogsCfPullCronAlertState(null));
+  }, [adminToken]);
+
+  // Task #974 — alerter-state for the missing-Slack-webhook nag
+  // (routes/admin_slack_webhook_missing_alerts.py, Task #970), one
+  // entry per monitored env. Fans out three GETs against
+  // /admin/health/slack-webhook-missing/<env>/alert-state in parallel
+  // and stashes the response keyed by env name so each cron pill
+  // can pick out its matching slot to feed the SlackConfigBadge's
+  // "· paged Nh ago" decoration. Best-effort: a missing entry just
+  // means the badge renders the pre-Task #974 shape (no decoration).
+  // Names are pinned here (not imported from a shared module) to
+  // keep the wiring obvious next to the pills they're rendered on;
+  // the source of truth lives in routes/slack_alerter_config.py and
+  // is mirrored into _MONITORED_ENV_NAMES on the alerter module.
+  const SLACK_WEBHOOK_MISSING_ENVS = useMemo(() => [
+    'UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK',
+    'CF_WAF_DRIFT_SLACK_WEBHOOK',
+    'EDGE_PROXY_DEPLOY_SLACK_WEBHOOK',
+  ], []);
+  const [slackWebhookMissingAlertStates, setSlackWebhookMissingAlertStates] = useState({});
+  const loadSlackWebhookMissingAlertStates = useCallback(() => {
+    Promise.all(SLACK_WEBHOOK_MISSING_ENVS.map((env) =>
+      axios.get(
+        `${API_BASE}/admin/health/slack-webhook-missing/${env}/alert-state`,
+        { headers: adminHeaders(adminToken), withCredentials: true },
+      )
+        .then((r) => [env, r.data])
+        .catch(() => [env, null])
+    )).then((pairs) => {
+      // Replace wholesale instead of merging so a per-env transition
+      // from "paged" to "recovered" (which clears `last_alert_at`)
+      // doesn't leave a stale `lastAlertAgeSeconds` lingering on the
+      // badge. The 60s polling cadence picks this up automatically.
+      setSlackWebhookMissingAlertStates(Object.fromEntries(pairs));
+    });
+  }, [adminToken, SLACK_WEBHOOK_MISSING_ENVS]);
+
+  // Task #979 — per-env audit log of pages issued by the
+  // missing-Slack-webhook nag, sourced from
+  // /admin/health/slack-webhook-missing/<env>/alert-history (the
+  // endpoint Task #974 already shipped). Polled on the same 60s
+  // cadence as the alert-state above — NOT lazy like the Task #918
+  // disclosure on the cron pills, because the "Recent pages"
+  // affordance on the SlackConfigBadge needs the event count up
+  // front to decide whether to render the disclosure at all (an
+  // empty-history env should show only the existing "· paged Nh
+  // ago" badge, no extra clutter — see task spec).
+  //
+  // Cap at ~10 events per env: that's the max the badge's
+  // disclosure renders (the wider Task #918 disclosure on the
+  // sibling cron pills uses 20, but here we're decorating a small
+  // inline badge, not a tile, so we keep the payload tight).
+  const [slackWebhookMissingAlertHistories, setSlackWebhookMissingAlertHistories] = useState({});
+  const loadSlackWebhookMissingAlertHistories = useCallback(() => {
+    Promise.all(SLACK_WEBHOOK_MISSING_ENVS.map((env) =>
+      axios.get(
+        `${API_BASE}/admin/health/slack-webhook-missing/${env}/alert-history?limit=10`,
+        { headers: adminHeaders(adminToken), withCredentials: true },
+      )
+        .then((r) => [env, r.data])
+        // Best-effort: a 4xx/5xx (e.g. Mongo down) just means the
+        // disclosure stays hidden for this env; the badge itself is
+        // unaffected. Mirrors the alert-state catch above so a
+        // transient backend hiccup doesn't break the dashboard.
+        .catch(() => [env, { events: [] }])
+    )).then((pairs) => {
+      // Wholesale replace, same reason as alert-state above: a
+      // per-env transition from "had pages" to "events trimmed by
+      // the audit-log retention policy" must not leave stale rows
+      // on the badge.
+      setSlackWebhookMissingAlertHistories(Object.fromEntries(pairs));
+    });
+  }, [adminToken, SLACK_WEBHOOK_MISSING_ENVS]);
+
+  // Task #980 — POST a snooze for one missing-Slack-webhook env and
+  // refresh the per-env alert-state so the SlackConfigBadge's
+  // tooltip + decoration update atomically without waiting for the
+  // next 60s polling tick. The snooze endpoint already echoes back
+  // the ``/alert-state`` shape, so the optimistic update can just
+  // patch the relevant slot in ``slackWebhookMissingAlertStates``;
+  // the next polling tick reconciles in the (vanishingly rare) case
+  // where two admins click the button from two tabs at once.
+  const snoozeSlackWebhookMissing = useCallback(async (envName, untilHours) => {
+    if (!envName || !untilHours) return;
+    try {
+      const r = await axios.post(
+        `${API_BASE}/admin/health/slack-webhook-missing/${envName}/snooze`,
+        { untilHours },
+        { headers: adminHeaders(adminToken), withCredentials: true },
+      );
+      if (r && r.data) {
+        setSlackWebhookMissingAlertStates((prev) => ({
+          ...prev,
+          [envName]: r.data,
+        }));
+      }
+    } catch (_e) {
+      // Best-effort — the badge's local "snoozing…" flag clears on
+      // its finally branch, and the next 60s polling tick re-fetches
+      // canonical state. A persistent failure (e.g. Mongo down ⇒ 503)
+      // simply leaves the badge in its current shape; the admin can
+      // retry.
+    }
+  }, [adminToken]);
+
+  // Task #918 — paged-on-call audit log per pill, sourced from
+  //   * /admin/health/edge-proxy-deploy/cron/alert-history
+  //   * /admin/health/cf-waf-drift/cron/alert-history
+  //   * /admin/health/trustpilot/refresh-cron/alert-history
+  // Lazy-fetched on first toggle of the pill's "Show paged history"
+  // disclosure (NOT included in the 60s polling above) so the
+  // page-load payload doesn't carry N×20 history events nobody
+  // asked for. Once an admin opens the panel, the data sticks until
+  // the next page reload — the 60s polling cadence above is the
+  // canonical refresh path; admins click the pill's RefreshCw to
+  // force a manual refresh of the rest, and the loader below also
+  // re-fires on every disclosure open so a long-open panel reflects
+  // the latest events without a full page reload.
+  const [edgeProxyDeployCronAlertHistory, setEdgeProxyDeployCronAlertHistory] = useState(null);
+  const [cfDriftCronAlertHistory, setCfDriftCronAlertHistory] = useState(null);
+  const [tpCronAlertHistory, setTpCronAlertHistory] = useState(null);
+  // Task #956 — paged-on-call audit log for the unified-logs CF pull
+  // silence alerter. Same lazy contract as the sibling alert-history
+  // states above.
+  const [unifiedLogsCfPullCronAlertHistory, setUnifiedLogsCfPullCronAlertHistory] = useState(null);
+
+  const loadEdgeProxyDeployCronAlertHistory = useCallback(() => {
+    axios.get(`${API_BASE}/admin/health/edge-proxy-deploy/cron/alert-history`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setEdgeProxyDeployCronAlertHistory(r.data))
+      .catch(() => setEdgeProxyDeployCronAlertHistory({ events: [] }));
+  }, [adminToken]);
+
+  const loadCfDriftCronAlertHistory = useCallback(() => {
+    axios.get(`${API_BASE}/admin/health/cf-waf-drift/cron/alert-history`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setCfDriftCronAlertHistory(r.data))
+      .catch(() => setCfDriftCronAlertHistory({ events: [] }));
+  }, [adminToken]);
+
+  const loadTpCronAlertHistory = useCallback(() => {
+    axios.get(`${API_BASE}/admin/health/trustpilot/refresh-cron/alert-history`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setTpCronAlertHistory(r.data))
+      .catch(() => setTpCronAlertHistory({ events: [] }));
+  }, [adminToken]);
+
+  const loadUnifiedLogsCfPullCronAlertHistory = useCallback(() => {
+    axios.get(`${API_BASE}/admin/health/unified-logs/cf-pull/cron/alert-history`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setUnifiedLogsCfPullCronAlertHistory(r.data))
+      .catch(() => setUnifiedLogsCfPullCronAlertHistory({ events: [] }));
+  }, [adminToken]);
+
+  const loadTpJsonldReport = useCallback(() => {
+    setTpJsonldLoading(true);
+    axios.get(`${API_BASE}/admin/trustpilot-jsonld/report`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setTpJsonldReport(r.data))
+      .catch(() => setTpJsonldReport({ _error: true }))
+      .finally(() => setTpJsonldLoading(false));
+  }, [adminToken]);
+
+  const loadTpJsonldHistory = useCallback(() => {
+    axios.get(`${API_BASE}/admin/trustpilot-jsonld/history`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setTpJsonldHistory(r.data))
+      .catch(() => setTpJsonldHistory({ points: [], _error: true }));
+  }, [adminToken]);
+
+  const loadTpJsonldAlerts = useCallback(() => {
+    // Last 10 is enough to spot a flappy URL at a glance without
+    // blowing the tile height; user can deep-link into the full
+    // notifications page for more.
+    axios.get(`${API_BASE}/admin/trustpilot-jsonld/alerts?limit=10`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setTpJsonldAlerts(r.data))
+      .catch(() => setTpJsonldAlerts({ events: [], _error: true }));
+  }, [adminToken]);
+
+  useEffect(() => {
+    if (!adminToken) return;
+    loadTpJsonldReport();
+    loadTpJsonldHistory();
+    loadTpJsonldAlerts();
+    loadTpCronHealth();
+    loadCfDriftCronHealth();
+    loadEdgeProxyDeployCronHealth();
+    // Task #956 — unified-logs CF pull silence pill polls on the
+    // same 60s cadence as the sibling cron pills so a freshly
+    // silent ingest shows up next to cf-waf-drift / edge-proxy-
+    // deploy without a page reload.
+    loadUnifiedLogsCfPullCronHealth();
+    // Task #902 — pull alerter-state alongside the pill snapshots so
+    // the "last paged Xh ago · in debounce ~Yh" caption stays in
+    // sync with the pill's colour. Same 60s cadence as the rest;
+    // the lock-doc reads are tiny (single Mongo find by _id).
+    loadEdgeProxyDeployCronAlertState();
+    loadCfDriftCronAlertState();
+    loadTpCronAlertState();
+    loadUnifiedLogsCfPullCronAlertState();
+    // Task #974 — per-env missing-Slack-webhook nag state, batched
+    // into a single loader so the three GETs fire in parallel and
+    // the badges' "· paged Nh ago" decoration stays in lockstep
+    // with the rest of the 60s polling cadence.
+    loadSlackWebhookMissingAlertStates();
+    // Task #979 — pair the per-env alert-state load with a per-env
+    // alert-history load on the same 60s cadence; the disclosure
+    // under the SlackConfigBadge needs the event count up front to
+    // decide whether to render at all.
+    loadSlackWebhookMissingAlertHistories();
+    const id = setInterval(() => {
+      loadTpJsonldReport();
+      loadTpJsonldHistory();
+      loadTpJsonldAlerts();
+      loadTpCronHealth();
+      loadCfDriftCronHealth();
+      loadEdgeProxyDeployCronHealth();
+      loadUnifiedLogsCfPullCronHealth();
+      loadEdgeProxyDeployCronAlertState();
+      loadCfDriftCronAlertState();
+      loadTpCronAlertState();
+      loadUnifiedLogsCfPullCronAlertState();
+      loadSlackWebhookMissingAlertStates();
+      loadSlackWebhookMissingAlertHistories();
+    }, 60000);
+    return () => clearInterval(id);
+  }, [adminToken, loadTpJsonldReport, loadTpJsonldHistory,
+      loadTpJsonldAlerts, loadTpCronHealth, loadCfDriftCronHealth,
+      loadEdgeProxyDeployCronHealth, loadUnifiedLogsCfPullCronHealth,
+      loadEdgeProxyDeployCronAlertState, loadCfDriftCronAlertState,
+      loadTpCronAlertState, loadUnifiedLogsCfPullCronAlertState,
+      loadSlackWebhookMissingAlertStates,
+      loadSlackWebhookMissingAlertHistories]);
+
   // Task #609 — managed AI response cache stats + admin purge controls.
   const [aiCacheStats, setAiCacheStats] = useState(null);
   const [aiCacheLoading, setAiCacheLoading] = useState(false);
@@ -333,6 +742,39 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     setAsmRevertPreview(row);
   }, []);
 
+  // NOTE: `loadAsmCfg` MUST be declared before `confirmAsmRevert`
+  // (and any other useCallback that captures it). It's a `const`
+  // declaration so it lives in the temporal dead zone until this
+  // line runs — referencing it earlier in component-body order
+  // (even inside a useCallback body that won't actually invoke
+  // until later) crashes the whole AdminHealth component with
+  // "Cannot access 'loadAsmCfg' before initialization" the moment
+  // React executes the body, which trips the
+  // <SectionErrorBoundary> wrapper and replaces the entire Health
+  // tab with the "failed to load" card. Do not move this back
+  // below `confirmAsmRevert`.
+  const loadAsmCfg = useCallback(() => {
+    setAsmLoading(true);
+    axios.get(`${API_BASE}/admin/assamese-purity`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => {
+        setAsmCfg(r.data);
+        const cfg = r.data?.config || {};
+        setAsmDraft({
+          behaviour: cfg.behaviour || '',
+          threshold: cfg.threshold != null ? String(cfg.threshold) : '',
+          indic_provider: cfg.indic_provider || '',
+        });
+        setAsmTestSample(r.data?.test_sample || '');
+      })
+      .catch((e) => {
+        const msg = e?.response?.data?.detail || 'Failed to load purity config';
+        toast.error(msg);
+      })
+      .finally(() => setAsmLoading(false));
+  }, [adminToken]);
+
   const confirmAsmRevert = useCallback(async () => {
     const row = asmRevertPreview;
     if (!row?.id) return;
@@ -389,28 +831,6 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       })
       .finally(() => setAsmStatsLoading(false));
   }, [adminToken, asmStatsWindow]);
-
-  const loadAsmCfg = useCallback(() => {
-    setAsmLoading(true);
-    axios.get(`${API_BASE}/admin/assamese-purity`, {
-      headers: adminHeaders(adminToken), withCredentials: true,
-    })
-      .then((r) => {
-        setAsmCfg(r.data);
-        const cfg = r.data?.config || {};
-        setAsmDraft({
-          behaviour: cfg.behaviour || '',
-          threshold: cfg.threshold != null ? String(cfg.threshold) : '',
-          indic_provider: cfg.indic_provider || '',
-        });
-        setAsmTestSample(r.data?.test_sample || '');
-      })
-      .catch((e) => {
-        const msg = e?.response?.data?.detail || 'Failed to load purity config';
-        toast.error(msg);
-      })
-      .finally(() => setAsmLoading(false));
-  }, [adminToken]);
 
   const saveAsmOverride = useCallback(async () => {
     const body = {};
@@ -556,7 +976,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     try {
       const r = await llmCosts(adminToken, llmDays);
       setLlmData(r.data);
-    } catch {} finally { setLlmLoading(false); }
+    } catch (err) { console.warn('AdminHealth: llmCosts() failed:', err); } finally { setLlmLoading(false); }
   }, [adminToken, llmDays]);
 
   useEffect(() => { loadHealth(); }, []);
@@ -1698,6 +2118,492 @@ export default function AdminHealth({ adminToken, onNavigate }) {
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
+        </SectionErrorBoundary>
+
+        <SectionErrorBoundary name="Trustpilot JSON-LD Coverage">
+        {(() => {
+          // Task #750 — pass/fail per URL from the daily verifier
+          // (.github/workflows/trustpilot-jsonld-prod.yml). Tile turns
+          // red when ANY URL failed the latest scheduled run, so a
+          // SERP-star regression surfaces here, not just in CI email.
+          const data = tpJsonldReport && !tpJsonldReport._error
+            ? tpJsonldReport
+            : null;
+          const configured = !!data?.configured;
+          const report = data?.report || null;
+          const failed = report?.failed ?? 0;
+          const total = report?.totalUrls ?? (report?.results?.length || 0);
+          const tileFailed = configured && report && (failed > 0 || report.ok === false);
+          const tileUnknown = !configured || !report;
+          const containerCls = tileFailed
+            ? 'bg-red-50 border-red-200'
+            : tileUnknown
+              ? 'bg-gray-50 border-gray-200'
+              : 'bg-emerald-50 border-emerald-200';
+          const headerColor = tileFailed
+            ? 'text-red-600'
+            : tileUnknown
+              ? 'text-gray-500'
+              : 'text-emerald-600';
+          let timestampLabel = 'never';
+          if (report?.generatedAt) {
+            try {
+              const ts = new Date(report.generatedAt);
+              const diff = Math.max(0, Math.floor((Date.now() - ts.getTime()) / 1000));
+              if (diff < 60) timestampLabel = `${diff}s ago`;
+              else if (diff < 3600) timestampLabel = `${Math.floor(diff / 60)}m ago`;
+              else if (diff < 86400) timestampLabel = `${Math.floor(diff / 3600)}h ago`;
+              else timestampLabel = `${Math.floor(diff / 86400)}d ago`;
+            } catch { /* keep default */ }
+          }
+          return (
+            <div className={`rounded-2xl p-4 border ${containerCls}`} data-testid="trustpilot-jsonld-tile">
+              <div className="flex items-center gap-3 mb-3">
+                {tileFailed
+                  ? <AlertTriangle size={18} className="text-red-500" />
+                  : tileUnknown
+                    ? <Star size={18} className="text-gray-400" />
+                    : <Star size={18} className="text-emerald-500" />}
+                <div className="flex-1 min-w-0">
+                  <p className={`text-sm font-semibold ${headerColor}`} data-testid="trustpilot-jsonld-status">
+                    {tileUnknown
+                      ? 'Trustpilot JSON-LD coverage — no verifier run yet'
+                      : tileFailed
+                        ? `Trustpilot JSON-LD coverage — ${failed}/${total} URL${failed === 1 ? '' : 's'} failed`
+                        : `Trustpilot JSON-LD coverage — all ${total} URL${total === 1 ? '' : 's'} pass`}
+                  </p>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    Last run {timestampLabel}
+                    {report?.target ? ` · target=${report.target}` : ''}
+                    {report?.origin ? ` · ${report.origin}` : ''}
+                  </p>
+                </div>
+                {/* Task #968 — surface the dedicated Slack fan-out
+                    configuration health (SLACK_TRUSTPILOT_WEBHOOK_URL)
+                    next to the per-event verifier alerter, mirroring
+                    the badge Task #964 added to the three cron pills.
+                    Renders nothing when the backend hasn't published
+                    the field yet (in-flight rollout safe). */}
+                <SlackConfigBadge
+                  configured={tpJsonldReport?.slackConfigured}
+                  envName={tpJsonldReport?.slackWebhookEnv}
+                  testId="trustpilot-jsonld"
+                />
+                {report?.runUrl && (
+                  <a
+                    href={report.runUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[11px] text-violet-600 hover:text-violet-700 inline-flex items-center gap-1"
+                    data-testid="trustpilot-jsonld-run-link"
+                    title="Open the GitHub Actions run that produced this report"
+                  >
+                    Run <ExternalLink size={11} />
+                  </a>
+                )}
+                <button
+                  onClick={loadTpJsonldReport}
+                  disabled={tpJsonldLoading}
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-white/60"
+                  data-testid="button-refresh-trustpilot-jsonld"
+                  title="Refresh"
+                >
+                  <RefreshCw size={13} className={tpJsonldLoading ? 'animate-spin' : ''} />
+                </button>
+              </div>
+              {(() => {
+                // Task #754 — 30-day pass-rate sparkline. Rendered above
+                // the per-URL table so ops sees a slow-moving regression
+                // (e.g. the line drifting from 100% to 80% over a week)
+                // without having to compare table snapshots day to day.
+                const points = (tpJsonldHistory?.points || [])
+                  .filter((p) => p && p.passRate != null)
+                  .map((p) => ({
+                    ts: p.ts,
+                    label: p.ts ? new Date(p.ts).toLocaleDateString() : '',
+                    passRatePct: Math.round((p.passRate ?? 0) * 1000) / 10,
+                    avgRating: p.avgRatingValue,
+                    passed: p.passed,
+                    failed: p.failed,
+                    total: p.totalUrls,
+                  }));
+                if (points.length < 2) return null;
+                const passColor = tileFailed ? '#dc2626' : '#10b981';
+                return (
+                  <div className="mb-3" data-testid="trustpilot-jsonld-sparkline">
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="text-[10px] uppercase tracking-wider text-gray-500">
+                        Pass-rate · last {points.length} run{points.length === 1 ? '' : 's'} (30d TTL)
+                      </p>
+                      <p className="text-[10px] text-gray-400 font-mono">
+                        latest {points[points.length - 1].passRatePct}%
+                      </p>
+                    </div>
+                    <ResponsiveContainer width="100%" height={48}>
+                      <LineChart data={points} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
+                        <YAxis hide domain={[0, 100]} />
+                        <Tooltip
+                          contentStyle={TOOLTIP_STYLE}
+                          formatter={(v, name) => {
+                            if (name === 'passRatePct') return [`${v}%`, 'pass-rate'];
+                            return [v, name];
+                          }}
+                          labelFormatter={(_, payload) => {
+                            const p = payload?.[0]?.payload;
+                            if (!p) return '';
+                            const bits = [p.label];
+                            if (p.passed != null && p.total != null) {
+                              bits.push(`${p.passed}/${p.total} pass`);
+                            }
+                            if (p.avgRating != null) {
+                              bits.push(`avg ★ ${Number(p.avgRating).toFixed(2)}`);
+                            }
+                            return bits.join(' · ');
+                          }}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="passRatePct"
+                          stroke={passColor}
+                          strokeWidth={2}
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                    {(() => {
+                      // Task #760 — second sparkline: 30-day average
+                      // ratingValue trend. Pass-rate alone can't catch a
+                      // slow drift in the actual star rating (e.g. 4.7★
+                      // → 4.5★ over a fortnight); this chart does.
+                      // Points without avgRating (pre-Task-#754 rows or
+                      // an all-fail run with no numeric ratings) are
+                      // filtered out so the line doesn't fake zeros.
+                      const ratingPoints = points.filter(
+                        (p) => p.avgRating != null && Number.isFinite(Number(p.avgRating)),
+                      ).map((p) => ({
+                        ...p,
+                        avgRatingNum: Number(p.avgRating),
+                      }));
+                      if (ratingPoints.length < 2) return null;
+                      // Tighten Y domain around the observed range so
+                      // sub-0.2★ drift is actually visible on a 48px
+                      // chart. Clamped to a sane Trustpilot band.
+                      const values = ratingPoints.map((p) => p.avgRatingNum);
+                      const minV = Math.max(0, Math.min(...values) - 0.1);
+                      const maxV = Math.min(5, Math.max(...values) + 0.1);
+                      const latest = ratingPoints[ratingPoints.length - 1].avgRatingNum;
+                      return (
+                        <div className="mt-2" data-testid="trustpilot-jsonld-rating-sparkline">
+                          <div className="flex items-center justify-between mb-1">
+                            <p className="text-[10px] uppercase tracking-wider text-gray-500">
+                              Avg ratingValue · last {ratingPoints.length} run{ratingPoints.length === 1 ? '' : 's'}
+                            </p>
+                            <p className="text-[10px] text-gray-400 font-mono">
+                              latest ★ {latest.toFixed(2)}
+                            </p>
+                          </div>
+                          <ResponsiveContainer width="100%" height={48}>
+                            <LineChart
+                              data={ratingPoints}
+                              margin={{ top: 2, right: 2, bottom: 2, left: 2 }}
+                            >
+                              <YAxis hide domain={[minV, maxV]} />
+                              <Tooltip
+                                contentStyle={TOOLTIP_STYLE}
+                                formatter={(v, name) => {
+                                  if (name === 'avgRatingNum') {
+                                    return [`★ ${Number(v).toFixed(2)}`, 'avg rating'];
+                                  }
+                                  return [v, name];
+                                }}
+                                labelFormatter={(_, payload) => {
+                                  const p = payload?.[0]?.payload;
+                                  if (!p) return '';
+                                  const bits = [p.label];
+                                  if (p.avgRating != null) {
+                                    bits.push(`★ ${Number(p.avgRating).toFixed(2)}`);
+                                  }
+                                  return bits.join(' · ');
+                                }}
+                              />
+                              <Line
+                                type="monotone"
+                                dataKey="avgRatingNum"
+                                stroke="#f59e0b"
+                                strokeWidth={2}
+                                dot={false}
+                                isAnimationActive={false}
+                              />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                );
+              })()}
+              {(() => {
+                // Task #758 — recent regression / recovery / streak
+                // alert events. Reads from the notifications the
+                // dispatcher already writes, so a flappy URL (alerted,
+                // recovered, re-alerted within a week) stands out at a
+                // glance — something single-fire email dedup hides.
+                const events = tpJsonldAlerts?.events || [];
+                if (!events.length) return null;
+                const stateStyles = {
+                  regression: 'bg-red-50 text-red-700 border-red-200',
+                  streak: 'bg-amber-50 text-amber-700 border-amber-200',
+                  recovery: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                };
+                const stateLabels = {
+                  regression: 'REGRESSION',
+                  streak: 'STREAK',
+                  recovery: 'RECOVERY',
+                };
+                const fmtAge = (iso) => {
+                  if (!iso) return '';
+                  const t = new Date(iso).getTime();
+                  if (!Number.isFinite(t)) return '';
+                  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+                  if (s < 60) return `${s}s ago`;
+                  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+                  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+                  return `${Math.round(s / 86400)}d ago`;
+                };
+                return (
+                  <div
+                    className="mb-3 pt-2 border-t border-gray-100"
+                    data-testid="trustpilot-jsonld-alert-history"
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <p className="text-[10px] uppercase tracking-wider text-gray-500">
+                        Recent alerts · last {events.length}
+                      </p>
+                      <p className="text-[10px] text-gray-400">
+                        auto-refreshes · 60s
+                      </p>
+                    </div>
+                    <ul className="space-y-1 max-h-40 overflow-y-auto pr-1">
+                      {events.map((e) => (
+                        <li
+                          key={e.id || `${e.created_at}-${e.title}`}
+                          className="flex items-start gap-2 text-[11px] leading-snug"
+                          data-testid={`trustpilot-jsonld-alert-${e.state}`}
+                        >
+                          <span
+                            className={`shrink-0 mt-0.5 inline-block px-1.5 py-0.5 rounded border font-bold text-[9px] tracking-wider ${stateStyles[e.state] || stateStyles.regression}`}
+                            title={e.state}
+                          >
+                            {stateLabels[e.state] || e.state?.toUpperCase() || 'ALERT'}
+                          </span>
+                          <span className="flex-1 min-w-0">
+                            <span
+                              className="block text-gray-700 truncate"
+                              title={e.title}
+                            >
+                              {e.title}
+                            </span>
+                            {Array.isArray(e.urls) && e.urls.length > 0 ? (
+                              // Render the per-URL bullets backend
+                              // parsed out of the alert body so ops can
+                              // spot a flappy URL at a glance. Capped
+                              // at 5 with a "+N more" suffix so one
+                              // giant alert can't push the strip off
+                              // screen.
+                              <span
+                                className="block mt-0.5 text-[10px] font-mono text-gray-600"
+                                data-testid={`trustpilot-jsonld-alert-urls-${e.id || e.created_at}`}
+                              >
+                                {e.urls.slice(0, 5).map((u, i) => (
+                                  <span
+                                    key={`${u}-${i}`}
+                                    className="block truncate"
+                                    title={u}
+                                  >
+                                    · {u}
+                                  </span>
+                                ))}
+                                {e.urls.length > 5 ? (
+                                  <span className="block text-gray-400">
+                                    · +{e.urls.length - 5} more
+                                  </span>
+                                ) : null}
+                              </span>
+                            ) : null}
+                            <span className="block text-[10px] text-gray-400 font-mono">
+                              {fmtAge(e.created_at)}
+                              {e.created_at ? ` · ${new Date(e.created_at).toLocaleString()}` : ''}
+                            </span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })()}
+              {tileUnknown ? (
+                <p className="text-[11px] text-gray-500 leading-relaxed">
+                  The daily <code className="font-mono">trustpilot-jsonld-prod</code> workflow will publish per-URL pass/fail here once it runs (06:00 UTC). Until then, treat the build-time inject step as the source of truth.
+                </p>
+              ) : (
+                <div className="overflow-x-auto" data-testid="trustpilot-jsonld-table">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-100">
+                        <th className="py-1.5 pr-3 font-bold">URL</th>
+                        <th className="py-1.5 pr-3 font-bold">HTTP</th>
+                        <th className="py-1.5 pr-3 font-bold">Pass</th>
+                        <th className="py-1.5 font-bold">Detail</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(report.results || []).map((r, idx) => (
+                        <tr key={`${r.url}-${idx}`} className="border-b border-gray-50" data-testid={`trustpilot-jsonld-row-${idx}`}>
+                          <td className="py-1.5 pr-3 font-mono text-gray-700">{r.url}</td>
+                          <td className="py-1.5 pr-3 font-mono text-gray-500">{r.status ?? '—'}</td>
+                          <td className="py-1.5 pr-3">
+                            <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              r.pass
+                                ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
+                                : 'bg-red-50 text-red-600 border border-red-200'
+                            }`}>
+                              {r.pass ? 'PASS' : 'FAIL'}
+                            </span>
+                          </td>
+                          <td className="py-1.5 text-gray-600 font-mono text-[11px]">
+                            {r.pass
+                              ? (r.ratingValue != null && r.reviewCount != null
+                                  ? `${r.ratingValue}★ · ${r.reviewCount} reviews`
+                                  : '—')
+                              : (r.reason || 'fail')}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+        </SectionErrorBoundary>
+
+        <SectionErrorBoundary name="Trustpilot Refresh Cron">
+        {/*
+          Task #755 — surface the daily refresh-cron heartbeat next to
+          the existing Trustpilot data tile so admins can spot a silent
+          cron at a glance instead of waiting for the email. Endpoint
+          shape comes from /admin/health/trustpilot/refresh-cron (Task
+          #751). Task #835 — the visual pill is the shared
+          <CronHealthPill> component. Task #838 — the configuration
+          (header text per status, two-line success/any heartbeat
+          caption, default workflow URL) was extracted into
+          <TrustpilotRefreshCronPill> so its colour mapping and
+          dual-heartbeat caption can be unit-tested in isolation
+          (see TrustpilotRefreshCronPill.test.jsx). testId moved from
+          "trustpilot-cron" to "trustpilot-refresh-cron" to align
+          with the cf-waf-drift pill's naming convention.
+        */}
+        <TrustpilotRefreshCronPill
+          data={tpCronHealth}
+          loading={tpCronLoading}
+          onRefresh={loadTpCronHealth}
+          alertState={tpCronAlertState}
+          alertHistory={tpCronAlertHistory}
+          onLoadAlertHistory={loadTpCronAlertHistory}
+        />
+        </SectionErrorBoundary>
+
+        <SectionErrorBoundary name="Cloudflare WAF Drift Cron">
+        {/*
+          Task #833 — sibling pill for the daily cf-waf-drift-daily
+          workflow heartbeat (Task #831). Same shape as the Trustpilot
+          refresh-cron pill above, with one addition: a "Last run"
+          deep-link when the heartbeat carries one, since jumping
+          straight to the offending GitHub Actions run is the first
+          thing an admin wants when the pill turns red. Endpoint:
+          /admin/health/cf-waf-drift/cron — status keys mirror the
+          Trustpilot endpoint. Task #835 — the visual pill is the
+          shared <CronHealthPill> component. Task #836 — the
+          configuration was extracted into <CfWafDriftCronPill> so
+          its colour mapping, heartbeat-age caption, and conditional
+          verify/aggregate-RC text can be unit-tested in isolation
+          (see CfWafDriftCronPill.test.jsx).
+        */}
+        <CfWafDriftCronPill
+          data={cfDriftCronHealth}
+          loading={cfDriftCronLoading}
+          onRefresh={loadCfDriftCronHealth}
+          alertState={cfDriftCronAlertState}
+          alertHistory={cfDriftCronAlertHistory}
+          onLoadAlertHistory={loadCfDriftCronAlertHistory}
+          slackMissingAlertState={slackWebhookMissingAlertStates['CF_WAF_DRIFT_SLACK_WEBHOOK']}
+          slackMissingAlertHistory={slackWebhookMissingAlertHistories['CF_WAF_DRIFT_SLACK_WEBHOOK']}
+          onSnoozeSlackMissing={snoozeSlackWebhookMissing}
+        />
+        </SectionErrorBoundary>
+
+        <SectionErrorBoundary name="Edge-Proxy Deploy CI">
+        {/*
+          Task #882 — surface the latest `edge-proxy-deploy` GitHub
+          Actions run next to the other cron pills. The workflow runs
+          unattended on every push to master that touches
+          workers/edge-proxy/**; its `smoke-preview` job is the
+          canonical signal that the latest worker build still passes
+          the burst / D1 / KV / bot-cache checks. A red badge there
+          previously only lived in the GitHub Actions UI — this pill
+          puts it on the AdminHealth dashboard on-call already
+          watches. Endpoint: /admin/health/edge-proxy-deploy/cron.
+        */}
+        <EdgeProxyDeployCronPill
+          data={edgeProxyDeployCronHealth}
+          loading={edgeProxyDeployCronLoading}
+          onRefresh={loadEdgeProxyDeployCronHealth}
+          alertState={edgeProxyDeployCronAlertState}
+          alertHistory={edgeProxyDeployCronAlertHistory}
+          onLoadAlertHistory={loadEdgeProxyDeployCronAlertHistory}
+          slackMissingAlertState={slackWebhookMissingAlertStates['EDGE_PROXY_DEPLOY_SLACK_WEBHOOK']}
+          slackMissingAlertHistory={slackWebhookMissingAlertHistories['EDGE_PROXY_DEPLOY_SLACK_WEBHOOK']}
+          onSnoozeSlackMissing={snoozeSlackWebhookMissing}
+        />
+        </SectionErrorBoundary>
+
+        <SectionErrorBoundary name="Cloudflare Log Ingest">
+        {/*
+          Task #956 — surface the unified-logs Cloudflare GraphQL pull
+          silence alerter (Task #951) on the AdminHealth dashboard
+          alongside the other cron pills. Until this pill shipped, the
+          only signal that ingest had stalled was the on-call page or
+          the cf_pull_last_run timestamp on /api/admin/logs/status
+          quietly growing old. The pill turns red when the lock doc's
+          updated_at is older than ~3× the configured pull interval
+          (default 5 min floor), shows the lease owner and last
+          successful cursor advance inline, and exposes the same
+          "last paged Xh ago · in debounce ~Yh" caption + paged
+          history disclosure as its siblings.
+          Endpoint: /admin/health/unified-logs/cf-pull/cron.
+          Tasks #957 / #963 — the alerter pages on three channels
+          (in-app + email + Slack), matching the cf-waf-drift /
+          edge-proxy-deploy pills. Slack is the third best-effort
+          channel and is gated on `UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK`
+          being set on the backend; the shared SlackConfigBadge
+          inside <CronHealthPill> renders a "Slack ✓ / ✗" indicator
+          next to this pill so a deploy-without-Slack-coverage gap is
+          visible at a glance. See §8.7.7 of CLOUDFLARE_ZERO_TRUST.md
+          for the sibling-webhook table.
+        */}
+        <UnifiedLogsCfPullCronPill
+          data={unifiedLogsCfPullCronHealth}
+          loading={unifiedLogsCfPullCronLoading}
+          onRefresh={loadUnifiedLogsCfPullCronHealth}
+          alertState={unifiedLogsCfPullCronAlertState}
+          alertHistory={unifiedLogsCfPullCronAlertHistory}
+          onLoadAlertHistory={loadUnifiedLogsCfPullCronAlertHistory}
+          slackMissingAlertState={slackWebhookMissingAlertStates['UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK']}
+          slackMissingAlertHistory={slackWebhookMissingAlertHistories['UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK']}
+          onSnoozeSlackMissing={snoozeSlackWebhookMissing}
+        />
         </SectionErrorBoundary>
 
         <SectionErrorBoundary name="Live Traffic Stats">

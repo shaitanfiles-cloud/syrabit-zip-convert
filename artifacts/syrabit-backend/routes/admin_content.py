@@ -1,5 +1,5 @@
 """Syrabit.ai — Admin content CRUD & thumbnails"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
+import re, json, asyncio, uuid, logging, base64
 
 _PRERENDER_LOG = logging.getLogger("syrabit.prerender_refresh")
 
@@ -75,24 +75,15 @@ def _schedule_indexnow_for_chapter(chapter_doc: dict):
         loop.create_task(_do())
     except Exception:
         pass
-from typing import Optional, List, Dict, Any, Union
-from datetime import datetime, timezone, timedelta
+from typing import Optional
+from datetime import datetime, timezone
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    APIRouter, HTTPException, Depends, Query, Body, File, UploadFile, Request, BackgroundTasks,
+    Form,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
-import mistune as _mistune
 
 from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
+    SubjectCreate, ChapterCreate, ChunkCreate,
 )
 from config import _GROQ_KEY
 from deps import (
@@ -102,12 +93,44 @@ from deps import (
     supa,
 )
 from cache import _invalidate_content_cache
-from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional,
+
+
+def _purge_for_route(route: str, prefixes, content_id: str = "") -> None:
+    """Cache-purge wrapper for admin write routes (Task #795).
+
+    Calls ``_invalidate_content_cache`` for each content prefix, which
+    fans out to (1) the in-process content cache, (2) Redis, and (3) the
+    debounced Cloudflare zone purge + worker /api/edge/purge call (see
+    ``cache._fire_cf_edge_purge`` → ``cloudflare_client.purge_content_prefixes``
+    + ``purge_worker_cache``). Emits a single audit log line so admins can
+    correlate writes to purge events in production logs.
+
+    Designed to be safe to call from any handler — failures in the purge
+    path are logged but never raised, since a purge is best-effort cache
+    hygiene, not a correctness barrier.
+    """
+    if not prefixes:
+        return
+    prefix_list = list(prefixes)
+    for p in prefix_list:
+        try:
+            _invalidate_content_cache(p)
+        except Exception as e:
+            logger.warning(
+                f"admin.purge invalidate failed prefix={p} route={route}: {e}"
+            )
+    logger.info(
+        f"admin.purge route={route} prefixes={prefix_list} id={content_id or '-'}"
+    )
+
+
+from routes.content import (
+    get_draft_served_subjects as _get_draft_served_subjects,
+    clear_draft_served_subject as _clear_draft_served_subject,
 )
-from llm import call_llm_api, call_llm_api_stream
+from auth_deps import (
+    get_admin_user,
+)
 from rag import (
     auto_chunk_content,
     rechunk_chapter,
@@ -283,6 +306,17 @@ async def admin_trigger_d1_sync(admin: dict = Depends(get_admin_user), tables: O
         result = await sync_tables(db, table_list)
     else:
         result = await sync_full(db)
+    # Task #795: after MongoDB → D1 sync the worker's edge cache may still
+    # serve responses backed by stale D1 reads until each key's TTL
+    # expires. Force a worker-cache purge_all so the next read repopulates
+    # from the freshly synced D1 tables. Best-effort — log but never raise
+    # because the sync itself succeeded.
+    try:
+        from cloudflare_client import purge_worker_cache
+        await purge_worker_cache(purge_all=True)
+        logger.info("admin.purge route=admin.d1_sync worker=all")
+    except Exception as e:
+        logger.warning(f"admin.purge worker after d1-sync failed: {e}")
     return result
 
 @router.get("/admin/d1-export")
@@ -678,11 +712,28 @@ async def admin_update_subject(subject_id: str, data: dict, admin: dict = Depend
         raise HTTPException(status_code=404, detail="Subject not found")
     _invalidate_content_cache("subjects")
     _schedule_d1_sync_fire("subjects")
+    if allowed.get("status") == "published":
+        _clear_draft_served_subject(subject_id)
     updated_subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0, "board_slug": 1, "class_slug": 1, "slug": 1})
     if updated_subj:
         _schedule_indexnow_for_subject(updated_subj)
     _schedule_prerender_refresh("subject_updated")
     return {"message": "Updated"}
+
+@router.get("/admin/content/draft-served-subjects")
+async def admin_draft_served_subjects(admin: dict = Depends(get_admin_user)):
+    """Task #701 — list of subjects currently being served via the relaxed
+    status filter (Task #700). The public chapter resolver tolerates
+    draft/unpublished subjects so live URLs don't 404, and records each hit.
+    Surfacing them here lets the admin Control Center show a "Subjects served
+    as draft" widget with a one-click publish action.
+
+    Returns: { "items": [{id, name, slug, status, first_served_at,
+    last_served_at, count}, ...], "total": int }
+    """
+    items = _get_draft_served_subjects()
+    return {"items": items, "total": len(items)}
+
 
 _ALLOWED_BULK_STATUSES = {"published", "draft", "unpublished", "archived"}
 _ALLOWED_BULK_SCOPES = {"subjects", "chapters"}
@@ -725,6 +776,9 @@ async def admin_bulk_status_update(data: dict, admin: dict = Depends(get_admin_u
     _schedule_d1_sync_fire(scope)
 
     if scope == "subjects":
+        if new_status == "published":
+            for sid in ids:
+                _clear_draft_served_subject(sid)
         try:
             async for subj in db.subjects.find(
                 {"id": {"$in": ids}},
@@ -771,6 +825,8 @@ async def admin_patch_subject(subject_id: str, data: dict, admin: dict = Depends
         raise HTTPException(status_code=404, detail="Subject not found")
     _invalidate_content_cache("subjects")
     _schedule_d1_sync_fire("subjects")
+    if allowed.get("status") == "published":
+        _clear_draft_served_subject(subject_id)
     updated_subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0, "board_slug": 1, "class_slug": 1, "slug": 1})
     if updated_subj:
         _schedule_indexnow_for_subject(updated_subj)
@@ -802,6 +858,10 @@ async def upload_subject_thumbnail(
         {"id": subject_id},
         {"$set": {"thumbnailUrl": data_url, "updated_at": datetime.now(timezone.utc).isoformat()}}
     )
+    # Task #795: subject thumbnailUrl is part of the public subject list
+    # surfaced in /api/content/subjects + /api/content/library-bundle, so
+    # the edge cache must be invalidated for the change to be visible.
+    _purge_for_route("admin.subject_thumbnail_upload", ["subjects"], subject_id)
     return {"thumbnailUrl": data_url}
 
 
@@ -916,8 +976,7 @@ def _inpaint_region(img, box, method=0):
     box = (x0, y0, x1, y1) in pixel coords.
     method: 0=gaussian blur fill, 1=edge-color gradient, 2=median + blur
     """
-    from PIL import Image, ImageFilter, ImageDraw
-    import random as _rand
+    from PIL import Image, ImageFilter
 
     W, H = img.size
     x0 = max(0, int(box[0]))
@@ -1238,6 +1297,11 @@ async def generate_ai_thumbnails(
     )
     text_found = len(text_regions) > 0
     logger.info(f"AI thumbnails generated for subject {subject_id}: {len(text_regions)} text regions detected, {len(colors)} colors")
+    # Task #795: this also overwrites `thumbnailUrl` and stores
+    # `thumbnail_variants` on the subject document, both of which leak
+    # into the public subject payload, so the edge cache must drop the
+    # stale subject list.
+    _purge_for_route("admin.thumbnail_generate", ["subjects"], subject_id)
     return {
         "original_url":  original_url,
         "variants":      list(variants),
@@ -1338,12 +1402,23 @@ async def generate_ai_thumbnails_bulk(
             logger.error(f"Bulk thumb error for {sid}: {_be}")
             results.append({"subject_id": sid, "status": "failed", "error": str(_be)})
 
-    return {"results": results, "total": len(subject_ids), "done": sum(1 for r in results if r["status"] == "done")}
+    # Task #795: bulk run touched up to 50 subject docs in one shot —
+    # one purge call covers all of them since `_invalidate_content_cache`
+    # already drops the entire `subjects:*` keyspace + the library bundle.
+    done_count = sum(1 for r in results if r["status"] == "done")
+    if done_count:
+        _purge_for_route(
+            "admin.thumbnail_generate_bulk",
+            ["subjects"],
+            f"{done_count}/{len(subject_ids)} subjects",
+        )
+
+    return {"results": results, "total": len(subject_ids), "done": done_count}
 
 
 def _generate_chapter_card_wallpaper(chapter_title: str, subject_name: str, variant: int = 0, size=(400, 225)) -> str:
     from PIL import Image as _PILImage, ImageDraw as _Draw
-    import io as _io, hashlib as _hl, struct as _st, math as _math
+    import io as _io, hashlib as _hl
 
     seed = int(_hl.md5(f"{chapter_title}:{subject_name}:{variant}".encode()).hexdigest()[:8], 16)
     palette_sets = [
@@ -1439,10 +1514,23 @@ async def generate_chapter_card_thumbnails(
             logger.error(f"Chapter card thumb error for {ch_id}: {_e}")
             results.append({"chapter_id": ch_id, "title": ch_title, "status": "failed", "error": str(_e)[:80]})
 
+    # Task #795: each chapter doc had its `thumbnailUrl` and
+    # `card_thumbnails` fields rewritten — those leak into chapter
+    # listings, the chapter-by-slug payload, and the library bundle.
+    # One purge for the chapters prefix invalidates all of them; we add
+    # subjects too because the bundle nests chapters under subjects.
+    done_count = sum(1 for r in results if r["status"] == "done")
+    if done_count:
+        _purge_for_route(
+            "admin.thumbnail_generate_chapter_cards",
+            ["chapters", "subjects"],
+            f"{done_count}/{len(chapters)} chapters in {subject_id}",
+        )
+
     return {
         "results": results,
         "total": len(chapters),
-        "done": sum(1 for r in results if r["status"] == "done"),
+        "done": done_count,
     }
 
 
@@ -1537,6 +1625,33 @@ async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_ad
         chapter_id, data.subject_id, data.title,
         data.description or "", _topics, data.content or "",
     ))
+
+    # Permanent per-chapter quiz: generate ONCE at chapter-creation time
+    # and pin it to MongoDB (``chapter_quizzes`` collection) so every
+    # student who later clicks "Quiz me" gets the SAME stored quiz with
+    # zero LLM round-trip and zero rate-limit charge. Best-effort
+    # background task — chapter creation must not be blocked by a slow
+    # / failed LLM call, and the lazy fallback in
+    # ``edu_study.quiz_generate`` will recover the miss the first time
+    # a student opens the quiz if this pre-generation skips or errors.
+    try:
+        from routes.edu_study import pregenerate_chapter_quiz
+        # Intentionally NOT passing ``count=`` — the helper's default
+        # is now ``_QUIZ_POOL_SIZE`` (≈24), which is the size of the
+        # per-chapter conceptual question pool the user requested
+        # ("3-4 quiz per chapter, one time, shuffle and provide to
+        # user"). Hardcoding count=7 here would silently downgrade
+        # every newly-created chapter to a 7-question pool and
+        # defeat the purpose of the shuffle layer.
+        asyncio.create_task(pregenerate_chapter_quiz(chap, response_lang="en"))
+    except Exception as quiz_pregen_err:
+        # Defensive: import / scheduling failure must never bubble up
+        # to the admin caller. The chapter is already written; the
+        # quiz can be generated lazily on first student click.
+        logger.warning(
+            f"Quiz pre-generation could not be scheduled for chapter {chapter_id}: "
+            f"{quiz_pregen_err}"
+        )
     
     result = {k: v for k, v in chap.items() if k != "_id"}
     result["chunks_created"] = len(chunks_created)
@@ -1585,6 +1700,10 @@ async def admin_create_chunk(data: ChunkCreate, admin: dict = Depends(get_admin_
     }
     result = await db.chunks.insert_one(chunk)
     chunk["_id"] = str(result.inserted_id)
+    # Task #795: chunks are addressed by /api/content/chunks/<chapter_id>
+    # which is an explicitly cached prefix; without this purge the new
+    # chunk wouldn't surface to readers until the per-key TTL expires.
+    _purge_for_route("admin.chunk_create", ["chapters"], data.chapter_id)
     return chunk
 
 
@@ -1691,6 +1810,12 @@ async def upload_content_file(
     )
     
     logger.info(f"Content uploaded: {file.filename} ({file_ext}) for subject {subject_id}")
+    # Task #795: this flips `has_document` on the subject (visible in the
+    # public subject payload + library bundle) and adds a row that
+    # /content/subjects/{id}/document falls back to. Purge subjects so
+    # the new flag surfaces; chapters because the document drives the
+    # chapter-list fallback path in routes/content.py.
+    _purge_for_route("admin.content_upload", ["subjects", "chapters"], subject_id)
     _schedule_prerender_refresh(f"content_uploaded:{subject_id}")
     return {"id": content_id, "message": "Upload successful", "file_type": file_ext}
 
@@ -1903,6 +2028,20 @@ Last-minute preparation requires smart work, not just hard work. Follow this pro
         )
     
     logger.info(f"Content reset and seeded: {seeded_count} chapters across {len(subjects)} subjects")
+    # Task #795: this wiped every chapter + content_upload and rewrote
+    # `has_document` / `chapter_count` on the seeded subjects. Fire a
+    # full-content cache purge (CF zone purge_everything + worker
+    # purge_all) so no edge POP is left holding the old bundle.
+    try:
+        from cloudflare_client import purge_all_content_cache
+        await purge_all_content_cache()
+    except Exception as e:
+        logger.warning(f"admin.purge full content purge after reset-and-seed failed: {e}")
+    _purge_for_route(
+        "admin.reset_and_seed",
+        ["chapters", "subjects"],
+        f"{seeded_count} chapters / {len(subjects)} subjects",
+    )
     # Bulk seed wipes & rewrites every chapter — fire the deploy hook
     # immediately rather than waiting for the coalesce window or the
     # nightly safety-net (Task #398).
@@ -1934,6 +2073,12 @@ async def create_content_manual(data: dict, admin: dict = Depends(get_admin_user
     
     await db.content_uploads.insert_one(content_data)
     content_data.pop("_id", None)
+    # Task #795: `/api/content/subjects/{id}/document` falls back to
+    # `db.content_uploads` and is edge-cached under the `/api/content/subjects`
+    # prefix (worker uses startsWith). Purge so the new manual upload is
+    # visible to students immediately.
+    subject_id = data.get("subject_id") or ""
+    _purge_for_route("admin.content_manual_create", ["subjects"], subject_id)
     return content_data
 
 @router.get("/admin/content/uploads")
@@ -1961,9 +2106,20 @@ async def get_content_uploads(
 @router.delete("/admin/content/uploads/{content_id}")
 async def delete_content_upload(content_id: str, admin: dict = Depends(get_admin_user)):
     """Delete uploaded content"""
+    # Look up subject_id BEFORE the delete so we can include it in the
+    # audit log for traceability.
+    upload = await db.content_uploads.find_one(
+        {"id": content_id}, {"_id": 0, "subject_id": 1}
+    )
     result = await db.content_uploads.delete_one({"id": content_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Content not found")
+    # Task #795: matches `create_content_manual` — content_uploads feeds
+    # the document fallback, which is edge-cached under
+    # `/api/content/subjects`. Without this, deleted material can still
+    # render to students for up to the cache TTL.
+    subject_id = (upload or {}).get("subject_id") or ""
+    _purge_for_route("admin.content_manual_delete", ["subjects"], subject_id)
     return {"message": "Content deleted"}
 
 

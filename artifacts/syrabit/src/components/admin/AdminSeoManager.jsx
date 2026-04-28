@@ -14,6 +14,9 @@ import SitemapTab from './seo-manager/SitemapTab';
 import PipelineTab from './seo-manager/PipelineTab';
 import QualityTab from './seo-manager/QualityTab';
 import SchedulePanel from './seo-manager/SchedulePanel';
+import TopicDiscoveryTab from './seo-manager/TopicDiscoveryTab';
+import RemediationTab from './seo-manager/RemediationTab';
+import EntitySeoTab from './seo-manager/EntitySeoTab';
 import useSeoManager from './seo-manager/useSeoManager';
 
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
@@ -33,6 +36,9 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
     { id: 'sitemap',  label: '🗺 Sitemap', count: null },
     { id: 'quality',  label: '🛡 Quality', count: null },
     { id: 'schedule', label: '🗓 Schedule', count: null },
+    { id: 'discovery', label: '🤖 Discovery', count: null },
+    { id: 'remediation', label: '♻️ Remediation', count: null },
+    { id: 'entity', label: '🪪 Entity SEO', count: null },
   ];
 
   return (
@@ -146,7 +152,8 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
         )}
 
         {s.tab === 'links' && (
-          <LinksTab linksData={s.linksData} linksLoading={s.linksLoading}
+          <LinksTab adminToken={adminToken}
+            linksData={s.linksData} linksLoading={s.linksLoading}
             handleLinksAnalyze={s.handleLinksAnalyze} injectSlug={s.injectSlug}
             setInjectSlug={s.setInjectSlug} injecting={s.injecting}
             handleLinksInject={s.handleLinksInject} />
@@ -185,6 +192,18 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
         {s.tab === 'schedule' && (
           <SchedulePanel schedule={s.schedule} scheduleLoading={s.scheduleLoading}
             loadSchedule={s.loadSchedule} />
+        )}
+
+        {s.tab === 'discovery' && (
+          <TopicDiscoveryTab adminToken={adminToken} />
+        )}
+
+        {s.tab === 'remediation' && (
+          <RemediationTab adminToken={adminToken} />
+        )}
+
+        {s.tab === 'entity' && (
+          <EntitySeoTab adminToken={adminToken} />
         )}
 
         <AdminQuickLinks links={['content','vertex','analytics','dashboard','editor']} onNavigate={onNavigate} />

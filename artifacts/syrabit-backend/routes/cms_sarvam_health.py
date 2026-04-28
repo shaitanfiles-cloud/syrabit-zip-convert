@@ -1,26 +1,124 @@
-"""Syrabit.ai — CMS documents, Sarvam AI, health checks, studio"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
-from typing import Optional, List, Dict, Any, Union
+"""Syrabit.ai — CMS documents, Sarvam AI, health checks, studio, and assorted admin utilities.
+
+This file is the historical home for ~55 admin/public routes spanning
+several domains. It used to also host /admin/ga4/* and /admin/vertex/*;
+those were carved into ``routes/admin_ga4.py`` and ``routes/admin_vertex.py``
+during the admin-panel audit (Task #5) — see the breadcrumb comment
+near the bottom of this file. Further carve-outs (analytics, studio,
+dashboard, workers-ai) are tracked but deferred — the test suite pins
+several private symbols here (``_record_assamese_run``, ``_scrub_pii``,
+``_ASM_REFRESH_INTERVAL_SECONDS``, ``derive_bot_cache_key``,
+``BotRenderMiddleware``, ``CmsNoIndexMiddleware``) so any further split
+must move the helpers in lockstep with their tests.
+
+Route catalog (all paths have the ``/api`` prefix added by server.py):
+
+  CMS DOCUMENTS (admin) ── 14 routes ────────────────────────────────
+    GET    /admin/content/cms-documents/merged-subject-ids
+    GET    /admin/content/cms-documents/seo-topics-subject-ids
+    GET    /admin/content/cms-documents/assets-generated-subject-ids
+    GET    /admin/content/cms-documents
+    POST   /admin/content/cms-documents
+    PATCH  /admin/content/cms-documents/{doc_id}
+    PUT    /admin/content/cms-documents/{doc_id}
+    POST   /admin/content/cms-documents/{doc_id}/publish
+    POST   /admin/content/cms-documents/{doc_id}/link-syllabus
+    POST   /admin/content/cms-documents/{doc_id}/revisions
+    POST   /admin/content/extract-pdf-text
+    DELETE /admin/content/cms-documents/{doc_id}
+    POST   /admin/content/cms-documents/{doc_id}/process-rag
+    POST   /admin/upload/image
+
+  CMS PUBLIC + LEGACY MERGE ── 9 routes ─────────────────────────────
+    GET    /content/cms-library
+    GET    /content/cms-documents/{doc_id}
+    GET    /cms/posts
+    GET    /cms/post/{subject_id}
+    GET    /cms/{user_id}
+    GET    /cms/{user_id}/{slug}
+    POST   /cms/personalize
+    POST   /admin/cms/merge/{subject_id}
+    POST   /admin/cms/merge-by-chapter/{subject_id}
+
+  CONTENT / SYLLABUS PDF ── 5 routes ────────────────────────────────
+    POST   /admin/content/regenerate-sitemap
+    POST   /admin/content/upload-pdf
+    GET    /content/documents/{document_id}
+    GET    /content/subject-documents/{subject_id}
+    DELETE /admin/content/documents/{document_id}
+    DELETE /admin/syllabus/reset-all
+
+  HEALTH / METRICS / AI CACHE ── 6 routes ───────────────────────────
+    GET    /ready
+    GET    /health
+    GET    /metrics
+    GET    /metrics/history
+    GET    /ai/cache/stats
+    POST   /ai/cache/purge
+    GET    /admin/workers-ai/status
+    POST   /admin/workers-ai/kill-switch
+
+  SARVAM (TTS / Translate / Transliterate / Status) ── 4 routes ─────
+    GET    /sarvam/status
+    POST   /sarvam/translate
+    POST   /sarvam/tts
+    POST   /sarvam/transliterate
+    GET    /admin/translation/languages
+
+  ASSAMESE PURITY (admin) ── 8 routes ───────────────────────────────
+    GET    /admin/assamese-purity
+    PATCH  /admin/assamese-purity
+    DELETE /admin/assamese-purity
+    GET    /admin/assamese-purity/audit
+    POST   /admin/assamese-purity/audit/{audit_id}/revert
+    GET    /admin/assamese-purity/stats
+    GET    /admin/assamese-purity/runs
+    POST   /admin/assamese-purity/test
+
+  DASHBOARD / ALERTS / STUDIO / SEO / ANALYTICS / AUTOMATION ───────
+    GET    /admin/dashboard/metrics
+    GET    /admin/alerts
+    PATCH  /admin/alerts/{alert_id}/acknowledge
+    PUT    /admin/alerts/thresholds
+    POST   /admin/studio/parse
+    POST   /admin/studio/publish
+    POST   /admin/seo/generate
+    GET    /admin/studio/drafts
+    POST   /admin/studio/drafts
+    DELETE /admin/studio/drafts/{draft_id}
+    POST   /admin/studio/drafts/{draft_id}/publish
+    GET    /admin/analytics/funnel
+    GET    /admin/analytics/content-heatmap
+    GET    /admin/analytics/content-card-views
+    GET    /admin/analytics/revenue
+    GET    /admin/analytics/predictor
+    GET    /admin/analytics/daily
+    GET    /admin/automation/insights        (and remaining automation routes below)
+
+Module-level helpers + middleware that other modules / tests import from here:
+  * Middleware: ``CmsNoIndexMiddleware``, ``BotRenderMiddleware``
+  * Bot rendering: ``derive_bot_cache_key``
+  * Assamese purity: ``apply_persisted_assamese_purity_override``,
+    ``_assamese_purity_refresh_loop``, ``ensure_assamese_runs_index``,
+    ``ensure_assamese_audit_index``, ``_record_assamese_run``,
+    ``_scrub_pii``, ``_snippet``, ``_ASM_SNIPPET_MAX_CHARS``,
+    ``_ASM_REFRESH_INTERVAL_SECONDS``
+"""
+import re, json, asyncio, time, uuid, logging, hashlib, os, html as _html_mod
+from typing import Optional, List
 from datetime import datetime, timezone, timedelta
 from fastapi import (
     APIRouter, HTTPException, Depends, Query, Body, Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    File, UploadFile, Response, Form,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
+from fastapi.responses import JSONResponse, HTMLResponse
 from starlette.requests import Request as StarletteRequest
 from starlette.middleware.base import BaseHTTPMiddleware
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel
 import cachetools, httpx
-import mistune as _mistune
 
 from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
+    HealthOut, ReadyOut,
 )
 from config import (
     LLM_MODEL,
@@ -42,35 +140,74 @@ from cache import (
 )
 from routes.admin_monetization import merge_subject_content, _md_to_html as _blog_md_to_html, _extract_headings_json, preprocess_markdown
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional,
+    get_current_user, get_admin_user,
 )
 from db_ops import (
     _pg_rows,
     _supa,
     supa_list_users,
 )
-from llm import call_llm_api, call_llm_api_content, call_llm_api_stream, _LLM_PROVIDERS, _llm_batcher
+from llm import call_llm_api, call_llm_api_content, _LLM_PROVIDERS, _llm_batcher
 from cache import _content_cache, _ai_response_cache, _redis_hit_count, _redis_miss_count
-import metrics as _metrics_mod
 from metrics import (
     _metrics, _health_deps_cache, _health_deps_cache_at, _HEALTH_CACHE_TTL_S,
     _metrics_history, _metrics_history_lock, _METRICS_HISTORY_MAX,
-    _snapshot_metrics, _start_metrics_collector, _startup_time,
-    _check_health_deps, _dispatch_alert, _alerting_loop,
-    _ALERT_COOLDOWN_S, _alert_last_fired, _ALERT_THRESHOLDS,
+    _snapshot_metrics, _startup_time,
+    _check_health_deps, _ALERT_THRESHOLDS,
 )
 from rag import _embed_and_store_page
 from seo_engine import _md_to_html
 import ga4_client
 import cloudflare_client
 import vertex_services
+import health_snapshot_cache
+
+# Task #848 — register the per-dependency probes once, at import time.
+# Probes are lazy (they import ``deps`` inside the call), so this is
+# safe even though deps.db / deps.pg_pool aren't initialised yet.
+health_snapshot_cache.register_default_probes()
 
 logger = logging.getLogger(__name__)
 
 _llm_health_cache: dict = {}
 _llm_health_task: asyncio.Task | None = None
+
+
+def _vertex_block_for_health() -> tuple[dict, bool]:
+    """Task #691 — produce the ``vertex`` block surfaced under
+    ``/health → dependencies`` and decide whether vertex should drag
+    the aggregate ``status`` to ``degraded``.
+
+    Returns ``(block, ok)`` where:
+
+    * ``block`` carries ``status`` (one of ``ok / unhealthy / stale /
+      unknown``), ``age_s``, ``auth_mode``, ``via_cf_gateway`` and the
+      last failure ``reason`` — the same fields the admin dashboard
+      tile (Task #689) renders.
+    * ``ok`` is ``True`` unless the cached probe is actively
+      ``unhealthy`` or ``stale``. ``unknown`` (no probe has completed
+      since boot) is treated as non-degrading so a fresh rollout
+      doesn't flap the page yellow for the first probe interval.
+    """
+    try:
+        import vertex_health_cache
+        snap = vertex_health_cache.dashboard_snapshot()
+    except Exception as exc:
+        return (
+            {"status": "unknown", "reason": f"cache unavailable: {exc!r}"},
+            True,
+        )
+    status = snap.get("status") or "unknown"
+    block = {
+        "status": status,
+        "age_s": snap.get("age_s"),
+        "auth_mode": snap.get("auth_mode"),
+        "via_cf_gateway": snap.get("via_cf_gateway"),
+        "consecutive_failures": snap.get("consecutive_failures") or 0,
+        "reason": snap.get("reason"),
+    }
+    ok = status not in ("unhealthy", "stale")
+    return block, ok
 
 # Models to try in order. The probe walks the list and stops at the first
 # success — so the LLM layer is reported "ok" as long as ANY provider in
@@ -1375,12 +1512,14 @@ async def delete_document(document_id: str, admin: dict = Depends(get_admin_user
 # ENHANCED HEALTH
 # ─────────────────────────────────────────────
 import time as _time_mod
-import threading as _threading
-from collections import defaultdict as _defaultdict
 
 
 @router.get("/ready", response_model=ReadyOut)
 async def readiness():
+    """Legacy readiness route — preserved for backwards compatibility
+    with any external monitor still pointing at /api/ready. New
+    integrations should use /api/readyz, which consults the
+    snapshot cache instead of issuing per-request I/O."""
     checks = {"mongodb": False, "postgresql": False}
     try:
         if db is not None:
@@ -1401,6 +1540,85 @@ async def readiness():
         content={"status": "ready" if all_ok else "degraded", "checks": checks},
     )
 
+
+# Task #848 — split liveness from readiness from full health.
+#
+# Why three endpoints?
+#
+#   /api/livez   — "is the Python process alive and serving HTTP?"
+#                  Zero I/O. Returns in <1 ms. Railway's restart probe
+#                  hits this — a slow Mongo or Vertex outage must NOT
+#                  cause Railway to recycle the pod, because that just
+#                  drops in-flight chat traffic for no reason.
+#
+#   /api/readyz  — "are critical dependencies usable right now?"
+#                  Reads from the snapshot cache (5–10 s TTL,
+#                  single-flight). 200 if mongo + pg are ok, 503
+#                  otherwise. Vertex is reported but does NOT flip the
+#                  HTTP code because we have an LLM fallback chain.
+#                  Suitable for load-balancer "should I send traffic
+#                  here?" decisions.
+#
+#   /api/health  — full diagnostic dump (versions, latencies, latency
+#                  histogram, every dep). Same data, also from cache.
+#                  This is the human / dashboard endpoint.
+#
+# All three are exempt from origin-secret auth, rate-limiting, and
+# request tracking (see middleware.py and tracing.py).
+@router.get("/livez")
+async def liveness():
+    """Liveness — process is up and the event loop can serve a
+    request. NO dependency I/O. Target latency p99 < 50 ms."""
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "alive",
+            "service": "Syrabit.ai API",
+            "uptime_seconds": int(_time_mod.time() - _startup_time),
+        },
+        # No cache headers — even at 1 req/s this is cheaper than the
+        # round-trip to revalidate, and we never want a CDN to mask
+        # a process that's actually wedged.
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/readyz")
+async def readyz():
+    """Readiness — should this instance receive traffic right now?
+    Reads cached probe results (TTL 5–10 s, single-flight per dep).
+    Returns 503 only when a *critical* dependency (Mongo or Postgres)
+    is down — Vertex / LLM degradation is reported in the body but
+    does not flip the HTTP code, because the chat layer falls back
+    through Workers AI / Sarvam / Groq / Cerebras."""
+    snapshot = await health_snapshot_cache.get_all()
+    mongo = snapshot.get("mongodb", {"status": "unknown"})
+    pg = snapshot.get("postgresql", {"status": "unknown"})
+    cf_cache_dep = snapshot.get("cloudflare_cache", {"status": "unknown"})
+    razorpay_dep = snapshot.get("razorpay", {"status": "unknown"})
+
+    # Vertex/LLM blocks come from their own bg-probe caches, not the
+    # snapshot cache, because they refresh on a much longer interval
+    # (LLM probe loop is 5 min; vertex probe loop is independent).
+    vertex_block, vertex_ok = _vertex_block_for_health()
+
+    critical_ok = (mongo.get("status") == "ok") and (pg.get("status") == "ok")
+    body = {
+        "status": "ready" if critical_ok else "degraded",
+        "checks": {
+            "mongodb": mongo,
+            "postgresql": pg,
+            "cloudflare_cache": cf_cache_dep,
+            "razorpay": razorpay_dep,
+            "vertex": vertex_block,
+        },
+    }
+    return JSONResponse(
+        status_code=200 if critical_ok else 503,
+        content=body,
+        headers={"Cache-Control": "no-store"},
+    )
+
 @router.get("/health", response_model=HealthOut)
 async def health():
     try:
@@ -1418,48 +1636,33 @@ async def health():
         )
 
 async def _health_inner():
+    """Full /api/health dump.
+
+    Task #848 — every per-dependency probe goes through
+    ``health_snapshot_cache`` now, so this handler is an O(1)
+    dict-walk in the steady state instead of ~5 round-trips to
+    Mongo/PG/Redis/Mongo-again-for-Razorpay. Net effect on
+    production p50: ~280 ms → ~5 ms.
+    """
     _ensure_llm_health_probe()
-    kv_ok = await is_mongo_available()
-    kv_latency = 0
-    if kv_ok:
-        try:
-            t0 = _time_mod.time()
-            await db.boards.find_one({})
-            kv_latency = int((_time_mod.time() - t0) * 1000)
-        except Exception:
-            kv_ok = False
 
-    redis_ok = False
-    if redis_client:
-        try:
-            redis_client.ping()
-            redis_ok = True
-        except Exception:
-            pass
+    snapshot = await health_snapshot_cache.get_all()
+    mongo_dep = snapshot.get("mongodb", {"status": "unknown", "latencyMs": 0})
+    pg_dep = snapshot.get("postgresql", {"status": "unknown", "latencyMs": 0})
+    cf_cache_dep = snapshot.get("cloudflare_cache", {"status": "unknown", "latencyMs": 0})
+    razorpay_dep = snapshot.get("razorpay", {"status": "unknown"})
 
-    mongo_status = "ok" if kv_ok else "unavailable"
+    kv_ok = mongo_dep.get("status") == "ok"
+    kv_latency = mongo_dep.get("latencyMs", 0)
+    mongo_status = "ok" if kv_ok else ("unavailable" if mongo_dep.get("status") == "error" else mongo_dep.get("status", "unavailable"))
 
-    pg_ok = False
-    pg_latency = 0
-    if deps.pg_pool:
-        try:
-            t1 = _time_mod.time()
-            async with deps.pg_pool.acquire() as conn:
-                await conn.fetchval("SELECT 1")
-            pg_latency = int((_time_mod.time() - t1) * 1000)
-            pg_ok = True
-        except Exception:
-            pass
+    pg_ok = pg_dep.get("status") == "ok"
+    pg_latency = pg_dep.get("latencyMs", 0)
 
-    rp_status = "not_configured"
-    try:
-        rp_cfg = await db.api_config.find_one({}, {"payment": 1}) or {}
-        rp_payment = rp_cfg.get("payment", {})
-        rp_key_id = (rp_payment.get("razorpay_key_id") or os.environ.get("RAZORPAY_KEY_ID", "")).strip()
-        rp_key_secret = (rp_payment.get("razorpay_key_secret") or os.environ.get("RAZORPAY_KEY_SECRET", "")).strip()
-        rp_status = "configured" if (rp_key_id and rp_key_secret) else "not_configured"
-    except Exception:
-        pass
+    cf_cache_status = cf_cache_dep.get("status", "unknown")
+    cf_cache_latency = cf_cache_dep.get("latencyMs", 0)
+
+    rp_status = razorpay_dep.get("status", "not_configured")
 
     llm_status = "not_configured"
     llm_latency = 0
@@ -1472,7 +1675,15 @@ async def _health_inner():
             llm_status = "degraded"
             llm_latency = 0
 
-    critical_ok = kv_ok and pg_ok
+    # Task #691 — fold the cached Vertex/Gemini health probe (Task #678)
+    # into /health so on-call has a single page instead of remembering
+    # to also poll /healthz/ai. ``unknown`` (probe hasn't run yet) is
+    # treated as non-degrading to avoid flapping right after boot;
+    # ``unhealthy`` and ``stale`` flip the aggregate status to
+    # ``degraded`` the same way Mongo / Postgres outages do.
+    vertex_block, vertex_ok = _vertex_block_for_health()
+
+    critical_ok = kv_ok and pg_ok and vertex_ok
     overall = "ok" if critical_ok else "degraded"
 
     from rag import _chat_latencies
@@ -1501,7 +1712,7 @@ async def _health_inner():
         "dependencies": {
             "mongodb": {"status": mongo_status, "latencyMs": kv_latency},
             "postgresql": {"status": "ok" if pg_ok else "unavailable", "latencyMs": pg_latency},
-            "redis": {"status": "ok" if redis_ok else "not_connected"},
+            "cloudflare_cache": {"status": cf_cache_status, "latencyMs": cf_cache_latency},
             "llm": {
                 "status": llm_status,
                 "latencyMs": llm_latency,
@@ -1512,7 +1723,8 @@ async def _health_inner():
             },
             "supabase": {"status": "ok" if supa else "not_configured"},
             "razorpay": {"status": rp_status},
-            "bot_render": get_bot_render_metrics(),
+            "vertex": vertex_block,
+            "bot_render": await get_bot_render_metrics_async(),
         },
         "chat_latency": {
             "samples": len(_recent_lats),
@@ -1775,7 +1987,6 @@ async def metrics_history(minutes: int = 60, admin: dict = Depends(get_admin_use
         "window_minutes": minutes,
     }
 
-from qa_engine import log_chat_message as _log_chat_message
 
 # ─────────────────────────────────────────────
 # SARVAM AI — Translate, TTS, Transliterate
@@ -1796,7 +2007,7 @@ def _normalise_lang(code: str) -> str:
     return code
 
 def _sarvam_cache_key(op: str, payload: dict) -> str:
-    import hashlib, json
+    import json
     raw = json.dumps(payload, sort_keys=True)
     return f"sarvam:{op}:{hashlib.md5(raw.encode()).hexdigest()}"
 
@@ -1977,8 +2188,10 @@ except Exception as _rec_err:  # pragma: no cover - defensive
 async def ensure_assamese_runs_index() -> None:
     """Create the TTL index on the runs collection so old docs auto-
     expire. Called from server.py lifespan (idempotent)."""
+    from deps import db as _db
+    if _db is None:
+        return
     try:
-        from deps import db as _db
         await _db[_ASM_RUNS_COLLECTION].create_index(
             "ts", expireAfterSeconds=_ASM_RUNS_TTL_SECONDS,
         )
@@ -1990,8 +2203,10 @@ async def ensure_assamese_runs_index() -> None:
 async def ensure_assamese_audit_index() -> None:
     """Index `ts` desc on the audit collection so the history-panel
     query (`find().sort(ts, -1).limit(20)`) is cheap. Idempotent."""
+    from deps import db as _db
+    if _db is None:
+        return
     try:
-        from deps import db as _db
         await _db[_ASM_AUDIT_COLLECTION].create_index([("ts", -1)])
     except Exception as e:
         logger.warning(f"[INDIC-SANITIZE] audit index create failed: {e}")
@@ -2009,8 +2224,10 @@ async def _record_assamese_audit(
     continue — losing an audit row must NEVER fail the user-visible
     admin action. Returns the new row's `id` so callers (e.g. the
     revert endpoint) can reference it back to the source row."""
+    from deps import db as _db
+    if _db is None:
+        return None
     try:
-        from deps import db as _db
         new_id = uuid.uuid4().hex
         doc = {
             "id": new_id,
@@ -2041,8 +2258,10 @@ _ASM_TEST_FIRE_SAMPLE = (
 async def _load_persisted_assamese_purity_override() -> dict | None:
     """Read the persisted override doc from mongo. Returns the inner
     {behaviour, threshold, ...} dict or None when no override is set."""
+    from deps import db as _db
+    if _db is None:
+        return None
     try:
-        from deps import db as _db
         doc = await _db.api_config.find_one({}, {_ASM_OVERRIDE_DOC_KEY: 1})
         if not doc:
             return None
@@ -3048,7 +3267,6 @@ def _bot_html_response(html: str, *, robots_tag: str = "index, follow"):
     HTTP `X-Robots-Tag` header agrees with the noindex meta in the body
     instead of overriding it with a global `index, follow`.
     """
-    from fastapi.responses import HTMLResponse
     return HTMLResponse(
         content=html, status_code=200,
         headers={
@@ -3061,18 +3279,168 @@ def _bot_html_response(html: str, *, robots_tag: str = "index, follow"):
     )
 
 
+# Bot-render counters — were previously in-memory module globals which
+# caused the "Bot Renders" admin tile to perpetually show 0 because:
+#   1. Every gunicorn worker restart wiped the counters back to zero.
+#   2. Each gunicorn worker maintained its own private copy, so the
+#      value the admin saw depended on which worker handled the
+#      dashboard request — not the true cluster-wide total.
+# Now mirrored to MongoDB via atomic $inc so the counters survive
+# restarts and aggregate across workers. (Tried Redis first but
+# `deps.redis_client` is permanently None in this codebase — never
+# assigned — so cache layers silently no-op. Mongo IS wired and is
+# the actual durable persistence layer here.)
+# The in-memory dict is kept as a hot fallback that can absorb writes
+# while Mongo is briefly unavailable.
 _bot_render_fallback_count = 0
 _bot_render_success_count = 0
 _bot_render_by_type: dict = {}
+# Single-document doc id used in the `metrics_counters` collection.
+_BOT_RENDER_MONGO_ID = "bot_render_v1"
+# Keep strong refs to fire-and-forget Mongo writes so the loop's
+# weak reference doesn't garbage-collect the task before it runs —
+# a well-known asyncio footgun. Tasks self-remove on completion via
+# the discard callback below.
+_bot_render_pending_tasks: set = set()
+# Bound the cardinality of `by_page_type` field names so the single
+# Mongo doc can never balloon. Anything passed in that isn't on this
+# allowlist is bucketed as "other" — the four dynamic call sites in
+# the catch-all middleware previously split the URL slug, which in
+# the worst case (chapter / subject pages) would have written one
+# field per unique URL into the doc and eventually breached Mongo's
+# 16MB document limit.
+_BOT_RENDER_KNOWN_TYPES = frozenset({
+    "about", "chat", "curriculum", "exam-routine",
+    "board", "board_class", "static_page", "learn",
+    "subject", "subject_id", "chapter", "page",
+})
+
+
+def _normalize_page_type(page_type) -> str:
+    if not page_type:
+        return "other"
+    pt = str(page_type).strip().lower()
+    if pt in _BOT_RENDER_KNOWN_TYPES:
+        return pt
+    return "other"
+
+
+def _bot_render_task_done(task):  # noqa: ANN001 — asyncio callback signature
+    _bot_render_pending_tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        try:
+            logger.warning(f"bot_render mongo persist failed: {exc!r}")
+        except Exception:
+            pass
+
+
+def _bot_render_mongo_snapshot():
+    """Pull the cluster-wide bot-render counters from Mongo. Returns
+    None if Mongo is unreachable, the doc is missing, or any decode
+    fails — caller falls back to the in-memory counters in that case
+    so the tile still renders a (degraded) value instead of 500'ing."""
+    if db is None:
+        return None
+    try:
+        # The dashboard metrics endpoint is sync (uses asyncio.run) so
+        # use the sync motor accessor — `db` is async-only. Build a
+        # short-lived sync client via PyMongo if available.
+        # In practice get_bot_render_metrics is invoked from an async
+        # FastAPI handler, so awaiting works. But to keep the helper
+        # callable from both sync/async contexts we delegate to the
+        # async path via run_until_complete-on-new-loop only if needed.
+        import asyncio as _asyncio
+        coro = db["metrics_counters"].find_one({"_id": _BOT_RENDER_MONGO_ID})
+        try:
+            loop = _asyncio.get_event_loop()
+            if loop.is_running():
+                # Called from inside a running loop — caller (FastAPI)
+                # should await us instead. Fall back to in-memory to
+                # avoid blocking the loop.
+                return None
+            doc = loop.run_until_complete(coro)
+        except RuntimeError:
+            doc = _asyncio.run(coro)
+        if not doc:
+            return None
+        success = int(doc.get("success_count", 0))
+        fallback = int(doc.get("fallback_count", 0))
+        by_type = {k: int(v) for k, v in (doc.get("by_page_type") or {}).items()}
+        return {"success": success, "fallback": fallback, "by_type": by_type}
+    except Exception:
+        return None
+
+
+async def _bot_render_mongo_snapshot_async():
+    """Async-safe version of the snapshot pull. Used by the dashboard
+    metrics endpoint which already runs inside the FastAPI event loop."""
+    if db is None:
+        return None
+    try:
+        doc = await db["metrics_counters"].find_one({"_id": _BOT_RENDER_MONGO_ID})
+        if not doc:
+            return None
+        success = int(doc.get("success_count", 0))
+        fallback = int(doc.get("fallback_count", 0))
+        by_type = {k: int(v) for k, v in (doc.get("by_page_type") or {}).items()}
+        return {"success": success, "fallback": fallback, "by_type": by_type}
+    except Exception:
+        return None
+
+
+async def get_bot_render_metrics_async():
+    """Async entry point — preferred when called from FastAPI handlers
+    (which are themselves async). Reads the durable Mongo counters
+    directly without juggling event loops, then falls back to the
+    in-memory counters for this worker if Mongo is unreachable."""
+    snap = await _bot_render_mongo_snapshot_async()
+    if snap is not None:
+        success = snap["success"]
+        fallback = snap["fallback"]
+        by_type = snap["by_type"]
+    else:
+        success = _bot_render_success_count
+        fallback = _bot_render_fallback_count
+        by_type = dict(_bot_render_by_type)
+    total = success + fallback
+    return {
+        "fallback_count": fallback,
+        "success_count": success,
+        "total_requests": total,
+        "success_rate_pct": round(success / max(total, 1) * 100, 1),
+        "by_page_type": by_type,
+    }
+
 
 def get_bot_render_metrics():
+    """Sync entry point — kept for backward compatibility with any
+    sync callers. Async callers should prefer get_bot_render_metrics_async
+    so we can read the durable Mongo counters even when the event loop
+    is already running."""
+    snap = _bot_render_mongo_snapshot()
+    if snap is not None:
+        # Combine durable + in-flight in-memory counts. The in-memory
+        # values for THIS worker may have been double-counted into Mongo
+        # already on each _track_bot_render call, so just trust Mongo.
+        success = snap["success"]
+        fallback = snap["fallback"]
+        by_type = snap["by_type"]
+    else:
+        success = _bot_render_success_count
+        fallback = _bot_render_fallback_count
+        by_type = dict(_bot_render_by_type)
+    total = success + fallback
     return {
-        "fallback_count": _bot_render_fallback_count,
-        "success_count": _bot_render_success_count,
-        "total_requests": _bot_render_fallback_count + _bot_render_success_count,
-        "success_rate_pct": round(_bot_render_success_count / max(_bot_render_success_count + _bot_render_fallback_count, 1) * 100, 1),
-        "by_page_type": dict(_bot_render_by_type),
+        "fallback_count": fallback,
+        "success_count": success,
+        "total_requests": total,
+        "success_rate_pct": round(success / max(total, 1) * 100, 1),
+        "by_page_type": by_type,
     }
+
 
 def _track_bot_render(page_type: str, success: bool):
     global _bot_render_success_count, _bot_render_fallback_count
@@ -3080,8 +3448,52 @@ def _track_bot_render(page_type: str, success: bool):
         _bot_render_success_count += 1
     else:
         _bot_render_fallback_count += 1
-    key = f"{page_type}:{'ok' if success else 'fail'}"
+    # Normalize so unknown / dynamic slugs collapse to "other" — this
+    # is what bounds the cardinality of by_page_type both in memory
+    # and in the persisted Mongo doc.
+    norm_type = _normalize_page_type(page_type)
+    key = f"{norm_type}:{'ok' if success else 'fail'}"
     _bot_render_by_type[key] = _bot_render_by_type.get(key, 0) + 1
+    # Mirror to Mongo so the counter survives worker restarts and
+    # aggregates atomically across all gunicorn workers. Fire-and-
+    # forget on the running event loop; if there isn't one (e.g. unit
+    # tests) we silently skip the durable write — the in-memory dict
+    # above is still authoritative for this worker so we don't lose
+    # accuracy locally. Errors are swallowed so a transient Mongo
+    # blip never breaks the actual bot-render response path.
+    if db is None:
+        return
+    try:
+        import asyncio as _asyncio
+        try:
+            loop = _asyncio.get_running_loop()
+        except RuntimeError:
+            # Not in an async context — skip the durable write. The
+            # in-memory counters above are still accurate for this
+            # worker. Real bot-render middleware always runs inside
+            # the FastAPI loop so this path is only hit by tests.
+            return
+        update = {
+            "$inc": {
+                "success_count" if success else "fallback_count": 1,
+                f"by_page_type.{key}": 1,
+            },
+            "$currentDate": {"updated_at": True},
+        }
+        task = loop.create_task(
+            db["metrics_counters"].update_one(
+                {"_id": _BOT_RENDER_MONGO_ID}, update, upsert=True
+            )
+        )
+        # Strong ref + done callback — without this asyncio is free to
+        # GC the task before it starts, silently dropping the write.
+        _bot_render_pending_tasks.add(task)
+        task.add_done_callback(_bot_render_task_done)
+    except Exception as e:
+        try:
+            logger.warning(f"bot_render mongo schedule failed: {e!r}")
+        except Exception:
+            pass
 
 
 _BOT_KNOWN_BOARDS = {"ahsec", "seba", "degree", "cbse", "nep"}
@@ -4302,7 +4714,7 @@ async def admin_dashboard_metrics(admin: dict = Depends(get_admin_user)):
             "revenue": {"total_inr": total_revenue_inr, "total_usd": total_revenue_usd, "mrr_inr": mrr_inr},
             "seo": {"topics": seo_count, "published_pages": seo_published},
             "payments_count": len(payments),
-            "bot_render": get_bot_render_metrics(),
+            "bot_render": await get_bot_render_metrics_async(),
         }
         _metrics_cache["data"] = result
         _metrics_cache["ts"] = now_ts
@@ -4715,7 +5127,11 @@ async def admin_analytics_funnel(admin: dict = Depends(get_admin_user)):
             paid += 1
 
     payments = await db.payments.find({}, {"_id": 0}).to_list(5000)
-    total_revenue = sum(p.get("amount_paise", 0) for p in payments if p.get("provider") != "stripe") / 100
+    # Task #740 — Stripe-aware revenue using the same _row_inr helper as
+    # Monetization (#731 S3). The previous paise-only sum dropped every
+    # Stripe payment from the funnel's "revenue / paid user" tile.
+    from routes.admin_advanced import _row_inr, _currency_breakdown
+    total_revenue = sum(_row_inr(p) for p in payments)
 
     return {
         "funnel": [
@@ -4725,6 +5141,7 @@ async def admin_analytics_funnel(admin: dict = Depends(get_admin_user)):
         ],
         "revenue_per_user": round(total_revenue / max(paid, 1), 2),
         "conversion_rate": round(paid / max(total, 1) * 100, 2),
+        "currency_breakdown": _currency_breakdown(payments),
     }
 
 @router.get("/admin/analytics/content-heatmap")
@@ -4889,6 +5306,10 @@ async def admin_analytics_revenue(days: int = 30, admin: dict = Depends(get_admi
         {"_id": 0}
     ).sort("verified_at", 1).to_list(5000)
 
+    # Task #740 — Stripe-aware: use _row_inr so daily totals include
+    # USD payments at the FX rate captured at-payment-time. The
+    # previous `amount_paise / 100` was Razorpay-only.
+    from routes.admin_advanced import _row_inr, _currency_breakdown
     daily = {}
     for p in payments:
         day = p.get("verified_at", "")[:10]
@@ -4896,7 +5317,7 @@ async def admin_analytics_revenue(days: int = 30, admin: dict = Depends(get_admi
             continue
         if day not in daily:
             daily[day] = {"date": day, "revenue_inr": 0, "count": 0}
-        daily[day]["revenue_inr"] += p.get("amount_paise", 0) / 100
+        daily[day]["revenue_inr"] = round(daily[day]["revenue_inr"] + _row_inr(p), 2)
         daily[day]["count"] += 1
 
     users = await supa_list_users()
@@ -4909,6 +5330,7 @@ async def admin_analytics_revenue(days: int = 30, admin: dict = Depends(get_admi
         "daily_revenue": sorted(daily.values(), key=lambda x: x["date"]),
         "cohorts": cohorts,
         "total_payments": len(payments),
+        "currency_breakdown": _currency_breakdown(payments),
     }
 
 @router.get("/admin/analytics/predictor")
@@ -5102,205 +5524,12 @@ async def admin_analytics_daily(
 
 
 # ─────────────────────────────────────────────
-# GOOGLE ANALYTICS 4 OAUTH SETUP
-# ─────────────────────────────────────────────
-@router.get("/admin/ga4/status")
-async def ga4_status(admin: dict = Depends(get_admin_user)):
-    token_env = os.getenv("GA4_REFRESH_TOKEN", "")
-    # Also check db.api_config in case token was persisted there
-    token_db = ""
-    try:
-        cfg = await db.api_config.find_one({}, {"ga4": 1})
-        token_db = (cfg or {}).get("ga4", {}).get("refresh_token", "")
-    except Exception:
-        pass
-    connected = bool(token_env or token_db)
-    return {
-        "connected": connected,
-        "token_source": "env" if token_env else ("db" if token_db else "none"),
-        "property_id": os.getenv("GA4_PROPERTY_ID", ""),
-        "client_id_set": bool(os.getenv("GOOGLE_OAUTH_CLIENT_ID")),
-        "client_secret_set": bool(os.getenv("GOOGLE_CLIENT_SECRET")),
-    }
-
-
-@router.get("/admin/ga4/auth-url")
-async def ga4_auth_url(redirect_uri: str, admin: dict = Depends(get_admin_user)):
-    url = ga4_client.get_oauth_url(redirect_uri)
-    return {"url": url}
-
-
-@router.post("/admin/ga4/connect")
-async def ga4_connect(
-    code: str = Body(...),
-    redirect_uri: str = Body(...),
-    admin: dict = Depends(get_admin_user),
-):
-    tokens = await ga4_client.exchange_code_for_tokens(code, redirect_uri)
-    if not tokens or "refresh_token" not in tokens:
-        raise HTTPException(status_code=400, detail="Failed to exchange code — ensure you selected the correct Google account with GA4 access and that you clicked 'Allow'.")
-    refresh_token = tokens["refresh_token"]
-    # Persist to MongoDB so it survives process restarts
-    await db.api_config.update_one({}, {"$set": {"ga4.refresh_token": refresh_token}}, upsert=True)
-    # Also update current process env so GA4 works immediately without restart
-    os.environ["GA4_REFRESH_TOKEN"] = refresh_token
-    ga4_client._db_token_cache["token"] = refresh_token
-    ga4_client._db_token_cache["loaded"] = True
-    logger.info("GA4 refresh token stored in db.api_config and os.environ")
-    return {
-        "status": "connected",
-        "message": "GA4 connected. Token persisted to database — no Replit Secret needed.",
-    }
-
-
-@router.get("/admin/ga4/test")
-async def ga4_test(admin: dict = Depends(get_admin_user)):
-    stats = await ga4_client.get_visitor_stats_ga4(days=7)
-    if stats is None:
-        return {"ok": False, "reason": "GA4 not configured or refresh token missing"}
-    return {"ok": True, "stats": stats}
-
-
-# ─────────────────────────────────────────────
-# VERTEX AI / GEMINI POWERED SERVICES
+# MOVED — GA4 OAUTH SETUP → routes/admin_ga4.py        (Task #5 split)
+# MOVED — VERTEX AI / GEMINI    → routes/admin_vertex.py  (Task #5 split)
+# Both routers are mounted in server.py alongside this one;
+# all paths (/admin/ga4/*, /admin/vertex/*) and behaviour are unchanged.
 # ─────────────────────────────────────────────
 
-@router.get("/admin/vertex/health")
-async def vertex_health(admin: dict = Depends(get_admin_user)):
-    """Check status of all Vertex AI / Gemini services."""
-    return await vertex_services.health_check()
-
-
-@router.post("/admin/vertex/translate")
-async def vertex_translate(
-    text: str = Body(...),
-    target_lang: str = Body("as"),
-    source_lang: str = Body("en"),
-    admin: dict = Depends(get_admin_user),
-):
-    """Translate educational content to Assamese or other regional languages."""
-    if not text:
-        raise HTTPException(status_code=400, detail="text is required")
-    result = await vertex_services.translate(text, target_lang=target_lang, source_lang=source_lang)
-    if result is None:
-        raise HTTPException(status_code=503, detail="Translation failed — check GEMINI_API_KEY")
-    return {"translated": result, "target_lang": target_lang, "source_lang": source_lang}
-
-
-@router.post("/admin/vertex/semantic-search")
-async def vertex_semantic_search(
-    query: str = Body(...),
-    top_k: int = Body(10),
-    admin: dict = Depends(get_admin_user),
-):
-    """Semantic search across all published SEO topics using text embeddings."""
-    topics = await db.seo_topics.find(
-        {}, {"_id": 0, "slug": 1, "title": 1, "subject_name": 1, "class_name": 1, "status": 1}
-    ).to_list(5000)
-    results = await vertex_services.semantic_search(query, topics, text_key="title", top_k=top_k)
-    return {"query": query, "results": results, "total_searched": len(topics)}
-
-
-@router.post("/admin/vertex/enhance")
-async def vertex_enhance_content(
-    content: str = Body(...),
-    page_type: str = Body("notes"),
-    subject: str = Body(""),
-    topic: str = Body(""),
-    class_name: str = Body("Class 11"),
-    admin: dict = Depends(get_admin_user),
-):
-    """Improve AI-generated content with Gemini."""
-    if not content:
-        raise HTTPException(status_code=400, detail="content is required")
-    enhanced = await vertex_services.enhance_content(content, page_type, subject, topic, class_name)
-    if enhanced is None:
-        raise HTTPException(status_code=503, detail="Enhancement failed")
-    return {"enhanced": enhanced, "original_length": len(content), "enhanced_length": len(enhanced)}
-
-
-@router.post("/admin/vertex/quality-score")
-async def vertex_quality_score(
-    content: str = Body(...),
-    page_type: str = Body("notes"),
-    topic: str = Body(""),
-    subject: str = Body(""),
-    admin: dict = Depends(get_admin_user),
-):
-    """Score the quality of educational content with Gemini."""
-    return await vertex_services.score_content(content, page_type, topic, subject)
-
-
-@router.post("/admin/vertex/suggest-topics")
-async def vertex_suggest_topics(
-    subject: str = Body(...),
-    class_name: str = Body("Class 11"),
-    board: str = Body("AHSEC"),
-    admin: dict = Depends(get_admin_user),
-):
-    """Suggest missing high-value topics for a subject using AI."""
-    existing = await db.seo_topics.distinct(
-        "title",
-        {"subject_name": subject, "class_name": class_name}
-    )
-    suggestions = await vertex_services.suggest_topics(subject, class_name, existing, board)
-    return {"subject": subject, "class_name": class_name, "suggestions": suggestions, "existing_count": len(existing)}
-
-
-@router.post("/admin/vertex/seo-meta")
-async def vertex_seo_meta(
-    topic: str = Body(...),
-    subject: str = Body(""),
-    class_name: str = Body("Class 11"),
-    page_type: str = Body("notes"),
-    board: str = Body("AHSEC"),
-    content_preview: str = Body(""),
-    admin: dict = Depends(get_admin_user),
-):
-    """Generate optimised SEO metadata (title, description, keywords, OG tags)."""
-    meta = await vertex_services.generate_seo_meta(topic, subject, class_name, page_type, board, content_preview)
-    if not meta:
-        raise HTTPException(status_code=503, detail="SEO meta generation failed")
-    return meta
-
-
-@router.get("/admin/vertex/content-gaps")
-async def vertex_content_gaps(admin: dict = Depends(get_admin_user)):
-    """Identify high-value content gaps by cross-referencing searches with published content."""
-    published = await db.seo_topics.distinct("slug", {"status": "published"})
-
-    search_pipeline = [
-        {"$match": {"type": "search"}},
-        {"$group": {"_id": "$query", "count": {"$sum": 1}}},
-        {"$sort": {"count": -1}},
-        {"$limit": 30},
-    ]
-    top_searches = []
-    try:
-        raw = await db.analytics.aggregate(search_pipeline).to_list(30)
-        top_searches = [r["_id"] for r in raw if r.get("_id")]
-    except Exception:
-        pass
-
-    subjects = await db.seo_topics.distinct("subject_name")
-    gaps = await vertex_services.find_content_gaps(published, top_searches, subjects)
-    return {"gaps": gaps, "published_count": len(published), "search_queries_analyzed": len(top_searches)}
-
-
-@router.post("/admin/vertex/extract-document")
-async def vertex_extract_document(
-    file: UploadFile = File(...),
-    task: str = "extract_topics",
-    admin: dict = Depends(get_admin_user),
-):
-    """Extract structured data from PDF textbooks/question papers using Gemini 1.5 Pro."""
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported")
-    pdf_bytes = await file.read()
-    if len(pdf_bytes) > 20 * 1024 * 1024:  # 20MB limit
-        raise HTTPException(status_code=400, detail="PDF too large — max 20MB")
-    result = await vertex_services.extract_from_document(pdf_bytes, task=task)
-    return result
 
 
 @router.delete("/admin/syllabus/reset-all")
@@ -5324,78 +5553,6 @@ async def admin_syllabus_reset_all(admin: dict = Depends(get_admin_user)):
         "message": "All subjects and chapters cleared. Upload new syllabus via Admin → Syllabus Manager.",
     }
 
-
-@router.post("/admin/vertex/ocr")
-async def vertex_ocr(
-    file: UploadFile = File(...),
-    admin: dict = Depends(get_admin_user),
-):
-    """Cloud Vision equivalent — extract text from AHSEC question paper/textbook images using Gemini Vision."""
-    allowed = {"image/jpeg", "image/png", "image/webp", "image/gif"}
-    ct = file.content_type or ""
-    if ct not in allowed:
-        raise HTTPException(status_code=400, detail=f"Unsupported image type: {ct}. Use JPEG, PNG, or WebP.")
-    img_bytes = await file.read()
-    if len(img_bytes) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Image too large — max 10MB")
-    result = await vertex_services.ocr_image(img_bytes, mime_type=ct)
-    if "error" in result:
-        raise HTTPException(status_code=503, detail=result["error"])
-    return result
-
-
-@router.post("/admin/vertex/nlp-concepts")
-async def vertex_nlp_concepts(
-    text: str = Body(...),
-    subject: str = Body(""),
-    class_name: str = Body("Class 11"),
-    admin: dict = Depends(get_admin_user),
-):
-    """Cloud Natural Language equivalent — extract key concepts, entities and difficulty from educational text."""
-    if not text or len(text.strip()) < 50:
-        raise HTTPException(status_code=400, detail="text must be at least 50 characters")
-    result = await vertex_services.extract_key_concepts(text, subject=subject, class_name=class_name)
-    if "error" in result:
-        raise HTTPException(status_code=503, detail=result["error"])
-    return result
-
-
-@router.post("/admin/vertex/flashcards")
-async def vertex_flashcards(
-    text: str = Body(...),
-    subject: str = Body(""),
-    class_name: str = Body("Class 11"),
-    count: int = Body(10),
-    admin: dict = Depends(get_admin_user),
-):
-    """Generate revision flashcards from chapter content for students."""
-    if not text or len(text.strip()) < 100:
-        raise HTTPException(status_code=400, detail="text must be at least 100 characters")
-    count = max(5, min(count, 20))
-    result = await vertex_services.generate_flashcards(text, subject=subject, count=count, class_name=class_name)
-    if "error" in result:
-        raise HTTPException(status_code=503, detail=result["error"])
-    return result
-
-
-@router.post("/admin/vertex/mcq-generator")
-async def vertex_mcq_generator(
-    text: str = Body(...),
-    subject: str = Body(""),
-    class_name: str = Body("Class 11"),
-    count: int = Body(10),
-    difficulty: str = Body("mixed"),
-    admin: dict = Depends(get_admin_user),
-):
-    """Generate AHSEC-pattern MCQ questions from chapter text."""
-    if not text or len(text.strip()) < 100:
-        raise HTTPException(status_code=400, detail="text must be at least 100 characters")
-    count = max(5, min(count, 20))
-    result = await vertex_services.generate_mcqs(text, subject=subject, class_name=class_name,
-                                                  count=count, difficulty=difficulty)
-    if "error" in result:
-        raise HTTPException(status_code=503, detail=result["error"])
-    return result
 
 
 # ─────────────────────────────────────────────

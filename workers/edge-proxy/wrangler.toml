@@ -12,28 +12,37 @@ routes = [
 # ---------------------------------------------------------------------------
 # BACKEND_URL — the production Railway backend the edge worker proxies to.
 #
-# DO NOT hard-code a real Railway URL here. wrangler.toml [vars] are
-# DEPLOYED on every `wrangler deploy` and OVERWRITE whatever was set in
-# the Cloudflare dashboard, so a stale value here silently breaks
-# api.syrabit.ai for users until someone re-edits the dashboard.
+# Despite the misleading hostname, `workspacemockup-sandbox-production-df37`
+# IS the live production Railway service. It was originally created off a
+# sandbox project's name and never renamed — the URL is permanent because
+# Railway hostnames cannot be changed without re-provisioning. A `curl
+# /api/health` against it returns the real Syrabit.ai API (status 200,
+# `"service":"Syrabit.ai API"`).
 #
-# The previous value (`workspacemockup-sandbox-production-df37`) was a
-# stale dev-environment URL pointing at a sandbox project — leaving it
-# in source meant any contributor running `wrangler deploy` from a
-# fresh checkout would have nuked the live api.syrabit.ai backend
-# binding without realising it.
+# Verified state (Apr 2026):
+#   - Live worker has BACKEND_URL set ONLY as a plaintext binding (this
+#     value); there is no encrypted secret override on the dashboard.
+#   - `wrangler deploy` from this repo therefore round-trips the same
+#     value back into production — safe to redeploy at any time.
 #
-# How to set the real URL for production:
-#   1. Cloudflare dashboard → Workers & Pages → syrabit-edge → Settings
-#      → Variables and Secrets → add BACKEND_URL as an *encrypted*
-#      variable (encrypted vars are NOT overwritten by wrangler.toml).
-#   2. For local `wrangler dev`, create workers/edge-proxy/.dev.vars
-#      (already in .gitignore via the worker template):
-#        BACKEND_URL=https://your-real-railway-host.up.railway.app
+# How to change the backend URL:
+#   1. Update this line and `wrangler deploy`. The new value is what
+#      production will use; there is nothing to also edit in the dashboard.
+#   2. If you want the new value to be a *secret* instead of plaintext,
+#      first delete this `BACKEND_URL = "..."` line, then run
+#      `wrangler secret put BACKEND_URL` and enter the value. Wrangler
+#      secrets ARE preserved across deploys, but only when the same name
+#      is not also declared as a plaintext var here (a plaintext var with
+#      the same name overwrites the secret on every deploy).
+#   3. For local `wrangler dev`, create workers/edge-proxy/.dev.vars
+#      (gitignored):
+#        BACKEND_URL=https://your-local-or-staging-host.up.railway.app
+#
+# Followup if the misleading name keeps confusing operators: rename the
+# Railway service to e.g. `syrabit-prod-api` (requires re-provisioning +
+# DNS-style cutover) and update the value below in the same commit.
 # ---------------------------------------------------------------------------
-# Production Railway backend. If this ever needs to change, update both
-# this value AND the Cloudflare dashboard binding in the same commit.
-BACKEND_URL = "https://workspacesyrabit-production-0ddc.up.railway.app"
+BACKEND_URL = "https://workspacemockup-sandbox-production-df37.up.railway.app"
 # Pages origin used by the worker to serve non-API GETs (the SPA).
 # MUST be the *.pages.dev hostname, not syrabit.ai/www.syrabit.ai —
 # routing through the custom domain would re-enter this same worker
@@ -122,4 +131,185 @@ migrations_dir = "migrations"
 # index_name = "syllabus-index-v2"
 
 [triggers]
-crons = ["0 */6 * * *"]
+# Two crons fan out from the same `scheduled` handler in src/index.ts —
+# the dispatch arm reads `event.cron` and runs the right job:
+#
+#   "* * * * *"   → Task #708 synthetic probe of /api/admin/diagnostics.
+#                   Hits the endpoint every 60s with a CF Access service
+#                   token + admin JWT so the break-glass / Access-degraded
+#                   paging rule (Task #706) actually fires during an
+#                   outage where no admin happens to be browsing.
+#                   Required secrets/vars (set via `wrangler secret put`
+#                   or the dashboard — see docs/CLOUDFLARE_ZERO_TRUST.md
+#                   §7.1 for the rotation procedure):
+#                     SYNTHETIC_PROBE_CF_ACCESS_CLIENT_ID
+#                     SYNTHETIC_PROBE_CF_ACCESS_CLIENT_SECRET
+#                     SYNTHETIC_PROBE_ADMIN_JWT
+#                     SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL  ← REQUIRED for
+#                       paging; without it the watchdog only logs to the
+#                       Workers console and no human gets woken up. The
+#                       absence of this secret was the root cause of the
+#                       Task #877 silent-outage incident — set it before
+#                       relying on this probe. Slack incoming-webhook URL
+#                       or PagerDuty Events v2 endpoint both accepted.
+#                   Optional: SYNTHETIC_PROBE_TARGET_URL (defaults to
+#                   ${BACKEND_URL}/api/admin/diagnostics — note the
+#                   `/api` prefix; the FastAPI router is mounted at
+#                   `/api`, hitting bare `/admin/diagnostics` returns
+#                   404 — Task #877),
+#                   SYNTHETIC_PROBE_WATCHDOG_THRESHOLD_MIN (default 5),
+#                   SYNTHETIC_PROBE_DISABLED=true to pause without
+#                   redeploying.
+#
+#                   ALSO runs Task #898 bot-cache hit-rate / fallback
+#                   watchdog. NOTE the data source: although the task
+#                   description (and the admin dashboard) reference
+#                   `/api/edge/kv-usage` → `bot_cache.hit_rate`, the
+#                   watchdog deliberately reads the same underlying
+#                   `bot_cache:count:*` counters DIRECTLY from
+#                   RATE_LIMIT KV inside the same isolate. Skipping
+#                   the HTTP round-trip removes an auth dependency and
+#                   keeps the watchdog alive in the failure mode where
+#                   the admin endpoint itself is degraded. The numbers
+#                   the watchdog evaluates are therefore exactly the
+#                   numbers `/api/edge/kv-usage` would report.
+#                   Pages on:
+#                     - hit-rate drop ≥30pp over the last 15m vs the
+#                       prior 15m (cache-key regression),
+#                     - fallback rate ≥10% over the last 15m
+#                       (degraded prerender pipeline).
+#                   Re-uses SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL but
+#                   tags payloads with alert_type=
+#                   bot_cache_hit_rate_drop / bot_cache_fallback_elevated.
+#                   Optional knobs: BOT_CACHE_ALERT_DROP_PCT (default 30),
+#                   BOT_CACHE_ALERT_FALLBACK_PCT (default 10),
+#                   BOT_CACHE_ALERT_MIN_SAMPLE (default 20),
+#                   BOT_CACHE_ALERT_WINDOW_BUCKETS (default 3 → 15m),
+#                   BOT_CACHE_ALERT_DISABLED=true to pause.
+#
+#   "0 */6 * * *" → 6-hourly D1 content sync from the Railway backend.
+crons = ["* * * * *", "0 */6 * * *"]
+
+# ---------------------------------------------------------------------------
+# [env.preview] — non-prod safety net for infra changes (Task #872)
+# ---------------------------------------------------------------------------
+# Lands at https://syrabit-edge-preview.<account>.workers.dev (NOT on the
+# real syrabit.ai routes), so an operator can validate Wrangler bumps,
+# compatibility-date moves, binding additions, or src/index.ts refactors
+# without touching the hot-path Worker that fronts every syrabit.ai
+# request.
+#
+# How to use it:
+#   pnpm --filter syrabit-edge run deploy:preview:dry  # schema check only
+#   pnpm --filter syrabit-edge run deploy:preview      # publish to *.workers.dev
+#   curl https://syrabit-edge-preview.<account>.workers.dev/api/health
+#   # … smoke-test target paths against the preview hostname …
+#   pnpm --filter syrabit-edge run deploy              # promote to prod
+#
+# Rollback: `wrangler rollback --env preview` (the preview env keeps its
+# own version history independent of prod).
+#
+# wrangler v4 inheritance rules applied here (DO NOT casually change):
+#   - Top-level scalars (name, main, compatibility_date) ARE inherited
+#     unless overridden. We override `name` (separate Worker) and clear
+#     `routes` (preview must not bind to syrabit.ai/*).
+#   - [vars] block is NOT inherited (Wrangler v4 emits a WARNING if
+#     env.preview.vars is missing while top-level [vars] exists).
+#     Redeclared below with the same values; override individual keys
+#     here if pointing preview at staging.
+#   - Bindings ([ai], [[kv_namespaces]], [[d1_databases]]) are NOT
+#     inherited — redeclared below.
+#   - [triggers] IS inherited; explicitly cleared to [] so the preview
+#     Worker does NOT run the synthetic probe (which would page on a
+#     prod /api/admin/diagnostics outage from the preview hostname) or the
+#     6-hourly D1 sync (which writes to whatever D1 is bound below).
+#
+# Secrets are per-env in Wrangler v4 — none are inherited. Set them
+# separately when first deploying preview:
+#   wrangler secret put D1_SYNC_SECRET --env preview         # required for /api/d1/sync writes
+#   wrangler secret put BACKEND_ORIGIN_SECRET --env preview  # only if preview hits Cloud Run
+#   wrangler secret put EDGE_AI_FALLBACK_SECRET --env preview
+#   wrangler secret put KV_ALERT_SECRET --env preview        # optional
+# Synthetic-probe + cf-block-probe secrets are intentionally NOT set on
+# preview (probes are disabled via the empty crons above).
+#
+# D1 binding: dedicated `syrabit-content-preview` database (provisioned in
+# Task #874) — physically separate from the prod `syrabit-content` D1, so
+# preview can exercise the `POST /api/d1/sync` write path end-to-end
+# without any risk of polluting prod content. Schema is kept in lockstep
+# with prod via the shared `migrations/` directory; re-apply after any
+# new migration with:
+#   pnpm dlx wrangler d1 migrations apply syrabit-content-preview --remote
+# To re-create from scratch (only if the DB is ever deleted):
+#   pnpm dlx wrangler d1 create syrabit-content-preview
+#   pnpm dlx wrangler d1 migrations apply syrabit-content-preview --remote
+# then swap the new `database_id` below.
+#
+# Drift guard (Task #880): the `deploy` and `deploy:preview` scripts in
+# package.json each chain `scripts/check-d1-drift.sh && wrangler deploy …`
+# (chained with `&&` rather than as a `pre*` lifecycle hook because pnpm 10
+# disables those by default). The check compares the
+# applied-migration list (`SELECT name FROM d1_migrations`) on prod vs
+# preview AND against the `migrations/` directory. If a new migration has
+# been applied to one DB but not the other (or to neither), the deploy is
+# blocked before any Worker code that depends on the new schema can ship.
+# Run on demand with `pnpm --filter syrabit-edge run d1:check-drift`.
+# Emergency override: `SKIP_D1_DRIFT_CHECK=1` (logs follow-up needed).
+#
+# Backfill: as of Task #879 the Railway sync (`d1_sync.py`) automatically
+# fans out to the preview hostname when both `EDGE_WORKER_PREVIEW_URL`
+# and `D1_SYNC_SECRET_PREVIEW` are set on the Railway service. Once the
+# operator sets those vars, every CRUD-driven, manual, or 6-hourly cron
+# sync writes prod AND preview in the same call — no separate cron / GH
+# Action needed. Preview-target failures are logged but never block prod.
+#
+# To enable end-to-end (one-time, ~5 min):
+#   1. wrangler secret put D1_SYNC_SECRET --env preview        # generate + set
+#   2. Add to Railway service env:
+#        EDGE_WORKER_PREVIEW_URL=https://syrabit-edge-preview.<account>.workers.dev
+#        D1_SYNC_SECRET_PREVIEW=<the-same-value-from-step-1>
+#   3. POST /api/admin/d1-sync against the prod backend ONCE to backfill
+#      preview from prod (subsequent CRUD writes keep them in lockstep).
+#   4. Verify with `pnpm --filter syrabit-edge run smoke:preview` —
+#      step `[d1-counts]` will report non-zero rows for boards/subjects/
+#      chapters when the fan-out is healthy.
+#
+# See artifacts/syrabit-backend/docs/D1_PREVIEW_BACKFILL.md for the full
+# on-call procedure (cadence, monitoring signal, manual one-shot replay).
+#
+# KV bindings: the IDs below are the existing `preview_id` values from
+# the top-level [[kv_namespaces]] entries. Those preview KV namespaces
+# were created when the prod ones were (`wrangler kv namespace create
+# … --preview`) and are physically separate from prod KV — so writes
+# from the preview Worker cannot pollute prod rate-limit or BOT_HTML_CACHE
+# state.
+[env.preview]
+name = "syrabit-edge-preview"
+workers_dev = true
+routes = []
+
+[env.preview.vars]
+BACKEND_URL = "https://workspacemockup-sandbox-production-df37.up.railway.app"
+PAGES_ORIGIN = "https://syrabit-zip-convert.pages.dev"
+
+[env.preview.triggers]
+crons = []
+
+[env.preview.ai]
+binding = "AI"
+
+[[env.preview.kv_namespaces]]
+binding = "RATE_LIMIT"
+id = "c7d531ef4b9a4cd980134251f5739556"
+preview_id = "c7d531ef4b9a4cd980134251f5739556"
+
+[[env.preview.kv_namespaces]]
+binding = "BOT_HTML_CACHE"
+id = "2c67fcc51dbf430391602e11d7a5e9fe"
+preview_id = "2c67fcc51dbf430391602e11d7a5e9fe"
+
+[[env.preview.d1_databases]]
+binding = "CONTENT_DB"
+database_name = "syrabit-content-preview"
+database_id = "35e59391-218e-4e94-bbf5-972baa0d0b30"
+migrations_dir = "migrations"

@@ -86,7 +86,9 @@ export default function useCmsEditor(adminToken, onNavigate, hubContext) {
       }));
       setSeoTab('content');
       toast.success(`Pre-filled with merged content for "${prefill.title}" — review and save`);
-    } catch {}
+    } catch (err) {
+      console.warn('useCmsEditor: prefill apply failed:', err);
+    }
   }, []);
 
   useEffect(() => {

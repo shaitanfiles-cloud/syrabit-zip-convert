@@ -8,9 +8,37 @@ import os
 import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional, List
+from typing import Optional, List, TypedDict
 
 logger = logging.getLogger(__name__)
+
+
+# ─── Public return-shape contracts (used by tests for schema-drift guard) ───
+# When `get_verified_bot_traffic_cf` ships a new key (or drops one) every
+# downstream caller — alerting, weekly email, WoW comparison, Mongo
+# persistence — must be updated in lockstep. The TypedDict below is the
+# single source of truth for that contract; the matching test in
+# `tests/test_cloudflare_client_contract.py` mocks `_graphql_query` and
+# asserts the returned dict has EXACTLY these keys with the right types.
+# Missing the test? See `VERIFIED_BOT_TRAFFIC_KEYS` below — that constant
+# is what the test imports and is the authoritative key list.
+class VerifiedBotTraffic(TypedDict):
+    by_category: dict   # {verifiedBotCategory: int request count}
+    bot_total: int
+    bot_5xx: int
+    window_start: str   # ISO8601 UTC, "%Y-%m-%dT%H:%M:%SZ"
+    window_end: str     # ISO8601 UTC, "%Y-%m-%dT%H:%M:%SZ"
+    source: str         # always literal "cloudflare"
+
+
+# Authoritative key set for the schema-drift test. Add/remove keys here
+# AND in the TypedDict above AND in every downstream consumer in the
+# same change — `routes/bot_traffic_report.py`, the Mongo persistence
+# in `cf_bot_report.py`, the WoW prior-week diff, etc.
+VERIFIED_BOT_TRAFFIC_KEYS: frozenset[str] = frozenset({
+    "by_category", "bot_total", "bot_5xx",
+    "window_start", "window_end", "source",
+})
 
 _cf_http: Optional["httpx.AsyncClient"] = None
 
@@ -418,6 +446,135 @@ async def get_visitor_stats_cf(days: int = 7) -> Optional[dict]:
         return None
 
 
+async def _fetch_visits_series(zone_id: str, range_key: str) -> Optional[dict]:
+    """Task #741 — best-effort total-visits (sessions) per bucket.
+
+    `sum.visits` was removed from `httpRequests1dGroups`/`httpRequests1hGroups`,
+    so unique-visitors and total-sessions can no longer be fetched in a
+    single query. We mirror the same window the main overview uses but
+    pull from `httpRequestsAdaptiveGroups` (which still exposes
+    `sum { visits }`) and return ``{bucket_ts: visits}``.
+
+    Returns `None` on ANY failure (token rejected, schema change, account
+    plan without adaptive access). The caller then sets per-row visits to
+    None and the UI tile renders "—" instead of breaking the whole card.
+    """
+    if not is_configured():
+        return None
+    now = datetime.now(timezone.utc)
+    if range_key == "24h":
+        since = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        until = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        query = """
+        query CfVisitsHourly($zoneTag: String!, $since: Time!, $until: Time!) {
+          viewer {
+            zones(filter: { zoneTag: $zoneTag }) {
+              series: httpRequestsAdaptiveGroups(
+                filter: { datetime_geq: $since, datetime_lt: $until }
+                orderBy: [datetimeHour_ASC]
+                limit: 48
+              ) {
+                dimensions { datetimeHour }
+                sum { visits }
+              }
+            }
+          }
+        }
+        """
+        variables = {"zoneTag": zone_id, "since": since, "until": until}
+    else:
+        # Daily path: 7d = 1 chunk, 30d = 5 chunks of <= 7 days each.
+        #
+        # Cloudflare's `httpRequestsAdaptiveGroups` dataset is capped at
+        # an 8-day (1w1d) window per request on most plans — a 30-day
+        # query gets rejected with:
+        #   "cannot request a time range wider than 1w1d, but your query
+        #    time range spans 4w1d…"
+        # which made the entire `visits` (sessions) total fall back to
+        # None and the dashboard "Total Visitors" tile under-report by
+        # silently dropping to `vs.total_visitors` (often 0). To stay
+        # safely under the cap we chunk into <=7-day windows and run the
+        # chunks in parallel, then merge the per-day maps. The 24h
+        # path above already fits in one window, so it's untouched.
+        days = 30 if range_key == "30d" else 7
+        chunk_size = 7  # safely below CF's 8-day cap
+        chunks: list[tuple[str, str]] = []
+        end = now
+        remaining = days
+        while remaining > 0:
+            span = min(chunk_size, remaining)
+            start = end - timedelta(days=span - 1)
+            chunks.append((start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")))
+            end = start - timedelta(days=1)
+            remaining -= span
+
+        query = """
+        query CfVisitsDaily($zoneTag: String!, $since: Date!, $until: Date!) {
+          viewer {
+            zones(filter: { zoneTag: $zoneTag }) {
+              series: httpRequestsAdaptiveGroups(
+                filter: { date_geq: $since, date_leq: $until }
+                orderBy: [date_ASC]
+                limit: 100
+              ) {
+                dimensions { date }
+                sum { visits }
+              }
+            }
+          }
+        }
+        """
+        results = await asyncio.gather(*[
+            _graphql_query(query, {"zoneTag": zone_id, "since": s, "until": u})
+            for (s, u) in chunks
+        ])
+        # If every chunk failed we have no usable data; otherwise merge
+        # whatever chunks succeeded so a single bad window doesn't
+        # blank out the whole 30-day tile.
+        if not any(results):
+            return None
+        out: dict = {}
+        try:
+            for data in results:
+                if not data:
+                    continue
+                zones = data.get("viewer", {}).get("zones", []) or []
+                if not zones:
+                    continue
+                rows = zones[0].get("series", []) or []
+                for row in rows:
+                    dims = row.get("dimensions", {}) or {}
+                    ts = dims.get("date") or ""
+                    v = int((row.get("sum", {}) or {}).get("visits", 0) or 0)
+                    if ts:
+                        out[ts] = v
+            return out
+        except Exception as e:
+            logger.debug(f"CF visits-series parsing failed: {e}")
+            return None
+
+    # 24h path (unchanged single-shot adaptive-groups fetch).
+    data = await _graphql_query(query, variables)
+    if not data:
+        return None
+    try:
+        zones = data.get("viewer", {}).get("zones", []) or []
+        if not zones:
+            return None
+        rows = zones[0].get("series", []) or []
+        out: dict = {}
+        for row in rows:
+            dims = row.get("dimensions", {}) or {}
+            ts = dims.get("date") or dims.get("datetimeHour") or ""
+            v = int((row.get("sum", {}) or {}).get("visits", 0) or 0)
+            if ts:
+                out[ts] = v
+        return out
+    except Exception as e:
+        logger.debug(f"CF visits-series parsing failed: {e}")
+        return None
+
+
 async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
     """Cloudflare-mirror analytics overview with selectable time range.
 
@@ -491,7 +648,16 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
         period_label = f"Previous {days} days"
         bucket = "day"
 
-    data = await _graphql_query(query, variables)
+    # Task #741 — fetch the per-bucket visits (sessions) series in
+    # parallel with the main overview query so the new "Total Visitors"
+    # tile can render alongside "Unique Visitors". The visits fetch is
+    # best-effort: if it returns None, we degrade the visits tile to "—"
+    # without touching the rest of the card.
+    _safe_range = range_key if range_key in ("24h", "7d", "30d") else "7d"
+    data, visits_map = await asyncio.gather(
+        _graphql_query(query, variables),
+        _fetch_visits_series(zone_id, _safe_range),
+    )
     if not data:
         return None
 
@@ -505,6 +671,7 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
         if len(rows) > max_buckets:
             rows = rows[-max_buckets:]
         series = []
+        visits_available = isinstance(visits_map, dict)
         # NOTE: `sum.visits` was removed from the CF GraphQL schema for the
         # `httpRequests1dGroups` / `httpRequests1hGroups` datasets, so the
         # old "visitors == sum.visits (sessions)" mapping started failing
@@ -515,7 +682,7 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
         # (sessions); if the exact session count is needed in the future
         # the right move is to migrate to `httpRequestsAdaptiveGroups`
         # which still exposes `sum { visits }`.
-        totals = {"requests": 0, "bytes": 0, "visitors": 0, "page_views": 0}
+        totals = {"requests": 0, "bytes": 0, "visitors": 0, "page_views": 0, "visits": (0 if visits_available else None)}
         for row in rows:
             dims = row.get("dimensions", {}) or {}
             ts = dims.get("datetime") or dims.get("date") or ""
@@ -526,10 +693,16 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
             pv = int(s.get("pageViews", 0) or 0)
             uniques = int(u.get("uniques", 0) or 0)        # CF "Unique visitors"
             vis = uniques                                  # back-compat alias
+            # Task #741: total visits/sessions per bucket from the
+            # parallel adaptive-groups query. None when unavailable
+            # so the UI can render "—" per bucket.
+            visits_count = visits_map.get(ts) if visits_available else None
             totals["requests"] += req
             totals["bytes"] += byt
             totals["page_views"] += pv
             totals["visitors"] += vis
+            if visits_available and isinstance(visits_count, int):
+                totals["visits"] += visits_count
             series.append({
                 "ts": ts,
                 "requests": req,
@@ -537,9 +710,31 @@ async def get_cf_overview(range_key: str = "7d") -> Optional[dict]:
                 "page_views": pv,
                 "visitors": vis,
                 "uniques": uniques,
+                "visits": visits_count,
             })
+        # Per-bucket visits coverage: how many days actually returned a
+        # number from `_fetch_visits_series` vs. how many we asked for.
+        # On most CF plans `httpRequestsAdaptiveGroups` is capped at an
+        # 8-day retention window, so a 30-day request comes back with
+        # only the most recent ~7-8 days of `visits` populated. Without
+        # this signal the UI would proudly display 132 899 sessions
+        # under a "Previous 30 days" headline that's actually only 7
+        # days of data — a 4x under-count by definition.
+        if _safe_range == "24h":
+            requested_buckets = 24
+        elif _safe_range == "30d":
+            requested_buckets = 30
+        else:
+            requested_buckets = 7
+        returned_buckets = sum(1 for b in series if b.get("visits") is not None)
+        totals["visits_coverage"] = {
+            "requested_buckets": requested_buckets,
+            "returned_buckets": returned_buckets,
+            "complete": returned_buckets >= requested_buckets,
+            "bucket_unit": bucket,
+        }
         return {
-            "range": range_key if range_key in ("24h", "7d", "30d") else "7d",
+            "range": _safe_range,
             "bucket": bucket,
             "period_label": period_label,
             "totals": totals,
@@ -647,8 +842,7 @@ async def get_verified_bot_traffic_cf(since: datetime, until: datetime) -> Optio
           categories: httpRequestsAdaptiveGroups(
             filter: {
               datetime_geq: $since,
-              datetime_lt: $until,
-              verifiedBotCategory_neq: ""
+              datetime_lt: $until
             }
             limit: 50
             orderBy: [count_DESC]
@@ -660,7 +854,6 @@ async def get_verified_bot_traffic_cf(since: datetime, until: datetime) -> Optio
             filter: {
               datetime_geq: $since,
               datetime_lt: $until,
-              verifiedBotCategory_neq: "",
               edgeResponseStatus_geq: 500,
               edgeResponseStatus_lt: 600
             }

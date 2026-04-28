@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } fro
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import MarkdownRenderer from '@/components/MarkdownRenderer';
+import TopicAnswerCard from '@/components/chapter/TopicAnswerCard';
+import ChapterTopicGraph from '@/components/chapter/ChapterTopicGraph';
 import { slugifyHeading } from '@/utils/slugifyHeading';
 import { useHashScroll } from '@/hooks/useHashScroll';
 import {
@@ -16,7 +18,7 @@ import Analytics from '@/utils/analytics';
 import { useContentLang } from '@/context/LanguageContext';
 import StickyToc from '@/components/ui/StickyToc';
 import ContinueLearning from '@/components/content/ContinueLearning';
-import GoogleReviewsSection, { ReviewsAggregateRatingJsonLd } from '@/components/content/GoogleReviewsSection';
+import TrustpilotReviewsSection from '@/components/content/TrustpilotReviewsSection';
 import { MobileNavSwitch } from '@/components/layout/MobileNavSwitch';
 import { useLibraryBundle, useLibraryBundleSlim } from '@/hooks/useContent';
 import { findSiblingChapters, siblingsAsRelated } from '@/utils/siblingChapter';
@@ -247,6 +249,15 @@ export default function ChapterPage() {
   const subjectSlug = hasStreamInUrl ? params.subjectSlug : params.subjectSlug;
   const chapterSlug = hasStreamInUrl ? params.chapterSlug : params.chapterSlug;
   const streamSlug = hasStreamInUrl ? params.streamSlug : null;
+  // Task #914 Step 2 — when the route is the topic deep-link
+  // `/.../<chapter>/topic/<topic-slug>`, react-router exposes the
+  // slug as `topicSlug`. We render the SAME chapter tree (no
+  // cloaking — same DOM for bots and humans) and let `useHashScroll`
+  // jump to `#topic-<slug>` after content paints. The deep-link
+  // route also overrides PageMeta's canonical to point back at the
+  // chapter URL with the topic anchor, and shapes the SEO title /
+  // description around the topic for AI-citation surfaces.
+  const topicSlugParam = params.topicSlug || null;
   const [searchParams, setSearchParams] = useSearchParams();
   const initialChapterData = useMemo(
     () => readChapterPreload(board, classSlug, subjectSlug, chapterSlug),
@@ -261,10 +272,55 @@ export default function ChapterPage() {
   const [error, setError] = useState(null);
   const skipFirstFetchRef = useRef(!!initialChapterData);
   const [pyqData, setPyqData] = useState(null);
+  // P0 #1 of the AI-visibility plan — FAQPage JSON-LD entries built from
+  // the chapter's published MCQs. Fed into chapterSchema() via
+  // pageData.data.faq_entries so the existing JSON-LD pipeline emits a
+  // schema.org FAQPage node alongside Article / LearningResource.
+  //
+  // Sources, in priority order:
+  //   1. The prerender script (scripts/prerender-routes.mjs) bakes
+  //      `faq_entries` directly into the chapter preload payload, so
+  //      SSR-rendered HTML ships the FAQPage JSON-LD on first byte —
+  //      this is what crawlers (Googlebot, Perplexity, ChatGPT) see.
+  //   2. For non-prerendered routes served via the SPA shell, the
+  //      useEffect below fetches `/api/content/chapters/{id}/faq-jsonld`
+  //      and updates the head after hydration. Real-user browsers get
+  //      the same enhancement; AI crawlers that execute JS also pick
+  //      it up on the second render.
+  const [faqEntries, setFaqEntries] = useState(
+    Array.isArray(initialChapterData?.faq_entries)
+      ? initialChapterData.faq_entries
+      : null,
+  );
   const articleRef = useRef(null);
   const [quizOpen, setQuizOpen] = useState(false);
   const [activeId, setActiveId] = useState('');
   const [relatedChapterTopics, setRelatedChapterTopics] = useState([]);
+  // Task #914 Step 3 — published topics with `definition_status=ok`
+  // that power the visible AI answer cards. Seeded from the
+  // prerender preload (so SSR / curl-no-JS already ships the cards
+  // on first byte) and re-fetched live for SPA navigations.
+  const [publishedTopics, setPublishedTopics] = useState(
+    Array.isArray(initialChapterData?.published_topics)
+      ? initialChapterData.published_topics
+      : [],
+  );
+  // Topical-mapping (Task: topical mapping + topical authority) —
+  // sibling + cross-chapter related topics fetched from
+  // `/content/chapters/{id}/topics-related`. Seeded from the
+  // prerendered preload so SSR / curl-no-JS already ships the graph.
+  const [topicGraph, setTopicGraph] = useState(
+    initialChapterData?.topics_related && typeof initialChapterData.topics_related === 'object'
+      ? initialChapterData.topics_related
+      : { siblings: [], cross_chapter: [] },
+  );
+  // Task #914 Step 2 — deep-link 404 gating. When the route is
+  // `/.../<chapter>/topic/<slug>` we must NOT render the chapter
+  // for an unknown / unpublished / definition_missing slug; we
+  // probe the single-topic resolver and flag a not-found state.
+  // `null` = not yet checked (or not on the deep-link route),
+  // `true` = resolver returned 404, `false` = topic resolved.
+  const [topicNotFound, setTopicNotFound] = useState(false);
 
   // Fetch related topics across the chapter for in-content internal links.
   useEffect(() => {
@@ -280,6 +336,127 @@ export default function ChapterPage() {
       .catch(() => { if (!cancelled) setRelatedChapterTopics([]); });
     return () => { cancelled = true; };
   }, [data?.chapter_id]);
+
+  // Task #914 Step 3 — fetch the topics-published list for this
+  // chapter's AI answer cards. Skipped when the prerender preload
+  // already supplied them (initialChapterData.published_topics) so
+  // we don't double-fetch on the SSR hot path; SPA navigations
+  // always refetch because chapter_id changes between pages.
+  useEffect(() => {
+    let cancelled = false;
+    if (!data?.chapter_id) { setPublishedTopics([]); return; }
+    // If we already have topics for THIS chapter from the preload,
+    // don't refetch on first paint — the preload list is already
+    // canonical for the chapter we're on.
+    if (
+      Array.isArray(initialChapterData?.published_topics)
+      && initialChapterData?.chapter_id === data.chapter_id
+      && publishedTopics.length > 0
+    ) {
+      return;
+    }
+    apiClient()
+      .get(`/content/chapters/${data.chapter_id}/topics-published`)
+      .then((r) => {
+        if (cancelled) return;
+        const list = Array.isArray(r.data?.topics) ? r.data.topics : [];
+        setPublishedTopics(list);
+      })
+      .catch(() => { if (!cancelled) setPublishedTopics([]); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.chapter_id]);
+
+  // Topical-mapping — fetch the related-topic graph (siblings +
+  // cross-chapter) once we know the chapter_id. Skipped on the
+  // first paint when the prerender preload already supplied it for
+  // this exact chapter, so we don't double-fetch on the SSR hot
+  // path. SPA navigations between chapters always refetch since
+  // the graph is chapter-scoped.
+  useEffect(() => {
+    let cancelled = false;
+    if (!data?.chapter_id) return;
+    if (
+      initialChapterData?.topics_related
+      && initialChapterData?.chapter_id === data.chapter_id
+      && (topicGraph.siblings.length > 0 || topicGraph.cross_chapter.length > 0)
+    ) {
+      return;
+    }
+    apiClient()
+      .get(`/content/chapters/${data.chapter_id}/topics-related?limit=12`)
+      .then((r) => {
+        if (cancelled) return;
+        const payload = r.data || {};
+        setTopicGraph({
+          siblings: Array.isArray(payload.siblings) ? payload.siblings : [],
+          cross_chapter: Array.isArray(payload.cross_chapter) ? payload.cross_chapter : [],
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setTopicGraph({ siblings: [], cross_chapter: [] });
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.chapter_id]);
+
+  // Task #914 Step 2 — gate the topic deep-link route on the
+  // single-topic resolver. The resolver returns 404 for unknown,
+  // unpublished, OR `definition_status != ok` slugs, so this is
+  // the authoritative check (matches the spec: "The topic URL must
+  // 404 cleanly when the topic isn't citable"). We also handle the
+  // hash scroll explicitly here — `useHashScroll` only fires on
+  // `window.location.hash`, but the deep-link uses a path segment,
+  // so we replaceState the hash + nudge the browser ourselves once
+  // the answer cards have rendered.
+  useEffect(() => {
+    let cancelled = false;
+    if (!topicSlugParam || !data?.chapter_id) {
+      setTopicNotFound(false);
+      return;
+    }
+    apiClient()
+      .get(`/content/chapters/${data.chapter_id}/topics/${encodeURIComponent(topicSlugParam)}`)
+      .then(() => { if (!cancelled) setTopicNotFound(false); })
+      .catch((e) => {
+        if (cancelled) return;
+        // Only flip to "not found" on a real 404. Network blips fall
+        // through silently — the answer card list will still render
+        // from the topics-published fetch, and the user can retry.
+        if (e?.response?.status === 404) setTopicNotFound(true);
+      });
+    return () => { cancelled = true; };
+  }, [topicSlugParam, data?.chapter_id]);
+
+  // Task #914 Step 2 — explicit scroll for path-segment deep-links.
+  // Once the answer cards are in the DOM, scroll the matching card
+  // into view. We also rewrite the URL hash so subsequent in-page
+  // anchor jumps and useHashScroll behaviour stay consistent with
+  // chapter-URL deep-links (`#topic-<slug>`).
+  useEffect(() => {
+    if (!topicSlugParam || topicNotFound) return;
+    if (publishedTopics.length === 0) return;
+    if (typeof window === 'undefined') return;
+    const id = `topic-${topicSlugParam}`;
+    // Two RAFs so the DOM has actually painted the answer cards
+    // before we measure / scroll. (One RAF is enough on Chrome, but
+    // Safari + the Vite dev refresh occasionally need the extra
+    // tick — borrowing the same pattern from the existing
+    // chunk-scroll effect above.)
+    const t = setTimeout(() => {
+      const el = document.getElementById(id);
+      if (el) el.scrollIntoView({ behavior: 'auto', block: 'start' });
+      // Reflect the topic in the URL hash without pushing a new
+      // history entry; this keeps Back/Forward sane and lets the
+      // existing useHashScroll hook own subsequent fragment jumps.
+      try {
+        if (window.location.hash !== `#${id}`) {
+          window.history.replaceState(null, '', `${window.location.pathname}#${id}`);
+        }
+      } catch { /* ignore — not all environments allow replaceState */ }
+    }, 80);
+    return () => clearTimeout(t);
+  }, [topicSlugParam, topicNotFound, publishedTopics.length]);
 
   // Library bundle (slim then full) — used for sibling chapter prev/next.
   const { data: _slim } = useLibraryBundleSlim();
@@ -386,6 +563,26 @@ export default function ChapterPage() {
       .get(`/content/chapters/${data.chapter_id}/topic-pyqs?limit=50`)
       .then(r => { if (!cancelled) setPyqData(r.data); })
       .catch(() => { if (!cancelled) setPyqData(null); });
+    return () => { cancelled = true; };
+  }, [data?.chapter_id]);
+
+  // P0 #1 of the AI-visibility plan — fetch FAQPage source data so the
+  // existing chapterSchema() builder can emit a schema.org FAQPage node.
+  // The endpoint returns 404 when the chapter has no MCQ-derived Q+A
+  // pairs, in which case we leave faqEntries null and the JSON-LD path
+  // simply skips emitting FAQPage (existing behaviour).
+  useEffect(() => {
+    setFaqEntries(null);
+    if (!data?.chapter_id) return;
+    let cancelled = false;
+    apiClient()
+      .get(`/content/chapters/${data.chapter_id}/faq-jsonld`)
+      .then(r => {
+        if (cancelled) return;
+        const entries = r?.data?.entries;
+        if (Array.isArray(entries) && entries.length > 0) setFaqEntries(entries);
+      })
+      .catch(() => { /* 404 expected when no parseable MCQs — silent skip */ });
     return () => { cancelled = true; };
   }, [data?.chapter_id]);
 
@@ -521,12 +718,20 @@ export default function ChapterPage() {
       }
 
       if (!el && decoded) {
-        const slugified = decoded.replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-        el = document.getElementById(slugified);
-        if (!el) {
-          const allH = articleRef.current?.querySelectorAll('h2[id], h3[id]') || [];
-          for (const h of allH) {
-            if (h.id.includes(slugified) || slugified.includes(h.id)) { el = h; break; }
+        const slugified = decoded.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+        // For non-Latin scripts (Assamese, Hindi, Bengali, etc.) the
+        // ASCII-only slug above collapses to '' or '-', which would
+        // false-match any heading whose id happens to contain a hyphen.
+        // Only attempt the slug-id lookup when the slug carries real
+        // alphanumeric content; otherwise fall straight through to the
+        // Unicode-safe keyword-scoring path below.
+        if (slugified && /[a-z0-9]/.test(slugified)) {
+          el = document.getElementById(slugified);
+          if (!el) {
+            const allH = articleRef.current?.querySelectorAll('h2[id], h3[id]') || [];
+            for (const h of allH) {
+              if (h.id.includes(slugified) || slugified.includes(h.id)) { el = h; break; }
+            }
           }
         }
         if (!el) {
@@ -646,7 +851,31 @@ export default function ChapterPage() {
   }, [loading, data, topicParam, chunkParam, rchunkParam]);
 
   const basePath = `/${board}/${classSlug}/${subjectSlug}`;
-  const canonical = `https://syrabit.ai${basePath}/${chapterSlug}`;
+  // Chapter URL is always the canonical "home" for its content; on
+  // the topic deep-link route we point canonical back here with the
+  // `#topic-<slug>` fragment per the spec (Step 2). The chapter URL
+  // itself stays self-canonical with no fragment.
+  //
+  // NB: streamSlug must be re-inserted here because `basePath` (used
+  // elsewhere for breadcrumbs / sibling links) intentionally omits
+  // it. Stream-bearing routes are 5-segment
+  // (/board/class/stream/subject/chapter) and dropping the stream
+  // would yield a 404 / wrong canonical for streams like "mdc",
+  // "core", etc. Mirrors the chapter-recent push earlier in the
+  // file (search "pushRecentChapter").
+  const _chapterStreamSlug = streamSlug || data?.stream_slug || '';
+  const _chapterPath = _chapterStreamSlug
+    ? `/${board}/${classSlug}/${_chapterStreamSlug}/${subjectSlug}/${chapterSlug}`
+    : `${basePath}/${chapterSlug}`;
+  const chapterUrl = `https://syrabit.ai${_chapterPath}`;
+  const canonical = topicSlugParam
+    ? `${chapterUrl}#topic-${topicSlugParam}`
+    : chapterUrl;
+  // Look up the active topic doc for the deep-link route so we can
+  // shape topic-specific title/description without an extra fetch.
+  const activeDeepLinkTopic = topicSlugParam
+    ? (publishedTopics.find((t) => (t.topic_slug || t.slug) === topicSlugParam) || null)
+    : null;
   const readMins = data?.word_count ? Math.max(1, Math.ceil(data.word_count / 200)) : null;
 
   const handleShare = useCallback(() => {
@@ -716,6 +945,42 @@ export default function ChapterPage() {
           {[...Array(8)].map((_, i) => (
             <Skeleton key={i} className="h-5 w-full mb-3" style={{ width: `${60 + (i % 3) * 15}%` }} />
           ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Task #914 Step 2 — clean 404 for the topic deep-link route
+  // when the slug isn't citable (unknown / unpublished / definition
+  // missing). Renders BEFORE the chapter error branch so we don't
+  // ship the chapter article for a stale topic URL — the spec
+  // requires the topic URL to 404 cleanly in that case.
+  if (topicSlugParam && topicNotFound) {
+    return (
+      <div className="min-h-screen bg-background text-foreground flex items-center justify-center">
+        <div className="text-center max-w-md px-6">
+          <div className="w-16 h-16 rounded-2xl bg-muted flex items-center justify-center mx-auto mb-5">
+            <BookOpen size={28} className="text-muted-foreground" />
+          </div>
+          <h1 className="text-2xl font-bold mb-3" data-testid="topic-not-found">Topic not found</h1>
+          <p className="text-muted-foreground mb-6">
+            This topic isn't published yet. You can still read the full chapter below.
+          </p>
+          {/* Stream-aware link target — `basePath` intentionally
+              omits streamSlug for breadcrumbs, so re-insert it here
+              to avoid linking to a 404. Same shape as the chapterUrl
+              builder below the not-found branch. */}
+          <Link
+            to={(() => {
+              const _s = streamSlug || data?.stream_slug || '';
+              return _s
+                ? `/${board}/${classSlug}/${_s}/${subjectSlug}/${chapterSlug}`
+                : `${basePath}/${chapterSlug}`;
+            })()}
+            className="inline-flex items-center gap-2 px-6 py-3 bg-purple-600 hover:bg-purple-700 rounded-xl text-white font-medium transition-colors"
+          >
+            View chapter
+          </Link>
         </div>
       </div>
     );
@@ -797,8 +1062,23 @@ export default function ChapterPage() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <PageMeta
-        title={seoTitle}
-        description={seoDesc}
+        title={
+          // On topic deep-link URLs, lead with the topic title for
+          // crawler/snippet relevance. Falls back to the chapter
+          // title when the topic isn't yet in the published-topics
+          // list (race between route + topics fetch).
+          topicSlugParam && activeDeepLinkTopic
+            ? `${activeDeepLinkTopic.title} — ${chapterTitle}`
+            : seoTitle
+        }
+        description={
+          topicSlugParam && activeDeepLinkTopic && activeDeepLinkTopic.definition
+            // Trim the definition to ~280 chars so the meta
+            // description stays within Google's snippet budget while
+            // surfacing the topic-specific answer text.
+            ? activeDeepLinkTopic.definition.slice(0, 280)
+            : seoDesc
+        }
         url={canonical}
         keywords={(() => {
           // Task #333: when the monthly Bing keyword refresh has populated
@@ -820,7 +1100,21 @@ export default function ChapterPage() {
         })()}
         tags={[chapterTitle, subjectName, boardName, className, data.chapter_title || ''].filter(Boolean)}
         pageType="chapter"
-        pageData={{ data, basePath }}
+        pageData={{
+          // Merge async-loaded FAQ entries + the published-topics
+          // list into the chapter data so the existing chapterSchema()
+          // builder can emit a FAQPage @graph node AND one
+          // LearningResource per citable topic + Article.mentions[].
+          // Both fall back gracefully when the source data is absent.
+          data: {
+            ...data,
+            ...(faqEntries && faqEntries.length > 0 ? { faq_entries: faqEntries } : {}),
+            // `publishedTopics` is the runtime/SPA source; preload
+            // already baked it onto `data.published_topics` for SSR.
+            published_topics: publishedTopics.length > 0 ? publishedTopics : (data.published_topics || []),
+          },
+          basePath,
+        }}
         hasAssamese={hasAssamese}
       />
 
@@ -854,6 +1148,31 @@ export default function ChapterPage() {
               {data.meta_description && (
                 <p className="text-muted-foreground mt-1.5 text-sm leading-relaxed max-w-2xl line-clamp-2">{data.meta_description}</p>
               )}
+              {/* Topical-authority byline — visible last-updated +
+                  author signal that mirrors the JSON-LD `dateModified`
+                  / `author` fields. Crawlers and humans see the same
+                  freshness cue (single source of truth). Falls back to
+                  `created_at` and finally hides when neither exists. */}
+              {(() => {
+                const stamp = data.updated_at || data.modified_at || data.generated_at || data.created_at;
+                if (!stamp) return null;
+                let formatted;
+                try {
+                  formatted = new Date(stamp).toLocaleDateString('en-IN', {
+                    year: 'numeric', month: 'short', day: 'numeric',
+                  });
+                } catch { return null; }
+                if (!formatted) return null;
+                const author = data.author_name || 'Syrabit Editors';
+                return (
+                  <p
+                    className="text-[11px] text-muted-foreground/80 mt-1.5"
+                    data-testid="chapter-byline"
+                  >
+                    Updated <time dateTime={stamp}>{formatted}</time> · by <span className="font-medium">{author}</span>
+                  </p>
+                );
+              })()}
               <div className="flex items-center gap-3 mt-2.5 text-xs sm:text-sm text-muted-foreground">
                 {readMins && (
                   <span className="flex items-center gap-1"><Clock size={12} />{readMins} {contentLang === 'as' ? 'মিনিট পঢ়া' : 'min read'}</span>
@@ -937,6 +1256,37 @@ export default function ChapterPage() {
                   {data.meta_description}
                 </p>
               )}
+              {/* Task #914 Step 3 — visible AI answer cards. Rendered
+                  before the markdown body so:
+                    1. Bots reading the linear DOM see the citable
+                       attribution sentence + definition immediately.
+                    2. The topic deep-link `#topic-<slug>` anchor lands
+                       above the fold once useHashScroll fires.
+                  Same React tree, same DOM for SSR / prerender / SPA —
+                  the spec's "no cloaking, single source of truth"
+                  contract is preserved. */}
+              {publishedTopics.length > 0 && (
+                <div data-testid="topic-answer-cards" className="mb-8">
+                  {publishedTopics.map((t) => (
+                    <TopicAnswerCard
+                      key={t.id || t.topic_slug}
+                      topic={t}
+                      chapterUrl={chapterUrl}
+                    />
+                  ))}
+                </div>
+              )}
+              {/* Topical-mapping — siblings + cross-chapter related
+                  topics rendered as real <a href> links so bots see the
+                  full internal-linking graph in the linear DOM (no JS
+                  required). Sibling links jump in-page to the
+                  matching answer card; cross-chapter links use the
+                  Task #914 deep-link route. Renders nothing when both
+                  arrays are empty. */}
+              <ChapterTopicGraph
+                siblings={topicGraph.siblings}
+                crossChapter={topicGraph.cross_chapter}
+              />
               <Suspense fallback={
                 <div className="space-y-3">
                   {[...Array(6)].map((_, i) => (
@@ -1002,14 +1352,8 @@ export default function ChapterPage() {
           </aside>
         </div>
 
-        <GoogleReviewsSection
-          subheading={`Real Google reviews from students using Syrabit.ai for ${subjectName} ${className} notes.`}
-          keywords={[subjectName, chapterTitle, className].filter(Boolean)}
-        />
-        <ReviewsAggregateRatingJsonLd
-          id="chapter-google-reviews-jsonld"
-          name={`Syrabit.ai — ${chapterTitle}`}
-          url={canonical}
+        <TrustpilotReviewsSection
+          subheading={`Verified Trustpilot reviews from students using Syrabit.ai for ${subjectName} ${className} notes.`}
         />
 
         <nav className="mt-10 pt-6 border-t border-border/30" aria-label="Site navigation">

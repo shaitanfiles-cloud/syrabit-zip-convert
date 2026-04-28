@@ -40,14 +40,14 @@ from fastapi import HTTPException
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 from config import (
     LLM_PROVIDER, LLM_MODEL, OPENAI_API_KEY, SARVAM_THINK_BUFFER,
-    _GROQ_KEY, _GROQ_KEY_2, _GEMINI_KEY, _GEMINI_KEY_2, _XAI_KEY, _OPENAI_KEY,
+    _GROQ_KEY, _GROQ_KEY_2, _GEMINI_KEY, _GEMINI_KEY_2, _OPENAI_KEY,
     _SARVAM_LLM_KEY, _SARVAM_LLM_KEY_2, _SARVAM_LLM_KEY_3, _CEREBRAS_KEY, _OPENROUTER_KEY, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
-    CF_GATEWAY_ENABLED, CF_CACHE_TTL, is_cf_gateway_up, mark_cf_gateway_down, get_provider_base_url,
-    byok_headers,
+    is_cf_gateway_up, mark_cf_gateway_down, get_provider_base_url,
+    byok_headers, BYOK_PLACEHOLDER,
     VERTEX_GEMINI_MODEL,
 )
 import vertex_chat as _vertex_chat
-from deps import sarvam_llm_client, sarvam_llm_client_direct, logger as _dep_logger
+from deps import sarvam_llm_client, sarvam_llm_client_direct
 from cache import _cache_key
 
 logger = logging.getLogger(__name__)
@@ -189,17 +189,37 @@ class _LlmBatcher:
 _llm_batcher = _LlmBatcher(batch_window_ms=_LLM_BATCH_WINDOW_MS)
 _content_batcher = _LlmBatcher(batch_window_ms=_CONTENT_BATCH_WINDOW_MS)
 
-_LLM_PROVIDERS = []
+# ── Sarvam provider list — Assamese-only ─────────────────────────────────────
+# Sarvam is intentionally segregated into its own provider list and is NEVER
+# added to `_LLM_PROVIDERS`, `_LLM_PROVIDERS_CHAT`, `_LLM_PROVIDERS_CONTENT`,
+# `_SLM_SLOT_CANDIDATES`, or `_CONTENT_SLOT_CANDIDATES`. Sarvam billing /
+# quota is reserved for the two Assamese paths that benefit from its native
+# Indic grounding:
+#
+#   1. Assamese chat response generation — the hedged Sarvam-key race in
+#      `call_llm_api_stream` (gated on `_indic_mode == _is_indic_lang(lang)`,
+#      where `_INDIC_LANG_CODES = {"as"}`). Indic resolution reads from
+#      `_SARVAM_PROVIDERS` to find a Sarvam key.
+#   2. Assamese translation — `routes/ai_chat.py` calls Sarvam's `/translate`
+#      endpoint only when `_SARVAM_LANG_MAP[lang]` is set, and that map only
+#      contains `{"as": "as-IN"}`.
+#
+# Any other request (English, Hindi, content-generation pools, admin notes,
+# PYQ, important questions, etc.) MUST NOT touch Sarvam — even if Sarvam's
+# key was working, it would drift to the wrong script for non-Assamese.
+_SARVAM_PROVIDERS: list[dict] = []
 if _SARVAM_LLM_KEY_3:
-    _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY_3, "default_model": "sarvam-m"})
+    _SARVAM_PROVIDERS.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY_3, "default_model": "sarvam-m"})
 if _SARVAM_LLM_KEY_2 and _SARVAM_LLM_KEY_2 != _SARVAM_LLM_KEY_3:
-    _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY_2, "default_model": "sarvam-m"})
+    _SARVAM_PROVIDERS.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY_2, "default_model": "sarvam-m"})
 if _SARVAM_LLM_KEY and _SARVAM_LLM_KEY not in (_SARVAM_LLM_KEY_3, _SARVAM_LLM_KEY_2):
-    _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
-# Gemini sits BEFORE Groq in the fallback chain so that when all Sarvam keys
-# return 429 (Indic primary exhausted), the next attempt is Gemini 2.5 Flash —
-# which speaks Assamese / Bengali / Hindi natively. Groq's Llama-4 Scout drifts
-# to English/Hinglish for Indic prompts and degrades student-facing quality.
+    _SARVAM_PROVIDERS.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+
+# General LLM fallback chain — used by every non-Assamese path. Gemini leads
+# because of native multilingual coverage (Hindi/Bengali/etc) AND huge RPM
+# headroom (600/min vs 30/min on Groq/Cerebras). Sarvam is deliberately
+# absent — see `_SARVAM_PROVIDERS` above for the rationale.
+_LLM_PROVIDERS = []
 if _GEMINI_KEY:
     _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
 if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
@@ -209,10 +229,14 @@ if _GROQ_KEY:
 if _GROQ_KEY_2 and _GROQ_KEY_2 != _GROQ_KEY:
     _LLM_PROVIDERS.append({"provider": "groq",         "key": _GROQ_KEY_2,     "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
 if _CEREBRAS_KEY:
-    # Upgraded from llama-3.3-70b-versatile (Task #282 T002): Llama-4 Scout
-    # is faster on Cerebras (~2600 tok/s vs 2200), has a 10M context window,
-    # and noticeably better instruction-following for chat workloads.
-    _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama-3.3-70b"})
+    # Cerebras dropped llama-3.3-70b from this account's catalog (verified
+    # 2026-04-26: GET /v1/models returns only llama3.1-8b, gpt-oss-120b,
+    # zai-glm-4.7, qwen-3-235b-a22b-instruct-2507; only the 8B and the
+    # 235B qwen are accessible to us — gpt-oss-120b and zai-glm both
+    # return 404 "does not have access"). llama3.1-8b is the fast-tier
+    # SLM choice; the 235B qwen is reserved for the higher-quality
+    # content slot (see _CONTENT_SLOT_CANDIDATES below).
+    _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama3.1-8b"})
 if _OPENROUTER_KEY:
     _LLM_PROVIDERS.append({"provider": "openrouter",  "key": _OPENROUTER_KEY, "default_model": "deepseek/deepseek-chat-v3-0324"})
 if _OPENAI_KEY and _OPENAI_KEY != 'x':
@@ -223,7 +247,7 @@ _LLM_PROVIDERS_CHAT: list[dict] = []
 # now leads because Groq's hosted Llama-4 Scout endpoint has been failing
 # 100% in prod (see _SLM_SLOT_CANDIDATES note above).
 if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama-3.3-70b"})
+    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
 if _GROQ_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
 if _OPENROUTER_KEY:
@@ -248,6 +272,10 @@ _MODEL_PROVIDER_MAP = {
     "meta-llama/llama-4-maverick": "openrouter",
     "meta-llama/llama-4-scout": "openrouter",
     "meta-llama/llama-4-scout-17b-16e-instruct": "groq",
+    # Legacy entries — kept for cost-lookup back-compat on historical
+    # records, but no live provider call site references these any
+    # more (Cerebras dropped llama-3.3-70b from our account; the SLM
+    # tier-0 slot is now llama3.1-8b which is mapped above).
     "llama-3.3-70b-versatile": "cerebras",
     "llama-3.3-70b": "cerebras",
 }
@@ -263,20 +291,26 @@ _MODEL_ALIAS_MAP = {
 # Slots in the same tier are load-balanced by in-flight count.
 #
 _SLM_SLOT_CANDIDATES = [
-    # Cerebras serves the same Llama-4 Scout model as Groq but at higher
-    # tok/s and far better latency in our region; Groq's hosted endpoint
-    # for this model has been intermittently failing (100% fallback rate
-    # observed in prod alerts), so Cerebras is now Tier 0 and Groq is
-    # the Tier 1 fallback.
-    ("cerebras",    "llama-3.3-70b",                                     4, 0),
+    # Tier 0: Cerebras llama3.1-8b — fast small-model slot for SLM
+    # work (topic resolution, classification, short rewrites). This
+    # replaced llama-3.3-70b after Cerebras removed that model from
+    # our account on 2026-04-26 (see provider list comment above).
+    # llama3.1-8b is the only fast Cerebras model we have access to;
+    # the 235B qwen sits in the content slot for higher-quality jobs.
+    # Tiers 1/2 keep the larger Llama-4 Scout fallbacks unchanged.
+    ("cerebras",    "llama3.1-8b",                                       4, 0),
     ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 1),
     ("openrouter",  "meta-llama/llama-4-scout",                          4, 2),
 ]
 
+# Content SmartKeyPool — serves `_CONTENT_INTENTS` (notes, important_questions,
+# pyq) for ALL languages. Sarvam is intentionally NOT in this pool — see
+# `_SARVAM_PROVIDERS` rationale above. Gemini Tier 0 carries the load
+# (600 RPM headroom + native multilingual); Cerebras qwen-235B is the
+# higher-quality fallback when Gemini is throttled or down.
 _CONTENT_SLOT_CANDIDATES = [
     ("gemini",      "gemini-2.5-flash",                                  6, 0),
-    ("sarvam",      "sarvam-m",                                          4, 1),
-    ("cerebras",    "qwen-3-235b-a22b-instruct-2507",                    4, 2),
+    ("cerebras",    "qwen-3-235b-a22b-instruct-2507",                    4, 1),
 ]
 
 _CONTENT_INTENTS = {"notes", "important_questions", "pyq"}
@@ -565,15 +599,31 @@ async def _call_sarvam_llm(messages: list, api_key: str, model: str, max_tokens:
     result = re.sub(r'<think>.*$', '', result, flags=re.DOTALL).strip()
     return result
 
-def _cf_cache_headers() -> dict:
+def _cf_cache_headers(api_key: Optional[str] = None, *, clear_upstream_auth: Optional[bool] = None) -> dict:
     # Delegates to config.byok_headers() which returns:
-    #   cf-aig-byok-key:default   — CF substitutes the stored BYOK key upstream
+    #   cf-aig-byok-key:true      — CF may substitute the stored BYOK key upstream
     #   cf-aig-cache-ttl:<N>      — cache TTL hint
     #   cf-aig-authorization:…    — only when Authenticated Gateway mode is on
     # Returns {} when the gateway is down — callers should raise or continue
-    # without the caching hint. With BYOK active the placeholder api_key in
-    # the openai client is ignored by CF; the stored BYOK key is used instead.
-    return byok_headers()
+    # without the caching hint.
+    #
+    # Auth-header behaviour (FIXED 2026-04-26 after architect review):
+    # The decision of whether to clear the SDK's auto-attached
+    # ``Authorization: Bearer <api_key>`` is per-call, derived from the
+    # api_key the caller is about to send:
+    #   • api_key == BYOK_PLACEHOLDER ("x")  → BYOK mode, CF must
+    #     substitute the stored key upstream → CLEAR Authorization
+    #     so CF doesn't forward "Bearer x" (which 401s upstream).
+    #   • api_key is a REAL provider key      → keep Authorization so
+    #     CF forwards it to the upstream provider. The original bug
+    #     (default cleared) produced 400 "Missing or invalid
+    #     Authorization header" from Google Gemini whenever the CF
+    #     dashboard's BYOK binding was missing or stale.
+    # Callers can still force a value via ``clear_upstream_auth=...``
+    # for tests or special bypass paths; otherwise pass ``api_key``.
+    if clear_upstream_auth is None:
+        clear_upstream_auth = (api_key == BYOK_PLACEHOLDER)
+    return byok_headers(clear_upstream_auth=clear_upstream_auth)
 
 def _is_cf_connection_error(exc: Exception) -> bool:
     err = str(exc).lower()
@@ -596,7 +646,10 @@ async def _call_gemini(messages: list, api_key: str, model: str, max_tokens: int
     try:
         resp = await client.chat.completions.create(
             model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
-            extra_headers=_cf_cache_headers() or None,
+            # Pass api_key so the BYOK-aware helper can decide whether to
+            # clear the upstream Authorization (placeholder → clear so CF
+            # substitutes; real key → keep so SDK bearer reaches upstream).
+            extra_headers=_cf_cache_headers(api_key=api_key) or None,
         )
     except _oai.APIConnectionError as e:
         if base != direct_base and _is_cf_connection_error(e):
@@ -626,7 +679,9 @@ async def _call_openai_compat(messages: list, api_key: str, model: str, max_toke
     try:
         resp = await client.chat.completions.create(
             model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
-            extra_headers=_cf_cache_headers() or None,
+            # See _call_gemini for the rationale — pass api_key so BYOK
+            # placeholders correctly trigger the clear-Authorization branch.
+            extra_headers=_cf_cache_headers(api_key=api_key) or None,
         )
     except _oai.APIConnectionError as e:
         if base != fallback_base and _is_cf_connection_error(e):
@@ -805,11 +860,15 @@ async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048
     Uses all providers including Emergent (admin content generation)."""
     return await _llm_batcher.call(messages, model, max_tokens)
 
+# Admin content batcher chain — Cerebras qwen-235B (high-quality, fast)
+# preferred, Gemini 2.5 Flash as fallback. Sarvam was previously inserted
+# between them but has been removed: this batcher serves admin notes,
+# important_questions and PYQ for ALL languages, and Sarvam quota is now
+# reserved for Assamese-only paths (see `_SARVAM_PROVIDERS` rationale at
+# top of this module).
 _LLM_PROVIDERS_CONTENT: list[dict] = []
 if _CEREBRAS_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "qwen-3-235b-a22b-instruct-2507"})
-if _SARVAM_LLM_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
 if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
@@ -821,8 +880,14 @@ logger.info(
 )
 
 async def call_llm_api_content(messages: list, model: str = None, max_tokens: int = 3072) -> str:
-    """LLM call for admin content generation — Cerebras preferred (qwen-3-235b, fast + high quality),
-    Sarvam secondary (sarvam-m), Gemini 2.5 Flash last resort.
+    """LLM call for admin content generation — Cerebras qwen-3-235b preferred
+    (fast + high quality), Gemini 2.5 Flash as fallback.
+
+    Sarvam was previously the secondary slot here but has been removed — admin
+    content generation runs across all languages, and Sarvam quota is now
+    reserved exclusively for the Assamese chat + translate paths (see
+    `_SARVAM_PROVIDERS` rationale at the top of this module).
+
     Uses dedicated content batcher with 300ms batch window (vs 5ms for chat).
     Retries with exponential backoff instead of instant failover."""
     if model is None and _LLM_PROVIDERS_CONTENT:
@@ -1177,9 +1242,13 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     _stream_t0 = time.monotonic()
 
     if _indic_mode:
+        # Indic (Assamese) path: resolve Sarvam-preferred model from the
+        # dedicated `_SARVAM_PROVIDERS` list. Sarvam is no longer in
+        # `_LLM_PROVIDERS`, so we MUST look it up from its own list to keep
+        # the Assamese hedged-key race functional.
         _resolved_indic_model = None
         for _pref_model in _SARVAM_INDIC_MODEL_PREFERENCE:
-            _prov, _pkey = _resolve_provider_for_model(_pref_model, _LLM_PROVIDERS)
+            _prov, _pkey = _resolve_provider_for_model(_pref_model, _SARVAM_PROVIDERS)
             if _prov == "sarvam" and _pkey:
                 _resolved_indic_model = _pref_model
                 break
@@ -1228,6 +1297,16 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     if _use_vertex_fastpath:
         if not _vertex_chat.is_configured():
             logger.warning("vertex/gemini-flash requested but VERTEX_PROJECT_ID is not set — falling back to legacy SLM pool")
+            use_model_raw = _vertex_fallback_target
+        elif not _vertex_chat.is_available():
+            # Circuit breaker is open — Vertex is known-broken right now.
+            # Skip it entirely so we don't pay the connect timeout
+            # (~10s) per request. The breaker will auto-attempt
+            # recovery after its cooldown.
+            logger.info(
+                "vertex/gemini-flash skipped — circuit breaker is open; "
+                f"routing to {_vertex_fallback_target}"
+            )
             use_model_raw = _vertex_fallback_target
         else:
             _vertex_first_token = False
@@ -1304,7 +1383,11 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             _indic_vertex_active = False  # Fallback → resolve normally
 
     use_model_resolved = _MODEL_ALIAS_MAP.get(use_model_raw, use_model_raw)
-    _prov_list = _LLM_PROVIDERS if _indic_mode else _LLM_PROVIDERS_CHAT
+    # In Indic (Assamese) mode, prepend `_SARVAM_PROVIDERS` so the resolver
+    # finds Sarvam keys first (Sarvam is no longer in `_LLM_PROVIDERS`),
+    # then falls through to the general chain (Gemini etc.) when no Sarvam
+    # key is configured. Non-Indic paths use the chat-only chain unchanged.
+    _prov_list = (_SARVAM_PROVIDERS + _LLM_PROVIDERS) if _indic_mode else _LLM_PROVIDERS_CHAT
     provider, key = _resolve_provider_for_model(use_model_resolved, _prov_list)
     if use_model_raw != use_model_resolved:
         logger.info(f"Model alias '{use_model_raw}' → '{use_model_resolved}' ({provider})")
@@ -1604,22 +1687,41 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         yield f"data: {json.dumps({'error': 'All AI providers temporarily unavailable'})}\n\n"
         return
 
-    # ── Indic Sarvam with hedged key racing ─────────────────────────────────────
+    # ── Indic (Assamese) response: Sarvam-MAIN + Gemini-FALLBACK ───────────────
+    # User-mandated routing (2026-04-26): for Assamese chat *response*
+    # generation, Sarvam is the primary provider; Gemini is reached only
+    # when ALL Sarvam keys fail before the first token. This is the inverse
+    # of the translation pipeline (Gemini-main + Sarvam-polish — see
+    # `routes/ai_chat.py::_assamese_translate_gemini_main_sarvam_polish`).
+    #
+    # Implementation = two phases, never simultaneous:
+    #   Phase 1 — Sarvam-only race across all available Sarvam keys
+    #             (still hedged across keys for key-level resilience). The
+    #             first Sarvam key to emit a chunk wins; the rest are
+    #             cancelled. This preserves Sarvam-quality output whenever
+    #             at least one Sarvam key responds within
+    #             _SARVAM_TTFT_TIMEOUT.
+    #   Phase 2 — Triggered ONLY if Phase 1 emits zero chunks (all Sarvam
+    #             keys errored, were rate-limited, or timed out). Streams
+    #             directly from Gemini 2.5 Flash. This is a fallback path,
+    #             not a hedged co-runner — Gemini cannot "steal" the
+    #             first-token slot from Sarvam due to network jitter.
     _SARVAM_TTFT_TIMEOUT = 3.0
     _SARVAM_SLOT_TIMEOUT = 1.2
     if _indic_mode and provider == "sarvam":
-        _indic_candidates = []
-
-        _sarvam_keys = [p["key"] for p in _prov_list if p["provider"] == "sarvam"]
-        if key not in _sarvam_keys:
+        # Pull Sarvam keys from `_SARVAM_PROVIDERS` (the dedicated
+        # Assamese-only list). `_prov_list` may also contain Sarvam entries
+        # (we prepend `_SARVAM_PROVIDERS` to it in indic mode above), but
+        # reading from `_SARVAM_PROVIDERS` directly is more explicit and
+        # robust if the prepend logic ever changes.
+        _sarvam_keys = [p["key"] for p in _SARVAM_PROVIDERS if p.get("key")]
+        if key and key not in _sarvam_keys:
             _sarvam_keys.insert(0, key)
         _sarvam_keys = list(dict.fromkeys(_sarvam_keys))
-        for _sk in _sarvam_keys:
-            _indic_candidates.append({"provider": "sarvam", "key": _sk, "model": use_model})
-
-        _gemini_keys_for_indic = [p["key"] for p in _LLM_PROVIDERS if p["provider"] == "gemini" and p.get("key")]
-        for _gk in _gemini_keys_for_indic[:1]:
-            _indic_candidates.append({"provider": "gemini", "key": _gk, "model": "gemini-2.5-flash"})
+        _sarvam_candidates = [
+            {"provider": "sarvam", "key": _sk, "model": use_model}
+            for _sk in _sarvam_keys
+        ]
 
         _indic_q: asyncio.Queue = asyncio.Queue()
 
@@ -1638,36 +1740,59 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} failed ({type(_e).__name__}: {str(_e)[:120]}) rate_limit={_is_rate}")
                 await _indic_q.put((_cand_idx, "error", None))
 
-        _indic_tasks = [asyncio.create_task(_indic_producer(c, i)) for i, c in enumerate(_indic_candidates)]
-        _race_providers = ", ".join(f"{c['provider']}/{c['model']}" for c in _indic_candidates)
-        logger.info(f"[INDIC] Hedged racing {len(_indic_candidates)} candidates for {response_lang}: {_race_providers}")
-
         _sarvam_winner = None
-        _sarvam_finished: set = set()
         _sarvam_race_t0 = time.monotonic()
-        try:
-            _deadline = time.monotonic() + _SARVAM_TTFT_TIMEOUT
-            while _sarvam_winner is None and len(_sarvam_finished) < len(_indic_candidates):
-                _rem = _deadline - time.monotonic()
-                if _rem <= 0:
-                    break
-                try:
-                    _sid, _evt, _data = await asyncio.wait_for(_indic_q.get(), timeout=_rem)
-                except asyncio.TimeoutError:
-                    break
-                if _evt == "chunk":
-                    _sarvam_winner = _sid
-                elif _evt in ("done", "error"):
-                    _sarvam_finished.add(_sid)
-        except Exception:
-            pass
+        _phase1_tasks: list = []
 
+        # ── Phase 1: Sarvam-only race ────────────────────────────────────
+        if _sarvam_candidates:
+            _phase1_tasks = [
+                asyncio.create_task(_indic_producer(c, i))
+                for i, c in enumerate(_sarvam_candidates)
+            ]
+            _phase1_providers = ", ".join(
+                f"{c['provider']}/{c['model']}" for c in _sarvam_candidates
+            )
+            logger.info(
+                f"[INDIC] Phase 1 (Sarvam-MAIN): racing "
+                f"{len(_sarvam_candidates)} Sarvam keys for {response_lang}: "
+                f"{_phase1_providers}"
+            )
+
+            _sarvam_finished: set = set()
+            try:
+                _deadline = time.monotonic() + _SARVAM_TTFT_TIMEOUT
+                while _sarvam_winner is None and len(_sarvam_finished) < len(_sarvam_candidates):
+                    _rem = _deadline - time.monotonic()
+                    if _rem <= 0:
+                        break
+                    try:
+                        _sid, _evt, _data = await asyncio.wait_for(_indic_q.get(), timeout=_rem)
+                    except asyncio.TimeoutError:
+                        break
+                    if _evt == "chunk":
+                        _sarvam_winner = _sid
+                    elif _evt in ("done", "error"):
+                        _sarvam_finished.add(_sid)
+            except Exception:
+                pass
+        else:
+            logger.warning(
+                f"[INDIC] No Sarvam keys configured — skipping Phase 1, "
+                f"jumping straight to Gemini fallback for {response_lang}"
+            )
+
+        # ── Phase 1 winner: emit Sarvam stream ──────────────────────────
         if _sarvam_winner is not None:
-            _win_cand = _indic_candidates[_sarvam_winner]
+            _win_cand = _sarvam_candidates[_sarvam_winner]
             _ttft_ms = (time.monotonic() - _sarvam_race_t0) * 1000
-            logger.info(f"[INDIC-PERF] TTFT={_ttft_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']} idx={_sarvam_winner}")
+            logger.info(
+                f"[INDIC-PERF] Phase 1 WIN — TTFT={_ttft_ms:.0f}ms "
+                f"lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']} "
+                f"idx={_sarvam_winner}"
+            )
 
-            for i, t in enumerate(_indic_tasks):
+            for i, t in enumerate(_phase1_tasks):
                 if i != _sarvam_winner:
                     t.cancel()
 
@@ -1687,27 +1812,91 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                     break
 
             _total_ms = (time.monotonic() - _sarvam_race_t0) * 1000
-            logger.info(f"[INDIC-PERF] Total={_total_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']}")
+            logger.info(
+                f"[INDIC-PERF] Phase 1 Total={_total_ms:.0f}ms "
+                f"lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']}"
+            )
 
-            for t in _indic_tasks:
+            for t in _phase1_tasks:
                 t.cancel()
-            for t in _indic_tasks:
+            for t in _phase1_tasks:
                 try:
                     await t
                 except (asyncio.CancelledError, Exception):
                     pass
 
             yield f"data: {json.dumps({'__provider': _win_cand['provider']})}\n\n"
-        else:
-            for t in _indic_tasks:
-                t.cancel()
-            for t in _indic_tasks:
-                try:
-                    await t
-                except (asyncio.CancelledError, Exception):
-                    pass
-            logger.warning(f"[INDIC] All {len(_indic_candidates)} candidates failed/timed out")
+            return
+
+        # ── Phase 1 LOST → Phase 2: Gemini fallback ─────────────────────
+        # Cancel any straggler Sarvam tasks before starting Gemini so we
+        # don't double-stream. We don't await them here — they'll be GC'd
+        # by the event loop. (`_emit_tokens` is cancellation-safe.)
+        for t in _phase1_tasks:
+            t.cancel()
+
+        _phase1_elapsed = (time.monotonic() - _sarvam_race_t0) * 1000
+        if _sarvam_candidates:
+            logger.warning(
+                f"[INDIC] Phase 1 LOST — all {len(_sarvam_candidates)} "
+                f"Sarvam keys failed/timed out in {_phase1_elapsed:.0f}ms — "
+                f"falling back to Gemini (Phase 2)"
+            )
+
+        _gemini_keys_for_indic = [
+            p["key"] for p in _LLM_PROVIDERS
+            if p["provider"] == "gemini" and p.get("key")
+        ]
+        if not _gemini_keys_for_indic:
+            logger.warning(
+                f"[INDIC] Phase 2 unavailable — no Gemini key configured. "
+                f"Returning error for {response_lang}."
+            )
             yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
+            return
+
+        _gemini_key = _gemini_keys_for_indic[0]
+        _gemini_model = "gemini-2.5-flash"
+        _phase2_t0 = time.monotonic()
+        logger.info(
+            f"[INDIC] Phase 2 (Gemini-FALLBACK): streaming from "
+            f"gemini/{_gemini_model} for {response_lang}"
+        )
+        _phase2_first_token = False
+        try:
+            async for chunk in _emit_tokens(
+                _stream_from_provider("gemini", _gemini_key, _gemini_model)
+            ):
+                if not _phase2_first_token:
+                    _ttft_ms = (time.monotonic() - _phase2_t0) * 1000
+                    logger.info(
+                        f"[INDIC-PERF] Phase 2 TTFT={_ttft_ms:.0f}ms "
+                        f"lang={response_lang} provider=gemini/{_gemini_model}"
+                    )
+                    _phase2_first_token = True
+                yield chunk
+        except Exception as _ge:
+            if _phase2_first_token:
+                # We already streamed something to the client — can't restart.
+                logger.warning(
+                    f"[INDIC] Phase 2 mid-stream error: "
+                    f"{type(_ge).__name__}: {str(_ge)[:160]}"
+                )
+                yield f"data: {json.dumps({'error': 'AI service interrupted'})}\n\n"
+                return
+            logger.warning(
+                f"[INDIC] Phase 2 failed before first token: "
+                f"{type(_ge).__name__}: {str(_ge)[:160]}"
+            )
+            yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
+            return
+
+        _phase2_total_ms = (time.monotonic() - _phase2_t0) * 1000
+        logger.info(
+            f"[INDIC-PERF] Phase 2 Total={_phase2_total_ms:.0f}ms "
+            f"lang={response_lang} provider=gemini/{_gemini_model}"
+        )
+        yield f"data: {json.dumps({'__provider': 'gemini'})}\n\n"
         return
 
     # ── All other models: single provider ───────────────────────────────────────

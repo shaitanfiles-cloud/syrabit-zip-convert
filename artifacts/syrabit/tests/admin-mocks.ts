@@ -78,19 +78,101 @@ const FIXTURES: Array<[string, Fixture]> = [
     pages_total: 0, published_today: 0,
   })],
   ['/api/seo/health', () => ({ sitemaps: [] })],
+
+  // Task #940 — Entity SEO admin panel.
+  // Default fixture surfaces a "healthy / nothing missing" snapshot so
+  // the dashboard renders the panel chrome without erroring. Drift
+  // scenarios are wired via per-test `overrides`.
+  ['/api/admin/seo/entity/status', () => ({
+    configured: true,
+    snapshot: {
+      generated_at: '2026-04-26T04:30:00.000Z',
+      iso_week: '2026-W17',
+      aggregate_status: 'ok',
+      summary: {
+        wikidata_claims: 7, wikidata_missing: 0,
+        sameas_total: 7, sameas_broken: 0,
+        wikipedia_present: true, crunchbase_present: true, google_kg_present: true,
+      },
+      signals: {
+        wikidata:   { name: 'wikidata',   status: 'ok',
+          summary: 'Syrabit.ai (Q123) — 7 claims, 0 desired claims missing.',
+          fields: { qid: 'Q123', claim_count: 7, present_claims: ['P31','P17'],
+                    missing_claims: [], edit_url: 'https://www.wikidata.org/wiki/Q123' } },
+        wikipedia:  { name: 'wikipedia',  status: 'ok',
+          summary: 'Article live: Syrabit.ai',
+          fields: { title: 'Syrabit.ai', page_url: 'https://en.wikipedia.org/wiki/Syrabit.ai' } },
+        crunchbase: { name: 'crunchbase', status: 'ok',
+          summary: 'Crunchbase profile reachable (100% of tracked fields detected).',
+          fields: { permalink: 'syrabit-ai', completeness_pct: 100,
+                    page_url: 'https://www.crunchbase.com/organization/syrabit-ai' } },
+        sameas:     { name: 'sameas',     status: 'ok',
+          summary: 'All 7 verified profiles live.',
+          fields: { total: 7, broken: [] } },
+        google_kg:  { name: 'google_kg',  status: 'ok',
+          summary: 'Knowledge Panel present for all 2 tracked queries.',
+          fields: { configured: true, name: 'Syrabit.ai',
+                    queries: [
+                      { query: 'Syrabit',    status: 'ok', kg_id: 'kg:/m/syrabit', name: 'Syrabit.ai',    score: 950 },
+                      { query: 'Syrabit.ai', status: 'ok', kg_id: 'kg:/m/syrabit', name: 'Syrabit.ai',    score: 940 },
+                    ] } },
+        mentions:   { name: 'mentions',   status: 'ok',
+          summary: 'All 3 mention targets cover us.',
+          fields: { total: 3, missing: [], targets: [] } },
+      },
+      missing_claims: [],
+      missing_mentions: [],
+    },
+    previous: null,
+    drift: { hadBaseline: false, regressions: [], improvements: [],
+             summaryDeltas: {
+               wikidata_claims:  { current: 7, previous: 7, delta: 0 },
+               wikidata_missing: { current: 0, previous: 0, delta: 0 },
+               sameas_broken:    { current: 0, previous: 0, delta: 0 },
+             } },
+    missingClaims: [],
+    missingMentions: [],
+    alertState: null,
+  })],
+  ['/api/admin/seo/entity/history', () => ({ items: [] })],
+  ['/api/admin/seo/entity/refresh', () => ({
+    configured: true,
+    snapshot: null, previous: null,
+    drift: { hadBaseline: false, regressions: [], improvements: [], summaryDeltas: {} },
+    missingClaims: [], alertState: null,
+    refresh: { claimed: true, stored: true, regression_count: 0, paged: false },
+  })],
 ];
 
-export interface InstallOptions {
+interface InstallOptions {
   /**
    * URL substrings to force-fail with a 500 status. Used to assert that
    * the dashboard degrades gracefully (inline "failed to load" card)
    * instead of falling through to the global ErrorBoundary.
    */
   failPatterns?: string[];
+  /**
+   * Per-endpoint fixture overrides keyed by URL substring. Checked
+   * before the default FIXTURES list so a single test can replace
+   * the catch-all empty payload for one endpoint (e.g. the
+   * AdminHealth cron pills) without disturbing the rest of the
+   * dashboard mocks. The value is the JSON body to respond with
+   * (status 200), or a function returning that body.
+   */
+  overrides?: Record<string, unknown | ((url: string) => unknown)>;
 }
 
 export async function installAdminApiMocks(page: Page, opts: InstallOptions = {}) {
   const failPatterns = opts.failPatterns ?? [];
+  // Match the more-specific override first so a key like
+  // `/api/admin/health/edge-proxy-deploy/cron` doesn't shadow
+  // `/api/admin/health/edge-proxy-deploy/cron/alert-state` (the
+  // first is a prefix of the second, and `Array.find` returns
+  // the first hit). Sorting by descending key length means
+  // longer/more-specific patterns always win — author order
+  // inside the `overrides` object then doesn't matter.
+  const overrides = Object.entries(opts.overrides ?? {})
+    .sort(([a], [b]) => b.length - a.length);
 
   await page.route('**/api/**', async (route: Route) => {
     const req = route.request();
@@ -108,6 +190,18 @@ export async function installAdminApiMocks(page: Page, opts: InstallOptions = {}
 
     if (method === 'OPTIONS') {
       await route.fulfill({ status: 204, body: '' });
+      return;
+    }
+
+    const override = overrides.find(([key]) => url.includes(key));
+    if (override) {
+      const [, value] = override;
+      const body = typeof value === 'function' ? (value as (u: string) => unknown)(url) : value;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(body ?? EMPTY),
+      });
       return;
     }
 

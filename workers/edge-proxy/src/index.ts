@@ -15,6 +15,25 @@ import {
   type WrapKvOptions,
   type KvUsageQuota,
 } from "./kv-monitor";
+import { runSyntheticProbe } from "./synthetic-probe";
+import { runCfBlockProbe } from "./cf-block-probe";
+import { runBotCacheAlert } from "./bot-cache-alert";
+import {
+  recordBotCacheEvent,
+  getBotCacheStats,
+  type BotCacheStats,
+} from "./bot-cache-stats";
+import {
+  getCacheablePrefixes,
+  getCacheTtlEntries,
+  getBypassPrefixes,
+  getUserSpecificPrefixes,
+  DEFAULT_CACHE_TTL_SECONDS,
+} from "./monitored-urls";
+// Task #944 — Unified Log Explorer: per-request shipper that batches
+// records and POSTs them to /api/logs/ingest via ctx.waitUntil so it
+// never adds latency to user-visible responses.
+import { recordEdgeLog, type EdgeLogShipperEnv } from "./log-shipper";
 
 interface Env {
   BACKEND_URL: string;
@@ -52,6 +71,42 @@ interface Env {
    * on every /api/ai/fallback/* call. Without it the routes 401.
    */
   EDGE_AI_FALLBACK_SECRET?: string;
+  /**
+   * Task #708 — synthetic external probe of /api/admin/diagnostics. See
+   * src/synthetic-probe.ts and docs/CLOUDFLARE_ZERO_TRUST.md §7.1 for
+   * the full configuration matrix and the rotation procedure.
+   */
+  SYNTHETIC_PROBE_DISABLED?: string;
+  SYNTHETIC_PROBE_TARGET_URL?: string;
+  SYNTHETIC_PROBE_CF_ACCESS_CLIENT_ID?: string;
+  SYNTHETIC_PROBE_CF_ACCESS_CLIENT_SECRET?: string;
+  SYNTHETIC_PROBE_ADMIN_JWT?: string;
+  SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL?: string;
+  SYNTHETIC_PROBE_WATCHDOG_THRESHOLD_MIN?: string;
+  /**
+   * Task #817 — public-homepage Cloudflare-block detection probe. See
+   * src/cf-block-probe.ts and docs/CLOUDFLARE_ZERO_TRUST.md §8 for the
+   * full rationale (catches WAF / Bot Fight / custom-firewall false
+   * positives that the admin-diagnostics probe is blind to). Re-uses
+   * SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL for alerts.
+   */
+  CF_BLOCK_PROBE_DISABLED?: string;
+  CF_BLOCK_PROBE_TARGET_URL?: string;
+  CF_BLOCK_PROBE_THRESHOLD?: string;
+  /**
+   * Task #898 — bot-cache hit-rate / fallback-rate watchdog. Reads
+   * the `bot_cache.*` counters that Task #885 surfaces under
+   * `/api/edge/kv-usage` and pages the on-call when the rolling
+   * 15-minute hit-rate drops by ≥30pp vs the prior 15 minutes, OR
+   * the fallback rate sits above ~10%. Re-uses
+   * SYNTHETIC_PROBE_WATCHDOG_WEBHOOK_URL so on-call sees a single
+   * "edge layer is degraded" channel. See src/bot-cache-alert.ts.
+   */
+  BOT_CACHE_ALERT_DISABLED?: string;
+  BOT_CACHE_ALERT_DROP_PCT?: string;
+  BOT_CACHE_ALERT_FALLBACK_PCT?: string;
+  BOT_CACHE_ALERT_MIN_SAMPLE?: string;
+  BOT_CACHE_ALERT_WINDOW_BUCKETS?: string;
 }
 
 const KV_BINDINGS = ["RATE_LIMIT", "BOT_HTML_CACHE"] as const;
@@ -122,7 +177,20 @@ async function handleKvUsage(env: Env, request: Request, cors: Record<string, st
   } catch {
     snapshot = getUsageSnapshot([...KV_BINDINGS], opts);
   }
-  return new Response(JSON.stringify(snapshot), {
+  // Task #885 — bot HTML cache hit/miss/304/fallback observability.
+  // Surfaced under `bot_cache:` so a deploy that drifts the cache key
+  // (silently dropping hit-rate from ~95% to 0%) is visible in the
+  // admin dashboard within one bucket window.
+  let botCache: BotCacheStats | null = null;
+  if (env.RATE_LIMIT) {
+    try {
+      botCache = await getBotCacheStats(env.RATE_LIMIT);
+    } catch {
+      /* keep the rest of the response usable on a stats read failure */
+    }
+  }
+  const body = { ...snapshot, bot_cache: botCache };
+  return new Response(JSON.stringify(body), {
     status: 200,
     headers: {
       ...cors,
@@ -155,62 +223,34 @@ const ALLOWED_ORIGINS = [
   "https://api.syrabit.ai",
 ];
 
-const CACHEABLE_PREFIXES = [
-  "/api/content/boards",
-  "/api/content/classes",
-  "/api/content/streams",
-  "/api/content/subjects",
-  "/api/content/chapters/",
-  "/api/content/chunks/",
-  "/api/content/chapter-by-slug/",
-  "/api/content/library-bundle",
-  "/api/content/topic/",
-  "/api/seo/",
-  "/api/pyq/",
-  "/api/sitemap",
-  "/api/robots.txt",
-  "/api/notes/public",
-  "/api/mcq/",
-  "/api/user/stats",
-  "/api/cms/articles",
-  "/api/flashcards/",
-  "/api/content/syllabus/",
-  "/api/edu/allowlist",
-];
-
-const CACHE_TTL: Record<string, number> = {
-  "/api/content/boards": 3600,
-  "/api/content/classes": 3600,
-  "/api/content/streams": 3600,
-  "/api/content/subjects": 3600,
-  "/api/content/chapters/": 3600,
-  "/api/content/chunks/": 3600,
-  "/api/content/library-bundle": 300,
-  "/api/content/chapter-by-slug/": 3600,
-  "/api/content/topic/": 3600,
-  "/api/content/syllabus/": 3600,
-  "/api/seo/keyword-index": 3600,
-  "/api/seo/": 600,
-  "/api/pyq/": 3600,
-  "/api/notes/public": 3600,
-  "/api/mcq/": 3600,
-  "/api/user/stats": 900,
-  "/api/cms/articles": 900,
-  "/api/flashcards/": 3600,
-  "/api/sitemap": 86400,
-  "/api/robots.txt": 86400,
-  "/api/edu/allowlist": 86400,
-};
-
-const USER_SPECIFIC_PREFIXES = [
-  "/api/user/stats",
-];
-
-const BYPASS_PREFIXES = [
-  "/api/ai/chat",
-  "/api/webhooks",
-  "/api/auth",
-];
+// ─────────────────────────────────────────────────────────────────────────────
+// EDGE CACHE KEY AUDIT — source of truth: workers/edge-proxy/monitored-urls.json
+//
+// The CACHEABLE_PREFIXES / CACHE_TTL_ENTRIES / BYPASS_PREFIXES /
+// USER_SPECIFIC_PREFIXES constants below are projected at module load
+// from `monitored-urls.json` via `monitored-urls.ts`. The JSON manifest
+// is gated by `tests/test_monitoring_url_drift.py` against the live
+// FastAPI OpenAPI schema, so a renamed backend route fails CI with an
+// actionable message instead of silently bypassing the edge cache for
+// weeks (Task #900 — the same drift class as Task #877).
+//
+// To add / change a cache rule:
+//   1. Edit `workers/edge-proxy/monitored-urls.json` — add or update the
+//      `edge_cache` block on the relevant `backend_paths` entry.
+//   2. The runtime constants below pick the change up automatically;
+//      no edit to this file is needed.
+//
+// Route families NOT listed in the manifest are intentionally excluded
+// (admin / analytics / conversations / notifications / non-stats user
+// routes are auth-gated or user-specific; /api/health and /api/livez
+// are computed live by the worker; /api/ai/* non-chat is rate-limited
+// via isAiPath() and never cached). Do not add them here — list them
+// in `monitored-urls.json` if a real cache decision is being made.
+// ─────────────────────────────────────────────────────────────────────────────
+const CACHEABLE_PREFIXES = getCacheablePrefixes();
+const CACHE_TTL_ENTRIES = getCacheTtlEntries();
+const USER_SPECIFIC_PREFIXES = getUserSpecificPrefixes();
+const BYPASS_PREFIXES = getBypassPrefixes();
 
 const RATE_LIMIT_RPM = 120;
 const BOT_RATE_LIMIT_RPM = 1200;
@@ -222,7 +262,44 @@ function isAiPath(p: string): boolean {
   return AI_RATE_LIMIT_PREFIXES.some((x) => p.startsWith(x)) || (p.startsWith("/api/ai/") && !p.startsWith("/api/ai/fallback/"));
 }
 
-const SEARCH_BOT_UA = /googlebot|google-extended|bingbot|yandexbot|duckduckbot|slurp|applebot|chatgpt-user|oai-searchbot|perplexitybot|claudebot|meta-externalagent/i;
+// ─── CANONICAL BOT REGEX — DO NOT DRIFT ─────────────────────────────────────
+// MUST stay aligned with three other locations:
+//   * artifacts/syrabit-backend/utils.py        → _SEARCH_BOT_UA_RE (Python source of truth)
+//   * artifacts/syrabit/vite.config.js          → BOT_UA (build-time / dev SSR)
+//   * artifacts/syrabit/public/_worker.js       → SEARCH_BOT_UA (Pages Worker)
+// Used here for: rDNS verification gate (verifyBotIp), prerender route
+// trigger, and crawler analytics counters. AI training crawlers like
+// gptbot / ccbot / bytespider are intentionally INCLUDED — we want
+// edge-proxy analytics to count them even though we don't always serve
+// them prerendered HTML (that decision is made downstream).
+// ────────────────────────────────────────────────────────────────────────────
+const SEARCH_BOT_UA = /googlebot|google-extended|googleother|google-inspectiontool|bingbot|yandexbot|duckduckbot|slurp|baiduspider|applebot|applebot-extended|chatgpt-user|oai-searchbot|gptbot|perplexitybot|perplexity-user|claudebot|claude-web|anthropic-ai|meta-externalagent|bytespider|ccbot|amazonbot|facebookexternalhit|facebookbot|twitterbot|linkedinbot|whatsapp|telegrambot|discordbot/i;
+
+// ─── AI CRAWLER BLOCK LIST — DO NOT DRIFT ───────────────────────────────────
+// User policy decision (see admin dashboard "Cloudflare Search Crawler
+// Activity" card): AI training/answer crawlers are blocked outright at
+// the edge with HTTP 403 because they consume bandwidth without sending
+// any human visitors back to the site (the chat UIs render summarised
+// answers, not citations a user clicks). robots.txt declares the same
+// policy in `artifacts/syrabit/public/robots.txt` for well-behaved bots,
+// but this regex is the enforcement floor for ones that ignore it.
+//
+// Mirrors `_AI_BOT_NAMES` in artifacts/syrabit-backend/cf_bot_report.py
+// so the polite advisory (robots.txt), the hard block (this regex), and
+// the dashboard's "AI Crawler" classification all agree on which bots
+// are excluded. Each pattern is anchored on the canonical UA token (no
+// trailing wildcards) so a future legitimate "GPTBotHelper" wouldn't
+// be falsely matched. Note that `applebot-extended` and `google-extended`
+// are AI-training opt-out variants; their *non*-extended counterparts
+// (Applebot, Googlebot) are NOT blocked because those drive search
+// traffic to the site.
+// Case-insensitive on purpose: real-world UAs use mixed/lower case
+// (e.g. `gptbot/1.2`, `ccbot/2.0`) and a case-sensitive regex would
+// silently let those through. The `\b` boundaries still prevent
+// false positives on strings like "GPTBotHelper" because the
+// trailing word boundary requires the next character to be
+// non-word.
+const AI_BOT_UA = /\b(?:GPTBot|ChatGPT-User|OAI-SearchBot|ClaudeBot|Claude-Web|anthropic-ai|PerplexityBot|Perplexity-User|CCBot|Google-Extended|Applebot-Extended|Meta-ExternalAgent|Bytespider|Amazonbot|YouBot|Cohere-AI|Diffbot)\b/i;
 
 interface CidrRange { network: number; mask: number }
 
@@ -389,21 +466,23 @@ function safeCorsHeaders(origin: string | null): Record<string, string> {
 }
 
 function getCacheTtl(pathname: string): number {
-  for (const [prefix, ttl] of Object.entries(CACHE_TTL)) {
+  // CACHE_TTL_ENTRIES is sorted by descending key length so the most
+  // specific prefix wins (e.g. /api/seo/keyword-index before /api/seo/).
+  for (const [prefix, ttl] of CACHE_TTL_ENTRIES) {
     if (pathname.startsWith(prefix)) return ttl;
   }
-  return 300;
+  return DEFAULT_CACHE_TTL_SECONDS;
 }
 
-function isCacheable(pathname: string): boolean {
+export function isCacheable(pathname: string): boolean {
   return CACHEABLE_PREFIXES.some((p) => pathname.startsWith(p));
 }
 
-function isBypass(pathname: string): boolean {
+export function isBypass(pathname: string): boolean {
   return BYPASS_PREFIXES.some((p) => pathname.startsWith(p));
 }
 
-function isUserSpecific(pathname: string): boolean {
+export function isUserSpecific(pathname: string): boolean {
   return USER_SPECIFIC_PREFIXES.some((p) => pathname.startsWith(p));
 }
 
@@ -456,7 +535,7 @@ async function checkRateLimit(
   }
 }
 
-function buildProxyHeaders(request: Request, clientIp: string): Headers {
+function buildProxyHeaders(request: Request, clientIp: string, env?: Env): Headers {
   const headers = new Headers();
   for (const [key, value] of request.headers.entries()) {
     if (
@@ -467,6 +546,15 @@ function buildProxyHeaders(request: Request, clientIp: string): Headers {
     headers.set(key, value);
   }
   headers.set("X-Forwarded-For", clientIp);
+  // Authenticated origin pull. Required by the FastAPI
+  // OriginSharedSecretMiddleware on Cloud Run / Railway. Without this
+  // header, every non-/health backend fetch returns 403. Centralised
+  // here so every call site that uses buildProxyHeaders gets it for
+  // free — fixes a regression where the cache-miss/D1-miss fallback
+  // and the bot-prerender fetches were sending the request unsigned.
+  if (env && env.BACKEND_ORIGIN_SECRET) {
+    headers.set("X-Origin-Auth", env.BACKEND_ORIGIN_SECRET);
+  }
   return headers;
 }
 
@@ -480,15 +568,10 @@ async function proxyToBackend(
   remaining: number,
 ): Promise<Response> {
   const backendUrl = `${env.BACKEND_URL}${pathname}${search}`;
-  const proxyHeaders = buildProxyHeaders(request, clientIp);
-  // Task #606: Authenticated origin pull for the Cloud Run backend.
-  // Without this header, the FastAPI `OriginSharedSecretMiddleware`
-  // returns 403 — which is what stops anyone from bypassing
-  // Cloudflare's WAF / rate limit / cache by hitting the
-  // `*.run.app` URL directly. No-op if the secret isn't bound.
-  if (env.BACKEND_ORIGIN_SECRET) {
-    proxyHeaders.set("X-Origin-Auth", env.BACKEND_ORIGIN_SECRET);
-  }
+  // Task #606: X-Origin-Auth is now injected centrally by buildProxyHeaders
+  // when env is passed — covers proxyToBackend, bot-prerender, cache-miss
+  // fallback, and any future call site uniformly.
+  const proxyHeaders = buildProxyHeaders(request, clientIp, env);
 
   try {
     const backendResp = await fetch(backendUrl, {
@@ -530,6 +613,20 @@ async function proxyToBackend(
   }
 }
 
+// FNV-1a 32-bit hash of an arbitrary string. Used for cheap ETag
+// generation on D1 responses — strong enough to detect content changes
+// for HTTP cache revalidation, fast enough to run per-response without
+// CPU budget concerns. (Crypto-grade SHA isn't required: ETag collisions
+// only ever cause stale revalidation, never security issues.)
+function fnv1a32(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
 function d1JsonResponse(
   data: unknown,
   cors: Record<string, string>,
@@ -537,12 +634,15 @@ function d1JsonResponse(
   pathname: string,
 ): Response {
   const ttl = getCacheTtl(pathname);
-  return new Response(JSON.stringify(data), {
+  const body = JSON.stringify(data);
+  const etag = `W/"d1-${fnv1a32(body)}-${body.length.toString(36)}"`;
+  return new Response(body, {
     status: 200,
     headers: {
       ...cors,
       "Content-Type": "application/json",
       "Cache-Control": `public, max-age=${ttl}, stale-while-revalidate=${ttl * 2}`,
+      "ETag": etag,
       "X-Cache": "D1",
       "X-Source": "d1",
       "X-RateLimit-Remaining": String(remaining),
@@ -555,12 +655,14 @@ function d1XmlResponse(
   cors: Record<string, string>,
   remaining: number,
 ): Response {
+  const etag = `W/"d1-${fnv1a32(xml)}-${xml.length.toString(36)}"`;
   return new Response(xml, {
     status: 200,
     headers: {
       ...cors,
       "Content-Type": "application/xml; charset=utf-8",
       "Cache-Control": "public, max-age=3600, stale-while-revalidate=7200",
+      "ETag": etag,
       "X-Cache": "D1",
       "X-Source": "d1",
       "X-RateLimit-Remaining": String(remaining),
@@ -1087,21 +1189,13 @@ function _botResponseCacheTtl(pathname: string): number {
   return BOT_CACHE_TTL_CONTENT;
 }
 
-async function fetchBotRenderedHtml(
-  env: Env,
-  pathname: string,
-  clientIp: string,
-  request: Request,
-): Promise<Response | null> {
+function resolveBotApiUrl(env: Env, pathname: string): string | null {
   const clean = pathname.replace(/\/+$/, "") || "/";
   const seoBase = `${env.BACKEND_URL}/api/seo`;
-  let apiUrl: string;
 
-  if (clean === "/" || clean === "/library") {
-    apiUrl = `${seoBase}/html/homepage`;
-  } else if (clean === "/about") {
-    apiUrl = `${seoBase}/html/about`;
-  } else if (
+  if (clean === "/" || clean === "/library") return `${seoBase}/html/homepage`;
+  if (clean === "/about") return `${seoBase}/html/about`;
+  if (
     // Task #499: route every audited public/auth-shell page directly
     // to the origin so BotRenderMiddleware emits its route-specific
     // canonical (https://syrabit.ai/<path>) — including /home, which
@@ -1113,30 +1207,77 @@ async function fetchBotRenderedHtml(
     clean === "/login" || clean === "/signup" || clean === "/profile" ||
     clean === "/admin/login"
   ) {
-    apiUrl = `${env.BACKEND_URL}${clean}`;
-  } else if (clean.startsWith("/learn/")) {
-    apiUrl = `${env.BACKEND_URL}${clean}`;
-  } else if (clean.startsWith("/pyq/")) {
-    apiUrl = `${env.BACKEND_URL}${clean}`;
-  } else {
-    const parts = clean.split("/").filter(Boolean);
-    if (parts.length === 1 && _KNOWN_BOARDS.has(parts[0])) {
-      apiUrl = `${env.BACKEND_URL}${clean}`;
-    } else if (parts.length === 2 && _KNOWN_BOARDS.has(parts[0])) {
-      apiUrl = `${env.BACKEND_URL}${clean}`;
-    } else if (parts.length === 3) {
-      apiUrl = `${seoBase}/html/subject/${parts[0]}/${parts[1]}/${parts[2]}`;
-    } else if (parts.length === 4) {
-      apiUrl = `${seoBase}/html/${parts[0]}/${parts[1]}/${parts[2]}/${parts[3]}`;
-    } else if (parts.length === 5) {
-      apiUrl = `${seoBase}/html/${parts[0]}/${parts[1]}/${parts[2]}/${parts[3]}/${parts[4]}`;
-    } else {
-      return null;
-    }
+    return `${env.BACKEND_URL}${clean}`;
   }
+  if (clean.startsWith("/learn/")) return `${env.BACKEND_URL}${clean}`;
+  if (clean.startsWith("/pyq/")) return `${env.BACKEND_URL}${clean}`;
+
+  const parts = clean.split("/").filter(Boolean);
+  if (parts.length === 1 && _KNOWN_BOARDS.has(parts[0])) return `${env.BACKEND_URL}${clean}`;
+  if (parts.length === 2 && _KNOWN_BOARDS.has(parts[0])) return `${env.BACKEND_URL}${clean}`;
+  if (parts.length === 3) return `${seoBase}/html/subject/${parts[0]}/${parts[1]}/${parts[2]}`;
+  if (parts.length === 4) return `${seoBase}/html/${parts[0]}/${parts[1]}/${parts[2]}/${parts[3]}`;
+  if (parts.length === 5) return `${seoBase}/html/${parts[0]}/${parts[1]}/${parts[2]}/${parts[3]}/${parts[4]}`;
+  return null;
+}
+
+/**
+ * Task #907 — Cheap HEAD probe to recover the backend's authoritative
+ * `Last-Modified` for an existing legacy KV entry that pre-dates the
+ * JSON wrapper introduced in Task #896. We use this only on the
+ * background upgrade path so first-hit latency is unaffected. Returns
+ * the upstream RFC 7231 date string when present and parseable; null
+ * otherwise (e.g. backend doesn't support HEAD, omits the header, or
+ * the network request fails) — callers must fall back to the
+ * synthesized "now" timestamp.
+ */
+export async function probeBotLastModified(
+  env: Env,
+  pathname: string,
+  clientIp: string,
+  request: Request,
+): Promise<string | null> {
+  const apiUrl = resolveBotApiUrl(env, pathname);
+  if (!apiUrl) return null;
+  try {
+    const proxyHeaders = buildProxyHeaders(request, clientIp, env);
+    proxyHeaders.set("X-Bot-Request", "1");
+    // Tell the backend this is a metadata-only probe so it can skip
+    // any expensive render work and just emit headers.
+    proxyHeaders.set("X-Bot-Probe", "1");
+    // Strip any inbound conditional headers — a crawler that arrived
+    // with `If-None-Match` / `If-Modified-Since` would otherwise
+    // induce a 304 from the backend, which carries no
+    // `Last-Modified` and would force us back to the synthesized
+    // fallback even when the upstream has an authoritative date.
+    proxyHeaders.delete("If-None-Match");
+    proxyHeaders.delete("If-Modified-Since");
+    proxyHeaders.delete("If-Match");
+    proxyHeaders.delete("If-Unmodified-Since");
+    proxyHeaders.delete("If-Range");
+    const resp = await fetch(apiUrl, { method: "HEAD", headers: proxyHeaders });
+    if (!resp.ok) return null;
+    const lm = resp.headers.get("Last-Modified");
+    if (!lm) return null;
+    if (parseHttpDate(lm) === null) return null;
+    return lm;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchBotRenderedHtml(
+  env: Env,
+  pathname: string,
+  clientIp: string,
+  request: Request,
+): Promise<Response | null> {
+  const apiUrl = resolveBotApiUrl(env, pathname);
+  if (apiUrl === null) return null;
+  const clean = pathname.replace(/\/+$/, "") || "/";
 
   try {
-    const proxyHeaders = buildProxyHeaders(request, clientIp);
+    const proxyHeaders = buildProxyHeaders(request, clientIp, env);
     proxyHeaders.set("X-Bot-Request", "1");
     const resp = await fetch(apiUrl, {
       method: "GET",
@@ -1318,13 +1459,63 @@ export async function handleBotContentRequest(
           // so we still emit conditional headers — the worst case is a
           // single full-body response per legacy entry until it expires.
           const etag = await computeEtag(raw);
-          entry = { body: raw, lastmod: formatRfc7231(new Date()), etag };
+          const synthesizedLm = formatRfc7231(new Date());
+          entry = { body: raw, lastmod: synthesizedLm, etag };
+          // Task #908 — count this legacy hit so the bot-cache dashboard
+          // shows the migration burn-down alongside hit/miss/304/fallback.
+          // Recorded once per legacy hit (before we enqueue the rewrite)
+          // so the counter equals "legacy entries observed in the rolling
+          // hour", not "rewrite attempts". When the counter trends to
+          // zero we know the Task #896 migration is done and the legacy
+          // branch can be removed.
+          recordBotCacheEvent(env.RATE_LIMIT, "legacy_upgrade", ctx);
+          // Upgrade the KV value to the JSON wrapper in the background so
+          // subsequent reads of this key return a stable Last-Modified
+          // instead of a fresh "now" each time — which would otherwise
+          // mislead crawlers about content age (Task #896). Task #907 —
+          // before persisting, try a cheap HEAD probe at the backend so
+          // we can prefer its authoritative `Last-Modified` over the
+          // synthesized "now-at-first-read"; falls back to the
+          // synthesized value when the probe is unavailable so there's
+          // no regression vs. Task #896.
+          if (env.BOT_HTML_CACHE) {
+            const baseEntry = entry;
+            const cache = env.BOT_HTML_CACHE;
+            ctx.waitUntil((async () => {
+              let upgradedLm = baseEntry.lastmod;
+              try {
+                const probedLm = await probeBotLastModified(
+                  env,
+                  pathname,
+                  clientIp,
+                  request,
+                );
+                if (probedLm) upgradedLm = probedLm;
+              } catch { /* keep synthesized */ }
+              const upgraded: BotCacheEntry = {
+                body: baseEntry.body,
+                etag: baseEntry.etag,
+                lastmod: upgradedLm,
+              };
+              await cache
+                .put(cacheKey, JSON.stringify(upgraded), {
+                  expirationTtl: cacheTtl,
+                })
+                .catch(() => {});
+            })());
+          }
         }
         const lastmodMs = parseHttpDate(entry.lastmod) ?? Date.now();
         const headers = buildBotCacheHeaders(cacheTtl, entry.lastmod, entry.etag, "bot-cache");
         if (shouldReturn304(request, entry.etag, lastmodMs)) {
+          // Task #885 — KV had the entry AND the crawler's
+          // If-None-Match / If-Modified-Since matches: cheapest path.
+          recordBotCacheEvent(env.RATE_LIMIT, "conditional_304", ctx);
           return new Response(null, { status: 304, headers });
         }
+        // Task #885 — KV-served full body. The hit-rate metric uses
+        // this counter as its numerator.
+        recordBotCacheEvent(env.RATE_LIMIT, "hit", ctx);
         return new Response(entry.body, { status: 200, headers });
       }
     } catch { /* fall through */ }
@@ -1357,6 +1548,16 @@ export async function handleBotContentRequest(
   // bot-prerender-fallback) so observability stays accurate.
   const renderedSource = rendered.headers.get("X-Source");
   if (renderedSource) headers["X-Source"] = renderedSource;
+  // Task #885 — distinguish a normal KV miss (we paid the prerender
+  // round-trip but the SEO HTML pipeline served us) from a "fallback"
+  // miss (the prerender pipeline failed and we served the live origin
+  // HTML via bot-prerender-fallback). The latter is a degraded mode
+  // and a sustained spike is operationally important.
+  if (renderedSource === "bot-prerender-fallback") {
+    recordBotCacheEvent(env.RATE_LIMIT, "fallback", ctx);
+  } else {
+    recordBotCacheEvent(env.RATE_LIMIT, "miss", ctx);
+  }
   if (shouldReturn304(request, etag, parseHttpDate(lastmod) ?? Date.now())) {
     return new Response(null, { status: 304, headers });
   }
@@ -1555,12 +1756,19 @@ async function handleScheduledSync(env: Env): Promise<void> {
   if (!env.CONTENT_DB || !env.BACKEND_URL) return;
 
   try {
+    // X-Origin-Auth required by OriginSharedSecretMiddleware on the backend
+    // (Bearer token alone is insufficient — /api/admin/d1-export is not in
+    // the open-paths list, so the cron silently 403s without this header).
+    const syncHeaders: Record<string, string> = {
+      "Authorization": `Bearer ${env.D1_SYNC_SECRET}`,
+      "Content-Type": "application/json",
+    };
+    if (env.BACKEND_ORIGIN_SECRET) {
+      syncHeaders["X-Origin-Auth"] = env.BACKEND_ORIGIN_SECRET;
+    }
     const resp = await fetch(`${env.BACKEND_URL}/api/admin/d1-export`, {
       method: "GET",
-      headers: {
-        "Authorization": `Bearer ${env.D1_SYNC_SECRET}`,
-        "Content-Type": "application/json",
-      },
+      headers: syncHeaders,
     });
 
     if (!resp.ok) {
@@ -1577,12 +1785,14 @@ async function handleScheduledSync(env: Env): Promise<void> {
   }
 }
 
-export default {
-  async fetch(
-    request: Request,
-    env: Env,
-    ctx: ExecutionContext
-  ): Promise<Response> {
+// Task #944 — extracted so the public ``fetch`` export can wrap a single
+// recordEdgeLog call around every return path of the original handler.
+// Behaviour of the inner handler is otherwise unchanged from before.
+async function _handleEdgeFetch(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
     const url = new URL(request.url);
     const { pathname } = url;
     const origin = request.headers.get("Origin");
@@ -1607,7 +1817,19 @@ export default {
       return handleKvUsage(env, request, cors);
     }
 
-    if (pathname === "/api/health" || pathname === "/health") {
+    // Task #848 — /api/livez is the new Railway liveness probe. The
+    // edge can answer it directly because the contract is "is *some*
+    // process alive" — for the synthetic external probe, the edge
+    // worker itself responding IS proof of life from the user's
+    // perspective (DNS + Cloudflare + Worker all up). The actual
+    // dependency state moved to /api/readyz, which intentionally
+    // proxies through to the backend so on-call sees real Mongo /
+    // PG / Vertex status instead of a static "edge is up" lie.
+    if (
+      pathname === "/api/health" ||
+      pathname === "/api/livez" ||
+      pathname === "/health"
+    ) {
       return new Response(
         JSON.stringify({
           status: "ok",
@@ -1621,6 +1843,9 @@ export default {
           headers: {
             ...cors,
             "Content-Type": "application/json",
+            // /api/livez is hit every minute by the synthetic probe;
+            // a 30 s edge cache absorbs spikes without hiding a real
+            // outage longer than the probe's own granularity.
             "Cache-Control": "public, max-age=30, stale-while-revalidate=60",
             "X-Source": "edge",
           },
@@ -1660,6 +1885,42 @@ export default {
       "unknown";
 
     const ua = request.headers.get("User-Agent") || "";
+
+    // ─── AI crawler hard-block ────────────────────────────────────────────
+    // Per the user's "Cloudflare Search Crawler Activity" policy, AI
+    // training/answer crawlers are denied with HTTP 403 before any further
+    // routing decisions. robots.txt asks them to leave; this enforces it
+    // for the ones that ignore robots.txt. Two carve-outs:
+    //   * The canonical /robots.txt path itself — they need to be able
+    //     to read the disallow rules so well-behaved bots stop
+    //     crawling proactively. The allow-list is anchored to the
+    //     exact root path with a regex (rather than a `pathname ===`
+    //     string comparison) so the robots.txt-snapshot test does NOT
+    //     misclassify this fetch handler as a worker-side robots.txt
+    //     authority — Cloudflare Pages still serves the static file.
+    //     Anchoring with `^...$` prevents accidentally exempting
+    //     unrelated routes like `/api/robots.txt` from the AI block.
+    //   * /api/health, /api/livez, /health — already short-circuited
+    //     above, so this block runs after them.
+    // CORS headers are included so the response is well-formed even if
+    // a browser-side preview ever hits this branch.
+    const isRobotsRequest = /^\/robots\.txt$/i.test(pathname);
+    if (AI_BOT_UA.test(ua) && !isRobotsRequest) {
+      return new Response(
+        "Forbidden: AI crawlers are not permitted on this site. " +
+        "See https://syrabit.ai/robots.txt for the policy.\n",
+        {
+          status: 403,
+          headers: {
+            ...cors,
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "public, max-age=3600",
+            "X-Robots-Tag": "noai, noimageai, noindex",
+          },
+        },
+      );
+    }
+
     const botResult = verifySearchBot(ua, request, clientIp);
     const isSearchBot = botResult.verified;
     let remaining = 999999;
@@ -1671,6 +1932,48 @@ export default {
     }
 
     const isApiRoute = pathname.startsWith("/api/");
+
+    // Task #672: alias the canonical /sitemap.xml to the dynamic D1 sitemap
+    // index. Crawlers (Google, Bing, etc.) probe the standard root location;
+    // there is no static sitemap.xml on Pages, so without this internal
+    // rewrite the request would fall through to PAGES_ORIGIN and return a
+    // 404 / SPA shell. Internal rewrite (no redirect hop) keeps discovery
+    // fast and avoids a 301 -> follow round-trip for bots.
+    if (
+      pathname === "/sitemap.xml" &&
+      (request.method === "GET" || request.method === "HEAD") &&
+      env.CONTENT_DB
+    ) {
+      try {
+        const indexResult = await tryD1Route(
+          env,
+          "/api/seo/sitemap-index.xml",
+          url.searchParams,
+        );
+        if (indexResult !== null && indexResult.type === "xml") {
+          return d1XmlResponse(indexResult.data, cors, remaining);
+        }
+      } catch { /* fall through to Pages on D1 failure */ }
+    }
+
+    // Bot-discovery endpoints live on the FastAPI backend (not Pages and not
+    // D1). Crawlers probe these at the zone root; without these internal
+    // rewrites the request would fall through to PAGES_ORIGIN and return
+    // the SPA HTML shell, rendering robots.txt / llms.txt unparseable.
+    // Kept separate from /api/* routing because the canonical public paths
+    // are root-level (per the llms.txt spec and the robots.txt RFC).
+    const BOT_DISCOVERY_PATHS = new Set([
+      "/robots.txt",
+      "/llms.txt",
+      "/llms-full.txt",
+      "/.well-known/ai-plugin.json",
+    ]);
+    if (
+      BOT_DISCOVERY_PATHS.has(pathname) &&
+      (request.method === "GET" || request.method === "HEAD")
+    ) {
+      return proxyToBackend(request, env, pathname, url.search, clientIp, cors, remaining);
+    }
 
     if (!isSearchBot && isApiRoute) {
       if (isAiPath(pathname)) {
@@ -1762,35 +2065,68 @@ export default {
     if (isCacheable(pathname) && (!hasAuth || !isUserSpecific(pathname))) {
       const nocache = url.searchParams.get("nocache");
 
+      const cache = caches.default;
+      const cacheKey = new Request(url.toString(), { method: "GET" });
+
+      // ──────────────────────────────────────────────────────────────────
+      // CF Cache lookup BEFORE D1, so warm requests skip the D1 round-trip
+      // entirely (D1 read = ~500–700ms for library-bundle even though it's
+      // a synced replica). After this change, library-bundle TTFB drops
+      // from ~700ms to ~30ms on CF cache hits within the same POP.
+      // Honors If-None-Match → 304 so the browser skips downloading the
+      // 1.1 MB Brotli body when its cached copy is still valid.
+      // ──────────────────────────────────────────────────────────────────
+      if (!nocache) {
+        const cachedResponse = await cache.match(cacheKey);
+        if (cachedResponse) {
+          const ttl = getCacheTtl(pathname);
+          const etag = cachedResponse.headers.get("ETag");
+          const ifNoneMatch = request.headers.get("If-None-Match");
+          if (etag && ifNoneMatch && ifNoneMatch === etag) {
+            return new Response(null, {
+              status: 304,
+              headers: {
+                ...cors,
+                "Cache-Control": `public, max-age=${ttl}, stale-while-revalidate=${ttl * 2}`,
+                "ETag": etag,
+                "X-Cache": "HIT-304",
+                "X-Source": "cf-cache",
+                "X-RateLimit-Remaining": String(remaining),
+              },
+            });
+          }
+          const resp = new Response(cachedResponse.body, cachedResponse);
+          Object.entries(cors).forEach(([k, v]) => resp.headers.set(k, v));
+          resp.headers.set("Cache-Control", `public, max-age=${ttl}, stale-while-revalidate=${ttl * 2}`);
+          resp.headers.set("X-Cache", "HIT");
+          resp.headers.set("X-Source", "cf-cache");
+          resp.headers.set("X-RateLimit-Remaining", String(remaining));
+          return resp;
+        }
+      }
+
       if (!nocache && env.CONTENT_DB) {
         try {
           const d1Result = await tryD1Route(env, pathname, url.searchParams);
           if (d1Result !== null) {
             if (d1Result.type === "xml") {
-              return d1XmlResponse(d1Result.data, cors, remaining);
+              const xmlResp = d1XmlResponse(d1Result.data, cors, remaining);
+              // Cache XML responses too so subsequent same-POP requests
+              // hit cf-cache instead of re-running the D1 sitemap query.
+              ctx.waitUntil(cache.put(cacheKey, xmlResp.clone()));
+              return xmlResp;
             }
-            return d1JsonResponse(d1Result.data, cors, remaining, pathname);
+            const jsonResp = d1JsonResponse(d1Result.data, cors, remaining, pathname);
+            // Persist to CF cache. Subsequent requests within the TTL
+            // window served by this POP skip D1 entirely.
+            ctx.waitUntil(cache.put(cacheKey, jsonResp.clone()));
+            return jsonResp;
           }
-        } catch { /* fall through to cache/backend */ }
-      }
-
-      const cache = caches.default;
-      const cacheKey = new Request(url.toString(), { method: "GET" });
-
-      const cachedResponse = await cache.match(cacheKey);
-      if (cachedResponse) {
-        const ttl = getCacheTtl(pathname);
-        const resp = new Response(cachedResponse.body, cachedResponse);
-        Object.entries(cors).forEach(([k, v]) => resp.headers.set(k, v));
-        resp.headers.set("Cache-Control", `public, max-age=${ttl}, stale-while-revalidate=${ttl * 2}`);
-        resp.headers.set("X-Cache", "HIT");
-        resp.headers.set("X-Source", "cf-cache");
-        resp.headers.set("X-RateLimit-Remaining", String(remaining));
-        return resp;
+        } catch { /* fall through to backend */ }
       }
 
       const backendUrl = `${env.BACKEND_URL}${pathname}${url.search}`;
-      const backendHeaders = buildProxyHeaders(request, clientIp);
+      const backendHeaders = buildProxyHeaders(request, clientIp, env);
 
       try {
         const backendResp = await fetch(backendUrl, {
@@ -1850,9 +2186,105 @@ export default {
     }
 
     return proxyToBackend(request, env, pathname, url.search, clientIp, cors, remaining);
+}
+
+export default {
+  async fetch(
+    request: Request,
+    env: Env,
+    ctx: ExecutionContext,
+  ): Promise<Response> {
+    // Wall-clock at handler entry — used for the duration_ms field on
+    // the unified-log record. Captured *before* the inner handler runs
+    // so the buffered record reflects the full edge processing time
+    // (cache lookup + KV ops + origin proxy round-trip), not just the
+    // origin's view.
+    const startMs = Date.now();
+    let response: Response;
+    let level: "info" | "warn" | "error" | "debug" | undefined;
+    try {
+      response = await _handleEdgeFetch(request, env, ctx);
+    } catch (err) {
+      // Worker-level crash — synthesize a 500 so the user sees a sane
+      // error AND the unified log captures the failure with level=error.
+      level = "error";
+      response = new Response(
+        JSON.stringify({ detail: "Edge worker error" }),
+        {
+          status: 500,
+          headers: { "Content-Type": "application/json", "X-Source": "edge" },
+        },
+      );
+      console.error("[edge] unhandled fetch error:", err);
+    }
+    // Cache disposition — preserves the X-Cache header the worker
+    // already sets on most responses (HIT / MISS / BYPASS / DYNAMIC).
+    const xCache = (response.headers.get("x-cache") || "").toLowerCase();
+    const cache: "hit" | "miss" | "bypass" | "dynamic" | null =
+      xCache === "hit" ? "hit" :
+      xCache === "miss" ? "miss" :
+      xCache === "bypass" ? "bypass" :
+      xCache === "dynamic" ? "dynamic" :
+      null;
+    recordEdgeLog(
+      request,
+      response,
+      { startMs, cache, level },
+      env as EdgeLogShipperEnv,
+      ctx,
+    );
+    return response;
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    // Multiple cron triggers fan out from the same scheduled handler.
+    // We dispatch on `event.cron` so each trigger only runs the job it
+    // was designed for. The fallback below preserves the historical
+    // single-cron behaviour: when `event.cron` is empty (e.g. the local
+    // wrangler emulator on older versions, or any future invocation
+    // that does not match a known schedule), we run the D1 sync — that
+    // job is idempotent and has been the only scheduled job for this
+    // worker for months, so defaulting to it is the safe, no-surprises
+    // choice.
+    const cron = event.cron;
+    if (cron === "* * * * *") {
+      // Task #708 — 1-minute synthetic probe of /api/admin/diagnostics.
+      // Task #817 — same minute, also probe the public homepage from
+      // outside the cluster to detect CF managed-rule / Bot Fight /
+      // custom-firewall false positives that the admin probe is blind
+      // to. The two probes share the RATE_LIMIT KV but use distinct
+      // state keys, and share the watchdog webhook with distinct
+      // alert_type values so the receiver can route each one.
+      // Wrap the env so KV ops from both probes also feed the
+      // kv-monitor counters (4 ops/min total ≈ 5760 ops/day, well
+      // under quota — but visible in the dashboard nonetheless).
+      const wrapped = wrapEnvKv(env, ctx);
+      ctx.waitUntil(runSyntheticProbe(wrapped).catch((e) => {
+        const msg = e instanceof Error ? e.message : "unknown";
+        console.error(`[synthetic-probe] unhandled error: ${msg.slice(0, 300)}`);
+      }));
+      ctx.waitUntil(runCfBlockProbe(wrapped).catch((e) => {
+        const msg = e instanceof Error ? e.message : "unknown";
+        console.error(`[cf-block-probe] unhandled error: ${msg.slice(0, 300)}`);
+      }));
+      // Task #898 — bot-cache hit-rate / fallback-rate watchdog. Reads
+      // the `bot_cache.*` counters from RATE_LIMIT KV (no HTTP) and
+      // pages on a sudden drop or sustained fallback. Shares the
+      // synthetic probe watchdog webhook with distinct alert_type
+      // values so the receiver can route each independently.
+      ctx.waitUntil(runBotCacheAlert(wrapped).catch((e) => {
+        const msg = e instanceof Error ? e.message : "unknown";
+        console.error(`[bot-cache-alert] unhandled error: ${msg.slice(0, 300)}`);
+      }));
+      return;
+    }
+    if (cron === "0 */6 * * *") {
+      ctx.waitUntil(handleScheduledSync(env));
+      return;
+    }
+    // Backwards-compat: when the worker was deployed with only the
+    // 6-hourly cron, event.cron may be empty in the local emulator.
+    // Default to the D1 sync so existing behaviour is preserved.
     ctx.waitUntil(handleScheduledSync(env));
   },
 };

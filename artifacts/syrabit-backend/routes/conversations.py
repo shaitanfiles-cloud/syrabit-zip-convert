@@ -1,24 +1,11 @@
 """Syrabit.ai — Conversation management"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
-from typing import Optional, List, Dict, Any, Union
-from datetime import datetime, timezone, timedelta
+import re, logging
+from typing import Optional
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    APIRouter, HTTPException, Depends, Query, Request,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
-import mistune as _mistune
+from pydantic import BaseModel
 
-from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
-)
 from deps import (
     db,
     pg_pool,
@@ -29,9 +16,7 @@ from cache import (
     redis_list_anon_conversations,
 )
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional,
+    get_current_user, get_admin_user, get_current_user_optional,
 )
 from db_ops import (
     supa_delete_conversation,
@@ -39,7 +24,6 @@ from db_ops import (
     supa_get_conversations,
     supa_update_conversation,
 )
-from llm import call_llm_api, call_llm_api_stream
 
 logger = logging.getLogger(__name__)
 

@@ -7,5 +7,3 @@ export const MobileNavSwitch = memo(function MobileNavSwitch() {
   const { user } = useAuth();
   return user ? <BottomNav /> : <PublicBottomNav />;
 });
-
-export default MobileNavSwitch;

@@ -93,7 +93,7 @@ function computeSourceHash() {
 // baked into the filename so stale files never collide with current
 // ones in the on-disk cache directory.
 let cachedFingerprint = null;
-export function cacheFingerprint() {
+function cacheFingerprint() {
   if (cachedFingerprint) return cachedFingerprint;
   cachedFingerprint = crypto
     .createHash("sha256")
@@ -387,7 +387,7 @@ export async function warmCache({ days = 30 } = {}) {
   return { bundle, traffic };
 }
 
-export function clearCache() {
+function clearCache() {
   try {
     fs.rmSync(repoCacheDir, { recursive: true, force: true });
   } catch {

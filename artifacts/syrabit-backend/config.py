@@ -7,6 +7,7 @@ __all__ = [
     "ADMIN_ACCOUNTS", "ADMIN_JWT_SECRET",
     "CF_CACHE_TTL", "CF_GATEWAY_ENABLED",
     "CF_TURNSTILE_ENABLED", "CF_TURNSTILE_SECRET_KEY",
+    "CHAT_ENHANCE_ENABLED",
     "COOKIE_DOMAIN", "COOKIE_SAMESITE",
     "CORS_ORIGINS", "CORS_ORIGIN_REGEX",
     "DB_NAME", "EMAIL_FROM", "FRONTEND_URL",
@@ -41,30 +42,74 @@ load_dotenv(ROOT_DIR / '.env')
 
 MONGO_URL    = (os.environ.get('MONGO_URL') or os.environ.get('MONGODB_URI') or 'mongodb://localhost:27017').strip().strip('"').strip("'")
 DB_NAME      = os.environ.get('DB_NAME', 'test_database')
-_jwt_secret_env = os.environ.get('JWT_SECRET', '').strip()
-if not _jwt_secret_env:
-    import hashlib as _jwt_hl
-    import warnings as _w
-    _fallback_seed = (MONGO_URL + DB_NAME + os.environ.get('REPL_ID', '')).encode()
-    JWT_SECRET = _jwt_hl.sha256(b'syrabit-jwt-fallback:' + _fallback_seed).hexdigest()
-    _w.warn(
-        "JWT_SECRET is not set — using deterministic fallback derived from MONGO_URL+DB_NAME. "
-        "Sessions survive restarts but Set JWT_SECRET in production for best security.",
-        stacklevel=1,
+# ── JWT signing secrets (Task #770 — audit finding S2) ───────────────────
+# `JWT_SECRET` and `ADMIN_JWT_SECRET` MUST be set explicitly. The
+# previous implementation fell back to a deterministic value derived
+# from `MONGO_URL + DB_NAME + REPL_ID` whenever the env var was unset.
+# That meant any leak of the database connection string (logs,
+# screenshots, a contractor's machine) was equivalent to a leak of the
+# admin signing key — an attacker could forge admin sessions without
+# touching the database. We now refuse to start in any non-test
+# environment when either secret is missing.
+#
+# Test runs (pytest) get a freshly generated ephemeral secret per
+# process — NOT derived from any deployment value — so unit tests
+# don't need to wire env in conftest. The ephemeral secret dies with
+# the process and can never be recomputed from anything else.
+_RUNNING_UNDER_PYTEST = (
+    "PYTEST_CURRENT_TEST" in os.environ
+    or "pytest" in os.environ.get("_", "")
+    or any("pytest" in (a or "") for a in __import__("sys").argv[:2])
+)
+
+
+def _require_secret(name: str, *, min_len: int = 64) -> str:
+    raw = os.environ.get(name, "").strip()
+    if raw:
+        if len(raw) < min_len:
+            raise RuntimeError(
+                f"{name} is set but only {len(raw)} chars long — "
+                f"refusing to start. Use at least {min_len} chars of "
+                f"high-entropy randomness (e.g. `python3 -c 'import secrets; "
+                f"print(secrets.token_hex(48))'`)."
+            )
+        return raw
+    if _RUNNING_UNDER_PYTEST:
+        import secrets as _secrets
+        ephemeral = _secrets.token_hex(48)
+        import warnings as _w
+        _w.warn(
+            f"{name} unset under pytest — using an ephemeral random "
+            f"secret for this process only. Tokens signed in this "
+            f"process cannot be verified anywhere else.",
+            stacklevel=2,
+        )
+        return ephemeral
+    raise RuntimeError(
+        f"{name} is not set. Refusing to start: the previous "
+        f"deterministic fallback derived from MONGO_URL+DB_NAME was a "
+        f"security hole (audit finding S2 — DB connection string leak "
+        f"became admin access). Set {name} to 64+ chars of randomness "
+        f"in Replit Secrets and your production env (Railway / "
+        f"Cloud Run). Generate one with: "
+        f"`python3 -c 'import secrets; print(secrets.token_hex(48))'`."
     )
-else:
-    JWT_SECRET = _jwt_secret_env
+
+
+JWT_SECRET = _require_secret("JWT_SECRET")
 JWT_ALGORITHM    = 'HS256'
 JWT_ACCESS_EXPIRE_MINUTES = int(os.environ.get('JWT_ACCESS_EXPIRE_MINUTES', '60'))
 JWT_REFRESH_EXPIRE_MINUTES = int(os.environ.get('JWT_REFRESH_EXPIRE_MINUTES', str(60 * 24 * 30)))
 JWT_EXPIRE_MINUTES = JWT_ACCESS_EXPIRE_MINUTES
 
-_admin_jwt_env = os.environ.get('ADMIN_JWT_SECRET', '').strip()
-if not _admin_jwt_env:
-    import hashlib as _hl
-    ADMIN_JWT_SECRET = _hl.sha256(f"admin-{JWT_SECRET}".encode()).hexdigest()
-else:
-    ADMIN_JWT_SECRET = _admin_jwt_env
+ADMIN_JWT_SECRET = _require_secret("ADMIN_JWT_SECRET")
+if ADMIN_JWT_SECRET == JWT_SECRET:
+    raise RuntimeError(
+        "ADMIN_JWT_SECRET must be different from JWT_SECRET. "
+        "Reusing the same key for user and admin tokens means a "
+        "leaked user token signing key is also an admin token "
+        "signing key. Generate two independent secrets."
+    )
 
 # ── Google OAuth ──────────────────────────────────────────────────────────────
 GOOGLE_CLIENT_ID     = os.environ.get('GOOGLE_CLIENT_ID', '').strip()
@@ -173,6 +218,12 @@ CF_ACCESS_ENFORCE = os.environ.get('CF_ACCESS_ENFORCE', '').strip().lower() in (
 # ── Cloudflare Turnstile ────────────────────────────────────────────────────
 CF_TURNSTILE_SECRET_KEY = os.environ.get('CF_TURNSTILE_SECRET_KEY', '').strip()
 CF_TURNSTILE_ENABLED = bool(CF_TURNSTILE_SECRET_KEY)
+
+# ── Chat Enhancement Feature Flag ────────────────────────────────────────────
+# Controls whether cognitive anchors, engagement hooks, and trend signals are
+# injected into AI chat responses.  Defaults ON; set CHAT_ENHANCE_ENABLED=0
+# to disable for A/B testing or debugging.
+CHAT_ENHANCE_ENABLED = os.environ.get('CHAT_ENHANCE_ENABLED', '1').strip() not in ('0', 'false', 'no', 'off')
 
 # ── Cloudflare AI Gateway ────────────────────────────────────────────────────
 import time as _time
@@ -571,20 +622,64 @@ if _apprunner_url:
 CORS_ORIGIN_REGEX = r"^https://[a-z0-9-]+(\.[a-z0-9-]+)*\.(awsapprunner\.com|up\.railway\.app|railway\.app|pages\.dev)$"
 
 # ── Admin accounts ────────────────────────────────────────────────────────────
-# Admin accounts loaded from environment (no credentials in source code)
+# Admin accounts loaded from environment (no credentials in source code).
+#
+# Task #700 hardening — the parser strips wrapping quotes/whitespace from
+# every field (not just passwords) because operators routinely paste
+# values like `"admin@syrabit.ai"` into Railway/Cloudflare dashboards
+# which would otherwise compare unequal to a plain `admin@syrabit.ai`
+# from the login form. We also log a structured WARN on length-mismatch
+# so future drift between ADMIN_EMAILS / ADMIN_PASSWORDS / ADMIN_NAMES
+# is obvious in startup logs instead of silently dropping accounts.
+def _strip_env_field(raw: str) -> str:
+    s = (raw or "").strip()
+    # Strip a single layer of wrapping quotes (handles `"foo"` and `'foo'`)
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
+        s = s[1:-1].strip()
+    return s
+
+
+def _split_csv_env(name: str) -> list:
+    raw = os.environ.get(name, "")
+    return [_strip_env_field(p) for p in raw.split(",") if _strip_env_field(p)]
+
+
 def _load_admin_accounts():
-    emails    = [e.strip() for e in os.environ.get('ADMIN_EMAILS', '').split(',') if e.strip()]
-    passwords = [p.strip().strip('"').strip("'") for p in os.environ.get('ADMIN_PASSWORDS', '').split(',') if p.strip()]
-    names     = [n.strip() for n in os.environ.get('ADMIN_NAMES', '').split(',') if n.strip()]
-    max_len = max(len(emails), len(passwords), len(names)) if emails else 0
-    return [{"email": emails[i], "password": passwords[i], "name": names[i]}
-            for i in range(min(len(emails), len(passwords), len(names)))]
+    emails    = _split_csv_env("ADMIN_EMAILS")
+    passwords = _split_csv_env("ADMIN_PASSWORDS")
+    names     = _split_csv_env("ADMIN_NAMES")
+    n = min(len(emails), len(passwords), len(names))
+    if not n:
+        _cfg_log.critical(
+            "ADMIN ACCOUNTS NOT CONFIGURED — emails=%d passwords=%d names=%d. "
+            "Admin login will reject every request until ADMIN_EMAILS / "
+            "ADMIN_PASSWORDS / ADMIN_NAMES are set (comma-separated, equal length).",
+            len(emails), len(passwords), len(names),
+        )
+        return []
+    if not (len(emails) == len(passwords) == len(names)):
+        _cfg_log.warning(
+            "ADMIN ACCOUNTS MISALIGNED — emails=%d passwords=%d names=%d; "
+            "using first %d (extras dropped). Re-align the three env vars "
+            "to silence this warning.",
+            len(emails), len(passwords), len(names), n,
+        )
+    # Normalise emails to lowercase once at parse-time so login compares
+    # lowercase-vs-lowercase regardless of how the row was entered.
+    return [{"email": emails[i].lower(), "password": passwords[i], "name": names[i]}
+            for i in range(n)]
+
 
 ADMIN_ACCOUNTS = _load_admin_accounts()
 
 _E2E_ADMIN_ENABLED = os.environ.get('ENABLE_E2E_ADMIN', '').strip().lower() in ('1', 'true', 'yes')
 _E2E_ADMIN = {
-    "email": "e2e-admin@syrabit.test",
+    # NB: Pydantic's `EmailStr` validator (via `email-validator`)
+    # rejects IETF special-use TLDs like `.test`, so a `@*.test`
+    # address would fail with HTTP 422 at the very first step of
+    # POST /api/auth/login. Use a non-special domain that is
+    # obviously test-only so it can't collide with a real signup.
+    "email": "e2e-admin@syrabit-e2e.com",
     "password": "e2e-test-admin-2026",
     "name": "E2E Test Admin",
 }
@@ -625,16 +720,54 @@ PLAN_LIMITS = {
     # single classroom behind one NAT shares the same IP — 5/min throttled
     # legitimate students at peak usage. 15/min ≈ one chat every 4s, still
     # well below abuse thresholds.
-    # max_tokens raised: previous caps (512/768/1024) were truncating
-    # step-by-step explanations and solved-example replies mid-sentence
-    # for every plan, especially in Assamese where each word averages
-    # ~2x the tokens of English. New caps comfortably fit a full
-    # textbook-style answer (~700–1500 words) without affecting the
-    # daily credit accounting (1 reply = 1 credit regardless of length).
-    "free":    {"credits_per_day": 30,   "max_tokens": 1024,   "document_access": "zero",    "req_per_min": 15, "req_per_min_ip": 60},
+    # ``max_tokens`` is the per-reply UPPER BOUND for the plan, not the
+    # default budget. Bumped free 1024 → 10000 so a complex
+    # "explain step by step" / "solve every PYQ from this chapter"
+    # answer can complete without truncation. The actual per-request
+    # budget is now computed dynamically by
+    # ``prompts.compute_answer_budget(query, intent, plan_max)``:
+    # short / casual queries still get a few hundred tokens, the
+    # default factual question gets ~1024–1536 ("medium"), and only
+    # long-form / multi-part / "in detail" questions are allowed to
+    # scale up toward this ceiling. Daily credit accounting is
+    # unaffected (1 reply = 1 credit regardless of length).
+    # Only the free-plan ceiling was raised in this change (per request);
+    # starter/pro keep their previous 1536/2048 ceilings — paid plans
+    # already had headroom and bumping them would change cost/latency
+    # behaviour for paying users without it being asked for.
+    "free":    {"credits_per_day": 30,   "max_tokens": 10000,  "document_access": "zero",    "req_per_min": 15, "req_per_min_ip": 60},
     "starter": {"credits_per_day": 500,  "max_tokens": 1536,   "document_access": "limited", "req_per_min": 10, "req_per_min_ip": 90},
     "pro":     {"credits_per_day": 4000, "max_tokens": 2048,   "document_access": "full",    "req_per_min": 15, "req_per_min_ip": 120},
 }
+
+# Task #793 — coarse per-IP daily ceiling for the free-tier chat. The
+# real free-tier 30/day budget is now device-keyed (signed HttpOnly
+# cookie minted by ``device_token.mint_device_token``) so school WiFi
+# / Jio CGNAT / hostel users no longer drain each other's quota. This
+# IP-keyed counter is kept *only* as an abuse cap: a single host
+# should not be able to script thousands of chat requests/day even if
+# they rotate cookies. Set high enough that a classroom-sized NAT of
+# students (say, 30 devices × 30 req/day = 900) running normally
+# never trips it. Override via ``IP_COARSE_DAILY_CAP`` env var if a
+# specific deployment sees legitimate traffic above the default.
+IP_COARSE_DAILY_CAP = int(os.environ.get("IP_COARSE_DAILY_CAP", "1500"))
+
+# Task #797 — cap how often a single IP can mint a fresh device cookie
+# in a short window. The first-visit branch in
+# ``auth_deps.rate_limit_chat_optional`` lets an anonymous request
+# through without a valid cookie by minting one and charging 1 against
+# the new token's 30/day budget. A scripted abuser can defeat the
+# 30/device cap by simply discarding the cookie on every request, so
+# every hit looks like a "first visit" and is only limited by the much
+# higher per-IP coarse cap (1500/day default). This per-minute mint
+# rate-limit closes that loophole: even if the script never persists
+# the cookie, it still gets at most ``DEVICE_COOKIE_MINTS_PER_MIN``
+# fresh sessions per minute from a single IP. Real browsers retain the
+# cookie they're given and never re-trigger this code path. Override
+# via the env var if a deployment terminates an unusually large NAT
+# (e.g. a national carrier CGNAT pop) where many genuine first-visits
+# legitimately co-occur.
+DEVICE_COOKIE_MINTS_PER_MIN = int(os.environ.get("DEVICE_COOKIE_MINTS_PER_MIN", "5"))
 PLAN_PRICES = {
     "free":    {"price": 0,   "label": "Free",    "description": "30 credits/day · zero document access"},
     "starter": {"price": 99,  "label": "Starter", "description": "500 credits/day · limited document access"},

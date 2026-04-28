@@ -227,7 +227,7 @@ function stopHeartbeatAndSendEnd(sessionId, visitorId) {
   sendSessionEnd(sessionId, visitorId);
 }
 
-export function usePageTracking() {
+function usePageTracking() {
   const location = useLocation();
   const lastPath = useRef(null);
   const sessionIdRef = useRef(null);

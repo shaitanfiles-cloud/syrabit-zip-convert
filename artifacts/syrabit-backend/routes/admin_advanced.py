@@ -1,24 +1,12 @@
 """Syrabit.ai — SEO, referrals, vector, RAG, billing, pipeline auto-generate"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod, httpx
-from typing import Optional, List, Dict, Any, Union
+import re, json, asyncio, uuid, logging, hashlib, os, httpx
+from typing import List, Optional
 from datetime import datetime, timezone, timedelta
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    APIRouter, HTTPException, Depends, Query, Body, BackgroundTasks, Request,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
-import mistune as _mistune
+from pydantic import BaseModel
 
-from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
-)
 from deps import (
     db,
     is_mongo_available,
@@ -29,12 +17,10 @@ from cache import (
     _redis_set,
 )
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional,
+    get_admin_user,
 )
 from db_ops import supa_list_users
-from llm import call_llm_api, call_llm_api_content, call_llm_api_stream, _call_llm_raw
+from llm import call_llm_api_content, _call_llm_raw
 from seo_engine import _normalize_headings
 from rag import (
     _embed_and_store_chapter,
@@ -47,33 +33,297 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# ─────────────────────────────────────────────
+# Task #731 S3 — Stripe-aware revenue rollups
+# ─────────────────────────────────────────────
+def _row_inr_mongo_expr() -> dict:
+    """Mongo aggregation `$expr` mirror of `_row_inr()` Python semantics.
+
+    Used by `_sum_revenue_inr` and `_aggregate_currency_breakdown` so
+    the server-side INR sum matches the Python fallback ladder exactly:
+
+      1. `amount_inr` if numeric and >= 0     →  use as-is
+      2. else, non-stripe rows               →  `amount_paise / 100`
+      3. otherwise                            →  0.0
+    """
+    is_numeric_amount_inr = {
+        "$in": [
+            {"$type": "$amount_inr"},
+            ["double", "int", "long", "decimal"],
+        ]
+    }
+    return {
+        "$cond": [
+            {"$and": [is_numeric_amount_inr,
+                      {"$gte": [{"$ifNull": ["$amount_inr", -1]}, 0]}]},
+            {"$toDouble": "$amount_inr"},
+            {"$cond": [
+                {"$ne": [{"$ifNull": ["$provider", ""]}, "stripe"]},
+                {"$divide": [
+                    {"$toDouble": {"$ifNull": ["$amount_paise", 0]}},
+                    100.0,
+                ]},
+                0.0,
+            ]},
+        ]
+    }
+
+
+async def _sum_revenue_inr(start_iso: Optional[str] = None) -> float:
+    """Sum INR revenue across `db.payments` using a server-side
+    aggregation pipeline so the result is NEVER truncated by a
+    client-side document-count cap.
+
+    The previous implementation pulled `to_list(5000)` and summed in
+    Python, which silently undercounted revenue (and therefore ARPU)
+    once monthly payment volume passed ~5000 rows. At the current
+    product trajectory that threshold is crossed quickly, so the
+    revenue tiles must use a $sum aggregation.
+
+    Args:
+      start_iso: ISO-8601 string. If provided, only payments with
+                 `verified_at >= start_iso` are summed. `verified_at`
+                 is stored as an ISO-8601 string, so lexicographic
+                 `$gte` is the correct comparator.
+    """
+    pipeline: List[dict] = []
+    if start_iso:
+        pipeline.append({"$match": {"verified_at": {"$gte": start_iso}}})
+    pipeline += [
+        {"$project": {"_id": 0, "row_inr": _row_inr_mongo_expr()}},
+        {"$group": {"_id": None, "total": {"$sum": "$row_inr"}}},
+    ]
+    docs = await db.payments.aggregate(pipeline).to_list(1)
+    return round(float(docs[0]["total"]) if docs else 0.0, 2)
+
+
+async def _aggregate_currency_breakdown(start_iso: Optional[str] = None) -> dict:
+    """Aggregation-based equivalent of the in-memory `_currency_breakdown`,
+    so the per-currency breakdown stays correct at any payment volume.
+
+    Splits payments into "USD-native" and "INR-native" buckets using the
+    same predicate as `_currency_breakdown` (currency_original=='USD'
+    OR a Stripe row whose currency is anything other than INR) and then
+    grabs the most-recent USD-native row's FX provenance for the
+    "rate as of payment-time" caption.
+    """
+    base_match: dict = {}
+    if start_iso:
+        base_match = {"verified_at": {"$gte": start_iso}}
+
+    is_usd_expr = {
+        "$or": [
+            {"$eq": [{"$toUpper": {"$ifNull": ["$currency_original", ""]}}, "USD"]},
+            {"$and": [
+                {"$eq": [{"$toLower": {"$ifNull": ["$provider", ""]}}, "stripe"]},
+                {"$ne": [{"$toUpper": {"$ifNull": ["$currency_original", ""]}}, "INR"]},
+            ]},
+        ]
+    }
+    # USD-native amount: prefer cents/100, fall back to amount_original
+    usd_native_expr = {
+        "$cond": [
+            {"$gt": [{"$toDouble": {"$ifNull": ["$amount_cents", 0]}}, 0]},
+            {"$divide": [{"$toDouble": {"$ifNull": ["$amount_cents", 0]}}, 100.0]},
+            {"$toDouble": {"$ifNull": ["$amount_original", 0]}},
+        ]
+    }
+
+    pipeline: List[dict] = []
+    if base_match:
+        pipeline.append({"$match": base_match})
+    pipeline += [
+        {"$project": {
+            "_id": 0,
+            "verified_at": 1,
+            "fx_rate": 1, "fx_source": 1, "fx_fetched_at": 1,
+            "is_usd": is_usd_expr,
+            "row_inr": _row_inr_mongo_expr(),
+            "usd_native": usd_native_expr,
+        }},
+        {"$facet": {
+            "inr_native": [
+                {"$match": {"is_usd": False}},
+                {"$group": {"_id": None, "total": {"$sum": "$row_inr"}}},
+            ],
+            "usd": [
+                {"$match": {"is_usd": True}},
+                {"$group": {
+                    "_id": None,
+                    "usd_native": {"$sum": "$usd_native"},
+                    "inr_from_usd": {"$sum": "$row_inr"},
+                }},
+            ],
+            "latest_usd": [
+                {"$match": {"is_usd": True}},
+                {"$sort": {"verified_at": -1}},
+                {"$limit": 1},
+                {"$project": {"_id": 0, "fx_rate": 1, "fx_source": 1, "fx_fetched_at": 1}},
+            ],
+        }},
+    ]
+
+    facet_docs = await db.payments.aggregate(pipeline).to_list(1)
+    facet = facet_docs[0] if facet_docs else {}
+
+    inr_native_arr = facet.get("inr_native") or []
+    usd_arr = facet.get("usd") or []
+    latest_arr = facet.get("latest_usd") or []
+
+    inr_native = (inr_native_arr[0]["total"] if inr_native_arr else 0.0) or 0.0
+    usd_native = (usd_arr[0].get("usd_native", 0.0) if usd_arr else 0.0) or 0.0
+    inr_from_usd = (usd_arr[0].get("inr_from_usd", 0.0) if usd_arr else 0.0) or 0.0
+    latest = latest_arr[0] if latest_arr else {}
+
+    return {
+        "inr_native":   round(float(inr_native), 2),
+        "usd_native":   round(float(usd_native), 2),
+        "inr_from_usd": round(float(inr_from_usd), 2),
+        "fx_rate":      latest.get("fx_rate"),
+        "fx_source":    latest.get("fx_source"),
+        "fx_fetched_at": latest.get("fx_fetched_at"),
+    }
+
+
+def _currency_breakdown(payments: list) -> dict:
+    """Task #740 — per-currency native totals + FX provenance metadata.
+
+    Returns a dict the frontend uses to render the same
+    "Includes: Razorpay (₹X) + Stripe (USD $Y → ₹Z @ rate R, source: …)"
+    caption that Monetization tab already shows. Schema is
+    forward-compatible (only INR + USD slices populated for v1).
+
+    Fields:
+      inr_native:     float, sum of Razorpay/INR-native amounts in INR
+      usd_native:     float, sum of Stripe USD amounts in USD (original)
+      inr_from_usd:   float, INR equivalent of usd_native at captured rates
+      fx_rate:        float|None, FX rate from the most recent USD row
+      fx_source:      str|None,  e.g. "frankfurter", "open_er_api", "..._stale"
+      fx_fetched_at:  str|None, ISO timestamp of when that rate was captured
+    """
+    inr_native = 0.0
+    usd_native = 0.0
+    inr_from_usd = 0.0
+    latest_fx_row = None
+    for p in payments or []:
+        currency_original = (p.get("currency_original") or "").upper()
+        provider = (p.get("provider") or "").lower()
+        amount_inr = _row_inr(p)
+        is_usd = currency_original == "USD" or (
+            provider == "stripe" and currency_original != "INR"
+        )
+        if is_usd:
+            cents = p.get("amount_cents") or 0
+            if isinstance(cents, (int, float)) and cents:
+                usd_native += float(cents) / 100.0
+            else:
+                usd_native += float(p.get("amount_original") or 0)
+            inr_from_usd += amount_inr
+            ts = p.get("verified_at") or ""
+            if not latest_fx_row or ts > (latest_fx_row.get("verified_at") or ""):
+                latest_fx_row = p
+        else:
+            inr_native += amount_inr
+
+    out = {
+        "inr_native":   round(inr_native, 2),
+        "usd_native":   round(usd_native, 2),
+        "inr_from_usd": round(inr_from_usd, 2),
+        "fx_rate":      None,
+        "fx_source":    None,
+        "fx_fetched_at": None,
+    }
+    if latest_fx_row:
+        out["fx_rate"]       = latest_fx_row.get("fx_rate")
+        out["fx_source"]     = latest_fx_row.get("fx_source")
+        out["fx_fetched_at"] = latest_fx_row.get("fx_fetched_at")
+    return out
+
+
+def _row_inr(p: dict) -> float:
+    """Best-effort INR rupees for one payment row.
+
+    Order of preference:
+      1. Persisted `amount_inr` (set by `_enrich_payment_record` at
+         insert time post-S2, OR by the backfill migration). This is
+         always the right number — for Stripe rows it's the live USD->INR
+         FX as of the moment of payment, captured alongside fx_rate +
+         fx_source on the row itself.
+      2. For Razorpay rows that pre-date S2 + the migration, fall back
+         to `amount_paise / 100` since paise->INR is an identity.
+      3. For Stripe rows without persisted amount_inr we return 0
+         (instead of guessing with today's FX). The migration script
+         backfills these idempotently — once it runs, this branch
+         disappears.
+    """
+    v = p.get("amount_inr")
+    if isinstance(v, (int, float)) and v >= 0:
+        return float(v)
+    if p.get("provider") != "stripe":
+        paise = p.get("amount_paise") or 0
+        if isinstance(paise, (int, float)):
+            return float(paise) / 100.0
+    return 0.0
+
+
 @router.get("/admin/monetization/overview")
 async def admin_monetization_overview(admin: dict = Depends(get_admin_user)):
     users = await supa_list_users()
-    payments = await db.payments.find({}, {"_id": 0}).sort("verified_at", -1).to_list(5000)
 
     now = datetime.now(timezone.utc)
     thirty_ago = (now - timedelta(days=30)).isoformat()
     seven_ago = (now - timedelta(days=7)).isoformat()
 
-    revenue_30d = sum(p.get("amount_paise", 0) for p in payments if p.get("verified_at", "") >= thirty_ago and p.get("provider") != "stripe") / 100
-    revenue_7d = sum(p.get("amount_paise", 0) for p in payments if p.get("verified_at", "") >= seven_ago and p.get("provider") != "stripe") / 100
+    # Stripe-aware revenue rollups via server-side $sum aggregations.
+    # Previously this loaded `db.payments.find().to_list(5000)` and
+    # summed in Python — once monthly volume crosses ~5000 rows that
+    # cap silently undercounts revenue (and therefore ARPU + the
+    # currency_breakdown caption). All scalar revenue numbers + the
+    # currency breakdown are now computed in the database; only the
+    # 20-row "recent transactions" tail is materialised in Python.
+    revenue_30d, revenue_7d, total_lifetime_revenue, currency_breakdown, recent_payments = await asyncio.gather(
+        _sum_revenue_inr(thirty_ago),
+        _sum_revenue_inr(seven_ago),
+        _sum_revenue_inr(None),
+        _aggregate_currency_breakdown(None),
+        db.payments.find({}, {"_id": 0}).sort("verified_at", -1).to_list(20),
+    )
 
-    total_paid = sum(1 for u in users if u.get("plan") in ("starter", "pro"))
+    # Plan-based counts include Stripe payers (Stripe webhook flips
+    # users to plan="starter"/"pro" on success), so this is the same
+    # paid-user universe as `revenue_30d`'s numerator.
     starter_count = sum(1 for u in users if u.get("plan") == "starter")
     pro_count = sum(1 for u in users if u.get("plan") == "pro")
+    total_paid = starter_count + pro_count
 
     arpu = round(revenue_30d / max(total_paid, 1), 2)
 
     recent_txns = []
-    for p in payments[:20]:
+    for p in recent_payments:
+        amount_inr = _row_inr(p)
+        provider = p.get("provider") or "razorpay"
+        # Original-currency display values for the "shown alongside INR"
+        # caption — preserves the receipt-of-record amount even for
+        # Stripe rows where the live INR comes from FX conversion.
+        if provider == "stripe":
+            amount_original = (p.get("amount_cents", 0) or 0) / 100
+            currency_original = (p.get("currency_original") or p.get("currency") or "USD").upper()
+        else:
+            amount_original = (p.get("amount_paise", 0) or 0) / 100
+            currency_original = p.get("currency_original") or "INR"
         recent_txns.append({
-            "user_id": p.get("user_id", ""),
-            "plan": p.get("plan", ""),
-            "amount": p.get("amount_paise", 0) / 100 if p.get("provider") != "stripe" else p.get("amount_cents", 0) / 100,
-            "currency": "INR" if p.get("provider") != "stripe" else "USD",
-            "provider": p.get("provider", "razorpay"),
-            "date": p.get("verified_at", "")[:10],
+            "user_id":           p.get("user_id", ""),
+            "plan":              p.get("plan", ""),
+            "amount_inr":        amount_inr,
+            "amount":            amount_inr,            # back-compat alias for older UI builds
+            "amount_original":   round(amount_original, 2),
+            "currency_original": currency_original,
+            "currency":          "INR",                  # primary display currency
+            "fx_rate":           p.get("fx_rate"),
+            "fx_source":         p.get("fx_source"),
+            "fx_fetched_at":     p.get("fx_fetched_at"),
+            "provider":          provider,
+            "date":              (p.get("verified_at") or "")[:10],
         })
 
     return {
@@ -86,7 +336,16 @@ async def admin_monetization_overview(admin: dict = Depends(get_admin_user)):
         "total_free_users": len(users) - total_paid,
         "conversion_rate": round(total_paid / max(len(users), 1) * 100, 2),
         "recent_transactions": recent_txns,
-        "total_lifetime_revenue_inr": sum(p.get("amount_paise", 0) for p in payments if p.get("provider") != "stripe") / 100,
+        "total_lifetime_revenue_inr": round(sum(_row_inr(p) for p in payments), 2),
+        # Honest provenance caption — frontend renders "Includes:
+        # Razorpay + Stripe (USD->INR @ rate as of payment-time)" under
+        # revenue tiles using these flags (S9).
+        "revenue_includes_stripe": True,
+        "revenue_basis": "amount_inr_at_payment_time",
+        # Task #740 — per-currency breakdown so the "Includes: Razorpay
+        # + Stripe (USD→INR @ rate …)" caption can render the actual
+        # numbers, not just an opaque "Includes Stripe" boolean.
+        "currency_breakdown": _currency_breakdown(payments),
     }
 
 @router.get("/admin/monetization/referrals")
@@ -556,6 +815,22 @@ async def admin_page_conversions(days: int = 30, admin: dict = Depends(get_admin
     except Exception:
         pass
 
+    # Task #740 — populate revenue_attributed (the frontend tile expected
+    # this field but it was always 0). For v1, "attributed" = total
+    # revenue in the same period, since per-page attribution is not
+    # tracked. The currency_breakdown lets the UI render the same
+    # provenance caption as Monetization.
+    #
+    # Both numbers come from server-side aggregations rather than a
+    # `to_list(5000)` Python sum — `cutoff` can stretch back arbitrarily
+    # far via the `days` query param, and at full payment volume that
+    # cap silently truncated revenue_attributed (and the per-currency
+    # breakdown rendered alongside it).
+    revenue_attributed, currency_breakdown_period = await asyncio.gather(
+        _sum_revenue_inr(cutoff),
+        _aggregate_currency_breakdown(cutoff),
+    )
+
     return {
         "top_converting_pages": enriched,
         "daily_signups": sorted(
@@ -563,6 +838,8 @@ async def admin_page_conversions(days: int = 30, admin: dict = Depends(get_admin
             key=lambda x: x["date"],
         ),
         "period_days": days,
+        "revenue_attributed": revenue_attributed,
+        "currency_breakdown": currency_breakdown_period,
     }
 
 
@@ -1162,6 +1439,98 @@ async def admin_chat_fallbacks(days: int = 7, admin: dict = Depends(get_admin_us
     }
 
 
+@router.get("/admin/chat/anon-quota-exhausted")
+async def admin_anon_quota_exhausted(
+    days: int = 7,
+    backfill: bool = False,
+    recent_limit: int = 200,
+    top_devices: bool = False,
+    top_devices_n: int = 10,
+    weeks: int = 12,
+    admin: dict = Depends(get_admin_user),
+):
+    """Task #798 + #808 — anonymous-quota exhaustion observability.
+
+    Reports how many anonymous students hit the per-device 30/day cap
+    each day, alongside the next-24h sign-up conversion among
+    exhausted devices. Pair the two to tune the cap quarterly with
+    data instead of guessing — too low loses students, too high
+    cannibalises sign-up conversions.
+
+    Task #808 also exposes the per-event detail so support can
+    answer "I keep getting blocked" tickets in seconds (via the
+    "Recent" tab) and so the daily numbers are legible at a glance
+    ("most cap-hits today are from one school's NAT range").
+
+    Query params
+    ------------
+    days : int
+        Lookback window for the daily/by-hour/by-day-of-week
+        breakdown (default 7, max bounded by the 14-day in-memory
+        retention configured in `metrics.py`).
+    backfill : bool
+        When true, scans Redis for `device_daily_credits:*:<today>`
+        keys already at the cap and replays the metric for any
+        device that exhausted *before* this code shipped. Cheap
+        (one SCAN), idempotent (the metric dedupes on token+day),
+        and gated behind an explicit flag so the admin page's
+        default load is just a memory read.
+    recent_limit : int
+        How many recent exhaustion events to return in the
+        ``recent`` field (Task #808). Defaults to the ring buffer's
+        max (~200) so the support workflow gets the full feed in one
+        round-trip. Capped server-side at the ring-buffer's max so a
+        careless caller can't over-pull. Set to 0 to omit the feed
+        entirely.
+    top_devices : bool
+        When true, includes a ``top_devices`` leaderboard of the
+        top ``top_devices_n`` device hashes by hit count over the
+        ``days`` window (Task #808). Off by default because it
+        scans the rolling window — cheap at our current volume but
+        we don't want every page load paying for it.
+    top_devices_n : int
+        Cap for the leaderboard length when ``top_devices=true``.
+    weeks : int
+        Lookback (in ISO weeks, Monday-anchored UTC) for the
+        ``weekly_trend`` series powered by Task #809's durable
+        per-day aggregate. Default 12 (one quarter); server-clamped
+        to [1, 52]. Always present in the response — empty buckets
+        are pre-seeded with ``exhausted=0`` so the chart x-axis
+        stays regularly spaced.
+    """
+    from metrics import (
+        get_anon_quota_exhausted_stats,
+        backfill_anon_quota_exhausted_today,
+        get_anon_quota_exhausted_recent,
+        get_anon_quota_exhausted_top_devices,
+        get_anon_quota_exhausted_weekly_trend,
+    )
+    backfilled_today = 0
+    if backfill:
+        backfilled_today = backfill_anon_quota_exhausted_today()
+    payload = get_anon_quota_exhausted_stats(days=days)
+    payload["backfilled_today"] = backfilled_today
+    payload["alert"] = "amber" if payload["unique_devices_exhausted"] >= 50 else "green"
+    # Task #808 — per-event detail. Always present in the response
+    # (even if empty) so the admin UI can render a stable "Recent"
+    # tab without conditionally hiding the column. Set
+    # ``recent_limit=0`` to opt out for callers that only want
+    # aggregates.
+    payload["recent"] = get_anon_quota_exhausted_recent(limit=recent_limit)
+    if top_devices:
+        payload["top_devices"] = get_anon_quota_exhausted_top_devices(
+            days=days, top_n=top_devices_n,
+        )
+    # Task #809 — durable weekly trend. Always emitted (with zero
+    # buckets pre-seeded) so the dashboard can render a stable
+    # 12-week sparkline regardless of recent activity. The data
+    # itself is read from Redis hashes that survive gunicorn
+    # restarts (TTL ~13 months), unlike the in-memory rolling
+    # window used by the daily series.
+    payload["weekly_trend"] = get_anon_quota_exhausted_weekly_trend(weeks=weeks)
+    return payload
+
+
 @router.get("/admin/chat/speedups")
 async def admin_chat_speedups(days: int = 7, admin: dict = Depends(get_admin_user)):
     """Track how often the Task #282 chat speed-ups actually help (Task #303).
@@ -1335,6 +1704,23 @@ async def admin_monetization_funnel(admin: dict = Depends(get_admin_user)):
         if (u.get("created_at") or "") >= thirty_ago and u.get("plan") in ("starter", "pro")
     )
 
+    # Task #731 S3 — Stripe-aware "Revenue per Paid User" tile.
+    # Numerator: lifetime revenue across BOTH Razorpay + Stripe via
+    # _row_inr (which prefers persisted amount_inr over the legacy
+    # paise/cents fields). Denominator: same paid-user set the funnel
+    # already counts above (plan in {starter, pro}, regardless of
+    # provider) — so num + denom describe the SAME population.
+    payments = await db.payments.find(
+        {}, {"_id": 0, "amount_inr": 1, "amount_paise": 1, "amount_cents": 1, "provider": 1, "verified_at": 1},
+    ).to_list(5000)
+    lifetime_revenue_inr = round(sum(_row_inr(p) for p in payments), 2)
+    revenue_30d_inr = round(
+        sum(_row_inr(p) for p in payments if (p.get("verified_at") or "") >= thirty_ago),
+        2,
+    )
+    revenue_per_paid_user_inr = round(lifetime_revenue_inr / max(paid_count, 1), 2)
+    revenue_per_paid_user_30d_inr = round(revenue_30d_inr / max(paid_count, 1), 2)
+
     return {
         "funnel": [
             {"stage": "Registered", "count": total},
@@ -1348,6 +1734,12 @@ async def admin_monetization_funnel(admin: dict = Depends(get_admin_user)):
         "new_users_30d": new_users_30d,
         "new_paid_30d": new_paid_30d,
         "conversion_30d_rate": round(new_paid_30d / max(new_users_30d, 1) * 100, 2),
+        # Stripe-aware revenue context for the funnel tile.
+        "lifetime_revenue_inr": lifetime_revenue_inr,
+        "revenue_30d_inr": revenue_30d_inr,
+        "revenue_per_paid_user_inr": revenue_per_paid_user_inr,
+        "revenue_per_paid_user_30d_inr": revenue_per_paid_user_30d_inr,
+        "revenue_includes_stripe": True,
     }
 
 
@@ -2668,7 +3060,6 @@ async def admin_intelligence_overview(admin: dict = Depends(get_admin_user)):
 
 @router.post("/admin/content/auto-heal")
 async def admin_content_auto_heal(admin: dict = Depends(get_admin_user)):
-    from llm import call_llm_api
     from rag import auto_chunk_content, record_pipeline_run
     import time as _t
 
@@ -2927,6 +3318,8 @@ async def admin_ttl_monitor(
 
 
 async def _record_collection_size_snapshot():
+    if db is None:
+        return
     try:
         now = datetime.now(timezone.utc)
         today_str = now.strftime("%Y-%m-%d")
@@ -3348,6 +3741,178 @@ async def admin_ai_cache_purge(
         return {"ok": False, "error": str(e)[:200], "deleted": 0, "l1_cleared": 0}
 
 
+# ───────────────────────────────────────────────────────────────────────────
+# Task #706 — /admin/diagnostics + Cloudflare Access break-glass paging
+# ───────────────────────────────────────────────────────────────────────────
+# The runbook (docs/CLOUDFLARE_ZERO_TRUST.md §0 + §7) instructs operators to
+# poll this endpoint to confirm Access enforcement is on after rollout, and
+# to confirm break-glass is *off* once an incident is resolved. The endpoint
+# is admin-gated (so the JSON cannot be casually scraped) but does NOT itself
+# require a CF Access JWT — by design, since its purpose is to surface the
+# state when Access is degraded. The admin-JWT-only path is reachable when
+# break-glass is active because ``require_cf_access_admin`` short-circuits
+# in that mode.
+#
+# Paging: when ``admin_enforced`` is False on a production-like environment
+# (i.e. CF_ACCESS_ENFORCE was provisioned at any point) we dispatch an
+# alert through the existing ``metrics._dispatch_alert`` pipeline. Cooldown
+# is handled inside the dispatcher (1h default) so polling the diagnostics
+# endpoint cannot spam the alert channel.
+
+_CF_ACCESS_DEGRADED_ALERT_TYPE = "cf_access_admin_degraded"
+_CF_ACCESS_BREAK_GLASS_ALERT_TYPE = "cf_access_break_glass_active"
+
+
+def _cf_access_provisioned() -> bool:
+    """True once an operator has *ever* turned on Access in this env.
+
+    We use the presence of ``CF_ACCESS_TEAM_DOMAIN`` (or any AUD) as the
+    "production-like" signal so dev environments that have never set
+    these vars do not page on every diagnostics call. Once enforcement
+    has been provisioned, the alert fires whenever ``admin_enforced``
+    flips to False — which is exactly the lockout-prevention signal
+    the on-call needs.
+    """
+    return bool(
+        os.environ.get("CF_ACCESS_TEAM_DOMAIN", "").strip()
+        or os.environ.get("CF_ACCESS_AUD_ADMIN", "").strip()
+    )
+
+
+async def _maybe_page_cf_access_state(snapshot: dict) -> dict:
+    """Fire paging alerts on degraded Access state. Returns alert metadata."""
+    fired: list[str] = []
+    if not _cf_access_provisioned():
+        return {"alerts_fired": fired, "skipped_reason": "cf_access_not_provisioned"}
+    try:
+        from metrics import _dispatch_alert  # local import: heavy module
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[CF_ACCESS_DIAG] metrics import failed: {exc}")
+        return {"alerts_fired": fired, "skipped_reason": f"metrics_unavailable:{exc}"}
+
+    if snapshot.get("break_glass_active"):
+        try:
+            await _dispatch_alert(
+                _CF_ACCESS_BREAK_GLASS_ALERT_TYPE,
+                "Cloudflare Access break-glass is ACTIVE",
+                (
+                    "Admin Access enforcement is currently BYPASSED via the "
+                    f"break-glass {snapshot.get('break_glass_source') or 'unknown'} "
+                    "path. Disable it as soon as the underlying Cloudflare Zero "
+                    "Trust outage is resolved. See docs/CLOUDFLARE_ZERO_TRUST.md §7."
+                ),
+                threshold_snapshot={
+                    "metric": "cf_access.break_glass_active",
+                    "value": "false",
+                    "actual": "true",
+                },
+            )
+            fired.append(_CF_ACCESS_BREAK_GLASS_ALERT_TYPE)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[CF_ACCESS_DIAG] break-glass alert dispatch failed: {exc}")
+    elif not snapshot.get("admin_enforced"):
+        try:
+            await _dispatch_alert(
+                _CF_ACCESS_DEGRADED_ALERT_TYPE,
+                "Cloudflare Access admin enforcement is OFF",
+                (
+                    "/admin/diagnostics reports admin_enforced=false in a "
+                    "production-provisioned environment. Either CF_ACCESS_ENFORCE "
+                    "is unset, the AUD tag was rotated and not updated, or the "
+                    "service was not restarted after env changes. Restore "
+                    "enforcement before the next admin login. See docs/"
+                    "CLOUDFLARE_ZERO_TRUST.md §0 + §7."
+                ),
+                threshold_snapshot={
+                    "metric": "cf_access.admin_enforced",
+                    "value": "true",
+                    "actual": "false",
+                },
+            )
+            fired.append(_CF_ACCESS_DEGRADED_ALERT_TYPE)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[CF_ACCESS_DIAG] degraded alert dispatch failed: {exc}")
+    return {"alerts_fired": fired}
+
+
+@router.post("/admin/break-glass/disable")
+async def admin_break_glass_disable(
+    request: Request,
+    admin: dict = Depends(get_admin_user),
+):
+    """One-click disable for Cloudflare Access break-glass mode (Task #710).
+
+    Persists a Redis-backed "force-disabled" flag visible to all gunicorn
+    workers (so the disable does not race with the other workers still
+    seeing the original env vars), pops the env vars in the current
+    process for instant local effect, and audit-logs the action at
+    WARNING with the admin's email.
+
+    The endpoint is admin-gated. Because ``require_cf_access_admin``
+    (folded into ``get_admin_user``) short-circuits while break-glass is
+    active, an admin can ALWAYS reach this endpoint to disable an active
+    bypass — that's the whole point of the affordance.
+
+    After the disable is recorded the operator must still:
+      1. Remove ``CF_ACCESS_BREAK_GLASS`` from Railway env (so a worker
+         restart does not re-arm it).
+      2. Rotate / clear the Cloudflare Worker secret that injected the
+         ``X-Cf-Access-Break-Glass`` header (so traffic-side activation
+         is also revoked).
+      See docs/CLOUDFLARE_ZERO_TRUST.md §7.1 for the full checklist.
+    """
+    import cf_access  # local import: avoids heavy import at module load
+    actor = (
+        (admin or {}).get("cf_access_email")
+        or (admin or {}).get("email")
+        or (admin or {}).get("sub")
+        or "unknown_admin"
+    )
+    record = cf_access.force_disable_break_glass(actor=actor)
+    logger.warning(
+        "[ADMIN_AUDIT] break-glass DISABLED actor=%r at=%s persisted=%s cleared=%s",
+        actor,
+        record.get("disabled_at"),
+        record.get("redis_persisted"),
+        record.get("env_cleared"),
+    )
+    snapshot = cf_access.status(request)
+    return {
+        "ok": True,
+        "disabled_at": record.get("disabled_at"),
+        "actor": actor,
+        "redis_persisted": record.get("redis_persisted"),
+        "env_cleared": record.get("env_cleared"),
+        "cf_access": snapshot,
+    }
+
+
+@router.get("/admin/diagnostics")
+async def admin_diagnostics(
+    request: Request,
+    admin: dict = Depends(get_admin_user),
+):
+    """Operator diagnostics for admin auth posture (Task #637 + Task #706).
+
+    Returns the live Cloudflare Access enforcement state plus break-glass
+    surface. Polling this endpoint also drives the paging rule: when
+    ``admin_enforced`` flips to False (or break-glass is active) on a
+    production-provisioned environment, an alert fires through the same
+    pipeline that handles SEO / hydrate alerts.
+    """
+    import cf_access  # local import: avoids heavy import at module load
+    snapshot = cf_access.status(request)
+    page_meta = await _maybe_page_cf_access_state(snapshot)
+    return {
+        "cf_access": snapshot,
+        "paging": page_meta,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "checked_by": (admin or {}).get("cf_access_email")
+        or (admin or {}).get("email")
+        or (admin or {}).get("sub"),
+    }
+
+
 # ── Background auto-warm loop (Task #282 T004) ────────────────────────────────
 # Periodically re-runs the cache warmer so the top common questions always
 # have a near-instant answer waiting in Redis. The loop is registered from
@@ -3360,21 +3925,70 @@ _CACHE_WARM_LOOP_INTERVAL_S = 6 * 3600
 _CACHE_WARM_LOOP_TOP_N = 30
 _CACHE_WARM_LOOP_STARTUP_DELAY_S = 15 * 60
 
+# Task #950 — Mongo-backed lease so only ONE replica fires the LLM
+# cache pre-warm per cycle. Previously gated by ``_is_leader`` in
+# server.py, which is per-machine and double-fires on multi-replica
+# Railway deployments — the warmer issues real LLM completions, so
+# every duplicate run multiplies the LLM budget by N.
+#
+# TTL is 3× the loop interval (~18h) so a single missed renewal
+# doesn't trigger a needless leader fail-over. Followers poll every
+# 15 minutes — enough to take over within one cycle if the leader
+# replica dies, without hammering Mongo in the steady state.
+_CACHE_WARM_LOCK_ID = "cache_warm_lease"
+_CACHE_WARM_LEASE_TTL_S = _CACHE_WARM_LOOP_INTERVAL_S * 3
+_CACHE_WARM_FOLLOWER_INTERVAL_S = 15 * 60
+import background_lease as _bglease
+_CACHE_WARM_OWNER_ID = _bglease.make_owner_id("cache-warm")
+
 
 async def _cache_warm_loop():
     """Auto-warm the AI response cache every ``_CACHE_WARM_LOOP_INTERVAL_S``
     seconds. Failures are swallowed and logged so a single bad iteration
-    never tears down the loop."""
-    from deps import is_mongo_available
+    never tears down the loop.
+
+    Cross-replica dedup (Task #950): every replica may run this loop,
+    but only the one holding the Mongo-backed lease actually fires
+    ``_perform_cache_warm`` (which costs real LLM tokens). Followers
+    stand down on each tick, so the LLM-budget cost stays at 1×
+    regardless of replica count, and a leader fail-over is picked up
+    within one follower interval (~15 min) instead of waiting hours.
+    """
+    from deps import db, is_mongo_available
     await asyncio.sleep(_CACHE_WARM_LOOP_STARTUP_DELAY_S)
-    while True:
+    try:
+        while True:
+            try:
+                if not await is_mongo_available():
+                    logger.debug(
+                        "[CACHE_WARM] Skipping auto warm — Mongo unavailable")
+                    await asyncio.sleep(_CACHE_WARM_FOLLOWER_INTERVAL_S)
+                    continue
+                have_lease = await _bglease.try_acquire_lease(
+                    db, _CACHE_WARM_LOCK_ID, _CACHE_WARM_OWNER_ID,
+                    _CACHE_WARM_LEASE_TTL_S,
+                )
+                if not have_lease:
+                    # A peer replica owns the lease and it's still
+                    # fresh; stand down and re-check at the follower
+                    # cadence. This branch does NOT touch the LLM
+                    # budget.
+                    await asyncio.sleep(_CACHE_WARM_FOLLOWER_INTERVAL_S)
+                    continue
+                await _perform_cache_warm(
+                    _CACHE_WARM_LOOP_TOP_N, source="auto_loop")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    f"[CACHE_WARM] auto loop iteration error: {exc}")
+            await asyncio.sleep(_CACHE_WARM_LOOP_INTERVAL_S)
+    finally:
         try:
-            if await is_mongo_available():
-                await _perform_cache_warm(_CACHE_WARM_LOOP_TOP_N, source="auto_loop")
-            else:
-                logger.debug("[CACHE_WARM] Skipping auto warm — Mongo unavailable")
-        except Exception as exc:
-            logger.warning(f"[CACHE_WARM] auto loop iteration error: {exc}")
-        await asyncio.sleep(_CACHE_WARM_LOOP_INTERVAL_S)
+            await asyncio.shield(_bglease.release_lease(
+                db, _CACHE_WARM_LOCK_ID, _CACHE_WARM_OWNER_ID,
+            ))
+        except Exception:
+            pass
 
 

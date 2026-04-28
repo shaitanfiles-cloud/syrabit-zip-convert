@@ -89,6 +89,33 @@ const ROUTES = [
       "Learn about Syrabit.ai, the AI-powered study platform built in Guwahati for AHSEC (Class 11-12), SEBA, and Degree students across Assam.",
   },
   {
+    // Stream landing pages — Task: stop serving the homepage HTML shell
+    // for /ahsec, /seba, /degree. These are heavily-shared routes
+    // (WhatsApp / Telegram link previews, Google search results) so the
+    // byte-zero <head> must carry stream-specific title, description,
+    // canonical, and og:image hooks. The React app still hydrates the
+    // real content into #root after JS loads — we only own the <head>.
+    path: "/ahsec",
+    title:
+      "AHSEC Class 11-12 Notes, MCQs & Solved PYQs — Syrabit.ai",
+    description:
+      "Free AHSEC Class 11 and Class 12 syllabus notes, MCQs, definitions and solved previous-year questions for Science, Commerce and Arts. AI study help in Assamese & English.",
+  },
+  {
+    path: "/seba",
+    title:
+      "SEBA Class 9-10 (HSLC) Notes, MCQs & Solved PYQs — Syrabit.ai",
+    description:
+      "Free SEBA Class 9 and Class 10 (HSLC) syllabus notes, chapter summaries, MCQs and solved previous-year questions. AI tutor in Assamese & English for every subject.",
+  },
+  {
+    path: "/degree",
+    title:
+      "Gauhati University Degree Notes — B.A, B.Com, B.Sc | Syrabit.ai",
+    description:
+      "Free Gauhati University and Dibrugarh University degree syllabus notes, MCQs and exam-ready answers for B.A, B.Com and B.Sc (FYUGP) students across Assam.",
+  },
+  {
     path: "/technology",
     title: "Technology Behind Syrabit.ai — RAG, AI Tutors & Speed",
     description:

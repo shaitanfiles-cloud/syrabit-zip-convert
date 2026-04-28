@@ -140,59 +140,128 @@ def install_deps_stub(*, force: bool = False, db: Any = None,
     The stub module that was installed (or the pre-existing module if
     `force` was False and one already lived in sys.modules).
     """
-    if "deps" in sys.modules and not force:
-        return sys.modules["deps"]
+    existing = sys.modules.get("deps")
+    if existing is not None and not force:
+        return existing
 
-    deps = types.ModuleType("deps")
+    # Task #774: when ``force=True`` and an existing *stub* is already
+    # pinned in ``sys.modules['deps']`` (the conftest does this at
+    # session start), MUTATE that module in place instead of creating
+    # a brand-new ``ModuleType`` and swapping ``sys.modules`` to it.
+    #
+    # Why: ``routes/admin_monetization.py`` (and many other route
+    # modules) do ``import deps`` at module-load time, which binds
+    # ``mon.deps`` to whichever module object lived in
+    # ``sys.modules['deps']`` at that instant. If a later test file
+    # calls ``install_deps_stub(force=True)`` and we replace the
+    # module, ``mon.deps`` keeps pointing at the *old* object while
+    # the test's local ``import deps`` resolves to the *new* one.
+    # Then ``monkeypatch.setattr(deps, "pg_pool", ...)`` only patches
+    # the new module, but the route reads from ``mon.deps.pg_pool`` —
+    # divergence — and the test has to monkeypatch BOTH (the
+    # workaround Task #774 was filed to remove).
+    #
+    # Mutating in place preserves module identity, so every reference
+    # — the conftest's ``_PINNED_DEPS_STUB``, ``mon.deps``, and the
+    # test's local ``deps`` — all see the same fresh attribute set.
+    if (
+        force
+        and existing is not None
+        and getattr(existing, "_is_syrabit_test_stub", False)
+    ):
+        # In-place reuse: preserve module identity AND the identity of
+        # every top-level attribute that route modules may have already
+        # imported via ``from deps import db, redis_client, supa, ...``.
+        # Replacing those would silently desync ``mon.db`` from
+        # ``deps.db``, causing tests to monkeypatch one object while
+        # the route reads from another. We do NOT delete attributes;
+        # we only fill in any names that don't yet exist (no-op when
+        # the stub was already populated). The conftest autouse
+        # fixture handles per-test state reset (mock call history,
+        # snapshot/restore of ``db``/``supa``/``is_mongo_available``).
+        deps = existing
+        _populate_missing = True
+    else:
+        deps = types.ModuleType("deps")
+        _populate_missing = False  # brand-new module — set everything
 
     # Task #469: marker so the conftest autouse fixture can recognise
     # the synthetic deps and reset its mock call history between tests
     # without touching the real production module.
     deps._is_syrabit_test_stub = True
 
-    # Core mongo handle + availability probe
-    deps.db = db if db is not None else _MotorDbMock()
-    deps.is_mongo_available = AsyncMock(return_value=is_mongo_available_value)
-    deps.mark_mongo_down = MagicMock()
+    # ``_set`` only writes the attribute if we're populating a brand-new
+    # module OR the attribute is missing. This protects identity of
+    # already-populated names (so ``mon.db`` / ``mon.security`` etc.
+    # — bound at route load time via ``from deps import X`` — keep
+    # pointing at the same object the test's local ``deps.X`` resolves
+    # to). Per-test mock state reset lives in conftest, not here.
+    def _set(name: str, value: Any) -> None:
+        if _populate_missing and hasattr(deps, name):
+            return
+        setattr(deps, name, value)
+
+    # Core mongo handle + availability probe. ``db`` is the special
+    # case: callers may pass an explicit override, which we always
+    # honour even on in-place reuse.
+    if db is not None or not hasattr(deps, "db"):
+        deps.db = db if db is not None else _MotorDbMock()
+    # ``is_mongo_available`` MUST honour the caller's parameter on
+    # every call (some tests, e.g. tests/test_chapter_by_slug_regression
+    # .py, force a re-install with ``is_mongo_available_value=True``).
+    # On in-place reuse: mutate the existing AsyncMock's return_value
+    # so the *identity* of ``deps.is_mongo_available`` stays stable
+    # for any route that captured it via ``from deps import
+    # is_mongo_available``, while the value still tracks the latest
+    # caller intent.
+    existing_ima = getattr(deps, "is_mongo_available", None)
+    if isinstance(existing_ima, AsyncMock):
+        existing_ima.return_value = is_mongo_available_value
+    else:
+        deps.is_mongo_available = AsyncMock(
+            return_value=is_mongo_available_value
+        )
+    _set("mark_mongo_down", MagicMock())
 
     # Redis / auth / supa surface — every name some production module
     # currently does `from deps import X`. Anything missing here will
     # surface as a collection-time ImportError in pytest.
-    deps.redis_client = None
-    deps.supa = None
-    deps.pg_pool = None
-    deps.pwd_ctx = MagicMock()
+    _set("redis_client", None)
+    _set("supa", None)
+    _set("pg_pool", None)
+    _set("pwd_ctx", MagicMock())
 
-    try:
-        from fastapi.security import HTTPBearer  # local import keeps stub light
-        deps.security = HTTPBearer(auto_error=False)
-    except Exception:
-        deps.security = MagicMock()
+    if not (_populate_missing and hasattr(deps, "security")):
+        try:
+            from fastapi.security import HTTPBearer  # keep stub light
+            deps.security = HTTPBearer(auto_error=False)
+        except Exception:
+            deps.security = MagicMock()
 
-    deps.logger = logging.getLogger("tests.deps_stub")
+    _set("logger", logging.getLogger("tests.deps_stub"))
 
     # Sarvam clients — present so `from deps import sarvam_*` imports work.
-    deps.sarvam_client = None
-    deps.sarvam_translate_client = None
-    deps.sarvam_llm_client = None
-    deps.sarvam_client_direct = None
-    deps.sarvam_llm_client_direct = None
+    _set("sarvam_client", None)
+    _set("sarvam_translate_client", None)
+    _set("sarvam_llm_client", None)
+    _set("sarvam_client_direct", None)
+    _set("sarvam_llm_client_direct", None)
 
     # Misc helpers production code occasionally pulls.
     def _noop_assert_not_cms_context(*_a, **_kw):
         return None
 
-    deps._assert_not_cms_context = _noop_assert_not_cms_context
-    deps._cms_request_ctx = None
-    deps._init_pg_pool = AsyncMock()
-    deps._sarvam_headers = lambda *a, **kw: {}
-    deps._sarvam_timeout = None
-    deps._sarvam_llm_timeout = None
-    deps._sarvam_pool_limits = None
+    _set("_assert_not_cms_context", _noop_assert_not_cms_context)
+    _set("_cms_request_ctx", None)
+    _set("_init_pg_pool", AsyncMock())
+    _set("_sarvam_headers", lambda *a, **kw: {})
+    _set("_sarvam_timeout", None)
+    _set("_sarvam_llm_timeout", None)
+    _set("_sarvam_pool_limits", None)
 
     # Supabase client factory — admin_monetization imports `_create_supa`
     # explicitly (used by /admin/supabase/test and /admin/supabase/apply).
-    deps._create_supa = MagicMock()
+    _set("_create_supa", MagicMock())
 
     sys.modules["deps"] = deps
     return deps

@@ -6,7 +6,7 @@
  * tracks score, and shows a result screen with explanations.
  */
 import { useEffect, useState, useCallback } from 'react';
-import { X, Check, AlertCircle, Loader2, RotateCcw, Trophy } from 'lucide-react';
+import { X, Check, AlertCircle, Loader2, Trophy } from 'lucide-react';
 import { studyApi } from '@/utils/studyApi';
 import { toast } from 'sonner';
 import { requestReviewPrompt } from '@/components/ReviewPrompt';
@@ -179,13 +179,12 @@ export function QuizModal({
         </div>
 
         {!loading && !error && (
-          <div className="flex items-center justify-between px-5 py-3 border-t border-border/60">
-            <button
-              onClick={fetchQuiz}
-              className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
-            >
-              <RotateCcw className="w-3 h-3" /> New quiz
-            </button>
+          /* Footer is right-aligned now that the "New quiz" regenerate
+             button is gone. Each chapter has ONE permanent quiz that is
+             generated at chapter-creation time and pinned in the cache,
+             so re-rolling questions is no longer a user action — every
+             open of this modal serves the same stored quiz. */
+          <div className="flex items-center justify-end px-5 py-3 border-t border-border/60">
             {!done ? (
               !reveal ? (
                 <button

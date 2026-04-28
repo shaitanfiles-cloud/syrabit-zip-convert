@@ -1,23 +1,15 @@
 """Syrabit.ai — Admin auth, users, conversations"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
-from typing import Optional, List, Dict, Any, Union
+import json, asyncio, uuid, logging
+from typing import Optional
 from datetime import datetime, timezone, timedelta
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    APIRouter, HTTPException, Depends, Response, Cookie,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
-import mistune as _mistune
+from pydantic import BaseModel
 
 from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserRoleUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
+    AdminLoginReq, UserStatusUpdate, UserPlanUpdate, UserRoleUpdate, UserCreditsUpdate,
 )
 from config import (
     ADMIN_ACCOUNTS,
@@ -39,9 +31,7 @@ from cache import (
     redis_list_all_anon_conversations,
 )
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    create_token, decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional, JWTError,
+    get_admin_user, create_access_token, create_token, decode_token, get_user_credits, get_current_user_optional, JWTError,
     get_rate_limit_count, reset_rate_limit,
 )
 from db_ops import (
@@ -54,25 +44,59 @@ from db_ops import (
     supa_list_users,
     supa_update_user,
 )
-from llm import call_llm_api, call_llm_api_stream
-from analytics_helpers import get_recent_user_events
+from analytics_helpers import get_recent_user_events, get_session_metrics
 import cloudflare_client
+from cf_access import require_cf_access_admin
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 @router.post("/admin/login")
-async def admin_login(data: AdminLoginReq, response: Response):
+async def admin_login(
+    data: AdminLoginReq,
+    response: Response,
+    # Task #702 — gate the admin login entry point itself behind
+    # Cloudflare Access. `get_admin_user` already protects every other
+    # admin route, but `/admin/login` cannot use it (no admin JWT exists
+    # yet). Without this dependency, anyone who learns the Railway /
+    # Cloud Run URL can hit the credential check directly and brute-
+    # force passwords, completely bypassing the Zero Trust IdP +
+    # device-posture rules. The dependency is a no-op when
+    # CF_ACCESS_ENFORCE is unset (dev / pre-rollout) and 401s the
+    # request before the password compare in production.
+    _cf_access_claims: Optional[dict] = Depends(require_cf_access_admin),
+):
+    # Task #700 — defensive normalisation + structured failure logging.
+    # Login was returning a generic "Invalid credentials" even when the
+    # email/password were correct because (a) the env-side parser was
+    # dropping wrapping quotes only on passwords, and (b) the form was
+    # round-tripping a stray space/newline. We strip on both sides now,
+    # and log the exact failure reason server-side (without echoing the
+    # password) so future regressions are immediately visible in logs.
+    submitted_email = (data.email or "").strip().lower()
+    submitted_password = (data.password or "").strip()
 
-    # Find the matching admin account across the array
+    if not ADMIN_ACCOUNTS:
+        logger.critical(
+            "admin_login refused — ADMIN_ACCOUNTS is empty (env not configured); "
+            "submitted_email=%r", submitted_email,
+        )
+        raise HTTPException(status_code=503, detail="Admin login is not configured")
+
     matched = next(
         (a for a in ADMIN_ACCOUNTS
-         if a["email"].lower() == data.email.lower()
-         and a["password"] == data.password),
-        None
+         if a["email"].lower() == submitted_email
+         and a["password"] == submitted_password),
+        None,
     )
     if not matched:
+        email_known = any(a["email"].lower() == submitted_email for a in ADMIN_ACCOUNTS)
+        reason = "wrong_password" if email_known else "unknown_email"
+        logger.warning(
+            "admin_login rejected — reason=%s submitted_email=%r configured_admins=%d",
+            reason, submitted_email, len(ADMIN_ACCOUNTS),
+        )
         raise HTTPException(status_code=401, detail="Invalid admin credentials")
 
     # Token payload includes name so the frontend welcome toast can greet by name
@@ -90,6 +114,22 @@ async def admin_login(data: AdminLoginReq, response: Response):
     if COOKIE_DOMAIN:
         _ck["domain"] = COOKIE_DOMAIN
     response.set_cookie(**_ck)
+    # Task #707 — record successful admin logins so the silent-lockout
+    # watcher can tell whether anyone has reached the admin surface
+    # since the last CF_ACCESS_* env change. Best-effort: a Mongo
+    # outage must never break login itself, so we swallow errors.
+    try:
+        if await is_mongo_available():
+            await db.admin_login_log.insert_one({
+                "email": matched["email"],
+                "name": matched["name"],
+                "success": True,
+                "ts": datetime.now(timezone.utc),
+                "cf_access_email": (_cf_access_claims or {}).get("email"),
+                "cf_access_break_glass": bool((_cf_access_claims or {}).get("break_glass")),
+            })
+    except Exception as _login_log_err:
+        logger.debug(f"admin_login_log insert failed: {_login_log_err}")
     return {
         "access_token": token,
         "token_type":   "bearer",
@@ -188,7 +228,13 @@ async def _compute_dashboard():
                 )
                 for r in _pg_rows(rows):
                     pg_conv_map[r["id"]] = r
-        except Exception: pass
+        except Exception as e:
+            # Audit #7 sweep cleanup: this used to silently swallow pg
+            # failures, so if Postgres started returning errors the admin
+            # dashboard would just look empty with no clue why. Falling
+            # through to the supa branch below is still the right
+            # behavior, but we log so the failure mode is observable.
+            logger.warning(f"_compute_dashboard pg conversations fetch failed: {e}")
 
     if supa:
         try:
@@ -246,9 +292,16 @@ async def _compute_dashboard():
         p = u.get("plan", "free")
         plan_dist[p] = plan_dist.get(p, 0) + 1
 
-    cf_stats, recent_events = await asyncio.gather(
+    # Cloudflare GraphQL is the source of truth for visitor / page-view
+    # counts but does not expose bounce rate or session duration. Fan
+    # those two metrics out from the Mongo-backed sessions aggregation
+    # in parallel so the dashboard's two right-hand traffic tiles
+    # ("Bounce Rate", "Avg Session") stop rendering as em-dash
+    # placeholders.
+    cf_stats, recent_events, sess_metrics = await asyncio.gather(
         cloudflare_client.get_visitor_stats_cf(days=7),
         get_recent_user_events(limit=10),
+        get_session_metrics(days=7),
     )
     cf_connected = bool(cf_stats)
     if cf_stats:
@@ -262,10 +315,15 @@ async def _compute_dashboard():
             "total_bytes": cf_stats.get("total_bytes", 0),
             "bytes_today": cf_stats.get("bytes_today", 0),
             "daily_visitors": cf_stats.get("daily_visitors", []),
+            "bounce_rate": sess_metrics.get("bounce_rate"),
+            "avg_session_duration": sess_metrics.get("avg_session_duration"),
             "cloudflare": {**cf_stats, "period_days": 7},
         }
     else:
-        visitor_stats = {}
+        visitor_stats = {
+            "bounce_rate": sess_metrics.get("bounce_rate"),
+            "avg_session_duration": sess_metrics.get("avg_session_duration"),
+        }
 
     return {
         "total_users": total_users,

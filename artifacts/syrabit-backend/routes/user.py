@@ -1,35 +1,25 @@
 """Syrabit.ai — User profile & account routes"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
-from typing import Optional, List, Dict, Any, Union
+import logging, base64
+from typing import Optional
 from datetime import datetime, timezone, timedelta
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    APIRouter, HTTPException, Depends, File, UploadFile, Cookie,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
-import mistune as _mistune
 
 from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
+    OnboardingData, ProfileUpdate,
 )
 import deps
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional,
+    get_current_user, get_user_credits, get_current_user_optional,
 )
+from config import PLAN_LIMITS
+from device_token import device_token_id
 from db_ops import (
     supa_get_conversations,
     supa_update_user,
+    peek_device_credit_used,
 )
-from llm import call_llm_api, call_llm_api_stream
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +114,6 @@ async def upload_avatar(
     max_size = 2 * 1024 * 1024
     if len(file_content) > max_size:
         raise HTTPException(status_code=400, detail="Image must be under 2 MB")
-    import base64
     b64 = base64.b64encode(file_content).decode("utf-8")
     data_url = f"data:{file.content_type};base64,{b64}"
     await supa_update_user(user["id"], {"avatar_url": data_url})
@@ -147,9 +136,43 @@ async def toggle_saved_subject(subject_id: str, user: dict = Depends(get_current
     return {"message": action, "saved_subjects": saved}
 
 @router.get("/user/credits")
-async def get_credits(user: Optional[dict] = Depends(get_current_user_optional)):
+async def get_credits(
+    user: Optional[dict] = Depends(get_current_user_optional),
+    syrabit_device: Optional[str] = Cookie(default=None),
+):
+    """Daily credit summary for the chat composer's "X / N left today" badge.
+
+    For authenticated users this returns the plan's per-day allowance
+    (``free`` / ``pro`` / ``max`` from :data:`config.PLAN_LIMITS`)
+    minus today's usage from the user-credit ledger.
+
+    For anonymous users (Task #796), the same shape is returned but
+    sourced from the device-keyed Redis counter that
+    :func:`auth_deps.rate_limit_chat_optional` charges on every send
+    (the per-IP daily counter was demoted to a coarse abuse cap in
+    Task #793 and is therefore *not* what we surface to students).
+    The peek is read-only — calling this endpoint never burns a free
+    message — so polling it on every chat-composer mount or after
+    each send is safe. When the device cookie is missing or
+    unverifiable, or Redis is unreachable, we return the optimistic
+    "fresh quota" view (``used=0``, ``remaining=daily_limit``)
+    rather than risk showing "0 left" to a student who has never
+    sent a message.
+    """
     if not user:
-        return {"used": 0, "limit": 30, "remaining": 30, "document_access": False}
+        free_cfg = PLAN_LIMITS.get("free", {})
+        daily_limit = int(free_cfg.get("credits_per_day") or 30)
+        token_id = device_token_id(syrabit_device) if syrabit_device else None
+        used = peek_device_credit_used(token_id) if token_id else 0
+        used = min(used, daily_limit)
+        return {
+            "used": used,
+            "limit": daily_limit,
+            "remaining": max(0, daily_limit - used),
+            "document_access": False,
+            "resets_at": "midnight UTC",
+            "anonymous": True,
+        }
     credits_info = await get_user_credits(user)
     return credits_info
 

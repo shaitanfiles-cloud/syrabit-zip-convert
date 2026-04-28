@@ -1,11 +1,10 @@
 """Syrabit.ai — Analytics tracking helpers."""
-import re, asyncio, logging, uuid, time, hashlib
-from typing import Optional
+import asyncio, logging, uuid
 from datetime import datetime, timezone, timedelta
 import httpx
 import deps
-from deps import db, logger as _dep_logger
-from utils import _is_bot, _get_device_type, _resolve_country
+from deps import db
+from utils import _is_bot
 try:
     from user_agents import parse as _parse_ua
 except ImportError:
@@ -15,12 +14,325 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "get_library_analytics", "get_recent_user_events", "get_visitor_stats",
+    "get_session_metrics",
     "track_library_event", "track_page_view",
     "track_pwa_install", "get_pwa_stats",
 ]
 
+
+async def get_session_metrics(days: int = 7) -> dict:
+    """Compute bounce-rate and avg-session-duration from db.sessions.
+
+    Cloudflare's free GraphQL feed (the source of truth for visitor /
+    page-view counts in /admin/dashboard) does NOT expose bounce rate
+    or session duration, so the admin Traffic row's two right-hand
+    tiles ("Bounce Rate" and "Avg Session") rendered as em-dash
+    placeholders. This helper runs only the session-shaped aggregation
+    from the legacy Mongo-backed get_visitor_stats() so the dashboard
+    handler can merge those two fields into its CF-derived
+    visitor_stats payload without paying the cost of the full
+    page_views fan-out.
+
+    Returns a dict with bounce_rate (percent, 1 dp, may be None) and
+    avg_session_duration (seconds, integer, may be None). Both keys
+    are always present so the caller can blindly merge.
+    """
+    if not await is_mongo_available():
+        return {"bounce_rate": None, "avg_session_duration": None}
+    try:
+        cutoff_iso = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        bot_visitor_ids = await db.page_views.distinct(
+            "visitor_id",
+            {"is_bot": True, "date": {"$gte": (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")}},
+        )
+        match: dict = {
+            "start_time": {"$gte": cutoff_iso},
+            "is_bot": {"$ne": True},
+        }
+        if bot_visitor_ids:
+            match["visitor_id"] = {"$nin": bot_visitor_ids}
+
+        pipeline = [
+            {"$match": match},
+            {"$addFields": {
+                "effective_end": {"$ifNull": ["$end_time", "$last_ping"]},
+                "effective_page_count": {"$ifNull": ["$page_count", 0]},
+            }},
+            {"$match": {
+                "effective_end": {"$exists": True, "$ne": None},
+                "effective_page_count": {"$gte": 1},
+            }},
+            {"$project": {
+                "effective_page_count": 1,
+                "duration_secs": {
+                    "$divide": [
+                        {"$subtract": [
+                            {"$toDate": "$effective_end"},
+                            {"$toDate": "$start_time"},
+                        ]},
+                        1000,
+                    ],
+                },
+            }},
+            {"$group": {
+                "_id": None,
+                "total": {"$sum": 1},
+                "bounces": {"$sum": {"$cond": [{"$eq": ["$effective_page_count", 1]}, 1, 0]}},
+                "avg_duration": {"$avg": "$duration_secs"},
+            }},
+        ]
+        rows = await db.sessions.aggregate(pipeline).to_list(1)
+        if not rows:
+            return {"bounce_rate": None, "avg_session_duration": None}
+        row = rows[0]
+        total = row.get("total", 0) or 0
+        if total <= 0:
+            return {"bounce_rate": None, "avg_session_duration": None}
+        bounce_rate = round(row.get("bounces", 0) / total * 100, 1)
+        avg_dur = row.get("avg_duration")
+        avg_session_duration = round(avg_dur) if avg_dur is not None else None
+        return {"bounce_rate": bounce_rate, "avg_session_duration": avg_session_duration}
+    except Exception as e:
+        logger.warning(f"get_session_metrics failed: {e}")
+        return {"bounce_rate": None, "avg_session_duration": None}
+
 from deps import is_mongo_available
 from db_ops import supa_list_users, supa_get_all_conversations
+
+
+# ── AI-provider referral hostname → CF operator-tile name ────────────────
+# Cloudflare's *AI Crawl Control → Overview* tab shows a "Total
+# referrals" number on each operator card: the count of human visits to
+# the site that arrived with a Referer header pointing back to that AI
+# assistant (e.g. someone clicked a citation in a ChatGPT answer and
+# landed on syrabit.ai). CF's free-tier GraphQL doesn't expose the
+# Referer dimension, but we already capture it in ``db.page_views``,
+# so this helper reproduces the same per-operator referral tally from
+# Mongo. The hostname patterns below cover the user-facing chat /
+# search surfaces of every AI operator that also has a crawler in
+# ``cf_bot_report._OPERATOR_MAP``, so the operator tile colouring
+# (which side of the AI/Search divide a card lands on) and the
+# referral attribution agree on which company owns each click.
+#
+# Each entry is ``(hostname-suffix-pattern, operator-tile-name)``.
+# Suffix matching keeps it robust to subdomains (e.g. ``chat.openai.com``
+# and ``openai.com`` both map to "OpenAI"; ``gemini.google.com`` and
+# ``aistudio.google.com`` both map to "Google"). Order matters only
+# for overlap cases (Microsoft's copilot.microsoft.com is matched
+# before bing.com to avoid swallowing Bing search referrals which
+# belong on the Microsoft tile already).
+_AI_REFERRER_HOSTS: list[tuple[str, str]] = [
+    # OpenAI surfaces — ChatGPT web app + branded variants.
+    ("chatgpt.com", "OpenAI"),
+    ("chat.openai.com", "OpenAI"),
+    ("openai.com", "OpenAI"),
+    # Anthropic — Claude consumer chat.
+    ("claude.ai", "Anthropic"),
+    ("anthropic.com", "Anthropic"),
+    # Google — Gemini consumer + AI Studio + legacy Bard.
+    ("gemini.google.com", "Google"),
+    ("aistudio.google.com", "Google"),
+    ("bard.google.com", "Google"),
+    # Microsoft — Copilot chat + Bing chat (latter still uses bing.com).
+    ("copilot.microsoft.com", "Microsoft"),
+    ("bing.com/chat", "Microsoft"),
+    # Perplexity AI search.
+    ("perplexity.ai", "Perplexity"),
+    # Meta — Llama-powered consumer chat.
+    ("meta.ai", "Meta"),
+    # You.com — AI search.
+    ("you.com", "You.com"),
+    # xAI Grok consumer chat (no entry in CF operator map yet, so it
+    # rolls into the synthetic "Other" tile via the same fallback CF
+    # uses for unmapped crawlers — keeps the totals honest).
+    ("grok.com", "xAI"),
+    ("x.ai", "xAI"),
+]
+
+
+async def get_ai_referrals_by_operator(days: int = 7) -> dict[str, int]:
+    """Per-operator AI-assistant referral count from ``db.page_views``.
+
+    Mirrors Cloudflare's *AI Crawl Control → Overview* "Total referrals"
+    metric (see ``_AI_REFERRER_HOSTS`` above for what counts as an AI
+    referrer and the mapping back to operator tiles). Used by
+    ``/admin/analytics/cf-ai-crawl-control`` to enrich each
+    ``per_operator`` entry with a ``referrals`` field so the admin card
+    matches CF's own per-operator card layout.
+
+    Counts distinct visitors per operator over the window, so a single
+    ChatGPT visitor browsing 5 pages still counts as 1 referral —
+    matches CF's "Total referrals" semantics on the Overview tab.
+
+    Two correctness traps the implementation has to avoid:
+
+    * **Overlapping host patterns.** ``chat.openai.com`` and the
+      broader ``openai.com`` would both match a referrer like
+      ``https://chat.openai.com/share/abc`` because the regex allows
+      a subdomain prefix. Naively summing per-pattern ``distinct``
+      counts would double-count that visitor toward OpenAI. We solve
+      it by accumulating visitor_ids into a per-operator ``set`` and
+      counting set-cardinality at the end — guarantees each visitor
+      contributes ≤1 to each operator regardless of how many host
+      patterns they match.
+
+    * **Querystring/fragment after host.** A referrer such as
+      ``https://www.bing.com/chat?source=...`` must still be
+      classified, so the trailing boundary is ``[/:?#]`` (or end of
+      string) rather than just ``/`` — otherwise Microsoft (and any
+      other operator with a path-prefixed host pattern) would be
+      undercounted whenever the AI provider appends UTM/source
+      tracking params on outbound links.
+
+    Returns a dict ``{operator_name: int}`` with only operators that
+    have ≥1 referral over the window present. Callers should treat
+    missing keys as 0. Returns ``{}`` on any failure or when Mongo is
+    unavailable so the caller can blindly merge without null checks.
+    """
+    out: dict[str, int] = {}
+    if not await is_mongo_available():
+        return out
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        # Per-operator visitor sets (deduped across overlapping host
+        # patterns — see the docstring's "overlapping host patterns"
+        # trap). Sets at write time also keep memory bounded vs.
+        # accumulating raw counts and trying to subtract overlap
+        # later, which would require knowing which patterns overlap.
+        per_op_visitors: dict[str, set] = {}
+        for host_pat, operator in _AI_REFERRER_HOSTS:
+            escaped = host_pat.replace(".", r"\.").replace("/", r"/")
+            # Match bare host (https://chatgpt.com/…) or any subdomain
+            # of it (https://chat.openai.com → openai.com), with a
+            # boundary that admits path / port / query / fragment so
+            # tracking-tagged outbound links from AI surfaces still
+            # classify (e.g. https://www.bing.com/chat?ref=copilot).
+            # The boundary anchor also prevents lookalike-domain
+            # hits like https://openai.com.fake.example.org/.
+            host_regex = rf"^https?://(?:[^/]*\.)?{escaped}(?:[/:?#]|$)"
+            visitors = await db.page_views.distinct(
+                "visitor_id",
+                {
+                    "date": {"$gte": cutoff},
+                    "referrer": {"$regex": host_regex, "$options": "i"},
+                },
+            )
+            if not visitors:
+                continue
+            per_op_visitors.setdefault(operator, set()).update(visitors)
+        for operator, visitor_set in per_op_visitors.items():
+            if visitor_set:
+                out[operator] = len(visitor_set)
+    except Exception as e:
+        logger.warning(f"get_ai_referrals_by_operator failed: {e}")
+    return out
+
+
+# ── Search-engine referral hostname → engine display name ─────────────────
+# Counterpart to ``_AI_REFERRER_HOSTS`` for organic search-engine
+# referrals (humans clicking a Google / Bing / DuckDuckGo / etc. search
+# result and landing on syrabit.ai). The admin dashboard renders this
+# beside the AI-assistant referrals block so site owners can see both
+# acquisition channels side by side.
+#
+# Each entry is ``(host-regex-fragment, engine-display-name)``. Unlike
+# ``_AI_REFERRER_HOSTS`` (which stores literal host strings and escapes
+# them at query time), entries here are pre-built regex fragments —
+# necessary because Google country-code TLDs (``.co.in``, ``.com.au``,
+# ``.de``, etc.) are matched with a single character-class fragment
+# instead of one entry per TLD. The fragment is dropped into the
+# template ``^https?://{frag}(?:[/:?#]|$)`` so anchors/boundaries are
+# added uniformly and stay consistent with the AI helper above.
+#
+# Important overlap-avoidance notes:
+#   * Google AI surfaces (``gemini.google.com``, ``aistudio.google.com``,
+#     ``bard.google.com``) are already attributed to "Google" under the
+#     AI map. The Google search fragment uses ``(?:www\.)?google\.…``
+#     rather than ``(?:[^/]*\.)?google\.…`` so those AI subdomains
+#     don't double-count as search referrals.
+#   * Bing's legacy ``bing.com/chat`` was mapped to Microsoft on the AI
+#     side. The Bing fragment here is host-only (no path constraint),
+#     so the rare residual chat referrer also lands here, but per-engine
+#     visitor sets dedupe it within this map. Cross-map overlap is
+#     accepted (and explicitly noted in the dashboard tooltip) because
+#     a visitor genuinely browsing both Bing search and Bing chat
+#     legitimately appears in both blocks.
+_SEARCH_REFERRER_HOSTS: list[tuple[str, str]] = [
+    # Google: bare or www., across the full universe of Google country
+    # TLDs. The character-class TLD pattern covers .com, .de, .fr, .in,
+    # .uk plus compound TLDs like .co.in, .co.uk, .com.au, .com.br, etc.
+    (r"(?:www\.)?google\.[a-z]{2,3}(?:\.[a-z]{2,3})?", "Google"),
+    # Microsoft Bing organic.
+    (r"(?:[^/]*\.)?bing\.com", "Bing"),
+    (r"(?:[^/]*\.)?duckduckgo\.com", "DuckDuckGo"),
+    # Yahoo Search lives at search.yahoo.com; bare yahoo.com is the
+    # portal and rarely a real search referrer.
+    (r"search\.yahoo\.com", "Yahoo"),
+    (r"(?:[^/]*\.)?yandex\.(?:com|ru)", "Yandex"),
+    (r"(?:[^/]*\.)?baidu\.com", "Baidu"),
+    (r"(?:[^/]*\.)?ecosia\.org", "Ecosia"),
+    (r"search\.brave\.com", "Brave"),
+    (r"kagi\.com", "Kagi"),
+    (r"(?:[^/]*\.)?startpage\.com", "Startpage"),
+    (r"(?:[^/]*\.)?qwant\.com", "Qwant"),
+    (r"(?:[^/]*\.)?mojeek\.com", "Mojeek"),
+]
+
+
+async def get_search_referrals_by_engine(days: int = 7) -> dict[str, int]:
+    """Per-engine organic-search referral count from ``db.page_views``.
+
+    Mirrors :func:`get_ai_referrals_by_operator` but for search engines
+    (Google / Bing / DuckDuckGo / Yahoo / Yandex / Baidu / Ecosia /
+    Brave / Kagi / Startpage / Qwant / Mojeek). Counts distinct
+    visitor_ids per engine over the window, so a single Google visitor
+    browsing 12 pages still counts as 1 referral — same semantics as
+    the AI helper, which keeps the two cards visually comparable on
+    the admin dashboard.
+
+    Implementation notes (also see ``_SEARCH_REFERRER_HOSTS`` above):
+
+    * Each engine's host fragment may be matched by multiple referrer
+      strings on the same visitor (e.g. ``google.com/search?q=A`` and
+      ``www.google.co.in/`` both contribute toward "Google"); we
+      accumulate visitor ids into a per-engine set so the union is
+      counted once. This mirrors the dedupe trick in the AI helper.
+    * Engines that the visitor never used produce empty distinct
+      results; we skip empty sets so absent engines don't appear with
+      a zero in the response. Callers should treat missing keys as 0.
+
+    Returns a dict ``{engine_name: int}`` containing only engines with
+    ≥1 referral. Returns ``{}`` on any failure or when Mongo is down so
+    the caller can blindly merge into the response payload.
+    """
+    out: dict[str, int] = {}
+    if not await is_mongo_available():
+        return out
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        per_eng_visitors: dict[str, set] = {}
+        for host_frag, engine in _SEARCH_REFERRER_HOSTS:
+            # Same anchor / trailing-boundary template as the AI helper
+            # so query-string-tagged outbound links from search engines
+            # (``?utm_source=…`` etc.) still classify, and lookalike
+            # domains (``google.com.fake.example.org``) don't.
+            host_regex = rf"^https?://{host_frag}(?:[/:?#]|$)"
+            visitors = await db.page_views.distinct(
+                "visitor_id",
+                {
+                    "date": {"$gte": cutoff},
+                    "referrer": {"$regex": host_regex, "$options": "i"},
+                },
+            )
+            if not visitors:
+                continue
+            per_eng_visitors.setdefault(engine, set()).update(visitors)
+        for engine, visitor_set in per_eng_visitors.items():
+            if visitor_set:
+                out[engine] = len(visitor_set)
+    except Exception as e:
+        logger.warning(f"get_search_referrals_by_engine failed: {e}")
+    return out
 
 
 async def track_pwa_install(action: str, metadata: dict = None, user_id: str = None):

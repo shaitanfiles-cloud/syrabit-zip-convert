@@ -79,10 +79,14 @@ const mirrorAdImpression = (properties) => {
       (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_BACKEND_URL)
         ? `${import.meta.env.VITE_BACKEND_URL.replace(/\/$/, '')}/api`
         : '/api';
+    // ``enabled`` used to be in this payload but it was always true
+    // at the AdSlot call site (the IntersectionObserver only fires
+    // after a cfg.enabled gate) and the backend never read it back.
+    // Dropped in the admin-panel audit; backend ignores the extra
+    // key from older bundles, so this is a one-sided rollout.
     const payload = JSON.stringify({
       placement: properties.placement,
       network: properties.network,
-      enabled: properties.enabled === undefined ? null : !!properties.enabled,
     });
     const url = `${apiBase}/analytics/ad-impression`;
     const blob = new Blob([payload], { type: 'application/json' });
@@ -281,12 +285,33 @@ export const Analytics = {
   },
 
   // ── Payment ────────────────────────────────────────────────────────────────
+  // Task #731 S7 — defensive normalizer for the `priceInr` argument.
+  //
+  // The 4 call sites in ProfilePage.jsx (Razorpay full plan + 3 top-up
+  // paths) pass `orderData.amount` directly, and Razorpay returns that
+  // amount in PAISE (so a ₹99 plan shows up as 9900). For ~6 months the
+  // analytics events have therefore been emitting `price_inr=9900`,
+  // making PostHog/GA4 revenue dashboards 100x too high.
+  //
+  // Rather than rely on every future caller remembering to divide by
+  // 100, we normalize here: any value above PAISE_THRESHOLD that's also
+  // an exact multiple of 100 is treated as paise and converted to
+  // rupees. This is safe because (a) Razorpay paise are always integer
+  // multiples of 100 and (b) no real plan price exceeds ₹50000 — well
+  // below the 5_000_000 paise floor a future ₹50000 plan would have to
+  // exceed to misclassify.
+  _normalizePriceInr: (v) => {
+    if (typeof v !== "number" || !Number.isFinite(v)) return v;
+    const PAISE_THRESHOLD = 50_000;       // ₹50000 max plausible plan price
+    if (v >= PAISE_THRESHOLD && v % 100 === 0) return v / 100;
+    return v;
+  },
   upgradeInitiated: (plan, priceInr) => {
-    track('upgrade_initiated', { plan, price_inr: priceInr, attribution_source: _getAttribution() });
+    track('upgrade_initiated', { plan, price_inr: Analytics._normalizePriceInr(priceInr), attribution_source: _getAttribution() });
   },
 
   purchaseComplete: (plan, priceInr, orderId) => {
-    track('purchase_completed', { plan, price_inr: priceInr, order_id: orderId, attribution_source: _getAttribution() });
+    track('purchase_completed', { plan, price_inr: Analytics._normalizePriceInr(priceInr), order_id: orderId, attribution_source: _getAttribution() });
   },
 
   purchaseFailed: (plan, reason, orderId) => {
@@ -311,12 +336,14 @@ export const Analytics = {
     track('pwa_prompt_dismissed');
   },
 
-  // ── Google review prompt (Task #652) ─────────────────────────────────────
-  // Fired when the in-app prompt asking engaged students to leave a Google
-  // review is shown / clicked through / dismissed. The CTA opens the
-  // Google "write a review" form in a new tab — Google does not permit
-  // posting reviews via API, so click-through is the closest proxy we
-  // have for measuring conversion to actual reviews.
+  // ── Trustpilot review prompt (Task #652; relabeled #726, migrated #724) ──
+  // Fired when the in-app prompt asking engaged students to leave a
+  // Trustpilot review is shown / clicked through / dismissed. The CTA opens the
+  // Trustpilot "write a review" form in a new tab — Trustpilot does not
+  // permit posting reviews via API, so click-through is the closest
+  // proxy we have for measuring conversion to actual reviews. Event
+  // names (review_prompt_*) are intentionally generic and unchanged
+  // from the Google-era so historical funnels keep working.
   reviewPromptShown: (reason) => {
     track('review_prompt_shown', { reason });
   },
@@ -346,8 +373,10 @@ export const Analytics = {
   // ── Ads (Task #528) ──────────────────────────────────────────────────────
   // Fired once per AdSlot mount when the slot first crosses 50% in-viewport.
   // Gated by ad consent in the caller so opt-out users emit nothing.
-  adSlotViewed: ({ placement, network, enabled } = {}) => {
-    track('ad_slot_viewed', { placement, network, enabled });
+  // ``enabled`` was dropped — see mirrorAdImpression() comment for
+  // rationale (always true at call site + never read by backend).
+  adSlotViewed: ({ placement, network } = {}) => {
+    track('ad_slot_viewed', { placement, network });
   },
 
   adminLogin: (email) => {

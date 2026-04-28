@@ -5,7 +5,8 @@ import { AuthProvider } from "@/context/AuthContext";
 import { LanguageProvider } from "@/context/LanguageContext";
 import { AuthGuard } from "@/components/AuthGuard";
 import { AdminGuard } from "@/components/AdminGuard";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { queryClient } from "./queryClient";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { HelmetProvider } from "react-helmet-async";
 import Analytics from "@/utils/analytics";
@@ -16,20 +17,21 @@ const LazyToaster = lazy(() => import("sonner").then(m => ({ default: m.Toaster 
 // per-page <PageMeta>/Helmet usage on Library, Chapter, Pricing, etc. still
 // works. (Task #381 fix after architect review.)
 const LazyGlobalSeo = lazy(() => import("@/components/seo/GlobalSeo"));
+// Task #727 — emit the Trustpilot aggregate-rating JSON-LD on every
+// route so FAQ/About/Pricing/Learn/blog and any other indexable page
+// becomes eligible for the Google review-stars rich snippet, not just
+// the 5 content pages that render <TrustpilotReviewsSection />.
+const LazyGlobalTrustpilotJsonLd = lazy(() => import("@/components/seo/GlobalTrustpilotJsonLd"));
 import { apiClient } from "@/utils/api";
 
 // ── React Query client ────────────────────────────────────────────────────────
-export const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 10 * 60 * 1000,
-      gcTime: 60 * 60 * 1000,
-      retry: 1,
-      refetchOnWindowFocus: false,
-      refetchOnReconnect: false,
-    },
-  },
-});
+// `queryClient` lives in its own leaf module (`./queryClient`) so it has no
+// outgoing edges in the dependency graph. This avoids a Rollup SSR-build
+// failure where named-export resolution from `App.jsx` would intermittently
+// see the symbol as missing due to a circular-import chain via
+// AuthContext/LanguageContext/ErrorBoundary etc. Re-exported for any
+// existing imports that still pull it from `./App`.
+export { queryClient };
 
 // Seed React Query from data baked into the prerendered HTML so the
 // first render on the client matches the server-rendered markup
@@ -312,6 +314,14 @@ export function AppRoutes() {
       {/* ── SEO routes: /{board}/{class}/{subject} and /{board}/{class}/{subject}/{chapter} ── */}
       <Route path="/:board/:classSlug/:streamSlug/:subjectSlug/:chapterSlug" element={<ChapterPage />} />
       <Route path="/:board/:classSlug/:subjectSlug/:chapterSlug" element={<ChapterPage />} />
+      {/* Task #914 Step 2 — topic deep-link URLs. Mounted BEFORE the
+          legacy `/:pageType` redirect below so the literal `topic`
+          segment doesn't get swallowed and re-routed. ChapterPage
+          treats `topicSlug` as scroll-to-anchor + canonical override
+          context; markup is identical to the chapter URL (no
+          cloaking — same React tree, same DOM). */}
+      <Route path="/:board/:classSlug/:streamSlug/:subjectSlug/:chapterSlug/topic/:topicSlug" element={<ChapterPage />} />
+      <Route path="/:board/:classSlug/:subjectSlug/:chapterSlug/topic/:topicSlug" element={<ChapterPage />} />
       <Route path="/:board/:classSlug/:subjectSlug/:chapterSlug/:pageType" element={<LegacyTopicRedirect />} />
       <Route path="/:board/:classSlug/:subjectSlug" element={<SubjectLandingPage />} />
 
@@ -365,6 +375,7 @@ export function AppShell({ children, ssr = false, helmetContext }) {
   return (
     <HelmetProvider context={helmetContext}>
       {showDeferred ? <Suspense fallback={null}><LazyGlobalSeo /></Suspense> : null}
+      {showDeferred ? <Suspense fallback={null}><LazyGlobalTrustpilotJsonLd /></Suspense> : null}
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
           <AuthProvider>

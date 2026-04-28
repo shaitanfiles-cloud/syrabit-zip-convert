@@ -42,6 +42,40 @@ def test_classify_ua_returns_none_for_human_and_unknown():
     assert _classify_ua("MyCustomScraper/1.0") is None
 
 
+def test_classify_ua_drops_internal_prewarm_googlebot_spoof():
+    """Task #820: the KV cache prewarm path emits a UA that intentionally
+    spoofs Googlebot so the edge serves the bot HTML render path on
+    cold-cache hit. Without the internal-UA short-circuit, every prewarm
+    cycle would inflate Googlebot's count in the per-UA report and the
+    operator would see phantom Googlebot crawl spikes that never came
+    from Google."""
+    from internal_user_agents import (
+        PREWARM_USER_AGENT,
+        SEO_SELF_CHECK_USER_AGENT,
+        WEB_CONTENT_USER_AGENT,
+        GOOGLE_SUGGEST_USER_AGENT,
+        RAG_FETCH_USER_AGENT,
+    )
+
+    # The prewarm UA contains "Googlebot" — pre-Task-820 this would
+    # have classified as "Googlebot". Now it returns None.
+    assert _classify_ua(PREWARM_USER_AGENT) is None
+
+    # Defence-in-depth: every other internal UA also drops out.
+    assert _classify_ua(SEO_SELF_CHECK_USER_AGENT) is None
+    assert _classify_ua(WEB_CONTENT_USER_AGENT) is None
+    assert _classify_ua(GOOGLE_SUGGEST_USER_AGENT) is None
+    assert _classify_ua(RAG_FETCH_USER_AGENT) is None
+
+    # Sanity: REAL Googlebot (no SyrabitInternal marker, no
+    # syrabit-prewarm token) still classifies as Googlebot — otherwise
+    # the per-UA report would silently lose the bot we care most about.
+    real_googlebot = (
+        "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+    )
+    assert _classify_ua(real_googlebot) == "Googlebot"
+
+
 # ── aggregate_per_ua ────────────────────────────────────────────────────────
 
 def _bucket(ua, count, status, cache="hit", bytes_=1024):

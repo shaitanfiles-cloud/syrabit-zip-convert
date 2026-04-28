@@ -182,6 +182,101 @@ def _delta_color(delta: int, *, invert: bool = False) -> str:
     return "#16a34a" if good else "#c0392b"
 
 
+# Bots we always promote to the top of the per-UA table even if their
+# request count is low — these are the SEO/AEO crawlers that operators
+# care about most. Other bots fill in below sorted by request volume.
+_PROMOTED_BOTS = (
+    "Googlebot", "Bingbot",
+    "GPTBot", "PerplexityBot", "ClaudeBot",
+    "OAI-SearchBot", "ChatGPT-User",
+    "Google-Extended", "Applebot-Extended",
+)
+
+
+def _fmt_bytes_short(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    if n < 1024 * 1024 * 1024:
+        return f"{n / (1024 * 1024):.1f} MB"
+    return f"{n / (1024 * 1024 * 1024):.2f} GB"
+
+
+def _format_per_ua_table_html(per_ua: Optional[Dict[str, Any]]) -> str:
+    """Render the per-crawler breakdown sourced from the `cf_bot_reports`
+    Mongo collection (Task #315). Returns an empty string when no per-UA
+    data is available so the email gracefully degrades to category-only.
+
+    Promoted SEO/AEO crawlers (Googlebot, Bingbot, GPTBot, PerplexityBot,
+    ClaudeBot, OAI-SearchBot, ChatGPT-User, Google-Extended,
+    Applebot-Extended) are listed first even when traffic is low — they're
+    the ones an operator wants to confirm are active. Remaining bots fill
+    in sorted by request volume, capped at 12 rows so the email stays
+    skim-friendly.
+    """
+    if not per_ua:
+        return ""
+    per_bot = per_ua.get("per_bot") or {}
+    if not per_bot:
+        return ""
+
+    ordered: List[tuple[str, Dict[str, Any]]] = []
+    seen: set[str] = set()
+    for name in _PROMOTED_BOTS:
+        bot = per_bot.get(name)
+        if bot is None:
+            ordered.append((name, {"requests": 0, "bytes": 0,
+                                    "hit_pct": 0.0, "error_rate": 0.0}))
+        else:
+            ordered.append((name, bot))
+        seen.add(name)
+    rest = [(n, b) for n, b in per_bot.items() if n not in seen]
+    rest.sort(key=lambda kv: -int(kv[1].get("requests", 0) or 0))
+    ordered.extend(rest[: max(0, 12 - len(_PROMOTED_BOTS))])
+
+    rows_html = []
+    for name, bot in ordered:
+        req = int(bot.get("requests", 0) or 0)
+        bytes_v = int(bot.get("bytes", 0) or 0)
+        hit_pct = float(bot.get("hit_pct", 0.0) or 0.0)
+        err_pct = float(bot.get("error_rate", 0.0) or 0.0) * 100.0
+        # Visual emphasis on absent promoted bots — they're the alert
+        # signal embedded in the table.
+        is_absent = req == 0 and name in _PROMOTED_BOTS
+        name_style = "color:#94a3b8;font-style:italic" if is_absent else "color:#0f172a"
+        req_str = "—" if is_absent else f"{req:,}"
+        rows_html.append(
+            "<tr>"
+            f"<td style='padding:6px 10px;border:1px solid #e2e8f0;{name_style}'>{name}</td>"
+            f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{req_str}</td>"
+            f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{_fmt_bytes_short(bytes_v)}</td>"
+            f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{hit_pct:.1f}%</td>"
+            f"<td style='padding:6px 10px;border:1px solid #e2e8f0;text-align:right'>{err_pct:.2f}%</td>"
+            "</tr>"
+        )
+
+    iso_week = per_ua.get("iso_week", "")
+    suffix = f" · ISO {iso_week}" if iso_week else ""
+    return (
+        f"<h3 style='margin:20px 0 6px;font-size:15px;color:#334155'>"
+        f"Per-crawler breakdown{suffix}</h3>"
+        "<p style='margin:0 0 6px;font-size:12px;color:#64748b'>"
+        "Greyed-italic rows are crawlers we expect to see but had no traffic "
+        "in the latest weekly snapshot.</p>"
+        "<table style='border-collapse:collapse;width:100%;font-size:13px;margin:0 0 16px'>"
+        "<tr style='background:#f3f4f6'>"
+        "<th style='text-align:left;padding:6px 10px;border:1px solid #e2e8f0'>Crawler</th>"
+        "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Requests</th>"
+        "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Bytes</th>"
+        "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Cache hit</th>"
+        "<th style='text-align:right;padding:6px 10px;border:1px solid #e2e8f0'>Error rate</th>"
+        "</tr>"
+        + "".join(rows_html)
+        + "</table>"
+    )
+
+
 def _format_bot_traffic_report_html(stats: Dict[str, Any]) -> str:
     """Render the digest as a Resend-compatible HTML body. Highlights
     (biggest week-over-week movers + total + bot 5xx) go at the top."""
@@ -264,6 +359,8 @@ def _format_bot_traffic_report_html(stats: Dict[str, Any]) -> str:
 
         f"{cat_table}"
 
+        f"{_format_per_ua_table_html(stats.get('per_ua_report'))}"
+
         f"<p style='margin:18px 0'><a href='{dashboard}' style='display:inline-block;background:#7c3aed;"
         "color:white;text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:600;font-size:14px'>"
         "Open SEO Manager dashboard</a></p>"
@@ -305,7 +402,30 @@ async def _gather_bot_traffic_report_inputs(
         # fallback alert tells operators exactly which window failed.
         return {"_error": "cf_api_prior_window_failed"}
 
-    return _compose_bot_traffic_report(current, prior, now=_now)
+    stats = _compose_bot_traffic_report(current, prior, now=_now)
+
+    # Pull the latest per-UA report (Task #315 sister job stores
+    # `cf_bot_reports` docs with `{iso_week, data: {per_bot: {...}}}`).
+    # Without this the email shows category totals only and the operator
+    # has to log into the dashboard to see WHICH crawler moved.
+    try:
+        from deps import db, is_mongo_available  # type: ignore
+        if await is_mongo_available():
+            doc = await db.cf_bot_reports.find_one(
+                {}, sort=[("generated_at", -1)],
+            )
+            if doc and doc.get("data"):
+                stats["per_ua_report"] = {
+                    "iso_week": doc.get("iso_week", ""),
+                    "totals": doc["data"].get("totals") or {},
+                    "per_bot": doc["data"].get("per_bot") or {},
+                    "generated_at": doc.get("generated_at", ""),
+                }
+    except Exception as exc:
+        # Per-UA enrichment is opportunistic — never block the email.
+        logger.debug(f"per-UA report enrichment skipped: {exc}")
+
+    return stats
 
 
 async def _send_bot_traffic_report_email(

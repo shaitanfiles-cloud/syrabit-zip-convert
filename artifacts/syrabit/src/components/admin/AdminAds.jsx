@@ -338,6 +338,33 @@ export default function AdminAds({ adminToken }) {
                   <p className="text-xs text-gray-500">
                     Account: <span className="font-mono">{adsenseStatus.account_id}</span>
                   </p>
+                  {adsenseStatus.sync && (
+                    <div
+                      className="text-[11px] rounded-lg px-3 py-2 border"
+                      style={
+                        adsenseStatus.sync.last_status === 'ok'
+                          ? { background: 'rgba(16,185,129,0.06)', borderColor: 'rgba(16,185,129,0.2)', color: '#047857' }
+                          : adsenseStatus.sync.last_status === 'error'
+                            ? { background: 'rgba(239,68,68,0.06)', borderColor: 'rgba(239,68,68,0.2)', color: '#b91c1c' }
+                            : { background: '#f9fafb', borderColor: '#e5e7eb', color: '#4b5563' }
+                      }
+                    >
+                      <div className="font-semibold mb-0.5">
+                        {adsenseStatus.sync.last_status === 'ok'    && '✓ Last sync OK'}
+                        {adsenseStatus.sync.last_status === 'error' && '✕ Last sync failed'}
+                        {!adsenseStatus.sync.last_status            && 'No sync attempted yet'}
+                      </div>
+                      {adsenseStatus.sync.last_success_at && (
+                        <div>Last success: {new Date(adsenseStatus.sync.last_success_at).toLocaleString()}</div>
+                      )}
+                      {adsenseStatus.sync.last_attempted_at && adsenseStatus.sync.last_status === 'error' && (
+                        <div>Last attempt: {new Date(adsenseStatus.sync.last_attempted_at).toLocaleString()}</div>
+                      )}
+                      {adsenseStatus.sync.last_error_message && (
+                        <div className="font-mono text-[10px] mt-1 opacity-80">{adsenseStatus.sync.last_error_message}</div>
+                      )}
+                    </div>
+                  )}
                   <button
                     onClick={onSyncAdsense}
                     disabled={syncing}
@@ -467,7 +494,30 @@ export default function AdminAds({ adminToken }) {
                           <td className="py-2 pr-3 text-gray-900 font-semibold">₹{Number(e.revenue_inr || 0).toLocaleString()}</td>
                           <td className="py-2 pr-3 text-gray-700">{e.impressions ? Number(e.impressions).toLocaleString() : '—'}</td>
                           <td className="py-2 pr-3 text-gray-700">{e.fill_rate_pct != null ? `${e.fill_rate_pct}%` : '—'}</td>
-                          <td className="py-2 pr-3 text-gray-400 text-xs">{e.source || 'manual'}</td>
+                          <td className="py-2 pr-3">
+                            {(() => {
+                              const src = e.source || 'manual';
+                              const styles = {
+                                adsense_api: { bg: 'rgba(16,185,129,0.10)', fg: '#047857', label: 'API' },
+                                csv:         { bg: 'rgba(59,130,246,0.10)', fg: '#1d4ed8', label: 'CSV' },
+                                manual:      { bg: 'rgba(245,158,11,0.10)', fg: '#b45309', label: 'manual' },
+                              }[src] || { bg: '#f3f4f6', fg: '#4b5563', label: src };
+                              return (
+                                <span
+                                  className="px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wide"
+                                  style={{ background: styles.bg, color: styles.fg }}
+                                  title={
+                                    e.currency_original && e.currency_original !== 'INR'
+                                      ? `${e.currency_original} ${e.revenue_usd ?? ''} → ₹${e.revenue_inr} @ ${e.fx_rate ?? '?'} (${e.fx_source || 'unknown'})`
+                                      : src === 'adsense_api' ? 'Auto-synced from AdSense Management API' :
+                                        src === 'csv' ? 'Imported via CSV upload' : 'Manually entered'
+                                  }
+                                >
+                                  {styles.label}
+                                </span>
+                              );
+                            })()}
+                          </td>
                           <td className="py-2 pr-3">
                             <button
                               onClick={() => onDeleteEntry(e._id)}

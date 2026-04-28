@@ -1,5 +1,6 @@
 import { Loader2, RefreshCw, Eye, TrendingUp, DollarSign, Target } from 'lucide-react';
 import { Card, Stat } from './shared';
+import CurrencyProvenanceCaption, { breakdownTooltip } from './CurrencyProvenanceCaption';
 
 export default function ConversionsTab({ pageConvData, pageConvLoading, loadPageConversions }) {
   return (
@@ -22,12 +23,17 @@ export default function ConversionsTab({ pageConvData, pageConvLoading, loadPage
         <>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             {[
-              { icon: Eye,        label: 'Funnel Hits',  value: (pageConvData.total_views || 0).toLocaleString(), color: '#06b6d4' },
-              { icon: Target,     label: 'Conversion Events', value: pageConvData.total_conversions || 0, color: '#8b5cf6' },
-              { icon: TrendingUp, label: 'Top CVR',           value: `${pageConvData.top_cvr || 0}%`, color: '#10b981' },
-              { icon: DollarSign, label: 'Revenue Attributed',value: `₹${(pageConvData.revenue_attributed || 0).toLocaleString()}`, color: '#f59e0b' },
-            ].map(s => <Stat key={s.label} icon={s.icon} label={s.label} value={s.value} color={s.color} />)}
+              { icon: Eye,        label: 'Funnel Hits',  value: (pageConvData.total_views || 0).toLocaleString(), color: '#06b6d4', tip: '' },
+              { icon: Target,     label: 'Conversion Events', value: pageConvData.total_conversions || 0, color: '#8b5cf6', tip: '' },
+              { icon: TrendingUp, label: 'Top CVR',           value: `${pageConvData.top_cvr || 0}%`, color: '#10b981', tip: '' },
+              { icon: DollarSign, label: 'Revenue Attributed',value: `₹${Number(pageConvData.revenue_attributed || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`, color: '#f59e0b', tip: breakdownTooltip(pageConvData.currency_breakdown) },
+            ].map(s => (
+              <div key={s.label} title={s.tip}>
+                <Stat icon={s.icon} label={s.label} value={s.value} color={s.color} />
+              </div>
+            ))}
           </div>
+          <CurrencyProvenanceCaption breakdown={pageConvData.currency_breakdown} className="px-1" />
 
           {pageConvData.pages?.length > 0 && (
             <Card title="Top Converting Pages">

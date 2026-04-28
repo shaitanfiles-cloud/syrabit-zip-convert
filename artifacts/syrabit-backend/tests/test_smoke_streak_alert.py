@@ -49,6 +49,11 @@ class _FakeSmokeLog:
         rng = (query or {}).get("ran_at") or {}
         gte = rng.get("$gte")
         lt = rng.get("$lt")
+        # The production query also carries an ``$or`` clause that excludes
+        # rows whose ``skipped_reason`` is set (so quiet "no_publish_today"
+        # runs don't pollute the streak window). Honour it here so tests can
+        # mix skipped + real rows on the same day.
+        or_clauses = (query or {}).get("$or")
         out = []
         for d in self._docs:
             ts = d.get("ran_at")
@@ -56,6 +61,12 @@ class _FakeSmokeLog:
                 continue
             if lt is not None and ts >= lt:
                 continue
+            if or_clauses:
+                sr = d.get("skipped_reason")
+                # Skipped row → not match the "skipped_reason missing/None/empty"
+                # disjunction → drop.
+                if sr is not None and sr != "":
+                    continue
             out.append(d)
         return _FakeCursor(out)
 
@@ -159,6 +170,50 @@ def test_streak_alert_skipped_when_a_day_has_no_runs():
     _reset_cooldown()
     from routes import bot_discovery as bd
     assert _run(bd._evaluate_smoke_failure_streak()) is None
+
+
+def test_streak_alert_fires_when_failed_day_also_has_skipped_runs():
+    """Task #988 — quiet smoke runs (``skipped_reason`` set) must NOT
+    mask an actively-failing day.
+
+    The architect-flagged regression was: a day where the smoke ALSO
+    happened to log a "no published page today" skipped row alongside
+    a real failure was being treated as having a "passing" run, which
+    silently broke the streak even though the chain was genuinely
+    broken. The fix filters skipped rows out at the query level so the
+    failed row stands alone and the day still counts as a failure day.
+
+    Scenario: today + yesterday both have a failed smoke run, AND each
+    day also has a later skipped (quiet) row. The streak alert must
+    still fire.
+    """
+    docs = [
+        # Today — early failure, later quiet skip.
+        _row(0, ok=False, url="https://syrabit.ai/p1", error="503"),
+        {**_row(0, ok=True), "ran_at": _utc_day(0, hour=18),
+         "skipped_reason": "no_publish_today"},
+        # Yesterday — same shape: a failure plus a later skipped row.
+        _row(1, ok=False, url="https://syrabit.ai/p2", error="500"),
+        {**_row(1, ok=True), "ran_at": _utc_day(1, hour=20),
+         "skipped_reason": "no_publish_today"},
+    ]
+    _install_db(docs)
+    _reset_cooldown()
+    from routes import bot_discovery as bd
+
+    breakdown = _run(bd._evaluate_smoke_failure_streak())
+    assert breakdown is not None, (
+        "skipped/quiet rows must be filtered so a failed day still "
+        "counts toward the streak"
+    )
+    per_day = breakdown["per_day"]
+    # Both days should register exactly one failure (the skipped rows
+    # are dropped at the query layer, so they don't show up as passes).
+    assert all(b["passes"] == 0 for b in per_day.values()), (
+        "skipped rows must not be counted as passes"
+    )
+    assert all(b["failures"] == 1 for b in per_day.values())
+    assert breakdown["failure_days"] == 2
 
 
 def test_streak_alert_respects_cooldown():

@@ -5,15 +5,22 @@
   "scripts": {
     "dev": "wrangler dev",
     "build": "echo 'syrabit-edge: no build step — wrangler bundles src/index.ts on deploy'",
-    "deploy": "wrangler deploy",
+    "deploy": "bash scripts/check-d1-drift.sh && wrangler deploy",
+    "deploy:dry": "wrangler deploy --dry-run",
+    "deploy:preview": "bash scripts/check-d1-drift.sh && wrangler deploy --env preview",
+    "deploy:preview:dry": "wrangler deploy --env preview --dry-run",
+    "d1:check-drift": "bash scripts/check-d1-drift.sh",
+    "smoke": "bash scripts/smoke-test.sh",
+    "smoke:preview": "bash scripts/smoke-preview.sh",
+    "test-fire:watchdog": "bash scripts/test-fire-watchdog.sh",
     "test": "vitest run",
     "d1:migrate:local": "wrangler d1 migrations apply syrabit-content --local",
     "d1:migrate:remote": "wrangler d1 migrations apply syrabit-content --remote"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20241205.0",
+    "@cloudflare/workers-types": "^4.20260424.1",
     "typescript": "^5.7.0",
     "vitest": "^4.1.4",
-    "wrangler": "^3.99.0"
+    "wrangler": "^4.0.0"
   }
 }

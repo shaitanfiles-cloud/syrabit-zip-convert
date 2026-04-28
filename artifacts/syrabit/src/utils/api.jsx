@@ -86,8 +86,8 @@ export const getSubject = (id) => axios.get(`${WORKER_API}/content/subjects/${id
 export const getChapters = (subjectId) => axios.get(`${WORKER_API}/content/chapters/${subjectId}`);
 export const getChunks = (chapterId) => axios.get(`${WORKER_API}/content/chunks/${chapterId}`);
 export const getChapterTopicSummary = (chapterId) => axios.get(`${WORKER_API}/content/chapters/${chapterId}/topic-summary`);
-export const getChapterTopicContent = (chapterId) => axios.get(`${WORKER_API}/content/chapters/${chapterId}/topic-content`);
-export const getTopicPage = (topicId, pageType) => axios.get(`${WORKER_API}/content/topic/${topicId}/page/${pageType}`);
+const getChapterTopicContent = (chapterId) => axios.get(`${WORKER_API}/content/chapters/${chapterId}/topic-content`);
+const getTopicPage = (topicId, pageType) => axios.get(`${WORKER_API}/content/topic/${topicId}/page/${pageType}`);
 
 // ── Educational Browser (Task #577) ───────────────────────────────────────
 export const eduFetchReader = (url, opts = {}) =>
@@ -185,6 +185,46 @@ export const adminLogout = () =>
 export const adminGetDashboard = (token) =>
   axios.get(`${API_BASE}/admin/dashboard`, { headers: adminHeaders(token), withCredentials: true });
 
+// Task #701 — list subjects served via the relaxed status filter so
+// admins can flip them to "published" and silence the WARN logs.
+export const adminGetDraftServedSubjects = (token) =>
+  axios.get(`${API_BASE}/admin/content/draft-served-subjects`, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+  });
+
+export const adminPublishSubject = (token, subjectId) =>
+  axios.patch(
+    `${API_BASE}/admin/content/subjects/${subjectId}`,
+    { status: 'published' },
+    { headers: adminHeaders(token), withCredentials: true },
+  );
+
+// Task #940 — Entity SEO + Knowledge Graph health panel. Mirrors the
+// FastAPI router shape from `routes/admin_entity_seo.py`:
+//   GET  /admin/seo/entity/status     — current snapshot + WoW deltas
+//   GET  /admin/seo/entity/history    — recent snapshots for the chart
+//   POST /admin/seo/entity/refresh    — manual re-probe (admin override)
+export const adminEntitySeoStatus = (token) =>
+  axios.get(`${API_BASE}/admin/seo/entity/status`, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+  });
+
+export const adminEntitySeoHistory = (token, limit = 20) =>
+  axios.get(`${API_BASE}/admin/seo/entity/history`, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+    params: { limit },
+  });
+
+export const adminEntitySeoRefresh = (token) =>
+  axios.post(`${API_BASE}/admin/seo/entity/refresh`, {}, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+    timeout: 60000,
+  });
+
 export const adminSeoHealthHistory = (token, limit = 168) =>
   axios.get(`${API_BASE}/admin/seo/health-history`, {
     headers: adminHeaders(token),
@@ -276,9 +316,31 @@ export const adminGetCfOverview = (token, range = '7d') =>
 export const adminGetHydrateStats = (token, days = 7) =>
   axios.get(`${API_BASE}/admin/analytics/hydrate-stats`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
 
-// Task #654: Google review prompt funnel tile
+// Task #654 (Trustpilot per #724/#726): review prompt funnel tile
 export const adminGetReviewPromptStats = (token, days = 30) =>
   axios.get(`${API_BASE}/admin/analytics/review-prompt-stats`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
+
+// Task #681: per-reason baseline mean CTR + stddev + current z-score
+// (the same noise band the auto-tuned collapse alert uses, surfaced
+// next to each row so admins can eyeball volatility ahead of an alert).
+export const adminGetReviewPromptBaselineNoise = (token, windowDays = 7) =>
+  axios.get(
+    `${API_BASE}/admin/analytics/review-prompt-stats/baseline-noise`,
+    { headers: adminHeaders(token), withCredentials: true, params: { window_days: windowDays } },
+  );
+
+// Task #662: per-reason 8-week trend (drill-down sparkline)
+// Task #673: optional `compare` reason overlays a second series on the
+// same chart so admins can spot whether a CTR dip is reason-specific.
+export const adminGetReviewPromptByReasonTrend = (token, reason, weeks = 8, compare = null) => {
+  const params = { reason, weeks };
+  if (compare) params.compare = compare;
+  return axios.get(`${API_BASE}/admin/analytics/review-prompt-stats/by-reason-trend`, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+    params,
+  });
+};
 
 export const adminGetRevenue = (token, days = 30) =>
   axios.get(`${API_BASE}/admin/analytics/revenue`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
@@ -338,6 +400,12 @@ export const adminAdsenseSync = (token, days = 7) =>
 export const adminGetSettings = (token) =>
   axios.get(`${API_BASE}/admin/settings`, { headers: adminHeaders(token), withCredentials: true });
 
+export const adminGetDiagnostics = (token) =>
+  axios.get(`${API_BASE}/admin/diagnostics`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminDisableBreakGlass = (token) =>
+  axios.post(`${API_BASE}/admin/break-glass/disable`, {}, { headers: adminHeaders(token), withCredentials: true });
+
 export const adminUpdateSettings = (token, data) =>
   axios.patch(`${API_BASE}/admin/settings`, data, { headers: adminHeaders(token), withCredentials: true });
 
@@ -369,24 +437,24 @@ export const adminUpdateRoadmapItem = (token, id, data) =>
 export const adminGetActivityLog = (token) =>
   axios.get(`${API_BASE}/admin/activity-log`, { headers: adminHeaders(token), withCredentials: true });
 
-export const getSeoPage = (board, classSlug, subjectSlug, topicSlug, pageType) => {
+const getSeoPage = (board, classSlug, subjectSlug, topicSlug, pageType) => {
   let url = `${WORKER_API}/seo/page/${board}/${classSlug}/${subjectSlug}/${topicSlug}`;
   if (pageType && pageType !== 'notes') url += `/${pageType}`;
   return axios.get(url);
 };
 
-export const getSeoPageBundle = (board, classSlug, subjectSlug, topicSlug, pageType) =>
+const getSeoPageBundle = (board, classSlug, subjectSlug, topicSlug, pageType) =>
   axios.get(`${WORKER_API}/seo/page-bundle/${board}/${classSlug}/${subjectSlug}/${topicSlug}`, {
     params: pageType && pageType !== 'notes' ? { pt: pageType } : undefined,
   });
 
-export const getSeoPageTypes = (board, classSlug, subjectSlug, topicSlug) =>
+const getSeoPageTypes = (board, classSlug, subjectSlug, topicSlug) =>
   axios.get(`${WORKER_API}/seo/page-types/${board}/${classSlug}/${subjectSlug}/${topicSlug}`);
 
-export const getSeoRelated = (topicSlug) =>
+const getSeoRelated = (topicSlug) =>
   axios.get(`${WORKER_API}/seo/related/${topicSlug}`);
 
-export const getChapterBySlug = (board, classSlug, subjectSlug, chapterSlug) =>
+const getChapterBySlug = (board, classSlug, subjectSlug, chapterSlug) =>
   axios.get(`${WORKER_API}/content/chapter-by-slug/${board}/${classSlug}/${subjectSlug}/${chapterSlug}`);
 
 // ── Admin SEO management ──────────────────────────────────────────────────────
@@ -449,7 +517,7 @@ export const adminSeoBackfillNotes = (token) =>
 export const adminSeoInsights = (token) =>
   axios.get(`${API_BASE}/seo/insights`, { headers: adminHeaders(token), withCredentials: true });
 
-export const adminSeoExpand = (token, boardSlug, pageTypes = null) =>
+const adminSeoExpand = (token, boardSlug, pageTypes = null) =>
   axios.post(`${API_BASE}/seo/expand/${boardSlug}`, pageTypes ? { page_types: pageTypes } : {}, { headers: adminHeaders(token), withCredentials: true });
 
 export const adminSeoBulkPublish = (token, pageType = null, subjectId = null) =>
@@ -477,6 +545,108 @@ export const adminSeoRefreshMeta = (token) =>
 
 export const adminSeoGoogleIndexingStats = (token) =>
   axios.get(`${API_BASE}/admin/seo/google-indexing-stats`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminTopicDiscoveryRuns = (token, limit = 20) =>
+  axios.get(`${API_BASE}/admin/seo/topic-discovery/runs`, {
+    headers: adminHeaders(token), withCredentials: true, params: { limit },
+  });
+
+export const adminTopicDiscoveryCandidates = (token, { runId = null, decision = null, limit = 100, skip = 0 } = {}) => {
+  const params = { limit, skip };
+  if (runId) params.run_id = runId;
+  if (decision) params.decision = decision;
+  return axios.get(`${API_BASE}/admin/seo/topic-discovery/candidates`, {
+    headers: adminHeaders(token), withCredentials: true, params,
+  });
+};
+
+export const adminTopicDiscoveryRunNow = (token) =>
+  axios.post(`${API_BASE}/admin/seo/topic-discovery/run-now`, null, {
+    headers: adminHeaders(token), withCredentials: true,
+  });
+
+export const adminTopicDiscoveryOverride = (token, candidateId, decision, reason = '') =>
+  axios.post(
+    `${API_BASE}/admin/seo/topic-discovery/${encodeURIComponent(candidateId)}/override`,
+    { decision, reason },
+    { headers: adminHeaders(token), withCredentials: true },
+  );
+
+// Task #938 — closed-loop content remediation agent.
+export const adminSeoRemediationStatus = (token) =>
+  axios.get(`${API_BASE}/admin/seo/remediation/status`, {
+    headers: adminHeaders(token), withCredentials: true,
+  });
+
+export const adminSeoRemediationHistory = (token, { days = 7, limit = 50, action = null } = {}) => {
+  const params = { days, limit };
+  if (action) params.action = action;
+  return axios.get(`${API_BASE}/admin/seo/remediation/history`, {
+    headers: adminHeaders(token), withCredentials: true, params,
+  });
+};
+
+export const adminSeoRemediationPromote = (token, recId) =>
+  axios.post(
+    `${API_BASE}/admin/seo/remediation/${encodeURIComponent(recId)}/promote`,
+    null,
+    { headers: adminHeaders(token), withCredentials: true },
+  );
+
+export const adminSeoRemediationTrigger = (token, payload) =>
+  axios.post(`${API_BASE}/admin/seo/remediation/trigger`, payload, {
+    headers: adminHeaders(token), withCredentials: true,
+  });
+
+export const adminSeoRemediationCircuitReset = (token) =>
+  axios.post(`${API_BASE}/admin/seo/remediation/circuit/reset`, null, {
+    headers: adminHeaders(token), withCredentials: true,
+  });
+
+// Task #939 — agentic internal-linker.
+export const adminSeoInternalLinksStatus = (token) =>
+  axios.get(`${API_BASE}/admin/seo/internal-links/status`, {
+    headers: adminHeaders(token), withCredentials: true,
+  });
+
+export const adminSeoInternalLinksPending = (token, { limit = 50 } = {}) =>
+  axios.get(`${API_BASE}/admin/seo/internal-links/pending`, {
+    headers: adminHeaders(token), withCredentials: true, params: { limit },
+  });
+
+export const adminSeoInternalLinksHistory = (token, { days = 7, limit = 100, action = null } = {}) => {
+  const params = { days, limit };
+  if (action) params.action = action;
+  return axios.get(`${API_BASE}/admin/seo/internal-links/history`, {
+    headers: adminHeaders(token), withCredentials: true, params,
+  });
+};
+
+export const adminSeoInternalLinksApprove = (token, recId) =>
+  axios.post(
+    `${API_BASE}/admin/seo/internal-links/${encodeURIComponent(recId)}/approve`,
+    null,
+    { headers: adminHeaders(token), withCredentials: true },
+  );
+
+export const adminSeoInternalLinksReject = (token, recId) =>
+  axios.post(
+    `${API_BASE}/admin/seo/internal-links/${encodeURIComponent(recId)}/reject`,
+    null,
+    { headers: adminHeaders(token), withCredentials: true },
+  );
+
+export const adminSeoInternalLinksRevert = (token, recId) =>
+  axios.post(
+    `${API_BASE}/admin/seo/internal-links/${encodeURIComponent(recId)}/revert`,
+    null,
+    { headers: adminHeaders(token), withCredentials: true },
+  );
+
+export const adminSeoInternalLinksTrigger = (token, payload) =>
+  axios.post(`${API_BASE}/admin/seo/internal-links/trigger`, payload, {
+    headers: adminHeaders(token), withCredentials: true,
+  });
 
 export const adminSeoReviewQueue = (token, status = 'draft', limit = 200) =>
   axios.get(`${API_BASE}/seo/review-queue`, { headers: adminHeaders(token), withCredentials: true, params: { status, limit } });
@@ -657,16 +827,16 @@ export const adminResetQuizQuota = (token, userId) =>
   axios.post(`${API_BASE}/admin/users/${userId}/quiz-quota/reset`, {}, { headers: adminHeaders(token), withCredentials: true });
 
 // ── Personalized CMS ────────────────────────────────────────────────────────
-export const cmsPersonalize = (body) =>
+const cmsPersonalize = (body) =>
   apiClient().post('/cms/personalize', body);
 
-export const cmsListPlans = (userId) =>
+const cmsListPlans = (userId) =>
   apiClient().get(`/cms/${userId}`);
 
-export const adminPipelineAutoGenerate = (token, subjectId, skipExisting = false) =>
+const adminPipelineAutoGenerate = (token, subjectId, skipExisting = false) =>
   axios.post(`${API_BASE}/admin/pipeline/auto-generate`, { subject_id: subjectId, skip_existing: skipExisting }, { headers: adminHeaders(token), withCredentials: true });
 
-export const adminPipelineStatus = (token, jobId) =>
+const adminPipelineStatus = (token, jobId) =>
   axios.get(`${API_BASE}/admin/pipeline/status/${jobId}`, { headers: adminHeaders(token), withCredentials: true });
 
 
@@ -676,7 +846,7 @@ export const adminIntelligenceOverview = (token) =>
 export const adminContentAutoHeal = (token) =>
   axios.post(`${API_BASE}/admin/content/auto-heal`, {}, { headers: adminHeaders(token), withCredentials: true });
 
-export const adminContentVersionHistory = (token, chapterId) =>
+const adminContentVersionHistory = (token, chapterId) =>
   axios.get(`${API_BASE}/admin/content/version-history/${chapterId}`, { headers: adminHeaders(token), withCredentials: true });
 
 export const postChatFeedback = (data) =>
@@ -721,6 +891,20 @@ export const adminUpdateAlertSettings = (token, data) =>
 export const adminTestAlertDelivery = (token) =>
   axios.post(`${API_BASE}/admin/alert-settings/test-delivery`, {}, { headers: adminHeaders(token), withCredentials: true });
 
+// Task #660: manually trigger the weekly review-prompt digest send (or
+// preview the rendered HTML / resolved recipient list). When `to` is
+// supplied, it overrides the persisted recipient list so admins can
+// "send me a test now" without first saving the field.
+export const adminSendReviewPromptWeeklyDigest = (token, { to = null, previewOnly = false } = {}) => {
+  const params = previewOnly ? { preview_only: true } : {};
+  const body = to ? { to } : {};
+  return axios.post(
+    `${API_BASE}/admin/analytics/review-prompt-weekly-digest/send`,
+    body,
+    { headers: adminHeaders(token), withCredentials: true, params },
+  );
+};
+
 export const adminGetAlerts = (token, { limit = 50, acknowledged, type, date_from, date_to, include_synthetic } = {}) => {
   const params = { limit };
   if (acknowledged !== undefined && acknowledged !== null) params.acknowledged = acknowledged;
@@ -743,10 +927,19 @@ export const adminAcknowledgeAllAlerts = (token) =>
 export const adminBackfillThresholds = (token) =>
   axios.post(`${API_BASE}/admin/alerts/backfill-thresholds`, {}, { headers: adminHeaders(token), withCredentials: true });
 
-export const adminIndexNowPing = (token, urls = []) =>
+export const adminGetAlertCooldowns = (token, { limit = 200, only_active } = {}) => {
+  const params = { limit };
+  if (only_active) params.only_active = true;
+  return axios.get(`${API_BASE}/admin/alerts/cooldowns`, { headers: adminHeaders(token), withCredentials: true, params });
+};
+
+export const adminReleaseAlertCooldown = (token, dedupKey) =>
+  axios.delete(`${API_BASE}/admin/alerts/cooldowns/${encodeURIComponent(dedupKey)}`, { headers: adminHeaders(token), withCredentials: true });
+
+const adminIndexNowPing = (token, urls = []) =>
   axios.post(`${API_BASE}/admin/indexnow/ping`, { urls }, { headers: adminHeaders(token), withCredentials: true });
 
-export const adminIndexNowStatus = (token) =>
+const adminIndexNowStatus = (token) =>
   axios.get(`${API_BASE}/admin/indexnow/status`, { headers: adminHeaders(token), withCredentials: true });
 
 export const adminIndexNowBackfillStart = (token) =>
@@ -772,3 +965,105 @@ export const adminSeoIndexNowSmoke = (token) =>
 // Task #564: smoke run history (manual + cron) for the trend strip
 export const adminSeoIndexNowSmokeHistory = (token, limit = 50) =>
   axios.get(`${API_BASE}/admin/seo/indexnow/smoke/history`, { headers: adminHeaders(token), withCredentials: true, params: { limit } });
+
+// ─────────────────────────────────────────────────────────────────────
+// Task #944 — Unified Log Explorer
+// ─────────────────────────────────────────────────────────────────────
+// Helper that turns the (mostly) flat filter state in AdminLogsExplorer
+// into the URLSearchParams shape the backend expects. The backend route
+// (admin_logs.admin_list_logs) accepts ``sources`` and ``levels`` as
+// comma-separated strings, so we pre-flatten arrays here to avoid
+// surprising serialisation by axios's default `paramsSerializer`.
+const _logsFiltersToParams = (filters = {}) => {
+  const out = {};
+  if (Array.isArray(filters.sources) && filters.sources.length)
+    out.sources = filters.sources.join(',');
+  if (Array.isArray(filters.levels) && filters.levels.length)
+    out.levels = filters.levels.join(',');
+  if (filters.status_min != null && filters.status_min !== '')
+    out.status_min = Number(filters.status_min);
+  if (filters.status_max != null && filters.status_max !== '')
+    out.status_max = Number(filters.status_max);
+  if (filters.route_prefix) out.route_prefix = filters.route_prefix;
+  if (filters.correlation_id) out.correlation_id = filters.correlation_id;
+  if (filters.q) out.q = filters.q;
+  if (filters.since) out.since = filters.since;
+  if (filters.until) out.until = filters.until;
+  return out;
+};
+
+export const adminLogsList = (token, { filters = {}, limit = 200, before } = {}) =>
+  axios.get(`${API_BASE}/admin/logs`, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+    params: { ..._logsFiltersToParams(filters), limit, ...(before ? { before } : {}) },
+  });
+
+export const adminLogsTrace = (token, correlationId) =>
+  axios.get(`${API_BASE}/admin/logs/trace/${encodeURIComponent(correlationId)}`,
+    { headers: adminHeaders(token), withCredentials: true });
+
+export const adminLogsStatus = (token) =>
+  axios.get(`${API_BASE}/admin/logs/status`,
+    { headers: adminHeaders(token), withCredentials: true });
+
+export const adminLogsPause = (token) =>
+  axios.post(`${API_BASE}/admin/logs/pause`, {},
+    { headers: adminHeaders(token), withCredentials: true });
+
+export const adminLogsResume = (token) =>
+  axios.post(`${API_BASE}/admin/logs/resume`, {},
+    { headers: adminHeaders(token), withCredentials: true });
+
+export const adminLogsRotateToken = (token) =>
+  axios.post(`${API_BASE}/admin/logs/rotate-token`, {},
+    { headers: adminHeaders(token), withCredentials: true });
+
+export const adminLogsClear = (token, sources = []) => {
+  const params = sources.length ? { sources: sources.join(',') } : undefined;
+  return axios.delete(`${API_BASE}/admin/logs`, {
+    headers: adminHeaders(token), withCredentials: true, params,
+  });
+};
+
+// Returns a fully-qualified URL (with query string) the browser can hit
+// directly via window.open or <a download>. Cookies + admin JWT auth
+// must already be in place. Kept for any caller that already relies
+// on cookie-only admin auth.
+export const adminLogsExportUrl = ({ filters = {}, fmt = 'ndjson', limit = 5000 } = {}) => {
+  const sp = new URLSearchParams();
+  const params = _logsFiltersToParams(filters);
+  Object.entries(params).forEach(([k, v]) => sp.set(k, String(v)));
+  sp.set('fmt', fmt);
+  sp.set('limit', String(limit));
+  return `${API_BASE}/admin/logs/export?${sp.toString()}`;
+};
+
+// Authenticated download — fetches the export as a Blob with the admin
+// Bearer token in the Authorization header, then triggers a browser
+// download. Use this in environments where admin auth is Bearer-only
+// (no cookie). Returns the filename used for the download so callers
+// can surface a confirmation toast.
+export const adminLogsDownloadExport = async (token,
+                                              { filters = {}, fmt = 'ndjson', limit = 5000 } = {}) => {
+  const params = _logsFiltersToParams(filters);
+  const resp = await axios.get(`${API_BASE}/admin/logs/export`, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+    responseType: 'blob',
+    params: { ...params, fmt, limit },
+  });
+  const ext = fmt === 'csv' ? 'csv' : 'ndjson';
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filename = `unified_logs_${stamp}.${ext}`;
+  const url = window.URL.createObjectURL(new Blob([resp.data]));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Defer revoke so Safari has time to begin the download.
+  setTimeout(() => window.URL.revokeObjectURL(url), 1000);
+  return filename;
+};

@@ -4,7 +4,7 @@
  * Import this everywhere: ProfilePage, PricingPage, LandingPage, AdminPlans.
  */
 
-export const PLANS = {
+const PLANS = {
   free: {
     id: 'free',
     label: 'Free',

@@ -2,10 +2,23 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import { log } from '@/utils/logger';
 import AdminQuickLinks from './AdminQuickLinks';
+import AdminDraftServedSubjects from './AdminDraftServedSubjects';
+import AlertReasonsRow from './AlertReasonsRow';
+import BotCachePanel from './BotCachePanel';
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 
 const safeArr = (v) => (Array.isArray(v) ? v : []);
 const safeObj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
+// Compact integer formatter — matches CF dashboard style ("7k", "6.02k",
+// "1k") so the redesigned Cloudflare AI Crawl Control card reads the
+// same way as Cloudflare's own Overview tab. Falls back to a plain
+// localised string for values < 1,000 (where compact would just print
+// the same digits) so small counts like "108" or "11" stay legible.
+const _COMPACT_INT_FORMATTER = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 2 });
+const formatCompactInt = (n) => {
+  const num = Number(n) || 0;
+  return num >= 1000 ? _COMPACT_INT_FORMATTER.format(num) : num.toLocaleString();
+};
 const normalizeChatFallbacks = (d) => (d ? { ...d, daily: safeArr(d.daily) } : null);
 const normalizeLatency = (d) => (d ? { ...d, daily: safeArr(d.daily) } : null);
 const normalizeTokenSpend = (d) => (d ? { ...d, daily: safeArr(d.daily), totals: safeObj(d.totals) } : null);
@@ -18,14 +31,16 @@ import {
   UserPlus, Globe, Search, Bot, BarChart2, Server, Clock,
   CheckCircle, AlertCircle, AlertTriangle, Wifi, Database, DollarSign, Crown,
   Layers, Link2, FileCheck, Target, Cpu, ShieldCheck, Smartphone,
-  Volume2, VolumeX, Bell, BellOff, RotateCcw, Upload, Trash2, Music,
+  Volume2, VolumeX, Bell, BellOff, RotateCcw, Upload, Trash2, Music, X,
+  ShieldAlert, UserCheck, Cloud,
 } from 'lucide-react';
 import AudioTrimPreview from './AudioTrimPreview';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import axios from 'axios';
-import { adminGetDashboard, adminGetCfOverview, seoPipelineStatus, adminSeoHealthHistory, adminSeoHealthSnapshotNow, seoHealthLive, seoHealthDeepScan, adminSeoDeepScanHistory, API_BASE } from '@/utils/api';
+import { adminGetDashboard, adminGetCfOverview, seoPipelineStatus, adminSeoHealthHistory, adminSeoHealthSnapshotNow, seoHealthLive, seoHealthDeepScan, adminSeoDeepScanHistory, adminGetAlertCooldowns, API_BASE } from '@/utils/api';
 import CloudflareAnalyticsBanner from './analytics/CloudflareAnalyticsBanner';
 import { pushChannelTone } from '@/utils/pushChannelTone';
+import { TODAY_BUCKET_CAPTION, UTC_MIDNIGHT_IN_IST } from '@/utils/time';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, ReferenceLine, CartesianGrid, Legend,
@@ -115,19 +130,26 @@ function ActivityItem({ event, idx }) {
   );
 }
 
-const DEP_ICONS = { mongodb: Database, postgresql: Database, redis: Server, supabase: Database };
+const DEP_ICONS = { mongodb: Database, postgresql: Database, cloudflare_cache: Cloud, supabase: Database };
+// Friendly display names so the underscored backend keys
+// (e.g. ``cloudflare_cache``) don't render as "Cloudflare_cache" via
+// the CSS ``capitalize`` rule. Keys not present here fall back to the
+// raw ``name`` (still capitalize-d by CSS) so adding new probes is a
+// no-op for the UI.
+const DEP_LABELS = { mongodb: 'MongoDB', postgresql: 'PostgreSQL', cloudflare_cache: 'Cloudflare Cache', supabase: 'Supabase' };
 const STATUS_COLORS = { ok: '#10b981', error: '#ef4444', not_configured: '#64748b', unknown: '#f59e0b' };
 
 function DepStatusCard({ name, status, latency }) {
   const Icon = DEP_ICONS[name] || Server;
   const color = STATUS_COLORS[status] || STATUS_COLORS.unknown;
+  const label = DEP_LABELS[name] || name;
   return (
     <div className="flex items-center gap-3 p-3 rounded-xl transition-all duration-200 hover:bg-gray-50 bg-gray-50 border border-gray-100">
       <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: `${color}15` }}>
         <Icon size={14} style={{ color }} />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-gray-700 text-sm font-medium capitalize">{name}</p>
+        <p className="text-gray-700 text-sm font-medium">{label}</p>
         <p className="text-xs" style={{ color }}>{status === 'ok' ? 'Connected' : status}</p>
       </div>
       {status === 'ok' && (
@@ -169,8 +191,8 @@ function PipelineWidget({ token }) {
           <span className="text-xs text-gray-400">({pipe.total_topics} topics · {pipe.pages_total} pages)</span>
         </div>
         {pipe.published_today > 0 && (
-          <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600">
-            +{pipe.published_today} today
+          <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600" title={TODAY_BUCKET_CAPTION}>
+            +{pipe.published_today} today (UTC)
           </span>
         )}
       </div>
@@ -278,12 +300,25 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
   const [chatSpeedups, setChatSpeedups] = useState(null);
   const [speedupDays, setSpeedupDays] = useState(7);
   const [speedupLoading, setSpeedupLoading] = useState(false);
+  // Task #810 — anonymous-quota wall card. Independent of the main
+  // dashboard payload because the period picker and the
+  // "Backfill today" action both re-fetch this card on demand
+  // without touching the rest of the dashboard cache.
+  const [anonQuotaWall, setAnonQuotaWall] = useState(null);
+  const [anonQuotaDays, setAnonQuotaDays] = useState(7);
+  const [anonQuotaLoading, setAnonQuotaLoading] = useState(false);
+  const [anonQuotaBackfilling, setAnonQuotaBackfilling] = useState(false);
   const [topQueries, setTopQueries] = useState(null);
   const [tokenSpend, setTokenSpend] = useState(null);
   const [funnel, setFunnel] = useState(null);
   const [coverage, setCoverage] = useState(null);
   const [pwaStats, setPwaStats] = useState(null);
   const [botAnalytics, setBotAnalytics] = useState(null);
+  // Cloudflare AI Crawl Control — sourced from CF GraphQL via the
+  // /admin/analytics/cf-ai-crawl-control route. When CF analytics
+  // credentials are missing the route returns `available: false` with a
+  // reason so we render an empty-state card instead of hiding the section.
+  const [cfCrawlControl, setCfCrawlControl] = useState(null);
   // Cloudflare Account Analytics overview — re-fetched whenever the
   // user clicks 24h / 7d / 30d on the Traffic card. Independent of the
   // dashboard payload so the selector responds instantly without
@@ -297,6 +332,13 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
   const [resubmittingIndexNow, setResubmittingIndexNow] = useState(false);
   const [resubmitMessage, setResubmitMessage] = useState('');
   const [alertHistory, setAlertHistory] = useState(null);
+  // Task #991 — surface the persistent alert-cooldown active count
+  // (from `/admin/alerts/cooldowns?only_active=true`) directly on the
+  // dashboard so on-call admins can spot "alert is being suppressed"
+  // without having to drill into Bot Security → Suppressed Alerts.
+  // Polled every 60s on the same cadence as the rest of the dashboard
+  // header counters (see AdminPage.jsx unack-alerts polling).
+  const [cooldownActiveCount, setCooldownActiveCount] = useState(0);
   const [seoHealth, setSeoHealth] = useState(null);
   const [seoHealthRefreshing, setSeoHealthRefreshing] = useState(false);
   const [seoLive, setSeoLive] = useState(null);
@@ -315,7 +357,41 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
   // "fresh" indicator and a banner if any sitemap was auto-scanned in
   // the last hour.
   const [seoAutoDeepScans, setSeoAutoDeepScans] = useState(null);
-  const [alertFilter, setAlertFilter] = useState('all');
+  // Task #692 — alert filter selection persists in the URL query
+  // string so admins can bookmark and share a focused view (e.g. drop
+  // a `?alert_status=unacknowledged&alert_reason=foo` link into an
+  // incident ticket). Initial state reads from the current URL so a
+  // refresh restores the same view; a useEffect (below) syncs every
+  // change back via history.replaceState (no extra entry in the back
+  // stack — the dashboard isn't a navigable surface).
+  const [alertFilter, setAlertFilter] = useState(() => {
+    if (typeof window === 'undefined') return 'all';
+    const v = new URLSearchParams(window.location.search).get('alert_status');
+    return v === 'unacknowledged' || v === 'acknowledged' || v === 'all' ? v : 'all';
+  });
+  const [alertReasonFilter, setAlertReasonFilter] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    return new URLSearchParams(window.location.search).get('alert_reason') || '';
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (alertFilter && alertFilter !== 'all') {
+      params.set('alert_status', alertFilter);
+    } else {
+      params.delete('alert_status');
+    }
+    if (alertReasonFilter) {
+      params.set('alert_reason', alertReasonFilter);
+    } else {
+      params.delete('alert_reason');
+    }
+    const qs = params.toString();
+    const next = `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`;
+    if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+      window.history.replaceState(window.history.state, '', next);
+    }
+  }, [alertFilter, alertReasonFilter]);
   // Task #426: hide synthetic test alerts (from "Test alert delivery" button)
   // by default; admins can opt in via the "Show test alerts" toggle.
   const [showSyntheticAlerts, setShowSyntheticAlerts] = useState(false);
@@ -339,6 +415,12 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
   // see read/write counters & quota % at a glance and react before a
   // KV outage starts dropping pages and the analytics beacon.
   const [kvHealth, setKvHealth] = useState(null);
+  // Task #689 — Cached state of the periodic Gemini health probe
+  // (Task #677). ``null`` while loading; ``{ status, last_check_ts,
+  // reason, consecutive_failures, ... }`` once the backend responds.
+  // Surfaced as a tile so admins can see *current* probe state without
+  // grepping logs and waiting for the email/Slack alert.
+  const [vertexProbe, setVertexProbe] = useState(null);
   // Task #470 — Latest GitHub Actions run for the backend + frontend
   // workflows. ``null`` while loading; ``{ configured: false, ... }``
   // when GITHUB_REPO isn't set; ``{ configured: true, runs: {...} }``
@@ -394,7 +476,9 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
     try {
       const statsRes = await axios.get(`${API_BASE}/admin/push/delivery-stats?days=7`, adminHdr(adminToken));
       setPushDeliverySummary(statsRes.data);
-    } catch {}
+    } catch (err) {
+      console.warn('AdminDashboard: /admin/push/delivery-stats fetch failed:', err);
+    }
     // Task #434 — pull channel_status.push from /admin/alert-settings
     // (the same payload Bot Security's Alert Settings panel uses) so
     // the dashboard tile can show last_success_at + last_error inline.
@@ -433,6 +517,16 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       setCiStatus(ciRes.data || null);
     } catch {
       setCiStatus({ configured: false, reason: 'Backend unreachable' });
+    }
+    // Task #689 — cached state of the periodic Gemini health probe.
+    try {
+      const vpRes = await axios.get(
+        `${API_BASE}/admin/vertex/probe-status`,
+        adminHdr(adminToken),
+      );
+      setVertexProbe(vpRes.data || null);
+    } catch {
+      setVertexProbe({ status: 'unknown', reason: 'Backend unreachable' });
     }
   }, [adminToken]);
 
@@ -485,7 +579,13 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       gain.gain.exponentialRampToValueAtTime(0.01, now + toneConfig.dur);
       osc.start(now);
       osc.stop(now + toneConfig.dur);
-    } catch {}
+    } catch (err) {
+      // WebAudio/Oscillator can throw when the AudioContext is
+      // suspended (e.g. before the first user gesture) or the tone
+      // config is malformed — both are best-effort UX nice-to-haves
+      // (the chime preview), so degrade silently with a debug log.
+      console.debug('AdminDashboard: chime preview tone failed:', err?.message);
+    }
   }, [chimeTone, notifPrefs?.custom_chime_url]);
 
   const handleChimeFileSelect = useCallback((e) => {
@@ -567,7 +667,7 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       const [
         dashRes, metricsRes,
         ragAccRes, fallbackRes, vectorRes, latencyRes,
-        queriesRes, tokenRes, funnelRes, coverageRes, pwaRes, botRes, indexNowRes, indexNowHistRes,
+        queriesRes, tokenRes, funnelRes, coverageRes, pwaRes, botRes, cfCrawlRes, indexNowRes, indexNowHistRes,
         alertHistRes, seoHealthRes,
       ] = await Promise.allSettled([
         adminGetDashboard(adminToken),
@@ -582,6 +682,7 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
         axios.get(`${API_BASE}/admin/content/coverage`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/pwa/stats`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/analytics/bot-traffic?days=30`, adminHdr(adminToken)),
+        axios.get(`${API_BASE}/admin/analytics/cf-ai-crawl-control?days=7`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/indexnow/stats`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/indexnow/history?limit=20`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/alerts?limit=50${showSyntheticAlerts ? '&include_synthetic=true' : ''}`, adminHdr(adminToken)),
@@ -600,6 +701,7 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       if (coverageRes.status === 'fulfilled') setCoverage(coverageRes.value.data); else { failed.push('coverage'); setCoverage(null); }
       if (pwaRes.status === 'fulfilled') setPwaStats(pwaRes.value.data); else { failed.push('pwa'); setPwaStats(null); }
       if (botRes.status === 'fulfilled') setBotAnalytics(botRes.value.data); else { failed.push('bot-analytics'); setBotAnalytics(null); }
+      if (cfCrawlRes.status === 'fulfilled') setCfCrawlControl(cfCrawlRes.value.data); else { failed.push('cf-ai-crawl-control'); setCfCrawlControl(null); }
       if (indexNowRes.status === 'fulfilled') setIndexNowStats(indexNowRes.value.data); else { failed.push('indexnow'); setIndexNowStats(null); }
       if (indexNowHistRes.status === 'fulfilled') setIndexNowHistory(indexNowHistRes.value.data); else setIndexNowHistory(null);
       if (alertHistRes.status === 'fulfilled') setAlertHistory(alertHistRes.value.data); else { failed.push('alerts'); setAlertHistory(null); }
@@ -633,6 +735,29 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
     return () => clearInterval(interval);
   }, [load, loadNotifPrefs]);
 
+  // Task #991 — poll the persistent alert-cooldown active count so the
+  // Alert History header can surface a "N on hold" pill whenever the
+  // 6h cross-worker cooldown is silencing alerts that would otherwise
+  // fire. Cheap call (the route returns just `active_count` plus the
+  // first row); we ask for limit=1 because the badge only needs the
+  // count, never the body. Failures are swallowed — the badge simply
+  // hides, matching the unack-count poll's behaviour in AdminPage.
+  useEffect(() => {
+    if (!adminToken) return undefined;
+    const fetchCount = () => {
+      adminGetAlertCooldowns(adminToken, { only_active: true, limit: 1 })
+        .then((res) => setCooldownActiveCount(res.data?.active_count ?? 0))
+        // On a transient failure, reset to 0 so a stale positive
+        // count from an earlier successful poll doesn't keep the
+        // badge visible and misleading. The next successful poll
+        // will repopulate the real number.
+        .catch(() => setCooldownActiveCount(0));
+    };
+    fetchCount();
+    const id = setInterval(fetchCount, 60000);
+    return () => clearInterval(id);
+  }, [adminToken]);
+
   // Cloudflare Account Analytics overview — fetch on mount and whenever
   // the user clicks a different range pill on the Traffic card.
   const loadCfOverview = useCallback(async (range) => {
@@ -652,6 +777,79 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
   useEffect(() => {
     loadCfOverview(cfRange);
   }, [cfRange, loadCfOverview]);
+
+  // Locked Cloudflare visitors window — used ONLY by the "Unique Visitors"
+  // tile in the Traffic card so the headline always reads "uniques over
+  // the last 30 days" regardless of which range pill (24h / 7d / 30d) is
+  // currently active for the rest of the tiles. Refreshes hourly since the
+  // 30-day window moves slowly enough that minute-level updates would be
+  // wasted CF GraphQL calls.
+  //
+  // Fallback chain: prefer the 30-day window, but if that call fails OR
+  // comes back empty (CF GraphQL occasionally returns ``connected:false``
+  // for the 30d range under quota pressure / token churn), retry with
+  // the 7-day window so the tile never goes blank. We cache the window
+  // we actually used in `cfVisitorsWindow` so the tile sub-label can
+  // honestly say which one is being shown when we degrade.
+  const [cfVisitors30d, setCfVisitors30d] = useState(null);
+  const [cfVisitorsWindow, setCfVisitorsWindow] = useState('30d');
+  useEffect(() => {
+    if (!adminToken) return;
+    let cancelled = false;
+    // True iff the response shape is one we can actually surface:
+    // a connected-CF payload with a non-null total-visits count AND
+    // complete bucket coverage for the requested window. We require
+    // `visits_coverage.complete` because Cloudflare's adaptive-groups
+    // dataset (the only one that still exposes `sum.visits`) is capped
+    // at ~8 days of retention on most plans — so a 30d call typically
+    // returns a non-null but partial total (~7-8 of 30 days), which
+    // would under-count by 4x if shown under a "30 days" headline.
+    // Falling through to the 7d window in that case gives a complete,
+    // honest number.
+    const isUsable = (data) => {
+      if (!data || data.connected === false) return false;
+      const v = data?.totals?.visits;
+      if (v === null || v === undefined) return false;
+      const cov = data?.totals?.visits_coverage;
+      // If coverage info is missing assume usable (back-compat with
+      // older backend versions that don't emit the field).
+      if (!cov) return true;
+      return cov.complete === true;
+    };
+    const tryRange = async (range) => {
+      try {
+        const r = await adminGetCfOverview(adminToken, range);
+        return isUsable(r?.data) ? r.data : null;
+      } catch (e) {
+        log.warn(`CF visitors ${range} fetch failed`, { error: e.message });
+        return null;
+      }
+    };
+    const fetchVisitors = async () => {
+      let data = await tryRange('30d');
+      let window = '30d';
+      if (!data) {
+        data = await tryRange('7d');
+        window = '7d';
+        if (data) {
+          log.warn('CF visitors fell back to 7d window — 30d returned no data');
+        }
+      }
+      if (cancelled) return;
+      if (data) {
+        setCfVisitors30d(data);
+        setCfVisitorsWindow(window);
+      } else {
+        log.error('CF visitors fetch failed for both 30d and 7d windows');
+        // Don't wipe the previous good value — leaving the existing
+        // state in place means the tile keeps showing the last known
+        // count instead of flashing back to the active-range fallback.
+      }
+    };
+    fetchVisitors();
+    const interval = setInterval(fetchVisitors, 60 * 60 * 1000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [adminToken]);
 
   const loadChatSpeedups = useCallback(async (days) => {
     setSpeedupLoading(true);
@@ -673,6 +871,51 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
     return () => clearInterval(interval);
   }, [loadChatSpeedups, speedupDays]);
 
+  // Task #810 — pull the anonymous-quota wall stats produced by Task
+  // #798's `chat.anon_quota_exhausted` counter. The endpoint can be
+  // called with `?backfill=1` to seed today's chart from existing
+  // Redis device-credit counters; we only do that on explicit click
+  // so the auto-refresh path stays a cheap memory read.
+  // We track fetch errors separately from `anonQuotaWall === null` so
+  // the card can show an honest "couldn't load" banner instead of a
+  // grid of zeros that would otherwise be indistinguishable from a
+  // real "no devices hit the wall today" state.
+  const [anonQuotaError, setAnonQuotaError] = useState(null);
+  const loadAnonQuotaWall = useCallback(async (days, withBackfill = false) => {
+    if (withBackfill) setAnonQuotaBackfilling(true);
+    else setAnonQuotaLoading(true);
+    try {
+      const url = `${API_BASE}/admin/chat/anon-quota-exhausted?days=${days}${withBackfill ? '&backfill=1' : ''}`;
+      const res = await axios.get(url, adminHdr(adminToken));
+      setAnonQuotaWall(res.data);
+      setAnonQuotaError(null);
+      if (withBackfill) {
+        const n = res.data?.backfilled_today ?? 0;
+        toast.success(n > 0 ? `Backfilled ${n} device${n === 1 ? '' : 's'} for today` : 'Already up-to-date — nothing to backfill');
+      }
+    } catch (e) {
+      log.error('Failed to load anon-quota wall stats', { error: e.message, status: e.response?.status });
+      // Deliberately do NOT clear `anonQuotaWall` here — keep the
+      // last-known-good payload visible behind the error banner so
+      // the admin still has stale-but-real numbers to look at while
+      // the retry resolves. The banner copy makes the staleness
+      // explicit ("numbers below are not real" if there's no prior
+      // payload, otherwise the banner reads as a refresh failure).
+      setAnonQuotaError(e?.response?.status ? `HTTP ${e.response.status}` : (e?.message || 'Network error'));
+      if (withBackfill) toast.error('Backfill failed — see logs');
+    } finally {
+      setAnonQuotaLoading(false);
+      setAnonQuotaBackfilling(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adminToken]);
+
+  useEffect(() => {
+    loadAnonQuotaWall(anonQuotaDays);
+    const interval = setInterval(() => loadAnonQuotaWall(anonQuotaDays), 60000);
+    return () => clearInterval(interval);
+  }, [loadAnonQuotaWall, anonQuotaDays]);
+
   // Task #626 — Chat Model config tab deep-links here with
   // { scrollTo: 'chat-speedup-providers' } to land the admin on the
   // per-provider comparison. Wait a tick so the card has mounted
@@ -688,6 +931,38 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
     }, 250);
     return () => clearTimeout(t);
   }, [navContext]);
+
+  // Task #681 — the review-prompt funnel tile (in OverviewTab) renders
+  // a baseline-noise legend whose "Tune sigma multiplier" link expects
+  // to land the admin directly on the Reason CTR Sigma Multiplier
+  // input. We listen on a window event (decoupled from OverviewTab's
+  // props) and pop the Alert Settings panel + scroll-and-focus the
+  // sigma input. Hoisted above the `if (loading)` early return below
+  // so the hook order stays stable across loading → loaded transitions
+  // (otherwise React throws "Rendered more hooks than during the
+  // previous render" once `loading` flips to false).
+  useEffect(() => {
+    const onOpenSigma = () => {
+      if (!alertSettings) loadAlertSettings();
+      setAlertSettingsOpen(true);
+      // Defer to the next paint so the panel is in the DOM before we
+      // try to scroll/focus the input.
+      setTimeout(() => {
+        const el = document.getElementById('alert-reason-ctr-sigma-input');
+        if (el) {
+          try {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } catch {
+            el.scrollIntoView();
+          }
+          try { el.focus({ preventScroll: true }); } catch { el.focus(); }
+        }
+      }, 50);
+    };
+    window.addEventListener('syrabit:open-alert-sigma-setting', onOpenSigma);
+    return () => window.removeEventListener('syrabit:open-alert-sigma-setting', onOpenSigma);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alertSettings]);
 
   if (loading) {
     return (
@@ -795,8 +1070,10 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
   const latencyAlert = failedSections.includes('latency') ? 'yellow' : (latency?.alert || 'green');
   const vectorAlert = failedSections.includes('vector') ? 'yellow'
     : (vectorStats?.overall_coverage_pct ?? 100) < 90 ? 'yellow' : 'green';
-  const botAlert = failedSections.includes('bot-analytics') ? 'yellow'
-    : (botAnalytics?.alert_level || 'green');
+  // botAlert was used by the legacy "Bot Traffic Analytics" card,
+  // which has been replaced by the Cloudflare AI Crawl Control card.
+  // botAnalytics is still fetched (other consumers may rely on it),
+  // but the alert badge for it is no longer rendered here.
 
   const hasRagIssue = ragAlert === 'red' || latencyAlert === 'red';
 
@@ -910,6 +1187,7 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
 
       <SectionErrorBoundary name="Revenue">
       {metrics?.revenue && (
+        <>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard
             label="Revenue (INR)"
@@ -927,10 +1205,14 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
           <StatCard label="Bot Renders"    value={metrics.bot_render?.total_requests || 0} icon={Bot} color="#8b5cf6"
             subLabel="Success Rate" subValue={metrics.bot_render?.success_rate_pct != null ? `${metrics.bot_render.success_rate_pct}%` : '—'} />
         </div>
+        <p className="text-[11px] text-gray-400 mt-2 px-1">
+          Revenue includes Razorpay (INR) + Stripe (USD→INR via daily ECB rate). All values stored as <code>amount_inr</code> on each payment row.
+        </p>
+        </>
       )}
       </SectionErrorBoundary>
       <SectionErrorBoundary name="Bot Render">
-      {metrics.bot_render?.by_page_type && Object.keys(metrics.bot_render.by_page_type).length > 0 && (() => {
+      {metrics?.bot_render?.by_page_type && Object.keys(metrics.bot_render.by_page_type).length > 0 && (() => {
         const raw = metrics.bot_render.by_page_type;
         const grouped = {};
         Object.entries(raw).forEach(([key, count]) => {
@@ -1046,20 +1328,48 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
             if (n < 1e9) return `${(n / 1e6).toFixed(2).replace(/\.?0+$/, '')}M`;
             return `${(n / 1e9).toFixed(2)}B`;
           };
+          // "Total Visitors" headline is hard-pinned to the locked
+          // visitors window (`cfVisitors30d` — see the fetcher above).
+          // The fetcher prefers a 30-day window and transparently
+          // degrades to 7-day if Cloudflare returns incomplete or no
+          // visits data for 30d (typical because the adaptive-groups
+          // dataset that exposes `sum.visits` is capped at ~8 days
+          // retention on most CF plans).
+          //
+          // We use `totals.visits` (total sessions / visits) rather
+          // than `totals.visitors` (uniques) per product requirement.
+          // The "today" sub-line uses `lastBucket.visits` so it stays
+          // consistent with the headline; on the initial-paint path
+          // (before cfOverview lands) we fall back to `cf.visitors_today`
+          // (uniques) — the only "visits today" signal available before
+          // the GraphQL overview returns — which is harmless because
+          // it's only used for one paint and the active-range refresh
+          // immediately replaces it.
+          const visitorsLockedTotal = cfVisitors30d?.totals?.visits ?? totals.visits ?? totals.visitors;
+          // The locked-window fetcher transparently degrades 30d → 7d
+          // when Cloudflare's adaptive-groups dataset can't return a
+          // complete 30-day series. Per product feedback, the tile
+          // label should NOT advertise that fallback — always read
+          // "Total Visitors", regardless of which window the data
+          // ended up coming from.
+          const visitorsLabel = 'Total Visitors';
+          const visitorsToday = useOverview ? (lastBucket?.visits ?? lastBucket?.visitors) : cf.visitors_today;
           const tiles = [
-            { key: 'requests',   label: 'Requests',   total: totals.requests,   today: useOverview ? lastBucket?.requests   : cf.requests_today,   fmt: fmtNum },
-            { key: 'bytes',      label: 'Bandwidth',  total: totals.bytes,      today: useOverview ? lastBucket?.bytes      : cf.bytes_today,      fmt: fmtBytes },
-            { key: 'visitors',   label: 'Visits',     total: totals.visitors,   today: useOverview ? lastBucket?.visitors   : cf.visitors_today,   fmt: fmtNum },
-            { key: 'page_views', label: 'Page views', total: totals.page_views, today: useOverview ? lastBucket?.page_views : cf.page_views_today, fmt: fmtNum },
+            { key: 'requests',   label: 'Interactions',     total: totals.requests,       today: useOverview ? lastBucket?.requests   : cf.requests_today,   fmt: fmtNum },
+            { key: 'bytes',      label: 'Bandwidth',        total: totals.bytes,          today: useOverview ? lastBucket?.bytes      : cf.bytes_today,      fmt: fmtBytes },
+            { key: 'visitors',   label: visitorsLabel,      total: visitorsLockedTotal,   today: visitorsToday,                                              fmt: fmtNum },
+            { key: 'page_views', label: 'Page views',       total: totals.page_views,     today: useOverview ? lastBucket?.page_views : cf.page_views_today, fmt: fmtNum },
           ];
           const hasData = (useOverview ? series.length > 0 : (vs.cloudflare && series.length > 0));
           return (
+            <>
+            <p className="text-[10px] text-gray-400 mb-2" title="Daily 'Today' buckets reset at UTC midnight (5:30 AM IST). In early IST morning the bucket only covers a few hours.">{TODAY_BUCKET_CAPTION}</p>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
               {tiles.map(t => (
                 <div key={t.key} className="rounded-xl p-3 bg-white border border-gray-200">
                   <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">{t.label}</p>
                   <p className="text-gray-900 font-bold text-2xl leading-none">
-                    {hasData ? t.fmt(t.total) : '—'}
+                    {hasData && t.total != null ? t.fmt(t.total) : '—'}
                   </p>
                   <p className="text-[10px] text-gray-400 mt-1">
                     {lastBucketLabel}: {hasData && t.today != null ? t.fmt(t.today) : '—'}
@@ -1095,6 +1405,7 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                 </div>
               ))}
             </div>
+            </>
           );
         })()}
 
@@ -1137,120 +1448,265 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       </GlassCard>
       </SectionErrorBoundary>
 
-      <SectionErrorBoundary name="Bot Analytics">
-      {botAnalytics && (
+      {/* Site-level page-view metrics row — moved here at the user's
+          request so the at-a-glance traffic numbers sit directly
+          under the Cloudflare account-wide traffic card and above
+          the verified-bot Crawl Control card. The block was
+          originally rendered much further down (above the Chat
+          Health card); the move keeps all traffic-shaped cards
+          adjacent so the dashboard tells one continuous story:
+          account traffic → site totals → bot share. */}
+      <div>
+        <p className="text-[10px] text-gray-400 mb-2">{TODAY_BUCKET_CAPTION}</p>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
+          {/* "Total Visitors" — auto-swaps between two CF metrics
+              depending on what the active range can actually deliver:
+
+                * If `visits_coverage.complete` is true (24h + 7d
+                  always; 30d when the CF plan retains 30 days of
+                  adaptive-groups data), show `totals.visits` —
+                  Cloudflare's "Visits" (sessions) metric, where every
+                  return after a 30-minute idle gap counts as a new
+                  visit. Matches the CF Analytics dashboard 1:1.
+
+                * If coverage is INCOMPLETE (e.g. 30d on a plan with
+                  only 8 days of adaptive-groups retention), CF cannot
+                  give us 30 days of session data — the most we can
+                  get is the recent 7-8 days, so showing that as a
+                  "30-day total" would silently under-report by 4x.
+                  In that case we switch to `totals.visitors` (unique
+                  visitors from `httpRequests1dGroups`, which DOES
+                  retain 30 days), update the label to "Unique
+                  Visitors" so the metric matches the headline, and
+                  put the partial-coverage note in the tooltip.
+
+              Final fallback to `vs.total_visitors` (server-side
+              7-day count) if the CF overview hasn't loaded yet. */}
+          {(() => {
+            const cov = cfOverview?.totals?.visits_coverage;
+            const visitsComplete = cov?.complete === true;
+            const useUniques = !visitsComplete && cfOverview?.totals?.visitors != null;
+            const headline = useUniques
+              ? cfOverview.totals.visitors
+              : (cfOverview?.totals?.visits ?? vs?.total_visitors ?? 0);
+            const todayBucket = cfOverview?.series?.length
+              ? cfOverview.series[cfOverview.series.length - 1]
+              : null;
+            const todayValue = useUniques
+              ? (todayBucket?.uniques ?? todayBucket?.visitors ?? vs?.visitors_today ?? 0)
+              : ((todayBucket?.visits) ?? vs?.visitors_today ?? 0);
+            const label = useUniques ? 'Unique Visitors' : 'Total Visitors';
+            const tooltip = useUniques && cov
+              ? `Switched from "Visits" (sessions) to "Unique Visitors" because Cloudflare only kept ${cov.returned_buckets} of ${cov.requested_buckets} days of session data for this range. Unique-visitors data covers the full ${cov.requested_buckets}-day window.`
+              : undefined;
+            return (
+              <StatCard label={label}
+                value={headline}
+                icon={Users} color="#84cc16"
+                subLabel="Today"
+                subValue={todayValue}
+                title={tooltip} />
+            );
+          })()}
+          <StatCard label="Bounce Rate"  value={vs.bounce_rate != null ? `${vs.bounce_rate}%` : '—'} icon={TrendingUp} color="#f59e0b" />
+          <StatCard label="Avg Session"  value={vs.avg_session_duration != null ? `${vs.avg_session_duration}s` : '—'} icon={Clock} color="#a78bfa" />
+        </div>
+      </div>
+
+      {/* Legacy "Bot Traffic Analytics" card removed — its content
+          (bot vs human totals, top bots, per-bot pages) was sourced
+          from local server logs and duplicated what the
+          authoritative Cloudflare AI Crawl Control card below now
+          shows. The CF card uses verified-bot data straight from
+          Cloudflare's GraphQL feed (the same dataset CF's own
+          dashboard reads), so it's the canonical source of truth.
+          The `botAnalytics` API endpoint is intentionally still
+          fetched in case other components or alerts depend on it. */}
+
+      <SectionErrorBoundary name="CF AI Crawl Control">
+      {cfCrawlControl && (
         <GlassCard className="p-5">
           <div className="flex items-center gap-2 mb-4">
-            <Bot size={16} className="text-amber-500" />
-            <h3 className="text-gray-700 font-semibold">Bot Traffic Analytics</h3>
+            <ShieldCheck size={16} className="text-orange-500" />
+            <h3 className="text-gray-700 font-semibold">Cloudflare Search Crawler Activity</h3>
             <div className="ml-auto flex items-center gap-2">
-              <AlertBadge alert={botAlert} />
-              <span className="text-[10px] text-gray-400">{botAnalytics.period_days}-day window</span>
+              {cfCrawlControl.available ? (
+                <span className="text-[10px] text-gray-400">{cfCrawlControl.period_days}-day window</span>
+              ) : (
+                <span className="text-[10px] px-2 py-0.5 rounded-md text-amber-700 bg-amber-50 border border-amber-200">
+                  CF analytics unavailable
+                </span>
+              )}
             </div>
           </div>
 
-          {botAnalytics.alerts?.length > 0 && (
-            <div className="mb-4 space-y-1.5">
-              {botAnalytics.alerts.map((a, i) => (
-                <div
-                  key={i}
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
-                  style={{
-                    background: a.severity === 'red' ? '#fef2f2' : '#fffbeb',
-                    border: `1px solid ${a.severity === 'red' ? '#fecaca' : '#fde68a'}`,
-                    color: a.severity === 'red' ? '#991b1b' : '#92400e',
-                  }}
-                >
-                  {a.severity === 'red' ? <AlertCircle size={13} /> : <AlertTriangle size={13} />}
-                  <span>{a.message}</span>
+          {!cfCrawlControl.available && (
+            <div className="rounded-lg p-3 bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-start gap-2">
+              <AlertTriangle size={13} className="mt-0.5 flex-shrink-0" />
+              <span>{cfCrawlControl.reason || 'Cloudflare GraphQL API did not return verified-bot data.'}</span>
+            </div>
+          )}
+
+          {cfCrawlControl.available && (
+            <>
+              {/* ─── METRICS section (top of CF "AI Crawl Control →
+                  Overview"). Four headline stats stacked above a
+                  full-width sparkline showing daily request volume.
+                  Stats use the verified-bot totals from CF GraphQL;
+                  the sparkline sums all per-bot daily counts so the
+                  shape matches what CF's own dashboard renders. ─── */}
+              <div className="rounded-xl border border-gray-200 bg-white px-4 pt-4 pb-2 mb-4">
+                <div className="text-[11px] text-gray-500 font-medium mb-3">Metrics</div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-3">
+                  <div>
+                    <p className="text-[11px] text-gray-500 underline decoration-dotted decoration-gray-300 underline-offset-4 mb-1">
+                      Total requests
+                    </p>
+                    <p className="text-gray-800 font-bold text-xl tabular-nums">
+                      {formatCompactInt(cfCrawlControl.totals?.requests ?? 0)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-gray-500 underline decoration-dotted decoration-gray-300 underline-offset-4 mb-1">
+                      Allowed requests
+                    </p>
+                    <p className="text-gray-800 font-bold text-xl tabular-nums">
+                      {formatCompactInt(cfCrawlControl.allowed_total ?? 0)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-gray-500 underline decoration-dotted decoration-gray-300 underline-offset-4 mb-1">
+                      Unsuccessful requests
+                    </p>
+                    <p className="text-gray-800 font-bold text-xl tabular-nums">
+                      {formatCompactInt(cfCrawlControl.unsuccessful_total ?? 0)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-gray-500 underline decoration-dotted decoration-gray-300 underline-offset-4 mb-1">
+                      Total referrals
+                    </p>
+                    <p className="text-gray-800 font-bold text-xl tabular-nums">
+                      {formatCompactInt(cfCrawlControl.total_referrals ?? 0)}
+                    </p>
+                  </div>
                 </div>
-              ))}
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-            <div className="rounded-lg p-3 bg-blue-50 border border-blue-200 text-center">
-              <p className="text-blue-700 font-bold text-lg">{(botAnalytics.bot_vs_human?.total_bot ?? 0).toLocaleString()}</p>
-              <p className="text-[10px] text-gray-500">Bot Hits</p>
-            </div>
-            <div className="rounded-lg p-3 bg-green-50 border border-green-200 text-center">
-              <p className="text-green-700 font-bold text-lg">{(botAnalytics.bot_vs_human?.total_human ?? 0).toLocaleString()}</p>
-              <p className="text-[10px] text-gray-500">Human Hits</p>
-            </div>
-            <div className={`rounded-lg p-3 text-center ${
-              botAlert === 'red' ? 'bg-red-50 border border-red-300' :
-              botAlert === 'yellow' ? 'bg-yellow-50 border border-yellow-300' :
-              'bg-violet-50 border border-violet-200'
-            }`}>
-              <p className={`font-bold text-lg ${
-                botAlert === 'red' ? 'text-red-700' :
-                botAlert === 'yellow' ? 'text-yellow-700' :
-                'text-violet-700'
-              }`}>{botAnalytics.crawl_coverage ?? 0}%</p>
-              <p className="text-[10px] text-gray-500">Crawl Coverage</p>
-            </div>
-            <div className="rounded-lg p-3 bg-amber-50 border border-amber-200 text-center">
-              <p className="text-amber-700 font-bold text-lg">{botAnalytics.bot_vs_human?.bot_ratio_pct ?? 0}%</p>
-              <p className="text-[10px] text-gray-500">Bot Ratio</p>
-            </div>
-          </div>
-
-          <div className="text-[10px] text-gray-400 mb-1">
-            Crawled {(botAnalytics.pages_crawled ?? 0).toLocaleString()} of {(botAnalytics.total_sitemap_pages ?? 0).toLocaleString()} sitemap pages
-          </div>
-
-          {botAnalytics.daily_bot_hits?.length > 0 && (
-            <div className="mt-4">
-              <div className="text-[10px] text-gray-400 font-semibold mb-2 uppercase tracking-wider">Daily Bot vs Human Hits</div>
-              <div style={{ width: '100%', height: 200 }}>
-                <ResponsiveContainer>
-                  <BarChart data={botAnalytics.daily_bot_hits.slice(-14)} margin={{ top: 5, right: 5, left: -15, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                    <XAxis dataKey="date" tick={{ fontSize: 9 }} tickFormatter={v => v.slice(5)} />
-                    <YAxis tick={{ fontSize: 9 }} />
-                    <Tooltip contentStyle={{ fontSize: 11 }} labelFormatter={v => `Date: ${v}`} />
-                    <Bar dataKey="bot_hits" fill="#f59e0b" name="Bot" radius={[2, 2, 0, 0]} />
-                    <Bar dataKey="human_hits" fill="#6366f1" name="Human" radius={[2, 2, 0, 0]} />
-                    <Legend wrapperStyle={{ fontSize: 10 }} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          )}
-
-          {botAnalytics.top_bots?.length > 0 && (
-            <div className="mt-4">
-              <div className="text-[10px] text-gray-400 font-semibold mb-2 uppercase tracking-wider">Top Bots (by hits)</div>
-              <div className="space-y-1.5">
-                {botAnalytics.top_bots.slice(0, 10).map((b, i) => {
-                  const maxHits = botAnalytics.top_bots[0]?.hits || 1;
-                  const pct = Math.round((b.hits / maxHits) * 100);
+                {/* Sparkline of total daily requests — sums every per-bot
+                    column in daily_series.rows so the line matches CF's
+                    "requests over time" sparkline on the Overview tab.
+                    Filtered to last 30 days max for a clean shape. */}
+                {cfCrawlControl.daily_series?.rows?.length > 0 && (() => {
+                  const rows = cfCrawlControl.daily_series.rows.slice(-30).map(row => {
+                    const total = Object.entries(row).reduce((acc, [k, v]) => (
+                      k === 'date' ? acc : acc + (Number(v) || 0)
+                    ), 0);
+                    return { date: row.date, total };
+                  });
                   return (
-                    <div key={i} className="flex items-center gap-2">
-                      <span className="text-[10px] text-gray-600 font-medium w-28 truncate">{b.bot}</span>
-                      <div className="flex-1 h-3 bg-gray-100 rounded-full overflow-hidden">
-                        <div className="h-full bg-amber-400 rounded-full" style={{ width: `${pct}%` }} />
-                      </div>
-                      <span className="text-[10px] text-gray-500 w-14 text-right">{b.hits.toLocaleString()}</span>
-                      <span className="text-[9px] text-gray-400 w-12 text-right">{b.unique_ips} IPs</span>
+                    <div style={{ width: '100%', height: 56 }}>
+                      <ResponsiveContainer>
+                        <AreaChart data={rows} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
+                          <defs>
+                            <linearGradient id="cfMetricsSparkFill" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.35} />
+                              <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
+                            </linearGradient>
+                          </defs>
+                          <Tooltip
+                            contentStyle={{ fontSize: 11, padding: '4px 8px' }}
+                            labelFormatter={v => v}
+                            formatter={(val) => [Number(val).toLocaleString(), 'Requests']}
+                          />
+                          <Area
+                            type="monotone"
+                            dataKey="total"
+                            stroke="#3b82f6"
+                            strokeWidth={1.4}
+                            fill="url(#cfMetricsSparkFill)"
+                            dot={false}
+                            isAnimationActive={false}
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
                     </div>
                   );
-                })}
+                })()}
               </div>
-            </div>
-          )}
 
-          {botAnalytics.per_bot_pages?.length > 0 && (
-            <div className="mt-4">
-              <div className="text-[10px] text-gray-400 font-semibold mb-2 uppercase tracking-wider">Pages Fetched per Bot</div>
-              <div className="flex flex-wrap gap-1.5">
-                {botAnalytics.per_bot_pages.slice(0, 10).map((b, i) => (
-                  <span key={i} className="text-[10px] px-2 py-0.5 rounded-md text-violet-700 bg-violet-50 border border-violet-200">
-                    {b.bot}: {b.pages_fetched} pages
-                  </span>
-                ))}
-              </div>
-            </div>
+              {/* ─── CRAWLERS section. Grid of operator tiles, one per
+                  company (Google, Microsoft, Apple, OpenAI, etc.). Each
+                  tile shows: operator name, contributing-bot pills, and
+                  a two-column footer with "Allowed requests" + "Total
+                  referrals" — same layout as CF's own Overview tab. The
+                  unified ``crawlers_grid`` is built server-side from the
+                  full unfiltered per_bot list, so AI operators (whose
+                  bots get 403'd at our edge) still appear in the grid
+                  for visibility — just like they do in CF's UI. ─── */}
+              {cfCrawlControl.crawlers_grid?.length > 0 && (
+                <div className="rounded-xl border border-gray-200 bg-white px-4 pt-4 pb-4">
+                  <div className="text-[11px] text-gray-500 font-medium mb-3">Crawlers</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    {cfCrawlControl.crawlers_grid.map((op) => {
+                      const headBots = (op.bots || []).slice(0, 1);
+                      const extraBots = Math.max(0, (op.bots?.length || 0) - 1);
+                      return (
+                        <div
+                          key={op.operator}
+                          className="rounded-lg border border-gray-200 bg-white p-3 flex flex-col gap-2 hover:shadow-sm transition-shadow"
+                        >
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-gray-800 font-semibold text-sm" title={op.operator}>
+                              {op.operator}
+                            </span>
+                            {headBots.map(b => (
+                              <span
+                                key={b.name}
+                                className="text-[10px] px-2 py-0.5 rounded bg-gray-100 text-gray-600 truncate max-w-[110px]"
+                                title={b.name}
+                              >
+                                {b.name}
+                              </span>
+                            ))}
+                            {extraBots > 0 && (
+                              <span
+                                className="text-[10px] px-2 py-0.5 rounded bg-gray-100 text-gray-600"
+                                title={(op.bots || []).slice(1).map(b => `${b.name}: ${(b.requests ?? 0).toLocaleString()}`).join('\n')}
+                              >
+                                +{extraBots}
+                              </span>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-2 gap-3 mt-1">
+                            <div>
+                              <p className="text-[11px] text-gray-500 mb-0.5">Allowed requests</p>
+                              <p className="text-gray-800 font-bold text-base tabular-nums">
+                                {formatCompactInt(op.allowed ?? 0)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-[11px] text-gray-500 mb-0.5">Total referrals</p>
+                              <p className="text-gray-800 font-bold text-base tabular-nums">
+                                {formatCompactInt(op.referrals ?? 0)}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="text-[10px] text-gray-400 mt-3">
+                    Source: Cloudflare GraphQL{cfCrawlControl.zone_id ? ` · zone ${cfCrawlControl.zone_id.slice(0, 8)}…` : ''} · same dataset as Cloudflare's AI Crawl Control dashboard · referrals sourced from page-view Referer headers (distinct visitors per operator)
+                  </div>
+                </div>
+              )}
+
+              {cfCrawlControl.crawlers_grid?.length === 0 && (
+                <div className="mt-4 rounded-lg p-3 bg-gray-50 border border-gray-200 text-xs text-gray-600 text-center">
+                  No verified-bot traffic in the last {cfCrawlControl.period_days} days.
+                </div>
+              )}
+            </>
           )}
         </GlassCard>
       )}
@@ -1986,6 +2442,32 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       </SectionErrorBoundary>
       
 
+      {/*
+        Task #991 — standalone fallback for the "N on hold" badge that
+        runs *outside* the Alert History gate. The richer inline pill
+        below (inside the Alert History header) is what admins see in
+        the normal case, but if `/admin/alerts?limit=50` ever fails
+        (the source for `alertHistory`) the cooldown indicator stays
+        visible because its own poll is independent. Hidden when
+        nothing is on hold OR when alertHistory is present (the inline
+        pill takes over and avoids double-rendering).
+      */}
+      {!alertHistory && cooldownActiveCount > 0 && (
+        <SectionErrorBoundary name="Suppressed Alert Badge">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onNavigate && onNavigate('botsecurity', { panel: 'alert-cooldowns' })}
+              className="inline-flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-800 font-semibold hover:bg-amber-100 transition-colors cursor-pointer"
+              title={`${cooldownActiveCount} alert${cooldownActiveCount === 1 ? '' : 's'} silenced by the 6h cooldown — click to review in Bot Security`}
+            >
+              <Clock size={12} />
+              {cooldownActiveCount} alert{cooldownActiveCount === 1 ? '' : 's'} on hold
+            </button>
+          </div>
+        </SectionErrorBoundary>
+      )}
+
       <SectionErrorBoundary name="Alert History">
       {alertHistory && (
         <GlassCard className="p-5">
@@ -1996,6 +2478,28 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-semibold">
                 {alertHistory.alerts.filter(a => !a.acknowledged).length} unacknowledged
               </span>
+            )}
+            {/*
+              Task #991 — at-a-glance "alert is being suppressed" badge.
+              Hidden when nothing is on hold so it's never misleading
+              (per the task's "Done looks like" spec). Click jumps into
+              Bot Security with the Suppressed Alerts panel auto-
+              expanded + scrolled into view (see AlertCooldownsPanel's
+              `navContext` handler in AdminBotSecurity.jsx). A
+              standalone fallback above this card covers the
+              alertHistory-fetch-failed case so the indicator never
+              disappears just because a sibling API blipped.
+            */}
+            {cooldownActiveCount > 0 && (
+              <button
+                type="button"
+                onClick={() => onNavigate && onNavigate('botsecurity', { panel: 'alert-cooldowns' })}
+                className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-semibold hover:bg-amber-200 transition-colors cursor-pointer"
+                title={`${cooldownActiveCount} alert${cooldownActiveCount === 1 ? '' : 's'} silenced by the 6h cooldown — click to review in Bot Security`}
+              >
+                <Clock size={10} />
+                {cooldownActiveCount} on hold
+              </button>
             )}
             <div className="ml-auto flex items-center gap-2">
               <button
@@ -2043,6 +2547,68 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                 <option value="unacknowledged">Unacknowledged</option>
                 <option value="acknowledged">Acknowledged</option>
               </select>
+              {(() => {
+                // Task #693 — count how many loaded alerts mention each
+                // trigger reason so the dropdown can surface noisy
+                // reasons (e.g. "checkout_skip (4)") and operators can
+                // triage the loudest ones first. We dedupe within a
+                // single alert (one alert that lists "foo" twice in its
+                // snapshot still counts once) so the count matches the
+                // post-filter row count the table will show. The same
+                // counts feed the active "Reason: foo (N)" pill below
+                // via the shared ``reasonCounts`` Map (lifted via the
+                // outer IIFE so we only walk the alert history once).
+                const reasonCounts = new Map();
+                (alertHistory.alerts || []).forEach(a => {
+                  if (a?.type === 'review_prompt_reason_ctr_drop' && Array.isArray(a?.threshold_snapshot?.reasons)) {
+                    const seenInAlert = new Set();
+                    a.threshold_snapshot.reasons.forEach(r => {
+                      const name = (r && typeof r === 'object') ? (r.reason ?? '') : String(r ?? '');
+                      if (name && !seenInAlert.has(name)) {
+                        seenInAlert.add(name);
+                        reasonCounts.set(name, (reasonCounts.get(name) || 0) + 1);
+                      }
+                    });
+                  }
+                });
+                const reasons = Array.from(reasonCounts.keys()).sort((a, b) => {
+                  // Noisiest first, then alphabetical for ties — matches
+                  // the triage flow the dropdown is meant to enable.
+                  const diff = (reasonCounts.get(b) || 0) - (reasonCounts.get(a) || 0);
+                  return diff !== 0 ? diff : a.localeCompare(b);
+                });
+                const activeCount = reasonCounts.get(alertReasonFilter) || 0;
+                if (reasons.length === 0 && !alertReasonFilter) return null;
+                return (
+                  <>
+                    <select
+                      className="text-[10px] border border-gray-200 rounded-md px-2 py-1 bg-white text-gray-600"
+                      value={alertReasonFilter}
+                      onChange={e => setAlertReasonFilter(e.target.value)}
+                      title="Filter alert history to alerts whose reason snapshot contains this trigger reason. Counts show how many of the loaded alerts mention each reason — sorted noisiest first."
+                    >
+                      <option value="">All reasons</option>
+                      {reasons.map(r => (
+                        <option key={r} value={r}>{`${r} (${reasonCounts.get(r)})`}</option>
+                      ))}
+                      {alertReasonFilter && !reasons.includes(alertReasonFilter) && (
+                        <option value={alertReasonFilter}>{`${alertReasonFilter} (0)`}</option>
+                      )}
+                    </select>
+                    {alertReasonFilter && (
+                      <button
+                        type="button"
+                        onClick={() => setAlertReasonFilter('')}
+                        className="text-[10px] px-2 py-1 rounded-md bg-violet-50 text-violet-700 border border-violet-200 hover:bg-violet-100 transition-colors font-medium flex items-center gap-1"
+                        title={`Clear reason filter — ${activeCount} alert${activeCount === 1 ? '' : 's'} in the loaded history mention "${alertReasonFilter}"`}
+                      >
+                        {`Reason: ${alertReasonFilter} (${activeCount})`}
+                        <X size={10} />
+                      </button>
+                    )}
+                  </>
+                );
+              })()}
               <label
                 className="flex items-center gap-1 text-[10px] text-gray-600 px-2 py-1 rounded-md border border-gray-200 bg-white cursor-pointer select-none hover:bg-gray-50"
                 title="Include synthetic alerts produced by the Test alert delivery button"
@@ -2242,6 +2808,19 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                     max="100"
                     value={alertSettingsDraft.thresholds.review_prompt_ctr_floor_pct ?? ''}
                     onChange={e => setAlertSettingsDraft(prev => ({ ...prev, thresholds: { ...prev.thresholds, review_prompt_ctr_floor_pct: parseFloat(e.target.value) || 0 } }))}
+                    className="w-full text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white focus:ring-1 focus:ring-violet-300 focus:border-violet-300 outline-none"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="alert-reason-ctr-sigma-input" className="text-[10px] text-gray-500 font-medium block mb-1" title="Per-reason CTR-collapse alert: required multiple of the per-reason rolling stddev the WoW drop must additionally exceed (auto-tunes the threshold from baseline noise so volatile reasons don't page on ordinary swings). Set to 0 to disable the sigma gate and rely only on the absolute pp floor.">Reason CTR Sigma Multiplier</label>
+                  <input
+                    id="alert-reason-ctr-sigma-input"
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="10"
+                    value={alertSettingsDraft.thresholds.review_prompt_reason_ctr_drop_sigma ?? ''}
+                    onChange={e => setAlertSettingsDraft(prev => ({ ...prev, thresholds: { ...prev.thresholds, review_prompt_reason_ctr_drop_sigma: parseFloat(e.target.value) || 0 } }))}
                     className="w-full text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white focus:ring-1 focus:ring-violet-300 focus:border-violet-300 outline-none"
                   />
                 </div>
@@ -2446,6 +3025,93 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                 )}
               </div>
 
+              {/* Task #689 — Cached Gemini health probe state. Surfaces
+                  the periodic probe (Task #677) result without grepping
+                  logs and without spending a Vertex API call on every
+                  dashboard refresh. */}
+              <div className="mb-3 pb-3 border-b border-gray-200" data-testid="notif-prefs-vertex-probe">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[10px] text-gray-500 font-medium">
+                    Gemini upstream — periodic health probe
+                  </label>
+                  {vertexProbe?.last_check_ts ? (
+                    <span className="text-[10px] text-gray-400" data-testid="notif-prefs-vertex-probe-checked">
+                      checked {new Date(vertexProbe.last_check_ts * 1000).toLocaleTimeString()}
+                    </span>
+                  ) : null}
+                </div>
+                {vertexProbe === null ? (
+                  <div className="text-[10px] text-gray-400">Loading…</div>
+                ) : (() => {
+                  const status = vertexProbe.status || 'unknown';
+                  const pillCls =
+                    status === 'ok' ? 'bg-emerald-100 text-emerald-700 ring-emerald-200'
+                    : status === 'unhealthy' ? 'bg-red-100 text-red-700 ring-red-200'
+                    : status === 'stale' ? 'bg-amber-100 text-amber-700 ring-amber-200'
+                    : 'bg-gray-100 text-gray-600 ring-gray-200';
+                  const cf = vertexProbe.consecutive_failures || 0;
+                  const ageS = typeof vertexProbe.age_s === 'number' ? vertexProbe.age_s : null;
+                  const fmtAge = (s) => {
+                    if (s == null) return '—';
+                    if (s < 60) return `${Math.round(s)}s ago`;
+                    if (s < 3600) return `${Math.round(s / 60)}m ago`;
+                    return `${(s / 3600).toFixed(1)}h ago`;
+                  };
+                  return (
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span
+                          className={`text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded ring-1 ${pillCls}`}
+                          data-testid="notif-prefs-vertex-probe-status"
+                        >
+                          {status}
+                        </span>
+                        <span className="text-[11px] text-gray-600" data-testid="notif-prefs-vertex-probe-age">
+                          last probe {fmtAge(ageS)}
+                          {vertexProbe.source ? ` (${vertexProbe.source})` : ''}
+                        </span>
+                        {cf > 0 && (
+                          <span
+                            className="text-[10px] font-semibold text-red-700"
+                            data-testid="notif-prefs-vertex-probe-consecutive"
+                          >
+                            {cf} consecutive failure{cf === 1 ? '' : 's'}
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 gap-1 text-[10px] text-gray-500">
+                        <div>
+                          auth: <span className="font-mono text-gray-700">{vertexProbe.auth_mode || '—'}</span>
+                        </div>
+                        <div>
+                          via CF gateway:{' '}
+                          <span className="font-mono text-gray-700">
+                            {vertexProbe.via_cf_gateway === true ? 'yes'
+                              : vertexProbe.via_cf_gateway === false ? 'no' : '—'}
+                          </span>
+                        </div>
+                        <div className="col-span-2 text-[10px] text-gray-400">
+                          probe interval {vertexProbe.probe_interval_s || '—'}s · stale after {vertexProbe.ttl_s || '—'}s
+                        </div>
+                      </div>
+                      {vertexProbe.reason && status !== 'ok' && (
+                        <div
+                          className="text-[10px] text-red-700 mt-1 break-words"
+                          data-testid="notif-prefs-vertex-probe-reason"
+                        >
+                          Last failure: {vertexProbe.reason}
+                        </div>
+                      )}
+                      {status === 'unknown' && !vertexProbe.last_check_ts && (
+                        <div className="text-[10px] text-gray-500 mt-1">
+                          The startup probe has not completed yet — refresh in a few seconds.
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+
               <div className="mb-3 pb-3 border-b border-gray-200" data-testid="notif-prefs-kv-health">
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="text-[10px] text-gray-500 font-medium">
@@ -2519,6 +3185,12 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                   </ul>
                 )}
               </div>
+
+              {/* Task #897 — bot HTML cache rolling-hour hit rate.
+                  Extracted to <BotCachePanel> so the panel logic +
+                  sparkline geometry can be unit-tested without
+                  rendering the whole admin dashboard. */}
+              <BotCachePanel kvHealth={kvHealth} />
 
               {/* Task #474 — recent SEO summary dispatch history. */}
               <div className="mb-3 pb-3 border-b border-gray-200" data-testid="notif-prefs-seo-summary-history">
@@ -2903,8 +3575,16 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
           <div className="space-y-2 max-h-[400px] overflow-y-auto">
             {alertHistory.alerts
               .filter(a => {
-                if (alertFilter === 'unacknowledged') return !a.acknowledged;
-                if (alertFilter === 'acknowledged') return a.acknowledged;
+                if (alertFilter === 'unacknowledged' && a.acknowledged) return false;
+                if (alertFilter === 'acknowledged' && !a.acknowledged) return false;
+                if (alertReasonFilter) {
+                  const reasons = Array.isArray(a?.threshold_snapshot?.reasons) ? a.threshold_snapshot.reasons : [];
+                  const hit = reasons.some(r => {
+                    const name = (r && typeof r === 'object') ? (r.reason ?? '') : String(r ?? '');
+                    return name === alertReasonFilter;
+                  });
+                  if (!hit) return false;
+                }
                 return true;
               })
               .map((alert) => {
@@ -2966,6 +3646,11 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                           </>)}
                         </div>
                       )}
+                      <AlertReasonsRow
+                        alert={alert}
+                        alertReasonFilter={alertReasonFilter}
+                        onReasonClick={(name) => setAlertReasonFilter(name)}
+                      />
                       <div className="flex items-center gap-3 mt-1.5">
                         <span className="text-[10px] text-gray-400 flex items-center gap-1">
                           <Clock size={10} />
@@ -2992,11 +3677,33 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
               })}
 
             {alertHistory.alerts.filter(a => {
-              if (alertFilter === 'unacknowledged') return !a.acknowledged;
-              if (alertFilter === 'acknowledged') return a.acknowledged;
+              if (alertFilter === 'unacknowledged' && a.acknowledged) return false;
+              if (alertFilter === 'acknowledged' && !a.acknowledged) return false;
+              if (alertReasonFilter) {
+                const reasons = Array.isArray(a?.threshold_snapshot?.reasons) ? a.threshold_snapshot.reasons : [];
+                const hit = reasons.some(r => {
+                  const name = (r && typeof r === 'object') ? (r.reason ?? '') : String(r ?? '');
+                  return name === alertReasonFilter;
+                });
+                if (!hit) return false;
+              }
               return true;
             }).length === 0 && (
-              <p className="text-center text-[11px] text-gray-400 py-4">No alerts matching this filter</p>
+              <p className="text-center text-[11px] text-gray-400 py-4">
+                No alerts matching this filter
+                {alertReasonFilter && (
+                  <>
+                    {' '}
+                    <button
+                      type="button"
+                      onClick={() => setAlertReasonFilter('')}
+                      className="underline text-violet-600 hover:text-violet-700"
+                    >
+                      Clear reason filter
+                    </button>
+                  </>
+                )}
+              </p>
             )}
           </div>
           )}
@@ -3024,7 +3731,9 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                   try {
                     const statsRes = await axios.get(`${API_BASE}/admin/indexnow/stats`, adminHdr(adminToken));
                     setIndexNowStats(statsRes.data);
-                  } catch {}
+                  } catch (err) {
+                    console.warn('AdminDashboard: post-resubmit indexnow stats refresh failed:', err);
+                  }
                 } catch (e) {
                   setResubmitMessage(`Re-submit failed: ${e?.response?.data?.detail || e.message || 'unknown error'}`);
                 } finally {
@@ -3055,9 +3764,9 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
               <p className="text-blue-700 font-bold text-lg">{(indexNowStats.total_pushes ?? 0).toLocaleString()}</p>
               <p className="text-[10px] text-gray-500">Total Pushes</p>
             </div>
-            <div className="rounded-lg p-3 bg-violet-50 border border-violet-200 text-center">
+            <div className="rounded-lg p-3 bg-violet-50 border border-violet-200 text-center" title={TODAY_BUCKET_CAPTION}>
               <p className="text-violet-700 font-bold text-lg">{(indexNowStats.today_urls_pushed ?? 0).toLocaleString()}</p>
-              <p className="text-[10px] text-gray-500">URLs Today</p>
+              <p className="text-[10px] text-gray-500">URLs Today<span className="text-gray-400"> (UTC)</span></p>
             </div>
             <div className="rounded-lg p-3 bg-amber-50 border border-amber-200 text-center">
               <p className="text-amber-700 font-bold text-lg">{indexNowStats.pending ?? 0}</p>
@@ -3286,13 +3995,11 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       )}
       </SectionErrorBoundary>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
-        <StatCard label="Total Page Views" value={vs?.total_page_views ?? 0} icon={BarChart2} color="#84cc16"
-          subLabel="Today" subValue={vs?.page_views_today ?? 0} />
-        <StatCard label="Bounce Rate"  value={vs.bounce_rate != null ? `${vs.bounce_rate}%` : '—'} icon={TrendingUp} color="#f59e0b" />
-        <StatCard label="Avg Session"  value={vs.avg_session_duration != null ? `${vs.avg_session_duration}s` : '—'} icon={Clock} color="#a78bfa" />
-      </div>
+      {/* Page-views / bounce-rate / avg-session row was previously
+          rendered here. It has been moved up to sit directly between
+          the "Traffic (Cloudflare)" card and the "Cloudflare AI
+          Crawl Control" card so all traffic-shaped surfaces are
+          adjacent. See the marker comment near that block. */}
 
       <SectionErrorBoundary name="Chat Health">
       <GlassCard className="p-5">
@@ -3666,6 +4373,331 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       </GlassCard>
       </SectionErrorBoundary>
 
+      <SectionErrorBoundary name="Anonymous Quota Wall">
+      <GlassCard className="p-5" data-testid="anon-quota-wall-card">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <ShieldAlert size={14} className="text-rose-500" />
+            <h3 className="text-gray-700 font-semibold text-sm">Anonymous Quota Wall</h3>
+            <span className="text-xs text-gray-400">device 30/day cap hits &amp; sign-up rescue</span>
+            {anonQuotaWall?.alert && (
+              <span
+                className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                  anonQuotaWall.alert === 'amber'
+                    ? 'bg-amber-100 text-amber-700'
+                    : 'bg-emerald-100 text-emerald-700'
+                }`}
+                data-testid="anon-quota-alert-pill"
+              >
+                {anonQuotaWall.alert === 'amber' ? '≥50 devices/wk' : 'healthy'}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+              {[{d: 1, label: '24h'}, {d: 7, label: '7d'}, {d: 14, label: '14d'}].map(({d, label}) => (
+                <button
+                  key={d}
+                  onClick={() => setAnonQuotaDays(d)}
+                  disabled={anonQuotaLoading}
+                  className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
+                    anonQuotaDays === d
+                      ? 'bg-white text-rose-600 font-medium shadow-sm'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                  data-testid={`anon-quota-period-${d}`}
+                >
+                  {label}
+                </button>
+              ))}
+              {anonQuotaLoading && <Loader2 size={11} className="animate-spin text-gray-400 ml-1" />}
+            </div>
+            <button
+              onClick={() => loadAnonQuotaWall(anonQuotaDays, true)}
+              disabled={anonQuotaBackfilling || anonQuotaLoading}
+              className="text-xs px-2.5 py-1 rounded-md border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+              data-testid="anon-quota-backfill-btn"
+              title="Replay today's at-cap devices from existing Redis device-credit counters so the chart isn't empty on first load"
+            >
+              {anonQuotaBackfilling ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}
+              Backfill today
+            </button>
+          </div>
+        </div>
+
+        {anonQuotaWall?.data_source === 'memory_fallback' && (
+          <div className="mb-3 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-start gap-2" data-testid="anon-quota-degraded-banner">
+            <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+            <span>
+              <span className="font-medium">Showing per-worker memory fallback.</span>{' '}
+              Redis is offline or unreachable, so totals reflect only the gunicorn worker that served this request — multiply by worker count for a rough fleet estimate.
+            </span>
+          </div>
+        )}
+
+        {anonQuotaError && (
+          <div className="mb-3 px-3 py-3 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-start justify-between gap-3" data-testid="anon-quota-fetch-error">
+            <div className="flex items-start gap-2">
+              <AlertCircle size={12} className="mt-0.5 flex-shrink-0" />
+              <span>
+                <span className="font-medium">Couldn't refresh wall-hit stats ({anonQuotaError}).</span>{' '}
+                {anonQuotaWall ? (
+                  <>The numbers below are the <span className="font-medium">last successful snapshot</span> — they may be stale. Click Retry to fetch fresh data.</>
+                ) : (
+                  <>No data has loaded yet. Click Retry to fetch live data.</>
+                )}
+              </span>
+            </div>
+            <button
+              onClick={() => loadAnonQuotaWall(anonQuotaDays)}
+              disabled={anonQuotaLoading}
+              className="text-xs px-2 py-1 rounded-md border border-rose-300 bg-white text-rose-700 hover:bg-rose-100 disabled:opacity-50 flex items-center gap-1 flex-shrink-0"
+              data-testid="anon-quota-retry-btn"
+            >
+              {anonQuotaLoading ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+              Retry
+            </button>
+          </div>
+        )}
+
+        {/* Headline KPIs */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          <div className="rounded-xl p-3 bg-rose-50 border border-rose-100">
+            <div className="flex items-center gap-1 text-rose-600 text-[10px] uppercase tracking-wide font-medium mb-1">
+              <ShieldAlert size={10} /> Wall hits
+            </div>
+            <div className="text-2xl font-bold text-rose-700" data-testid="anon-quota-total-exhausted">
+              {anonQuotaWall?.total_exhausted ?? 0}
+            </div>
+            <div className="text-[10px] text-rose-500/70">events in window</div>
+          </div>
+          <div className="rounded-xl p-3 bg-gray-50 border border-gray-100">
+            <div className="flex items-center gap-1 text-gray-500 text-[10px] uppercase tracking-wide font-medium mb-1">
+              <Smartphone size={10} /> Unique devices
+            </div>
+            <div className="text-2xl font-bold text-gray-800" data-testid="anon-quota-unique-devices">
+              {anonQuotaWall?.unique_devices_exhausted ?? 0}
+            </div>
+            <div className="text-[10px] text-gray-400">distinct cookies</div>
+          </div>
+          <div className="rounded-xl p-3 bg-emerald-50 border border-emerald-100">
+            <div className="flex items-center gap-1 text-emerald-600 text-[10px] uppercase tracking-wide font-medium mb-1">
+              <UserCheck size={10} /> Signed up
+            </div>
+            <div className="text-2xl font-bold text-emerald-700" data-testid="anon-quota-signup-after">
+              {anonQuotaWall?.signup_after_exhaust ?? 0}
+            </div>
+            <div className="text-[10px] text-emerald-600/70">within 24h of wall</div>
+          </div>
+          <div className="rounded-xl p-3 bg-violet-50 border border-violet-100">
+            <div className="flex items-center gap-1 text-violet-600 text-[10px] uppercase tracking-wide font-medium mb-1">
+              <Target size={10} /> Conversion
+            </div>
+            <div className="text-2xl font-bold text-violet-700" data-testid="anon-quota-conversion-pct">
+              {(anonQuotaWall?.conversion_pct ?? 0).toFixed(1)}%
+            </div>
+            <div className="text-[10px] text-violet-500/70">wall → sign-up</div>
+          </div>
+        </div>
+
+        {/* Sparkline: daily exhaustion count + conversion % on second axis.
+            The backend currently exposes only a window-aggregate
+            `conversion_pct`. We always render the conversion series so
+            the right axis is meaningful — when per-day data isn't
+            available, every point is the window-level value, drawn as
+            a flat dashed line and labeled accordingly. Per-day values
+            are used automatically once the backend starts returning
+            them. */}
+        {(() => {
+          const daily = anonQuotaWall?.daily ?? [];
+          const windowConv = typeof anonQuotaWall?.conversion_pct === 'number'
+            ? anonQuotaWall.conversion_pct
+            : null;
+          const hasPerDayConv = daily.some(d => typeof d.conversion_pct === 'number');
+          // Project the window-level value onto every row when per-day
+          // is missing, so the recharts <Line> draws a (flat) series.
+          const dailyForChart = daily.map(d => ({
+            ...d,
+            conversion_pct: typeof d.conversion_pct === 'number'
+              ? d.conversion_pct
+              : windowConv,
+          }));
+          const showConv = anonQuotaWall?.has_data && (hasPerDayConv || windowConv !== null);
+          return (
+            <div className="rounded-xl p-3 bg-gray-50 border border-gray-100 mb-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-gray-600">
+                  Daily wall hits &amp; conversion
+                </span>
+                <div className="flex items-center gap-3 text-[10px] text-gray-500">
+                  <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm bg-rose-500" /> exhausted</span>
+                  {showConv && (
+                    <span className="flex items-center gap-1" data-testid="anon-quota-conv-legend">
+                      <span className="inline-block w-2 h-2 rounded-sm bg-violet-500" /> conv. %{!hasPerDayConv ? ' (window avg)' : ''}
+                    </span>
+                  )}
+                </div>
+              </div>
+              {anonQuotaWall?.has_data && (anonQuotaWall.daily?.length ?? 0) > 0 ? (
+                <ResponsiveContainer width="100%" height={140}>
+                  <LineChart data={dailyForChart}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                    <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#9ca3af' }} tickFormatter={d => (d || '').slice(5)} />
+                    <YAxis yAxisId="left" tick={{ fontSize: 9, fill: '#fb7185' }} domain={[0, 'auto']} allowDecimals={false} />
+                    {showConv && (
+                      <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 9, fill: '#a78bfa' }} domain={[0, 100]} tickFormatter={v => `${v}%`} />
+                    )}
+                    <Tooltip content={<ChartTooltip />} />
+                    <Line yAxisId="left" type="monotone" dataKey="exhausted" stroke="#f43f5e" strokeWidth={2} dot={{ r: 2 }} name="Wall hits" />
+                    {showConv && (
+                      <Line yAxisId="right" type="monotone" dataKey="conversion_pct" stroke="#8b5cf6" strokeWidth={2} strokeDasharray="4 3" dot={hasPerDayConv ? { r: 2 } : false} name={hasPerDayConv ? 'Conversion %' : 'Conversion % (window avg)'} data-testid="anon-quota-conv-line" />
+                    )}
+                  </LineChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex flex-col items-center justify-center h-[140px] text-gray-400 text-xs gap-1" data-testid="anon-quota-empty-state">
+                  <ShieldAlert size={20} className="opacity-30" />
+                  <span>No wall hits in the last {anonQuotaWall?.period_days ?? anonQuotaDays} day{(anonQuotaWall?.period_days ?? anonQuotaDays) === 1 ? '' : 's'}</span>
+                  <span className="text-[10px] text-gray-300">Click <strong>Backfill today</strong> if devices have already hit the cap before this card shipped</span>
+                </div>
+              )}
+              {!hasPerDayConv && anonQuotaWall?.has_data && windowConv !== null && (
+                <p className="text-[10px] text-gray-400 mt-1 text-center">
+                  Per-day conversion not yet emitted by the backend — the dashed line plots the window aggregate ({windowConv.toFixed(1)}%) across every day.
+                </p>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Task #809 — durable weekly trend sparkline. Reads from the
+            backend's `weekly_trend` series (Redis-persisted, ~13mo
+            history) so this chart survives gunicorn restarts and
+            shows trends well beyond the 14-day in-memory window
+            powering the daily sparkline above. Always rendered when
+            the array is present (it's pre-seeded with zero buckets
+            server-side) so the dashboard's layout stays stable. */}
+        {(() => {
+          const weekly = anonQuotaWall?.weekly_trend ?? [];
+          if (weekly.length === 0) return null;
+          const weeklyMax = Math.max(1, ...weekly.map(w => Number(w.exhausted) || 0));
+          const weeklyTotal = weekly.reduce((a, w) => a + (Number(w.exhausted) || 0), 0);
+          return (
+            <div className="rounded-xl p-3 bg-gray-50 border border-gray-100 mb-3" data-testid="anon-quota-weekly-trend">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-gray-600">
+                  Weekly trend ({weekly.length} weeks, ISO Mondays UTC)
+                </span>
+                <span className="text-[10px] text-gray-400">
+                  {weeklyTotal.toLocaleString()} device-days · peak {weeklyMax.toLocaleString()}
+                </span>
+              </div>
+              <ResponsiveContainer width="100%" height={100}>
+                <LineChart data={weekly}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                  <XAxis
+                    dataKey="week_start"
+                    tick={{ fontSize: 9, fill: '#9ca3af' }}
+                    tickFormatter={d => (d || '').slice(5)}
+                    interval={Math.max(0, Math.floor(weekly.length / 6) - 1)}
+                  />
+                  <YAxis tick={{ fontSize: 9, fill: '#fb7185' }} domain={[0, 'auto']} allowDecimals={false} />
+                  <Tooltip
+                    content={<ChartTooltip />}
+                    formatter={(v) => [`${v} device-days`, 'Wall hits']}
+                    labelFormatter={(l) => `Week of ${l}`}
+                  />
+                  <Line type="monotone" dataKey="exhausted" stroke="#f43f5e" strokeWidth={2} dot={{ r: 2 }} name="Wall hits" />
+                </LineChart>
+              </ResponsiveContainer>
+              <p className="text-[10px] text-gray-400 mt-1 text-center">
+                Durable — survives backend restarts. Each bucket sums device-days that hit the cap that ISO week.
+              </p>
+            </div>
+          );
+        })()}
+
+        {/* By-hour heatmap (24 cells) */}
+        <div className="rounded-xl p-3 bg-gray-50 border border-gray-100">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-medium text-gray-600">By hour of day (UTC)</span>
+            <span className="text-[10px] text-gray-400">when devices hit the wall</span>
+          </div>
+          {(() => {
+            const byHour = anonQuotaWall?.by_hour || {};
+            const counts = Array.from({ length: 24 }, (_, h) => Number(byHour[h] ?? byHour[String(h)] ?? 0));
+            const maxCount = Math.max(1, ...counts);
+            return (
+              <div
+                className="grid gap-1"
+                style={{ gridTemplateColumns: 'repeat(24, minmax(0, 1fr))' }}
+                data-testid="anon-quota-hour-heatmap"
+              >
+                {counts.map((c, h) => {
+                  const intensity = c === 0 ? 0 : 0.15 + (c / maxCount) * 0.85;
+                  return (
+                    <div
+                      key={h}
+                      className="relative group rounded h-6 flex items-end justify-center"
+                      style={{ background: c === 0 ? '#f3f4f6' : `rgba(244, 63, 94, ${intensity})` }}
+                      title={`${String(h).padStart(2, '0')}:00 — ${c} hit${c === 1 ? '' : 's'}`}
+                      data-testid={`anon-quota-hour-${h}`}
+                    >
+                      <span className={`text-[9px] leading-none mb-0.5 ${c > 0 && intensity > 0.5 ? 'text-white' : 'text-gray-500'}`}>
+                        {h % 3 === 0 ? String(h).padStart(2, '0') : ''}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+          {(() => {
+            // Backend (`metrics.get_anon_quota_exhausted_stats`)
+            // returns weekday keys as the three-letter string names
+            // ("Mon".."Sun"). Read with the same shape; fall back to
+            // numeric indices in case the contract is ever changed
+            // to Mon=0..Sun=6 down the line.
+            const dowMap = anonQuotaWall?.by_day_of_week || {};
+            const dowLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+            const dowCounts = dowLabels.map((label, i) => Number(dowMap[label] ?? dowMap[i] ?? dowMap[String(i)] ?? 0));
+            const dowMax = Math.max(1, ...dowCounts);
+            return (
+              <div className="mt-3 pt-3 border-t border-gray-200">
+                <div className="text-xs font-medium text-gray-600 mb-2">By day of week (UTC)</div>
+                <div className="grid grid-cols-7 gap-1" data-testid="anon-quota-dow-strip">
+                  {dowLabels.map((label, i) => {
+                    const c = dowCounts[i];
+                    const intensity = c === 0 ? 0 : 0.15 + (c / dowMax) * 0.85;
+                    return (
+                      <div key={label} className="text-center">
+                        <div
+                          className="rounded h-6 flex items-center justify-center"
+                          style={{ background: c === 0 ? '#f3f4f6' : `rgba(244, 63, 94, ${intensity})` }}
+                          data-testid={`anon-quota-dow-${i}`}
+                        >
+                          <span className={`text-[10px] font-medium ${c > 0 && intensity > 0.5 ? 'text-white' : 'text-gray-500'}`}>
+                            {c}
+                          </span>
+                        </div>
+                        <span className="text-[9px] text-gray-400">{label}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+
+        <p className="text-xs text-gray-400 mt-3">
+          Window: last {anonQuotaWall?.period_days ?? anonQuotaDays} day{(anonQuotaWall?.period_days ?? anonQuotaDays) === 1 ? '' : 's'}
+          {(anonQuotaWall?.backfilled_today ?? 0) > 0 && <> · Backfilled today: {anonQuotaWall.backfilled_today}</>}
+          {anonQuotaWall?.data_source && <> · Source: {anonQuotaWall.data_source === 'redis' ? 'Redis (cross-worker)' : 'memory fallback'}</>}
+        </p>
+      </GlassCard>
+      </SectionErrorBoundary>
+
       <SectionErrorBoundary name="Latency & Top Queries">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <GlassCard className="p-5">
@@ -3925,8 +4957,8 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
             <Smartphone size={14} className="text-violet-500" />
             <h3 className="text-gray-600 font-semibold text-sm">PWA App Downloads</h3>
             {pwaStats.installs_today > 0 && (
-              <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600">
-                +{pwaStats.installs_today} today
+              <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600" title={TODAY_BUCKET_CAPTION}>
+                +{pwaStats.installs_today} today (UTC)
               </span>
             )}
           </div>
@@ -4037,8 +5069,8 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
           </div>
           <div className="flex gap-4 mt-3">
             {vs.daily_visitors.slice(-1).map(d => (
-              <div key="today-summary" className="flex gap-4 text-xs text-gray-400">
-                <span>Today: <span className="text-violet-600 font-medium">{d.visitors} visitors</span></span>
+              <div key="today-summary" className="flex gap-4 text-xs text-gray-400" title={TODAY_BUCKET_CAPTION}>
+                <span>Today (UTC, {UTC_MIDNIGHT_IN_IST}–now): <span className="text-violet-600 font-medium">{d.visitors} visitors</span></span>
                 <span>·</span>
                 <span><span className="text-gray-600 font-medium">{d.page_views}</span> page views</span>
               </div>
@@ -4080,6 +5112,10 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
           </div>
         )}
       </GlassCard>
+      </SectionErrorBoundary>
+
+      <SectionErrorBoundary name="Draft-Served Subjects">
+        <AdminDraftServedSubjects adminToken={adminToken} />
       </SectionErrorBoundary>
 
       <AdminQuickLinks links={['content','seomanager','analytics','users','conversations','vertex','monetization']} onNavigate={onNavigate} />

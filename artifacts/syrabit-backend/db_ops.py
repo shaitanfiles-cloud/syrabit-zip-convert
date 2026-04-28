@@ -1,13 +1,12 @@
 """Syrabit.ai — Database operations: supa_*, pg_* helpers."""
 import json, asyncio, logging, uuid, concurrent.futures as _cf
-from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
-from fastapi import HTTPException
+from typing import Any
 import deps as _deps_mod
-from deps import supa, db, redis_client, logger as _dep_logger
+from deps import supa, db, redis_client
 from cache import (
     _invalidate_user_cache, _user_cache, _conv_cache, _conv_cache_key,
-    _invalidate_conv_cache, _redis_cache_session, _redis_get_conversation,
+    _invalidate_conv_cache, _redis_get_conversation,
     _redis_invalidate_conversation, _redis_cache_conversation,
 )
 
@@ -16,7 +15,9 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "_THREAD_POOL", "_pg_row", "_pg_rows", "_pg_user_cols", "_supa", "_supa_mirror",
     "_ALLOWED_CONV_COLUMNS", "_ALLOWED_SETTINGS_COLUMNS", "_ALLOWED_USER_COLUMNS",
-    "atomic_deduct_credit", "supa_clear_activity_log", "supa_count_conversations",
+    "atomic_deduct_credit", "atomic_deduct_ip_credit", "atomic_deduct_device_credit",
+    "peek_device_credit_used",
+    "supa_clear_activity_log", "supa_count_conversations",
     "supa_count_users", "supa_create_password_reset", "supa_delete_conversation",
     "supa_delete_notification", "supa_delete_password_reset", "supa_get_activity_logs",
     "supa_get_all_conversations", "supa_get_conversation", "supa_get_conversations",
@@ -252,12 +253,197 @@ async def supa_update_user(uid: str, updates: dict):
     except Exception as e:
         logger.warning(f"All stores failed for update_user: {e}")
 
+# Lua: seed the daily counter to ``seed`` if it does not exist (with TTL),
+# then atomically increment-and-return only if the post-increment value is
+# within ``limit``. Returns the new count on success, -1 if the limit was
+# already reached. Executes inside Redis as a single atomic operation, so
+# concurrent callers cannot both succeed when only one slot remains.
+_REDIS_DEDUCT_LUA = """
+local key = KEYS[1]
+local seed = tonumber(ARGV[1])
+local limit = tonumber(ARGV[2])
+local ttl = tonumber(ARGV[3])
+if redis.call('EXISTS', key) == 0 then
+  redis.call('SET', key, seed, 'EX', ttl)
+end
+local cur = tonumber(redis.call('GET', key)) or 0
+if cur >= limit then
+  return -1
+end
+return redis.call('INCR', key)
+"""
+
+
+_REDIS_DEDUCT_SCRIPT_CACHE: dict[int, Any] = {}
+
+
+def _redis_atomic_deduct(client, key: str, seed: int, limit: int, ttl: int) -> int:
+    """Run the atomic deduct script. The registered ``Script`` object is cached
+    per Redis client so we don't re-register on every call (registration only
+    needs to happen once; ``Script.__call__`` uses EVALSHA with EVAL fallback).
+    Falls back to a raw ``eval`` for clients without ``register_script``
+    (some test doubles)."""
+    cached = _REDIS_DEDUCT_SCRIPT_CACHE.get(id(client))
+    if cached is None:
+        try:
+            cached = client.register_script(_REDIS_DEDUCT_LUA)
+            _REDIS_DEDUCT_SCRIPT_CACHE[id(client)] = cached
+        except AttributeError:
+            return int(client.eval(_REDIS_DEDUCT_LUA, 1, key, seed, limit, ttl))
+    return int(cached(keys=[key], args=[seed, limit, ttl]))
+
+
+def atomic_deduct_ip_credit(ip: str, daily_limit: int, window_seconds: int = 86400) -> bool:
+    """Atomically charge 1 credit against a per-IP daily quota in Redis.
+
+    Mirrors :func:`atomic_deduct_credit`'s Redis fallback: a single Lua
+    script (``_REDIS_DEDUCT_LUA``) seeds the counter to 0 with a TTL on
+    first use, then check-and-increments only when the post-increment
+    value would still be within ``daily_limit``. Concurrent callers can
+    therefore never push the counter past the limit, which is the same
+    double-spend race that Task #765 fixed for user credit ledgers.
+
+    .. note::
+       Task #793 demoted this from "the daily free-tier quota" (30/day)
+       to a much higher coarse abuse cap (a few hundred per day,
+       configurable via ``IP_COARSE_DAILY_CAP``). The per-device 30/day
+       budget is now enforced by :func:`atomic_deduct_device_credit`
+       so that shared NAT / school WiFi / Jio CGNAT users no longer
+       drain each other's quota.
+
+    Returns
+    -------
+    True  — credit charged, caller may proceed.
+    False — quota already exhausted (or Redis unavailable, fail-closed).
+    """
+    if not ip:
+        return False
+    if redis_client is None:
+        # Fail-closed: without Redis we cannot make the cross-worker
+        # atomic guarantee that this primitive promises. Callers that
+        # want a permissive in-memory fallback can implement it on top.
+        return False
+    from datetime import datetime, timezone
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    key = f"ip_daily_credits:{ip}:{today_str}"
+    try:
+        new_count = _redis_atomic_deduct(
+            redis_client, key, 0, int(daily_limit), int(window_seconds),
+        )
+    except Exception as e:
+        logger.warning(f"atomic_deduct_ip_credit redis failed for ip={ip}: {e}")
+        return False
+    return new_count > 0
+
+
+def atomic_deduct_device_credit(
+    token_id: str, daily_limit: int, window_seconds: int = 86400,
+) -> bool:
+    """Atomically charge 1 credit against a per-device daily quota.
+
+    This is the Task #793 replacement for the per-IP daily counter
+    formerly used in :func:`auth_deps.rate_limit_chat_optional`. The
+    key is keyed on the **device-token id** (the verified payload
+    minted by :mod:`device_token`), not on the public IP, so two
+    students on the same school/college NAT or Jio CGNAT egress each
+    get their own 30/day budget.
+
+    Implementation is identical to :func:`atomic_deduct_ip_credit` —
+    same Lua script, same atomic check-and-increment guarantee, same
+    midnight-UTC reset via the date-suffixed key + TTL — only the key
+    namespace differs (``device_daily_credits:`` instead of
+    ``ip_daily_credits:``). Reusing the script means the existing
+    concurrency regression in
+    ``tests/test_atomic_deduct_ip_race.py`` already covers the
+    correctness of the underlying primitive; the new tests added in
+    Task #793 only have to assert the routing.
+
+    Returns
+    -------
+    True  — credit charged, caller may proceed.
+    False — quota already exhausted (or Redis unavailable, fail-closed).
+    """
+    if not token_id:
+        return False
+    if redis_client is None:
+        # Same fail-closed posture as atomic_deduct_ip_credit: without
+        # Redis we cannot honour the cross-worker atomic guarantee that
+        # the per-device quota promises, so we deny rather than silently
+        # let abusers through.
+        return False
+    from datetime import datetime, timezone
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    key = f"device_daily_credits:{token_id}:{today_str}"
+    try:
+        new_count = _redis_atomic_deduct(
+            redis_client, key, 0, int(daily_limit), int(window_seconds),
+        )
+    except Exception as e:
+        logger.warning(
+            f"atomic_deduct_device_credit redis failed for token={token_id[:8]}…: {e}"
+        )
+        return False
+    return new_count > 0
+
+
+def peek_device_credit_used(token_id: str) -> int:
+    """Return today's per-device daily-credit usage *without* incrementing it.
+
+    Read-only companion to :func:`atomic_deduct_device_credit`, used by
+    the ``/user/credits`` endpoint (Task #796) to surface the remaining
+    free messages-of-the-day on the chat composer for anonymous
+    students. A peek must never charge a credit — students are simply
+    rendering "X / 30 left" in the UI; a side-effecting "peek" would
+    silently burn one of their messages on every page load.
+
+    Mirrors the date-suffixed Redis key built by
+    :func:`atomic_deduct_device_credit` exactly (same
+    ``device_daily_credits:<token>:<YYYY-MM-DD>`` namespace, midnight
+    UTC reset boundary), so the value returned here always matches
+    what the dependency would observe on its next charge attempt.
+
+    Returns
+    -------
+    int
+        Number of messages already charged against the device today
+        (``0`` when the counter has not yet been seeded). Returns
+        ``0`` for missing tokens or when Redis is unreachable — a
+        peek that fails should fall back to an optimistic
+        "fresh quota" view in the UI rather than show a misleading
+        "0 left" badge.
+    """
+    if not token_id:
+        return 0
+    if redis_client is None:
+        return 0
+    from datetime import datetime, timezone
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    key = f"device_daily_credits:{token_id}:{today_str}"
+    try:
+        raw = redis_client.get(key)
+    except Exception as e:
+        logger.warning(
+            f"peek_device_credit_used redis failed for token={token_id[:8]}…: {e}"
+        )
+        return 0
+    if raw is None:
+        return 0
+    try:
+        if isinstance(raw, bytes):
+            raw = raw.decode("ascii", errors="ignore")
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
 async def atomic_deduct_credit(uid: str, current_used: int, current_limit: int) -> bool:
     """Atomically deduct 1 daily credit only if credits_used_today < daily limit.
     Returns True on success, False if limit already reached (race condition guard).
     Resets credits_used_today to 0 when credits_reset_date is before today (UTC).
-    Uses PG UPDATE...WHERE for atomic check+increment; falls back to Redis INCR/DECR
-    CAS pattern; last resort falls back to Supabase with explicit limit guard.
+    Uses PG UPDATE...WHERE for atomic check+increment; falls back to a single
+    atomic Redis Lua script (see ``_REDIS_DEDUCT_LUA``) that seeds the daily
+    counter if absent and only increments when still under ``current_limit``;
+    last resort falls back to Supabase with an explicit limit guard.
     """
     from datetime import datetime, timezone
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -287,14 +473,33 @@ async def atomic_deduct_credit(uid: str, current_used: int, current_limit: int) 
             return False
         except Exception as e:
             logger.warning(f"atomic_deduct_credit pg failed, falling back: {e}")
-    # ── Fallback: Redis INCR + rollback CAS (atomic per Redis INCR semantics) ──
+    # ── Fallback: Redis Lua script — atomic seed-if-absent + check-and-incr ──
+    # Task #765 (audit finding B1): the prior implementation issued SETNX
+    # then INCR then a compensating DECR as three independent commands.
+    # Two concurrent callers could both observe the pre-deduction value,
+    # both INCR past the limit, and both write the over-spent count back
+    # to the user record before either rollback landed. The Lua script
+    # below executes atomically inside Redis, so only callers that fit
+    # within ``current_limit`` ever see a successful return.
     if redis_client:
+        # Task #769: we've left the Postgres happy path — record the
+        # fallback so the alerting loop can page on-call when PG is
+        # silently broken. Recording before the attempt ensures we
+        # capture the event even if the Redis op itself raises and
+        # cascades to Supabase below (in which case both events fire,
+        # which is correct: both fallback paths were exercised).
+        # Lazy import avoids an import cycle with metrics.py.
+        try:
+            from metrics import record_credit_fallback as _rcf
+            _rcf("redis")
+        except Exception:
+            pass
         try:
             redis_key = f"daily_credits:{uid}:{today_str}"
-            redis_client.set(redis_key, current_used, ex=86400, nx=True)
-            new_count = redis_client.incr(redis_key)
-            if new_count > current_limit:
-                redis_client.decr(redis_key)
+            new_count = _redis_atomic_deduct(
+                redis_client, redis_key, int(current_used), int(current_limit), 86400,
+            )
+            if new_count < 0:
                 return False
             user_data = await supa_get_user_by_id(uid)
             lifetime_used = (user_data.get("credits_used", 0) if user_data else 0) + 1
@@ -303,6 +508,12 @@ async def atomic_deduct_credit(uid: str, current_used: int, current_limit: int) 
         except Exception as e:
             logger.warning(f"atomic_deduct_credit redis failed, falling back: {e}")
     # ── Last resort: Supabase with explicit limit guard ─────────────────────
+    # Task #769: same instrumentation as the Redis branch above.
+    try:
+        from metrics import record_credit_fallback as _rcf
+        _rcf("supabase")
+    except Exception:
+        pass
     if current_used >= current_limit:
         return False
     new_used = current_used + 1
@@ -811,7 +1022,15 @@ async def supa_get_activity_logs(limit: int = 200):
     except Exception:
         return []
 
-async def supa_insert_activity_log(entry: dict):
+async def supa_insert_activity_log(entry: dict) -> bool:
+    """Insert an activity log entry across the pg → supa → mongo tiers.
+
+    Returns True if any tier accepted the write, False only when every
+    available tier raised. Callers that need observability on the
+    write outcome (e.g. the activity-log purge breadcrumb in
+    admin_clear_activity_log) can branch on the return; the existing
+    fire-and-forget callers ignore it without behavior change.
+    """
     if _deps_mod.pg_pool:
         try:
             async with _deps_mod.pg_pool.acquire() as conn:
@@ -823,33 +1042,63 @@ async def supa_insert_activity_log(entry: dict):
                     entry.get("admin_name",""), entry.get("admin_email",""),
                     entry.get("created_at", datetime.now(timezone.utc).isoformat())
                 )
-            return
+            return True
         except Exception as e:
             logger.warning(f"pg supa_insert_activity_log failed: {e}")
     if supa:
         try:
             allowed = {"id", "action", "details", "level", "admin_name", "admin_email", "created_at"}
-            await _supa(lambda: supa.table("activity_log").insert({k: v for k, v in entry.items() if k in allowed}).execute()); return
+            await _supa(lambda: supa.table("activity_log").insert({k: v for k, v in entry.items() if k in allowed}).execute())
+            return True
         except Exception as e:
             logger.warning(f"supa_insert_activity_log failed: {e}")
     try:
         await db.activity_log.insert_one(entry)
-    except Exception: pass
+        return True
+    except Exception as e:
+        logger.warning(f"mongo supa_insert_activity_log failed: {e}")
+        return False
 
-async def supa_clear_activity_log():
+async def supa_clear_activity_log() -> int:
+    """Purge every row from the activity log.
+
+    Returns the number of rows actually deleted so callers can attribute
+    "Cleared N prior entries" in the immediate self-audit entry that
+    admin_settings.admin_clear_activity_log() inserts after this call —
+    that breadcrumb is the only thing standing between us and a malicious
+    admin silently erasing their own trail. Falls through the pg → supa →
+    mongo tiers in the same order as supa_get_activity_logs() so the count
+    matches whatever the GET endpoint would have returned. Returns 0 if
+    every tier fails (caller still inserts the self-audit entry — the
+    breadcrumb is more important than the count's accuracy).
+    """
     if _deps_mod.pg_pool:
         try:
             async with _deps_mod.pg_pool.acquire() as conn:
-                await conn.execute("DELETE FROM activity_log")
-            return
-        except Exception: pass
+                # Single round-trip: DELETE ... RETURNING id is cheaper
+                # than COUNT(*) followed by DELETE and avoids a TOCTOU
+                # race where another admin inserts between the two.
+                rows = await conn.fetch("DELETE FROM activity_log RETURNING id")
+                return len(rows)
+        except Exception as e:
+            logger.warning(f"pg supa_clear_activity_log failed: {e}")
     if supa:
         try:
-            await _supa(lambda: supa.table("activity_log").delete().neq("id", "").execute()); return
-        except Exception: pass
+            # supabase-py doesn't surface a delete-count, so we count
+            # first then delete. The window between the two is tiny and
+            # acceptable for an audit-trail caption.
+            cnt_resp = await _supa(lambda: supa.table("activity_log").select("id", count="exact").limit(1).execute())
+            count = int(getattr(cnt_resp, "count", 0) or 0)
+            await _supa(lambda: supa.table("activity_log").delete().neq("id", "").execute())
+            return count
+        except Exception as e:
+            logger.warning(f"supa supa_clear_activity_log failed: {e}")
     try:
-        await db.activity_log.delete_many({})
-    except Exception: pass
+        result = await db.activity_log.delete_many({})
+        return int(getattr(result, "deleted_count", 0) or 0)
+    except Exception as e:
+        logger.warning(f"mongo supa_clear_activity_log failed: {e}")
+        return 0
 
 async def supa_get_notifications(limit: int = 100):
     if _deps_mod.pg_pool:
@@ -867,6 +1116,63 @@ async def supa_get_notifications(limit: int = 100):
         return await db.notifications.find({}, {"_id": 0}).sort("created_at", -1).to_list(limit)
     except Exception:
         return []
+
+async def supa_get_notifications_by_title_prefix(prefix: str, limit: int = 10):
+    """Return the N most-recent notifications whose title starts with
+    ``prefix`` (used by Task #758 to power the Trustpilot JSON-LD alert
+    history strip on the admin dashboard).
+
+    Filters on ``title`` rather than ``meta.kind`` because the PG and
+    Supabase code paths in ``supa_insert_notification`` only persist a
+    fixed column set — ``meta`` / ``channel`` are silently dropped — so
+    a meta-based filter would miss everything inserted in production.
+    Title-prefix matching is stable because every alert emitter in
+    this codebase uses a distinct, namespaced title prefix.
+
+    Tries the same storage backends, in the same priority order, as
+    ``supa_get_notifications`` so we stay consistent with the writer.
+    """
+    if _deps_mod.pg_pool:
+        try:
+            async with _deps_mod.pg_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """SELECT * FROM notifications
+                       WHERE title LIKE $1
+                       ORDER BY created_at DESC LIMIT $2""",
+                    f"{prefix}%", int(limit),
+                )
+                return _pg_rows(rows)
+        except Exception as exc:
+            logger.warning(
+                "pg supa_get_notifications_by_title_prefix failed: %s", exc,
+            )
+    if supa:
+        try:
+            r = await _supa(
+                lambda: supa.table("notifications")
+                .select("*")
+                .like("title", f"{prefix}%")
+                .order("created_at", desc=True)
+                .limit(int(limit))
+                .execute()
+            )
+            return r.data or []
+        except Exception as exc:
+            logger.warning(
+                "supa supa_get_notifications_by_title_prefix failed: %s", exc,
+            )
+    try:
+        # Mongo fallback — regex-anchored to the prefix.
+        import re as _re
+        safe = _re.escape(prefix)
+        cursor = db.notifications.find(
+            {"title": {"$regex": f"^{safe}"}},
+            {"_id": 0},
+        ).sort("created_at", -1).limit(int(limit))
+        return await cursor.to_list(int(limit))
+    except Exception:
+        return []
+
 
 async def supa_insert_notification(notif: dict):
     if _deps_mod.pg_pool:

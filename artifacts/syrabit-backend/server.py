@@ -4,11 +4,10 @@ AHSEC AI-Powered Educational Platform
 
 Thin entry point: creates the app, mounts middleware, and includes all route modules.
 """
-import os, sys, json, uuid, logging, asyncio, fcntl
+import os, sys, json, logging, asyncio, fcntl
 from contextlib import asynccontextmanager
-from pathlib import Path
+from datetime import datetime, timedelta, timezone
 from typing import Optional
-from datetime import datetime, timezone
 
 from fastapi import FastAPI, APIRouter, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -97,37 +96,41 @@ def _validate_env():
         "AWS_ACCESS_KEY_ID": os.environ.get("AWS_ACCESS_KEY_ID", "").strip(),
         "AWS_SECRET_ACCESS_KEY": os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip(),
     }
+    _byok_active = os.environ.get("CF_AI_GATEWAY_BYOK", "1").strip() not in ("", "0", "false", "False")
     _log.info("─── LLM Provider Key Diagnostic ───")
     for name, val in _llm_keys.items():
         status = "SET" if val else "NOT SET"
-        _log.info(f"  {name}: {status}")
+        if name.startswith("GEMINI_API_KEY") and _byok_active:
+            _log.info(f"  {name}: {status}  (BYOK — managed by Cloudflare AI Gateway)")
+        else:
+            _log.info(f"  {name}: {status}")
     _log.info("───────────────────────────────────")
 
 
 _validate_env()
 
 from config import ROOT_DIR, CORS_ORIGINS, CORS_ORIGIN_REGEX, _CORS_ALLOW_CREDENTIALS
-import deps
 from deps import (
-    db, supa, sarvam_client, sarvam_translate_client, sarvam_llm_client,
+    db, sarvam_client, sarvam_translate_client, sarvam_llm_client,
     sarvam_client_direct, sarvam_llm_client_direct,
-    mongo_client, logger, _rate_cleanup_task, _init_pg_pool,
-    is_mongo_available,
+    mongo_client, logger, _init_pg_pool,
 )
 from auth_deps import _rate_limiter_cleanup
 from seed import ensure_seeded
 from db_ops import supa_insert_activity_log
 from metrics import _bg_health_loop, _alerting_loop
 from routes.bot_discovery import _endpoint_health_alert_loop, _seo_health_alert_loop, _seo_weekly_digest_loop, _cf_bot_report_loop
+from entity_seo_health import _entity_seo_loop
 from routes.bot_traffic_report import _bot_traffic_report_loop
 
-from prompts import build_system_prompt, _classify_question
 from syllabus_embedder import SyllabusEmbedder
 
 _syllabus_embedder: Optional[SyllabusEmbedder] = None
 
 
 async def _load_ga4_from_db():
+    if db is None:
+        return
     try:
         if not os.getenv("GA4_REFRESH_TOKEN"):
             cfg = await db.api_config.find_one({}, {"ga4": 1})
@@ -164,6 +167,413 @@ async def _prewarm_library_cache():
             if attempt < 2:
                 await asyncio.sleep(2 * (attempt + 1))
 
+async def _vertex_startup_probe() -> None:
+    """Task #667 — fail-fast Gemini reachability self-check.
+
+    Calls ``vertex_services.health_check()`` once after boot. Logs a single
+    ERROR line if either the embed probe or the one-token generation probe
+    fails, so a broken credential / AI Gateway misconfig surfaces in the
+    deploy logs instead of waiting for a user-facing 502. Runs as a
+    background task via ``asyncio.create_task`` so it never blocks the
+    API from accepting requests.
+
+    The wait_for budget is configurable via ``VERTEX_STARTUP_PROBE_TIMEOUT_S``
+    (default 15s). The legacy 5s budget was unrealistic for the cold-start
+    path: ``health_check()`` does TWO sequential HTTPS calls (embed +
+    generate), each requiring DNS + TLS + (for SA mode) a fresh OAuth2
+    token exchange. A cold container in a region with elevated baseline
+    latency to ``*-aiplatform.googleapis.com`` regularly exceeded 5s and
+    booted into a permanent ``unhealthy`` state on otherwise-working
+    deploys (#audit 2026-04-25).
+
+    Failure paths now also pass ``auth_mode`` and ``via_cf_gateway`` to
+    the cache (read from the vertex_services module-level state) so
+    ``/healthz/ai`` reports which auth path was attempted instead of
+    showing ``null``.
+    """
+    import vertex_health_cache
+
+    def _probe_auth_meta() -> tuple[Optional[str], Optional[bool]]:
+        """Best-effort lookup of the auth_mode + gateway flag from the
+        already-imported vertex_services module. Returns (None, None)
+        when the module hasn't loaded yet (e.g. import itself failed)."""
+        try:
+            import vertex_services as _vs
+            return (
+                getattr(_vs, "_AUTH_MODE", None),
+                getattr(_vs, "_CF_GW_ENABLED", None),
+            )
+        except Exception:  # pragma: no cover — defensive
+            return (None, None)
+
+    timeout_s = max(1.0, float(os.environ.get("VERTEX_STARTUP_PROBE_TIMEOUT_S", "15") or 15))
+
+    try:
+        import vertex_services
+        result = await asyncio.wait_for(
+            vertex_services.health_check(), timeout=timeout_s
+        )
+    except asyncio.TimeoutError:
+        auth_mode, via_cf_gateway = _probe_auth_meta()
+        reason = (
+            f"timed out after {timeout_s:.0f}s — upstream (Vertex / AI Gateway) "
+            f"is unreachable or hung."
+        )
+        logger.error(f"[STARTUP-PROBE] Gemini self-check FAILED: {reason}")
+        vertex_health_cache.record(
+            False,
+            reason=reason,
+            auth_mode=auth_mode,
+            via_cf_gateway=via_cf_gateway,
+            source="startup",
+        )
+        return
+    except Exception as exc:
+        auth_mode, via_cf_gateway = _probe_auth_meta()
+        reason = f"vertex health_check raised: {exc!r}"
+        logger.error(f"[STARTUP-PROBE] {reason}")
+        vertex_health_cache.record(
+            False,
+            reason=reason,
+            auth_mode=auth_mode,
+            via_cf_gateway=via_cf_gateway,
+            source="startup",
+        )
+        return
+    embed_ok = bool(result.get("embeddings"))
+    gen_ok = bool(result.get("generation"))
+    if not embed_ok or not gen_ok:
+        reason = result.get("reason") or (
+            f"embeddings={embed_ok} generation={gen_ok} "
+            f"auth_mode={result.get('auth_mode')!r} "
+            f"via_cf_gateway={result.get('via_cf_gateway')!r}"
+        )
+        logger.error(f"[STARTUP-PROBE] Gemini self-check FAILED: {reason}")
+        vertex_health_cache.record(
+            False,
+            reason=reason,
+            auth_mode=result.get("auth_mode"),
+            via_cf_gateway=result.get("via_cf_gateway"),
+            source="startup",
+        )
+    else:
+        logger.info(
+            f"[STARTUP-PROBE] Gemini self-check OK "
+            f"(auth_mode={result.get('auth_mode')!r})"
+        )
+        vertex_health_cache.record(
+            True,
+            auth_mode=result.get("auth_mode"),
+            via_cf_gateway=result.get("via_cf_gateway"),
+            source="startup",
+        )
+
+
+_VERTEX_PROBE_INTERVAL_S = max(
+    30, int(os.environ.get("VERTEX_PROBE_INTERVAL_S", "600") or 600)
+)
+_VERTEX_PROBE_FAILURE_THRESHOLD = 2
+
+
+async def _vertex_periodic_probe_loop() -> None:
+    """Task #677 — keep watching Gemini *after* boot.
+
+    The startup probe (Task #667) only catches credential / gateway
+    misconfig at deploy time. If Gemini fails mid-day (revoked key, AI
+    Gateway throttling, regional outage) nothing notices until users
+    start hitting 502s. This loop calls ``vertex_services.health_check()``
+    every ``VERTEX_PROBE_INTERVAL_S`` seconds (default 600s) and routes
+    consecutive failures (>=2) through ``metrics._dispatch_alert`` so
+    on-call gets paged the same way ``_seo_health_alert_loop`` already
+    pages them.
+
+    Alert fires exactly once per failure run: on the transition to 2
+    consecutive failures we dispatch, then suppress further dispatches
+    until a success resets the counter. The same alert type also goes
+    through the existing 30-min cooldown in ``_dispatch_alert`` as a
+    secondary guard.
+    """
+    import vertex_health_cache
+    consecutive_failures = 0
+    alerted_for_run = False
+    await asyncio.sleep(_VERTEX_PROBE_INTERVAL_S)
+    while True:
+        ok = False
+        reason = ""
+        result: dict = {}
+        try:
+            import vertex_services
+            result = await asyncio.wait_for(
+                vertex_services.health_check(), timeout=10.0
+            )
+            embed_ok = bool(result.get("embeddings"))
+            gen_ok = bool(result.get("generation"))
+            ok = embed_ok and gen_ok
+            if not ok:
+                reason = result.get("reason") or (
+                    f"embeddings={embed_ok} generation={gen_ok} "
+                    f"auth_mode={result.get('auth_mode')!r} "
+                    f"via_cf_gateway={result.get('via_cf_gateway')!r}"
+                )
+        except asyncio.TimeoutError:
+            reason = "timed out after 10s — upstream (Vertex / AI Gateway) unreachable or hung."
+        except Exception as exc:
+            reason = f"vertex health_check raised: {exc!r}"
+
+        # Compute the next consecutive_failures BEFORE writing to the
+        # cache so the admin dashboard always shows the freshest count
+        # (including the failure we just observed).
+        next_consecutive = 0 if ok else consecutive_failures + 1
+        vertex_health_cache.record(
+            ok,
+            reason=None if ok else reason,
+            auth_mode=result.get("auth_mode") if isinstance(result, dict) else None,
+            via_cf_gateway=result.get("via_cf_gateway") if isinstance(result, dict) else None,
+            source="periodic",
+            consecutive_failures=next_consecutive,
+        )
+
+        if ok:
+            # Task #690 — auto-recovery notification. If we already paged
+            # on-call for this failure run (``alerted_for_run`` was set
+            # the moment we crossed the failure threshold), close the
+            # loop with a single "all clear" message so admins don't
+            # have to grep logs to know the outage ended. We force=True
+            # so the recovery message is not silenced by the 30-min
+            # alert cooldown that the matching ``vertex_health_degraded``
+            # may have just consumed.
+            if alerted_for_run:
+                try:
+                    from metrics import _dispatch_alert
+                    await _dispatch_alert(
+                        "vertex_health_recovered",
+                        "Gemini / Vertex health recovered",
+                        f"vertex_services.health_check() is healthy again "
+                        f"after a sustained failure run "
+                        f"(probe interval: {_VERTEX_PROBE_INTERVAL_S}s). "
+                        f"This closes the matching vertex_health_degraded "
+                        f"alert — no on-call action needed.",
+                        threshold_snapshot={
+                            "metric": "vertex_consecutive_failures",
+                            "value": _VERTEX_PROBE_FAILURE_THRESHOLD,
+                            "actual": 0,
+                            "interval_s": _VERTEX_PROBE_INTERVAL_S,
+                        },
+                        force=True,
+                    )
+                except Exception as recovery_err:
+                    logger.error(
+                        f"[PERIODIC-PROBE] recovery _dispatch_alert "
+                        f"raised: {recovery_err!r}"
+                    )
+            consecutive_failures = 0
+            alerted_for_run = False
+        else:
+            consecutive_failures += 1
+            logger.error(
+                f"[PERIODIC-PROBE] Gemini self-check FAILED "
+                f"(consecutive={consecutive_failures}): {reason}"
+            )
+            if (
+                consecutive_failures >= _VERTEX_PROBE_FAILURE_THRESHOLD
+                and not alerted_for_run
+            ):
+                alerted_for_run = True
+                try:
+                    from metrics import _dispatch_alert
+                    await _dispatch_alert(
+                        "vertex_health_degraded",
+                        "Gemini / Vertex health check failing",
+                        f"vertex_services.health_check() failed "
+                        f"{consecutive_failures} consecutive times "
+                        f"(probe interval: {_VERTEX_PROBE_INTERVAL_S}s). "
+                        f"Last reason: {reason}",
+                        threshold_snapshot={
+                            "metric": "vertex_consecutive_failures",
+                            "value": _VERTEX_PROBE_FAILURE_THRESHOLD,
+                            "actual": consecutive_failures,
+                            "interval_s": _VERTEX_PROBE_INTERVAL_S,
+                        },
+                    )
+                except Exception as dispatch_err:
+                    logger.error(
+                        f"[PERIODIC-PROBE] _dispatch_alert raised: {dispatch_err!r}"
+                    )
+
+        await asyncio.sleep(_VERTEX_PROBE_INTERVAL_S)
+
+
+# ── Task #707 — silent-lockout watcher ────────────────────────────────────────
+# Pairs the persisted CF Access env-change timestamp (from
+# ``cf_access.record_cf_access_config_change``) with the most recent successful
+# admin login (``db.admin_login_log``). When the gap exceeds the operator-
+# configurable ``cf_access_silent_lockout_hours`` threshold, fires the
+# ``cf_access_admin_silent_lockout`` alert through ``metrics._dispatch_alert``
+# — which already enforces the 30-min cooldown so a perma-locked deployment
+# does not page on every iteration.
+_CF_ACCESS_SILENT_LOCKOUT_LOOP_INTERVAL_S = max(
+    60, int(os.environ.get("CF_ACCESS_SILENT_LOCKOUT_INTERVAL_S", "1800") or 1800)
+)
+_CF_ACCESS_SILENT_LOCKOUT_STARTUP_DELAY_S = 120
+_CF_ACCESS_SILENT_LOCKOUT_ALERT_TYPE = "cf_access_admin_silent_lockout"
+
+
+def _parse_iso_dt(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return None
+
+
+async def _cf_access_silent_lockout_check_once() -> dict:
+    """One iteration of the silent-lockout watcher.
+
+    Returns a dict describing what was observed (and whether an alert was
+    dispatched) so unit tests can assert on the decision without monkey-
+    patching the dispatcher itself.
+    """
+    from cf_access import cf_access_config_fingerprint
+    import metrics as _metrics
+
+    state_doc = None
+    try:
+        cfg = await db.api_config.find_one({}, {"_id": 0, "cf_access_config_state": 1})
+        if isinstance(cfg, dict):
+            state_doc = cfg.get("cf_access_config_state")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"[CF_ACCESS_LOCKOUT] state read failed: {exc}")
+        return {"skipped": "state_read_failed"}
+
+    if not isinstance(state_doc, dict) or not state_doc.get("changed_at"):
+        return {"skipped": "no_recorded_change"}
+
+    # Only watch environments that have ever provisioned CF Access — dev
+    # boxes that never set the env should not page.
+    fp = cf_access_config_fingerprint()
+    if not (fp.get("team_domain") or fp.get("admin_aud_configured")):
+        return {"skipped": "cf_access_not_provisioned"}
+
+    changed_at = _parse_iso_dt(state_doc.get("changed_at"))
+    if changed_at is None:
+        return {"skipped": "bad_changed_at"}
+
+    threshold_hours = float(_metrics._ALERT_THRESHOLDS.get(
+        "cf_access_silent_lockout_hours",
+        _metrics._ALERT_THRESHOLDS_DEFAULT["cf_access_silent_lockout_hours"],
+    ))
+    threshold_delta = timedelta(hours=max(0.1, threshold_hours))
+    now = datetime.now(timezone.utc)
+    age = now - changed_at
+    if age < threshold_delta:
+        return {"skipped": "within_threshold", "age_hours": age.total_seconds() / 3600}
+
+    # Most recent successful admin login.
+    last_login_at = None
+    last_login_email = None
+    try:
+        cursor = db.admin_login_log.find(
+            {"success": True}, {"_id": 0, "ts": 1, "email": 1}
+        ).sort("ts", -1).limit(1)
+        rows = await cursor.to_list(length=1)
+        if rows:
+            last_login_at = _parse_iso_dt(rows[0].get("ts"))
+            last_login_email = rows[0].get("email")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"[CF_ACCESS_LOCKOUT] admin_login_log read failed: {exc}")
+        return {"skipped": "login_log_read_failed"}
+
+    if last_login_at is not None and last_login_at >= changed_at:
+        return {
+            "skipped": "login_seen_after_change",
+            "last_login_at": last_login_at.isoformat(),
+            "changed_at": changed_at.isoformat(),
+        }
+
+    body = (
+        f"No admin login has succeeded in the {age.total_seconds() / 3600:.1f}h "
+        f"since the last CF_ACCESS_* env change at {changed_at.isoformat()} "
+        f"(threshold: {threshold_hours}h). This usually means a silent "
+        "lockout — the new AUD tag, team domain, or enforce flag rejected "
+        "the operator's session and nobody noticed because nobody tried to "
+        "log in. Verify /admin/diagnostics, the Cloudflare Zero Trust "
+        "dashboard, and the runbook (docs/CLOUDFLARE_ZERO_TRUST.md §0 + §7) "
+        "before the next on-call need. "
+        f"Last successful admin login: "
+        f"{last_login_at.isoformat() if last_login_at else 'never recorded'}"
+        f"{' (' + last_login_email + ')' if last_login_email else ''}."
+    )
+    try:
+        await _metrics._dispatch_alert(
+            _CF_ACCESS_SILENT_LOCKOUT_ALERT_TYPE,
+            "Cloudflare Access — possible silent admin lockout",
+            body,
+            threshold_snapshot={
+                "metric": "cf_access.hours_since_change_without_login",
+                "value": threshold_hours,
+                "actual": round(age.total_seconds() / 3600, 2),
+                "changed_at": changed_at.isoformat(),
+                "last_login_at": last_login_at.isoformat() if last_login_at else None,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[CF_ACCESS_LOCKOUT] dispatch failed: {exc}")
+        return {"skipped": "dispatch_failed", "error": str(exc)[:200]}
+    return {
+        "alerted": True,
+        "age_hours": age.total_seconds() / 3600,
+        "threshold_hours": threshold_hours,
+    }
+
+
+async def _cf_access_silent_lockout_loop() -> None:
+    """Task #707 — periodic wrapper around ``_cf_access_silent_lockout_check_once``.
+
+    Re-arms the persisted ``cf_access_config_state`` anchor on every
+    iteration via ``record_cf_access_config_change``. This matters for
+    two reasons:
+
+      * The boot-time call from ``lifespan`` can fail when Mongo is not
+        yet ready; without a re-arm path the watcher would stay stuck
+        in ``no_recorded_change`` for the lifetime of the process and
+        silently never page.
+      * If an operator rotates a CF Access AUD between boots, the
+        loop captures the new fingerprint + a fresh ``changed_at`` on
+        the very next tick instead of waiting for the next restart.
+    """
+    await asyncio.sleep(_CF_ACCESS_SILENT_LOCKOUT_STARTUP_DELAY_S)
+    while True:
+        try:
+            from deps import is_mongo_available as _is_mongo
+            if await _is_mongo():
+                try:
+                    from cf_access import (
+                        record_cf_access_config_change as _rec_cf_change,
+                    )
+                    await _rec_cf_change(db)
+                except Exception as rec_err:  # noqa: BLE001
+                    logger.debug(
+                        f"[CF_ACCESS_LOCKOUT] re-arm skipped: {rec_err}"
+                    )
+                outcome = await _cf_access_silent_lockout_check_once()
+                if outcome.get("alerted"):
+                    logger.warning(
+                        "[CF_ACCESS_LOCKOUT] paged on-call: "
+                        "age=%.1fh threshold=%.1fh",
+                        outcome.get("age_hours", 0),
+                        outcome.get("threshold_hours", 0),
+                    )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[CF_ACCESS_LOCKOUT] loop iteration error: {exc}")
+        await asyncio.sleep(_CF_ACCESS_SILENT_LOCKOUT_LOOP_INTERVAL_S)
+
+
 @asynccontextmanager
 async def lifespan(app):
     import deps as _deps_mod
@@ -185,6 +595,36 @@ async def lifespan(app):
             await db.chapters.create_index("subject_id")
             await db.chapters.create_index("order_index")
             await db.chapters.create_index([("slug", 1), ("subject_id", 1)])
+            # Task #914 Step 1 — durable uniqueness for the persistent
+            # topic_slug. The backfill resolves intra-chapter
+            # collisions deterministically; this compound unique
+            # index stops a future admin edit / SEO regen from
+            # silently re-introducing two topics that point at the
+            # same `/.../<chapter>/topic/<slug>` URL. Partial filter
+            # so legacy rows without `topic_slug` (or with empty
+            # string) don't trip the constraint before the next
+            # backfill pass.
+            try:
+                await db.topics.create_index(
+                    [("chapter_id", 1), ("topic_slug", 1)],
+                    unique=True,
+                    partialFilterExpression={
+                        "topic_slug": {"$type": "string", "$gt": ""},
+                    },
+                    name="topics_chapter_id_topic_slug_unique",
+                )
+            except Exception as _idx_err:  # noqa: BLE001
+                # Pre-existing duplicates would block index creation.
+                # Log and continue — the next backfill run will
+                # repair the data and a follow-up restart picks up
+                # the index. Failure here must NOT block app boot.
+                logging.getLogger("syrabit.startup").warning(
+                    "topics chapter_id+topic_slug unique index skipped: %s", _idx_err,
+                )
+            # And a non-unique index on definition_status to make the
+            # admin definition-missing audit O(matched) instead of
+            # full-collection scan.
+            await db.topics.create_index("definition_status")
             await db.subjects.create_index("stream_id")
             await db.subjects.create_index("status")
             await db.subjects.create_index([("slug", 1), ("stream_id", 1)])
@@ -340,6 +780,21 @@ async def lifespan(app):
                 name="ran_at_desc",
             )
 
+            # Persistent cross-worker alert dedup log (paired with
+            # metrics._dispatch_alert). Unique by ``dedup_key`` so the
+            # upsert at dispatch time has a single row per (alert_type,
+            # target) pair. TTL prunes rows ~30d after the last fire so
+            # the collection doesn't grow unbounded — the alert cooldown
+            # window itself is only 6h.
+            await db.alert_dispatch_log.create_index(
+                "dedup_key", unique=True, name="dedup_key_unique",
+            )
+            await db.alert_dispatch_log.create_index(
+                "fired_at",
+                expireAfterSeconds=30 * 24 * 3600,
+                name="fired_at_ttl_30d",
+            )
+
             await db.collection_size_history.create_index(
                 [("collection", 1), ("date", 1)],
                 unique=True,
@@ -467,6 +922,25 @@ async def lifespan(app):
         asyncio.create_task(ensure_synthetic_alerts_ttl_index())
     asyncio.create_task(_synthetic_alert_cleanup_loop())
     asyncio.create_task(_alerting_loop())
+    # Task #707 — silent-lockout watcher. Snapshot the current CF Access
+    # env fingerprint *before* starting the loop so a same-restart change
+    # already gets a fresh ``changed_at`` anchor. The loop itself is
+    # leader-gated to avoid N× paging on multi-replica deployments; the
+    # underlying ``_dispatch_alert`` cooldown is a defense-in-depth.
+    if _is_leader:
+        try:
+            from cf_access import record_cf_access_config_change as _rec_cf_change
+            await _rec_cf_change(db)
+            await db.admin_login_log.create_index([("ts", -1)])
+            await db.admin_login_log.create_index(
+                [("success", 1), ("ts", -1)],
+                name="success_ts_idx",
+            )
+        except Exception as _cf_lock_init_err:
+            logger.warning(
+                f"cf_access silent-lockout init skipped: {_cf_lock_init_err}"
+            )
+        asyncio.create_task(_cf_access_silent_lockout_loop())
     asyncio.create_task(_endpoint_health_alert_loop())
     # Task #412 — periodically check hydrate_telemetry and fire admin
     # alerts (email + webhook + persisted) when stale-build failures
@@ -505,6 +979,41 @@ async def lifespan(app):
         asyncio.create_task(_bing_keyword_refresh_loop())
     asyncio.create_task(_seo_health_alert_loop())
     asyncio.create_task(_seo_weekly_digest_loop())
+    # Task #940: weekly entity-SEO health worker (Wikidata, Wikipedia,
+    # Crunchbase, sameAs, Google KG).
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``entity_seo_lease``), not the per-machine ``_is_leader`` file
+    # lock — Railway runs N replicas and each had its own file lock,
+    # so all of them previously fired the weekly Wikidata/KG probe.
+    # Followers stand down on each tick.
+    asyncio.create_task(_entity_seo_loop())
+    # Task #937: nightly autonomous topic-discovery agent. Leader-gated
+    # so only one replica fires the per-day run; the loop also holds an
+    # atomic per-yyyy-mm-dd lock as a belt-and-braces guard.
+    if _is_leader:
+        from topic_discovery_service import _topic_discovery_loop
+        asyncio.create_task(_topic_discovery_loop())
+    # Task #938: closed-loop content remediation worker.
+    # Leader-gated so only one replica processes signals — the
+    # alerter on every replica enqueues into the durable Mongo
+    # ``seo_remediation_signals`` collection, and the leader's
+    # poller atomically claims (find_one_and_update) the next
+    # pending signal. Cross-replica safe: producers can fire from
+    # any worker, the consumer drains them one at a time without
+    # double-processing.
+    if _is_leader:
+        from seo_remediation_service import _seo_remediation_loop
+        asyncio.create_task(_seo_remediation_loop(db))
+    # Task #939: agentic internal-linker nightly maintenance loop.
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``internal_linker_lease``), not the per-machine ``_is_leader``
+    # file lock. The per-UTC-date marker on the budget doc remains as
+    # belt-and-braces against fail-over inside the same day. Stage 3
+    # still hits its fire-and-forget per-page entry point on every
+    # replica (no lease) — only the nightly maintenance pass is
+    # guarded.
+    from seo_internal_linker import _internal_linker_loop
+    asyncio.create_task(_internal_linker_loop(db))
     # Task #587 — nightly live grounded-recall benchmark + alerting.
     # Runs once per UTC day (configurable via GROUNDED_RECALL_NIGHTLY_*),
     # writes bench/results/latest.json so the admin tile reflects the
@@ -566,45 +1075,180 @@ async def lifespan(app):
     # Task #491 — liveness heartbeat for the staleness monitor itself.
     # Every 6h, verify the monitor's lock-doc ``updated_at`` is younger
     # than ~3h (2x its 1h cadence) and page admins exactly once if not.
-    # Leader-gated so a multi-replica deployment doesn't N×-page when
-    # the monitor goes quiet; the per-doc CAS inside the loop is a
-    # defense-in-depth against leader fail-over mid-iteration.
-    if _is_leader:
-        try:
-            from seo_engine import _seo_staleness_heartbeat_loop
-            asyncio.create_task(_seo_staleness_heartbeat_loop())
-        except Exception as _sap_hb_err:
-            logger.warning(
-                f"seo staleness heartbeat loop not started: {_sap_hb_err}")
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``seo_staleness_heartbeat_lease``), not the per-machine
+    # ``_is_leader`` file lock — Railway runs N replicas and each had
+    # its own file lock, so all of them previously paged when the
+    # monitor went quiet. The per-doc CAS inside the alerter remains
+    # as defense-in-depth against fail-over mid-iteration.
+    try:
+        from seo_engine import _seo_staleness_heartbeat_loop
+        asyncio.create_task(_seo_staleness_heartbeat_loop())
+    except Exception as _sap_hb_err:
+        logger.warning(
+            f"seo staleness heartbeat loop not started: {_sap_hb_err}")
     # Task #484 — poll GitHub Actions every 10 min and email admins +
     # drop an in-app notification when the latest main-branch run for
     # backend-tests/frontend-tests flips to failure (or stays red past
     # the 6h re-page window). Recovery alert fires once on red→green.
-    # Leader-gated so multi-replica deployments don't burn the GitHub
-    # API quota N×; the per-workflow CAS inside the loop is a defense
-    # in depth in case leadership fails over mid-poll. No-ops cleanly
-    # when GITHUB_REPO is unset (e.g. local dev).
-    if _is_leader:
-        try:
-            from routes.admin_ci_alerts import _ci_alert_loop
-            asyncio.create_task(_ci_alert_loop())
-        except Exception as _ci_alert_err:
-            logger.warning(
-                f"ci alert loop not started: {_ci_alert_err}")
-    if _is_leader:
-        # Single-leader: only one replica should query the CF GraphQL API
-        # and write the per-UA report each Monday.
-        asyncio.create_task(_cf_bot_report_loop())
-    # Task #387 — leader-gated nightly Cloudflare Pages deploy hook so the
-    # prerendered subject/chapter HTML stays current even when no admin
-    # edits trigger a debounced refresh. No-ops if CF_PAGES_DEPLOY_HOOK_URL
-    # is unset.
-    if _is_leader:
-        try:
-            import pages_deploy as _pages_deploy
-            asyncio.create_task(_pages_deploy.nightly_loop())
-        except Exception as _pd_err:
-            logger.warning(f"pages_deploy nightly loop not started: {_pd_err}")
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``ci_alert_lease``), not the per-machine ``_is_leader`` file
+    # lock — Railway runs N replicas and each had its own file lock,
+    # so the GitHub API quota was being burned N×. The per-workflow
+    # CAS inside the loop remains as defense-in-depth in case
+    # leadership fails over mid-poll. No-ops cleanly when GITHUB_REPO
+    # is unset (e.g. local dev).
+    try:
+        from routes.admin_ci_alerts import _ci_alert_loop
+        asyncio.create_task(_ci_alert_loop())
+    except Exception as _ci_alert_err:
+        logger.warning(
+            f"ci alert loop not started: {_ci_alert_err}")
+    # Task #728 — hourly poll of the in-process Trustpilot aggregate
+    # cache; emails admins + drops an in-app notification when the
+    # /api/config/trustpilot/aggregate feed has had no successful
+    # upstream fetch in >24h (rotated key, expired plan, WAF block,
+    # etc). Debounced to one alert per 24h while broken, plus exactly
+    # one recovery notification on broken→healthy.
+    #
+    # Run on EVERY replica (no leader gate) — the feed health state
+    # lives in *per-process* memory (_tp_aggregate_cache), so a
+    # leader-only loop could miss an outage entirely if production
+    # traffic hashes around the leader replica. Cross-replica spam is
+    # prevented by the atomic CAS on db.job_locks inside the loop, the
+    # same dedup pattern Task #484's CI alerter relies on.
+    try:
+        from routes.admin_trustpilot_alerts import (
+            _trustpilot_feed_alert_loop,
+        )
+        asyncio.create_task(_trustpilot_feed_alert_loop())
+    except Exception as _tp_alert_err:
+        logger.warning(
+            f"trustpilot feed alert loop not started: {_tp_alert_err}")
+    # Task #751 — separate alerter that pages when the daily refresh
+    # GitHub Actions cron itself stops checking in (>36h since the last
+    # heartbeat), distinct from the Task #728 data-staleness alert so
+    # on-call can tell "Trustpilot is down" apart from "our cron has
+    # been disabled".
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``trustpilot_refresh_cron_alert_lease``), not the per-machine
+    # ``_is_leader`` file lock — Railway runs N replicas and each
+    # had its own file lock, so all of them previously hammered the
+    # CAS each tick.
+    try:
+        from routes.admin_trustpilot_cron_alerts import (
+            _trustpilot_refresh_cron_alert_loop,
+        )
+        asyncio.create_task(_trustpilot_refresh_cron_alert_loop())
+    except Exception as _tp_cron_alert_err:
+        logger.warning(
+            "trustpilot refresh-cron alert loop not started: "
+            f"{_tp_cron_alert_err}"
+        )
+    # Task #831 — symmetric silence alerter for the daily Cloudflare
+    # firewall drift cron (.github/workflows/cf-waf-drift-daily.yml,
+    # Task #828). The workflow already posts per-run Slack alerts on
+    # drift; this loop adds the missing "the workflow itself stopped
+    # running" signal, mirroring the Task #751 pattern. Leader-gated
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``cf_waf_drift_cron_alert_lease``), not the per-machine
+    # ``_is_leader`` file lock — Railway runs N replicas and each had
+    # its own file lock, so all of them previously hammered the CAS
+    # each tick.
+    try:
+        from routes.admin_cf_waf_drift_cron_alerts import (
+            _cf_waf_drift_cron_alert_loop,
+        )
+        asyncio.create_task(_cf_waf_drift_cron_alert_loop())
+    except Exception as _cfw_cron_alert_err:
+        logger.warning(
+            "cf-waf-drift cron alert loop not started: "
+            f"{_cfw_cron_alert_err}"
+        )
+    # Task #951 — symmetric silence alerter for the unified-logs
+    # Cloudflare GraphQL pull. Task #947 made the pull single-leader
+    # via a Mongo lease; the flip side is that if every replica is
+    # unhealthy (or the lease doc gets stuck owned by a zombie process
+    # whose ``lease_expires_at`` is being refreshed by a frozen task),
+    # the unified log explorer silently stops ingesting Cloudflare
+    # data. This loop watches ``unified_logs_cf_pull_lock.updated_at``
+    # — only stamped after a successful pull's cursor advance, so it
+    # rules out the zombie-lease case the lease TTL alone cannot
+    # detect — and pages on-call when the cursor goes stale. Mirrors
+    # the cf-waf-drift cron alert loop above for cross-replica dedup
+    # via :mod:`background_lease`.
+    try:
+        from routes.admin_logs_cf_pull_silence_alerts import (
+            _cf_pull_silence_alert_loop,
+        )
+        asyncio.create_task(_cf_pull_silence_alert_loop())
+    except Exception as _ulogs_silence_err:
+        logger.warning(
+            "unified-logs cf-pull silence alert loop not started: "
+            f"{_ulogs_silence_err}"
+        )
+    # Task #893 — silence-alerter for the edge-proxy-deploy CI workflow.
+    # Task #882 added a red/amber/green pill to AdminHealth that polls
+    # the GitHub Actions REST API for the latest edge-proxy-deploy run;
+    # this loop pages on-call (email + in-app + best-effort Slack) when
+    # that pill flips to silent (failure) or degraded (>7d stale) so a
+    # red smoke-preview regression at 03:00 UTC doesn't wait for an
+    # admin to open the dashboard.
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``edge_proxy_deploy_cron_alert_lease``), not the per-machine
+    # ``_is_leader`` file lock — Railway runs N replicas and each had
+    # its own file lock, so the GitHub REST quota was being burned N×.
+    try:
+        from routes.admin_edge_proxy_deploy_cron_alerts import (
+            _edge_proxy_deploy_cron_alert_loop,
+        )
+        asyncio.create_task(_edge_proxy_deploy_cron_alert_loop())
+    except Exception as _epd_cron_alert_err:
+        logger.warning(
+            "edge-proxy-deploy cron alert loop not started: "
+            f"{_epd_cron_alert_err}"
+        )
+    # Task #970 — page on-call when one of the three sibling cron Slack
+    # webhook env vars (UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK,
+    # CF_WAF_DRIFT_SLACK_WEBHOOK, EDGE_PROXY_DEPLOY_SLACK_WEBHOOK) stays
+    # unset for >24h after deploy. Task #963 documented the env vars and
+    # Task #964 added the AdminHealth "Slack ✓ / ✗" badge for at-a-glance
+    # visibility, but a deploy that ships without a webhook can sit
+    # "Slack ✗" indefinitely until an admin happens to look at the
+    # dashboard. This loop closes that gap by paging via in-app + email
+    # (no Slack — the whole point is "your Slack webhook is missing")
+    # using the same leader-gated lease + per-state CAS dedup the
+    # silence alerters above use.
+    try:
+        from routes.admin_slack_webhook_missing_alerts import (
+            _slack_webhook_missing_alert_loop,
+        )
+        asyncio.create_task(_slack_webhook_missing_alert_loop())
+    except Exception as _swm_alert_err:
+        logger.warning(
+            "slack-webhook-missing alert loop not started: "
+            f"{_swm_alert_err}"
+        )
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``cf_bot_report_lease``), not the per-machine ``_is_leader``
+    # file lock — Railway runs N replicas and each had its own file
+    # lock, so all of them previously polled the CF GraphQL API every
+    # 5 min, multiplying the analytics quota cost.
+    asyncio.create_task(_cf_bot_report_loop())
+    # Task #387 — nightly Cloudflare Pages deploy hook so the
+    # prerendered subject/chapter HTML stays current even when no
+    # admin edits trigger a debounced refresh. No-ops if
+    # CF_PAGES_DEPLOY_HOOK_URL is unset.
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``pages_deploy_nightly_lease``), not the per-machine
+    # ``_is_leader`` file lock — Railway runs N replicas and each
+    # had its own file lock, so the deploy hook fired N CF Pages
+    # builds per night.
+    try:
+        import pages_deploy as _pages_deploy
+        asyncio.create_task(_pages_deploy.nightly_loop())
+    except Exception as _pd_err:
+        logger.warning(f"pages_deploy nightly loop not started: {_pd_err}")
 
     # Task #314 uses atomic Mongo CAS via db.job_locks for dedup across
     # replicas, so it does not need a leader gate.
@@ -614,10 +1258,12 @@ async def lifespan(app):
     from routes.admin_advanced import _collection_size_snapshot_loop, _cache_warm_loop
     asyncio.create_task(_collection_size_snapshot_loop())
     # Auto pre-warm AI response cache for the most common queries (Task #282 T004)
-    # Leader-gated so multi-worker deployments don't run the warm cycle N times
-    # and burn N× the LLM budget every 6h.
-    if _is_leader:
-        asyncio.create_task(_cache_warm_loop())
+    # Task #950: dedup is now via Mongo lease inside the loop
+    # (``cache_warm_lease``), not the per-machine ``_is_leader`` file
+    # lock — Railway runs N replicas and each had its own file lock,
+    # so the warm cycle was burning N× the LLM budget every 6h.
+    # Followers stand down each tick.
+    asyncio.create_task(_cache_warm_loop())
 
     # Task #310 — rehydrate chat speed-up metrics from Redis and start the
     # periodic flush so the per-day counters and warm-run history survive
@@ -657,6 +1303,19 @@ async def lifespan(app):
     except Exception as _asm_load_err:
         logger.warning(f"[INDIC-SANITIZE] startup override load failed: {_asm_load_err}")
 
+    # Task #754 — TTL index on the Trustpilot JSON-LD per-run history
+    # collection so the AdminHealth tile can render a 30-day pass-rate
+    # sparkline without unbounded growth.
+    try:
+        from routes.admin_trustpilot_jsonld_status import (
+            ensure_trustpilot_jsonld_runs_index,
+        )
+        asyncio.create_task(ensure_trustpilot_jsonld_runs_index())
+    except Exception as _tp_runs_err:
+        logger.warning(
+            f"[trustpilot-jsonld] runs index startup failed: {_tp_runs_err}"
+        )
+
     # Task #609 — initialise the managed AI response cache. Safe no-op when
     # MEMORYSTORE_REDIS_URL is unset; the cache transparently falls back to
     # in-memory L1. LLM upstream caching is handled by Cloudflare AI Gateway.
@@ -665,6 +1324,67 @@ async def lifespan(app):
         await _ai_cache.init_async_client()
     except Exception as _ai_cache_err:
         logger.warning(f"ai_cache init failed (continuing with fallback): {_ai_cache_err}")
+
+    # Task #667 — fail-fast startup self-check against Gemini/Vertex. Runs
+    # in the background so a slow upstream never blocks the API from
+    # accepting requests, but a broken credential or gateway misconfig
+    # surfaces in the deploy logs as a single ERROR line within seconds —
+    # before any user-facing 502.
+    asyncio.create_task(_vertex_startup_probe())
+
+    # Task #677 — periodic Gemini health probe. The startup probe only
+    # catches misconfig at boot; this loop reruns health_check() every
+    # VERTEX_PROBE_INTERVAL_S (default 600s) and dispatches an alert via
+    # the same email/Slack pipeline as _seo_health_alert_loop on >=2
+    # consecutive failures, so mid-day Vertex outages page on-call
+    # instead of waiting for users to hit 502s.
+    asyncio.create_task(_vertex_periodic_probe_loop())
+
+    # Task #944 — Unified Log Explorer.
+    #   * Ensure TTL + secondary indexes on the unified_logs collection
+    #     so the admin UI's filtered queries hit an index from minute
+    #     one (otherwise the first sort-by-timestamp pull on a fresh
+    #     deploy is a full collection scan).
+    #   * Hydrate the persisted runtime pause flag so a previous
+    #     "Pause ingest" click survives the restart.
+    #   * Boot the in-process backend log shipper which the global
+    #     middleware drips per-request samples into.
+    #   * Start the Cloudflare GraphQL pull loop on EVERY replica.
+    #     Cross-replica dedup is enforced inside the loop via a
+    #     Mongo-backed lease (Task #947, ``_try_acquire_cf_pull_lease``).
+    #     The previous ``_is_leader`` gate was a per-machine file
+    #     lock, so two Railway replicas would each consider themselves
+    #     "leader" and double-poll the CF GraphQL API, multiplying
+    #     analytics quota cost. Followers stand down on each tick
+    #     instead of firing the GraphQL query, so quota cost stays
+    #     at 1× regardless of replica count, and a leader fail-over
+    #     is picked up within one follower interval.
+    _unified_logs_cf_task = None
+    try:
+        import unified_logs_dao as _ulogs_dao
+        from routes.admin_logs import (
+            _hydrate_pause_state_from_db,
+            _unified_logs_cf_pull_loop,
+        )
+        await _ulogs_dao.ensure_indexes(db)
+        # Task #952 — TTL index on the rolling-24h saturation log so the
+        # admin dashboard's "saturated minutes in last 24h" counter has
+        # a bounded collection to scan.
+        try:
+            from routes.admin_logs_cf_pull_saturation_alerts import (
+                ensure_saturation_indexes,
+            )
+            await ensure_saturation_indexes(db)
+        except Exception as _sat_idx_err:
+            logger.debug(
+                f"[unified_logs] saturation index bootstrap failed: "
+                f"{_sat_idx_err}"
+            )
+        await _hydrate_pause_state_from_db()
+        await _ulogs_dao.get_backend_shipper().start(db)
+        _unified_logs_cf_task = asyncio.create_task(_unified_logs_cf_pull_loop())
+    except Exception as _ulogs_boot_err:
+        logger.warning(f"[unified_logs] startup wiring failed: {_ulogs_boot_err}")
 
     logger.info("Syrabit.ai API started")
     if sarvam_client:
@@ -688,6 +1408,24 @@ async def lifespan(app):
         pass
     if _deps_mod._rate_cleanup_task:
         _deps_mod._rate_cleanup_task.cancel()
+    # Task #944 — drain the in-process unified-log shipper so the
+    # tail of records buffered between the last flush tick and the
+    # shutdown signal is not lost on restart.
+    try:
+        import unified_logs_dao as _ulogs_dao_shutdown
+        await _ulogs_dao_shutdown.get_backend_shipper().stop()
+    except Exception as _ulogs_stop_err:
+        logger.debug(f"[unified_logs] shutdown stop raised: {_ulogs_stop_err}")
+    # Task #947 — cancel the CF pull loop so its CancelledError
+    # handler releases the Mongo lease, letting a peer replica pick
+    # up the loop on its next follower tick instead of waiting out
+    # the full ``CF_PULL_LEASE_TTL_S`` window.
+    if _unified_logs_cf_task is not None and not _unified_logs_cf_task.done():
+        _unified_logs_cf_task.cancel()
+        try:
+            await _unified_logs_cf_task
+        except (asyncio.CancelledError, Exception):
+            pass
     if sarvam_client:
         await sarvam_client.aclose()
     if sarvam_translate_client:
@@ -783,6 +1521,19 @@ api = APIRouter(prefix="/api")
 
 from routes.auth import router as auth_router
 from routes.content import router as content_router
+from routes.topic_faq_jsonld import router as topic_faq_jsonld_router
+# Task #914 Steps 1-3 — topic citability pipeline:
+#   * topic_answer_cards: public endpoints powering the per-topic AI
+#     answer card on chapter pages and the dedicated topic deep-link
+#     route (`/.../<chapter>/topic/<slug>`).
+#   * admin_topic_audit: admin-only audit + on-demand backfill for
+#     the persistent `topic_slug` and `definition_status` fields.
+from routes.topic_answer_cards import router as topic_answer_cards_router
+from routes.admin_topic_audit import router as admin_topic_audit_router
+# topic_graph: sibling + cross-chapter related topics, plus the
+# subject-wide topic index that powers the pillar SubjectLandingPage.
+# Same auth surface as topic_answer_cards (public, edge-cached).
+from routes.topic_graph import router as topic_graph_router
 from routes.syllabus import router as syllabus_router
 from routes.ai_chat import router as ai_chat_router
 from routes.conversations import router as conversations_router
@@ -792,22 +1543,73 @@ from routes.analytics import router as analytics_router
 from routes.admin_content import router as admin_content_router
 from routes.admin_pipeline import router as admin_pipeline_router
 from routes.admin_settings import router as admin_settings_router
+# Task #944 — Unified Log Explorer: admin filter/export/trace endpoints
+# + the public token-authed ingest endpoint that the edge worker posts
+# batched per-request log records to.
+from routes.admin_logs import router as admin_logs_router
 from routes.admin_notifications import router as admin_notifications_router
 from routes.admin_monetization import router as admin_monetization_router
 from routes.cms_sarvam_health import router as cms_sarvam_health_router
+# Carved out of cms_sarvam_health.py (admin-panel audit Task #5) so the
+# routes live in files whose name reflects what they do. Paths
+# (/admin/ga4/*, /admin/vertex/*) and behaviour are unchanged.
+from routes.admin_ga4 import router as admin_ga4_router
+from routes.admin_vertex import router as admin_vertex_router
 from routes.admin_advanced import router as admin_advanced_router
 from routes.admin_retriever import router as admin_retriever_router
 from routes.admin_benchmark import router as admin_benchmark_router
 from routes.admin_kv_health import router as admin_kv_health_router
 from routes.admin_ci_status import router as admin_ci_status_router
+from routes.admin_trustpilot_alerts import router as admin_trustpilot_alerts_router
+from routes.admin_trustpilot_jsonld_status import router as admin_trustpilot_jsonld_status_router
+from routes.admin_trustpilot_cron_alerts import router as admin_trustpilot_cron_alerts_router
+from routes.cf_waf_drift_cron_heartbeat import router as cf_waf_drift_cron_heartbeat_router
+from routes.admin_cf_waf_drift_cron_alerts import router as admin_cf_waf_drift_cron_alerts_router
+# Task #951 — silence alerter for the unified-logs Cloudflare GraphQL
+# pull. Pages on-call when every backend replica has stopped advancing
+# the ``unified_logs_cf_pull_lock.updated_at`` cursor (e.g. all
+# replicas unhealthy, or a zombie holds the lease but never completes
+# a tick) — the failure mode introduced by Task #947's single-leader
+# guarantee.
+from routes.admin_logs_cf_pull_silence_alerts import (
+    router as admin_logs_cf_pull_silence_alerts_router,
+)
+# Task #952 — pages on-call when busy hours saturate the 200-buckets
+# CF GraphQL cap and the unified-logs explorer starts losing rows
+# (the failure mode Task #948's pagination surfaces but doesn't
+# itself remediate).
+from routes.admin_logs_cf_pull_saturation_alerts import (
+    router as admin_logs_cf_pull_saturation_alerts_router,
+)
+# Task #974 — admin-readable surfaces for the Task #970 missing-Slack-
+# webhook nag. Per-env alert-state + alert-history endpoints so the
+# AdminHealth dashboard can decorate each cron pill's "Slack ✗" badge
+# with "last paged Nh ago" inline.
+from routes.admin_slack_webhook_missing_alerts import (
+    router as admin_slack_webhook_missing_alerts_router,
+)
+from routes.synthetic_probe_secret_alert import router as synthetic_probe_secret_alert_router
+# Task #882 — surfaces the latest edge-proxy-deploy GitHub Actions run
+# as a cron pill in AdminHealth so a red `smoke-preview` regression
+# pages on-call via the dashboard they already watch, instead of
+# relying on someone noticing a red badge in the GitHub Actions UI.
+from routes.admin_health import router as admin_health_router
 from routes.admin_ads import router as admin_ads_router
 from routes.admin_review_prompts import router as admin_review_prompts_router
 from routes.edu_browser import router as edu_browser_router
 from routes.edu_study import router as edu_study_router
 from routes.admin_seo_keywords import router as admin_seo_keywords_router
+from routes.admin_topic_discovery import router as admin_topic_discovery_router
+from routes.admin_seo_remediation import router as admin_seo_remediation_router
+from routes.admin_seo_internal_linker import router as admin_seo_internal_linker_router
+from routes.admin_entity_seo import router as admin_entity_seo_router
 
 api.include_router(auth_router)
 api.include_router(content_router)
+api.include_router(topic_faq_jsonld_router)
+api.include_router(topic_answer_cards_router)
+api.include_router(admin_topic_audit_router)
+api.include_router(topic_graph_router)
 api.include_router(syllabus_router)
 api.include_router(ai_chat_router)
 api.include_router(conversations_router)
@@ -818,28 +1620,49 @@ api.include_router(analytics_router)
 api.include_router(admin_content_router)
 api.include_router(admin_pipeline_router)
 api.include_router(admin_settings_router)
+# Task #944 — Unified Log Explorer routes. Mounted on the bare ``app``
+# instead of ``api`` because the routes already include ``/api/...``
+# prefixes (so the ingest endpoint stays at ``/api/logs/ingest`` and is
+# easy for the worker to target without reasoning about router nesting).
+app.include_router(admin_logs_router)
 api.include_router(admin_notifications_router)
 api.include_router(admin_monetization_router)
 api.include_router(cms_sarvam_health_router)
+api.include_router(admin_ga4_router)
+api.include_router(admin_vertex_router)
 api.include_router(admin_advanced_router)
 api.include_router(admin_retriever_router)
 api.include_router(admin_benchmark_router)
 api.include_router(admin_kv_health_router)
 api.include_router(admin_ci_status_router)
+api.include_router(admin_trustpilot_alerts_router)
+api.include_router(admin_trustpilot_jsonld_status_router)
+api.include_router(admin_trustpilot_cron_alerts_router)
+api.include_router(cf_waf_drift_cron_heartbeat_router)
+api.include_router(admin_cf_waf_drift_cron_alerts_router)
+api.include_router(admin_logs_cf_pull_silence_alerts_router)
+api.include_router(admin_logs_cf_pull_saturation_alerts_router)
+api.include_router(admin_slack_webhook_missing_alerts_router)
+api.include_router(synthetic_probe_secret_alert_router)
+api.include_router(admin_health_router)
 api.include_router(admin_ads_router)
 api.include_router(admin_review_prompts_router)
 api.include_router(edu_browser_router)
 api.include_router(edu_study_router)
 api.include_router(admin_seo_keywords_router)
+api.include_router(admin_topic_discovery_router)
+api.include_router(admin_seo_remediation_router)
+api.include_router(admin_seo_internal_linker_router)
+api.include_router(admin_entity_seo_router)
 
-from llm import call_llm_api, call_llm_api_content
+from llm import call_llm_api_content
 from auth_deps import get_admin_user
 
 from seo_engine import router as seo_router, init_seo_engine
 init_seo_engine(db, call_llm_api_content, get_admin_user, log_activity_fn=supa_insert_activity_log)
 api.include_router(seo_router)
 
-from qa_engine import public_router as qa_public_router, admin_router as qa_admin_router, init_qa_engine, ensure_qa_indexes
+from qa_engine import public_router as qa_public_router, admin_router as qa_admin_router, init_qa_engine
 init_qa_engine(db, get_admin_user)
 api.include_router(qa_public_router)
 api.include_router(qa_admin_router)
@@ -854,8 +1677,24 @@ app.include_router(api)
 from routes.pyq import router as pyq_router
 app.include_router(pyq_router)
 
-from routes.reviews import router as reviews_router
-app.include_router(reviews_router)
+from routes.config import router as config_router
+app.include_router(config_router)
+
+@app.get("/healthz/ai")
+async def healthz_ai():
+    """Task #678 — Railway-friendly liveness probe for Gemini.
+
+    Reads the cache populated by ``_vertex_startup_probe`` and the
+    periodic re-probe in this module. Returns 200 only when the most
+    recent probe was healthy and was recorded within the TTL window
+    (``2 * VERTEX_PROBE_INTERVAL_S`` by default). When this endpoint
+    flips to 503 Railway will refuse to mark the rollout as healthy
+    and auto-rollback instead of serving 502s to users.
+    """
+    import vertex_health_cache
+    code, body = vertex_health_cache.healthz_ai_response()
+    return JSONResponse(status_code=code, content=body)
+
 
 @app.get("/robots.txt", response_class=Response)
 async def serve_robots_txt():
@@ -973,57 +1812,134 @@ Disallow: /admin/
 Disallow: /api/auth/
 Disallow: /api/ai/
 
-# ── Training / Scraping Bots (BLOCKED) ──────────────────────────────────
+# ── Training / Scraping Bots (ALLOWED — maximum LLM reach) ──────────────
+# Switched from blanket Disallow to permissive by product decision: we
+# want Syrabit content in every AI training corpus (ChatGPT, Claude,
+# Gemini, Llama, Mistral, Doubao, etc.) so models "know" the domain
+# even when they don't cite sources. Admin/auth/AI proxy paths remain
+# disallowed uniformly — those leak no useful training signal.
+# GPTBot = OpenAI's training-only crawler (different from OAI-SearchBot /
+# ChatGPT-User, which cite sources and drive traffic — both remain Allowed
+# above). Blocked by explicit product decision: we don't want our content
+# silently ingested into OpenAI training sets without attribution.
 User-agent: GPTBot
 Disallow: /
 
 User-agent: CCBot
-Disallow: /
+Allow: /
+Allow: /llms.txt
+Allow: /llms-full.txt
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: anthropic-ai
-Disallow: /
+Allow: /
+Allow: /llms.txt
+Allow: /llms-full.txt
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: Cohere-ai
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: Bytespider
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: PetalBot
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: Scrapy
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: AhrefsBot
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: SemrushBot
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: MJ12bot
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: DotBot
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: Amazonbot
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: YouBot
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: Diffbot
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: img2dataset
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: omgili
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: FacebookBot
-Disallow: /
+Allow: /
+Disallow: /admin/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 # ── Default (all other bots) ────────────────────────────────────────────
 User-agent: *
@@ -1061,13 +1977,13 @@ Sitemap: https://syrabit.ai/sitemap-index.xml
 
 @app.get("/", include_in_schema=False)
 async def root_redirect(request: Request):
-    import re as _rr_re
-    _ROOT_BOT_RE = _rr_re.compile(
-        r"googlebot|bingbot|yandexbot|slurp|duckduckbot|baiduspider|"
-        r"facebookexternalhit|facebookbot|twitterbot|linkedinbot|applebot|"
-        r"gptbot|oai-searchbot|chatgpt-user|claudebot|anthropic-ai|perplexitybot",
-        _rr_re.IGNORECASE,
-    )
+    # Use the canonical bot regex from utils.py (the source of truth
+    # also imported by the tracking middleware) instead of redefining
+    # a local copy that drifts out of sync. Covers Googlebot, Bingbot,
+    # Applebot, GPTBot, PerplexityBot, ClaudeBot, OAI-SearchBot,
+    # ChatGPT-User, Google-Extended, Applebot-Extended, social
+    # previews, etc. — anything we want to see prerendered HTML.
+    from utils import _SEARCH_BOT_UA_RE as _ROOT_BOT_RE
     ua = request.headers.get("user-agent", "")
     if _ROOT_BOT_RE.search(ua):
         try:
@@ -1277,6 +2193,13 @@ app.add_middleware(BotRenderMiddleware)
 app.add_middleware(ServerSideTrackingMiddleware)
 app.add_middleware(GlobalRateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+# Task #793: re-applies a freshly-minted ``syrabit_device`` cookie to
+# the outgoing response when the route handler returned its own
+# ``Response`` (e.g. ``StreamingResponse`` on /ai/chat/stream), which
+# otherwise causes FastAPI to discard the dependency-injected
+# Response and silently drop the Set-Cookie header.
+from middleware import DeviceCookieMiddleware
+app.add_middleware(DeviceCookieMiddleware)
 # Task #606: When deployed on Cloud Run behind Cloudflare, require the
 # shared-secret header injected by the edge worker so direct hits to the
 # Cloud Run URL (e.g. `https://syrabit-backend-xyz.a.run.app/api/...`) are
@@ -1324,12 +2247,11 @@ if FRONTEND_BUILD.is_dir():
     _CHAPTER_PATH_RE = _spa_re.compile(
         r"^(?P<board>[^/]+)/(?P<class>[^/]+)/(?P<subject>[^/]+)/(?P<chapter>[^/]+)/?$"
     )
-    _SEO_BOT_RE = _spa_re.compile(
-        r"googlebot|bingbot|yandexbot|slurp|duckduckbot|baiduspider|"
-        r"facebookexternalhit|facebookbot|twitterbot|linkedinbot|applebot|"
-        r"gptbot|oai-searchbot|chatgpt-user|claudebot|anthropic-ai|perplexitybot",
-        _spa_re.IGNORECASE,
-    )
+    # Canonical bot regex from utils.py — same source of truth as
+    # the tracking middleware and root_redirect. Aliased locally
+    # under the historical name `_SEO_BOT_RE` so callers below
+    # keep working unchanged.
+    from utils import _SEARCH_BOT_UA_RE as _SEO_BOT_RE
     _VALID_SEO_PAGE_TYPES = {"mcqs", "important-questions", "examples", "definition"}
     _KNOWN_FIRST_SEGMENTS = {
         "api", "docs", "openapi.json", "health", "static",

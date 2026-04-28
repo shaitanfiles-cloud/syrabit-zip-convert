@@ -76,6 +76,74 @@ def test_compose_trend_down_when_ctr_drops():
     assert stats["ctr_trend"] == "down"
 
 
+def test_compose_per_reason_wow_delta_active_reason():
+    """Active reason — both windows have data; per-reason delta computed."""
+    stats = arp._compose_review_prompt_weekly_digest(
+        {"shown": 100, "clicked": 10, "dismissed": 0},
+        [{"reason": "answer_helpful", "shown": 100, "clicked": 10, "dismissed": 0}],
+        {"shown": 80, "clicked": 16, "dismissed": 0},
+        prev_by_reason=[{"reason": "answer_helpful",
+                         "shown": 80, "clicked": 16, "dismissed": 0}],
+    )
+    row = stats["by_reason"][0]
+    assert row["reason"] == "answer_helpful"
+    assert row["status"] == "active"
+    assert row["prev_shown"] == 80
+    assert row["prev_clicked"] == 16
+    assert row["prev_ctr_pct"] == 20.0
+    assert row["ctr_pct"] == 10.0
+    assert row["ctr_delta_pct"] == -10.0
+    assert row["shown_delta"] == 20
+
+
+def test_compose_per_reason_marks_new_and_gone_reasons():
+    """New reasons (no prev data) tagged 'new'; reasons that disappear
+    this week are still surfaced with status 'gone' so ops can spot a
+    silenced trigger."""
+    stats = arp._compose_review_prompt_weekly_digest(
+        {"shown": 50, "clicked": 5, "dismissed": 0},
+        [{"reason": "session_end", "shown": 50, "clicked": 5, "dismissed": 0}],
+        {"shown": 40, "clicked": 4, "dismissed": 0},
+        prev_by_reason=[{"reason": "answer_helpful",
+                         "shown": 40, "clicked": 4, "dismissed": 0}],
+    )
+    by_reason = {r["reason"]: r for r in stats["by_reason"]}
+    assert by_reason["session_end"]["status"] == "new"
+    assert by_reason["session_end"]["prev_shown"] == 0
+    assert by_reason["session_end"]["ctr_delta_pct"] is None
+    assert by_reason["answer_helpful"]["status"] == "gone"
+    assert by_reason["answer_helpful"]["shown"] == 0
+    assert by_reason["answer_helpful"]["prev_shown"] == 40
+    assert by_reason["answer_helpful"]["shown_delta"] == -40
+    assert by_reason["answer_helpful"]["ctr_delta_pct"] is None
+
+
+def test_format_html_renders_per_reason_wow_columns():
+    """The digest email table must include the new Δ-vs-prev-week
+    columns and clearly label new/gone reasons."""
+    stats = arp._compose_review_prompt_weekly_digest(
+        {"shown": 150, "clicked": 15, "dismissed": 0},
+        [
+            {"reason": "answer_helpful", "shown": 100, "clicked": 10, "dismissed": 0},
+            {"reason": "session_end",    "shown": 50,  "clicked": 5,  "dismissed": 0},
+        ],
+        {"shown": 80, "clicked": 16, "dismissed": 0},
+        prev_by_reason=[
+            {"reason": "answer_helpful", "shown": 80, "clicked": 16, "dismissed": 0},
+            {"reason": "chapter_engaged", "shown": 30, "clicked": 3, "dismissed": 0},
+        ],
+    )
+    html = arp._format_review_prompt_weekly_digest_html(stats)
+    assert "Δ shown vs prev week" in html
+    assert "Δ CTR vs prev week" in html
+    # session_end is brand new this window.
+    assert ">new<" in html
+    # chapter_engaged was around last week but disappeared.
+    assert ">gone<" in html
+    # answer_helpful CTR fell from 20% → 10% → -10.0 pp delta rendered.
+    assert "-10.0 pp" in html
+
+
 def test_compose_trend_flat_when_prev_ctr_unavailable():
     stats = arp._compose_review_prompt_weekly_digest(
         {"shown": 100, "clicked": 5, "dismissed": 10},
@@ -109,12 +177,170 @@ def test_format_html_includes_key_metrics_and_dashboard_link():
         {"shown": 100, "clicked": 5, "dismissed": 10},
     )
     html = arp._format_review_prompt_weekly_digest_html(stats)
-    assert "Google review prompt" in html
+    assert "Trustpilot review prompt" in html
     assert "10.0%" in html       # current CTR
     assert "5.0%" in html        # previous CTR
     assert "+5.0 pp" in html     # WoW delta
     assert "answer_helpful" in html
     assert arp._REVIEW_PROMPT_DIGEST_DASHBOARD_URL in html
+
+
+# ── Task #694 — baseline noise on the per-reason digest rows ─────────────
+
+
+def _baseline_snapshot(by_reason: dict, *, sigma_mult: float = 2.0,
+                       baseline_weeks: int = 4, min_shown: int = 50) -> dict:
+    """Helper: build a baseline snapshot in the shape that
+    ``_compute_review_prompt_reason_baseline`` returns, so the digest
+    composer/formatter can be exercised without touching Mongo."""
+    return {
+        "window_days": 7,
+        "baseline_weeks": baseline_weeks,
+        "min_shown": min_shown,
+        "sigma_mult": sigma_mult,
+        "by_reason": by_reason,
+    }
+
+
+def test_compose_merges_populated_baseline_into_per_reason_rows():
+    """Populated-baseline path — every per-reason row picks up
+    ``baseline_mean_ctr_pct``, ``baseline_stddev_pp`` and
+    ``baseline_z_score`` from the snapshot and the response carries
+    ``baseline_meta`` so the formatter can render the legend."""
+    baseline = _baseline_snapshot({
+        "answer_helpful": {
+            "baseline_weeks_used": 4,
+            "baseline_mean_ctr_pct": 8.0,
+            "baseline_stddev_pp": 1.5,
+            "current_ctr_pct": 12.0,
+            "current_shown": 150,
+            "current_z_score": 2.67,
+            "sigma_threshold_pp": 3.0,
+        },
+    })
+    stats = arp._compose_review_prompt_weekly_digest(
+        {"shown": 150, "clicked": 18, "dismissed": 0},
+        [{"reason": "answer_helpful", "shown": 150, "clicked": 18, "dismissed": 0}],
+        {"shown": 100, "clicked": 8, "dismissed": 0},
+        baseline=baseline,
+    )
+    row = next(r for r in stats["by_reason"] if r["reason"] == "answer_helpful")
+    assert row["baseline_mean_ctr_pct"] == 8.0
+    assert row["baseline_stddev_pp"] == 1.5
+    assert row["baseline_z_score"] == 2.67
+    assert row["baseline_weeks_used"] == 4
+    assert stats["baseline_meta"] == {
+        "baseline_weeks": 4,
+        "min_shown": 50,
+        "sigma_mult": 2.0,
+    }
+
+
+def test_compose_thin_baseline_falls_back_to_none_per_row():
+    """Thin-baseline path — a reason with fewer than 2 qualifying
+    weekly samples comes back with ``None`` for mean / stddev / z so
+    the email can render an explicit "n/a" instead of a misleading
+    point estimate."""
+    baseline = _baseline_snapshot({
+        "answer_helpful": {
+            "baseline_weeks_used": 1,           # below the 2-sample gate
+            "baseline_mean_ctr_pct": None,
+            "baseline_stddev_pp": None,
+            "current_ctr_pct": 12.0,
+            "current_shown": 150,
+            "current_z_score": None,
+            "sigma_threshold_pp": None,
+        },
+    })
+    stats = arp._compose_review_prompt_weekly_digest(
+        {"shown": 150, "clicked": 18, "dismissed": 0},
+        [{"reason": "answer_helpful", "shown": 150, "clicked": 18, "dismissed": 0}],
+        {"shown": 0, "clicked": 0, "dismissed": 0},
+        baseline=baseline,
+    )
+    row = stats["by_reason"][0]
+    assert row["baseline_mean_ctr_pct"] is None
+    assert row["baseline_stddev_pp"] is None
+    assert row["baseline_z_score"] is None
+    assert row["baseline_weeks_used"] == 1
+
+
+def test_compose_without_baseline_keeps_legacy_shape():
+    """Backwards-compat: callers that don't pass a baseline (e.g. an
+    older test) get rows with ``baseline_*`` keys present but None,
+    and ``baseline_meta`` is None — the formatter must still render
+    without a legend."""
+    stats = arp._compose_review_prompt_weekly_digest(
+        {"shown": 100, "clicked": 10, "dismissed": 0},
+        [{"reason": "x", "shown": 100, "clicked": 10, "dismissed": 0}],
+        {"shown": 0, "clicked": 0, "dismissed": 0},
+    )
+    row = stats["by_reason"][0]
+    assert row["baseline_mean_ctr_pct"] is None
+    assert row["baseline_stddev_pp"] is None
+    assert row["baseline_z_score"] is None
+    assert stats["baseline_meta"] is None
+
+
+def test_format_html_renders_baseline_columns_and_legend_when_populated():
+    baseline = _baseline_snapshot({
+        "answer_helpful": {
+            "baseline_weeks_used": 4,
+            "baseline_mean_ctr_pct": 8.0,
+            "baseline_stddev_pp": 1.5,
+            "current_ctr_pct": 12.0,
+            "current_shown": 150,
+            "current_z_score": 2.67,
+            "sigma_threshold_pp": 3.0,
+        },
+    }, sigma_mult=2.0, baseline_weeks=4)
+    stats = arp._compose_review_prompt_weekly_digest(
+        {"shown": 150, "clicked": 18, "dismissed": 0},
+        [{"reason": "answer_helpful", "shown": 150, "clicked": 18, "dismissed": 0}],
+        {"shown": 0, "clicked": 0, "dismissed": 0},
+        baseline=baseline,
+    )
+    html = arp._format_review_prompt_weekly_digest_html(stats)
+    # New columns appear in the per-reason table header.
+    assert "Baseline μ" in html
+    assert "σ (noise)" in html
+    assert "This week z" in html
+    # Per-reason values render with the right formatting.
+    assert "8.0%" in html               # baseline mean
+    assert "±1.5 pp" in html            # baseline stddev
+    assert "+2.7σ" in html              # current week z-score
+    # Legend explains the noise band, parameterised on the snapshot.
+    assert "prior 4 weeks" in html
+    assert "±2.0σ" in html
+    # Outside-band z-scores get the alert color (drop=red, spike=green).
+    # 2.67σ is a positive spike → green color used elsewhere in the file.
+    assert "#16a34a" in html
+
+
+def test_format_html_renders_na_for_thin_baseline_and_omits_legend():
+    baseline = _baseline_snapshot({
+        "answer_helpful": {
+            "baseline_weeks_used": 1,
+            "baseline_mean_ctr_pct": None,
+            "baseline_stddev_pp": None,
+            "current_ctr_pct": 12.0,
+            "current_shown": 150,
+            "current_z_score": None,
+            "sigma_threshold_pp": None,
+        },
+    })
+    stats = arp._compose_review_prompt_weekly_digest(
+        {"shown": 150, "clicked": 18, "dismissed": 0},
+        [{"reason": "answer_helpful", "shown": 150, "clicked": 18, "dismissed": 0}],
+        {"shown": 0, "clicked": 0, "dismissed": 0},
+        baseline=baseline,
+    )
+    html = arp._format_review_prompt_weekly_digest_html(stats)
+    # Thin-baseline cells render as explicit "n/a" pills.
+    assert html.count("n/a") >= 3
+    # Legend renders even when individual rows are thin (the snapshot
+    # itself carries the band parameters).
+    assert "prior" in html and "weeks" in html
 
 
 def test_format_html_handles_empty_window_gracefully():
@@ -317,6 +543,20 @@ def test_send_email_skipped_without_admin_email(monkeypatch):
 def test_send_email_skipped_without_resend_key(monkeypatch):
     monkeypatch.delenv("RESEND_API_KEY", raising=False)
     monkeypatch.setenv("ALERT_EMAIL", "ops@example.com")
+    # Reset the in-memory ``metrics._notification_channels`` dict — earlier
+    # tests in the suite (e.g. ``test_admin_assamese_purity``,
+    # ``test_hydrate_slack_payload``) populate this with stub values like
+    # "x@y.z" via ``_load_alert_settings``. Without resetting, the digest
+    # recipient resolver short-circuits on the polluted dict before ever
+    # consulting ``ALERT_EMAIL``.
+    import metrics
+    monkeypatch.setattr(metrics, "_notification_channels",
+                        dict(metrics._NOTIFICATION_CHANNELS_DEFAULT),
+                        raising=False)
+    monkeypatch.setattr(
+        metrics, "_load_alert_settings",
+        lambda *a, **kw: __import__("asyncio").sleep(0),
+    )
     fake_stats = {"iso_week": "2026-W17", "shown": 1, "clicked": 0,
                   "dismissed": 0, "ctr_pct": None}
     result = asyncio.run(
@@ -329,7 +569,10 @@ def test_send_email_skipped_without_resend_key(monkeypatch):
 
 def test_send_email_returns_no_stats_when_called_with_empty_dict():
     result = asyncio.run(arp._send_review_prompt_weekly_digest_email({}))
-    assert result == {"sent": False, "to": "", "reason": "no_stats"}
+    assert result["sent"] is False
+    assert result["to"] == ""
+    assert result["reason"] == "no_stats"
+    assert result.get("recipients") == []
 
 
 # ── Stats-route ↔ digest aggregation parity ─────────────────────────────────
@@ -440,3 +683,35 @@ def test_stats_route_and_digest_share_aggregation_for_same_window():
             key=lambda r: r["reason"],
         )
     assert _norm(stats_route["by_reason"]) == _norm(digest["by_reason"])
+
+
+def test_stats_route_per_reason_includes_wow_delta_columns():
+    """The admin tile must surface per-reason WoW deltas (Task #659):
+    `prev_shown`, `prev_ctr_pct`, `shown_delta`, `ctr_delta_pct`,
+    and `status` so ops can pinpoint which trigger reason regressed
+    instead of just seeing the overall CTR swing.
+    """
+    fixture_by_reason = [
+        {"reason": "answer_helpful", "shown": 100, "clicked": 10, "dismissed": 0},
+    ]
+    fake = _fake_event_db(
+        totals_shown=100, totals_clicked=10, totals_dismissed=0,
+        by_reason=fixture_by_reason,
+    )
+    with patch.object(arp, "db", fake), \
+         patch.object(arp, "is_mongo_available", AsyncMock(return_value=True)), \
+         patch.object(arp, "_ensure_review_prompt_indexes", AsyncMock()):
+        stats_route = asyncio.run(arp.admin_review_prompt_stats(
+            days=7, admin={"id": "admin"},
+        ))
+    rows = stats_route["by_reason"]
+    assert len(rows) == 1
+    row = rows[0]
+    # The fake doesn't filter by date so the prev window mirrors the
+    # current — ensures the deltas are wired through end-to-end.
+    assert row["prev_shown"] == 100
+    assert row["prev_clicked"] == 10
+    assert row["prev_ctr_pct"] == 10.0
+    assert row["shown_delta"] == 0
+    assert row["ctr_delta_pct"] == 0.0
+    assert row["status"] == "active"

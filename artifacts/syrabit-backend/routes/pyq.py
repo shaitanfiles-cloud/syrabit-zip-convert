@@ -1,35 +1,20 @@
 """Syrabit.ai — PYQ upload, processing, and serving"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod, httpx
-from typing import Optional, List, Dict, Any, Union
-from datetime import datetime, timezone, timedelta
+import re, json, asyncio, uuid, logging, os, base64, httpx
+from typing import List
+from datetime import datetime, timezone
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    APIRouter, HTTPException, Depends, File, UploadFile, Form,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
-import mistune as _mistune
+from pydantic import BaseModel
 
-from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
-)
 from deps import (
     db,
     supa,
 )
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional,
+    get_admin_user,
 )
 from db_ops import _THREAD_POOL
-from llm import call_llm_api, call_llm_api_stream
 from utils import _extract_keywords
 import vertex_services
 
@@ -40,6 +25,30 @@ router = APIRouter()
 # ══════════════════════════════════════════════════════════════════════════════
 #  PYQ — Previous Year Questions Upload & Management
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _normalize_iso_for_sort(value):
+    """Normalize an ISO-8601 timestamp string for stable cross-format
+    comparison.
+
+    Task #738 made every new write timezone-aware (suffix ``+00:00``),
+    but historical PYQ rows on disk are still naive (no suffix).
+    MongoDB sorts strings lexicographically, so a mixed result set can
+    have rows from the same wall-clock instant appear in surprising
+    order. This helper coerces both shapes to a canonical aware form
+    so a Python-side ``sorted(..., key=...)`` re-sort is correct
+    regardless of which dialect is on disk.
+
+    Empty / non-string values sort to the start (so descending sort
+    pushes them to the end).
+    """
+    if not isinstance(value, str) or not value:
+        return ""
+    if value.endswith("Z"):
+        return value[:-1] + "+00:00"
+    if len(value) >= 6 and value[-6] in "+-" and value[-3] == ":":
+        return value
+    return value + "+00:00"
+
 
 def _get_db():
     return db
@@ -64,7 +73,7 @@ async def _upsert_pyq_html_page(db_handle, slug: str, page_doc: dict) -> None:
     if db_handle is None:
         return
 
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     doc = dict(page_doc)
     created_at = doc.pop("created_at", None) or now
     updated_at = doc.pop("updated_at", None) or now
@@ -194,7 +203,7 @@ async def admin_pyq_upload(
             "pages": [{"file_url": file_url, "filename": upload.filename}] if is_image else [],
             "status":            "uploaded",
             "processing_status": "uploaded",
-            "created_at":        datetime.utcnow().isoformat(),
+            "created_at":        datetime.now(timezone.utc).isoformat(),
             "created_by":        admin.get("username", "admin"),
         }
         await _db["pyq_uploads"].insert_one(doc)
@@ -288,7 +297,7 @@ async def admin_pyq_upload_text(
         "status":            "uploaded",
         "processing_status": "uploaded",
         "raw_text":          raw_text[:10000],
-        "created_at":        datetime.utcnow().isoformat(),
+        "created_at":        datetime.now(timezone.utc).isoformat(),
         "created_by":        admin.get("username", "admin"),
     }
     await _db["pyq_uploads"].insert_one(doc)
@@ -325,7 +334,7 @@ async def admin_pyq_upload_text(
         subject_name=subject_name, exam_year=payload.exam_year, paper_type=payload.paper_type,
     )
 
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     page_doc = {
         "slug": slug, "html_content": html_content, "seo_title": seo_title,
         "seo_description": seo_desc, "geo_tags": geo_tags, "schema_json": schema_json,
@@ -420,6 +429,12 @@ async def admin_pyq_list(
     if exam_year:  filt["exam_year"]  = exam_year
 
     docs = await _db["pyq_uploads"].find(filt, {"_id": 0}).sort("created_at", -1).to_list(200)
+    # Belt-and-suspenders re-sort: rows written before Task #738 are
+    # naive (no `+00:00`) and Mongo's lexicographic sort can interleave
+    # them with new aware rows incorrectly. The migration script
+    # `migrate_pyq_timestamps_to_aware` removes the gap permanently;
+    # this Python re-sort guarantees correctness during the rollout.
+    docs.sort(key=lambda d: _normalize_iso_for_sort(d.get("created_at")), reverse=True)
     return {"pyqs": docs}
 
 
@@ -430,6 +445,7 @@ async def admin_pyq_by_chapter(chapter_id: str, admin: dict = Depends(get_admin_
         {"chapter_id": chapter_id},
         {"_id": 0}
     ).sort("created_at", -1).to_list(100)
+    docs.sort(key=lambda d: _normalize_iso_for_sort(d.get("created_at")), reverse=True)
     return {"pyqs": docs}
 
 
@@ -531,7 +547,7 @@ async def admin_pyq_agentic_process(
 
     await _db["pyq_uploads"].update_one(
         {"id": pyq_id},
-        {"$set": {"processing_status": "ocr_running", "updated_at": datetime.utcnow().isoformat()}},
+        {"$set": {"processing_status": "ocr_running", "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
 
     # Fetch PDF bytes from storage URL
@@ -552,7 +568,7 @@ async def admin_pyq_agentic_process(
     class_name   = pyq.get("class_name", "")
     subject_name = pyq.get("subject_name", "")
     stream_name  = pyq.get("stream_name", "")
-    exam_year    = int(pyq.get("exam_year") or datetime.utcnow().year)
+    exam_year    = int(pyq.get("exam_year") or datetime.now(timezone.utc).year)
     paper_type   = pyq.get("paper_type", "major")
     board_id     = pyq.get("board_id", "")
     class_id     = pyq.get("class_id", "")
@@ -586,7 +602,14 @@ async def admin_pyq_agentic_process(
 
     if not ocr_result_raw:
         await _db["pyq_uploads"].update_one({"id": pyq_id}, {"$set": {"processing_status": "ocr_error"}})
-        raise HTTPException(502, "Gemini OCR returned empty response — check GEMINI_API_KEY")
+        raise HTTPException(
+            502,
+            "Gemini OCR returned empty response — Gemini auth is served via the Cloudflare AI "
+            "Gateway BYOK binding (google-ai-studio). Check the BYOK binding + "
+            "CF_AI_GATEWAY_ACCOUNT_ID/CF_AI_GATEWAY_ID, then hit "
+            "/admin/cms/sarvam-health/vertex/health. See docs/VERTEX_SETUP.md "
+            "'Migrating Railway → CF AI Gateway BYOK (Task #666)'.",
+        )
 
     # Parse OCR JSON
     try:
@@ -634,7 +657,7 @@ async def admin_pyq_agentic_process(
     )
 
     # Persist html page
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     page_doc = {
         "slug": slug, "html_content": html_content, "seo_title": seo_title,
         "seo_description": seo_desc, "geo_tags": geo_tags, "schema_json": schema_json,
@@ -972,7 +995,13 @@ async def admin_pyq_html_replica(
 
     ocr_result_raw = await vertex_services.analyze_image(raw, mime_type=mime, prompt=ocr_prompt, max_output_tokens=8192)
     if not ocr_result_raw:
-        raise HTTPException(502, "Gemini OCR failed — check GEMINI_API_KEY")
+        raise HTTPException(
+            502,
+            "Gemini OCR failed — Gemini auth is served via the Cloudflare AI Gateway BYOK binding "
+            "(google-ai-studio). Check the BYOK binding + CF_AI_GATEWAY_ACCOUNT_ID/CF_AI_GATEWAY_ID, "
+            "then hit /admin/cms/sarvam-health/vertex/health. See docs/VERTEX_SETUP.md "
+            "'Migrating Railway → CF AI Gateway BYOK (Task #666)'.",
+        )
 
     # Parse JSON from Gemini response
     try:
@@ -1032,7 +1061,7 @@ async def admin_pyq_html_replica(
     )
 
     # ── Persist to MongoDB (upsert by slug) ───────────────────────────────────
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     page_doc = {
         "slug":         slug,
         "html_content": html_content,
@@ -1102,7 +1131,7 @@ async def _index_pyq_rag_chunks(
             paragraphs = [p.strip() for p in raw_text.split('\n') if len(p.strip()) >= 50]
             chunks_to_index = paragraphs[:30]
 
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         for i, chunk_text in enumerate(chunks_to_index):
             embedding = await vertex_services.embed_text(chunk_text, task_type="RETRIEVAL_DOCUMENT")
             chunk_doc = {
@@ -1155,6 +1184,9 @@ async def public_pyq_list(
          "subject_name": 1, "board_name": 1, "exam_year": 1, "paper_type": 1,
          "question_count": 1, "created_at": 1}
     ).sort("created_at", -1).limit(200).to_list(200)
+    # See _normalize_iso_for_sort docstring — re-sort to handle the
+    # mixed naive/aware timestamp window during the Task #738 rollout.
+    docs.sort(key=lambda d: _normalize_iso_for_sort(d.get("created_at")), reverse=True)
     return {"pages": docs}
 
 

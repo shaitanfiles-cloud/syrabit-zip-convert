@@ -81,7 +81,7 @@ def test_alerting_loop_fires_when_heartbeat_is_stale():
                  "value": threshold, "actual": int(age)},
             )
 
-    asyncio.new_event_loop().run_until_complete(_run_one_iteration())
+    asyncio.run(_run_one_iteration())
     assert len(fired) == 1, "stale heartbeat must trigger exactly one alert"
     alert_type, _title, _body, snap = fired[0]
     assert alert_type == "assamese_override_refresh_stalled"
@@ -171,7 +171,7 @@ def test_refresh_loop_records_heartbeat_on_successful_tick():
                     pass
 
     try:
-        ok = asyncio.new_event_loop().run_until_complete(_scenario())
+        ok = asyncio.run(_scenario())
     finally:
         mod._ASM_REFRESH_INTERVAL_SECONDS = saved_interval
 
@@ -244,7 +244,7 @@ def test_refresh_loop_leaves_heartbeat_stale_when_loader_raises():
                     pass
 
     try:
-        asyncio.new_event_loop().run_until_complete(_scenario())
+        asyncio.run(_scenario())
     finally:
         mod._ASM_REFRESH_INTERVAL_SECONDS = saved_interval
 

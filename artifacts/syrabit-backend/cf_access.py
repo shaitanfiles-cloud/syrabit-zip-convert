@@ -90,6 +90,215 @@ def _enforce_enabled() -> bool:
     return val in ("1", "true", "yes", "on")
 
 
+# ── Break-glass (Task #706) ──────────────────────────────────────────────────
+# When Cloudflare Access itself is degraded (Zero Trust outage, AUD tag
+# misrotation, IdP failure) the entire admin surface goes 401. Without a
+# tested escape hatch the only recovery is "set CF_ACCESS_ENFORCE=false on
+# Railway and restart" — which can take minutes during an active incident.
+#
+# Two break-glass surfaces are supported, both read **at request time** so
+# they can flip without a service restart:
+#
+#  1. ``CF_ACCESS_BREAK_GLASS`` env (truthy values: 1/true/yes/on). Set on
+#     the Railway service when an operator already has Railway access.
+#  2. ``X-Cf-Access-Break-Glass: <token>`` request header, validated against
+#     the ``CF_ACCESS_BREAK_GLASS_TOKEN`` env. The Cloudflare Worker in
+#     front of the origin can inject this header from a Worker secret —
+#     this is the "non-Railway" path: the on-call edits the Worker secret
+#     in the Cloudflare dashboard, traffic resumes within seconds, no
+#     FastAPI restart needed.
+#
+# Activation is **always loud** (CRITICAL log + diagnostics flag) so the
+# state cannot silently linger past the incident.
+_BREAK_GLASS_HEADER = "x-cf-access-break-glass"
+
+
+def _break_glass_env_active() -> bool:
+    val = os.environ.get("CF_ACCESS_BREAK_GLASS", "").strip().lower()
+    return val in ("1", "true", "yes", "on")
+
+
+def _break_glass_token_env() -> str:
+    return os.environ.get("CF_ACCESS_BREAK_GLASS_TOKEN", "").strip()
+
+
+_FORCE_DISABLE_REDIS_KEY = "cf_access:break_glass_force_disabled"
+
+
+def _force_disable_state() -> Optional[dict]:
+    """Return the persisted "force-disabled" record from Redis, or None.
+
+    Task #710 — once an admin clicks "Disable now" in the banner we set
+    this Redis key so all gunicorn workers (preload_app=True spawns 3+
+    in prod) see the disable immediately. Pure in-process os.environ
+    pop only fixes the worker that handled the request, leaving the
+    other workers still bypassed — exactly the silent-state class of
+    bug the original break-glass design works hard to avoid.
+
+    The record stores ``{disabled_at: iso, actor: email|sub}``; the
+    presence of the key is enough — the metadata is for the audit
+    trail surfaced via /admin/diagnostics.
+    """
+    try:
+        from deps import redis_client
+    except Exception:  # noqa: BLE001
+        return None
+    if not redis_client:
+        return None
+    try:
+        raw = redis_client.get(_FORCE_DISABLE_REDIS_KEY)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[CF_ACCESS] force-disable redis read failed: {exc}")
+        return None
+    if not raw:
+        return None
+    try:
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "ignore")
+        import json as _json
+        data = _json.loads(raw)
+        if isinstance(data, dict):
+            return data
+    except Exception:  # noqa: BLE001
+        # Legacy/garbled value — treat as a bare disable flag so we still
+        # honour the operator's intent rather than re-arming break-glass.
+        return {"disabled_at": str(raw), "actor": None}
+    return None
+
+
+def force_disable_break_glass(actor: Optional[str] = None) -> dict:
+    """Persist a process-shared "break-glass is OFF" flag.
+
+    Side effects:
+      * Sets Redis key ``cf_access:break_glass_force_disabled`` with
+        ``{disabled_at, actor}`` (no TTL — the operator must explicitly
+        clear it on the next deploy after also removing the source env
+        on Railway / rotating the Worker secret).
+      * Removes ``CF_ACCESS_BREAK_GLASS`` and ``CF_ACCESS_BREAK_GLASS_TOKEN``
+        from this process's ``os.environ`` so even if Redis writes fail
+        the calling worker honours the disable for the rest of its
+        lifetime.
+
+    Returns the persisted record (with a ``redis_persisted`` boolean so
+    the caller can warn on multi-worker drift if the persist failed).
+    """
+    from datetime import datetime, timezone
+    record = {
+        "disabled_at": datetime.now(timezone.utc).isoformat(),
+        "actor": actor,
+    }
+    persisted = False
+    try:
+        from deps import redis_client
+        if redis_client:
+            import json as _json
+            redis_client.set(_FORCE_DISABLE_REDIS_KEY, _json.dumps(record))
+            persisted = True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[CF_ACCESS] force-disable redis write failed: {exc}")
+    # Always pop the env vars from THIS process so the disable is honoured
+    # immediately on the worker that served the request, even if Redis is
+    # down. The popped values are not restored — operator must also clear
+    # them at the source (Railway env / Worker secret).
+    cleared = []
+    for key in ("CF_ACCESS_BREAK_GLASS", "CF_ACCESS_BREAK_GLASS_TOKEN"):
+        if os.environ.pop(key, None) is not None:
+            cleared.append(key)
+    record["redis_persisted"] = persisted
+    record["env_cleared"] = cleared
+    logger.warning(
+        "[CF_ACCESS] BREAK-GLASS force-disabled by actor=%r persisted=%s cleared=%s",
+        actor or "?",
+        persisted,
+        cleared,
+    )
+    return record
+
+
+def clear_force_disable() -> bool:
+    """Remove the force-disable Redis flag. Test-only / re-arm path."""
+    try:
+        from deps import redis_client
+        if redis_client:
+            redis_client.delete(_FORCE_DISABLE_REDIS_KEY)
+            return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[CF_ACCESS] clear_force_disable failed: {exc}")
+    return False
+
+
+def break_glass_state(request: Optional[Request] = None) -> dict:
+    """Return the current break-glass state.
+
+    Always includes ``env_active``; when a ``request`` is supplied the
+    header path is also evaluated. ``active`` is the OR of both sources
+    and ``source`` records which one tripped (env wins on tie).
+
+    Task #710: if a previous "force-disable" has been persisted (Redis
+    flag set by ``force_disable_break_glass``), ``active`` is forced to
+    False regardless of env/header so the disable actually sticks
+    across all gunicorn workers.
+    """
+    env_on = _break_glass_env_active()
+    header_on = False
+    header_present = False
+    if request is not None:
+        raw = request.headers.get(_BREAK_GLASS_HEADER) or request.headers.get(
+            _BREAK_GLASS_HEADER.title()
+        )
+        if raw:
+            header_present = True
+            expected = _break_glass_token_env()
+            # Constant-time compare so a timing oracle doesn't leak the
+            # token byte-by-byte if the Worker leaks the header upstream.
+            import hmac as _hmac
+            header_on = bool(expected) and _hmac.compare_digest(raw.strip(), expected)
+    forced_off = _force_disable_state()
+    active = (env_on or header_on) and not forced_off
+    source: Optional[str] = None
+    if active:
+        if env_on:
+            source = "env"
+        elif header_on:
+            source = "header"
+    return {
+        "active": active,
+        "source": source,
+        "env_active": env_on,
+        "header_present": header_present,
+        "header_accepted": header_on,
+        "header_token_configured": bool(_break_glass_token_env()),
+        "force_disabled": bool(forced_off),
+        "force_disabled_at": (forced_off or {}).get("disabled_at") if forced_off else None,
+        "force_disabled_by": (forced_off or {}).get("actor") if forced_off else None,
+    }
+
+
+def _log_break_glass(label: str, state: dict, request: Optional[Request]) -> None:
+    """Emit a CRITICAL log every time a request bypasses Access.
+
+    Logged per-request (no rate limiting) on purpose: while break-glass is
+    active every admin action must be auditable in the log stream. A noisy
+    log is also a strong reminder to the operator to disable the bypass
+    once the underlying outage is resolved.
+    """
+    ip = ""
+    ua = ""
+    if request is not None:
+        ip = (request.headers.get("cf-connecting-ip")
+              or request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+              or (request.client.host if request.client else ""))
+        ua = request.headers.get("user-agent", "")[:120]
+    logger.critical(
+        "CF Access BREAK-GLASS bypass active (%s) source=%s ip=%s ua=%r path=%s",
+        label,
+        state.get("source"),
+        ip or "?",
+        ua,
+        getattr(getattr(request, "url", None), "path", "?") if request else "?",
+    )
+
+
 def is_admin_enforcement_enabled() -> bool:
     """True when admin enforcement is configured AND complete.
 
@@ -328,7 +537,16 @@ async def require_cf_access_admin(request: Request) -> Optional[dict]:
     sets ``CF_ACCESS_ENFORCE=true`` along with ``CF_ACCESS_TEAM_DOMAIN``
     and ``CF_ACCESS_AUD_ADMIN``. If enforcement is on but config is
     incomplete, the request is refused with 503 (fail-closed).
+
+    Break-glass (Task #706): when ``CF_ACCESS_BREAK_GLASS=true`` or a
+    valid ``X-Cf-Access-Break-Glass`` header is present, the Access
+    challenge is skipped (CRITICAL log, surfaced via /admin/diagnostics).
+    The downstream admin JWT check in ``get_admin_user`` still runs.
     """
+    bg = break_glass_state(request)
+    if bg["active"]:
+        _log_break_glass("admin", bg, request)
+        return {"break_glass": True, "source": bg["source"]}
     _fail_closed_if_misconfigured(CF_ACCESS_AUD_ADMIN, "admin")
     if not is_admin_enforcement_enabled():
         return None
@@ -338,21 +556,130 @@ async def require_cf_access_admin(request: Request) -> Optional[dict]:
 async def require_cf_access_internal(request: Request) -> Optional[dict]:
     """FastAPI dependency for internal-tier Access app (operations,
     feature-flags, kill switches, anything ops-only)."""
+    bg = break_glass_state(request)
+    if bg["active"]:
+        _log_break_glass("internal", bg, request)
+        return {"break_glass": True, "source": bg["source"]}
     _fail_closed_if_misconfigured(CF_ACCESS_AUD_INTERNAL, "internal")
     if not is_internal_enforcement_enabled():
         return None
     return await _require(request, [CF_ACCESS_AUD_INTERNAL], "internal")
 
 
-def status() -> dict:
-    """Public introspection used by /admin/diagnostics. No secrets."""
+# ── CF Access env-change fingerprint (Task #707) ─────────────────────────────
+# A "silent lockout" happens when an operator rotates a CF Access AUD tag,
+# changes the team domain, toggles enforce, or activates break-glass — and
+# nobody happens to log in for hours afterwards. The /admin/diagnostics
+# paging rule (Task #706) only fires on poll, so without a background watcher
+# the lockout sits invisible until someone needs admin access urgently.
+#
+# We snapshot a stable fingerprint of the CF_ACCESS_* env-derived state and
+# persist it in db.api_config["cf_access_config_state"] together with the
+# UTC timestamp at which it last changed. The background loop in server.py
+# pairs this `changed_at` with the most recent successful admin login from
+# db.admin_login_log to decide whether to fire `cf_access_admin_silent_lockout`.
+
+def cf_access_config_fingerprint() -> dict:
+    """Return a stable summary of the CF Access env state.
+
+    The summary contains only booleans / public identifiers — no secrets —
+    so it is safe to persist and to surface in alert payloads. AUD tags
+    are reduced to ``configured: bool`` so a rotation is detected without
+    leaking the new tag value into the audit trail.
+    """
+    return {
+        "team_domain": CF_ACCESS_TEAM_DOMAIN or "",
+        "enforce": _enforce_enabled(),
+        "admin_aud_configured": bool(CF_ACCESS_AUD_ADMIN),
+        "internal_aud_configured": bool(CF_ACCESS_AUD_INTERNAL),
+        # AUD tags themselves are not secret (Cloudflare exposes them in
+        # the dashboard) but recording a hash keeps the change-detector
+        # sensitive to silent rotations without persisting the raw value.
+        "admin_aud_hash": _short_hash(CF_ACCESS_AUD_ADMIN),
+        "internal_aud_hash": _short_hash(CF_ACCESS_AUD_INTERNAL),
+        "break_glass_env": _break_glass_env_active(),
+        "break_glass_token_configured": bool(_break_glass_token_env()),
+    }
+
+
+def _short_hash(value: str) -> str:
+    if not value:
+        return ""
+    import hashlib
+    return hashlib.sha256(value.encode("utf-8", "ignore")).hexdigest()[:12]
+
+
+async def record_cf_access_config_change(db) -> dict:
+    """Compare the live CF Access fingerprint with the persisted one.
+
+    Updates ``db.api_config["cf_access_config_state"]`` when the fingerprint
+    has changed, stamping ``changed_at`` so the silent-lockout watcher has
+    a reliable "since" anchor. Returns the resulting state document
+    (including ``changed_at`` and ``fingerprint``). Safe to call on every
+    boot — a no-op when nothing changed.
+    """
+    from datetime import datetime, timezone
+    fp = cf_access_config_fingerprint()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        cfg = await db.api_config.find_one({}, {"_id": 0, "cf_access_config_state": 1})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[CF_ACCESS] record_cf_access_config_change read failed: {exc}")
+        return {"fingerprint": fp, "changed_at": now_iso, "first_seen": True}
+    prev = (cfg or {}).get("cf_access_config_state") if isinstance(cfg, dict) else None
+    if isinstance(prev, dict) and prev.get("fingerprint") == fp:
+        return prev
+    new_state = {
+        "fingerprint": fp,
+        "changed_at": now_iso,
+        "previous_fingerprint": (prev or {}).get("fingerprint") if isinstance(prev, dict) else None,
+    }
+    try:
+        await db.api_config.update_one(
+            {},
+            {"$set": {"cf_access_config_state": new_state}},
+            upsert=True,
+        )
+        if prev:
+            logger.info(
+                "[CF_ACCESS] config fingerprint changed at %s — "
+                "silent-lockout watcher armed.", now_iso,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[CF_ACCESS] record_cf_access_config_change write failed: {exc}")
+    return new_state
+
+
+def status(request: Optional[Request] = None) -> dict:
+    """Public introspection used by /admin/diagnostics. No secrets.
+
+    Pass ``request`` to also evaluate the per-request break-glass header
+    path; without a request only the env-level break-glass flag is
+    reflected.
+    """
+    bg = break_glass_state(request)
+    admin_enforced = is_admin_enforcement_enabled() and not bg["active"]
+    internal_enforced = is_internal_enforcement_enabled() and not bg["active"]
     return {
         "team_domain": CF_ACCESS_TEAM_DOMAIN or None,
         "enforce": _enforce_enabled(),
-        "admin_enforced": is_admin_enforcement_enabled(),
-        "internal_enforced": is_internal_enforcement_enabled(),
+        "admin_enforced": admin_enforced,
+        "internal_enforced": internal_enforced,
         "admin_aud_configured": bool(CF_ACCESS_AUD_ADMIN),
         "internal_aud_configured": bool(CF_ACCESS_AUD_INTERNAL),
         "jwks_cached_keys": len(_jwks_state["keys_by_kid"]),
         "jwks_fetched_at": _jwks_state["fetched_at"] or None,
+        # Task #706 — break-glass surface. ``break_glass_active`` is the
+        # field the paging rule alerts on; ``break_glass_source`` records
+        # which surface tripped (env vs. header) for incident timelines.
+        "break_glass_active": bg["active"],
+        "break_glass_source": bg["source"],
+        "break_glass_env_active": bg["env_active"],
+        "break_glass_header_token_configured": bg["header_token_configured"],
+        # Task #710 — surfaced so the banner and runbook can show whether
+        # a one-click disable has already been applied across the worker
+        # pool (Redis-backed) and who clicked it.
+        "break_glass_force_disabled": bg["force_disabled"],
+        "break_glass_force_disabled_at": bg["force_disabled_at"],
+        "break_glass_force_disabled_by": bg["force_disabled_by"],
     }

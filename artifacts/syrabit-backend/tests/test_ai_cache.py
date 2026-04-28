@@ -24,7 +24,23 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Run a coroutine on a fresh event loop.
+
+    Earlier tests in the suite (notably ``test_admin_assamese_purity_*``)
+    leave the per-thread event loop closed/unset via their async mocks.
+    On Python 3.11 ``asyncio.get_event_loop()`` then raises ``RuntimeError:
+    There is no current event loop in thread 'MainThread'``, which used
+    to make every ai_cache test fail with "RuntimeErro..." when the full
+    suite was run. Spinning up a new loop per call insulates this file
+    from that pollution.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+        asyncio.set_event_loop(None)
 
 
 @pytest.fixture(autouse=True)

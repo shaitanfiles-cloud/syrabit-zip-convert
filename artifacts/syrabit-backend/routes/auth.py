@@ -1,24 +1,15 @@
 """Syrabit.ai — Authentication routes"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
-from pymongo.errors import DuplicateKeyError
-from typing import Optional, List, Dict, Any, Union
+import json, asyncio, uuid, logging
+from typing import Optional
 from datetime import datetime, timezone, timedelta
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    APIRouter, HTTPException, Depends, Response, Request, Cookie,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
-import mistune as _mistune
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
+    UserCreate, UserLogin, UserOut, TokenOut, PasswordResetReq, PasswordResetConfirm,
     GoogleAuthRequest,
 )
 from config import (
@@ -31,9 +22,8 @@ from config import (
 )
 from deps import pwd_ctx
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional,
+    get_current_user, create_access_token, create_refresh_token,
+    get_user_credits, get_current_user_optional,
 )
 from db_ops import (
     supa_create_password_reset,
@@ -46,7 +36,7 @@ from db_ops import (
     supa_update_user,
     supa_update_user_password,
 )
-from llm import call_llm_api, call_llm_api_stream
+from turnstile_verify import require_turnstile
 import email_templates
 
 logger = logging.getLogger(__name__)
@@ -54,7 +44,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.post("/auth/signup")
-async def signup(data: UserCreate, response: Response):
+async def signup(
+    data: UserCreate,
+    request: Request,
+    response: Response,
+    syrabit_device: Optional[str] = Cookie(default=None),
+):
+    await require_turnstile(request)
     existing = await supa_get_user(data.email.lower())
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -103,6 +99,19 @@ async def signup(data: UserCreate, response: Response):
 
     token = create_access_token(user_id, role="student", plan="free")
     refresh = create_refresh_token(user_id)
+    # Task #798 — pair this brand-new account with any anonymous-quota
+    # exhaustion event from the same device cookie in the prior 48h so
+    # the admin chart can compute the "exhausted -> sign-up" funnel.
+    # Best-effort: a missing/forged/expired cookie or a metric crash
+    # must never block the signup itself.
+    try:
+        from metrics import record_signup_with_device
+        from device_token import device_token_id
+        _tid = device_token_id(syrabit_device) if syrabit_device else None
+        if _tid:
+            record_signup_with_device(_tid)
+    except Exception:
+        pass
     user_out = UserOut(
         id=user_id, name=data.name, email=data.email.lower(),
         plan="free", credits_used=0, credits_limit=user.get("credits_limit", 30),
@@ -118,7 +127,8 @@ async def signup(data: UserCreate, response: Response):
     return {"access_token": token, "token_type": "bearer", "user": user_out.dict()}
 
 @router.post("/auth/login", response_model=TokenOut)
-async def login(data: UserLogin, response: Response):
+async def login(data: UserLogin, request: Request, response: Response):
+    await require_turnstile(request)
     user = await supa_get_user(data.email.lower())
     pw_hash = user.get("password_hash", "") if user else ""
     if not user or not pw_hash or not await asyncio.to_thread(pwd_ctx.verify, data.password, pw_hash):
@@ -163,7 +173,18 @@ async def google_client_id():
 
 
 @router.post("/auth/google")
-async def google_auth(data: GoogleAuthRequest, response: Response):
+async def google_auth(
+    data: GoogleAuthRequest,
+    request: Request,
+    response: Response,
+    syrabit_device: Optional[str] = Cookie(default=None),
+):
+    # Task #697 — gate the Google sign-in endpoint behind the same
+    # Turnstile check as `/auth/login` and `/auth/signup` so the only
+    # password-free auth path isn't an unprotected automation surface.
+    # `require_turnstile` is a no-op when CF_TURNSTILE_ENABLED is
+    # False, preserving today's dev/local behaviour.
+    await require_turnstile(request)
     from config import GOOGLE_CLIENT_ID
 
     if not GOOGLE_CLIENT_ID:
@@ -267,6 +288,18 @@ async def google_auth(data: GoogleAuthRequest, response: Response):
         role = "student"
         token = create_access_token(user_id, role=role, plan="free")
         refresh = create_refresh_token(user_id)
+        # Task #798 — same exhausted -> sign-up funnel pairing as
+        # `/auth/signup`. Only fires in this `else` branch (i.e. a
+        # brand-new account); the `existing` branch above is a
+        # returning-user login and shouldn't influence conversion.
+        try:
+            from metrics import record_signup_with_device
+            from device_token import device_token_id
+            _tid = device_token_id(syrabit_device) if syrabit_device else None
+            if _tid:
+                record_signup_with_device(_tid)
+        except Exception:
+            pass
         user_out = UserOut(
             id=user_id, name=google_name, email=google_email,
             plan="free", credits_used=0, credits_limit=30,
@@ -290,7 +323,8 @@ async def _send_password_reset_email(email: str, token: str):
     await email_templates.send_password_reset(email=email, token=token, reset_url=reset_url)
 
 @router.post("/auth/reset-request")
-async def reset_request(data: PasswordResetReq):
+async def reset_request(data: PasswordResetReq, request: Request):
+    await require_turnstile(request)
     user = await supa_get_user_for_reset(data.email.lower())
     if user:
         token = str(uuid.uuid4())
@@ -300,7 +334,13 @@ async def reset_request(data: PasswordResetReq):
     return {"message": "If the email exists, a reset link has been sent"}
 
 @router.post("/auth/reset-confirm")
-async def reset_confirm(data: PasswordResetConfirm):
+async def reset_confirm(data: PasswordResetConfirm, request: Request):
+    # Task #699 — gate the reset-confirm endpoint behind the same
+    # Turnstile check that protects /auth/reset-request, so an
+    # attacker can't hammer it at high QPS to probe for live tokens
+    # or harvest timing/error signal. No-op when the secret isn't
+    # configured (dev/local), preserving today's behaviour.
+    await require_turnstile(request)
     record = await supa_get_password_reset(data.token)
     if not record:
         raise HTTPException(status_code=400, detail="Invalid or expired reset token")

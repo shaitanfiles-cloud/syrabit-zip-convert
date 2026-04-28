@@ -1,25 +1,17 @@
-"""SEO/GEO/AEO ENHANCED CHAT ROUTES - Upgraded with RAG citations, cognitive anchors & cliffhanger hooks"""
-import re, json, asyncio, time, time as _time_mod, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
+"""Syrabit.ai — AI chat & search routes"""
+import re, json, asyncio, time as _time_mod, uuid, logging
 
-from typing import Optional, List, Dict, Any, Union
-from datetime import datetime, timezone, timedelta
+from typing import Optional
+from datetime import datetime, timezone
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
-    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
-    Form, Header, status,
+    APIRouter, HTTPException, Depends, Request, UploadFile, File,
 )
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
+from fastapi.responses import StreamingResponse
 import cachetools
-import mistune as _mistune
 
 from models import (
-    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
-    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
-    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
-    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
-    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
+    ChatMessage,
+    SearchResultOut,
 )
 from config import (
     CF_TURNSTILE_ENABLED,
@@ -38,9 +30,7 @@ from cache import (
     REDIS_AI_CACHE_TTL,
     REDIS_CASUAL_CACHE_TTL,
     _ai_response_cache,
-    _cache_key,
-    _redis_get_ai_cache,
-    _redis_get_ai_cache_async,
+    _cache_key,  # re-exported for tests/back-compat (test_ai_chat_indic_route)
     _redis_set,
     _syllabus_cache,
     _syllabus_cache_key,
@@ -51,9 +41,7 @@ from cache import (
     ai_cache_expected_saved_ms,
 )
 from auth_deps import (
-    get_current_user, get_admin_user, create_access_token, create_refresh_token,
-    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional, rate_limit_chat_optional,
+    get_user_credits, rate_limit_chat_optional, rate_limit_ocr_optional,
 )
 from db_ops import (
     atomic_deduct_credit,
@@ -63,7 +51,7 @@ from db_ops import (
     supa_update_user,
     supa_upsert_conversation,
 )
-from llm import call_llm_api, call_llm_api_chat, call_llm_api_stream
+from llm import call_llm_api_chat, call_llm_api_stream
 from rag import (
     _fetch_internal_chapters,
     _record_chat_latency,
@@ -75,25 +63,22 @@ from rag import (
     syrabit_library_search,
     web_search_with_fallback,
 )
-from prompts import _classify_intent, classify_intent, _is_out_of_scope_response, extract_semester_number
+from prompts import classify_intent, _is_out_of_scope_response, extract_semester_number, compute_answer_budget
 from tracing import (
     record_chat_attrs,
     record_first_token,
-    get_current_trace_id,
     emit_phase_span,
 )
 from followup_context import detect_followup, build_followup_context, merge_followup_into_query
 from pipeline import should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query, get_instant_response
 
-# SEO/GEO/AEO Enhancement Layer imports
+# Chat Enhancement Layer
 try:
     from chat_enhancement_layer import chat_enhancement_layer
-    from cliffhanger_engine import cliffhanger_engine
-    from cognitive_anchor_injector import cognitive_anchor_injector
-    from reddit_oracle import reddit_oracle
-    GEO_ENHANCEMENTS_ENABLED = True
+    from config import CHAT_ENHANCE_ENABLED as _CHAT_ENHANCE_ENABLED
+    GEO_ENHANCEMENTS_ENABLED = _CHAT_ENHANCE_ENABLED
 except ImportError as e:
-    logger.warning(f"GEO enhancements not loaded: {e}")
+    logger.warning(f"[Enhancement] Layer unavailable: {e}")
     GEO_ENHANCEMENTS_ENABLED = False
 
 _CONTENT_INTENTS_SET = {"notes", "important_questions", "pyq"}
@@ -148,6 +133,183 @@ logger = logging.getLogger(__name__)
 def _record_llm_cost(model, prompt_tokens, completion_tokens, provider="gemini", user_id=""):
     from routes.admin_advanced import record_llm_cost
     record_llm_cost(model, prompt_tokens, completion_tokens, provider, user_id)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Assamese translation: Gemini main + Sarvam polish
+# ────────────────────────────────────────────────────────────────────────────
+# User-mandated routing (2026-04-26):
+#   • English → Assamese translation: Gemini does the heavy lifting
+#     (vertex_services.translate, 600 RPM headroom, reliable native
+#     multilingual). Sarvam then polishes the Gemini output for native
+#     Assamese fluency (sarvam-m chat, ~30 RPM but excellent for Indic).
+#   • For chat *response* generation (not translation), the routing is
+#     the inverse: Sarvam main + Gemini fallback — see `llm.py` indic
+#     race phase logic.
+#
+# Tradeoffs documented in `_make_assamese_translate_callable` docstring.
+# ────────────────────────────────────────────────────────────────────────────
+
+# Polish only kicks in for substantive output. Below this length the polish
+# round-trip cost (~0.8-1.5s) outweighs the marginal quality lift, and N
+# small fragments would compound into multi-second post-stream latency.
+_POLISH_MIN_LEN = 80
+
+# Hard ceiling on the Sarvam polish call so a slow/dead Sarvam never holds
+# up the translation pipeline. On timeout we return the un-polished Gemini
+# output (graceful degradation).
+_SARVAM_POLISH_TIMEOUT_SEC = 1.8
+
+# Hard ceiling on the Gemini translate call. vertex_services.translate
+# already has its own internal timeout (60s), but we wrap it so a stalled
+# Gemini call cannot block the chat path indefinitely.
+_GEMINI_TRANSLATE_TIMEOUT_SEC = 4.0
+
+_POLISH_SYSTEM_PROMPT = (
+    "You are a native Assamese (অসমীয়া) editor. The user message is an "
+    "Assamese text that may sound slightly machine-translated or "
+    "English-influenced. Polish it so it reads naturally to a native "
+    "Assamese speaker: fix unnatural word choices, smooth grammar, and "
+    "use idiomatic Assamese phrasing. Preserve the original meaning "
+    "exactly — do NOT add information, do NOT remove information. "
+    "Latin script is allowed ONLY for: pure numbers, scientific units "
+    "(cm, kg, °C, eV…), math symbols/equations, code, URLs, and "
+    "well-known proper nouns/acronyms (NCERT, SEBA, AHSEC, DNA, GDP, "
+    "Newton). Return ONLY the polished Assamese text — no explanations, "
+    "no preamble, no quote marks."
+)
+
+
+async def _assamese_translate_gemini_main_sarvam_polish(
+    text: str,
+    *,
+    target_lang_code: str = "as-IN",
+) -> str:
+    """User-mandated Assamese translation pipeline: Gemini-main + Sarvam-polish.
+
+    Step 1 (main): English text → Assamese via Gemini (vertex_services.translate).
+    Step 2 (polish, optional): Gemini Assamese output → polished Assamese
+        via Sarvam-m chat. Skipped for short fragments (< _POLISH_MIN_LEN
+        chars) where the polish round-trip overhead is not justified.
+
+    Failure modes:
+        • Gemini fails or returns empty → returns "" (caller falls back to
+          its own strip / original-text path).
+        • Sarvam polish fails / times out → returns the un-polished Gemini
+          output (graceful degradation — translation still landed).
+
+    Args:
+        text: Source English text to translate.
+        target_lang_code: Sarvam-style language code (e.g., "as-IN"). The
+            Gemini translator only uses the bare language ("as"); the full
+            code is kept in the signature for symmetry with the legacy
+            Sarvam /translate API and forward-compatibility if other Indic
+            targets are ever added.
+
+    Returns:
+        Polished Assamese string, or un-polished Gemini output, or "".
+    """
+    src = (text or "").strip()
+    if not src:
+        return ""
+
+    # Derive bare language ("as-IN" → "as") for the Gemini translator.
+    _bare_lang = (target_lang_code or "as-IN").split("-", 1)[0].lower() or "as"
+
+    # ── Step 1: Gemini main ─────────────────────────────────────────────
+    gemini_out = ""
+    try:
+        import vertex_services  # local import — keeps cold-start cost off the main chat path
+        gemini_out = await asyncio.wait_for(
+            vertex_services.translate(src[:4000], target_lang=_bare_lang, source_lang="en"),
+            timeout=_GEMINI_TRANSLATE_TIMEOUT_SEC,
+        ) or ""
+        gemini_out = gemini_out.strip()
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"[INDIC-TRANSLATE] Gemini main timed out after "
+            f"{_GEMINI_TRANSLATE_TIMEOUT_SEC}s for {src[:60]!r}"
+        )
+        return ""
+    except Exception as _e:  # pragma: no cover — network defensive
+        logger.warning(
+            f"[INDIC-TRANSLATE] Gemini main failed for {src[:60]!r}: "
+            f"{type(_e).__name__}: {str(_e)[:160]}"
+        )
+        return ""
+
+    if not gemini_out:
+        logger.info(f"[INDIC-TRANSLATE] Gemini main returned empty for {src[:60]!r}")
+        return ""
+
+    # ── Step 2: Sarvam polish (optional, best-effort) ───────────────────
+    if len(gemini_out) < _POLISH_MIN_LEN:
+        # Short fragment — skip polish, return Gemini output verbatim.
+        return gemini_out
+
+    # Read the live `sarvam_llm_client` attribute off the deps module so
+    # tests that monkey-patch `deps.sarvam_llm_client = None` see the
+    # current value rather than the import-time snapshot.
+    _sarvam_chat = getattr(deps, "sarvam_llm_client", None)
+    if _sarvam_chat is None:
+        # No Sarvam client configured — return un-polished Gemini.
+        return gemini_out
+
+    try:
+        polish_resp = await asyncio.wait_for(
+            _sarvam_chat.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "sarvam-m",
+                    "messages": [
+                        {"role": "system", "content": _POLISH_SYSTEM_PROMPT},
+                        {"role": "user", "content": gemini_out[:4000]},
+                    ],
+                    "max_tokens": min(1200, len(gemini_out) * 3 + 200),
+                    "temperature": 0.05,
+                    "top_p": 0.9,
+                    "stream": False,
+                    "thinking": {"enabled": False},
+                    "response_language": target_lang_code,
+                },
+            ),
+            timeout=_SARVAM_POLISH_TIMEOUT_SEC,
+        )
+        if polish_resp.status_code == 200:
+            _body = polish_resp.json()
+            _polished = (
+                _body.get("choices", [{}])[0].get("message", {}).get("content", "")
+                or ""
+            ).strip()
+            # Strip any sarvam-m <think> blocks (defense; we asked it to skip them).
+            _polished = re.sub(r"<think>[\s\S]*?</think>", "", _polished).strip()
+            # Also strip wrapping quote marks that LLMs sometimes add.
+            if _polished.startswith(('"', "'", "“", "‘")) and _polished.endswith(('"', "'", "”", "’")):
+                _polished = _polished[1:-1].strip()
+            if _polished:
+                return _polished
+            logger.info(
+                f"[INDIC-TRANSLATE] Sarvam polish returned empty body for "
+                f"{gemini_out[:60]!r} — using un-polished Gemini output"
+            )
+        else:
+            logger.warning(
+                f"[INDIC-TRANSLATE] Sarvam polish HTTP {polish_resp.status_code} "
+                f"for {gemini_out[:60]!r} — using un-polished Gemini output"
+            )
+    except asyncio.TimeoutError:
+        logger.info(
+            f"[INDIC-TRANSLATE] Sarvam polish timed out after "
+            f"{_SARVAM_POLISH_TIMEOUT_SEC}s — using un-polished Gemini output"
+        )
+    except Exception as _pe:  # pragma: no cover — network defensive
+        logger.warning(
+            f"[INDIC-TRANSLATE] Sarvam polish exception "
+            f"({type(_pe).__name__}: {str(_pe)[:120]}) — using un-polished Gemini output"
+        )
+
+    return gemini_out
+
 
 router = APIRouter()
 
@@ -226,6 +388,161 @@ async def _resolve_semester_class_id(query: str, ctx_board_id: str) -> str | Non
         logger.warning(f"_resolve_semester_class_id failed: {e}")
     return None
 
+_OCR_ALLOWED_MIME = {"image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif"}
+_OCR_MAX_BYTES = 8 * 1024 * 1024  # 8MB
+_OCR_READ_CHUNK = 64 * 1024  # 64KB streamed reads — keeps peak RSS bounded
+
+
+def _sniff_image_mime(buf: bytes) -> Optional[str]:
+    """Magic-byte sniff for the formats Vertex Gemini Vision accepts.
+
+    Returns the canonical `image/<fmt>` string, or None if the buffer does
+    not start with a recognised image header. Client-supplied `Content-Type`
+    is untrusted, so this guards Vertex against being handed (and billed
+    for) non-image payloads such as PDFs or scripts.
+    """
+    if not buf or len(buf) < 12:
+        return None
+    if buf.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if buf.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if buf[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if buf[:4] == b"RIFF" and buf[8:12] == b"WEBP":
+        return "image/webp"
+    # HEIC/HEIF — ISO-BMFF box: bytes 4..8 == "ftyp", then a brand string.
+    if buf[4:8] == b"ftyp" and buf[8:12] in (b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"mif1", b"msf1"):
+        return "image/heic"
+    return None
+
+
+@router.post("/ai/ocr-image")
+async def ocr_chat_image(
+    request: Request,
+    file: UploadFile = File(...),
+    user: Optional[dict] = Depends(rate_limit_ocr_optional),
+):
+    """Public OCR endpoint for the chat composer.
+
+    Accepts a single image (JPEG/PNG/WebP/GIF/HEIC, ≤8MB), runs Vertex AI
+    Gemini Vision OCR, and returns the extracted text. The endpoint uses
+    :func:`rate_limit_ocr_optional` (NOT the chat dep) so OCR uploads do
+    not consume the daily chat-message budget — Task #819. The follow-up
+    chat send still costs 1 credit on its own; OCR is free.
+
+    Other safeguards mirror the chat endpoint: Cloudflare Turnstile for
+    anonymous callers, bounded streaming reads to cap memory pressure,
+    and magic-byte sniffing to refuse non-image payloads before any
+    Vertex call is made (a Vertex Vision call is far more expensive than
+    a chat call). No documents/PDFs — the chat composer is image-only by
+    product decision.
+    """
+    is_anon = user is None
+
+    # 1. Anti-bot: Turnstile parity with /ai/chat for anonymous callers.
+    if CF_TURNSTILE_ENABLED and is_anon:
+        _ts_tok = request.headers.get("x-turnstile-token", "")
+        _ts_ip = (
+            request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+            if request.headers.get("x-forwarded-for")
+            else (request.client.host if request.client else "")
+        )
+        if not _ts_tok:
+            raise HTTPException(status_code=403, detail="Turnstile token required")
+        if not await _verify_turnstile(_ts_tok, _ts_ip):
+            raise HTTPException(status_code=403, detail="Turnstile verification failed")
+
+    # 2. Mime check on the client-supplied Content-Type (cheap fast-path).
+    ct = (file.content_type or "").lower()
+    if ct not in _OCR_ALLOWED_MIME:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {ct or 'unknown'}. Please upload an image (JPEG, PNG, WebP, GIF or HEIC).",
+        )
+
+    # 3. Early reject by Content-Length when present — saves a streaming read.
+    cl_hdr = request.headers.get("content-length")
+    if cl_hdr:
+        try:
+            if int(cl_hdr) > _OCR_MAX_BYTES + 4096:  # +4KB multipart envelope overhead
+                raise HTTPException(status_code=413, detail="Image too large — max 8MB.")
+        except ValueError:
+            pass
+
+    # 4. Bounded streaming read — never buffer more than _OCR_MAX_BYTES + 1 byte.
+    img_buf = bytearray()
+    while True:
+        chunk = await file.read(_OCR_READ_CHUNK)
+        if not chunk:
+            break
+        img_buf.extend(chunk)
+        if len(img_buf) > _OCR_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Image too large — max 8MB.")
+    img_bytes = bytes(img_buf)
+    if not img_bytes:
+        raise HTTPException(status_code=400, detail="Empty image upload.")
+
+    # 5. Magic-byte sniff — drop payloads whose actual bytes aren't an image,
+    #    before paying for a Vertex Vision request.
+    sniffed = _sniff_image_mime(img_bytes)
+    if sniffed is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file is not a recognised image (only JPEG, PNG, WebP, GIF and HEIC are supported).",
+        )
+
+    # 6. Vertex call — use the magic-byte-sniffed mime (defends against
+    #    a JPEG body sent with a "image/png" Content-Type and vice versa).
+    #
+    # NOTE (Task #819): we deliberately do NOT deduct a chat credit
+    # here. OCR is free; the user pays 1 credit only on the follow-up
+    # /ai/chat send that contains the extracted question. Per-minute
+    # throttle + per-IP coarse cap inside rate_limit_ocr_optional are
+    # enough abuse protection — OCR's 10/min/device cap is an order of
+    # magnitude tighter than chat's 15/min, so a single client can
+    # never burst more than ~600 Vertex Vision calls/hour.
+    vertex_mime = sniffed
+    try:
+        import vertex_services  # local import — avoids cold-start cost on chat path
+    except Exception as _imp_err:
+        logger.exception("vertex_services import failed")
+        raise HTTPException(status_code=503, detail="OCR service unavailable.") from _imp_err
+
+    try:
+        result = await vertex_services.ocr_image(img_bytes, mime_type=vertex_mime)
+    except Exception as _vx_err:
+        logger.exception("vertex ocr_image raised")
+        raise HTTPException(status_code=503, detail="OCR service unavailable.") from _vx_err
+
+    if not isinstance(result, dict) or "error" in result:
+        err_msg = (result or {}).get("error") if isinstance(result, dict) else "OCR failed"
+        raise HTTPException(status_code=503, detail=err_msg or "OCR failed")
+
+    raw_text = (result.get("raw_text") or "").strip()
+    if not raw_text:
+        # Fallback: if Vertex returned only a structured questions list, flatten it.
+        qs = result.get("questions") or []
+        if isinstance(qs, list) and qs:
+            parts = []
+            for q in qs:
+                if not isinstance(q, dict):
+                    continue
+                num = q.get("number")
+                txt = q.get("text") or ""
+                parts.append(f"{num}. {txt}" if num else txt)
+            raw_text = "\n".join(p for p in parts if p).strip()
+
+    if not raw_text:
+        raise HTTPException(status_code=422, detail="No text could be extracted from the image.")
+
+    return {
+        "text": raw_text,
+        "content_type": result.get("content_type") or "extracted",
+        "word_count": result.get("word_count") or len(raw_text.split()),
+    }
+
+
 @router.post("/ai/chat")
 async def chat(msg: ChatMessage, request: Request, user: Optional[dict] = Depends(rate_limit_chat_optional)):
     _chat_t0 = _time_mod.time()
@@ -240,11 +557,20 @@ async def chat(msg: ChatMessage, request: Request, user: Optional[dict] = Depend
             raise HTTPException(status_code=403, detail="Turnstile verification failed")
 
     plan = user.get("plan", "free") if user else "free"
-    max_tokens = PLAN_LIMITS[plan]["max_tokens"]
+    _plan_max_tokens = PLAN_LIMITS[plan]["max_tokens"]
     conv_id = msg.conversation_id
     user_id = user["id"] if user else None
 
     _detected_intent, _detected_db_category = classify_intent(msg.message)
+    # Smart per-request budget: free plan ceiling is 10 000 (so a complex
+    # "explain step by step" or "solve every PYQ" request can complete) but
+    # the median question stays at the medium ~1024-token tier — see
+    # ``prompts.compute_answer_budget`` for the intent + keyword heuristics.
+    max_tokens = compute_answer_budget(msg.message, _detected_intent, _plan_max_tokens)
+    logger.info(
+        f"[NON-STREAM] answer-budget: intent={_detected_intent} "
+        f"plan={plan} plan_max={_plan_max_tokens} chosen={max_tokens}"
+    )
 
     _ns_resp_lang = (msg.response_lang or "").lower().strip()
     _instant = get_instant_response(msg.message) if (_detected_intent == "casual" and _ns_resp_lang in ("", "en")) else None
@@ -930,7 +1256,22 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     plan = user.get("plan", "free") if user else "free"
-    max_tokens = PLAN_LIMITS[plan]["max_tokens"]
+    _plan_max_tokens = PLAN_LIMITS[plan]["max_tokens"]
+    # Smart per-request budget — same heuristic as the non-streaming path.
+    # The intent has already been classified above as ``_stream_intent`` /
+    # ``_detected_intent`` (whichever this branch uses); fall back to a fresh
+    # classification if neither is in scope yet so we never break the route.
+    _budget_intent = locals().get("_stream_intent") or locals().get("_detected_intent")
+    if not _budget_intent:
+        try:
+            _budget_intent, _ = classify_intent(msg.message)
+        except Exception:
+            _budget_intent = "general"
+    max_tokens = compute_answer_budget(msg.message, _budget_intent, _plan_max_tokens)
+    logger.info(
+        f"[STREAM] answer-budget: intent={_budget_intent} "
+        f"plan={plan} plan_max={_plan_max_tokens} chosen={max_tokens}"
+    )
 
     _t_auth_done = _time_mod.time()
     _auth_elapsed = _t_auth_done - _stream_t0
@@ -939,33 +1280,33 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
     def _make_assamese_translate_callable(_target: str):
         """Build an `async (str) -> str` callable that translates a single
-        English fragment to the requested Indic target language via the
-        Sarvam `/translate` endpoint. Used by the Assamese leakage
-        sanitiser to splice cleaned Assamese text in place of leaked
-        English runs (Task #419). Returns "" on any failure so the
-        sanitiser falls back to its existing `strip` path."""
+        English fragment to Assamese for the leakage-sanitiser splice path
+        (Task #419).
+
+        Routing contract (user-mandated 2026-04-26 — see replit.md
+        "LLM Providers"):
+          • English → Assamese translation: **Gemini main + Sarvam polish**
+          • Gemini does the heavy translation via `vertex_services.translate`
+            (high RPM headroom, native multilingual quality).
+          • For substantive output (≥ `_POLISH_MIN_LEN` chars), Sarvam
+            polishes the Gemini text via `sarvam-m` chat to lift it to
+            native-Assamese fluency.
+          • For short fragments (< `_POLISH_MIN_LEN` chars) — the common
+            sanitiser case where leaked English runs are typically just a
+            few words — polish is **skipped** because the per-fragment
+            polish round-trip (~0.8-1.5s) would compound across N
+            fragments into multi-second post-stream latency. Gemini's
+            translation is already high-quality at that length.
+          • All Sarvam polish failures degrade gracefully to the
+            un-polished Gemini output. Gemini failure returns "" so the
+            sanitiser falls back to its existing `strip` behaviour.
+        """
         async def _translate(fragment: str) -> str:
-            frag = (fragment or "").strip()
-            if not frag or sarvam_client is None:
-                return ""
-            try:
-                resp = await asyncio.wait_for(
-                    sarvam_client.post("/translate", json={
-                        "input": frag[:1000],
-                        "source_language_code": "en-IN",
-                        "target_language_code": _target,
-                        "mode": "formal",
-                        "model": "sarvam-translate:v1",
-                        "enable_preprocessing": False,
-                    }),
-                    timeout=2.5,
-                )
-                if resp.status_code == 200:
-                    return (resp.json().get("translated_text") or "").strip()
-            except Exception as _te:  # pragma: no cover - network defensive
-                logger.warning(f"[INDIC-SANITIZE] /translate failed for {frag[:40]!r}: {_te}")
-            return ""
+            return await _assamese_translate_gemini_main_sarvam_polish(
+                fragment, target_lang_code=_target
+            )
         return _translate
+
     _resp_lang = (msg.response_lang or "").lower().strip()
     _sarvam_target = _SARVAM_LANG_MAP.get(_resp_lang)
     _want_translate = bool(_sarvam_target and _resp_lang != "en")
@@ -973,22 +1314,17 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _instant_s = get_instant_response(msg.message) if _stream_intent == "casual" else None
     if _instant_s:
         if _want_translate and _instant_s:
-            try:
-                _tr_resp = await asyncio.wait_for(
-                    sarvam_client.post("/translate", json={
-                        "input": _instant_s[:2000],
-                        "source_language_code": "en-IN",
-                        "target_language_code": _sarvam_target,
-                        "mode": "formal",
-                        "model": "sarvam-translate:v1",
-                        "enable_preprocessing": False,
-                    }),
-                    timeout=2.0,
-                )
-                if _tr_resp.status_code == 200:
-                    _instant_s = _tr_resp.json().get("translated_text") or _instant_s
-            except Exception:
-                pass
+            # Gemini-main + Sarvam-polish translation (user-mandated routing).
+            # Polish is applied here because the instant fast-path is a single
+            # substantive translation, not a fragment splice — the polish
+            # quality lift is worth the extra ~1-1.5s round-trip.
+            _translated_full = await _assamese_translate_gemini_main_sarvam_polish(
+                _instant_s, target_lang_code=_sarvam_target,
+            )
+            if _translated_full:
+                _instant_s = _translated_full
+            # else: keep the original English instant response — better than
+            # blocking the fast-path on a translator outage.
         logger.info(f"[STREAM] INSTANT casual fast-path: '{msg.message[:30]}' → {len(_instant_s)} chars (0 LLM calls)")
         _speedup.record_instant_fastpath()
         _instant_ms = (_time_mod.time() - _stream_t0) * 1000
@@ -1047,6 +1383,15 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         _early_cached_answer = await ai_cache_aget(_cache_key_early)
         if not _early_cached_answer and _cache_key_early in _ai_response_cache:
             _early_cached_answer = _ai_response_cache[_cache_key_early]
+        if not _early_cached_answer:
+            _legacy_early = _cache_key(
+                _cache_msg_key_early,
+                subject_id=msg.subject_id or "",
+                board_id=msg.board_id or "",
+                conversation_id=getattr(msg, "conversation_id", "") or "",
+            )
+            if _legacy_early in _ai_response_cache:
+                _early_cached_answer = _ai_response_cache[_legacy_early]
         if _early_cached_answer:
             ai_cache_record_hit_saved_latency(ai_cache_expected_saved_ms())
     if _early_cached_answer:
@@ -1739,6 +2084,18 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         if _cached_answer:
             ai_cache_record_hit_saved_latency(ai_cache_expected_saved_ms())
             logger.info(f"AI cache HIT (pre-SSE, managed): {_cache_key_val}")
+    if not _cached_answer:
+        _legacy_key = _cache_key(
+            _cache_msg_key,
+            subject_id=msg.subject_id or "",
+            board_id=msg.board_id or "",
+            conversation_id=conv_id or "",
+        )
+        _legacy_hit = _ai_response_cache.get(_legacy_key)
+        if _legacy_hit:
+            _cached_answer = _legacy_hit
+            ai_cache_record_hit_saved_latency(ai_cache_expected_saved_ms())
+            logger.info(f"AI cache HIT (pre-SSE, L1 legacy): {_legacy_key}")
     if _cached_answer:
         try:
             _speedup.record_pre_sse_cache_hit()
@@ -2074,6 +2431,28 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             _src_board_slug = _src_ctx_s.get("board_slug") or ""
             _src_class_slug = _src_ctx_s.get("class_slug") or ""
             _src_subject_slug = _src_ctx_s.get("subject_slug") or ""
+
+            # Re-build the inline-citation source list now that the
+            # board/class/subject slugs have actually resolved — this
+            # is what powers the clickable [PAGE: ...] markers in the
+            # answer body and the source card under the bubble.  Without
+            # this rebuild, chapter sources would have empty URLs and
+            # the markdown layer would silently degrade citations to
+            # bold text.  Web sources are kept as-is.
+            try:
+                _rebuilt = _sources_from_rag_ctx(
+                    rag_ctx,
+                    board_slug=_src_board_slug,
+                    class_slug=_src_class_slug,
+                    subject_slug=_src_subject_slug,
+                )
+                if web_results:
+                    _rebuilt.extend(_sources_from_web_results(web_results))
+                rag_sources = _rebuilt
+            except Exception:
+                # Keep the partial sources we built earlier rather than
+                # erroring out the SSE on a sources-list bug.
+                pass
 
             # ── syrabit_done event with credits metadata + RAG-derived sources + slugs ────
             done_payload = {

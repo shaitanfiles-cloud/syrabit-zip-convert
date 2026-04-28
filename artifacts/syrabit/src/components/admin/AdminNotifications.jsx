@@ -161,7 +161,12 @@ export default function AdminNotifications({ adminToken, onNavigate }) {
         setSubsTotal(subsRes.value.data.total || 0);
       }
       if (pruneRes.status === 'fulfilled') setPruneStatus(pruneRes.value.data);
-    } catch {}
+    } catch (err) {
+      // The Promise.allSettled chain absorbs per-request failures into
+      // .status === 'rejected', so this catch only fires for code-level
+      // bugs in the per-result handling above. Log loudly when it does.
+      console.warn('AdminNotifications: post-allSettled handler threw:', err);
+    }
     finally { setDeliveryLoading(false); }
   }, [adminAxios, statsDays]);
 
