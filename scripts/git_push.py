@@ -239,14 +239,17 @@ def push(auth_url: str, branch: str, token: str) -> None:
 
 def update_tracking_ref(remote: str, branch: str) -> None:
     """
-    Update refs/remotes/<remote>/<branch> to match the current local HEAD.
+    Update refs/remotes/<remote>/<branch> to match the current local HEAD
+    using git update-ref (the correct, safe approach — handles packed-refs too).
     This keeps `git branch -vv` accurate without requiring a separate fetch.
     """
     head = _run(["git", "rev-parse", "HEAD"]).stdout.strip()
-    ref_path = GIT_DIR / "refs" / "remotes" / remote / branch
-    ref_path.parent.mkdir(parents=True, exist_ok=True)
-    ref_path.write_text(head + "\n")
-    _say(f"Updated tracking ref refs/remotes/{remote}/{branch} → {head[:12]}")
+    ref = f"refs/remotes/{remote}/{branch}"
+    result = _run(["git", "update-ref", ref, head], check=False)
+    if result.returncode == 0:
+        _say(f"Updated tracking ref {ref} → {head[:12]}")
+    else:
+        _say(f"Warning — could not update tracking ref: {result.stderr.strip()[:120]}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
