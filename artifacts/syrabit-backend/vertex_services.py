@@ -1093,6 +1093,12 @@ async def _generate(prompt: str, model: str = _GEN_MODEL,
     try:
         async with httpx.AsyncClient(timeout=45) as c:
             r = await c.post(url, json=body, headers=headers)
+            # Log detailed HTTP status for debugging Gateway auth issues
+            if r.status_code >= 400:
+                logger.warning(
+                    f"vertex _generate HTTP {r.status_code}: via_cf_gateway={_CF_GW_ENABLED} "
+                    f"auth_mode={_AUTH_MODE!r} response={r.text[:300]}"
+                )
             if not _record_response(r, "generate"):
                 return None
             return r.json()["candidates"][0]["content"]["parts"][0]["text"]

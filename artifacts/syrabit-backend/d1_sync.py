@@ -27,9 +27,23 @@ the prod sync — preview is best-effort by design.
 import os
 import logging
 import asyncio
+import json
+from datetime import datetime, date
 from typing import Optional, List, Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+class DateTimeEncoder(json.JSONEncoder):
+    """Custom JSON encoder that converts datetime/date objects to ISO 8601 strings.
+    
+    This prevents serialization crashes when exporting PostgreSQL rows containing
+    datetime objects directly to JSON for D1 sync.
+    """
+    def default(self, obj):
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        return super().default(obj)
 
 _d1_http: Optional["httpx.AsyncClient"] = None
 
@@ -125,13 +139,20 @@ async def export_content_catalog(db) -> Dict[str, Any]:
     }
 
 
-async def _post_one_target(label: str, url: str, secret: str, payload: Dict[str, Any]) -> bool:
-    """POST the sync payload to a single edge target. Never raises."""
+async def _post_one_target(label: str, url: str, secret: str, payload: Dict[str, Any], attempt: int = 1) -> bool:
+    """POST the sync payload to a single edge target. Never raises.
+    
+    Includes retry logic with exponential backoff for transient failures.
+    Uses DateTimeEncoder to properly serialize datetime objects in the payload.
+    """
     try:
         client = _get_http()
+        # Use json.dumps with DateTimeEncoder to handle datetime objects,
+        # then pass as data= instead of json= to have full control over serialization
+        json_payload = json.dumps(payload, cls=DateTimeEncoder)
         resp = await client.post(
             f"{url}/api/edge/d1-sync",
-            json=payload,
+            content=json_payload,
             headers={
                 "Authorization": f"Bearer {secret}",
                 "Content-Type": "application/json",
@@ -145,9 +166,22 @@ async def _post_one_target(label: str, url: str, secret: str, payload: Dict[str,
                 return True
             logger.warning(f"D1 sync ({label}) returned errors: {data.get('errors', [])}")
             return False
+        # Retry on 5xx server errors (transient)
+        if resp.status_code >= 500 and attempt < 3:
+            wait_time = (2 ** (attempt - 1)) * 2  # 2s, 4s, 8s backoff
+            logger.warning(f"D1 sync ({label}) HTTP {resp.status_code}: retrying in {wait_time}s (attempt {attempt}/3)")
+            await asyncio.sleep(wait_time)
+            return await _post_one_target(label, url, secret, payload, attempt + 1)
         logger.warning(f"D1 sync ({label}) HTTP {resp.status_code}: {resp.text[:200]}")
         return False
     except Exception as e:
+        # Retry on network/transient errors
+        error_msg = str(e).lower()
+        if attempt < 3 and any(s in error_msg for s in ("timeout", "connection", "network")):
+            wait_time = (2 ** (attempt - 1)) * 2
+            logger.warning(f"D1 sync ({label}) transient error: {e}; retrying in {wait_time}s (attempt {attempt}/3)")
+            await asyncio.sleep(wait_time)
+            return await _post_one_target(label, url, secret, payload, attempt + 1)
         logger.warning(f"D1 sync ({label}) trigger error: {e}")
         return False
 

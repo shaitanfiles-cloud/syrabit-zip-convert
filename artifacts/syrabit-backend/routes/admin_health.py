@@ -41,6 +41,10 @@ someone renames it but otherwise defaults to
 ``error`` so the UI can render "status temporarily unavailable"
 rather than going blank — same defensive shape as
 ``admin_ci_status``.
+
+Task #DIAGNOSTICS: Added /admin/diagnostics endpoint to provide system
+health overview including LLM provider status, database pool health,
+cache hit rates, and last D1 sync timestamp.
 """
 from __future__ import annotations
 
@@ -647,3 +651,137 @@ async def admin_edge_proxy_deploy_cron_alert_history(
     """
     from routes.admin_edge_proxy_deploy_cron_alerts import _LOCK_ID
     return await _build_alert_history_response(_LOCK_ID, limit=limit)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task #DIAGNOSTICS — System diagnostics endpoint
+# ──────────────────────────────────────────────────────────────────────────────
+
+@router.get("/admin/diagnostics")
+async def admin_diagnostics(admin: dict = Depends(get_admin_user)) -> dict[str, Any]:
+    """Return comprehensive system health diagnostics.
+    
+    Provides a JSON payload summarizing:
+    - LLM Provider Status (Gemini/Vertex, Groq, Sarvam, etc.)
+    - Database Pool Health (PostgreSQL, MongoDB, Redis)
+    - Cache Hit Rates (if available)
+    - Last D1 Sync Timestamp
+    - Circuit Breaker States
+    
+    This endpoint stops 404 spam from monitoring systems and provides
+    real-time visibility into system health metrics via the admin UI.
+    
+    Always returns 200; individual component failures are reported in
+    the response body rather than raising exceptions.
+    """
+    from deps import db, pg_pool, is_mongo_available, redis_client
+    import time as _time_mod
+    
+    result: dict[str, Any] = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "llm_providers": {},
+        "databases": {},
+        "cache": {},
+        "d1_sync": {},
+        "circuit_breakers": {},
+    }
+    
+    # LLM Provider Status
+    try:
+        import vertex_services
+        vertex_health = await vertex_services.health_check()
+        result["llm_providers"]["vertex_gemini"] = {
+            "status": "healthy" if vertex_health.get("ok") else "unhealthy",
+            "auth_mode": vertex_health.get("auth_mode"),
+            "via_gateway": vertex_health.get("via_cf_gateway"),
+            "embeddings": vertex_health.get("embeddings"),
+            "generation": vertex_health.get("generation"),
+            "details": vertex_health.get("reason") if not vertex_health.get("ok") else None,
+        }
+    except Exception as e:
+        result["llm_providers"]["vertex_gemini"] = {
+            "status": "error",
+            "error": str(e),
+        }
+    
+    # Check Sarvam status
+    try:
+        from deps import sarvam_client, sarvam_translate_client
+        result["llm_providers"]["sarvam"] = {
+            "client_ready": sarvam_client is not None,
+            "translate_ready": sarvam_translate_client is not None,
+        }
+    except Exception as e:
+        result["llm_providers"]["sarvam"] = {"status": "error", "error": str(e)}
+    
+    # Database Pool Health
+    # MongoDB
+    try:
+        mongo_ok = await is_mongo_available()
+        result["databases"]["mongodb"] = {
+            "status": "healthy" if mongo_ok else "unhealthy",
+        }
+    except Exception as e:
+        result["databases"]["mongodb"] = {"status": "error", "error": str(e)}
+    
+    # PostgreSQL
+    try:
+        if pg_pool:
+            async with pg_pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+            result["databases"]["postgresql"] = {"status": "healthy"}
+        else:
+            result["databases"]["postgresql"] = {"status": "not_configured"}
+    except Exception as e:
+        result["databases"]["postgresql"] = {"status": "unhealthy", "error": str(e)}
+    
+    # Redis
+    try:
+        if redis_client:
+            await redis_client.ping()
+            result["databases"]["redis"] = {"status": "healthy"}
+        else:
+            result["databases"]["redis"] = {"status": "not_configured"}
+    except Exception as e:
+        result["databases"]["redis"] = {"status": "unhealthy", "error": str(e)}
+    
+    # Cache Stats (if ai_cache is available)
+    try:
+        import ai_cache
+        stats = ai_cache.get_stats()
+        result["cache"] = {
+            "enabled": True,
+            "hits": stats.get("hits", 0),
+            "misses": stats.get("misses", 0),
+            "hit_rate": round(
+                stats.get("hits", 0) / max(1, stats.get("hits", 0) + stats.get("misses", 0)),
+                3
+            ),
+        }
+    except Exception:
+        result["cache"] = {"enabled": False}
+    
+    # D1 Sync Status
+    try:
+        import d1_sync
+        result["d1_sync"] = {
+            "configured": d1_sync.is_d1_configured(),
+            "preview_fanout": d1_sync.is_preview_fanout_configured(),
+            "targets": [t[0] for t in d1_sync._sync_targets()],
+        }
+    except Exception as e:
+        result["d1_sync"] = {"status": "error", "error": str(e)}
+    
+    # Circuit Breaker States
+    try:
+        import vertex_services
+        breaker_snapshot = vertex_services._breaker.snapshot()
+        result["circuit_breakers"]["vertex"] = {
+            "state": breaker_snapshot.get("state", "unknown"),
+            "last_reason": breaker_snapshot.get("last_reason"),
+            "failure_count": breaker_snapshot.get("failure_count", 0),
+        }
+    except Exception as e:
+        result["circuit_breakers"]["vertex"] = {"status": "error", "error": str(e)}
+    
+    return result
