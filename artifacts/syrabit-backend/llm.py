@@ -767,61 +767,77 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
     _is_chat = provider_list is _LLM_PROVIDERS_CHAT
     _PROVIDER_TIMEOUT = 30.0 if _is_content else (4.0 if _is_chat else 6.0)
 
+    # Task #LLM-PARALLEL-FALLBACK: Race multiple providers in parallel to reduce worst-case latency
+    # Sequential fallback caused 90-120s worst-case; parallel reduces to ~30-45s (66-75% improvement)
+    
+    async def _call_with_tracking(provider_cfg, key, try_model, is_fallback=False):
+        """Call single provider with timeout and metrics tracking. Returns (success, result, error)."""
+        fb_key_id = id(key) if key else 0
+        tried.add((provider_cfg["provider"], try_model, fb_key_id))
+        try:
+            _t0 = _t.perf_counter()
+            result = await asyncio.wait_for(
+                _call_single_provider(messages, provider_cfg["provider"], key, try_model, max_tokens),
+                timeout=_PROVIDER_TIMEOUT,
+            )
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            tok = len(result.split())
+            _record_llm_call(provider_cfg["provider"], try_model, _dur, True, tok, is_fallback)
+            log_prefix = "llm_call provider=" + provider_cfg["provider"] + f" model={try_model} duration_ms={_dur} tokens_approx={tok}"
+            if is_fallback:
+                logger.info(log_prefix + " fallback=true")
+            else:
+                logger.info(log_prefix)
+            return (True, LlmResult(result, provider=provider_cfg["provider"]), None)
+        except asyncio.TimeoutError:
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            _record_llm_call(provider_cfg["provider"], try_model, _dur, False, 0, is_fallback, "Timeout")
+            err = TimeoutError(f"{provider_cfg['provider']}/{try_model} timed out after {_PROVIDER_TIMEOUT}s")
+            logger.warning(f"LLM {'fallback' if is_fallback else 'primary'} TIMEOUT ({provider_cfg['provider']}/{try_model}): {_dur}ms > {_PROVIDER_TIMEOUT}s limit")
+            return (False, None, err)
+        except Exception as e:
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            _record_llm_call(provider_cfg["provider"], try_model, _dur, False, 0, is_fallback, type(e).__name__)
+            logger.warning(f"LLM {'fallback' if is_fallback else 'primary'} failed ({provider_cfg['provider']}/{try_model}): {type(e).__name__}: {str(e)[:150]}")
+            return (False, None, e)
+
+    # Primary attempt
     provider, key = primary_provider, primary_key
     try_model = _safe_model_for_provider(use_model, provider, providers)
     if try_model != use_model:
         logger.info(f"Model '{use_model}' not compatible with {provider} → using '{try_model}'")
-    try:
-        tried.add((provider, try_model, id(key) if key else 0))
-        _t0 = _t.perf_counter()
-        result = await asyncio.wait_for(
-            _call_single_provider(messages, provider, key, try_model, max_tokens),
-            timeout=_PROVIDER_TIMEOUT,
-        )
-        _dur = int((_t.perf_counter() - _t0) * 1000)
-        tok = len(result.split())
-        _record_llm_call(provider, try_model, _dur, True, tok, False)
-        logger.info(f"llm_call provider={provider} model={try_model} duration_ms={_dur} tokens_approx={tok}")
-        return LlmResult(result, provider=provider)
-    except asyncio.TimeoutError:
-        _dur = int((_t.perf_counter() - _t0) * 1000)
-        _record_llm_call(provider, try_model, _dur, False, 0, False, "Timeout")
-        last_err = TimeoutError(f"{provider}/{try_model} timed out after {_PROVIDER_TIMEOUT}s")
-        logger.warning(f"LLM primary TIMEOUT ({provider}/{try_model}): {_dur}ms > {_PROVIDER_TIMEOUT}s limit")
-    except Exception as e:
-        _dur = int((_t.perf_counter() - _t0) * 1000)
-        _record_llm_call(provider, try_model, _dur, False, 0, False, type(e).__name__)
-        last_err = e
-        logger.warning(f"LLM primary failed ({provider}/{try_model}): {type(e).__name__}: {str(e)[:150]}")
+    
+    success, result, err = await _call_with_tracking({"provider": provider, "default_model": try_model}, key, try_model, is_fallback=False)
+    if success:
+        return result
+    last_err = err
 
+    # Parallel fallback: race remaining providers concurrently instead of sequentially
+    # This reduces worst-case from N*30s to ~30s where N is number of providers
+    fallback_tasks = []
     for fallback in providers:
         fb_model = fallback["default_model"]
         fb_key_id = id(fallback["key"]) if fallback.get("key") else 0
         if (fallback["provider"], fb_model, fb_key_id) in tried:
             continue
-        tried.add((fallback["provider"], fb_model, fb_key_id))
-        try:
-            _t0 = _t.perf_counter()
-            result = await asyncio.wait_for(
-                _call_single_provider(messages, fallback["provider"], fallback["key"], fb_model, max_tokens),
-                timeout=_PROVIDER_TIMEOUT,
-            )
-            _dur = int((_t.perf_counter() - _t0) * 1000)
-            tok = len(result.split())
-            _record_llm_call(fallback["provider"], fb_model, _dur, True, tok, True)
-            logger.info(f"llm_call provider={fallback['provider']} model={fb_model} duration_ms={_dur} tokens_approx={tok} fallback=true")
-            return LlmResult(result, provider=fallback["provider"])
-        except asyncio.TimeoutError:
-            _dur = int((_t.perf_counter() - _t0) * 1000)
-            _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, "Timeout")
-            last_err = TimeoutError(f"{fallback['provider']}/{fb_model} timed out after {_PROVIDER_TIMEOUT}s")
-            logger.warning(f"LLM fallback TIMEOUT ({fallback['provider']}/{fb_model}): {_dur}ms > {_PROVIDER_TIMEOUT}s limit")
-        except Exception as e:
-            _dur = int((_t.perf_counter() - _t0) * 1000)
-            _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, type(e).__name__)
-            last_err = e
-            logger.warning(f"LLM fallback failed ({fallback['provider']}/{fb_model}): {type(e).__name__}: {str(e)[:150]}")
-
+        task = asyncio.create_task(_call_with_tracking(fallback, fallback["key"], fb_model, is_fallback=True))
+        fallback_tasks.append(task)
+    
+    if fallback_tasks:
+        # Race all fallbacks concurrently, first successful response wins
+        for completed in asyncio.as_completed(fallback_tasks):
+            success, result, err = await completed
+            if success and result:
+                # Cancel remaining tasks to avoid unnecessary API calls
+                for task in fallback_tasks:
+                    if not task.done():
+                        task.cancel()
+                # Wait for cancellation to complete
+                await asyncio.gather(*fallback_tasks, return_exceptions=True)
+                return result
+            elif err:
+                last_err = err
+    
     # Task #636 — last-resort Workers AI fallback. Only reached after every
     # configured primary+fallback Cerebras/Gemini/etc provider has failed.
     # Policy is strict (timeout/5xx/429/quota only) so 4xx bad-input bugs

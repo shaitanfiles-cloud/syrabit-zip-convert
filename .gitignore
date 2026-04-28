@@ -1,15 +1,17 @@
-# Configuration and setup files
-*.env
-*.env.local
-*.env.*
-
-# Logs
+```
+# Logs and temp files
 *.log
-
-# Temporary files
 *.tmp
 *.swp
-*.swo
+
+# Environment
+.env
+.env.local
+.env.*
+
+# Editors
+.vscode/
+.idea/
 
 # Dependencies
 node_modules/
@@ -18,31 +20,22 @@ venv/
 __pycache__/
 .mypy_cache/
 .pytest_cache/
+
+# Build artifacts
 dist/
 build/
 target/
-.gradle/
-
-# IDE specific
-.vscode/
-.idea/
-
-# OS generated files
-.DS_Store
-Thumbs.db
-
-# Compiled files
 *.pyc
 *.class
 *.o
-*.exe
-*.dll
-*.so
-*.a
 *.obj
 *.out
 
-# Coverage reports
+# System files
+.DS_Store
+Thumbs.db
+
+# Coverage
 coverage/
 htmlcov/
 .coverage
@@ -70,7 +63,4 @@ htmlcov/
 *.tar.bz2
 *.tar.xz
 *.tar.zst
-
-# Cloudflare WAF orchestrator state — per-incident artifact, never durable
-# (see artifacts/syrabit-backend/scripts/cf_waf_override.py header for why)
-artifacts/syrabit-backend/scripts/cf_waf_override_state.json
+```

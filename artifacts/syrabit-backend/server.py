@@ -589,6 +589,22 @@ async def lifespan(app):
     except (IOError, OSError):
         logger.info("Worker skipping migrations/indexes (another worker owns lock)")
 
+    # Task #D1-WARMUP: Warm D1 edge cache on startup to prevent cold-start latency
+    if _is_leader:
+        try:
+            import d1_sync
+            if d1_sync.is_d1_configured():
+                logger.info("D1 sync configured — warming cache on startup")
+                warmup_result = await d1_sync.warmup_d1_cache(db)
+                if warmup_result.get("success"):
+                    logger.info(f"D1 cache warmed: {warmup_result.get('total_rows', 0)} rows in {warmup_result.get('duration_ms', 0)}ms")
+                else:
+                    logger.warning(f"D1 cache warm-up failed: {warmup_result.get('error', 'unknown error')}")
+            else:
+                logger.info("D1 sync not configured — skipping startup warm-up")
+        except Exception as _d1_warm_err:
+            logger.warning(f"D1 cache warm-up failed (non-blocking): {type(_d1_warm_err).__name__}: {str(_d1_warm_err)[:200]}")
+
     try:
         if _is_leader:
             await ensure_seeded()
