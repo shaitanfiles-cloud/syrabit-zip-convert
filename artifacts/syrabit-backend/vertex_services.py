@@ -90,14 +90,19 @@ def _is_transient_embed_error(exc: BaseException) -> bool:
 
 
 # ── Models ──────────────────────────────────────────────────────────────────
-# Generation/vision/long-doc models can be overridden via env. Embedding
-# model is locked to gemini-embedding-001 because Vectorize
-# syllabus-index-v2 expects 1024-dim vectors from this exact model.
-_EMBED_MODEL  = "gemini-embedding-001"
+# Generation/vision/long-doc models use Gemini (unchanged).
+# Embeddings are served by Jina AI (jina-embeddings-v3 @ 1024 dims) to
+# decouple the embed path from the Vertex/Gemini service-account auth that
+# was failing at startup. JINA_API_KEY must be set in the environment.
+_EMBED_MODEL  = "jina-embeddings-v3"   # Jina model; replaces gemini-embedding-001
 _GEN_MODEL    = os.environ.get("VERTEX_GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 _PRO_MODEL    = os.environ.get("VERTEX_GEMINI_PRO_MODEL", _GEN_MODEL).strip() or _GEN_MODEL
 _VISION_MODEL = os.environ.get("VERTEX_GEMINI_VISION_MODEL", _GEN_MODEL).strip() or _GEN_MODEL
 _EMBED_DIMENSIONS = 1024
+
+# ── Jina AI embeddings config ────────────────────────────────────────────────
+_JINA_API_KEY = os.environ.get("JINA_API_KEY", "").strip()
+_JINA_EMBED_URL = "https://api.jina.ai/v1/embeddings"
 
 
 # ── Auth detection ──────────────────────────────────────────────────────────
@@ -440,120 +445,92 @@ def _headers() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. TEXT EMBEDDINGS  — gemini-embedding-001 @ 1024 dims
+# 1. TEXT EMBEDDINGS  — Jina AI jina-embeddings-v3 @ 1024 dims
+#
+# Embeddings are now served by Jina AI instead of Gemini/Vertex to decouple
+# the embed path from the Vertex service-account auth that was failing at
+# startup. Gemini is kept exclusively for text generation.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-async def _post_embed_with_retry(
-    url: str, body: dict, headers: dict, label: str,
-) -> Optional[httpx.Response]:
+async def _jina_embed_one(text: str) -> Optional[List[float]]:
+    """Call Jina AI embeddings API and return a 1024-dim vector, or None.
+
+    Uses jina-embeddings-v3 with dimensions=1024 so the output matches the
+    Vectorize syllabus-index-v2 index schema. Retries up to
+    _EMBED_RETRY_MAX_ATTEMPTS times on transient errors (429, 5xx, network).
+    """
+    if not _JINA_API_KEY or not text:
+        if not _JINA_API_KEY:
+            logger.warning("jina embed: JINA_API_KEY not set — skipping embedding")
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {_JINA_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "input": [text[:8000]],
+        "model": _EMBED_MODEL,
+        "dimensions": _EMBED_DIMENSIONS,
+    }
+
     c = _get_embed_client()
     last_exc: Optional[BaseException] = None
     for attempt in range(1, _EMBED_RETRY_MAX_ATTEMPTS + 1):
         try:
-            r = await c.post(url, json=body, headers=headers)
+            r = await c.post(_JINA_EMBED_URL, json=body, headers=headers)
             if r.status_code == 429 or 500 <= r.status_code < 600:
                 if attempt == _EMBED_RETRY_MAX_ATTEMPTS:
-                    return r
+                    logger.warning(
+                        f"jina embed HTTP {r.status_code} on final attempt: "
+                        f"{r.text[:200] if hasattr(r, 'text') else ''}"
+                    )
+                    return None
                 wait_ms = _EMBED_RETRY_BASE_MS * (2 ** (attempt - 1))
                 logger.info(
-                    f"gemini embed ({label}) HTTP {r.status_code} "
-                    f"attempt {attempt}/{_EMBED_RETRY_MAX_ATTEMPTS}; retrying in {wait_ms}ms"
+                    f"jina embed HTTP {r.status_code} attempt "
+                    f"{attempt}/{_EMBED_RETRY_MAX_ATTEMPTS}; retrying in {wait_ms}ms"
                 )
                 await asyncio.sleep(wait_ms / 1000.0)
                 continue
-            return r
+            if r.status_code >= 400:
+                logger.warning(
+                    f"jina embed HTTP {r.status_code}: "
+                    f"{r.text[:200] if hasattr(r, 'text') else ''}"
+                )
+                return None
+            data = r.json()
+            vec = data["data"][0]["embedding"]
+            if len(vec) != _EMBED_DIMENSIONS:
+                logger.warning(
+                    f"jina embed returned {len(vec)}-dim vector; "
+                    f"expected {_EMBED_DIMENSIONS}. Dropping."
+                )
+                return None
+            return vec
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             last_exc = exc
             if not _is_transient_embed_error(exc) or attempt == _EMBED_RETRY_MAX_ATTEMPTS:
-                logger.warning(f"gemini embed ({label}) failed: {exc}")
+                logger.warning(f"jina embed failed: {exc}")
                 return None
             wait_ms = _EMBED_RETRY_BASE_MS * (2 ** (attempt - 1))
             logger.info(
-                f"gemini embed ({label}) transient {type(exc).__name__} "
+                f"jina embed transient {type(exc).__name__} "
                 f"attempt {attempt}/{_EMBED_RETRY_MAX_ATTEMPTS}; retrying in {wait_ms}ms"
             )
             await asyncio.sleep(wait_ms / 1000.0)
     if last_exc:
-        logger.warning(f"gemini embed ({label}) exhausted retries: {last_exc}")
+        logger.warning(f"jina embed exhausted retries: {last_exc}")
     return None
 
 
-async def _embed_one(text: str, task_type: str) -> Optional[List[float]]:
-    if not _ok() or not text:
-        return None
-    headers = await _auth_headers()
-
-    async with _get_embed_semaphore():
-        if _SA_CREDS is not None:
-            url  = _embed_url()
-            body = {
-                "instances": [{"content": text[:8000], "task_type": task_type}],
-                "parameters": {"outputDimensionality": _EMBED_DIMENSIONS},
-            }
-            r = await _post_embed_with_retry(url, body, headers, "Vertex")
-            if not _record_response(r, "embed_vertex"):
-                return None
-            try:
-                return r.json()["predictions"][0]["embeddings"]["values"]
-            except Exception as e:
-                logger.warning(f"gemini embed (Vertex) parse failed: {e}")
-                _breaker.record_failure(f"embed_vertex_parse_{type(e).__name__}")
-                return None
-
-        for model in (_EMBED_MODEL, "text-embedding-004"):
-            url  = _alt_embed_url(model)
-            body = {
-                "model":   f"models/{model}",
-                "content": {"parts": [{"text": text[:8000]}]},
-                "taskType": task_type,
-                "outputDimensionality": _EMBED_DIMENSIONS,
-            }
-            r = await _post_embed_with_retry(url, body, headers, model)
-            if r is None:
-                # Transient exhausted — let the breaker count it and try
-                # the next candidate model (404 below also continues).
-                _breaker.record_failure(f"embed_{model}_no_response")
-                continue
-            if r.status_code == 403:
-                rescued = _attempt_auth_rescue()
-                if not rescued:
-                    _breaker.record_failure(f"embed_{model}_403")
-                return None
-            if r.status_code == 404:
-                # Model unavailable on this endpoint — try the next
-                # candidate. NOT counted as a breaker failure (it's a
-                # routing decision, not an upstream outage).
-                continue
-            if r.status_code >= 400:
-                _breaker.record_failure(f"embed_{model}_http_{r.status_code}")
-                logger.warning(
-                    f"gemini embed ({model}) HTTP {r.status_code}: "
-                    f"{r.text[:200] if hasattr(r, 'text') else ''}"
-                )
-                continue
-            try:
-                vec = r.json()["embedding"]["values"]
-                _breaker.record_success()
-                return vec
-            except Exception as e:
-                logger.warning(f"gemini embed ({model}) parse failed: {e}")
-                _breaker.record_failure(f"embed_{model}_parse_{type(e).__name__}")
-                continue
-        return None
-
-
 async def _workers_ai_fallback(text: str) -> Optional[List[float]]:
-    """Workers AI safety net (Task #636). Only returns a vector when its
-    dimension matches `_EMBED_DIMENSIONS` so the 1024-dim Vectorize
-    index never receives a dimension-mismatched embedding. The current
-    Workers AI default (bge-base-en-v1.5) emits 768-dim, so in the
-    default deployment this path attempts the fallback (and surfaces
-    failure metrics in providers.workers_ai) but returns None — which
-    callers already handle. Set `WORKERS_AI_EMBED_MODEL` to a
-    1024-compatible model on Cloudflare to actually use the fallback.
+    """Workers AI safety net. Only returns a vector when its dimension matches
+    `_EMBED_DIMENSIONS` so the 1024-dim Vectorize index never receives a
+    dimension-mismatched embedding.
     """
     if not text:
         return None
@@ -561,10 +538,10 @@ async def _workers_ai_fallback(text: str) -> Optional[List[float]]:
         from providers import workers_ai as _wai
         if not _wai.is_enabled("embed"):
             return None
-        class _VertexFailed(TimeoutError):
+        class _JinaFailed(TimeoutError):
             pass
         ok, val, _ = await _wai.attempt_fallback(
-            "embed", _VertexFailed("vertex_primary_failed"), 0,
+            "embed", _JinaFailed("jina_primary_failed"), 0,
             lambda: _wai.call_embed(text),
         )
         if not ok or not val:
@@ -587,13 +564,13 @@ async def _workers_ai_fallback(text: str) -> Optional[List[float]]:
 
 
 async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Optional[List[float]]:
-    """Return a 1024-dim Gemini embedding vector, or None on failure.
+    """Return a 1024-dim Jina embedding vector, or None on failure.
 
-    Tries Gemini primary path first; if it fails, attempts the Workers
-    AI fallback (Task #636 safety net). The fallback is dimension-gated
-    — only vectors matching `_EMBED_DIMENSIONS` (1024) are returned so
-    Vectorize syllabus-index-v2 never receives a dim-mismatched vector.
-    Callers must handle None.
+    Uses Jina AI (jina-embeddings-v3) as the primary embedding provider.
+    The `task_type` parameter is accepted for API compatibility but is not
+    forwarded to Jina (Jina handles task routing internally). Falls back to
+    Workers AI when Jina fails and Workers AI is configured. Callers must
+    handle None.
     """
     if not text:
         return None
@@ -608,7 +585,7 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Option
         _ek = None
         _embedding_cache = None  # type: ignore[assignment]
 
-    vec = await _embed_one(text, task_type)
+    vec = await _jina_embed_one(text)
     if vec is None:
         vec = await _workers_ai_fallback(text)
 
@@ -1108,25 +1085,33 @@ async def _generate(prompt: str, model: str = _GEN_MODEL,
 
 
 async def health_check() -> dict:
+    # Embeddings now use Jina AI (independent of Gemini auth). Run the Jina
+    # embed probe unconditionally; only gate the generation probe on _ok()
+    # (Gemini credentials + circuit breaker). This decoupling means a broken
+    # Vertex service account no longer causes embeddings=False in the probe.
+
+    # ── Jina embed probe ────────────────────────────────────────────────────
+    try:
+        test = await _jina_embed_one("test")
+    except Exception as _exc:
+        logger.warning(f"vertex health_check jina embed raised: {_exc!r}")
+        test = None
+    embed_ok = test is not None and len(test) == _EMBED_DIMENSIONS
+
+    # ── Gemini generation probe ─────────────────────────────────────────────
+    gen_ok = False
+    gen_reason: str = ""
     if not _ok():
-        # Distinguish the two failure modes that both make _ok() False.
-        # The previous text claimed "No credential available" in BOTH
-        # cases, which sent ops on multi-hour wild-goose chases when the
-        # real problem was an open circuit breaker (e.g. upstream IAM
-        # 403s). The credential snapshot below names the actual auth
-        # mode that was loaded so a Railway log reader can immediately
-        # tell "creds present but upstream rejecting" from "no creds at
-        # all".
         has_creds = bool(_API_KEY) or _SA_CREDS is not None or _USE_BYOK
         if not has_creds:
-            reason = (
-                "No credential available — set VERTEX_SERVICE_ACCOUNT, "
+            gen_reason = (
+                "No Gemini credential available — set VERTEX_SERVICE_ACCOUNT, "
                 "GOOGLE_APPLICATION_CREDENTIALS_JSON, or GEMINI_API_KEY, "
                 "or configure CF AI Gateway BYOK."
             )
         else:
             snap = _breaker.snapshot()
-            reason = (
+            gen_reason = (
                 f"Vertex circuit breaker is {snap.get('state', 'open')} "
                 f"(credentials are loaded as auth_mode={_AUTH_MODE!r}; the "
                 f"upstream is rejecting calls). Last failure reason: "
@@ -1135,53 +1120,20 @@ async def health_check() -> dict:
                 f"upstream HTTP status — a 403 PERMISSION_DENIED means "
                 f"the SA needs roles/aiplatform.user on its GCP project."
             )
-        return {
-            "ok": False,
-            "auth_mode": _AUTH_MODE,
-            "via_cf_gateway": _CF_GW_ENABLED,
-            "reason": reason,
-            "breaker": _breaker.snapshot(),
-        }
-    # Task #848 — run embed and generate concurrently. Sequential awaits
-    # made the healthcheck path roughly ``embed_latency + gen_latency``
-    # (~1.4 s p50 in production), which compounded the per-request
-    # /api/health TTFB problem this task is fixing. ``asyncio.gather``
-    # collapses that to ``max(embed, gen)`` while preserving the same
-    # success criterion. ``return_exceptions=True`` keeps a failure in
-    # one probe from cancelling the other so we still get a useful
-    # diagnostic dict back instead of half-blank fields.
-    # NOTE: ``max_tokens`` must accommodate "thinking" models (e.g.
-    # gemini-2.5-flash) which spend tokens on internal reasoning before
-    # emitting a response. With a tight cap (the previous value was 5),
-    # the model would hit ``MAX_TOKENS`` after a single thinking-tail
-    # token like "The", returning content that does not contain "OK"
-    # — a false negative that made every probe report
-    # ``generation=False`` even when the upstream was perfectly
-    # healthy. 64 leaves enough room for thinking + an "OK" reply
-    # without inflating probe latency or cost meaningfully.
-    test, gen_test = await asyncio.gather(
-        embed_text("test", task_type="SEMANTIC_SIMILARITY"),
-        _generate("Reply with just the word: OK", max_tokens=64),
-        return_exceptions=True,
-    )
-    if isinstance(test, BaseException):
-        logger.warning(f"vertex health_check embed raised: {test!r}")
-        test = None
-    if isinstance(gen_test, BaseException):
-        logger.warning(f"vertex health_check generate raised: {gen_test!r}")
-        gen_test = None
-    embed_ok = test is not None and len(test) == _EMBED_DIMENSIONS
-    # Accept any non-empty text as a healthy generation. The "OK"
-    # substring check was overly literal — thinking models often wrap
-    # their reply ("Sure, OK", "The answer is OK") and the previous
-    # exact-match logic flagged those as failures. A non-empty string
-    # back from ``_generate`` already proves auth + routing + the model
-    # itself are all working end-to-end.
-    gen_ok = bool(gen_test and gen_test.strip())
-    # `ok` reflects actual probe success (not just credential presence)
-    # so health dashboards can't show green when calls are silently
-    # failing upstream.
-    return {
+    else:
+        # NOTE: max_tokens=64 accommodates "thinking" models (e.g.
+        # gemini-2.5-flash) which spend tokens on internal reasoning before
+        # emitting a response. A tight cap caused false negatives where the
+        # model hit MAX_TOKENS after a single thinking token.
+        try:
+            gen_test = await _generate("Reply with just the word: OK", max_tokens=64)
+        except Exception as _exc:
+            logger.warning(f"vertex health_check generate raised: {_exc!r}")
+            gen_test = None
+        # Accept any non-empty text as a healthy generation.
+        gen_ok = bool(gen_test and gen_test.strip())
+
+    result: dict = {
         "ok": embed_ok and gen_ok,
         "auth_mode": _AUTH_MODE,
         "via_cf_gateway": _CF_GW_ENABLED,
@@ -1189,6 +1141,7 @@ async def health_check() -> dict:
         "project": _VERTEX_PROJECT or None,
         "location": _VERTEX_LOCATION,
         "embeddings": embed_ok,
+        "embed_provider": "jina",
         "embed_dimensions": len(test) if test else 0,
         "generation": gen_ok,
         "models": {
@@ -1198,3 +1151,7 @@ async def health_check() -> dict:
             "long_doc":   _PRO_MODEL,
         },
     }
+    if gen_reason:
+        result["reason"] = gen_reason
+        result["breaker"] = _breaker.snapshot()
+    return result
