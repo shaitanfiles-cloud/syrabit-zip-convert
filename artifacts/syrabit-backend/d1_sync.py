@@ -221,3 +221,62 @@ async def sync_tables(db, tables: List[str]) -> Dict[str, Any]:
         "row_counts": {k: len(v) for k, v in payload.items()},
         "targets": [t[0] for t in _sync_targets()],
     }
+
+
+async def warmup_d1_cache(db) -> Dict[str, Any]:
+    """Warm up D1 edge cache by triggering a full sync.
+    
+    This should be called:
+    1. On application startup (server.py lifespan)
+    2. After deployments (CI/CD pipeline)
+    3. Periodically every 6 hours (background task)
+    
+    Returns dict with success status and timing metrics.
+    """
+    import time as _t
+    
+    _t0 = _t.perf_counter()
+    logger.info("D1 cache warm-up initiated")
+    
+    try:
+        # Export current catalog state
+        payload = await export_content_catalog(db)
+        if not payload:
+            logger.warning("D1 warm-up: export returned empty, skipping sync")
+            return {
+                "success": False,
+                "error": "Export returned empty",
+                "duration_ms": int((_t.perf_counter() - _t0) * 1000),
+            }
+        
+        # Count rows for logging
+        row_counts = {k: len(v) for k, v in payload.items()}
+        total_rows = sum(row_counts.values())
+        logger.info(f"D1 warm-up: exporting {total_rows} total rows across {len(payload)} tables")
+        
+        # Trigger sync to all targets (prod + preview)
+        ok = await trigger_d1_sync(payload)
+        duration_ms = int((_t.perf_counter() - _t0) * 1000)
+        
+        if ok:
+            logger.info(f"D1 cache warm-up completed successfully in {duration_ms}ms")
+        else:
+            logger.warning(f"D1 cache warm-up reported failure after {duration_ms}ms")
+        
+        return {
+            "success": ok,
+            "tables_exported": list(payload.keys()),
+            "row_counts": row_counts,
+            "total_rows": total_rows,
+            "targets": [t[0] for t in _sync_targets()],
+            "duration_ms": duration_ms,
+        }
+        
+    except Exception as e:
+        duration_ms = int((_t.perf_counter() - _t0) * 1000)
+        logger.error(f"D1 warm-up failed: {type(e).__name__}: {str(e)[:200]}")
+        return {
+            "success": False,
+            "error": f"{type(e).__name__}: {str(e)}",
+            "duration_ms": duration_ms,
+        }
