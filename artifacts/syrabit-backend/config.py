@@ -35,10 +35,38 @@ __all__ = [
     "_XAI_KEY",
     "cf_gateway_url", "get_provider_base_url",
     "is_cf_gateway_up", "mark_cf_gateway_down",
+    "Configurator",
 ]
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+import threading as _threading
+
+class Configurator:
+    """Centralized configuration access with thread-safe runtime overrides.
+
+    Provides a thin wrapper around os.environ that supports runtime
+    overrides (e.g. refresh tokens loaded from the database after boot)
+    without direct os.environ mutation scattered across the codebase.
+    """
+    _lock = _threading.Lock()
+    _runtime_overrides: dict = {}
+
+    @classmethod
+    def get(cls, key: str, default: str = "") -> str:
+        """Read a configuration value. Runtime overrides take precedence."""
+        with cls._lock:
+            if key in cls._runtime_overrides:
+                return cls._runtime_overrides[key]
+        return os.environ.get(key, default)
+
+    @classmethod
+    def set_runtime_env(cls, key: str, value: str) -> None:
+        """Set a runtime override and mirror it to os.environ."""
+        with cls._lock:
+            cls._runtime_overrides[key] = value
+            os.environ[key] = value
 
 MONGO_URL    = (os.environ.get('MONGO_URL') or os.environ.get('MONGODB_URI') or 'mongodb://localhost:27017').strip().strip('"').strip("'")
 DB_NAME      = os.environ.get('DB_NAME', 'test_database')
