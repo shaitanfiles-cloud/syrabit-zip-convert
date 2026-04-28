@@ -106,11 +106,12 @@ def fastapi_app():
     doesn't break the gate.
     """
     import secrets as _secrets
+    from config import Configurator
 
-    os.environ["MONGO_URL"] = "mongodb://localhost:27017/openapi-test"
-    os.environ["JWT_SECRET"] = _secrets.token_hex(48)
-    os.environ["ADMIN_JWT_SECRET"] = _secrets.token_hex(48)
-    os.environ["ADMIN_PASSWORDS"] = "openapi-test-no-real-password"
+    Configurator.set_runtime_env("MONGO_URL", "mongodb://localhost:27017/openapi-test")
+    Configurator.set_runtime_env("JWT_SECRET", _secrets.token_hex(48))
+    Configurator.set_runtime_env("ADMIN_JWT_SECRET", _secrets.token_hex(48))
+    Configurator.set_runtime_env("ADMIN_PASSWORDS", "openapi-test-no-real-password")
 
     from tests._deps_stub import install_deps_stub  # type: ignore[import-not-found]
 

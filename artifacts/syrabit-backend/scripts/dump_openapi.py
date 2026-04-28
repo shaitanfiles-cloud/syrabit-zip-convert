@@ -69,10 +69,11 @@ def _set_dummy_env() -> None:
     The dummy values are throwaway randomness — nothing the FastAPI app
     is going to *use* for auth, since we never start the lifespan.
     """
-    os.environ["MONGO_URL"] = "mongodb://localhost:27017/openapi-dump"
-    os.environ["JWT_SECRET"] = secrets.token_hex(48)
-    os.environ["ADMIN_JWT_SECRET"] = secrets.token_hex(48)
-    os.environ["ADMIN_PASSWORDS"] = "openapi-dump-no-real-password"
+    from config import Configurator
+    Configurator.set_runtime_env("MONGO_URL", "mongodb://localhost:27017/openapi-dump")
+    Configurator.set_runtime_env("JWT_SECRET", secrets.token_hex(48))
+    Configurator.set_runtime_env("ADMIN_JWT_SECRET", secrets.token_hex(48))
+    Configurator.set_runtime_env("ADMIN_PASSWORDS", "openapi-dump-no-real-password")
 
 
 def _install_deps_stub() -> None:

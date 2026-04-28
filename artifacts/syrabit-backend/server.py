@@ -109,7 +109,7 @@ def _validate_env():
 
 _validate_env()
 
-from config import ROOT_DIR, CORS_ORIGINS, CORS_ORIGIN_REGEX, _CORS_ALLOW_CREDENTIALS
+from config import ROOT_DIR, CORS_ORIGINS, CORS_ORIGIN_REGEX, _CORS_ALLOW_CREDENTIALS, Configurator
 from deps import (
     db, sarvam_client, sarvam_translate_client, sarvam_llm_client,
     sarvam_client_direct, sarvam_llm_client_direct,
@@ -132,11 +132,11 @@ async def _load_ga4_from_db():
     if db is None:
         return
     try:
-        if not os.getenv("GA4_REFRESH_TOKEN"):
+        if not Configurator.get("GA4_REFRESH_TOKEN"):
             cfg = await db.api_config.find_one({}, {"ga4": 1})
             token = (cfg or {}).get("ga4", {}).get("refresh_token", "")
             if token:
-                os.environ["GA4_REFRESH_TOKEN"] = token
+                Configurator.set_runtime_env("GA4_REFRESH_TOKEN", token)
                 logger.info("GA4 refresh token loaded from db.api_config")
     except Exception as e:
         logger.warning(f"GA4 db-load skipped: {e}")
@@ -2514,7 +2514,7 @@ if FRONTEND_BUILD.is_dir():
 
 if __name__ == "__main__":
     import uvicorn
-    PORT = int(os.getenv("PORT", 5000))
+    PORT = int(Configurator.get("PORT", 5000))
     logger.info(f"Starting server on port {PORT}")
     uvicorn.run(
         "server:app",

@@ -1249,10 +1249,11 @@ async def admin_apply_supabase(data: dict, admin: dict = Depends(get_admin_user)
     SUPABASE_SERVICE_KEY = service_key
     if anon_key:
         SUPABASE_ANON_KEY = anon_key
-    os.environ["SUPABASE_URL"] = url
-    os.environ["SUPABASE_SERVICE_KEY"] = service_key
+    from config import Configurator
+    Configurator.set_runtime_env("SUPABASE_URL", url)
+    Configurator.set_runtime_env("SUPABASE_SERVICE_KEY", service_key)
     if anon_key:
-        os.environ["SUPABASE_ANON_KEY"] = anon_key
+        Configurator.set_runtime_env("SUPABASE_ANON_KEY", anon_key)
     logger.info("Supabase client re-initialized with new credentials")
     return {"message": "Supabase credentials applied, verified, and saved"}
 
