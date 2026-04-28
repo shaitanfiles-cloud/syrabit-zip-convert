@@ -7,6 +7,7 @@ __all__ = [
     "ADMIN_ACCOUNTS", "ADMIN_JWT_SECRET",
     "CF_CACHE_TTL", "CF_GATEWAY_ENABLED",
     "CF_TURNSTILE_ENABLED", "CF_TURNSTILE_SECRET_KEY",
+    "CHAT_ENHANCE_ENABLED",
     "COOKIE_DOMAIN", "COOKIE_SAMESITE",
     "CORS_ORIGINS", "CORS_ORIGIN_REGEX",
     "DB_NAME", "EMAIL_FROM", "FRONTEND_URL",
@@ -217,6 +218,12 @@ CF_ACCESS_ENFORCE = os.environ.get('CF_ACCESS_ENFORCE', '').strip().lower() in (
 # ── Cloudflare Turnstile ────────────────────────────────────────────────────
 CF_TURNSTILE_SECRET_KEY = os.environ.get('CF_TURNSTILE_SECRET_KEY', '').strip()
 CF_TURNSTILE_ENABLED = bool(CF_TURNSTILE_SECRET_KEY)
+
+# ── Chat Enhancement Feature Flag ────────────────────────────────────────────
+# Controls whether cognitive anchors, engagement hooks, and trend signals are
+# injected into AI chat responses.  Defaults ON; set CHAT_ENHANCE_ENABLED=0
+# to disable for A/B testing or debugging.
+CHAT_ENHANCE_ENABLED = os.environ.get('CHAT_ENHANCE_ENABLED', '1').strip() not in ('0', 'false', 'no', 'off')
 
 # ── Cloudflare AI Gateway ────────────────────────────────────────────────────
 import time as _time

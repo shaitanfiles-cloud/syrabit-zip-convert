@@ -72,15 +72,13 @@ from tracing import (
 from followup_context import detect_followup, build_followup_context, merge_followup_into_query
 from pipeline import should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query, get_instant_response
 
-# SEO/GEO/AEO Enhancement Layer imports
+# Chat Enhancement Layer
 try:
     from chat_enhancement_layer import chat_enhancement_layer
-    from cliffhanger_engine import cliffhanger_engine
-    from cognitive_anchor_injector import cognitive_anchor_injector
-    from reddit_oracle import reddit_oracle
-    GEO_ENHANCEMENTS_ENABLED = True
+    from config import CHAT_ENHANCE_ENABLED as _CHAT_ENHANCE_ENABLED
+    GEO_ENHANCEMENTS_ENABLED = _CHAT_ENHANCE_ENABLED
 except ImportError as e:
-    logger.warning(f"GEO enhancements not loaded: {e}")
+    logger.warning(f"[Enhancement] Layer unavailable: {e}")
     GEO_ENHANCEMENTS_ENABLED = False
 
 _CONTENT_INTENTS_SET = {"notes", "important_questions", "pyq"}
