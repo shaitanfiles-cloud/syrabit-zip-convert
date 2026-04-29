@@ -121,6 +121,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         // Health check endpoint
         .route("/health", get(handlers::health::health_check))
+        // D1 Sync endpoints for Edge caching (UUID → TEXT conversion)
+        .route("/api/edge/d1-sync/boards", get(handlers::d1_sync::sync_boards))
+        .route("/api/edge/d1-sync/classes", get(handlers::d1_sync::sync_classes))
+        .route("/api/edge/d1-sync/subjects", get(handlers::d1_sync::sync_subjects))
+        .route("/api/edge/d1-sync/chapters", get(handlers::d1_sync::sync_chapters))
+        .route("/api/edge/d1-sync/pages", get(handlers::d1_sync::sync_pages))
+        .route("/api/edge/d1-status", get(handlers::d1_sync::d1_sync_status))
         // RAG endpoints (migrated from Python)
         .route("/api/rag/query", post(handlers::rag::query_rag))
         .route("/api/rag/search", post(handlers::rag::hybrid_search))
@@ -143,15 +150,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    // Spawn gRPC server in background
+    // Spawn gRPC server in background with tonic-web support for Cloudflare Workers
     let grpc_addr = SocketAddr::from(([0, 0, 0, 0], config.grpc_port));
-    tracing::info!("📡 gRPC server listening on {}", grpc_addr);
+    tracing::info!("📡 gRPC server listening on {} (HTTP/2 + gRPC-Web)", grpc_addr);
 
     let grpc_service = NeuralMeshGrpcService::new(grpc_db, grpc_metrics_tx);
     
+    // Enable gRPC-Web support for Cloudflare Workers compatibility
     let grpc_handle = tokio::spawn(async move {
         tonic::transport::Server::builder()
+            .accept_http1(true)  // Required for gRPC-Web
             .add_service(NeuralMeshGrpcService::into_service(grpc_service))
+            .add_service(tonic_web::enable(NeuralMeshGrpcService::into_service(grpc_service.clone())))
             .serve(grpc_addr)
             .await
             .expect("Failed to start gRPC server");

@@ -350,6 +350,13 @@ export function AppRoutes() {
       <Route path="/admin/login" element={<AdminLoginPage />} />
       <Route path="/admin"       element={<AdminGuard><AdminPage /></AdminGuard>} />
 
+      {/* ── Staff Management Panel routes ── */}
+      <Route path="/staff/login" element={lazy(() => import("@/pages/staff/StaffLogin"))} />
+      <Route path="/staff" element={<AuthGuard><lazy(() => import("@/pages/staff/StaffDashboard")).default /></AuthGuard>} />
+
+      {/* ── JARVIS HUD route ── */}
+      <Route path="/jarvis" element={<AuthGuard><lazy(() => import("@/components/jarvis/JarvisDashboard")).default /></AuthGuard>} />
+
       {/* ── 404 ── */}
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
