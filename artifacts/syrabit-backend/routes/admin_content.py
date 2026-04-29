@@ -1,5 +1,7 @@
 """Syrabit.ai — Admin content CRUD & thumbnails"""
 import re, json, asyncio, uuid, logging, base64
+from r2_storage import r2_upload, r2_public_url, make_key, content_type_for
+from config import R2_ENABLED
 
 _PRERENDER_LOG = logging.getLogger("syrabit.prerender_refresh")
 
@@ -1736,20 +1738,31 @@ async def upload_content_image(
     ext = (file.filename or "img.png").rsplit(".", 1)[-1].lower()
     img_id = str(uuid.uuid4())
     safe_name = f"{img_id}.{ext}"
-    storage_path = f"{_CONTENT_IMG_PREFIX}/{safe_name}"
+    r2_key = f"{_CONTENT_IMG_PREFIX}/{safe_name}"
+    supa_path = r2_key
 
+    # Priority 1: Cloudflare R2 (cheap, fast CDN)
+    if R2_ENABLED:
+        try:
+            url = await r2_upload(r2_key, raw, content_type=mime)
+            return {"url": url, "storage": "r2"}
+        except Exception as exc:
+            logger.warning(f"R2 image upload failed, falling back to Supabase: {exc}")
+
+    # Priority 2: Supabase Storage
     if supa:
         try:
             url = await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: _content_img_supabase_upload(raw, storage_path, mime),
+                lambda: _content_img_supabase_upload(raw, supa_path, mime),
             )
-            return {"url": url}
-        except Exception as e:
-            logger.warning(f"Content image Supabase upload failed: {e}")
+            return {"url": url, "storage": "supabase"}
+        except Exception as exc:
+            logger.warning(f"Supabase image upload failed, using base64 fallback: {exc}")
 
+    # Priority 3: base64 data-URL (last resort — not suitable for large images)
     b64 = base64.b64encode(raw).decode()
-    return {"url": f"data:{mime};base64,{b64}"}
+    return {"url": f"data:{mime};base64,{b64}", "storage": "base64"}
 
 
 # Generic content upload endpoints
@@ -1764,30 +1777,68 @@ async def upload_content_file(
     year: str = Form(""),
     admin: dict = Depends(get_admin_user)
 ):
-    """Upload content file - stores PDFs as base64, text as plain text"""
+    """Upload content file — stores PDFs in R2 (or Supabase), text inline."""
     content_id = str(uuid.uuid4())
-    
-    # Read file
+
     file_content = await file.read()
-    file_ext = file.filename.split('.')[-1].lower() if '.' in file.filename else 'txt'
-    
-    # Handle different file types
-    if file_ext == 'pdf':
-        # Store PDF as base64 for easy retrieval
-        import base64
-        pdf_base64 = base64.b64encode(file_content).decode('utf-8')
-        text_content = ""  # Can't extract text easily without extra libs
-        file_url = f"data:application/pdf;base64,{pdf_base64}"
+    file_ext = (file.filename or "file.txt").rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else "txt"
+    text_content = ""
+    file_url = ""
+    storage_backend = "none"
+
+    if file_ext == "pdf":
+        mime = "application/pdf"
+        r2_key = make_key("uploads/pdfs", file.filename or f"{content_id}.pdf")
+
+        # Priority 1: R2
+        if R2_ENABLED:
+            try:
+                file_url = await r2_upload(r2_key, file_content, content_type=mime,
+                                           cache_control="private, max-age=3600")
+                storage_backend = "r2"
+            except Exception as exc:
+                logger.warning(f"R2 PDF upload failed: {exc}")
+
+        # Priority 2: Supabase Storage
+        if not file_url and supa:
+            supa_path = r2_key
+            try:
+                file_url = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: (
+                        supa.storage.from_(_CONTENT_IMG_BUCKET).upload(
+                            path=supa_path,
+                            file=file_content,
+                            file_options={"content-type": mime, "upsert": "true"},
+                        ),
+                        supa.storage.from_(_CONTENT_IMG_BUCKET).get_public_url(supa_path),
+                    )[1],
+                )
+                storage_backend = "supabase"
+            except Exception as exc:
+                logger.warning(f"Supabase PDF upload failed: {exc}")
+
+        # Priority 3: base64 fallback (only for small PDFs ≤ 2 MB)
+        if not file_url:
+            if len(file_content) <= 2 * 1024 * 1024:
+                pdf_b64 = base64.b64encode(file_content).decode()
+                file_url = f"data:application/pdf;base64,{pdf_b64}"
+                storage_backend = "base64"
+            else:
+                raise HTTPException(
+                    507,
+                    "PDF too large to store without R2 or Supabase — "
+                    "configure R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY",
+                )
     else:
-        # Text files
-        text_content = file_content.decode('utf-8', errors='ignore')
-        file_url = ""
-    
+        text_content = file_content.decode("utf-8", errors="ignore")
+        storage_backend = "inline"
+
     upload_data = {
         "id": content_id,
         "subject_id": subject_id,
         "content_type": content_type,
-        "title": title or file.filename.replace(f'.{file_ext}', ''),
+        "title": title or (file.filename or "").replace(f".{file_ext}", ""),
         "description": description,
         "tags": tags,
         "year": year,
@@ -1795,6 +1846,7 @@ async def upload_content_file(
         "file_ext": file_ext,
         "file_size": len(file_content),
         "file_url": file_url,
+        "storage_backend": storage_backend,
         "content": text_content,
         "uploaded_at": datetime.now(timezone.utc).isoformat(),
         "uploaded_by": admin.get("email"),
@@ -1809,15 +1861,16 @@ async def upload_content_file(
         {"$set": {"has_document": True, "document_type": file_ext}}
     )
     
-    logger.info(f"Content uploaded: {file.filename} ({file_ext}) for subject {subject_id}")
-    # Task #795: this flips `has_document` on the subject (visible in the
-    # public subject payload + library bundle) and adds a row that
-    # /content/subjects/{id}/document falls back to. Purge subjects so
-    # the new flag surfaces; chapters because the document drives the
-    # chapter-list fallback path in routes/content.py.
+    logger.info(f"Content uploaded: {file.filename} ({file_ext}) for subject {subject_id} via {storage_backend}")
     _purge_for_route("admin.content_upload", ["subjects", "chapters"], subject_id)
     _schedule_prerender_refresh(f"content_uploaded:{subject_id}")
-    return {"id": content_id, "message": "Upload successful", "file_type": file_ext}
+    return {
+        "id": content_id,
+        "message": "Upload successful",
+        "file_type": file_ext,
+        "storage": storage_backend,
+        "file_url": file_url if storage_backend != "base64" else None,
+    }
 
 @router.post("/admin/reset-and-seed-content")
 async def reset_and_seed_content(admin: dict = Depends(get_admin_user)):

@@ -241,6 +241,21 @@ CF_ACCESS_ENFORCE = os.environ.get('CF_ACCESS_ENFORCE', '').strip().lower() in (
 CF_TURNSTILE_SECRET_KEY = os.environ.get('CF_TURNSTILE_SECRET_KEY', '').strip()
 CF_TURNSTILE_ENABLED = bool(CF_TURNSTILE_SECRET_KEY)
 
+# ── Cloudflare R2 Object Storage ─────────────────────────────────────────────
+# R2 uses S3-compatible API with account-scoped endpoint.
+# Create R2 API tokens at: CF Dashboard → R2 → Manage R2 API Tokens
+R2_ACCESS_KEY_ID     = os.environ.get('R2_ACCESS_KEY_ID', '').strip()
+R2_SECRET_ACCESS_KEY = os.environ.get('R2_SECRET_ACCESS_KEY', '').strip()
+R2_BUCKET_NAME       = os.environ.get('R2_BUCKET_NAME', 'syrabit-media').strip()
+R2_PUBLIC_URL        = os.environ.get('R2_PUBLIC_URL', '').strip().rstrip('/')
+# Endpoint derived from account ID: https://<account_id>.r2.cloudflarestorage.com
+_R2_ACCOUNT_ID = os.environ.get('CF_AI_GATEWAY_ACCOUNT_ID', '').strip()
+R2_ENDPOINT_URL = (
+    os.environ.get('R2_ENDPOINT_URL', '').strip()
+    or (f'https://{_R2_ACCOUNT_ID}.r2.cloudflarestorage.com' if _R2_ACCOUNT_ID else '')
+)
+R2_ENABLED = bool(R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_ENDPOINT_URL)
+
 # ── Chat Enhancement Feature Flag ────────────────────────────────────────────
 # Controls whether cognitive anchors, engagement hooks, and trend signals are
 # injected into AI chat responses.  Defaults ON; set CHAT_ENHANCE_ENABLED=0

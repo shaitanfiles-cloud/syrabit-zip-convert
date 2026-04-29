@@ -1763,6 +1763,15 @@ async def healthz_ai():
     return JSONResponse(status_code=code, content=body)
 
 
+@app.get("/healthz/r2")
+async def healthz_r2():
+    """Liveness probe for Cloudflare R2 Object Storage."""
+    from r2_storage import r2_health
+    result = await r2_health()
+    code = 200 if result.get("ok") else 503
+    return JSONResponse(status_code=code, content=result)
+
+
 @app.get("/robots.txt", response_class=Response)
 async def serve_robots_txt():
     txt = """# Syrabit.ai — robots.txt

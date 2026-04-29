@@ -41,6 +41,7 @@ mistune==3.2.0
 
 razorpay==2.0.1
 resend==2.26.0
+boto3>=1.34.0  # R2 Object Storage — S3-compatible API for Cloudflare R2
 duckduckgo_search==8.1.1
 dnspython==2.7.0
 
