@@ -29,7 +29,13 @@ class LlmResult(str):
 _MODEL_MAX_OUTPUT_TOKENS = {
     "llama-3.1-8b-instant": 8192,
     "gemini-2.5-flash": 65536,
-    "gemini-2.0-flash": 8192,
+    "gemini-2.0-flash": 65536,  # alias → gemini-2.5-flash at call time
+}
+
+# Deprecated / renamed models — resolved before the provider call so we
+# never send a stale model name to the upstream API.
+_MODEL_ALIASES: dict[str, str] = {
+    "gemini-2.0-flash": "gemini-2.5-flash",
 }
 
 def _clamp_max_tokens(model: str, max_tokens: int) -> int:
@@ -730,6 +736,7 @@ async def _call_cerebras(messages: list, api_key: str, model: str, max_tokens: i
     return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
 
 async def _call_single_provider(messages: list, provider: str, api_key: str, model: str, max_tokens: int) -> str:
+    model = _MODEL_ALIASES.get(model, model)
     max_tokens = _clamp_max_tokens(model, max_tokens)
     if provider == "workers-ai":
         from providers.cloudflare_ai import chat as _cf_chat, MODELS as _CF_MODELS

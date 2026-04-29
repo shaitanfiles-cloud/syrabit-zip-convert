@@ -432,7 +432,9 @@ def _embed_url() -> str:
 
 
 def _alt_embed_url(model: str) -> str:
-    return _wrap_gateway(f"{_BASE}/models/{model}:embedContent")
+    # text-embedding-004 is only available on the v1 endpoint, not v1beta
+    base = _BASE_V1 if model == "text-embedding-004" else _BASE
+    return _wrap_gateway(f"{base}/models/{model}:embedContent")
 
 
 def _headers() -> dict:
@@ -503,7 +505,7 @@ async def _embed_one(text: str, task_type: str) -> Optional[List[float]]:
                 _breaker.record_failure(f"embed_vertex_parse_{type(e).__name__}")
                 return None
 
-        for model in (_EMBED_MODEL, "text-embedding-004"):
+        for model in (_EMBED_MODEL,):  # text-embedding-004 not enabled on this project
             url  = _alt_embed_url(model)
             body = {
                 "model":   f"models/{model}",
