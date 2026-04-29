@@ -35,10 +35,32 @@ __all__ = [
     "_XAI_KEY",
     "cf_gateway_url", "get_provider_base_url",
     "is_cf_gateway_up", "mark_cf_gateway_down",
+    "Configurator",
 ]
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+
+class Configurator:
+    """Lightweight runtime environment override store.
+
+    Allows code to set or retrieve env-var overrides at runtime without
+    mutating os.environ globally. Falls back to os.environ when no
+    runtime override exists.
+    """
+    _overrides: dict = {}
+
+    @classmethod
+    def get(cls, key: str, default: str = "") -> str:
+        if key in cls._overrides:
+            return cls._overrides[key]
+        return os.environ.get(key, default)
+
+    @classmethod
+    def set_runtime_env(cls, key: str, value: str) -> None:
+        cls._overrides[key] = value
+        os.environ[key] = value
 
 MONGO_URL    = (os.environ.get('MONGO_URL') or os.environ.get('MONGODB_URI') or 'mongodb://localhost:27017').strip().strip('"').strip("'")
 DB_NAME      = os.environ.get('DB_NAME', 'test_database')
