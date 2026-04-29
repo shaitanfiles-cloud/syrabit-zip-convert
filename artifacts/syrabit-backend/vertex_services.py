@@ -545,15 +545,37 @@ async def _embed_one(text: str, task_type: str) -> Optional[List[float]]:
         return None
 
 
+async def _workers_ai_primary_embed(text: str) -> Optional[List[float]]:
+    """Workers AI PRIMARY embedding via bge-large-en-v1.5 (1024-dim).
+
+    Upgraded from fallback to PRIMARY (2026-04-29) — bge-large-en-v1.5
+    emits 1024-dim vectors matching the syllabus-index-v2 Vectorize index.
+    Much cheaper than Gemini embeddings under the $5k CF startup credits.
+    Falls back to None so callers continue to the Gemini path on error.
+    """
+    if not text:
+        return None
+    try:
+        from providers.cloudflare_ai import embed_one as _cf_embed
+        vec = await _cf_embed(text.strip()[:8000], model_key="embed")
+        if not vec:
+            return None
+        if len(vec) != _EMBED_DIMENSIONS:
+            logger.warning(
+                "[cf-ai] embed returned %d-dim; index expects %d — dropping",
+                len(vec), _EMBED_DIMENSIONS,
+            )
+            return None
+        return vec
+    except Exception as exc:
+        logger.warning("[cf-ai] primary embed failed: %s: %s", type(exc).__name__, str(exc)[:200])
+        return None
+
+
 async def _workers_ai_fallback(text: str) -> Optional[List[float]]:
-    """Workers AI safety net (Task #636). Only returns a vector when its
-    dimension matches `_EMBED_DIMENSIONS` so the 1024-dim Vectorize
-    index never receives a dimension-mismatched embedding. The current
-    Workers AI default (bge-base-en-v1.5) emits 768-dim, so in the
-    default deployment this path attempts the fallback (and surfaces
-    failure metrics in providers.workers_ai) but returns None — which
-    callers already handle. Set `WORKERS_AI_EMBED_MODEL` to a
-    1024-compatible model on Cloudflare to actually use the fallback.
+    """Legacy edge-worker fallback path (Task #636). Kept for back-compat.
+    The direct REST path (_workers_ai_primary_embed) is preferred — this
+    path is only called when both Gemini AND the direct REST fail.
     """
     if not text:
         return None
@@ -573,27 +595,23 @@ async def _workers_ai_fallback(text: str) -> Optional[List[float]]:
         if not vec:
             return None
         if len(vec) != _EMBED_DIMENSIONS:
-            logger.warning(
-                f"workers-ai fallback returned {len(vec)}-dim vector; "
-                f"Vectorize index expects {_EMBED_DIMENSIONS}. Dropping to None "
-                "to preserve dimension safety. Set WORKERS_AI_EMBED_MODEL to a "
-                f"{_EMBED_DIMENSIONS}-dim model to enable the fallback."
-            )
             return None
         return list(vec)
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"workers-ai embed fallback failed: {type(e).__name__}: {str(e)[:150]}")
+        logger.warning(f"workers-ai edge-fallback failed: {type(e).__name__}: {str(e)[:150]}")
         return None
 
 
 async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Optional[List[float]]:
-    """Return a 1024-dim Gemini embedding vector, or None on failure.
+    """Return a 1024-dim embedding vector, or None on failure.
 
-    Tries Gemini primary path first; if it fails, attempts the Workers
-    AI fallback (Task #636 safety net). The fallback is dimension-gated
-    — only vectors matching `_EMBED_DIMENSIONS` (1024) are returned so
-    Vectorize syllabus-index-v2 never receives a dim-mismatched vector.
-    Callers must handle None.
+    Priority order (2026-04-29):
+      1. Cloudflare Workers AI — bge-large-en-v1.5 (1024-dim, cheap, APAC-fast)
+      2. Gemini / Vertex AI — gemini-embedding-001 (1024-dim, high quality)
+      3. Edge-worker Workers AI fallback (legacy path, Task #636)
+
+    Dimension-gated: only 1024-dim vectors are returned so syllabus-index-v2
+    never receives a mismatched vector. Callers must handle None.
     """
     if not text:
         return None
@@ -608,7 +626,9 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Option
         _ek = None
         _embedding_cache = None  # type: ignore[assignment]
 
-    vec = await _embed_one(text, task_type)
+    vec = await _workers_ai_primary_embed(text)
+    if vec is None:
+        vec = await _embed_one(text, task_type)
     if vec is None:
         vec = await _workers_ai_fallback(text)
 
@@ -669,7 +689,25 @@ _LANG_NAMES = {
 
 
 async def translate(text: str, target_lang: str = "as", source_lang: str = "en") -> Optional[str]:
-    if not _ok() or not text:
+    """Translate text to Indic language.
+
+    Priority order (2026-04-29):
+      1. Cloudflare Workers AI — indictrans2-en-indic-1B (free on CF credits,
+         purpose-built for EN→Indic, superior to generic LLM translation for
+         Assamese/Bengali/Hindi educational content).
+      2. Gemini/Vertex — fallback for unsupported target languages.
+    """
+    if not text:
+        return None
+    try:
+        from providers.cloudflare_ai import translate as _cf_translate
+        result = await _cf_translate(text, target_lang=target_lang, source_lang=source_lang)
+        if result:
+            return result
+    except Exception as exc:
+        logger.warning("[cf-ai] translate failed, falling back to Gemini: %s", str(exc)[:150])
+
+    if not _ok():
         return None
     lang_name = _LANG_NAMES.get(target_lang, target_lang)
     prompt = (

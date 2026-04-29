@@ -1,0 +1,379 @@
+"""Cloudflare Workers AI — primary LLM/embed/translate/vision provider.
+
+Replaces Groq, Cerebras, OpenRouter, Sarvam (translation), and
+Vertex AI (embeddings) as the primary tier. All calls go through
+the Cloudflare AI REST API (api.cloudflare.com/client/v4/accounts/
+{account_id}/ai/run/{model}) — no edge worker round-trip needed
+from the backend.
+
+Models used (all available on Workers AI Enterprise):
+  chat        → @cf/meta/llama-3.3-70b-instruct-fp8-fast (70B, fp8)
+  chat_long   → @cf/openai/gpt-oss-120b (120B, for admin content gen)
+  chat_code   → @cf/qwen/qwen2.5-coder-32b-instruct
+  embed       → @cf/baai/bge-large-en-v1.5 (1024-dim, matches Vectorize)
+  embed_multi → @cf/baai/bge-m3 (multilingual, for Assamese content)
+  translate   → @cf/ai4bharat/indictrans2-en-indic-1B (EN→Indic, free on CF)
+  vision      → @cf/meta/llama-3.2-11b-vision-instruct
+  stt         → @cf/openai/whisper-large-v3-turbo
+  tts         → @cf/deepgram/aura-2-en / @cf/deepgram/aura-2-es
+  rerank      → @cf/baai/bge-reranker-base
+
+Auth: CLOUDFLARE_API_TOKEN (already in env) + CF_AI_GATEWAY_ACCOUNT_ID.
+All calls route through CF AI Gateway when CF_AI_GATEWAY_ID is set —
+enabling caching, rate-limiting, and cost visibility in the dashboard.
+"""
+from __future__ import annotations
+
+import asyncio
+import base64
+import json
+import logging
+import os
+import time
+from typing import Any, AsyncIterator, Dict, List, Optional
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+# ── Config ────────────────────────────────────────────────────────────────────
+_ACCOUNT_ID  = os.environ.get("CF_AI_GATEWAY_ACCOUNT_ID", "").strip()
+_API_TOKEN   = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+_GW_ID       = os.environ.get("CF_AI_GATEWAY_ID", "").strip()
+_GW_TOKEN    = os.environ.get("CF_AI_GATEWAY_TOKEN", "").strip()
+_GW_CACHE_TTL = int(os.environ.get("CF_AI_GATEWAY_CACHE_TTL", "3600"))
+
+# Use AI Gateway URL when available — adds caching + logging in CF dashboard
+if _ACCOUNT_ID and _GW_ID:
+    _BASE_URL = f"https://gateway.ai.cloudflare.com/v1/{_ACCOUNT_ID}/{_GW_ID}/workers-ai"
+else:
+    _BASE_URL = f"https://api.cloudflare.com/client/v4/accounts/{_ACCOUNT_ID}/ai/run"
+
+_ENABLED = bool(_ACCOUNT_ID and _API_TOKEN)
+
+# ── Model catalog ─────────────────────────────────────────────────────────────
+MODELS = {
+    "chat":        "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "chat_long":   "@cf/openai/gpt-oss-120b",
+    "chat_code":   "@cf/qwen/qwen2.5-coder-32b-instruct",
+    "chat_fast":   "@cf/meta/llama-3.1-8b-instruct-fp8",
+    "chat_indic":  "@cf/aisingapore/gemma-sea-lion-v4-27b-it",
+    "embed":       "@cf/baai/bge-large-en-v1.5",
+    "embed_multi": "@cf/baai/bge-m3",
+    "embed_small": "@cf/baai/bge-small-en-v1.5",
+    "translate":   "@cf/ai4bharat/indictrans2-en-indic-1B",
+    "vision":      "@cf/meta/llama-3.2-11b-vision-instruct",
+    "stt":         "@cf/openai/whisper-large-v3-turbo",
+    "tts_en":      "@cf/deepgram/aura-2-en",
+    "tts_es":      "@cf/deepgram/aura-2-es",
+    "rerank":      "@cf/baai/bge-reranker-base",
+    "guard":       "@cf/meta/llama-guard-3-8b",
+}
+
+# ── HTTP client ───────────────────────────────────────────────────────────────
+_http_client: Optional[httpx.AsyncClient] = None
+_http_lock = asyncio.Lock()
+
+
+def _headers() -> Dict[str, str]:
+    h = {"Authorization": f"Bearer {_API_TOKEN}"}
+    if _GW_TOKEN:
+        h["cf-aig-authorization"] = f"Bearer {_GW_TOKEN}"
+        h["cf-aig-cache-ttl"] = str(_GW_CACHE_TTL)
+    return h
+
+
+async def _get_client() -> httpx.AsyncClient:
+    global _http_client
+    async with _http_lock:
+        if _http_client is None or _http_client.is_closed:
+            _http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=10, read=120, write=30, pool=30),
+                limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+            )
+    return _http_client
+
+
+def _model_url(model_key: str) -> str:
+    model = MODELS.get(model_key, model_key)
+    if _ACCOUNT_ID and _GW_ID:
+        return f"{_BASE_URL}/{model}"
+    return f"https://api.cloudflare.com/client/v4/accounts/{_ACCOUNT_ID}/ai/run/{model}"
+
+
+async def _post(model_key: str, payload: dict, *, stream: bool = False,
+                timeout: float = 90.0) -> Any:
+    url = _model_url(model_key)
+    client = await _get_client()
+    headers = {**_headers(), "Content-Type": "application/json"}
+    if stream:
+        headers["Accept"] = "text/event-stream"
+    resp = await client.post(url, json=payload, headers=headers, timeout=timeout)
+    resp.raise_for_status()
+    if stream:
+        return resp
+    data = resp.json()
+    if "result" in data:
+        return data["result"]
+    return data
+
+
+# ── Chat ──────────────────────────────────────────────────────────────────────
+async def chat(
+    messages: List[Dict[str, str]],
+    *,
+    model_key: str = "chat",
+    max_tokens: int = 2048,
+    temperature: float = 0.7,
+    stream: bool = False,
+) -> str:
+    """Run a chat completion. Returns the full text response."""
+    if not _ENABLED:
+        raise RuntimeError("Cloudflare AI not configured (missing CLOUDFLARE_API_TOKEN or CF_AI_GATEWAY_ACCOUNT_ID)")
+    t0 = time.perf_counter()
+    payload: Dict[str, Any] = {
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if stream:
+        payload["stream"] = True
+    result = await _post(model_key, payload, stream=stream)
+    if stream:
+        return result
+    text = (result or {}).get("response", "")
+    logger.debug(
+        "[cf-ai] chat model=%s tokens≈%d dur=%.0fms",
+        MODELS.get(model_key, model_key),
+        len(text) // 4,
+        (time.perf_counter() - t0) * 1000,
+    )
+    return text
+
+
+async def chat_stream(
+    messages: List[Dict[str, str]],
+    *,
+    model_key: str = "chat",
+    max_tokens: int = 2048,
+) -> AsyncIterator[str]:
+    """Stream chat tokens as an async generator of delta strings."""
+    if not _ENABLED:
+        raise RuntimeError("Cloudflare AI not configured")
+    payload: Dict[str, Any] = {
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "stream": True,
+    }
+    url = _model_url(model_key)
+    client = await _get_client()
+    headers = {**_headers(), "Content-Type": "application/json", "Accept": "text/event-stream"}
+    async with client.stream("POST", url, json=payload, headers=headers, timeout=120.0) as resp:
+        resp.raise_for_status()
+        async for line in resp.aiter_lines():
+            if not line.startswith("data: "):
+                continue
+            raw = line[6:]
+            if raw.strip() == "[DONE]":
+                break
+            try:
+                chunk = json.loads(raw)
+                delta = chunk.get("response", "")
+                if delta:
+                    yield delta
+            except json.JSONDecodeError:
+                continue
+
+
+# ── Embeddings ────────────────────────────────────────────────────────────────
+async def embed(
+    texts: List[str],
+    *,
+    model_key: str = "embed",
+) -> List[List[float]]:
+    """Return embedding vectors for a list of texts."""
+    if not _ENABLED:
+        raise RuntimeError("Cloudflare AI not configured")
+    result = await _post(model_key, {"text": texts})
+    data = (result or {}).get("data", [])
+    return data
+
+
+async def embed_one(text: str, *, model_key: str = "embed") -> Optional[List[float]]:
+    vecs = await embed([text], model_key=model_key)
+    return vecs[0] if vecs else None
+
+
+# ── Translation (Assamese / Indic) ────────────────────────────────────────────
+_INDIC_TRANS2_LANG_MAP = {
+    "as": "asm_Beng",  # Assamese
+    "bn": "ben_Beng",  # Bengali
+    "hi": "hin_Deva",  # Hindi
+    "or": "ory_Orya",  # Odia
+    "ta": "tam_Taml",  # Tamil
+    "te": "tel_Telu",  # Telugu
+    "kn": "kan_Knda",  # Kannada
+    "ml": "mal_Mlym",  # Malayalam
+    "mr": "mar_Deva",  # Marathi
+    "gu": "guj_Gujr",  # Gujarati
+    "pa": "pan_Guru",  # Punjabi
+}
+_INDIC_SRC = "eng_Latn"  # source: English
+
+
+async def translate(
+    text: str,
+    target_lang: str = "as",
+    source_lang: str = "en",
+) -> Optional[str]:
+    """Translate text using indictrans2-en-indic-1B (Workers AI).
+
+    Falls back to None on error so callers can degrade gracefully.
+    target_lang: ISO 639-1 code (e.g. 'as' for Assamese).
+    """
+    if not _ENABLED:
+        return None
+    tgt = _INDIC_TRANS2_LANG_MAP.get(target_lang.lower())
+    if not tgt:
+        logger.warning("[cf-ai] translate: unsupported target_lang=%s", target_lang)
+        return None
+    try:
+        result = await _post("translate", {
+            "text": text[:4000],
+            "source_lang": _INDIC_SRC,
+            "target_lang": tgt,
+        }, timeout=60.0)
+        translated = (result or {}).get("translated_text", "")
+        return translated or None
+    except Exception as exc:
+        logger.warning("[cf-ai] translate failed: %s: %s", type(exc).__name__, str(exc)[:200])
+        return None
+
+
+async def translate_structured(
+    content: dict,
+    fields: List[str],
+    target_lang: str = "as",
+) -> dict:
+    """Translate multiple string fields of a dict concurrently."""
+    tasks = {
+        f: translate(content.get(f, ""), target_lang=target_lang)
+        for f in fields if content.get(f)
+    }
+    results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+    out = dict(content)
+    for field, result in zip(tasks.keys(), results):
+        if isinstance(result, str) and result:
+            out[field] = result
+    return out
+
+
+# ── Vision / Image ────────────────────────────────────────────────────────────
+async def analyze_image(
+    image_bytes: bytes,
+    prompt: str = "Describe this image in detail for an educational context.",
+    mime_type: str = "image/jpeg",
+) -> str:
+    """Analyse an image with the llama-3.2-11b vision model."""
+    if not _ENABLED:
+        raise RuntimeError("Cloudflare AI not configured")
+    b64 = base64.b64encode(image_bytes).decode()
+    result = await _post("vision", {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}},
+                ],
+            }
+        ],
+        "max_tokens": 1024,
+    }, timeout=60.0)
+    return (result or {}).get("response", "")
+
+
+# ── Speech-to-Text ────────────────────────────────────────────────────────────
+async def transcribe(audio_bytes: bytes) -> str:
+    """Transcribe audio using whisper-large-v3-turbo."""
+    if not _ENABLED:
+        raise RuntimeError("Cloudflare AI not configured")
+    audio_arr = list(audio_bytes)
+    result = await _post("stt", {"audio": audio_arr}, timeout=120.0)
+    return (result or {}).get("text", "")
+
+
+# ── Text-to-Speech ────────────────────────────────────────────────────────────
+async def speak(text: str, lang: str = "en") -> bytes:
+    """Generate TTS audio using Deepgram Aura via Workers AI."""
+    if not _ENABLED:
+        raise RuntimeError("Cloudflare AI not configured")
+    model_key = "tts_en" if lang == "en" else "tts_es"
+    result = await _post(model_key, {"text": text[:4096]}, timeout=60.0)
+    audio = (result or {}).get("audio")
+    if isinstance(audio, list):
+        return bytes(audio)
+    if isinstance(audio, str):
+        return base64.b64decode(audio)
+    return b""
+
+
+# ── Content Safety (Llama Guard) ──────────────────────────────────────────────
+async def is_safe(text: str) -> bool:
+    """Return True if text passes Llama Guard 3 8B safety check."""
+    if not _ENABLED:
+        return True
+    try:
+        result = await _post("guard", {
+            "messages": [{"role": "user", "content": text[:4000]}],
+            "max_tokens": 16,
+        }, timeout=15.0)
+        response = (result or {}).get("response", "").strip().lower()
+        return response.startswith("safe")
+    except Exception:
+        return True
+
+
+# ── Reranking ─────────────────────────────────────────────────────────────────
+async def rerank(query: str, documents: List[str]) -> List[float]:
+    """Return relevance scores for each document relative to query."""
+    if not _ENABLED:
+        return [0.0] * len(documents)
+    result = await _post("rerank", {
+        "query": query,
+        "contexts": [{"text": d} for d in documents],
+    }, timeout=30.0)
+    scores_raw = (result or {}).get("response", [])
+    if isinstance(scores_raw, list):
+        return [float(r.get("score", 0.0)) for r in scores_raw]
+    return [0.0] * len(documents)
+
+
+# ── Health ────────────────────────────────────────────────────────────────────
+async def health_check() -> dict:
+    """Quick health probe using a minimal chat request."""
+    if not _ENABLED:
+        return {"ok": False, "error": "not_configured"}
+    t0 = time.perf_counter()
+    try:
+        text = await chat(
+            [{"role": "user", "content": "Say OK"}],
+            model_key="chat_fast",
+            max_tokens=4,
+        )
+        return {
+            "ok": True,
+            "latency_ms": round((time.perf_counter() - t0) * 1000),
+            "model": MODELS["chat_fast"],
+            "response": text,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "latency_ms": round((time.perf_counter() - t0) * 1000),
+            "error": str(exc)[:200],
+        }
+
+
+# Alias used by llm.py's _stream_from_provider
+stream_chat = chat_stream

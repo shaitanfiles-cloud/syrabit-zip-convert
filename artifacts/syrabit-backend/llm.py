@@ -215,11 +215,26 @@ if _SARVAM_LLM_KEY_2 and _SARVAM_LLM_KEY_2 != _SARVAM_LLM_KEY_3:
 if _SARVAM_LLM_KEY and _SARVAM_LLM_KEY not in (_SARVAM_LLM_KEY_3, _SARVAM_LLM_KEY_2):
     _SARVAM_PROVIDERS.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 
-# General LLM fallback chain — used by every non-Assamese path. Gemini leads
-# because of native multilingual coverage (Hindi/Bengali/etc) AND huge RPM
-# headroom (600/min vs 30/min on Groq/Cerebras). Sarvam is deliberately
-# absent — see `_SARVAM_PROVIDERS` above for the rationale.
+# ── Cloudflare Workers AI — PRIMARY provider (2026-04-29 upgrade) ──────────────
+# Workers AI is now Tier 1. With $5k Cloudflare startup credits and the
+# account on Enterprise, Workers AI is cheaper and lower-latency than
+# Groq/Cerebras/OpenRouter for our Assam-region user base.
+#
+# Provider key: "workers-ai" — uses providers/cloudflare_ai.py which calls
+# the CF REST API (or AI Gateway) directly without an edge worker round-trip.
+# The CLOUDFLARE_API_TOKEN env var (already set) is the credential; no new key.
+#
+# Models in priority order:
+#   chat  → llama-3.3-70b-instruct-fp8-fast (70B, fp8 quantised, 16k context)
+#   admin → gpt-oss-120b (admin content gen, long-form notes, MCQ batches)
+# Gemini/Groq/Cerebras remain as secondary fallbacks below.
+_CF_AI_ACCOUNT_ID = os.environ.get("CF_AI_GATEWAY_ACCOUNT_ID", "").strip()
+_CF_API_TOKEN = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+_CF_AI_ENABLED = bool(_CF_AI_ACCOUNT_ID and _CF_API_TOKEN)
+
 _LLM_PROVIDERS = []
+if _CF_AI_ENABLED:
+    _LLM_PROVIDERS.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
 if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
@@ -243,9 +258,9 @@ if _OPENAI_KEY and _OPENAI_KEY != 'x':
     _LLM_PROVIDERS.append({"provider": "openai",      "key": _OPENAI_KEY,     "default_model": "gpt-4o-mini"})
 
 _LLM_PROVIDERS_CHAT: list[dict] = []
-# Order matters: pipeline.py iterates this list in priority order. Cerebras
-# now leads because Groq's hosted Llama-4 Scout endpoint has been failing
-# 100% in prod (see _SLM_SLOT_CANDIDATES note above).
+# Workers AI leads the chat pool — 70B fp8 model, no rate-limit per-key issues.
+if _CF_AI_ENABLED:
+    _LLM_PROVIDERS_CHAT.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
 if _CEREBRAS_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
 if _GROQ_KEY:
@@ -715,6 +730,17 @@ async def _call_cerebras(messages: list, api_key: str, model: str, max_tokens: i
 
 async def _call_single_provider(messages: list, provider: str, api_key: str, model: str, max_tokens: int) -> str:
     max_tokens = _clamp_max_tokens(model, max_tokens)
+    if provider == "workers-ai":
+        from providers.cloudflare_ai import chat as _cf_chat, MODELS as _CF_MODELS
+        model_key = "chat"
+        if "120b" in model or "gpt-oss" in model:
+            model_key = "chat_long"
+        elif "coder" in model or "qwen2.5" in model:
+            model_key = "chat_code"
+        elif "8b" in model or "fast" in model.lower():
+            model_key = "chat_fast"
+        text = await _cf_chat(messages, model_key=model_key, max_tokens=max_tokens)
+        return re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
     if provider == "sarvam":
         return await _call_sarvam_llm(messages, api_key, model, max_tokens)
     if provider == "gemini":
@@ -883,6 +909,8 @@ async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048
 # reserved for Assamese-only paths (see `_SARVAM_PROVIDERS` rationale at
 # top of this module).
 _LLM_PROVIDERS_CONTENT: list[dict] = []
+if _CF_AI_ENABLED:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/openai/gpt-oss-120b"})
 if _CEREBRAS_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "qwen-3-235b-a22b-instruct-2507"})
 if _GEMINI_KEY:
@@ -1523,6 +1551,19 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     async def _stream_from_provider(p_name: str, p_key: str, p_model: str):
         """Yield raw tokens from a provider. Raises on failure."""
         _mt = _clamp_max_tokens(p_model, max_tokens)
+        if p_name == "workers-ai":
+            logger.info(f"LLM stream: provider=workers-ai, model={p_model}")
+            from providers.cloudflare_ai import stream_chat as _cf_stream
+            model_key = "chat"
+            if "120b" in p_model or "gpt-oss" in p_model:
+                model_key = "chat_long"
+            elif "coder" in p_model or "qwen2.5" in p_model:
+                model_key = "chat_code"
+            elif "8b" in p_model or "fast" in p_model.lower():
+                model_key = "chat_fast"
+            async for token in _cf_stream(messages, model_key=model_key, max_tokens=_mt):
+                yield token
+            return
         if p_name == "sarvam":
             _input_est = sum(len(m.get("content", "")) for m in messages) // 4
             _think_overhead = 0 if _indic_mode else SARVAM_THINK_BUFFER
