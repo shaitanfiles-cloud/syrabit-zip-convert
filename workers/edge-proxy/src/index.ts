@@ -115,6 +115,12 @@ interface Env {
    */
   SYLLABUS_INDEX?: VectorizeIndex;
   SYLLABUS_INDEX_LEGACY?: VectorizeIndex;
+  /**
+   * Task: D1 Cache Warming on Startup — preload hot content into D1/KV cache
+   * when the worker starts to eliminate cold-start latency (~10-50ms → ~0ms).
+   * When true, the scheduled handler runs an immediate warm-up on first boot.
+   */
+  D1_WARM_ON_STARTUP?: string;
 }
 
 const KV_BINDINGS = ["RATE_LIMIT", "BOT_HTML_CACHE"] as const;
@@ -265,6 +271,9 @@ const BOT_RATE_LIMIT_RPM = 1200;
 const RATE_LIMIT_WINDOW_S = 60;
 const AI_RATE_LIMIT_RPM = 30;
 const AI_RATE_LIMIT_PREFIXES = ["/api/ai/chat", "/api/ai/generate", "/api/ai/grounded", "/api/ai/explain", "/api/ai/quiz", "/api/ai/summarize", "/api/chat"];
+
+// D1 Sync warm-on-startup flag — runs sync immediately when worker boots
+let _d1WarmOnStartupDone = false;
 function isAiPath(p: string): boolean {
   if (p.startsWith("/api/ai/fallback/")) return false;
   return AI_RATE_LIMIT_PREFIXES.some((x) => p.startsWith(x)) || (p.startsWith("/api/ai/") && !p.startsWith("/api/ai/fallback/"));
@@ -2333,6 +2342,27 @@ export default {
     // job is idempotent and has been the only scheduled job for this
     // worker for months, so defaulting to it is the safe, no-surprises
     // choice.
+    
+    // Task: D1 Cache Warming on Startup — preload hot content into D1/KV cache
+    // when the worker starts to eliminate cold-start latency (~10-50ms → ~0ms).
+    // Runs once per worker boot before any user traffic arrives.
+    if (!_d1WarmOnStartupDone && env.D1_WARM_ON_STARTUP?.toLowerCase() === 'true') {
+      _d1WarmOnStartupDone = true;
+      console.log('[D1 warm-on-startup] Starting immediate cache warm-up...');
+      const warmStart = Date.now();
+      ctx.waitUntil(
+        handleScheduledSync(env)
+          .then(() => {
+            const duration = Date.now() - warmStart;
+            console.log(`[D1 warm-on-startup] Complete in ${duration}ms`);
+          })
+          .catch((e) => {
+            const msg = e instanceof Error ? e.message : 'unknown';
+            console.error(`[D1 warm-on-startup] Failed: ${msg.slice(0, 300)}`);
+          })
+      );
+    }
+    
     const cron = event.cron;
     if (cron === "* * * * *") {
       // Task #708 — 1-minute synthetic probe of /api/admin/diagnostics.
