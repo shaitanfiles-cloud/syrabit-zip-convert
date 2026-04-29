@@ -265,15 +265,16 @@ if _OPENAI_KEY and _OPENAI_KEY != 'x':
     _LLM_PROVIDERS.append({"provider": "openai",      "key": _OPENAI_KEY,     "default_model": "gpt-4o-mini"})
 
 _LLM_PROVIDERS_CHAT: list[dict] = []
-# Workers AI leads the chat pool — 70B fp8 model, no rate-limit per-key issues.
-# Cerebras uses qwen-3-235b (235B reasoning model, ~1.7s, much better quality
-# than llama3.1-8b for educational Q&A) as the first fallback.
-if _CF_AI_ENABLED:
-    _LLM_PROVIDERS_CHAT.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
-if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "qwen-3-235b-a22b-instruct-2507"})
+# Groq leads the chat pool — measured 1.6s avg for 300-token educational answers.
+# Workers AI 70B is only fast for short outputs (<50 tokens); at 300+ tokens it
+# takes 14s (confirmed benchmark 2026-04-29). Groq and Cerebras are both faster
+# for real chat responses. Workers AI stays as burst fallback.
 if _GROQ_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
+    _LLM_PROVIDERS_CHAT.append({"provider": "groq",       "key": _GROQ_KEY,       "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras",   "key": _CEREBRAS_KEY,   "default_model": "qwen-3-235b-a22b-instruct-2507"})
+if _CF_AI_ENABLED:
+    _LLM_PROVIDERS_CHAT.append({"provider": "workers-ai", "key": _CF_API_TOKEN,   "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
 if _OPENROUTER_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "meta-llama/llama-4-scout"})
 
@@ -827,7 +828,10 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
 
     _is_content = provider_list is _LLM_PROVIDERS_CONTENT
     _is_chat = provider_list is _LLM_PROVIDERS_CHAT
-    _PROVIDER_TIMEOUT = 30.0 if _is_content else (4.0 if _is_chat else 6.0)
+    _is_rag = provider_list is _RAG_PROVIDERS
+    # Content: 30s (long generation). RAG: 12s (Gemini thinking can take 8-10s).
+    # Chat: 4s (streaming latency budget). General: 6s.
+    _PROVIDER_TIMEOUT = 30.0 if _is_content else (12.0 if _is_rag else (4.0 if _is_chat else 6.0))
 
     # Task #LLM-PARALLEL-FALLBACK: Race multiple providers in parallel to reduce worst-case latency
     # Sequential fallback caused 90-120s worst-case; parallel reduces to ~8s (90%+ improvement)
@@ -1037,22 +1041,26 @@ def route_for_task(task: str) -> tuple[str, str]:
 #
 # Falls back to Workers AI 70B if Gemini is unavailable or hits quota.
 _RAG_PROVIDERS: list[dict] = []
+# Groq leads RAG: fastest at 1.6s, good quality for 1024-2048 token answers.
+# Cerebras qwen-3-235b is second: 235B reasoning model, ~1.7s avg, excellent accuracy.
+# Gemini 2.5-flash is quality fallback: best accuracy but 6-10s with thinking tokens.
+# Workers AI last resort: slow (10s+) for long outputs but guaranteed capacity.
+if _GROQ_KEY:
+    _RAG_PROVIDERS.append({"provider": "groq",       "key": _GROQ_KEY,       "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
+if _CEREBRAS_KEY:
+    _RAG_PROVIDERS.append({"provider": "cerebras",   "key": _CEREBRAS_KEY,   "default_model": "qwen-3-235b-a22b-instruct-2507"})
 if _GEMINI_KEY:
     _RAG_PROVIDERS.append({"provider": "gemini",     "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
 if _CF_AI_ENABLED:
     _RAG_PROVIDERS.append({"provider": "workers-ai", "key": _CF_API_TOKEN,   "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
-if _CEREBRAS_KEY:
-    _RAG_PROVIDERS.append({"provider": "cerebras",   "key": _CEREBRAS_KEY,   "default_model": "qwen-3-235b-a22b-instruct-2507"})
-if _GROQ_KEY:
-    _RAG_PROVIDERS.append({"provider": "groq",       "key": _GROQ_KEY,       "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
 
 
 async def call_llm_for_rag(messages: list, max_tokens: int = 2048) -> str:
     """LLM call optimised for RAG answer synthesis.
 
-    Provider priority: Gemini 2.5 Flash → Workers AI 70B → Cerebras qwen-3-235b → Groq.
-    Gemini leads because it has the best factual accuracy and longest context
-    for combining multiple retrieved chunks into a coherent answer.
+    Provider priority: Groq → Cerebras qwen-3-235b → Gemini 2.5-flash → Workers AI 70B.
+    Groq leads for speed (1.6s avg). Gemini is quality fallback with 12s timeout
+    to accommodate thinking-mode responses. RAG path timeout is 12s (vs 6s general).
 
     Use this instead of ``call_llm_api_chat`` for any endpoint that retrieves
     context before generation (PYQ solve, notes Q&A, semantic search answer).
