@@ -37,6 +37,22 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Optional
 
+try:
+    from pymongo.errors import OperationFailure as _MongoOperationFailure
+except ImportError:
+    _MongoOperationFailure = None  # type: ignore[assignment,misc]
+
+_QUOTA_BACKOFF_MIN = 300    # 5 min first back-off when Atlas is full
+_QUOTA_BACKOFF_MAX = 1800   # 30 min cap
+_quota_backoff_current = _QUOTA_BACKOFF_MIN
+
+
+def _is_quota_error(exc: BaseException) -> bool:
+    """Return True if *exc* is an Atlas storage-quota error (code 8000)."""
+    if _MongoOperationFailure and isinstance(exc, _MongoOperationFailure):
+        return getattr(exc, "code", None) == 8000
+    return "over your space quota" in str(exc)
+
 logger = logging.getLogger(__name__)
 
 HISTORY_RETENTION_DAYS = 30
@@ -809,7 +825,9 @@ async def _seo_remediation_loop(db=None):
             # by Mongo so it costs nothing on idle.
             try:
                 await _expire_stale_signals(db)
-            except Exception:
+            except Exception as _sweep_exc:
+                if _is_quota_error(_sweep_exc):
+                    raise  # let outer handler apply quota backoff
                 logger.exception("remediation: stale-signal sweep failed")
 
             sig_doc = await _claim_next_signal(db)
@@ -832,7 +850,22 @@ async def _seo_remediation_loop(db=None):
         except asyncio.CancelledError:
             logger.info("remediation: loop cancelled")
             raise
-        except Exception:
+        except Exception as _loop_exc:
             # Belt-and-braces — never let the loop die.
-            logger.exception("remediation: unexpected loop error")
-            await asyncio.sleep(get_config()["idle_backoff_secs"])
+            global _quota_backoff_current
+            if _is_quota_error(_loop_exc):
+                logger.warning(
+                    "remediation: MongoDB Atlas storage quota full "
+                    "(512 MB / 512 MB) — pausing for %ds before retry. "
+                    "Free space in Atlas Dashboard or upgrade the cluster.",
+                    _quota_backoff_current,
+                )
+                await asyncio.sleep(_quota_backoff_current)
+                # Exponential backoff, cap at _QUOTA_BACKOFF_MAX
+                _quota_backoff_current = min(
+                    _quota_backoff_current * 2, _QUOTA_BACKOFF_MAX
+                )
+            else:
+                _quota_backoff_current = _QUOTA_BACKOFF_MIN  # reset on non-quota error
+                logger.exception("remediation: unexpected loop error")
+                await asyncio.sleep(get_config()["idle_backoff_secs"])
