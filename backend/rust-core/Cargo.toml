@@ -14,6 +14,7 @@ tower-http = { version = "0.5", features = ["cors", "trace"] }
 # gRPC
 tonic = "0.11"
 tonic-build = "0.11"
+tonic-web = "0.11"  # gRPC-Web support for Cloudflare Workers compatibility
 prost = "0.12"
 
 # Serialization

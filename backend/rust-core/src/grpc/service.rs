@@ -24,6 +24,15 @@ impl NeuralMeshGrpcService {
     }
 }
 
+impl Clone for NeuralMeshGrpcService {
+    fn clone(&self) -> Self {
+        Self {
+            db: self.db.clone(),
+            metrics_tx: self.metrics_tx.clone(),
+        }
+    }
+}
+
 #[tonic::async_trait]
 impl NeuralMeshService for NeuralMeshGrpcService {
     type ChatStream = tokio_stream::wrappers::BroadcastStream<ChatResponse>;
