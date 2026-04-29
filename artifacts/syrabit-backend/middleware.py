@@ -93,6 +93,13 @@ _ORIGIN_AUTH_OPEN_PATHS = (
                     # any external monitor still pointing at the old path
                     # (Task #848 follow-up review).
     "/health",
+    # Library bundle is read-only public content (board/class/subject/chapter
+    # index). Cloudflare Pages prerender and external CDN revalidation must
+    # reach it without the edge-injected secret, because the CF Pages build
+    # runner and Replit deploy builder are not behind our edge worker.
+    # It is already in _BOT_OPEN_PREFIXES (bot rate-limit bypass), so
+    # opening it here is consistent with its existing public-access intent.
+    "/api/content/library-bundle",
 )
 
 

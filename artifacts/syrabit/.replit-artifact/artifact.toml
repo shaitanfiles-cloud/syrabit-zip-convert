@@ -1,46 +1,47 @@
 kind = "web"
-previewPath = "/"
-title = "Syrabit.ai"
-version = "1.0.0"
-id = "artifacts/syrabit"
-router = "path"
+  previewPath = "/"
+  title = "Syrabit.ai"
+  version = "1.0.0"
+  id = "artifacts/syrabit"
+  router = "path"
 
-[[integratedSkills]]
-name = "react-vite"
-version = "1.0.0"
+  [[integratedSkills]]
+  name = "react-vite"
+  version = "1.0.0"
 
-[[services]]
-name = "web"
-paths = [ "/" ]
-localPort = 25144
+  [[services]]
+  name = "web"
+  paths = [ "/" ]
+  localPort = 25144
 
-[services.development]
-run = "pnpm --filter @workspace/syrabit run dev"
+  [services.development]
+  run = "pnpm --filter @workspace/syrabit run dev"
 
-[services.production]
-build = [ "sh", "-c", "npm i -g pnpm@10.26.1 && pnpm --filter @workspace/syrabit run build" ]
-publicDir = "artifacts/syrabit/dist"
-serve = "static"
+  [services.production]
+  build = [ "sh", "-c", "npm i -g pnpm@10.26.1 && pnpm --filter @workspace/syrabit run build" ]
+  publicDir = "artifacts/syrabit/dist"
+  serve = "static"
 
-[[services.production.rewrites]]
-from = "/*"
-to = "/index.html"
+  [[services.production.rewrites]]
+  from = "/*"
+  to = "/index.html"
 
-[services.env]
-PORT = "25144"
-BASE_PATH = "/"
+  [services.env]
+  PORT = "25144"
+  BASE_PATH = "/"
 
-[[services]]
-name = "api"
-paths = [ "/api" ]
-localPort = 8080
+  [[services]]
+  name = "api"
+  paths = [ "/api" ]
+  localPort = 8080
 
-[services.development]
-run = "cd /home/runner/workspace/artifacts/syrabit-backend && gunicorn server:app -c gunicorn.conf.py"
+  [services.development]
+  run = "cd /home/runner/workspace/artifacts/syrabit-backend && gunicorn server:app -c gunicorn.conf.py"
 
-[services.production]
-build = [ "sh", "-c", "PIP_USER=0 pip3 install --no-cache-dir --target=/home/runner/workspace/.python-deps -r /home/runner/workspace/artifacts/syrabit-backend/requirements.txt" ]
-run = [ "sh", "-c", "cd /home/runner/workspace/artifacts/syrabit-backend && PYTHONPATH=/home/runner/workspace/.python-deps gunicorn server:app -c gunicorn.conf.py" ]
+  [services.production]
+  build = [ "sh", "-c", "uv pip install --system --no-cache -r /home/runner/workspace/artifacts/syrabit-backend/requirements.txt || pip install --no-cache-dir -r /home/runner/workspace/artifacts/syrabit-backend/requirements.txt" ]
+  run = [ "sh", "-c", "cd /home/runner/workspace/artifacts/syrabit-backend && gunicorn server:app -c gunicorn.conf.py" ]
 
-[services.env]
-PORT = "8080"
+  [services.env]
+  PORT = "8080"
+  

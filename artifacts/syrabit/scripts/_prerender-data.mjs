@@ -212,7 +212,7 @@ async function backendSchemaSignal(url) {
     Math.min(2000, FETCH_TIMEOUT_MS),
   );
   try {
-    const res = await fetch(url, { method: "HEAD", signal: ctrl.signal });
+    const res = await fetch(url, { method: "HEAD", signal: ctrl.signal, headers: buildFetchHeaders() });
     if (!res.ok) {
       signalCache.set(url, { ts: now, signal: null });
       return null;
@@ -258,6 +258,26 @@ function parseRetryAfter(value) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Build-time origin auth: allows the prerender to reach endpoints that require
+// the edge-injected X-Origin-Auth header. Set PRERENDER_ORIGIN_SECRET to the
+// same value as the backend ORIGIN_SHARED_SECRET env var in your build config.
+// Safe to leave unset — the header is simply omitted and the fetch still works
+// for open endpoints.
+const PRERENDER_ORIGIN_SECRET = (
+  process.env.PRERENDER_ORIGIN_SECRET ||
+  process.env.ORIGIN_SHARED_SECRET ||
+  ""
+).trim();
+const PRERENDER_ORIGIN_HEADER = (
+  process.env.ORIGIN_SHARED_SECRET_HEADER || "X-Origin-Auth"
+).trim();
+
+function buildFetchHeaders() {
+  const h = { Accept: "application/json" };
+  if (PRERENDER_ORIGIN_SECRET) h[PRERENDER_ORIGIN_HEADER] = PRERENDER_ORIGIN_SECRET;
+  return h;
+}
+
 async function fetchJson(url, timeoutMs = FETCH_TIMEOUT_MS) {
   let lastErr;
   for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
@@ -266,7 +286,7 @@ async function fetchJson(url, timeoutMs = FETCH_TIMEOUT_MS) {
     try {
       const res = await fetch(url, {
         signal: ctrl.signal,
-        headers: { Accept: "application/json" },
+        headers: buildFetchHeaders(),
       });
       if (res.ok) return await res.json();
       // Retry only on transient classes: 429 (rate-limited) and 5xx.
