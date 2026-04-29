@@ -1,15 +1,26 @@
 """
-Transactional email helpers for Syrabit.ai using the Resend Python SDK.
+Transactional email helpers for Syrabit.ai.
+
+Provider priority:
+  1. Cloudflare Email Worker (EMAIL_WORKER_URL) — zero-cost under CF $5k credits,
+     routes via CF Email Workers send_email binding.  Activated automatically when
+     EMAIL_WORKER_URL is set AND CF Email Routing is live (MX records pointing to CF).
+  2. Resend (RESEND_API_KEY) — reliable third-party fallback while CF routing is
+     being configured.
+
 All functions are fire-and-forget — they log warnings on failure and never raise.
 """
 import os
 import logging
 import asyncio
+import json
 
 logger = logging.getLogger(__name__)
 
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
-EMAIL_FROM = os.environ.get("EMAIL_FROM", "Syrabit.ai <noreply@syrabit.ai>").strip()
+RESEND_API_KEY     = os.environ.get("RESEND_API_KEY", "").strip()
+EMAIL_FROM         = os.environ.get("EMAIL_FROM", "Syrabit.ai <noreply@syrabit.ai>").strip()
+EMAIL_WORKER_URL   = os.environ.get("EMAIL_WORKER_URL", "").rstrip("/")
+EMAIL_WORKER_KEY   = os.environ.get("EMAIL_WORKER_AUTH_KEY", "").strip()
 
 _BRAND = "#7c3aed"
 _BG    = "#0d0d1a"
@@ -47,18 +58,52 @@ def _button(label: str, url: str) -> str:
             f'font-size:14px;">{label}</a>')
 
 
+def _send_via_cf_worker(to: str, subject: str, html: str) -> bool:
+    """
+    Send email via the Cloudflare Email Worker.
+    Returns True on success, False on any failure (caller should fallback to Resend).
+    Requires:
+      - EMAIL_WORKER_URL to be set (e.g. https://syrabit-email.axomxplain.workers.dev)
+      - CF Email Routing MX records pointing to Cloudflare (not Hostinger)
+    """
+    worker_url = os.environ.get("EMAIL_WORKER_URL", "").rstrip("/")
+    auth_key   = os.environ.get("EMAIL_WORKER_AUTH_KEY", "").strip()
+    if not worker_url:
+        return False
+    try:
+        import httpx
+        headers = {"Content-Type": "application/json"}
+        if auth_key:
+            headers["Authorization"] = f"Bearer {auth_key}"
+        payload = {"to": to, "subject": subject, "html": html}
+        r = httpx.post(f"{worker_url}/email/send", json=payload, headers=headers, timeout=8.0)
+        if r.status_code in (200, 201):
+            logger.info(f"[Email/CF] Sent '{subject}' → {to}")
+            return True
+        logger.warning(f"[Email/CF] Worker returned {r.status_code}: {r.text[:200]}")
+        return False
+    except Exception as e:
+        logger.warning(f"[Email/CF] Worker call failed: {e}")
+        return False
+
+
 def _send_sync(to: str, subject: str, html: str):
-    """Synchronous Resend API call — run in thread via asyncio.to_thread."""
+    """
+    Send email — tries CF Email Worker first (zero-cost), falls back to Resend.
+    Fire-and-forget: never raises.
+    """
+    if _send_via_cf_worker(to, subject, html):
+        return
     key = os.environ.get("RESEND_API_KEY", "").strip()
     if not key:
-        logger.info(f"[Email] RESEND_API_KEY not set — skipping email to {to}: {subject}")
+        logger.info(f"[Email] No provider configured — skipping email to {to}: {subject}")
         return
     try:
         import resend as _resend
         _resend.api_key = key
         frm = os.environ.get("EMAIL_FROM", "Syrabit.ai <noreply@syrabit.ai>").strip()
         _resend.Emails.send({"from": frm, "to": [to], "subject": subject, "html": html})
-        logger.info(f"[Email] Sent '{subject}' → {to}")
+        logger.info(f"[Email/Resend] Sent '{subject}' → {to}")
     except Exception as e:
         logger.warning(f"[Email] Send failed to {to}: {e}")
 

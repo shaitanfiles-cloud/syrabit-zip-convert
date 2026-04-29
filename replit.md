@@ -46,14 +46,14 @@ The project is built as a pnpm workspace monorepo, integrating a React + Vite fr
 - **Caching:** Cloudflare AI Gateway (upstream LLM cache), Cloudflare edge worker KV bindings.
 - **LLM Providers (2026-04-29):** Cloudflare Workers AI is now the PRIMARY provider for all three pools — `llama-3.3-70b-instruct-fp8-fast` for chat/general, `gpt-oss-120b` for admin content generation. Gemini, Groq, Cerebras, OpenRouter remain as ordered fallbacks. Workers AI also handles Assamese/Indic translation via `indictrans2-en-indic-1B` (replaces Sarvam as primary), and embeddings via `bge-large-en-v1.5` (1024-dim, matches Vectorize). All LLM traffic routes through Cloudflare AI Gateway (`CF_AI_GATEWAY_ID=syrabit`).
 - **Payment Gateways:** Razorpay (INR), Stripe (USD).
-- **Email Service:** Resend API.
+- **Email Service:** CF Email Worker (`syrabit-email`) is now PRIMARY (zero-cost under CF credits), deployed at `https://syrabit-email.axomxplain.workers.dev`. Uses CF `send_email` binding + `mimetext`. Backend (`email_templates.py`) tries CF worker first, falls back to Resend. Auth via `EMAIL_WORKER_AUTH_KEY` secret. CF Email Routing requires manual DNS fix (remove Hostinger MX records, keep only CF MX). Until routing is live, Resend handles all delivery. Env vars: `EMAIL_WORKER_URL`, `EMAIL_WORKER_AUTH_KEY` (shared secrets).
 - **UI/UX Frameworks:** React, Vite, React Router, Tailwind CSS.
 - **ORM:** Drizzle ORM.
 - **API Framework:** FastAPI.
 - **Schema Validation:** Zod.
 - **API Codegen:** Orval.
 - **Build Tools:** esbuild, pnpm, Docker.
-- **Production Deployment:** Hybrid architecture with FastAPI on Railway, Cloudflare Worker edge proxy, and frontend on Cloudflare Pages.
+- **Production Deployment:** Hybrid architecture with FastAPI on Railway, Cloudflare Worker edge proxy, and frontend on Cloudflare Pages. **Deployed 2026-04-29:** Edge worker `syrabit-edge` v`d8509bb0` (bundled, no --no-bundle), Pages frontend `d4344f1d` live at `syrabit.ai` + `www.syrabit.ai`, email worker `syrabit-email` v`111055bc`. CF Pages project name: `syrabit-analytics` (subdomain: `syrabit-zip-convert.pages.dev`). Build config fixed: `pnpm --filter @workspace/syrabit run build:client` (not full prerender build). Pages deployed via `CLOUDFLARE_ACCOUNT_ID` env var bypass for wrangler `/memberships` check. App.jsx: removed broken inline lazy imports for non-existent staff/jarvis routes.
 - **Cloudflare Services (Enterprise):** Cloudflare Cache Purge API, Worker Cache API, IndexNow Integration, Vectorize (syllabus-index-v2 1024-dim + syllabus-index 768-dim legacy), D1 (syrabit-content + syrabit-content-preview), KV namespaces (RATE_LIMIT, BOT_HTML_CACHE), Smart Placement, Workers Observability (10% sampling), Workers Logpush, Enterprise WAF (security_level=high, image_resizing=on). Edge worker `wrangler.toml` upgraded Apr 2026: compatibility_date=2025-05-01, nodejs_compat_v2 flag, Vectorize bindings enabled, enterprise AI models (llama-3.3-70b-instruct-fp8-fast for chat, bge-large-en-v1.5 for embed, whisper-large-v3-turbo for STT). New endpoint: POST /api/edge/search — edge-side semantic search via Vectorize + Workers AI with no backend round-trip.
 - **Observability:** Firebase Performance Monitoring for RUM and Core Web Vitals. OpenTelemetry for distributed tracing to Cloud Trace.
 

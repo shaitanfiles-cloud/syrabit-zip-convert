@@ -1,0 +1,1 @@
+import{r,j as o}from"./react-dom-BCtgtKsU.js";import{u as s}from"./index-gC_eLEqr.js";import{B as m}from"./BottomNav-1BCDzyh9.js";import{P as a}from"./PublicBottomNav-LmfjIpG9.js";const n=r.memo(function(){const{user:t}=s();return t?o.jsx(m,{}):o.jsx(a,{})});export{n as M};

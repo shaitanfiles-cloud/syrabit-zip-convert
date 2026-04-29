@@ -1,0 +1,1 @@
+import{g as t}from"./react-dom-BCtgtKsU.js";var f,u;function e(){return u||(u=1,f=function(r){return r!=null&&r.constructor!=null&&typeof r.constructor.isBuffer=="function"&&r.constructor.isBuffer(r)}),f}var s=e();const o=t(s);export{o as i};

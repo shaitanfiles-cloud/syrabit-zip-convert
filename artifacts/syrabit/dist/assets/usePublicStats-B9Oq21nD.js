@@ -1,0 +1,1 @@
+import{r as e}from"./react-dom-BCtgtKsU.js";import{W as r}from"./index-gC_eLEqr.js";let s=null;function o(){const[a,c]=e.useState(s);return e.useEffect(()=>{s||fetch(`${r}/analytics/public-stats`).then(t=>t.json()).then(t=>{s=t,c(t)}).catch(()=>{})},[]),a}export{o as u};
