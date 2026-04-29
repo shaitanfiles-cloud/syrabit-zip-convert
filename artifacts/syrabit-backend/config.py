@@ -492,14 +492,14 @@ SARVAM_API_KEY_2 = os.environ.get('SARVAM_API_KEY_2', '').strip()
 SARVAM_TRANSLATE_KEY = SARVAM_API_KEY or SARVAM_API_KEY_2
 SARVAM_BASE_URL = 'https://api.sarvam.ai'
 
-# ── Distributed cache (Cloudflare-native architecture) ────────────────────────
-# Cloudflare AI Gateway handles LLM upstream caching (cache_ttl=3600s).
-# Edge worker's RATE_LIMIT KV binding handles distributed rate limiting.
-# Per-worker L1 in-memory cache handles hot-path dedupe.
-# These constants remain as empty strings for backward compatibility —
-# every call site guards with `if redis_client:`.
-REDIS_URL   = ''
-REDIS_TOKEN = ''
+# ── Distributed cache — Upstash Redis (REST-based, serverless) ────────────────
+# Upstash is used for L2 cross-worker cache, anonymous chat history,
+# atomic rate-limit credit deduction, and AI response caching.
+# Set UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN in Replit Secrets.
+# All call sites guard with `if redis_client:` so the app degrades gracefully
+# to in-process L1 only when these env vars are absent.
+REDIS_URL   = os.environ.get('UPSTASH_REDIS_REST_URL', '').strip()
+REDIS_TOKEN = os.environ.get('UPSTASH_REDIS_REST_TOKEN', '').strip()
 REDIS_AI_CACHE_TTL = int(os.environ.get('REDIS_AI_CACHE_TTL', '3600') or '3600')
 REDIS_CASUAL_CACHE_TTL = int(os.environ.get('REDIS_CASUAL_CACHE_TTL', '300') or '300')
 REDIS_CHAT_CACHE_TTL = 600

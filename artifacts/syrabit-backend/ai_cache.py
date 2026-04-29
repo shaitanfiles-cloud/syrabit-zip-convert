@@ -47,6 +47,8 @@ from config import (
     REDIS_AI_CACHE_CONNECT_TIMEOUT_MS,
     REDIS_AI_CACHE_OP_TIMEOUT_MS,
     REDIS_AI_CACHE_TTL,
+    REDIS_URL as _UPSTASH_URL,
+    REDIS_TOKEN as _UPSTASH_TOKEN,
 )
 
 __all__ = [
@@ -143,15 +145,17 @@ def active_backend() -> str:
 
 
 def _detect_initial_backend() -> str:
+    if _UPSTASH_URL and _UPSTASH_TOKEN:
+        return "upstash"
     if aioredis and MEMORYSTORE_REDIS_URL:
         return "memorystore"
     return "memory_only"
 
 
 def _detect_fallback_backend() -> str:
-    """Last-resort backend when a configured Memorystore endpoint is
-    unreachable at startup. LLM upstream caching lives at Cloudflare AI
-    Gateway; this fallback only affects the per-worker L1 cache."""
+    """Last-resort backend when a configured Redis endpoint is unreachable at
+    startup. LLM upstream caching lives at Cloudflare AI Gateway; this
+    fallback only affects the per-worker L1 cache."""
     return "memory_only"
 
 
@@ -159,7 +163,31 @@ async def init_async_client() -> str:
     """Initialise the async Redis pool. Safe to call multiple times."""
     global _async_pool, _backend
     chosen = _detect_initial_backend()
-    if chosen == "memorystore":
+
+    # ── Upstash (REST-API, serverless, no TCP) ────────────────────────────────
+    if chosen == "upstash":
+        try:
+            from upstash_redis.asyncio import Redis as _UpstashAsyncRedis
+            pool = _UpstashAsyncRedis(url=_UPSTASH_URL, token=_UPSTASH_TOKEN)
+            await asyncio.wait_for(
+                pool.ping(),
+                timeout=(REDIS_AI_CACHE_CONNECT_TIMEOUT_MS + REDIS_AI_CACHE_OP_TIMEOUT_MS) / 1000.0,
+            )
+            _async_pool = pool
+            _backend = "upstash"
+            _safe_url = _UPSTASH_URL.split("//", 1)[-1][:40]
+            logger.info("ai_cache: Upstash Redis L2 ready (%s…, ns=%s, ttl=%ds)",
+                        _safe_url, REDIS_AI_CACHE_NAMESPACE, REDIS_AI_CACHE_TTL)
+            return _backend
+        except ImportError:
+            logger.warning("ai_cache: upstash-redis not installed, falling back to memory_only")
+        except Exception as e:
+            logger.warning("ai_cache: Upstash unreachable, falling back to memory_only: %s", e)
+        _async_pool = None
+        chosen = _detect_fallback_backend()
+
+    # ── Legacy Memorystore / any redis:// endpoint ────────────────────────────
+    elif chosen == "memorystore":
         try:
             pool = aioredis.from_url(
                 MEMORYSTORE_REDIS_URL,
@@ -185,10 +213,12 @@ async def init_async_client() -> str:
             logger.warning("ai_cache: Memorystore unreachable, falling back to memory_only: %s", e)
             _async_pool = None
             chosen = _detect_fallback_backend()
+
     _backend = chosen
-    if _backend == "memory_only" and not MEMORYSTORE_REDIS_URL:
+    if _backend == "memory_only":
         logger.info(
-            "ai_cache: backend=L1_only (per-worker TTLCache, maxsize=%d, ttl=%ds; Cloudflare AI Gateway handles upstream LLM cache, edge KV handles rate limiting)",
+            "ai_cache: backend=L1_only (per-worker TTLCache, maxsize=%d, ttl=%ds; "
+            "Cloudflare AI Gateway handles upstream LLM cache)",
             _L1_MAX_ENTRIES, REDIS_AI_CACHE_TTL,
         )
     else:

@@ -29,11 +29,29 @@ from config import (
     _PG_DSN,
     CF_GATEWAY_ENABLED, cf_gateway_url, _CF_PROVIDER_SLUGS,
     CF_AI_GATEWAY_TOKEN, CF_CACHE_TTL,
+    REDIS_URL, REDIS_TOKEN,
 )
 
 logger = logging.getLogger(__name__)
 
+# ── Upstash Redis (REST-based, serverless) ────────────────────────────────────
+# Uses the HTTP REST API — works from any environment without TCP access.
+# Initialized here so every module that does `from deps import redis_client`
+# automatically gets a live client when credentials are present.
 redis_client: Optional[Any] = None
+try:
+    if REDIS_URL and REDIS_TOKEN:
+        from upstash_redis import Redis as _UpstashRedis
+        redis_client = _UpstashRedis(url=REDIS_URL, token=REDIS_TOKEN)
+        _ping = redis_client.ping()
+        logging.info(f"Upstash Redis ready — ping={_ping}")
+    else:
+        logging.info("Upstash Redis not configured (UPSTASH_REDIS_REST_URL/TOKEN missing) — L1 in-memory cache only")
+except ImportError:
+    logging.warning("upstash-redis package not installed — Redis disabled. Run: pip install upstash-redis")
+except Exception as _redis_init_err:
+    redis_client = None
+    logging.warning(f"Upstash Redis init failed — L1 cache only: {_redis_init_err}")
 
 # MongoDB with fast timeout — wrapped so bad URLs don't crash startup
 try:
