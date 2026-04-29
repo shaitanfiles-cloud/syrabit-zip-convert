@@ -18,21 +18,38 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "workers/edge-proxy: wrangler dev"
+args = "Backend"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
 
 [[workflows.workflow]]
-name = "workers/edge-proxy: wrangler dev"
+name = "Backend"
 author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd workers/edge-proxy && ./node_modules/.bin/wrangler dev --ip 0.0.0.0 --port 8000"
+args = "cd artifacts/syrabit-backend && python -m uvicorn server:app --host 0.0.0.0 --port 8080 --reload"
+waitForPort = 8080
 
 [workflows.workflow.metadata]
 outputType = "console"
 
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd artifacts/syrabit && PORT=5000 pnpm dev"
+waitForPort = 5000
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
 [agent]
-stack = "PNPM_WORKSPACE"
+stack = "BEST_EFFORT_FALLBACK"
 expertMode = true
 
 [postMerge]
@@ -47,7 +64,6 @@ packages = ["cargo", "libiconv", "libxcrypt", "rustc"]
 
 [userenv.shared]
 DB_NAME = "test_database"
-CORS_ORIGINS = "http://localhost:5000,http://localhost:3000,http://0.0.0.0:5000,https://90464407-7954-469a-ae00-d16f60f666ea-00-19ag09bq0sa15.pike.replit.dev"
 ADMIN_EMAILS = "admin@syrabit.ai"
 ADMIN_NAMES = "Administrator"
 LLM_PROVIDER = "groq"
@@ -59,13 +75,12 @@ VITE_SITE_URL = "https://syrabit.ai"
 TRUSTPILOT_BUSINESS_UNIT_ID = "6831bda2e0dd12f40d94de6c"
 EDGE_WORKER_URL = "https://api.syrabit.ai"
 CF_AI_GATEWAY_ACCOUNT_ID = "d66e40eac539fff1db270fddf384a5ec"
+CORS_ORIGINS = "http://localhost:5000,http://localhost:3000,http://0.0.0.0:5000,https://f5641b56-9215-49ab-9946-ebb50a2f75a2-00-2rp6le2tp8cuz.kirk.replit.dev,https://*.replit.dev,https://*.replit.app"
 
 [userenv.development]
-ENABLE_E2E_ADMIN = "true"
+VITE_BACKEND_URL = "http://localhost:8080"
 
 [userenv.production]
-VITE_ADS_PROPELLERADS_SCRIPT_URL = "https://quge5.com/88/tag.min.js"
-VITE_ADS_PROPELLERADS_LEARN_AFTER_PYQS_ZONE = "231351"
 VITE_ADS_PROPELLERADS_LEARN_END_ZONE = "231351"
 TRACING_ENABLED = "1"
 OTEL_EXPORTER = "cloud_trace"
@@ -73,6 +88,10 @@ OTEL_SERVICE_NAME = "syrabit-backend"
 TRACE_SAMPLE_RATIO = "0.1"
 DEPLOYMENT_ENV = "production"
 VITE_BACKEND_URL = "https://api.syrabit.ai"
+
+[[ports]]
+localPort = 5000
+externalPort = 80
 
 [[ports]]
 localPort = 7766
@@ -85,10 +104,6 @@ externalPort = 80
 [[ports]]
 localPort = 8080
 externalPort = 8080
-
-[[ports]]
-localPort = 8081
-externalPort = 8081
 
 [[ports]]
 localPort = 8082
