@@ -54,7 +54,7 @@ The project is built as a pnpm workspace monorepo, integrating a React + Vite fr
 - **API Codegen:** Orval.
 - **Build Tools:** esbuild, pnpm, Docker.
 - **Production Deployment:** Hybrid architecture with FastAPI on Railway, Cloudflare Worker edge proxy, and frontend on Cloudflare Pages.
-- **Cloudflare Services:** Cloudflare Cache Purge API, Worker Cache API, IndexNow Integration.
+- **Cloudflare Services (Enterprise):** Cloudflare Cache Purge API, Worker Cache API, IndexNow Integration, Vectorize (syllabus-index-v2 1024-dim + syllabus-index 768-dim legacy), D1 (syrabit-content + syrabit-content-preview), KV namespaces (RATE_LIMIT, BOT_HTML_CACHE), Smart Placement, Workers Observability (10% sampling), Workers Logpush, Enterprise WAF (security_level=high, image_resizing=on). Edge worker `wrangler.toml` upgraded Apr 2026: compatibility_date=2025-05-01, nodejs_compat_v2 flag, Vectorize bindings enabled, enterprise AI models (llama-3.3-70b-instruct-fp8-fast for chat, bge-large-en-v1.5 for embed, whisper-large-v3-turbo for STT). New endpoint: POST /api/edge/search — edge-side semantic search via Vectorize + Workers AI with no backend round-trip.
 - **Observability:** Firebase Performance Monitoring for RUM and Core Web Vitals. OpenTelemetry for distributed tracing to Cloud Trace.
 
 ## GitHub Sync Scripts

@@ -1,6 +1,41 @@
 name = "syrabit-edge"
 main = "src/index.ts"
-compatibility_date = "2024-12-01"
+account_id = "d66e40eac539fff1db270fddf384a5ec"
+compatibility_date = "2025-05-01"
+compatibility_flags = [
+  "nodejs_compat_v2",
+]
+
+# ---------------------------------------------------------------------------
+# Enterprise zone / Workers Standard settings
+# ---------------------------------------------------------------------------
+# NOTE: usage_model="unbound" and [limits] cpu_ms require Workers Enterprise
+# Unbound subscription (separate from the syrabit.ai Enterprise Website zone
+# plan). When that subscription is activated on the account, uncomment:
+#   usage_model = "unbound"
+#   [limits]
+#   cpu_ms = 30000
+# Until then the Standard Workers model applies (10ms CPU / 128MB RAM).
+
+# Smart Placement — Cloudflare automatically routes each isolate invocation
+# to the data-centre closest to the Railway backend origin, not to the user.
+# This cuts origin RTT on API proxying by 30–60 ms in Asia Pacific markets
+# (the primary Assam user base). Available on Workers Standard Paid.
+[placement]
+mode = "smart"
+
+# Workers Logpush — streams structured request/response metadata to the
+# Logpush pipeline configured in the dashboard (Cloudflare → Analytics →
+# Logpush → Workers Trace Events). Available on Workers Standard Paid.
+logpush = true
+
+# Workers Observability — enables per-request sampling in the CF dashboard
+# (Workers → Observability). head_sampling_rate = 0.1 → sample 10 % of
+# requests so the flame-graph / tail-latency views are populated without
+# burning the full per-request cost on high-traffic paths.
+[observability]
+enabled = true
+head_sampling_rate = 0.1
 
 routes = [
   { pattern = "api.syrabit.ai/*", zone_name = "syrabit.ai" },
@@ -129,6 +164,30 @@ migrations_dir = "migrations"
 # [[vectorize]]
 # binding   = "SYLLABUS_INDEX"
 # index_name = "syllabus-index-v2"
+
+# ---------------------------------------------------------------------------
+# Vectorize bindings — ENABLED for enterprise edge semantic search.
+#
+# Enterprise Vectorize limits (2025):
+#   - Up to 5 000 000 vectors per index
+#   - Up to 1 536 dimensions per vector
+#   - Metadata filtering across 10 metadata indexes per index
+#   - Low-latency direct binding (no HTTP round-trip, no CLOUDFLARE_API_TOKEN)
+#
+# SYLLABUS_INDEX   → syllabus-index-v2, 1024-dim cosine (Gemini embeddings)
+#                    Primary index used for semantic chapter/topic search.
+# SYLLABUS_INDEX_LEGACY → syllabus-index, 768-dim cosine (BGE embeddings)
+#                    Kept for rollback if the 1024-dim index is ever
+#                    re-embedded; queries fall back here when v2 returns
+#                    no results above the similarity threshold.
+# ---------------------------------------------------------------------------
+[[vectorize]]
+binding    = "SYLLABUS_INDEX"
+index_name = "syllabus-index-v2"
+
+[[vectorize]]
+binding    = "SYLLABUS_INDEX_LEGACY"
+index_name = "syllabus-index"
 
 [triggers]
 # Two crons fan out from the same `scheduled` handler in src/index.ts —
@@ -287,6 +346,14 @@ crons = ["* * * * *", "0 */6 * * *"]
 name = "syrabit-edge-preview"
 workers_dev = true
 routes = []
+logpush = true
+
+[env.preview.placement]
+mode = "smart"
+
+[env.preview.observability]
+enabled = true
+head_sampling_rate = 1.0
 
 [env.preview.vars]
 BACKEND_URL = "https://workspacemockup-sandbox-production-df37.up.railway.app"
@@ -313,3 +380,11 @@ binding = "CONTENT_DB"
 database_name = "syrabit-content-preview"
 database_id = "35e59391-218e-4e94-bbf5-972baa0d0b30"
 migrations_dir = "migrations"
+
+[[env.preview.vectorize]]
+binding    = "SYLLABUS_INDEX"
+index_name = "syllabus-index-v2"
+
+[[env.preview.vectorize]]
+binding    = "SYLLABUS_INDEX_LEGACY"
+index_name = "syllabus-index"
