@@ -44,7 +44,7 @@ The project is built as a pnpm workspace monorepo, integrating a React + Vite fr
 - **Databases:** PostgreSQL, MongoDB, Cloudflare D1.
 - **Authentication:** Supabase, JWT helpers, Google OAuth.
 - **Caching:** Cloudflare AI Gateway (upstream LLM cache), Cloudflare edge worker KV bindings.
-- **LLM Providers:** Cerebras, Groq, OpenRouter (general English chat); Cerebras (qwen-235b) and Gemini 2.5 Flash (admin content generation); Gemini for vision and embeddings; Sarvam (Assamese translation polishing and Assamese-only chat responses with Gemini fallback). All LLM traffic routed through Cloudflare AI Gateway.
+- **LLM Providers (2026-04-29):** Cloudflare Workers AI is now the PRIMARY provider for all three pools — `llama-3.3-70b-instruct-fp8-fast` for chat/general, `gpt-oss-120b` for admin content generation. Gemini, Groq, Cerebras, OpenRouter remain as ordered fallbacks. Workers AI also handles Assamese/Indic translation via `indictrans2-en-indic-1B` (replaces Sarvam as primary), and embeddings via `bge-large-en-v1.5` (1024-dim, matches Vectorize). All LLM traffic routes through Cloudflare AI Gateway (`CF_AI_GATEWAY_ID=syrabit`).
 - **Payment Gateways:** Razorpay (INR), Stripe (USD).
 - **Email Service:** Resend API.
 - **UI/UX Frameworks:** React, Vite, React Router, Tailwind CSS.
@@ -56,6 +56,22 @@ The project is built as a pnpm workspace monorepo, integrating a React + Vite fr
 - **Production Deployment:** Hybrid architecture with FastAPI on Railway, Cloudflare Worker edge proxy, and frontend on Cloudflare Pages.
 - **Cloudflare Services (Enterprise):** Cloudflare Cache Purge API, Worker Cache API, IndexNow Integration, Vectorize (syllabus-index-v2 1024-dim + syllabus-index 768-dim legacy), D1 (syrabit-content + syrabit-content-preview), KV namespaces (RATE_LIMIT, BOT_HTML_CACHE), Smart Placement, Workers Observability (10% sampling), Workers Logpush, Enterprise WAF (security_level=high, image_resizing=on). Edge worker `wrangler.toml` upgraded Apr 2026: compatibility_date=2025-05-01, nodejs_compat_v2 flag, Vectorize bindings enabled, enterprise AI models (llama-3.3-70b-instruct-fp8-fast for chat, bge-large-en-v1.5 for embed, whisper-large-v3-turbo for STT). New endpoint: POST /api/edge/search — edge-side semantic search via Vectorize + Workers AI with no backend round-trip.
 - **Observability:** Firebase Performance Monitoring for RUM and Core Web Vitals. OpenTelemetry for distributed tracing to Cloud Trace.
+
+## Cloudflare Upgrade Script
+
+`scripts/cf_upgrade.sh` — applies all 10 Cloudflare configuration upgrades in order (zone settings, email routing, R2 buckets, WAF, cache rules, rate limiting, AI Gateway, Vectorize indexes, Workers deploy, health check).
+
+```bash
+export CLOUDFLARE_API_TOKEN="your-token"
+bash scripts/cf_upgrade.sh              # run all steps
+bash scripts/cf_upgrade.sh --dry-run    # preview only, no writes
+bash scripts/cf_upgrade.sh --step 4     # run only step 4 (WAF)
+```
+
+Steps requiring extra token permissions (skip gracefully if absent):
+- **Step 3** R2: Enable R2 in Dashboard first, then re-run.
+- **Step 4** WAF: Needs `Zone > Firewall Services > Edit`.
+- **Step 6** Rate Limiting: Needs `Zone > Rate Limiting > Edit`.
 
 ## GitHub Sync Scripts
 
