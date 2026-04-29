@@ -143,6 +143,12 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS ads_opt_out BOOLEAN NOT NULL DEFAULT 
 -- Task #591: persisted role column so admins can promote trusted users to
 -- 'educator' (the get_educator_user dependency already gates on this).
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider TEXT NOT NULL DEFAULT 'email';
+-- DPDP Act consent columns (India Digital Personal Data Protection Act)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS consent_dpdp BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS consent_dpdp_version TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS consent_dpdp_at TIMESTAMPTZ;
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,

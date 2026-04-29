@@ -220,6 +220,18 @@ def _quote_ident(name: str) -> str:
     """Double-quote a SQL identifier to prevent injection (defense-in-depth on top of allowlists)."""
     return '"' + name.replace('"', '""') + '"'
 
+_TIMESTAMPTZ_USER_COLS: frozenset = frozenset({"consent_dpdp_at"})
+
+def _coerce_user_val(k: str, v):
+    """Coerce values for known PostgreSQL column types in the users table."""
+    if k in _TIMESTAMPTZ_USER_COLS and isinstance(v, str) and v:
+        from datetime import datetime, timezone
+        try:
+            return datetime.fromisoformat(v.replace("Z", "+00:00"))
+        except ValueError:
+            return v
+    return v
+
 async def supa_update_user(uid: str, updates: dict):
     _invalidate_user_cache(uid)  # always bust cache before touching DB
     if _deps_mod.pg_pool and updates:
@@ -236,7 +248,7 @@ async def supa_update_user(uid: str, updates: dict):
                     vals.append(json.dumps(v))
                 else:
                     cols.append(f"{qi} = ${i}")
-                    vals.append(v)
+                    vals.append(_coerce_user_val(k, v))
             vals.append(uid)
             sql = f"UPDATE users SET {', '.join(cols)} WHERE id = ${len(vals)}"
             async with _deps_mod.pg_pool.acquire() as conn:

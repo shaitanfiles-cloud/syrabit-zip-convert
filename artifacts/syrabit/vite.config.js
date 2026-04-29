@@ -549,22 +549,26 @@ function backendPreconnectPlugin() {
   return {
     name: 'syrabit-backend-preconnect',
     transformIndexHtml(html) {
-      if (!backendUrl) return html;
       try {
-        const origin = new URL(backendUrl).origin;
-        // Preload the slim library bundle ONLY when the current request is for
-        // /library — site-wide preload would waste bandwidth on every page.
-        const tags = [
-          // Task #391: drop crossorigin on the same-host API preconnect.
-          // The API responds same-origin (api.syrabit.ai shares eTLD+1
-          // with syrabit.ai for cookie/credential purposes only — the
-          // preconnect itself is plain), and Lighthouse flags the
-          // crossorigin attribute as "preconnect misuse" when no
-          // crossorigin request follows.
-          `<link rel="preconnect" href="${origin}" />`,
-          `<link rel="dns-prefetch" href="${origin}" />`,
-          `<script>(function(){if(/^\\/library(\\/|$)/.test(location.pathname)){var l=document.createElement('link');l.rel='preload';l.as='fetch';l.crossOrigin='anonymous';l.href=${JSON.stringify(`${origin}/api/content/library-bundle?slim=1`)};document.head.appendChild(l);}})();</script>`,
-        ].join('\n    ');
+        // Task #391: drop crossorigin on the same-host API preconnect.
+        // Use relative URLs for the preload hint so it always works regardless
+        // of whether VITE_BACKEND_URL is local or remote (avoids credentials
+        // mismatch when Vite proxies /api/* to a local backend).
+        const preconnectTags = backendUrl
+          ? (() => {
+              const origin = new URL(backendUrl).origin;
+              return [
+                `<link rel="preconnect" href="${origin}" />`,
+                `<link rel="dns-prefetch" href="${origin}" />`,
+              ].join('\n    ');
+            })()
+          : '';
+        // Always inject the library-bundle preload using a relative URL so it
+        // goes through the Vite proxy in dev and the CDN edge in production.
+        // crossOrigin='anonymous' → mode:cors + credentials:same-origin, matching
+        // the actual fetch() so the browser can reuse the preloaded response.
+        const preloadScript = `<script>(function(){if(/^\\/library(\\/|$)/.test(location.pathname)){var l=document.createElement('link');l.rel='preload';l.as='fetch';l.crossOrigin='anonymous';l.href='/api/content/library-bundle?slim=1';document.head.appendChild(l);}})();</script>`;
+        const tags = [preconnectTags, preloadScript].filter(Boolean).join('\n    ');
         return html.replace('<!--BACKEND_PRECONNECT-->', tags);
       } catch {
         return html;
