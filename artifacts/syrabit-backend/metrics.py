@@ -1185,6 +1185,22 @@ async def _bg_health_loop():
                 f"cache_stats hit_rate={hit_rate} "
                 f"hits={_cache_mod._redis_hit_count} misses={_cache_mod._redis_miss_count} total={total}"
             )
+            try:
+                from neural_mesh import get_mesh_stats as _gms
+                _ms = _gms()
+                agg = _ms["aggregate"]
+                mesh_parts = " ".join(
+                    f"{m['name']}={m['hits']}h/{m['misses']}m/{m['l1_size']}sz"
+                    for m in _ms["meshes"]
+                )
+                logger.info(
+                    "neural_mesh_stats hit_rate=%.3f hits=%d misses=%d "
+                    "inflight_saves=%d | %s",
+                    agg["hit_rate"], agg["hits"], agg["misses"],
+                    agg["inflight_saves"], mesh_parts,
+                )
+            except Exception:
+                pass
 
         await asyncio.sleep(25)
 

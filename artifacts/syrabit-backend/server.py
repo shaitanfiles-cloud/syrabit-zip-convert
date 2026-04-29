@@ -156,6 +156,14 @@ async def _seed_syllabus_embeddings():
 
 async def _prewarm_library_cache():
     await asyncio.sleep(3)
+    # Check if neural_mesh.warm_all() already populated the content cache
+    try:
+        from cache import _get_content_cache
+        if _get_content_cache("library-bundle:slim") is not None:
+            logger.info("Library-bundle cache pre-warmed (neural_mesh already warm)")
+            return
+    except Exception:
+        pass
     from routes.content import get_library_bundle
     for attempt in range(3):
         try:
@@ -943,6 +951,11 @@ async def lifespan(app):
     _deps_mod._rate_cleanup_task = asyncio.create_task(_rate_limiter_cleanup())
     asyncio.create_task(_bg_health_loop())
     asyncio.create_task(_prewarm_library_cache())
+    try:
+        from neural_mesh import warm_all as _nm_warm_all
+        asyncio.create_task(_nm_warm_all())
+    except Exception as _nm_err:
+        logger.warning("neural_mesh startup warm skipped: %s", _nm_err)
     global _syllabus_embedder
     if db is not None:
         _syllabus_embedder = SyllabusEmbedder(db)
