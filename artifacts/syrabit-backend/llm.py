@@ -266,10 +266,12 @@ if _OPENAI_KEY and _OPENAI_KEY != 'x':
 
 _LLM_PROVIDERS_CHAT: list[dict] = []
 # Workers AI leads the chat pool — 70B fp8 model, no rate-limit per-key issues.
+# Cerebras uses qwen-3-235b (235B reasoning model, ~1.7s, much better quality
+# than llama3.1-8b for educational Q&A) as the first fallback.
 if _CF_AI_ENABLED:
     _LLM_PROVIDERS_CHAT.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
 if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
+    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "qwen-3-235b-a22b-instruct-2507"})
 if _GROQ_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
 if _OPENROUTER_KEY:
@@ -313,26 +315,31 @@ _MODEL_ALIAS_MAP = {
 # Slots in the same tier are load-balanced by in-flight count.
 #
 _SLM_SLOT_CANDIDATES = [
-    # Tier 0: Cerebras llama3.1-8b — fast small-model slot for SLM
-    # work (topic resolution, classification, short rewrites). This
-    # replaced llama-3.3-70b after Cerebras removed that model from
-    # our account on 2026-04-26 (see provider list comment above).
-    # llama3.1-8b is the only fast Cerebras model we have access to;
-    # the 235B qwen sits in the content slot for higher-quality jobs.
-    # Tiers 1/2 keep the larger Llama-4 Scout fallbacks unchanged.
-    ("cerebras",    "llama3.1-8b",                                       4, 0),
-    ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 1),
-    ("openrouter",  "meta-llama/llama-4-scout",                          4, 2),
+    # Tier 0: Workers AI llama-3.3-70b-fp8 — fastest slot (840ms measured),
+    # free under CF startup credits. Used for routing/classification/short
+    # rewrites where a large reasoning model is unnecessary.
+    ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",         6, 0),
+    # Tier 1: Cerebras llama3.1-8b — ultra-fast SLM backup (kept for
+    # burst headroom when Workers AI hits concurrency limits).
+    ("cerebras",    "llama3.1-8b",                                       4, 1),
+    # Tier 2/3: Groq and OpenRouter as further fallbacks.
+    ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 2),
+    ("openrouter",  "meta-llama/llama-4-scout",                          4, 3),
 ]
 
 # Content SmartKeyPool — serves `_CONTENT_INTENTS` (notes, important_questions,
 # pyq) for ALL languages. Sarvam is intentionally NOT in this pool — see
-# `_SARVAM_PROVIDERS` rationale above. Gemini Tier 0 carries the load
-# (600 RPM headroom + native multilingual); Cerebras qwen-235B is the
-# higher-quality fallback when Gemini is throttled or down.
+# `_SARVAM_PROVIDERS` rationale above.
+#
+# Tier order (quality + speed priority):
+#   0 — Workers AI gpt-oss-120b: 120B model free under CF credits, best
+#       for long-form structured educational content (notes, MCQs).
+#   1 — Gemini 2.5 Flash: excellent multilingual reasoning, 600 RPM headroom.
+#   2 — Cerebras qwen-3-235b: high-quality reasoning fallback.
 _CONTENT_SLOT_CANDIDATES = [
-    ("gemini",      "gemini-2.5-flash",                                  6, 0),
-    ("cerebras",    "qwen-3-235b-a22b-instruct-2507",                    4, 1),
+    ("workers-ai",  "@cf/openai/gpt-oss-120b",                           4, 0),
+    ("gemini",      "gemini-2.5-flash",                                  6, 1),
+    ("cerebras",    "qwen-3-235b-a22b-instruct-2507",                    4, 2),
 ]
 
 _CONTENT_INTENTS = {"notes", "important_questions", "pyq"}
@@ -727,11 +734,32 @@ async def _call_openai_compat(messages: list, api_key: str, model: str, max_toke
     return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
 
 async def _call_cerebras(messages: list, api_key: str, model: str, max_tokens: int) -> str:
-    base = get_provider_base_url("cerebras") or "https://api.cerebras.ai/v1"
+    direct_base = "https://api.cerebras.ai/v1"
+    base = get_provider_base_url("cerebras") or direct_base
     client = _get_oai_client(api_key, base)
-    resp = await client.chat.completions.create(
-        model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
-    )
+    try:
+        resp = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            extra_headers=_cf_cache_headers(api_key=api_key) or None,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
     content = resp.choices[0].message.content or ""
     return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
 
@@ -958,6 +986,83 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
 
     logger.error(f"All LLM providers exhausted. Last error: {last_err}")
     raise HTTPException(status_code=503, detail="AI service temporarily unavailable. Please try again.")
+
+# ── Task-based dynamic router ──────────────────────────────────────────────────
+# Maps abstract task types to (provider_list, model) so callers never
+# hard-code provider names. Add new task types here; never in route handlers.
+#
+# Task taxonomy:
+#   fast / classify / routing  → Workers AI 70B  (fastest, free under CF credits)
+#   chat                       → _LLM_PROVIDERS_CHAT pool (Workers AI → Cerebras qwen-3 → Groq)
+#   rag_answer / synthesis     → Gemini 2.5 Flash primary (best multi-doc reasoning)
+#   content / notes / pyq      → _LLM_PROVIDERS_CONTENT pool (Workers AI 120B → Gemini → Cerebras)
+#   embed                      → Workers AI BGE-large-en-v1.5 via vertex_services.embed_text()
+
+_TASK_ROUTE: dict[str, tuple] = {
+    # ── Speed-optimised (low latency, simple output) ──────────────────────────
+    "fast":          ("workers-ai", "@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
+    "classify":      ("workers-ai", "@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
+    "routing":       ("workers-ai", "@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
+    "rewrite":       ("workers-ai", "@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
+    # ── RAG quality (factual, multi-doc, citation-heavy) ─────────────────────
+    "rag_answer":    ("gemini",     "gemini-2.5-flash"),
+    "synthesis":     ("gemini",     "gemini-2.5-flash"),
+    "pyq_solve":     ("gemini",     "gemini-2.5-flash"),
+    # ── Long-form content (notes, MCQs, PYQs) ────────────────────────────────
+    "content":       ("workers-ai", "@cf/openai/gpt-oss-120b"),
+    "notes":         ("workers-ai", "@cf/openai/gpt-oss-120b"),
+    "mcq":           ("workers-ai", "@cf/openai/gpt-oss-120b"),
+    # ── Deep reasoning ───────────────────────────────────────────────────────
+    "reasoning":     ("cerebras",   "qwen-3-235b-a22b-instruct-2507"),
+}
+
+
+def route_for_task(task: str) -> tuple[str, str]:
+    """Return (provider, model) for the given abstract task type.
+
+    Falls back to Workers AI 70B for unknown task names.
+    Usage::
+
+        provider, model = route_for_task("rag_answer")
+        result = await _call_single_provider(msgs, provider, key, model, 1024)
+    """
+    return _TASK_ROUTE.get(task, ("workers-ai", "@cf/meta/llama-3.3-70b-instruct-fp8-fast"))
+
+
+# ── RAG-quality call path ───────────────────────────────────────────────────────
+# Gemini 2.5 Flash is the best available model for RAG synthesis:
+#   • native long-context window (1M tokens)
+#   • strong factual grounding across retrieved chunks
+#   • multilingual (handles Assamese syllabus text natively)
+#
+# Falls back to Workers AI 70B if Gemini is unavailable or hits quota.
+_RAG_PROVIDERS: list[dict] = []
+if _GEMINI_KEY:
+    _RAG_PROVIDERS.append({"provider": "gemini",     "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
+if _CF_AI_ENABLED:
+    _RAG_PROVIDERS.append({"provider": "workers-ai", "key": _CF_API_TOKEN,   "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
+if _CEREBRAS_KEY:
+    _RAG_PROVIDERS.append({"provider": "cerebras",   "key": _CEREBRAS_KEY,   "default_model": "qwen-3-235b-a22b-instruct-2507"})
+if _GROQ_KEY:
+    _RAG_PROVIDERS.append({"provider": "groq",       "key": _GROQ_KEY,       "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
+
+
+async def call_llm_for_rag(messages: list, max_tokens: int = 2048) -> str:
+    """LLM call optimised for RAG answer synthesis.
+
+    Provider priority: Gemini 2.5 Flash → Workers AI 70B → Cerebras qwen-3-235b → Groq.
+    Gemini leads because it has the best factual accuracy and longest context
+    for combining multiple retrieved chunks into a coherent answer.
+
+    Use this instead of ``call_llm_api_chat`` for any endpoint that retrieves
+    context before generation (PYQ solve, notes Q&A, semantic search answer).
+    """
+    # Explicitly pass the first provider's model so _call_llm_raw resolves
+    # the correct primary immediately instead of falling back to the global
+    # LLM_MODEL default which may map to a different provider.
+    primary_model = _RAG_PROVIDERS[0]["default_model"] if _RAG_PROVIDERS else None
+    return await _call_llm_raw(messages, model=primary_model, max_tokens=max_tokens, provider_list=_RAG_PROVIDERS)
+
 
 async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048) -> str:
     """Smart-batched LLM call: deduplicates identical requests, limits concurrency.
