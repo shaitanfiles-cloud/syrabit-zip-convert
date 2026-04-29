@@ -1,0 +1,66 @@
+[package]
+name = "syrabit-rust-core"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance Rust/gRPC core for Syrabit.ai Education Platform"
+
+[dependencies]
+# Web framework
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# gRPC
+tonic = "0.11"
+tonic-build = "0.11"
+prost = "0.12"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Database
+sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "postgres", "sqlite"] }
+
+# Async utilities
+futures = "0.3"
+async-stream = "0.3"
+
+# Logging & tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# UUID
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# JWT authentication
+jsonwebtoken = "9.2"
+
+# HTTP client for external APIs
+reqwest = { version = "0.11", features = ["json"] }
+
+# Vector search / embeddings
+ndarray = "0.15"
+ndarray-linalg = "0.16"
+
+# Random number generation
+rand = "0.8"
+
+# Async stream utilities
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+[build-dependencies]
+tonic-build = "0.11"
+
+[[bin]]
+name = "rust-core"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
