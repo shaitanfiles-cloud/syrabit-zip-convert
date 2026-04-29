@@ -41,6 +41,7 @@ The project is built as a pnpm workspace monorepo, integrating a React + Vite fr
 
 ## External Dependencies
 
+- **Data State (2026-04-29):** MongoDB `test_database` now has 99 subjects (AHSEC: 28, DEGREE: 65, other: 6) and 593 chapters. AHSEC sub-style subjects (sub1–sub50) have been synced with correct `board_slug`, `class_slug`, `stream_slug` metadata from D1. DEGREE NEP semester subjects fixed with `board_slug=degree`. `resolve-subject` (with-stream variant) now returns full metadata. Library bundle correctly shows 91 public subjects with chapter counts. Chapter content for AHSEC (500 chapters) is placeholder — requires AI generation via admin panel.
 - **Databases:** PostgreSQL, MongoDB, Cloudflare D1.
 - **Authentication:** Supabase, JWT helpers, Google OAuth.
 - **Caching:** Cloudflare AI Gateway (upstream LLM cache), Cloudflare edge worker KV bindings.

@@ -511,7 +511,16 @@ async def resolve_subject(board_slug: str, class_slug: str, stream_slug: str, su
     if not stream: raise HTTPException(404, "Stream not found")
     subj = await db.subjects.find_one({"slug": subject_slug, "stream_id": stream["id"], "status": "published"}, {"_id": 0})
     if not subj: raise HTTPException(404, "Subject not found")
-    result = {"id": subj["id"], "name": subj["name"]}
+    result = {
+        "id": subj["id"], "name": subj["name"],
+        "description": subj.get("description", ""),
+        "icon": subj.get("icon", ""), "tags": subj.get("tags", []),
+        "gradient": subj.get("gradient", ""), "chapter_count": subj.get("chapter_count", 0),
+        "board_name": board.get("name", ""), "class_name": cls.get("name", ""),
+        "stream_name": stream.get("name", ""),
+        "board_slug": board_slug, "class_slug": class_slug,
+        "stream_slug": stream_slug, "slug": subject_slug,
+    }
     _set_content_cache(ck, result)
     if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
     return result
