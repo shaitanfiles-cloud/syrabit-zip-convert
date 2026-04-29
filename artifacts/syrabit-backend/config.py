@@ -436,7 +436,11 @@ if CF_GATEWAY_ENABLED:
     # if not set — BYOK means CF handles rotation, so a single logical slot
     # per provider is enough. The pool's secondary-key slots only activate
     # when operators explicitly set the `*_KEY_2/3` env vars.
-_EXPLICIT_PROVIDER = os.environ.get('LLM_PROVIDER', '').strip().lower()
+# LLM_PRIMARY_PROVIDER is the canonical name (PR #36); LLM_PROVIDER kept as alias.
+_EXPLICIT_PROVIDER = (
+    os.environ.get('LLM_PRIMARY_PROVIDER', '').strip() or
+    os.environ.get('LLM_PROVIDER', '').strip()
+).lower()
 _AWS_ACCESS_KEY = os.environ.get('AWS_ACCESS_KEY_ID', '').strip()
 _AWS_SECRET_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY', '').strip()
 _AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1').strip()
