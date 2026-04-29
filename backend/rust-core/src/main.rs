@@ -15,7 +15,7 @@ mod grpc;
 mod websocket;
 
 use axum::{
-    routing::{get, post},
+    routing::{get, post, put, delete},
     Router,
 };
 use tower_http::{
@@ -127,6 +127,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Agent endpoints
         .route("/api/agents", get(handlers::agents::list_agents))
         .route("/api/agents/:id/execute", post(handlers::agents::execute_agent))
+        // D1 Sync endpoints for Edge caching
+        .route("/api/edge/d1-sync/health", get(handlers::d1_sync::d1_sync_health))
+        .route("/api/edge/d1-sync/boards", get(handlers::d1_sync::sync_boards))
+        .route("/api/edge/d1-sync/classes", get(handlers::d1_sync::sync_classes))
+        .route("/api/edge/d1-sync/subjects", get(handlers::d1_sync::sync_subjects))
+        .route("/api/edge/d1-sync/chapters", get(handlers::d1_sync::sync_chapters))
+        .route("/api/edge/d1-sync/pages", get(handlers::d1_sync::sync_pages))
         // WebSocket endpoint for JARVIS HUD
         .route("/ws/metrics", get(websocket::metrics_handler))
         // Staff management endpoints (Phone auth + CMS)
@@ -143,15 +150,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    // Spawn gRPC server in background
+    // Spawn gRPC server in background with tonic-web for HTTP/1.1 compatibility
     let grpc_addr = SocketAddr::from(([0, 0, 0, 0], config.grpc_port));
-    tracing::info!("📡 gRPC server listening on {}", grpc_addr);
+    tracing::info!("📡 gRPC server listening on {} (with tonic-web for HTTP/1.1)", grpc_addr);
 
     let grpc_service = NeuralMeshGrpcService::new(grpc_db, grpc_metrics_tx);
     
+    // Enable tonic-web for gRPC-Web compatibility (required for Cloudflare Workers/browser clients)
+    let grpc_web_service = tonic_web::enable(NeuralMeshGrpcService::into_service(grpc_service));
+    
     let grpc_handle = tokio::spawn(async move {
         tonic::transport::Server::builder()
-            .add_service(NeuralMeshGrpcService::into_service(grpc_service))
+            .accept_http1(true) // Allow HTTP/1.1 connections for gRPC-Web
+            .add_service(grpc_web_service)
             .serve(grpc_addr)
             .await
             .expect("Failed to start gRPC server");

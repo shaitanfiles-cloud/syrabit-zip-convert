@@ -1,6 +1,16 @@
 ```
 # Dependencies
 target/
+node_modules/
+
+# Rust specific
+Cargo.lock
+*.rs.bk
+
+# TypeScript/JavaScript
+*.tsbuildinfo
+.nyc_output/
+coverage/
 
 # Logs and temp files
 *.log
@@ -15,6 +25,11 @@ target/
 .vscode/
 .idea/
 
-# Rust-specific
-Cargo.lock
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Build outputs
+dist/
+build/
 ```

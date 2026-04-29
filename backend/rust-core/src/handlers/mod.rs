@@ -5,3 +5,4 @@ pub mod rag;
 pub mod agents;
 pub mod staff;
 pub mod websocket;
+pub mod d1_sync;

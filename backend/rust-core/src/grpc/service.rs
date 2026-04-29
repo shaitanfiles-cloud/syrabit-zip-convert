@@ -13,6 +13,7 @@ use crate::generated::syrabit::{
 };
 
 /// gRPC service implementation
+#[derive(Clone)]
 pub struct NeuralMeshGrpcService {
     db: PgPool,
     metrics_tx: broadcast::Sender<MetricsUpdate>,

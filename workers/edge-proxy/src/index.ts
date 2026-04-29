@@ -34,6 +34,8 @@ import {
 // records and POSTs them to /api/logs/ingest via ctx.waitUntil so it
 // never adds latency to user-visible responses.
 import { recordEdgeLog, type EdgeLogShipperEnv } from "./log-shipper";
+// Task #950 — Speculative prefetch based on user intent analysis
+import { detectIntent, speculativePrefetch, generatePrefetchHints } from "./speculative-prefetch";
 
 interface Env {
   BACKEND_URL: string;
@@ -1794,7 +1796,7 @@ async function _handleEdgeFetch(
   ctx: ExecutionContext,
 ): Promise<Response> {
     const url = new URL(request.url);
-    const { pathname } = url;
+    const { pathname, search } = url;
     const origin = request.headers.get("Origin");
     const cors = safeCorsHeaders(origin);
 
@@ -1812,6 +1814,25 @@ async function _handleEdgeFetch(
     // per-request keeps the binding instances `const` and lets the
     // monitor module share state across requests via its own Map.
     env = wrapEnvKv(env, ctx);
+
+    // Task #950 — Speculative prefetch based on user intent
+    // Analyze first 3 keystrokes/request patterns to preload resources
+    // Only for GET requests to educational content paths
+    if (request.method === "GET" && pathname.startsWith("/api/")) {
+      const intent = detectIntent(pathname, search);
+      if (intent.confidence > 0.3) {
+        // Trigger async prefetch (non-blocking)
+        ctx.waitUntil(
+          speculativePrefetch(intent, env, ctx, 0.3).then(result => {
+            if (result.success) {
+              console.log(`[speculative-prefetch] Prefetched ${result.resources.length} resources for ${intent.category}`);
+            }
+          }).catch(err => {
+            console.error('[speculative-prefetch] Error:', err);
+          })
+        );
+      }
+    }
 
     if (pathname === "/api/edge/kv-usage" && request.method === "GET") {
       return handleKvUsage(env, request, cors);
