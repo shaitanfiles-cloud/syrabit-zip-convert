@@ -129,6 +129,11 @@ binding = "BOT_HTML_CACHE"
 id = "a92591899d544ddb8ac61c54d2b40180"
 preview_id = "2c67fcc51dbf430391602e11d7a5e9fe"
 
+[[kv_namespaces]]
+binding = "CONTENT_CACHE"
+id = "981e939bcca445c481d4be818ebefee7"
+preview_id = "981e939bcca445c481d4be818ebefee7"
+
 [[d1_databases]]
 binding = "CONTENT_DB"
 database_name = "syrabit-content"

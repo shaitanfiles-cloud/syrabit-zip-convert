@@ -8,7 +8,7 @@ import modulepreloadInjectPlugin from './vite-plugins/modulepreload-inject.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isProd = process.env.NODE_ENV === 'production';
-const BACKEND_TARGET = process.env.VITE_BACKEND_URL || 'http://localhost:8000';
+const BACKEND_TARGET = process.env.VITE_BACKEND_URL || process.env.BACKEND_PROXY_URL || 'http://localhost:8080';
 
 // ─── CANONICAL BOT REGEX — DO NOT DRIFT ─────────────────────────────────────
 // This regex MUST stay aligned with three other locations:
