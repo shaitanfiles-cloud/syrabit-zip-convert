@@ -441,7 +441,14 @@ _AWS_ACCESS_KEY = os.environ.get('AWS_ACCESS_KEY_ID', '').strip()
 _AWS_SECRET_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY', '').strip()
 _AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1').strip()
 
-if _EXPLICIT_PROVIDER == 'groq' and _GROQ_KEY:
+_CF_API_TOKEN_FOR_LLM = os.environ.get('CLOUDFLARE_API_TOKEN', '').strip()
+_CF_ACCOUNT_ID_FOR_LLM = os.environ.get('CF_AI_GATEWAY_ACCOUNT_ID', '').strip()
+
+if _EXPLICIT_PROVIDER == 'workers-ai' and _CF_API_TOKEN_FOR_LLM and _CF_ACCOUNT_ID_FOR_LLM:
+    LLM_PROVIDER = 'workers-ai'
+    LLM_API_KEY = _CF_API_TOKEN_FOR_LLM
+    LLM_MODEL = os.environ.get('LLM_MODEL', '@cf/meta/llama-3.3-70b-instruct-fp8-fast')
+elif _EXPLICIT_PROVIDER == 'groq' and _GROQ_KEY:
     LLM_PROVIDER = 'groq'
     LLM_API_KEY = _GROQ_KEY
     LLM_MODEL = os.environ.get('LLM_MODEL', 'meta-llama/llama-4-scout-17b-16e-instruct')

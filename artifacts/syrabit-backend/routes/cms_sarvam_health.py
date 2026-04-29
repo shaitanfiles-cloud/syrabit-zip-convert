@@ -147,7 +147,7 @@ from db_ops import (
     _supa,
     supa_list_users,
 )
-from llm import call_llm_api, call_llm_api_content, _LLM_PROVIDERS, _llm_batcher
+from llm import call_llm_api, call_llm_api_content, _LLM_PROVIDERS, _llm_batcher, get_llm_provider_stats
 from cache import _content_cache, _ai_response_cache, _redis_hit_count, _redis_miss_count
 from metrics import (
     _metrics, _health_deps_cache, _health_deps_cache_at, _HEALTH_CACHE_TTL_S,
@@ -1716,10 +1716,10 @@ async def _health_inner():
             "llm": {
                 "status": llm_status,
                 "latencyMs": llm_latency,
-                "provider": LLM_PROVIDER,
-                "model": LLM_MODEL,
-                "providers": [p["provider"] for p in _LLM_PROVIDERS],
-                "fallback": len(_LLM_PROVIDERS) > 1,
+                "primary_provider": LLM_PROVIDER,
+                "primary_model": LLM_MODEL,
+                "provider_pool": [p["provider"] for p in _LLM_PROVIDERS],
+                "stats_1h": get_llm_provider_stats(3600),
             },
             "supabase": {"status": "ok" if supa else "not_configured"},
             "razorpay": {"status": rp_status},
