@@ -956,6 +956,11 @@ async def lifespan(app):
         asyncio.create_task(_nm_warm_all())
     except Exception as _nm_err:
         logger.warning("neural_mesh startup warm skipped: %s", _nm_err)
+    try:
+        import health_snapshot_cache as _hsc
+        asyncio.create_task(_hsc.warm_all_probes())
+    except Exception as _hsc_err:
+        logger.warning("health_snapshot_cache startup warm skipped: %s", _hsc_err)
     global _syllabus_embedder
     if db is not None:
         _syllabus_embedder = SyllabusEmbedder(db)

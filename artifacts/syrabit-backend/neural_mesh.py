@@ -241,6 +241,7 @@ async def warm_all() -> None:
     tasks = [
         _warm_library_bundle(),
         _warm_chapter_paths_sample(),
+        _warm_slug_hierarchies(),
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     elapsed = round((time.monotonic() - t0) * 1000)
@@ -407,7 +408,44 @@ async def _warm_chapter_paths_sample() -> None:
             warmed += 1
 
         logger.info("neural_mesh: chapter paths warmed — %d/%d chapters", warmed, len(sample))
+
     except asyncio.TimeoutError:
         logger.warning("neural_mesh: chapter path warm timed out")
     except Exception as exc:
         logger.warning("neural_mesh: chapter path warm error: %s", exc)
+
+
+async def _warm_slug_hierarchies() -> None:
+    """Pre-warm content.py's _slug_hierarchy_cache for all subjects.
+
+    Fetches FULL documents (no projection filter) for boards, classes,
+    streams, and subjects so the cached dict contains every field that
+    downstream route handlers access — including ``subj['name']`` which
+    causes a KeyError when stripped data is used.
+
+    Runs concurrently with the other warm tasks in warm_all().
+    """
+    try:
+        from deps import db, is_mongo_available
+
+        if not await is_mongo_available():
+            return
+
+        (boards, classes, streams, subjects) = await asyncio.wait_for(
+            asyncio.gather(
+                db.boards.find({}, {"_id": 0}).to_list(100),
+                db.classes.find({}, {"_id": 0}).to_list(200),
+                db.streams.find({}, {"_id": 0}).to_list(300),
+                db.subjects.find({"status": {"$ne": "archived"}}, {"_id": 0}).to_list(1000),
+            ),
+            timeout=10.0,
+        )
+
+        from routes.content import warm_slug_hierarchy_cache
+        count = warm_slug_hierarchy_cache(subjects, streams, classes, boards)
+        logger.info("neural_mesh: slug hierarchy cache warmed — %d entries", count)
+
+    except asyncio.TimeoutError:
+        logger.warning("neural_mesh: slug hierarchy warm timed out")
+    except Exception as exc:
+        logger.warning("neural_mesh: slug hierarchy warm error: %s", exc)

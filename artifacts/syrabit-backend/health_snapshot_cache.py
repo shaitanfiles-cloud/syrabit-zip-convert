@@ -303,3 +303,22 @@ def register_default_probes() -> None:
     register("postgresql", _probe_postgres)
     register("cloudflare_cache", _probe_cloudflare_cache)
     register("razorpay", _probe_razorpay)
+
+
+async def warm_all_probes() -> None:
+    """Run every registered probe once in parallel at startup.
+
+    After this returns, all slots are populated so the first real
+    request to /api/health never pays a cold-probe penalty.
+    Force-refresh by passing ttl_s=0 so we skip the "never probed"
+    fast-path and actually run every probe.
+    """
+    if not _probes:
+        return
+    t0 = time.time()
+    await get_all(ttl_s=0)
+    logger.info(
+        "health_snapshot_cache: startup warm complete in %dms — probes: %s",
+        int((time.time() - t0) * 1000),
+        ", ".join(_probes.keys()),
+    )

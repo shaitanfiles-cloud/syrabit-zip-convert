@@ -770,6 +770,52 @@ async def get_chapters(subject_id: str, response: Response = None):
 
 _slug_hierarchy_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=1800)
 
+
+def warm_slug_hierarchy_cache(
+    subjects: list,
+    streams: list,
+    classes: list,
+    boards: list,
+) -> int:
+    """Pre-populate _slug_hierarchy_cache from pre-fetched lookup data.
+
+    Called by neural_mesh._warm_chapter_paths_sample() at startup — the
+    data is already in memory, so we pay zero extra DB round-trips here.
+    Returns the number of entries populated.
+    """
+    stream_map = {s["id"]: s for s in streams}
+    class_map = {c["id"]: c for c in classes}
+    board_map = {b["id"]: b for b in boards}
+
+    warmed = 0
+    for subj in subjects:
+        stream_id = subj.get("stream_id")
+        stream = stream_map.get(stream_id) if stream_id else None
+        class_id = (stream or {}).get("class_id") or subj.get("class_id")
+        cls = class_map.get(class_id) if class_id else None
+        if cls is None:
+            continue
+        board = board_map.get(cls.get("board_id", ""))
+        if board is None:
+            continue
+        if not (board.get("name") and cls.get("name") and subj.get("name")):
+            continue
+        hk = f"{board.get('slug', '')}:{cls.get('slug', '')}:{subj.get('slug', '')}"
+        if hk in _slug_hierarchy_cache:
+            continue
+        try:
+            _slug_hierarchy_cache[hk] = {
+                "board": board,
+                "cls": cls,
+                "subj": subj,
+                "stream": stream,
+            }
+            warmed += 1
+        except Exception:
+            pass
+    return warmed
+
+
 async def _resolve_slug_hierarchy(board_slug, class_slug, subject_slug):
     hk = f"{board_slug}:{class_slug}:{subject_slug}"
     cached = _slug_hierarchy_cache.get(hk)
