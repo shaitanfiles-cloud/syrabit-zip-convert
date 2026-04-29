@@ -1,9 +1,20 @@
-```markdown
-# Deployment and execution documents
-CLOUDFLARE_DEPLOYMENT_CHECKLIST.md
-CLOUDFLARE_DEPLOYMENT_WIRING.md
-WIRING_EXECUTION_PROMPT.md
+```
+# Dependencies
+target/
 
-# Scripts documentation
-scripts/README.md
+# Logs and temp files
+*.log
+*.tmp
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Editors
+.vscode/
+.idea/
+
+# Rust-specific
+Cargo.lock
 ```
