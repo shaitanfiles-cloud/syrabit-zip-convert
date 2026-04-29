@@ -45,6 +45,7 @@ from config import (
     is_cf_gateway_up, mark_cf_gateway_down, get_provider_base_url,
     byok_headers, BYOK_PLACEHOLDER,
     VERTEX_GEMINI_MODEL,
+    ENABLE_PARALLEL_LLM_RACE, PARALLEL_RACE_TIMEOUT, MIN_PROVIDERS_TO_RACE, MAX_CONCURRENT_RACE_PROVIDERS,
 )
 import vertex_chat as _vertex_chat
 from deps import sarvam_llm_client, sarvam_llm_client_direct
@@ -794,7 +795,7 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
     _PROVIDER_TIMEOUT = 30.0 if _is_content else (4.0 if _is_chat else 6.0)
 
     # Task #LLM-PARALLEL-FALLBACK: Race multiple providers in parallel to reduce worst-case latency
-    # Sequential fallback caused 90-120s worst-case; parallel reduces to ~30-45s (66-75% improvement)
+    # Sequential fallback caused 90-120s worst-case; parallel reduces to ~8s (90%+ improvement)
     
     async def _call_with_tracking(provider_cfg, key, try_model, is_fallback=False):
         """Call single provider with timeout and metrics tracking. Returns (success, result, error)."""
@@ -839,27 +840,72 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
     last_err = err
 
     # Parallel fallback: race remaining providers concurrently instead of sequentially
-    # This reduces worst-case from N*30s to ~30s where N is number of providers
-    fallback_tasks = []
+    # This reduces worst-case from N*30s to ~PARALLEL_RACE_TIMEOUT where N is number of providers
+    
+    # Build list of healthy fallback providers to race
+    fallback_candidates = []
     for fallback in providers:
         fb_model = fallback["default_model"]
         fb_key_id = id(fallback["key"]) if fallback.get("key") else 0
         if (fallback["provider"], fb_model, fb_key_id) in tried:
             continue
-        task = asyncio.create_task(_call_with_tracking(fallback, fallback["key"], fb_model, is_fallback=True))
-        fallback_tasks.append(task)
+        # Skip providers with high recent error rates (SmartKeyPool health check)
+        if fallback.get("_error_rate", 0) > 0.5:  # >50% error rate in recent window
+            logger.debug(f"Skipping unhealthy provider {fallback['provider']} (error_rate={fallback.get('_error_rate', 0):.2f})")
+            continue
+        fallback_candidates.append(fallback)
     
-    if fallback_tasks:
-        # Race all fallbacks concurrently, first successful response wins
-        for completed in asyncio.as_completed(fallback_tasks):
-            success, result, err = await completed
-            if success and result:
-                # Cancel remaining tasks to avoid unnecessary API calls
+    # Limit concurrent providers in race to avoid overwhelming API quotas
+    fallback_to_race = fallback_candidates[:MAX_CONCURRENT_RACE_PROVIDERS]
+    
+    if fallback_to_race and ENABLE_PARALLEL_LLM_RACE:
+        # Race providers concurrently with a global timeout
+        # First successful response wins; remaining tasks are cancelled
+        race_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RACE_PROVIDERS)
+        
+        async def _race_task(fallback):
+            async with race_semaphore:
+                fb_model = fallback["default_model"]
+                fb_key = fallback["key"]
+                return await _call_with_tracking(fallback, fb_key, fb_model, is_fallback=True)
+        
+        # Create tasks for all candidates
+        fallback_tasks = [asyncio.create_task(_race_task(fb)) for fb in fallback_to_race]
+        
+        if fallback_tasks:
+            # Use wait_for to enforce global race timeout
+            try:
+                # Wait for first successful result or timeout
+                for completed in asyncio.as_completed(fallback_tasks, timeout=PARALLEL_RACE_TIMEOUT):
+                    success, result, err = await completed
+                    if success and result:
+                        # Cancel remaining tasks to avoid unnecessary API calls
+                        for task in fallback_tasks:
+                            if not task.done():
+                                task.cancel()
+                        # Wait for cancellation to complete (suppress CancelledError)
+                        await asyncio.gather(*fallback_tasks, return_exceptions=True)
+                        return result
+                    elif err:
+                        last_err = err
+            except asyncio.TimeoutError:
+                logger.warning(f"Parallel LLM race timed out after {PARALLEL_RACE_TIMEOUT}s, cancelling all tasks")
                 for task in fallback_tasks:
                     if not task.done():
                         task.cancel()
-                # Wait for cancellation to complete
                 await asyncio.gather(*fallback_tasks, return_exceptions=True)
+                last_err = TimeoutError(f"All providers timed out after {PARALLEL_RACE_TIMEOUT}s race window")
+    
+    # Fallback to sequential if parallel disabled or no candidates
+    if not ENABLE_PARALLEL_LLM_RACE or not fallback_to_race:
+        # Sequential fallback (legacy behavior)
+        for fallback in fallback_to_race if fallback_to_race else providers:
+            fb_model = fallback["default_model"]
+            fb_key_id = id(fallback["key"]) if fallback.get("key") else 0
+            if (fallback["provider"], fb_model, fb_key_id) in tried:
+                continue
+            success, result, err = await _call_with_tracking(fallback, fallback["key"], fb_model, is_fallback=True)
+            if success and result:
                 return result
             elif err:
                 last_err = err

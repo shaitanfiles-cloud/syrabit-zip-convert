@@ -444,6 +444,14 @@ _AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1').strip()
 _CF_API_TOKEN_FOR_LLM = os.environ.get('CLOUDFLARE_API_TOKEN', '').strip()
 _CF_ACCOUNT_ID_FOR_LLM = os.environ.get('CF_AI_GATEWAY_ACCOUNT_ID', '').strip()
 
+# Parallel LLM Race Configuration (Task: Fix sequential fallback latency)
+# When ENABLE_PARALLEL_LLM_RACE=true, multiple providers are called concurrently
+# and the first successful response wins. Remaining requests are cancelled.
+ENABLE_PARALLEL_LLM_RACE = os.environ.get('ENABLE_PARALLEL_LLM_RACE', 'true').strip().lower() == 'true'
+PARALLEL_RACE_TIMEOUT = float(os.environ.get('PARALLEL_RACE_TIMEOUT', '8.0') or '8.0')  # Max seconds to wait for first response
+MIN_PROVIDERS_TO_RACE = int(os.environ.get('MIN_PROVIDERS_TO_RACE', '2') or '2')  # Min healthy providers to trigger race
+MAX_CONCURRENT_RACE_PROVIDERS = int(os.environ.get('MAX_CONCURRENT_RACE_PROVIDERS', '3') or '3')  # Cap concurrent calls in race
+
 if _EXPLICIT_PROVIDER == 'workers-ai' and _CF_API_TOKEN_FOR_LLM and _CF_ACCOUNT_ID_FOR_LLM:
     LLM_PROVIDER = 'workers-ai'
     LLM_API_KEY = _CF_API_TOKEN_FOR_LLM

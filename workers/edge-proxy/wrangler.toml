@@ -78,6 +78,11 @@ routes = [
 # DNS-style cutover) and update the value below in the same commit.
 # ---------------------------------------------------------------------------
 BACKEND_URL = "https://workspacemockup-sandbox-production-df37.up.railway.app"
+
+# D1_WARM_ON_STARTUP — Enable cache warming on worker startup to eliminate
+# cold-start latency (~10-50ms → ~0ms). When true, runs D1 sync immediately
+# when the worker boots before any user traffic arrives.
+D1_WARM_ON_STARTUP = "true"
 # Pages origin used by the worker to serve non-API GETs (the SPA).
 # MUST be the *.pages.dev hostname, not syrabit.ai/www.syrabit.ai —
 # routing through the custom domain would re-enter this same worker
