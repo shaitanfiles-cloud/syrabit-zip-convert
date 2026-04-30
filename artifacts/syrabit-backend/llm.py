@@ -374,19 +374,27 @@ _MODEL_ALIAS_MAP = {
 # speed_tier: lower = faster provider, used by pick() to prefer fast slots.
 # Slots in the same tier are load-balanced by in-flight count.
 #
+# Concurrency caps per slot — Workers AI unified billing allows much higher
+# parallelism than the old free-tier defaults.  The account is on CF Standard
+# (billing enabled), which means 3 000 RPM per model and no hard concurrent
+# cap beyond what the semaphore allows here.
+#
+# Rule of thumb: rpm / 60 * avg_response_s ≈ optimal concurrent.
+# At 3 000 RPM, 2-4 s avg → 100-200 concurrent across all slots.
+# 5 WAI chat slots × 24 = 120 total, which is within that band.
 _SLM_SLOT_CANDIDATES = [
     # Tier 0: Workers AI llama-3.3-70b-fp8 — primary chat provider (70B, FP8).
-    ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",         8, 0),
+    ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",        24, 0),
     # Tier 1: Workers AI GPT-OSS-20B — fast 20B model, own quota.
-    ("workers-ai",  "@cf/openai/gpt-oss-20b",                           8, 1),
+    ("workers-ai",  "@cf/openai/gpt-oss-20b",                          24, 1),
     # Tier 2: Workers AI Qwen 2.5-72B — high-quality 72B on separate quota.
-    ("workers-ai",  "@cf/qwen/qwen2.5-72b-instruct",                    8, 2),
+    ("workers-ai",  "@cf/qwen/qwen2.5-72b-instruct",                   24, 2),
     # Tier 3: Workers AI llama-3.2-3b — ultrafast 3B for burst traffic.
-    ("workers-ai",  "@cf/meta/llama-3.2-3b-instruct",                  12, 3),
+    ("workers-ai",  "@cf/meta/llama-3.2-3b-instruct",                  32, 3),
     # Tier 4: Workers AI llama-3.1-8b — fast 8B fallback.
-    ("workers-ai",  "@cf/meta/llama-3.1-8b-instruct-fp8",               8, 4),
+    ("workers-ai",  "@cf/meta/llama-3.1-8b-instruct-fp8",              24, 4),
     # Tier 5: Groq llama-4-scout — external fallback when Workers AI is saturated.
-    ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 5),
+    ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",        4, 5),
     # Tier 6: Cerebras llama3.1-8b — secondary external fallback.
     ("cerebras",    "llama3.1-8b",                                       4, 6),
 ]
@@ -397,9 +405,10 @@ _SLM_SLOT_CANDIDATES = [
 # Tier order:
 #   0 — Workers AI gpt-oss-120b: 120B model, best for long-form content.
 #   1 — Workers AI llama-3.3-70b: fallback for content generation.
+# Concurrency raised to 16 per slot (unified billing standard RPM = 3 000).
 _CONTENT_SLOT_CANDIDATES = [
-    ("workers-ai",  "@cf/openai/gpt-oss-120b",                           4, 0),
-    ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",          4, 1),
+    ("workers-ai",  "@cf/openai/gpt-oss-120b",                         16, 0),
+    ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",        16, 1),
 ]
 
 _CONTENT_INTENTS = {"notes", "important_questions", "pyq"}
@@ -431,12 +440,18 @@ def _parse_rpm_limit(env_var: str, default: int) -> int:
 
 # Per-provider RPM caps used by _SmartKeyPool._PROVIDER_RPM_LIMITS.
 # All values are env-overridable so ops can tune them without a deploy.
+#
+# Workers AI — Cloudflare Standard plan (unified billing enabled).
+# Standard plan rate limit is 3 000 RPM per model per account.
+# All 5 chat-pool WAI slots share one rpm_window (same API token),
+# so this 3 000 budget is shared across them, not per-slot.
+# Override with WORKERS_AI_RPM_LIMIT if the account has custom caps.
 _POOL_RPM_LIMITS = {
-    "workers-ai": _parse_rpm_limit("WORKERS_AI_RPM_LIMIT", 150),
-    "groq":        _parse_rpm_limit("GROQ_RPM_LIMIT",       30),
-    "cerebras":    _parse_rpm_limit("CEREBRAS_RPM_LIMIT",   30),
-    "sarvam":      _parse_rpm_limit("SARVAM_RPM_LIMIT",     30),
-    "gemini":      _parse_rpm_limit("GEMINI_RPM_LIMIT",     600),
+    "workers-ai": _parse_rpm_limit("WORKERS_AI_RPM_LIMIT", 3000),
+    "groq":        _parse_rpm_limit("GROQ_RPM_LIMIT",         30),
+    "cerebras":    _parse_rpm_limit("CEREBRAS_RPM_LIMIT",     30),
+    "sarvam":      _parse_rpm_limit("SARVAM_RPM_LIMIT",       30),
+    "gemini":      _parse_rpm_limit("GEMINI_RPM_LIMIT",      600),
     "openrouter":  60,
     "openai":      60,
     "bedrock":     30,
