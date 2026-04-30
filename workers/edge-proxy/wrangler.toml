@@ -336,6 +336,12 @@ crons = ["* * * * *", "0 */6 * * *"]
 # certificate_id: replace the placeholder with the ID from step 1 above.
 #   Find it later at dash.cloudflare.com → SSL/TLS → Client Certificates.
 # ---------------------------------------------------------------------------
-[[mtls_certificates]]
-binding        = "MTLS_CERT"
-certificate_id = "REPLACE_WITH_MTLS_CERTIFICATE_ID"
+# [[mtls_certificates]]                           ← UNCOMMENT after provisioning
+# binding        = "MTLS_CERT"
+# certificate_id = "<id-from-cloudflare-phase6-apply.js>"
+#
+# To activate:
+#   1. Run: CLOUDFLARE_API_TOKEN=<tok> node artifacts/syrabit/scripts/cloudflare-phase6-apply.js
+#   2. Store the private key: echo "<pem>" | wrangler secret put MTLS_PRIVATE_KEY --name syrabit-edge
+#   3. Uncomment the three lines above, replace certificate_id with the id from step 1.
+#   4. wrangler deploy

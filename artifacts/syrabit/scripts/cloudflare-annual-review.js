@@ -434,25 +434,31 @@ async function main() {
     }
   }
 
-  // 6d: Observatory scheduled runs
-  const obsHome = await cfGet(
-    `/zones/${ZONE_ID}/speed/schedule?url=${encodeURIComponent('https://syrabit.ai/')}`,
-  );
-  if (!obsHome.success) {
-    const code = obsHome.errors?.[0]?.code;
-    if (code === 10000) {
-      console.log('  ?  Observatory schedule  [token lacks Speed: Read]');
-    } else if (code === 1135) {
-      console.log('  ⚠  Observatory: not available on current plan');
+  // 6d: Observatory scheduled runs — homepage + representative chapter page
+  const obsTargets = [
+    { label: 'Observatory homepage schedule',     url: 'https://syrabit.ai/' },
+    { label: 'Observatory chapter page schedule', url: 'https://syrabit.ai/ahsec/class-12/physics' },
+  ];
+  for (const { label, url } of obsTargets) {
+    const obsRes = await cfGet(
+      `/zones/${ZONE_ID}/speed/schedule?url=${encodeURIComponent(url)}`,
+    );
+    if (!obsRes.success) {
+      const code = obsRes.errors?.[0]?.code;
+      if (code === 10000) {
+        console.log(`  ?  ${label}  [token lacks Speed: Read]`);
+        break;  // same scope issue for all targets
+      } else if (code === 1135) {
+        console.log(`  ⚠  ${label}: not available on current plan`);
+        break;
+      } else {
+        console.log(`  ?  ${label}: ${JSON.stringify(obsRes.errors)}`);
+      }
+    } else if (obsRes.result?.schedule) {
+      row(label, true, true, `frequency=${obsRes.result.schedule.frequency || 'unknown'}`);
     } else {
-      console.log(`  ?  Observatory: ${JSON.stringify(obsHome.errors)}`);
+      row(label, 'NOT FOUND', 'EXISTS', 'run cloudflare-phase6-apply.js → Step 4');
     }
-  } else if (obsHome.result?.schedule) {
-    row('Observatory homepage schedule', true, true,
-      `frequency=${obsHome.result.schedule.frequency || 'unknown'}`);
-  } else {
-    row('Observatory homepage schedule', 'NOT FOUND', 'EXISTS',
-      'run cloudflare-phase6-apply.js → Step 4');
   }
 
   console.log('\n────────────────────────────────────────');

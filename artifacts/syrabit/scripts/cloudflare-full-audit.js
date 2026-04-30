@@ -577,34 +577,52 @@ async function auditItem19ZarazAndObservatory() {
     zarazOk = true;
   }
 
-  // Check Observatory schedule for homepage
-  const obs = await cfGetOrSkip(
-    `/zones/${ZONE_ID}/speed/schedule?url=${encodeURIComponent('https://syrabit.ai/')}`,
-  );
-  if (!obs) {
-    if (zarazOk) {
-      warn(19, 6, 'Zaraz GA4 + Observatory', 'Zaraz OK but Observatory: token lacks Speed: Read scope');
+  // Check Observatory schedule for homepage + representative chapter page
+  const obsUrls = [
+    { label: 'homepage',     url: 'https://syrabit.ai/' },
+    { label: 'chapter page', url: 'https://syrabit.ai/ahsec/class-12/physics' },
+  ];
+  const obsResults = [];
+
+  for (const { label, url } of obsUrls) {
+    const raw  = await fetch(
+      `${API}/zones/${ZONE_ID}/speed/schedule?url=${encodeURIComponent(url)}`,
+      { headers },
+    );
+    const json = await raw.json();
+    if (!json.success) {
+      const code = json.errors?.[0]?.code;
+      if (code === 10000) {
+        if (zarazOk) {
+          warn(19, 6, 'Zaraz GA4 + Observatory',
+            `Zaraz OK but Observatory: token lacks Speed: Read scope (${label} check skipped)`);
+        }
+        return;
+      } else if (code === 1135) {
+        if (zarazOk) {
+          warn(19, 6, 'Zaraz GA4 + Observatory',
+            `Zaraz OK but Observatory not available on current plan (${label})`);
+        }
+        return;
+      }
+      obsResults.push({ label, url, found: false });
+    } else {
+      obsResults.push({ label, url, found: !!json.result?.schedule,
+        frequency: json.result?.schedule?.frequency || 'weekly' });
     }
-    return;
-  }
-  if (!obs.success && obs.errors?.[0]?.code === 1135) {
-    if (zarazOk) {
-      warn(19, 6, 'Zaraz GA4 + Observatory', 'Zaraz OK but Observatory not available on current plan');
-    }
-    return;
   }
 
-  const hasSchedule = !!obs.result?.schedule;
-  if (zarazOk && hasSchedule) {
-    pass(19, 6, 'Zaraz GA4 + Observatory',
-      `Zaraz GA4 enabled; Observatory homepage weekly (${obs.result.schedule.frequency || 'weekly'})`);
-  } else if (zarazOk && !hasSchedule) {
+  const missingObs = obsResults.filter(r => !r.found);
+  if (zarazOk && missingObs.length === 0) {
+    const detail = obsResults.map(r => `${r.label}:${r.frequency}`).join(', ');
+    pass(19, 6, 'Zaraz GA4 + Observatory', `Zaraz GA4 enabled; Observatory weekly: ${detail}`);
+  } else if (zarazOk && missingObs.length > 0) {
     fail(19, 6, 'Zaraz GA4 + Observatory',
-      'Zaraz GA4 OK but Observatory schedule for homepage NOT FOUND',
+      `Zaraz GA4 OK but Observatory schedule missing for: ${missingObs.map(r => r.label).join(', ')}`,
       'run cloudflare-phase6-apply.js → Step 4');
   } else {
     fail(19, 6, 'Zaraz GA4 + Observatory',
-      'Zaraz GA4 missing; Observatory: ' + (hasSchedule ? 'OK' : 'NOT FOUND'),
+      `Zaraz GA4 missing; Observatory: ${missingObs.length === 0 ? 'OK' : 'also missing'}`,
       'run cloudflare-phase6-apply.js');
   }
 }

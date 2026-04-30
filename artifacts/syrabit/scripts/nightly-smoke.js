@@ -451,28 +451,36 @@ async function main() {
     }
   }
 
-  // 6d: Observatory scheduled run for homepage
+  // 6d: Observatory scheduled runs — homepage + representative chapter page
   // Raw fetch — Observatory may return 1135 on plans without Observatory access.
-  const obsRaw  = await fetch(
-    `${API}/zones/${ZONE_ID}/speed/schedule?url=${encodeURIComponent('https://syrabit.ai/')}`,
-    { headers },
-  );
-  const obsJson = await obsRaw.json();
-  if (!obsJson.success) {
-    const code = obsJson.errors?.[0]?.code;
-    if (code === 10000) {
-      warn('Observatory schedule (homepage)', 'token lacks Speed: Read — add scope or verify at dash.cloudflare.com → Speed → Observatory');
-    } else if (code === 1135) {
-      warn('Observatory schedule (homepage)', 'not available on current plan — requires Observatory access');
+  const obsTargets = [
+    { label: 'homepage',     url: 'https://syrabit.ai/' },
+    { label: 'chapter page', url: 'https://syrabit.ai/ahsec/class-12/physics' },
+  ];
+  for (const { label, url } of obsTargets) {
+    const obsRaw  = await fetch(
+      `${API}/zones/${ZONE_ID}/speed/schedule?url=${encodeURIComponent(url)}`,
+      { headers },
+    );
+    const obsJson = await obsRaw.json();
+    if (!obsJson.success) {
+      const code = obsJson.errors?.[0]?.code;
+      if (code === 10000) {
+        warn(`Observatory schedule (${label})`, 'token lacks Speed: Read — add scope or verify at dash.cloudflare.com → Speed → Observatory');
+        break;  // same token issue will affect all targets
+      } else if (code === 1135) {
+        warn(`Observatory schedule (${label})`, 'not available on current plan — requires Observatory access');
+        break;
+      } else {
+        warn(`Observatory schedule (${label})`, `Observatory API error code ${code}: ${obsJson.errors?.[0]?.message}`);
+      }
+    } else if (obsJson.result?.schedule) {
+      const freq = obsJson.result.schedule.frequency || 'unknown';
+      console.log(`  ✓  Observatory schedule (${label}): frequency=${freq}`);
     } else {
-      warn('Observatory schedule (homepage)', `Observatory API error code ${code}: ${obsJson.errors?.[0]?.message}`);
+      failures.push(`Observatory schedule for ${url} (NOT FOUND)`);
+      console.log(`  ✗  Observatory schedule (${label}): NOT FOUND — run cloudflare-phase6-apply.js`);
     }
-  } else if (obsJson.result?.schedule) {
-    const freq = obsJson.result.schedule.frequency || 'unknown';
-    console.log(`  ✓  Observatory schedule for homepage: frequency=${freq}`);
-  } else {
-    failures.push('Observatory schedule for https://syrabit.ai/ (NOT FOUND)');
-    console.log('  ✗  Observatory schedule for homepage: NOT FOUND — run cloudflare-phase6-apply.js');
   }
 
   // ── Summary ────────────────────────────────────────────────────────────
