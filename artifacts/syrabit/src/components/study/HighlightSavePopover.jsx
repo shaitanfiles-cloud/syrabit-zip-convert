@@ -19,7 +19,11 @@ import { QuizModal } from './QuizModal';
 function _isInsideSavable(node) {
   let el = node && node.nodeType === 3 ? node.parentElement : node;
   while (el) {
-    if (el.getAttribute && el.getAttribute('data-savable') === 'true') return true;
+    if (el.getAttribute) {
+      const val = el.getAttribute('data-savable');
+      if (val === 'false') return false;
+      if (val === 'true') return true;
+    }
     el = el.parentElement;
   }
   return false;
