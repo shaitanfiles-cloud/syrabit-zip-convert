@@ -302,6 +302,46 @@ describe('HighlightSavePopover — edge cases', () => {
     outerSavable.parentNode.removeChild(outerSavable);
   });
 
+  it('shows the popover for a selection in a plain sibling div next to a data-savable="false" opt-out zone', async () => {
+    render(<HighlightSavePopover />);
+
+    const outerSavable = document.createElement('div');
+    outerSavable.setAttribute('data-savable', 'true');
+
+    const optOutDiv = document.createElement('div');
+    optOutDiv.setAttribute('data-savable', 'false');
+    optOutDiv.appendChild(document.createTextNode('opt-out content'));
+
+    const plainDiv = document.createElement('div');
+    const plainTextNode = document.createTextNode('valid highlighted content here');
+    plainDiv.appendChild(plainTextNode);
+
+    outerSavable.appendChild(optOutDiv);
+    outerSavable.appendChild(plainDiv);
+    document.body.appendChild(outerSavable);
+
+    const plainRange = {
+      commonAncestorContainer: plainTextNode,
+      getBoundingClientRect: () => ({ left: 100, top: 60, width: 80, height: 18 }),
+    };
+    getSelectionSpy.mockReturnValue({
+      isCollapsed: false,
+      toString: () => 'valid highlighted content here',
+      getRangeAt: () => plainRange,
+    });
+
+    await act(async () => {
+      document.dispatchEvent(new Event('selectionchange'));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(document.querySelector('.fixed.z-\\[110\\]')).toBeInTheDocument();
+    expect(screen.getByText(/save/i)).toBeInTheDocument();
+    expect(screen.getByText(/quiz me/i)).toBeInTheDocument();
+
+    outerSavable.parentNode.removeChild(outerSavable);
+  });
+
   it('does not show the popover when the selection is outside any savable container', async () => {
     render(<HighlightSavePopover />);
 
