@@ -120,11 +120,13 @@ jobs:
   #             sbfm_likely_automated, content_bots_protection, DMARC p= policy.
   # Task #106 — Phase 2: R2 bucket syrabit-logs, Logpush jobs (http_requests +
   #             firewall_events), Origin Healthcheck api-syrabit-ai-origin.
-  #             Phase 2 checks degrade gracefully if the token lacks Logs: Read
-  #             or Health Checks: Read (warns, does not fail hard).
+  # Task #107 — Phase 3: Zero Trust Access app (Syrabit Admin, 8h session) and
+  #             Waiting Room (syrabit-exam-season-queue, 10-min cookie, enabled).
+  #             Phase 2/3 checks degrade gracefully if the token lacks the required
+  #             read scopes (warns, does not fail hard — see task-116 for token fix).
   # Runs in parallel with the other smoke jobs (no `needs:` dependency).
   cf-zone-settings:
-    name: Cloudflare Phase 1 & 2 smoke
+    name: Cloudflare Phase 1, 2 & 3 smoke
     runs-on: ubuntu-latest
     timeout-minutes: 5
 

@@ -8,8 +8,9 @@
  *
  * Required env:
  *   CLOUDFLARE_API_TOKEN   — Zone Settings: Read, DNS: Read, Bot Management: Read,
- *                            Logs: Read (for Phase 2 Logpush), Health Checks: Read,
- *                            R2: Read (for Phase 2 bucket check)
+ *                            Logs: Read (Phase 2 Logpush), Health Checks: Read,
+ *                            R2: Read (Phase 2 bucket), Zero Trust: Read (Phase 3),
+ *                            Waiting Room: Read (Phase 3)
  *   CLOUDFLARE_ZONE_ID     — optional, defaults to syrabit.ai zone
  *   CLOUDFLARE_ACCOUNT_ID  — optional, defaults to Syrabit account
  *
@@ -179,9 +180,57 @@ async function main() {
     }
   }
 
-  console.log('\n── Phase 3: Zero Trust & Waiting Rooms (Task #107 — pending) ──');
+  // ── Phase 3: Zero Trust Access ────────────────────────────────────────
+  console.log('\n── Phase 3: Zero Trust Access (Task #107) ──');
+  console.log('  Target: Syrabit Admin app covers api.syrabit.ai/admin, session=8h');
+  const zt = await cfGet(`/accounts/${ACCOUNT_ID}/access/apps`);
+  if (!zt.success) {
+    const authErr = zt.errors?.[0]?.code === 10000;
+    console.log(`  ?  Access apps${authErr
+      ? '  [token lacks Zero Trust: Read — add scope at dash.cloudflare.com/profile/api-tokens]'
+      : ': ' + JSON.stringify(zt.errors)}`);
+  } else {
+    const adminApp = zt.result.find(a => a.name === 'Syrabit Admin');
+    if (adminApp) {
+      row('Syrabit Admin app exists', true, true,
+        `id=${adminApp.id} domain=${adminApp.domain}`);
+      row('  session_duration', adminApp.session_duration, '8h');
+      // Check policy count
+      const pol = await cfGet(`/accounts/${ACCOUNT_ID}/access/apps/${adminApp.id}/policies`);
+      if (pol.success) {
+        row('  policies', pol.result.length >= 1, true,
+          `${pol.result.length} policy(ies): ${pol.result.map(p=>p.name).join(', ')}`);
+      } else {
+        console.log('  ?  Policy read error:', JSON.stringify(pol.errors));
+      }
+    } else {
+      row('Syrabit Admin app', 'NOT FOUND', 'EXISTS', 'run cloudflare-phase3-apply.js');
+    }
+  }
+
+  // ── Phase 3: Waiting Room ─────────────────────────────────────────────
+  console.log('\n── Phase 3: Waiting Room (Task #107) ──');
+  console.log('  Target: syrabit-exam-season-queue on syrabit.ai/*, 10-min session, enabled');
   const wr = await cfGet(`/zones/${ZONE_ID}/waiting_rooms`);
-  row('waiting_rooms (inspect only)', wr.success ? wr.result.length : '?', undefined);
+  if (!wr.success) {
+    const authErr = wr.errors?.[0]?.code === 10000;
+    console.log(`  ?  Waiting rooms${authErr
+      ? '  [token lacks Waiting Room: Read — add scope at dash.cloudflare.com/profile/api-tokens]'
+      : ': ' + JSON.stringify(wr.errors)}`);
+  } else {
+    const room = wr.result.find(r => r.name === 'syrabit-exam-season-queue');
+    if (room) {
+      row('syrabit-exam-season-queue exists', true, true,
+        `id=${room.id} host=${room.host}`);
+      row('  enabled', room.enabled, true);
+      row('  session_duration', room.session_duration, 10);
+      row('  new_users_per_minute', room.new_users_per_minute, undefined,
+        'Railway plan capacity — increase on Pro plan');
+      row('  total_active_users', room.total_active_users, undefined);
+    } else {
+      row('syrabit-exam-season-queue', 'NOT FOUND', 'EXISTS', 'run cloudflare-phase3-apply.js');
+    }
+  }
 
   console.log('\n────────────────────────────────────────');
   console.log('Review complete.');

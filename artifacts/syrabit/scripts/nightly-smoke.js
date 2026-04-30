@@ -2,16 +2,16 @@
 /**
  * nightly-smoke.js — Cloudflare zone-settings health check.
  *
- * Asserts that the zone settings applied in Cloudflare Phases 1 & 2
- * (Tasks #105 and #106) still hold their target values.  Run nightly in CI
+ * Asserts that the zone settings applied in Cloudflare Phases 1, 2 & 3
+ * (Tasks #105, #106, #107) still hold their target values.  Run nightly in CI
  * so any accidental dashboard revert surfaces overnight rather than
  * silently degrading cache hit rates, bot filtering, or email security.
  *
  * Required env:
  *   CLOUDFLARE_API_TOKEN  — Zone Settings: Read, Bot Management: Read,
- *                           DNS: Read, Logs: Read, Health Checks: Read
- *                           (Phase 2 checks are skipped with a warning if
- *                           the token lacks Logs: Read or Health Checks: Read)
+ *                           DNS: Read, Logs: Read, Health Checks: Read,
+ *                           Zero Trust: Read (Phase 3), Waiting Room: Read (Phase 3)
+ *                           (Phase 2/3 checks degrade to warnings on token scope gap)
  *   CLOUDFLARE_ZONE_ID    — syrabit.ai zone (5b8c97df4431491dc7f60ea72fb61871)
  *   CLOUDFLARE_ACCOUNT_ID — Syrabit account (d66e40eac539fff1db270fddf384a5ec)
  *
@@ -65,7 +65,7 @@ function warn(label, detail) {
 }
 
 async function main() {
-  console.log('Cloudflare nightly smoke — Phase 1 & 2 checks');
+  console.log('Cloudflare nightly smoke — Phase 1, 2 & 3 checks');
   console.log(`Zone: ${ZONE_ID}\n`);
 
   // ── Phase 1: Zone settings ────────────────────────────────────────────
@@ -163,6 +163,41 @@ async function main() {
       console.log('  ✗  Origin healthcheck NOT FOUND — run cloudflare-phase2-apply.js');
     } else {
       console.log(`  ✓  api-syrabit-ai-origin: id=${hcRecord.id} status=${hcRecord.status}`);
+    }
+  }
+
+  // ── Phase 3: Zero Trust Access application ───────────────────────────
+  console.log('\nPhase 3 — Zero Trust Access:');
+  const zt = await cfGetOrSkip(`/accounts/${ACCOUNT_ID}/access/apps`);
+  if (!zt) {
+    warn('Zero Trust Access apps',
+      'token lacks Zero Trust: Read — add scope and run cloudflare-phase3-apply.js');
+  } else {
+    const adminApp = zt.result.find(a => a.name === 'Syrabit Admin');
+    if (!adminApp) {
+      failures.push('Access application Syrabit Admin (NOT FOUND)');
+      console.log('  ✗  Access application Syrabit Admin: NOT FOUND — run cloudflare-phase3-apply.js');
+    } else {
+      console.log(`  ✓  Access app: Syrabit Admin id=${adminApp.id} domain=${adminApp.domain}`);
+      assert('  Access app session_duration', adminApp.session_duration, '8h');
+    }
+  }
+
+  // ── Phase 3: Waiting Room ─────────────────────────────────────────────
+  console.log('\nPhase 3 — Waiting Room:');
+  const wr = await cfGetOrSkip(`/zones/${ZONE_ID}/waiting_rooms`);
+  if (!wr) {
+    warn('Waiting Room',
+      'token lacks Waiting Room: Read — add scope and run cloudflare-phase3-apply.js');
+  } else {
+    const room = wr.result.find(r => r.name === 'syrabit-exam-season-queue');
+    if (!room) {
+      failures.push('Waiting Room syrabit-exam-season-queue (NOT FOUND)');
+      console.log('  ✗  Waiting Room syrabit-exam-season-queue: NOT FOUND — run cloudflare-phase3-apply.js');
+    } else {
+      assert('syrabit-exam-season-queue enabled', room.enabled, true);
+      assert('  session_duration (min)', room.session_duration, 10);
+      assert('  host', room.host, 'syrabit.ai');
     }
   }
 
