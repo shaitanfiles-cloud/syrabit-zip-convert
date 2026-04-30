@@ -180,6 +180,30 @@ describe('HighlightSavePopover — edge cases', () => {
     expect(document.querySelector('.fixed.z-\\[110\\]')).toBeNull();
   });
 
+  it('shows the popover when the commonAncestorContainer is a text node inside a savable element', async () => {
+    render(<HighlightSavePopover />);
+
+    const textNode = document.createTextNode('highlighted content inside savable');
+    savableEl.appendChild(textNode);
+
+    const textNodeRange = {
+      commonAncestorContainer: textNode,
+      getBoundingClientRect: () => ({ left: 100, top: 60, width: 80, height: 18 }),
+    };
+    getSelectionSpy.mockReturnValue({
+      isCollapsed: false,
+      toString: () => 'highlighted content inside savable',
+      getRangeAt: () => textNodeRange,
+    });
+
+    await act(async () => {
+      document.dispatchEvent(new Event('selectionchange'));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(document.querySelector('.fixed.z-\\[110\\]')).toBeInTheDocument();
+  });
+
   it('does not show the popover when the selection is outside any savable container', async () => {
     render(<HighlightSavePopover />);
 
