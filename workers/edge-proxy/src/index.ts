@@ -2061,8 +2061,9 @@ async function _handleEdgeFetch(
     //   Multipart form: `file` (binary PDF/document) + `key` (R2 object key)
     //   Protected upstream by Cloudflare Zero Trust (Phase 3) — the route is
     //   inside api.syrabit.ai/admin* so no request reaches here without a
-    //   valid Access session cookie. An additional Bearer-token check is
-    //   performed here as defence-in-depth (same JWT the backend checks).
+    //   valid Access session cookie. A second layer requires an Authorization:
+    //   Bearer header (format check — prevents headerless CSRF; full JWT
+    //   signature verification is deferred as a future hardening step).
     //
     // Response (JSON):
     //   201 { ok: true, key, size, url }          — upload succeeded
@@ -2082,8 +2083,14 @@ async function _handleEdgeFetch(
         );
       }
 
-      // Defence-in-depth: require a valid admin Bearer JWT.
-      // Zero Trust already gates this route, but belt-and-suspenders.
+      // Presence check: require an Authorization: Bearer header.
+      // This is a format-only check (we confirm the header starts with "Bearer ")
+      // not a cryptographic JWT validation. Zero Trust (Phase 3) is the primary
+      // auth gate — no request reaches this route without a valid Access session
+      // cookie. This check adds a second layer by requiring an explicit auth header,
+      // which prevents accidental CSRF from same-origin pages that wouldn't
+      // normally send an Authorization header. Full JWT signature verification
+      // would require the JWT_SECRET binding and is left as a future hardening step.
       const authHeader = request.headers.get("Authorization") ?? "";
       if (!authHeader.startsWith("Bearer ")) {
         return new Response(

@@ -263,7 +263,9 @@ async function main() {
         'not available on current plan — requires Cache Reserve subscription; ' +
         'see https://dash.cloudflare.com → Caching → Cache Reserve');
     } else {
-      fail('Cache Reserve', JSON.stringify(crJson.errors));
+      const msg = `Cache Reserve error code ${crJson.errors?.[0]?.code}: ${crJson.errors?.[0]?.message}`;
+      failures.push(`Cache Reserve (${msg})`);
+      console.log(`  ✗  Cache Reserve: unexpected API error — ${msg}`);
     }
   } else {
     const value = crJson.result?.value;
