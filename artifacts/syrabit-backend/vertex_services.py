@@ -156,6 +156,12 @@ def is_embed_cooldown_active() -> bool:
     return time.time() < _embed_cooldown_until
 
 
+def get_embed_cooldown_remaining_s() -> float:
+    """Return seconds remaining in the embed cooldown, or 0.0 if not active."""
+    remaining = _embed_cooldown_until - time.time()
+    return max(0.0, remaining)
+
+
 # ── Auth detection ──────────────────────────────────────────────────────────
 # Credential sources, in priority order:
 #   1. VERTEX_SERVICE_ACCOUNT          — explicit Syrabit-side SA JSON. When

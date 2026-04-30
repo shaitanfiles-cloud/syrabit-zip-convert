@@ -666,8 +666,11 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       else setWaiThrottle(null);
       if (poolRes.status === 'fulfilled')
         setEmbedBurst({
-          burst: poolRes.value.data?.embed_429_burst ?? 0,
-          cooldown: poolRes.value.data?.embed_cooldown_active ?? false,
+          burst:       poolRes.value.data?.embed_429_burst ?? 0,
+          cooldown:    poolRes.value.data?.embed_cooldown_active ?? false,
+          remainingS:  poolRes.value.data?.embed_cooldown_remaining_s ?? 0,
+          threshold:   poolRes.value.data?.embed_429_threshold ?? 3,
+          durationS:   poolRes.value.data?.embed_cooldown_duration_s ?? 60,
         });
       else setEmbedBurst(null);
     });
@@ -2141,25 +2144,90 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                       </div>
                     </div>
 
-                    {embedBurst !== null && (
-                      <div className="flex items-center gap-3 mb-4 rounded-lg px-3 py-2.5 border border-gray-100 bg-gray-50">
-                        <div className="flex-1">
-                          <span className="text-[10px] uppercase text-gray-400 font-semibold">Embed 429s (60s)</span>
-                          <span className={`ml-2 text-sm font-semibold ${embedBurst.burst > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
-                            {embedBurst.burst}
-                          </span>
+                    {/* Task #96 — Workers AI embed 429 cooldown indicator */}
+                    {(() => {
+                      const eb = embedBurst;
+                      const isLoading = eb === null;
+                      const burst      = eb?.burst ?? 0;
+                      const cooldown   = eb?.cooldown ?? false;
+                      const remainingS = eb?.remainingS ?? 0;
+                      const threshold  = eb?.threshold ?? 3;
+                      const durationS  = eb?.durationS ?? 60;
+                      const approaching = !isLoading && !cooldown && burst >= Math.ceil(threshold * 0.6);
+                      const dotColor = isLoading
+                        ? 'bg-gray-300'
+                        : cooldown
+                        ? 'bg-red-500'
+                        : approaching
+                        ? 'bg-amber-400'
+                        : 'bg-emerald-500';
+                      const statusLabel = isLoading
+                        ? 'Loading\u2026'
+                        : cooldown ? 'Cooldown Active' : approaching ? 'Approaching' : 'OK';
+                      const statusText = isLoading
+                        ? 'text-gray-400'
+                        : cooldown
+                        ? 'text-red-600'
+                        : approaching
+                        ? 'text-amber-600'
+                        : 'text-emerald-600';
+                      return (
+                        <div className={`rounded-2xl p-4 border shadow-sm mb-4 ${
+                          cooldown
+                            ? 'bg-red-50 border-red-200'
+                            : approaching
+                            ? 'bg-amber-50 border-amber-200'
+                            : 'bg-white border-gray-200'
+                        }`}>
+                          {cooldown && (
+                            <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-red-100 border border-red-200">
+                              <AlertTriangle size={14} className="text-red-600 shrink-0" />
+                              <span className="text-xs font-semibold text-red-700">
+                                Embed cooldown active — Workers AI embed skipped for {Math.ceil(remainingS)}s
+                                ({burst} of {threshold} hits in last {durationS}s)
+                              </span>
+                            </div>
+                          )}
+                          {approaching && !cooldown && (
+                            <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-amber-100 border border-amber-200">
+                              <AlertTriangle size={14} className="text-amber-600 shrink-0" />
+                              <span className="text-xs font-semibold text-amber-700">
+                                Approaching cooldown — {burst}/{threshold} embed 429s recorded
+                              </span>
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2">
+                            <Zap size={14} className={isLoading ? 'text-gray-300' : cooldown ? 'text-red-500' : approaching ? 'text-amber-500' : 'text-gray-400'} />
+                            <span className="text-xs font-semibold text-gray-700">Workers AI — Embed 429 Cooldown</span>
+                            <span className={`flex items-center gap-1 text-[11px] font-semibold ${statusText}`}>
+                              <span className={`inline-block w-2 h-2 rounded-full ${dotColor}`} />
+                              {statusLabel}
+                            </span>
+                          </div>
+                          {!isLoading && (
+                            <div className="mt-3 grid grid-cols-3 gap-3">
+                              <div className="rounded-lg p-2.5 bg-white/70 border border-gray-100">
+                                <div className="text-[10px] uppercase text-gray-400 font-semibold mb-0.5">429 hits (60 s)</div>
+                                <div className={`text-base font-bold tabular-nums ${burst >= threshold ? 'text-red-600' : burst >= Math.ceil(threshold * 0.6) ? 'text-amber-600' : 'text-emerald-600'}`}>
+                                  {burst}
+                                  <span className="text-xs font-normal text-gray-400"> / {threshold}</span>
+                                </div>
+                              </div>
+                              <div className="rounded-lg p-2.5 bg-white/70 border border-gray-100">
+                                <div className="text-[10px] uppercase text-gray-400 font-semibold mb-0.5">Cooldown clears in</div>
+                                <div className={`text-base font-bold tabular-nums ${cooldown ? 'text-red-600' : 'text-gray-400'}`}>
+                                  {cooldown ? `${Math.ceil(remainingS)} s` : '—'}
+                                </div>
+                              </div>
+                              <div className="rounded-lg p-2.5 bg-white/70 border border-gray-100">
+                                <div className="text-[10px] uppercase text-gray-400 font-semibold mb-0.5">Skip window</div>
+                                <div className="text-base font-bold tabular-nums text-gray-700">{durationS} s</div>
+                              </div>
+                            </div>
+                          )}
                         </div>
-                        <div>
-                          <span className="text-[10px] uppercase text-gray-400 font-semibold mr-1">Cooldown</span>
-                          <span className={`text-sm font-semibold ${embedBurst.cooldown ? 'text-red-500' : 'text-gray-400'}`}>
-                            {embedBurst.cooldown ? 'Active' : 'Off'}
-                          </span>
-                        </div>
-                        <div className="text-[10px] text-gray-400">
-                          After 3 hits → 60s skip
-                        </div>
-                      </div>
-                    )}
+                      );
+                    })()}
 
                     <div className="overflow-hidden rounded-xl border border-gray-100">
                       <table className="w-full text-xs">

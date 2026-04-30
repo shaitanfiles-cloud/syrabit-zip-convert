@@ -1718,19 +1718,27 @@ async def admin_llm_pool_stats(admin: dict = Depends(get_admin_user)):
     for stat in [*chat_stats, *content_stats]:
         stat["rpm_env_var"] = _env_keys.get(stat["provider"])
 
-    from vertex_services import get_embed_429_burst, is_embed_cooldown_active
+    from vertex_services import (
+        get_embed_429_burst,
+        get_embed_cooldown_remaining_s,
+        is_embed_cooldown_active,
+    )
     return {
         "chat_pool":    chat_stats,
         "content_pool": content_stats,
         "rpm_limits":   {p: _rpm_table.get(p) for p in _env_keys},
-        "embed_429_burst":       get_embed_429_burst(window_seconds=60),
-        "embed_cooldown_active": is_embed_cooldown_active(),
+        "embed_429_burst":            get_embed_429_burst(window_seconds=60),
+        "embed_cooldown_active":      is_embed_cooldown_active(),
+        "embed_cooldown_remaining_s": round(get_embed_cooldown_remaining_s(), 1),
+        "embed_429_threshold":        3,
+        "embed_cooldown_duration_s":  60,
         "note": (
             "rpm_used is a rolling 60s window per slot. "
             "Workers AI slots share one window (same API key). "
             "Override limits via env vars listed in rpm_env_var. "
             "embed_429_burst counts Workers AI embed 429s in the last 60 s; "
-            "embed_cooldown_active is true while the 60s skip-window is live."
+            "embed_cooldown_active is true while the 60s skip-window is live; "
+            "embed_cooldown_remaining_s is seconds until the cooldown clears."
         ),
     }
 
