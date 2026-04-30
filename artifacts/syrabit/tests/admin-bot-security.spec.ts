@@ -42,7 +42,7 @@ async function openBotSecurity(page: Page, botTraffic: unknown) {
   // Broad catch-all first; specific overrides via installAdminApiMocks overrides map.
   await installAdminApiMocks(page, {
     overrides: {
-      '/api/admin/cf/overview': () => CF_OVERVIEW,
+      '/api/admin/analytics/cf-overview': () => CF_OVERVIEW,
     },
   });
 

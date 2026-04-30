@@ -101,6 +101,164 @@ jobs:
         run: |
           pytest --cov=. --cov-report=xml --cov-report=term-missing --cov-fail-under=60
 
+      # ───────── Task #4 — fixture ↔ schema drift detection ─────────
+      # Re-generate the OpenAPI JSON from the current FastAPI route
+      # registry and compare it against the committed snapshot
+      # (artifacts/syrabit/tests/api-schema.json).  Two levels checked:
+      #
+      #   1. Path set — added/renamed/removed endpoints are caught.
+      #   2. Response-component schema deep diff — for every component
+      #      schema referenced by a 200-response of a path present in
+      #      both live and snapshot, a canonical structural fingerprint
+      #      (type, required, properties with types, $ref, anyOf/allOf,
+      #      items, nullable, enum) is computed and compared.  Changes to
+      #      property types, newly-required fields, added/removed
+      #      properties, and nullability changes are all caught here.
+      #      Non-semantic fields (description, title, example) are
+      #      stripped before comparison to avoid noise.
+      #
+      # If either comparison fails, developers are instructed to run:
+      #
+      #   python artifacts/syrabit-backend/scripts/export_api_schema.py
+      #
+      # and commit the updated api-schema.json alongside their changes.
+      - name: Verify OpenAPI snapshot is current (fixture-schema drift)
+        id: schema_drift
+        working-directory: ${{ github.workspace }}
+        run: |
+          python artifacts/syrabit-backend/scripts/export_api_schema.py \
+            /tmp/live-openapi.json
+          python - <<'PYEOF'
+          import json, sys
+
+          live = json.load(open('/tmp/live-openapi.json'))
+          snap = json.load(open('artifacts/syrabit/tests/api-schema.json'))
+
+          # ── 1. Path-set comparison ────────────────────────────────────
+          live_paths = set(live.get('paths', {}).keys())
+          snap_paths = set(snap.get('paths', {}).keys())
+          added_paths   = sorted(live_paths - snap_paths)
+          removed_paths = sorted(snap_paths - live_paths)
+
+          # ── 2. Response-component deep-type comparison ────────────────
+          #
+          # Collect component names referenced by 200-response bodies of
+          # paths present in both live and snapshot.
+          def response_component_refs(schema, path):
+              refs = set()
+              for method, op in schema.get('paths', {}).get(path, {}).items():
+                  if not isinstance(op, dict):
+                      continue
+                  for ct in op.get('responses', {}).get('200', {}).get('content', {}).values():
+                      ref = ct.get('schema', {}).get('$ref', '')
+                      if ref.startswith('#/components/schemas/'):
+                          refs.add(ref.split('/')[-1])
+              return refs
+
+          shared_paths = live_paths & snap_paths
+          all_component_names = set()
+          for p in shared_paths:
+              all_component_names |= response_component_refs(live, p)
+              all_component_names |= response_component_refs(snap, p)
+
+          # Semantic fields we care about for drift detection.
+          # Strip doc-only keys (description, title, example, examples)
+          # to avoid false positives from docstring edits.
+          SEMANTIC_KEYS = {
+              'type', 'required', 'properties', '$ref',
+              'anyOf', 'allOf', 'oneOf', 'items',
+              'nullable', 'enum', 'additionalProperties',
+          }
+
+          def canonical(obj):
+              """Recursively extract semantic structure for comparison.
+
+              When the key is 'properties', its value is a field-name→schema
+              map — field names are preserved (they are not semantic keys
+              themselves) and each per-field schema is canonicalized.
+              All other dict keys are filtered to SEMANTIC_KEYS so that
+              doc-only fields (description, title, example) do not cause
+              false-positive drift reports.
+              """
+              if isinstance(obj, dict):
+                  result = {}
+                  for k, v in obj.items():
+                      if k not in SEMANTIC_KEYS:
+                          continue
+                      if k == 'properties' and isinstance(v, dict):
+                          # v maps field-name → schema; preserve ALL field
+                          # names but canonicalize each field's schema.
+                          result[k] = {field: canonical(schema)
+                                       for field, schema in v.items()}
+                      else:
+                          result[k] = canonical(v)
+                  return result
+              if isinstance(obj, list):
+                  return [canonical(i) for i in obj]
+              return obj
+
+          component_diffs = []
+          live_comps = live.get('components', {}).get('schemas', {})
+          snap_comps = snap.get('components', {}).get('schemas', {})
+
+          for name in sorted(all_component_names):
+              live_canon = canonical(live_comps.get(name, {}))
+              snap_canon = canonical(snap_comps.get(name, {}))
+              if live_canon != snap_canon:
+                  # Build a human-readable summary of what changed.
+                  detail = []
+                  live_req = set(live_canon.get('required', []))
+                  snap_req = set(snap_canon.get('required', []))
+                  if live_req != snap_req:
+                      if live_req - snap_req:
+                          detail.append(f'    new required fields: {sorted(live_req - snap_req)}')
+                      if snap_req - live_req:
+                          detail.append(f'    no longer required: {sorted(snap_req - live_req)}')
+                  live_props = live_canon.get('properties', {})
+                  snap_props = snap_canon.get('properties', {})
+                  added_props   = sorted(set(live_props) - set(snap_props))
+                  removed_props = sorted(set(snap_props) - set(live_props))
+                  if added_props:
+                      detail.append(f'    new properties: {added_props}')
+                  if removed_props:
+                      detail.append(f'    removed properties: {removed_props}')
+                  for prop in sorted(set(live_props) & set(snap_props)):
+                      if live_props[prop] != snap_props[prop]:
+                          detail.append(
+                              f'    "{prop}" type changed:\n'
+                              f'      was: {json.dumps(snap_props[prop], sort_keys=True)}\n'
+                              f'      now: {json.dumps(live_props[prop], sort_keys=True)}'
+                          )
+                  if not detail:
+                      detail.append(f'    structural change (non-property level)')
+                  component_diffs.append(f'  {name}:\n' + '\n'.join(detail))
+
+          # ── Report ────────────────────────────────────────────────────
+          if not added_paths and not removed_paths and not component_diffs:
+              print(
+                  f'[schema-drift] OK — {len(live_paths)} paths and '
+                  f'{len(all_component_names)} response component schemas '
+                  f'match the snapshot (types, required, properties).'
+              )
+              sys.exit(0)
+
+          print('[schema-drift] FAIL — committed api-schema.json is out of date.')
+          print('Run:  python artifacts/syrabit-backend/scripts/export_api_schema.py')
+          print('Then commit the updated artifacts/syrabit/tests/api-schema.json.')
+
+          if added_paths:
+              print('\nNew backend paths not in snapshot:')
+              for p in added_paths: print(f'  + {p}')
+          if removed_paths:
+              print('\nSnapshot paths no longer in backend:')
+              for p in removed_paths: print(f'  - {p}')
+          if component_diffs:
+              print('\nResponse component schema changes (types/required/properties):')
+              for d in component_diffs: print(d)
+
+          sys.exit(1)
+          PYEOF
+
       - name: Upload coverage artifact
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

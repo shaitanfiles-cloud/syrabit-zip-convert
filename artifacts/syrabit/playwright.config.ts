@@ -18,6 +18,7 @@ const launchOptions = replitChromium ? { executablePath: replitChromium } : unde
 
 export default defineConfig({
   testDir: './tests',
+  globalSetup: './tests/global-setup.ts',
   timeout: 30_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,

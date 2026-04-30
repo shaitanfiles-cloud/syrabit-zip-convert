@@ -30,7 +30,17 @@ const FIXTURES: Array<[string, Fixture]> = [
   })],
 
   // --- Top-level chrome ---------------------------------------------------
-  ['/api/health', () => ({ status: 'ok', dependencies: {} })],
+  // HealthOut (response_model on GET /api/health) requires: status, version,
+  // service, workers, uptime_seconds, dependencies.  Keep all fields so the
+  // global fixture-schema validator does not flag missing required fields.
+  ['/api/health', () => ({
+    status: 'ok',
+    version: '0.0.0-e2e',
+    service: 'syrabit-api',
+    workers: 1,
+    uptime_seconds: 0,
+    dependencies: {},
+  })],
   ['/api/admin/settings', () => ({ maintenance_mode: false })],
   ['/api/admin/alerts/unacknowledged-count', () => ({ count: 0 })],
   ['/api/admin/notification-prefs', () => ({
@@ -71,8 +81,12 @@ const FIXTURES: Array<[string, Fixture]> = [
   ['/api/admin/alerts', () => ({ alerts: [] })],
   ['/api/admin/seo/health-history', () => ({ history: [] })],
   ['/api/admin/seo/deep-scan-history', () => ({})],
-  ['/api/admin/cf/overview', () => ({})],
-  ['/api/seo/pipeline/status', () => ({
+  // Corrected from /api/admin/cf/overview — the real backend path is
+  // /api/admin/analytics/cf-overview (confirmed in server.py + api.jsx).
+  ['/api/admin/analytics/cf-overview', () => ({})],
+  // Corrected from /api/seo/pipeline/status — the real backend path is
+  // /api/admin/seo/pipeline-status (confirmed in server.py + api.jsx).
+  ['/api/admin/seo/pipeline-status', () => ({
     total_topics: 0, published: 0, has_content: 0,
     needs_schema: 0, needs_internal_links: 0,
     pages_total: 0, published_today: 0,
@@ -143,6 +157,35 @@ const FIXTURES: Array<[string, Fixture]> = [
     refresh: { claimed: true, stored: true, regression_count: 0, paged: false },
   })],
 ];
+
+/**
+ * Flat list of every URL substring key registered in FIXTURES.
+ *
+ * Imported by tests/global-setup.ts so the fixture-schema drift
+ * validator can check each key against the committed OpenAPI snapshot
+ * (tests/api-schema.json) at test startup without duplicating the list
+ * here and in the setup file.
+ */
+export const FIXTURE_KEYS: readonly string[] = FIXTURES.map(([key]) => key);
+
+/**
+ * Representative fixture body for every URL key in FIXTURES.
+ *
+ * Each entry is the JSON object that the mock will actually return for
+ * a request whose URL contains the corresponding key.  Calling the
+ * fixture function with the key as the URL is correct for all fixtures
+ * that ignore the URL argument (the vast majority); the few that do
+ * use the URL (e.g. history paginators) return a type-stable shape at
+ * any URL, so the key itself is a safe stand-in.
+ *
+ * Imported by tests/global-setup.ts so the drift validator can validate
+ * these payloads against the OpenAPI response schemas for their
+ * matching backend paths — catching field renames, type changes, and
+ * removed required fields automatically at test startup.
+ */
+export const FIXTURE_SAMPLES: ReadonlyMap<string, unknown> = new Map(
+  FIXTURES.map(([key, fn]) => [key, fn(key)] as const),
+);
 
 interface InstallOptions {
   /**
