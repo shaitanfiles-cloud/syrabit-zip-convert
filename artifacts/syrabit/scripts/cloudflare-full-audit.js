@@ -633,33 +633,36 @@ async function auditItem19ZarazAndObservatory() {
     // secret present — fail-closed gate is armed
   }
 
-  // 6a-iv: Railway origin bypass probe
-  // Direct request to Railway origin without mTLS cert; should fail when Railway mTLS active.
+  // 6a-iv: Railway origin bypass probe (strict semantics)
+  // Sends a direct request to the Railway origin WITHOUT a mTLS client cert.
+  // STRICT: ANY HTTP response (any status 2xx/4xx/5xx) = FAIL — the origin
+  // is reachable at the HTTP layer, meaning only BACKEND_ORIGIN_SECRET guards it.
+  // If that header leaks, the origin can be accessed directly — defeating mTLS.
+  // Only a network/TLS-level rejection (no HTTP response, non-timeout error) = PASS.
+  // Timeout = WARN (indeterminate: mTLS rejection vs host-unreachable).
   const RAILWAY_ORIGIN_URL = process.env.RAILWAY_ORIGIN_URL;
   if (!RAILWAY_ORIGIN_URL) {
     warn(19, 6, 'Zaraz GA4 + Observatory',
-      'Railway bypass probe skipped (RAILWAY_ORIGIN_URL not set) — set CI secret to verify origin enforcement');
+      'Railway bypass probe skipped (RAILWAY_ORIGIN_URL not set) — set CI secret to verify origin mTLS enforcement');
   } else {
     try {
       const probeResp = await fetch(`${RAILWAY_ORIGIN_URL}/api/health`, {
         signal: AbortSignal.timeout(8000),
       });
-      if (probeResp.ok) {
-        fail(19, 6, 'Zaraz GA4 + Observatory',
-          `Railway origin bypass probe succeeded (status=${probeResp.status}) — mTLS NOT enforced on origin`,
-          'Configure Railway mTLS: Railway dashboard → Service → Settings → mTLS → add the Cloudflare client cert');
-        return;
-      }
-      // 4xx/5xx without TLS error is unusual but not a bypass
+      // ANY HTTP response = origin accessible = mTLS NOT enforced at TLS level
+      fail(19, 6, 'Zaraz GA4 + Observatory',
+        `Railway bypass probe: HTTP ${probeResp.status} received — origin reachable at HTTP layer without mTLS cert`,
+        'Require mTLS on Railway: Service → Settings → mTLS → add the Cloudflare client cert; BACKEND_ORIGIN_SECRET alone is insufficient if the header leaks');
+      return;
     } catch (e) {
       const msg = e.message || String(e);
-      // Network/TLS error = connection rejected = enforcement active (expected)
-      if (!msg.includes('abort') && !msg.includes('timeout') && !msg.includes('timed out')) {
-        // TLS/connection error — enforcement active, this is correct
+      if (msg.includes('abort') || msg.includes('timeout') || msg.includes('timed out')) {
+        // Cannot distinguish mTLS rejection from unreachable host via timeout
+        warn(19, 6, 'Zaraz GA4 + Observatory',
+          'Railway bypass probe: connection timeout — cannot confirm TLS-level rejection vs host-unreachable; verify Railway mTLS setting manually');
       }
-      // timeout/abort — origin not reachable (also correct)
+      // else: connection refused / SSL handshake error = mTLS enforced (pass, continue)
     }
-    // No successful bypass — Railway enforcement is active
   }
 
   // Check Observatory alert notification policy (speed_insights)
