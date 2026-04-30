@@ -234,7 +234,7 @@ async def _extract_pdf_text(content: bytes, url: str, max_chars: int) -> Optiona
     loop = asyncio.get_running_loop()
     def _run():
         try:
-            from PyPDF2 import PdfReader
+            from pypdf import PdfReader
             reader = PdfReader(io.BytesIO(content))
             text_parts = []
             chars = 0

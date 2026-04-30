@@ -618,27 +618,16 @@ async def extract_pdf_text(file: UploadFile = File(...), admin: dict = Depends(g
         raise HTTPException(status_code=413, detail="File too large (max 20 MB)")
 
     def _extract_sync(data: bytes):
-        try:
-            import io as _io
-            import pypdf
-            reader = pypdf.PdfReader(_io.BytesIO(data))
-            pages = []
-            for page in reader.pages:
-                text = page.extract_text() or ""
-                if text.strip():
-                    pages.append(text.strip())
-            extracted = "\n\n".join(pages)
-            return {"text": extracted, "pages": len(reader.pages), "chars": len(extracted)}
-        except ImportError:
-            import PyPDF2, io as _io
-            reader = PyPDF2.PdfReader(_io.BytesIO(data))
-            pages = []
-            for page in reader.pages:
-                text = page.extract_text() or ""
-                if text.strip():
-                    pages.append(text.strip())
-            extracted = "\n\n".join(pages)
-            return {"text": extracted, "pages": len(reader.pages), "chars": len(extracted)}
+        import io as _io
+        from pypdf import PdfReader
+        reader = PdfReader(_io.BytesIO(data))
+        pages = []
+        for page in reader.pages:
+            text = page.extract_text() or ""
+            if text.strip():
+                pages.append(text.strip())
+        extracted = "\n\n".join(pages)
+        return {"text": extracted, "pages": len(reader.pages), "chars": len(extracted)}
 
     try:
         loop = asyncio.get_event_loop()
@@ -1335,7 +1324,7 @@ async def upload_pdf_document(
     is_scanned = False
     
     try:
-        from PyPDF2 import PdfReader
+        from pypdf import PdfReader
         import io
         
         pdf_reader = PdfReader(io.BytesIO(content))

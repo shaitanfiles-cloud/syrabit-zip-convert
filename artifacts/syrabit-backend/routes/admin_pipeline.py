@@ -1609,7 +1609,7 @@ async def attach_file_to_chapter(
             import base64
             pdf_url = f"data:application/pdf;base64,{base64.b64encode(file_content).decode()}"
         try:
-            from PyPDF2 import PdfReader
+            from pypdf import PdfReader
             import io
             reader = PdfReader(io.BytesIO(file_content))
             extracted_text = "\n".join(p.extract_text() or "" for p in reader.pages).strip()
