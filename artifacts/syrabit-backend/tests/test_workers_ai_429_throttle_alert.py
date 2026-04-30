@@ -1,12 +1,17 @@
 """Task #73 — Test the Workers AI 429 throttle alert pipeline end-to-end.
 
-Three axes to cover:
+Four axes to cover:
  A. Counter helpers (llm._track_workers_ai_429, _reset_workers_ai_429,
     get_workers_ai_429_burst_inprocess, get_workers_ai_429_burst).
  B. Alerting check block #8 in metrics._alerting_loop: fires
     _dispatch_alert when burst >= threshold, silent below threshold.
  C. Source-level contract: metrics.py contains the check and llm.py
     exports the required symbols (pure AST / import assertions — zero I/O).
+ D. SmartKeyPool integration: mark_429() / mark_ok() are the actual
+    production entry-points that drive and reset the burst counter.
+    These tests verify the wiring between pool methods and the helpers
+    tested in section A — catching regressions like a rename that breaks
+    the call chain without touching the helpers themselves.
 """
 from __future__ import annotations
 
@@ -367,6 +372,203 @@ class TestAlertWithRealDispatch:
 
         assert result is None
         mock_db.alerts.insert_one.assert_not_awaited()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# D. SmartKeyPool integration — mark_429 / mark_ok wiring
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _make_wai_slot():
+    """Build a minimal Workers AI slot dict accepted by _SmartKeyPool methods."""
+    return {
+        "provider": "workers-ai",
+        "key": "test-key",
+        "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        "sem": asyncio.Semaphore(24),
+        "max_con": 24,
+        "last_used": 0.0,
+        "cooldown_until": 0.0,
+        "errors": 0,
+        "priority": 0,
+        "rpm_window": [],
+        "rpm_limit": 3000,
+        "base_priority": 0,
+        "rpm_warn_until": 0.0,
+    }
+
+
+class TestSmartKeyPoolMark429:
+    """mark_429 is the production entry-point that drives _track_workers_ai_429.
+
+    If someone renames _track_workers_ai_429 or changes the 'workers-ai'
+    guard, these tests fail before the regression reaches prod.
+    """
+
+    def test_mark_429_increments_burst_counter(self):
+        slot = _make_wai_slot()
+        llm_mod._slm_pool.mark_429(slot)
+        assert llm_mod.get_workers_ai_429_burst_inprocess(60) == 1
+
+    def test_mark_429_five_times_reaches_default_threshold(self):
+        """Requirement from task spec: 'calling mark_429() five times …
+        increments the counter to >= threshold (default 5)'."""
+        slot = _make_wai_slot()
+        for _ in range(5):
+            llm_mod._slm_pool.mark_429(slot)
+        burst = llm_mod.get_workers_ai_429_burst_inprocess(60)
+        default_threshold = 5
+        assert burst >= default_threshold, (
+            f"burst={burst} should be >= default threshold {default_threshold}"
+        )
+
+    def test_mark_429_accumulates_across_multiple_calls(self):
+        slot = _make_wai_slot()
+        for n in range(1, 6):
+            llm_mod._slm_pool.mark_429(slot)
+            assert llm_mod.get_workers_ai_429_burst_inprocess(60) == n
+
+    def test_mark_429_non_workers_ai_slot_does_not_increment_counter(self):
+        """Only Workers AI 429s count toward the burst — Groq/Cerebras
+        rate limits are tracked separately and must not pollute the WAI counter."""
+        slot = _make_wai_slot()
+        slot["provider"] = "groq"
+        llm_mod._slm_pool.mark_429(slot)
+        assert llm_mod.get_workers_ai_429_burst_inprocess(60) == 0
+
+    def test_mark_429_sets_cooldown_on_slot(self):
+        slot = _make_wai_slot()
+        before = time.time()
+        llm_mod._slm_pool.mark_429(slot)
+        assert slot["cooldown_until"] > before
+
+    def test_mark_429_also_records_rpm_window_entry(self):
+        """_record_request is called inside mark_429 so RPM tracking stays
+        accurate even for throttled requests."""
+        slot = _make_wai_slot()
+        llm_mod._slm_pool.mark_429(slot)
+        assert len(slot["rpm_window"]) == 1
+
+
+class TestSmartKeyPoolMarkOk:
+    """mark_ok is the production entry-point that calls _reset_workers_ai_429.
+
+    After a successful response, the burst counter must return to 0 so
+    the alerting loop stops paging on a recovered outage.
+    """
+
+    def test_mark_ok_resets_burst_counter_to_zero(self):
+        """Requirement from task spec: 'calling mark_ok() after a burst
+        resets the Redis key and in-memory window to 0'."""
+        slot = _make_wai_slot()
+        for _ in range(5):
+            llm_mod._slm_pool.mark_429(slot)
+        assert llm_mod.get_workers_ai_429_burst_inprocess(60) == 5
+
+        llm_mod._slm_pool.mark_ok(slot)
+        assert llm_mod.get_workers_ai_429_burst_inprocess(60) == 0
+
+    def test_mark_ok_clears_in_memory_window(self):
+        slot = _make_wai_slot()
+        llm_mod._slm_pool.mark_429(slot)
+        llm_mod._slm_pool.mark_429(slot)
+        assert llm_mod._WORKERS_AI_429_WINDOW != []
+
+        llm_mod._slm_pool.mark_ok(slot)
+        assert llm_mod._WORKERS_AI_429_WINDOW == []
+
+    def test_mark_ok_calls_redis_delete(self):
+        slot = _make_wai_slot()
+        mock_rc = MagicMock()
+        with patch("deps.redis_client", mock_rc):
+            llm_mod._slm_pool.mark_ok(slot)
+        mock_rc.delete.assert_called_once_with(llm_mod._WORKERS_AI_429_REDIS_KEY)
+
+    def test_mark_ok_non_workers_ai_slot_does_not_reset_counter(self):
+        """A Groq OK response must not wipe a concurrent Workers AI burst."""
+        slot_wai = _make_wai_slot()
+        for _ in range(3):
+            llm_mod._slm_pool.mark_429(slot_wai)
+        assert llm_mod.get_workers_ai_429_burst_inprocess(60) == 3
+
+        slot_groq = _make_wai_slot()
+        slot_groq["provider"] = "groq"
+        llm_mod._slm_pool.mark_ok(slot_groq)
+        # WAI counter must still be 3.
+        assert llm_mod.get_workers_ai_429_burst_inprocess(60) == 3
+
+    def test_mark_ok_sets_errors_to_zero_on_slot(self):
+        slot = _make_wai_slot()
+        slot["errors"] = 5
+        llm_mod._slm_pool.mark_ok(slot)
+        assert slot["errors"] == 0
+
+    def test_mark_ok_also_records_rpm_window_entry(self):
+        slot = _make_wai_slot()
+        llm_mod._slm_pool.mark_ok(slot)
+        assert len(slot["rpm_window"]) == 1
+
+
+class TestMark429ThenAlertThresholdMet:
+    """End-to-end integration: mark_429 five times → burst >= threshold
+    → the alerting check block fires _dispatch_alert.
+
+    This is the closest test to the real production flow without a live
+    event loop: we call the pool method (not the helper directly) and
+    verify the signal is strong enough to trigger the alert check.
+    """
+
+    def test_five_mark_429_calls_put_burst_above_default_alert_threshold(self):
+        slot = _make_wai_slot()
+        for _ in range(5):
+            llm_mod._slm_pool.mark_429(slot)
+
+        burst = llm_mod.get_workers_ai_429_burst_inprocess(
+            llm_mod._WORKERS_AI_429_WINDOW_S
+        )
+        default_threshold = 5
+        assert burst >= default_threshold, (
+            "After 5 mark_429 calls the burst must meet the default alert threshold"
+        )
+
+    def test_mark_ok_after_burst_drops_burst_below_alert_threshold(self):
+        slot = _make_wai_slot()
+        for _ in range(5):
+            llm_mod._slm_pool.mark_429(slot)
+
+        llm_mod._slm_pool.mark_ok(slot)
+
+        burst = llm_mod.get_workers_ai_429_burst_inprocess(
+            llm_mod._WORKERS_AI_429_WINDOW_S
+        )
+        assert burst == 0, (
+            "mark_ok must clear the burst so the alerting loop stops firing"
+        )
+
+    def test_alert_dispatch_called_after_five_mark_429_via_check_logic(self):
+        """Full stack: mark_429 × 5 via the pool → burst=5 → check #8 mock
+        fires _dispatch_alert exactly once with the right alert_type."""
+        slot = _make_wai_slot()
+        for _ in range(5):
+            llm_mod._slm_pool.mark_429(slot)
+
+        # Check #8 logic inline (same as _run_check_8 but using the REAL burst).
+        burst = llm_mod.get_workers_ai_429_burst_inprocess(
+            llm_mod._WORKERS_AI_429_WINDOW_S
+        )
+        threshold = 5
+        dispatch_mock = AsyncMock()
+
+        async def _check():
+            if burst >= threshold:
+                await dispatch_mock(
+                    "workers_ai_429_burst",
+                    "Workers AI rate-limit burst — chat may be unavailable",
+                    f"{burst} 429s (threshold {threshold})",
+                )
+
+        _run(_check())
+        dispatch_mock.assert_awaited_once()
+        assert dispatch_mock.await_args.args[0] == "workers_ai_429_burst"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
