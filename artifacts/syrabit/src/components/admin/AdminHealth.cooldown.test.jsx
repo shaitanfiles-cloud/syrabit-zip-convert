@@ -133,25 +133,28 @@ afterEach(() => {
    ═══════════════════════════════════════════════════════════════════════════ */
 describe('AdminHealth — embed cooldown pulse animation & urgency cue', () => {
 
+  /** Find the countdown value div by its structural position beneath the label. */
+  async function getValueEl() {
+    const label = await screen.findByText('Cooldown clears in', {}, { timeout: 3000 });
+    // The label div and the value div are siblings inside the same cell wrapper.
+    return label.nextElementSibling;
+  }
+
   it('A — no animate-pulse and gray text when cooldown is inactive', async () => {
     setPoolStatsMock({ embed_cooldown_active: false, embed_cooldown_remaining_s: 0 });
     await renderAndNavigate();
 
-    const label = await screen.findByText('Cooldown clears in', {}, { timeout: 3000 });
-    expect(label).toBeInTheDocument();
-
-    const valueEl = screen.getByText('—');
+    const valueEl = await getValueEl();
     expect(valueEl.className).toContain('text-gray-400');
     expect(valueEl.className).not.toContain('animate-pulse');
+    expect(valueEl.textContent).toBe('—');
   });
 
   it('B — red text, no animate-pulse when cooldown has > 10 s remaining', async () => {
     setPoolStatsMock({ embed_cooldown_active: true, embed_cooldown_remaining_s: 45 });
     await renderAndNavigate();
 
-    await screen.findByText('Cooldown clears in', {}, { timeout: 3000 });
-
-    const valueEl = screen.getByText(/45 s/);
+    const valueEl = await getValueEl();
     expect(valueEl.className).toContain('text-red-600');
     expect(valueEl.className).not.toContain('animate-pulse');
   });
@@ -160,9 +163,7 @@ describe('AdminHealth — embed cooldown pulse animation & urgency cue', () => {
     setPoolStatsMock({ embed_cooldown_active: true, embed_cooldown_remaining_s: 8 });
     await renderAndNavigate();
 
-    await screen.findByText('Cooldown clears in', {}, { timeout: 3000 });
-
-    const valueEl = screen.getByText(/8 s/);
+    const valueEl = await getValueEl();
     expect(valueEl.className).toContain('animate-pulse');
     expect(valueEl.className).toContain('text-red-600');
     expect(valueEl.className).not.toContain('text-orange-500');
@@ -172,9 +173,7 @@ describe('AdminHealth — embed cooldown pulse animation & urgency cue', () => {
     setPoolStatsMock({ embed_cooldown_active: true, embed_cooldown_remaining_s: 3 });
     await renderAndNavigate();
 
-    await screen.findByText('Cooldown clears in', {}, { timeout: 3000 });
-
-    const valueEl = screen.getByText(/3 s/);
+    const valueEl = await getValueEl();
     expect(valueEl.className).toContain('animate-pulse');
     expect(valueEl.className).toContain('text-orange-500');
     expect(valueEl.className).not.toContain('text-red-600');
