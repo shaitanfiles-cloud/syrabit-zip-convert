@@ -34,7 +34,13 @@ import path from "path";
 
 // Chunk name patterns to preload (matched against bundle keys, no leading `/`).
 // These are the critical-path chunks that the entry point statically imports.
-// Keep this list in sync with TARGETS in modulepreload-inject.js.
+//
+// DRIFT WARNING — keep in sync with TARGETS in modulepreload-inject.js.
+// Both lists must contain the same chunk names so the <link rel="modulepreload">
+// tags injected into index.html by modulepreload-inject.js match the
+// Link: response headers emitted by this plugin. If a chunk is renamed or
+// split in vite.config.js → rollupOptions.output.manualChunks, update both
+// files together. Missing from SCRIPT_TARGETS = no Early Hints for that chunk.
 const SCRIPT_TARGETS = ["index", "react-dom", "router", "query"];
 
 export default function preloadHeadersInjectPlugin() {
@@ -127,9 +133,26 @@ export default function preloadHeadersInjectPlugin() {
 
       fs.writeFileSync(headersPath, headers);
 
+      // ── Build-time assertion ────────────────────────────────────────────────
+      // Read back what was written and verify at least one Link: rel=preload
+      // line exists. Emitting a hard error here catches cases where the `/*`
+      // block replacement logic silently produced no output (e.g. regex
+      // mismatch on an unexpected _headers format).
+      const written = fs.readFileSync(headersPath, "utf-8");
+      const preloadLineCount = (
+        written.match(/^\s+Link:.*rel=preload/gim) || []
+      ).length;
+      if (preloadLineCount === 0) {
+        this.error(
+          "[preload-headers] ASSERTION FAILED: dist/_headers was written but " +
+            "contains no Link: rel=preload lines. Check the `/*` block logic.",
+        );
+        return;
+      }
+
       this.warn(
         `[preload-headers] Wrote ${linkLines.length} Link preload header(s) ` +
-          `to dist/_headers (/*).`,
+          `to dist/_headers (/*). Assertion: ${preloadLineCount} line(s) confirmed.`,
       );
     },
   };
