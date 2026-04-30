@@ -381,6 +381,41 @@ describe('HighlightSavePopover — edge cases', () => {
     outerSavable.parentNode.removeChild(outerSavable);
   });
 
+  it('does not show the popover when a selection spans from inside a savable area to completely outside it (commonAncestorContainer is non-savable)', async () => {
+    render(<HighlightSavePopover />);
+
+    const wrapperDiv = document.createElement('div');
+    const innerSavable = document.createElement('div');
+    innerSavable.setAttribute('data-savable', 'true');
+    innerSavable.appendChild(document.createTextNode('text inside savable'));
+    const outerSibling = document.createElement('div');
+    outerSibling.appendChild(document.createTextNode('text completely outside savable'));
+    wrapperDiv.appendChild(innerSavable);
+    wrapperDiv.appendChild(outerSibling);
+    document.body.appendChild(wrapperDiv);
+
+    const crossOutsideRange = {
+      commonAncestorContainer: wrapperDiv,
+      getBoundingClientRect: () => ({ left: 50, top: 50, width: 80, height: 18 }),
+    };
+    getSelectionSpy.mockReturnValue({
+      isCollapsed: false,
+      toString: () => 'text inside savable text completely outside savable',
+      getRangeAt: () => crossOutsideRange,
+    });
+
+    await act(async () => {
+      document.dispatchEvent(new Event('selectionchange'));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(screen.queryByText(/save/i)).toBeNull();
+    expect(screen.queryByText(/quiz me/i)).toBeNull();
+    expect(document.querySelector('.fixed.z-\\[110\\]')).toBeNull();
+
+    wrapperDiv.parentNode.removeChild(wrapperDiv);
+  });
+
   it('does not show the popover when the selection is outside any savable container', async () => {
     render(<HighlightSavePopover />);
 
