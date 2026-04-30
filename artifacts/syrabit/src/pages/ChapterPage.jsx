@@ -1380,6 +1380,7 @@ export default function ChapterPage() {
         sourceTitle={`${chapterTitle} — ${subjectName}`}
         chapterRef={`${board}/${classSlug}/${subjectSlug}/${chapterSlug}`}
         subjectName={subjectName}
+        hideQuiz={isQuestionPaper}
       />
       {!isQuestionPaper && typeof document !== 'undefined' && createPortal(
         <QuizModal

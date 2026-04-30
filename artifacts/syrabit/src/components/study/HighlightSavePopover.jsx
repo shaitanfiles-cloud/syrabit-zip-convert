@@ -25,7 +25,7 @@ function _isInsideSavable(node) {
 }
 
 export function HighlightSavePopover({
-  sourceUrl = '', sourceTitle = '', chapterRef = '', subjectName = '',
+  sourceUrl = '', sourceTitle = '', chapterRef = '', subjectName = '', hideQuiz = false,
 }) {
   const [pos, setPos] = useState(null);     // {x,y,text}
   const [saved, setSaved] = useState(false);
@@ -98,13 +98,15 @@ export function HighlightSavePopover({
                      <Bookmark className="w-3.5 h-3.5" />}
             {saved ? 'Saved' : 'Save'}
           </button>
-          <div className="w-px h-5 bg-border/60" />
-          <button
-            onClick={onQuiz}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium hover:bg-muted"
-          >
-            <HelpCircle className="w-3.5 h-3.5" /> Quiz me
-          </button>
+          {!hideQuiz && <div className="w-px h-5 bg-border/60" />}
+          {!hideQuiz && (
+            <button
+              onClick={onQuiz}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium hover:bg-muted"
+            >
+              <HelpCircle className="w-3.5 h-3.5" /> Quiz me
+            </button>
+          )}
         </div>
       )}
       <QuizModal
