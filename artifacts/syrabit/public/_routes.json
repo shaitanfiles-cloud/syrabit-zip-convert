@@ -2,6 +2,7 @@
   "version": 1,
   "include": ["/*"],
   "_comment_xml_routes": "Sitemap, feed and llms paths are intentionally NOT in `exclude` — they MUST flow through _worker.js so it can proxy them to the backend (see SEO_PASSTHROUGH_RE). Putting them here would bypass the worker, hit the static asset pipeline, 404, and Googlebot would silently drop the sitemap (the Apr 2026 indexing collapse).",
+  "_comment_ads_txt": "ads.txt MUST be in exclude — it is a plain-text static file served directly from the CDN. Without this, the worker intercepts it, falls back to PAGES_ORIGIN, which re-enters the same Pages deployment creating an infinite-proxy loop that always returns the SPA HTML instead of the AdSense verification line.",
   "exclude": [
     "/assets/*",
     "/icons/*",
@@ -18,6 +19,7 @@
     "/apple-touch-icon.png",
     "/offline.html",
     "/googlefbe0a804ad7e5fdd.html",
-    "/_headers"
+    "/_headers",
+    "/ads.txt"
   ]
 }
