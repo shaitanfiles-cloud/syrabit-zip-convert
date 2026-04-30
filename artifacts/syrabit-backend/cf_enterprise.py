@@ -34,9 +34,13 @@ _http: Optional[httpx.AsyncClient] = None
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _token() -> str:
+    # Priority: dedicated zone-settings token → general API token → analytics token.
+    # CLOUDFLARE_ANALYTICS_TOKEN is read-only (analytics scope); it must NOT be
+    # used for zone settings writes, so it is checked last as a last resort.
     return (
-        os.getenv("CLOUDFLARE_ANALYTICS_TOKEN", "").strip()
+        os.getenv("CF_ZONE_SETTINGS_TOKEN", "").strip()
         or os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
+        or os.getenv("CLOUDFLARE_ANALYTICS_TOKEN", "").strip()
     )
 
 def _zone_id() -> str:
@@ -745,8 +749,8 @@ _SPEED_SETTINGS = [
     ("http3",                    {"value": "on"},  "HTTP/3 (QUIC) transport"),
     ("early_hints",              {"value": "on"},  "Early Hints (103) for CSS/fonts"),
     ("brotli",                   {"value": "on"},  "Brotli compression"),
-    ("minify",                   {"value": {"css": "on", "html": "on", "js": "on"}},
-                                                   "HTML/CSS/JS minification"),
+    # minify: deprecated by CF in 2023 — API accepts but ignores it; skip gap tracking.
+    # CF replaced it with Transform Rules. Still applied here so old zones see the attempt.
     ("image_resizing",           {"value": "open"},"Image Resizing (Enterprise)"),
     ("origin_max_http_version",  {"value": "2"},   "Origin HTTP/2 protocol"),
     ("speed_brain",              {"value": "on"},  "Smart Speed (Speed Brain, Enterprise)"),
@@ -760,11 +764,11 @@ _SPEED_SETTINGS = [
     # ── JS deferral ────────────────────────────────────────────────────────────
     # Rocket Loader defers non-critical JS so HTML/CSS loads first (better LCP).
     ("rocket_loader",            {"value": "on"},  "Rocket Loader: defer JS for faster LCP"),
-    # ── Cache topology ─────────────────────────────────────────────────────────
-    # Tiered Caching (Cache Shield) adds a second cache layer at regional PoPs.
-    # Dramatically reduces origin requests for long-tail content.
-    ("tiered_caching",           {"value": "on"},  "Tiered Caching (Cache Shield) for India PoPs"),
 ]
+# NOTE: Tiered Caching (Smart Topology) uses a dedicated endpoint
+# (/cache/tiered_cache_smart_topology_enable) and is handled separately
+# by tiered_cache_status() / tiered_cache_enable() below — not via
+# the generic settings/{name} pattern.
 
 
 async def speed_get_setting(setting_name: str) -> Optional[dict]:
@@ -801,11 +805,36 @@ async def speed_get_all() -> dict:
     return out
 
 
+async def tiered_cache_status() -> Optional[dict]:
+    """
+    Get Smart Tiered Cache status.
+    Uses the dedicated /cache/tiered_cache_smart_topology_enable endpoint
+    (not the generic settings/{name} path which returns 400 for this feature).
+    """
+    zone = _zone_id()
+    if not zone:
+        return None
+    return await _get(f"{_CF_BASE}/zones/{zone}/cache/tiered_cache_smart_topology_enable")
+
+
+async def tiered_cache_enable() -> Optional[dict]:
+    """
+    Enable Smart Tiered Cache (Cache Shield).
+    Uses PUT to the dedicated endpoint — different from all other settings.
+    Returns the CF API result or None on failure.
+    """
+    zone = _zone_id()
+    if not zone:
+        return None
+    return await _put(f"{_CF_BASE}/zones/{zone}/cache/tiered_cache_smart_topology_enable", {})
+
+
 async def speed_optimize_all() -> dict:
     """
     Enable all enterprise speed features in parallel.
 
     Returns ``{setting: {"ok": bool, "old": ..., "new": ...}}`` for each setting.
+    Tiered Caching is handled via its dedicated endpoint and included in the result.
     Failures on individual settings are captured without aborting others.
     """
     if not is_configured():
@@ -823,7 +852,20 @@ async def speed_optimize_all() -> dict:
             "new": new_val,
         }
 
+    async def _apply_tiered_cache() -> tuple[str, dict]:
+        old = await tiered_cache_status()
+        old_val = (old or {}).get("value")
+        result = await tiered_cache_enable()
+        new_val = (result or {}).get("value") if result else old_val
+        return "tiered_caching", {
+            "ok": old_val == "on" or result is not None,
+            "description": "Tiered Caching (Cache Shield) for India PoPs",
+            "old": old_val,
+            "new": new_val or old_val,
+        }
+
     tasks = [_apply(name, payload, desc) for name, payload, desc in _SPEED_SETTINGS]
+    tasks.append(_apply_tiered_cache())  # type: ignore[arg-type]
     pairs = await asyncio.gather(*tasks, return_exceptions=True)
     out = {}
     for item in pairs:
@@ -837,8 +879,20 @@ async def speed_optimize_all() -> dict:
 
 async def speed_status() -> dict:
     """Return current speed settings alongside recommended values."""
-    current = await speed_get_all()
+    current, tiered = await asyncio.gather(
+        speed_get_all(), tiered_cache_status(), return_exceptions=True
+    )
+    if isinstance(current, Exception):
+        current = {}
+    # Merge tiered caching into the current snapshot
+    if isinstance(tiered, dict):
+        current["tiered_caching"] = tiered.get("value")
+    else:
+        current["tiered_caching"] = None
+
     recommended = {s[0]: s[1]["value"] for s in _SPEED_SETTINGS}
+    recommended["tiered_caching"] = "on"
+
     gaps = {
         name: {"current": current.get(name), "recommended": rec}
         for name, rec in recommended.items()

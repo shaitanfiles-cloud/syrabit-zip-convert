@@ -517,14 +517,27 @@ def test_speed_optimize_all_applies_settings(monkeypatch, cf_env):
         applied.append(name)
         return {"id": name, "value": value}
 
+    async def fake_tiered_status():
+        return {"value": "on"}
+
+    async def fake_tiered_enable():
+        return {"value": "on"}
+
     monkeypatch.setattr(cfe, "speed_get_setting", fake_get_setting)
     monkeypatch.setattr(cfe, "speed_set_setting", fake_set_setting)
+    monkeypatch.setattr(cfe, "tiered_cache_status", fake_tiered_status)
+    monkeypatch.setattr(cfe, "tiered_cache_enable", fake_tiered_enable)
 
     result = _run(cfe.speed_optimize_all())
     assert isinstance(result, dict)
-    assert len(result) == len(cfe._SPEED_SETTINGS)
-    assert all(v.get("ok") for v in result.values())
-    assert set(applied) == {s[0] for s in cfe._SPEED_SETTINGS}
+    # Result includes all _SPEED_SETTINGS entries + tiered_caching (separate endpoint)
+    assert len(result) == len(cfe._SPEED_SETTINGS) + 1
+    assert "tiered_caching" in result
+    # All standard settings applied, tiered_caching reported ok
+    standard_keys = {s[0] for s in cfe._SPEED_SETTINGS}
+    assert all(result[k].get("ok") for k in standard_keys)
+    assert result["tiered_caching"].get("ok") is True
+    assert set(applied) == standard_keys
 
 
 def test_speed_optimize_all_not_configured(monkeypatch):
@@ -556,10 +569,15 @@ def test_speed_status_fully_optimized(monkeypatch, cf_env):
     async def fake_get_all():
         return {s[0]: s[1]["value"] for s in cfe._SPEED_SETTINGS}
 
+    async def fake_tiered_status():
+        return {"value": "on"}
+
     monkeypatch.setattr(cfe, "speed_get_all", fake_get_all)
+    monkeypatch.setattr(cfe, "tiered_cache_status", fake_tiered_status)
     status = _run(cfe.speed_status())
     assert status["fully_optimized"] is True
     assert status["gap_count"] == 0
+    assert status["current"]["tiered_caching"] == "on"
 
 
 def test_speed_set_setting_sends_correct_value(monkeypatch, cf_env):
