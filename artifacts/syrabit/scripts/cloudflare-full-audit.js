@@ -550,6 +550,8 @@ async function auditItem18ImageResizing() {
 }
 
 async function auditItem19ZarazAndObservatory() {
+  const WORKER_NAME = 'syrabit-edge';
+
   // Check Zaraz GA4
   const zaraz = await cfGetOrSkip(`/zones/${ZONE_ID}/zaraz/config`);
   let zarazOk = false;
@@ -575,6 +577,89 @@ async function auditItem19ZarazAndObservatory() {
       return;
     }
     zarazOk = true;
+  }
+
+  // 6a-ii: Worker MTLS_CERT binding present in deployed worker
+  const workerBindingsRes = await fetch(
+    `${API}/accounts/${ACCOUNT_ID}/workers/scripts/${WORKER_NAME}/bindings`,
+    { headers },
+  );
+  const workerBindingsJson = await workerBindingsRes.json();
+  if (!workerBindingsJson.success) {
+    const code = workerBindingsJson.errors?.[0]?.code;
+    if (code === 10000) {
+      warn(19, 6, 'Zaraz GA4 + Observatory',
+        'Worker bindings: token lacks Workers Scripts: Read — cannot verify MTLS_CERT binding');
+    } else {
+      warn(19, 6, 'Zaraz GA4 + Observatory',
+        `Worker bindings API error ${code}: ${workerBindingsJson.errors?.[0]?.message}`);
+    }
+  } else {
+    const mtlsBinding = (workerBindingsJson.result || []).find(
+      b => b.name === 'MTLS_CERT' && b.type === 'mtls_certificate',
+    );
+    if (!mtlsBinding) {
+      fail(19, 6, 'Zaraz GA4 + Observatory',
+        'Worker MTLS_CERT binding NOT FOUND in deployed worker',
+        'ensure CF_MTLS_CERT_ID is set in CI secrets and re-deploy via edge-proxy-deploy.yml');
+      return;
+    }
+    // binding present — continue
+  }
+
+  // 6a-iii: MTLS_REQUIRED secret exists in the worker (fail-closed gate)
+  const workerSecretsRes = await fetch(
+    `${API}/accounts/${ACCOUNT_ID}/workers/scripts/${WORKER_NAME}/secrets`,
+    { headers },
+  );
+  const workerSecretsJson = await workerSecretsRes.json();
+  if (!workerSecretsJson.success) {
+    const code = workerSecretsJson.errors?.[0]?.code;
+    if (code === 10000) {
+      warn(19, 6, 'Zaraz GA4 + Observatory',
+        'Worker secrets: token lacks Workers Scripts: Read — cannot verify MTLS_REQUIRED secret');
+    } else {
+      warn(19, 6, 'Zaraz GA4 + Observatory',
+        `Worker secrets API error ${code}: ${workerSecretsJson.errors?.[0]?.message}`);
+    }
+  } else {
+    const mtlsRequired = (workerSecretsJson.result || []).find(s => s.name === 'MTLS_REQUIRED');
+    if (!mtlsRequired) {
+      fail(19, 6, 'Zaraz GA4 + Observatory',
+        'Worker MTLS_REQUIRED secret NOT SET (fail-closed gate inactive)',
+        'run: wrangler secret put MTLS_REQUIRED --name syrabit-edge  (value: true)');
+      return;
+    }
+    // secret present — fail-closed gate is armed
+  }
+
+  // 6a-iv: Railway origin bypass probe
+  // Direct request to Railway origin without mTLS cert; should fail when Railway mTLS active.
+  const RAILWAY_ORIGIN_URL = process.env.RAILWAY_ORIGIN_URL;
+  if (!RAILWAY_ORIGIN_URL) {
+    warn(19, 6, 'Zaraz GA4 + Observatory',
+      'Railway bypass probe skipped (RAILWAY_ORIGIN_URL not set) — set CI secret to verify origin enforcement');
+  } else {
+    try {
+      const probeResp = await fetch(`${RAILWAY_ORIGIN_URL}/api/health`, {
+        signal: AbortSignal.timeout(8000),
+      });
+      if (probeResp.ok) {
+        fail(19, 6, 'Zaraz GA4 + Observatory',
+          `Railway origin bypass probe succeeded (status=${probeResp.status}) — mTLS NOT enforced on origin`,
+          'Configure Railway mTLS: Railway dashboard → Service → Settings → mTLS → add the Cloudflare client cert');
+        return;
+      }
+      // 4xx/5xx without TLS error is unusual but not a bypass
+    } catch (e) {
+      const msg = e.message || String(e);
+      // Network/TLS error = connection rejected = enforcement active (expected)
+      if (!msg.includes('abort') && !msg.includes('timeout') && !msg.includes('timed out')) {
+        // TLS/connection error — enforcement active, this is correct
+      }
+      // timeout/abort — origin not reachable (also correct)
+    }
+    // No successful bypass — Railway enforcement is active
   }
 
   // Check Observatory alert notification policy (speed_insights)

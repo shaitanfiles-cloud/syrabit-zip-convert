@@ -55,6 +55,11 @@ jobs:
           CLOUDFLARE_ZONE_ID: "5b8c97df4431491dc7f60ea72fb61871"
           CLOUDFLARE_ACCOUNT_ID: "d66e40eac539fff1db270fddf384a5ec"
           CF_ANALYTICS_TOKEN: ${{ secrets.CF_ANALYTICS_TOKEN }}
+          # Task #110 Phase 6: Railway origin bypass probe.
+          # When set, the audit sends a direct HTTP request to this URL without
+          # a client cert and asserts the connection is rejected (mTLS enforced).
+          # Set via GitHub repo secrets: Settings → Secrets → RAILWAY_ORIGIN_URL
+          RAILWAY_ORIGIN_URL: ${{ secrets.RAILWAY_ORIGIN_URL }}
           AUDIT_OUTPUT_FILE: /tmp/cf-audit-report.json
         run: node artifacts/syrabit/scripts/cloudflare-full-audit.js
 

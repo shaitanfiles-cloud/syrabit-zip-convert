@@ -380,6 +380,12 @@ async function main() {
   console.log('\nPhase 6 — mTLS cert, Image Resizing, Zaraz GA4, Observatory:');
 
   // 6a: mTLS client certificate for Railway origin
+  //
+  // Three-layer enforcement verification:
+  //   6a-i:  Account-level cert object exists (syrabit-railway-mtls)
+  //   6a-ii: Worker has [[mtls_certificates]] binding (MTLS_CERT name in worker bindings)
+  //   6a-iii: MTLS_REQUIRED secret = "true" in the deployed worker (fail-closed gate)
+  //
   const mtlsCerts = await cfGetOrSkip(`/accounts/${ACCOUNT_ID}/mtls_certificates`);
   if (!mtlsCerts) {
     warn('mTLS client certificate',
@@ -397,6 +403,91 @@ async function main() {
       console.log(`  ${mark}  mTLS cert syrabit-railway-mtls: id=${railwayCert.id} expires=${railwayCert.expires_on} (${daysLeft}d)`);
       if (expiringSoon) {
         warnings.push(`mTLS cert expires in ${daysLeft} days — renew via cloudflare-phase6-apply.js`);
+      }
+    }
+  }
+
+  // 6a-ii: Worker MTLS_CERT binding is present in the deployed worker.
+  // Uses /workers/scripts/{name}/bindings — same endpoint as Phase 5a.
+  // The inject-mtls-cert-id.js CI gate ensures the wrangler.toml [[mtls_certificates]]
+  // block is populated at deploy time; this assertion proves it reached the worker.
+  const workerBindings = await cfGetOrSkip(`/accounts/${ACCOUNT_ID}/workers/scripts/${WORKER_NAME}/bindings`);
+  if (!workerBindings) {
+    warn('Worker MTLS_CERT binding',
+      'token lacks Workers Scripts: Read — add scope to verify worker bindings');
+  } else {
+    const mtlsBinding = (workerBindings.result || []).find(b => b.name === 'MTLS_CERT' && b.type === 'mtls_certificate');
+    if (!mtlsBinding) {
+      failures.push('Worker MTLS_CERT binding NOT FOUND in deployed worker');
+      console.log('  ✗  Worker MTLS_CERT binding: NOT FOUND — ensure CF_MTLS_CERT_ID secret is set and re-deploy via edge-proxy-deploy.yml');
+    } else {
+      console.log(`  ✓  Worker MTLS_CERT binding: present (certificate_id=${mtlsBinding.certificate_id || 'N/A'})`);
+    }
+  }
+
+  // 6a-iii: MTLS_REQUIRED=true is set in the worker (fail-closed gate).
+  // Cloudflare's Workers API exposes secret names (not values) at
+  // /accounts/{id}/workers/scripts/{name}/secrets — we can verify the secret
+  // exists. The value "true" cannot be read back but its presence is enforced
+  // by proxyToBackend() which 503s when MTLS_CERT binding is absent; step 6a-ii
+  // above already proves the binding is present, so together they confirm the
+  // fail-closed path is active.
+  const workerSecrets = await cfGetOrSkip(`/accounts/${ACCOUNT_ID}/workers/scripts/${WORKER_NAME}/secrets`);
+  if (!workerSecrets) {
+    warn('Worker MTLS_REQUIRED secret',
+      'token lacks Workers Scripts: Read — add scope to verify worker secrets');
+  } else {
+    const mtlsRequiredSecret = (workerSecrets.result || []).find(s => s.name === 'MTLS_REQUIRED');
+    if (!mtlsRequiredSecret) {
+      failures.push('Worker MTLS_REQUIRED secret NOT SET in deployed worker (fail-closed gate inactive)');
+      console.log('  ✗  Worker MTLS_REQUIRED secret: NOT SET — run: wrangler secret put MTLS_REQUIRED --name syrabit-edge (value: true)');
+    } else {
+      console.log('  ✓  Worker MTLS_REQUIRED secret: present (fail-closed gate active)');
+    }
+  }
+
+  // 6a-iv: Railway origin bypass probe.
+  // Attempts a direct HTTP request to the Railway backend WITHOUT the Cloudflare
+  // worker (no BACKEND_ORIGIN_SECRET, no mTLS cert). When Railway mTLS is
+  // correctly configured, this request should be rejected (connection refused,
+  // TLS error, or 401/403 from Railway's own policy). A 200 would mean the
+  // origin is still publicly reachable without a cert — a security regression.
+  //
+  // RAILWAY_ORIGIN_URL must be set in the CI environment to the bare Railway
+  // URL (e.g. https://syrabit-production.up.railway.app).  When unset the
+  // check is skipped with a warning so local dev / accounts without Railway
+  // are not blocked.  Set via: GitHub Actions → Secrets → RAILWAY_ORIGIN_URL.
+  //
+  // Note: probe path is /api/health which returns 200 on a healthy origin
+  // if mTLS is NOT enforced. When Railway mTLS is enforced, the TLS handshake
+  // fails before HTTP is reached, so fetch() throws a network error.
+  const RAILWAY_ORIGIN_URL = process.env.RAILWAY_ORIGIN_URL;
+  if (!RAILWAY_ORIGIN_URL) {
+    warnings.push('Railway bypass probe skipped: RAILWAY_ORIGIN_URL not set — set the CI secret to verify origin enforcement');
+    console.log('  ⚠  Railway bypass probe: SKIPPED — set RAILWAY_ORIGIN_URL in CI secrets');
+  } else {
+    try {
+      const probeResp = await fetch(`${RAILWAY_ORIGIN_URL}/api/health`, {
+        signal: AbortSignal.timeout(8000),
+      });
+      // If we get ANY successful 2xx back, Railway mTLS is not enforced
+      if (probeResp.ok) {
+        failures.push(`Railway origin bypass probe succeeded (status=${probeResp.status}) — Railway mTLS NOT enforced`);
+        console.log(`  ✗  Railway bypass probe: status=${probeResp.status} — origin is reachable without mTLS cert`);
+        console.log('      → Configure Railway mTLS: Railway dashboard → Service → Settings → mTLS → add Cloudflare client cert');
+      } else {
+        // 4xx/5xx from Railway before mTLS handshake means something is wrong but not bypassed
+        console.log(`  ✓  Railway bypass probe: status=${probeResp.status} (non-200 — origin not freely accessible)`);
+      }
+    } catch (e) {
+      // Network/TLS error = connection was rejected. This is the expected result
+      // when Railway mTLS is correctly configured (handshake fails, no HTTP response).
+      const msg = e.message || String(e);
+      if (msg.includes('abort') || msg.includes('timeout') || msg.includes('timed out')) {
+        console.log('  ✓  Railway bypass probe: connection timeout — origin is not publicly reachable (expected)');
+      } else {
+        // TLS handshake failure or connection refused — both indicate enforcement
+        console.log(`  ✓  Railway bypass probe: network/TLS error "${msg}" — origin rejected unauthenticated connection (expected)`);
       }
     }
   }

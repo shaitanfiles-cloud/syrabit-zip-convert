@@ -157,4 +157,9 @@ jobs:
           CLOUDFLARE_ZONE_ID: "5b8c97df4431491dc7f60ea72fb61871"
           CLOUDFLARE_ACCOUNT_ID: "d66e40eac539fff1db270fddf384a5ec"
           CF_ANALYTICS_TOKEN: ${{ secrets.CF_ANALYTICS_TOKEN }}
+          # Task #110 Phase 6: Railway origin bypass probe.
+          # When set, nightly-smoke.js sends a direct unauthenticated request to
+          # this URL and asserts the connection is rejected (Railway mTLS active).
+          # Set via GitHub repo secrets: Settings → Secrets → RAILWAY_ORIGIN_URL
+          RAILWAY_ORIGIN_URL: ${{ secrets.RAILWAY_ORIGIN_URL }}
         run: node artifacts/syrabit/scripts/nightly-smoke.js
