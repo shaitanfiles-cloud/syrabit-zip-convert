@@ -93,6 +93,28 @@ describe('QuizModal portal mounting', () => {
     expect(screen.queryByText(/quiz me/i)).not.toBeInTheDocument();
   });
 
+  it('shows a toast error and keeps the popover visible when Save fails', async () => {
+    const { studyApi } = await import('@/utils/studyApi');
+    const { toast } = await import('sonner');
+    const errorMessage = 'Network error';
+    studyApi.createNote.mockRejectedValue(new Error(errorMessage));
+
+    render(<HighlightSavePopover hideQuiz={false} hideSave={false} />);
+
+    await triggerSelectionChange('this is long enough text');
+
+    expect(screen.getByText(/^save$/i)).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /save/i }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(toast.error).toHaveBeenCalledWith(errorMessage);
+    expect(screen.getByText(/^save$/i)).toBeInTheDocument();
+  });
+
   it('dismisses the popover bar after Save completes and 900 ms elapses', async () => {
     const { studyApi } = await import('@/utils/studyApi');
     studyApi.createNote.mockResolvedValue({});
