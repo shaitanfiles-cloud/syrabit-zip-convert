@@ -146,6 +146,26 @@ describe('HighlightSavePopover — edge cases', () => {
     expect(document.querySelector('.fixed.z-\\[110\\]')).toBeNull();
   });
 
+  it('shows the popover for text of exactly 6 chars (minimum valid length)', async () => {
+    render(<HighlightSavePopover />);
+
+    await triggerSelectionChange('abcdef');
+
+    expect(screen.getByText(/save/i)).toBeInTheDocument();
+    expect(screen.getByText(/quiz me/i)).toBeInTheDocument();
+    expect(document.querySelector('.fixed.z-\\[110\\]')).toBeInTheDocument();
+  });
+
+  it('shows the popover for text of exactly 4000 chars (maximum valid length)', async () => {
+    render(<HighlightSavePopover />);
+
+    await triggerSelectionChange('a'.repeat(4000));
+
+    expect(screen.getByText(/save/i)).toBeInTheDocument();
+    expect(screen.getByText(/quiz me/i)).toBeInTheDocument();
+    expect(document.querySelector('.fixed.z-\\[110\\]')).toBeInTheDocument();
+  });
+
   it('does not show the popover when the selection is collapsed', async () => {
     render(<HighlightSavePopover />);
 
