@@ -1773,9 +1773,19 @@ async def healthz_ai():
     (``2 * VERTEX_PROBE_INTERVAL_S`` by default). When this endpoint
     flips to 503 Railway will refuse to mark the rollout as healthy
     and auto-rollback instead of serving 502s to users.
+
+    Also surfaces Workers AI 429 burst counts (informational — they do
+    not affect the HTTP status code, which is driven solely by the
+    Vertex/Gemini probe result).
     """
     import vertex_health_cache
     code, body = vertex_health_cache.healthz_ai_response()
+    try:
+        from llm import get_workers_ai_429_burst
+        body["workers_ai_429_burst_60s"] = get_workers_ai_429_burst(60)
+        body["workers_ai_429_burst_180s"] = get_workers_ai_429_burst(180)
+    except Exception:
+        pass
     return JSONResponse(status_code=code, content=body)
 
 

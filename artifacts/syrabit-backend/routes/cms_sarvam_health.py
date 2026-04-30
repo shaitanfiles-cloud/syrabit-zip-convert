@@ -4738,6 +4738,22 @@ async def admin_dashboard_metrics(admin: dict = Depends(get_admin_user)):
 
         elapsed = round((time.time() - start) * 1000, 1)
 
+        # Workers AI 429 burst — cross-worker via Redis, in-process fallback.
+        _wai_burst_60 = 0
+        _wai_burst_180 = 0
+        _wai_threshold = 5
+        try:
+            from llm import get_workers_ai_429_burst as _get_wai_burst
+            _wai_burst_60 = _get_wai_burst(60)
+            _wai_burst_180 = _get_wai_burst(180)
+        except Exception:
+            pass
+        try:
+            from metrics import _ALERT_THRESHOLDS as _at
+            _wai_threshold = int(_at.get("workers_ai_429_burst_threshold", 5))
+        except Exception:
+            pass
+
         result = {
             "dependencies": deps_status,
             "response_time_ms": elapsed,
@@ -4746,6 +4762,12 @@ async def admin_dashboard_metrics(admin: dict = Depends(get_admin_user)):
             "seo": {"topics": seo_count, "published_pages": seo_published},
             "payments_count": len(payments),
             "bot_render": await get_bot_render_metrics_async(),
+            "workers_ai_throttle": {
+                "burst_60s": _wai_burst_60,
+                "burst_180s": _wai_burst_180,
+                "alert_threshold": _wai_threshold,
+                "throttled": _wai_burst_60 >= _wai_threshold,
+            },
         }
         _metrics_cache["data"] = result
         _metrics_cache["ts"] = now_ts
