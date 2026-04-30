@@ -687,10 +687,14 @@ function extractChapterIdFromPath(pathname: string): string {
  * The edge worker never reads the response body, so it cannot know which
  * backend provider (groq/gemini/cerebras) ultimately served the request.
  * Only /api/ai/fallback/* is distinguishable — those route to Workers AI.
+ *
+ * NOTE: isAiPath() explicitly excludes /api/ai/fallback/* (it is exempt from
+ * the AI rate limit), so the fallback check must come BEFORE the isAiPath()
+ * guard to remain reachable.
  */
 function aiProviderFromPath(pathname: string): string {
-  if (!isAiPath(pathname)) return "none";
   if (pathname.startsWith("/api/ai/fallback/")) return "workers-ai";
+  if (!isAiPath(pathname)) return "none";
   return "backend";
 }
 
