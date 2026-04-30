@@ -40,7 +40,7 @@ The application lets privileged actors edit educational content that is later sh
 
 ### Information Disclosure
 
-The system stores secrets, JWT signing material, login-capable credentials, and user/staff/admin data. Secrets and passwords must not appear in repository files, logs, or client-readable responses. Public endpoints must only expose fields intended for unauthenticated readers, and authenticated routes must scope data to the requesting user or role.
+The system stores secrets, JWT signing material, login-capable credentials, and user/staff/admin data. Secrets and passwords must not appear in repository files, logs, or client-readable responses. Public endpoints must only expose fields intended for unauthenticated readers, and authenticated routes must scope data to the requesting user or role. Content flagged private or personalized must never be admitted to the public CMS/library path merely because it is marked published for an internal workflow.
 
 ### Denial of Service
 
@@ -48,4 +48,4 @@ Public auth and content endpoints are internet-exposed and can be abused for scr
 
 ### Elevation of Privilege
 
-Syrabit.ai has meaningful privilege tiers: student, staff, and admin. The system must enforce role checks on the backend, prevent content injection from becoming same-origin script execution, and prevent secret exposure from turning into staff/admin account takeover. Any public content path that can execute attacker-controlled script can become an account-compromise primitive because authenticated users browse the same origin.
+Syrabit.ai has meaningful privilege tiers: student, staff, and admin. The system must enforce role checks on the backend, prevent content injection from becoming same-origin script execution, and prevent secret exposure from turning into staff/admin account takeover. Any public content path that can execute attacker-controlled script can become an account-compromise primitive because authenticated users browse the same origin. Credentialed browser trust settings are also part of this boundary: cross-site cookies and CORS allowlists must not trust arbitrary preview-hosting domains or they can hand attacker-controlled origins an authenticated read/write channel into user and admin APIs.
