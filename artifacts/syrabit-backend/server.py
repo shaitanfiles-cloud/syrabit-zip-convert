@@ -1632,6 +1632,7 @@ from routes.admin_trustpilot_jsonld_status import router as admin_trustpilot_jso
 from routes.admin_trustpilot_cron_alerts import router as admin_trustpilot_cron_alerts_router
 from routes.cf_waf_drift_cron_heartbeat import router as cf_waf_drift_cron_heartbeat_router
 from routes.admin_cf_waf_drift_cron_alerts import router as admin_cf_waf_drift_cron_alerts_router
+from routes.admin_cf_enterprise import router as admin_cf_enterprise_router
 # Task #951 — silence alerter for the unified-logs Cloudflare GraphQL
 # pull. Pages on-call when every backend replica has stopped advancing
 # the ``unified_logs_cf_pull_lock.updated_at`` cursor (e.g. all
@@ -1707,6 +1708,7 @@ api.include_router(admin_trustpilot_jsonld_status_router)
 api.include_router(admin_trustpilot_cron_alerts_router)
 api.include_router(cf_waf_drift_cron_heartbeat_router)
 api.include_router(admin_cf_waf_drift_cron_alerts_router)
+api.include_router(admin_cf_enterprise_router)
 api.include_router(admin_logs_cf_pull_silence_alerts_router)
 api.include_router(admin_logs_cf_pull_saturation_alerts_router)
 api.include_router(admin_slack_webhook_missing_alerts_router)

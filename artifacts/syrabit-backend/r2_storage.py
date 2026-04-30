@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import mimetypes
+import os
 import time
 from functools import lru_cache
 from typing import Optional
@@ -33,11 +34,33 @@ logger = logging.getLogger(__name__)
 
 # ── lazy boto3 client ─────────────────────────────────────────────────────────
 
+def _live_key() -> str:
+    return os.environ.get("R2_ACCESS_KEY_ID", "").strip()
+
+def _live_secret() -> str:
+    return os.environ.get("R2_SECRET_ACCESS_KEY", "").strip()
+
+def _live_endpoint() -> str:
+    explicit = os.environ.get("R2_ENDPOINT_URL", "").strip()
+    if explicit:
+        return explicit
+    acct = os.environ.get("CF_AI_GATEWAY_ACCOUNT_ID", "").strip()
+    return f"https://{acct}.r2.cloudflarestorage.com" if acct else ""
+
+def _live_bucket() -> str:
+    return os.environ.get("R2_BUCKET_NAME", "syrabit-media").strip()
+
+def _live_public_url() -> str:
+    return os.environ.get("R2_PUBLIC_URL", "").strip().rstrip("/")
+
+
 @lru_cache(maxsize=1)
 def _get_r2_client():
     """Return a cached boto3 S3 client pointed at R2. Raises if not configured."""
-    from config import R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT_URL, R2_ENABLED
-    if not R2_ENABLED:
+    key = _live_key()
+    secret = _live_secret()
+    endpoint = _live_endpoint()
+    if not (key and secret and endpoint):
         raise RuntimeError(
             "R2 not configured — set R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, "
             "and CF_AI_GATEWAY_ACCOUNT_ID (or R2_ENDPOINT_URL)"
@@ -46,9 +69,9 @@ def _get_r2_client():
     from botocore.config import Config
     client = boto3.client(
         "s3",
-        endpoint_url=R2_ENDPOINT_URL,
-        aws_access_key_id=R2_ACCESS_KEY_ID,
-        aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+        endpoint_url=endpoint,
+        aws_access_key_id=key,
+        aws_secret_access_key=secret,
         region_name="auto",
         config=Config(
             retries={"max_attempts": 3, "mode": "adaptive"},
@@ -60,8 +83,8 @@ def _get_r2_client():
 
 
 def _is_r2_ready() -> bool:
-    from config import R2_ENABLED
-    return R2_ENABLED
+    """Read env vars live so monkeypatching works in tests."""
+    return bool(_live_key() and _live_secret() and _live_endpoint())
 
 
 # ── ensure bucket exists ──────────────────────────────────────────────────────
@@ -92,9 +115,8 @@ async def ensure_bucket() -> None:
     """Create the R2 bucket if it doesn't exist yet."""
     if not _is_r2_ready():
         return
-    from config import R2_BUCKET_NAME
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _ensure_bucket_sync, R2_BUCKET_NAME)
+    await loop.run_in_executor(None, _ensure_bucket_sync, _live_bucket())
 
 
 # ── upload ────────────────────────────────────────────────────────────────────
@@ -125,8 +147,7 @@ async def r2_upload(
     Returns the public URL if R2_PUBLIC_URL is set, otherwise the key.
     Raises RuntimeError if R2 is not configured.
     """
-    from config import R2_BUCKET_NAME, R2_PUBLIC_URL
-    _bucket = bucket or R2_BUCKET_NAME
+    _bucket = bucket or _live_bucket()
     loop = asyncio.get_event_loop()
     t0 = time.monotonic()
     await loop.run_in_executor(
@@ -150,8 +171,7 @@ async def r2_delete(key: str, bucket: Optional[str] = None) -> None:
     """Delete an object from R2. Silent no-op if key doesn't exist."""
     if not _is_r2_ready():
         return
-    from config import R2_BUCKET_NAME
-    _bucket = bucket or R2_BUCKET_NAME
+    _bucket = bucket or _live_bucket()
     loop = asyncio.get_event_loop()
     try:
         await loop.run_in_executor(None, _delete_sync, key, _bucket)
@@ -173,8 +193,7 @@ def _presign_sync(key: str, bucket: str, expires: int) -> str:
 
 async def r2_presign(key: str, expires: int = 3600, bucket: Optional[str] = None) -> str:
     """Generate a time-limited presigned GET URL (for private objects)."""
-    from config import R2_BUCKET_NAME
-    _bucket = bucket or R2_BUCKET_NAME
+    _bucket = bucket or _live_bucket()
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _presign_sync, key, _bucket, expires)
 
@@ -187,12 +206,13 @@ def r2_public_url(key: str, bucket: Optional[str] = None) -> str:
     Uses R2_PUBLIC_URL if set (e.g. https://media.syrabit.ai),
     otherwise falls back to the R2 endpoint URL pattern.
     """
-    from config import R2_PUBLIC_URL, R2_ENDPOINT_URL, R2_BUCKET_NAME
-    _bucket = bucket or R2_BUCKET_NAME
-    if R2_PUBLIC_URL:
-        return f"{R2_PUBLIC_URL}/{key}"
-    if R2_ENDPOINT_URL:
-        return f"{R2_ENDPOINT_URL}/{_bucket}/{key}"
+    _bucket = bucket or _live_bucket()
+    pub = _live_public_url()
+    if pub:
+        return f"{pub}/{key}"
+    endpoint = _live_endpoint()
+    if endpoint:
+        return f"{endpoint}/{_bucket}/{key}"
     return key
 
 
@@ -216,8 +236,7 @@ async def r2_list(prefix: str = "", max_keys: int = 1000, bucket: Optional[str] 
     """List objects in R2 under a prefix. Returns list of {key, size, last_modified, url}."""
     if not _is_r2_ready():
         return []
-    from config import R2_BUCKET_NAME
-    _bucket = bucket or R2_BUCKET_NAME
+    _bucket = bucket or _live_bucket()
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _list_sync, prefix, _bucket, max_keys)
 
@@ -232,8 +251,7 @@ def _download_sync(key: str, bucket: str) -> bytes:
 
 async def r2_download(key: str, bucket: Optional[str] = None) -> bytes:
     """Download and return the raw bytes of an R2 object."""
-    from config import R2_BUCKET_NAME
-    _bucket = bucket or R2_BUCKET_NAME
+    _bucket = bucket or _live_bucket()
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _download_sync, key, _bucket)
 
@@ -260,13 +278,12 @@ async def r2_health() -> dict:
     if not _is_r2_ready():
         return {"ok": False, "reason": "R2 not configured"}
     try:
-        from config import R2_BUCKET_NAME, R2_ENDPOINT_URL, R2_PUBLIC_URL
         items = await r2_list(max_keys=1)
         return {
             "ok": True,
-            "bucket": R2_BUCKET_NAME,
-            "endpoint": R2_ENDPOINT_URL,
-            "public_url": R2_PUBLIC_URL or "(none — using endpoint URL)",
+            "bucket": _live_bucket(),
+            "endpoint": _live_endpoint(),
+            "public_url": _live_public_url() or "(none — using endpoint URL)",
             "sample_count": len(items),
         }
     except Exception as exc:
