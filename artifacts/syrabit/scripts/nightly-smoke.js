@@ -180,6 +180,25 @@ async function main() {
     } else {
       console.log(`  ✓  Access app: Syrabit Admin id=${adminApp.id} domain=${adminApp.domain}`);
       assert('  Access app session_duration', adminApp.session_duration, '8h');
+      // Verify the wildcard path covers all nested admin routes
+      const hasWildcard = adminApp.domain && (adminApp.domain.endsWith('*') || adminApp.domain.includes('admin*'));
+      assert('  Access app domain covers admin/*', hasWildcard, true);
+
+      // Assert the email allowlist policy exists (at least one allow policy)
+      const pol = await cfGetOrSkip(`/accounts/${ACCOUNT_ID}/access/apps/${adminApp.id}/policies`);
+      if (!pol) {
+        warn('  Access app policies', 'token lacks Zero Trust: Read for policy read');
+      } else {
+        const allowPolicy = pol.result.find(p => p.decision === 'allow' && p.name === 'Team email allowlist');
+        if (!allowPolicy) {
+          failures.push('Access policy "Team email allowlist" (NOT FOUND on Syrabit Admin)');
+          console.log('  ✗  Access policy "Team email allowlist": NOT FOUND — run cloudflare-phase3-apply.js');
+        } else {
+          const emailCount = (allowPolicy.include || []).filter(r => r.email).length;
+          console.log(`  ✓  Access policy: ${allowPolicy.name} (${emailCount} email rule(s))`);
+          assert('  Policy has at least 1 email rule', emailCount >= 1, true);
+        }
+      }
     }
   }
 

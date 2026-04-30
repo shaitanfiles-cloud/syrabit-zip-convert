@@ -109,7 +109,9 @@ async function ensureAccessApp() {
   const create = await cfReq('POST', `/accounts/${ACCOUNT_ID}/access/apps`, {
     name:                'Syrabit Admin',
     type:                'self_hosted',
-    domain:              'api.syrabit.ai/admin',
+    // Wildcard suffix is required to cover all nested admin routes
+    // (api.syrabit.ai/admin alone would only protect the exact path)
+    domain:              'api.syrabit.ai/admin*',
     session_duration:    '8h',
     // Security hardening
     http_only_cookie_attribute:  true,
