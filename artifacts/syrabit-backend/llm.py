@@ -76,6 +76,69 @@ _ADMIN_LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("ADMIN_LLM_MAX_CONCU
 _LLM_PROVIDER_METRICS: list = []
 _LLM_PROVIDER_METRICS_MAX = 20_000
 
+# ── Task #70: Workers AI 429 burst tracking ───────────────────────────────────
+# In-memory sliding window of Workers AI 429 timestamps.
+# Also written to Redis (key wai_429_burst) for cross-worker visibility.
+# Reset to [] on any successful Workers AI call so the counter reflects a
+# *current* burst, not historic noise. The alerting loop in metrics.py reads
+# this via get_workers_ai_429_burst() and fires _dispatch_alert when ≥ threshold.
+#
+# Window is 180s — deliberately larger than the 120s _alerting_loop interval
+# so a burst that starts near a loop tick boundary is still visible on the
+# next tick.  TTL is refreshed on every 429 (not just the first) so an
+# ongoing outage never silently auto-expires mid-burst.
+_WORKERS_AI_429_WINDOW: list = []   # list[float] — epoch timestamps
+_WORKERS_AI_429_WINDOW_S = 180       # lookback window / Redis TTL in seconds
+_WORKERS_AI_429_REDIS_KEY = "wai_429_burst"
+
+
+def _track_workers_ai_429() -> None:
+    """Record one Workers AI 429 hit (in-memory + Redis)."""
+    _WORKERS_AI_429_WINDOW.append(time.time())
+    try:
+        from deps import redis_client as _rc
+        if _rc:
+            _rc.incr(_WORKERS_AI_429_REDIS_KEY)
+            # Refresh TTL on every hit so an ongoing burst never auto-expires.
+            _rc.expire(_WORKERS_AI_429_REDIS_KEY, _WORKERS_AI_429_WINDOW_S)
+    except Exception:
+        pass
+
+
+def _reset_workers_ai_429() -> None:
+    """Reset Workers AI 429 counter after a successful call."""
+    global _WORKERS_AI_429_WINDOW
+    _WORKERS_AI_429_WINDOW = []
+    try:
+        from deps import redis_client as _rc
+        if _rc:
+            _rc.delete(_WORKERS_AI_429_REDIS_KEY)
+    except Exception:
+        pass
+
+
+def get_workers_ai_429_burst(window_seconds: int = _WORKERS_AI_429_WINDOW_S) -> int:
+    """Return the number of Workers AI 429s in the last *window_seconds*.
+
+    Redis is the primary source (cross-worker, TTL-backed). Falls back to the
+    in-process sliding window when Redis is unavailable.
+
+    The default window (180s) is intentionally larger than the 120s alerting
+    loop interval so a burst near a tick boundary is never missed.
+    """
+    try:
+        from deps import redis_client as _rc
+        if _rc:
+            val = _rc.get(_WORKERS_AI_429_REDIS_KEY)
+            if val is not None:
+                return int(val)
+    except Exception:
+        pass
+    now = time.time()
+    cutoff = now - window_seconds
+    return sum(1 for t in _WORKERS_AI_429_WINDOW if t > cutoff)
+
+
 def _record_llm_call(provider: str, model: str, duration_ms: float, success: bool, tokens_approx: int = 0, fallback: bool = False, error_type: str = ""):
     _LLM_PROVIDER_METRICS.append({
         "ts": time.time(),
@@ -448,6 +511,8 @@ class _SmartKeyPool:
         slot["last_used"] = time.time()
         slot["errors"] = 0
         self._record_request(slot)
+        if slot["provider"] == "workers-ai":
+            _reset_workers_ai_429()
 
     def mark_429(self, slot):
         slot["cooldown_until"] = time.time() + self._RL_COOLDOWN
@@ -456,6 +521,8 @@ class _SmartKeyPool:
             f"SLM pool: {slot['provider']}/{slot['model']} → 429 rate-limit "
             f"(RPM {self._rpm_count(slot)}/{slot['rpm_limit']}), cooling {self._RL_COOLDOWN}s"
         )
+        if slot["provider"] == "workers-ai":
+            _track_workers_ai_429()
 
     def mark_403(self, slot):
         slot["cooldown_until"] = float("inf")

@@ -1290,6 +1290,17 @@ _ALERT_THRESHOLDS_DEFAULT = {
     # PG outage almost immediately and large enough to stay quiet
     # during routine connection blips. Set to 0 to disable the alert.
     "credit_deduct_fallback_per_min": 5,
+    # Task #70: Workers AI 429 burst alert. Fires when >= this many
+    # Workers AI 429 rate-limit responses are recorded within the 180s
+    # counting window without any successful call resetting the counter.
+    # The 180s window (llm._WORKERS_AI_429_WINDOW_S) is intentionally
+    # larger than the 120s alerting loop so a burst near a tick boundary
+    # is never silently missed. The Redis counter uses TTL-consecutive
+    # semantics: it counts hits since the first 429 in the current burst
+    # and auto-expires 180s after the last hit (not a strict sliding window).
+    # Default 5 — enough to distinguish a real throttle burst from a
+    # transient single-request spike. Set to 0 to disable.
+    "workers_ai_429_burst_threshold": 5,
 }
 _ALERT_EXPIRATION_DEFAULT = {
     "enabled": False,
@@ -2229,6 +2240,40 @@ async def _alerting_loop():
                                 "actual": _cf_stats["rate_per_min"],
                                 "by_path": _cf_stats["by_path"],
                                 "window_seconds": _cf_stats["window_seconds"],
+                            },
+                        )
+            except Exception:
+                pass
+
+            # ── 8. Workers AI 429 burst (Task #70) ──────────────────────
+            # Fires when Workers AI returns >= threshold 429s in the last
+            # 180s without any successful call resetting the counter.
+            # 180s window > 120s loop interval so a burst near a tick
+            # boundary is never silently missed.  Redis TTL is refreshed
+            # on every 429 hit, so an ongoing outage stays counted.
+            # Counter is cleared by mark_ok() on the next successful call.
+            try:
+                _wai_threshold = int(
+                    _ALERT_THRESHOLDS.get("workers_ai_429_burst_threshold", 5) or 5
+                )
+                if _wai_threshold > 0:
+                    from llm import get_workers_ai_429_burst, _WORKERS_AI_429_WINDOW_S
+                    _wai_burst = get_workers_ai_429_burst(_WORKERS_AI_429_WINDOW_S)
+                    if _wai_burst >= _wai_threshold:
+                        await _dispatch_alert(
+                            "workers_ai_429_burst",
+                            "Workers AI rate-limit burst — chat may be unavailable",
+                            f"{_wai_burst} Workers AI 429 rate-limit responses recorded "
+                            f"in the last {_WORKERS_AI_429_WINDOW_S}s (threshold: {_wai_threshold}). "
+                            f"Chat completions are being throttled by Cloudflare Workers AI. "
+                            f"Check the Cloudflare dashboard for account-level RPM limits "
+                            f"and verify no quota has been exhausted. "
+                            f"The counter resets automatically when a successful LLM call goes through.",
+                            threshold_snapshot={
+                                "metric": "workers_ai_429_burst_threshold",
+                                "value": _wai_threshold,
+                                "actual": _wai_burst,
+                                "window_seconds": _WORKERS_AI_429_WINDOW_S,
                             },
                         )
             except Exception:
