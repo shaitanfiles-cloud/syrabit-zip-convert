@@ -62,6 +62,26 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+describe('HighlightSavePopover — hideSave prop', () => {
+  it('does not render the popover at all when hideSave={true} and hideQuiz={true}', async () => {
+    render(<HighlightSavePopover hideSave hideQuiz />);
+
+    await triggerSelectionChange('enough text to show popover');
+
+    expect(screen.queryByText(/save/i)).toBeNull();
+    expect(screen.queryByText(/quiz me/i)).toBeNull();
+    expect(document.querySelector('.fixed.z-\\[110\\]')).toBeNull();
+  });
+
+  it('shows the Save button when hideSave={false}', async () => {
+    render(<HighlightSavePopover hideSave={false} />);
+
+    await triggerSelectionChange('enough text to show popover');
+
+    expect(screen.getByText(/save/i)).toBeInTheDocument();
+  });
+});
+
 describe('HighlightSavePopover — hideQuiz prop', () => {
   it('hides the Quiz me button and divider when hideQuiz={true}', async () => {
     render(<HighlightSavePopover hideQuiz={true} />);
