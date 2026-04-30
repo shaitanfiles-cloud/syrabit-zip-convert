@@ -316,15 +316,15 @@ _MODEL_ALIAS_MAP = {
 # Slots in the same tier are load-balanced by in-flight count.
 #
 _SLM_SLOT_CANDIDATES = [
-    # Tier 0: Workers AI llama-3.3-70b-fp8 — fastest slot (840ms measured),
-    # free under CF startup credits. Used for routing/classification/short
-    # rewrites where a large reasoning model is unnecessary.
-    ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",         6, 0),
-    # Tier 1: Cerebras llama3.1-8b — ultra-fast SLM backup (kept for
-    # burst headroom when Workers AI hits concurrency limits).
-    ("cerebras",    "llama3.1-8b",                                       4, 1),
-    # Tier 2/3: Groq and OpenRouter as further fallbacks.
-    ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 2),
+    # Tier 0: Groq llama-4-scout — confirmed fastest (sub-1s TTFT, always
+    # available). Primary English chat provider.
+    ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 0),
+    # Tier 1: Workers AI llama-3.3-70b-fp8 — free under CF startup credits;
+    # serves as burst relief when Groq hits RPM limits.
+    ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",         6, 1),
+    # Tier 2: Cerebras llama3.1-8b — ultra-fast SLM secondary.
+    ("cerebras",    "llama3.1-8b",                                       4, 2),
+    # Tier 3: OpenRouter as last-resort fallback.
     ("openrouter",  "meta-llama/llama-4-scout",                          4, 3),
 ]
 
@@ -1635,9 +1635,12 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     _SSE_BATCH = 2    # flush every 2 chars — near-instant token delivery
 
     async def _emit_tokens(token_source):
-        nonlocal in_think, buf
+        # All state is LOCAL — each call (including parallel producers in Phase 1)
+        # gets its own independent think-strip state, preventing race conditions.
         import re as _re
         _CLOSE_KEEP = len('</think>') - 1   # 7
+        _in_think   = False
+        _buf        = ""
         think_done  = False
         batch       = ""
         _visible_text = ""
@@ -1654,80 +1657,80 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                         batch = ""
                 continue
 
-            buf += token
-            while buf:
-                if in_think:
-                    close_idx = buf.find('</think>')
+            _buf += token
+            while _buf:
+                if _in_think:
+                    close_idx = _buf.find('</think>')
                     if close_idx != -1:
-                        _think_buf.append(buf[:close_idx])
-                        buf = buf[close_idx + 8:]
-                        in_think   = False
+                        _think_buf.append(_buf[:close_idx])
+                        _buf = _buf[close_idx + 8:]
+                        _in_think  = False
                         think_done = True
-                        if buf:
-                            batch += buf
-                            buf = ""
+                        if _buf:
+                            batch += _buf
+                            _buf = ""
                             if len(batch) >= _SSE_BATCH:
                                 _visible_text += batch
                                 yield f"data: {json.dumps({'content': batch})}\n\n"
                                 batch = ""
                         break
                     else:
-                        if len(buf) > _CLOSE_KEEP:
-                            _think_buf.append(buf[:-_CLOSE_KEEP])
-                            buf = buf[-_CLOSE_KEEP:]
+                        if len(_buf) > _CLOSE_KEEP:
+                            _think_buf.append(_buf[:-_CLOSE_KEEP])
+                            _buf = _buf[-_CLOSE_KEEP:]
                         break
                 else:
-                    open_idx = buf.find('<think>')
+                    open_idx = _buf.find('<think>')
                     if open_idx != -1:
-                        before = buf[:open_idx]
+                        before = _buf[:open_idx]
                         if before:
                             batch += before
                             if len(batch) >= _SSE_BATCH:
                                 _visible_text += batch
                                 yield f"data: {json.dumps({'content': batch})}\n\n"
                                 batch = ""
-                        buf      = buf[open_idx + 7:]
-                        in_think = True
-                    elif buf.endswith(('<', '<t', '<th', '<thi', '<thin', '<think')):
-                        partial_start = buf.rfind('<')
-                        candidate     = buf[partial_start:]
+                        _buf      = _buf[open_idx + 7:]
+                        _in_think = True
+                    elif _buf.endswith(('<', '<t', '<th', '<thi', '<thin', '<think')):
+                        partial_start = _buf.rfind('<')
+                        candidate     = _buf[partial_start:]
                         if '<think>'[:len(candidate)] == candidate:
-                            before = buf[:partial_start]
+                            before = _buf[:partial_start]
                             if before:
                                 batch += before
                                 if len(batch) >= _SSE_BATCH:
                                     _visible_text += batch
                                     yield f"data: {json.dumps({'content': batch})}\n\n"
                                     batch = ""
-                            buf = candidate
+                            _buf = candidate
                             break
                         else:
-                            batch += buf
-                            buf    = ""
+                            batch += _buf
+                            _buf   = ""
                             if len(batch) >= _SSE_BATCH:
                                 _visible_text += batch
                                 yield f"data: {json.dumps({'content': batch})}\n\n"
                                 batch = ""
                     else:
-                        batch += buf
-                        buf    = ""
+                        batch += _buf
+                        _buf   = ""
                         if len(batch) >= _SSE_BATCH:
                             _visible_text += batch
                             yield f"data: {json.dumps({'content': batch})}\n\n"
                             batch = ""
                         break
 
-        if batch and not in_think:
+        if batch and not _in_think:
             _visible_text += batch
             yield f"data: {json.dumps({'content': batch})}\n\n"
-        if buf and not in_think:
-            _visible_text += buf
-            yield f"data: {json.dumps({'content': buf})}\n\n"
+        if _buf and not _in_think:
+            _visible_text += _buf
+            yield f"data: {json.dumps({'content': _buf})}\n\n"
 
-        if not _visible_text.strip() and (in_think or think_done):
+        if not _visible_text.strip() and (_in_think or think_done):
             fallback_text = "".join(_think_buf)
-            if in_think and buf:
-                fallback_text += buf
+            if _in_think and _buf:
+                fallback_text += _buf
             fallback_text = _re.sub(r'</?think\s*/?>', '', fallback_text).strip()
             fallback_text = _re.sub(r'</?\w*$', '', fallback_text).strip()
             if fallback_text and len(fallback_text) > 5:
@@ -1973,8 +1976,17 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     #             directly from Gemini 2.5 Flash. This is a fallback path,
     #             not a hedged co-runner — Gemini cannot "steal" the
     #             first-token slot from Sarvam due to network jitter.
-    _SARVAM_TTFT_TIMEOUT = 3.0
-    _SARVAM_SLOT_TIMEOUT = 1.2
+    # Two-stage Sarvam timeout:
+    #   Stage 1 — connection probe: Sarvam must return its FIRST RAW TOKEN
+    #             (even a think token) within _SARVAM_CONN_TIMEOUT seconds.
+    #             If no raw token arrives → Sarvam is dead → go to Phase 2.
+    #   Stage 2 — visible answer: after a key proves it's alive, we wait up to
+    #             _SARVAM_VISIBLE_TIMEOUT more seconds for the first non-think
+    #             chunk (after </think>).  Sarvam-m with think enabled can
+    #             spend 10-15 s in its <think> block before writing the answer.
+    _SARVAM_CONN_TIMEOUT    = 2.5   # max seconds to receive ANY raw token
+    _SARVAM_VISIBLE_TIMEOUT = 16.0  # max additional seconds for visible chunk
+    _SARVAM_SLOT_TIMEOUT    = 1.2
     if _indic_mode and provider == "sarvam":
         # Pull Sarvam keys from `_SARVAM_PROVIDERS` (the dedicated
         # Assamese-only list). `_prov_list` may also contain Sarvam entries
@@ -1996,11 +2008,24 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             _cprov, _ckey, _cmodel = _cand["provider"], _cand["key"], _cand["model"]
             try:
                 _cn = 0
-                async for chunk in _emit_tokens(_stream_from_provider(_cprov, _ckey, _cmodel)):
+                _conn_signaled = False
+
+                async def _raw_conn_wrapper():
+                    """Intercept raw tokens before _emit_tokens strips think blocks.
+                    Emits a 'connected' queue event on the very first token (even a
+                    think token) so the Phase 1 race knows this key is alive."""
+                    nonlocal _conn_signaled
+                    async for _raw_tok in _stream_from_provider(_cprov, _ckey, _cmodel):
+                        if not _conn_signaled:
+                            _conn_signaled = True
+                            await _indic_q.put((_cand_idx, "connected", None))
+                        yield _raw_tok
+
+                async for chunk in _emit_tokens(_raw_conn_wrapper()):
                     _cn += 1
                     await _indic_q.put((_cand_idx, "chunk", chunk))
                 if _cn == 0:
-                    logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} returned 0 chunks")
+                    logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} returned 0 visible chunks (think-only?)")
                 await _indic_q.put((_cand_idx, "done", None))
             except Exception as _e:
                 _is_rate = any(s in str(_e).lower() for s in ("429", "rate", "quota", "throttl"))
@@ -2011,7 +2036,11 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         _sarvam_race_t0 = time.monotonic()
         _phase1_tasks: list = []
 
-        # ── Phase 1: Sarvam-only race ────────────────────────────────────
+        # ── Phase 1: two-stage Sarvam race ───────────────────────────────
+        # Stage 1: wait up to _SARVAM_CONN_TIMEOUT for ANY key to signal
+        #          "connected" (first raw token, including think tokens).
+        # Stage 2: once ≥1 key is connected, wait up to _SARVAM_VISIBLE_TIMEOUT
+        #          for a "chunk" (first non-think visible token).
         if _sarvam_candidates:
             _phase1_tasks = [
                 asyncio.create_task(_indic_producer(c, i))
@@ -2027,20 +2056,55 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             )
 
             _sarvam_finished: set = set()
+            _sarvam_connected: set = set()
             try:
-                _deadline = time.monotonic() + _SARVAM_TTFT_TIMEOUT
-                while _sarvam_winner is None and len(_sarvam_finished) < len(_sarvam_candidates):
-                    _rem = _deadline - time.monotonic()
+                # Stage 1 — connection probe
+                _conn_deadline = time.monotonic() + _SARVAM_CONN_TIMEOUT
+                while (
+                    not _sarvam_connected
+                    and len(_sarvam_finished) < len(_sarvam_candidates)
+                ):
+                    _rem = _conn_deadline - time.monotonic()
                     if _rem <= 0:
                         break
                     try:
                         _sid, _evt, _data = await asyncio.wait_for(_indic_q.get(), timeout=_rem)
                     except asyncio.TimeoutError:
                         break
-                    if _evt == "chunk":
+                    if _evt == "connected":
+                        _sarvam_connected.add(_sid)
+                        logger.info(
+                            f"[INDIC] key idx={_sid} connected in "
+                            f"{(time.monotonic()-_sarvam_race_t0)*1000:.0f}ms"
+                        )
+                    elif _evt == "chunk":
+                        # Visible token arrived during Stage 1 (think was very short)
                         _sarvam_winner = _sid
                     elif _evt in ("done", "error"):
                         _sarvam_finished.add(_sid)
+
+                # Stage 2 — wait for visible token (only if ≥1 key is alive)
+                if _sarvam_winner is None and _sarvam_connected:
+                    _vis_deadline = time.monotonic() + _SARVAM_VISIBLE_TIMEOUT
+                    while _sarvam_winner is None and len(_sarvam_finished) < len(_sarvam_candidates):
+                        _rem = _vis_deadline - time.monotonic()
+                        if _rem <= 0:
+                            break
+                        try:
+                            _sid, _evt, _data = await asyncio.wait_for(_indic_q.get(), timeout=_rem)
+                        except asyncio.TimeoutError:
+                            break
+                        if _evt == "chunk":
+                            _sarvam_winner = _sid
+                        elif _evt == "connected":
+                            _sarvam_connected.add(_sid)
+                        elif _evt in ("done", "error"):
+                            _sarvam_finished.add(_sid)
+                elif not _sarvam_connected:
+                    logger.warning(
+                        f"[INDIC] Phase 1 — no Sarvam key connected within "
+                        f"{_SARVAM_CONN_TIMEOUT}s — skipping to Phase 2"
+                    )
             except Exception:
                 pass
         else:
@@ -2151,12 +2215,6 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 _gemini_msgs.append({**_gm, "content": _gc})
             else:
                 _gemini_msgs.append(_gm)
-
-        # Reset shared think-strip state from Phase 1 before starting Phase 2
-        # so Gemini tokens are never accidentally swallowed into a Sarvam
-        # <think> buffer that was left open when Phase 1 timed out.
-        in_think = False
-        buf = ""
 
         _phase2_first_token = False
         try:

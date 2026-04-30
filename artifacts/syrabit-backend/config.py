@@ -764,7 +764,7 @@ else:
     _cfg_log.warning("PG DSN empty — neither DATABASE_URL nor SUPABASE_DB_URL is set")
 
 
-SARVAM_THINK_BUFFER = 80
+SARVAM_THINK_BUFFER = 512  # Sarvam-m thinks in ~385 English tokens; give headroom for answer
 
 CONTENT_CACHE_SECONDS = 600
 REDIS_CONTENT_PREFIX = "content:"
