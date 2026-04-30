@@ -2222,8 +2222,8 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                                 ? 'bg-amber-100 border-amber-300'
                                 : 'bg-red-100 border-red-200'
                             }`}>
-                              <AlertTriangle size={14} className={`shrink-0 ${embedCooldownDisplay <= 5 ? 'text-amber-600' : 'text-red-600'}`} />
-                              <span className={`text-xs font-semibold ${embedCooldownDisplay <= 5 ? 'text-amber-700' : 'text-red-700'}`}>
+                              <AlertTriangle size={14} className={`shrink-0 transition-colors ${embedCooldownDisplay <= 5 ? 'text-amber-600' : 'text-red-600'}`} />
+                              <span className={`text-xs font-semibold transition-colors ${embedCooldownDisplay <= 5 ? 'text-amber-700' : 'text-red-700'}`}>
                                 Embed cooldown active — Workers AI embed skipped for {embedCooldownDisplay}s
                                 ({burst} of {threshold} hits in last {durationS}s)
                               </span>
