@@ -54,10 +54,12 @@ def _run(coro):
 
 @pytest.fixture(autouse=True)
 def _reset_window():
-    """Clear the in-memory window before and after every test."""
-    llm_mod._WORKERS_AI_429_WINDOW.clear()
+    """Clear all in-memory provider windows before and after every test."""
+    for _w in llm_mod._PROVIDER_429_WINDOWS.values():
+        _w.clear()
     yield
-    llm_mod._WORKERS_AI_429_WINDOW.clear()
+    for _w in llm_mod._PROVIDER_429_WINDOWS.values():
+        _w.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -590,20 +592,23 @@ class TestSourceContract:
         assert isinstance(llm_mod._WORKERS_AI_429_WINDOW_S, int)
         assert llm_mod._WORKERS_AI_429_WINDOW_S > 0
 
-    def test_metrics_imports_get_workers_ai_429_burst_in_check_8(self):
-        """The alerting loop must import get_workers_ai_429_burst from llm —
-        if someone renames the helper, this test catches it before prod."""
+    def test_metrics_imports_get_provider_429_burst_in_check_8(self):
+        """check #8 must use get_provider_429_burst (the generic API) and pass
+        'workers-ai' as the first argument — catching accidental renames."""
         src = _METRICS_PY.read_text(encoding="utf-8")
-        assert "get_workers_ai_429_burst" in src, (
-            "metrics.py must reference get_workers_ai_429_burst"
+        assert "get_provider_429_burst" in src, (
+            "metrics.py check #8 must reference get_provider_429_burst"
+        )
+        assert '"workers-ai"' in src, (
+            "metrics.py check #8 must pass 'workers-ai' to get_provider_429_burst"
         )
 
-    def test_metrics_check_8_uses_window_s_constant(self):
-        """The check block must use _WORKERS_AI_429_WINDOW_S so the window
+    def test_metrics_check_8_uses_provider_window_s_constant(self):
+        """check #8 must pass _PROVIDER_429_BURST_WINDOW_S so the window
         stays in sync when llm.py changes the default."""
         src = _METRICS_PY.read_text(encoding="utf-8")
-        assert "_WORKERS_AI_429_WINDOW_S" in src, (
-            "metrics.py must pass _WORKERS_AI_429_WINDOW_S to get_workers_ai_429_burst"
+        assert "_PROVIDER_429_BURST_WINDOW_S" in src, (
+            "metrics.py must import and use _PROVIDER_429_BURST_WINDOW_S"
         )
 
     def test_metrics_check_8_fires_workers_ai_429_burst_alert_type(self):
@@ -633,26 +638,269 @@ class TestSourceContract:
                     break
         assert found, "_alerting_loop must contain _dispatch_alert('workers_ai_429_burst', ...)"
 
-    def test_llm_track_appends_to_module_level_list(self):
-        """AST check: _track_workers_ai_429 must append to
-        _WORKERS_AI_429_WINDOW (not a local variable)."""
+    # ── New generic API source contracts (Task #75) ──────────────────────────
+
+    def test_llm_exports_get_provider_429_burst(self):
+        """get_provider_429_burst must be importable from llm."""
+        import llm as llm_mod2
+        assert callable(llm_mod2.get_provider_429_burst)
+
+    def test_llm_exports_get_provider_429_burst_inprocess(self):
+        assert callable(llm_mod.get_provider_429_burst_inprocess)
+
+    def test_llm_provider_429_windows_has_required_keys(self):
+        """All three tracked providers must be present in _PROVIDER_429_WINDOWS."""
+        assert "workers-ai" in llm_mod._PROVIDER_429_WINDOWS
+        assert "groq" in llm_mod._PROVIDER_429_WINDOWS
+        assert "gemini" in llm_mod._PROVIDER_429_WINDOWS
+
+    def test_llm_provider_429_redis_keys_are_non_empty_strings(self):
+        for provider, key in llm_mod._PROVIDER_429_REDIS_KEYS.items():
+            assert isinstance(key, str) and key, (
+                f"_PROVIDER_429_REDIS_KEYS['{provider}'] must be a non-empty string"
+            )
+
+    def test_llm_workers_ai_redis_key_unchanged(self):
+        """The Workers AI Redis key must not change — existing TTL keys in prod
+        would be orphaned and the counter would read zero mid-outage."""
+        assert llm_mod._PROVIDER_429_REDIS_KEYS.get("workers-ai") == "wai_429_burst"
+
+    def test_llm_provider_burst_window_s_positive_int(self):
+        assert isinstance(llm_mod._PROVIDER_429_BURST_WINDOW_S, int)
+        assert llm_mod._PROVIDER_429_BURST_WINDOW_S > 0
+
+    def test_llm_backwards_compat_window_alias_is_same_object(self):
+        """_WORKERS_AI_429_WINDOW must be the same list object as
+        _PROVIDER_429_WINDOWS['workers-ai'] so clearing one clears both."""
+        assert llm_mod._WORKERS_AI_429_WINDOW is llm_mod._PROVIDER_429_WINDOWS["workers-ai"]
+
+    def test_metrics_groq_threshold_key_in_alert_thresholds_default(self):
+        """groq_429_burst_threshold must be in _ALERT_THRESHOLDS_DEFAULT."""
+        src = _METRICS_PY.read_text(encoding="utf-8")
+        assert "groq_429_burst_threshold" in src
+
+    def test_metrics_gemini_threshold_key_in_alert_thresholds_default(self):
+        """gemini_429_burst_threshold must be in _ALERT_THRESHOLDS_DEFAULT."""
+        src = _METRICS_PY.read_text(encoding="utf-8")
+        assert "gemini_429_burst_threshold" in src
+
+    def test_metrics_alerting_loop_dispatches_groq_429_burst(self):
+        """_alerting_loop must dispatch 'groq_429_burst' alert."""
+        tree = ast.parse(_METRICS_PY.read_text(encoding="utf-8"))
+        found = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "_alerting_loop":
+                body = ast.unparse(node)
+                # ast.unparse uses single quotes; check substring without quote style
+                if "groq_429_burst" in body and "_dispatch_alert" in body:
+                    found = True
+                    break
+        assert found, "_alerting_loop must contain _dispatch_alert('groq_429_burst', ...)"
+
+    def test_metrics_alerting_loop_dispatches_gemini_429_burst(self):
+        """_alerting_loop must dispatch 'gemini_429_burst' alert."""
+        tree = ast.parse(_METRICS_PY.read_text(encoding="utf-8"))
+        found = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "_alerting_loop":
+                body = ast.unparse(node)
+                if "gemini_429_burst" in body and "_dispatch_alert" in body:
+                    found = True
+                    break
+        assert found, "_alerting_loop must contain _dispatch_alert('gemini_429_burst', ...)"
+
+    def test_llm_track_delegates_to_generic_helper(self):
+        """AST check: _track_workers_ai_429 must delegate to _track_provider_429."""
         tree = ast.parse(_LLM_PY.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef) and node.name == "_track_workers_ai_429":
                 body = ast.unparse(node)
-                assert "_WORKERS_AI_429_WINDOW" in body
-                assert "append" in body
+                assert "_track_provider_429" in body, (
+                    "_track_workers_ai_429 must call _track_provider_429"
+                )
                 return
         pytest.fail("_track_workers_ai_429 not found in llm.py")
 
-    def test_llm_reset_clears_module_level_list(self):
-        """AST check: _reset_workers_ai_429 must reassign
-        _WORKERS_AI_429_WINDOW to an empty list using 'global'."""
+    def test_llm_reset_delegates_to_generic_helper(self):
+        """AST check: _reset_workers_ai_429 must delegate to _reset_provider_429."""
         tree = ast.parse(_LLM_PY.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef) and node.name == "_reset_workers_ai_429":
                 body = ast.unparse(node)
-                assert "global" in body
-                assert "_WORKERS_AI_429_WINDOW" in body
+                assert "_reset_provider_429" in body, (
+                    "_reset_workers_ai_429 must call _reset_provider_429"
+                )
                 return
         pytest.fail("_reset_workers_ai_429 not found in llm.py")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# D2. Groq + Gemini SmartKeyPool integration (Task #75)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _make_groq_slot():
+    """Build a minimal Groq slot dict accepted by _SmartKeyPool methods."""
+    return {
+        "provider": "groq",
+        "key": "gsk-test",
+        "model": "llama-3.3-70b-versatile",
+        "sem": asyncio.Semaphore(4),
+        "max_con": 4,
+        "last_used": 0.0,
+        "cooldown_until": 0.0,
+        "errors": 0,
+        "priority": 0,
+        "rpm_window": [],
+        "rpm_limit": 30,
+        "base_priority": 0,
+        "rpm_warn_until": 0.0,
+    }
+
+
+def _make_gemini_slot():
+    """Build a minimal Gemini slot dict accepted by _SmartKeyPool methods."""
+    return {
+        "provider": "gemini",
+        "key": "AIza-test",
+        "model": "gemini-2.0-flash",
+        "sem": asyncio.Semaphore(8),
+        "max_con": 8,
+        "last_used": 0.0,
+        "cooldown_until": 0.0,
+        "errors": 0,
+        "priority": 0,
+        "rpm_window": [],
+        "rpm_limit": 600,
+        "base_priority": 0,
+        "rpm_warn_until": 0.0,
+    }
+
+
+class TestGroqMark429Integration:
+    """mark_429 on a Groq slot must increment the Groq burst counter and
+    leave the Workers AI counter untouched (Task #75)."""
+
+    def test_groq_mark_429_increments_groq_burst(self):
+        slot = _make_groq_slot()
+        llm_mod._slm_pool.mark_429(slot)
+        assert llm_mod.get_provider_429_burst_inprocess("groq", 60) == 1
+
+    def test_groq_mark_429_five_times_reaches_default_threshold(self):
+        slot = _make_groq_slot()
+        for _ in range(5):
+            llm_mod._slm_pool.mark_429(slot)
+        assert llm_mod.get_provider_429_burst_inprocess("groq", 60) >= 5
+
+    def test_groq_mark_429_does_not_affect_workers_ai_counter(self):
+        slot = _make_groq_slot()
+        for _ in range(5):
+            llm_mod._slm_pool.mark_429(slot)
+        assert llm_mod.get_provider_429_burst_inprocess("workers-ai", 60) == 0
+
+    def test_groq_mark_ok_resets_groq_burst(self):
+        slot = _make_groq_slot()
+        for _ in range(5):
+            llm_mod._slm_pool.mark_429(slot)
+        assert llm_mod.get_provider_429_burst_inprocess("groq", 60) == 5
+        llm_mod._slm_pool.mark_ok(slot)
+        assert llm_mod.get_provider_429_burst_inprocess("groq", 60) == 0
+
+    def test_groq_mark_ok_does_not_reset_workers_ai_burst(self):
+        """Recovering Groq must not clear a concurrent Workers AI burst."""
+        wai_slot = _make_wai_slot()
+        for _ in range(3):
+            llm_mod._slm_pool.mark_429(wai_slot)
+        groq_slot = _make_groq_slot()
+        llm_mod._slm_pool.mark_ok(groq_slot)
+        assert llm_mod.get_provider_429_burst_inprocess("workers-ai", 60) == 3
+
+    def test_groq_mark_ok_calls_redis_delete_for_groq_key(self):
+        mock_rc = MagicMock()
+        slot = _make_groq_slot()
+        with patch("deps.redis_client", mock_rc):
+            llm_mod._slm_pool.mark_ok(slot)
+        mock_rc.delete.assert_called_once_with(
+            llm_mod._PROVIDER_429_REDIS_KEYS["groq"]
+        )
+
+    def test_groq_burst_triggers_groq_alert_check(self):
+        """Five Groq 429s → burst=5 → check #9 mock fires groq_429_burst."""
+        slot = _make_groq_slot()
+        for _ in range(5):
+            llm_mod._slm_pool.mark_429(slot)
+        burst = llm_mod.get_provider_429_burst_inprocess("groq", llm_mod._PROVIDER_429_BURST_WINDOW_S)
+        threshold = 5
+        dispatch_mock = AsyncMock()
+
+        async def _check():
+            if burst >= threshold:
+                await dispatch_mock("groq_429_burst", "Groq throttled", f"{burst} 429s")
+
+        _run(_check())
+        dispatch_mock.assert_awaited_once()
+        assert dispatch_mock.await_args.args[0] == "groq_429_burst"
+
+
+class TestGeminiMark429Integration:
+    """mark_429 on a Gemini slot must increment the Gemini burst counter and
+    leave the Workers AI counter untouched (Task #75)."""
+
+    def test_gemini_mark_429_increments_gemini_burst(self):
+        slot = _make_gemini_slot()
+        llm_mod._slm_pool.mark_429(slot)
+        assert llm_mod.get_provider_429_burst_inprocess("gemini", 60) == 1
+
+    def test_gemini_mark_429_five_times_reaches_default_threshold(self):
+        slot = _make_gemini_slot()
+        for _ in range(5):
+            llm_mod._slm_pool.mark_429(slot)
+        assert llm_mod.get_provider_429_burst_inprocess("gemini", 60) >= 5
+
+    def test_gemini_mark_429_does_not_affect_workers_ai_counter(self):
+        slot = _make_gemini_slot()
+        for _ in range(5):
+            llm_mod._slm_pool.mark_429(slot)
+        assert llm_mod.get_provider_429_burst_inprocess("workers-ai", 60) == 0
+
+    def test_gemini_mark_ok_resets_gemini_burst(self):
+        slot = _make_gemini_slot()
+        for _ in range(5):
+            llm_mod._slm_pool.mark_429(slot)
+        assert llm_mod.get_provider_429_burst_inprocess("gemini", 60) == 5
+        llm_mod._slm_pool.mark_ok(slot)
+        assert llm_mod.get_provider_429_burst_inprocess("gemini", 60) == 0
+
+    def test_gemini_mark_ok_does_not_reset_workers_ai_burst(self):
+        """Recovering Gemini must not clear a concurrent Workers AI burst."""
+        wai_slot = _make_wai_slot()
+        for _ in range(3):
+            llm_mod._slm_pool.mark_429(wai_slot)
+        gemini_slot = _make_gemini_slot()
+        llm_mod._slm_pool.mark_ok(gemini_slot)
+        assert llm_mod.get_provider_429_burst_inprocess("workers-ai", 60) == 3
+
+    def test_gemini_mark_ok_calls_redis_delete_for_gemini_key(self):
+        mock_rc = MagicMock()
+        slot = _make_gemini_slot()
+        with patch("deps.redis_client", mock_rc):
+            llm_mod._slm_pool.mark_ok(slot)
+        mock_rc.delete.assert_called_once_with(
+            llm_mod._PROVIDER_429_REDIS_KEYS["gemini"]
+        )
+
+    def test_gemini_burst_triggers_gemini_alert_check(self):
+        """Five Gemini 429s → burst=5 → check #10 mock fires gemini_429_burst."""
+        slot = _make_gemini_slot()
+        for _ in range(5):
+            llm_mod._slm_pool.mark_429(slot)
+        burst = llm_mod.get_provider_429_burst_inprocess("gemini", llm_mod._PROVIDER_429_BURST_WINDOW_S)
+        threshold = 5
+        dispatch_mock = AsyncMock()
+
+        async def _check():
+            if burst >= threshold:
+                await dispatch_mock("gemini_429_burst", "Gemini throttled", f"{burst} 429s")
+
+        _run(_check())
+        dispatch_mock.assert_awaited_once()
+        assert dispatch_mock.await_args.args[0] == "gemini_429_burst"

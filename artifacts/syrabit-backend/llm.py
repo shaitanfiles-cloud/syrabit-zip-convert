@@ -105,82 +105,148 @@ _ADMIN_LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("ADMIN_LLM_MAX_CONCU
 _LLM_PROVIDER_METRICS: list = []
 _LLM_PROVIDER_METRICS_MAX = 20_000
 
-# ── Task #70: Workers AI 429 burst tracking ───────────────────────────────────
-# In-memory sliding window of Workers AI 429 timestamps.
-# Also written to Redis (key wai_429_burst) for cross-worker visibility.
-# Reset to [] on any successful Workers AI call so the counter reflects a
-# *current* burst, not historic noise. The alerting loop in metrics.py reads
-# this via get_workers_ai_429_burst() and fires _dispatch_alert when ≥ threshold.
+# ── Per-provider 429 burst tracking (Task #70 + Task #75) ───────────────────
+# Unified sliding-window counter for every LLM provider.
+# Each provider gets its own in-memory list and its own Redis key so the
+# alerting loop can fire a targeted alert for each independently.
 #
 # Window is 180s — deliberately larger than the 120s _alerting_loop interval
-# so a burst that starts near a loop tick boundary is still visible on the
-# next tick.  TTL is refreshed on every 429 (not just the first) so an
-# ongoing outage never silently auto-expires mid-burst.
-_WORKERS_AI_429_WINDOW: list = []   # list[float] — epoch timestamps
-_WORKERS_AI_429_WINDOW_S = 180       # lookback window / Redis TTL in seconds
-_WORKERS_AI_429_REDIS_KEY = "wai_429_burst"
+# so a burst that starts near a tick boundary is never silently missed.
+# Redis TTL is refreshed on every 429 hit so an ongoing outage never
+# silently auto-expires mid-burst.  The counter resets on the next
+# successful call (mark_ok → _reset_provider_429).
+#
+# Providers included: workers-ai, groq, gemini.  Others silently no-op.
+_PROVIDER_429_BURST_WINDOW_S = 180   # shared lookback / Redis TTL for all providers
+_PROVIDER_429_WINDOWS: dict = {       # provider → list[float epoch timestamps]
+    "workers-ai": [],
+    "groq":       [],
+    "gemini":     [],
+}
+_PROVIDER_429_REDIS_KEYS: dict = {
+    "workers-ai": "wai_429_burst",    # keeps existing Redis key for backwards compat
+    "groq":       "groq_429_burst",
+    "gemini":     "gemini_429_burst",
+}
+
+# Backwards-compat module-level aliases for code that references these directly
+# (server.py, vertex_health_cache.py, tests).  They are aliases to the list
+# inside _PROVIDER_429_WINDOWS["workers-ai"] — never reassign the list object,
+# use .clear() to reset so the aliases stay valid.
+_WORKERS_AI_429_WINDOW   = _PROVIDER_429_WINDOWS["workers-ai"]
+_WORKERS_AI_429_WINDOW_S = _PROVIDER_429_BURST_WINDOW_S
+_WORKERS_AI_429_REDIS_KEY = _PROVIDER_429_REDIS_KEYS["workers-ai"]
 
 
-def _track_workers_ai_429() -> None:
-    """Record one Workers AI 429 hit (in-memory + Redis)."""
-    _WORKERS_AI_429_WINDOW.append(time.time())
+def _track_provider_429(provider: str) -> None:
+    """Record one 429 hit for *provider* (in-memory + Redis).
+
+    No-ops silently for providers not in ``_PROVIDER_429_WINDOWS``.
+    """
+    window = _PROVIDER_429_WINDOWS.get(provider)
+    if window is None:
+        return
+    window.append(time.time())
+    redis_key = _PROVIDER_429_REDIS_KEYS.get(provider)
+    if not redis_key:
+        return
     try:
         from deps import redis_client as _rc
         if _rc:
-            _rc.incr(_WORKERS_AI_429_REDIS_KEY)
-            # Refresh TTL on every hit so an ongoing burst never auto-expires.
-            _rc.expire(_WORKERS_AI_429_REDIS_KEY, _WORKERS_AI_429_WINDOW_S)
+            _rc.incr(redis_key)
+            _rc.expire(redis_key, _PROVIDER_429_BURST_WINDOW_S)
     except Exception:
         pass
 
 
-def _reset_workers_ai_429() -> None:
-    """Reset Workers AI 429 counter after a successful call."""
-    global _WORKERS_AI_429_WINDOW
-    _WORKERS_AI_429_WINDOW = []
+def _reset_provider_429(provider: str) -> None:
+    """Reset 429 counter for *provider* after a successful call.
+
+    Uses list.clear() (not reassignment) so module-level aliases stay valid.
+    No-ops silently for providers not in ``_PROVIDER_429_WINDOWS``.
+    """
+    window = _PROVIDER_429_WINDOWS.get(provider)
+    if window is None:
+        return
+    window.clear()
+    redis_key = _PROVIDER_429_REDIS_KEYS.get(provider)
+    if not redis_key:
+        return
     try:
         from deps import redis_client as _rc
         if _rc:
-            _rc.delete(_WORKERS_AI_429_REDIS_KEY)
+            _rc.delete(redis_key)
     except Exception:
         pass
 
 
-def get_workers_ai_429_burst(window_seconds: int = _WORKERS_AI_429_WINDOW_S) -> int:
-    """Return the number of Workers AI 429s in the last *window_seconds*.
+def get_provider_429_burst(provider: str,
+                           window_seconds: int = _PROVIDER_429_BURST_WINDOW_S) -> int:
+    """Return the number of 429s for *provider* in the last *window_seconds*.
 
     Redis is the primary source (cross-worker, TTL-backed). Falls back to the
     in-process sliding window when Redis is unavailable.
 
     NOTE: when Redis is available the *window_seconds* parameter is ignored —
-    Redis stores a single cumulative counter with a fixed TTL of
-    ``_WORKERS_AI_429_WINDOW_S`` (180 s). The parameter only controls the
-    timestamp cutoff applied to the in-process fallback list.  Use
-    ``get_workers_ai_429_burst_inprocess()`` when you need an accurate short
-    window (e.g. 60 s) that is always timestamp-filtered.
+    Redis stores a cumulative counter with a fixed TTL.  Use
+    ``get_provider_429_burst_inprocess()`` when you need an accurate short
+    window that is always timestamp-filtered.
     """
-    try:
-        from deps import redis_client as _rc
-        if _rc:
-            val = _rc.get(_WORKERS_AI_429_REDIS_KEY)
-            if val is not None:
-                return int(val)
-    except Exception:
-        pass
-    return get_workers_ai_429_burst_inprocess(window_seconds)
+    redis_key = _PROVIDER_429_REDIS_KEYS.get(provider)
+    if redis_key:
+        try:
+            from deps import redis_client as _rc
+            if _rc:
+                val = _rc.get(redis_key)
+                if val is not None:
+                    return int(val)
+        except Exception:
+            pass
+    return get_provider_429_burst_inprocess(provider, window_seconds)
+
+
+def get_provider_429_burst_inprocess(provider: str,
+                                     window_seconds: int = 60) -> int:
+    """Return the number of 429s for *provider* in the last *window_seconds*
+    using only the in-process timestamp list (no Redis).
+
+    Use this when you need an accurate short window (e.g. 60 s) or when
+    Redis is unavailable.
+    """
+    window = _PROVIDER_429_WINDOWS.get(provider, [])
+    cutoff = time.time() - window_seconds
+    return sum(1 for t in window if t > cutoff)
+
+
+# ── Backwards-compat wrappers — Workers AI specific public API ────────────────
+# Existing callers (server.py, vertex_health_cache.py, metrics.py, tests)
+# import these by name.  They delegate to the generic helpers above.
+
+def _track_workers_ai_429() -> None:
+    """Record one Workers AI 429 hit (in-memory + Redis)."""
+    _track_provider_429("workers-ai")
+
+
+def _reset_workers_ai_429() -> None:
+    """Reset Workers AI 429 counter after a successful call."""
+    _reset_provider_429("workers-ai")
+
+
+def get_workers_ai_429_burst(window_seconds: int = _WORKERS_AI_429_WINDOW_S) -> int:
+    """Return the number of Workers AI 429s in the last *window_seconds*.
+
+    Redis is the primary source. Falls back to the in-process sliding window.
+    See ``get_provider_429_burst`` for the generic version.
+    """
+    return get_provider_429_burst("workers-ai", window_seconds)
 
 
 def get_workers_ai_429_burst_inprocess(window_seconds: int = 60) -> int:
-    """Return the number of Workers AI 429s in the last *window_seconds*
-    using only the in-process timestamp list.
+    """Return Workers AI 429 burst using only the in-process timestamp list.
 
-    Unlike ``get_workers_ai_429_burst``, this function always applies the
-    exact time window to per-timestamp entries, regardless of Redis
-    availability.  Use this for short windows (e.g. 60 s) where the Redis
-    cumulative counter would be too coarse.
+    See ``get_provider_429_burst_inprocess`` for the generic version.
     """
-    cutoff = time.time() - window_seconds
-    return sum(1 for t in _WORKERS_AI_429_WINDOW if t > cutoff)
+    return get_provider_429_burst_inprocess("workers-ai", window_seconds)
 
 
 def _record_llm_call(provider: str, model: str, duration_ms: float, success: bool, tokens_approx: int = 0, fallback: bool = False, error_type: str = ""):
@@ -621,8 +687,7 @@ class _SmartKeyPool:
         slot["last_used"] = time.time()
         slot["errors"] = 0
         self._record_request(slot)
-        if slot["provider"] == "workers-ai":
-            _reset_workers_ai_429()
+        _reset_provider_429(slot["provider"])   # no-op for untracked providers
 
     def mark_429(self, slot):
         slot["cooldown_until"] = time.time() + self._RL_COOLDOWN
@@ -631,8 +696,7 @@ class _SmartKeyPool:
             f"SLM pool: {slot['provider']}/{slot['model']} → 429 rate-limit "
             f"(RPM {self._rpm_count(slot)}/{slot['rpm_limit']}), cooling {self._RL_COOLDOWN}s"
         )
-        if slot["provider"] == "workers-ai":
-            _track_workers_ai_429()
+        _track_provider_429(slot["provider"])   # no-op for untracked providers
 
     def mark_403(self, slot):
         slot["cooldown_until"] = float("inf")

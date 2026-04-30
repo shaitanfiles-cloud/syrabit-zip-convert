@@ -1293,7 +1293,7 @@ _ALERT_THRESHOLDS_DEFAULT = {
     # Task #70: Workers AI 429 burst alert. Fires when >= this many
     # Workers AI 429 rate-limit responses are recorded within the 180s
     # counting window without any successful call resetting the counter.
-    # The 180s window (llm._WORKERS_AI_429_WINDOW_S) is intentionally
+    # The 180s window (llm._PROVIDER_429_BURST_WINDOW_S) is intentionally
     # larger than the 120s alerting loop so a burst near a tick boundary
     # is never silently missed. The Redis counter uses TTL-consecutive
     # semantics: it counts hits since the first 429 in the current burst
@@ -1301,6 +1301,15 @@ _ALERT_THRESHOLDS_DEFAULT = {
     # Default 5 — enough to distinguish a real throttle burst from a
     # transient single-request spike. Set to 0 to disable.
     "workers_ai_429_burst_threshold": 5,
+    # Task #75: Groq 429 burst alert.  Same semantics as Workers AI above.
+    # Groq operates at 30 RPM on the free tier so 5 hits in 180 s means
+    # it is fully throttled.  Redis key: groq_429_burst.  Set to 0 to disable.
+    "groq_429_burst_threshold": 5,
+    # Task #75: Gemini 429 burst alert.  Same semantics.  Redis key:
+    # gemini_429_burst.  Gemini's paid quota is much higher so a burst here
+    # usually signals an account-level quota exhaustion, not normal traffic.
+    # Set to 0 to disable.
+    "gemini_429_burst_threshold": 5,
 }
 _ALERT_EXPIRATION_DEFAULT = {
     "enabled": False,
@@ -2257,14 +2266,14 @@ async def _alerting_loop():
                     _ALERT_THRESHOLDS.get("workers_ai_429_burst_threshold", 5) or 5
                 )
                 if _wai_threshold > 0:
-                    from llm import get_workers_ai_429_burst, _WORKERS_AI_429_WINDOW_S
-                    _wai_burst = get_workers_ai_429_burst(_WORKERS_AI_429_WINDOW_S)
+                    from llm import get_provider_429_burst, _PROVIDER_429_BURST_WINDOW_S
+                    _wai_burst = get_provider_429_burst("workers-ai", _PROVIDER_429_BURST_WINDOW_S)
                     if _wai_burst >= _wai_threshold:
                         await _dispatch_alert(
                             "workers_ai_429_burst",
                             "Workers AI rate-limit burst — chat may be unavailable",
                             f"{_wai_burst} Workers AI 429 rate-limit responses recorded "
-                            f"in the last {_WORKERS_AI_429_WINDOW_S}s (threshold: {_wai_threshold}). "
+                            f"in the last {_PROVIDER_429_BURST_WINDOW_S}s (threshold: {_wai_threshold}). "
                             f"Chat completions are being throttled by Cloudflare Workers AI. "
                             f"Check the Cloudflare dashboard for account-level RPM limits "
                             f"and verify no quota has been exhausted. "
@@ -2273,7 +2282,65 @@ async def _alerting_loop():
                                 "metric": "workers_ai_429_burst_threshold",
                                 "value": _wai_threshold,
                                 "actual": _wai_burst,
-                                "window_seconds": _WORKERS_AI_429_WINDOW_S,
+                                "window_seconds": _PROVIDER_429_BURST_WINDOW_S,
+                            },
+                        )
+            except Exception:
+                pass
+
+            # ── 9. Groq 429 burst (Task #75) ─────────────────────────────
+            # Same semantics as check #8.  Groq has a 30 RPM free-tier cap
+            # so 5 hits in 180 s means it is fully throttled.
+            try:
+                _groq_threshold = int(
+                    _ALERT_THRESHOLDS.get("groq_429_burst_threshold", 5) or 5
+                )
+                if _groq_threshold > 0:
+                    from llm import get_provider_429_burst, _PROVIDER_429_BURST_WINDOW_S
+                    _groq_burst = get_provider_429_burst("groq", _PROVIDER_429_BURST_WINDOW_S)
+                    if _groq_burst >= _groq_threshold:
+                        await _dispatch_alert(
+                            "groq_429_burst",
+                            "Groq rate-limit burst — fallback LLM throttled",
+                            f"{_groq_burst} Groq 429 rate-limit responses recorded "
+                            f"in the last {_PROVIDER_429_BURST_WINDOW_S}s (threshold: {_groq_threshold}). "
+                            f"Groq is being throttled, which may affect chat fallback availability. "
+                            f"Check your Groq account RPM limits and key usage. "
+                            f"The counter resets automatically when a successful Groq call goes through.",
+                            threshold_snapshot={
+                                "metric": "groq_429_burst_threshold",
+                                "value": _groq_threshold,
+                                "actual": _groq_burst,
+                                "window_seconds": _PROVIDER_429_BURST_WINDOW_S,
+                            },
+                        )
+            except Exception:
+                pass
+
+            # ── 10. Gemini 429 burst (Task #75) ──────────────────────────
+            # Same semantics.  Gemini's paid quota is high so a burst here
+            # usually indicates account-level quota exhaustion.
+            try:
+                _gemini_threshold = int(
+                    _ALERT_THRESHOLDS.get("gemini_429_burst_threshold", 5) or 5
+                )
+                if _gemini_threshold > 0:
+                    from llm import get_provider_429_burst, _PROVIDER_429_BURST_WINDOW_S
+                    _gemini_burst = get_provider_429_burst("gemini", _PROVIDER_429_BURST_WINDOW_S)
+                    if _gemini_burst >= _gemini_threshold:
+                        await _dispatch_alert(
+                            "gemini_429_burst",
+                            "Gemini rate-limit burst — AI provider quota may be exhausted",
+                            f"{_gemini_burst} Gemini 429 rate-limit responses recorded "
+                            f"in the last {_PROVIDER_429_BURST_WINDOW_S}s (threshold: {_gemini_threshold}). "
+                            f"Gemini is being throttled, which may affect chat availability. "
+                            f"Check your Google AI Studio / Vertex AI quota in the Google Cloud Console. "
+                            f"The counter resets automatically when a successful Gemini call goes through.",
+                            threshold_snapshot={
+                                "metric": "gemini_429_burst_threshold",
+                                "value": _gemini_threshold,
+                                "actual": _gemini_burst,
+                                "window_seconds": _PROVIDER_429_BURST_WINDOW_S,
                             },
                         )
             except Exception:
