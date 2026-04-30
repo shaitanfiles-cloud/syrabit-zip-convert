@@ -297,16 +297,20 @@ _MODEL_ALIAS_MAP = {
 # Slots in the same tier are load-balanced by in-flight count.
 #
 _SLM_SLOT_CANDIDATES = [
-    # Tier 0: Workers AI llama-3.3-70b-fp8 — primary chat provider.
+    # Tier 0: Workers AI llama-3.3-70b-fp8 — primary chat provider (70B, FP8).
     ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",         8, 0),
-    # Tier 1: Workers AI Qwen 2.5-72B — separate model quota, parallel slot.
-    ("workers-ai",  "@cf/qwen/qwen2.5-72b-instruct",                    8, 1),
-    # Tier 2: Workers AI llama-3.1-8b — fast small-model fallback.
-    ("workers-ai",  "@cf/meta/llama-3.1-8b-instruct-fp8",               8, 2),
-    # Tier 3: Groq llama-4-scout — fallback when Workers AI is rate-limited.
-    ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 3),
-    # Tier 4: Cerebras llama3.1-8b — secondary fallback.
-    ("cerebras",    "llama3.1-8b",                                       4, 4),
+    # Tier 1: Workers AI GPT-OSS-20B — fast 20B model, own quota.
+    ("workers-ai",  "@cf/openai/gpt-oss-20b",                           8, 1),
+    # Tier 2: Workers AI Qwen 2.5-72B — high-quality 72B on separate quota.
+    ("workers-ai",  "@cf/qwen/qwen2.5-72b-instruct",                    8, 2),
+    # Tier 3: Workers AI llama-3.2-3b — ultrafast 3B for burst traffic.
+    ("workers-ai",  "@cf/meta/llama-3.2-3b-instruct",                  12, 3),
+    # Tier 4: Workers AI llama-3.1-8b — fast 8B fallback.
+    ("workers-ai",  "@cf/meta/llama-3.1-8b-instruct-fp8",               8, 4),
+    # Tier 5: Groq llama-4-scout — external fallback when Workers AI is saturated.
+    ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 5),
+    # Tier 6: Cerebras llama3.1-8b — secondary external fallback.
+    ("cerebras",    "llama3.1-8b",                                       4, 6),
 ]
 
 # Content SmartKeyPool — serves `_CONTENT_INTENTS` (notes, important_questions,

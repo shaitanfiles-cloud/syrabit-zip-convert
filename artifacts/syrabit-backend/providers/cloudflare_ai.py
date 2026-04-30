@@ -53,12 +53,14 @@ _ENABLED = bool(_ACCOUNT_ID and _API_TOKEN)
 
 # ── Model catalog ─────────────────────────────────────────────────────────────
 MODELS = {
-    "chat":        "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-    "chat_long":   "@cf/openai/gpt-oss-120b",
-    "chat_qwen":   "@cf/qwen/qwen2.5-72b-instruct",
-    "chat_code":   "@cf/qwen/qwen2.5-coder-32b-instruct",
-    "chat_fast":   "@cf/meta/llama-3.1-8b-instruct-fp8",
-    "chat_indic":  "@cf/aisingapore/gemma-sea-lion-v4-27b-it",
+    "chat":          "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "chat_long":     "@cf/openai/gpt-oss-120b",
+    "chat_gpt_oss":  "@cf/openai/gpt-oss-20b",
+    "chat_qwen":     "@cf/qwen/qwen2.5-72b-instruct",
+    "chat_code":     "@cf/qwen/qwen2.5-coder-32b-instruct",
+    "chat_fast":     "@cf/meta/llama-3.1-8b-instruct-fp8",
+    "chat_ultrafast": "@cf/meta/llama-3.2-3b-instruct",
+    "chat_indic":    "@cf/aisingapore/gemma-sea-lion-v4-27b-it",
     "embed":       "@cf/baai/bge-large-en-v1.5",
     "embed_multi": "@cf/baai/bge-m3",
     "embed_small": "@cf/baai/bge-small-en-v1.5",
