@@ -26,7 +26,7 @@ function _isInsideSavable(node) {
 }
 
 export function HighlightSavePopover({
-  sourceUrl = '', sourceTitle = '', chapterRef = '', subjectName = '', hideQuiz = false,
+  sourceUrl = '', sourceTitle = '', chapterRef = '', subjectName = '', hideQuiz = false, hideSave = false,
 }) {
   const [pos, setPos] = useState(null);     // {x,y,text}
   const [saved, setSaved] = useState(false);
@@ -83,24 +83,29 @@ export function HighlightSavePopover({
     setPos(null);
   }, [pos]);
 
+  const showSave = !hideSave;
+  const showQuiz = !hideQuiz;
+
   return (
     <>
-      {pos && (
+      {pos && (showSave || showQuiz) && (
         <div
           className="fixed z-[110] flex items-center gap-1 rounded-xl border border-border/60 bg-card shadow-lg px-1 py-1"
           style={{ left: pos.x, top: pos.y }}
           onMouseDown={(e) => e.preventDefault()}
         >
-          <button
-            onClick={onSave}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium hover:bg-muted"
-          >
-            {saved ? <Check className="w-3.5 h-3.5 text-emerald-600" /> :
-                     <Bookmark className="w-3.5 h-3.5" />}
-            {saved ? 'Saved' : 'Save'}
-          </button>
-          {!hideQuiz && <div className="w-px h-5 bg-border/60" />}
-          {!hideQuiz && (
+          {showSave && (
+            <button
+              onClick={onSave}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium hover:bg-muted"
+            >
+              {saved ? <Check className="w-3.5 h-3.5 text-emerald-600" /> :
+                       <Bookmark className="w-3.5 h-3.5" />}
+              {saved ? 'Saved' : 'Save'}
+            </button>
+          )}
+          {showSave && showQuiz && <div className="w-px h-5 bg-border/60" />}
+          {showQuiz && (
             <button
               onClick={onQuiz}
               className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium hover:bg-muted"

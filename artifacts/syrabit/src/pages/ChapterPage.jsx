@@ -1381,6 +1381,7 @@ export default function ChapterPage() {
         chapterRef={`${board}/${classSlug}/${subjectSlug}/${chapterSlug}`}
         subjectName={subjectName}
         hideQuiz={isQuestionPaper}
+        hideSave={isQuestionPaper}
       />
       {!isQuestionPaper && typeof document !== 'undefined' && createPortal(
         <QuizModal
