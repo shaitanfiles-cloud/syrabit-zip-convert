@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Loader2, MessageSquare, BookOpen, Search, Mail, User, Ghost,
-  ChevronRight, Crown, X, Clock, ArrowLeft, Sparkles, TrendingUp, RefreshCw,
+  ChevronRight, Crown, X, Clock, ArrowLeft, Sparkles, TrendingUp, RefreshCw, Flag,
 } from 'lucide-react';
 import AdminQuickLinks from './AdminQuickLinks';
-import { adminGetConversations, extractFaqs, conversationsSentiment, syncConversations } from '@/utils/api';
+import { adminGetConversations, extractFaqs, conversationsSentiment, syncConversations, API_BASE } from '@/utils/api';
+import axios from 'axios';
 import { toast } from 'sonner';
 import { formatDistanceToNow, format } from 'date-fns';
 
@@ -120,6 +121,19 @@ export default function AdminConversations({ adminToken, onNavigate }) {
     } catch {
       toast.error('FAQ extraction failed');
     } finally { setFaqLoading(false); }
+  };
+
+  const handleFlagConversation = async (e, convId) => {
+    e.stopPropagation();
+    const isRealJwt = adminToken && typeof adminToken === 'string' && adminToken.split('.').length === 3;
+    const headers = isRealJwt ? { Authorization: `Bearer ${adminToken}` } : {};
+    try {
+      await axios.post(`${API_BASE}/admin/conversations/${convId}/flag`, {}, { headers, withCredentials: true });
+      setConversations((prev) => prev.map((c) => c.id === convId ? { ...c, flagged: !c.flagged } : c));
+      toast.success('Conversation flagged');
+    } catch {
+      toast.error('Failed to flag conversation');
+    }
   };
 
   const totalMessages = useMemo(() => conversations.reduce((sum, c) => sum + (c.messages || []).length, 0), [conversations]);
@@ -298,9 +312,19 @@ export default function AdminConversations({ adminToken, onNavigate }) {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-medium text-gray-700 truncate">{conv.title || 'Untitled'}</p>
-                    <span className="text-[10px] text-gray-400 flex-shrink-0">
-                      {formatDistanceToNow(new Date(conv.updated_at || conv.created_at), { addSuffix: true })}
-                    </span>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <button
+                        onClick={(e) => handleFlagConversation(e, conv.id)}
+                        aria-label="Flag conversation"
+                        title={conv.flagged ? 'Flagged' : 'Flag conversation'}
+                        className={`p-1 rounded transition-colors ${conv.flagged ? 'text-red-500' : 'text-gray-300 hover:text-red-400'}`}
+                      >
+                        <Flag size={11} />
+                      </button>
+                      <span className="text-[10px] text-gray-400">
+                        {formatDistanceToNow(new Date(conv.updated_at || conv.created_at), { addSuffix: true })}
+                      </span>
+                    </div>
                   </div>
                   <div className="flex items-center gap-2">
                     <p className="text-xs text-gray-400 truncate">{conv.is_anonymous ? 'Anonymous User' : (conv.user_name || 'Unknown')}</p>

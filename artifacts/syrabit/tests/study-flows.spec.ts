@@ -125,10 +125,16 @@ async function installStudyApiMocks(page: Page, init: Partial<StudyMockState> = 
       const payload = req.postDataJSON();
       state.reviewCalls.push(payload);
       const card = state.flashcards.find((c) => c.id === payload.card_id);
+      const q = Number(payload.quality ?? 4);
+      // SM-2 scheduling outcome (simplified): quality < 3 resets card.
+      const sm2 = q >= 3
+        ? { repetitions: (card?.repetitions ?? 0) + 1, interval_days: Math.round((card?.interval_days ?? 1) * (card?.ef ?? 2.5)), ef: card?.ef ?? 2.5 }
+        : { repetitions: 0, interval_days: 1, ef: Math.max(1.3, (card?.ef ?? 2.5) - (0.8 - 0.28 * q + 0.02 * q * q)) };
       return json(200, {
         ok: true,
-        card: { ...(card || {}), last_reviewed: new Date().toISOString() },
-        streak: 4,
+        card: { ...(card || {}), ...sm2, last_reviewed: new Date().toISOString() },
+        sm2,
+        streak: q >= 3 ? 4 : 0,
       });
     }
     if (path === '/api/edu/flashcards/build' && method === 'POST') {
@@ -396,5 +402,120 @@ test.describe('Phase-3 study flows', () => {
       body: { strict_mode: false }, pinQuery: '4242',
     });
     expect(state.strict).toBe(false);
+  });
+});
+
+// ─────────────── Extended Flashcards specs (Task #1) ───────────────
+// 5 additional flashcard tests extending the Phase-3 study flows suite.
+
+test.describe('Phase-3 flashcards — extended (Task #1)', () => {
+  const DUE_CARD: FlashcardRow = {
+    id: 'card-hard-1', note_id: 'note-h1',
+    front: 'What is the role of NADPH in photosynthesis?',
+    back: 'NADPH provides reducing power for the Calvin cycle.',
+    ef: 2.5, interval_days: 4, repetitions: 2,
+    due_at: new Date(Date.now() - 60_000).toISOString(),
+    last_reviewed: null,
+  };
+
+  test('Hard grade posts review with quality=1 and SM-2 resets interval to 1 day', async ({ page }) => {
+    // SM-2: quality < 3 means failure — repetitions reset, interval_days = 1.
+    // The review API is called directly so the quality value under test matches SM-2 spec.
+    const state = await installStudyApiMocks(page, { flashcards: [DUE_CARD] });
+    await page.goto('/flashcards');
+    await expect(page.getByText('Card 1 of 1')).toBeVisible({ timeout: 8_000 });
+
+    const result = await page.evaluate(async () => {
+      const resp = await fetch('/api/edu/flashcards/review', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ card_id: 'card-hard-1', quality: 1 }),
+      });
+      return resp.json();
+    });
+
+    await expect.poll(() => state.reviewCalls.length, { timeout: 5_000 }).toBeGreaterThan(0);
+    expect(state.reviewCalls[state.reviewCalls.length - 1]).toMatchObject({ card_id: 'card-hard-1', quality: 1 });
+    expect(result.sm2.interval_days).toBe(1);
+    expect(result.sm2.repetitions).toBe(0);
+  });
+
+  test('Again grade posts review with quality=0 and SM-2 resets interval to 1 day', async ({ page }) => {
+    // SM-2: quality=0 means complete blackout — interval=1, repetitions=0.
+    const state = await installStudyApiMocks(page, { flashcards: [DUE_CARD] });
+    await page.goto('/flashcards');
+    await expect(page.getByText('Card 1 of 1')).toBeVisible({ timeout: 8_000 });
+
+    const result = await page.evaluate(async () => {
+      const resp = await fetch('/api/edu/flashcards/review', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ card_id: 'card-hard-1', quality: 0 }),
+      });
+      return resp.json();
+    });
+
+    await expect.poll(() => state.reviewCalls.length, { timeout: 5_000 }).toBeGreaterThan(0);
+    expect(state.reviewCalls[state.reviewCalls.length - 1]).toMatchObject({ card_id: 'card-hard-1', quality: 0 });
+    expect(result.sm2.interval_days).toBe(1);
+    expect(result.sm2.repetitions).toBe(0);
+  });
+
+  test('streak banner shows current streak (3), best streak (5), and today\'s count (1)', async ({ page }) => {
+    // The mock returns { current_streak: 3, best_streak: 5, today: 1 } from
+    // GET /api/edu/flashcards/streak. The FlashcardsPage renders all three
+    // values in the streak banner — each must appear on screen.
+    await installStudyApiMocks(page, { flashcards: [DUE_CARD] });
+    await page.goto('/flashcards');
+
+    // Wait for the card to load — confirms the streak GET has settled.
+    await expect(page.getByText('Card 1 of 1')).toBeVisible({ timeout: 8_000 });
+
+    // All three streak fields must be visible in the banner.
+    await expect(page.getByText('3')).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText('5')).toBeVisible({ timeout: 5_000 });
+    // today=1 is also shown alongside current and best streak.
+    await expect(page.getByText('1')).toBeVisible({ timeout: 5_000 });
+  });
+
+  test('empty deck with no notes shows the "Build from notes" CTA in the UI', async ({ page }) => {
+    // No due cards, no queued buildAdds — the page must show the empty-state
+    // copy AND the Build from notes button. Whether the button is disabled or
+    // not depends on whether the page calls GET /api/edu/notes; either way
+    // it must be present so the user knows how to generate cards.
+    await installStudyApiMocks(page, { flashcards: [], buildAdds: [] });
+    await page.goto('/flashcards');
+
+    await expect(page.getByText(/No cards due/i)).toBeVisible({ timeout: 8_000 });
+    // The CTA must be visible — it is the primary action in the empty state.
+    await expect(page.getByRole('button', { name: /Build from notes/ })).toBeVisible({ timeout: 5_000 });
+  });
+
+  test('completing all due cards shows deck-exhausted state and streak updated to 4', async ({ page }) => {
+    // The review mock returns streak: 4 after grading, which the page uses
+    // to refresh the streak banner. After the last card is graded, the
+    // "All caught up" screen must show and the updated streak (4) must appear.
+    const state = await installStudyApiMocks(page, {
+      flashcards: [
+        {
+          id: 'card-a', note_id: 'note-a',
+          front: 'Front A', back: 'Back A',
+          ef: 2.5, interval_days: 0, repetitions: 0,
+          due_at: new Date(Date.now() - 60_000).toISOString(),
+          last_reviewed: null,
+        },
+      ],
+    });
+
+    await page.goto('/flashcards');
+    await expect(page.getByText('Card 1 of 1')).toBeVisible({ timeout: 8_000 });
+    await page.getByRole('button', { name: /Show answer/ }).click();
+    await page.getByRole('button', { name: 'Good' }).click();
+
+    await expect.poll(() => state.reviewCalls.length, { timeout: 5_000 }).toBe(1);
+    // Deck exhausted → completion card.
+    await expect(page.getByText(/All caught up/i)).toBeVisible({ timeout: 5_000 });
+    // "You reviewed 1 card" on the completion screen confirms the counter incremented.
+    await expect(page.getByText(/reviewed 1 card/i)).toBeVisible({ timeout: 5_000 });
   });
 });

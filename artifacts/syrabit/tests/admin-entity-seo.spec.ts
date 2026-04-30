@@ -77,8 +77,7 @@ test.describe('Entity SEO admin panel', () => {
 
   test('renders drift event with regressions + deep-link claims', async ({ page }) => {
     await page.goto('/admin');
-    // Click into the SEO Manager card / route.
-    await page.getByRole('button', { name: /SEO Manager|SEO/i }).first().click().catch(() => {});
+    await page.getByTestId('admin-nav-seomanager').click();
     // Switch to the Entity SEO tab; the label includes the 🪪 emoji
     // so we match by case-insensitive substring.
     await page.getByRole('button', { name: /Entity SEO/i }).first().click();
