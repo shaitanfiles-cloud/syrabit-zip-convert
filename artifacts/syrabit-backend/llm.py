@@ -404,6 +404,46 @@ _CONTENT_SLOT_CANDIDATES = [
 
 _CONTENT_INTENTS = {"notes", "important_questions", "pyq"}
 
+
+def _parse_rpm_limit(env_var: str, default: int) -> int:
+    """Safely parse an RPM-limit env var, falling back to *default* on bad input.
+
+    Logs a warning (never raises) so a misconfigured value never prevents
+    the service from starting.
+    """
+    raw = os.environ.get(env_var, "")
+    if raw:
+        try:
+            val = int(raw)
+            if val > 0:
+                return val
+            logger.warning(
+                "RPM env var %s=%r is not a positive integer — using default %d",
+                env_var, raw, default,
+            )
+        except ValueError:
+            logger.warning(
+                "RPM env var %s=%r is not an integer — using default %d",
+                env_var, raw, default,
+            )
+    return default
+
+
+# Per-provider RPM caps used by _SmartKeyPool._PROVIDER_RPM_LIMITS.
+# All values are env-overridable so ops can tune them without a deploy.
+_POOL_RPM_LIMITS = {
+    "workers-ai": _parse_rpm_limit("WORKERS_AI_RPM_LIMIT", 150),
+    "groq":        _parse_rpm_limit("GROQ_RPM_LIMIT",       30),
+    "cerebras":    _parse_rpm_limit("CEREBRAS_RPM_LIMIT",   30),
+    "sarvam":      _parse_rpm_limit("SARVAM_RPM_LIMIT",     30),
+    "gemini":      _parse_rpm_limit("GEMINI_RPM_LIMIT",     600),
+    "openrouter":  60,
+    "openai":      60,
+    "bedrock":     30,
+}
+logger.info("SLM RPM limits (overridable via env): %s", _POOL_RPM_LIMITS)
+
+
 class _SmartKeyPool:
     """Concurrent smart pool — maximises RPS across all providers.
 
@@ -424,7 +464,7 @@ class _SmartKeyPool:
     _RPM_SOFT_THRESHOLD = 0.70
     _RPM_HARD_THRESHOLD = 0.90
 
-    # RPM limits per provider.
+    # RPM limits per provider — see _parse_rpm_limit() for the env-var safe parser.
     # Workers AI: despite CF Enterprise billing, the gateway enforces a
     # per-account RPM cap that has been observed to be ~150 in practice
     # (the 429s seen in production confirm the old 500 value was too
@@ -432,16 +472,7 @@ class _SmartKeyPool:
     # account tier is different.
     # Groq / Cerebras: 30 RPM on the free / preview tier; set GROQ_RPM_LIMIT
     # or CEREBRAS_RPM_LIMIT to a higher value on a paid plan.
-    _PROVIDER_RPM_LIMITS = {
-        "workers-ai": int(os.environ.get("WORKERS_AI_RPM_LIMIT", "150")),
-        "groq":        int(os.environ.get("GROQ_RPM_LIMIT",       "30")),
-        "cerebras":    int(os.environ.get("CEREBRAS_RPM_LIMIT",   "30")),
-        "sarvam":      int(os.environ.get("SARVAM_RPM_LIMIT",     "30")),
-        "gemini":      int(os.environ.get("GEMINI_RPM_LIMIT",     "600")),
-        "openrouter":  60,
-        "openai":      60,
-        "bedrock":     30,
-    }
+    _PROVIDER_RPM_LIMITS = _POOL_RPM_LIMITS  # module-level dict, populated just above
 
     def __init__(self, candidates: list):
         pmap: dict = {}

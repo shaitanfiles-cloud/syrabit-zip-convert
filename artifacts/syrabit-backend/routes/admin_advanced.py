@@ -1702,13 +1702,10 @@ async def admin_llm_pool_stats(admin: dict = Depends(get_admin_user)):
 
     Pair with /admin/llm/speed-test for a full latency + throughput picture.
     """
-    from llm import _slm_pool, _content_pool
+    from llm import _slm_pool, _content_pool, _POOL_RPM_LIMITS as _rpm_table
 
     chat_stats = _slm_pool.rpm_status()
     content_stats = _content_pool.rpm_status()
-
-    # _PROVIDER_RPM_LIMITS is a class attribute on _SmartKeyPool.
-    _rpm_table = type(_slm_pool)._PROVIDER_RPM_LIMITS
 
     # Annotate each slot with the configured limit and env-var that controls it.
     _env_keys = {
