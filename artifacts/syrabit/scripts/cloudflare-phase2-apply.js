@@ -229,12 +229,16 @@ async function ensureSlackWebhookDestination() {
 // ── Step 4: Notification policy ───────────────────────────────────────────
 async function ensureNotificationPolicy(healthcheckId) {
   console.log('\nStep 4: Healthcheck notification policy');
-  if (!ADMIN_EMAIL) {
-    skip('Notification policy', 'ADMIN_EMAIL env var not set');
-    return;
-  }
   if (!healthcheckId) {
     skip('Notification policy', 'healthcheck not created');
+    return;
+  }
+  if (!ADMIN_EMAIL) {
+    // A healthcheck without a notification policy is silent — treat as a hard failure
+    // so the operator is alerted to set ADMIN_EMAIL before the job completes.
+    fail('Notification policy',
+      'ADMIN_EMAIL env var is not set — re-run with ADMIN_EMAIL=you@example.com ' +
+      'to ensure the healthcheck can actually alert on origin failures');
     return;
   }
 
