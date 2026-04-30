@@ -1,5 +1,5 @@
 """Syrabit.ai — AI chat & search routes"""
-import re, json, asyncio, time as _time_mod, uuid, logging
+import re, json, asyncio, time as _time_mod, uuid, logging, hashlib
 
 from typing import Optional
 from datetime import datetime, timezone
@@ -217,6 +217,29 @@ async def _assamese_translate_gemini_main_sarvam_polish(
     # Derive bare language ("as-IN" → "as") for the Gemini translator.
     _bare_lang = (target_lang_code or "as-IN").split("-", 1)[0].lower() or "as"
 
+    # ── Redis translation cache (avoids repeated Gemini+Sarvam round-trips) ─
+    _cache_key = "tr:" + hashlib.md5(f"{_bare_lang}:{src[:1000]}".encode()).hexdigest()
+    _TRANSLATE_CACHE_TTL = 1800  # 30 minutes
+
+    def _tr_cache_store(result: str) -> str:
+        """Store result in Redis and return it unchanged."""
+        if result:
+            try:
+                if redis_client:
+                    redis_client.setex(_cache_key, _TRANSLATE_CACHE_TTL, result)
+            except Exception:
+                pass
+        return result
+
+    try:
+        if redis_client:
+            _cached = redis_client.get(_cache_key)
+            if _cached:
+                logger.debug("[INDIC-TRANSLATE] Redis cache hit for %r", src[:40])
+                return _cached if isinstance(_cached, str) else _cached.decode("utf-8", errors="replace")
+    except Exception:
+        pass  # cache miss — proceed normally
+
     # ── Step 1: Gemini main ─────────────────────────────────────────────
     gemini_out = ""
     try:
@@ -246,7 +269,7 @@ async def _assamese_translate_gemini_main_sarvam_polish(
     # ── Step 2: Sarvam polish (optional, best-effort) ───────────────────
     if len(gemini_out) < _POLISH_MIN_LEN:
         # Short fragment — skip polish, return Gemini output verbatim.
-        return gemini_out
+        return _tr_cache_store(gemini_out)
 
     # Read the live `sarvam_llm_client` attribute off the deps module so
     # tests that monkey-patch `deps.sarvam_llm_client = None` see the
@@ -254,7 +277,7 @@ async def _assamese_translate_gemini_main_sarvam_polish(
     _sarvam_chat = getattr(deps, "sarvam_llm_client", None)
     if _sarvam_chat is None:
         # No Sarvam client configured — return un-polished Gemini.
-        return gemini_out
+        return _tr_cache_store(gemini_out)
 
     try:
         polish_resp = await asyncio.wait_for(
@@ -288,7 +311,7 @@ async def _assamese_translate_gemini_main_sarvam_polish(
             if _polished.startswith(('"', "'", "“", "‘")) and _polished.endswith(('"', "'", "”", "’")):
                 _polished = _polished[1:-1].strip()
             if _polished:
-                return _polished
+                return _tr_cache_store(_polished)
             logger.info(
                 f"[INDIC-TRANSLATE] Sarvam polish returned empty body for "
                 f"{gemini_out[:60]!r} — using un-polished Gemini output"
@@ -309,7 +332,7 @@ async def _assamese_translate_gemini_main_sarvam_polish(
             f"({type(_pe).__name__}: {str(_pe)[:120]}) — using un-polished Gemini output"
         )
 
-    return gemini_out
+    return _tr_cache_store(gemini_out)
 
 
 router = APIRouter()

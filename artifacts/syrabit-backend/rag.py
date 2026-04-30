@@ -491,12 +491,19 @@ async def _fetch_internal_chapters(
         if subject_id:
             filters["subject_id"] = subject_id
 
+        # Pinecone reranking available → fetch wider candidate set so the
+        # reranker can surface the most semantically relevant chapters.
+        try:
+            from providers.pinecone_ai import ENABLED as _pinecone_enabled
+        except Exception:
+            _pinecone_enabled = False
+        fetch_limit = min(limit * 5, 20) if _pinecone_enabled else limit
+
         regex_pattern = "|".join(re.escape(kw) for kw in keywords[:6])
         filters["$or"] = [
             {"title": {"$regex": regex_pattern, "$options": "i"}},
             {"content": {"$regex": regex_pattern, "$options": "i"}},
         ]
-        fetch_limit = limit
         cursor = db.chapters.find(
             filters,
             {"_id": 0, "id": 1, "title": 1, "content": 1, "slug": 1, "subject_id": 1, "description": 1},
@@ -517,7 +524,30 @@ async def _fetch_internal_chapters(
                 "type": "chapter",
             })
 
-        candidates = candidates[:limit]
+        # ── Pinecone reranking ───────────────────────────────────────────────
+        # bge-reranker-v2-m3 is multilingual — handles Assamese queries too.
+        # Falls back silently to keyword order if Pinecone is unavailable.
+        if _pinecone_enabled and len(candidates) > 1:
+            try:
+                from providers.pinecone_ai import rerank_items as _pc_rerank
+                candidates = await asyncio.wait_for(
+                    _pc_rerank(
+                        query,
+                        candidates,
+                        lambda c: f"{c['title']}\n\n{c['content'][:800]}",
+                        top_k=limit,
+                    ),
+                    timeout=8.0,
+                )
+                logger.info(
+                    "[INTERNAL_RAG] Pinecone reranked → top %d for '%s'",
+                    len(candidates), query[:50],
+                )
+            except Exception as _rr_err:
+                logger.debug("[INTERNAL_RAG] Pinecone rerank skipped: %s", _rr_err)
+                candidates = candidates[:limit]
+        else:
+            candidates = candidates[:limit]
 
         # ── Apply total-char budget ──────────────────────────────────────────
         result = []
