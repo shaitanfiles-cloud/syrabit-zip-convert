@@ -2,18 +2,20 @@
 /**
  * nightly-smoke.js — Cloudflare zone-settings health check.
  *
- * Asserts that the zone settings applied in Cloudflare Phases 1, 2, 3, 4 & 5
- * (Tasks #105, #106, #107, #108, #109) still hold their target values.  Run
- * nightly in CI so any accidental dashboard revert surfaces overnight rather
- * than silently degrading cache hit rates, bot filtering, or email security.
+ * Asserts that the zone settings applied in Cloudflare Phases 1–6
+ * (Tasks #105–#110) still hold their target values.  Run nightly in CI so
+ * any accidental dashboard revert surfaces overnight rather than silently
+ * degrading cache hit rates, bot filtering, or email security.
  *
  * Required env:
  *   CLOUDFLARE_API_TOKEN  — Zone Settings: Read, Bot Management: Read,
  *                           DNS: Read, Logs: Read, Health Checks: Read,
  *                           Zero Trust: Read (Phase 3), Waiting Room: Read (Phase 3),
  *                           R2: Read (Phase 4), Cache: Read (Phase 4),
- *                           Workers: Read, Durable Objects: Read (Phase 5)
- *                           (Phase 2/3/4/5 checks degrade to warnings on token scope gap)
+ *                           Workers: Read, Durable Objects: Read (Phase 5),
+ *                           SSL and Certificates: Read, Zaraz: Read,
+ *                           Speed (Observatory): Read (Phase 6)
+ *                           (Phase 2–6 checks degrade to warnings on token scope gap)
  *   CLOUDFLARE_ZONE_ID    — syrabit.ai zone (5b8c97df4431491dc7f60ea72fb61871)
  *   CLOUDFLARE_ACCOUNT_ID — Syrabit account (d66e40eac539fff1db270fddf384a5ec)
  *
@@ -67,7 +69,7 @@ function warn(label, detail) {
 }
 
 async function main() {
-  console.log('Cloudflare nightly smoke — Phase 1, 2, 3, 4 & 5 checks');
+  console.log('Cloudflare nightly smoke — Phase 1, 2, 3, 4, 5 & 6 checks');
   console.log(`Zone: ${ZONE_ID}\n`);
 
   // ── Phase 1: Zone settings ────────────────────────────────────────────
@@ -369,6 +371,108 @@ async function main() {
     } catch (err) {
       warn('AE dataset write recency', `AE SQL fetch failed: ${err.message}`);
     }
+  }
+
+  // ── Phase 6: mTLS cert, Image Resizing, Zaraz GA4, Observatory ────────
+  // These resources are provisioned by cloudflare-phase6-apply.js.
+  // All checks degrade to warnings on token scope gaps (code 10000) or
+  // plan-restriction errors (code 1135) so CI doesn't block on new accounts.
+  console.log('\nPhase 6 — mTLS cert, Image Resizing, Zaraz GA4, Observatory:');
+
+  // 6a: mTLS client certificate for Railway origin
+  const mtlsCerts = await cfGetOrSkip(`/accounts/${ACCOUNT_ID}/mtls_certificates`);
+  if (!mtlsCerts) {
+    warn('mTLS client certificate',
+      'token lacks SSL and Certificates: Read — add scope to verify');
+  } else {
+    const railwayCert = (mtlsCerts.result || []).find(c => c.name === 'syrabit-railway-mtls');
+    if (!railwayCert) {
+      failures.push('mTLS certificate syrabit-railway-mtls (NOT FOUND)');
+      console.log('  ✗  mTLS certificate syrabit-railway-mtls: NOT FOUND — run cloudflare-phase6-apply.js');
+    } else {
+      const expiresOn    = new Date(railwayCert.expires_on);
+      const daysLeft     = Math.round((expiresOn - Date.now()) / 86400000);
+      const expiringSoon = daysLeft < 60;
+      const mark         = expiringSoon ? '⚠' : '✓';
+      console.log(`  ${mark}  mTLS cert syrabit-railway-mtls: id=${railwayCert.id} expires=${railwayCert.expires_on} (${daysLeft}d)`);
+      if (expiringSoon) {
+        warnings.push(`mTLS cert expires in ${daysLeft} days — renew via cloudflare-phase6-apply.js`);
+      }
+    }
+  }
+
+  // 6b: Image Resizing zone setting
+  // Use raw fetch (like Phase 4 Cache Reserve) so plan-restriction code 1135
+  // degrades to a warning rather than causing cfGetOrSkip to throw.
+  const imgResRaw  = await fetch(`${API}/zones/${ZONE_ID}/settings/image_resizing`, { headers });
+  const imgResJson = await imgResRaw.json();
+  if (!imgResJson.success) {
+    const code = imgResJson.errors?.[0]?.code;
+    if (code === 10000) {
+      warn('image_resizing zone setting', 'token lacks Zone Settings: Read — add scope to verify');
+    } else if (code === 1135) {
+      warn('image_resizing zone setting', 'not available on current plan — requires Image Resizing add-on');
+    } else {
+      failures.push(`image_resizing (error code ${code}: ${imgResJson.errors?.[0]?.message})`);
+      console.log(`  ✗  image_resizing: unexpected API error code ${code} — run cloudflare-phase6-apply.js`);
+    }
+  } else {
+    const val = imgResJson.result?.value;
+    if (val === 'on') {
+      console.log('  ✓  image_resizing: on');
+    } else {
+      failures.push(`image_resizing (value=${JSON.stringify(val)} — want: "on")`);
+      console.log(`  ✗  image_resizing: ${JSON.stringify(val)}  (want: "on") — run cloudflare-phase6-apply.js`);
+    }
+  }
+
+  // 6c: Zaraz GA4 tool configured
+  // Raw fetch — Zaraz may return non-10000 codes on plans without Zaraz.
+  const zarazRaw  = await fetch(`${API}/zones/${ZONE_ID}/zaraz/config`, { headers });
+  const zarazJson = await zarazRaw.json();
+  if (!zarazJson.success) {
+    const code = zarazJson.errors?.[0]?.code;
+    if (code === 10000) {
+      warn('Zaraz GA4 tool', 'token lacks Zaraz: Read — add scope or verify at dash.cloudflare.com → Zaraz');
+    } else {
+      warn('Zaraz GA4 tool', `Zaraz API error code ${code}: ${zarazJson.errors?.[0]?.message || JSON.stringify(zarazJson.errors)}`);
+    }
+  } else {
+    const tools   = zarazJson.result?.tools || {};
+    const ga4Tool = Object.values(tools).find(
+      t => t.type === 'GA4' || (t.name && t.name.toLowerCase().includes('ga4')),
+    );
+    if (!ga4Tool) {
+      failures.push('Zaraz GA4 tool (NOT FOUND)');
+      console.log('  ✗  Zaraz GA4 tool: NOT FOUND — run cloudflare-phase6-apply.js');
+    } else {
+      console.log(`  ✓  Zaraz GA4 tool: "${ga4Tool.name}" enabled=${ga4Tool.enabled}`);
+      assert('  Zaraz GA4 tool enabled', ga4Tool.enabled, true);
+    }
+  }
+
+  // 6d: Observatory scheduled run for homepage
+  // Raw fetch — Observatory may return 1135 on plans without Observatory access.
+  const obsRaw  = await fetch(
+    `${API}/zones/${ZONE_ID}/speed/schedule?url=${encodeURIComponent('https://syrabit.ai/')}`,
+    { headers },
+  );
+  const obsJson = await obsRaw.json();
+  if (!obsJson.success) {
+    const code = obsJson.errors?.[0]?.code;
+    if (code === 10000) {
+      warn('Observatory schedule (homepage)', 'token lacks Speed: Read — add scope or verify at dash.cloudflare.com → Speed → Observatory');
+    } else if (code === 1135) {
+      warn('Observatory schedule (homepage)', 'not available on current plan — requires Observatory access');
+    } else {
+      warn('Observatory schedule (homepage)', `Observatory API error code ${code}: ${obsJson.errors?.[0]?.message}`);
+    }
+  } else if (obsJson.result?.schedule) {
+    const freq = obsJson.result.schedule.frequency || 'unknown';
+    console.log(`  ✓  Observatory schedule for homepage: frequency=${freq}`);
+  } else {
+    failures.push('Observatory schedule for https://syrabit.ai/ (NOT FOUND)');
+    console.log('  ✗  Observatory schedule for homepage: NOT FOUND — run cloudflare-phase6-apply.js');
   }
 
   // ── Summary ────────────────────────────────────────────────────────────

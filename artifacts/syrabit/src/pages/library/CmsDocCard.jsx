@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import { Link } from 'react-router-dom';
 import { Clock, ArrowRight } from 'lucide-react';
+import { cdnImage } from '@/utils/imageCdn';
 
 const CmsDocCard = memo(function CmsDocCard({ doc }) {
   const tags = doc.seo_tags ? doc.seo_tags.split(',').map(t => t.trim()).filter(Boolean).slice(0, 3) : [];
@@ -16,7 +17,7 @@ const CmsDocCard = memo(function CmsDocCard({ doc }) {
     >
       {doc.thumbnail_url && (
         <div className="w-full aspect-video overflow-hidden">
-          <img src={doc.thumbnail_url} alt={doc.alt_text || doc.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" loading="lazy" width="400" height="225" />
+          <img src={cdnImage(doc.thumbnail_url, { width: 400, format: 'webp' })} alt={doc.alt_text || doc.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" loading="lazy" width="400" height="225" />
         </div>
       )}
       <div className="p-4 flex flex-col flex-1 gap-3">

@@ -4,14 +4,16 @@
  *
  * Read-only audit of syrabit.ai Cloudflare zone configuration.
  * Run before each annual review to surface gaps against the target state
- * established in Phase 1 (Task #105) and updated by later phases.
+ * established in Phase 1 (Task #105) and updated through Phase 6 (Task #110).
  *
  * Required env:
  *   CLOUDFLARE_API_TOKEN   — Zone Settings: Read, DNS: Read, Bot Management: Read,
  *                            Logs: Read (Phase 2 Logpush), Health Checks: Read,
  *                            R2: Read (Phase 2 + 4 buckets), Zero Trust: Read (Phase 3),
  *                            Waiting Room: Read (Phase 3), Cache: Read (Phase 4),
- *                            Workers: Read, Durable Objects: Read (Phase 5)
+ *                            Workers: Read, Durable Objects: Read (Phase 5),
+ *                            SSL and Certificates: Read, Zaraz: Read,
+ *                            Speed (Observatory): Read (Phase 6)
  *   CLOUDFLARE_ZONE_ID     — optional, defaults to syrabit.ai zone
  *   CLOUDFLARE_ACCOUNT_ID  — optional, defaults to Syrabit account
  *
@@ -364,6 +366,94 @@ async function main() {
   // 5c: CF_ANALYTICS_TOKEN — cannot be verified via API (secret); just note
   console.log('  ℹ  CF_ANALYTICS_TOKEN: verify via Workers dashboard → Settings → Variables');
   console.log('  ℹ    (required for /api/edge/analytics query route; set with wrangler secret put)');
+
+  // ── Phase 6: mTLS origin hardening, Zaraz, Image Resizing, Observatory ──
+  console.log('\n── Phase 6: mTLS, Zaraz GA4, Image Resizing, Observatory (Task #110) ──');
+  console.log('  Targets:');
+  console.log('    mTLS cert syrabit-railway-mtls — provisioned, non-expiring within 60 days');
+  console.log('    image_resizing: on              — CF Image Resizing enabled for /cdn-cgi/image/');
+  console.log('    Zaraz GA4 tool — enabled, server-side event forwarding');
+  console.log('    Observatory — weekly Lighthouse for homepage + chapter page');
+
+  // 6a: mTLS certificate
+  const mtlsCerts = await cfGet(`/accounts/${ACCOUNT_ID}/mtls_certificates`);
+  if (!mtlsCerts.success) {
+    const authErr = mtlsCerts.errors?.[0]?.code === 10000;
+    console.log(`  ?  mTLS certificates${authErr
+      ? '  [token lacks SSL and Certificates: Read — add scope]'
+      : ': ' + JSON.stringify(mtlsCerts.errors)}`);
+  } else {
+    const railwayCert = (mtlsCerts.result || []).find(c => c.name === 'syrabit-railway-mtls');
+    if (railwayCert) {
+      const expiresOn  = new Date(railwayCert.expires_on);
+      const daysLeft   = Math.round((expiresOn - Date.now()) / 86400000);
+      row('syrabit-railway-mtls exists', true, true,
+        `id=${railwayCert.id} expires=${railwayCert.expires_on} (${daysLeft}d)`);
+      if (daysLeft < 60) {
+        console.log('  ✗  WARN: certificate expires in < 60 days — renew via cloudflare-phase6-apply.js');
+      }
+    } else {
+      row('syrabit-railway-mtls', 'NOT FOUND', 'EXISTS', 'run cloudflare-phase6-apply.js');
+    }
+  }
+
+  // 6b: Image Resizing zone setting
+  const imgRes = await cfGet(`/zones/${ZONE_ID}/settings/image_resizing`);
+  if (!imgRes.success) {
+    const code = imgRes.errors?.[0]?.code;
+    if (code === 10000) {
+      console.log('  ?  image_resizing  [token lacks Zone Settings: Read]');
+    } else if (code === 1135) {
+      console.log('  ⚠  image_resizing: not available on current plan — requires Image Resizing add-on');
+    } else {
+      console.log(`  ?  image_resizing: ${JSON.stringify(imgRes.errors)}`);
+    }
+  } else {
+    row('image_resizing', imgRes.result.value, 'on',
+      imgRes.result.value !== 'on' ? 'run cloudflare-phase6-apply.js → Step 2' : '');
+  }
+
+  // 6c: Zaraz GA4 tool
+  const zaraz = await cfGet(`/zones/${ZONE_ID}/zaraz/config`);
+  if (!zaraz.success) {
+    const authErr = zaraz.errors?.[0]?.code === 10000;
+    console.log(`  ?  Zaraz config${authErr
+      ? '  [token lacks Zaraz: Read — add scope]'
+      : ': ' + JSON.stringify(zaraz.errors)}`);
+  } else {
+    const tools   = zaraz.result?.tools || {};
+    const ga4Tool = Object.values(tools).find(
+      t => t.type === 'GA4' || (t.name && t.name.toLowerCase().includes('ga4')),
+    );
+    if (ga4Tool) {
+      row('Zaraz GA4 tool exists', true, true,
+        `name="${ga4Tool.name}" enabled=${ga4Tool.enabled}`);
+      row('  Zaraz GA4 enabled', ga4Tool.enabled, true);
+    } else {
+      row('Zaraz GA4 tool', 'NOT FOUND', 'EXISTS', 'run cloudflare-phase6-apply.js → Step 3');
+    }
+  }
+
+  // 6d: Observatory scheduled runs
+  const obsHome = await cfGet(
+    `/zones/${ZONE_ID}/speed/schedule?url=${encodeURIComponent('https://syrabit.ai/')}`,
+  );
+  if (!obsHome.success) {
+    const code = obsHome.errors?.[0]?.code;
+    if (code === 10000) {
+      console.log('  ?  Observatory schedule  [token lacks Speed: Read]');
+    } else if (code === 1135) {
+      console.log('  ⚠  Observatory: not available on current plan');
+    } else {
+      console.log(`  ?  Observatory: ${JSON.stringify(obsHome.errors)}`);
+    }
+  } else if (obsHome.result?.schedule) {
+    row('Observatory homepage schedule', true, true,
+      `frequency=${obsHome.result.schedule.frequency || 'unknown'}`);
+  } else {
+    row('Observatory homepage schedule', 'NOT FOUND', 'EXISTS',
+      'run cloudflare-phase6-apply.js → Step 4');
+  }
 
   console.log('\n────────────────────────────────────────');
   console.log('Review complete.');

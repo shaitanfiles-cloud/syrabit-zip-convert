@@ -313,3 +313,29 @@ new_classes = ["RateLimiter"]
 #
 #   "0 */6 * * *" → 6-hourly D1 content sync from the Railway backend.
 crons = ["* * * * *", "0 */6 * * *"]
+
+# ---------------------------------------------------------------------------
+# Phase 6 (Task #110) — mTLS client certificate for Railway origin hardening.
+#
+# The `MTLS_CERT` binding presents a Cloudflare-issued client certificate on
+# every outbound TLS connection to the Railway backend.  Railway's mTLS policy
+# (configured separately) rejects connections that do not present this cert,
+# closing the bypass risk where a leaked BACKEND_ORIGIN_SECRET could be used
+# to hit the backend directly.  BACKEND_ORIGIN_SECRET is kept as belt-and-
+# suspenders; the cert is the primary enforcement mechanism.
+#
+# Provision steps (one-time — run once per certificate lifecycle, ~10 y):
+#   1. Issue the mTLS cert via cloudflare-phase6-apply.js:
+#        CLOUDFLARE_API_TOKEN=<tok> node artifacts/syrabit/scripts/cloudflare-phase6-apply.js
+#      The script calls POST /accounts/{id}/mtls_certificates, prints the
+#      certificate_id, and writes the private key to stdout.
+#   2. Store the private key as a wrangler secret:
+#        echo "<pem>" | wrangler secret put MTLS_PRIVATE_KEY --name syrabit-edge
+#   3. Fill in the certificate_id below and run `wrangler deploy`.
+#
+# certificate_id: replace the placeholder with the ID from step 1 above.
+#   Find it later at dash.cloudflare.com → SSL/TLS → Client Certificates.
+# ---------------------------------------------------------------------------
+[[mtls_certificates]]
+binding        = "MTLS_CERT"
+certificate_id = "REPLACE_WITH_MTLS_CERTIFICATE_ID"

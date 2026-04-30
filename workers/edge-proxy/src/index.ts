@@ -155,6 +155,16 @@ interface Env {
    * Set via: wrangler secret put CF_ANALYTICS_TOKEN
    */
   CF_ANALYTICS_TOKEN?: string;
+  /**
+   * Task #110 Phase 6 — mTLS client certificate binding for Railway origin.
+   * When bound, proxyToBackend() calls env.MTLS_CERT.fetch() instead of the
+   * global fetch() so Cloudflare automatically presents the client certificate
+   * on the TLS handshake with the Railway backend.
+   * Declared in wrangler.toml [[mtls_certificates]].
+   * Optional so the worker degrades gracefully in local dev / before the cert
+   * is issued (falls back to plain fetch, which still sends BACKEND_ORIGIN_SECRET).
+   */
+  MTLS_CERT?: { fetch(input: RequestInfo, init?: RequestInit): Promise<Response> };
 }
 
 const KV_BINDINGS = ["RATE_LIMIT", "BOT_HTML_CACHE"] as const;
@@ -737,14 +747,21 @@ async function proxyToBackend(
   const proxyHeaders = buildProxyHeaders(request, clientIp, env);
 
   try {
-    const backendResp = await fetch(backendUrl, {
+    // Phase 6 (Task #110): use the mTLS-bound fetcher when the certificate has
+    // been provisioned, so Cloudflare presents the client cert on every TLS
+    // handshake with the Railway origin.  Falls back to global fetch in local
+    // dev and before the certificate_id is filled in wrangler.toml.
+    const fetchInit = {
       method: request.method,
       headers: proxyHeaders,
       body:
         request.method !== "GET" && request.method !== "HEAD"
           ? request.body
           : undefined,
-    });
+    };
+    const backendResp = env.MTLS_CERT
+      ? await env.MTLS_CERT.fetch(backendUrl, fetchInit)
+      : await fetch(backendUrl, fetchInit);
 
     const respHeaders = new Headers(cors);
     for (const [key, value] of backendResp.headers.entries()) {
