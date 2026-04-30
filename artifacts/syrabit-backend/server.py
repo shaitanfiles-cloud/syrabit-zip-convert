@@ -691,6 +691,16 @@ async def lifespan(app):
             await db.classes.create_index("board_id")
             await db.chunks.create_index("chapter_id")
             await db.chunks.create_index("subject_id")
+
+            # Atlas Vector Search index — available on Flex tier (2026-04-30).
+            # Safe to call every boot: silently skips if already exists.
+            try:
+                from retrievers.mongodb_vector import ensure_vector_index as _ensure_vs
+                _vs_result = await _ensure_vs()
+                logger.info("Atlas Vector Search index check: %s", _vs_result)
+            except Exception as _vs_err:
+                logger.warning("Atlas Vector Search index ensure failed (non-blocking): %s", _vs_err)
+
             await db.analytics.create_index([("event_type", 1), ("timestamp", -1)])
             await db.analytics.create_index([("subject_id", 1), ("event_type", 1)])
             await db.analytics.create_index("user_id")

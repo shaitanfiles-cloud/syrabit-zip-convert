@@ -42,19 +42,21 @@ __all__ = [
     "get_hierarchy_cache", "set_hierarchy_cache",
 ]
 
-_ai_response_cache = cachetools.TTLCache(maxsize=1024, ttl=3600)
+_ai_response_cache = cachetools.TTLCache(maxsize=4096, ttl=7200)  # Flex/upgraded Redis: 4× larger, 2× longer
 
 # ── User Object Cache ─────────────────────────────────────────────────────────
-# Keyed by user_id, 120-second TTL — eliminates DB round-trip on every auth'd request
-_user_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=2000, ttl=600)
+# Keyed by user_id — eliminates DB round-trip on every auth'd request.
+# Flex tier: 5000 entries (up from 2000), 15-min TTL (up from 10-min).
+_user_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=5000, ttl=900)
 
 def _invalidate_user_cache(uid: str):
     _user_cache.pop(uid, None)
     _redis_del("session", uid)
 
 # ── Conversation Object Cache ──────────────────────────────────────────────────
-# Keyed by "conv_id:uid", 60-second TTL — avoids PG on every chat turn
-_conv_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=4000, ttl=600)
+# Keyed by "conv_id:uid" — avoids PG on every chat turn.
+# Flex tier: 10000 entries (up from 4000).
+_conv_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=10000, ttl=600)
 
 def _conv_cache_key(conv_id: str, uid: str) -> str:
     return f"{conv_id}:{uid}"
@@ -63,24 +65,29 @@ def _invalidate_conv_cache(conv_id: str, uid: str):
     _conv_cache.pop(_conv_cache_key(conv_id, uid), None)
 
 # ── RAG Result Cache ───────────────────────────────────────────────────────────
-# Keyed by (query_hash, subject_id), 600-second TTL — skips 3 MongoDB queries on repeat
-_rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=2048, ttl=900)
+# Keyed by (query_hash, subject_id) — skips 3 MongoDB queries on repeat.
+# Flex tier: 8192 entries (up from 2048), 30-min TTL (up from 15-min).
+_rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=8192, ttl=1800)
 
-# Vector RAG cache — 300-second TTL (Gemini embed API calls are expensive to re-run)
-_vector_rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=600)
+# Vector RAG cache — Workers AI embed API calls saved by keeping results longer.
+# Flex tier: 2048 entries (up from 512), 20-min TTL (up from 10-min).
+_vector_rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=2048, ttl=1200)
 
-# Query embedding cache — avoids repeated Gemini embed calls for the same/similar queries
-_query_embed_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=900)
+# Query embedding cache — avoids re-embedding the same queries.
+# Flex tier: 2048 entries (up from 512), 30-min TTL (up from 15-min).
+_query_embed_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=2048, ttl=1800)
 
-# Content card cache — 180-second TTL (avoids duplicate seo_pages + chapters queries)
-_content_card_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=600)
+# Content card cache — avoids duplicate seo_pages + chapters queries.
+# Flex tier: 2048 entries (up from 512), 15-min TTL (up from 10-min).
+_content_card_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=2048, ttl=900)
 
 def _content_card_cache_key(query: str, subject_id: Optional[str], subject_name: Optional[str], intent: Optional[str] = None, chapter_title: Optional[str] = None) -> str:
     raw = f"{query.strip().lower()}|{subject_id or ''}|{subject_name or ''}|{intent or ''}|{chapter_title or ''}"
     return hashlib.md5(raw.encode()).hexdigest()
 
-# Syllabus cache — 30-minute TTL; syllabi almost never change between requests
-_syllabus_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=256, ttl=3600)
+# Syllabus cache — syllabi almost never change; 1h TTL.
+# Flex tier: 1024 entries (up from 256).
+_syllabus_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=1024, ttl=3600)
 
 def _syllabus_cache_key(board_id: str, class_id: str, stream_id: Optional[str], subject_id: Optional[str] = None) -> str:
     return f"{board_id}|{class_id}|{stream_id or ''}|{subject_id or ''}"
@@ -93,7 +100,8 @@ def _vector_rag_cache_key(query: str, subject_id: Optional[str], top_k: int) -> 
     raw = f"{query.strip().lower()}|{subject_id or ''}|{top_k}"
     return hashlib.md5(raw.encode()).hexdigest()
 
-_embedding_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=1024, ttl=900)
+# Embedding cache — Flex tier: 4096 entries (up from 1024), 30-min TTL.
+_embedding_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=4096, ttl=1800)
 
 def _embedding_cache_key(text: str, task_type: str) -> str:
     raw = f"{text[:200].strip().lower()}|{task_type}"

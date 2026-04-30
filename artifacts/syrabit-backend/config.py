@@ -529,11 +529,13 @@ SARVAM_BASE_URL = 'https://api.sarvam.ai'
 # to in-process L1 only when these env vars are absent.
 REDIS_URL   = os.environ.get('UPSTASH_REDIS_REST_URL', '').strip()
 REDIS_TOKEN = os.environ.get('UPSTASH_REDIS_REST_TOKEN', '').strip()
-REDIS_AI_CACHE_TTL = int(os.environ.get('REDIS_AI_CACHE_TTL', '3600') or '3600')
-REDIS_CASUAL_CACHE_TTL = int(os.environ.get('REDIS_CASUAL_CACHE_TTL', '300') or '300')
-REDIS_CHAT_CACHE_TTL = 600
-REDIS_SEARCH_CACHE_TTL = 300
-REDIS_SESSION_CACHE_TTL = 1800
+# Upgraded Upstash tier (2026-04-30): longer TTLs — more capacity means more
+# aggressive caching benefits chat speed and repeat-query hit rate.
+REDIS_AI_CACHE_TTL     = int(os.environ.get('REDIS_AI_CACHE_TTL',     '7200') or '7200')   # 2h (was 1h)
+REDIS_CASUAL_CACHE_TTL = int(os.environ.get('REDIS_CASUAL_CACHE_TTL', '600')  or '600')    # 10m (was 5m)
+REDIS_CHAT_CACHE_TTL   = int(os.environ.get('REDIS_CHAT_CACHE_TTL',   '1200') or '1200')   # 20m (was 10m)
+REDIS_SEARCH_CACHE_TTL = 600   # 10m (was 5m)
+REDIS_SESSION_CACHE_TTL = 3600  # 1h (was 30m)
 REDIS_RATE_WINDOW = 60
 
 # ── Memorystore-backed AI response cache (Task #609) ────────────────────────
@@ -569,18 +571,46 @@ def _extract_redis_url(raw: str) -> str:
     return url
 
 
-# MEMORYSTORE_REDIS_URL intentionally pinned to empty (Cloudflare-native).
-# Cloudflare AI Gateway handles upstream LLM cache (cache_ttl=3600s).
-# Edge worker's RATE_LIMIT KV binding handles distributed rate limiting.
-# Per-worker L1 in-memory cache handles hot-path dedupe.
-# To re-enable a managed Redis L2 in the future (e.g. GCP Memorystore on
-# Cloud Run), restore the line below and ensure the secret is reachable:
-#   MEMORYSTORE_REDIS_URL = _extract_redis_url(os.environ.get('MEMORYSTORE_REDIS_URL', ''))
-MEMORYSTORE_REDIS_URL = ''
+# ── Upstash native-protocol L2 AI cache (enabled 2026-04-30) ────────────────
+# Upstash exposes a native Redis endpoint at rediss://default:TOKEN@HOST:6379
+# alongside the REST API. We derive it automatically from the REST credentials
+# already in env — no extra secret needed. This enables aioredis-based L2 so
+# the AI response cache is shared across all gunicorn workers (cross-worker
+# dedupe). With the upgraded Upstash plan this is safe to turn on:
+#   • Higher connection limits (native connections are separate from REST)
+#   • Larger data limit — 1 KB average AI answer × 10 000 entries < plan max
+#   • TLS is enforced automatically (rediss://)
+# Operators can override by setting MEMORYSTORE_REDIS_URL explicitly.
+def _build_upstash_native_url(rest_url: str, token: str) -> str:
+    """Derive native Redis URL from Upstash REST credentials.
+    REST URL example: https://eager-mouse-40471.upstash.io
+    Native URL:       rediss://default:TOKEN@eager-mouse-40471.upstash.io:6379
+    """
+    import re as _re
+    rest_url = (rest_url or '').strip()
+    token    = (token or '').strip()
+    if not rest_url or not token:
+        return ''
+    host = _re.sub(r'^https?://', '', rest_url).rstrip('/')
+    if not host:
+        return ''
+    return f'rediss://default:{token}@{host}:6379'
+
+_explicit_memstore = os.environ.get('MEMORYSTORE_REDIS_URL', '').strip()
+if _explicit_memstore:
+    MEMORYSTORE_REDIS_URL = _extract_redis_url(_explicit_memstore)
+else:
+    # Auto-derive from Upstash REST credentials (upgraded plan — safe to enable)
+    _rest_url = os.environ.get('UPSTASH_REDIS_REST_URL', '').strip()
+    _rest_tok = os.environ.get('UPSTASH_REDIS_REST_TOKEN', '').strip()
+    MEMORYSTORE_REDIS_URL = _build_upstash_native_url(_rest_url, _rest_tok)
+
 REDIS_AI_CACHE_NAMESPACE = (os.environ.get('REDIS_AI_CACHE_NAMESPACE', 'ai_cache').strip() or 'ai_cache')
-REDIS_AI_CACHE_MAX_ENTRY_BYTES = int(os.environ.get('REDIS_AI_CACHE_MAX_ENTRY_BYTES', str(64 * 1024)) or 64 * 1024)
-REDIS_AI_CACHE_CONNECT_TIMEOUT_MS = int(os.environ.get('REDIS_AI_CACHE_CONNECT_TIMEOUT_MS', '200') or '200')
-REDIS_AI_CACHE_OP_TIMEOUT_MS = int(os.environ.get('REDIS_AI_CACHE_OP_TIMEOUT_MS', '150') or '150')
+# Upgraded plan: allow larger cached entries (128 KB vs 64 KB).
+REDIS_AI_CACHE_MAX_ENTRY_BYTES = int(os.environ.get('REDIS_AI_CACHE_MAX_ENTRY_BYTES', str(128 * 1024)) or 128 * 1024)
+# Slightly more generous timeouts since Upstash upgraded tier has lower p99.
+REDIS_AI_CACHE_CONNECT_TIMEOUT_MS = int(os.environ.get('REDIS_AI_CACHE_CONNECT_TIMEOUT_MS', '300') or '300')
+REDIS_AI_CACHE_OP_TIMEOUT_MS = int(os.environ.get('REDIS_AI_CACHE_OP_TIMEOUT_MS', '200') or '200')
 
 # ── Slow-query logging ────────────────────────────────────────────────────────
 SLOW_QUERY_THRESHOLD_MS = float(os.environ.get("SLOW_QUERY_THRESHOLD_MS", "200"))
