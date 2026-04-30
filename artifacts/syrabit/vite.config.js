@@ -469,10 +469,23 @@ function cfAnalyticsPlugin() {
 // defined — the analytics call sites in src/utils/{usePageTracking,
 // webVitals}.js already gate on `typeof window.gtag === 'function'`
 // so they no-op cleanly without throwing.
+//
+// Phase 6 (Task #110): VITE_GA4_ID MUST NOT be set in production.
+// Analytics are handled server-side by Cloudflare Zaraz. Setting
+// VITE_GA4_ID in the production build CI env will cause this plugin to
+// throw a hard build error so the error is caught before it reaches users.
 const GA4_ID_RE = /^G-[A-Z0-9]{6,12}$/;
 function ga4Plugin() {
   const raw = (process.env.VITE_GA4_ID || '').trim();
   const id = GA4_ID_RE.test(raw) ? raw : '';
+  // Phase 6: fail the production build if GA4 ID is set — Zaraz handles it.
+  if (id && isProd) {
+    throw new Error(
+      `[ga4] VITE_GA4_ID is set in a production build. ` +
+      `Phase 6 disables client-side GA4 in favour of Cloudflare Zaraz server-side tracking. ` +
+      `Remove VITE_GA4_ID from the production CI environment and re-run the build.`
+    );
+  }
   return {
     name: 'syrabit-ga4',
     transformIndexHtml(html) {

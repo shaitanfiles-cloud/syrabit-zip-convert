@@ -165,6 +165,15 @@ interface Env {
    * is issued (falls back to plain fetch, which still sends BACKEND_ORIGIN_SECRET).
    */
   MTLS_CERT?: { fetch(input: RequestInfo, init?: RequestInit): Promise<Response> };
+  /**
+   * Task #110 Phase 6 — mTLS enforcement gate.
+   * Set to "true" (via `wrangler secret put MTLS_REQUIRED`) once the mTLS cert
+   * has been provisioned AND Railway has been configured to require it.
+   * When "true" and MTLS_CERT is not bound, proxyToBackend() returns a 503
+   * instead of falling back to plain fetch — closes the insecure bypass path.
+   * Leave unset (or "false") in local dev and before the cert is active.
+   */
+  MTLS_REQUIRED?: string;
 }
 
 const KV_BINDINGS = ["RATE_LIMIT", "BOT_HTML_CACHE"] as const;
@@ -749,8 +758,24 @@ async function proxyToBackend(
   try {
     // Phase 6 (Task #110): use the mTLS-bound fetcher when the certificate has
     // been provisioned, so Cloudflare presents the client cert on every TLS
-    // handshake with the Railway origin.  Falls back to global fetch in local
-    // dev and before the certificate_id is filled in wrangler.toml.
+    // handshake with the Railway origin.
+    //
+    // MTLS_REQUIRED="true" → fail-closed: returns 503 if the binding is absent
+    //   (prevents an insecure fallback to plain fetch in production).
+    //   Set via: wrangler secret put MTLS_REQUIRED   (value: true)
+    //   Only set this AFTER provisioning the cert AND configuring Railway mTLS.
+    //
+    // MTLS_REQUIRED unset / "false" → fail-open: falls back to global fetch so
+    //   local dev and pre-cert deploy still work.  BACKEND_ORIGIN_SECRET still
+    //   provides the belt-and-suspenders auth check on every request.
+    if (env.MTLS_REQUIRED === "true" && !env.MTLS_CERT) {
+      console.error("[mTLS] MTLS_REQUIRED=true but MTLS_CERT binding is absent — refusing request to prevent insecure bypass");
+      return new Response(
+        JSON.stringify({ error: "mTLS enforcement active: cert binding missing — deploy with [[mtls_certificates]] uncommented in wrangler.toml" }),
+        { status: 503, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
     const fetchInit = {
       method: request.method,
       headers: proxyHeaders,
