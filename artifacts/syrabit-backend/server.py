@@ -1781,8 +1781,10 @@ async def healthz_ai():
     import vertex_health_cache
     code, body = vertex_health_cache.healthz_ai_response()
     try:
-        from llm import get_workers_ai_429_burst
-        body["workers_ai_429_burst_60s"] = get_workers_ai_429_burst(60)
+        from llm import get_workers_ai_429_burst, get_workers_ai_429_burst_inprocess
+        # burst_60s: in-process timestamp list (always exact 60s window, this worker only)
+        # burst_180s: Redis counter (cross-worker, 180s TTL) with in-process fallback
+        body["workers_ai_429_burst_60s"] = get_workers_ai_429_burst_inprocess(60)
         body["workers_ai_429_burst_180s"] = get_workers_ai_429_burst(180)
     except Exception:
         pass

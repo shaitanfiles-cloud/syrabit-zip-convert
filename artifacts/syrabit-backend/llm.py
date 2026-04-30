@@ -123,8 +123,12 @@ def get_workers_ai_429_burst(window_seconds: int = _WORKERS_AI_429_WINDOW_S) -> 
     Redis is the primary source (cross-worker, TTL-backed). Falls back to the
     in-process sliding window when Redis is unavailable.
 
-    The default window (180s) is intentionally larger than the 120s alerting
-    loop interval so a burst near a tick boundary is never missed.
+    NOTE: when Redis is available the *window_seconds* parameter is ignored —
+    Redis stores a single cumulative counter with a fixed TTL of
+    ``_WORKERS_AI_429_WINDOW_S`` (180 s). The parameter only controls the
+    timestamp cutoff applied to the in-process fallback list.  Use
+    ``get_workers_ai_429_burst_inprocess()`` when you need an accurate short
+    window (e.g. 60 s) that is always timestamp-filtered.
     """
     try:
         from deps import redis_client as _rc
@@ -134,8 +138,19 @@ def get_workers_ai_429_burst(window_seconds: int = _WORKERS_AI_429_WINDOW_S) -> 
                 return int(val)
     except Exception:
         pass
-    now = time.time()
-    cutoff = now - window_seconds
+    return get_workers_ai_429_burst_inprocess(window_seconds)
+
+
+def get_workers_ai_429_burst_inprocess(window_seconds: int = 60) -> int:
+    """Return the number of Workers AI 429s in the last *window_seconds*
+    using only the in-process timestamp list.
+
+    Unlike ``get_workers_ai_429_burst``, this function always applies the
+    exact time window to per-timestamp entries, regardless of Redis
+    availability.  Use this for short windows (e.g. 60 s) where the Redis
+    cumulative counter would be too coarse.
+    """
+    cutoff = time.time() - window_seconds
     return sum(1 for t in _WORKERS_AI_429_WINDOW if t > cutoff)
 
 

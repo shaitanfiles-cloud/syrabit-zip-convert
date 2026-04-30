@@ -4744,7 +4744,10 @@ async def admin_dashboard_metrics(admin: dict = Depends(get_admin_user)):
         _wai_threshold = 5
         try:
             from llm import get_workers_ai_429_burst as _get_wai_burst
-            _wai_burst_60 = _get_wai_burst(60)
+            from llm import get_workers_ai_429_burst_inprocess as _get_wai_burst_ip
+            # burst_60s: in-process timestamps (exact 60s, single-worker)
+            # burst_180s: Redis counter (cross-worker, 180s TTL) with in-process fallback
+            _wai_burst_60 = _get_wai_burst_ip(60)
             _wai_burst_180 = _get_wai_burst(180)
         except Exception:
             pass
