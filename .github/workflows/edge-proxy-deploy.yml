@@ -176,6 +176,16 @@ jobs:
       - name: Install workspace deps (resolves wrangler from the lockfile)
         run: pnpm --filter syrabit-edge install --frozen-lockfile
 
+      - name: Inject mTLS certificate ID into wrangler.toml (Phase 6 gate)
+        # Task #110: replaces the sentinel "PENDING_CERT_PROVISIONING" in
+        # [[mtls_certificates]].certificate_id with the real UUID from the
+        # CF_MTLS_CERT_ID repo secret.  Exits 1 (aborts deploy) when the
+        # secret is absent so the mTLS binding is NEVER silently skipped.
+        # See workers/edge-proxy/scripts/inject-mtls-cert-id.js for details.
+        env:
+          CF_MTLS_CERT_ID: ${{ secrets.CF_MTLS_CERT_ID }}
+        run: node workers/edge-proxy/scripts/inject-mtls-cert-id.js
+
       - name: wrangler deploy --env preview
         run: pnpm --filter syrabit-edge run deploy:preview
 
@@ -323,6 +333,14 @@ jobs:
 
       - name: Install workspace deps (frozen lockfile)
         run: pnpm --filter syrabit-edge install --frozen-lockfile
+
+      - name: Inject mTLS certificate ID into wrangler.toml (Phase 6 gate)
+        # Task #110: same gate as the preview deploy — must pass before prod
+        # wrangler deploy runs. Uses the production environment's CF_MTLS_CERT_ID
+        # secret so the mTLS binding is active in every production deploy.
+        env:
+          CF_MTLS_CERT_ID: ${{ secrets.CF_MTLS_CERT_ID }}
+        run: node workers/edge-proxy/scripts/inject-mtls-cert-id.js
 
       - name: wrangler deploy (prod)
         run: pnpm --filter syrabit-edge run deploy

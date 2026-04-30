@@ -621,6 +621,19 @@ async function auditItem19ZarazAndObservatory() {
         'add admin@syrabit.ai as email recipient via dash.cloudflare.com → Notifications → Policies');
       return;
     }
+    // Assert Core Web Vitals threshold values match the required values:
+    //   LCP > 2500 ms, CLS > 0.1, INP > 200 ms
+    const c = speedAlert.conditions || {};
+    const lcpOk = c.lcp && c.lcp.operator === 'greater_than' && Number(c.lcp.value) === 2500;
+    const clsOk = c.cls && c.cls.operator === 'greater_than' && Number(c.cls.value) === 0.1;
+    const inpOk = c.inp && c.inp.operator === 'greater_than' && Number(c.inp.value) === 200;
+    if (!lcpOk || !clsOk || !inpOk) {
+      const got = `lcp=${JSON.stringify(c.lcp||'unset')}, cls=${JSON.stringify(c.cls||'unset')}, inp=${JSON.stringify(c.inp||'unset')}`;
+      fail(19, 6, 'Zaraz GA4 + Observatory',
+        `Observatory alert thresholds wrong: ${got}`,
+        'expected lcp>2500 ms, cls>0.1, inp>200 ms — re-run cloudflare-phase6-apply.js step 4b');
+      return;
+    }
     alertOk = true;
   }
 

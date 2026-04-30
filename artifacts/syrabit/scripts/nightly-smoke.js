@@ -478,6 +478,27 @@ async function main() {
         warnings.push('Observatory alert policy has no email recipient — add admin@syrabit.ai via dashboard');
         console.log('  ⚠  Observatory alert policy: no email recipient configured');
       }
+      // Assert Core Web Vitals threshold values are set correctly.
+      // cloudflare-phase6-apply.js creates: lcp>2500 ms, cls>0.1, inp>200 ms.
+      const c = speedAlert.conditions || {};
+      const lcpOk  = c.lcp  && c.lcp.operator === 'greater_than'  && Number(c.lcp.value)  === 2500;
+      const clsOk  = c.cls  && c.cls.operator === 'greater_than'  && Number(c.cls.value)  === 0.1;
+      const inpOk  = c.inp  && c.inp.operator === 'greater_than'  && Number(c.inp.value)  === 200;
+      if (!lcpOk) {
+        warnings.push(`Observatory alert LCP threshold: expected >2500 ms, got ${JSON.stringify(c.lcp || 'unset')}`);
+        console.log(`  ⚠  Observatory LCP threshold: expected >2500 ms, got ${JSON.stringify(c.lcp || 'unset')}`);
+      }
+      if (!clsOk) {
+        warnings.push(`Observatory alert CLS threshold: expected >0.1, got ${JSON.stringify(c.cls || 'unset')}`);
+        console.log(`  ⚠  Observatory CLS threshold: expected >0.1, got ${JSON.stringify(c.cls || 'unset')}`);
+      }
+      if (!inpOk) {
+        warnings.push(`Observatory alert INP threshold: expected >200 ms, got ${JSON.stringify(c.inp || 'unset')}`);
+        console.log(`  ⚠  Observatory INP threshold: expected >200 ms, got ${JSON.stringify(c.inp || 'unset')}`);
+      }
+      if (lcpOk && clsOk && inpOk) {
+        console.log('  ✓  Observatory alert thresholds: LCP>2500 ms, CLS>0.1, INP>200 ms — correct');
+      }
     }
   }
 

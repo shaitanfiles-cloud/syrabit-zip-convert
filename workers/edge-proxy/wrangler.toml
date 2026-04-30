@@ -324,36 +324,33 @@ crons = ["* * * * *", "0 */6 * * *"]
 # to hit the backend directly.  BACKEND_ORIGIN_SECRET is kept as belt-and-
 # suspenders; the cert is the primary enforcement mechanism.
 #
-# Provision steps (one-time — run once per certificate lifecycle, ~10 y):
-#   1. Issue the mTLS cert via cloudflare-phase6-apply.js:
-#        CLOUDFLARE_API_TOKEN=<tok> node artifacts/syrabit/scripts/cloudflare-phase6-apply.js
-#      The script calls POST /accounts/{id}/mtls_certificates, prints the
-#      certificate_id, and writes the private key to stdout.
+# DEPLOYMENT GATE: The CI pre-deploy step in edge-proxy-deploy.yml calls
+# `node workers/edge-proxy/scripts/inject-mtls-cert-id.js` which reads
+# CF_MTLS_CERT_ID from the CI environment and rewrites the sentinel value
+# "PENDING_CERT_PROVISIONING" below with the real UUID before wrangler runs.
+# If CF_MTLS_CERT_ID is absent, the script exits 1 and the deploy is aborted.
+# This means the binding is ALWAYS present in deployable config, but the worker
+# silently falls back to plain fetch (MTLS_REQUIRED gate) until the cert UUID
+# is supplied. Never commit a real cert UUID to source — store it as a secret.
+#
+# HOW TO PROVISION (one-time, ~10-year lifecycle):
+#   1. Issue the cert:
+#        CLOUDFLARE_API_TOKEN=<tok> \
+#          node artifacts/syrabit/scripts/cloudflare-phase6-apply.js
+#      Prints the certificate_id UUID.
 #   2. Store the private key as a wrangler secret:
 #        echo "<pem>" | wrangler secret put MTLS_PRIVATE_KEY --name syrabit-edge
-#   3. Fill in the certificate_id below and run `wrangler deploy`.
-#
-# certificate_id: replace the placeholder with the ID from step 1 above.
-#   Find it later at dash.cloudflare.com → SSL/TLS → Client Certificates.
+#   3. Add CF_MTLS_CERT_ID to GitHub repo secrets (Settings → Secrets → Actions):
+#        CF_MTLS_CERT_ID = <uuid-from-step-1>
+#      The next push to master/main triggers edge-proxy-deploy.yml which injects
+#      the UUID into this block and calls wrangler deploy — binding goes live.
+#   4. Configure Railway to require the cert (Railway → Service → mTLS).
+#   5. Flip the fail-closed gate AFTER Railway requires the cert:
+#        wrangler secret put MTLS_REQUIRED --name syrabit-edge  (value: true)
+#      MTLS_REQUIRED=true makes proxyToBackend() return 503 if MTLS_CERT is
+#      absent, preventing any insecure plain-fetch bypass.
 # ---------------------------------------------------------------------------
-# [[mtls_certificates]]                           ← UNCOMMENT after provisioning
-# binding        = "MTLS_CERT"
-# certificate_id = "<id-from-cloudflare-phase6-apply.js>"
-#
-# Full mTLS activation checklist (one-time — run once per cert lifecycle ~10 y):
-#   1. Issue the cert:
-#        CLOUDFLARE_API_TOKEN=<tok> GA4_MEASUREMENT_ID=G-XXXXXXX \
-#          node artifacts/syrabit/scripts/cloudflare-phase6-apply.js
-#   2. Store the private key:
-#        echo "<pem>" | wrangler secret put MTLS_PRIVATE_KEY --name syrabit-edge
-#   3. Uncomment the three [[mtls_certificates]] lines above.
-#      Replace certificate_id with the UUID printed by step 1.
-#   4. Deploy the updated binding:
-#        cd workers/edge-proxy && wrangler deploy
-#   5. Configure Railway to require the Cloudflare client certificate
-#      (Railway → Service → Settings → mTLS).
-#   6. Flip the fail-closed gate (after verifying Railway accepts the cert):
-#        wrangler secret put MTLS_REQUIRED --name syrabit-edge
-#        (enter: true)
-#   ℹ  MTLS_REQUIRED=true causes proxyToBackend() to return 503 when MTLS_CERT
-#      is absent — prevents insecure fallback to plain fetch in production.
+
+[[mtls_certificates]]
+binding        = "MTLS_CERT"
+certificate_id = "PENDING_CERT_PROVISIONING"
