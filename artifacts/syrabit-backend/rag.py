@@ -484,15 +484,18 @@ async def _fetch_internal_chapters(
         if not keywords:
             return []
         filters: dict = {"status": "published"}
+        # Use subject_id when explicitly provided (production calls pass this).
+        # Do NOT filter by subject_name alone — the AHSEC subject stubs (sub1, sub2 …)
+        # have no content yet; filtering to them returns zero results. The UUID-based
+        # CMS chapters carry the actual indexed text.
         if subject_id:
             filters["subject_id"] = subject_id
+
         regex_pattern = "|".join(re.escape(kw) for kw in keywords[:6])
         filters["$or"] = [
             {"title": {"$regex": regex_pattern, "$options": "i"}},
             {"content": {"$regex": regex_pattern, "$options": "i"}},
         ]
-        # Reranking disabled — fetch exactly the limit needed.
-        _rerank_enabled = False
         fetch_limit = limit
         cursor = db.chapters.find(
             filters,
