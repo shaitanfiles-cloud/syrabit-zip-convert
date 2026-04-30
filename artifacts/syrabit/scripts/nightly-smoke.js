@@ -117,22 +117,37 @@ async function main() {
       'token lacks Logs: Read — add the scope to CLOUDFLARE_API_TOKEN and run ' +
       'cloudflare-phase2-apply.js to create the jobs');
   } else {
-    const httpJob  = lp.result.find(j => j.name === 'syrabit-http-requests');
+    const httpJob     = lp.result.find(j => j.name === 'syrabit-http-requests');
     const firewallJob = lp.result.find(j => j.name === 'syrabit-firewall-events');
 
-    if (!httpJob) {
-      failures.push('Logpush job syrabit-http-requests (NOT FOUND)');
-      console.log('  ✗  Logpush job syrabit-http-requests: NOT FOUND — run cloudflare-phase2-apply.js');
-    } else {
-      assert('syrabit-http-requests enabled', httpJob.enabled, true);
+    function assertJobHealthy(job, label) {
+      if (!job) {
+        failures.push(`Logpush job ${label} (NOT FOUND)`);
+        console.log(`  ✗  Logpush job ${label}: NOT FOUND — run cloudflare-phase2-apply.js`);
+        return;
+      }
+      assert(`${label} enabled`,        job.enabled,       true);
+      assert(`${label} error_message`,   job.error_message || null, null);
+      // last_complete: non-null means at least one batch has been pushed successfully.
+      // A freshly-created job will show null until its first 5-min window closes — that
+      // is acceptable and does NOT indicate degradation.
+      // Staleness threshold: 4 hours. Logpush batches every 5 min, so >4 h with no
+      // push means 48+ consecutive missed windows — a clear signal of degradation.
+      // (The nightly CI runs at 02:00 UTC; 4 h covers the lowest-traffic window.)
+      if (job.last_complete) {
+        const ageMs   = Date.now() - new Date(job.last_complete).getTime();
+        const ageMins = Math.round(ageMs / 60000);
+        const stale   = ageMs > 4 * 60 * 60 * 1000;    // 4 hours
+        const mark    = stale ? '✗' : '✓';
+        console.log(`  ${mark}  ${label} last_complete: ${ageMins} min ago${stale ? '  (want: <240 min)' : ''}`);
+        if (stale) failures.push(`${label} last_complete stale (${ageMins} min — no push in >4 h)`);
+      } else {
+        console.log(`  ─  ${label} last_complete: null (job newly created — not yet stale)`);
+      }
     }
 
-    if (!firewallJob) {
-      failures.push('Logpush job syrabit-firewall-events (NOT FOUND)');
-      console.log('  ✗  Logpush job syrabit-firewall-events: NOT FOUND — run cloudflare-phase2-apply.js');
-    } else {
-      assert('syrabit-firewall-events enabled', firewallJob.enabled, true);
-    }
+    assertJobHealthy(httpJob,     'syrabit-http-requests');
+    assertJobHealthy(firewallJob, 'syrabit-firewall-events');
   }
 
   // ── Phase 2: Healthcheck ──────────────────────────────────────────────

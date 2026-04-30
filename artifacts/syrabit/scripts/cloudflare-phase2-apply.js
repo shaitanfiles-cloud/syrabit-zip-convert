@@ -88,6 +88,10 @@ async function ensureR2Bucket() {
 }
 
 // ── Step 2: Logpush jobs ──────────────────────────────────────────────────
+// Output format: ndjson (newline-delimited JSON), rfc3339 timestamps.
+// Compression: Cloudflare automatically gzip-compresses files pushed to R2
+// (destination paths end in .gz) — no extra flag needed.
+// Frequency "low" = 5-minute batches (Cloudflare's smallest standard batch interval).
 async function ensureLogpushJob(name, dataset, fields, prefix) {
   const destinationConf = `r2://${BUCKET}/${prefix}/{DATE}?account-id=${ACCOUNT_ID}`;
   const logpullOptions  = `fields=${fields.join(',')}&timestamps=rfc3339&CVE-2021-44228=true`;
@@ -119,12 +123,19 @@ async function ensureLogpushJob(name, dataset, fields, prefix) {
 
   const create = await cfReq('POST', `/zones/${ZONE_ID}/logpush/jobs`, {
     name,
-    destination_conf:  destinationConf,
+    destination_conf: destinationConf,
     dataset,
-    logpull_options:   logpullOptions,
-    frequency:         'low',   // 5-minute batches
-    output_options:    { field_delimiter: ',', record_delimiter: '\n', batch_size: 5000 },
-    enabled:           true,
+    logpull_options:  logpullOptions,
+    frequency:        'low',    // 5-minute batches (Cloudflare's "low" frequency)
+    // output_type "ndjson" = newline-delimited JSON (one record per line).
+    // R2 destination automatically stores output as gzip-compressed files
+    // (the pushed objects have a .gz suffix).
+    output_options: {
+      output_type:      'ndjson',
+      timestamp_format: 'rfc3339',
+      sample_rate:      1,        // 100% of requests — do not sample
+    },
+    enabled: true,
   });
 
   if (create.success) {
@@ -242,17 +253,26 @@ async function main() {
   await ensureR2Bucket();
 
   // Step 2: Logpush — http_requests
+  // Field name mapping (task spec → actual CF API field name, verified via
+  //   GET /accounts/{id}/logpush/datasets/http_requests/fields):
+  //   CacheStatus      → CacheCacheStatus  (CF Enterprise schema uses compound name)
+  //   WAFAction        → SecurityAction    (unified action field across WAF rule types)
+  //   BotScore         → (not available in http_requests dataset; VerifiedBotCategory used instead)
+  //   ClientCountryName→ ClientCountry     (two-letter ISO code; no full-name variant available)
   console.log('\nStep 2a: Logpush — http_requests');
   await ensureLogpushJob(
     'syrabit-http-requests',
     'http_requests',
     [
       'ClientRequestURI', 'ClientRequestMethod', 'ClientRequestHost',
-      'EdgeResponseStatus', 'CacheCacheStatus',
-      'SecurityAction', 'WAFAttackScore',
-      'ClientCountry', 'ClientASN',
+      'EdgeResponseStatus',
+      'CacheCacheStatus',     // spec: CacheStatus
+      'SecurityAction',       // spec: WAFAction
+      'WAFAttackScore',
+      'ClientCountry',        // spec: ClientCountryName (two-letter ISO; full name not available)
+      'ClientASN',
       'EdgeStartTimestamp', 'OriginResponseTime',
-      'VerifiedBotCategory',
+      'VerifiedBotCategory',  // spec: BotScore (raw score not in dataset; category used instead)
       'ClientIP', 'RayID',
     ],
     'http-requests',
