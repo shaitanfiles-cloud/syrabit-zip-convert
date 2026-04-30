@@ -11,7 +11,7 @@ import { ThinkingIndicator } from './ThinkingIndicator';
 
 const MarkdownContent = lazy(() => import('./MarkdownContent').then(m => ({ default: m.MarkdownContent })));
 
-export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, isLast, messageIndex, conversationId, responseLang }) {
+export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, isLast, messageIndex, conversationId, responseLang, subject, scopedChapters }) {
   const [copied, setCopied] = useState(false);
   const [reaction, setReaction] = useState(null);
   const [showComment, setShowComment] = useState(false);
@@ -158,7 +158,9 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
             <span className="text-xs font-semibold text-foreground/70">Syrabit AI</span>
           </div>
           <div className="w-full" style={msg.streaming ? { willChange: 'contents', contain: 'layout style' } : undefined}>
-            {msg.streaming && !msg.content && !msg.translating && <ThinkingIndicator />}
+            {msg.streaming && !msg.content && !msg.translating && (
+              <ThinkingIndicator subject={subject} scopedChapters={scopedChapters} />
+            )}
             {msg.translating && !msg.content && (
               <div className="flex items-center gap-2 py-2 text-sm text-muted-foreground animate-pulse">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>

@@ -619,7 +619,7 @@ export default function ChatPage() {
                 messages.forEach((msg, i) => {
                   out.push(
                     <div key={msg.id || i} ref={i === lastUIdx ? lastUserMsgRef : undefined}>
-                      <MessageBubble msg={msg} isLast={i === messages.length - 1} onCopy={handleCopy} onRegenerate={msg.role === 'assistant' && i === messages.length - 1 ? handleRegenerate : null} messageIndex={i} conversationId={conversationId} responseLang={responseLang} />
+                      <MessageBubble msg={msg} isLast={i === messages.length - 1} onCopy={handleCopy} onRegenerate={msg.role === 'assistant' && i === messages.length - 1 ? handleRegenerate : null} messageIndex={i} conversationId={conversationId} responseLang={responseLang} subject={subject} scopedChapters={scopedChapters} />
                     </div>
                   );
                 });
