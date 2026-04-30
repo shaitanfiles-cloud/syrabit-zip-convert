@@ -26,6 +26,11 @@ name: admin-smoke
 #             sees exactly one Playwright job (all-tests.yml) while still
 #             running the admin/study/payment smoke suite off-hours to catch
 #             environment-level regressions that aren't tied to a specific PR.
+# Task #80  — Second job `cf-network-checks` runs check-http3-early-hints.sh
+#             nightly so a silent Cloudflare configuration rollback (HTTP/3 or
+#             Early Hints toggled off) is caught within 24 hours. Runs in
+#             parallel with the Playwright job — needs no Node/pnpm setup
+#             because curl is pre-installed on ubuntu-latest.
 #
 # Nightly smoke: 02:00 UTC every day.  Can also be triggered manually
 # via workflow_dispatch for on-demand checks.
@@ -88,3 +93,25 @@ jobs:
             artifacts/syrabit/test-results/
           if-no-files-found: ignore
           retention-days: 7
+
+  # Task #80 — HTTP/3 + Early Hints live check.
+  # Runs in parallel with the Playwright job (no `needs:` dependency).
+  # Only curl is required; ubuntu-latest pre-installs it.  If curl on the
+  # runner is built without QUIC support (Ubuntu 22.04 default), the script
+  # falls back to alt-svc header inspection for the HTTP/3 assertion and
+  # still checks the Link: rel=preload header for the Early Hints assertion.
+  # A non-zero exit from the script marks the job — and therefore the
+  # workflow — as failed, which wires into the existing smoke-run alerting.
+  cf-network-checks:
+    name: HTTP/3 + Early Hints live check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: HTTP/3 + Early Hints check (syrabit.ai)
+        run: bash artifacts/syrabit/scripts/check-http3-early-hints.sh
