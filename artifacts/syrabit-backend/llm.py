@@ -552,9 +552,11 @@ def _parse_rpm_limit(env_var: str, default: int) -> int:
 # NOTE: Workers AI embedding (@cf/baai/bge-large-en-v1.5) gets separate
 #   429s in production but is NOT rate-limited by this pool — it goes
 #   through vertex_services._workers_ai_primary_embed() which has its own
-#   retry path.  Embedding rate-limit tracking is out of scope here; those
-#   429s are from the CF free-tier embedding model limit (~50 RPM), not the
-#   3 000 RPM LLM limit.
+#   cooldown path.  Embedding 429 burst tracking lives in vertex_services
+#   (_track_embed_429/ get_embed_429_burst) and is exposed via
+#   GET /admin/llm/pool-stats (embed_429_burst, embed_cooldown_active).
+#   Those 429s are from the CF free-tier embedding model limit (~50 RPM),
+#   not the 3 000 RPM LLM limit.
 _POOL_RPM_LIMITS = {
     "workers-ai": _parse_rpm_limit("WORKERS_AI_RPM_LIMIT", 3000),
     "groq":        _parse_rpm_limit("GROQ_RPM_LIMIT",         30),

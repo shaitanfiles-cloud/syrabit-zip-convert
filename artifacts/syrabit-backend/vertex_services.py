@@ -24,6 +24,7 @@ import json
 import asyncio
 import logging
 import base64
+import time
 from typing import Optional, List, Dict
 
 import httpx
@@ -106,6 +107,53 @@ _GEN_MODEL    = os.environ.get("VERTEX_GEMINI_MODEL", "gemini-2.5-flash").strip(
 _PRO_MODEL    = os.environ.get("VERTEX_GEMINI_PRO_MODEL", _GEN_MODEL).strip() or _GEN_MODEL
 _VISION_MODEL = os.environ.get("VERTEX_GEMINI_VISION_MODEL", _GEN_MODEL).strip() or _GEN_MODEL
 _EMBED_DIMENSIONS = 1024
+
+# ── Workers AI embed 429 cooldown ────────────────────────────────────────────
+# After _EMBED_429_THRESHOLD 429 hits within the last _EMBED_429_COOLDOWN_S
+# seconds the embed path is skipped for _EMBED_429_COOLDOWN_S seconds so
+# calls fall through immediately to Gemini rather than incurring a slow
+# round-trip that will also 429.  The window/counter resets on the next
+# successful embed call.  Note: this is a sliding-window burst count (not
+# strictly consecutive 429s) — a single success does not cancel accumulated
+# 429s from different calls earlier in the window.
+_EMBED_429_THRESHOLD  = 3     # 429 hits in window before cooldown activates
+_EMBED_429_COOLDOWN_S = 60    # seconds to skip Workers AI embed
+_embed_429_timestamps: List[float] = []   # recent 429 hit timestamps
+_embed_cooldown_until: float = 0.0        # epoch; 0 = no cooldown
+
+
+def _track_embed_429() -> None:
+    """Record one Workers AI embed 429 hit and activate cooldown if threshold met."""
+    global _embed_cooldown_until
+    now = time.time()
+    _embed_429_timestamps.append(now)
+    cutoff = now - _EMBED_429_COOLDOWN_S
+    recent = [t for t in _embed_429_timestamps if t > cutoff]
+    _embed_429_timestamps[:] = recent
+    if len(recent) >= _EMBED_429_THRESHOLD:
+        _embed_cooldown_until = now + _EMBED_429_COOLDOWN_S
+        logger.warning(
+            "[cf-ai] embed 429 burst (%d hits in %ds) — skipping Workers AI embed for %ds",
+            len(recent), _EMBED_429_COOLDOWN_S, _EMBED_429_COOLDOWN_S,
+        )
+
+
+def _reset_embed_429() -> None:
+    """Reset the embed 429 counter and cooldown after a successful embed call."""
+    global _embed_cooldown_until
+    _embed_429_timestamps.clear()
+    _embed_cooldown_until = 0.0
+
+
+def get_embed_429_burst(window_seconds: int = 60) -> int:
+    """Return the number of Workers AI embed 429s in the last *window_seconds*."""
+    cutoff = time.time() - window_seconds
+    return sum(1 for t in _embed_429_timestamps if t > cutoff)
+
+
+def is_embed_cooldown_active() -> bool:
+    """Return True if the Workers AI embed cooldown is currently active."""
+    return time.time() < _embed_cooldown_until
 
 
 # ── Auth detection ──────────────────────────────────────────────────────────
@@ -563,8 +611,17 @@ async def _workers_ai_primary_embed(text: str) -> Optional[List[float]]:
     emits 1024-dim vectors matching the syllabus-index-v2 Vectorize index.
     Much cheaper than Gemini embeddings under the $5k CF startup credits.
     Falls back to None so callers continue to the Gemini path on error.
+
+    Rate-limit protection: after _EMBED_429_THRESHOLD 429 hits within the
+    sliding _EMBED_429_COOLDOWN_S-second window, the function returns None
+    immediately (without a network round-trip) for _EMBED_429_COOLDOWN_S
+    seconds, letting Gemini embed take over quickly.
+    The burst window resets on the next successful embed call.
     """
     if not text:
+        return None
+    if is_embed_cooldown_active():
+        logger.debug("[cf-ai] embed cooldown active — skipping Workers AI embed")
         return None
     try:
         from providers.cloudflare_ai import embed_one as _cf_embed
@@ -577,9 +634,14 @@ async def _workers_ai_primary_embed(text: str) -> Optional[List[float]]:
                 len(vec), _EMBED_DIMENSIONS,
             )
             return None
+        _reset_embed_429()
         return vec
     except Exception as exc:
-        logger.warning("[cf-ai] primary embed failed: %s: %s", type(exc).__name__, str(exc)[:200])
+        if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
+            _track_embed_429()
+            logger.warning("[cf-ai] embed 429 (rate-limited); burst=%d", get_embed_429_burst())
+        else:
+            logger.warning("[cf-ai] primary embed failed: %s: %s", type(exc).__name__, str(exc)[:200])
         return None
 
 

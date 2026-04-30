@@ -645,6 +645,8 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   // throttled, alert_threshold) from GET /admin/dashboard/metrics.
   // Piggybacked on the 30s workers-ai poll so no extra interval is needed.
   const [waiThrottle, setWaiThrottle] = useState(null);
+  // Task #93 — embed 429 cooldown stats from GET /admin/llm/pool-stats.
+  const [embedBurst, setEmbedBurst] = useState(null);
   const loadWorkersAi = useCallback(() => {
     Promise.allSettled([
       axios.get(`${API_BASE}/admin/workers-ai/status`, {
@@ -653,12 +655,21 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       axios.get(`${API_BASE}/admin/dashboard/metrics`, {
         headers: adminHeaders(adminToken), withCredentials: true,
       }),
-    ]).then(([statusRes, metricsRes]) => {
+      axios.get(`${API_BASE}/admin/llm/pool-stats`, {
+        headers: adminHeaders(adminToken), withCredentials: true,
+      }),
+    ]).then(([statusRes, metricsRes, poolRes]) => {
       if (statusRes.status === 'fulfilled') setWaiStatus(statusRes.value.data);
       else setWaiStatus(null);
       if (metricsRes.status === 'fulfilled')
         setWaiThrottle(metricsRes.value.data?.workers_ai_throttle ?? null);
       else setWaiThrottle(null);
+      if (poolRes.status === 'fulfilled')
+        setEmbedBurst({
+          burst: poolRes.value.data?.embed_429_burst ?? 0,
+          cooldown: poolRes.value.data?.embed_cooldown_active ?? false,
+        });
+      else setEmbedBurst(null);
     });
   }, [adminToken]);
   const toggleWorkersAi = useCallback(async (capability, enabled) => {
@@ -2129,6 +2140,26 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                         </div>
                       </div>
                     </div>
+
+                    {embedBurst !== null && (
+                      <div className="flex items-center gap-3 mb-4 rounded-lg px-3 py-2.5 border border-gray-100 bg-gray-50">
+                        <div className="flex-1">
+                          <span className="text-[10px] uppercase text-gray-400 font-semibold">Embed 429s (60s)</span>
+                          <span className={`ml-2 text-sm font-semibold ${embedBurst.burst > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                            {embedBurst.burst}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] uppercase text-gray-400 font-semibold mr-1">Cooldown</span>
+                          <span className={`text-sm font-semibold ${embedBurst.cooldown ? 'text-red-500' : 'text-gray-400'}`}>
+                            {embedBurst.cooldown ? 'Active' : 'Off'}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-gray-400">
+                          After 3 hits → 60s skip
+                        </div>
+                      </div>
+                    )}
 
                     <div className="overflow-hidden rounded-xl border border-gray-100">
                       <table className="w-full text-xs">
