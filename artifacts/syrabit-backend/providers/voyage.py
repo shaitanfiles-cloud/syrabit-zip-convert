@@ -42,7 +42,10 @@ import httpx
 
 logger = logging.getLogger("providers.voyage")
 
-_API_KEY      = os.environ.get("MONGODB_MODEL_API_KEY", "").strip()
+_API_KEY      = (
+    os.environ.get("VOYAGE_API_KEY", "").strip()
+    or os.environ.get("MONGODB_MODEL_API_KEY", "").strip()
+)
 _EMBED_MODEL  = os.environ.get("VOYAGE_EMBED_MODEL",  "voyage-3-large").strip() or "voyage-3-large"
 _RERANK_MODEL = os.environ.get("VOYAGE_RERANK_MODEL", "rerank-2-lite").strip()  or "rerank-2-lite"
 _EMBED_DIMS   = int(os.environ.get("VOYAGE_EMBED_DIMS", "1024") or "1024")
@@ -60,14 +63,20 @@ _BASE_URL = _EXPLICIT_BASE if _EXPLICIT_BASE else "https://api.voyageai.com/v1"
 
 ENABLED: bool = bool(_API_KEY)
 
+_key_source = (
+    "VOYAGE_API_KEY" if os.environ.get("VOYAGE_API_KEY", "").strip()
+    else "MONGODB_MODEL_API_KEY" if os.environ.get("MONGODB_MODEL_API_KEY", "").strip()
+    else None
+)
+
 if ENABLED:
     logger.info(
-        "Voyage AI ready — embed=%s rerank=%s dims=%d base=%s",
-        _EMBED_MODEL, _RERANK_MODEL, _EMBED_DIMS, _BASE_URL,
+        "Voyage AI ready — embed=%s rerank=%s dims=%d base=%s (key from %s)",
+        _EMBED_MODEL, _RERANK_MODEL, _EMBED_DIMS, _BASE_URL, _key_source,
     )
 else:
     logger.info(
-        "Voyage AI disabled (MONGODB_MODEL_API_KEY not set) — "
+        "Voyage AI disabled (VOYAGE_API_KEY / MONGODB_MODEL_API_KEY not set) — "
         "using Workers AI embeddings and CF reranker"
     )
 
