@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, memo, lazy, Suspense } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef, memo, lazy, Suspense } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { RefreshCw, Copy, Check, FileText, Globe, BookOpen, ThumbsUp, ThumbsDown, MessageSquare, Share2, Send, HelpCircle, ShieldAlert, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { ReadAloudButton } from '@/components/study/ReadAloudButton';
@@ -11,7 +11,7 @@ import { ThinkingIndicator } from './ThinkingIndicator';
 
 const MarkdownContent = lazy(() => import('./MarkdownContent').then(m => ({ default: m.MarkdownContent })));
 
-export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, isLast, messageIndex, conversationId, responseLang, subject, scopedChapters }) {
+export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, onRetry, isLast, messageIndex, conversationId, responseLang, subject, scopedChapters }) {
   const [copied, setCopied] = useState(false);
   const [reaction, setReaction] = useState(null);
   const [showComment, setShowComment] = useState(false);
@@ -23,6 +23,33 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
   const [hiddenLinks, setHiddenLinks] = useState([]);
   const [hiddenOpen, setHiddenOpen] = useState(false);
   const [requestState, setRequestState] = useState({}); // host -> 'pending'|'sent'|'failed'
+  // Countdown for the auto-retry that fires 8 s after an AI unavailable error.
+  const [retryCountdown, setRetryCountdown] = useState(null);
+  const retryTimerRef = useRef(null);
+
+  // Start an 8-second countdown display when the message becomes an error card.
+  // The actual retry is triggered by ChatPage; this is just the visual countdown.
+  useEffect(() => {
+    if (!msg.isAiUnavailable) {
+      setRetryCountdown(null);
+      if (retryTimerRef.current) clearInterval(retryTimerRef.current);
+      return;
+    }
+    setRetryCountdown(8);
+    let remaining = 8;
+    retryTimerRef.current = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        clearInterval(retryTimerRef.current);
+        setRetryCountdown(null);
+      } else {
+        setRetryCountdown(remaining);
+      }
+    }, 1000);
+    return () => {
+      if (retryTimerRef.current) clearInterval(retryTimerRef.current);
+    };
+  }, [msg.isAiUnavailable]);
 
   const handleHiddenLinks = useCallback((items) => {
     setHiddenLinks(items || []);
@@ -168,7 +195,57 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
               </div>
             )}
 
-            {msg.content && (
+            {msg.isAiUnavailable && (
+              <div
+                role="alert"
+                data-testid="ai-unavailable-card"
+                className="flex flex-col gap-3 rounded-2xl px-4 py-3.5 mt-1"
+                style={{
+                  background: 'rgba(124,58,237,0.06)',
+                  border: '1px solid rgba(124,58,237,0.18)',
+                  maxWidth: '26rem',
+                }}
+              >
+                <div className="flex items-start gap-3">
+                  <div
+                    className="mt-0.5 flex-shrink-0 flex items-center justify-center rounded-full"
+                    style={{ width: 32, height: 32, background: 'rgba(124,58,237,0.12)' }}
+                    aria-hidden="true"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-foreground" style={{ lineHeight: '1.45' }}>
+                      Syra is resting — please try again in a moment
+                    </p>
+                    <p className="text-[12.5px] text-muted-foreground mt-0.5">
+                      All AI services are temporarily busy. Your question is saved.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { if (onRetry) onRetry(); }}
+                    className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-semibold transition-colors"
+                    style={{ background: '#7c3aed', color: '#fff' }}
+                    aria-label="Retry now"
+                  >
+                    <RefreshCw size={13} />
+                    Retry now
+                  </button>
+                  {retryCountdown !== null && (
+                    <span className="text-[12px] text-muted-foreground">
+                      Auto-retry in {retryCountdown}s…
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {!msg.isAiUnavailable && msg.content && (
               <Suspense fallback={<div className="md-content-light" style={{ fontSize: '0.9375rem' }}>{cleanContent}</div>}>
                 <MarkdownContent
                   content={cleanContent}

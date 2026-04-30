@@ -89,6 +89,9 @@ export default function ChatPage() {
   const abortControllerRef = useRef(null);
   const modelMenuRef      = useRef(null);
   const scrollTimeoutRef  = useRef(null);
+  const autoRetryTimerRef = useRef(null);
+  // Always points to the latest sendMsg closure so timers can call it safely.
+  const sendMsgRef        = useRef(null);
   const pendingSendScroll = useRef(false);
   // Conversation IDs created locally during this session — we already
   // have their messages in state, so the URL→DB loader effect must
@@ -98,7 +101,10 @@ export default function ChatPage() {
   const ownedConvIds = useRef(new Set());
 
   useEffect(() => {
-    return () => { if (abortControllerRef.current) abortControllerRef.current.abort(); };
+    return () => {
+      if (abortControllerRef.current) abortControllerRef.current.abort();
+      if (autoRetryTimerRef.current) clearTimeout(autoRetryTimerRef.current);
+    };
   }, []);
 
   const lastMsgLenRef = useRef(0);
@@ -275,6 +281,11 @@ export default function ChatPage() {
 
   const sendMsg = async (text) => {
     if (!text.trim() || isLoading || isOutOfCredits || (!user && turnstileEnabled && !turnstileReady)) return;
+    // Cancel any pending auto-retry from a previous error.
+    if (autoRetryTimerRef.current) {
+      clearTimeout(autoRetryTimerRef.current);
+      autoRetryTimerRef.current = null;
+    }
     const msgId = Date.now().toString();
     const userMsg = { id: msgId + '_u', role: 'user', content: text, timestamp: new Date().toISOString() };
     const aiMsgId = msgId + '_a';
@@ -431,8 +442,19 @@ export default function ChatPage() {
           }
           if (parsed.error) {
             meta.hasError = true;
-            toast.error(parsed.error || 'AI service error — please try again.');
-            setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: 'Sorry, something went wrong. Please try again.', streaming: false } : m));
+            // Clear any previous auto-retry timer before scheduling a new one.
+            if (autoRetryTimerRef.current) clearTimeout(autoRetryTimerRef.current);
+            setMessages((prev) => prev.map((m) =>
+              m.id === aiMsgId
+                ? { ...m, content: '', isAiUnavailable: true, retryText: text, streaming: false }
+                : m
+            ));
+            // Auto-retry once after 8 seconds using the latest sendMsg closure.
+            autoRetryTimerRef.current = setTimeout(() => {
+              autoRetryTimerRef.current = null;
+              setMessages((prev) => prev.filter((m) => m.id !== aiMsgId));
+              sendMsgRef.current?.(text);
+            }, 8000);
             continue;
           }
           if (meta.hasError) continue;
@@ -507,6 +529,8 @@ export default function ChatPage() {
       try { _perfTotal.stop(); } catch {}
     }
   };
+  // Keep the ref in sync so auto-retry timers always call the freshest closure.
+  sendMsgRef.current = sendMsg;
 
   const handleRegenerate = useCallback(() => {
     const lastUser = [...messages].reverse().find((m) => m.role === 'user');
@@ -633,7 +657,7 @@ export default function ChatPage() {
                 messages.forEach((msg, i) => {
                   out.push(
                     <div key={msg.id || i} ref={i === lastUIdx ? lastUserMsgRef : undefined}>
-                      <MessageBubble msg={msg} isLast={i === messages.length - 1} onCopy={handleCopy} onRegenerate={msg.role === 'assistant' && i === messages.length - 1 ? handleRegenerate : null} messageIndex={i} conversationId={conversationId} responseLang={responseLang} subject={subject} scopedChapters={scopedChapters} />
+                      <MessageBubble msg={msg} isLast={i === messages.length - 1} onCopy={handleCopy} onRegenerate={msg.role === 'assistant' && i === messages.length - 1 ? handleRegenerate : null} onRetry={msg.isAiUnavailable && msg.retryText ? () => { if (autoRetryTimerRef.current) { clearTimeout(autoRetryTimerRef.current); autoRetryTimerRef.current = null; } setMessages((prev) => prev.filter((m) => m.id !== msg.id)); sendMsgRef.current?.(msg.retryText); } : null} messageIndex={i} conversationId={conversationId} responseLang={responseLang} subject={subject} scopedChapters={scopedChapters} />
                     </div>
                   );
                 });
