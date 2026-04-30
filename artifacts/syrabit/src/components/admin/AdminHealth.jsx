@@ -2012,18 +2012,27 @@ export default function AdminHealth({ adminToken, onNavigate }) {
               {/* Task #78 — Workers AI 429 burst pressure gauge */}
               {(() => {
                 const thr = waiThrottle;
+                // Neutral gray while the first fetch is still in-flight.
+                const isLoading = thr === null;
                 const burst60 = thr?.burst_60s ?? 0;
                 const burst180 = thr?.burst_180s ?? 0;
                 const limit = thr?.alert_threshold ?? 5;
-                const throttled = thr?.throttled ?? false;
-                const approaching = !throttled && burst60 > 0;
-                const dotColor = throttled
+                const throttled = !isLoading && (thr?.throttled ?? false);
+                // Approaching = burst is ≥60% of the alert threshold but not yet firing.
+                const approaching = !isLoading && !throttled && burst60 >= Math.ceil(limit * 0.6);
+                const dotColor = isLoading
+                  ? 'bg-gray-300'
+                  : throttled
                   ? 'bg-red-500'
                   : approaching
                   ? 'bg-amber-400'
                   : 'bg-emerald-500';
-                const statusLabel = throttled ? 'Throttled' : approaching ? 'Approaching' : 'OK';
-                const statusText = throttled
+                const statusLabel = isLoading
+                  ? 'Loading\u2026'
+                  : throttled ? 'Throttled' : approaching ? 'Approaching' : 'OK';
+                const statusText = isLoading
+                  ? 'text-gray-400'
+                  : throttled
                   ? 'text-red-600'
                   : approaching
                   ? 'text-amber-600'
@@ -2044,24 +2053,19 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                         </span>
                       </div>
                     )}
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Zap size={14} className={throttled ? 'text-red-500' : approaching ? 'text-amber-500' : 'text-gray-400'} />
-                        <span className="text-xs font-semibold text-gray-700">Workers AI — 429 Burst Pressure</span>
-                        <span className={`flex items-center gap-1 text-[11px] font-semibold ${statusText}`}>
-                          <span className={`inline-block w-2 h-2 rounded-full ${dotColor}`} />
-                          {statusLabel}
-                        </span>
-                      </div>
-                      {thr === null && (
-                        <span className="text-[11px] text-gray-400">loading…</span>
-                      )}
+                    <div className="flex items-center gap-2">
+                      <Zap size={14} className={isLoading ? 'text-gray-300' : throttled ? 'text-red-500' : approaching ? 'text-amber-500' : 'text-gray-400'} />
+                      <span className="text-xs font-semibold text-gray-700">Workers AI — 429 Burst Pressure</span>
+                      <span className={`flex items-center gap-1 text-[11px] font-semibold ${statusText}`}>
+                        <span className={`inline-block w-2 h-2 rounded-full ${dotColor}`} />
+                        {statusLabel}
+                      </span>
                     </div>
-                    {thr !== null && (
+                    {!isLoading && (
                       <div className="mt-3 grid grid-cols-3 gap-3">
                         <div className="rounded-lg p-2.5 bg-white/70 border border-gray-100">
                           <div className="text-[10px] uppercase text-gray-400 font-semibold mb-0.5">60 s (this worker)</div>
-                          <div className={`text-base font-bold tabular-nums ${burst60 >= limit ? 'text-red-600' : burst60 > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                          <div className={`text-base font-bold tabular-nums ${burst60 >= limit ? 'text-red-600' : burst60 >= Math.ceil(limit * 0.6) ? 'text-amber-600' : 'text-emerald-600'}`}>
                             {burst60}
                             <span className="text-xs font-normal text-gray-400"> / {limit}</span>
                           </div>
