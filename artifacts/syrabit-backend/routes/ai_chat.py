@@ -186,14 +186,22 @@ async def _assamese_translate_gemini_main_sarvam_polish(
     *,
     target_lang_code: str = "as-IN",
 ) -> str:
-    """User-mandated Assamese translation pipeline: Gemini-main + Sarvam-polish.
+    """Assamese translation pipeline: Sarvam-primary → Gemini-fallback → Sarvam-polish.
 
-    Step 1 (main): English text → Assamese via Gemini (vertex_services.translate).
+    Step 0 (primary): English text → Assamese via Sarvam translate:v1 (/translate API).
+        Sarvam's dedicated translation model is purpose-built for Indic languages
+        and produces more natural Assamese than Gemini. Typical latency: 300-800ms.
+
+    Step 1 (fallback): If Sarvam translate is unavailable or fails, English text →
+        Assamese via Gemini (vertex_services.translate).
+
     Step 2 (polish, optional): Gemini Assamese output → polished Assamese
         via Sarvam-m chat. Skipped for short fragments (< _POLISH_MIN_LEN
-        chars) where the polish round-trip overhead is not justified.
+        chars), AND skipped entirely when Step 0 succeeded (Sarvam translate
+        already produces fluent Assamese).
 
     Failure modes:
+        • Sarvam translate fails → falls through to Gemini (Step 1).
         • Gemini fails or returns empty → returns "" (caller falls back to
           its own strip / original-text path).
         • Sarvam polish fails / times out → returns the un-polished Gemini
@@ -240,7 +248,37 @@ async def _assamese_translate_gemini_main_sarvam_polish(
     except Exception:
         pass  # cache miss — proceed normally
 
-    # ── Step 1: Gemini main ─────────────────────────────────────────────
+    # ── Step 0: Sarvam translate:v1 (primary — dedicated translation model) ─
+    # Sarvam's /translate endpoint is purpose-built for Indic languages and
+    # outperforms Gemini on Assamese fluency. Gemini is kept as Step 1 fallback.
+    _sarvam_tc = getattr(deps, "sarvam_translate_client", None) or getattr(deps, "sarvam_client", None)
+    if _sarvam_tc:
+        try:
+            _sv_resp = await asyncio.wait_for(
+                _sarvam_tc.post("/translate", json={
+                    "input": src[:1950],
+                    "source_language_code": "en-IN",
+                    "target_language_code": target_lang_code,
+                    "speaker_gender": "Female",
+                    "mode": "formal",
+                    "model": "sarvam-translate:v1",
+                    "enable_preprocessing": False,
+                }),
+                timeout=3.5,
+            )
+            if _sv_resp.status_code == 200:
+                _sv_result = (_sv_resp.json().get("translated_text") or "").strip()
+                if _sv_result:
+                    logger.debug("[INDIC-TRANSLATE] Sarvam translate:v1 primary OK for %r", src[:40])
+                    return _tr_cache_store(_sv_result)
+            else:
+                logger.warning("[INDIC-TRANSLATE] Sarvam translate HTTP %d — falling back to Gemini", _sv_resp.status_code)
+        except asyncio.TimeoutError:
+            logger.info("[INDIC-TRANSLATE] Sarvam translate timed out after 3.5s — falling back to Gemini")
+        except Exception as _sv_err:
+            logger.warning("[INDIC-TRANSLATE] Sarvam translate failed (%s) — falling back to Gemini", _sv_err)
+
+    # ── Step 1: Gemini main (fallback) ──────────────────────────────────
     gemini_out = ""
     try:
         import vertex_services  # local import — keeps cold-start cost off the main chat path

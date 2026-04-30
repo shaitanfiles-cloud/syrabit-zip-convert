@@ -470,6 +470,85 @@ def _extract_relevant_sections(document_text: str, query: str, char_limit: int =
     return document_text[:char_limit]
 
 
+async def _fetch_chunks_semantic(
+    query: str,
+    limit: int = 10,
+    subject_id: Optional[str] = None,
+) -> list:
+    """Semantic retrieval: embed query → Atlas $vectorSearch on chunks → fetch chapters.
+
+    Returns chapter dicts in the same shape as the keyword-search path so they
+    can be deduplicated and reranked together.  Falls back to [] if chunks have
+    no embeddings yet or the index isn't ready.
+    """
+    try:
+        from providers.pinecone_ai import embed_one as _pc_embed
+        q_vec = await asyncio.wait_for(
+            _pc_embed(query, input_type="query"),
+            timeout=4.0,
+        )
+        if not q_vec:
+            return []
+
+        vs_filter = {}
+        if subject_id:
+            vs_filter = {"subject_id": {"$eq": subject_id}}
+
+        pipeline: list = [
+            {
+                "$vectorSearch": {
+                    "index": "vector_index",
+                    "path": "embedding",
+                    "queryVector": q_vec,
+                    "numCandidates": min(limit * 15, 500),
+                    "limit": limit,
+                    **({"filter": vs_filter} if vs_filter else {}),
+                }
+            },
+            {"$addFields": {"_vs_score": {"$meta": "vectorSearchScore"}}},
+            {"$project": {
+                "_id": 0,
+                "chapter_id": 1,
+                "chapter_title": 1,
+                "subject_id": 1,
+                "_vs_score": 1,
+            }},
+        ]
+
+        raw = await db.chunks.aggregate(pipeline).to_list(length=limit)
+        if not raw:
+            return []
+
+        chapter_ids = list({r["chapter_id"] for r in raw if r.get("chapter_id")})
+        if not chapter_ids:
+            return []
+
+        ch_docs = await db.chapters.find(
+            {"id": {"$in": chapter_ids}, "status": "published"},
+            {"_id": 0, "id": 1, "title": 1, "content": 1, "content_as": 1,
+             "slug": 1, "subject_id": 1, "description": 1},
+        ).to_list(length=len(chapter_ids))
+        chapters_map = {ch["id"]: ch for ch in ch_docs}
+
+        seen: set = set()
+        result = []
+        for r in raw:
+            cid = r.get("chapter_id", "")
+            if cid in seen or cid not in chapters_map:
+                continue
+            seen.add(cid)
+            result.append(chapters_map[cid])
+
+        logger.debug(
+            "[INTERNAL_RAG] Semantic: %d chunk hits → %d unique chapters for '%s'",
+            len(raw), len(result), query[:50],
+        )
+        return result
+    except Exception as _se:
+        logger.debug("[INTERNAL_RAG] Semantic search failed: %s", _se)
+        return []
+
+
 async def _fetch_internal_chapters(
     query: str,
     subject_id: Optional[str] = None,
@@ -477,66 +556,111 @@ async def _fetch_internal_chapters(
     limit: int = 3,
     max_content_chars: int = 4000,
 ) -> list:
+    """Hybrid keyword + semantic retrieval with Pinecone reranking.
+
+    Pipeline:
+      1. Keyword regex search on MongoDB chapters (title + content + content_as)
+      2. Semantic vector search on MongoDB chunks via Atlas $vectorSearch  [parallel]
+      3. Deduplicate by chapter id
+      4. Pinecone bge-reranker-v2-m3 reranks (multilingual, handles Assamese)
+      5. Return top-K chapters within char budget
+    """
     if not await is_mongo_available():
         return []
     try:
         keywords = _extract_keywords(query)
         if not keywords:
             return []
+
         filters: dict = {"status": "published"}
-        # Use subject_id when explicitly provided (production calls pass this).
-        # Do NOT filter by subject_name alone — the AHSEC subject stubs (sub1, sub2 …)
-        # have no content yet; filtering to them returns zero results. The UUID-based
-        # CMS chapters carry the actual indexed text.
+        # Use subject_id when explicitly provided.
+        # Do NOT filter by subject_name alone — the AHSEC subject stubs (sub1/sub2…)
+        # have no content yet; filtering to them returns zero results.
         if subject_id:
             filters["subject_id"] = subject_id
 
-        # Pinecone reranking available → fetch wider candidate set so the
-        # reranker can surface the most semantically relevant chapters.
         try:
             from providers.pinecone_ai import ENABLED as _pinecone_enabled
         except Exception:
             _pinecone_enabled = False
-        fetch_limit = min(limit * 5, 20) if _pinecone_enabled else limit
 
+        # Fetch more candidates when reranker is available
+        fetch_limit = min(limit * 5, 25) if _pinecone_enabled else limit
+
+        # ── 1. Keyword search: title + content + content_as (Assamese field) ──
         regex_pattern = "|".join(re.escape(kw) for kw in keywords[:6])
         filters["$or"] = [
-            {"title": {"$regex": regex_pattern, "$options": "i"}},
-            {"content": {"$regex": regex_pattern, "$options": "i"}},
+            {"title":      {"$regex": regex_pattern, "$options": "i"}},
+            {"content":    {"$regex": regex_pattern, "$options": "i"}},
+            {"content_as": {"$regex": regex_pattern, "$options": "i"}},
         ]
-        cursor = db.chapters.find(
+        keyword_task = db.chapters.find(
             filters,
-            {"_id": 0, "id": 1, "title": 1, "content": 1, "slug": 1, "subject_id": 1, "description": 1},
-        ).limit(fetch_limit)
-        chapters = await cursor.to_list(length=fetch_limit)
+            {"_id": 0, "id": 1, "title": 1, "content": 1, "content_as": 1,
+             "slug": 1, "subject_id": 1, "description": 1},
+        ).limit(fetch_limit).to_list(length=fetch_limit)
 
-        # Build result dicts (content-length capped per item, not yet total)
+        # ── 2. Semantic vector search (parallel with keyword) ─────────────────
+        if _pinecone_enabled:
+            kw_chapters, sem_chapters = await asyncio.gather(
+                keyword_task,
+                _fetch_chunks_semantic(query, limit=fetch_limit, subject_id=subject_id),
+                return_exceptions=True,
+            )
+            if isinstance(kw_chapters, Exception):
+                logger.debug("[INTERNAL_RAG] Keyword search error: %s", kw_chapters)
+                kw_chapters = []
+            if isinstance(sem_chapters, Exception):
+                logger.debug("[INTERNAL_RAG] Semantic search error: %s", sem_chapters)
+                sem_chapters = []
+        else:
+            kw_chapters = await keyword_task
+            sem_chapters = []
+
+        # ── 3. Merge + deduplicate by chapter id ──────────────────────────────
+        seen_ids: set = set()
+        all_chapters = []
+        for ch in (kw_chapters + sem_chapters):
+            cid = ch.get("id", "")
+            if cid not in seen_ids:
+                seen_ids.add(cid)
+                all_chapters.append(ch)
+
+        logger.debug(
+            "[INTERNAL_RAG] keyword=%d semantic=%d merged=%d for '%s'",
+            len(kw_chapters), len(sem_chapters), len(all_chapters), query[:50],
+        )
+
+        # ── 4. Build candidate dicts ───────────────────────────────────────────
         candidates = []
-        for ch in chapters:
+        for ch in all_chapters:
             content = (ch.get("content") or ch.get("description") or "").strip()
             if not content or len(content) < 30:
                 continue
+            content_as = (ch.get("content_as") or "").strip()
             candidates.append({
-                "title": ch.get("title", ""),
-                "content": content,
-                "slug": ch.get("slug", ""),
+                "title":      ch.get("title", ""),
+                "content":    content,
+                "content_as": content_as,
+                "slug":       ch.get("slug", ""),
                 "subject_id": ch.get("subject_id", ""),
-                "type": "chapter",
+                "type":       "chapter",
             })
 
-        # ── Pinecone reranking ───────────────────────────────────────────────
-        # bge-reranker-v2-m3 is multilingual — handles Assamese queries too.
-        # Falls back silently to keyword order if Pinecone is unavailable.
+        # ── 5. Pinecone reranking (bge-reranker-v2-m3, multilingual) ──────────
         if _pinecone_enabled and len(candidates) > 1:
             try:
                 from providers.pinecone_ai import rerank_items as _pc_rerank
+
+                def _rerank_text(c: dict) -> str:
+                    # Bilingual scoring: include Assamese content when available so
+                    # the multilingual reranker can match Assamese queries.
+                    en_part = c["content"][:600]
+                    as_part = c["content_as"][:300] if c["content_as"] else ""
+                    return f"{c['title']}\n\n{en_part}" + (f"\n\n{as_part}" if as_part else "")
+
                 candidates = await asyncio.wait_for(
-                    _pc_rerank(
-                        query,
-                        candidates,
-                        lambda c: f"{c['title']}\n\n{c['content'][:800]}",
-                        top_k=limit,
-                    ),
+                    _pc_rerank(query, candidates, _rerank_text, top_k=limit),
                     timeout=8.0,
                 )
                 logger.info(
@@ -549,7 +673,7 @@ async def _fetch_internal_chapters(
         else:
             candidates = candidates[:limit]
 
-        # ── Apply total-char budget ──────────────────────────────────────────
+        # ── 6. Apply total-char budget ─────────────────────────────────────────
         result = []
         total_chars = 0
         for ch in candidates:
@@ -568,7 +692,7 @@ async def _fetch_internal_chapters(
             )
         return result
     except Exception as e:
-        logger.warning(f"[INTERNAL_RAG] Chapter fetch failed: {e}")
+        logger.warning("[INTERNAL_RAG] Chapter fetch failed: %s", e)
         return []
 
 
