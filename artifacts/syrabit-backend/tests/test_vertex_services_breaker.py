@@ -342,3 +342,73 @@ def test_expired_sub_threshold_hits_do_not_activate_cooldown_on_new_hit(
     # NOT be active because the new window count (1) is below the threshold.
     assert not vertex_services.is_embed_cooldown_active()
     assert vertex_services.get_embed_429_burst(window_seconds=cooldown_s) == 1
+
+
+# ── get_embed_cooldown_remaining_s tests ─────────────────────────────────────
+
+
+def test_cooldown_remaining_is_zero_when_inactive(_reset_embed_state):
+    """get_embed_cooldown_remaining_s must return 0.0 when no cooldown is set.
+
+    _embed_cooldown_until is initialised to 0.0 (epoch), so subtracting the
+    current wall-clock time always yields a large negative number — the max(0)
+    clamp must convert it to exactly 0.0.
+    """
+    import vertex_services
+
+    assert not vertex_services.is_embed_cooldown_active()
+    remaining = vertex_services.get_embed_cooldown_remaining_s()
+    assert remaining == 0.0
+
+
+def test_cooldown_remaining_positive_when_active(_reset_embed_state, monkeypatch):
+    """get_embed_cooldown_remaining_s must return a positive value immediately
+    after the cooldown is activated.
+
+    We freeze the clock, trigger the cooldown, then confirm the returned value
+    is close to _EMBED_429_COOLDOWN_S (within a 1-second tolerance to be robust
+    against any tiny arithmetic rounding).
+    """
+    import vertex_services
+
+    base_time = 5_000_000.0
+    monkeypatch.setattr(vertex_services.time, "time", lambda: base_time)
+
+    threshold = vertex_services._EMBED_429_THRESHOLD
+    for _ in range(threshold):
+        vertex_services._track_embed_429()
+
+    assert vertex_services.is_embed_cooldown_active()
+
+    remaining = vertex_services.get_embed_cooldown_remaining_s()
+    expected = vertex_services._EMBED_429_COOLDOWN_S
+    assert remaining > 0.0
+    assert abs(remaining - expected) < 1.0
+
+
+def test_cooldown_remaining_clamps_to_zero(_reset_embed_state, monkeypatch):
+    """get_embed_cooldown_remaining_s must never return a negative value, even
+    when the current time is well past the cooldown expiry timestamp.
+
+    Steps:
+      1. Freeze the clock and activate the cooldown.
+      2. Advance the clock past the cooldown expiry.
+      3. Confirm the function returns 0.0, not a negative number.
+    """
+    import vertex_services
+
+    base_time = 7_000_000.0
+    monkeypatch.setattr(vertex_services.time, "time", lambda: base_time)
+
+    threshold = vertex_services._EMBED_429_THRESHOLD
+    for _ in range(threshold):
+        vertex_services._track_embed_429()
+
+    assert vertex_services.is_embed_cooldown_active()
+
+    # Advance the clock well past the cooldown expiry.
+    cooldown_s = vertex_services._EMBED_429_COOLDOWN_S
+    monkeypatch.setattr(vertex_services.time, "time", lambda: base_time + cooldown_s + 60)
+
+    remaining = vertex_services.get_embed_cooldown_remaining_s()
+    assert remaining == 0.0, f"Expected 0.0 but got {remaining} (must not be negative)"
