@@ -299,12 +299,14 @@ _MODEL_ALIAS_MAP = {
 _SLM_SLOT_CANDIDATES = [
     # Tier 0: Workers AI llama-3.3-70b-fp8 — primary chat provider.
     ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",         8, 0),
-    # Tier 1: Workers AI llama-3.1-8b — fast small-model fallback.
-    ("workers-ai",  "@cf/meta/llama-3.1-8b-instruct-fp8",               8, 1),
-    # Tier 2: Groq llama-4-scout — fallback when Workers AI is rate-limited.
-    ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 2),
-    # Tier 3: Cerebras llama3.1-8b — secondary fallback.
-    ("cerebras",    "llama3.1-8b",                                       4, 3),
+    # Tier 1: Workers AI Qwen 2.5-72B — separate model quota, parallel slot.
+    ("workers-ai",  "@cf/qwen/qwen2.5-72b-instruct",                    8, 1),
+    # Tier 2: Workers AI llama-3.1-8b — fast small-model fallback.
+    ("workers-ai",  "@cf/meta/llama-3.1-8b-instruct-fp8",               8, 2),
+    # Tier 3: Groq llama-4-scout — fallback when Workers AI is rate-limited.
+    ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 3),
+    # Tier 4: Cerebras llama3.1-8b — secondary fallback.
+    ("cerebras",    "llama3.1-8b",                                       4, 4),
 ]
 
 # Content SmartKeyPool — serves `_CONTENT_INTENTS` (notes, important_questions,
@@ -745,13 +747,16 @@ async def _call_single_provider(messages: list, provider: str, api_key: str, mod
     max_tokens = _clamp_max_tokens(model, max_tokens)
     if provider == "workers-ai":
         from providers.cloudflare_ai import chat as _cf_chat, MODELS as _CF_MODELS
-        model_key = "chat"
-        if "120b" in model or "gpt-oss" in model:
-            model_key = "chat_long"
-        elif "coder" in model or "qwen2.5" in model:
-            model_key = "chat_code"
-        elif "8b" in model or "fast" in model.lower():
-            model_key = "chat_fast"
+        if model.startswith("@cf/"):
+            model_key = model
+        else:
+            model_key = "chat"
+            if "120b" in model or "gpt-oss" in model:
+                model_key = "chat_long"
+            elif "coder" in model:
+                model_key = "chat_code"
+            elif "8b" in model or "fast" in model.lower():
+                model_key = "chat_fast"
         text = await _cf_chat(messages, model_key=model_key, max_tokens=max_tokens)
         return re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
     if provider == "sarvam":
@@ -1705,13 +1710,16 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         if p_name == "workers-ai":
             logger.info(f"LLM stream: provider=workers-ai, model={p_model}")
             from providers.cloudflare_ai import stream_chat as _cf_stream
-            model_key = "chat"
-            if "120b" in p_model or "gpt-oss" in p_model:
-                model_key = "chat_long"
-            elif "coder" in p_model or "qwen2.5" in p_model:
-                model_key = "chat_code"
-            elif "8b" in p_model or "fast" in p_model.lower():
-                model_key = "chat_fast"
+            if p_model.startswith("@cf/"):
+                model_key = p_model
+            else:
+                model_key = "chat"
+                if "120b" in p_model or "gpt-oss" in p_model:
+                    model_key = "chat_long"
+                elif "coder" in p_model:
+                    model_key = "chat_code"
+                elif "8b" in p_model or "fast" in p_model.lower():
+                    model_key = "chat_fast"
             async for token in _cf_stream(messages, model_key=model_key, max_tokens=_mt):
                 yield token
             return

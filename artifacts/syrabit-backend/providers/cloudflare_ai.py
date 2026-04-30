@@ -55,6 +55,7 @@ _ENABLED = bool(_ACCOUNT_ID and _API_TOKEN)
 MODELS = {
     "chat":        "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "chat_long":   "@cf/openai/gpt-oss-120b",
+    "chat_qwen":   "@cf/qwen/qwen2.5-72b-instruct",
     "chat_code":   "@cf/qwen/qwen2.5-coder-32b-instruct",
     "chat_fast":   "@cf/meta/llama-3.1-8b-instruct-fp8",
     "chat_indic":  "@cf/aisingapore/gemma-sea-lion-v4-27b-it",
