@@ -32,7 +32,7 @@ function LoadingSpinner({ size = 6 }) {
   );
 }
 
-function Sidebar({ user, onLogout, view, onViewChange }) {
+function Sidebar({ user, onLogout, view, onViewChange, onChangePassword }) {
   return (
     <aside className="flex flex-col h-full bg-white border-r border-gray-100">
       <div className="flex items-center gap-3 px-5 py-5 border-b border-gray-100">
@@ -72,6 +72,13 @@ function Sidebar({ user, onLogout, view, onViewChange }) {
           Staff
         </span>
         <button
+          onClick={onChangePassword}
+          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-gray-600 hover:bg-violet-50 hover:text-violet-700 transition-colors mb-1"
+        >
+          <KeyIcon />
+          Change password
+        </button>
+        <button
           onClick={onLogout}
           className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-gray-600 hover:bg-red-50 hover:text-red-600 transition-colors"
         >
@@ -96,6 +103,122 @@ function SidebarLink({ active, icon, label, onClick }) {
       <span className={active ? 'text-violet-600' : 'text-gray-400'}>{icon}</span>
       {label}
     </button>
+  );
+}
+
+function ChangePasswordModal({ onClose }) {
+  const [form, setForm] = useState({ current: '', next: '', confirm: '' });
+  const [saving, setSaving] = useState(false);
+  const [strength, setStrength] = useState(0);
+
+  const set = (f) => (e) => {
+    const val = e.target.value;
+    setForm((prev) => ({ ...prev, [f]: val }));
+    if (f === 'next') {
+      let s = 0;
+      if (val.length >= 8) s++;
+      if (/[A-Z]/.test(val)) s++;
+      if (/[0-9]/.test(val)) s++;
+      if (/[^A-Za-z0-9]/.test(val)) s++;
+      setStrength(s);
+    }
+  };
+
+  const strengthLabel = ['', 'Weak', 'Fair', 'Good', 'Strong'][strength];
+  const strengthColor = ['', 'bg-red-400', 'bg-yellow-400', 'bg-blue-400', 'bg-emerald-400'][strength];
+
+  const handleSave = async () => {
+    if (form.next.length < 8) {
+      toast.error('Password must be at least 8 characters');
+      return;
+    }
+    if (form.next !== form.confirm) {
+      toast.error('Passwords do not match');
+      return;
+    }
+    setSaving(true);
+    try {
+      await api().post('/staff/auth/change-password', {
+        current_password: form.current,
+        new_password: form.next,
+      });
+      toast.success('Password changed — use your new password next time you log in.');
+      onClose();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Failed to change password');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+      style={{ background: 'rgba(0,0,0,0.45)' }}
+      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <div className="bg-white w-full sm:max-w-md sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <h2 className="text-base font-bold text-gray-900">Change Password</h2>
+          <button
+            onClick={onClose}
+            className="p-2 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+          >
+            <CloseIcon />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-4">
+          {[
+            { key: 'current', label: 'Current password',  type: 'password' },
+            { key: 'next',    label: 'New password',      type: 'password' },
+            { key: 'confirm', label: 'Confirm new password', type: 'password' },
+          ].map(({ key, label, type }) => (
+            <div key={key}>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+                {label}
+              </label>
+              <input
+                type={type}
+                value={form[key]}
+                onChange={set(key)}
+                autoComplete="new-password"
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent"
+              />
+              {key === 'next' && form.next.length > 0 && (
+                <div className="mt-2 flex items-center gap-2">
+                  <div className="flex-1 h-1 rounded-full bg-gray-100 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${strengthColor}`}
+                      style={{ width: `${strength * 25}%` }}
+                    />
+                  </div>
+                  <span className="text-xs text-gray-400 w-10">{strengthLabel}</span>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-gray-100 bg-gray-50">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-semibold text-white transition-colors disabled:opacity-60"
+            style={{ background: 'hsl(var(--primary))' }}
+          >
+            {saving && <LoadingSpinner size={4} />}
+            {saving ? 'Saving…' : 'Change Password'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -439,8 +562,9 @@ function SubjectCard({ subject, boards, classes, onClick }) {
 export default function StaffDashboard() {
   const { user, logout } = useAuth();
 
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [view, setView]               = useState('subjects');
+  const [sidebarOpen,  setSidebarOpen]  = useState(false);
+  const [changePwOpen, setChangePwOpen] = useState(false);
+  const [view, setView]                 = useState('subjects');
 
   const [boards,   setBoards]   = useState([]);
   const [classes,  setClasses]  = useState([]);
@@ -498,6 +622,11 @@ export default function StaffDashboard() {
     if (v === 'subjects') setSelectedSubject(null);
   };
 
+  const openChangePw = () => {
+    setSidebarOpen(false);
+    setChangePwOpen(true);
+  };
+
   const handleLogout = async () => {
     try {
       await logout();
@@ -517,6 +646,7 @@ export default function StaffDashboard() {
             onLogout={handleLogout}
             view={view}
             onViewChange={handleViewChange}
+            onChangePassword={openChangePw}
           />
         </div>
       </div>
@@ -540,6 +670,7 @@ export default function StaffDashboard() {
           onLogout={handleLogout}
           view={view}
           onViewChange={handleViewChange}
+          onChangePassword={openChangePw}
         />
       </div>
 
@@ -597,6 +728,11 @@ export default function StaffDashboard() {
           onSaved={handleChapterSaved}
         />
       )}
+
+      {/* ── Change password modal ── */}
+      {changePwOpen && (
+        <ChangePasswordModal onClose={() => setChangePwOpen(false)} />
+      )}
     </div>
   );
 }
@@ -635,6 +771,14 @@ function InfoIcon() {
     <svg width="17" height="17" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
       <circle cx="12" cy="12" r="10" />
       <path strokeLinecap="round" d="M12 16v-4m0-4h.01" />
+    </svg>
+  );
+}
+
+function KeyIcon() {
+  return (
+    <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
     </svg>
   );
 }

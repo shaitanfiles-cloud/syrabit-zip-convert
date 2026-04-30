@@ -92,6 +92,11 @@ A separate content management panel for staff users (role=`staff`) built at `/st
 | Nahida Ahmed | kunal.bhuyan@syrabit.ai | Syrabit@Staff4 |
 | Rashmita Sharma | riya.gogoi@syrabit.ai | Syrabit@Staff5 |
 
+**Password management:**
+- Passwords are stored as bcrypt hashes in MongoDB — never in plaintext.
+- To re-seed with new passwords, set the `STAFF_PASSWORDS` secret (comma-separated, one per account in order) then run `python scripts/seed_staff_users.py --update` from the backend root.
+- Staff can also change their own password any time from the "Change password" button in the staff portal sidebar — no admin required.
+
 **Backend API endpoints (require `role=staff` or `role=admin`):**
 - `GET /api/staff/content/boards` — list boards
 - `GET /api/staff/content/classes` — list classes

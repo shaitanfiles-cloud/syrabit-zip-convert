@@ -5,12 +5,50 @@ notes / description / status. They cannot create or delete subjects,
 boards, classes, or streams (those remain admin-only operations).
 """
 
+import asyncio
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from auth_deps import get_staff_user
-from deps import db
+from deps import db, pwd_ctx
 
 router = APIRouter()
+
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@router.post("/staff/auth/change-password")
+async def staff_change_password(
+    data: ChangePasswordRequest,
+    staff: dict = Depends(get_staff_user),
+):
+    """Allow a staff member to change their own password.
+
+    Verifies the current password before writing the new bcrypt hash.
+    Minimum 8 characters enforced server-side.
+    """
+    if len(data.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+
+    user = await db.users.find_one({"id": staff["id"]}, {"_id": 0, "password_hash": 1})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    pw_hash = user.get("password_hash", "")
+    if not pw_hash or not await asyncio.to_thread(pwd_ctx.verify, data.current_password, pw_hash):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+
+    new_hash = await asyncio.to_thread(pwd_ctx.hash, data.new_password)
+    await db.users.update_one(
+        {"id": staff["id"]},
+        {"$set": {"password_hash": new_hash, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return {"message": "Password changed successfully"}
 
 
 # ── Taxonomy reads ──────────────────────────────────────────────────────────
