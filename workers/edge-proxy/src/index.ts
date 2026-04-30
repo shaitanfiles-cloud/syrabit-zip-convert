@@ -642,6 +642,56 @@ function fnv1a32(s: string): string {
   return h.toString(16).padStart(8, "0");
 }
 
+// ─── Cache-Tag derivation ─────────────────────────────────────────────────────
+// Derives one or more Cloudflare Cache-Tags from the request pathname so
+// content can be surgically purged by tag from the CF dashboard or a CI
+// pipeline after a publish event, without purging unrelated cached routes.
+//
+// Tag taxonomy:
+//   chapter-{id}        → /api/content/chapters/{id} and SEO chapter pages
+//   subject-{slug}      → /api/content/subjects/{slug}
+//   library-bundle      → /api/content/library-bundle (the big navbar payload)
+//   seo-pages           → /api/seo/** (SEO HTML and sitemap routes)
+//   sitemap             → /api/seo/sitemap* and /sitemap.xml
+//   api-content         → catch-all for all /api/content/* responses
+//
+// Usage: set the returned string as the `Cache-Tag` response header.
+// Multiple tags are space-separated (CF accepts comma- or space-separated).
+// Returns empty string for paths that carry no useful tag.
+export function buildCacheTags(pathname: string): string {
+  const tags: string[] = [];
+
+  if (pathname.startsWith("/api/content/library-bundle")) {
+    tags.push("library-bundle");
+  }
+  if (pathname.startsWith("/api/content/")) {
+    tags.push("api-content");
+    // /api/content/chapters/{id}[/...]
+    const chapterMatch = pathname.match(/^\/api\/content\/chapters\/([^/?]+)/);
+    if (chapterMatch) tags.push(`chapter-${chapterMatch[1]}`);
+    // /api/content/subjects/{slug}
+    const subjectMatch = pathname.match(/^\/api\/content\/subjects\/([^/?]+)/);
+    if (subjectMatch) tags.push(`subject-${subjectMatch[1]}`);
+  }
+  if (pathname.startsWith("/api/seo/")) {
+    tags.push("seo-pages");
+    if (pathname.includes("sitemap")) tags.push("sitemap");
+  }
+  if (pathname === "/sitemap.xml" || pathname === "/sitemap-index.xml") {
+    tags.push("sitemap");
+  }
+  // Board/class/subject/chapter routes served by D1 or SEO pipeline.
+  // Guard: only apply to non-API paths so /api/content/... doesn't get
+  // spurious subject-content or chapter-xyz tags.
+  if (!pathname.startsWith("/api/")) {
+    const parts = pathname.split("/").filter(Boolean);
+    // parts: [board, class, subject, chapter?, page_type?]
+    if (parts.length >= 3) tags.push(`subject-${parts[2]}`);
+    if (parts.length >= 4) tags.push(`chapter-${parts[3]}`);
+  }
+  return tags.join(",");
+}
+
 function d1JsonResponse(
   data: unknown,
   cors: Record<string, string>,
@@ -651,18 +701,21 @@ function d1JsonResponse(
   const ttl = getCacheTtl(pathname);
   const body = JSON.stringify(data);
   const etag = `W/"d1-${fnv1a32(body)}-${body.length.toString(36)}"`;
-  return new Response(body, {
-    status: 200,
-    headers: {
-      ...cors,
-      "Content-Type": "application/json",
-      "Cache-Control": `public, max-age=${ttl}, stale-while-revalidate=${ttl * 2}`,
-      "ETag": etag,
-      "X-Cache": "D1",
-      "X-Source": "d1",
-      "X-RateLimit-Remaining": String(remaining),
-    },
-  });
+  const cacheControl = `public, max-age=${ttl}, stale-while-revalidate=${ttl * 2}`;
+  const tags = buildCacheTags(pathname);
+  const headers: Record<string, string> = {
+    ...cors,
+    "Content-Type": "application/json",
+    "Cache-Control": cacheControl,
+    "Surrogate-Control": cacheControl,
+    "Vary": "Accept-Encoding, Accept",
+    "ETag": etag,
+    "X-Cache": "D1",
+    "X-Source": "d1",
+    "X-RateLimit-Remaining": String(remaining),
+  };
+  if (tags) headers["Cache-Tag"] = tags;
+  return new Response(body, { status: 200, headers });
 }
 
 function d1XmlResponse(
@@ -677,6 +730,9 @@ function d1XmlResponse(
       ...cors,
       "Content-Type": "application/xml; charset=utf-8",
       "Cache-Control": "public, max-age=3600, stale-while-revalidate=7200",
+      "Surrogate-Control": "public, max-age=3600, stale-while-revalidate=7200",
+      "Vary": "Accept-Encoding",
+      "Cache-Tag": "sitemap",
       "ETag": etag,
       "X-Cache": "D1",
       "X-Source": "d1",
@@ -2231,28 +2287,36 @@ async function _handleEdgeFetch(
         if (backendResp.ok) {
           const ttl = getCacheTtl(pathname);
           const respBody = await backendResp.arrayBuffer();
+          const contentType = backendResp.headers.get("Content-Type") || "application/json";
+          const cacheControl = `public, max-age=${ttl}, stale-while-revalidate=${ttl * 2}`;
+          const tags = buildCacheTags(pathname);
 
+          const cachedHeaders: Record<string, string> = {
+            "Content-Type": contentType,
+            "Cache-Control": `public, s-maxage=${ttl}, stale-while-revalidate=${ttl * 2}`,
+            "Surrogate-Control": cacheControl,
+            "Vary": "Accept-Encoding, Accept",
+          };
+          if (tags) cachedHeaders["Cache-Tag"] = tags;
           const cachedResp = new Response(respBody, {
             status: backendResp.status,
-            headers: {
-              "Content-Type":
-                backendResp.headers.get("Content-Type") || "application/json",
-              "Cache-Control": `public, s-maxage=${ttl}, stale-while-revalidate=${ttl * 2}`,
-            },
+            headers: cachedHeaders,
           });
           ctx.waitUntil(cache.put(cacheKey, cachedResp.clone()));
 
+          const clientHeaders: Record<string, string> = {
+            ...cors,
+            "Content-Type": contentType,
+            "Cache-Control": cacheControl,
+            "Vary": "Accept-Encoding, Accept",
+            "X-Cache": "MISS",
+            "X-Source": "backend",
+            "X-RateLimit-Remaining": String(remaining),
+          };
+          if (tags) clientHeaders["Cache-Tag"] = tags;
           const clientResp = new Response(respBody, {
             status: backendResp.status,
-            headers: {
-              ...cors,
-              "Content-Type":
-                backendResp.headers.get("Content-Type") || "application/json",
-              "Cache-Control": `public, max-age=${ttl}, stale-while-revalidate=${ttl * 2}`,
-              "X-Cache": "MISS",
-              "X-Source": "backend",
-              "X-RateLimit-Remaining": String(remaining),
-            },
+            headers: clientHeaders,
           });
           return clientResp;
         }
