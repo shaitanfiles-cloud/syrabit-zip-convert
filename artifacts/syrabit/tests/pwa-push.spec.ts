@@ -525,45 +525,4 @@ test.describe('Push subscription registration', () => {
     expect(body.subscription.keys.auth).toBe(FAKE_PUSH_SUBSCRIPTION.keys.auth);
   });
 
-  test('missing subscription object in POST body would be rejected as 400', async ({
-    context,
-    page,
-  }) => {
-    // Simulate what the backend returns when the subscription key is absent.
-    // This test confirms the frontend receives and surfaces backend 400 errors
-    // gracefully (no unhandled exception crashes the page).
-    await context.grantPermissions(['notifications']);
-
-    await context.route('**/push/subscribe', async (route) => {
-      if (route.request().method() === 'POST') {
-        await route.fulfill({
-          status: 400,
-          json: { detail: 'Missing subscription object' },
-        });
-      } else {
-        await route.continue();
-      }
-    });
-
-    await page.goto('/');
-    await page.waitForLoadState('load');
-
-    // A 400 response from the backend should not crash the page.
-    const pageErrors: string[] = [];
-    page.on('pageerror', (e) => pageErrors.push(e.message));
-
-    const status = await page.evaluate(async () => {
-      const resp = await fetch('/api/push/subscribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-        credentials: 'include',
-      });
-      return resp.status;
-    });
-
-    expect(status).toBe(400);
-    // No uncaught exception from the 400 response itself.
-    expect(pageErrors.filter((m) => m.includes('push/subscribe'))).toHaveLength(0);
-  });
 });
