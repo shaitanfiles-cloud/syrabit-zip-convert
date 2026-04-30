@@ -1,15 +1,16 @@
 """
-providers.voyage — MongoDB Atlas Embedding & Reranking API (Voyage AI).
+providers.voyage — Voyage AI embeddings and reranking (direct API).
 
-MongoDB Atlas acquired Voyage AI and provides their embedding and reranking
-models as a managed API service. This module wraps that API so the rest of
-the backend can call it through clean async helpers without touching HTTP
-details.
+Calls api.voyageai.com/v1 directly. Cloudflare AI Gateway does not support
+Voyage AI as a named provider (returns code:2008 "Invalid provider"), so all
+requests bypass the gateway and go straight to Voyage AI.
 
 API format (OpenAI-style):
   POST https://api.voyageai.com/v1/embeddings
   POST https://api.voyageai.com/v1/rerank
   Authorization: Bearer <MONGODB_MODEL_API_KEY>
+
+To get a valid key: https://dash.voyageai.com → API Keys (key looks like pa-...)
 
 Embedding models (1024-dim — matches our Atlas Vector Search index):
   voyage-3-large        — best quality, multilingual, general purpose
@@ -20,14 +21,14 @@ Reranking models:
   rerank-2              — highest quality reranker
   rerank-2-lite         — fast, efficient reranker (default)
 
-Configuration (all optional — sensible defaults):
-  MONGODB_MODEL_API_KEY — API key (required to activate)
-  VOYAGE_BASE_URL       — override endpoint base (default: https://api.voyageai.com/v1)
-  VOYAGE_EMBED_MODEL    — embedding model (default: voyage-3-large)
-  VOYAGE_RERANK_MODEL   — reranking model (default: rerank-2-lite)
-  VOYAGE_EMBED_DIMS     — expected output dimensions (default: 1024)
-  VOYAGE_TIMEOUT_S      — HTTP timeout in seconds (default: 15)
-  VOYAGE_RERANK_TOP_K   — how many top results to keep after rerank (default: 5)
+Configuration:
+  MONGODB_MODEL_API_KEY   — Voyage AI API key from dash.voyageai.com (required)
+  VOYAGE_BASE_URL         — override endpoint (default: https://api.voyageai.com/v1)
+  VOYAGE_EMBED_MODEL      — embedding model (default: voyage-3-large)
+  VOYAGE_RERANK_MODEL     — reranking model (default: rerank-2-lite)
+  VOYAGE_EMBED_DIMS       — expected output dimensions (default: 1024)
+  VOYAGE_TIMEOUT_S        — HTTP timeout in seconds (default: 15)
+  VOYAGE_RERANK_TOP_K     — how many top results to keep after rerank (default: 5)
 """
 
 from __future__ import annotations
@@ -41,19 +42,27 @@ import httpx
 
 logger = logging.getLogger("providers.voyage")
 
-_API_KEY   = os.environ.get("MONGODB_MODEL_API_KEY", "").strip()
-_BASE_URL  = os.environ.get("VOYAGE_BASE_URL", "https://api.voyageai.com/v1").rstrip("/")
+_API_KEY      = os.environ.get("MONGODB_MODEL_API_KEY", "").strip()
 _EMBED_MODEL  = os.environ.get("VOYAGE_EMBED_MODEL",  "voyage-3-large").strip() or "voyage-3-large"
 _RERANK_MODEL = os.environ.get("VOYAGE_RERANK_MODEL", "rerank-2-lite").strip()  or "rerank-2-lite"
 _EMBED_DIMS   = int(os.environ.get("VOYAGE_EMBED_DIMS", "1024") or "1024")
 _TIMEOUT      = float(os.environ.get("VOYAGE_TIMEOUT_S", "15") or "15")
 _RERANK_TOP_K = int(os.environ.get("VOYAGE_RERANK_TOP_K", "5") or "5")
 
+# ── Base URL: explicit override → direct voyageai.com ────────────────────────
+# Note: Cloudflare AI Gateway does not support Voyage AI as a named provider
+# (returns code:2008 "Invalid provider"). All calls go direct to voyageai.com.
+_EXPLICIT_BASE = os.environ.get("VOYAGE_BASE_URL", "").strip().rstrip("/")
+_CF_GW_TOKEN   = os.environ.get("CF_AI_GATEWAY_TOKEN", "").strip()
+_via_gateway   = False
+
+_BASE_URL = _EXPLICIT_BASE if _EXPLICIT_BASE else "https://api.voyageai.com/v1"
+
 ENABLED: bool = bool(_API_KEY)
 
 if ENABLED:
     logger.info(
-        "Voyage AI (MongoDB Atlas Embedding) ready — embed=%s rerank=%s dims=%d base=%s",
+        "Voyage AI ready — embed=%s rerank=%s dims=%d base=%s",
         _EMBED_MODEL, _RERANK_MODEL, _EMBED_DIMS, _BASE_URL,
     )
 else:
@@ -64,7 +73,10 @@ else:
 
 
 def _headers() -> dict:
-    return {"Authorization": f"Bearer {_API_KEY}", "Content-Type": "application/json"}
+    h: dict = {"Authorization": f"Bearer {_API_KEY}", "Content-Type": "application/json"}
+    if _via_gateway and _CF_GW_TOKEN:
+        h["cf-aig-authorization"] = f"Bearer {_CF_GW_TOKEN}"
+    return h
 
 
 # ── Shared async client (module-level, reused across requests) ──────────────
