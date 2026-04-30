@@ -495,6 +495,36 @@ Run this after any Cloudflare Speed/Optimization dashboard change to confirm nei
 
 Task #68 verified that all 8 checklist rows above were updated from "☐ Reviewed" to either "✅ Confirmed" or "⚠ Changed — <note>", that the "Changes made during this review" section records the Mirage setting change, and that next review date is set to 2027-04-30. No further anomalies were found. Review is closed.
 
+### Task #76 — Add Load Balancer Read scope to CLOUDFLARE_API_TOKEN (2026-04-30)
+
+**Background:** During the Task #66 annual review the Load Balancing check (row 1 in the table above) returned a 403 on both `/accounts/:id/load_balancers/pools` and `/zones/:id/load_balancers` because `CLOUDFLARE_API_TOKEN` lacks the "Load Balancer: Read" scope. The architecture review confirmed no LB pool is currently in use, so the missing scope did not cause an outage — but it does mean future automated reviews cannot verify LB state programmatically.
+
+**What this task delivers:**
+
+- `artifacts/syrabit-backend/scripts/verify_cf_tokens.sh` now includes two new probes (check #4) for Load Balancer Read access at both the zone level and account level. Run the script after the scope is added to confirm the fix.
+
+**Human operator action required — Cloudflare dashboard:**
+
+1. Go to **https://dash.cloudflare.com/profile/api-tokens**
+2. Find the token corresponding to `CLOUDFLARE_API_TOKEN` (used by Wrangler and the annual review script)
+3. Click **Edit** on that token
+4. Under **Permissions** click **+ Add more** and add both:
+   - `Account` › **Load Balancing: Read**
+   - `Zone` › **Load Balancing: Read** (resource: All zones, or specifically `syrabit.ai`)
+5. Click **Continue to summary** → **Update Token**
+6. Verify with:
+   ```sh
+   CLOUDFLARE_ACCOUNT_ID=d66e40eac539fff1db270fddf384a5ec \
+   CLOUDFLARE_ZONE_ID=5b8c97df4431491dc7f60ea72fb61871 \
+   CLOUDFLARE_API_TOKEN=<token> \
+   bash artifacts/syrabit-backend/scripts/verify_cf_tokens.sh
+   ```
+   Both `LB read / zone` and `LB read / account` probes should return `OK   HTTP 200`.
+
+**Status:** ⚠ Pending — script updated and runbook documented; dashboard scope grant awaits human operator.
+
+Once the scope is granted and `verify_cf_tokens.sh` shows OK for both LB probes, update this status line to `✅ Complete — Load Balancer Read scope granted <date>`.
+
 ---
 
 ## Google Tag Gateway (first-party gtag proxy)
