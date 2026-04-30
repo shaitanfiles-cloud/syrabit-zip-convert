@@ -156,6 +156,7 @@ export default function PYQUploadPanel({
   const [viewMode, setViewMode] = useState('grid');
   const fileInputRef = useRef(null);
   const dropRef = useRef(null);
+  const uploadingRef = useRef(false);
 
   const loadPyqs = useCallback(async () => {
     if (!chapterId) return;
@@ -190,6 +191,7 @@ export default function PYQUploadPanel({
       return;
     }
     setUploading(true);
+    uploadingRef.current = true;
     try {
       const formData = new FormData();
       valid.forEach(f => formData.append('files', f));
@@ -216,6 +218,7 @@ export default function PYQUploadPanel({
       toast.error(e.response?.data?.detail || 'Upload failed');
     } finally {
       setUploading(false);
+      uploadingRef.current = false;
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   }, [examYear, subjectId, boardId, classId, streamId, chapterId, adminToken, loadPyqs]);
@@ -223,6 +226,10 @@ export default function PYQUploadPanel({
   const handleDrop = useCallback((e) => {
     e.preventDefault();
     setDragging(false);
+    if (uploadingRef.current) {
+      toast.warning('Please wait for the current upload to finish');
+      return;
+    }
     uploadFiles(e.dataTransfer.files);
   }, [uploadFiles]);
 

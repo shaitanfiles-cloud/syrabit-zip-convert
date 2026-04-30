@@ -32,8 +32,26 @@ const ADSENSE_SRC = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle
 
 const _injected = new Set();
 
+function pauseAutoAds() {
+  try {
+    if (typeof window !== 'undefined') {
+      window.adsbygoogle = window.adsbygoogle || [];
+      window.adsbygoogle.pauseAdRequests = 1;
+    }
+  } catch { /* ignore */ }
+}
+
+function resumeAutoAds() {
+  try {
+    if (typeof window !== 'undefined' && window.adsbygoogle) {
+      delete window.adsbygoogle.pauseAdRequests;
+    }
+  } catch { /* ignore */ }
+}
+
 function removeInjectedAdsense() {
   if (typeof document === 'undefined') return;
+  pauseAutoAds();
   const tags = document.querySelectorAll(`script[src="${ADSENSE_SRC}"]`);
   tags.forEach((t) => {
     try {
@@ -47,6 +65,7 @@ function removeInjectedAdsense() {
 
 function injectAdsense() {
   if (typeof document === 'undefined') return null;
+  resumeAutoAds();
   if (_injected.has(ADSENSE_SRC)) return null;
   if (document.querySelector(`script[src="${ADSENSE_SRC}"]`)) {
     _injected.add(ADSENSE_SRC);
