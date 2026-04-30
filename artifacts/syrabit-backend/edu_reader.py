@@ -412,6 +412,7 @@ async def fetch_and_extract(
             _reader_metrics["cache_hits"] += 1
             cached["from_cache"] = True
             cached["elapsed_ms"] = int((time.perf_counter() - t0) * 1000)
+            cached.pop("_final_url", None)
             return cached
         _reader_metrics["cache_misses"] += 1
 
@@ -545,6 +546,7 @@ async def fetch_and_extract(
     _cache_set(url, payload)
     if final_url != url:
         _cache_set(final_url, payload)
+    payload.pop("_final_url", None)
     return payload
 
 

@@ -163,6 +163,6 @@ async def safe_get_with_redirects(
         if not ok:
             return resp, current, f"redirect_{why}"
         if hop_validator and not await hop_validator(nxt):
-            return resp, current, "hop_policy_rejected"
+            return resp, nxt, "hop_policy_rejected"
         current = nxt
     return resp, current, "too_many_redirects"
