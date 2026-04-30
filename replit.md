@@ -86,11 +86,11 @@ A separate content management panel for staff users (role=`staff`) built at `/st
 **Staff accounts (seeded 2026-04-30):**
 | Name | Email | Password |
 |---|---|---|
-| Priya Sharma | priya.sharma@syrabit.ai | Syrabit@Staff1 |
-| Rahul Bora | rahul.bora@syrabit.ai | Syrabit@Staff2 |
-| Ananya Das | ananya.das@syrabit.ai | Syrabit@Staff3 |
-| Kunal Bhuyan | kunal.bhuyan@syrabit.ai | Syrabit@Staff4 |
-| Riya Gogoi | riya.gogoi@syrabit.ai | Syrabit@Staff5 |
+| Rohan Sahu | priya.sharma@syrabit.ai | Syrabit@Staff1 |
+| Prakash Sahu | rahul.bora@syrabit.ai | Syrabit@Staff2 |
+| Pari Saikia | ananya.das@syrabit.ai | Syrabit@Staff3 |
+| Nahida Ahmed | kunal.bhuyan@syrabit.ai | Syrabit@Staff4 |
+| Rashmita Sharma | riya.gogoi@syrabit.ai | Syrabit@Staff5 |
 
 **Backend API endpoints (require `role=staff` or `role=admin`):**
 - `GET /api/staff/content/boards` — list boards

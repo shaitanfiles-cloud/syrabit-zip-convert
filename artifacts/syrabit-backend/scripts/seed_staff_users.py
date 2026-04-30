@@ -25,11 +25,11 @@ DB_NAME   = os.environ.get("DB_NAME", "syrabit")
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 STAFF_USERS = [
-    {"name": "Priya Sharma",   "email": "priya.sharma@syrabit.ai",  "password": "Syrabit@Staff1"},
-    {"name": "Rahul Bora",     "email": "rahul.bora@syrabit.ai",    "password": "Syrabit@Staff2"},
-    {"name": "Ananya Das",     "email": "ananya.das@syrabit.ai",    "password": "Syrabit@Staff3"},
-    {"name": "Kunal Bhuyan",   "email": "kunal.bhuyan@syrabit.ai",  "password": "Syrabit@Staff4"},
-    {"name": "Riya Gogoi",     "email": "riya.gogoi@syrabit.ai",    "password": "Syrabit@Staff5"},
+    {"name": "Rohan Sahu",      "email": "priya.sharma@syrabit.ai",  "password": "Syrabit@Staff1"},
+    {"name": "Prakash Sahu",    "email": "rahul.bora@syrabit.ai",    "password": "Syrabit@Staff2"},
+    {"name": "Pari Saikia",     "email": "ananya.das@syrabit.ai",    "password": "Syrabit@Staff3"},
+    {"name": "Nahida Ahmed",    "email": "kunal.bhuyan@syrabit.ai",  "password": "Syrabit@Staff4"},
+    {"name": "Rashmita Sharma", "email": "riya.gogoi@syrabit.ai",    "password": "Syrabit@Staff5"},
 ]
 
 
