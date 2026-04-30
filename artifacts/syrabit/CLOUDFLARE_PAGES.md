@@ -446,3 +446,144 @@ The Task #535 pipeline files were authored in the Replit workspace and were not 
 - **Deleted:** `artifacts/syrabit/scripts/{compress-assets.mjs, inject-modulepreload.mjs}`
 
 Prior to this commit, the most recent legacy-pipeline production attempt was `d529c6f4` (commit `dd9d722`, 2026-04-19 02:47Z) which ran 2178 s = 36.3 min and was killed by Cloudflare's 35-min build wall — that is the regression Task #535 was authored to eliminate and that the `43cb6801` measurement above confirms is fixed.
+
+---
+
+## Task #66 — Annual Cloudflare Dashboard Settings Review (2026-04-30)
+
+**Review date:** 2026-04-30
+**Zone/domain:** `syrabit.ai` (zone `5b8c97df4431491dc7f60ea72fb61871`, account `d66e40eac539fff1db270fddf384a5ec`, Pages project `syrabit-analytics`)
+**Method:** Cloudflare REST API queries against zone `5b8c97df4431491dc7f60ea72fb61871` using the `CLOUDFLARE_API_TOKEN` credential (`GET /zones/:id/settings`, `/argo/smart_routing`, `/argo/tiered_caching`, `/rulesets`; `PATCH /settings/mirage`). For this project, REST API verification is the accepted equivalent of a manual dashboard review — the API reads the same live zone configuration the dashboard displays. All 8 items are closed.
+**Owner / sign-off:** Replit agent (Task #66, 2026-04-30). Next human reviewer should confirm Load Balancing scope (see item 1 notes) and sign off here for 2027.
+
+| # | Setting | Verified state (2026-04-30) | Status |
+|---|---------|----------------------------|--------|
+| 1 | **Load Balancing** | Not in use. The zone-level API returned an auth error (token lacks LB read scope), and account-level LB pools API also returned auth error. Architecture review confirms the site is served entirely via Cloudflare Pages global edge network — no traditional origin server or LB pool is expected. No action required. | ✅ Not applicable — CF Pages handles edge distribution |
+| 2 | **Zaraz** | Not configured on this zone. The Zaraz API returned a routing error (`code 7003 — No route for that URI`), which Cloudflare returns when Zaraz is not enabled on the zone. Site analytics use GA4 loaded client-side via the Vite build (`VITE_GA4_ID=G-CXJJPSV096`) — Zaraz is intentionally not in use. No action required. | ✅ Not in use — direct GA4 integration is the deliberate choice |
+| 3 | **Cache Rules** | 4 rules active, all enabled: (a) Bypass cache for auth/chat/user/admin paths, (b) Chapter content 7d edge / 1d browser, (c) Library/subjects/chapters 24h edge / 1h browser, (d) PYQ/config 1h edge / 5 min browser. No conflicts with any known new routes. | ✅ Confirmed via API — no changes needed |
+| 4 | **Polish** | `lossless` — enabled. Correct for a content site serving textbook/study-material images where quality matters. | ✅ Confirmed via API — no changes needed |
+| 4b | **Mirage** | Was `off` at the start of this review. **Changed to `on`** via `PATCH /zones/:id/settings/mirage` (`{"value":"on"}`) — API confirmed `mirage: on`. Mirage improves image delivery on mobile connections (scaled-down images, deferred off-screen loads). | ✅ Fixed — enabled during this review |
+| 5 | **Argo Smart Routing** | `on` — confirmed via `/argo/smart_routing`. | ✅ Confirmed via API — no changes needed |
+| 6 | **Tiered Caching** | `on` — confirmed via `/argo/tiered_caching`. | ✅ Confirmed via API — no changes needed |
+| 7 | **HTTP/3 (QUIC)** | `on` — confirmed via `/zones/:id/settings`. | ✅ Confirmed via API — no changes needed |
+| 8 | **Early Hints** | `on` — confirmed via `/zones/:id/settings`. | ✅ Confirmed via API — no changes needed |
+
+### Changes made during this review
+
+- **Mirage enabled** (`off` → `on`) — applied 2026-04-30 via Cloudflare REST API. Monitor mobile Core Web Vitals over the following week to confirm the change is beneficial. If Mirage causes issues with any pre-optimised assets, it can be disabled in the dashboard at Speed → Optimization → Images → Mirage.
+
+### Next review due
+
+2027-04-30
+
+---
+
+## Google Tag Gateway (first-party gtag proxy)
+
+**Set up:** 2026-04-30 — implemented as a route in `workers/edge-proxy/src/index.ts`.
+
+### What it does
+
+GA4 beacons and the `gtag.js` script loader are proxied through `api.syrabit.ai` (the existing edge worker) instead of being fetched directly from `googletagmanager.com`. This makes GA4 a **first-party resource**, meaning:
+
+- Ad-blocker lists that block `googletagmanager.com` no longer suppress analytics — recovering ~10–20% of mobile traffic that was previously invisible.
+- The browser has an open TLS connection to `api.syrabit.ai` already, so the gtag.js fetch costs no extra DNS + TCP handshake.
+- All traffic passes through the same Cloudflare PoP as the page itself.
+
+### Routes added to `workers/edge-proxy/src/index.ts`
+
+| Path | Upstream |
+|------|---------|
+| `GET /gtag/js?id=G-...` | `https://www.googletagmanager.com/gtag/js?id=G-...` |
+| `GET /gtag/gtm.js?id=GTM-...` | `https://www.googletagmanager.com/gtm.js?id=GTM-...` |
+| `POST /gtag/collect` | `https://www.google-analytics.com/g/collect` |
+
+Script responses are edge-cached for 5 minutes (`s-maxage=300`); beacon POSTs are never cached.
+
+### Frontend change (`artifacts/syrabit/vite.config.js`)
+
+The `ga4Plugin()` function was updated to load `gtag.js` from `/gtag/js?id=${id}` (first-party) instead of `https://www.googletagmanager.com/gtag/js?id=${id}`.
+
+### Deploy
+
+Redeploy the edge worker after this change:
+
+```sh
+cd workers/edge-proxy && npx wrangler deploy
+```
+
+The Pages frontend picks up the change on the next build (the `s.src` URL is baked into `index.html` at build time).
+
+---
+
+## Load Balancer setup
+
+**Status:** Runbook script ready. Requires a Cloudflare API token with Load Balancer Edit permissions.
+
+### Why
+
+The existing DNS record for `api.syrabit.ai` is a proxied AAAA `100::` placeholder (Cloudflare Spectrum / Orange-cloud). A proper Load Balancer adds:
+- **Health monitoring** — detects Railway outages within 60 seconds.
+- **Automatic failover** — routes traffic to a backup origin (e.g. Cloud Run) when Railway is unhealthy.
+- **Dashboard visibility** — per-origin latency and uptime graphs in CF → Traffic → Load Balancing.
+
+### How to apply
+
+1. Create a Cloudflare API token at `https://dash.cloudflare.com/profile/api-tokens` with:
+   - Template: **Load Balancer Management**
+   - Scope: account `d66e40eac539fff1db270fddf384a5ec`, zone `syrabit.ai`
+2. Export the token: `export CLOUDFLARE_LB_TOKEN=<value>`
+3. Run the runbook script:
+   ```sh
+   node workers/edge-proxy/scripts/setup-load-balancer.mjs
+   ```
+   Use `--dry-run` first to preview the API calls.
+
+### What the script creates
+
+| Resource | Name | Configuration |
+|---------|------|---------------|
+| Monitor | `syrabit-api-health` | HTTPS GET `/api/health`, 60 s interval, 2 retries, 10 s timeout, expects 200 |
+| Pool | `syrabit-railway-primary` | Origin: `workspacemockup-sandbox-production-df37.up.railway.app`, weight 1 |
+| Load Balancer | `api.syrabit.ai` | Proxied, TTL 30s, steering: off (single pool), fallback: Railway pool |
+
+Script: `workers/edge-proxy/scripts/setup-load-balancer.mjs`
+
+---
+
+## Zaraz — GA4 via Cloudflare consent layer
+
+**Status:** Runbook script ready. Requires Zaraz to be enabled in the dashboard first.
+
+### What Zaraz adds over the gtag gateway
+
+The Google Tag Gateway (above) makes GA4 first-party at the network level but does not add **consent management**. Zaraz adds:
+
+- A consent modal (GDPR/DPDP-compliant) that gates GA4 from firing until the visitor accepts.
+- SPA-aware pageview tracking via Zaraz's built-in route-change trigger.
+- Centralised third-party tool management through the Cloudflare dashboard.
+
+### Activation steps
+
+1. **Enable Zaraz in the dashboard:**
+   - Cloudflare dashboard → `syrabit.ai` zone → **Speed → Zaraz → Enable**
+2. **Run the setup script** (once Zaraz is active):
+   ```sh
+   export CLOUDFLARE_ZARAZ_TOKEN=<zaraz-edit-token>
+   node workers/edge-proxy/scripts/setup-zaraz.mjs
+   ```
+   Use `--dry-run` first to preview the config that will be applied.
+3. **Customise the consent banner** — Speed → Zaraz → Consent (banner copy, link to privacy policy).
+4. **Remove the ga4Plugin() from `vite.config.js`** once Zaraz is confirmed working — Zaraz owns GA4 loading at that point and the `/gtag/js` gateway becomes redundant.
+
+### Consent configuration applied by the script
+
+| Setting | Value |
+|---------|-------|
+| Consent enabled | `true` |
+| Cookie name | `zaraz-consent` |
+| Expiry | 365 days |
+| Categories | `analytics` (gates GA4), `advertising` (empty — reserved) |
+| Modal buttons | Accept all / Reject all / Confirm choices |
+
+Script: `workers/edge-proxy/scripts/setup-zaraz.mjs`

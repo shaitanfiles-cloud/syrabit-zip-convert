@@ -494,7 +494,7 @@ function ga4Plugin() {
       // src/utils/{usePageTracking,webVitals}.js can queue events
       // immediately — once gtag.js loads, the queued commands flush.
       const tag = [
-        `<!-- Google Analytics 4 (LCP-deferred) — Task #639 -->`,
+        `<!-- Google Analytics 4 (LCP-deferred, first-party gtag gateway) -->`,
         `    <script>`,
         `      window.dataLayer=window.dataLayer||[];`,
         `      function gtag(){dataLayer.push(arguments);}`,
@@ -506,7 +506,7 @@ function ga4Plugin() {
         `        function load(){`,
         `          if(loaded)return;loaded=true;`,
         `          var s=document.createElement('script');`,
-        `          s.src='https://www.googletagmanager.com/gtag/js?id=${id}';`,
+        `          s.src='/gtag/js?id=${id}';`,
         `          s.async=true;document.head.appendChild(s);`,
         `          if(po){try{po.disconnect()}catch(e){}}`,
         `          if(timer){clearTimeout(timer);timer=null;}`,

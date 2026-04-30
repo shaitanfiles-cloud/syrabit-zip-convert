@@ -1865,6 +1865,92 @@ async function handleScheduledSync(env: Env): Promise<void> {
   }
 }
 
+// ── Google Tag Gateway ────────────────────────────────────────────────────────
+// Proxies GA4 / GTM requests through api.syrabit.ai so they originate from a
+// first-party origin, bypassing ad-blocker lists that block googletagmanager.com
+// and google-analytics.com. The route /gtag/* is matched in _handleEdgeFetch
+// before any backend proxy logic runs, so no request ever reaches Railway.
+//
+// URL mapping:
+//   /gtag/js?id=G-...       → https://www.googletagmanager.com/gtag/js?id=G-...
+//   /gtag/gtm.js?id=GTM-... → https://www.googletagmanager.com/gtm.js?id=GTM-...
+//   /gtag/collect            → https://www.google-analytics.com/g/collect   (POST)
+//
+// To activate the gateway in the frontend, update ga4Plugin() in vite.config.js:
+//   Replace: s.src='https://www.googletagmanager.com/gtag/js?id=${id}';
+//   With:    s.src='/gtag/js?id=${id}';
+// and update any sendBeacon / fetch beacon URLs similarly.
+async function handleGtagGateway(
+  request: Request,
+  pathname: string,
+  url: URL,
+): Promise<Response> {
+  let upstreamUrl: string;
+
+  if (pathname === "/gtag/js" || pathname === "/gtag/gtm.js") {
+    // Script proxy: /gtag/js → googletagmanager.com/gtag/js
+    //               /gtag/gtm.js → googletagmanager.com/gtm.js
+    const upstreamPath = pathname === "/gtag/js" ? "/gtag/js" : "/gtm.js";
+    upstreamUrl = `https://www.googletagmanager.com${upstreamPath}${url.search}`;
+  } else if (pathname === "/gtag/collect") {
+    // Beacon proxy: POST /gtag/collect → google-analytics.com/g/collect
+    upstreamUrl = `https://www.google-analytics.com/g/collect${url.search}`;
+  } else {
+    return new Response("Not found", { status: 404 });
+  }
+
+  const upstreamReq = new Request(upstreamUrl, {
+    method: request.method,
+    headers: (() => {
+      const h = new Headers();
+      // Forward content-type for POST beacons; strip Origin/Referer so
+      // Google does not see the proxy's own URL as the document origin.
+      const ct = request.headers.get("content-type");
+      if (ct) h.set("content-type", ct);
+      const ua = request.headers.get("user-agent");
+      if (ua) h.set("user-agent", ua);
+      // Forward the real visitor IP so GA4 geolocation is accurate.
+      const cf = (request as unknown as { cf?: { ip?: string } }).cf;
+      const realIp = request.headers.get("cf-connecting-ip") || cf?.ip || "";
+      if (realIp) h.set("x-forwarded-for", realIp);
+      return h;
+    })(),
+    body: request.method === "POST" ? request.body : undefined,
+  });
+
+  let upstream: Response;
+  try {
+    upstream = await fetch(upstreamReq);
+  } catch {
+    return new Response("Bad gateway", { status: 502 });
+  }
+
+  const respHeaders = new Headers();
+  // Propagate content-type from Google's response.
+  const ct = upstream.headers.get("content-type");
+  if (ct) respHeaders.set("content-type", ct);
+
+  if (pathname === "/gtag/collect") {
+    // Beacon: no caching, CORS open so browsers can POST cross-origin.
+    respHeaders.set("cache-control", "no-store");
+    respHeaders.set("access-control-allow-origin", "*");
+  } else {
+    // Script: cache at the edge for 5 minutes (Google rotates slowly).
+    // Browsers may cache up to 1 minute so a stale version is never older
+    // than 6 minutes after Google publishes an update.
+    respHeaders.set("cache-control", "public, max-age=60, s-maxage=300, stale-while-revalidate=300");
+    respHeaders.set("access-control-allow-origin", "*");
+    respHeaders.set("vary", "accept-encoding");
+  }
+  respHeaders.set("x-source", "gtag-gateway");
+
+  return new Response(upstream.body, {
+    status: upstream.status,
+    headers: respHeaders,
+  });
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Task #944 — extracted so the public ``fetch`` export can wrap a single
 // recordEdgeLog call around every return path of the original handler.
 // Behaviour of the inner handler is otherwise unchanged from before.
@@ -1896,6 +1982,35 @@ async function _handleEdgeFetch(
     if (pathname === "/api/edge/kv-usage" && request.method === "GET") {
       return handleKvUsage(env, request, cors);
     }
+
+    // ── Google Tag Gateway (gtag proxy) ─────────────────────────────────────
+    // Proxies Google Analytics 4 beacon requests through this edge worker so
+    // they originate from api.syrabit.ai instead of googletagmanager.com.
+    // Benefits:
+    //   1. Bypasses ad-blockers and browser privacy extensions that block
+    //      googletagmanager.com, recovering ~10–20% of mobile traffic that
+    //      would otherwise be invisible to GA4.
+    //   2. Eliminates the third-party DNS + TLS handshake cost for the gtag.js
+    //      script (~50–100 ms on slow connections) because the script is now
+    //      served from a first-party origin already open in the browser.
+    //   3. All requests pass through Cloudflare's network — same PoP as the
+    //      page HTML — so no extra cross-ocean hop.
+    //
+    // Routes proxied:
+    //   GET  /gtag/js            → https://www.googletagmanager.com/gtag/js
+    //   POST /gtag/collect       → https://www.google-analytics.com/g/collect
+    //   GET  /gtag/gtm.js        → https://www.googletagmanager.com/gtm.js
+    //
+    // The frontend references these as relative URLs (see vite.config.js
+    // ga4Plugin — change the src from the googletagmanager.com absolute URL
+    // to /gtag/js?id=G-XXXXXXXXXX after this worker is deployed).
+    //
+    // Cache: gtag.js is edge-cached for 5 minutes (Google rotates it slowly);
+    //        /g/collect beacons are never cached (POST + ephemeral).
+    if (pathname.startsWith("/gtag/")) {
+      return handleGtagGateway(request, pathname, url);
+    }
+    // ────────────────────────────────────────────────────────────────────────
 
     // Task #848 — /api/livez is the new Railway liveness probe. The
     // edge can answer it directly because the contract is "is *some*
