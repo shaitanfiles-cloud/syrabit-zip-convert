@@ -278,3 +278,67 @@ async def test_workers_ai_primary_embed_allowed_after_reset(_reset_embed_state, 
 
     result = await vertex_services._workers_ai_primary_embed("hello world")
     assert result == fake_vec
+
+
+# ── Sliding-window expiry tests ───────────────────────────────────────────────
+
+
+def test_stale_timestamps_are_pruned_and_do_not_count(_reset_embed_state, monkeypatch):
+    """Timestamps older than _EMBED_429_COOLDOWN_S must be dropped by
+    _track_embed_429 so they no longer contribute to the burst count."""
+    import vertex_services
+
+    threshold = vertex_services._EMBED_429_THRESHOLD
+    cooldown_s = vertex_services._EMBED_429_COOLDOWN_S
+    base_time = 1_000_000.0
+
+    # Record (threshold - 1) hits at t=base_time — below the activation threshold.
+    monkeypatch.setattr(vertex_services.time, "time", lambda: base_time)
+    for _ in range(threshold - 1):
+        vertex_services._track_embed_429()
+
+    assert vertex_services.get_embed_429_burst() == threshold - 1
+    assert not vertex_services.is_embed_cooldown_active()
+
+    # Advance the clock past the full cooldown window so every prior hit is stale.
+    future_time = base_time + cooldown_s + 1
+    monkeypatch.setattr(vertex_services.time, "time", lambda: future_time)
+
+    # Record one new hit — _track_embed_429 must prune all old timestamps.
+    vertex_services._track_embed_429()
+
+    # Only the single fresh hit should remain in the window.
+    assert vertex_services.get_embed_429_burst() == 1
+    assert len(vertex_services._embed_429_timestamps) == 1
+
+
+def test_expired_sub_threshold_hits_do_not_activate_cooldown_on_new_hit(
+    _reset_embed_state, monkeypatch
+):
+    """Previously accumulated 429s that fall below the threshold but outside the
+    window must NOT activate the cooldown when new hits arrive in a fresh window
+    (even if the combined old+new count would cross the threshold)."""
+    import vertex_services
+
+    threshold = vertex_services._EMBED_429_THRESHOLD
+    cooldown_s = vertex_services._EMBED_429_COOLDOWN_S
+    base_time = 2_000_000.0
+
+    # Record (threshold - 1) hits — just below the activation threshold.
+    monkeypatch.setattr(vertex_services.time, "time", lambda: base_time)
+    for _ in range(threshold - 1):
+        vertex_services._track_embed_429()
+
+    assert not vertex_services.is_embed_cooldown_active()
+
+    # Advance the clock so all previous hits are outside the sliding window.
+    future_time = base_time + cooldown_s + 1
+    monkeypatch.setattr(vertex_services.time, "time", lambda: future_time)
+
+    # One new hit in the fresh window — still below threshold on its own.
+    vertex_services._track_embed_429()
+
+    # Old timestamps have been pruned; only 1 fresh hit exists — cooldown must
+    # NOT be active because the new window count (1) is below the threshold.
+    assert not vertex_services.is_embed_cooldown_active()
+    assert vertex_services.get_embed_429_burst(window_seconds=cooldown_s) == 1
