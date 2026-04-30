@@ -374,15 +374,9 @@ async def fetch_and_extract(
         {"ok": False, "error": <code>, "detail": <message>, "url": url}
     """
     t0 = time.perf_counter()
-    if not bypass_cache:
-        cached = _cache_get(url)
-        if cached:
-            _reader_metrics["cache_hits"] += 1
-            cached["from_cache"] = True
-            cached["elapsed_ms"] = int((time.perf_counter() - t0) * 1000)
-            return cached
-        _reader_metrics["cache_misses"] += 1
 
+    # Policy checks run BEFORE the cache so that allowlist revocations and
+    # robots.txt changes take effect immediately, even for previously cached URLs.
     allowed, reason = await is_allowed_url(url)
     if not allowed:
         _reader_metrics["blocked_allowlist"] += 1
@@ -393,6 +387,15 @@ async def fetch_and_extract(
         _reader_metrics["blocked_robots"] += 1
         await log_blocked_request(url, "robots_disallow", actor=actor, ip_hash=ip_hash)
         return {"ok": False, "error": "robots_disallow", "detail": "robots.txt forbids this path", "url": url}
+
+    if not bypass_cache:
+        cached = _cache_get(url)
+        if cached:
+            _reader_metrics["cache_hits"] += 1
+            cached["from_cache"] = True
+            cached["elapsed_ms"] = int((time.perf_counter() - t0) * 1000)
+            return cached
+        _reader_metrics["cache_misses"] += 1
 
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
