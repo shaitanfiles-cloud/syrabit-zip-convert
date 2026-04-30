@@ -280,6 +280,7 @@ async def _assamese_translate_gemini_main_sarvam_polish(
 
     # ── Step 1: Gemini main (fallback) ──────────────────────────────────
     gemini_out = ""
+    _gemini_timed_out = False
     try:
         import vertex_services  # local import — keeps cold-start cost off the main chat path
         gemini_out = await asyncio.wait_for(
@@ -292,16 +293,41 @@ async def _assamese_translate_gemini_main_sarvam_polish(
             f"[INDIC-TRANSLATE] Gemini main timed out after "
             f"{_GEMINI_TRANSLATE_TIMEOUT_SEC}s for {src[:60]!r}"
         )
-        return ""
+        _gemini_timed_out = True
     except Exception as _e:  # pragma: no cover — network defensive
         logger.warning(
             f"[INDIC-TRANSLATE] Gemini main failed for {src[:60]!r}: "
             f"{type(_e).__name__}: {str(_e)[:160]}"
         )
-        return ""
+
+    # ── Step 1.5: Qwen fallback (when Gemini fails or returns empty, not timeout) ──
+    # Skip if Gemini timed out — stacking another 6s would be too slow for the user.
+    if not gemini_out and not _gemini_timed_out:
+        try:
+            from providers.cloudflare_ai import chat as _cf_chat_tr
+            _qwen_tr_msgs = [
+                {"role": "system", "content": (
+                    "You are an expert English-to-Assamese translator. "
+                    "Translate the given English text to fluent, standard Assamese (অসমীয়া) script. "
+                    "Output only the Assamese translation — no explanation, no English words."
+                )},
+                {"role": "user", "content": f"Translate to Assamese:\n\n{src[:1500]}"},
+            ]
+            _qwen_tr = await asyncio.wait_for(
+                _cf_chat_tr(_qwen_tr_msgs, model_key="@cf/qwen/qwen2.5-72b-instruct", max_tokens=1024),
+                timeout=6.0,
+            )
+            _qwen_tr = (_qwen_tr or "").strip()
+            if _qwen_tr:
+                logger.info("[INDIC-TRANSLATE] Qwen fallback succeeded for %r", src[:40])
+                return _tr_cache_store(_qwen_tr)
+        except Exception as _qe:
+            logger.warning("[INDIC-TRANSLATE] Qwen fallback failed: %s: %s", type(_qe).__name__, str(_qe)[:120])
 
     if not gemini_out:
-        logger.info(f"[INDIC-TRANSLATE] Gemini main returned empty for {src[:60]!r}")
+        if _gemini_timed_out:
+            return ""
+        logger.info(f"[INDIC-TRANSLATE] Gemini + Qwen both returned empty for {src[:60]!r}")
         return ""
 
     # ── Step 2: Sarvam polish (optional, best-effort) ───────────────────

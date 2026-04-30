@@ -1062,7 +1062,10 @@ async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048
 _LLM_PROVIDERS_CONTENT: list[dict] = []
 if _CF_AI_ENABLED:
     _LLM_PROVIDERS_CONTENT.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/openai/gpt-oss-120b"})
+    _LLM_PROVIDERS_CONTENT.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/qwen/qwen2.5-72b-instruct"})
     _LLM_PROVIDERS_CONTENT.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
+if _GEMINI_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
 
 logger.info(
     f"Admin content providers (quality-first order): "
@@ -2173,10 +2176,10 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             else:
                 _wai_msgs.append(_gm)
 
-        _wai_model = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+        _wai_model = "@cf/qwen/qwen2.5-72b-instruct"
         _phase2_t0 = time.monotonic()
         logger.info(
-            f"[INDIC] Phase 2 (Workers AI FALLBACK): streaming from "
+            f"[INDIC] Phase 2 (Qwen FALLBACK): streaming from "
             f"workers-ai/{_wai_model} for {response_lang}"
         )
 
