@@ -10,6 +10,7 @@
  * chapterRef=… subjectName=… /> once on any reader/chapter page.
  */
 import { useEffect, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { Bookmark, HelpCircle, Check } from 'lucide-react';
 import { studyApi } from '@/utils/studyApi';
 import { toast } from 'sonner';
@@ -109,11 +110,14 @@ export function HighlightSavePopover({
           )}
         </div>
       )}
-      <QuizModal
-        open={quizOpen} onClose={() => setQuizOpen(false)}
-        context={quizCtx} subject_name={subjectName}
-        chapter_ref={chapterRef} count={5}
-      />
+      {typeof document !== 'undefined' && createPortal(
+        <QuizModal
+          open={quizOpen} onClose={() => setQuizOpen(false)}
+          context={quizCtx} subject_name={subjectName}
+          chapter_ref={chapterRef} count={5}
+        />,
+        document.body,
+      )}
     </>
   );
 }
