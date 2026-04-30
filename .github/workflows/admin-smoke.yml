@@ -116,12 +116,15 @@ jobs:
       - name: HTTP/3 + Early Hints check (syrabit.ai)
         run: bash artifacts/syrabit/scripts/check-http3-early-hints.sh
 
-  # Task #105 — Verify Cloudflare Phase 1 zone settings haven't been reverted.
-  # Checks: sort_query_string_for_cache, true_client_ip_header, ECH,
-  # sbfm_likely_automated, content_bots_protection, DMARC p= policy.
+  # Task #105 — Phase 1: sort_query_string_for_cache, true_client_ip_header, ECH,
+  #             sbfm_likely_automated, content_bots_protection, DMARC p= policy.
+  # Task #106 — Phase 2: R2 bucket syrabit-logs, Logpush jobs (http_requests +
+  #             firewall_events), Origin Healthcheck api-syrabit-ai-origin.
+  #             Phase 2 checks degrade gracefully if the token lacks Logs: Read
+  #             or Health Checks: Read (warns, does not fail hard).
   # Runs in parallel with the other smoke jobs (no `needs:` dependency).
   cf-zone-settings:
-    name: Cloudflare zone settings smoke
+    name: Cloudflare Phase 1 & 2 smoke
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -136,8 +139,9 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Verify Cloudflare Phase 1 zone settings
+      - name: Verify Cloudflare Phase 1 & 2 settings
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ZONE_ID: "5b8c97df4431491dc7f60ea72fb61871"
+          CLOUDFLARE_ACCOUNT_ID: "d66e40eac539fff1db270fddf384a5ec"
         run: node artifacts/syrabit/scripts/nightly-smoke.js

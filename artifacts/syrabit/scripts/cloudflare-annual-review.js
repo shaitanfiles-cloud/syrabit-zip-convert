@@ -7,7 +7,9 @@
  * established in Phase 1 (Task #105) and updated by later phases.
  *
  * Required env:
- *   CLOUDFLARE_API_TOKEN   — Zone Settings: Read, DNS: Read, Bot Management: Read
+ *   CLOUDFLARE_API_TOKEN   — Zone Settings: Read, DNS: Read, Bot Management: Read,
+ *                            Logs: Read (for Phase 2 Logpush), Health Checks: Read,
+ *                            R2: Read (for Phase 2 bucket check)
  *   CLOUDFLARE_ZONE_ID     — optional, defaults to syrabit.ai zone
  *   CLOUDFLARE_ACCOUNT_ID  — optional, defaults to Syrabit account
  *
@@ -114,19 +116,72 @@ async function main() {
     console.log('  ✗  _dmarc.syrabit.ai TXT record: NOT FOUND');
   }
 
-  // ── Phase 2+ placeholders ─────────────────────────────────────────────
-  console.log('\n── Phase 2: Logpush & Healthchecks (todo) ──');
+  // ── Phase 2: R2 Logs Bucket ──────────────────────────────────────────
+  console.log('\n── Phase 2: R2 Logs Bucket (Task #106) ──');
+  const r2 = await cfGet(`/accounts/${ACCOUNT_ID}/r2/buckets`);
+  if (!r2.success) {
+    const authErr = r2.errors?.[0]?.code === 10000;
+    console.log(`  ?  R2 bucket syrabit-logs${authErr ? '  [token lacks R2: Read]' : ': ' + JSON.stringify(r2.errors)}`);
+  } else {
+    const exists = (r2.result?.buckets || []).some(b => b.name === 'syrabit-logs');
+    row('R2 bucket syrabit-logs exists', exists, true,
+      exists ? 'Logpush destination' : 'run cloudflare-phase2-apply.js');
+  }
+
+  // ── Phase 2: Logpush jobs ─────────────────────────────────────────────
+  console.log('\n── Phase 2: Logpush Jobs (Task #106) ──');
+  console.log('  Target: 2 jobs (syrabit-http-requests, syrabit-firewall-events) → R2, enabled');
   const lp = await cfGet(`/zones/${ZONE_ID}/logpush/jobs`);
-  const lc = lp.success ? lp.result.length : '?';
-  row('logpush jobs', lc, null, lc === 0 ? 'Phase 2 not yet applied' : '');
+  if (!lp.success) {
+    const authErr = lp.errors?.[0]?.code === 10000;
+    console.log(`  ?  Logpush jobs${authErr
+      ? '  [token lacks Logs: Read — add scope at dash.cloudflare.com/profile/api-tokens]'
+      : ': ' + JSON.stringify(lp.errors)}`);
+  } else {
+    const httpJob  = lp.result.find(j => j.name === 'syrabit-http-requests');
+    const fwJob    = lp.result.find(j => j.name === 'syrabit-firewall-events');
+    if (httpJob) {
+      row('syrabit-http-requests enabled', httpJob.enabled, true,
+        `id=${httpJob.id} dataset=${httpJob.dataset}`);
+    } else {
+      row('syrabit-http-requests', 'NOT FOUND', 'EXISTS', 'run cloudflare-phase2-apply.js');
+    }
+    if (fwJob) {
+      row('syrabit-firewall-events enabled', fwJob.enabled, true,
+        `id=${fwJob.id} dataset=${fwJob.dataset}`);
+    } else {
+      row('syrabit-firewall-events', 'NOT FOUND', 'EXISTS', 'run cloudflare-phase2-apply.js');
+    }
+    if (lp.result.length > 2) {
+      console.log(`  ℹ  ${lp.result.length - 2} additional job(s): ${lp.result.filter(j=>j.name!=='syrabit-http-requests'&&j.name!=='syrabit-firewall-events').map(j=>j.name).join(', ')}`);
+    }
+  }
 
+  // ── Phase 2: Origin Healthcheck ───────────────────────────────────────
+  console.log('\n── Phase 2: Origin Healthcheck (Task #106) ──');
+  console.log('  Target: api-syrabit-ai-origin polls https://api.syrabit.ai/health every 60 s');
   const hc = await cfGet(`/zones/${ZONE_ID}/healthchecks`);
-  const hcount = hc.success ? hc.result.length : '?';
-  row('healthchecks', hcount, null, hcount === 0 ? 'Phase 2 not yet applied' : '');
+  if (!hc.success) {
+    const authErr = hc.errors?.[0]?.code === 10000;
+    console.log(`  ?  Healthcheck${authErr
+      ? '  [token lacks Health Checks: Read — add scope at dash.cloudflare.com/profile/api-tokens]'
+      : ': ' + JSON.stringify(hc.errors)}`);
+  } else {
+    const hcRecord = hc.result.find(h => h.name === 'api-syrabit-ai-origin');
+    if (hcRecord) {
+      row('api-syrabit-ai-origin exists', true, true,
+        `id=${hcRecord.id} interval=${hcRecord.interval}s status=${hcRecord.status}`);
+      row('  type', hcRecord.type, 'HTTPS');
+      row('  path', hcRecord.path, '/health');
+      row('  interval', hcRecord.interval, 60);
+    } else {
+      row('api-syrabit-ai-origin', 'NOT FOUND', 'EXISTS', 'run cloudflare-phase2-apply.js');
+    }
+  }
 
-  console.log('\n── Phase 3: Waiting Rooms (todo) ──');
+  console.log('\n── Phase 3: Zero Trust & Waiting Rooms (Task #107 — pending) ──');
   const wr = await cfGet(`/zones/${ZONE_ID}/waiting_rooms`);
-  row('waiting_rooms', wr.success ? wr.result.length : '?', null);
+  row('waiting_rooms (inspect only)', wr.success ? wr.result.length : '?', undefined);
 
   console.log('\n────────────────────────────────────────');
   console.log('Review complete.');
