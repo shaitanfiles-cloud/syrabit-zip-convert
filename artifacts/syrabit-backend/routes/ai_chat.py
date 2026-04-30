@@ -2227,6 +2227,24 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         nonlocal full_response
         _credit_saved = False  # set True when answer is committed; controls refund in finally
         try:
+            # ── Discovery SSE events ───────────────────────────────────────────
+            # Emitted before _meta_event so the ThinkingIndicator can advance
+            # each step as the backend reports what it found (step 0→3).
+            # These arrive in the same TCP frame as _meta_event today but the
+            # frontend handles them independently so future streaming
+            # architecture improvements (emitting mid-resolve) will work
+            # without any frontend changes.
+            yield f"data: {json.dumps({'event': 'discovery:searching'})}\n\n"
+            _disc_class = ctx_class_name or (ctx_stream_name if ctx_stream_name else None)
+            if _disc_class:
+                yield f"data: {json.dumps({'event': 'discovery:class', 'value': _disc_class})}\n\n"
+            _disc_subject = rag_subject_name or (msg.subject_name if msg.subject_name else None)
+            if _disc_subject:
+                yield f"data: {json.dumps({'event': 'discovery:subject', 'value': _disc_subject})}\n\n"
+            _disc_chapter = rag_chapter_name or (_wai_match.get('chapter_title') if _wai_match else None)
+            if _disc_chapter:
+                yield f"data: {json.dumps({'event': 'discovery:chapter', 'value': _disc_chapter})}\n\n"
+            # ── Meta event ────────────────────────────────────────────────────
             _meta_event = {'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'rag_subject_icon': rag_subject_icon or '', 'rag_subject_gradient': rag_subject_gradient or '', 'rag_chapter_name': rag_chapter_name, 'rag_chapter_slug': rag_chapter_slug or '', 'rag_topic_name': rag_topic_name or '', 'rag_chunk_snippet': rag_chunk_snippet, 'router_subject': _router_subject, 'router_chapter': _router_chapter, 'router_board': _router_board, 'web_search_used': web_search_used, 'ctx_board_name': ctx_board_name or '', 'ctx_class_name': ctx_class_name or '', 'ctx_stream_name': ctx_stream_name or ''}
             if content_card_meta:
                 _meta_event['content_card_name'] = content_card_meta.get('card_name', '')

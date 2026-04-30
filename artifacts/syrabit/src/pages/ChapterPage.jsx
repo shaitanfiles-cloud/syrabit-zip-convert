@@ -638,7 +638,9 @@ export default function ChapterPage() {
   const topicParam = searchParams.get('topic') || searchParams.get('highlight') || '';
   const chunkParam = searchParams.get('chunk') || '';
   const rchunkParam = searchParams.get('rchunk') || '';
-  useEffect(() => { highlightDoneRef.current = false; }, [chapterSlug]);
+  const fromChatParam = searchParams.get('from') === 'chat';
+  const [fromChatTopicSlug, setFromChatTopicSlug] = useState(null);
+  useEffect(() => { highlightDoneRef.current = false; setFromChatTopicSlug(null); }, [chapterSlug]);
   useEffect(() => {
     if (loading || !data) return;
     if (highlightDoneRef.current) return;
@@ -786,6 +788,13 @@ export default function ChapterPage() {
     };
 
     const applyHighlight = (el) => {
+      // Task #64 — if arrived from chat, detect which TopicAnswerCard
+      // was matched and trigger the green flash on it.
+      if (fromChatParam) {
+        const card = el.closest('[data-topic-answer-card]') || el.querySelector('[data-topic-answer-card]');
+        const slug = card?.dataset?.topicSlug || null;
+        if (slug) setFromChatTopicSlug(slug);
+      }
       document.querySelectorAll('.highlight-active, .highlight-section-start, .highlight-section-end, .highlight-single').forEach(e => {
         e.classList.remove('highlight-active', 'highlight-section-start', 'highlight-section-end', 'highlight-single');
       });
@@ -822,6 +831,7 @@ export default function ChapterPage() {
         cleanUrl.searchParams.delete('highlight');
         cleanUrl.searchParams.delete('chunk');
         cleanUrl.searchParams.delete('rchunk');
+        cleanUrl.searchParams.delete('from');
         window.history.replaceState(window.history.state, '', cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
       } catch {}
     };
@@ -1270,13 +1280,17 @@ export default function ChapterPage() {
                   contract is preserved. */}
               {publishedTopics.length > 0 && (
                 <div data-testid="topic-answer-cards" className="mb-8">
-                  {publishedTopics.map((t) => (
-                    <TopicAnswerCard
-                      key={t.id || t.topic_slug}
-                      topic={t}
-                      chapterUrl={chapterUrl}
-                    />
-                  ))}
+                  {publishedTopics.map((t) => {
+                    const tSlug = t.topic_slug || t.slug || '';
+                    return (
+                      <TopicAnswerCard
+                        key={t.id || tSlug}
+                        topic={t}
+                        chapterUrl={chapterUrl}
+                        fromChat={!!(fromChatTopicSlug && fromChatTopicSlug === tSlug)}
+                      />
+                    );
+                  })}
                 </div>
               )}
               {/* Topical-mapping — siblings + cross-chapter related

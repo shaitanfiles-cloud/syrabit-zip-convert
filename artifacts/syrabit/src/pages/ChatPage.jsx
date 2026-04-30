@@ -417,6 +417,14 @@ export default function ChatPage() {
               m.id === aiMsgId ? { ...m, wai_chapter_match: parsed.wai_chapter_match } : m
             ));
           }
+          if (parsed.event && parsed.event.startsWith('discovery:')) {
+            const ev = { event: parsed.event, value: parsed.value || null };
+            setMessages((prev) => prev.map((m) =>
+              m.id === aiMsgId
+                ? { ...m, discovery_events: [...(m.discovery_events || []), ev] }
+                : m
+            ));
+          }
           if (parsed.translating) {
             setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: '', translating: true } : m));
             continue;

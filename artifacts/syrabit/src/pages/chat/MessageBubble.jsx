@@ -159,7 +159,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
           </div>
           <div className="w-full" style={msg.streaming ? { willChange: 'contents', contain: 'layout style' } : undefined}>
             {msg.streaming && !msg.content && !msg.translating && (
-              <ThinkingIndicator subject={subject} scopedChapters={scopedChapters} chapterMatch={msg.wai_chapter_match || null} />
+              <ThinkingIndicator subject={subject} scopedChapters={scopedChapters} chapterMatch={msg.wai_chapter_match || null} discoveryEvents={msg.discovery_events || []} />
             )}
             {msg.translating && !msg.content && (
               <div className="flex items-center gap-2 py-2 text-sm text-muted-foreground animate-pulse">
@@ -282,14 +282,14 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                 if (chapterUrl) {
                   const topicText = msg.rag_topic_name || chapterLabel || '';
                   const params = new URLSearchParams();
+                  params.set('from', 'chat');
                   if (topicText) params.set('topic', topicText);
                   const rawContent = (msg.content || '').replace(/[#*_`>\[\]()]/g, '').replace(/\s+/g, ' ').trim();
                   const sentences = rawContent.split(/(?<=[.!?])\s+/).filter(s => s.length > 20);
                   const coreSnippet = sentences.length > 1 ? sentences.slice(1, 4).join(' ') : rawContent;
                   const responseSnippet = coreSnippet.slice(0, 300);
                   if (responseSnippet) params.set('rchunk', responseSnippet);
-                  const qs = params.toString();
-                  navigate(qs ? `${chapterUrl}?${qs}` : chapterUrl);
+                  navigate(`${chapterUrl}?${params.toString()}`);
                 } else if (subjectUrl) {
                   navigate(subjectUrl);
                 }

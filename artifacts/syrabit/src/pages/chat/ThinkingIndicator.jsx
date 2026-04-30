@@ -2,6 +2,14 @@ import { useState, useEffect, useMemo } from 'react';
 
 const STEP_DELAYS_MS = [0, 1200, 2500, 3600];
 
+// Map discovery event names → step indices (0-based).
+const DISCOVERY_STEP_MAP = {
+  'discovery:searching': 0,
+  'discovery:class':     1,
+  'discovery:subject':   2,
+  'discovery:chapter':   3,
+};
+
 const PULSE_STYLE = `
 @keyframes syra-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
@@ -9,7 +17,12 @@ const PULSE_STYLE = `
 }
 `;
 
-export function ThinkingIndicator({ subject, scopedChapters = [], chapterMatch = null }) {
+export function ThinkingIndicator({
+  subject,
+  scopedChapters = [],
+  chapterMatch = null,
+  discoveryEvents = [],
+}) {
   const [activeStep, setActiveStep] = useState(0);
   const [elapsed, setElapsed]       = useState(0);
   const [chapterIdx, setChapterIdx] = useState(0);
@@ -21,6 +34,26 @@ export function ThinkingIndicator({ subject, scopedChapters = [], chapterMatch =
       ),
     [scopedChapters],
   );
+
+  // Derive labels and values directly from discovery events when available.
+  const discoveryValues = useMemo(() => {
+    const vals = {};
+    for (const ev of discoveryEvents) {
+      const idx = DISCOVERY_STEP_MAP[ev.event];
+      if (idx !== undefined && ev.value) vals[idx] = ev.value;
+    }
+    return vals;
+  }, [discoveryEvents]);
+
+  // Highest step index signalled by discovery events so far.
+  const discoveryMaxStep = useMemo(() => {
+    let max = -1;
+    for (const ev of discoveryEvents) {
+      const idx = DISCOVERY_STEP_MAP[ev.event] ?? -1;
+      if (idx > max) max = idx;
+    }
+    return max;
+  }, [discoveryEvents]);
 
   const steps = useMemo(() => {
     const classLine = [subject?.class_name, subject?.stream_name]
@@ -36,8 +69,7 @@ export function ThinkingIndicator({ subject, scopedChapters = [], chapterMatch =
   }, [subject]);
 
   // Chapter label for Step 4:
-  // - When a WAI match arrives, lock onto the real chapter name.
-  // - Otherwise cycle through subject chapters as before.
+  // Priority: WAI match > discovery:chapter value > cycling through subject chapters.
   const chapterLabel = useMemo(() => {
     if (chapterMatch) {
       const num = chapterMatch.chapter_number;
@@ -45,15 +77,25 @@ export function ThinkingIndicator({ subject, scopedChapters = [], chapterMatch =
       const prefix = num ? `Chapter\u00a0${num}\u00a0\u2014\u00a0` : '';
       return `${prefix}${title}`;
     }
+    if (discoveryValues[3]) return discoveryValues[3];
     if (!sortedChapters.length) return 'Finding relevant chapter\u2026';
     const ch  = sortedChapters[chapterIdx];
     const num = ch.chapter_number ?? ch.order_index ?? chapterIdx + 1;
     return `Chapter\u00a0${num}\u00a0\u2014\u00a0${ch.title}`;
-  }, [chapterMatch, sortedChapters, chapterIdx]);
+  }, [chapterMatch, discoveryValues, sortedChapters, chapterIdx]);
 
+  // Override step labels with discovery values when available.
+  const effectiveLabel = (i) => {
+    if (i === 3) return chapterLabel;
+    if (discoveryValues[i]) return discoveryValues[i];
+    return steps[i]?.label ?? '';
+  };
+
+  // Timer-based fallback: advance steps on a fixed schedule so the
+  // indicator never stalls if discovery events are slow or absent.
   useEffect(() => {
     const timers = STEP_DELAYS_MS.slice(1).map((delay, i) =>
-      setTimeout(() => setActiveStep(i + 1), delay),
+      setTimeout(() => setActiveStep((s) => Math.max(s, i + 1)), delay),
     );
     const sec = setInterval(() => setElapsed((s) => s + 1), 1000);
     return () => {
@@ -61,6 +103,14 @@ export function ThinkingIndicator({ subject, scopedChapters = [], chapterMatch =
       clearInterval(sec);
     };
   }, []);
+
+  // Event-driven advance: jump to the step immediately when a
+  // discovery event arrives from the backend.
+  useEffect(() => {
+    if (discoveryMaxStep >= 0) {
+      setActiveStep((s) => Math.max(s, discoveryMaxStep));
+    }
+  }, [discoveryMaxStep]);
 
   // Stop cycling once the real chapter match arrives.
   useEffect(() => {
@@ -73,7 +123,7 @@ export function ThinkingIndicator({ subject, scopedChapters = [], chapterMatch =
     return () => clearInterval(t);
   }, [sortedChapters, chapterMatch]);
 
-  // When a match arrives, fast-forward Step 4 into view.
+  // When a WAI match arrives, fast-forward Step 4 into view.
   useEffect(() => {
     if (chapterMatch && activeStep < 3) {
       setActiveStep(3);
@@ -90,8 +140,8 @@ export function ThinkingIndicator({ subject, scopedChapters = [], chapterMatch =
           const visible  = i <= activeStep;
           const isActive = i === activeStep;
           const isStep4  = i === 3;
-          const label    = isStep4 ? chapterLabel : step.label;
-          const locked   = isStep4 && chapterMatch;
+          const label    = effectiveLabel(i);
+          const locked   = isStep4 && (chapterMatch || discoveryValues[3]);
 
           return (
             <div
