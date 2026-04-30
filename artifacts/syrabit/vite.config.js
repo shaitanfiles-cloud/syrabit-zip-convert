@@ -565,9 +565,9 @@ function backendPreconnectPlugin() {
           : '';
         // Always inject the library-bundle preload using a relative URL so it
         // goes through the Vite proxy in dev and the CDN edge in production.
-        // No crossOrigin attr: same-origin relative URL uses credentials:same-origin
-        // which matches the actual fetch() so the browser reuses the preloaded response.
-        const preloadScript = `<script>(function(){if(/^\\/library(\\/|$)/.test(location.pathname)){var l=document.createElement('link');l.rel='preload';l.as='fetch';l.href='/api/content/library-bundle?slim=1';document.head.appendChild(l);}})();</script>`;
+        // crossOrigin='use-credentials' matches fetch({ credentials:'include' })
+        // so the browser can reuse the preloaded response (fixes mode-mismatch warning).
+        const preloadScript = `<script>(function(){if(/^\\/library(\\/|$)/.test(location.pathname)){var l=document.createElement('link');l.rel='preload';l.as='fetch';l.crossOrigin='use-credentials';l.href='/api/content/library-bundle?slim=1';document.head.appendChild(l);}})();</script>`;
         const tags = [preconnectTags, preloadScript].filter(Boolean).join('\n    ');
         return html.replace('<!--BACKEND_PRECONNECT-->', tags);
       } catch {
