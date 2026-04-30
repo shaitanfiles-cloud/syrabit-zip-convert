@@ -30,12 +30,14 @@ on:
   pull_request:
     branches: [master]
 
-# Least-privilege defaults. The PR-coverage-comment step needs
-# `pull-requests: write`, but on forked PRs GitHub downgrades the
-# token to read-only — that step is also guarded with `continue-on-error`
-# below so a permissions failure cannot turn an otherwise-green build red.
+# Permissions: `pull-requests: write` for the PR coverage-comment step
+# (guarded with `continue-on-error` on forks where the token is downgraded).
+# `contents: write` for the auto-commit of api-schema.json when the
+# OpenAPI snapshot drifts on a push to master — enabled now that the
+# GITHUB_TOKEN has been granted "Read and write" workflow permissions.
+# On PRs the auto-commit step is skipped and the job fails hard instead.
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 jobs:
@@ -50,7 +52,7 @@ jobs:
 
     steps:
       - name: Checkout (with merge base for coverage diff)
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           # Task #906 — strip the GITHUB_TOKEN from .git/config after
@@ -62,7 +64,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.11"
           cache: pip
@@ -124,6 +126,7 @@ jobs:
       # and commit the updated api-schema.json alongside their changes.
       - name: Verify OpenAPI snapshot is current (fixture-schema drift)
         id: schema_drift
+        continue-on-error: true
         working-directory: ${{ github.workspace }}
         run: |
           python artifacts/syrabit-backend/scripts/export_api_schema.py \
@@ -259,9 +262,43 @@ jobs:
           sys.exit(1)
           PYEOF
 
+      # Auto-commit the updated snapshot when drift is detected on a direct
+      # push to master.  The GITHUB_TOKEN now has `contents: write` so the
+      # bot can push back without a separate deploy key.  [skip ci] prevents
+      # this commit from re-triggering the workflow.
+      - name: Auto-update OpenAPI snapshot (push to master only)
+        if: steps.schema_drift.outcome == 'failure' && github.event_name == 'push'
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp /tmp/live-openapi.json artifacts/syrabit/tests/api-schema.json
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git remote set-url origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git add artifacts/syrabit/tests/api-schema.json
+          if git diff --cached --quiet; then
+            echo "[schema-drift] snapshot already up-to-date after re-export — no commit needed."
+          else
+            git commit -m "ci: auto-update api-schema.json [skip ci]"
+            git push
+            echo "[schema-drift] snapshot committed and pushed to ${GITHUB_REF_NAME}."
+          fi
+
+      # On PRs we cannot safely commit back, so fail hard and tell the
+      # author to update the snapshot locally before pushing.
+      - name: Fail build — api-schema.json out of date (PR)
+        if: steps.schema_drift.outcome == 'failure' && github.event_name == 'pull_request'
+        run: |
+          echo "::error file=artifacts/syrabit/tests/api-schema.json::api-schema.json is out of date."
+          echo "Run: python artifacts/syrabit-backend/scripts/export_api_schema.py"
+          echo "Then commit the updated artifacts/syrabit/tests/api-schema.json alongside your changes."
+          exit 1
+
       - name: Upload coverage artifact
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-xml
           path: artifacts/syrabit-backend/coverage.xml
@@ -324,7 +361,7 @@ jobs:
           steps.head_cov.outputs.diff_pct != '' &&
           fromJSON(steps.head_cov.outputs.diff_pct) < -1
         continue-on-error: true
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
         env:
           # Task #906 — pass step outputs through env vars rather than
           # direct ${{ ... }} interpolation into the inline script. The

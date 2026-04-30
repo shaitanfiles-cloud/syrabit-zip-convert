@@ -4,12 +4,17 @@
 for the configured repo so the on-call admin can see red CI without
 leaving the app.
 
+``POST /admin/ci-rerun`` triggers a re-run of a failed workflow run by
+its ``run_id``.  Requires the GITHUB_TOKEN to carry ``actions:write``
+(now granted as of the token-edit-permission upgrade).
+
 Configuration (env vars, all optional — route gracefully reports
 ``configured: false`` when missing):
 
 * ``GITHUB_REPO`` — ``owner/name`` slug of the repository to query.
-* ``GITHUB_TOKEN`` — PAT with ``actions:read``. Only required for
-  private repos; public repos work unauthenticated.
+* ``GITHUB_TOKEN`` — PAT with ``actions:read`` (+ ``actions:write``
+  for the re-run endpoint).  Only required for private repos;
+  public repos work unauthenticated for reads.
 * ``GITHUB_CI_WORKFLOW`` — workflow file name (default
   ``backend-tests.yml``) so we don't accidentally surface an unrelated
   workflow's status.
@@ -23,7 +28,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from auth_deps import get_admin_user
 
@@ -136,3 +142,69 @@ async def admin_ci_status(admin: dict = Depends(get_admin_user)):
         "runs": runs,
         "error": error,
     }
+
+
+class _RerunRequest(BaseModel):
+    run_id: int
+    failed_only: bool = True
+
+
+@router.post("/admin/ci-rerun")
+async def admin_ci_rerun(
+    body: _RerunRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """Trigger a re-run of a GitHub Actions workflow run.
+
+    Uses the ``/actions/runs/{run_id}/rerun`` (all jobs) or
+    ``/actions/runs/{run_id}/rerun-failed-jobs`` (failed jobs only)
+    GitHub API endpoint.  Requires GITHUB_TOKEN with ``actions:write``.
+
+    Returns ``{queued: true}`` on success (GitHub returns 201 No Content
+    for both rerun variants).  On failure the HTTP status code from GitHub
+    is forwarded as a 502 so the frontend can display a helpful message.
+    """
+    cfg = _cfg()
+    if not cfg["repo"]:
+        raise HTTPException(status_code=503, detail="GITHUB_REPO is not configured")
+    if not cfg["token"]:
+        raise HTTPException(
+            status_code=503,
+            detail="GITHUB_TOKEN is not configured — actions:write is required to re-run",
+        )
+
+    path = (
+        "rerun-failed-jobs" if body.failed_only else "rerun"
+    )
+    url = (
+        f"https://api.github.com/repos/{cfg['repo']}"
+        f"/actions/runs/{body.run_id}/{path}"
+    )
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Authorization": f"Bearer {cfg['token']}",
+    }
+
+    async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT_S, headers=headers) as client:
+        try:
+            resp = await client.post(url, content=b"{}")
+        except Exception as exc:
+            logger.warning(f"[ci-rerun] request failed: {exc}")
+            raise HTTPException(status_code=502, detail=f"GitHub unreachable: {type(exc).__name__}")
+
+    # GitHub returns 201 on success with an empty body.
+    if resp.status_code not in (200, 201):
+        logger.warning(
+            f"[ci-rerun] GitHub returned {resp.status_code} for run {body.run_id}: {resp.text[:200]}"
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"GitHub returned {resp.status_code}: {resp.text[:120]}",
+        )
+
+    logger.info(
+        f"[ci-rerun] queued re-run for run {body.run_id} "
+        f"(failed_only={body.failed_only}) by {admin.get('username', '?')}"
+    )
+    return {"queued": True, "run_id": body.run_id, "failed_only": body.failed_only}

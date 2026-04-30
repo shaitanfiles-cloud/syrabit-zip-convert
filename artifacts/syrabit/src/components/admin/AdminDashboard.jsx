@@ -427,6 +427,7 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
   // when the API responded. Surfaced so the on-call admin sees red CI
   // without leaving the app.
   const [ciStatus, setCiStatus] = useState(null);
+  const [ciRerunning, setCiRerunning] = useState(null);
   // Task #434 — last_success_at / last_error for the browser-push
   // channel from /admin/alert-settings (channel_status.push). Surfaced
   // inline in the notifications tile so admins notice a degraded push
@@ -1058,6 +1059,23 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       toast.error(`Retry failed: ${e.response?.data?.error || e.message}`);
     } finally {
       setRetryingEndpoint(null);
+    }
+  };
+
+  const handleCiRerun = async (runId, failedOnly = true) => {
+    setCiRerunning(runId);
+    try {
+      await axios.post(
+        `${API_BASE}/admin/ci-rerun`,
+        { run_id: runId, failed_only: failedOnly },
+        adminHdr(adminToken),
+      );
+      toast.success(`Re-run queued for run #${runId} — refresh in a moment to see it start`);
+    } catch (e) {
+      const detail = e.response?.data?.detail || e.message;
+      toast.error(`Re-run failed: ${detail}`);
+    } finally {
+      setCiRerunning(null);
     }
   };
 
@@ -3002,16 +3020,28 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                             <span>
                               #{run.run_number} · {run.head_sha} · {run.event} · {ageStr}
                             </span>
-                            {run.html_url && (
-                              <a
-                                href={run.html_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-blue-600 hover:underline"
-                              >
-                                view run →
-                              </a>
-                            )}
+                            <div className="flex items-center gap-2">
+                              {!inProgress && run.conclusion !== 'success' && run.id && (
+                                <button
+                                  onClick={() => handleCiRerun(run.id, true)}
+                                  disabled={ciRerunning === run.id}
+                                  className="text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded ring-1 bg-amber-50 text-amber-700 ring-amber-200 hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                  title="Re-run failed jobs only"
+                                >
+                                  {ciRerunning === run.id ? 're-running…' : 're-run'}
+                                </button>
+                              )}
+                              {run.html_url && (
+                                <a
+                                  href={run.html_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-blue-600 hover:underline"
+                                >
+                                  view run →
+                                </a>
+                              )}
+                            </div>
                           </div>
                         </li>
                       );
