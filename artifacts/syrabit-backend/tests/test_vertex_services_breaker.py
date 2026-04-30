@@ -161,3 +161,120 @@ def test_breaker_does_NOT_open_on_user_4xx_storm():
     snap = vertex_services.breaker_snapshot()
     assert snap["state"] == "closed"
     assert snap["consecutive_failures"] == 0
+
+
+# ── Workers AI embed 429 cooldown tests ───────────────────────────────────────
+
+
+@pytest.fixture(autouse=False)
+def _reset_embed_state():
+    """Reset embed 429 state before and after each embed cooldown test."""
+    import vertex_services
+    vertex_services._reset_embed_429()
+    yield
+    vertex_services._reset_embed_429()
+
+
+def test_cooldown_activates_after_threshold(_reset_embed_state):
+    """After _EMBED_429_THRESHOLD calls to _track_embed_429, the cooldown
+    must be active."""
+    import vertex_services
+    threshold = vertex_services._EMBED_429_THRESHOLD
+    assert not vertex_services.is_embed_cooldown_active()
+    for _ in range(threshold):
+        vertex_services._track_embed_429()
+    assert vertex_services.is_embed_cooldown_active()
+
+
+def test_cooldown_not_active_below_threshold(_reset_embed_state):
+    """Fewer than _EMBED_429_THRESHOLD hits must NOT activate the cooldown."""
+    import vertex_services
+    threshold = vertex_services._EMBED_429_THRESHOLD
+    for _ in range(threshold - 1):
+        vertex_services._track_embed_429()
+    assert not vertex_services.is_embed_cooldown_active()
+
+
+def test_get_embed_429_burst_returns_correct_count(_reset_embed_state):
+    """get_embed_429_burst returns the number of recent 429 hits recorded."""
+    import vertex_services
+    assert vertex_services.get_embed_429_burst() == 0
+    vertex_services._track_embed_429()
+    vertex_services._track_embed_429()
+    assert vertex_services.get_embed_429_burst() == 2
+
+
+def test_get_embed_429_burst_returns_zero_after_reset(_reset_embed_state):
+    """get_embed_429_burst must return 0 immediately after _reset_embed_429."""
+    import vertex_services
+    threshold = vertex_services._EMBED_429_THRESHOLD
+    for _ in range(threshold):
+        vertex_services._track_embed_429()
+    assert vertex_services.get_embed_429_burst() == threshold
+    vertex_services._reset_embed_429()
+    assert vertex_services.get_embed_429_burst() == 0
+
+
+def test_reset_clears_cooldown(_reset_embed_state):
+    """_reset_embed_429 must deactivate an active cooldown."""
+    import vertex_services
+    threshold = vertex_services._EMBED_429_THRESHOLD
+    for _ in range(threshold):
+        vertex_services._track_embed_429()
+    assert vertex_services.is_embed_cooldown_active()
+    vertex_services._reset_embed_429()
+    assert not vertex_services.is_embed_cooldown_active()
+
+
+@pytest.mark.asyncio
+async def test_workers_ai_primary_embed_skips_network_when_cooldown_active(_reset_embed_state, monkeypatch):
+    """When the cooldown is active, _workers_ai_primary_embed must return None
+    without making any network call."""
+    import vertex_services
+
+    call_count = {"n": 0}
+
+    async def _fake_embed(text, model_key=None):
+        call_count["n"] += 1
+        return [0.1] * 1024
+
+    import sys
+    fake_module = type(sys)("providers.cloudflare_ai")
+    fake_module.embed_one = _fake_embed
+    monkeypatch.setitem(sys.modules, "providers.cloudflare_ai", fake_module)
+
+    threshold = vertex_services._EMBED_429_THRESHOLD
+    for _ in range(threshold):
+        vertex_services._track_embed_429()
+    assert vertex_services.is_embed_cooldown_active()
+
+    result = await vertex_services._workers_ai_primary_embed("hello world")
+    assert result is None
+    assert call_count["n"] == 0, "No HTTP call should be made during cooldown"
+
+
+@pytest.mark.asyncio
+async def test_workers_ai_primary_embed_allowed_after_reset(_reset_embed_state, monkeypatch):
+    """After _reset_embed_429, _workers_ai_primary_embed must proceed to the
+    network (and return the vector on success)."""
+    import vertex_services
+
+    _EMBED_DIMENSIONS = vertex_services._EMBED_DIMENSIONS
+    fake_vec = [0.1] * _EMBED_DIMENSIONS
+
+    async def _fake_embed(text, model_key=None):
+        return fake_vec
+
+    import sys
+    fake_module = type(sys)("providers.cloudflare_ai")
+    fake_module.embed_one = _fake_embed
+    monkeypatch.setitem(sys.modules, "providers.cloudflare_ai", fake_module)
+
+    threshold = vertex_services._EMBED_429_THRESHOLD
+    for _ in range(threshold):
+        vertex_services._track_embed_429()
+    vertex_services._reset_embed_429()
+    assert not vertex_services.is_embed_cooldown_active()
+
+    result = await vertex_services._workers_ai_primary_embed("hello world")
+    assert result == fake_vec
