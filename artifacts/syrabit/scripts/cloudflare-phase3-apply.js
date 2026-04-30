@@ -102,7 +102,22 @@ async function ensureAccessApp() {
 
   const existing = list.result.find(a => a.name === 'Syrabit Admin');
   if (existing) {
-    ok('Access application: Syrabit Admin', `id=${existing.id} domain=${existing.domain}`);
+    ok('Access application: Syrabit Admin', `id=${existing.id}`);
+    // Reconcile — patch if critical security settings have drifted
+    const needsPatch = (
+      existing.domain !== 'api.syrabit.ai/admin*' ||
+      existing.session_duration !== '8h'
+    );
+    if (needsPatch) {
+      console.log(`  ⚠  Drift detected: domain=${existing.domain} session=${existing.session_duration} — patching`);
+      const patch = await cfReq('PUT', `/accounts/${ACCOUNT_ID}/access/apps/${existing.id}`, {
+        ...existing,
+        domain:           'api.syrabit.ai/admin*',
+        session_duration: '8h',
+      });
+      if (patch.success) ok('  Patched domain/session to target state');
+      else fail(`  Patch Access app`, JSON.stringify(patch.errors));
+    }
     return existing.id;
   }
 
@@ -228,10 +243,22 @@ async function ensureWaitingRoom() {
   const existing = list.result.find(w => w.name === 'syrabit-exam-season-queue');
   if (existing) {
     ok('Waiting Room: syrabit-exam-season-queue', `id=${existing.id} enabled=${existing.enabled}`);
-    if (!existing.enabled) {
-      const patch = await cfReq('PATCH', `/zones/${ZONE_ID}/waiting_rooms/${existing.id}`, { enabled: true });
-      if (patch.success) ok('  enabled Waiting Room');
-      else fail('  enable Waiting Room', JSON.stringify(patch.errors));
+    // Reconcile — patch if throughput thresholds, session, or enabled have drifted
+    const driftFields = {};
+    if (!existing.enabled)
+      driftFields.enabled = true;
+    if (existing.session_duration !== 10)
+      driftFields.session_duration = 10;
+    if (existing.new_users_per_minute !== WAITING_ROOM_NEW_PER_MIN)
+      driftFields.new_users_per_minute = WAITING_ROOM_NEW_PER_MIN;
+    if (existing.total_active_users !== WAITING_ROOM_TOTAL_ACTIVE)
+      driftFields.total_active_users = WAITING_ROOM_TOTAL_ACTIVE;
+
+    if (Object.keys(driftFields).length > 0) {
+      console.log(`  ⚠  Drift detected: ${JSON.stringify(driftFields)} — patching`);
+      const patch = await cfReq('PATCH', `/zones/${ZONE_ID}/waiting_rooms/${existing.id}`, driftFields);
+      if (patch.success) ok('  Patched Waiting Room to target state');
+      else fail('  Patch Waiting Room', JSON.stringify(patch.errors));
     }
     return;
   }
