@@ -229,7 +229,7 @@ index_name = "syllabus-index"
 # Set the CF Analytics token as a Worker secret before deploying:
 #   wrangler secret put CF_ANALYTICS_TOKEN
 # ---------------------------------------------------------------------------
-[analytics_engine_datasets]
+[[analytics_engine_datasets]]
 binding = "ANALYTICS"
 dataset = "syrabit-edge-metrics"
 

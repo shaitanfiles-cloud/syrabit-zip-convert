@@ -8,11 +8,12 @@
  *   - Top chapters by request volume
  *   - RAG query breakdown by AI provider
  *
- * Data source: GET /api/edge/analytics?range=<range>
- *   The route lives in the edge worker (workers/edge-proxy/src/index.ts).
- *   Requires CF_ANALYTICS_TOKEN secret with Analytics: Read scope.
+ * Data source: GET /api/admin/edge-analytics?range=<range>  (Flask backend proxy)
+ *   The backend route (routes/admin_edge_analytics.py) adds X-Edge-Admin-Secret
+ *   (D1_SYNC_SECRET) and forwards to the edge worker at /api/edge/analytics.
+ *   The edge worker queries the Analytics Engine GraphQL API using CF_ANALYTICS_TOKEN.
  *   Only populated after the worker has been redeployed with the
- *   [analytics_engine_datasets] ANALYTICS binding (wrangler.toml Phase 5).
+ *   [[analytics_engine_datasets]] ANALYTICS binding (wrangler.toml Phase 5).
  */
 import { useState, useEffect, useCallback } from 'react';
 import { Activity, Zap, BarChart2, RefreshCw, TrendingUp, Clock } from 'lucide-react';
@@ -69,20 +70,34 @@ export default function EdgeMetricsPanel({ token }) {
     setError(null);
     try {
       const headers = token ? { Authorization: `Bearer ${token}` } : {};
-      const res = await axios.get(`${API_BASE}/api/edge/analytics`, {
+      const res = await axios.get(`${API_BASE}/admin/edge-analytics`, {
         params: { range: r },
         headers,
+        withCredentials: true,
       });
-      setData(res.data);
+      const body = res.data;
+      if (!body.configured) {
+        setError(body.reason || 'Edge analytics not configured');
+        return;
+      }
+      if (!body.metrics) {
+        setError(body.reason || 'No metrics returned');
+        return;
+      }
+      setData(body.metrics);
     } catch (e) {
-      const msg = e?.response?.data?.error || e?.message || 'Request failed';
+      const msg = e?.response?.data?.detail || e?.response?.data?.error || e?.message || 'Request failed';
       setError(msg);
     } finally {
       setLoading(false);
     }
   }, [token]);
 
-  useEffect(() => { load(range); }, [load, range]);
+  useEffect(() => {
+    load(range);
+    const timer = setInterval(() => load(range), 60_000);
+    return () => clearInterval(timer);
+  }, [load, range]);
 
   const hitRatePct = data ? Math.round(data.cacheHitRate * 100) : null;
   const maxChapter = data?.topChapters?.[0]?.requests ?? 1;

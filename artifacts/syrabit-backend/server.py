@@ -1637,6 +1637,7 @@ from routes.admin_advanced import router as admin_advanced_router
 from routes.admin_retriever import router as admin_retriever_router
 from routes.admin_benchmark import router as admin_benchmark_router
 from routes.admin_kv_health import router as admin_kv_health_router
+from routes.admin_edge_analytics import router as admin_edge_analytics_router
 from routes.admin_ci_status import router as admin_ci_status_router
 from routes.admin_trustpilot_alerts import router as admin_trustpilot_alerts_router
 from routes.admin_trustpilot_jsonld_status import router as admin_trustpilot_jsonld_status_router
@@ -1713,6 +1714,7 @@ api.include_router(admin_advanced_router)
 api.include_router(admin_retriever_router)
 api.include_router(admin_benchmark_router)
 api.include_router(admin_kv_health_router)
+api.include_router(admin_edge_analytics_router)
 api.include_router(admin_ci_status_router)
 api.include_router(admin_trustpilot_alerts_router)
 api.include_router(admin_trustpilot_jsonld_status_router)

@@ -331,6 +331,46 @@ async function main() {
     }
   }
 
+  // 5c: Analytics Engine dataset write recency
+  // Verifies the worker has written at least one datapoint in the last 24 h
+  // by querying the AE SQL API. Requires CF_ANALYTICS_TOKEN env var with
+  // "Analytics: Read" scope. Degrades to a warning if the token is absent
+  // or on plan-restriction errors (code 1135) so CI doesn't block deploys
+  // on freshly-provisioned accounts with no traffic yet.
+  const cfAnalyticsToken = process.env.CF_ANALYTICS_TOKEN;
+  if (!cfAnalyticsToken) {
+    warn('AE dataset write recency', 'CF_ANALYTICS_TOKEN not set — set env var to verify writes');
+  } else {
+    const aeSqlUrl = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/analytics_engine/sql`;
+    const aeQuery  = `SELECT count() AS n FROM syrabit_edge_metrics WHERE timestamp >= now() - INTERVAL '86400' SECOND`;
+    try {
+      const aeRes  = await fetch(aeSqlUrl, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${cfAnalyticsToken}`, 'Content-Type': 'text/plain' },
+        body: aeQuery,
+      });
+      const aeText = await aeRes.text();
+      if (!aeRes.ok) {
+        const code = (() => { try { return JSON.parse(aeText)?.errors?.[0]?.code; } catch { return null; } })();
+        if (code === 1135) {
+          warn('AE dataset write recency', 'plan does not include Analytics Engine (code 1135)');
+        } else {
+          warn('AE dataset write recency', `AE SQL returned ${aeRes.status} — check CF_ANALYTICS_TOKEN scope`);
+        }
+      } else {
+        const aeJson = JSON.parse(aeText);
+        const n = Number(aeJson?.data?.[0]?.n ?? 0);
+        if (n === 0) {
+          warn('AE dataset write recency', 'syrabit_edge_metrics has 0 rows in last 24 h — verify worker is deployed and receiving traffic');
+        } else {
+          console.log(`  ✓  AE dataset write recency: ${n.toLocaleString()} datapoints in last 24 h`);
+        }
+      }
+    } catch (err) {
+      warn('AE dataset write recency', `AE SQL fetch failed: ${err.message}`);
+    }
+  }
+
   // ── Summary ────────────────────────────────────────────────────────────
   console.log('');
   if (warnings.length > 0) {

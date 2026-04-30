@@ -672,6 +672,28 @@ function writeEdgeMetric(
   ctx.waitUntil(Promise.resolve(env.ANALYTICS.writeDataPoint(dataPoint)));
 }
 
+/**
+ * Extract the chapter slug from a pathname for AE chapterId tagging.
+ * Matches patterns like /study/physics/chapter/thermodynamics or
+ * /chapters/waves — returns the slug, or "" if not a chapter route.
+ */
+function extractChapterIdFromPath(pathname: string): string {
+  const m = pathname.match(/\/chapters?\/([^/?#]+)/i);
+  return m ? m[1].toLowerCase().slice(0, 64) : "";
+}
+
+/**
+ * Best-effort AI provider attribution from the request pathname.
+ * The edge worker never reads the response body, so it cannot know which
+ * backend provider (groq/gemini/cerebras) ultimately served the request.
+ * Only /api/ai/fallback/* is distinguishable — those route to Workers AI.
+ */
+function aiProviderFromPath(pathname: string): string {
+  if (!isAiPath(pathname)) return "none";
+  if (pathname.startsWith("/api/ai/fallback/")) return "workers-ai";
+  return "backend";
+}
+
 function buildProxyHeaders(request: Request, clientIp: string, env?: Env): Headers {
   const headers = new Headers();
   for (const [key, value] of request.headers.entries()) {
@@ -2105,13 +2127,22 @@ async function _handleEdgeFetch(
       return handleKvUsage(env, request, cors);
     }
 
-    // ── Phase 5: Edge metrics query (Analytics Engine SQL API) ─────────────
+    // ── Phase 5: Edge metrics query (Analytics Engine GraphQL API) ──────────
     // GET /api/edge/analytics?range=24h|6h|1h|7d
-    // Requires CF_ANALYTICS_TOKEN secret (Analytics: Read scope) and the
-    // ANALYTICS [analytics_engine_datasets] binding in wrangler.toml.
-    // Only accessible to admin — protected by the Zero Trust Access app policy
-    // on api.syrabit.ai/admin* (Phase 3). Do not call from the public SPA.
+    // Requires:
+    //   - CF_ANALYTICS_TOKEN secret (Analytics: Read scope) to query the GQL API.
+    //   - X-Edge-Admin-Secret: <D1_SYNC_SECRET> header (same pattern as /api/edge/kv-usage).
+    //     This endpoint is NOT under /admin*, so it is not covered by the Zero Trust
+    //     Access app policy — the shared-secret check is the only auth layer.
+    //     Call via the Flask backend /admin/edge-analytics proxy (not directly from SPA).
     if (pathname === "/api/edge/analytics" && request.method === "GET") {
+      const edgeSecret = request.headers.get("X-Edge-Admin-Secret") ?? "";
+      if (!env.D1_SYNC_SECRET || edgeSecret !== env.D1_SYNC_SECRET) {
+        return new Response(
+          JSON.stringify({ error: "Unauthorized" }),
+          { status: 401, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
       if (!env.CF_ANALYTICS_TOKEN) {
         return new Response(
           JSON.stringify({ error: "CF_ANALYTICS_TOKEN secret not set. Run: wrangler secret put CF_ANALYTICS_TOKEN" }),
@@ -2529,12 +2560,9 @@ async function _handleEdgeFetch(
         const aiKey = `rl:ai:${clientIp}`;
         const aiRl = await checkRateLimitWithDO(aiKey, env, AI_RATE_LIMIT_RPM);
         if (!aiRl.allowed) {
-          writeEdgeMetric(env, ctx, Date.now(), {
-            pathname,
-            isAiRequest: true,
-            rateLimitResult: "ai_limited",
-            httpStatus: 429,
-          });
+          // X-AE-RL is an internal signal header read by the outer fetch handler
+          // to set rateLimitResult on the per-request AE datapoint. It is stripped
+          // from the final response before it reaches the client.
           return new Response(
             JSON.stringify({ detail: "AI rate limit exceeded. Please slow down." }),
             {
@@ -2546,29 +2574,17 @@ async function _handleEdgeFetch(
                 "X-RateLimit-Limit": String(AI_RATE_LIMIT_RPM),
                 "X-RateLimit-Remaining": "0",
                 "X-RateLimit-Scope": "ai",
+                "X-AE-RL": "ai_limited",
               },
             }
           );
         }
-        // AI request passed rate limit — emit metric so RAG volume is tracked.
-        // provider blob3 is "none" here because the edge worker does not know
-        // which backend provider (groq/gemini) will ultimately handle it.
-        writeEdgeMetric(env, ctx, Date.now(), {
-          pathname,
-          isAiRequest: true,
-          rateLimitResult: "ok",
-          httpStatus: 0, // will be resolved by the backend; 0 = pending
-        });
+        // AI request passed rate limit — outer fetch handler emits the AE datapoint.
       }
       // Phase 5: use DO for general IP rate limiting; KV fallback if DO unbound.
       const rl = await checkRateLimitWithDO(`rl:${clientIp}`, env, RATE_LIMIT_RPM);
       remaining = rl.remaining;
       if (!rl.allowed) {
-        writeEdgeMetric(env, ctx, Date.now(), {
-          pathname,
-          rateLimitResult: "ip_limited",
-          httpStatus: 429,
-        });
         return new Response(
           JSON.stringify({ detail: "Rate limit exceeded. Try again shortly." }),
           {
@@ -2579,6 +2595,7 @@ async function _handleEdgeFetch(
               "Retry-After": String(RATE_LIMIT_WINDOW_S),
               "X-RateLimit-Limit": String(RATE_LIMIT_RPM),
               "X-RateLimit-Remaining": "0",
+              "X-AE-RL": "ip_limited",
             },
           }
         );
@@ -2804,6 +2821,32 @@ export default {
       xCache === "bypass" ? "bypass" :
       xCache === "dynamic" ? "dynamic" :
       null;
+    // ── Phase 5: per-request Analytics Engine datapoint ─────────────────────
+    // X-AE-RL is an internal signal header set by rate-limit 429 return paths
+    // inside _handleEdgeFetch. We read it here to populate rateLimitResult and
+    // then strip it so it never reaches the client.
+    const aeRl     = response.headers.get("x-ae-rl") ?? "ok";
+    const reqUrl   = new URL(request.url);
+    const reqPath  = reqUrl.pathname;
+    writeEdgeMetric(env, ctx, startMs, {
+      cacheStatus:      cache ?? "dynamic",
+      chapterId:        extractChapterIdFromPath(reqPath),
+      aiProvider:       aiProviderFromPath(reqPath),
+      pathname:         reqPath,
+      rateLimitResult:  aeRl,
+      isAiRequest:      isAiPath(reqPath),
+      httpStatus:       response.status,
+    });
+    // Strip internal header if present (only on rate-limit 429 responses).
+    if (response.headers.has("x-ae-rl")) {
+      const stripped = new Headers(response.headers);
+      stripped.delete("x-ae-rl");
+      response = new Response(response.body, {
+        status:     response.status,
+        statusText: response.statusText,
+        headers:    stripped,
+      });
+    }
     recordEdgeLog(
       request,
       response,

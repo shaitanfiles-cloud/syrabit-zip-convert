@@ -1,31 +1,36 @@
 /**
  * analytics-engine.ts — Task #109 Phase 5: Workers Analytics Engine query utility.
  *
- * Queries Cloudflare Workers Analytics Engine via the SQL API to return
- * edge metrics for the syrabit-edge worker (dataset: syrabit-edge-metrics).
+ * Queries Cloudflare Workers Analytics Engine via the **GraphQL Analytics API**
+ * (https://api.cloudflare.com/client/v4/graphql) to return edge metrics for the
+ * syrabit-edge worker (dataset: syrabit-edge-metrics).
  *
  * The dataset is written to by the edge worker on every request (see index.ts
- * ANALYTICS.writeDataPoint calls). Fields:
+ * ANALYTICS.writeDataPoint calls). Fields written per request:
  *
- *   blob1  — cacheStatus:  "hit" | "miss" | "bypass" | "pass"
- *   blob2  — chapterId:    slug of the chapter being viewed, or "" if not a chapter
- *   blob3  — aiProvider:   "groq" | "gemini" | "workers-ai" | "none"
- *   blob4  — pathname:     request pathname (first 64 chars)
- *   blob5  — rateLimitResult: "ok" | "ai_limited" | "ip_limited"
+ *   blob1  — cacheStatus:      "hit" | "miss" | "bypass" | "dynamic" | "pass"
+ *   blob2  — chapterId:        slug of the chapter being viewed, or "" if not a chapter
+ *   blob3  — aiProvider:       "workers-ai" | "backend" | "none"
+ *   blob4  — pathname:         request pathname (first 64 chars)
+ *   blob5  — rateLimitResult:  "ok" | "ai_limited" | "ip_limited"
  *
  *   double1 — responseTimeMs: end-to-end response time in milliseconds
  *   double2 — isAiRequest:    1 if the request hit an AI route, else 0
  *   double3 — httpStatus:     HTTP response status code
  *
+ * GraphQL type name for dataset "syrabit-edge-metrics":
+ *   syrabitEdgeMetricsAdaptiveGroups
+ *
  * Required env:
- *   CF_ANALYTICS_TOKEN  — Cloudflare API token with Account Analytics: Read scope.
+ *   CF_ANALYTICS_TOKEN  — Cloudflare API token with Analytics: Read scope.
  *                         Set via: wrangler secret put CF_ANALYTICS_TOKEN
- *   CLOUDFLARE_ACCOUNT_ID — account ID (hardcoded default for syrabit account)
  */
 
-const ACCOUNT_ID    = 'd66e40eac539fff1db270fddf384a5ec';
-const DATASET_NAME  = 'syrabit_edge_metrics';    // AE SQL uses underscores
-const AE_SQL_URL    = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/analytics_engine/sql`;
+const ACCOUNT_ID = 'd66e40eac539fff1db270fddf384a5ec';
+const GQL_URL    = 'https://api.cloudflare.com/client/v4/graphql';
+
+/** GraphQL type name: dataset name → camelCase + AdaptiveGroups suffix. */
+const GQL_TYPE = 'syrabitEdgeMetricsAdaptiveGroups';
 
 /** Number of seconds in each range option. */
 const RANGE_SECONDS: Record<string, number> = {
@@ -48,27 +53,54 @@ export interface EdgeMetrics {
   rateLimitEvents: number;
 }
 
-async function runSql(token: string, query: string): Promise<Record<string, unknown>[]> {
-  const res = await fetch(AE_SQL_URL, {
-    method:  'POST',
+/** ISO-8601 string for `secsAgo` seconds before now. */
+function isoSecsAgo(secsAgo: number): string {
+  return new Date(Date.now() - secsAgo * 1000).toISOString().replace(/\.\d+Z$/, 'Z');
+}
+
+interface GqlCacheRow {
+  count: number;
+  dimensions: { blob1: string };
+  avg: { double1: number };
+}
+interface GqlChapterRow {
+  count: number;
+  dimensions: { blob2: string };
+}
+interface GqlProviderRow {
+  count: number;
+  dimensions: { blob3: string };
+}
+interface GqlRateLimitRow {
+  count: number;
+  dimensions: { blob5: string };
+}
+
+async function runGql<T>(token: string, query: string, variables: Record<string, unknown>): Promise<T> {
+  const res = await fetch(GQL_URL, {
+    method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
-      'Content-Type':  'text/plain',
+      'Content-Type':  'application/json',
     },
-    body: query,
+    body: JSON.stringify({ query, variables }),
   });
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`AE SQL ${res.status}: ${text.slice(0, 200)}`);
+    throw new Error(`CF GraphQL HTTP ${res.status}: ${text.slice(0, 300)}`);
   }
 
-  const json = await res.json() as {
-    data?: Record<string, unknown>[];
-    meta?: unknown;
-    statistics?: unknown;
-  };
-  return json.data ?? [];
+  const json = await res.json() as { data?: T; errors?: { message: string }[] };
+
+  if (json.errors?.length) {
+    const msgs = json.errors.map((e) => e.message).join('; ');
+    throw new Error(`CF GraphQL error: ${msgs.slice(0, 400)}`);
+  }
+  if (!json.data) {
+    throw new Error('CF GraphQL: empty response (no data field)');
+  }
+  return json.data;
 }
 
 export async function queryEdgeMetrics(
@@ -77,51 +109,109 @@ export async function queryEdgeMetrics(
 ): Promise<EdgeMetrics> {
   const windowSecs = RANGE_SECONDS[range] ?? RANGE_SECONDS['24h'];
   const rangeLabel = range;
+  const datetimeGeq = isoSecsAgo(windowSecs);
+  const datetimeLeq = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
 
-  // ── Cache hit/miss aggregate ─────────────────────────────────────────
+  // ── 1. Cache status breakdown + avg response time ─────────────────────
   const cacheQuery = `
-    SELECT
-      blob1                    AS cacheStatus,
-      count()                  AS requests,
-      avg(double1)             AS avgResponseMs
-    FROM ${DATASET_NAME}
-    WHERE timestamp >= now() - INTERVAL '${windowSecs}' SECOND
-    GROUP BY cacheStatus
-    ORDER BY requests DESC
-    LIMIT 20
-  `.trim();
+    query CacheBreakdown($accountTag: String!, $datetimeGeq: String!, $datetimeLeq: String!) {
+      viewer {
+        accounts(filter: { accountTag: $accountTag }) {
+          ${GQL_TYPE}(
+            filter: { datetime_geq: $datetimeGeq, datetime_leq: $datetimeLeq }
+            limit: 20
+            orderBy: [count_DESC]
+          ) {
+            count
+            dimensions { blob1 }
+            avg { double1 }
+          }
+        }
+      }
+    }
+  `;
 
-  // ── Top chapters ─────────────────────────────────────────────────────
+  // ── 2. Top chapters ────────────────────────────────────────────────────
   const chaptersQuery = `
-    SELECT
-      blob2          AS chapterId,
-      count()        AS requests
-    FROM ${DATASET_NAME}
-    WHERE timestamp >= now() - INTERVAL '${windowSecs}' SECOND
-      AND blob2 != ''
-    GROUP BY chapterId
-    ORDER BY requests DESC
-    LIMIT 5
-  `.trim();
+    query TopChapters($accountTag: String!, $datetimeGeq: String!, $datetimeLeq: String!) {
+      viewer {
+        accounts(filter: { accountTag: $accountTag }) {
+          ${GQL_TYPE}(
+            filter: {
+              datetime_geq: $datetimeGeq
+              datetime_leq: $datetimeLeq
+              blob2_neq: ""
+            }
+            limit: 5
+            orderBy: [count_DESC]
+          ) {
+            count
+            dimensions { blob2 }
+          }
+        }
+      }
+    }
+  `;
 
-  // ── RAG volume by AI provider ─────────────────────────────────────────
+  // ── 3. RAG requests by AI provider ────────────────────────────────────
   const ragQuery = `
-    SELECT
-      blob3          AS aiProvider,
-      count()        AS requests
-    FROM ${DATASET_NAME}
-    WHERE timestamp >= now() - INTERVAL '${windowSecs}' SECOND
-      AND double2 = 1
-    GROUP BY aiProvider
-    ORDER BY requests DESC
-    LIMIT 10
-  `.trim();
+    query RagByProvider($accountTag: String!, $datetimeGeq: String!, $datetimeLeq: String!) {
+      viewer {
+        accounts(filter: { accountTag: $accountTag }) {
+          ${GQL_TYPE}(
+            filter: {
+              datetime_geq: $datetimeGeq
+              datetime_leq: $datetimeLeq
+              double2_gt: 0
+            }
+            limit: 10
+            orderBy: [count_DESC]
+          ) {
+            count
+            dimensions { blob3 }
+          }
+        }
+      }
+    }
+  `;
 
-  const [cacheRows, chapterRows, ragRows] = await Promise.all([
-    runSql(token, cacheQuery),
-    runSql(token, chaptersQuery),
-    runSql(token, ragQuery),
+  // ── 4. Rate limit events ───────────────────────────────────────────────
+  const rateLimitQuery = `
+    query RateLimitEvents($accountTag: String!, $datetimeGeq: String!, $datetimeLeq: String!) {
+      viewer {
+        accounts(filter: { accountTag: $accountTag }) {
+          ${GQL_TYPE}(
+            filter: {
+              datetime_geq: $datetimeGeq
+              datetime_leq: $datetimeLeq
+              blob5_neq: "ok"
+            }
+            limit: 1
+            orderBy: [count_DESC]
+          ) {
+            count
+            dimensions { blob5 }
+          }
+        }
+      }
+    }
+  `;
+
+  const vars = { accountTag: ACCOUNT_ID, datetimeGeq, datetimeLeq };
+
+  type AccountsWrapper<T> = { viewer: { accounts: { [key: string]: T[] }[] } };
+
+  const [cacheData, chaptersData, ragData, rlData] = await Promise.all([
+    runGql<AccountsWrapper<GqlCacheRow>>(token, cacheQuery, vars),
+    runGql<AccountsWrapper<GqlChapterRow>>(token, chaptersQuery, vars),
+    runGql<AccountsWrapper<GqlProviderRow>>(token, ragQuery, vars),
+    runGql<AccountsWrapper<GqlRateLimitRow>>(token, rateLimitQuery, vars),
   ]);
+
+  const cacheRows   = (cacheData.viewer.accounts[0]?.[GQL_TYPE]   ?? []) as GqlCacheRow[];
+  const chapterRows = (chaptersData.viewer.accounts[0]?.[GQL_TYPE] ?? []) as GqlChapterRow[];
+  const ragRows     = (ragData.viewer.accounts[0]?.[GQL_TYPE]     ?? []) as GqlProviderRow[];
+  const rlRows      = (rlData.viewer.accounts[0]?.[GQL_TYPE]      ?? []) as GqlRateLimitRow[];
 
   // ── Aggregate cache metrics ──────────────────────────────────────────
   let totalRequests = 0;
@@ -129,15 +219,14 @@ export async function queryEdgeMetrics(
   let cacheMisses   = 0;
   let sumResponseMs = 0;
   let countForAvg   = 0;
-  let rateLimitEvents = 0;
 
   for (const row of cacheRows) {
-    const status   = String(row.cacheStatus ?? '');
-    const requests = Number(row.requests ?? 0);
-    const avgMs    = Number(row.avgResponseMs ?? 0);
+    const status   = row.dimensions?.blob1 ?? '';
+    const requests = row.count ?? 0;
+    const avgMs    = row.avg?.double1 ?? 0;
     totalRequests += requests;
-    if (status === 'hit')                       cacheHits += requests;
-    if (status === 'miss' || status === 'pass') cacheMisses += requests;
+    if (status === 'hit')                          cacheHits   += requests;
+    if (status === 'miss' || status === 'pass')    cacheMisses += requests;
     sumResponseMs += avgMs * requests;
     countForAvg   += requests;
   }
@@ -147,18 +236,21 @@ export async function queryEdgeMetrics(
 
   // ── Top chapters ─────────────────────────────────────────────────────
   const topChapters = chapterRows.map((r) => ({
-    chapterId: String(r.chapterId ?? ''),
-    requests:  Number(r.requests ?? 0),
+    chapterId: r.dimensions?.blob2 ?? '',
+    requests:  r.count ?? 0,
   }));
 
   // ── RAG by provider ──────────────────────────────────────────────────
-  const aiRequests = ragRows.reduce((s, r) => s + Number(r.requests ?? 0), 0);
+  const aiRequests = ragRows.reduce((s, r) => s + (r.count ?? 0), 0);
   const ragByProvider = ragRows
-    .filter((r) => String(r.aiProvider ?? '') !== 'none')
+    .filter((r) => (r.dimensions?.blob3 ?? '') !== 'none')
     .map((r) => ({
-      provider: String(r.aiProvider ?? ''),
-      requests: Number(r.requests ?? 0),
+      provider: r.dimensions?.blob3 ?? '',
+      requests: r.count ?? 0,
     }));
+
+  // ── Rate limit events ────────────────────────────────────────────────
+  const rateLimitEvents = rlRows.reduce((s, r) => s + (r.count ?? 0), 0);
 
   return {
     rangeLabel,
