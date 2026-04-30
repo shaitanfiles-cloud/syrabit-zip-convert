@@ -740,6 +740,36 @@ function buildProxyHeaders(request: Request, clientIp: string, env?: Env): Heade
   return headers;
 }
 
+/**
+ * Task #110 Phase 6 — Central mTLS-aware fetch for ALL Railway backend calls.
+ *
+ * Every fetch to env.BACKEND_URL MUST go through this function so that the
+ * mTLS client certificate is presented on every TLS handshake with Railway.
+ * Using plain `fetch()` bypasses the certificate binding and defeats the
+ * mTLS hardening goal — Railway would see no client cert and, once mTLS is
+ * required there, would reject the connection.
+ *
+ * Behaviour:
+ *   MTLS_CERT bound                   → env.MTLS_CERT.fetch() (cert presented)
+ *   MTLS_CERT absent + MTLS_REQUIRED  → throws; caller should surface a 503
+ *   MTLS_CERT absent + no requirement → plain fetch() (pre-cert / local dev)
+ */
+function fetchBackend(
+  env: Env,
+  url: string,
+  init: RequestInit,
+): Promise<Response> {
+  if (env.MTLS_CERT) {
+    return env.MTLS_CERT.fetch(url, init);
+  }
+  if (env.MTLS_REQUIRED === "true") {
+    throw new Error(
+      "[mTLS] MTLS_REQUIRED=true but MTLS_CERT binding absent — refusing backend fetch to prevent insecure bypass",
+    );
+  }
+  return fetch(url, init);
+}
+
 async function proxyToBackend(
   request: Request,
   env: Env,
@@ -760,22 +790,9 @@ async function proxyToBackend(
     // been provisioned, so Cloudflare presents the client cert on every TLS
     // handshake with the Railway origin.
     //
-    // MTLS_REQUIRED="true" → fail-closed: returns 503 if the binding is absent
-    //   (prevents an insecure fallback to plain fetch in production).
-    //   Set via: wrangler secret put MTLS_REQUIRED   (value: true)
-    //   Only set this AFTER provisioning the cert AND configuring Railway mTLS.
-    //
-    // MTLS_REQUIRED unset / "false" → fail-open: falls back to global fetch so
-    //   local dev and pre-cert deploy still work.  BACKEND_ORIGIN_SECRET still
-    //   provides the belt-and-suspenders auth check on every request.
-    if (env.MTLS_REQUIRED === "true" && !env.MTLS_CERT) {
-      console.error("[mTLS] MTLS_REQUIRED=true but MTLS_CERT binding is absent — refusing request to prevent insecure bypass");
-      return new Response(
-        JSON.stringify({ error: "mTLS enforcement active: cert binding missing — deploy with [[mtls_certificates]] uncommented in wrangler.toml" }),
-        { status: 503, headers: { "Content-Type": "application/json" } },
-      );
-    }
-
+    // All Railway backend fetches go through fetchBackend() which uses
+    // env.MTLS_CERT.fetch() when bound.  The fail-closed guard (MTLS_REQUIRED)
+    // lives inside fetchBackend() — calling it here surfaces a 503 cleanly.
     const fetchInit = {
       method: request.method,
       headers: proxyHeaders,
@@ -784,9 +801,17 @@ async function proxyToBackend(
           ? request.body
           : undefined,
     };
-    const backendResp = env.MTLS_CERT
-      ? await env.MTLS_CERT.fetch(backendUrl, fetchInit)
-      : await fetch(backendUrl, fetchInit);
+    let backendResp: Response;
+    try {
+      backendResp = await fetchBackend(env, backendUrl, fetchInit);
+    } catch (mtlsErr) {
+      const msg = mtlsErr instanceof Error ? mtlsErr.message : String(mtlsErr);
+      console.error(`[proxyToBackend] ${msg}`);
+      return new Response(
+        JSON.stringify({ error: "mTLS enforcement active: cert binding missing — deploy with [[mtls_certificates]] wired in wrangler.toml" }),
+        { status: 503, headers: { "Content-Type": "application/json" } },
+      );
+    }
 
     const respHeaders = new Headers(cors);
     for (const [key, value] of backendResp.headers.entries()) {
@@ -1516,7 +1541,7 @@ export async function probeBotLastModified(
     proxyHeaders.delete("If-Match");
     proxyHeaders.delete("If-Unmodified-Since");
     proxyHeaders.delete("If-Range");
-    const resp = await fetch(apiUrl, { method: "HEAD", headers: proxyHeaders });
+    const resp = await fetchBackend(env, apiUrl, { method: "HEAD", headers: proxyHeaders });
     if (!resp.ok) return null;
     const lm = resp.headers.get("Last-Modified");
     if (!lm) return null;
@@ -1540,7 +1565,7 @@ async function fetchBotRenderedHtml(
   try {
     const proxyHeaders = buildProxyHeaders(request, clientIp, env);
     proxyHeaders.set("X-Bot-Request", "1");
-    const resp = await fetch(apiUrl, {
+    const resp = await fetchBackend(env, apiUrl, {
       method: "GET",
       headers: proxyHeaders,
     });
@@ -1549,7 +1574,7 @@ async function fetchBotRenderedHtml(
       const parts = clean.split("/").filter(Boolean);
       if (parts.length >= 3 && parts.length <= 5) {
         const fallbackUrl = `${env.BACKEND_URL}${clean}`;
-        const fallbackResp = await fetch(fallbackUrl, {
+        const fallbackResp = await fetchBackend(env, fallbackUrl, {
           method: "GET",
           headers: proxyHeaders,
         });
@@ -2036,7 +2061,10 @@ async function handleScheduledSync(env: Env): Promise<void> {
     if (env.BACKEND_ORIGIN_SECRET) {
       syncHeaders["X-Origin-Auth"] = env.BACKEND_ORIGIN_SECRET;
     }
-    const resp = await fetch(`${env.BACKEND_URL}/api/admin/d1-export`, {
+    // Phase 6 (Task #110): use fetchBackend() so the mTLS cert is presented
+    // on this scheduled cron fetch too — Railway mTLS enforcement applies to
+    // all connections, not just the primary request proxy path.
+    const resp = await fetchBackend(env, `${env.BACKEND_URL}/api/admin/d1-export`, {
       method: "GET",
       headers: syncHeaders,
     });
@@ -2782,7 +2810,8 @@ async function _handleEdgeFetch(
       const backendHeaders = buildProxyHeaders(request, clientIp, env);
 
       try {
-        const backendResp = await fetch(backendUrl, {
+        // Phase 6 (Task #110): use fetchBackend() — mTLS cert presented here too.
+        const backendResp = await fetchBackend(env, backendUrl, {
           method: "GET",
           headers: backendHeaders,
         });
