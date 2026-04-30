@@ -411,6 +411,12 @@ export default function ChatPage() {
           if (parsed.content_card_board && !meta.ragBoardName) meta.ragBoardName = parsed.content_card_board;
           if (parsed.content_card_class && !meta.ragClassName) meta.ragClassName = parsed.content_card_class;
           if (parsed.content_card_subject && !meta.ragSubjectName) meta.ragSubjectName = parsed.content_card_subject;
+          if (parsed.wai_chapter_match) {
+            meta.waiChapterMatch = parsed.wai_chapter_match;
+            setMessages((prev) => prev.map((m) =>
+              m.id === aiMsgId ? { ...m, wai_chapter_match: parsed.wai_chapter_match } : m
+            ));
+          }
           if (parsed.translating) {
             setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: '', translating: true } : m));
             continue;

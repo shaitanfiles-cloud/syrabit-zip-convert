@@ -9,7 +9,7 @@ const PULSE_STYLE = `
 }
 `;
 
-export function ThinkingIndicator({ subject, scopedChapters = [] }) {
+export function ThinkingIndicator({ subject, scopedChapters = [], chapterMatch = null }) {
   const [activeStep, setActiveStep] = useState(0);
   const [elapsed, setElapsed]       = useState(0);
   const [chapterIdx, setChapterIdx] = useState(0);
@@ -35,12 +35,21 @@ export function ThinkingIndicator({ subject, scopedChapters = [] }) {
     ];
   }, [subject]);
 
+  // Chapter label for Step 4:
+  // - When a WAI match arrives, lock onto the real chapter name.
+  // - Otherwise cycle through subject chapters as before.
   const chapterLabel = useMemo(() => {
-    if (!sortedChapters.length) return 'Finding relevant chapter…';
+    if (chapterMatch) {
+      const num = chapterMatch.chapter_number;
+      const title = chapterMatch.chapter_title;
+      const prefix = num ? `Chapter\u00a0${num}\u00a0\u2014\u00a0` : '';
+      return `${prefix}${title}`;
+    }
+    if (!sortedChapters.length) return 'Finding relevant chapter\u2026';
     const ch  = sortedChapters[chapterIdx];
     const num = ch.chapter_number ?? ch.order_index ?? chapterIdx + 1;
     return `Chapter\u00a0${num}\u00a0\u2014\u00a0${ch.title}`;
-  }, [sortedChapters, chapterIdx]);
+  }, [chapterMatch, sortedChapters, chapterIdx]);
 
   useEffect(() => {
     const timers = STEP_DELAYS_MS.slice(1).map((delay, i) =>
@@ -53,14 +62,23 @@ export function ThinkingIndicator({ subject, scopedChapters = [] }) {
     };
   }, []);
 
+  // Stop cycling once the real chapter match arrives.
   useEffect(() => {
+    if (chapterMatch) return;
     if (sortedChapters.length < 2) return;
     const t = setInterval(
       () => setChapterIdx((i) => (i + 1) % sortedChapters.length),
       2000,
     );
     return () => clearInterval(t);
-  }, [sortedChapters]);
+  }, [sortedChapters, chapterMatch]);
+
+  // When a match arrives, fast-forward Step 4 into view.
+  useEffect(() => {
+    if (chapterMatch && activeStep < 3) {
+      setActiveStep(3);
+    }
+  }, [chapterMatch]); // eslint-disable-line
 
   const progress = Math.min(100, (elapsed / 5) * 100);
 
@@ -71,7 +89,9 @@ export function ThinkingIndicator({ subject, scopedChapters = [] }) {
         {steps.map((step, i) => {
           const visible  = i <= activeStep;
           const isActive = i === activeStep;
-          const label    = i === 3 ? chapterLabel : step.label;
+          const isStep4  = i === 3;
+          const label    = isStep4 ? chapterLabel : step.label;
+          const locked   = isStep4 && chapterMatch;
 
           return (
             <div
@@ -106,15 +126,21 @@ export function ThinkingIndicator({ subject, scopedChapters = [] }) {
                     }}
                   />
                 )}
-                <span style={{ fontSize: 13, lineHeight: 1 }}>{step.icon}</span>
+                <span style={{ fontSize: 13, lineHeight: 1 }}>
+                  {locked ? '✅' : step.icon}
+                </span>
               </div>
 
               <span
                 style={{
                   fontSize: 12.5,
                   lineHeight: '18px',
-                  color: isActive ? '#5b21b6' : '#6b7280',
-                  fontWeight: isActive ? 600 : 400,
+                  color: locked
+                    ? '#059669'
+                    : isActive
+                      ? '#5b21b6'
+                      : '#6b7280',
+                  fontWeight: (isActive || locked) ? 600 : 400,
                   letterSpacing: '0.01em',
                   transition: 'color 0.3s ease, font-weight 0.3s ease',
                   flex: 1,
@@ -125,12 +151,12 @@ export function ThinkingIndicator({ subject, scopedChapters = [] }) {
                 }}
               >
                 {label}
-                {isActive && (
-                  <span style={{ opacity: 0.6, marginLeft: 1 }}>…</span>
+                {isActive && !locked && (
+                  <span style={{ opacity: 0.6, marginLeft: 1 }}>\u2026</span>
                 )}
               </span>
 
-              {isActive && (
+              {isActive && !locked && (
                 <span
                   style={{
                     display: 'inline-block',

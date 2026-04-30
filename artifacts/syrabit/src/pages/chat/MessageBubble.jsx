@@ -159,7 +159,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
           </div>
           <div className="w-full" style={msg.streaming ? { willChange: 'contents', contain: 'layout style' } : undefined}>
             {msg.streaming && !msg.content && !msg.translating && (
-              <ThinkingIndicator subject={subject} scopedChapters={scopedChapters} />
+              <ThinkingIndicator subject={subject} scopedChapters={scopedChapters} chapterMatch={msg.wai_chapter_match || null} />
             )}
             {msg.translating && !msg.content && (
               <div className="flex items-center gap-2 py-2 text-sm text-muted-foreground animate-pulse">

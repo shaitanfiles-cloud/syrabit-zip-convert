@@ -71,6 +71,7 @@ from tracing import (
 )
 from followup_context import detect_followup, build_followup_context, merge_followup_into_query
 from pipeline import should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query, get_instant_response
+import wai_chapter_index as _wai_idx
 
 # Chat Enhancement Layer
 try:
@@ -1554,6 +1555,25 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 return {}
         _stage1_task = asyncio.create_task(_stage1_wrapper())
 
+    # WAI chapter classification — runs in parallel with Stage 1 + Phase 0.
+    # Uses Workers AI @cf/baai/bge-small-en-v1.5 to embed the query and find
+    # the closest matching chapter in the subject's vector index.
+    # Falls back gracefully (returns None) on cold-start or error.
+    _wai_chapter_task = None
+    _wai_subject_id_for_classify = msg.subject_id
+    if _wai_subject_id_for_classify and not _is_casual:
+        async def _wai_classify_wrapper():
+            try:
+                return await _wai_idx.classify(
+                    msg.message,
+                    _wai_subject_id_for_classify,
+                    timeout_s=3.5,
+                )
+            except Exception as _wai_err:
+                logger.debug("[WAI] classify error (non-fatal): %s", _wai_err)
+                return None
+        _wai_chapter_task = asyncio.create_task(_wai_classify_wrapper())
+
     async def _fetch_followup_info():
         if is_anon or _is_casual:
             return None
@@ -1857,6 +1877,44 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _t_phase2_done = _time_mod.time()
     logger.info(f"[STREAM][TIMING] Phase 2 (context): {_t_phase2_done - _t_phase2:.3f}s | total pre-LLM: {_t_phase2_done - _stream_t0:.3f}s")
 
+    # ── WAI chapter classification result ─────────────────────────────────────
+    # The task was started alongside Stage 1.  By the time we reach here
+    # (Phase 0 + resolve_rag_context ≈ 350-600ms), the Workers AI call
+    # (~200-400ms) is often already done.  We give it up to 1.0s of
+    # additional grace before moving on.
+    _wai_match: Optional[dict] = None
+    if _wai_chapter_task is not None:
+        if _wai_chapter_task.done():
+            try:
+                _wai_match = _wai_chapter_task.result()
+            except Exception:
+                _wai_match = None
+        else:
+            _wai_elapsed = _time_mod.time() - _stream_t0
+            _wai_grace   = max(0.0, 1.0 - _wai_elapsed)
+            if _wai_grace > 0.05:
+                try:
+                    _wai_match = await asyncio.wait_for(_wai_chapter_task, timeout=_wai_grace)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    _wai_match = None
+                    logger.info("[WAI] classify not ready (grace window elapsed) — skipping")
+                except Exception:
+                    _wai_match = None
+            else:
+                _wai_chapter_task.cancel()
+
+    if _wai_match:
+        logger.info(
+            "[WAI] chapter match: '%s' (sim=%.3f, confident=%s)",
+            _wai_match.get("chapter_title"), _wai_match.get("similarity"),
+            _wai_match.get("confident"),
+        )
+        # If RAG didn't find a chapter but WAI did, surface it as rag_chapter_name
+        if not rag_chapter_name and _wai_match.get("chapter_title"):
+            rag_chapter_name = _wai_match["chapter_title"]
+        if not rag_chapter_slug and _wai_match.get("slug"):
+            rag_chapter_slug = _wai_match["slug"]
+
     # ── Build prompt ───────────────────────────────────────────────────────────
     system_prompt = build_rag_system_prompt(
         {
@@ -2113,6 +2171,17 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 _meta_event['content_card_name'] = content_card_meta.get('card_name', '')
                 _meta_event['content_card_lesson'] = content_card_meta.get('lesson_name', '')
                 _meta_event['content_card_subject'] = content_card_meta.get('subject_name', '')
+            # WAI chapter match — lets the frontend ThinkingIndicator show the
+            # REAL matched chapter during the thinking animation (Step 4),
+            # instead of cycling through all chapters randomly.
+            if _wai_match:
+                _meta_event['wai_chapter_match'] = {
+                    'chapter_title':  _wai_match.get('chapter_title', ''),
+                    'chapter_number': _wai_match.get('chapter_number', 0),
+                    'slug':           _wai_match.get('slug', ''),
+                    'similarity':     _wai_match.get('similarity', 0.0),
+                    'confident':      _wai_match.get('confident', False),
+                }
             yield f"data: {json.dumps(_meta_event)}\n\n"
 
             cached_answer = _cached_answer
