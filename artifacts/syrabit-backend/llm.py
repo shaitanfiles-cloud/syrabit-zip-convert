@@ -61,17 +61,46 @@ logger = logging.getLogger(__name__)
 
 _oai_client_cache: Dict[str, _oai.AsyncOpenAI] = {}
 
+# Shared HTTP/2 transport reused by every provider client.
+# HTTP/2 multiplexes multiple requests over a single TCP connection, eliminating
+# per-request TLS handshake overhead for the CF AI Gateway.  Connection limits
+# are sized to cover the worst-case concurrency:
+#   chat pool: 5 WAI slots × 24 + Groq×4 + Cerebras×4 = 128
+#   content pool: 2 WAI slots × 16 = 32
+#   total: ~160 — so 256 max_connections gives comfortable headroom.
+_OAI_HTTP_TRANSPORT = httpx.AsyncHTTPTransport(
+    http2=True,
+    limits=httpx.Limits(
+        max_connections=256,
+        max_keepalive_connections=128,
+        keepalive_expiry=60.0,
+    ),
+)
+
 def _get_oai_client(api_key: str, base_url: str) -> _oai.AsyncOpenAI:
     key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:16]
     ck = f"{base_url}|{key_hash}"
     client = _oai_client_cache.get(ck)
     if client is None:
-        client = _oai.AsyncOpenAI(api_key=api_key, base_url=base_url)
+        # Custom httpx client shares the high-limit HTTP/2 transport above.
+        # Each unique base_url gets its own AsyncClient so cookies / headers
+        # don't bleed between providers, but the underlying TCP pool is shared.
+        http_client = httpx.AsyncClient(
+            transport=_OAI_HTTP_TRANSPORT,
+            timeout=httpx.Timeout(connect=5.0, read=90.0, write=15.0, pool=10.0),
+        )
+        client = _oai.AsyncOpenAI(api_key=api_key, base_url=base_url,
+                                   http_client=http_client)
         _oai_client_cache[ck] = client
     return client
 
-_LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("LLM_MAX_CONCURRENT", 40)))
-_ADMIN_LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("ADMIN_LLM_MAX_CONCURRENT", 6)))
+# Global outer semaphores.  Sized to the total slot capacity so they never
+# become the bottleneck — the per-slot SmartKeyPool semaphores (max_con) are
+# the real rate-control layer.
+#   chat pool:    5×24 + 4 + 4 = 136  → round up to 200
+#   admin pool:   2×16           = 32  → keep at 30 (admin is low-traffic)
+_LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("LLM_MAX_CONCURRENT", 200)))
+_ADMIN_LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("ADMIN_LLM_MAX_CONCURRENT", 30)))
 
 _LLM_PROVIDER_METRICS: list = []
 _LLM_PROVIDER_METRICS_MAX = 20_000
@@ -476,15 +505,16 @@ class _SmartKeyPool:
     """
     _RL_COOLDOWN  = 20.0
     _ERR_COOLDOWN = 7.0
-    _RPM_SOFT_THRESHOLD = 0.70
-    _RPM_HARD_THRESHOLD = 0.90
+    # With unified billing (3 000 RPM), keep Workers AI as primary until 85%
+    # of budget (2 550 RPM) before soft-shifting to Groq/Cerebras, and hard-
+    # deprioritize only at 95% (2 850 RPM).  The old 70/90 split was
+    # calibrated for the 150 RPM free-tier cap — too aggressive now.
+    _RPM_SOFT_THRESHOLD = 0.85
+    _RPM_HARD_THRESHOLD = 0.95
 
     # RPM limits per provider — see _parse_rpm_limit() for the env-var safe parser.
-    # Workers AI: despite CF Enterprise billing, the gateway enforces a
-    # per-account RPM cap that has been observed to be ~150 in practice
-    # (the 429s seen in production confirm the old 500 value was too
-    # optimistic).  Override with WORKERS_AI_RPM_LIMIT env var if your
-    # account tier is different.
+    # Workers AI: CF Standard plan with unified billing — 3 000 RPM per model.
+    # Override with WORKERS_AI_RPM_LIMIT env var if the account tier differs.
     # Groq / Cerebras: 30 RPM on the free / preview tier; set GROQ_RPM_LIMIT
     # or CEREBRAS_RPM_LIMIT to a higher value on a paid plan.
     _PROVIDER_RPM_LIMITS = _POOL_RPM_LIMITS  # module-level dict, populated just above
