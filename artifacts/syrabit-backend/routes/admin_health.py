@@ -689,20 +689,23 @@ async def admin_diagnostics(admin: dict = Depends(get_admin_user)) -> dict[str, 
     # LLM Provider Status
     try:
         import vertex_services
+        import vertex_chat as _vc
         vertex_health = await vertex_services.health_check()
-        result["llm_providers"]["vertex_gemini"] = {
+        gemini_entry = {
             "status": "healthy" if vertex_health.get("ok") else "unhealthy",
             "auth_mode": vertex_health.get("auth_mode"),
+            "chat_auth_mode": _vc.auth_mode(),
             "via_gateway": vertex_health.get("via_cf_gateway"),
             "embeddings": vertex_health.get("embeddings"),
             "generation": vertex_health.get("generation"),
             "details": vertex_health.get("reason") if not vertex_health.get("ok") else None,
         }
+        result["llm_providers"]["gemini"] = gemini_entry
+        result["llm_providers"]["vertex_gemini"] = gemini_entry
     except Exception as e:
-        result["llm_providers"]["vertex_gemini"] = {
-            "status": "error",
-            "error": str(e),
-        }
+        err_entry = {"status": "error", "error": str(e)}
+        result["llm_providers"]["gemini"] = err_entry
+        result["llm_providers"]["vertex_gemini"] = err_entry
     
     # Check Sarvam status
     try:

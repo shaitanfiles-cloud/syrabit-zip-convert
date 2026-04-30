@@ -1,26 +1,28 @@
 """
-vertex_chat — Vertex AI Gemini Flash streaming chat client (Task #607).
+vertex_chat — Gemini streaming chat client (Task #607, updated Task #34+).
 
-Provides token-by-token streaming from Google Vertex AI's
-`streamGenerateContent` REST endpoint using Application Default
-Credentials (ADC) or a service-account JSON blob.
+Supports two auth modes, detected at import time in priority order:
 
-This module is intentionally separate from the disabled
-`vertex_services.py` stub: that one wraps the legacy embeddings /
-OCR / generation surface, while this one is scoped strictly to chat
-streaming as required by Task #607.
+  1. Direct Gemini API key  — GEMINI_API_KEY=AIza...
+     Calls generativelanguage.googleapis.com directly. No GCP project or
+     service account required. This is the preferred mode for Railway
+     deployments that do not have a GCP project attached.
+
+  2. Vertex AI service account — VERTEX_PROJECT_ID + optional
+     VERTEX_SERVICE_ACCOUNT_JSON (falls back to ADC).
+     Calls the regional aiplatform.googleapis.com endpoint. Only active
+     when VERTEX_PROJECT_ID is set AND GEMINI_API_KEY is absent.
 
 Configuration (env):
-  VERTEX_PROJECT_ID            GCP project (REQUIRED to enable)
-  VERTEX_LOCATION              GCP region (default: us-central1)
+  GEMINI_API_KEY               AIza-style key from Google AI Studio (mode 1)
+  VERTEX_PROJECT_ID            GCP project (mode 2 — leave unset to use mode 1)
+  VERTEX_LOCATION              GCP region (default: us-central1, mode 2 only)
   VERTEX_GEMINI_MODEL          Model id (default: gemini-2.5-flash)
-  VERTEX_SERVICE_ACCOUNT_JSON  Service-account JSON blob (string).
-                               Optional — falls back to ADC
-                               (GOOGLE_APPLICATION_CREDENTIALS).
+  VERTEX_SERVICE_ACCOUNT_JSON  Service-account JSON blob (mode 2, optional)
 
-Returns plain text deltas from `async for token in stream(...)`.
-Raises RuntimeError on misconfiguration; httpx exceptions on
-network/auth errors so callers can fall back.
+Yields plain text deltas from `async for token in stream_chat(...)`.
+Raises RuntimeError on misconfiguration; httpx exceptions on network/auth
+errors so callers can fall back to the SLM pool.
 """
 from __future__ import annotations
 
@@ -42,18 +44,19 @@ VERTEX_LOCATION = os.environ.get("VERTEX_LOCATION", "us-central1").strip() or "u
 VERTEX_GEMINI_MODEL = os.environ.get("VERTEX_GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 _SERVICE_ACCOUNT_JSON = os.environ.get("VERTEX_SERVICE_ACCOUNT_JSON", "").strip()
 
+_GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+
+_GEMINI_STREAM_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+
+_USE_API_KEY = bool(_GEMINI_API_KEY and not VERTEX_PROJECT_ID)
+
 _SCOPE = "https://www.googleapis.com/auth/cloud-platform"
-_TOKEN_REFRESH_MARGIN_S = 120  # refresh ~2 min before expiry
+_TOKEN_REFRESH_MARGIN_S = 120
 
 _creds = None
 _creds_err: Optional[str] = None
 _token_lock = asyncio.Lock()
 
-# ── Circuit breaker (Task #831) ────────────────────────────────────────────
-# Tighter than vertex_services because chat is latency-sensitive: every
-# attempt against a dead upstream pays the connect timeout (10s) before
-# the SLM-pool fallback runs. Open the breaker quickly and recover
-# eagerly so user-perceived latency stays low during outages.
 _CHAT_BREAKER_THRESHOLD = max(1, int(os.environ.get("VERTEX_CHAT_BREAKER_THRESHOLD", "3")))
 _CHAT_BREAKER_COOLDOWN_S = max(1.0, float(os.environ.get("VERTEX_CHAT_BREAKER_COOLDOWN_S", "180")))
 
@@ -64,45 +67,44 @@ _breaker = CircuitBreaker(
 )
 
 
-def is_configured() -> bool:
-    """True iff the Vertex chat client has the env vars set.
+def auth_mode() -> str:
+    if _USE_API_KEY:
+        return "gemini_api_key"
+    if VERTEX_PROJECT_ID:
+        return "vertex_ai"
+    return "unconfigured"
 
-    Static config check only — does NOT consider runtime breaker state.
-    Callers that gate request routing should use `is_available()` so a
-    known-broken upstream is skipped without paying the connect timeout.
+
+def is_configured() -> bool:
+    """True iff at least one auth mode is available.
+
+    Accepts either a Gemini API key (direct AI Studio) or a GCP project
+    id for Vertex AI. Does NOT check runtime breaker state.
     """
-    return bool(VERTEX_PROJECT_ID)
+    return bool(_GEMINI_API_KEY or VERTEX_PROJECT_ID)
 
 
 def is_available() -> bool:
-    """True iff configured AND the circuit breaker currently allows traffic.
-
-    Use this in request-time routing (e.g. the llm.py fast-path) so a
-    Vertex outage degrades to the SLM pool with no per-request latency
-    penalty. Calling `allow()` may transition OPEN → HALF_OPEN as a side
-    effect — that's intentional, the next caller acts as the probe.
-    """
+    """True iff configured AND the circuit breaker currently allows traffic."""
     return is_configured() and _breaker.allow()
 
 
 def breaker_snapshot() -> dict:
-    """Public accessor for admin endpoints / health probes."""
     return _breaker.snapshot()
 
 
 def force_breaker_close() -> None:
-    """Operator override (admin endpoint) to force-close the breaker."""
     _breaker.force_close()
 
 
 def _load_credentials():
-    """Lazily load google-auth credentials. Returns None if unavailable."""
+    """Lazily load google-auth credentials (Vertex mode only)."""
     global _creds, _creds_err
     if _creds is not None or _creds_err is not None:
         return _creds
     try:
-        from google.oauth2 import service_account  # type: ignore
-        import google.auth  # type: ignore
+        from google.oauth2 import service_account
+        import google.auth
 
         if _SERVICE_ACCOUNT_JSON:
             try:
@@ -131,7 +133,7 @@ def _load_credentials():
 
 
 async def _get_access_token() -> str:
-    """Return a valid OAuth2 access token, refreshing as needed."""
+    """Return a valid OAuth2 access token (Vertex mode only)."""
     creds = _load_credentials()
     if creds is None:
         raise RuntimeError(_creds_err or "Vertex chat: no credentials available")
@@ -143,13 +145,13 @@ async def _get_access_token() -> str:
             or (creds.expiry.timestamp() - time.time()) < _TOKEN_REFRESH_MARGIN_S
         )
         if needs_refresh:
-            from google.auth.transport.requests import Request as _GAuthRequest  # type: ignore
+            from google.auth.transport.requests import Request as _GAuthRequest
             await asyncio.to_thread(creds.refresh, _GAuthRequest())
     return creds.token
 
 
 def _convert_messages(messages: List[Dict[str, str]]) -> Dict[str, Any]:
-    """Convert OpenAI-format chat messages → Vertex Gemini contents payload."""
+    """Convert OpenAI-format chat messages → Gemini contents payload."""
     system_parts: List[str] = []
     contents: List[Dict[str, Any]] = []
     for m in messages:
@@ -176,42 +178,50 @@ async def stream_chat(
     temperature: float = 0.1,
     timeout_s: float = 60.0,
 ) -> AsyncIterator[str]:
-    """Stream text deltas from Vertex AI Gemini Flash.
+    """Stream text deltas from Gemini (direct API key or Vertex AI).
 
     Yields raw text chunks. Raises RuntimeError / httpx exceptions on
     failure so callers can fall back to a different provider.
     """
     if not is_configured():
-        raise RuntimeError("Vertex chat is not configured (VERTEX_PROJECT_ID missing)")
+        raise RuntimeError(
+            "Gemini chat not configured: set GEMINI_API_KEY or VERTEX_PROJECT_ID"
+        )
 
     use_model = (model or VERTEX_GEMINI_MODEL).strip() or VERTEX_GEMINI_MODEL
-
-    try:
-        token = await _get_access_token()
-    except Exception as e:
-        # Auth failure (no creds, expired key, refresh denied) — feed
-        # the breaker so subsequent requests skip Vertex entirely.
-        _breaker.record_failure(f"auth_{type(e).__name__}")
-        raise
-
-    base = f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com/v1"
-    url = (
-        f"{base}/projects/{VERTEX_PROJECT_ID}/locations/{VERTEX_LOCATION}"
-        f"/publishers/google/models/{use_model}:streamGenerateContent?alt=sse"
-    )
     body = _convert_messages(messages)
     body["generationConfig"] = {
         "temperature": float(temperature),
         "maxOutputTokens": int(max_tokens),
     }
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "Accept": "text/event-stream",
-    }
-
     timeout = httpx.Timeout(timeout_s, connect=10.0)
+
+    if _USE_API_KEY:
+        url = (
+            f"{_GEMINI_STREAM_BASE}/{use_model}"
+            f":streamGenerateContent?alt=sse&key={_GEMINI_API_KEY}"
+        )
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+    else:
+        try:
+            token = await _get_access_token()
+        except Exception as e:
+            _breaker.record_failure(f"auth_{type(e).__name__}")
+            raise
+        base = f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com/v1"
+        url = (
+            f"{base}/projects/{VERTEX_PROJECT_ID}/locations/{VERTEX_LOCATION}"
+            f"/publishers/google/models/{use_model}:streamGenerateContent?alt=sse"
+        )
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+
     success_recorded = False
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -220,13 +230,8 @@ async def stream_chat(
                     err_text = (await resp.aread()).decode("utf-8", errors="replace")[:500]
                     _breaker.record_failure(f"http_{resp.status_code}")
                     raise RuntimeError(
-                        f"Vertex Gemini Flash {resp.status_code}: {err_text}"
+                        f"Gemini {resp.status_code}: {err_text}"
                     )
-                # 2xx — upstream accepted our request. Record success
-                # exactly once at the response-status boundary; if the
-                # stream later dies mid-way that's a separate concern
-                # (the upstream WAS alive, so don't re-open the breaker
-                # on transient mid-stream errors).
                 _breaker.record_success()
                 success_recorded = True
                 async for line in resp.aiter_lines():
@@ -248,13 +253,8 @@ async def stream_chat(
                         if txt:
                             yield txt
     except RuntimeError:
-        # Already recorded above (status >= 400); just propagate.
         raise
     except httpx.HTTPError as e:
-        # Only feed the breaker if we never saw a successful response.
-        # Mid-stream errors after a 2xx don't change the "upstream is
-        # alive" verdict — counting them would falsely re-open the
-        # breaker after a successful accept.
         if not success_recorded:
             _breaker.record_failure(f"network_{type(e).__name__}")
         raise

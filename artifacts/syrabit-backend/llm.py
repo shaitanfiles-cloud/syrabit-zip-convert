@@ -1525,7 +1525,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
 
     if _use_vertex_fastpath:
         if not _vertex_chat.is_configured():
-            logger.warning("vertex/gemini-flash requested but VERTEX_PROJECT_ID is not set — falling back to legacy SLM pool")
+            logger.warning("gemini-flash requested but neither GEMINI_API_KEY nor VERTEX_PROJECT_ID is set — falling back to legacy SLM pool")
             use_model_raw = _vertex_fallback_target
         elif not _vertex_chat.is_available():
             # Circuit breaker is open — Vertex is known-broken right now.
