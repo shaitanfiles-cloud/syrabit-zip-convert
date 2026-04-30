@@ -242,41 +242,10 @@ _CF_AI_ENABLED = bool(_CF_AI_ACCOUNT_ID and _CF_API_TOKEN)
 _LLM_PROVIDERS = []
 if _CF_AI_ENABLED:
     _LLM_PROVIDERS.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
-if _GEMINI_KEY:
-    _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
-if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
-    _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY_2,   "default_model": "gemini-2.5-flash"})
-if _GROQ_KEY:
-    _LLM_PROVIDERS.append({"provider": "groq",         "key": _GROQ_KEY,       "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
-if _GROQ_KEY_2 and _GROQ_KEY_2 != _GROQ_KEY:
-    _LLM_PROVIDERS.append({"provider": "groq",         "key": _GROQ_KEY_2,     "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
-if _CEREBRAS_KEY:
-    # Cerebras dropped llama-3.3-70b from this account's catalog (verified
-    # 2026-04-26: GET /v1/models returns only llama3.1-8b, gpt-oss-120b,
-    # zai-glm-4.7, qwen-3-235b-a22b-instruct-2507; only the 8B and the
-    # 235B qwen are accessible to us — gpt-oss-120b and zai-glm both
-    # return 404 "does not have access"). llama3.1-8b is the fast-tier
-    # SLM choice; the 235B qwen is reserved for the higher-quality
-    # content slot (see _CONTENT_SLOT_CANDIDATES below).
-    _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama3.1-8b"})
-if _OPENROUTER_KEY:
-    _LLM_PROVIDERS.append({"provider": "openrouter",  "key": _OPENROUTER_KEY, "default_model": "deepseek/deepseek-chat-v3-0324"})
-if _OPENAI_KEY and _OPENAI_KEY != 'x':
-    _LLM_PROVIDERS.append({"provider": "openai",      "key": _OPENAI_KEY,     "default_model": "gpt-4o-mini"})
 
 _LLM_PROVIDERS_CHAT: list[dict] = []
-# Groq leads the chat pool — measured 1.6s avg for 300-token educational answers.
-# Workers AI 70B is only fast for short outputs (<50 tokens); at 300+ tokens it
-# takes 14s (confirmed benchmark 2026-04-29). Groq and Cerebras are both faster
-# for real chat responses. Workers AI stays as burst fallback.
-if _GROQ_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "groq",       "key": _GROQ_KEY,       "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
-if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras",   "key": _CEREBRAS_KEY,   "default_model": "qwen-3-235b-a22b-instruct-2507"})
 if _CF_AI_ENABLED:
-    _LLM_PROVIDERS_CHAT.append({"provider": "workers-ai", "key": _CF_API_TOKEN,   "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
-if _OPENROUTER_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "meta-llama/llama-4-scout"})
+    _LLM_PROVIDERS_CHAT.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
 
 _MODEL_PROVIDER_MAP = {
     "sarvam-m": "sarvam",
@@ -316,31 +285,21 @@ _MODEL_ALIAS_MAP = {
 # Slots in the same tier are load-balanced by in-flight count.
 #
 _SLM_SLOT_CANDIDATES = [
-    # Tier 0: Groq llama-4-scout — confirmed fastest (sub-1s TTFT, always
-    # available). Primary English chat provider.
-    ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 0),
-    # Tier 1: Workers AI llama-3.3-70b-fp8 — free under CF startup credits;
-    # serves as burst relief when Groq hits RPM limits.
-    ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",         6, 1),
-    # Tier 2: Cerebras llama3.1-8b — ultra-fast SLM secondary.
-    ("cerebras",    "llama3.1-8b",                                       4, 2),
-    # Tier 3: OpenRouter as last-resort fallback.
-    ("openrouter",  "meta-llama/llama-4-scout",                          4, 3),
+    # Tier 0: Workers AI llama-3.3-70b-fp8 — sole chat provider.
+    ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",         8, 0),
+    # Tier 1: Workers AI llama-3.1-8b — fast small-model fallback.
+    ("workers-ai",  "@cf/meta/llama-3.1-8b-instruct-fp8",               8, 1),
 ]
 
 # Content SmartKeyPool — serves `_CONTENT_INTENTS` (notes, important_questions,
-# pyq) for ALL languages. Sarvam is intentionally NOT in this pool — see
-# `_SARVAM_PROVIDERS` rationale above.
+# pyq) for ALL languages.
 #
-# Tier order (quality + speed priority):
-#   0 — Workers AI gpt-oss-120b: 120B model free under CF credits, best
-#       for long-form structured educational content (notes, MCQs).
-#   1 — Gemini 2.5 Flash: excellent multilingual reasoning, 600 RPM headroom.
-#   2 — Cerebras qwen-3-235b: high-quality reasoning fallback.
+# Tier order:
+#   0 — Workers AI gpt-oss-120b: 120B model, best for long-form content.
+#   1 — Workers AI llama-3.3-70b: fallback for content generation.
 _CONTENT_SLOT_CANDIDATES = [
     ("workers-ai",  "@cf/openai/gpt-oss-120b",                           4, 0),
-    ("gemini",      "gemini-2.5-flash",                                  6, 1),
-    ("cerebras",    "qwen-3-235b-a22b-instruct-2507",                    4, 2),
+    ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",          4, 1),
 ]
 
 _CONTENT_INTENTS = {"notes", "important_questions", "pyq"}
@@ -366,6 +325,7 @@ class _SmartKeyPool:
     _RPM_HARD_THRESHOLD = 0.90
 
     _PROVIDER_RPM_LIMITS = {
+        "workers-ai": 500,  # CF Enterprise: billed per-token, no hard RPM cap
         "groq": 30,
         "cerebras": 30,
         "sarvam": 30,
@@ -1041,18 +1001,9 @@ def route_for_task(task: str) -> tuple[str, str]:
 #
 # Falls back to Workers AI 70B if Gemini is unavailable or hits quota.
 _RAG_PROVIDERS: list[dict] = []
-# Groq leads RAG: fastest at 1.6s, good quality for 1024-2048 token answers.
-# Cerebras qwen-3-235b is second: 235B reasoning model, ~1.7s avg, excellent accuracy.
-# Gemini 2.5-flash is quality fallback: best accuracy but 6-10s with thinking tokens.
-# Workers AI last resort: slow (10s+) for long outputs but guaranteed capacity.
-if _GROQ_KEY:
-    _RAG_PROVIDERS.append({"provider": "groq",       "key": _GROQ_KEY,       "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
-if _CEREBRAS_KEY:
-    _RAG_PROVIDERS.append({"provider": "cerebras",   "key": _CEREBRAS_KEY,   "default_model": "qwen-3-235b-a22b-instruct-2507"})
-if _GEMINI_KEY:
-    _RAG_PROVIDERS.append({"provider": "gemini",     "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
 if _CF_AI_ENABLED:
-    _RAG_PROVIDERS.append({"provider": "workers-ai", "key": _CF_API_TOKEN,   "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
+    _RAG_PROVIDERS.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/openai/gpt-oss-120b"})
+    _RAG_PROVIDERS.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
 
 
 async def call_llm_for_rag(messages: list, max_tokens: int = 2048) -> str:
@@ -1086,12 +1037,7 @@ async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048
 _LLM_PROVIDERS_CONTENT: list[dict] = []
 if _CF_AI_ENABLED:
     _LLM_PROVIDERS_CONTENT.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/openai/gpt-oss-120b"})
-if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "qwen-3-235b-a22b-instruct-2507"})
-if _GEMINI_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
-if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
+    _LLM_PROVIDERS_CONTENT.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
 
 logger.info(
     f"Admin content providers (quality-first order): "
@@ -1930,29 +1876,27 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                         _slm_pool.mark_err(s)
                         logger.warning(f"SLM hedged: {s['provider']}/{s['model']} TTFT timeout after {_effective_ttft}s")
 
-        # SLM pool exhausted — hard-fall-back to the first working Groq key
-        # so chat stays up even when Workers AI and Cerebras are down.
-        _groq_fb = next(
-            (p for p in _LLM_PROVIDERS_CHAT if p["provider"] == "groq" and p.get("key")),
-            None,
-        )
-        if _groq_fb:
-            _fb_model = _groq_fb.get("default_model", "meta-llama/llama-4-scout-17b-16e-instruct")
+        # SLM pool exhausted — hard-fall-back to Workers AI direct stream
+        # (bypassing the pool's concurrency accounting).
+        if _CF_AI_ENABLED:
+            _fb_model = "@cf/meta/llama-3.1-8b-instruct-fp8"
             logger.warning(
-                f"SLM pool exhausted — hard-fallback to groq/{_fb_model}"
+                f"SLM pool exhausted — hard-fallback to workers-ai/{_fb_model}"
             )
             _fb_ok = False
             try:
-                async for chunk in _emit_tokens(
-                    _stream_from_provider("groq", _groq_fb["key"], _fb_model)
-                ):
+                from providers.cloudflare_ai import chat_stream as _cf_cs
+                async def _slm_wai_fb():
+                    async for _tok in _cf_cs(messages, model_key=_fb_model, max_tokens=max_tokens):
+                        yield _tok
+                async for chunk in _emit_tokens(_slm_wai_fb()):
                     _fb_ok = True
                     yield chunk
                 if _fb_ok:
-                    yield f"data: {json.dumps({'__provider': 'groq'})}\n\n"
+                    yield f"data: {json.dumps({'__provider': 'workers-ai'})}\n\n"
                     return
             except Exception as _fb_err:
-                logger.warning(f"SLM groq-fallback failed: {type(_fb_err).__name__}: {str(_fb_err)[:120]}")
+                logger.warning(f"SLM workers-ai-fallback failed: {type(_fb_err).__name__}: {str(_fb_err)[:120]}")
 
         yield f"data: {json.dumps({'error': 'All AI providers temporarily unavailable'})}\n\n"
         return
@@ -2159,10 +2103,10 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             yield f"data: {json.dumps({'__provider': _win_cand['provider']})}\n\n"
             return
 
-        # ── Phase 1 LOST → Phase 2: Gemini fallback ─────────────────────
-        # Cancel any straggler Sarvam tasks before starting Gemini so we
-        # don't double-stream. We don't await them here — they'll be GC'd
-        # by the event loop. (`_emit_tokens` is cancellation-safe.)
+        # ── Phase 1 LOST → Phase 2: Workers AI fallback ──────────────────
+        # Cancel any straggler Sarvam tasks before starting Workers AI so
+        # we don't double-stream. We don't await them here — they'll be
+        # GC'd by the event loop. (`_emit_tokens` is cancellation-safe.)
         for t in _phase1_tasks:
             t.cancel()
 
@@ -2171,73 +2115,60 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             logger.warning(
                 f"[INDIC] Phase 1 LOST — all {len(_sarvam_candidates)} "
                 f"Sarvam keys failed/timed out in {_phase1_elapsed:.0f}ms — "
-                f"falling back to Gemini (Phase 2)"
+                f"falling back to Workers AI (Phase 2)"
             )
 
-        _gemini_keys_for_indic = [
-            p["key"] for p in _LLM_PROVIDERS
-            if p["provider"] == "gemini" and p.get("key")
-        ]
-        if not _gemini_keys_for_indic:
+        if not _CF_AI_ENABLED:
             logger.warning(
-                f"[INDIC] Phase 2 unavailable — no Gemini key configured. "
+                f"[INDIC] Phase 2 unavailable — Workers AI not configured. "
                 f"Returning error for {response_lang}."
             )
             yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
             return
 
-        _gemini_key = _gemini_keys_for_indic[0]
-        _gemini_model = "gemini-2.5-flash"
-        _phase2_t0 = time.monotonic()
-        logger.info(
-            f"[INDIC] Phase 2 (Gemini-FALLBACK): streaming from "
-            f"gemini/{_gemini_model} for {response_lang}"
-        )
-        # Strip the Sarvam-specific `/think …` prefix from the system message
-        # before forwarding to Gemini — Gemini doesn't understand the Sarvam
-        # `/think` directive and may emit spurious <think> blocks that
-        # _emit_tokens would strip, resulting in very short visible output.
-        # Replace it with a plain Assamese-only instruction that Gemini honours.
+        # Strip the Sarvam-specific `/think …` prefix from the system
+        # message — Workers AI doesn't understand the Sarvam `/think`
+        # directive. Replace it with a plain Assamese-only instruction.
         import re as _re2
-        _gemini_msgs = []
+        _wai_msgs = []
         for _gm in messages:
             if _gm.get("role") == "system":
                 _gc = _gm["content"]
-                # Remove leading /think … lines (Sarvam-only directive)
                 _gc = _re2.sub(r"^/think[^\n]*\n?", "", _gc, flags=_re2.MULTILINE)
-                # Prepend a Gemini-friendly Assamese directive
                 _gc = (
                     "CRITICAL: Reply entirely in Assamese (অসমীয়া) script. "
                     "Do NOT write in English. Every word must be in Assamese. "
                     "Technical terms/units/proper nouns (AHSEC, SEBA, Newton, cm, kg) may stay in Latin.\n\n"
                     + _gc.lstrip()
                 )
-                _gemini_msgs.append({**_gm, "content": _gc})
+                _wai_msgs.append({**_gm, "content": _gc})
             else:
-                _gemini_msgs.append(_gm)
+                _wai_msgs.append(_gm)
+
+        _wai_model = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+        _phase2_t0 = time.monotonic()
+        logger.info(
+            f"[INDIC] Phase 2 (Workers AI FALLBACK): streaming from "
+            f"workers-ai/{_wai_model} for {response_lang}"
+        )
 
         _phase2_first_token = False
         try:
-            # Gemini 2.5 Flash uses extended thinking by default which can
-            # consume much of a small max_tokens budget on reasoning alone.
-            # Enforce a minimum of 2048 so the visible Assamese answer has
-            # enough room after the (hidden) think phase.
-            _gemini_max_tokens = max(_clamp_max_tokens(_gemini_model, max_tokens), 2048)
-            async def _gemini_phase2_stream():
-                async for _tok in _stream_gemini(_gemini_msgs, _gemini_key, _gemini_model, _gemini_max_tokens):
+            from providers.cloudflare_ai import chat_stream as _cf_chat_stream
+            async def _wai_phase2_stream():
+                async for _tok in _cf_chat_stream(_wai_msgs, model_key=_wai_model, max_tokens=max(max_tokens, 1024)):
                     yield _tok
-            async for chunk in _emit_tokens(_gemini_phase2_stream()):
+            async for chunk in _emit_tokens(_wai_phase2_stream()):
                 if not _phase2_first_token:
                     _ttft_ms = (time.monotonic() - _phase2_t0) * 1000
                     logger.info(
                         f"[INDIC-PERF] Phase 2 TTFT={_ttft_ms:.0f}ms "
-                        f"lang={response_lang} provider=gemini/{_gemini_model}"
+                        f"lang={response_lang} provider=workers-ai/{_wai_model}"
                     )
                     _phase2_first_token = True
                 yield chunk
         except Exception as _ge:
             if _phase2_first_token:
-                # We already streamed something to the client — can't restart.
                 logger.warning(
                     f"[INDIC] Phase 2 mid-stream error: "
                     f"{type(_ge).__name__}: {str(_ge)[:160]}"
@@ -2254,9 +2185,9 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         _phase2_total_ms = (time.monotonic() - _phase2_t0) * 1000
         logger.info(
             f"[INDIC-PERF] Phase 2 Total={_phase2_total_ms:.0f}ms "
-            f"lang={response_lang} provider=gemini/{_gemini_model}"
+            f"lang={response_lang} provider=workers-ai/{_wai_model}"
         )
-        yield f"data: {json.dumps({'__provider': 'gemini'})}\n\n"
+        yield f"data: {json.dumps({'__provider': 'workers-ai'})}\n\n"
         return
 
     # ── All other models: single provider ───────────────────────────────────────

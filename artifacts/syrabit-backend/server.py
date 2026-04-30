@@ -233,7 +233,7 @@ async def _vertex_startup_probe() -> None:
             f"timed out after {timeout_s:.0f}s — upstream (Vertex / AI Gateway) "
             f"is unreachable or hung."
         )
-        logger.error(f"[STARTUP-PROBE] Gemini self-check FAILED: {reason}")
+        logger.error(f"[STARTUP-PROBE] Workers AI self-check FAILED: {reason}")
         vertex_health_cache.record(
             False,
             reason=reason,
@@ -276,7 +276,7 @@ async def _vertex_startup_probe() -> None:
         if gateway_failed_but_direct_works:
             # Gateway auth issue but direct fallback available - warn but don't fail
             logger.warning(
-                f"[STARTUP-PROBE] Gemini Gateway auth failed but direct fallback works. "
+                f"[STARTUP-PROBE] Workers AI Gateway auth failed but direct fallback works. "
                 f"Service operational via direct API. Check CF_AI_GATEWAY_TOKEN and "
                 f"CLOUDFLARE_ACCOUNT_ID env vars. Reason: {reason}"
             )
@@ -289,7 +289,7 @@ async def _vertex_startup_probe() -> None:
                 source="startup",
             )
         else:
-            logger.error(f"[STARTUP-PROBE] Gemini self-check FAILED: {reason}")
+            logger.error(f"[STARTUP-PROBE] Workers AI self-check FAILED: {reason}")
             vertex_health_cache.record(
                 False,
                 reason=reason,
@@ -299,7 +299,7 @@ async def _vertex_startup_probe() -> None:
             )
     else:
         logger.info(
-            f"[STARTUP-PROBE] Gemini self-check OK "
+            f"[STARTUP-PROBE] Workers AI self-check OK "
             f"(auth_mode={result.get('auth_mode')!r})"
         )
         vertex_health_cache.record(
@@ -412,7 +412,7 @@ async def _vertex_periodic_probe_loop() -> None:
         else:
             consecutive_failures += 1
             logger.error(
-                f"[PERIODIC-PROBE] Gemini self-check FAILED "
+                f"[PERIODIC-PROBE] Workers AI self-check FAILED "
                 f"(consecutive={consecutive_failures}): {reason}"
             )
             if (

@@ -45,6 +45,14 @@ _CF_GW_BYOK = (
     and os.environ.get("CF_AI_GATEWAY_BYOK", "1").strip().lower() not in ("0", "false", "no", "off")
 )
 
+# ── Workers AI direct mode ─────────────────────────────────────────────────────
+# When no Gemini key / SA creds are configured, vertex_services can fall
+# through to Workers AI (providers/cloudflare_ai.py) for generation and
+# vision. Embeddings and translation already use Workers AI as their primary
+# tier regardless of this flag.
+_CF_API_TOKEN      = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+_WORKERS_AI_MODE   = bool(_CF_ACCT and _CF_API_TOKEN)
+
 
 # ── HTTP client (embed path) ────────────────────────────────────────────────
 _embed_http_client: Optional[httpx.AsyncClient] = None
@@ -197,6 +205,8 @@ def _auth_mode_label() -> str:
         return "google_ai_studio_api_key"
     if _USE_BYOK:
         return "cf_ai_gateway_byok"
+    if _WORKERS_AI_MODE:
+        return "workers_ai"
     return "disabled"
 
 
@@ -207,10 +217,9 @@ _AUTH_MODE = _auth_mode_label()
 # made an entire stub-mode regression silent for days).
 if _AUTH_MODE == "disabled":
     logger.error(
-        "vertex_services: NO credentials configured. Set VERTEX_SERVICE_ACCOUNT, "
-        "GOOGLE_APPLICATION_CREDENTIALS_JSON, or GEMINI_API_KEY, or configure "
-        "CF_AI_GATEWAY_ACCOUNT_ID + CF_AI_GATEWAY_ID with a BYOK binding. "
-        "Every Gemini-backed feature will return None / 503."
+        "vertex_services: NO credentials configured. Set CLOUDFLARE_API_TOKEN + "
+        "CF_AI_GATEWAY_ACCOUNT_ID (Workers AI mode) or VERTEX_SERVICE_ACCOUNT / "
+        "GEMINI_API_KEY (Gemini mode). Every generation/vision feature will return None / 503."
     )
     if os.environ.get("VERTEX_REQUIRED", "").strip().lower() in ("1", "true", "yes", "on"):
         # Opt-in hard-fail for deploys that want boot to error rather
@@ -239,7 +248,7 @@ def _ok() -> bool:
     `_record_response()` (success closes the breaker, failure re-opens
     with a fresh cooldown).
     """
-    if not (bool(_API_KEY) or _SA_CREDS is not None or _USE_BYOK):
+    if not (bool(_API_KEY) or _SA_CREDS is not None or _USE_BYOK or _WORKERS_AI_MODE):
         return False
     return _breaker.allow()
 
@@ -740,6 +749,19 @@ async def analyze_image(image_bytes: bytes, mime_type: str = "image/jpeg",
                          max_output_tokens: int = 1024) -> Optional[str]:
     if not _ok():
         return None
+
+    # Workers AI mode — delegate to llama-3.2-11b vision.
+    if _AUTH_MODE == "workers_ai" or (not _API_KEY and not _SA_CREDS and not _USE_BYOK):
+        try:
+            from providers.cloudflare_ai import analyze_image as _cf_vision
+            text = await _cf_vision(image_bytes, prompt=prompt, mime_type=mime_type)
+            _breaker.record_success()
+            return text or None
+        except Exception as e:
+            logger.warning(f"analyze_image (workers_ai) failed: {e}")
+            _breaker.record_failure(f"analyze_image_wai_{type(e).__name__}")
+            return None
+
     b64 = base64.b64encode(image_bytes).decode()
     url = _gen_url(_VISION_MODEL)
     headers = await _auth_headers()
@@ -1121,6 +1143,24 @@ async def _generate(prompt: str, model: str = _GEN_MODEL,
                     max_tokens: int = 2048, temperature: float = 0.1) -> Optional[str]:
     if not _ok():
         return None
+
+    # Workers AI mode — no Gemini key configured, delegate to cloudflare_ai.
+    if _AUTH_MODE == "workers_ai" or (not _API_KEY and not _SA_CREDS and not _USE_BYOK):
+        try:
+            from providers.cloudflare_ai import chat as _cf_chat
+            text = await _cf_chat(
+                [{"role": "user", "content": prompt}],
+                model_key="chat_long",
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            _breaker.record_success()
+            return text or None
+        except Exception as e:
+            logger.warning(f"vertex _generate (workers_ai) failed: {e}")
+            _breaker.record_failure(f"generate_wai_{type(e).__name__}")
+            return None
+
     url = _gen_url(model)
     headers = await _auth_headers()
     body = {
@@ -1163,12 +1203,12 @@ async def health_check() -> dict:
         # mode that was loaded so a Railway log reader can immediately
         # tell "creds present but upstream rejecting" from "no creds at
         # all".
-        has_creds = bool(_API_KEY) or _SA_CREDS is not None or _USE_BYOK
+        has_creds = bool(_API_KEY) or _SA_CREDS is not None or _USE_BYOK or _WORKERS_AI_MODE
         if not has_creds:
             reason = (
-                "No credential available — set VERTEX_SERVICE_ACCOUNT, "
-                "GOOGLE_APPLICATION_CREDENTIALS_JSON, or GEMINI_API_KEY, "
-                "or configure CF AI Gateway BYOK."
+                "No credential available — set CLOUDFLARE_API_TOKEN + "
+                "CF_AI_GATEWAY_ACCOUNT_ID (Workers AI mode), or configure "
+                "VERTEX_SERVICE_ACCOUNT / GEMINI_API_KEY for Gemini mode."
             )
         else:
             snap = _breaker.snapshot()
