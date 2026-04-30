@@ -14,11 +14,11 @@
  * ----------------------------------------------------------------
  * The whole point of this task is to verify the app's actual call site
  * (usePushNotifications.js:44, triggered by AdminDashboard push toggle)
- * invokes Notification.requestPermission() at the right moment. If we called
- * requestPermission() ourselves from page.evaluate, a regression in the button
- * handler or hook wiring would be invisible. Both tests here click the real
- * "Push Off" button in the admin dashboard, which is the only production path
- * that calls pushNotif.subscribe() → Notification.requestPermission().
+ * invokes Notification.requestPermission() at the right moment. Calling
+ * requestPermission() ourselves from page.evaluate would hide regressions in
+ * the button handler or hook wiring. Both tests here click the real "Push Off"
+ * button in the admin dashboard, which is the only production path that calls
+ * pushNotif.subscribe() → Notification.requestPermission().
  *
  * Admin session bootstrapping
  * ----------------------------
@@ -26,7 +26,7 @@
  * installAdminApiMocks()  — intercepts all /api/** routes with fixture data
  *                           (from admin-mocks.ts, same as admin-smoke.spec.ts)
  * These are the canonical E2E helpers used across the admin test suite and
- * require no real backend, no real admin credentials.
+ * require no real backend or real admin credentials.
  *
  * Notification.requestPermission() control
  * -----------------------------------------
@@ -37,6 +37,13 @@
  * context.grantPermissions() is intentionally NOT used — that API sets the
  * browser-level permission flag BEFORE the page loads, bypassing the
  * Notification.requestPermission() JS call entirely.
+ *
+ * navigator.serviceWorker.ready stubbing (granted path only)
+ * -----------------------------------------------------------
+ * The hook awaits navigator.serviceWorker.ready after permission is granted.
+ * We stub the entire navigator.serviceWorker with a lightweight mock so no
+ * real service worker registration is required in the test environment. This
+ * makes the granted-path test fully deterministic and avoids timing issues.
  *
  * Runs under the default 'chromium' project (Desktop Chrome).
  * Source file tested: artifacts/syrabit/src/hooks/usePushNotifications.js
@@ -67,7 +74,7 @@ const PUSH_OFF_TITLE = 'Enable browser push notifications for critical alerts';
  * Wait for the push toggle button to appear in the admin dashboard.
  * It is conditionally rendered only when pushNotif.isSupported is true.
  */
-async function getPushToggle(page: Page) {
+function getPushToggle(page: Page) {
   return page.getByTitle(PUSH_OFF_TITLE);
 }
 
@@ -78,7 +85,7 @@ async function getPushToggle(page: Page) {
 test.describe('Push notification permission request — real UI trigger', () => {
   test(
     'denied: clicking "Push Off" calls requestPermission(), gets denied, and skips the subscription POST',
-    async ({ context, page }) => {
+    async ({ page }) => {
       // Stub Notification.requestPermission to return 'denied' and record the call.
       // This must be done before page.goto so the stub is in place when React mounts.
       await page.addInitScript(() => {
@@ -111,7 +118,7 @@ test.describe('Push notification permission request — real UI trigger', () => 
 
       // The push toggle renders as "Push Off" because the notification-prefs
       // fixture has push_enabled=false (see admin-mocks.ts line ~38).
-      const pushBtn = await getPushToggle(page);
+      const pushBtn = getPushToggle(page);
       await expect(pushBtn).toBeVisible();
 
       // Click the real button → triggers usePushNotifications.subscribe()
@@ -133,117 +140,125 @@ test.describe('Push notification permission request — real UI trigger', () => 
 
   test(
     'granted: clicking "Push Off" calls requestPermission(), gets granted, and POSTs the subscription',
-    async ({ context, page }) => {
-      // Stub requestPermission → 'granted' AND stub PushManager.prototype.subscribe
-      // so no real VAPID server or push endpoint is needed in CI.
+    async ({ page }) => {
+      // ------------------------------------------------------------------
+      // addInitScript runs before any page JS. We stub:
+      //   1. Notification.requestPermission → 'granted'
+      //   2. navigator.serviceWorker → a lightweight mock so the hook's
+      //      `await navigator.serviceWorker.ready` resolves immediately.
+      //      No real SW registration is needed.
+      // ------------------------------------------------------------------
       await page.addInitScript((fakeSub) => {
         (window as unknown as Record<string, unknown>).__permCalled = false;
+
+        // Stub permission to 'granted'.
         Notification.requestPermission = async () => {
           (window as unknown as Record<string, unknown>).__permCalled = true;
           return 'granted';
         };
 
-        if ('PushManager' in window) {
-          (PushManager.prototype as unknown as { subscribe: unknown }).subscribe =
-            async () => ({
-              endpoint: fakeSub.endpoint,
-              expirationTime: null,
-              getKey: () => null,
-              toJSON: () => ({
-                endpoint: fakeSub.endpoint,
-                expirationTime: null,
-                keys: fakeSub.keys,
-              }),
-              unsubscribe: async () => true,
-            });
+        // Build a fake PushSubscription that toJSON() returns the expected shape.
+        const fakeSubObj = {
+          endpoint: fakeSub.endpoint,
+          expirationTime: null,
+          getKey: (_name: string) => null,
+          toJSON: () => ({
+            endpoint: fakeSub.endpoint,
+            expirationTime: null,
+            keys: fakeSub.keys,
+          }),
+          unsubscribe: async () => true,
+        };
+
+        // Build a fake ServiceWorkerRegistration with a pushManager.
+        const fakeReg = {
+          pushManager: {
+            getSubscription: async () => null,
+            subscribe: async (_opts: unknown) => fakeSubObj,
+          },
+          active: { state: 'activated' },
+        };
+
+        // Replace navigator.serviceWorker with a mock that resolves .ready
+        // synchronously. The hook checks 'serviceWorker' in navigator for
+        // isSupported, so the property must exist.
+        const mockSWContainer = {
+          ready: Promise.resolve(fakeReg),
+          controller: { state: 'activated' },
+          register: async (_url: string, _opts?: unknown) => fakeReg,
+          getRegistrations: async () => [fakeReg],
+          addEventListener: (_type: string, _listener: unknown) => {},
+          removeEventListener: (_type: string, _listener: unknown) => {},
+          dispatchEvent: (_event: unknown) => false,
+        };
+
+        try {
+          Object.defineProperty(navigator, 'serviceWorker', {
+            get: () => mockSWContainer,
+            configurable: true,
+          });
+        } catch {
+          // If navigator.serviceWorker is non-configurable (strict browser
+          // environment), fall through — the test may still pass if the
+          // browser's own SW registration resolves in time.
         }
       }, FAKE_SUBSCRIPTION);
-
-      // Also stub PushManager.prototype.getSubscription to return null so the
-      // mount effect in the hook reports subscribed=false immediately.
-      await page.addInitScript(() => {
-        if ('PushManager' in window) {
-          (PushManager.prototype as unknown as { getSubscription: unknown }).getSubscription =
-            async () => null;
-        }
-      });
 
       // Admin session bootstrap.
       await seedAdminSession(page);
       await installAdminApiMocks(page);
 
-      // Intercept the VAPID key endpoint. 'AAAA' is valid minimal base64url
-      // that urlBase64ToUint8Array in the hook can decode without error.
+      // Intercept the VAPID key endpoint. Registered AFTER installAdminApiMocks
+      // so it takes priority (Playwright evaluates routes in LIFO order).
       await page.route('**/push/vapid-public-key', (route) =>
-        route.fulfill({ json: { public_key: 'AAAA' } }),
+        route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ public_key: 'AAAA' }),
+        }),
       );
 
-      // Capture the subscription POST body.
+      // Capture the subscription POST — this is the final step of a successful
+      // subscribe() call and is our primary assertion target.
       let capturedBody: unknown = null;
       await page.route('**/push/subscribe', async (route) => {
         if (route.request().method() === 'POST') {
           const raw = route.request().postData();
           capturedBody = raw ? JSON.parse(raw) : null;
-          await route.fulfill({ json: { ok: true } });
+          await route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify({ ok: true }),
+          });
         } else {
           await route.continue();
         }
       });
 
-      // Pre-register the service worker so navigator.serviceWorker.ready
-      // resolves immediately when the hook awaits it after permission is granted.
-      // We do this at the initial '/' load before navigating to /admin.
-      await page.goto('/');
-      await page.waitForLoadState('domcontentloaded');
-      await page.evaluate(async () => {
-        if (!('serviceWorker' in navigator)) return;
-        const reg = await navigator.serviceWorker.register('/sw.js', {
-          updateViaCache: 'none',
-        });
-        // The SW calls skipWaiting() in install, so it becomes active quickly.
-        // Wait for it to be the active controller before we navigate away.
-        await new Promise<void>((resolve) => {
-          if (navigator.serviceWorker.controller) {
-            resolve();
-            return;
-          }
-          navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), {
-            once: true,
-          });
-          // Fallback: if controllerchange never fires, resolve after 2s
-          // (the SW is installed/waiting even if not controlling yet, so
-          // navigator.serviceWorker.ready will still resolve on /admin).
-          setTimeout(resolve, 2000);
-        });
-      });
-
-      // Now navigate to /admin with the SW in place.
       await page.goto('/admin');
       await expect(page.getByTestId('admin-dashboard')).toBeVisible();
 
-      const pushBtn = await getPushToggle(page);
+      const pushBtn = getPushToggle(page);
       await expect(pushBtn).toBeVisible();
 
-      // Click the real push toggle → triggers the hook's subscribe():
-      //   requestPermission() → 'granted'
-      //   fetch /api/push/vapid-public-key → 'AAAA'
-      //   navigator.serviceWorker.ready → active SW (pre-registered above)
-      //   pushManager.subscribe() → FAKE_SUBSCRIPTION (stubbed)
-      //   POST /api/push/subscribe → captured below
+      // Click the real push toggle. The hook's subscribe() runs:
+      //   requestPermission() → 'granted'                     (stubbed)
+      //   GET /api/push/vapid-public-key → { public_key:'AAAA' }  (intercepted)
+      //   navigator.serviceWorker.ready → fakeReg             (stubbed)
+      //   pushManager.subscribe(...) → fakeSubObj             (stubbed)
+      //   POST /api/push/subscribe → captured below           (intercepted)
       await pushBtn.click();
 
-      // requestPermission must have been called by the hook.
+      // requestPermission must have been called by the hook, not test code.
       const permCalled = await page.evaluate(
         () => (window as unknown as Record<string, unknown>).__permCalled as boolean,
       );
       expect(permCalled).toBe(true);
 
-      // Wait for the POST to arrive (hook is async).
+      // Wait for the POST to arrive (hook is async; allow up to 8 s in slow CI).
       await expect
         .poll(() => capturedBody, { timeout: 8000 })
         .not.toBeNull();
 
-      // Assert the request body has the correct subscription shape.
+      // Assert the request body carries the correct subscription shape.
       const body = capturedBody as {
         subscription: { endpoint: string; keys: { p256dh: string; auth: string } };
       };
