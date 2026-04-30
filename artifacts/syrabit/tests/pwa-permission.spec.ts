@@ -3,8 +3,8 @@
  *
  * Verifies that the push subscription flow (usePushNotifications in
  * src/hooks/usePushNotifications.js) calls Notification.requestPermission()
- * at the right moment — when the admin clicks the "Push Off" toggle — and
- * that the app behaves correctly for both outcomes:
+ * at the RIGHT MOMENT — only after the admin clicks the "Push Off" toggle,
+ * not during page load — and that the app behaves correctly for both outcomes:
  *
  *   'denied'  → subscribe() returns false; no VAPID fetch, no subscription POST
  *   'granted' → subscribe() continues: fetches VAPID key, calls PushManager.subscribe,
@@ -16,9 +16,16 @@
  * (usePushNotifications.js:44, triggered by AdminDashboard push toggle)
  * invokes Notification.requestPermission() at the right moment. Calling
  * requestPermission() ourselves from page.evaluate would hide regressions in
- * the button handler or hook wiring. Both tests here click the real "Push Off"
- * button in the admin dashboard, which is the only production path that calls
- * pushNotif.subscribe() → Notification.requestPermission().
+ * the button handler or hook wiring. Both primary tests here click the real
+ * "Push Off" button in the admin dashboard, which is the only production path
+ * that calls pushNotif.subscribe() → Notification.requestPermission().
+ *
+ * Timing-correctness checks
+ * --------------------------
+ * Each primary test asserts __permCalled === false BEFORE clicking the toggle,
+ * then asserts __permCalled === true AFTER clicking. This ensures the
+ * permission request is not fired proactively on mount/render but exclusively
+ * as a response to an explicit user action.
  *
  * Admin session bootstrapping
  * ----------------------------
@@ -41,9 +48,9 @@
  * navigator.serviceWorker.ready stubbing (granted path only)
  * -----------------------------------------------------------
  * The hook awaits navigator.serviceWorker.ready after permission is granted.
- * We stub the entire navigator.serviceWorker with a lightweight mock so no
- * real service worker registration is required in the test environment. This
- * makes the granted-path test fully deterministic and avoids timing issues.
+ * We replace navigator.serviceWorker with a lightweight mock object via
+ * Object.defineProperty so no real SW registration is needed in CI. This
+ * makes the granted-path test fully deterministic.
  *
  * Runs under the default 'chromium' project (Desktop Chrome).
  * Source file tested: artifacts/syrabit/src/hooks/usePushNotifications.js
@@ -63,19 +70,21 @@ const FAKE_SUBSCRIPTION = {
   },
 };
 
-// The push toggle button title when push is disabled (confirmed from AdminDashboard.jsx).
+// Title attribute on the push toggle when push is disabled (AdminDashboard.jsx ~line 2535).
 const PUSH_OFF_TITLE = 'Enable browser push notifications for critical alerts';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Wait for the push toggle button to appear in the admin dashboard.
- * It is conditionally rendered only when pushNotif.isSupported is true.
- */
 function getPushToggle(page: Page) {
   return page.getByTitle(PUSH_OFF_TITLE);
+}
+
+async function readPermCalled(page: Page): Promise<boolean> {
+  return page.evaluate(
+    () => (window as unknown as Record<string, unknown>).__permCalled as boolean,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -84,10 +93,9 @@ function getPushToggle(page: Page) {
 
 test.describe('Push notification permission request — real UI trigger', () => {
   test(
-    'denied: clicking "Push Off" calls requestPermission(), gets denied, and skips the subscription POST',
+    'denied: requestPermission() is NOT called before click and IS called after; subscription POST is skipped',
     async ({ page }) => {
-      // Stub Notification.requestPermission to return 'denied' and record the call.
-      // This must be done before page.goto so the stub is in place when React mounts.
+      // Instrument requestPermission — stub returns 'denied'.
       await page.addInitScript(() => {
         (window as unknown as Record<string, unknown>).__permCalled = false;
         Notification.requestPermission = async () => {
@@ -96,11 +104,10 @@ test.describe('Push notification permission request — real UI trigger', () => 
         };
       });
 
-      // Standard admin session bootstrap (same pattern as admin-smoke.spec.ts).
       await seedAdminSession(page);
       await installAdminApiMocks(page);
 
-      // Track whether /api/push/subscribe receives a POST — it must NOT.
+      // Track whether POST /api/push/subscribe fires — it must NOT.
       let subscribePostFired = false;
       await page.route('**/push/subscribe', async (route) => {
         if (route.request().method() === 'POST') {
@@ -112,52 +119,49 @@ test.describe('Push notification permission request — real UI trigger', () => 
       });
 
       await page.goto('/admin');
-
-      // Wait for the admin dashboard shell to render.
       await expect(page.getByTestId('admin-dashboard')).toBeVisible();
+      await page.waitForLoadState('networkidle');
 
-      // The push toggle renders as "Push Off" because the notification-prefs
-      // fixture has push_enabled=false (see admin-mocks.ts line ~38).
+      // ------------------------------------------------------------------
+      // TIMING CHECK: permission must NOT have been requested yet.
+      // If this assertion fails, the app is calling requestPermission()
+      // proactively on load — a regression in the hook or dashboard code.
+      // ------------------------------------------------------------------
+      expect(await readPermCalled(page)).toBe(false);
+
+      // Click the real push toggle. This is the only place in the app that
+      // calls pushNotif.subscribe() → Notification.requestPermission().
       const pushBtn = getPushToggle(page);
       await expect(pushBtn).toBeVisible();
-
-      // Click the real button → triggers usePushNotifications.subscribe()
-      // → calls the stubbed Notification.requestPermission() → 'denied'.
       await pushBtn.click();
 
-      // requestPermission must have been called by the hook (not by test code).
-      const permCalled = await page.evaluate(
-        () => (window as unknown as Record<string, unknown>).__permCalled as boolean,
-      );
-      expect(permCalled).toBe(true);
+      // ------------------------------------------------------------------
+      // TIMING CHECK: permission MUST have been requested immediately after
+      // the click, before any other UI interaction.
+      // ------------------------------------------------------------------
+      expect(await readPermCalled(page)).toBe(true);
 
-      // With 'denied', the hook returns early — no subscription POST must fire.
-      // Allow a brief moment for any spurious async tasks to settle.
+      // 'denied' path: hook aborts early, subscription POST must not fire.
       await page.waitForTimeout(300);
       expect(subscribePostFired).toBe(false);
     },
   );
 
   test(
-    'granted: clicking "Push Off" calls requestPermission(), gets granted, and POSTs the subscription',
+    'granted: requestPermission() is NOT called before click and IS called after; subscription is POSTed',
     async ({ page }) => {
-      // ------------------------------------------------------------------
-      // addInitScript runs before any page JS. We stub:
-      //   1. Notification.requestPermission → 'granted'
-      //   2. navigator.serviceWorker → a lightweight mock so the hook's
-      //      `await navigator.serviceWorker.ready` resolves immediately.
-      //      No real SW registration is needed.
-      // ------------------------------------------------------------------
+      // Instrument requestPermission — stub returns 'granted'.
+      // Also stub navigator.serviceWorker so the hook's `await sw.ready`
+      // resolves immediately without a real SW registration.
       await page.addInitScript((fakeSub) => {
         (window as unknown as Record<string, unknown>).__permCalled = false;
 
-        // Stub permission to 'granted'.
         Notification.requestPermission = async () => {
           (window as unknown as Record<string, unknown>).__permCalled = true;
           return 'granted';
         };
 
-        // Build a fake PushSubscription that toJSON() returns the expected shape.
+        // Build a fake PushSubscription.
         const fakeSubObj = {
           endpoint: fakeSub.endpoint,
           expirationTime: null,
@@ -170,7 +174,7 @@ test.describe('Push notification permission request — real UI trigger', () => 
           unsubscribe: async () => true,
         };
 
-        // Build a fake ServiceWorkerRegistration with a pushManager.
+        // Build a fake ServiceWorkerRegistration.
         const fakeReg = {
           pushManager: {
             getSubscription: async () => null,
@@ -180,8 +184,8 @@ test.describe('Push notification permission request — real UI trigger', () => 
         };
 
         // Replace navigator.serviceWorker with a mock that resolves .ready
-        // synchronously. The hook checks 'serviceWorker' in navigator for
-        // isSupported, so the property must exist.
+        // synchronously. Also keeps 'serviceWorker' in navigator truthy so
+        // usePushNotifications.isSupported remains true.
         const mockSWContainer = {
           ready: Promise.resolve(fakeReg),
           controller: { state: 'activated' },
@@ -198,18 +202,16 @@ test.describe('Push notification permission request — real UI trigger', () => 
             configurable: true,
           });
         } catch {
-          // If navigator.serviceWorker is non-configurable (strict browser
-          // environment), fall through — the test may still pass if the
-          // browser's own SW registration resolves in time.
+          // Browser may reject the override; the test still validates the call
+          // path via capturedBody + permCalled checks that follow.
         }
       }, FAKE_SUBSCRIPTION);
 
-      // Admin session bootstrap.
       await seedAdminSession(page);
       await installAdminApiMocks(page);
 
-      // Intercept the VAPID key endpoint. Registered AFTER installAdminApiMocks
-      // so it takes priority (Playwright evaluates routes in LIFO order).
+      // Register specific routes AFTER installAdminApiMocks; Playwright
+      // evaluates page routes in LIFO order, so these take priority.
       await page.route('**/push/vapid-public-key', (route) =>
         route.fulfill({
           contentType: 'application/json',
@@ -217,8 +219,6 @@ test.describe('Push notification permission request — real UI trigger', () => 
         }),
       );
 
-      // Capture the subscription POST — this is the final step of a successful
-      // subscribe() call and is our primary assertion target.
       let capturedBody: unknown = null;
       await page.route('**/push/subscribe', async (route) => {
         if (route.request().method() === 'POST') {
@@ -235,30 +235,29 @@ test.describe('Push notification permission request — real UI trigger', () => 
 
       await page.goto('/admin');
       await expect(page.getByTestId('admin-dashboard')).toBeVisible();
+      await page.waitForLoadState('networkidle');
 
+      // ------------------------------------------------------------------
+      // TIMING CHECK: requestPermission must NOT have fired during load.
+      // ------------------------------------------------------------------
+      expect(await readPermCalled(page)).toBe(false);
+
+      // Click the real push toggle to trigger the subscription flow.
       const pushBtn = getPushToggle(page);
       await expect(pushBtn).toBeVisible();
-
-      // Click the real push toggle. The hook's subscribe() runs:
-      //   requestPermission() → 'granted'                     (stubbed)
-      //   GET /api/push/vapid-public-key → { public_key:'AAAA' }  (intercepted)
-      //   navigator.serviceWorker.ready → fakeReg             (stubbed)
-      //   pushManager.subscribe(...) → fakeSubObj             (stubbed)
-      //   POST /api/push/subscribe → captured below           (intercepted)
       await pushBtn.click();
 
-      // requestPermission must have been called by the hook, not test code.
-      const permCalled = await page.evaluate(
-        () => (window as unknown as Record<string, unknown>).__permCalled as boolean,
-      );
-      expect(permCalled).toBe(true);
+      // ------------------------------------------------------------------
+      // TIMING CHECK: requestPermission MUST have fired after the click.
+      // ------------------------------------------------------------------
+      expect(await readPermCalled(page)).toBe(true);
 
-      // Wait for the POST to arrive (hook is async; allow up to 8 s in slow CI).
+      // Wait for the subscription POST (hook is async; 8 s covers slow CI).
       await expect
         .poll(() => capturedBody, { timeout: 8000 })
         .not.toBeNull();
 
-      // Assert the request body carries the correct subscription shape.
+      // Assert the POST body carries the expected subscription shape.
       const body = capturedBody as {
         subscription: { endpoint: string; keys: { p256dh: string; auth: string } };
       };
@@ -270,20 +269,28 @@ test.describe('Push notification permission request — real UI trigger', () => 
   );
 
   test(
-    'baseline: Notification.permission is "default" at page load (app does not pre-request it)',
+    'baseline: app never calls requestPermission() automatically on page load or during idle',
     async ({ page }) => {
-      // No grantPermissions, no stubs — read the raw browser permission state.
-      // The app must not call requestPermission() automatically at load time;
-      // it should only be triggered by an explicit user action (the push toggle).
+      // Instrument requestPermission to detect any proactive call.
+      // We stub it so that if the app does call it, we know exactly.
+      await page.addInitScript(() => {
+        (window as unknown as Record<string, unknown>).__permCalled = false;
+        // Preserve the original implementation but wrap it to detect calls.
+        const _original = Notification.requestPermission.bind(Notification);
+        Notification.requestPermission = async (...args: []) => {
+          (window as unknown as Record<string, unknown>).__permCalled = true;
+          return _original(...args);
+        };
+      });
+
       await page.goto('/');
-      await page.waitForLoadState('domcontentloaded');
+      await page.waitForLoadState('networkidle');
 
-      const permission = await page.evaluate(() => Notification.permission);
+      // Give deferred effects additional time to settle.
+      await page.waitForTimeout(500);
 
-      // A fresh context without any action must be 'default' (prompt-able),
-      // not 'denied' (which would block the hook forever) or 'granted'
-      // (which the app must only acquire after the user explicitly enables push).
-      expect(permission).toBe('default');
+      // requestPermission must not have been called at any point during load.
+      expect(await readPermCalled(page)).toBe(false);
     },
   );
 });
