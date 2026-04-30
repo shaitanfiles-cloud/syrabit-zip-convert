@@ -84,13 +84,15 @@ A separate content management panel for staff users (role=`staff`) built at `/st
 **Login:** Staff log in through the regular `/login` page. After successful login the `LoginPage` checks `user.role === 'staff'` and redirects to `/staff` automatically.
 
 **Staff accounts (seeded 2026-04-30):**
-| Name | Email | Password |
-|---|---|---|
-| Rohan Sahu | priya.sharma@syrabit.ai | Syrabit@Staff1 |
-| Prakash Sahu | rahul.bora@syrabit.ai | Syrabit@Staff2 |
-| Pari Saikia | ananya.das@syrabit.ai | Syrabit@Staff3 |
-| Nahida Ahmed | kunal.bhuyan@syrabit.ai | Syrabit@Staff4 |
-| Rashmita Sharma | riya.gogoi@syrabit.ai | Syrabit@Staff5 |
+| Name | Email |
+|---|---|
+| Rohan Sahu | priya.sharma@syrabit.ai |
+| Prakash Sahu | rahul.bora@syrabit.ai |
+| Pari Saikia | ananya.das@syrabit.ai |
+| Nahida Ahmed | kunal.bhuyan@syrabit.ai |
+| Rashmita Sharma | riya.gogoi@syrabit.ai |
+
+> **Passwords are never stored in this file.** Current hashes live in MongoDB. To look up or rotate credentials use the `STAFF_PASSWORDS` Replit secret.
 
 **Password management:**
 - Passwords are stored as bcrypt hashes in MongoDB — never in plaintext.
