@@ -36,6 +36,18 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
+      // pwa-mobile.spec.ts is scoped to mobile-chrome; skip it here so the
+      // suite does not run twice under a desktop UA where mobile assertions
+      // (viewport meta, touch events, install prompt) have different semantics.
+      testIgnore: '**/pwa-mobile.spec.ts',
+    },
+    {
+      // Task #3 — mobile viewport for PWA install-prompt & offline-fallback tests.
+      // Uses a Pixel 5 profile: 393 × 851 logical px, deviceScaleFactor 2.75,
+      // touch enabled, mobile UA — mirrors how most users access the PWA.
+      name: 'mobile-chrome',
+      use: { ...devices['Pixel 5'] },
+      testMatch: '**/pwa-mobile.spec.ts',
     },
   ],
   webServer: {
