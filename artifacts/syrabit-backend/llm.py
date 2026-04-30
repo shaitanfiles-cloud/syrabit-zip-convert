@@ -1174,37 +1174,44 @@ def _inject_think_budget(messages: list) -> list:
 
 async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: int, *, response_lang: str = ""):
     """Token-by-token SSE streaming from Sarvam — reuses persistent sarvam_llm_client (zero TCP overhead).
-    For Indic languages: skips think budget injection and think buffer to reduce TTFT.
+    For Indic languages: enables native thinking in Assamese — model reasons in অসমীয়া inside
+    <think> blocks (stripped by _emit_tokens before reaching the student) then answers in Assamese.
     For English: adds SARVAM_THINK_BUFFER so <think> reasoning never crowds out the answer budget.
     Falls back to direct client if CF gateway connection fails.
     """
     _indic = _is_indic_lang(response_lang)
     if _indic:
-        api_max = max_tokens + 100
+        # Enable thinking in Assamese: give the model a reasoning budget so it
+        # can work through the problem in অসমীয়া before writing the answer.
+        # SARVAM_THINK_BUFFER tokens are reserved for the <think> block; the
+        # _emit_tokens layer strips the block before it reaches the student.
+        api_max = max_tokens + SARVAM_THINK_BUFFER
         patched = [dict(m) for m in messages]
+        _indic_preface = (
+            "/think অসমীয়াত চমুকৈ চিন্তা কৰা — তাৰ পিছত সম্পূৰ্ণ উত্তৰ অসমীয়াত দিয়া।\n"
+            "CRITICAL: Think in Assamese (অসমীয়া) first, then reply DIRECTLY in Assamese.\n"
+            "Do NOT start with 'Okay', 'Let me', or any English opener. Begin your answer immediately.\n"
+            "STRICT LANGUAGE RULES:\n"
+            "- Every running word in the answer MUST be in Assamese script. NO mid-sentence English.\n"
+            "- NEVER emit partial English fragments such as 'me uses', 'terms', 'ssible',\n"
+            "  'ble', 'tion', 'ssing'. If you start a word in English, switch back to Assamese.\n"
+            "- Latin script is allowed ONLY for: pure numbers/dates, scientific units\n"
+            "  (cm, kg, Hz, °C, eV…), math symbols/equations, code, URLs, well-known\n"
+            "  proper nouns and acronyms (AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
+            "- For everyday nouns/verbs, always use the Assamese word — never English.\n"
+            "BAD vs GOOD examples (follow the pattern, do not copy text):\n"
+            "  BAD : 'উৰুকা me uses ssible terms চমুকৈ ক'লে…'\n"
+            "  GOOD: 'উৰুকা চমুকৈ ক'লে অসমৰ এক প্ৰিয় উৎসৱ।'\n"
+            "  BAD : 'জল 100°C ত boil হয়।'\n"
+            "  GOOD: 'পানী 100°C ত উতলে।'\n"
+            "  BAD : 'Newton ৰ first law explains inertia।'\n"
+            "  GOOD: 'Newton ৰ গতিৰ প্ৰথম সূত্ৰে জড়তা ব্যাখ্যা কৰে।'\n"
+        )
         if patched and patched[0].get("role") == "system":
-            patched[0]["content"] = (
-                "CRITICAL: Do NOT use <think> tags. Do NOT write internal thoughts. "
-                "Do NOT start with 'Okay' or 'Let me'. "
-                "Reply DIRECTLY in Assamese (অসমীয়া). Start your answer immediately.\n"
-                "STRICT LANGUAGE RULES:\n"
-                "- Every running word MUST be in Assamese script. NO mid-sentence English words.\n"
-                "- NEVER emit partial English fragments such as 'me uses', 'terms', 'ssible',\n"
-                "  'ble', 'tion', 'ssing'. If you start a word in English, you MUST switch\n"
-                "  back to Assamese for the rest of that sentence.\n"
-                "- Latin script is allowed ONLY for: pure numbers/dates, scientific units\n"
-                "  (cm, kg, Hz, °C, eV…), math symbols/equations, code, URLs, well-known\n"
-                "  proper nouns and acronyms (AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
-                "- For everyday nouns/verbs, use the Assamese word — do NOT fall back to English.\n"
-                "BAD vs GOOD examples (follow the pattern, do not copy text):\n"
-                "  BAD : 'উৰুকা me uses ssible terms চমুকৈ ক'লে…'\n"
-                "  GOOD: 'উৰুকা চমুকৈ ক'লে অসমৰ এক প্ৰিয় উৎসৱ।'\n"
-                "  BAD : 'জল 100°C ত boil হয়।'\n"
-                "  GOOD: 'পানী 100°C ত উতলে।'\n"
-                "  BAD : 'Newton ৰ first law explains inertia।'\n"
-                "  GOOD: 'Newton ৰ গতিৰ প্ৰথম সূত্ৰে জড়তা ব্যাখ্যা কৰে।'\n"
-            ) + patched[0]["content"]
-        logger.info(f"[SARVAM-INDIC] No-think mode for {response_lang} — model={model}, api_max={api_max}")
+            patched[0]["content"] = _indic_preface + patched[0]["content"]
+        else:
+            patched.insert(0, {"role": "system", "content": _indic_preface})
+        logger.info(f"[SARVAM-INDIC] Think-in-Assamese mode for {response_lang} — model={model}, api_max={api_max}")
     else:
         api_max = max_tokens + SARVAM_THINK_BUFFER
         patched = _inject_think_budget(messages)
@@ -1213,14 +1220,17 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
         "model": model,
         "messages": patched,
         "max_tokens": api_max,
-        "temperature": 0.05 if _indic else 0.1,
+        "temperature": 0.1,
         "top_p": 0.9 if _indic else 0.95,
         "frequency_penalty": 0,
         "presence_penalty": 0,
         "stream": True,
     }
     if _indic:
-        payload["thinking"] = {"enabled": False}
+        # Enable Sarvam's native thinking so the model reasons in Assamese
+        # before writing the answer. The <think> block is stripped by
+        # _emit_tokens before any tokens reach the student.
+        payload["thinking"] = {"enabled": True}
         if response_lang in _SARVAM_LANG_CODE_MAP:
             payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
     elif response_lang in _SARVAM_LANG_CODE_MAP:
@@ -1542,8 +1552,9 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 if _indic_vertex_active:
                     _vx_messages = [dict(m) for m in messages]
                     _asm_preface = (
-                        "CRITICAL: Reply DIRECTLY in Assamese (অসমীয়া). "
-                        "Do NOT use <think> tags. Do NOT write internal thoughts.\n"
+                        "/think অসমীয়াত চমুকৈ চিন্তা কৰা — তাৰ পিছত সম্পূৰ্ণ উত্তৰ অসমীয়াত দিয়া।\n"
+                        "CRITICAL: Think in Assamese (অসমীয়া) first, then reply DIRECTLY in Assamese.\n"
+                        "Do NOT start with 'Okay' or 'Let me'. Begin your answer immediately.\n"
                         "STRICT LANGUAGE RULES:\n"
                         "- Every running word MUST be in Assamese script. "
                         "NO mid-sentence English words.\n"
@@ -1741,7 +1752,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             return
         if p_name == "sarvam":
             _input_est = sum(len(m.get("content", "")) for m in messages) // 4
-            _think_overhead = 0 if _indic_mode else SARVAM_THINK_BUFFER
+            _think_overhead = SARVAM_THINK_BUFFER
             _sarvam_cap = max(256, 7192 - _input_est - _think_overhead - 100)
             _mt = min(_mt, _sarvam_cap)
             async for token in _stream_sarvam(messages, p_key, p_model, _mt, response_lang=response_lang):

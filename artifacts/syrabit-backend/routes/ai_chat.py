@@ -1950,7 +1950,9 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     if _want_translate and _target_lang_name:
         from prompts import assamese_enforcement_block as _asm_block
         _indic_system_prompt = (
-            "তুমি Syra, এগৰাকী AI শিক্ষক। কেৱল অসমীয়াত উত্তৰ দিয়া। "
+            "/think অসমীয়াত চমুকৈ চিন্তা কৰক — তাৰ পিছত সম্পূৰ্ণ উত্তৰ অসমীয়াত দিয়ক।\n"
+            "তুমি Syra, এগৰাকী AI শিক্ষক। উত্তৰ দিয়াৰ আগতে অসমীয়াত চিন্তা কৰা। "
+            "কেৱল অসমীয়াত উত্তৰ দিয়া। "
             "কাৰিকৰী শব্দ/সূত্ৰ ইংৰাজীত ৰাখিব পাৰা। চমুকৈ লিখা: ৩০-৬০ শব্দ, সৰ্বাধিক ২০০।\n"
             + _asm_block()
         )

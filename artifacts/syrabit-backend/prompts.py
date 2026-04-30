@@ -626,7 +626,9 @@ def get_intent_extraction_rules(intent: str) -> str:
 
 
 _ASSAMESE_ENFORCEMENT_BLOCK = (
-    "\n\nLANGUAGE — ASSAMESE ONLY (অসমীয়া):\n"
+    "\n\nTHINK THEN ANSWER — ASSAMESE ONLY (অসমীয়া):\n"
+    "Before writing your answer, think through the problem in Assamese script (অসমীয়া লিপি).\n"
+    "Your reasoning inside <think>…</think> AND your final answer must both be in Assamese.\n"
     "- The student selected Assamese. Write the ENTIRE answer in Assamese script (অসমীয়া লিপি).\n"
     "- Do NOT mix English words mid-sentence. Do NOT emit partial English fragments\n"
     "  (e.g. 'me uses', 'terms', 'ssible'). Every running word MUST be Assamese.\n"
