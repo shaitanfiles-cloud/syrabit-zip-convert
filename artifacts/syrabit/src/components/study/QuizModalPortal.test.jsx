@@ -92,4 +92,42 @@ describe('QuizModal portal mounting', () => {
 
     expect(screen.queryByText(/quiz me/i)).not.toBeInTheDocument();
   });
+
+  it('dismisses the popover bar after Save completes and 900 ms elapses', async () => {
+    const { studyApi } = await import('@/utils/studyApi');
+    studyApi.createNote.mockResolvedValue({});
+
+    render(<HighlightSavePopover hideQuiz={false} hideSave={false} />);
+
+    // Trigger selection with real timers so triggerSelectionChange works normally
+    await triggerSelectionChange('this is long enough text');
+
+    expect(screen.getByText(/^save$/i)).toBeInTheDocument();
+    expect(screen.getByText(/quiz me/i)).toBeInTheDocument();
+
+    vi.useFakeTimers();
+    try {
+      // Click Save and flush the resolved createNote promise (microtasks only)
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /save/i }));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // Label switches to "Saved" but the popover is still in the DOM —
+      // "Quiz me" remains visible, proving the bar has not been dismissed yet.
+      expect(screen.getByText(/quiz me/i)).toBeInTheDocument();
+
+      // Advance past the 900 ms dismissal timeout
+      await act(async () => {
+        vi.advanceTimersByTime(901);
+      });
+
+      // The entire popover is gone — both action buttons are absent
+      expect(screen.queryByRole('button', { name: /save|saved/i })).toBeNull();
+      expect(screen.queryByText(/quiz me/i)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
