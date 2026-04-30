@@ -105,6 +105,7 @@ Module-level helpers + middleware that other modules / tests import from here:
     ``_ASM_REFRESH_INTERVAL_SECONDS``
 """
 import re, json, asyncio, time, uuid, logging, hashlib, os, html as _html_mod
+import nh3 as _nh3
 from typing import Optional, List
 from datetime import datetime, timezone, timedelta
 from fastapi import (
@@ -400,12 +401,43 @@ async def get_cms_documents(admin: dict = Depends(get_admin_user)):
         mark_mongo_down()
         return []
 
+def _sanitize_html(raw_html: str) -> str:
+    """Strip dangerous tags and event-handler attributes from HTML using nh3."""
+    if not raw_html:
+        return ""
+    return _nh3.clean(
+        raw_html,
+        tags={
+            "a", "abbr", "b", "blockquote", "br", "caption", "code",
+            "col", "colgroup", "dd", "del", "details", "dfn", "div",
+            "dl", "dt", "em", "figcaption", "figure", "h1", "h2", "h3",
+            "h4", "h5", "h6", "hr", "i", "img", "ins", "kbd", "li",
+            "mark", "ol", "p", "pre", "q", "s", "section", "small",
+            "span", "strike", "strong", "sub", "summary", "sup",
+            "table", "tbody", "td", "tfoot", "th", "thead", "tr",
+            "u", "ul", "var",
+        },
+        attributes={
+            "*": {"id", "class"},
+            "a": {"href", "title", "target"},
+            "img": {"src", "alt", "width", "height", "loading"},
+            "td": {"colspan", "rowspan", "align"},
+            "th": {"colspan", "rowspan", "align", "scope"},
+            "col": {"span"},
+            "colgroup": {"span"},
+        },
+        url_schemes={"http", "https", "mailto"},
+        link_rel=None,
+        strip_comments=True,
+    )
+
+
 @router.post("/admin/content/cms-documents")
 async def create_cms_document(doc: CMSDocument, admin: dict = Depends(get_admin_user)):
     """Create new SEO-optimized CMS document with auto markdown→HTML processing"""
     doc_id = str(uuid.uuid4())
     raw_md = doc.content or ""
-    content_html = doc.content_html or _md_to_html(raw_md)
+    content_html = _sanitize_html(doc.content_html or _md_to_html(raw_md))
     headings_json = doc.headings or _extract_headings_json(raw_md)
     word_count = len(re.sub(r'<[^>]+>', '', content_html).split())
     now = datetime.now(timezone.utc).isoformat()
@@ -456,12 +488,12 @@ async def update_cms_document(doc_id: str, doc: CMSDocumentUpdate, admin: dict =
     if "content" in patch:
         raw_md = patch["content"]
         updates["content"] = raw_md
-        updates["content_html"] = patch.pop("content_html", None) or _md_to_html(raw_md)
+        updates["content_html"] = _sanitize_html(patch.pop("content_html", None) or _md_to_html(raw_md))
         updates["headings"] = patch.pop("headings", None) or _extract_headings_json(raw_md)
         content_html_for_wc = updates["content_html"]
         updates["word_count"] = len(re.sub(r'<[^>]+>', '', content_html_for_wc).split())
     elif "content_html" in patch:
-        updates["content_html"] = patch.pop("content_html")
+        updates["content_html"] = _sanitize_html(patch.pop("content_html"))
     if "headings" in patch:
         updates["headings"] = patch.pop("headings")
 

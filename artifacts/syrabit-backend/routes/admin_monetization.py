@@ -1267,7 +1267,7 @@ async def admin_apply_supabase(data: dict, admin: dict = Depends(get_admin_user)
 
 _md_renderer = _mistune.create_markdown(
     plugins=["table", "strikethrough", "footnotes", "task_lists"],
-    escape=False,
+    escape=True,
 )
 
 def _md_to_html(raw: str) -> str:

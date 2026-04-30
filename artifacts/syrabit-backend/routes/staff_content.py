@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from auth_deps import get_staff_user
 from deps import db, pwd_ctx
+import nh3 as _nh3
 
 router = APIRouter()
 
@@ -103,6 +104,41 @@ async def staff_get_chapter(chapter_id: str, staff: dict = Depends(get_staff_use
 
 _STAFF_EDITABLE_FIELDS = {"title", "description", "content", "status"}
 
+_SAFE_MD_TAGS = {
+    "a", "abbr", "b", "blockquote", "br", "code", "del", "div", "em",
+    "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "img", "ins", "kbd",
+    "li", "mark", "ol", "p", "pre", "q", "s", "small", "span", "strike",
+    "strong", "sub", "sup", "table", "tbody", "td", "tfoot", "th", "thead",
+    "tr", "u", "ul",
+}
+
+_SAFE_MD_ATTRS = {
+    "*": {"id", "class"},
+    "a": {"href", "title", "target", "rel"},
+    "img": {"src", "alt", "width", "height", "loading"},
+    "td": {"colspan", "rowspan", "align"},
+    "th": {"colspan", "rowspan", "align", "scope"},
+}
+
+
+def _sanitize_markdown_content(text: str) -> str:
+    """Strip dangerous HTML embedded in markdown before storing.
+
+    This is a defense-in-depth measure. The frontend also refuses to execute
+    raw HTML in markdown (rehypeRaw removed), but we strip dangerous tags at
+    write time so the stored value is clean regardless of the renderer.
+    """
+    if not text:
+        return text
+    return _nh3.clean(
+        text,
+        tags=_SAFE_MD_TAGS,
+        attributes=_SAFE_MD_ATTRS,
+        url_schemes={"http", "https", "mailto"},
+        link_rel=None,
+        strip_comments=True,
+    )
+
 
 @router.patch("/staff/content/chapter/{chapter_id}")
 async def staff_update_chapter(
@@ -116,6 +152,9 @@ async def staff_update_chapter(
     allowed = {k: v for k, v in data.items() if k in _STAFF_EDITABLE_FIELDS}
     if not allowed:
         raise HTTPException(status_code=400, detail="No editable fields provided")
+
+    if "content" in allowed and isinstance(allowed["content"], str):
+        allowed["content"] = _sanitize_markdown_content(allowed["content"])
 
     allowed["updated_at"] = datetime.now(timezone.utc).isoformat()
     allowed["updated_by_staff"] = staff.get("id", "")

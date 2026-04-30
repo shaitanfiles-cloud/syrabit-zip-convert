@@ -37,6 +37,7 @@ numpy==2.4.4
 Pillow==12.2.0
 lxml==6.1.0
 mistune==3.2.0
+nh3==0.3.5
 
 razorpay==2.0.1
 resend==2.26.0

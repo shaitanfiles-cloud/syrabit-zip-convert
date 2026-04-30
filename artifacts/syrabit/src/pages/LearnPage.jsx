@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import DOMPurify from 'dompurify';
 import { Helmet } from 'react-helmet-async';
 import {
   BookOpen, ChevronRight, Clock, BarChart3, Share2,
@@ -323,7 +324,7 @@ export default function LearnPage() {
                 {processedHtml ? (
                   <div
                     className="learn-article max-w-none"
-                    dangerouslySetInnerHTML={{ __html: processedHtml }}
+                    dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(processedHtml) }}
                   />
                 ) : doc?.content ? (
                   <div className="learn-article max-w-none">
