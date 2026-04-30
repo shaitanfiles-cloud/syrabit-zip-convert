@@ -584,6 +584,61 @@ The 28-day re-check is tracked as **Task #89** — "Re-check mobile Core Web Vit
 
 ---
 
+### Task #81 — Workers AI RPM limit tuning (2026-04-30)
+
+#### Measurement
+
+Observed production deployment logs at 11:21–12:12 UTC on 2026-04-30, which covers both low-traffic and mid-morning load.
+
+**Workers AI LLM pool** (chat + content SmartKeyPools):
+| Signal | Value | Source |
+|--------|-------|--------|
+| LLM-level Workers AI 429s | **0** (none in entire log window) | deployment logs |
+| Deployed `rpm_limit` per slot | `30` (old code default, pre-Standard-plan) | `SLM SmartKeyPool active slots` startup log |
+| Current code default | **3 000** (Standard plan, unified billing) | `llm.py` `_POOL_RPM_LIMITS` |
+| Peak `rpm_used` approaching 30 RPM? | No | no throttle warnings or 429s seen |
+
+**Workers AI embedding** (`@cf/baai/bge-large-en-v1.5`):
+| Signal | Value |
+|--------|-------|
+| Embedding 429s | Present — roughly every 10 min |
+| Tracked by SmartKeyPool? | **No** — goes through `vertex_services._workers_ai_primary_embed()` directly |
+| Likely cause | CF free-tier embedding rate limit (~50 RPM); separate from the 3 000 RPM LLM limit |
+
+#### Decision
+
+- **LLM Workers AI limit → 3 000 RPM** (already in code). Zero LLM 429s confirms traffic is well
+  within the budget. The old deployed default of 30 was not causing errors at current load, but
+  the code default has been correctly updated to 3 000 (Standard plan).
+- **No Railway env var needed.** If `WORKERS_AI_RPM_LIMIT` was previously set to 30 or 150 in
+  the Railway environment, **remove it** — the code default of 3 000 now applies and the old
+  override would keep the limit artificially low.
+- **Embedding 429s are a separate issue.** No change to the embedding rate-limit path in this
+  task. The `vertex_services.py` fallback to Gemini embedding is the existing mitigation.
+  Tracked separately.
+
+#### Soft / hard shift thresholds (updated with Standard plan)
+
+| Threshold | Old (150 RPM free tier) | New (3 000 RPM Standard plan) |
+|-----------|------------------------|-------------------------------|
+| Soft shift (deprioritise) | 70% = 105 RPM | **85% = 2 550 RPM** |
+| Hard shift (skip slot) | 90% = 135 RPM | **95% = 2 850 RPM** |
+
+Both thresholds are set in `llm.py` `_SmartKeyPool._RPM_SOFT_THRESHOLD` (0.85) and
+`_RPM_HARD_THRESHOLD` (0.95).
+
+#### Action taken
+
+- `artifacts/syrabit-backend/llm.py` — added Task #81 measurement comment to `_POOL_RPM_LIMITS`
+  block, noting: zero LLM 429s, correct default is 3 000, Railway override should be removed if present.
+
+#### Status
+
+✅ Measured 2026-04-30. LLM Workers AI limit confirmed at **3 000 RPM** (code default, no Railway
+env var override needed). Embedding 429s noted as separate concern; no pool-level action taken.
+
+---
+
 ## Google Tag Gateway (first-party gtag proxy)
 
 **Set up:** 2026-04-30 — implemented as a route in `workers/edge-proxy/src/index.ts`.

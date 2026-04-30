@@ -538,9 +538,23 @@ def _parse_rpm_limit(env_var: str, default: int) -> int:
 #
 # Workers AI — Cloudflare Standard plan (unified billing enabled).
 # Standard plan rate limit is 3 000 RPM per model per account.
-# All 5 chat-pool WAI slots share one rpm_window (same API token),
-# so this 3 000 budget is shared across them, not per-slot.
+# All LLM pool Workers AI slots share one rpm_window (same API token),
+# so the 3 000 budget is shared across them, not per-slot.
 # Override with WORKERS_AI_RPM_LIMIT if the account has custom caps.
+#
+# Task #81 — measurement (2026-04-30):
+#   Zero LLM-level Workers AI 429s observed in production logs.  Current
+#   traffic is well below 3 000 RPM.  No Railway env var override needed;
+#   leave WORKERS_AI_RPM_LIMIT unset so the 3 000 default applies.
+#   If the Railway env has WORKERS_AI_RPM_LIMIT set to an older value
+#   (e.g. 30 or 150), remove it — the default is now correct.
+#
+# NOTE: Workers AI embedding (@cf/baai/bge-large-en-v1.5) gets separate
+#   429s in production but is NOT rate-limited by this pool — it goes
+#   through vertex_services._workers_ai_primary_embed() which has its own
+#   retry path.  Embedding rate-limit tracking is out of scope here; those
+#   429s are from the CF free-tier embedding model limit (~50 RPM), not the
+#   3 000 RPM LLM limit.
 _POOL_RPM_LIMITS = {
     "workers-ai": _parse_rpm_limit("WORKERS_AI_RPM_LIMIT", 3000),
     "groq":        _parse_rpm_limit("GROQ_RPM_LIMIT",         30),
