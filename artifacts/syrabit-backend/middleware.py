@@ -151,6 +151,91 @@ class OriginSharedSecretMiddleware:
         await resp(scope, receive, send)
 
 
+_RE_SMAXAGE = re.compile(r"s-maxage=(\d+)")
+_RE_SWR      = re.compile(r"stale-while-revalidate=(\d+)")
+_RE_SIE      = re.compile(r"stale-if-error=(\d+)")
+_RE_UA_VARY  = re.compile(r",?\s*User-Agent\b", re.IGNORECASE)
+_COMPRESSIBLE_CTYPES = ("text/", "application/json", "application/javascript", "application/xml")
+
+
+class CfPerformanceMiddleware:
+    """
+    Injects Cloudflare-specific performance headers into every HTTP response.
+
+    What it does — without touching your route handlers:
+
+    1. ``stale-if-error=86400`` — appended to every public Cache-Control header
+       so CF serves stale content for 24 h if the origin goes down.
+
+    2. ``Cloudflare-CDN-Cache-Control`` — mirrors the public Cache-Control but
+       promotes ``s-maxage`` to ``max-age`` so the CF edge obeys a different
+       (usually longer) TTL than the browser independently.
+
+    3. ``Vary: Accept-Encoding`` — appended to compressible content-types so
+       CF correctly deduplicates gzip / brotli cache buckets.
+
+    4. Bad ``Vary: User-Agent`` — stripped out; it forces CF to store a
+       separate cache copy per UA, fragmenting the cache by billions of buckets.
+    """
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def _send_with_cf_headers(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                cc = headers.get("cache-control", "")
+                ct = headers.get("content-type", "")
+
+                if "public" in cc and "no-store" not in cc:
+                    # ── 1. stale-if-error ─────────────────────────────────
+                    if "stale-if-error" not in cc:
+                        cc = cc.rstrip(", ") + ", stale-if-error=86400"
+                        headers["cache-control"] = cc
+
+                    # ── 2. Cloudflare-CDN-Cache-Control ───────────────────
+                    if not headers.get("cloudflare-cdn-cache-control"):
+                        sm = _RE_SMAXAGE.search(cc)
+                        swr = _RE_SWR.search(cc)
+                        sie = _RE_SIE.search(cc)
+                        if sm:
+                            edge_ttl = sm.group(1)
+                            cf_parts = [f"public, max-age={edge_ttl}"]
+                            if swr:
+                                cf_parts.append(f"stale-while-revalidate={swr.group(1)}")
+                            if sie:
+                                cf_parts.append(f"stale-if-error={sie.group(1)}")
+                            headers.append(
+                                "Cloudflare-CDN-Cache-Control", ", ".join(cf_parts)
+                            )
+
+                    # ── 3. Vary: Accept-Encoding ──────────────────────────
+                    if any(ct.startswith(t) for t in _COMPRESSIBLE_CTYPES):
+                        vary = headers.get("vary", "")
+                        if "Accept-Encoding" not in vary:
+                            headers["vary"] = (
+                                f"{vary}, Accept-Encoding" if vary else "Accept-Encoding"
+                            )
+
+                # ── 4. Strip bad Vary: User-Agent ─────────────────────────
+                vary = headers.get("vary", "")
+                if vary and "User-Agent" in vary:
+                    cleaned = _RE_UA_VARY.sub("", vary).strip(", ")
+                    if cleaned:
+                        headers["vary"] = cleaned
+                    else:
+                        del headers["vary"]
+
+            await send(message)
+
+        await self.app(scope, receive, _send_with_cf_headers)
+
+
 class SecurityHeadersMiddleware:
     def __init__(self, app: ASGIApp):
         self.app = app

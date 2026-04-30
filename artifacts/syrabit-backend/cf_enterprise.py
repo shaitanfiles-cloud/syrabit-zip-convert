@@ -753,6 +753,17 @@ _SPEED_SETTINGS = [
     ("h2_prioritization",        {"value": "on"},  "HTTP/2 Prioritization (Enterprise)"),
     ("0rtt",                     {"value": "on"},  "0-RTT resume (Enterprise)"),
     ("prefetch_preload",         {"value": "on"},  "Prefetch/preload links"),
+    # ── Image delivery ─────────────────────────────────────────────────────────
+    # Polish auto-converts uploaded images to WebP (or AVIF) and strips EXIF.
+    # Cuts image payload 30-50% with zero code changes.
+    ("polish",                   {"value": "lossless"}, "Polish: auto-WebP / strip EXIF (Enterprise)"),
+    # ── JS deferral ────────────────────────────────────────────────────────────
+    # Rocket Loader defers non-critical JS so HTML/CSS loads first (better LCP).
+    ("rocket_loader",            {"value": "on"},  "Rocket Loader: defer JS for faster LCP"),
+    # ── Cache topology ─────────────────────────────────────────────────────────
+    # Tiered Caching (Cache Shield) adds a second cache layer at regional PoPs.
+    # Dramatically reduces origin requests for long-tail content.
+    ("tiered_caching",           {"value": "on"},  "Tiered Caching (Cache Shield) for India PoPs"),
 ]
 
 
@@ -841,3 +852,88 @@ async def speed_status() -> dict:
         "gap_count": len(gaps),
         "fully_optimized": len(gaps) == 0,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5. CACHE TAGS — targeted purge without URL matching
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# CF Enterprise supports `Cache-Tag` response headers.  CF stores one tag
+# mapping per cache entry and lets you purge all entries that share a tag via
+# the Purge by Tag API — much faster and more precise than prefix purge.
+#
+# Usage in route handlers:
+#   from cf_enterprise import cache_tag_header
+#   response.headers["Cache-Tag"] = cache_tag_header("subject", subject_id, "chapter", chapter_id)
+#
+# Then call purge_by_tags(["syrabit-subject-12", "syrabit-chapter-99"]) to
+# invalidate exactly those pages.
+
+_TAG_PREFIX = "syrabit"
+
+def build_cache_tag(*pairs: str) -> str:
+    """
+    Build a space-separated ``Cache-Tag`` header value from (entity_type, entity_id) pairs.
+
+    Example:
+        build_cache_tag("subject", "12", "chapter", "99")
+        → "syrabit-subject-12 syrabit-chapter-99"
+
+    The space-delimited format lets a single response carry multiple tags so
+    CF can index it under all of them.
+    """
+    tags: list[str] = []
+    it = iter(pairs)
+    for entity_type in it:
+        entity_id = next(it, "")
+        if entity_type and entity_id:
+            tags.append(f"{_TAG_PREFIX}-{entity_type}-{entity_id}")
+    return " ".join(tags)
+
+
+def subject_cache_tag(subject_id) -> str:
+    return f"{_TAG_PREFIX}-subject-{subject_id}"
+
+def chapter_cache_tag(chapter_id) -> str:
+    return f"{_TAG_PREFIX}-chapter-{chapter_id}"
+
+def pyq_cache_tag(year: int = 0, subject_id=None) -> str:
+    parts = [f"{_TAG_PREFIX}-pyq"]
+    if year:
+        parts.append(f"{_TAG_PREFIX}-pyq-{year}")
+    if subject_id:
+        parts.append(f"{_TAG_PREFIX}-pyq-subject-{subject_id}")
+    return " ".join(parts)
+
+def content_cache_tag(content_type: str, content_id) -> str:
+    return f"{_TAG_PREFIX}-{content_type}-{content_id}"
+
+
+async def purge_by_tags(tags: list[str]) -> Optional[dict]:
+    """
+    Purge CF edge cache for all entries carrying any of the given Cache-Tags.
+    Requires Enterprise plan.  Returns the CF API response dict or None on error.
+
+    Example:
+        await purge_by_tags(["syrabit-subject-12", "syrabit-chapter-99"])
+    """
+    zone = _zone_id()
+    if not zone:
+        return None
+    if not tags:
+        return {"tags": [], "skipped": True}
+    return await _post(
+        f"{_CF_BASE}/zones/{zone}/purge_cache",
+        {"tags": tags},
+    )
+
+
+async def purge_by_hosts(hosts: list[str]) -> Optional[dict]:
+    """Purge all cache entries for the given hostnames (Enterprise only)."""
+    zone = _zone_id()
+    if not zone:
+        return None
+    return await _post(
+        f"{_CF_BASE}/zones/{zone}/purge_cache",
+        {"hosts": hosts},
+    )

@@ -28,6 +28,9 @@ Endpoints:
   GET  /admin/cf/speed            — current vs recommended speed settings
   POST /admin/cf/speed/optimize   — apply all enterprise speed optimisations
   PATCH /admin/cf/speed/{setting} — update a single setting
+
+  POST /admin/cf/cache/purge-tags  — purge edge cache by Cache-Tag (Enterprise)
+  POST /admin/cf/cache/purge-hosts — purge all cache for given hostnames (Enterprise)
 """
 from __future__ import annotations
 
@@ -361,6 +364,71 @@ async def cf_speed_set(
     if not result:
         raise HTTPException(502, f"Failed to update CF setting '{setting_name}'")
     return result
+
+
+# ── cache tag purge (Enterprise) ──────────────────────────────────────────────
+
+class PurgeTagsRequest(BaseModel):
+    tags: List[str] = Field(..., description="CF Cache-Tag values to purge, e.g. ['syrabit-subject-12']")
+
+
+class PurgeHostsRequest(BaseModel):
+    hosts: List[str] = Field(..., description="Hostnames to purge, e.g. ['syrabit.ai']")
+
+
+@router.post("/admin/cf/cache/purge-tags")
+async def cf_purge_by_tags(req: PurgeTagsRequest, admin: dict = Depends(get_admin_user)):
+    """
+    Purge CF edge cache for all entries that carry any of the given Cache-Tags.
+
+    Cache-Tags are set by route handlers via the ``Cache-Tag`` response header
+    (e.g. ``Cache-Tag: syrabit-subject-12 syrabit-chapter-99``).  Requires
+    CF Enterprise plan.
+    """
+    if not req.tags:
+        raise HTTPException(400, "At least one tag is required")
+    result = await cfe.purge_by_tags(req.tags)
+    if result is None:
+        raise HTTPException(502, "CF purge-by-tags failed or CF_ZONE_ID not configured")
+    return {"ok": True, "tags": req.tags, "cf_response": result}
+
+
+@router.post("/admin/cf/cache/purge-hosts")
+async def cf_purge_by_hosts(req: PurgeHostsRequest, admin: dict = Depends(get_admin_user)):
+    """Purge all cache entries for the given hostnames (Enterprise only)."""
+    if not req.hosts:
+        raise HTTPException(400, "At least one host is required")
+    result = await cfe.purge_by_hosts(req.hosts)
+    if result is None:
+        raise HTTPException(502, "CF purge-by-hosts failed or CF_ZONE_ID not configured")
+    return {"ok": True, "hosts": req.hosts, "cf_response": result}
+
+
+@router.get("/admin/cf/cache/tag-guide")
+async def cf_cache_tag_guide(admin: dict = Depends(get_admin_user)):
+    """
+    Returns the Cache-Tag naming conventions and example purge payloads.
+    Use this to understand how to tag responses and purge them selectively.
+    """
+    return {
+        "prefix": "syrabit",
+        "conventions": {
+            "subject":      "syrabit-subject-{subject_id}",
+            "chapter":      "syrabit-chapter-{chapter_id}",
+            "pyq":          "syrabit-pyq  syrabit-pyq-{year}  syrabit-pyq-subject-{id}",
+            "content_type": "syrabit-{content_type}-{content_id}",
+        },
+        "how_to_tag": (
+            "Add a Cache-Tag header to any cacheable response: "
+            "response.headers['Cache-Tag'] = 'syrabit-subject-12 syrabit-chapter-99'. "
+            "Multiple tags are space-separated."
+        ),
+        "example_purge": {
+            "url": "POST /admin/cf/cache/purge-tags",
+            "body": {"tags": ["syrabit-subject-12", "syrabit-chapter-99"]},
+        },
+        "note": "Purge-by-tag requires Cloudflare Enterprise plan.",
+    }
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

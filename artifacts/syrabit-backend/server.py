@@ -2261,6 +2261,7 @@ class HeadAsGetMiddleware:
 
 from middleware import (
     SecurityHeadersMiddleware,
+    CfPerformanceMiddleware,
     GlobalRateLimitMiddleware,
     ServerSideTrackingMiddleware,
     OriginSharedSecretMiddleware,
@@ -2271,6 +2272,7 @@ app.add_middleware(BotRenderMiddleware)
 app.add_middleware(ServerSideTrackingMiddleware)
 app.add_middleware(GlobalRateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(CfPerformanceMiddleware)
 # Task #793: re-applies a freshly-minted ``syrabit_device`` cookie to
 # the outgoing response when the route handler returned its own
 # ``Response`` (e.g. ``StreamingResponse`` on /ai/chat/stream), which
