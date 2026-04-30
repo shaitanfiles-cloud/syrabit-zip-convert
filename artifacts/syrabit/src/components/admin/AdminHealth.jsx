@@ -641,12 +641,25 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   // doesn't force us to disable the entire safety net.
   const [waiStatus, setWaiStatus] = useState(null);
   const [waiToggling, setWaiToggling] = useState('');
+  // Task #78 — 429 burst pressure gauge (burst_60s, burst_180s,
+  // throttled, alert_threshold) from GET /admin/dashboard/metrics.
+  // Piggybacked on the 30s workers-ai poll so no extra interval is needed.
+  const [waiThrottle, setWaiThrottle] = useState(null);
   const loadWorkersAi = useCallback(() => {
-    axios.get(`${API_BASE}/admin/workers-ai/status`, {
-      headers: adminHeaders(adminToken), withCredentials: true,
-    })
-      .then((r) => setWaiStatus(r.data))
-      .catch(() => setWaiStatus(null));
+    Promise.allSettled([
+      axios.get(`${API_BASE}/admin/workers-ai/status`, {
+        headers: adminHeaders(adminToken), withCredentials: true,
+      }),
+      axios.get(`${API_BASE}/admin/dashboard/metrics`, {
+        headers: adminHeaders(adminToken), withCredentials: true,
+      }),
+    ]).then(([statusRes, metricsRes]) => {
+      if (statusRes.status === 'fulfilled') setWaiStatus(statusRes.value.data);
+      else setWaiStatus(null);
+      if (metricsRes.status === 'fulfilled')
+        setWaiThrottle(metricsRes.value.data?.workers_ai_throttle ?? null);
+      else setWaiThrottle(null);
+    });
   }, [adminToken]);
   const toggleWorkersAi = useCallback(async (capability, enabled) => {
     setWaiToggling(capability);
@@ -1995,6 +2008,78 @@ export default function AdminHealth({ adminToken, onNavigate }) {
         {healthTab === 'workers-ai' && (
           <SectionErrorBoundary name="Workers AI Fallback">
             <div className="space-y-4">
+
+              {/* Task #78 — Workers AI 429 burst pressure gauge */}
+              {(() => {
+                const thr = waiThrottle;
+                const burst60 = thr?.burst_60s ?? 0;
+                const burst180 = thr?.burst_180s ?? 0;
+                const limit = thr?.alert_threshold ?? 5;
+                const throttled = thr?.throttled ?? false;
+                const approaching = !throttled && burst60 > 0;
+                const dotColor = throttled
+                  ? 'bg-red-500'
+                  : approaching
+                  ? 'bg-amber-400'
+                  : 'bg-emerald-500';
+                const statusLabel = throttled ? 'Throttled' : approaching ? 'Approaching' : 'OK';
+                const statusText = throttled
+                  ? 'text-red-600'
+                  : approaching
+                  ? 'text-amber-600'
+                  : 'text-emerald-600';
+                return (
+                  <div className={`rounded-2xl p-4 border shadow-sm ${
+                    throttled
+                      ? 'bg-red-50 border-red-200'
+                      : approaching
+                      ? 'bg-amber-50 border-amber-200'
+                      : 'bg-white border-gray-200'
+                  }`}>
+                    {throttled && (
+                      <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-red-100 border border-red-200">
+                        <AlertTriangle size={14} className="text-red-600 shrink-0" />
+                        <span className="text-xs font-semibold text-red-700">
+                          Workers AI is throttled — {burst60} 429s in the last 60 s (threshold: {limit})
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Zap size={14} className={throttled ? 'text-red-500' : approaching ? 'text-amber-500' : 'text-gray-400'} />
+                        <span className="text-xs font-semibold text-gray-700">Workers AI — 429 Burst Pressure</span>
+                        <span className={`flex items-center gap-1 text-[11px] font-semibold ${statusText}`}>
+                          <span className={`inline-block w-2 h-2 rounded-full ${dotColor}`} />
+                          {statusLabel}
+                        </span>
+                      </div>
+                      {thr === null && (
+                        <span className="text-[11px] text-gray-400">loading…</span>
+                      )}
+                    </div>
+                    {thr !== null && (
+                      <div className="mt-3 grid grid-cols-3 gap-3">
+                        <div className="rounded-lg p-2.5 bg-white/70 border border-gray-100">
+                          <div className="text-[10px] uppercase text-gray-400 font-semibold mb-0.5">60 s (this worker)</div>
+                          <div className={`text-base font-bold tabular-nums ${burst60 >= limit ? 'text-red-600' : burst60 > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                            {burst60}
+                            <span className="text-xs font-normal text-gray-400"> / {limit}</span>
+                          </div>
+                        </div>
+                        <div className="rounded-lg p-2.5 bg-white/70 border border-gray-100">
+                          <div className="text-[10px] uppercase text-gray-400 font-semibold mb-0.5">180 s (all workers)</div>
+                          <div className="text-base font-bold tabular-nums text-gray-700">{burst180}</div>
+                        </div>
+                        <div className="rounded-lg p-2.5 bg-white/70 border border-gray-100">
+                          <div className="text-[10px] uppercase text-gray-400 font-semibold mb-0.5">Alert threshold</div>
+                          <div className="text-base font-bold tabular-nums text-gray-700">{limit}</div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
                 <div className="flex items-start justify-between mb-4">
                   <div>
