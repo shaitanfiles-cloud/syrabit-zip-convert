@@ -449,6 +449,23 @@ describe('HighlightSavePopover — edge cases', () => {
     childOutsideSavable.parentNode.removeChild(childOutsideSavable);
   });
 
+  it('does not show the popover and throws no error when getSelection() returns null', async () => {
+    render(<HighlightSavePopover />);
+
+    getSelectionSpy.mockReturnValue(null);
+
+    await expect(
+      act(async () => {
+        document.dispatchEvent(new Event('selectionchange'));
+        await new Promise((r) => setTimeout(r, 0));
+      }),
+    ).resolves.not.toThrow();
+
+    expect(screen.queryByText(/save/i)).toBeNull();
+    expect(screen.queryByText(/quiz me/i)).toBeNull();
+    expect(document.querySelector('.fixed.z-\\[110\\]')).toBeNull();
+  });
+
   it('does not show the popover when the selection is outside any savable container', async () => {
     render(<HighlightSavePopover />);
 
