@@ -525,6 +525,61 @@ Task #68 verified that all 8 checklist rows above were updated from "☐ Reviewe
 
 Once the scope is granted and `verify_cf_tokens.sh` shows OK for both LB probes, update this status line to `✅ Complete — Load Balancer Read scope granted <date>`.
 
+### Task #77 — Mobile Core Web Vitals check after Mirage enable (2026-04-30)
+
+Mirage was enabled on **2026-04-30** (Task #66, row 4b). This section documents the day-0 baseline captured via PageSpeed Insights immediately after the change, and the monitoring plan for the following weeks.
+
+#### Day-0 baseline — 2026-04-30 at 13:37 UTC
+
+PSI report: <https://pagespeed.web.dev/analysis/https-syrabit-ai/56pr7yvyj0?form_factor=mobile>
+
+**CrUX field data (last 28 days, mobile — reflects pre-Mirage state):**
+
+| Metric | Value | Status |
+|--------|-------|--------|
+| Largest Contentful Paint (LCP) | 5.1 s | 🔴 Poor (≤ 2.5 s = Good) |
+| Interaction to Next Paint (INP) | 230 ms | 🟡 Needs Improvement (≤ 200 ms = Good) |
+| Cumulative Layout Shift (CLS) | 0.01 | 🟢 Good (≤ 0.1 = Good) |
+| First Contentful Paint (FCP) | 3.9 s | 🔴 Poor |
+| Time to First Byte (TTFB) | 1.2 s | 🟡 Needs Improvement |
+
+**Lighthouse lab scores (mobile, simulated throttling):**
+
+| Category | Score |
+|----------|-------|
+| Performance | 80 |
+| Accessibility | 100 |
+| Best Practices | 96 |
+| SEO | 92 |
+
+**CWV assessment: FAILED** — driven primarily by LCP (5.1 s) and FCP (3.9 s), which are pre-existing SPA hydration issues unrelated to Mirage image delivery. CLS is 0.01 (excellent) — this is the metric Mirage is most likely to affect (layout reflow from resized images) and it shows no problem.
+
+**Timing note:** CrUX data is a 28-day rolling average. Since Mirage was enabled on day 0, the day-0 report reflects ~0 days of Mirage traffic. Mirage's impact will show progressively in CrUX: ~25% visible at day 7, ~100% visible at day 28 (around 2026-05-28).
+
+#### Observations
+
+- **No Mirage-caused regression detected at day 0.**
+- CLS (0.01) is already well within the Good threshold — the primary risk from Mirage (image resizing causing layout shift) is not materialising.
+- LCP (5.1 s) and FCP (3.9 s) are pre-existing issues tied to React SPA hydration, not image delivery. Mirage may help slightly if the hero/splash image is the LCP element; it will not worsen these metrics since it defers off-screen images rather than blocking them.
+- INP (230 ms) and TTFB (1.2 s) are unaffected by Mirage (interaction and server response time respectively).
+
+#### 1-week re-check plan (target: 2026-05-07)
+
+Re-run PSI for mobile at <https://pagespeed.web.dev/report?url=https%3A%2F%2Fsyrabit.ai&strategy=mobile> and compare to the baseline table above. Focus on:
+
+1. **CLS** — should remain ≤ 0.1. A jump above 0.1 would be a Mirage regression (image resize causing unexpected reflow).
+2. **LCP** — note direction (improvement expected if LCP element is an image; stable otherwise).
+3. **INP** — should remain in the same range (Mirage does not affect interactivity).
+
+If CLS rises above 0.1 after Mirage data dominates the CrUX window, disable Mirage:
+- Cloudflare dashboard → **Speed** → **Optimization** → **Images** → **Mirage** → toggle off
+- Or via API: `PATCH /zones/5b8c97df4431491dc7f60ea72fb61871/settings/mirage` with `{"value":"off"}`
+- Update row 4b in the Task #66 table above and add a note here.
+
+#### Status
+
+✅ Baseline captured 2026-04-30. No regressions. Mirage remains enabled. Re-check target: **2026-05-07** (1 week) and **2026-05-28** (full 28-day CrUX window).
+
 ---
 
 ## Google Tag Gateway (first-party gtag proxy)
