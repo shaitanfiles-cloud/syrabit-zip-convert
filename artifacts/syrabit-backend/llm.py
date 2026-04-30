@@ -424,15 +424,23 @@ class _SmartKeyPool:
     _RPM_SOFT_THRESHOLD = 0.70
     _RPM_HARD_THRESHOLD = 0.90
 
+    # RPM limits per provider.
+    # Workers AI: despite CF Enterprise billing, the gateway enforces a
+    # per-account RPM cap that has been observed to be ~150 in practice
+    # (the 429s seen in production confirm the old 500 value was too
+    # optimistic).  Override with WORKERS_AI_RPM_LIMIT env var if your
+    # account tier is different.
+    # Groq / Cerebras: 30 RPM on the free / preview tier; set GROQ_RPM_LIMIT
+    # or CEREBRAS_RPM_LIMIT to a higher value on a paid plan.
     _PROVIDER_RPM_LIMITS = {
-        "workers-ai": 500,  # CF Enterprise: billed per-token, no hard RPM cap
-        "groq": 30,
-        "cerebras": 30,
-        "sarvam": 30,
-        "gemini": 600,
-        "openrouter": 60,
-        "openai": 60,
-        "bedrock": 30,
+        "workers-ai": int(os.environ.get("WORKERS_AI_RPM_LIMIT", "150")),
+        "groq":        int(os.environ.get("GROQ_RPM_LIMIT",       "30")),
+        "cerebras":    int(os.environ.get("CEREBRAS_RPM_LIMIT",   "30")),
+        "sarvam":      int(os.environ.get("SARVAM_RPM_LIMIT",     "30")),
+        "gemini":      int(os.environ.get("GEMINI_RPM_LIMIT",     "600")),
+        "openrouter":  60,
+        "openai":      60,
+        "bedrock":     30,
     }
 
     def __init__(self, candidates: list):
@@ -464,6 +472,7 @@ class _SmartKeyPool:
                     "priority": tier,
                     "rpm_window": shared_rpm[rpm_key], "rpm_limit": rpm,
                     "base_priority": tier,
+                    "rpm_warn_until": 0.0,  # suppresses repeated soft-threshold warnings
                 })
         logger.info(
             f"SLM SmartKeyPool active slots: "
@@ -501,13 +510,23 @@ class _SmartKeyPool:
             return None
 
         for s in available:
-            if self._rpm_ratio(s) >= self._RPM_HARD_THRESHOLD:
+            ratio = self._rpm_ratio(s)
+            # Soft-threshold warning: log once per 60s per slot so the team
+            # can see RPM pressure building before a 429 actually fires.
+            if ratio >= self._RPM_SOFT_THRESHOLD and now >= s.get("rpm_warn_until", 0.0):
                 remaining = self._seconds_until_rpm_drop(s)
-                if remaining > 0:
-                    logger.info(
-                        f"SLM pool: {s['provider']}/{s['model']} at {self._rpm_ratio(s)*100:.0f}% RPM "
-                        f"({self._rpm_count(s)}/{s['rpm_limit']}) — deprioritizing for ~{remaining:.0f}s"
-                    )
+                level = "WARNING" if ratio >= self._RPM_HARD_THRESHOLD else "INFO"
+                msg = (
+                    f"SLM pool: {s['provider']}/{s['model']} at {ratio*100:.0f}% RPM "
+                    f"({self._rpm_count(s)}/{s['rpm_limit']}) — "
+                    f"{'near limit, strongly deprioritizing' if ratio >= self._RPM_HARD_THRESHOLD else 'soft threshold crossed, shifting traffic'}"
+                    + (f" (~{remaining:.0f}s to free)" if remaining > 0 else "")
+                )
+                if level == "WARNING":
+                    logger.warning(msg)
+                else:
+                    logger.info(msg)
+                s["rpm_warn_until"] = now + 60.0  # suppress for 60 s
 
         with_capacity = [s for s in available if s["sem"]._value > 0]
         pool = with_capacity if with_capacity else available

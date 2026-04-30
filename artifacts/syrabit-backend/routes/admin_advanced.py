@@ -1691,6 +1691,48 @@ async def admin_llm_speed_test(admin: dict = Depends(get_admin_user)):
     }
 
 
+@router.get("/admin/llm/pool-stats")
+async def admin_llm_pool_stats(admin: dict = Depends(get_admin_user)):
+    """Real-time RPM usage and slot health across both SmartKeyPools.
+
+    Returns per-slot data for the chat SLM pool and the content pool:
+      - rpm_used / rpm_limit / rpm_pct  — current requests-per-minute load
+      - effective_priority               — 0-6 base + deprioritization penalty
+      - cooldown                         — True when slot is cooling after a 429
+
+    Pair with /admin/llm/speed-test for a full latency + throughput picture.
+    """
+    from llm import _slm_pool, _content_pool
+
+    chat_stats = _slm_pool.rpm_status()
+    content_stats = _content_pool.rpm_status()
+
+    # _PROVIDER_RPM_LIMITS is a class attribute on _SmartKeyPool.
+    _rpm_table = type(_slm_pool)._PROVIDER_RPM_LIMITS
+
+    # Annotate each slot with the configured limit and env-var that controls it.
+    _env_keys = {
+        "workers-ai": "WORKERS_AI_RPM_LIMIT",
+        "groq":        "GROQ_RPM_LIMIT",
+        "cerebras":    "CEREBRAS_RPM_LIMIT",
+        "sarvam":      "SARVAM_RPM_LIMIT",
+        "gemini":      "GEMINI_RPM_LIMIT",
+    }
+    for stat in [*chat_stats, *content_stats]:
+        stat["rpm_env_var"] = _env_keys.get(stat["provider"])
+
+    return {
+        "chat_pool":    chat_stats,
+        "content_pool": content_stats,
+        "rpm_limits":   {p: _rpm_table.get(p) for p in _env_keys},
+        "note": (
+            "rpm_used is a rolling 60s window per slot. "
+            "Workers AI slots share one window (same API key). "
+            "Override limits via env vars listed in rpm_env_var."
+        ),
+    }
+
+
 @router.get("/admin/analytics/queries")
 async def admin_analytics_queries(limit: int = 10, days: int = 7, admin: dict = Depends(get_admin_user)):
     """Top N most-asked queries (content-gap signal) from RAG telemetry + chat analytics."""
