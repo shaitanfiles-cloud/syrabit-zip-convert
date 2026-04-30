@@ -9,8 +9,8 @@
  * Required env:
  *   CLOUDFLARE_API_TOKEN   — Zone Settings: Read, DNS: Read, Bot Management: Read,
  *                            Logs: Read (Phase 2 Logpush), Health Checks: Read,
- *                            R2: Read (Phase 2 bucket), Zero Trust: Read (Phase 3),
- *                            Waiting Room: Read (Phase 3)
+ *                            R2: Read (Phase 2 + 4 buckets), Zero Trust: Read (Phase 3),
+ *                            Waiting Room: Read (Phase 3), Cache: Read (Phase 4)
  *   CLOUDFLARE_ZONE_ID     — optional, defaults to syrabit.ai zone
  *   CLOUDFLARE_ACCOUNT_ID  — optional, defaults to Syrabit account
  *
@@ -234,6 +234,77 @@ async function main() {
       row('syrabit-exam-season-queue', 'NOT FOUND', 'EXISTS', 'run cloudflare-phase3-apply.js');
     }
   }
+
+  // ── Phase 4: R2 Asset Storage + Cache Reserve (Task #108) ────────────────
+  console.log('\n── Phase 4: R2 Asset Storage + Cache Reserve (Task #108) ──');
+  console.log('  Targets:');
+  console.log('    syrabit-assets      — student PDFs served at assets.syrabit.ai');
+  console.log('    syrabit-cache-reserve — Cache Reserve backing bucket');
+  console.log('    Cache Reserve: on   — cold-cache misses resolve from R2 not Railway');
+
+  // Re-fetch R2 buckets (same endpoint used in Phase 2 check above, but re-call
+  // so Phase 4 stands alone when cross-referenced in future reviews).
+  const r2p4 = await cfGet(`/accounts/${ACCOUNT_ID}/r2/buckets`);
+  if (!r2p4.success) {
+    const authErr = r2p4.errors?.[0]?.code === 10000;
+    console.log(`  ?  R2 buckets${authErr
+      ? '  [token lacks R2: Read — add scope at dash.cloudflare.com/profile/api-tokens]'
+      : ': ' + JSON.stringify(r2p4.errors)}`);
+  } else {
+    const buckets = r2p4.result?.buckets || [];
+
+    const assets = buckets.find(b => b.name === 'syrabit-assets');
+    if (assets) {
+      row('syrabit-assets exists', true, true,
+        `location=${assets.location || 'auto'} created=${assets.creation_date || 'N/A'}`);
+      // Check custom domain
+      const domainRes = await cfGet(`/accounts/${ACCOUNT_ID}/r2/buckets/syrabit-assets/domains/custom`);
+      if (domainRes.success) {
+        const domain = (domainRes.result?.domains || []).find(d => d.domain === 'assets.syrabit.ai');
+        if (domain) {
+          row('  assets.syrabit.ai custom domain', domain.enabled, true,
+            `status=${domain.status || 'unknown'}`);
+        } else {
+          row('  assets.syrabit.ai custom domain', 'NOT FOUND', 'EXISTS',
+            'run cloudflare-phase4-apply.js → Step 2');
+        }
+      } else {
+        const authErr = domainRes.errors?.[0]?.code === 10000;
+        console.log(`  ?  assets.syrabit.ai domain${authErr ? '  [token lacks R2: Read]' : ': ' + JSON.stringify(domainRes.errors)}`);
+      }
+    } else {
+      row('syrabit-assets', 'NOT FOUND', 'EXISTS', 'run cloudflare-phase4-apply.js → Step 1');
+    }
+
+    const cacheReserveBucket = buckets.find(b => b.name === 'syrabit-cache-reserve');
+    if (cacheReserveBucket) {
+      row('syrabit-cache-reserve exists', true, true);
+    } else {
+      row('syrabit-cache-reserve', 'NOT FOUND', 'EXISTS', 'run cloudflare-phase4-apply.js → Step 3');
+    }
+  }
+
+  // Cache Reserve zone setting
+  const cr = await cfGet(`/zones/${ZONE_ID}/cache/cache_reserve`);
+  if (!cr.success) {
+    const code = cr.errors?.[0]?.code;
+    if (code === 10000) {
+      console.log('  ?  Cache Reserve  [token lacks Cache: Read — add scope at dash.cloudflare.com/profile/api-tokens]');
+    } else if (code === 1135) {
+      console.log('  ⚠  Cache Reserve: not available on current plan');
+      console.log('      Requires Cache Reserve subscription: dash.cloudflare.com → Caching → Cache Reserve');
+    } else {
+      console.log(`  ?  Cache Reserve: ${JSON.stringify(cr.errors)}`);
+    }
+  } else {
+    const value = cr.result?.value;
+    row('Cache Reserve (zone setting)', value, 'on',
+      value !== 'on' ? 'run cloudflare-phase4-apply.js → Step 4' : '');
+  }
+
+  // Worker ASSETS binding — cannot verify via API; note the check here
+  console.log('  ℹ  Worker ASSETS binding: verify via Workers dashboard or');
+  console.log('  ℹ    wrangler deployments list --name syrabit-edge');
 
   console.log('\n────────────────────────────────────────');
   console.log('Review complete.');

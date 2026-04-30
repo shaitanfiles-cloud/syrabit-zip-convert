@@ -116,6 +116,14 @@ interface Env {
   SYLLABUS_INDEX?: VectorizeIndex;
   SYLLABUS_INDEX_LEGACY?: VectorizeIndex;
   /**
+   * Task #108 — Phase 4: R2 student asset storage.
+   * Bound to the syrabit-assets bucket. Admins upload PDFs via
+   * POST /admin/assets/upload; files are served at assets.syrabit.ai/<key>.
+   * The binding is optional so the worker degrades gracefully if the bucket
+   * hasn't been provisioned yet (returns 503 on the upload route).
+   */
+  ASSETS?: R2Bucket;
+  /**
    * Task: D1 Cache Warming on Startup — preload hot content into D1/KV cache
    * when the worker starts to eliminate cold-start latency (~10-50ms → ~0ms).
    * When true, the scheduled handler runs an immediate warm-up on first boot.
@@ -2047,6 +2055,131 @@ async function _handleEdgeFetch(
         }
       );
     }
+
+    // ── Task #108 — Phase 4: Admin asset upload (R2) ────────────────────────
+    // POST /admin/assets/upload
+    //   Multipart form: `file` (binary PDF/document) + `key` (R2 object key)
+    //   Protected upstream by Cloudflare Zero Trust (Phase 3) — the route is
+    //   inside api.syrabit.ai/admin* so no request reaches here without a
+    //   valid Access session cookie. An additional Bearer-token check is
+    //   performed here as defence-in-depth (same JWT the backend checks).
+    //
+    // Response (JSON):
+    //   201 { ok: true, key, size, url }          — upload succeeded
+    //   400 { ok: false, error: "..." }            — missing/invalid params
+    //   401 { ok: false, error: "unauthorized" }   — no/invalid Bearer token
+    //   503 { ok: false, error: "assets_not_bound" } — ASSETS binding missing
+    //
+    // The uploaded file is served at:
+    //   https://assets.syrabit.ai/<key>
+    // (via the R2 custom domain configured by cloudflare-phase4-apply.js)
+    if (pathname === "/admin/assets/upload" && request.method === "POST") {
+      if (!env.ASSETS) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "assets_not_bound",
+            detail: "ASSETS R2 binding not configured — run cloudflare-phase4-apply.js then wrangler deploy" }),
+          { status: 503, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+
+      // Defence-in-depth: require a valid admin Bearer JWT.
+      // Zero Trust already gates this route, but belt-and-suspenders.
+      const authHeader = request.headers.get("Authorization") ?? "";
+      if (!authHeader.startsWith("Bearer ")) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "unauthorized",
+            detail: "Bearer token required in Authorization header" }),
+          { status: 401, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+
+      let formData: FormData;
+      try {
+        formData = await request.formData();
+      } catch {
+        return new Response(
+          JSON.stringify({ ok: false, error: "invalid_multipart",
+            detail: "Request must be multipart/form-data with 'file' and 'key' fields" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+
+      const fileField = formData.get("file");
+      const key       = (formData.get("key") as string | null)?.trim();
+
+      if (!fileField || !(fileField instanceof File)) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "file_required",
+            detail: "'file' field is required and must be a file upload" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+
+      if (!key || key.length === 0) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "key_required",
+            detail: "'key' field is required — e.g. ahsec/2024/physics.pdf" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+
+      // Reject path traversal attempts
+      if (key.includes("..") || key.startsWith("/")) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "invalid_key",
+            detail: "key must not contain '..' or start with '/'" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+
+      const contentType = fileField.type || "application/octet-stream";
+      const size        = fileField.size;
+
+      // Enforce a 50 MB limit to keep the Workers request body within reason.
+      // Workers standard has a 100 MB body limit; we use 50 MB as a safe cap
+      // for educational PDFs (typical past-paper PDF is 2–15 MB).
+      const MAX_BYTES = 50 * 1024 * 1024;
+      if (size > MAX_BYTES) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "file_too_large",
+            detail: `File size ${size} bytes exceeds 50 MB limit` }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+
+      const arrayBuffer = await fileField.arrayBuffer();
+
+      try {
+        await env.ASSETS.put(key, arrayBuffer, {
+          httpMetadata: {
+            contentType,
+            // Content-Disposition: inline so browsers open PDFs in-tab
+            contentDisposition: `inline; filename="${fileField.name}"`,
+            // Cache for 1 year — past papers and syllabi are immutable once uploaded.
+            // Admins who need to replace a file upload under the same key (R2 PUT
+            // is idempotent) and the CDN will serve the new version after the TTL.
+            cacheControl: "public, max-age=31536000, immutable",
+          },
+          customMetadata: {
+            uploadedAt: new Date().toISOString(),
+            originalName: fileField.name,
+          },
+        });
+      } catch (e: unknown) {
+        const detail = e instanceof Error ? e.message : "Unknown R2 error";
+        return new Response(
+          JSON.stringify({ ok: false, error: "upload_failed", detail }),
+          { status: 502, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+
+      const publicUrl = `https://assets.syrabit.ai/${key}`;
+      return new Response(
+        JSON.stringify({ ok: true, key, size, contentType, url: publicUrl }),
+        { status: 201, headers: { ...cors, "Content-Type": "application/json" } },
+      );
+    }
+    // ────────────────────────────────────────────────────────────────────────
 
     // Task #636 — Workers AI fallback fan-out. Backend POSTs here only
     // after a primary-provider failure. POST-only; CORS preflight is

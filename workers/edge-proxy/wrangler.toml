@@ -150,6 +150,20 @@ database_name = "syrabit-content"
 database_id = "da5b5b9d-a8f9-43dd-bd23-a938f5c0cf69"
 migrations_dir = "migrations"
 
+# Task #108 — Phase 4: R2 student asset storage.
+# Serves AHSEC/SEBA past-year question papers, syllabi, and study PDFs.
+# Admins upload via POST /admin/assets/upload (protected by Zero Trust from Phase 3).
+# Files are served at https://assets.syrabit.ai/<key> via the R2 custom domain.
+#
+# To create the bucket and custom domain before deploying:
+#   node artifacts/syrabit/scripts/cloudflare-phase4-apply.js
+[[r2_buckets]]
+binding     = "ASSETS"
+bucket_name = "syrabit-assets"
+# preview_bucket_name omitted — `wrangler dev` will error with a clear message
+# if you try to use ASSETS locally without it. Add a test bucket when needed:
+#   wrangler r2 bucket create syrabit-assets-dev
+
 # Vectorize binding — currently OFF by design.
 #
 # Embedding generation, upserts, and queries all happen in the Railway

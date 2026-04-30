@@ -122,11 +122,15 @@ jobs:
   #             firewall_events), Origin Healthcheck api-syrabit-ai-origin.
   # Task #107 — Phase 3: Zero Trust Access app (Syrabit Admin, 8h session) and
   #             Waiting Room (syrabit-exam-season-queue, 10-min cookie, enabled).
-  #             Phase 2/3 checks degrade gracefully if the token lacks the required
-  #             read scopes (warns, does not fail hard — see task-116 for token fix).
+  # Task #108 — Phase 4: R2 bucket syrabit-assets (student PDF storage,
+  #             assets.syrabit.ai), R2 bucket syrabit-cache-reserve, and
+  #             Cache Reserve enabled on the syrabit.ai zone.
+  #             Phase 2/3/4 checks degrade gracefully if the token lacks the
+  #             required read scopes (warns, does not fail hard — see task-116,
+  #             task-117, and follow-up task for Phase 4 token scopes).
   # Runs in parallel with the other smoke jobs (no `needs:` dependency).
   cf-zone-settings:
-    name: Cloudflare Phase 1, 2 & 3 smoke
+    name: Cloudflare Phase 1, 2, 3 & 4 smoke
     runs-on: ubuntu-latest
     timeout-minutes: 5
 

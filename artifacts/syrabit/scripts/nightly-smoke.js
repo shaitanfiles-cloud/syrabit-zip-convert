@@ -2,16 +2,17 @@
 /**
  * nightly-smoke.js — Cloudflare zone-settings health check.
  *
- * Asserts that the zone settings applied in Cloudflare Phases 1, 2 & 3
- * (Tasks #105, #106, #107) still hold their target values.  Run nightly in CI
- * so any accidental dashboard revert surfaces overnight rather than
+ * Asserts that the zone settings applied in Cloudflare Phases 1, 2, 3 & 4
+ * (Tasks #105, #106, #107, #108) still hold their target values.  Run nightly
+ * in CI so any accidental dashboard revert surfaces overnight rather than
  * silently degrading cache hit rates, bot filtering, or email security.
  *
  * Required env:
  *   CLOUDFLARE_API_TOKEN  — Zone Settings: Read, Bot Management: Read,
  *                           DNS: Read, Logs: Read, Health Checks: Read,
- *                           Zero Trust: Read (Phase 3), Waiting Room: Read (Phase 3)
- *                           (Phase 2/3 checks degrade to warnings on token scope gap)
+ *                           Zero Trust: Read (Phase 3), Waiting Room: Read (Phase 3),
+ *                           R2: Read (Phase 4), Cache: Read (Phase 4)
+ *                           (Phase 2/3/4 checks degrade to warnings on token scope gap)
  *   CLOUDFLARE_ZONE_ID    — syrabit.ai zone (5b8c97df4431491dc7f60ea72fb61871)
  *   CLOUDFLARE_ACCOUNT_ID — Syrabit account (d66e40eac539fff1db270fddf384a5ec)
  *
@@ -65,7 +66,7 @@ function warn(label, detail) {
 }
 
 async function main() {
-  console.log('Cloudflare nightly smoke — Phase 1, 2 & 3 checks');
+  console.log('Cloudflare nightly smoke — Phase 1, 2, 3 & 4 checks');
   console.log(`Zone: ${ZONE_ID}\n`);
 
   // ── Phase 1: Zone settings ────────────────────────────────────────────
@@ -217,6 +218,60 @@ async function main() {
       assert('syrabit-exam-season-queue enabled', room.enabled, true);
       assert('  session_duration (min)', room.session_duration, 10);
       assert('  host', room.host, 'syrabit.ai');
+    }
+  }
+
+  // ── Phase 4: R2 buckets ────────────────────────────────────────────────
+  // Reuse the R2 result from Phase 2 if already fetched; but cfGetOrSkip
+  // is idempotent (same endpoint) so just call it again for clarity.
+  console.log('\nPhase 4 — R2 Asset Storage + Cache Reserve:');
+  const r2p4 = await cfGetOrSkip(`/accounts/${ACCOUNT_ID}/r2/buckets`);
+  if (!r2p4) {
+    warn('R2 buckets (Phase 4)',
+      'token lacks R2: Read — add scope and run cloudflare-phase4-apply.js');
+  } else {
+    const buckets = r2p4.result?.buckets || [];
+    const assetsExists = buckets.some(b => b.name === 'syrabit-assets');
+    if (!assetsExists) {
+      failures.push('R2 bucket syrabit-assets (NOT FOUND)');
+      console.log('  ✗  R2 bucket syrabit-assets: NOT FOUND — run cloudflare-phase4-apply.js');
+    } else {
+      console.log('  ✓  R2 bucket syrabit-assets exists');
+    }
+    const cacheReserveExists = buckets.some(b => b.name === 'syrabit-cache-reserve');
+    if (!cacheReserveExists) {
+      failures.push('R2 bucket syrabit-cache-reserve (NOT FOUND)');
+      console.log('  ✗  R2 bucket syrabit-cache-reserve: NOT FOUND — run cloudflare-phase4-apply.js');
+    } else {
+      console.log('  ✓  R2 bucket syrabit-cache-reserve exists');
+    }
+  }
+
+  // ── Phase 4: Cache Reserve ─────────────────────────────────────────────
+  // Cache Reserve requires Cloudflare Cache Reserve subscription (paid add-on).
+  // Code 10000 = token scope gap; code 1135 = plan/subscription restriction.
+  // Both degrade gracefully to a warning rather than a hard failure.
+  const crRaw  = await fetch(`${API}/zones/${ZONE_ID}/cache/cache_reserve`, { headers });
+  const crJson = await crRaw.json();
+  if (!crJson.success) {
+    const code = crJson.errors?.[0]?.code;
+    if (code === 10000) {
+      warn('Cache Reserve',
+        'token lacks Cache: Read — add scope and run cloudflare-phase4-apply.js');
+    } else if (code === 1135) {
+      warn('Cache Reserve',
+        'not available on current plan — requires Cache Reserve subscription; ' +
+        'see https://dash.cloudflare.com → Caching → Cache Reserve');
+    } else {
+      fail('Cache Reserve', JSON.stringify(crJson.errors));
+    }
+  } else {
+    const value = crJson.result?.value;
+    if (value === 'on') {
+      console.log('  ✓  Cache Reserve: on');
+    } else {
+      failures.push(`Cache Reserve (value=${JSON.stringify(value)} — want: "on")`);
+      console.log(`  ✗  Cache Reserve: ${JSON.stringify(value)}  (want: "on") — run cloudflare-phase4-apply.js`);
     }
   }
 
