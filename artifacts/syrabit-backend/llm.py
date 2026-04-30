@@ -1793,7 +1793,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     # Tokens are yielded in real-time as they arrive (true streaming).
     # TTFT timeout ensures fast failover when a provider is unresponsive.
     _SLM_SLOT_TIMEOUT = 0.7    # max seconds between any two tokens mid-stream
-    _SLM_TTFT_TIMEOUT = 0.8    # max seconds to wait for FIRST token from a slot
+    _SLM_TTFT_TIMEOUT = 1.5    # max seconds to wait for FIRST token from a slot
 
     _SLM_PROVIDER_MAX_INPUT_CHARS = {
         "cerebras": 24000,
@@ -1823,11 +1823,11 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 continue
             _candidates.append(slot)
             _skipped_slots.add(id(slot))
-            if len(_candidates) >= 2:
+            if len(_candidates) >= 3:
                 break
 
         if _candidates:
-            _effective_ttft = min(1.2, _SLM_TTFT_TIMEOUT + (0.2 if _input_chars > 8000 else 0.0))
+            _effective_ttft = min(2.0, _SLM_TTFT_TIMEOUT + (0.3 if _input_chars > 8000 else 0.0))
             _hedged_q: asyncio.Queue = asyncio.Queue()
             _hedged_errors: dict = {}
 
@@ -1926,6 +1926,30 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                     if i not in _finished_slots:
                         _slm_pool.mark_err(s)
                         logger.warning(f"SLM hedged: {s['provider']}/{s['model']} TTFT timeout after {_effective_ttft}s")
+
+        # SLM pool exhausted — hard-fall-back to the first working Groq key
+        # so chat stays up even when Workers AI and Cerebras are down.
+        _groq_fb = next(
+            (p for p in _LLM_PROVIDERS_CHAT if p["provider"] == "groq" and p.get("key")),
+            None,
+        )
+        if _groq_fb:
+            _fb_model = _groq_fb.get("default_model", "meta-llama/llama-4-scout-17b-16e-instruct")
+            logger.warning(
+                f"SLM pool exhausted — hard-fallback to groq/{_fb_model}"
+            )
+            _fb_ok = False
+            try:
+                async for chunk in _emit_tokens(
+                    _stream_from_provider("groq", _groq_fb["key"], _fb_model)
+                ):
+                    _fb_ok = True
+                    yield chunk
+                if _fb_ok:
+                    yield f"data: {json.dumps({'__provider': 'groq'})}\n\n"
+                    return
+            except Exception as _fb_err:
+                logger.warning(f"SLM groq-fallback failed: {type(_fb_err).__name__}: {str(_fb_err)[:120]}")
 
         yield f"data: {json.dumps({'error': 'All AI providers temporarily unavailable'})}\n\n"
         return
@@ -2105,11 +2129,46 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             f"[INDIC] Phase 2 (Gemini-FALLBACK): streaming from "
             f"gemini/{_gemini_model} for {response_lang}"
         )
+        # Strip the Sarvam-specific `/think …` prefix from the system message
+        # before forwarding to Gemini — Gemini doesn't understand the Sarvam
+        # `/think` directive and may emit spurious <think> blocks that
+        # _emit_tokens would strip, resulting in very short visible output.
+        # Replace it with a plain Assamese-only instruction that Gemini honours.
+        import re as _re2
+        _gemini_msgs = []
+        for _gm in messages:
+            if _gm.get("role") == "system":
+                _gc = _gm["content"]
+                # Remove leading /think … lines (Sarvam-only directive)
+                _gc = _re2.sub(r"^/think[^\n]*\n?", "", _gc, flags=_re2.MULTILINE)
+                # Prepend a Gemini-friendly Assamese directive
+                _gc = (
+                    "CRITICAL: Reply entirely in Assamese (অসমীয়া) script. "
+                    "Do NOT write in English. Every word must be in Assamese. "
+                    "Technical terms/units/proper nouns (AHSEC, SEBA, Newton, cm, kg) may stay in Latin.\n\n"
+                    + _gc.lstrip()
+                )
+                _gemini_msgs.append({**_gm, "content": _gc})
+            else:
+                _gemini_msgs.append(_gm)
+
+        # Reset shared think-strip state from Phase 1 before starting Phase 2
+        # so Gemini tokens are never accidentally swallowed into a Sarvam
+        # <think> buffer that was left open when Phase 1 timed out.
+        in_think = False
+        buf = ""
+
         _phase2_first_token = False
         try:
-            async for chunk in _emit_tokens(
-                _stream_from_provider("gemini", _gemini_key, _gemini_model)
-            ):
+            # Gemini 2.5 Flash uses extended thinking by default which can
+            # consume much of a small max_tokens budget on reasoning alone.
+            # Enforce a minimum of 2048 so the visible Assamese answer has
+            # enough room after the (hidden) think phase.
+            _gemini_max_tokens = max(_clamp_max_tokens(_gemini_model, max_tokens), 2048)
+            async def _gemini_phase2_stream():
+                async for _tok in _stream_gemini(_gemini_msgs, _gemini_key, _gemini_model, _gemini_max_tokens):
+                    yield _tok
+            async for chunk in _emit_tokens(_gemini_phase2_stream()):
                 if not _phase2_first_token:
                     _ttft_ms = (time.monotonic() - _phase2_t0) * 1000
                     logger.info(
