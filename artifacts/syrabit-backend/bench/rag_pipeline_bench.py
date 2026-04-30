@@ -2,11 +2,10 @@
 rag_pipeline_bench.py — Direct RAG pipeline speed benchmark.
 
 Tests every stage of the RAG stack:
-  Stage 1 — Voyage AI embedding latency (single query)
+  Stage 1 — Workers AI embedding latency (@cf/baai/bge-large-en-v1.5, 1024-dim)
   Stage 2 — MongoDB vector search (ANN nearest-neighbour)
-  Stage 3 — Voyage AI reranking
-  Stage 4 — Full _fetch_internal_chapters() (embed + search + rerank combined)
-  Stage 5 — End-to-end across 10 AHSEC/SEBA questions (with stats)
+  Stage 3 — Workers AI reranking (@cf/baai/bge-reranker-base)
+  Stage 4 — Full _fetch_internal_chapters() (keyword → CF rerank) across 10 AHSEC questions
 
 Usage:
     cd artifacts/syrabit-backend
@@ -45,34 +44,45 @@ def sep(char="─", n=64): return bold(char * n)
 
 
 async def stage1_embed() -> dict:
-    """Measure single-query embedding latency."""
-    import providers.voyage as voyage
+    """Measure single-query embedding latency via Workers AI bge-large-en-v1.5."""
+    from providers.cloudflare_ai import embed, _ENABLED
     print(f"\n{sep()}")
-    print(bold("  Stage 1 — Voyage AI Embedding Latency"))
+    print(bold("  Stage 1 — Workers AI Embedding (@cf/baai/bge-large-en-v1.5)"))
     print(sep())
 
-    if not voyage.ENABLED:
-        print(fg("  SKIP — Voyage AI not enabled", "r"))
+    if not _ENABLED:
+        print(fg("  SKIP — Cloudflare AI not configured (missing CLOUDFLARE_API_TOKEN)", "r"))
         return {"enabled": False}
 
     warmup_t = time.perf_counter()
-    await voyage.embed(["warmup"])
-    warmup_ms = round((time.perf_counter() - warmup_t) * 1000)
-    print(f"  Warm-up (first call):  {fg(str(warmup_ms)+'ms', 'c')}")
+    try:
+        await embed(["warmup"])
+        warmup_ms = round((time.perf_counter() - warmup_t) * 1000)
+        print(f"  Warm-up (first call):  {fg(str(warmup_ms)+'ms', 'c')}")
+    except Exception as e:
+        warmup_ms = round((time.perf_counter() - warmup_t) * 1000)
+        print(f"  Warm-up (first call):  {fg('rate-limited / error — '+str(e)[:60], 'y')}")
 
     times = []
     for q, subj in QUERIES[:5]:
-        await asyncio.sleep(0.8)          # respect Voyage free-tier rate limit
+        await asyncio.sleep(0.3)
         t0 = time.perf_counter()
-        vecs = await voyage.embed([q])
+        try:
+            vecs = await embed([q])
+        except Exception as e:
+            print(f"  [{subj:10s}] {q[:45]:<45}  {fg('rate-limited: '+str(e)[:50], 'y')}")
+            continue
         ms = round((time.perf_counter() - t0) * 1000)
         if not vecs or not vecs[0]:
-            print(f"  [{subj:10s}] {q[:45]:<45}  {fg('429 rate-limited — skip', 'y')}")
+            print(f"  [{subj:10s}] {q[:45]:<45}  {fg('no vector returned', 'y')}")
             continue
         times.append(ms)
         dims = len(vecs[0])
         print(f"  [{subj:10s}] {q[:45]:<45}  {fg(str(ms)+'ms', 'c')}  {dims}d")
 
+    if not times:
+        print(fg("  No successful embed calls", "r"))
+        return {"enabled": True, "p50_ms": 0}
     p50 = round(statistics.median(times))
     p95 = round(sorted(times)[int(len(times) * 0.95)] if len(times) > 1 else times[0])
     print(f"\n  p50={fg(str(p50)+'ms','c')}  p95={fg(str(p95)+'ms','c')}  mean={fg(str(round(statistics.mean(times)))+'ms','c')}")
@@ -80,26 +90,36 @@ async def stage1_embed() -> dict:
 
 
 async def stage2_mongo_vector_search() -> dict:
-    """Measure raw MongoDB vector-search latency (without reranking)."""
+    """Measure raw MongoDB vector-search latency using Workers AI query embedding."""
     print(f"\n{sep()}")
-    print(bold("  Stage 2 — MongoDB Vector Search (ANN)"))
+    print(bold("  Stage 2 — MongoDB Vector Search (ANN, query via Workers AI)"))
     print(sep())
 
     try:
-        from db import db as mongo_db
-        import providers.voyage as voyage
-        if not voyage.ENABLED:
-            print(fg("  SKIP — Voyage AI not enabled (no query embedding)", "r"))
-            return {"enabled": False}
+        from deps import db as mongo_db, is_mongo_available
+        from providers.cloudflare_ai import embed as cf_embed, _ENABLED
 
-        from bson import ObjectId
+        if not _ENABLED:
+            print(fg("  SKIP — Cloudflare AI not configured", "r"))
+            return {"enabled": False}
+        if not await is_mongo_available():
+            print(fg("  SKIP — MongoDB not reachable", "r"))
+            return {}
 
         times = []
         hits = []
         for q, subj in QUERIES[:5]:
             t0 = time.perf_counter()
-            vec = (await voyage.embed([q]))[0]
+            try:
+                vecs = await cf_embed([q])
+                vec = vecs[0] if vecs else None
+            except Exception as e:
+                print(f"  [{subj:10s}] {q[:40]:<40}  {fg('embed error: '+str(e)[:40], 'r')}")
+                continue
             embed_ms = round((time.perf_counter() - t0) * 1000)
+            if not vec:
+                print(f"  [{subj:10s}] {q[:40]:<40}  {fg('no vector', 'y')}")
+                continue
 
             t1 = time.perf_counter()
             pipeline = [
@@ -137,15 +157,16 @@ async def stage2_mongo_vector_search() -> dict:
 
 
 async def stage3_rerank() -> dict:
-    """Measure Voyage AI reranking speed."""
+    """Measure Workers AI reranking speed (bge-reranker-base)."""
     print(f"\n{sep()}")
-    print(bold("  Stage 3 — Voyage AI Reranking"))
+    print(bold("  Stage 3 — Workers AI Reranking (@cf/baai/bge-reranker-base)"))
     print(sep())
 
     try:
-        import providers.voyage as voyage
-        if not voyage.ENABLED:
-            print(fg("  SKIP — Voyage AI not enabled", "r"))
+        from providers.cloudflare_ai import rerank as cf_rerank, _ENABLED
+
+        if not _ENABLED:
+            print(fg("  SKIP — Cloudflare AI not configured", "r"))
             return {"enabled": False}
 
         dummy_docs = [
@@ -159,18 +180,25 @@ async def stage3_rerank() -> dict:
 
         times = []
         for run in range(3):
-            await asyncio.sleep(0.8)
             t0 = time.perf_counter()
-            ranked = await voyage.rerank(q, dummy_docs, top_k=3)
-            ms = round((time.perf_counter() - t0) * 1000)
-            if ranked:
-                times.append(ms)
-                print(f"  Run {run+1}: {fg(str(ms)+'ms', 'c')}  top_result_score={ranked[0][1]:.4f}")
-            else:
-                print(f"  Run {run+1}: {fg('rate-limited / no result','y')}")
+            try:
+                scores = await cf_rerank(q, dummy_docs)
+                ms = round((time.perf_counter() - t0) * 1000)
+                if scores:
+                    times.append(ms)
+                    top_score = max(scores)
+                    print(f"  Run {run+1}: {fg(str(ms)+'ms', 'c')}  top_score={top_score:.4f}")
+                else:
+                    print(f"  Run {run+1}: {fg('no scores returned', 'y')}")
+            except Exception as e:
+                ms = round((time.perf_counter() - t0) * 1000)
+                print(f"  Run {run+1}: {fg('ERROR: '+str(e)[:60], 'r')}")
 
+        if not times:
+            print(fg("  No successful rerank calls", "r"))
+            return {}
         p50 = round(statistics.median(times))
-        print(f"\n  p50={fg(str(p50)+'ms','c')}  (5 docs → top 3)")
+        print(f"\n  p50={fg(str(p50)+'ms','c')}  (5 docs scored by bge-reranker-base)")
         return {"p50_ms": p50}
     except Exception as e:
         print(fg(f"  ERROR: {e}", "r"))
@@ -181,7 +209,7 @@ async def stage4_full_rag() -> dict:
     """Full RAG pipeline: _fetch_internal_chapters (keyword→rerank) + resolve_rag_context."""
     print(f"\n{sep()}")
     print(bold("  Stage 4 — Full RAG Pipeline (10 AHSEC/SEBA questions)"))
-    print(bold("  Flow: keywords → MongoDB match → Voyage rerank → context"))
+    print(bold("  Flow: keywords → MongoDB match → CF bge-reranker → context"))
     print(sep())
 
     try:
@@ -195,7 +223,6 @@ async def stage4_full_rag() -> dict:
         times = []
         results = []
         for q, subj in QUERIES:
-            await asyncio.sleep(1.2)      # respect Voyage free-tier rate limit
             t0 = time.perf_counter()
             try:
                 # Step 1: fetch + rerank internal chapters (the slow part)

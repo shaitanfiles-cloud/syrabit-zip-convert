@@ -491,14 +491,15 @@ async def _fetch_internal_chapters(
             {"title": {"$regex": regex_pattern, "$options": "i"}},
             {"content": {"$regex": regex_pattern, "$options": "i"}},
         ]
-        # Fetch more candidates when Voyage reranking is available so the
+        # Fetch more candidates when Workers AI reranking is available so the
         # reranker can pick the most semantically relevant ones. Without
         # reranking, cap at limit to avoid processing cost.
         try:
-            from providers.voyage import ENABLED as _voyage_enabled
+            from providers.cloudflare_ai import _ENABLED as _cf_enabled
+            _rerank_enabled = bool(_cf_enabled)
         except Exception:
-            _voyage_enabled = False
-        fetch_limit = min(limit * 5, 20) if _voyage_enabled else limit
+            _rerank_enabled = False
+        fetch_limit = min(limit * 5, 20) if _rerank_enabled else limit
         cursor = db.chapters.find(
             filters,
             {"_id": 0, "id": 1, "title": 1, "content": 1, "slug": 1, "subject_id": 1, "description": 1},
@@ -519,25 +520,26 @@ async def _fetch_internal_chapters(
                 "type": "chapter",
             })
 
-        # ── Voyage AI reranking ──────────────────────────────────────────────
+        # ── Workers AI reranking (bge-reranker-base) ─────────────────────────
         # Rerank candidates by true semantic relevance to the query so the
         # LLM receives the most pertinent chapters rather than whoever
         # happened to match the keyword regex first. Falls back silently.
-        if _voyage_enabled and len(candidates) > 1:
+        if _rerank_enabled and len(candidates) > 1:
             try:
-                from providers.voyage import rerank_items as _voyage_rerank
-                candidates = await _voyage_rerank(
-                    query,
-                    candidates,
-                    lambda c: f"{c['title']}\n\n{c['content'][:800]}",
-                    top_k=limit,
-                )
-                logger.info(
-                    "[INTERNAL_RAG] Voyage reranked %d candidates → top %d for '%s'",
-                    len(candidates), limit, query[:50],
-                )
+                from providers.cloudflare_ai import rerank as _cf_rerank
+                docs = [f"{c['title']}\n\n{c['content'][:800]}" for c in candidates]
+                scores = await _cf_rerank(query, docs)
+                if scores and len(scores) == len(candidates):
+                    ranked = sorted(zip(scores, candidates), key=lambda x: x[0], reverse=True)
+                    candidates = [c for _, c in ranked[:limit]]
+                    logger.info(
+                        "[INTERNAL_RAG] CF reranked %d candidates → top %d for '%s'",
+                        len(ranked), limit, query[:50],
+                    )
+                else:
+                    candidates = candidates[:limit]
             except Exception as _rr_err:
-                logger.debug("[INTERNAL_RAG] Voyage rerank skipped: %s", _rr_err)
+                logger.debug("[INTERNAL_RAG] CF rerank skipped: %s", _rr_err)
                 candidates = candidates[:limit]
         else:
             candidates = candidates[:limit]
@@ -557,7 +559,7 @@ async def _fetch_internal_chapters(
         if result:
             logger.info(
                 "[INTERNAL_RAG] Returning %d chapter(s) for '%s' (subject=%s, %d chars, reranked=%s)",
-                len(result), query[:50], subject_id or "any", total_chars, _voyage_enabled,
+                len(result), query[:50], subject_id or "any", total_chars, _rerank_enabled,
             )
         return result
     except Exception as e:
