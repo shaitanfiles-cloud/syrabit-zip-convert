@@ -672,7 +672,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           threshold:   poolRes.value.data?.embed_429_threshold ?? 3,
           durationS:   poolRes.value.data?.embed_cooldown_duration_s ?? 60,
         });
-      else setEmbedBurst(null);
+      else setEmbedBurst(false);
     });
   }, [adminToken]);
   const toggleWorkersAi = useCallback(async (capability, enabled) => {
@@ -2147,7 +2147,21 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                     {/* Task #96 — Workers AI embed 429 cooldown indicator */}
                     {(() => {
                       const eb = embedBurst;
-                      const isLoading = eb === null;
+                      const isLoading     = eb === null;
+                      const isUnavailable = eb === false;
+                      if (isUnavailable) return (
+                        <div className="rounded-2xl p-4 border border-gray-200 bg-white shadow-sm mb-4">
+                          <div className="flex items-center gap-2">
+                            <Zap size={14} className="text-gray-300" />
+                            <span className="text-xs font-semibold text-gray-700">Workers AI — Embed 429 Cooldown</span>
+                            <span className="flex items-center gap-1 text-[11px] font-semibold text-gray-400">
+                              <span className="inline-block w-2 h-2 rounded-full bg-gray-300" />
+                              Unavailable
+                            </span>
+                          </div>
+                          <p className="mt-2 text-[11px] text-gray-400">Pool stats endpoint unreachable — retry will happen in 30 s.</p>
+                        </div>
+                      );
                       const burst      = eb?.burst ?? 0;
                       const cooldown   = eb?.cooldown ?? false;
                       const remainingS = eb?.remainingS ?? 0;

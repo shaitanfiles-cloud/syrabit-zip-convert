@@ -1720,9 +1720,11 @@ async def admin_llm_pool_stats(admin: dict = Depends(get_admin_user)):
 
     from vertex_services import (
         get_embed_429_burst,
+        get_embed_cooldown_config,
         get_embed_cooldown_remaining_s,
         is_embed_cooldown_active,
     )
+    _embed_cfg = get_embed_cooldown_config()
     return {
         "chat_pool":    chat_stats,
         "content_pool": content_stats,
@@ -1730,8 +1732,8 @@ async def admin_llm_pool_stats(admin: dict = Depends(get_admin_user)):
         "embed_429_burst":            get_embed_429_burst(window_seconds=60),
         "embed_cooldown_active":      is_embed_cooldown_active(),
         "embed_cooldown_remaining_s": round(get_embed_cooldown_remaining_s(), 1),
-        "embed_429_threshold":        3,
-        "embed_cooldown_duration_s":  60,
+        "embed_429_threshold":        _embed_cfg["threshold"],
+        "embed_cooldown_duration_s":  _embed_cfg["duration_s"],
         "note": (
             "rpm_used is a rolling 60s window per slot. "
             "Workers AI slots share one window (same API key). "

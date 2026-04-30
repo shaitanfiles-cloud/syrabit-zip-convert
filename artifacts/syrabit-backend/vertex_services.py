@@ -162,6 +162,18 @@ def get_embed_cooldown_remaining_s() -> float:
     return max(0.0, remaining)
 
 
+def get_embed_cooldown_config() -> dict:
+    """Return the static embed-cooldown configuration constants.
+
+    Exposing these from the authoritative source prevents the admin
+    endpoint from hard-coding copies that drift when the constants change.
+    """
+    return {
+        "threshold":   _EMBED_429_THRESHOLD,
+        "duration_s":  _EMBED_429_COOLDOWN_S,
+    }
+
+
 # ── Auth detection ──────────────────────────────────────────────────────────
 # Credential sources, in priority order:
 #   1. VERTEX_SERVICE_ACCOUNT          — explicit Syrabit-side SA JSON. When
