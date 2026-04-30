@@ -2250,9 +2250,24 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                                   <span className="text-xs font-normal text-gray-400"> / {threshold}</span>
                                 </div>
                               </div>
-                              <div className="rounded-lg p-2.5 bg-white/70 border border-gray-100">
-                                <div className="text-[10px] uppercase text-gray-400 font-semibold mb-0.5">Cooldown clears in</div>
-                                <div className={`text-base font-bold tabular-nums ${cooldown ? 'text-red-600' : 'text-gray-400'} ${cooldown && embedCooldownDisplay <= 10 ? 'animate-pulse' : ''}`}>
+                              {/* Two-stage urgency: red+pulse (6-10s), amber bg + orange text (0-5s) */}
+                              <div className={`rounded-lg p-2.5 border transition-colors ${
+                                cooldown && embedCooldownDisplay <= 5
+                                  ? 'bg-amber-50 border-amber-300'
+                                  : 'bg-white/70 border-gray-100'
+                              }`}>
+                                <div className={`text-[10px] uppercase font-semibold mb-0.5 ${
+                                  cooldown && embedCooldownDisplay <= 5 ? 'text-amber-600' : 'text-gray-400'
+                                }`}>Cooldown clears in</div>
+                                <div className={`text-base font-bold tabular-nums ${
+                                  cooldown && embedCooldownDisplay <= 5
+                                    ? 'text-orange-500 animate-pulse'
+                                    : cooldown && embedCooldownDisplay <= 10
+                                    ? 'text-red-600 animate-pulse'
+                                    : cooldown
+                                    ? 'text-red-600'
+                                    : 'text-gray-400'
+                                }`}>
                                   {cooldown ? `${embedCooldownDisplay} s` : '—'}
                                 </div>
                               </div>
