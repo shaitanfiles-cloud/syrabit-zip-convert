@@ -234,6 +234,38 @@ describe('HighlightSavePopover — edge cases', () => {
     expect(document.querySelector('.fixed.z-\\[110\\]')).toBeInTheDocument();
   });
 
+  it('shows the popover when data-savable is on a distant ancestor (deeply nested text node)', async () => {
+    render(<HighlightSavePopover />);
+
+    const section = document.createElement('section');
+    const p = document.createElement('p');
+    const span = document.createElement('span');
+    const deepTextNode = document.createTextNode('deeply nested highlighted content');
+    span.appendChild(deepTextNode);
+    p.appendChild(span);
+    section.appendChild(p);
+    savableEl.appendChild(section);
+
+    const deepRange = {
+      commonAncestorContainer: deepTextNode,
+      getBoundingClientRect: () => ({ left: 100, top: 60, width: 80, height: 18 }),
+    };
+    getSelectionSpy.mockReturnValue({
+      isCollapsed: false,
+      toString: () => 'deeply nested highlighted content',
+      getRangeAt: () => deepRange,
+    });
+
+    await act(async () => {
+      document.dispatchEvent(new Event('selectionchange'));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(document.querySelector('.fixed.z-\\[110\\]')).toBeInTheDocument();
+    expect(screen.getByText(/save/i)).toBeInTheDocument();
+    expect(screen.getByText(/quiz me/i)).toBeInTheDocument();
+  });
+
   it('does not show the popover when the selection is outside any savable container', async () => {
     render(<HighlightSavePopover />);
 
