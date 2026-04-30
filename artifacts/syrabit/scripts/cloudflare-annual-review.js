@@ -10,7 +10,8 @@
  *   CLOUDFLARE_API_TOKEN   — Zone Settings: Read, DNS: Read, Bot Management: Read,
  *                            Logs: Read (Phase 2 Logpush), Health Checks: Read,
  *                            R2: Read (Phase 2 + 4 buckets), Zero Trust: Read (Phase 3),
- *                            Waiting Room: Read (Phase 3), Cache: Read (Phase 4)
+ *                            Waiting Room: Read (Phase 3), Cache: Read (Phase 4),
+ *                            Workers: Read, Durable Objects: Read (Phase 5)
  *   CLOUDFLARE_ZONE_ID     — optional, defaults to syrabit.ai zone
  *   CLOUDFLARE_ACCOUNT_ID  — optional, defaults to Syrabit account
  *
@@ -305,6 +306,64 @@ async function main() {
   // Worker ASSETS binding — cannot verify via API; note the check here
   console.log('  ℹ  Worker ASSETS binding: verify via Workers dashboard or');
   console.log('  ℹ    wrangler deployments list --name syrabit-edge');
+
+  // ── Phase 5: Analytics Engine + Durable Object rate limiter (Task #109) ─────
+  console.log('\n── Phase 5: Analytics Engine + DO Rate Limiter (Task #109) ──');
+  console.log('  Targets:');
+  console.log('    ANALYTICS binding (dataset: syrabit-edge-metrics) present in syrabit-edge');
+  console.log('    RateLimiter DO namespace provisioned via [[migrations]] v1');
+  console.log('    CF_ANALYTICS_TOKEN secret set (Analytics: Read scope)');
+
+  const WORKER_NAME_P5 = 'syrabit-edge';
+  const AE_DATASET_P5  = 'syrabit-edge-metrics';
+
+  // 5a: Analytics Engine binding in deployed worker
+  const aeBindings = await cfGet(`/accounts/${ACCOUNT_ID}/workers/scripts/${WORKER_NAME_P5}/bindings`);
+  if (!aeBindings.success) {
+    const authErr = aeBindings.errors?.[0]?.code === 10000;
+    console.log(`  ?  Worker bindings${authErr
+      ? '  [token lacks Workers: Read — add scope at dash.cloudflare.com/profile/api-tokens]'
+      : ': ' + JSON.stringify(aeBindings.errors)}`);
+  } else {
+    const aeBinding = (aeBindings.result || []).find(
+      (b) => b.type === 'analytics_engine' && b.dataset === AE_DATASET_P5,
+    );
+    if (aeBinding) {
+      row(`ANALYTICS binding (${AE_DATASET_P5})`, true, true,
+        'dataset registered; writes populate on first request');
+    } else {
+      row(`ANALYTICS binding (${AE_DATASET_P5})`, 'NOT FOUND', 'EXISTS',
+        'run: cd workers/edge-proxy && wrangler deploy');
+    }
+  }
+
+  // 5b: RateLimiter DO namespace
+  const doNs = await cfGet(`/accounts/${ACCOUNT_ID}/workers/durable_objects/namespaces`);
+  if (!doNs.success) {
+    const authErr = doNs.errors?.[0]?.code === 10000;
+    console.log(`  ?  DO namespaces${authErr
+      ? '  [token lacks Durable Objects: Read]'
+      : ': ' + JSON.stringify(doNs.errors)}`);
+  } else {
+    const ns = (doNs.result || []).find(
+      (n) => n.class === 'RateLimiter' && n.script === WORKER_NAME_P5,
+    );
+    if (ns) {
+      row('RateLimiter DO namespace', true, true, `id=${ns.id}`);
+    } else {
+      const anyMatch = (doNs.result || []).some((n) => n.class === 'RateLimiter');
+      if (anyMatch) {
+        console.log('  ✓  RateLimiter DO namespace found (script tag may differ — inspect dashboard)');
+      } else {
+        row('RateLimiter DO namespace', 'NOT FOUND', 'EXISTS',
+          'run: cd workers/edge-proxy && wrangler deploy');
+      }
+    }
+  }
+
+  // 5c: CF_ANALYTICS_TOKEN — cannot be verified via API (secret); just note
+  console.log('  ℹ  CF_ANALYTICS_TOKEN: verify via Workers dashboard → Settings → Variables');
+  console.log('  ℹ    (required for /api/edge/analytics query route; set with wrangler secret put)');
 
   console.log('\n────────────────────────────────────────');
   console.log('Review complete.');

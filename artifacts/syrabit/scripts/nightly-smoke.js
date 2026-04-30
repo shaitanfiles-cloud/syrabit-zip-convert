@@ -2,17 +2,18 @@
 /**
  * nightly-smoke.js — Cloudflare zone-settings health check.
  *
- * Asserts that the zone settings applied in Cloudflare Phases 1, 2, 3 & 4
- * (Tasks #105, #106, #107, #108) still hold their target values.  Run nightly
- * in CI so any accidental dashboard revert surfaces overnight rather than
- * silently degrading cache hit rates, bot filtering, or email security.
+ * Asserts that the zone settings applied in Cloudflare Phases 1, 2, 3, 4 & 5
+ * (Tasks #105, #106, #107, #108, #109) still hold their target values.  Run
+ * nightly in CI so any accidental dashboard revert surfaces overnight rather
+ * than silently degrading cache hit rates, bot filtering, or email security.
  *
  * Required env:
  *   CLOUDFLARE_API_TOKEN  — Zone Settings: Read, Bot Management: Read,
  *                           DNS: Read, Logs: Read, Health Checks: Read,
  *                           Zero Trust: Read (Phase 3), Waiting Room: Read (Phase 3),
- *                           R2: Read (Phase 4), Cache: Read (Phase 4)
- *                           (Phase 2/3/4 checks degrade to warnings on token scope gap)
+ *                           R2: Read (Phase 4), Cache: Read (Phase 4),
+ *                           Workers: Read, Durable Objects: Read (Phase 5)
+ *                           (Phase 2/3/4/5 checks degrade to warnings on token scope gap)
  *   CLOUDFLARE_ZONE_ID    — syrabit.ai zone (5b8c97df4431491dc7f60ea72fb61871)
  *   CLOUDFLARE_ACCOUNT_ID — Syrabit account (d66e40eac539fff1db270fddf384a5ec)
  *
@@ -66,7 +67,7 @@ function warn(label, detail) {
 }
 
 async function main() {
-  console.log('Cloudflare nightly smoke — Phase 1, 2, 3 & 4 checks');
+  console.log('Cloudflare nightly smoke — Phase 1, 2, 3, 4 & 5 checks');
   console.log(`Zone: ${ZONE_ID}\n`);
 
   // ── Phase 1: Zone settings ────────────────────────────────────────────
@@ -274,6 +275,59 @@ async function main() {
     } else {
       failures.push(`Cache Reserve (value=${JSON.stringify(value)} — want: "on")`);
       console.log(`  ✗  Cache Reserve: ${JSON.stringify(value)}  (want: "on") — run cloudflare-phase4-apply.js`);
+    }
+  }
+
+  // ── Phase 5: Analytics Engine dataset + Durable Object namespace ──────
+  // These resources are provisioned by `wrangler deploy` (not REST API calls).
+  // We verify them by inspecting the deployed worker's bindings and the
+  // account's DO namespace list. Both endpoints require narrow token scopes
+  // (Workers: Read, Durable Objects: Read) that are separate from the main
+  // zone-settings token — degrade gracefully on code 10000.
+  console.log('\nPhase 5 — Analytics Engine dataset + Durable Object rate limiter:');
+  const WORKER_NAME = 'syrabit-edge';
+  const AE_DATASET  = 'syrabit-edge-metrics';
+
+  // 5a: Analytics Engine binding
+  const aeBindings = await cfGetOrSkip(
+    `/accounts/${ACCOUNT_ID}/workers/scripts/${WORKER_NAME}/bindings`,
+  );
+  if (!aeBindings) {
+    warn('Analytics Engine ANALYTICS binding',
+      'token lacks Workers: Read — add scope to verify or check Workers dashboard');
+  } else {
+    const aeBinding = (aeBindings.result || []).find(
+      (b) => b.type === 'analytics_engine' && b.dataset === AE_DATASET,
+    );
+    if (!aeBinding) {
+      failures.push(`Analytics Engine binding (dataset=${AE_DATASET}) NOT found in syrabit-edge`);
+      console.log(`  ✗  ANALYTICS binding (dataset=${AE_DATASET}): NOT FOUND — run: cd workers/edge-proxy && wrangler deploy`);
+    } else {
+      console.log(`  ✓  ANALYTICS binding: dataset=${aeBinding.dataset}`);
+    }
+  }
+
+  // 5b: RateLimiter Durable Object namespace
+  const doNamespaces = await cfGetOrSkip(
+    `/accounts/${ACCOUNT_ID}/workers/durable_objects/namespaces`,
+  );
+  if (!doNamespaces) {
+    warn('RateLimiter DO namespace',
+      'token lacks Durable Objects: Read — add scope to verify or check Workers dashboard');
+  } else {
+    const ns = (doNamespaces.result || []).find(
+      (n) => n.class === 'RateLimiter' && n.script === WORKER_NAME,
+    );
+    if (!ns) {
+      const anyMatch = (doNamespaces.result || []).some((n) => n.class === 'RateLimiter');
+      if (anyMatch) {
+        console.log('  ✓  RateLimiter DO namespace found (possibly on different script tag)');
+      } else {
+        failures.push('RateLimiter DO namespace (NOT FOUND — wrangler deploy needed)');
+        console.log('  ✗  RateLimiter DO namespace: NOT FOUND — run: cd workers/edge-proxy && wrangler deploy');
+      }
+    } else {
+      console.log(`  ✓  RateLimiter DO namespace: id=${ns.id} script=${ns.script}`);
     }
   }
 

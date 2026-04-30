@@ -125,12 +125,15 @@ jobs:
   # Task #108 — Phase 4: R2 bucket syrabit-assets (student PDF storage,
   #             assets.syrabit.ai), R2 bucket syrabit-cache-reserve, and
   #             Cache Reserve enabled on the syrabit.ai zone.
-  #             Phase 2/3/4 checks degrade gracefully if the token lacks the
+  # Task #109 — Phase 5: Analytics Engine dataset binding (syrabit-edge-metrics)
+  #             present in the deployed syrabit-edge worker, and RateLimiter
+  #             Durable Object namespace provisioned via [[migrations]] v1.
+  #             Phase 2/3/4/5 checks degrade gracefully if the token lacks the
   #             required read scopes (warns, does not fail hard — see task-116,
-  #             task-117, and follow-up task for Phase 4 token scopes).
+  #             task-117, and follow-up tasks for Phase 4/5 token scopes).
   # Runs in parallel with the other smoke jobs (no `needs:` dependency).
   cf-zone-settings:
-    name: Cloudflare Phase 1, 2, 3 & 4 smoke
+    name: Cloudflare Phase 1, 2, 3, 4 & 5 smoke
     runs-on: ubuntu-latest
     timeout-minutes: 5
 

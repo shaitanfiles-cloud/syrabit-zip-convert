@@ -34,6 +34,10 @@ import {
 // records and POSTs them to /api/logs/ingest via ctx.waitUntil so it
 // never adds latency to user-visible responses.
 import { recordEdgeLog, type EdgeLogShipperEnv } from "./log-shipper";
+// Task #109 Phase 5 — Durable Object rate limiter + Analytics Engine query utility.
+import { RateLimiter } from "./rate-limiter-do";
+import { queryEdgeMetrics } from "./analytics-engine";
+export { RateLimiter };
 
 interface Env {
   BACKEND_URL: string;
@@ -129,6 +133,28 @@ interface Env {
    * When true, the scheduled handler runs an immediate warm-up on first boot.
    */
   D1_WARM_ON_STARTUP?: string;
+  /**
+   * Task #109 Phase 5 — Workers Analytics Engine dataset binding.
+   * Writes per-request metrics (cache hit/miss, chapter ID, AI provider,
+   * response time, rate-limit result) to the "syrabit-edge-metrics" dataset.
+   * Declared in wrangler.toml [analytics_engine_datasets]. Optional so the
+   * worker degrades gracefully in local dev without the binding.
+   */
+  ANALYTICS?: AnalyticsEngineDataset;
+  /**
+   * Task #109 Phase 5 — Durable Object rate-limiter namespace.
+   * Provides strongly-consistent, per-key sliding-window rate limiting.
+   * Falls back to KV-based checkRateLimitKey() when unbound (e.g. before
+   * the [[migrations]] have been applied via `wrangler deploy`).
+   */
+  RATE_LIMITER_DO?: DurableObjectNamespace;
+  /**
+   * Task #109 Phase 5 — Cloudflare API token with Analytics: Read scope.
+   * Used by the /api/edge/analytics route to query the Analytics Engine
+   * SQL API and return edge metrics to the admin panel.
+   * Set via: wrangler secret put CF_ANALYTICS_TOKEN
+   */
+  CF_ANALYTICS_TOKEN?: string;
 }
 
 const KV_BINDINGS = ["RATE_LIMIT", "BOT_HTML_CACHE"] as const;
@@ -556,6 +582,94 @@ async function checkRateLimit(
   } catch {
     return { allowed: true, remaining: limit };
   }
+}
+
+/**
+ * Task #109 Phase 5 — Durable Object rate limiter.
+ *
+ * Uses the RateLimiter DO for strongly-consistent, per-key sliding-window
+ * limiting. Falls back to the KV-based checkRateLimitKey() when RATE_LIMITER_DO
+ * is not bound (local dev, pre-migration). The DO provides isolation guarantees
+ * that KV's eventual-consistency cannot: two concurrent requests for the same IP
+ * hit the same DO instance and their storage.transaction() calls are serialized,
+ * eliminating the double-grant race that exists with KV.
+ */
+async function checkRateLimitWithDO(
+  key: string,
+  env: Env,
+  limit: number,
+  windowMs: number = RATE_LIMIT_WINDOW_S * 1000,
+): Promise<{ allowed: boolean; remaining: number; retryAfterMs: number }> {
+  if (env.RATE_LIMITER_DO) {
+    try {
+      const doId = env.RATE_LIMITER_DO.idFromName(key);
+      const stub = env.RATE_LIMITER_DO.get(doId);
+      const res = await stub.fetch("https://rate-limiter/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key, limit, windowMs }),
+      });
+      if (res.ok) {
+        return await res.json<{ allowed: boolean; remaining: number; retryAfterMs: number }>();
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "unknown";
+      console.error(`[rate-limiter-do] error for key=${key}: ${msg.slice(0, 200)}`);
+    }
+  }
+  // KV fallback — eventual consistency but always available
+  const kv = await checkRateLimitKey(key, env.RATE_LIMIT, limit);
+  return { ...kv, retryAfterMs: windowMs };
+}
+
+/**
+ * Task #109 Phase 5 — Analytics Engine instrumentation.
+ *
+ * Emits a single datapoint per request to the "syrabit-edge-metrics" dataset.
+ * Uses ctx.waitUntil so the write never blocks user-visible response time.
+ *
+ * Schema:
+ *   blob1  — cacheStatus:      "hit" | "miss" | "bypass" | "pass"
+ *   blob2  — chapterId:        chapter slug or "" for non-chapter routes
+ *   blob3  — aiProvider:       "groq" | "gemini" | "workers-ai" | "none"
+ *   blob4  — pathname:         first 64 chars of the request pathname
+ *   blob5  — rateLimitResult:  "ok" | "ai_limited" | "ip_limited"
+ *   double1 — responseTimeMs: end-to-end response latency
+ *   double2 — isAiRequest:    1 if an AI endpoint, else 0
+ *   double3 — httpStatus:     HTTP response status code
+ */
+function writeEdgeMetric(
+  env: Env,
+  ctx: ExecutionContext,
+  startMs: number,
+  opts: {
+    cacheStatus?: string;
+    chapterId?: string;
+    aiProvider?: string;
+    pathname: string;
+    rateLimitResult?: string;
+    isAiRequest?: boolean;
+    httpStatus?: number;
+  },
+): void {
+  if (!env.ANALYTICS) return;
+  const responseTimeMs = Date.now() - startMs;
+  const dataPoint = {
+    blobs: [
+      opts.cacheStatus     ?? "pass",
+      opts.chapterId       ?? "",
+      opts.aiProvider      ?? "none",
+      opts.pathname.slice(0, 64),
+      opts.rateLimitResult ?? "ok",
+    ],
+    doubles: [
+      responseTimeMs,
+      opts.isAiRequest ? 1 : 0,
+      opts.httpStatus ?? 0,
+    ],
+    indexes: [opts.chapterId ?? "none"],
+  };
+  ctx.waitUntil(Promise.resolve(env.ANALYTICS.writeDataPoint(dataPoint)));
 }
 
 function buildProxyHeaders(request: Request, clientIp: string, env?: Env): Headers {
@@ -1991,6 +2105,34 @@ async function _handleEdgeFetch(
       return handleKvUsage(env, request, cors);
     }
 
+    // ── Phase 5: Edge metrics query (Analytics Engine SQL API) ─────────────
+    // GET /api/edge/analytics?range=24h|6h|1h|7d
+    // Requires CF_ANALYTICS_TOKEN secret (Analytics: Read scope) and the
+    // ANALYTICS [analytics_engine_datasets] binding in wrangler.toml.
+    // Only accessible to admin — protected by the Zero Trust Access app policy
+    // on api.syrabit.ai/admin* (Phase 3). Do not call from the public SPA.
+    if (pathname === "/api/edge/analytics" && request.method === "GET") {
+      if (!env.CF_ANALYTICS_TOKEN) {
+        return new Response(
+          JSON.stringify({ error: "CF_ANALYTICS_TOKEN secret not set. Run: wrangler secret put CF_ANALYTICS_TOKEN" }),
+          { status: 503, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+      try {
+        const range   = url.searchParams.get("range") ?? "24h";
+        const metrics = await queryEdgeMetrics(env.CF_ANALYTICS_TOKEN, range);
+        return new Response(JSON.stringify(metrics), {
+          headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "no-store" },
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "unknown";
+        return new Response(
+          JSON.stringify({ error: `Analytics Engine query failed: ${msg.slice(0, 300)}` }),
+          { status: 500, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+    }
+
     // ── Google Tag Gateway (gtag proxy) ─────────────────────────────────────
     // Proxies Google Analytics 4 beacon requests through this edge worker so
     // they originate from api.syrabit.ai instead of googletagmanager.com.
@@ -2114,7 +2256,8 @@ async function _handleEdgeFetch(
       const fileField = formData.get("file");
       const key       = (formData.get("key") as string | null)?.trim();
 
-      if (!fileField || !(fileField instanceof File)) {
+      const uploadedFile = fileField as unknown as (File & { name: string; size: number; type: string; arrayBuffer(): Promise<ArrayBuffer> }) | null;
+      if (!uploadedFile || typeof uploadedFile === "string") {
         return new Response(
           JSON.stringify({ ok: false, error: "file_required",
             detail: "'file' field is required and must be a file upload" }),
@@ -2139,8 +2282,8 @@ async function _handleEdgeFetch(
         );
       }
 
-      const contentType = fileField.type || "application/octet-stream";
-      const size        = fileField.size;
+      const contentType = uploadedFile.type || "application/octet-stream";
+      const size        = uploadedFile.size;
 
       // Enforce a 50 MB limit to keep the Workers request body within reason.
       // Workers standard has a 100 MB body limit; we use 50 MB as a safe cap
@@ -2154,14 +2297,14 @@ async function _handleEdgeFetch(
         );
       }
 
-      const arrayBuffer = await fileField.arrayBuffer();
+      const arrayBuffer = await uploadedFile.arrayBuffer();
 
       try {
         await env.ASSETS.put(key, arrayBuffer, {
           httpMetadata: {
             contentType,
             // Content-Disposition: inline so browsers open PDFs in-tab
-            contentDisposition: `inline; filename="${fileField.name}"`,
+            contentDisposition: `inline; filename="${uploadedFile.name}"`,
             // Cache for 1 year — past papers and syllabi are immutable once uploaded.
             // Admins who need to replace a file upload under the same key (R2 PUT
             // is idempotent) and the CDN will serve the new version after the TTL.
@@ -2169,7 +2312,7 @@ async function _handleEdgeFetch(
           },
           customMetadata: {
             uploadedAt: new Date().toISOString(),
-            originalName: fileField.name,
+            originalName: uploadedFile.name,
           },
         });
       } catch (e: unknown) {
@@ -2382,9 +2525,16 @@ async function _handleEdgeFetch(
 
     if (!isSearchBot && isApiRoute) {
       if (isAiPath(pathname)) {
+        // Phase 5: use DO for strongly-consistent AI rate limiting; KV fallback if DO unbound.
         const aiKey = `rl:ai:${clientIp}`;
-        const aiRl = await checkRateLimitKey(aiKey, env.RATE_LIMIT, AI_RATE_LIMIT_RPM);
+        const aiRl = await checkRateLimitWithDO(aiKey, env, AI_RATE_LIMIT_RPM);
         if (!aiRl.allowed) {
+          writeEdgeMetric(env, ctx, Date.now(), {
+            pathname,
+            isAiRequest: true,
+            rateLimitResult: "ai_limited",
+            httpStatus: 429,
+          });
           return new Response(
             JSON.stringify({ detail: "AI rate limit exceeded. Please slow down." }),
             {
@@ -2400,10 +2550,25 @@ async function _handleEdgeFetch(
             }
           );
         }
+        // AI request passed rate limit — emit metric so RAG volume is tracked.
+        // provider blob3 is "none" here because the edge worker does not know
+        // which backend provider (groq/gemini) will ultimately handle it.
+        writeEdgeMetric(env, ctx, Date.now(), {
+          pathname,
+          isAiRequest: true,
+          rateLimitResult: "ok",
+          httpStatus: 0, // will be resolved by the backend; 0 = pending
+        });
       }
-      const rl = await checkRateLimit(clientIp, env.RATE_LIMIT, RATE_LIMIT_RPM);
+      // Phase 5: use DO for general IP rate limiting; KV fallback if DO unbound.
+      const rl = await checkRateLimitWithDO(`rl:${clientIp}`, env, RATE_LIMIT_RPM);
       remaining = rl.remaining;
       if (!rl.allowed) {
+        writeEdgeMetric(env, ctx, Date.now(), {
+          pathname,
+          rateLimitResult: "ip_limited",
+          httpStatus: 429,
+        });
         return new Response(
           JSON.stringify({ detail: "Rate limit exceeded. Try again shortly." }),
           {

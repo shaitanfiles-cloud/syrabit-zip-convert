@@ -13,6 +13,7 @@ import { llmCosts, API_BASE } from '@/utils/api';
 import { buildHighlightedSegments } from '@/utils/highlightSegments';
 
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
+import EdgeMetricsPanel from './EdgeMetricsPanel';
 const adminHeaders = (token) => {
   const isRealJwt = token && typeof token === 'string' && token.split('.').length === 3;
   return isRealJwt ? { Authorization: `Bearer ${token}` } : {};
@@ -3123,6 +3124,10 @@ export default function AdminHealth({ adminToken, onNavigate }) {
             ))}
           </ol>
         </div>
+        </SectionErrorBoundary>
+
+        <SectionErrorBoundary name="Edge Metrics">
+          <EdgeMetricsPanel token={adminToken} />
         </SectionErrorBoundary>
         </>)}
         <AdminQuickLinks links={['apiconfig','settings','dashboard','ratelimits']} onNavigate={onNavigate} />

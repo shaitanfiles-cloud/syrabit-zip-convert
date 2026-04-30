@@ -218,6 +218,42 @@ index_name = "syllabus-index-v2"
 binding    = "SYLLABUS_INDEX_LEGACY"
 index_name = "syllabus-index"
 
+# ---------------------------------------------------------------------------
+# Phase 5 (Task #109) — Workers Analytics Engine: custom edge metrics dataset.
+#
+# ANALYTICS is writable from the edge worker via env.ANALYTICS.writeDataPoint().
+# The dataset is created automatically on first write; no API call needed.
+# Query the dataset via the Analytics Engine SQL API or the /api/edge/analytics
+# worker route (requires CF_ANALYTICS_TOKEN secret with Analytics Read scope).
+#
+# Set the CF Analytics token as a Worker secret before deploying:
+#   wrangler secret put CF_ANALYTICS_TOKEN
+# ---------------------------------------------------------------------------
+[analytics_engine_datasets]
+binding = "ANALYTICS"
+dataset = "syrabit-edge-metrics"
+
+# ---------------------------------------------------------------------------
+# Phase 5 (Task #109) — Durable Object rate limiter.
+#
+# RateLimiter provides strongly-consistent, per-key sliding-window rate limits.
+# The edge worker uses it instead of the KV-based checkRateLimit() for all
+# API and AI rate-limit checks. KV remains as a fallback when the DO namespace
+# is not yet bound (e.g. local dev without wrangler.toml migration applied).
+#
+# Deploy steps:
+#   1. wrangler deploy   ← runs the [[migrations]] below, creating the namespace
+#   2. The DO namespace ID is auto-assigned and pinned on the CF dashboard.
+#      It is NOT stored in wrangler.toml — wrangler resolves it by class name.
+# ---------------------------------------------------------------------------
+[[durable_objects.bindings]]
+name       = "RATE_LIMITER_DO"
+class_name = "RateLimiter"
+
+[[migrations]]
+tag         = "v1"
+new_classes = ["RateLimiter"]
+
 [triggers]
 # Two crons fan out from the same `scheduled` handler in src/index.ts —
 # the dispatch arm reads `event.cron` and runs the right job:
