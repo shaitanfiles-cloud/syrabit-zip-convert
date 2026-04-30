@@ -2555,11 +2555,23 @@ async function _handleEdgeFetch(
     }
 
     if (!isSearchBot && isApiRoute) {
+      // Phase 5: per-IP and per-user (anon-id) Durable Object rate limiting.
+      // x-anon-id is the anonymous/authenticated user identifier set by the SPA.
+      // We enforce BOTH dimensions when the header is present so that users on
+      // shared IPs (campus, corporate NAT) cannot starve each other.
+      const anonId = (request.headers.get("x-anon-id") || "").trim().replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64);
+
       if (isAiPath(pathname)) {
-        // Phase 5: use DO for strongly-consistent AI rate limiting; KV fallback if DO unbound.
-        const aiKey = `rl:ai:${clientIp}`;
-        const aiRl = await checkRateLimitWithDO(aiKey, env, AI_RATE_LIMIT_RPM);
-        if (!aiRl.allowed) {
+        // AI rate limit — check per-IP first, then per-user if anon-id present.
+        const aiIpKey   = `rl:ai:${clientIp}`;
+        const aiUserKey = anonId ? `rl:ai:user:${anonId}` : null;
+
+        const [aiIpRl, aiUserRl] = await Promise.all([
+          checkRateLimitWithDO(aiIpKey, env, AI_RATE_LIMIT_RPM),
+          aiUserKey ? checkRateLimitWithDO(aiUserKey, env, AI_RATE_LIMIT_RPM) : Promise.resolve({ allowed: true, remaining: AI_RATE_LIMIT_RPM }),
+        ]);
+
+        if (!aiIpRl.allowed || !aiUserRl.allowed) {
           // X-AE-RL is an internal signal header read by the outer fetch handler
           // to set rateLimitResult on the per-request AE datapoint. It is stripped
           // from the final response before it reaches the client.
@@ -2579,12 +2591,20 @@ async function _handleEdgeFetch(
             }
           );
         }
-        // AI request passed rate limit — outer fetch handler emits the AE datapoint.
+        // AI request passed both rate limits — outer fetch handler emits AE datapoint.
       }
-      // Phase 5: use DO for general IP rate limiting; KV fallback if DO unbound.
-      const rl = await checkRateLimitWithDO(`rl:${clientIp}`, env, RATE_LIMIT_RPM);
-      remaining = rl.remaining;
-      if (!rl.allowed) {
+
+      // General API rate limit — check per-IP first, then per-user if anon-id present.
+      const ipKey   = `rl:${clientIp}`;
+      const userKey = anonId ? `rl:user:${anonId}` : null;
+
+      const [ipRl, userRl] = await Promise.all([
+        checkRateLimitWithDO(ipKey, env, RATE_LIMIT_RPM),
+        userKey ? checkRateLimitWithDO(userKey, env, RATE_LIMIT_RPM) : Promise.resolve({ allowed: true, remaining: RATE_LIMIT_RPM }),
+      ]);
+
+      remaining = Math.min(ipRl.remaining, userRl.remaining);
+      if (!ipRl.allowed || !userRl.allowed) {
         return new Response(
           JSON.stringify({ detail: "Rate limit exceeded. Try again shortly." }),
           {
