@@ -80,4 +80,16 @@ describe('QuizModal portal mounting', () => {
     expect(sentinel.parentNode).toBe(document.body);
     expect(container.contains(sentinel)).toBe(false);
   });
+
+  it('dismisses the selection popover bar when "Quiz me" is clicked', async () => {
+    render(<HighlightSavePopover hideQuiz={false} />);
+
+    await triggerSelectionChange('this is long enough text');
+
+    expect(screen.getByText(/quiz me/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText(/quiz me/i));
+
+    expect(screen.queryByText(/quiz me/i)).not.toBeInTheDocument();
+  });
 });
