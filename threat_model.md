@@ -24,7 +24,7 @@ Syrabit.ai is an educational web application for AssamBoard students. The produc
 ## Scan Anchors
 
 - **Production entry points**: `artifacts/syrabit/src`, `artifacts/syrabit-backend/routes`, `artifacts/syrabit-backend/server.py`, `workers/edge-proxy/src/index.ts`.
-- **Highest-risk code areas**: auth/session handling in `routes/auth.py`, `auth_deps.py`, `routes/admin_auth_users.py`; public content publishing in `routes/content.py`, `routes/cms_sarvam_health.py`, `routes/admin_monetization.py`, and frontend renderers/pages that consume HTML/markdown.
+- **Highest-risk code areas**: auth/session handling in `routes/auth.py`, `auth_deps.py`, `routes/admin_auth_users.py`; public content publishing in `routes/content.py`, `routes/cms_sarvam_health.py`, `routes/admin_monetization.py`, and frontend renderers/pages that consume HTML/markdown; external-content fetch flows in `edu_reader.py`, `routes/edu_browser.py`, and `url_safety.py`.
 - **Surface split**: public study/CMS routes are internet-facing; `/api/auth/*` and student features are authenticated; `/api/staff/*` is staff/admin only; `/api/admin/*` is admin-only with Cloudflare Access layering.
 - **Usually dev-only / lower priority**: mockup sandbox code, experimental artifacts outside the main `artifacts/syrabit*` and `workers/edge-proxy` production paths, unless production reachability is demonstrated.
 
@@ -42,6 +42,8 @@ The application lets privileged actors edit educational content that is later sh
 
 The system stores secrets, JWT signing material, login-capable credentials, and user/staff/admin data. Secrets and passwords must not appear in repository files, logs, or client-readable responses. Public endpoints must only expose fields intended for unauthenticated readers, and authenticated routes must scope data to the requesting user or role. Content flagged private or personalized must never be admitted to the public CMS/library path merely because it is marked published for an internal workflow.
 
+External-reader features are also part of this disclosure boundary. When Syrabit fetches third-party pages for the educational browser, it must enforce publisher policy on the page that is actually fetched and returned, not just on the caller-supplied URL. Allowlist, redirect, and `robots.txt` decisions must remain consistent across the full redirect chain so a redirector URL cannot expose content the final publisher has disallowed.
+
 ### Denial of Service
 
 Public auth and content endpoints are internet-exposed and can be abused for scraping or resource exhaustion. The system must keep rate limiting and origin protections active on production entry points, bound expensive generation/parsing operations, and avoid letting direct-origin access bypass edge-layer abuse controls.
@@ -49,3 +51,5 @@ Public auth and content endpoints are internet-exposed and can be abused for scr
 ### Elevation of Privilege
 
 Syrabit.ai has meaningful privilege tiers: student, staff, and admin. The system must enforce role checks on the backend, prevent content injection from becoming same-origin script execution, and prevent secret exposure from turning into staff/admin account takeover. Any public content path that can execute attacker-controlled script can become an account-compromise primitive because authenticated users browse the same origin. Credentialed browser trust settings are also part of this boundary: cross-site cookies and CORS allowlists must not trust arbitrary preview-hosting domains or they can hand attacker-controlled origins an authenticated read/write channel into user and admin APIs.
+
+Privilege changes and revocations must also take effect immediately. If session or user caches outlive a suspension, ban, or role downgrade, a compromised account can keep operating on stale authorization state after an admin has attempted to lock it out.
