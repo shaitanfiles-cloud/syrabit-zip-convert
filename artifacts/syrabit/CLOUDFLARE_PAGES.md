@@ -580,6 +580,8 @@ If CLS rises above 0.1 after Mirage data dominates the CrUX window, disable Mira
 
 ✅ Baseline captured 2026-04-30. No regressions. Mirage remains enabled. Re-check target: **2026-05-07** (1 week) and **2026-05-28** (full 28-day CrUX window).
 
+The 28-day re-check is tracked as **Task #89** — "Re-check mobile Core Web Vitals at the 28-day mark (~2026-05-28) when the CrUX window fully reflects Mirage traffic."
+
 ---
 
 ## Google Tag Gateway (first-party gtag proxy)
