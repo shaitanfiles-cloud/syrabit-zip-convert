@@ -242,10 +242,22 @@ _CF_AI_ENABLED = bool(_CF_AI_ACCOUNT_ID and _CF_API_TOKEN)
 _LLM_PROVIDERS = []
 if _CF_AI_ENABLED:
     _LLM_PROVIDERS.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
+if _GROQ_KEY:
+    _LLM_PROVIDERS.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
+if _GEMINI_KEY:
+    _LLM_PROVIDERS.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
 
 _LLM_PROVIDERS_CHAT: list[dict] = []
 if _CF_AI_ENABLED:
     _LLM_PROVIDERS_CHAT.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
+if _GROQ_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
+if _GEMINI_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
 
 _MODEL_PROVIDER_MAP = {
     "sarvam-m": "sarvam",
@@ -285,10 +297,14 @@ _MODEL_ALIAS_MAP = {
 # Slots in the same tier are load-balanced by in-flight count.
 #
 _SLM_SLOT_CANDIDATES = [
-    # Tier 0: Workers AI llama-3.3-70b-fp8 — sole chat provider.
+    # Tier 0: Workers AI llama-3.3-70b-fp8 — primary chat provider.
     ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",         8, 0),
     # Tier 1: Workers AI llama-3.1-8b — fast small-model fallback.
     ("workers-ai",  "@cf/meta/llama-3.1-8b-instruct-fp8",               8, 1),
+    # Tier 2: Groq llama-4-scout — fallback when Workers AI is rate-limited.
+    ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 2),
+    # Tier 3: Cerebras llama3.1-8b — secondary fallback.
+    ("cerebras",    "llama3.1-8b",                                       4, 3),
 ]
 
 # Content SmartKeyPool — serves `_CONTENT_INTENTS` (notes, important_questions,
