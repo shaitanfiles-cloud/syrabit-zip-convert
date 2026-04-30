@@ -5,7 +5,6 @@ import { usePublicStats } from '@/hooks/usePublicStats';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
-import { useTurnstile } from '@/hooks/useTurnstile';
 import { formatAuthError } from '@/lib/authErrors';
 import { toast } from 'sonner';
 import { LogoFull } from '@/components/Logo';
@@ -47,7 +46,6 @@ export default function SignupPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const { signup } = useAuth();
-  const { getToken: getTurnstileToken, ready: turnstileReady, enabled: turnstileEnabled, reset: resetTurnstile } = useTurnstile();
   const navigate = useNavigate();
 
   const strength = getPasswordStrength(password);
@@ -76,15 +74,10 @@ export default function SignupPage() {
     }
     setLoading(true);
     try {
-      let turnstileToken = '';
-      if (turnstileEnabled) {
-        turnstileToken = await getTurnstileToken();
-      }
-      await signup(name, email, password, consentDpdp, turnstileToken);
+      await signup(name, email, password, consentDpdp);
       toast.success('Account created! Welcome to Syrabit.ai!');
       navigate('/onboarding');
     } catch (err) {
-      try { resetTurnstile(); } catch {}
       setError(formatAuthError(err, 'Signup failed. Please try again.'));
     } finally {
       setLoading(false);
@@ -199,13 +192,11 @@ export default function SignupPage() {
               <GoogleSignInButton
                 text="signup_with"
                 disabled={loading}
-                getTurnstileToken={turnstileEnabled ? getTurnstileToken : undefined}
                 onSuccess={() => {
                   toast.success('Account created! Welcome to Syrabit.ai!');
                   navigate('/onboarding');
                 }}
                 onError={(err) => {
-                  try { resetTurnstile(); } catch {}
                   setError(formatAuthError(err, 'Google sign-up failed. Please try again.'));
                 }}
               />
@@ -390,7 +381,7 @@ export default function SignupPage() {
 
               <button
                 type="submit"
-                disabled={loading || (turnstileEnabled && !turnstileReady)}
+                disabled={loading}
                 className="w-full flex items-center justify-center gap-2 h-11 rounded-xl text-sm font-bold text-white transition-all duration-150 active:scale-[0.97] disabled:opacity-60 btn-gradient"
                 data-testid="auth-submit-button"
               >

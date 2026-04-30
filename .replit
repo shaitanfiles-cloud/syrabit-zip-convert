@@ -62,6 +62,8 @@ CF_AI_GATEWAY_ACCOUNT_ID = "d66e40eac539fff1db270fddf384a5ec"
 CORS_ORIGINS = "http://localhost:5000,http://localhost:3000,http://0.0.0.0:5000,https://f5641b56-9215-49ab-9946-ebb50a2f75a2-00-2rp6le2tp8cuz.kirk.replit.dev,https://*.replit.dev,https://*.replit.app"
 EMAIL_WORKER_URL = "https://syrabit-email.axomxplain.workers.dev"
 EMAIL_WORKER_AUTH_KEY = "Tt12N2yvx26opixnNz37nJW_dFo35bFC0r3kr9Iydeg"
+VITE_SUPABASE_URL = "https://czeznmqogtwecidhpysa.supabase.co"
+VITE_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN6ZXpubXFvZ3R3ZWNpZGhweXNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIxMjI1NDUsImV4cCI6MjA4NzY5ODU0NX0.7J2dlwfibjTArT6J4N3AnJ90OfgW4nYsym4T8kJ81u4"
 
 [userenv.development]
 
