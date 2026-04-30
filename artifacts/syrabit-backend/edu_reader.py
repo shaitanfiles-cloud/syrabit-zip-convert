@@ -453,6 +453,17 @@ async def fetch_and_extract(
         await log_blocked_request(final_url, f"redirect_{reason_final}", actor=actor, ip_hash=ip_hash)
         return {"ok": False, "error": "redirect_not_allowed", "detail": reason_final, "url": final_url}
 
+    # Re-check robots.txt for the final post-redirect URL (Task #34).
+    # The pre-fetch robots check (above) only covered the original URL.
+    # A redirect from an allowed URL to a path blocked by the destination
+    # site's robots.txt would have bypassed policy if we skipped this.
+    # Only skip the second check when the URL didn't change (no redirect
+    # occurred) to avoid an extra network round-trip on the common path.
+    if final_url != url and not await _robots_allows(final_url):
+        _reader_metrics["blocked_robots"] += 1
+        await log_blocked_request(final_url, "robots_disallow_redirect", actor=actor, ip_hash=ip_hash)
+        return {"ok": False, "error": "robots_disallow", "detail": "robots.txt forbids the redirect destination", "url": final_url}
+
     if resp.status_code != 200:
         _reader_metrics["fetches_failed"] += 1
         return {"ok": False, "error": f"http_{resp.status_code}", "detail": f"upstream returned {resp.status_code}", "url": final_url}
