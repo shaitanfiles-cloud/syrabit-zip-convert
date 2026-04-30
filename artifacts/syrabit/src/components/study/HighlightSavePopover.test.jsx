@@ -180,6 +180,36 @@ describe('HighlightSavePopover — edge cases', () => {
     expect(document.querySelector('.fixed.z-\\[110\\]')).toBeNull();
   });
 
+  it('does not show the popover when the commonAncestorContainer is a text node outside any savable container', async () => {
+    render(<HighlightSavePopover />);
+
+    const plainDiv = document.createElement('div');
+    document.body.appendChild(plainDiv);
+    const outsideTextNode = document.createTextNode('enough text to show popover');
+    plainDiv.appendChild(outsideTextNode);
+
+    const outsideTextNodeRange = {
+      commonAncestorContainer: outsideTextNode,
+      getBoundingClientRect: () => ({ left: 50, top: 50, width: 80, height: 18 }),
+    };
+    getSelectionSpy.mockReturnValue({
+      isCollapsed: false,
+      toString: () => 'enough text to show popover',
+      getRangeAt: () => outsideTextNodeRange,
+    });
+
+    await act(async () => {
+      document.dispatchEvent(new Event('selectionchange'));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(screen.queryByText(/save/i)).toBeNull();
+    expect(screen.queryByText(/quiz me/i)).toBeNull();
+    expect(document.querySelector('.fixed.z-\\[110\\]')).toBeNull();
+
+    plainDiv.parentNode.removeChild(plainDiv);
+  });
+
   it('shows the popover when the commonAncestorContainer is a text node inside a savable element', async () => {
     render(<HighlightSavePopover />);
 
