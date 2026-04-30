@@ -756,14 +756,19 @@ async def upload_image(file: UploadFile = File(...), admin: dict = Depends(get_a
     return {"url": data_url, "id": image_id, "filename": file.filename}
 
 # Public CMS endpoints (no auth required)
+_PUBLIC_CMS_FILTER = {
+    "doc_type": {"$ne": "personalized"},
+    "meta.is_private": {"$ne": True},
+}
+
 @router.get("/content/cms-library")
 async def get_public_cms_library():
-    """Get published CMS documents for public library"""
+    """Get published CMS documents for public library (personalized/private plans excluded)."""
     try:
         if not await is_mongo_available():
             return []
         docs = await db.cms_documents.find(
-            {"status": "published"},
+            {"status": "published", **_PUBLIC_CMS_FILTER},
             {"_id": 0, "content": 0}
         ).sort("updated_at", -1).limit(50).to_list(50)
         return docs
@@ -773,12 +778,18 @@ async def get_public_cms_library():
 
 @router.get("/content/cms-documents/{doc_id}")
 async def get_public_cms_document(doc_id: str):
-    """Get single CMS document for public view (PYQs and notes are freely scrapable)."""
+    """Get single CMS document for public view (PYQs and notes are freely scrapable).
+    Personalized or private documents are never returned — use the authenticated
+    /cms/{user_id}/{slug} endpoint for those."""
     try:
         if not await is_mongo_available():
             raise HTTPException(status_code=503, detail="Content service unavailable")
         doc = await db.cms_documents.find_one(
-            {"$or": [{"id": doc_id}, {"seo_slug": doc_id}], "status": "published"},
+            {
+                "$or": [{"id": doc_id}, {"seo_slug": doc_id}],
+                "status": "published",
+                **_PUBLIC_CMS_FILTER,
+            },
             {"_id": 0}
         )
         if not doc:
