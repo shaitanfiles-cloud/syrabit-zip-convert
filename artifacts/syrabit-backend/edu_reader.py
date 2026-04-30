@@ -391,6 +391,24 @@ async def fetch_and_extract(
     if not bypass_cache:
         cached = _cache_get(url)
         if cached:
+            # Re-validate robots.txt for the actual destination when a
+            # cached payload was produced by following a redirect. The
+            # original URL already passed the robots check above, but the
+            # destination path's robots.txt may have changed since caching.
+            cached_final = cached.get("_final_url")
+            if cached_final and cached_final != url:
+                if not await _robots_allows(cached_final):
+                    _reader_metrics["blocked_robots"] += 1
+                    await log_blocked_request(
+                        cached_final, "robots_disallow_cached_redirect",
+                        actor=actor, ip_hash=ip_hash,
+                    )
+                    return {
+                        "ok": False,
+                        "error": "robots_disallow",
+                        "detail": "robots.txt forbids the cached redirect destination",
+                        "url": cached_final,
+                    }
             _reader_metrics["cache_hits"] += 1
             cached["from_cache"] = True
             cached["elapsed_ms"] = int((time.perf_counter() - t0) * 1000)
@@ -427,7 +445,9 @@ async def fetch_and_extract(
                     "Accept-Language": "en-IN,en;q=0.9",
                 },
             ) as client:
-                resp, final_url, redirect_reason = await _safe_get_with_redirects(client, url)
+                resp, final_url, redirect_reason = await _safe_get_with_redirects(
+                    client, url, hop_validator=_robots_allows,
+                )
         except httpx.TimeoutException:
             _reader_metrics["fetches_failed"] += 1
             return {"ok": False, "error": "timeout", "detail": f"upstream did not respond within {_FETCH_TIMEOUT}s", "url": url}
@@ -436,6 +456,21 @@ async def fetch_and_extract(
             return {"ok": False, "error": "fetch_failed", "detail": str(e)[:200], "url": url}
 
     if redirect_reason != "ok":
+        if redirect_reason == "hop_policy_rejected":
+            # A redirect destination was blocked by robots.txt before the
+            # GET was issued (enforced inside safe_get_with_redirects via
+            # hop_validator=_robots_allows). No outbound request was made.
+            _reader_metrics["blocked_robots"] += 1
+            await log_blocked_request(
+                final_url or url, "robots_disallow_redirect_hop",
+                actor=actor, ip_hash=ip_hash,
+            )
+            return {
+                "ok": False,
+                "error": "robots_disallow",
+                "detail": "robots.txt forbids a redirect destination",
+                "url": final_url or url,
+            }
         _reader_metrics["blocked_allowlist"] += 1
         await log_blocked_request(url, redirect_reason, actor=actor, ip_hash=ip_hash)
         return {"ok": False, "error": "redirect_not_allowed", "detail": redirect_reason, "url": final_url or url}
@@ -504,6 +539,7 @@ async def fetch_and_extract(
         "fetched_at": time.time(),
         "from_cache": False,
         "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+        "_final_url": final_url if final_url != url else None,
     }
     _reader_metrics["fetches_ok"] += 1
     _cache_set(url, payload)
