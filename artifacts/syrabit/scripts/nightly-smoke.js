@@ -8,7 +8,7 @@
  * hit rates, bot filtering, or email security.
  *
  * Required env:
- *   CLOUDFLARE_API_TOKEN  — must have Zone Settings: Read and DNS: Read scopes
+ *   CLOUDFLARE_API_TOKEN  — must have Zone Settings: Read, Bot Management: Read, and DNS: Read scopes
  *   CLOUDFLARE_ZONE_ID    — syrabit.ai zone (5b8c97df4431491dc7f60ea72fb61871)
  *
  * Exit codes:
