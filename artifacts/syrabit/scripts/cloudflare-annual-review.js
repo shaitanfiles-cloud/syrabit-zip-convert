@@ -434,6 +434,31 @@ async function main() {
     }
   }
 
+  // 6d-alert: Observatory alert policy (speed_insights)
+  const alertsRes = await cfGet(`/accounts/${ACCOUNT_ID}/alerting/v3/policies`);
+  if (!alertsRes.success) {
+    const code = alertsRes.errors?.[0]?.code;
+    if (code === 10000) {
+      console.log('  ?  Observatory alert policy  [token lacks Account Notifications: Read]');
+    } else {
+      console.log(`  ?  Observatory alert policy: ${JSON.stringify(alertsRes.errors)}`);
+    }
+  } else {
+    const speedAlert = (alertsRes.result || []).find(p => p.alert_type === 'speed_insights');
+    if (speedAlert) {
+      const emailCount = (speedAlert.mechanisms?.email || []).length;
+      row('Observatory speed_insights alert policy', true, true,
+        `id=${speedAlert.id} enabled=${speedAlert.enabled} email_recipients=${emailCount}`);
+      row('  alert policy enabled', speedAlert.enabled, true);
+      if (!emailCount) {
+        console.log('  ✗  WARN: alert policy has no email recipient — add admin@syrabit.ai');
+      }
+    } else {
+      row('Observatory speed_insights alert policy', 'NOT FOUND', 'EXISTS',
+        'run cloudflare-phase6-apply.js → Step 4b');
+    }
+  }
+
   // 6d: Observatory scheduled runs — homepage + representative chapter page
   const obsTargets = [
     { label: 'Observatory homepage schedule',     url: 'https://syrabit.ai/' },

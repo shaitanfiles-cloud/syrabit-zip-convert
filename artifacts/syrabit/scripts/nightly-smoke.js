@@ -451,6 +451,36 @@ async function main() {
     }
   }
 
+  // 6d-alert: Observatory Core Web Vitals notification policy
+  // Verify a speed_insights alert policy exists on the account (created by
+  // cloudflare-phase6-apply.js step 4b). Degrades to warning on scope gaps.
+  const alertsRaw  = await fetch(`${API}/accounts/${ACCOUNT_ID}/alerting/v3/policies`, { headers });
+  const alertsJson = await alertsRaw.json();
+  if (!alertsJson.success) {
+    const code = alertsJson.errors?.[0]?.code;
+    if (code === 10000) {
+      warn('Observatory alert policy (speed_insights)', 'token lacks Account Notifications: Read — add scope to verify');
+    } else {
+      warn('Observatory alert policy (speed_insights)', `Alerting API error code ${code}: ${alertsJson.errors?.[0]?.message}`);
+    }
+  } else {
+    const speedAlert = (alertsJson.result || []).find(
+      p => p.alert_type === 'speed_insights',
+    );
+    if (!speedAlert) {
+      failures.push('Observatory alert policy (speed_insights) NOT FOUND');
+      console.log('  ✗  Observatory alert policy: NOT FOUND — run cloudflare-phase6-apply.js (step 4b creates it)');
+    } else {
+      const hasEmail = (speedAlert.mechanisms?.email || []).length > 0;
+      console.log(`  ✓  Observatory alert policy: "${speedAlert.name}" enabled=${speedAlert.enabled}`);
+      assert('  speed_insights policy enabled', speedAlert.enabled, true);
+      if (!hasEmail) {
+        warnings.push('Observatory alert policy has no email recipient — add admin@syrabit.ai via dashboard');
+        console.log('  ⚠  Observatory alert policy: no email recipient configured');
+      }
+    }
+  }
+
   // 6d: Observatory scheduled runs — homepage + representative chapter page
   // Raw fetch — Observatory may return 1135 on plans without Observatory access.
   const obsTargets = [

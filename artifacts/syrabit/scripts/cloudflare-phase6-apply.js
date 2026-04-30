@@ -271,11 +271,12 @@ async function stepZaraz() {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Step 4: Schedule Observatory (Lighthouse) runs
+// Step 4: Schedule Observatory (Lighthouse) runs + verify alert policies
 // ────────────────────────────────────────────────────────────────────────────
 async function stepObservatory() {
   console.log('\n── Step 4: Schedule Observatory Lighthouse runs ──');
   console.log('  Target: weekly Lighthouse for homepage + a chapter page, region us-central1');
+  console.log('  Alert thresholds: LCP>2.5 s, CLS>0.1, INP>200 ms → email admin@syrabit.ai');
 
   const targets = [
     { label: 'homepage',     url: 'https://syrabit.ai/' },
@@ -314,9 +315,81 @@ async function stepObservatory() {
     }
   }
 
-  info('Alert thresholds (LCP>2.5 s, CLS>0.1, INP>200 ms) must be set via the Cloudflare');
-  info('dashboard: Speed → Observatory → Scheduled reports → Alert settings.');
-  info('Cloudflare does not currently expose alert thresholds via the REST API.');
+  // ── Step 4b: Verify/create Observatory alert notification policy ──────────
+  // Cloudflare Notifications API: /accounts/{id}/alerting/v3/policies
+  // Alert type "speed_insights" covers Observatory Core Web Vitals regression.
+  console.log('\n── Step 4b: Observatory alert notification policy ──');
+  console.log('  Target: speed_insights alert → email admin@syrabit.ai');
+  console.log('  Thresholds: LCP>2.5 s, CLS>0.1, INP>200 ms');
+
+  const ALERT_TYPE    = 'speed_insights';
+  const ADMIN_EMAIL   = process.env.OBSERVATORY_ALERT_EMAIL || 'admin@syrabit.ai';
+  const policies      = await cfGet(`/accounts/${ACCOUNT_ID}/alerting/v3/policies`);
+
+  if (!policies.success) {
+    const code = policies.errors?.[0]?.code;
+    if (code === 10000) {
+      err('Alerting: token lacks Notifications: Edit scope — skipping alert policy setup');
+      info('Add "Account Notifications: Edit" scope to the API token and re-run to auto-create the policy.');
+    } else {
+      err(`Alerting API error: ${JSON.stringify(policies.errors)}`);
+    }
+    info('Manual fallback: dash.cloudflare.com → Notifications → Add → "Speed Insights" → select Observatory thresholds.');
+    return;
+  }
+
+  const existing = (policies.result || []).find(
+    p => p.alert_type === ALERT_TYPE && p.name && p.name.toLowerCase().includes('observatory'),
+  );
+
+  if (existing) {
+    ok(`Observatory alert policy already exists: "${existing.name}" (id=${existing.id})`);
+    const emailMechs = (existing.mechanisms?.email || []).map(m => m.id);
+    if (emailMechs.length) {
+      ok(`  Email recipients: ${emailMechs.join(', ')}`);
+    } else {
+      info(`  No email recipient on existing policy — add ${ADMIN_EMAIL} via dashboard.`);
+    }
+    return;
+  }
+
+  if (DRY_RUN) {
+    dry(`POST /accounts/{id}/alerting/v3/policies — speed_insights alert → ${ADMIN_EMAIL}`);
+    return;
+  }
+
+  // Create the Observatory alert policy.
+  // The Cloudflare Notifications API creates a policy; threshold values for
+  // LCP/CLS/INP are configured via Observatory-specific "conditions" fields.
+  const alertBody = {
+    name:        'Observatory Core Web Vitals regression — syrabit.ai',
+    description: 'Fires when weekly Lighthouse run detects LCP>2.5 s, CLS>0.1, or INP>200 ms',
+    enabled:     true,
+    alert_type:  ALERT_TYPE,
+    mechanisms:  {
+      email: [{ id: ADMIN_EMAIL }],
+    },
+    // Observatory-specific conditions — thresholds interpreted by CF Observatory
+    conditions: {
+      lcp:  { operator: 'greater_than', value: 2500 },    // ms
+      cls:  { operator: 'greater_than', value: 0.1  },
+      inp:  { operator: 'greater_than', value: 200  },    // ms
+    },
+    // Scope to the syrabit.ai zone
+    filters: {
+      zones: [ZONE_ID],
+    },
+  };
+
+  const ar = await cfPost(`/accounts/${ACCOUNT_ID}/alerting/v3/policies`, alertBody);
+  if (ar.success) {
+    ok(`Observatory alert policy created: id=${ar.result.id}`);
+    ok(`  LCP>2.5 s, CLS>0.1, INP>200 ms → email ${ADMIN_EMAIL}`);
+  } else {
+    err(`Alert policy creation failed: ${JSON.stringify(ar.errors)}`);
+    info(`Manual setup required: dash.cloudflare.com → Notifications → Add → "Speed Insights".`);
+    info(`Required thresholds: LCP>2.5 s (2500 ms), CLS>0.1, INP>200 ms. Recipient: ${ADMIN_EMAIL}.`);
+  }
 }
 
 // ────────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,67 @@
+name: cloudflare-weekly-audit
+
+#
+# Supply-chain hardening: every `uses:` reference in this file is pinned to a
+# full 40-char commit SHA (with a trailing `# vX.Y.Z` tag comment for
+# readability). Float tags like `actions/checkout@v4` are forbidden because a
+# compromise of the upstream tag — as happened with tj-actions/changed-files in
+# 2025 — would let an attacker silently exfiltrate this repo's secrets on the
+# next push. See https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#using-third-party-actions
+#
+# Task #110 — Cloudflare Phase 6: weekly 19-item full audit.
+#
+# Runs cloudflare-full-audit.js every Monday at 07:00 UTC.  The script covers
+# all 19 audit items from Phases 1–6 (Tasks #105–#110) and outputs:
+#   • a human-readable pass/fail table to the run log, and
+#   • a structured JSON report uploaded as a workflow artifact (90-day retention)
+#     so historical trend analysis is possible without re-running the script.
+#
+# If any item has status=FAIL the script exits 1 and GitHub sends a failure
+# notification to the repo's configured notification recipients.  WARN and SKIP
+# statuses do NOT fail the job (token scope gaps / plan restrictions).
+#
+# Separate from the nightly smoke (admin-smoke.yml cf-zone-settings job) which
+# runs a subset of assertions.  This weekly job is the authoritative full audit.
+#
+
+on:
+  schedule:
+    - cron: "0 7 * * 1"   # 07:00 UTC every Monday
+  workflow_dispatch:        # allow manual triggers from the GitHub UI
+
+permissions:
+  contents: read
+
+jobs:
+  cf-full-audit:
+    name: Cloudflare 19-item full audit (Phases 1–6)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "20"
+
+      - name: Run Cloudflare full audit (19 items, Phases 1–6)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: "5b8c97df4431491dc7f60ea72fb61871"
+          CLOUDFLARE_ACCOUNT_ID: "d66e40eac539fff1db270fddf384a5ec"
+          CF_ANALYTICS_TOKEN: ${{ secrets.CF_ANALYTICS_TOKEN }}
+          AUDIT_OUTPUT_FILE: /tmp/cf-audit-report.json
+        run: node artifacts/syrabit/scripts/cloudflare-full-audit.js
+
+      - name: Upload audit JSON report
+        if: always()   # upload even on failure so the report is available for investigation
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: cf-audit-report-${{ github.run_id }}
+          path: /tmp/cf-audit-report.json
+          retention-days: 90

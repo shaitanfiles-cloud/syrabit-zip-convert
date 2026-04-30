@@ -128,12 +128,15 @@ jobs:
   # Task #109 — Phase 5: Analytics Engine dataset binding (syrabit-edge-metrics)
   #             present in the deployed syrabit-edge worker, and RateLimiter
   #             Durable Object namespace provisioned via [[migrations]] v1.
-  #             Phase 2/3/4/5 checks degrade gracefully if the token lacks the
+  # Task #110 — Phase 6: mTLS client certificate (syrabit-railway-mtls), CF
+  #             Image Resizing (image_resizing=on), Zaraz GA4 tool enabled,
+  #             Observatory weekly schedules for homepage + chapter page.
+  #             Phase 2–6 checks degrade gracefully if the token lacks the
   #             required read scopes (warns, does not fail hard — see task-116,
-  #             task-117, and follow-up tasks for Phase 4/5 token scopes).
+  #             task-117, and follow-up tasks for Phase 4–6 token scopes).
   # Runs in parallel with the other smoke jobs (no `needs:` dependency).
   cf-zone-settings:
-    name: Cloudflare Phase 1, 2, 3, 4 & 5 smoke
+    name: Cloudflare Phase 1–6 nightly smoke
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -148,9 +151,10 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Verify Cloudflare Phase 1 & 2 settings
+      - name: Verify Cloudflare Phase 1–6 settings
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ZONE_ID: "5b8c97df4431491dc7f60ea72fb61871"
           CLOUDFLARE_ACCOUNT_ID: "d66e40eac539fff1db270fddf384a5ec"
+          CF_ANALYTICS_TOKEN: ${{ secrets.CF_ANALYTICS_TOKEN }}
         run: node artifacts/syrabit/scripts/nightly-smoke.js

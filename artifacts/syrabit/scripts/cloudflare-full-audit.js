@@ -577,6 +577,53 @@ async function auditItem19ZarazAndObservatory() {
     zarazOk = true;
   }
 
+  // Check Observatory alert notification policy (speed_insights)
+  // Uses the Cloudflare Notifications API — degrades gracefully on scope gaps.
+  const alertsRaw  = await fetch(
+    `${API}/accounts/${ACCOUNT_ID}/alerting/v3/policies`,
+    { headers },
+  );
+  const alertsJson = await alertsRaw.json();
+  let alertOk = false;
+  if (!alertsJson.success) {
+    const code = alertsJson.errors?.[0]?.code;
+    if (code === 10000) {
+      if (zarazOk) {
+        warn(19, 6, 'Zaraz GA4 + Observatory',
+          'Zaraz OK but Observatory alert: token lacks Account Notifications: Read scope');
+      }
+      // Cannot determine alert state — skip remaining Observatory checks to avoid false FAILs
+      return;
+    }
+    // Non-auth error — record as warning; proceed to schedule check
+    if (zarazOk) {
+      warn(19, 6, 'Zaraz GA4 + Observatory',
+        `Alerting API error ${alertsJson.errors?.[0]?.code}: ${alertsJson.errors?.[0]?.message}`);
+    }
+  } else {
+    const speedAlert = (alertsJson.result || []).find(p => p.alert_type === 'speed_insights');
+    if (!speedAlert) {
+      fail(19, 6, 'Zaraz GA4 + Observatory',
+        'Observatory alert policy (speed_insights) NOT FOUND',
+        'run cloudflare-phase6-apply.js step 4b to create the policy');
+      return;
+    }
+    if (!speedAlert.enabled) {
+      fail(19, 6, 'Zaraz GA4 + Observatory',
+        `Observatory alert policy "${speedAlert.name}" is disabled`,
+        'enable the policy at dash.cloudflare.com → Notifications → Policies');
+      return;
+    }
+    const hasEmail = (speedAlert.mechanisms?.email || []).length > 0;
+    if (!hasEmail) {
+      fail(19, 6, 'Zaraz GA4 + Observatory',
+        `Observatory alert policy "${speedAlert.name}" has no email recipient`,
+        'add admin@syrabit.ai as email recipient via dash.cloudflare.com → Notifications → Policies');
+      return;
+    }
+    alertOk = true;
+  }
+
   // Check Observatory schedule for homepage + representative chapter page
   const obsUrls = [
     { label: 'homepage',     url: 'https://syrabit.ai/' },
@@ -613,14 +660,16 @@ async function auditItem19ZarazAndObservatory() {
   }
 
   const missingObs = obsResults.filter(r => !r.found);
-  if (zarazOk && missingObs.length === 0) {
+  const allGood = zarazOk && alertOk && missingObs.length === 0;
+  if (allGood) {
     const detail = obsResults.map(r => `${r.label}:${r.frequency}`).join(', ');
-    pass(19, 6, 'Zaraz GA4 + Observatory', `Zaraz GA4 enabled; Observatory weekly: ${detail}`);
-  } else if (zarazOk && missingObs.length > 0) {
+    pass(19, 6, 'Zaraz GA4 + Observatory',
+      `Zaraz GA4 enabled; alert policy active; Observatory weekly: ${detail}`);
+  } else if (zarazOk && alertOk && missingObs.length > 0) {
     fail(19, 6, 'Zaraz GA4 + Observatory',
-      `Zaraz GA4 OK but Observatory schedule missing for: ${missingObs.map(r => r.label).join(', ')}`,
+      `Zaraz+alert OK but Observatory schedule missing for: ${missingObs.map(r => r.label).join(', ')}`,
       'run cloudflare-phase6-apply.js → Step 4');
-  } else {
+  } else if (!zarazOk) {
     fail(19, 6, 'Zaraz GA4 + Observatory',
       `Zaraz GA4 missing; Observatory: ${missingObs.length === 0 ? 'OK' : 'also missing'}`,
       'run cloudflare-phase6-apply.js');
