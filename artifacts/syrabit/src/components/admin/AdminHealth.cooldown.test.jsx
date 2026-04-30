@@ -1,209 +1,212 @@
 /**
- * Task #104 — Cooldown pulse animation & two-stage urgency cue tests.
+ * Task #104 — Verify the embed cooldown pulse animation and two-stage
+ * urgency cue appear correctly in the real AdminHealth component.
  *
- * Strategy: AdminHealth is a 3 000-line component driven by 36 async axios
- * calls and a multi-tab UI.  Booting the full component in jsdom would
- * require mocking every one of those calls and then simulating tab
- * navigation just to reach the cooldown card.  Instead we mirror the
- * *exact* className expressions from AdminHealth.jsx in compact test
- * components so we can verify the urgency-cue logic directly and quickly.
+ * AdminHealth is rendered with all axios calls mocked; pool-stats is the
+ * only one that returns cooldown-relevant data.  Every other URL rejects so
+ * sub-panels enter their error state gracefully.
  *
- * If the class expressions in AdminHealth.jsx ever diverge from what is
- * tested here the tests will flag the regression.
+ * We do NOT use vi.useFakeTimers() because it prevents waitFor (which relies
+ * on real setTimeout) from retrying.  The countdown interval fires at most
+ * once during the test (it ticks every 1 s), which is fast enough to still
+ * catch the initial rendered value before any tick occurs.
+ *
+ * Test flow
+ * ─────────
+ * 1. Configure pool-stats mock (per test).
+ * 2. Render <AdminHealth adminToken="tok" />.
+ * 3. The loadWorkersAi() useEffect fires on mount and resolves pool-stats.
+ * 4. Click the "Workers AI Fallback" tab to show the cooldown card.
+ * 5. waitFor the "Cooldown clears in" label, then assert classes.
  *
  * Covered states
  * ──────────────
- *  Countdown badge:
- *    1. cooldown inactive      → gray text, no animate-pulse
- *    2. cooldown > 10 s        → red text,  no animate-pulse
- *    3. cooldown 6–10 s        → red text,  animate-pulse  (stage 1)
- *    4. cooldown ≤ 5 s         → orange text + amber cell bg, animate-pulse (stage 2)
- *
- *  Alert banner (the red/amber strip above the stats grid):
- *    5. cooldown ≤ 5 s → amber-100 background, amber icon/text
- *    6. cooldown > 5 s → red-100  background, red   icon/text
+ *  A. cooldown inactive → no animate-pulse, gray text, "—" value
+ *  B. cooldown > 10 s   → text-red-600, no animate-pulse
+ *  C. cooldown 6–10 s   → text-red-600 + animate-pulse   (stage 1)
+ *  D. cooldown ≤ 5 s    → text-orange-500 + animate-pulse (stage 2)
+ *  D₂. stage-2 cell wrapper → bg-amber-50 / border-amber-300
+ *  D₃. alert banner at ≤ 5 s → bg-amber-100
+ *  C₂. alert banner at > 5 s → bg-red-100
  */
 import React from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, it, expect } from 'vitest';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-/* ─────────────────────────────────────────────────────────────────────────
-   Mirrors the "Cooldown clears in" stat cell from AdminHealth.jsx (~2257)
-   ───────────────────────────────────────────────────────────────────────── */
-function CooldownBadge({ cooldown, embedCooldownDisplay }) {
-  const cellCls = [
-    'rounded-lg p-2.5 border transition-colors',
-    cooldown && embedCooldownDisplay <= 5
-      ? 'bg-amber-50 border-amber-300'
-      : 'bg-white/70 border-gray-100',
-  ].join(' ');
+/* ── axios mock ──────────────────────────────────────────────────────────── */
+vi.mock('axios', () => {
+  const get = vi.fn();
+  return { default: { get, post: vi.fn().mockRejectedValue(new Error('mocked')), create: vi.fn() }, get };
+});
 
-  const labelCls = [
-    'text-[10px] uppercase font-semibold mb-0.5',
-    cooldown && embedCooldownDisplay <= 5 ? 'text-amber-600' : 'text-gray-400',
-  ].join(' ');
+/* ── sub-component / library mocks ──────────────────────────────────────── */
+vi.mock('@/utils/api', () => ({
+  llmCosts: {},
+  API_BASE: 'http://test.local',
+}));
 
-  const valueCls = [
-    'text-base font-bold tabular-nums',
-    cooldown && embedCooldownDisplay <= 5
-      ? 'text-orange-500 animate-pulse'
-      : cooldown && embedCooldownDisplay <= 10
-      ? 'text-red-600 animate-pulse'
-      : cooldown
-      ? 'text-red-600'
-      : 'text-gray-400',
-  ].join(' ');
+vi.mock('@/utils/highlightSegments', () => ({
+  buildHighlightedSegments: vi.fn(() => []),
+}));
 
-  return (
-    <div className={cellCls}>
-      <div className={labelCls}>Cooldown clears in</div>
-      <div data-testid="countdown-value" className={valueCls}>
-        {cooldown ? `${embedCooldownDisplay} s` : '—'}
-      </div>
-    </div>
-  );
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+
+vi.mock('@/components/ErrorBoundary', () => ({
+  SectionErrorBoundary: ({ children }) => <>{children}</>,
+}));
+
+vi.mock('recharts', () => ({
+  AreaChart:           ({ children }) => <div>{children}</div>,
+  BarChart:            ({ children }) => <div>{children}</div>,
+  LineChart:           ({ children }) => <div>{children}</div>,
+  Area:                () => null,
+  Bar:                 () => null,
+  Line:                () => null,
+  XAxis:               () => null,
+  YAxis:               () => null,
+  CartesianGrid:       () => null,
+  Tooltip:             () => null,
+  Legend:              () => null,
+  ResponsiveContainer: ({ children }) => <div>{children}</div>,
+  ReferenceLine:       () => null,
+}));
+
+vi.mock('./CronHealthPill',              () => ({ default: () => <span />, SlackConfigBadge: () => null }));
+vi.mock('./CfWafDriftCronPill',          () => ({ default: () => <span /> }));
+vi.mock('./TrustpilotRefreshCronPill',   () => ({ default: () => <span /> }));
+vi.mock('./EdgeProxyDeployCronPill',     () => ({ default: () => <span /> }));
+vi.mock('./UnifiedLogsCfPullCronPill',   () => ({ default: () => <span /> }));
+vi.mock('./AdminQuickLinks',             () => ({ default: () => <span /> }));
+
+/* ── imports (after mocks) ───────────────────────────────────────────────── */
+import axios from 'axios';
+import AdminHealth from './AdminHealth';
+
+/* ── helpers ─────────────────────────────────────────────────────────────── */
+const basePoolStats = {
+  embed_cooldown_active:      false,
+  embed_cooldown_remaining_s: 0,
+  embed_429_burst:            0,
+  embed_429_threshold:        3,
+  embed_cooldown_duration_s:  60,
+};
+
+function setPoolStatsMock(overrides = {}) {
+  const data = { ...basePoolStats, ...overrides };
+  axios.get.mockImplementation((url) => {
+    if (url.includes('/admin/workers-ai/status'))
+      return Promise.resolve({ data: { ok: true, enabled_globally: true, secret_configured: true, edge_url: 'https://cf.example.com' } });
+    if (url.includes('/admin/dashboard/metrics'))
+      return Promise.resolve({ data: { workers_ai_throttle: null } });
+    if (url.includes('/admin/llm/pool-stats'))
+      return Promise.resolve({ data });
+    return Promise.reject(new Error('mocked rejection'));
+  });
 }
 
-/* ─────────────────────────────────────────────────────────────────────────
-   Mirrors the alert banner from AdminHealth.jsx (~2222)
-   ───────────────────────────────────────────────────────────────────────── */
-function CooldownBanner({ embedCooldownDisplay, burst, threshold, durationS }) {
-  const wrapCls = [
-    'flex items-center gap-2 mb-3 px-3 py-2 rounded-lg border transition-colors',
-    embedCooldownDisplay <= 5
-      ? 'bg-amber-100 border-amber-300'
-      : 'bg-red-100 border-red-200',
-  ].join(' ');
-
-  const iconCls = `shrink-0 transition-colors ${
-    embedCooldownDisplay <= 5 ? 'text-amber-600' : 'text-red-600'
-  }`;
-
-  const textCls = `text-xs font-semibold transition-colors ${
-    embedCooldownDisplay <= 5 ? 'text-amber-700' : 'text-red-700'
-  }`;
-
-  return (
-    <div data-testid="banner" className={wrapCls}>
-      <span data-testid="banner-icon" className={iconCls}>!</span>
-      <span data-testid="banner-text" className={textCls}>
-        Embed cooldown active — Workers AI embed skipped for {embedCooldownDisplay}s
-        ({burst} of {threshold} hits in last {durationS}s)
-      </span>
-    </div>
-  );
+/** Flush all pending microtasks so that promise-based useEffects resolve. */
+async function flushEffects() {
+  // Two passes: first pass lets React schedule the effect; second pass
+  // lets the resolved promise (then-callback) update the state.
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => { await Promise.resolve(); });
 }
 
-/* ─────────────────────────────────────────────────────────────────────────
-   Helper — render to string and return the raw HTML for assertions
-   ───────────────────────────────────────────────────────────────────────── */
-function badgeHtml(props) {
-  return renderToStaticMarkup(<CooldownBadge {...props} />);
+async function renderAndNavigate() {
+  render(<AdminHealth adminToken="test-token" onNavigate={vi.fn()} />);
+  await flushEffects();
+  const tab = screen.getByRole('button', { name: /Workers AI Fallback/i });
+  fireEvent.click(tab);
 }
 
-function bannerHtml(props) {
-  return renderToStaticMarkup(<CooldownBanner {...props} />);
-}
+/* ── test lifecycle ──────────────────────────────────────────────────────── */
+beforeEach(() => {
+  setPoolStatsMock();   // default: inactive
+});
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   Countdown badge tests
-   ═══════════════════════════════════════════════════════════════════════════ */
-describe('AdminHealth — embed cooldown badge', () => {
-  it('shows a dash and gray text when cooldown is inactive', () => {
-    const html = badgeHtml({ cooldown: false, embedCooldownDisplay: 0 });
-    expect(html).toContain('—');
-    expect(html).toContain('text-gray-400');
-    expect(html).not.toContain('animate-pulse');
-    expect(html).not.toContain('text-red-600');
-    expect(html).not.toContain('text-orange-500');
-  });
-
-  it('shows red text but NO pulse when cooldown has more than 10 s remaining', () => {
-    const html = badgeHtml({ cooldown: true, embedCooldownDisplay: 45 });
-    expect(html).toContain('45 s');
-    expect(html).toContain('text-red-600');
-    expect(html).not.toContain('animate-pulse');
-    expect(html).not.toContain('bg-amber-50');
-  });
-
-  it('applies animate-pulse with red text when cooldown is in the 6–10 s window', () => {
-    for (const s of [10, 9, 8, 7, 6]) {
-      const html = badgeHtml({ cooldown: true, embedCooldownDisplay: s });
-      expect(html, `at ${s}s`).toContain('animate-pulse');
-      expect(html, `at ${s}s`).toContain('text-red-600');
-      expect(html, `at ${s}s`).not.toContain('text-orange-500');
-      expect(html, `at ${s}s`).not.toContain('bg-amber-50');
-    }
-  });
-
-  it('switches to orange text + amber cell background at exactly 5 s (stage-2 boundary)', () => {
-    const html = badgeHtml({ cooldown: true, embedCooldownDisplay: 5 });
-    expect(html).toContain('animate-pulse');
-    expect(html).toContain('text-orange-500');
-    expect(html).toContain('bg-amber-50');
-    expect(html).toContain('border-amber-300');
-    expect(html).not.toContain('text-red-600');
-  });
-
-  it('keeps stage-2 styling for remaining values 4, 3, 2, 1, 0', () => {
-    for (const s of [4, 3, 2, 1, 0]) {
-      const html = badgeHtml({ cooldown: true, embedCooldownDisplay: s });
-      expect(html, `at ${s}s`).toContain('animate-pulse');
-      expect(html, `at ${s}s`).toContain('text-orange-500');
-      expect(html, `at ${s}s`).toContain('bg-amber-50');
-      expect(html, `at ${s}s`).not.toContain('text-red-600');
-    }
-  });
-
-  it('label text color follows the same stage split', () => {
-    const stage1Html = badgeHtml({ cooldown: true, embedCooldownDisplay: 8 });
-    const stage2Html = badgeHtml({ cooldown: true, embedCooldownDisplay: 3 });
-    const idleHtml   = badgeHtml({ cooldown: false, embedCooldownDisplay: 0 });
-
-    expect(stage1Html).toContain('text-gray-400');   // label stays gray in stage 1
-    expect(stage2Html).toContain('text-amber-600');  // label flips amber in stage 2
-    expect(idleHtml).toContain('text-gray-400');     // label stays gray when idle
-  });
+afterEach(() => {
+  vi.clearAllMocks();
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Alert banner tests (Task #111 extension)
+   Tests
    ═══════════════════════════════════════════════════════════════════════════ */
-describe('AdminHealth — embed cooldown alert banner', () => {
-  const defaultProps = { burst: 3, threshold: 3, durationS: 60 };
+describe('AdminHealth — embed cooldown pulse animation & urgency cue', () => {
 
-  it('uses red palette when more than 5 s remain', () => {
-    for (const s of [60, 15, 11, 6]) {
-      const html = bannerHtml({ embedCooldownDisplay: s, ...defaultProps });
-      expect(html, `at ${s}s`).toContain('bg-red-100');
-      expect(html, `at ${s}s`).toContain('border-red-200');
-      expect(html, `at ${s}s`).toContain('text-red-600');
-      expect(html, `at ${s}s`).toContain('text-red-700');
-      expect(html, `at ${s}s`).not.toContain('bg-amber-100');
-    }
+  it('A — no animate-pulse and gray text when cooldown is inactive', async () => {
+    setPoolStatsMock({ embed_cooldown_active: false, embed_cooldown_remaining_s: 0 });
+    await renderAndNavigate();
+
+    const label = await screen.findByText('Cooldown clears in', {}, { timeout: 3000 });
+    expect(label).toBeInTheDocument();
+
+    const valueEl = screen.getByText('—');
+    expect(valueEl.className).toContain('text-gray-400');
+    expect(valueEl.className).not.toContain('animate-pulse');
   });
 
-  it('switches to amber palette at exactly 5 s (stage-2 boundary)', () => {
-    const html = bannerHtml({ embedCooldownDisplay: 5, ...defaultProps });
-    expect(html).toContain('bg-amber-100');
-    expect(html).toContain('border-amber-300');
-    expect(html).toContain('text-amber-600');
-    expect(html).toContain('text-amber-700');
-    expect(html).not.toContain('bg-red-100');
-    expect(html).not.toContain('text-red-700');
+  it('B — red text, no animate-pulse when cooldown has > 10 s remaining', async () => {
+    setPoolStatsMock({ embed_cooldown_active: true, embed_cooldown_remaining_s: 45 });
+    await renderAndNavigate();
+
+    await screen.findByText('Cooldown clears in', {}, { timeout: 3000 });
+
+    const valueEl = screen.getByText(/45 s/);
+    expect(valueEl.className).toContain('text-red-600');
+    expect(valueEl.className).not.toContain('animate-pulse');
   });
 
-  it('keeps amber palette for 4, 3, 2, 1, 0 s remaining', () => {
-    for (const s of [4, 3, 2, 1, 0]) {
-      const html = bannerHtml({ embedCooldownDisplay: s, ...defaultProps });
-      expect(html, `at ${s}s`).toContain('bg-amber-100');
-      expect(html, `at ${s}s`).not.toContain('bg-red-100');
-    }
+  it('C — animate-pulse + red text in the 6–10 s stage-1 window', async () => {
+    setPoolStatsMock({ embed_cooldown_active: true, embed_cooldown_remaining_s: 8 });
+    await renderAndNavigate();
+
+    await screen.findByText('Cooldown clears in', {}, { timeout: 3000 });
+
+    const valueEl = screen.getByText(/8 s/);
+    expect(valueEl.className).toContain('animate-pulse');
+    expect(valueEl.className).toContain('text-red-600');
+    expect(valueEl.className).not.toContain('text-orange-500');
   });
 
-  it('banner text always contains the countdown seconds', () => {
-    const html = bannerHtml({ embedCooldownDisplay: 7, ...defaultProps });
-    expect(html).toContain('skipped for 7s');
-    expect(html).toContain('3 of 3');
+  it('D — orange text + animate-pulse in the ≤5 s stage-2 window', async () => {
+    setPoolStatsMock({ embed_cooldown_active: true, embed_cooldown_remaining_s: 3 });
+    await renderAndNavigate();
+
+    await screen.findByText('Cooldown clears in', {}, { timeout: 3000 });
+
+    const valueEl = screen.getByText(/3 s/);
+    expect(valueEl.className).toContain('animate-pulse');
+    expect(valueEl.className).toContain('text-orange-500');
+    expect(valueEl.className).not.toContain('text-red-600');
+  });
+
+  it('D₂ — countdown cell wrapper has amber bg/border at ≤5 s', async () => {
+    setPoolStatsMock({ embed_cooldown_active: true, embed_cooldown_remaining_s: 3 });
+    await renderAndNavigate();
+
+    const label = await screen.findByText('Cooldown clears in', {}, { timeout: 3000 });
+    const cell = label.parentElement;
+    expect(cell.className).toContain('bg-amber-50');
+    expect(cell.className).toContain('border-amber-300');
+  });
+
+  it('D₃ — alert banner has amber bg at ≤5 s', async () => {
+    setPoolStatsMock({ embed_cooldown_active: true, embed_cooldown_remaining_s: 4 });
+    await renderAndNavigate();
+
+    const bannerText = await screen.findByText(/Embed cooldown active/, {}, { timeout: 3000 });
+    const banner = bannerText.closest('div.rounded-lg');
+    expect(banner.className).toContain('bg-amber-100');
+    expect(banner.className).not.toContain('bg-red-100');
+  });
+
+  it('C₂ — alert banner has red bg when > 5 s remain', async () => {
+    setPoolStatsMock({ embed_cooldown_active: true, embed_cooldown_remaining_s: 8 });
+    await renderAndNavigate();
+
+    const bannerText = await screen.findByText(/Embed cooldown active/, {}, { timeout: 3000 });
+    const banner = bannerText.closest('div.rounded-lg');
+    expect(banner.className).toContain('bg-red-100');
+    expect(banner.className).not.toContain('bg-amber-100');
   });
 });
