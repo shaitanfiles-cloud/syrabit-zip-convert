@@ -134,8 +134,10 @@ if ADMIN_JWT_SECRET == JWT_SECRET:
     )
 
 # ── Google OAuth ──────────────────────────────────────────────────────────────
-GOOGLE_CLIENT_ID     = os.environ.get('GOOGLE_CLIENT_ID', '').strip()
-GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '').strip()
+GOOGLE_CLIENT_ID     = (os.environ.get('GOOGLE_CLIENT_ID', '').strip()
+                        or os.environ.get('GOOGLE_OAUTH_CLIENT_ID', '').strip())
+GOOGLE_CLIENT_SECRET = (os.environ.get('GOOGLE_CLIENT_SECRET', '').strip()
+                        or os.environ.get('GOOGLE_OAUTH_CLIENT_SECRET', '').strip())
 
 # ── Email Configuration ───────────────────────────────────────────────────────
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()

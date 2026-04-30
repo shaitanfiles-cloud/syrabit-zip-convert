@@ -1,6 +1,11 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 
-const SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
+// Only enable Turnstile in production — dev/preview domains are not
+// registered in the Cloudflare Turnstile dashboard, so the widget would
+// fail silently (or show a "Couldn't verify you're human" error overlay).
+const SITE_KEY = import.meta.env.PROD
+  ? (import.meta.env.VITE_TURNSTILE_SITE_KEY || '')
+  : '';
 const SCRIPT_ID = 'cf-turnstile-script';
 
 let scriptLoadPromise = null;
