@@ -88,7 +88,7 @@ export function HighlightSavePopover({
 
   return (
     <>
-      {pos && (showSave || showQuiz) && (
+      {typeof document !== 'undefined' && pos && (showSave || showQuiz) && createPortal(
         <div
           className="fixed z-[110] flex items-center gap-1 rounded-xl border border-border/60 bg-card shadow-lg px-1 py-1"
           style={{ left: pos.x, top: pos.y }}
@@ -113,7 +113,8 @@ export function HighlightSavePopover({
               <HelpCircle className="w-3.5 h-3.5" /> Quiz me
             </button>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
       {typeof document !== 'undefined' && createPortal(
         <QuizModal
