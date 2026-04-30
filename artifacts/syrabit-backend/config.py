@@ -521,6 +521,12 @@ SARVAM_API_KEY_2 = os.environ.get('SARVAM_API_KEY_2', '').strip()
 SARVAM_TRANSLATE_KEY = SARVAM_API_KEY or SARVAM_API_KEY_2
 SARVAM_BASE_URL = 'https://api.sarvam.ai'
 
+# ── MongoDB Atlas Embedding & Reranking API (Voyage AI) ──────────────────────
+# MongoDB acquired Voyage AI and provides embedding + reranking models as
+# a managed API service. Set MONGODB_MODEL_API_KEY in Replit Secrets.
+# All call sites guard with `if voyage.ENABLED` and fall back gracefully.
+MONGODB_MODEL_API_KEY = os.environ.get('MONGODB_MODEL_API_KEY', '').strip()
+
 # ── Distributed cache — Upstash Redis (REST-based, serverless) ────────────────
 # Upstash is used for L2 cross-worker cache, anonymous chat history,
 # atomic rate-limit credit deduction, and AI response caching.

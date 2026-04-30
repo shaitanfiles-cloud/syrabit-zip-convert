@@ -491,28 +491,74 @@ async def _fetch_internal_chapters(
             {"title": {"$regex": regex_pattern, "$options": "i"}},
             {"content": {"$regex": regex_pattern, "$options": "i"}},
         ]
-        cursor = db.chapters.find(filters, {"_id": 0, "id": 1, "title": 1, "content": 1, "slug": 1, "subject_id": 1, "description": 1}).limit(limit)
-        chapters = await cursor.to_list(length=limit)
-        result = []
-        total_chars = 0
+        # Fetch more candidates when Voyage reranking is available so the
+        # reranker can pick the most semantically relevant ones. Without
+        # reranking, cap at limit to avoid processing cost.
+        try:
+            from providers.voyage import ENABLED as _voyage_enabled
+        except Exception:
+            _voyage_enabled = False
+        fetch_limit = min(limit * 5, 20) if _voyage_enabled else limit
+        cursor = db.chapters.find(
+            filters,
+            {"_id": 0, "id": 1, "title": 1, "content": 1, "slug": 1, "subject_id": 1, "description": 1},
+        ).limit(fetch_limit)
+        chapters = await cursor.to_list(length=fetch_limit)
+
+        # Build result dicts (content-length capped per item, not yet total)
+        candidates = []
         for ch in chapters:
             content = (ch.get("content") or ch.get("description") or "").strip()
             if not content or len(content) < 30:
                 continue
-            if total_chars + len(content) > max_content_chars:
-                content = content[:max(500, max_content_chars - total_chars)]
-            total_chars += len(content)
-            result.append({
+            candidates.append({
                 "title": ch.get("title", ""),
                 "content": content,
                 "slug": ch.get("slug", ""),
                 "subject_id": ch.get("subject_id", ""),
                 "type": "chapter",
             })
+
+        # ── Voyage AI reranking ──────────────────────────────────────────────
+        # Rerank candidates by true semantic relevance to the query so the
+        # LLM receives the most pertinent chapters rather than whoever
+        # happened to match the keyword regex first. Falls back silently.
+        if _voyage_enabled and len(candidates) > 1:
+            try:
+                from providers.voyage import rerank_items as _voyage_rerank
+                candidates = await _voyage_rerank(
+                    query,
+                    candidates,
+                    lambda c: f"{c['title']}\n\n{c['content'][:800]}",
+                    top_k=limit,
+                )
+                logger.info(
+                    "[INTERNAL_RAG] Voyage reranked %d candidates → top %d for '%s'",
+                    len(candidates), limit, query[:50],
+                )
+            except Exception as _rr_err:
+                logger.debug("[INTERNAL_RAG] Voyage rerank skipped: %s", _rr_err)
+                candidates = candidates[:limit]
+        else:
+            candidates = candidates[:limit]
+
+        # ── Apply total-char budget ──────────────────────────────────────────
+        result = []
+        total_chars = 0
+        for ch in candidates:
+            content = ch["content"]
+            if total_chars + len(content) > max_content_chars:
+                content = content[:max(500, max_content_chars - total_chars)]
+            total_chars += len(content)
+            result.append({**ch, "content": content})
             if total_chars >= max_content_chars:
                 break
+
         if result:
-            logger.info(f"[INTERNAL_RAG] Found {len(result)} chapter(s) for '{query[:50]}' (subject={subject_id or 'any'}, {total_chars} chars)")
+            logger.info(
+                "[INTERNAL_RAG] Returning %d chapter(s) for '%s' (subject=%s, %d chars, reranked=%s)",
+                len(result), query[:50], subject_id or "any", total_chars, _voyage_enabled,
+            )
         return result
     except Exception as e:
         logger.warning(f"[INTERNAL_RAG] Chapter fetch failed: {e}")

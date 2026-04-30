@@ -95,6 +95,7 @@ def _validate_env():
         "OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "").strip(),
         "AWS_ACCESS_KEY_ID": os.environ.get("AWS_ACCESS_KEY_ID", "").strip(),
         "AWS_SECRET_ACCESS_KEY": os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip(),
+        "MONGODB_MODEL_API_KEY": os.environ.get("MONGODB_MODEL_API_KEY", "").strip(),
     }
     _byok_active = os.environ.get("CF_AI_GATEWAY_BYOK", "1").strip() not in ("", "0", "false", "False")
     _log.info("─── LLM Provider Key Diagnostic ───")
