@@ -69,7 +69,10 @@ export default function LoginPage() {
       const user = await login(email, password, turnstileToken);
       toast.success('Welcome back!');
       setTimeout(() => {
-        if (!user.onboarding_done) {
+        const role = user.role || '';
+        if (role === 'staff') {
+          navigate('/staff');
+        } else if (!user.onboarding_done) {
           navigate('/onboarding');
         } else {
           navigate('/library');

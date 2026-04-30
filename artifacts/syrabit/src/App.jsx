@@ -5,6 +5,7 @@ import { AuthProvider } from "@/context/AuthContext";
 import { LanguageProvider } from "@/context/LanguageContext";
 import { AuthGuard } from "@/components/AuthGuard";
 import { AdminGuard } from "@/components/AdminGuard";
+import { StaffGuard } from "@/components/StaffGuard";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "./queryClient";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -97,6 +98,7 @@ const PrivacyPage        = lazy(() => import("@/pages/PrivacyPage"));
 const NotFoundPage       = lazy(() => import("@/pages/NotFoundPage"));
 const AdminLoginPage     = lazy(() => import("@/pages/AdminLoginPage"));
 const AdminPage          = lazy(() => import("@/pages/AdminPage"));
+const StaffDashboard     = lazy(() => import("@/pages/staff/StaffDashboard"));
 const ExamRoutinePage    = lazy(() => import("@/pages/ExamRoutinePage"));
 const CurriculumMap      = lazy(() => import("@/pages/CurriculumMap"));
 const PaymentSuccessPage = lazy(() => import("@/pages/PaymentSuccessPage"));
@@ -349,6 +351,9 @@ export function AppRoutes() {
       {/* ── Admin routes ── */}
       <Route path="/admin/login" element={<AdminLoginPage />} />
       <Route path="/admin"       element={<AdminGuard><AdminPage /></AdminGuard>} />
+
+      {/* ── Staff routes ── */}
+      <Route path="/staff" element={<StaffGuard><StaffDashboard /></StaffGuard>} />
 
       {/* ── 404 ── */}
       <Route path="*" element={<NotFoundPage />} />

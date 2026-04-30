@@ -1749,6 +1749,9 @@ app.include_router(pyq_router)
 from routes.config import router as config_router
 app.include_router(config_router)
 
+from routes.staff_content import router as staff_content_router
+app.include_router(staff_content_router)
+
 @app.get("/healthz/ai")
 async def healthz_ai():
     """Task #678 — Railway-friendly liveness probe for Gemini.

@@ -242,6 +242,18 @@ async def get_educator_user(user=Depends(get_current_user)):
     raise HTTPException(status_code=403, detail="Educator role required")
 
 
+async def get_staff_user(user=Depends(get_current_user)):
+    """Require the caller to be a staff member (or an admin).
+
+    Staff users manage educational content (chapter notes, descriptions,
+    status flags). Admins always satisfy this dependency.
+    """
+    role = (user or {}).get("role", "")
+    if role == "staff" or role == "admin" or (user or {}).get("is_admin"):
+        return user
+    raise HTTPException(status_code=403, detail="Staff role required")
+
+
 async def get_admin_user(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(security),
     syrabit_admin_session: Optional[str] = Cookie(default=None),

@@ -137,7 +137,13 @@ async def login(data: UserLogin, request: Request, response: Response):
         raise HTTPException(status_code=403, detail="Account banned")
 
     credits_info = await get_user_credits(user)
-    role = "admin" if user.get("is_admin") else "student"
+    db_role = user.get("role", "")
+    if user.get("is_admin"):
+        role = "admin"
+    elif db_role == "staff":
+        role = "staff"
+    else:
+        role = "student"
     token = create_access_token(user["id"], role=role, plan=user.get("plan", "free"))
     refresh = create_refresh_token(user["id"])
     user_out = UserOut(

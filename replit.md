@@ -55,7 +55,7 @@ The project is built as a pnpm workspace monorepo, integrating a React + Vite fr
 - **Schema Validation:** Zod.
 - **API Codegen:** Orval.
 - **Build Tools:** esbuild, pnpm, Docker.
-- **Production Deployment:** Hybrid architecture with FastAPI on Railway, Cloudflare Worker edge proxy, and frontend on Cloudflare Pages. **Deployed 2026-04-29:** Edge worker `syrabit-edge` v`d8509bb0` (bundled, no --no-bundle), Pages frontend `d4344f1d` live at `syrabit.ai` + `www.syrabit.ai`, email worker `syrabit-email` v`111055bc`. CF Pages project name: `syrabit-analytics` (subdomain: `syrabit-zip-convert.pages.dev`). Build config fixed: `pnpm --filter @workspace/syrabit run build:client` (not full prerender build). Pages deployed via `CLOUDFLARE_ACCOUNT_ID` env var bypass for wrangler `/memberships` check. App.jsx: removed broken inline lazy imports for non-existent staff/jarvis routes.
+- **Production Deployment:** Hybrid architecture with FastAPI on Railway, Cloudflare Worker edge proxy, and frontend on Cloudflare Pages. **Deployed 2026-04-29:** Edge worker `syrabit-edge` v`d8509bb0` (bundled, no --no-bundle), Pages frontend `d4344f1d` live at `syrabit.ai` + `www.syrabit.ai`, email worker `syrabit-email` v`111055bc`. CF Pages project name: `syrabit-analytics` (subdomain: `syrabit-zip-convert.pages.dev`). Build config fixed: `pnpm --filter @workspace/syrabit run build:client` (not full prerender build). Pages deployed via `CLOUDFLARE_ACCOUNT_ID` env var bypass for wrangler `/memberships` check. App.jsx: removed broken inline lazy imports for non-existent staff/jarvis routes (staff routes now fully implemented — see Staff Portal below).
 - **Cloudflare Services (Enterprise):** Cloudflare Cache Purge API, Worker Cache API, IndexNow Integration, Vectorize (syllabus-index-v2 1024-dim + syllabus-index 768-dim legacy), D1 (syrabit-content + syrabit-content-preview), KV namespaces (RATE_LIMIT, BOT_HTML_CACHE), Smart Placement, Workers Observability (10% sampling), Workers Logpush, Enterprise WAF (security_level=high, image_resizing=on). Edge worker `wrangler.toml` upgraded Apr 2026: compatibility_date=2025-05-01, nodejs_compat_v2 flag, Vectorize bindings enabled, enterprise AI models (llama-3.3-70b-instruct-fp8-fast for chat, bge-large-en-v1.5 for embed, whisper-large-v3-turbo for STT). New endpoint: POST /api/edge/search — edge-side semantic search via Vectorize + Workers AI with no backend round-trip.
 - **Observability:** Firebase Performance Monitoring for RUM and Core Web Vitals. OpenTelemetry for distributed tracing to Cloud Trace.
 
@@ -74,6 +74,39 @@ Steps requiring extra token permissions (skip gracefully if absent):
 - **Step 3** R2: Enable R2 in Dashboard first, then re-run.
 - **Step 4** WAF: Needs `Zone > Firewall Services > Edit`.
 - **Step 6** Rate Limiting: Needs `Zone > Rate Limiting > Edit`.
+
+## Staff Portal
+
+A separate content management panel for staff users (role=`staff`) built at `/staff`.
+
+**Route:** `GET /staff` — protected by `StaffGuard` (redirects to `/login` if not staff/admin)
+
+**Login:** Staff log in through the regular `/login` page. After successful login the `LoginPage` checks `user.role === 'staff'` and redirects to `/staff` automatically.
+
+**Staff accounts (seeded 2026-04-30):**
+| Name | Email | Password |
+|---|---|---|
+| Priya Sharma | priya.sharma@syrabit.ai | Syrabit@Staff1 |
+| Rahul Bora | rahul.bora@syrabit.ai | Syrabit@Staff2 |
+| Ananya Das | ananya.das@syrabit.ai | Syrabit@Staff3 |
+| Kunal Bhuyan | kunal.bhuyan@syrabit.ai | Syrabit@Staff4 |
+| Riya Gogoi | riya.gogoi@syrabit.ai | Syrabit@Staff5 |
+
+**Backend API endpoints (require `role=staff` or `role=admin`):**
+- `GET /api/staff/content/boards` — list boards
+- `GET /api/staff/content/classes` — list classes
+- `GET /api/staff/content/streams` — list streams
+- `GET /api/staff/content/subjects` — list all subjects (including drafts)
+- `GET /api/staff/content/chapters/{subject_id}` — list chapters in a subject
+- `GET /api/staff/content/chapter/{chapter_id}` — get chapter detail
+- `PATCH /api/staff/content/chapter/{chapter_id}` — update chapter (fields: title, description, content, status only)
+
+**Frontend files:**
+- `artifacts/syrabit/src/components/StaffGuard.jsx` — route guard
+- `artifacts/syrabit/src/pages/staff/StaffDashboard.jsx` — full dashboard
+- `artifacts/syrabit-backend/routes/staff_content.py` — API routes
+- `artifacts/syrabit-backend/auth_deps.py` — `get_staff_user()` dependency
+- `artifacts/syrabit-backend/scripts/seed_staff_users.py` — seed script
 
 ## GitHub Sync Scripts
 
