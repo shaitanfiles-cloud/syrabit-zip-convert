@@ -402,6 +402,7 @@ async def admin_update_user_status(user_id: str, data: UserStatusUpdate, admin: 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     await supa_update_user(user_id, {"status": data.status})
+    _redis_invalidate_session(user_id)
     return {"message": "Updated"}
 
 
