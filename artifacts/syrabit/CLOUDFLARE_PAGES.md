@@ -465,8 +465,23 @@ Prior to this commit, the most recent legacy-pipeline production attempt was `d5
 | 4b | **Mirage** | Was `off` at the start of this review. **Changed to `on`** via `PATCH /zones/:id/settings/mirage` (`{"value":"on"}`) — API confirmed `mirage: on`. Mirage improves image delivery on mobile connections (scaled-down images, deferred off-screen loads). Core Web Vitals monitoring follow-up tracked as #77. | ⚠ Changed — Mirage `off` → `on` applied during this review |
 | 5 | **Argo Smart Routing** | `on` — confirmed via `/argo/smart_routing`. | ✅ Confirmed — Smart Routing on; no changes needed |
 | 6 | **Tiered Caching** | `on` — confirmed via `/argo/tiered_caching`. | ✅ Confirmed — Tiered Cache on; no changes needed |
-| 7 | **HTTP/3 (QUIC)** | `on` — confirmed via `/zones/:id/settings`. | ✅ Confirmed — HTTP/3 on; no changes needed |
-| 8 | **Early Hints** | `on` — confirmed via `/zones/:id/settings`. | ✅ Confirmed — Early Hints on; no changes needed |
+| 7 | **HTTP/3 (QUIC)** | `on` — confirmed via `/zones/:id/settings`. Run `bash artifacts/syrabit/scripts/check-http3-early-hints.sh` to re-verify programmatically. | ✅ Confirmed — HTTP/3 on; no changes needed |
+| 8 | **Early Hints** | `on` — confirmed via `/zones/:id/settings`. Run `bash artifacts/syrabit/scripts/check-http3-early-hints.sh` to re-verify programmatically. | ✅ Confirmed — Early Hints on; no changes needed |
+
+### Automated HTTP/3 + Early Hints check (items 7 & 8)
+
+Items 7 and 8 can be verified programmatically without touching the dashboard. The script at `artifacts/syrabit/scripts/check-http3-early-hints.sh` issues request probes to `https://syrabit.ai/` and asserts:
+
+1. **HTTP/3** — HEAD probe via `curl -sI --http3`; falls back to inspecting the `alt-svc: h3` advertisement header if curl was built without QUIC support.
+2. **Early Hints** — GET probe via `curl -D -` to capture the `103 Early Hints` intermediate response that Cloudflare sends before the `200` (HEAD requests do not trigger 103 on Cloudflare); falls back in order to an explicit `Early-Hints:` response header, then to a `Link: ...; rel=preload` header.
+
+The script exits **0** when both pass and **non-zero** when either fails, making it safe to run in CI:
+
+```sh
+bash artifacts/syrabit/scripts/check-http3-early-hints.sh
+```
+
+Run this after any Cloudflare Speed/Optimization dashboard change to confirm neither setting regressed silently. For best results use a curl build with QUIC/HTTP3 support (e.g. `brew install curl` on macOS, or the `curl` formula in Homebrew which ships with ngtcp2); in environments without QUIC-enabled curl the script falls back to `alt-svc` header inspection, which is a reliable proxy.
 
 ### Changes made during this review
 
