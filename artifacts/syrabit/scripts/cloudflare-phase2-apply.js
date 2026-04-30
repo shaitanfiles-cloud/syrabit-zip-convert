@@ -196,6 +196,36 @@ async function ensureHealthcheck() {
   return null;
 }
 
+// ── Webhook destination helper ────────────────────────────────────────────
+// Cloudflare alerting policy mechanisms reference webhook destinations by
+// their CF-assigned UUID, not by the raw webhook URL. This function ensures
+// the Slack webhook URL is registered as a CF webhook destination and returns
+// the destination UUID to use in the policy's `webhooks` mechanism array.
+async function ensureSlackWebhookDestination() {
+  if (!SLACK_WEBHOOK) return null;
+
+  const list = await cfGet(`/accounts/${ACCOUNT_ID}/alerting/v3/destinations/webhooks`);
+  if (!list.success) {
+    fail('Slack webhook destination list', JSON.stringify(list.errors));
+    return null;
+  }
+  const existing = list.result.find(w => w.name === 'syrabit-slack-alerts');
+  if (existing) {
+    ok('Slack webhook destination', `id=${existing.id}`);
+    return existing.id;
+  }
+  const create = await cfReq('POST', `/accounts/${ACCOUNT_ID}/alerting/v3/destinations/webhooks`, {
+    name: 'syrabit-slack-alerts',
+    url:  SLACK_WEBHOOK,
+  });
+  if (create.success) {
+    ok('Slack webhook destination created', `id=${create.result.id}`);
+    return create.result.id;
+  }
+  fail('Slack webhook destination', JSON.stringify(create.errors));
+  return null;
+}
+
 // ── Step 4: Notification policy ───────────────────────────────────────────
 async function ensureNotificationPolicy(healthcheckId) {
   console.log('\nStep 4: Healthcheck notification policy');
@@ -223,9 +253,13 @@ async function ensureNotificationPolicy(healthcheckId) {
     return;
   }
 
+  // Register Slack webhook as a CF destination first (returns UUID, not raw URL)
+  const slackDestId = await ensureSlackWebhookDestination();
+
   const mechanisms = {
     email: [{ id: ADMIN_EMAIL }],
-    ...(SLACK_WEBHOOK ? { slack: [{ id: SLACK_WEBHOOK }] } : {}),
+    // CF alerting webhooks mechanism expects { id: <destination UUID> }, not raw URL.
+    ...(slackDestId ? { webhooks: [{ id: slackDestId }] } : {}),
   };
 
   const create = await cfReq('POST', `/accounts/${ACCOUNT_ID}/alerting/v3/policies`, {
