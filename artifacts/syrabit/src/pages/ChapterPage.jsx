@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import MarkdownRenderer from '@/components/MarkdownRenderer';
@@ -1204,13 +1205,15 @@ export default function ChapterPage() {
             >
               {sharing ? <svg className="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> : <Share2 size={14} />} {contentLang === 'as' ? 'শ্বেয়াৰ' : 'Share'}
             </button>
-            <button
-              onClick={() => setQuizOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-muted-foreground transition-all hover:text-foreground hover:bg-accent/30 active:scale-95"
-              style={{ border: '1px solid hsl(var(--border) / 0.3)' }}
-            >
-              <HelpCircle size={14} /> {contentLang === 'as' ? 'কুইজ' : 'Quiz Me'}
-            </button>
+            {!isQuestionPaper && (
+              <button
+                onClick={() => setQuizOpen(true)}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-muted-foreground transition-all hover:text-foreground hover:bg-accent/30 active:scale-95"
+                style={{ border: '1px solid hsl(var(--border) / 0.3)' }}
+              >
+                <HelpCircle size={14} /> {contentLang === 'as' ? 'কুইজ' : 'Quiz Me'}
+              </button>
+            )}
             {isQuestionPaper ? (
               <span className="ml-auto px-3 py-1 rounded-lg text-xs font-bold bg-amber-100 text-amber-700 border border-amber-200">
                 Question Paper
@@ -1378,13 +1381,16 @@ export default function ChapterPage() {
         chapterRef={`${board}/${classSlug}/${subjectSlug}/${chapterSlug}`}
         subjectName={subjectName}
       />
-      <QuizModal
-        open={quizOpen} onClose={() => setQuizOpen(false)}
-        topic={chapterTitle} subject_name={subjectName}
-        chapter_ref={`${board}/${classSlug}/${subjectSlug}/${chapterSlug}`}
-        response_lang={contentLang}
-        count={7}
-      />
+      {!isQuestionPaper && typeof document !== 'undefined' && createPortal(
+        <QuizModal
+          open={quizOpen} onClose={() => setQuizOpen(false)}
+          topic={chapterTitle} subject_name={subjectName}
+          chapter_ref={`${board}/${classSlug}/${subjectSlug}/${chapterSlug}`}
+          response_lang={contentLang}
+          count={7}
+        />,
+        document.body,
+      )}
     </div>
   );
 }
