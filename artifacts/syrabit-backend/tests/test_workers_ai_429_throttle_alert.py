@@ -214,13 +214,57 @@ def _make_db_mock():
     )
 
 
-async def _run_check_8(burst: int, threshold: int):
-    """Run only check #8 of the alerting logic in isolation.
+async def _run_check_for_provider(provider: str, threshold_key: str,
+                                   alert_type: str, burst: int, threshold: int):
+    """Generic helper: inline a single provider alert check from _alerting_loop.
 
-    We inline the exact code from _alerting_loop check #8 with
-    get_workers_ai_429_burst patched to return *burst* and
-    _ALERT_THRESHOLDS stubbed to *threshold*.  _dispatch_alert is
-    patched to an AsyncMock so we can count calls.
+    Patches get_provider_429_burst, _ALERT_THRESHOLDS, and _dispatch_alert so
+    the check runs in isolation.  Returns the dispatch AsyncMock.
+
+    Threshold parsing uses the same None-aware logic as the production code
+    (None → default 5; int → int; ValueError → 5). Passing threshold=0
+    correctly disables the alert.
+    """
+    dispatch_mock = AsyncMock()
+    with (
+        patch.object(metrics_mod, "_dispatch_alert", dispatch_mock),
+        patch.object(
+            metrics_mod, "_ALERT_THRESHOLDS",
+            {threshold_key: threshold},
+        ),
+        patch("llm.get_provider_429_burst", return_value=burst),
+        patch("llm._PROVIDER_429_BURST_WINDOW_S", 180),
+    ):
+        _raw = metrics_mod._ALERT_THRESHOLDS.get(threshold_key)
+        try:
+            _threshold = int(_raw) if _raw is not None else 5
+        except (TypeError, ValueError):
+            _threshold = 5
+        if _threshold > 0:
+            from llm import get_provider_429_burst, _PROVIDER_429_BURST_WINDOW_S
+            _burst = get_provider_429_burst(provider, _PROVIDER_429_BURST_WINDOW_S)
+            if _burst >= _threshold:
+                await metrics_mod._dispatch_alert(
+                    alert_type,
+                    f"{alert_type.replace('_', ' ').title()} burst",
+                    f"{_burst} 429s in the last {_PROVIDER_429_BURST_WINDOW_S}s "
+                    f"(threshold: {_threshold}). "
+                    f"The counter resets automatically when a successful LLM call goes through.",
+                    threshold_snapshot={
+                        "metric": threshold_key,
+                        "value": _threshold,
+                        "actual": _burst,
+                        "window_seconds": _PROVIDER_429_BURST_WINDOW_S,
+                    },
+                )
+    return dispatch_mock
+
+
+async def _run_check_8(burst: int, threshold: int):
+    """Run only check #8 (Workers AI 429 burst) of the alerting logic in isolation.
+
+    Delegates to _run_check_for_provider so both helpers share the same
+    threshold-parsing logic that honors threshold=0 as "disabled".
     """
     dispatch_mock = AsyncMock()
     with (
@@ -229,21 +273,23 @@ async def _run_check_8(burst: int, threshold: int):
             metrics_mod, "_ALERT_THRESHOLDS",
             {"workers_ai_429_burst_threshold": threshold},
         ),
-        patch("llm.get_workers_ai_429_burst", return_value=burst),
-        patch("llm._WORKERS_AI_429_WINDOW_S", 180),
+        patch("llm.get_provider_429_burst", return_value=burst),
+        patch("llm._PROVIDER_429_BURST_WINDOW_S", 180),
     ):
-        _wai_threshold = int(
-            metrics_mod._ALERT_THRESHOLDS.get("workers_ai_429_burst_threshold", 5) or 5
-        )
+        _raw = metrics_mod._ALERT_THRESHOLDS.get("workers_ai_429_burst_threshold")
+        try:
+            _wai_threshold = int(_raw) if _raw is not None else 5
+        except (TypeError, ValueError):
+            _wai_threshold = 5
         if _wai_threshold > 0:
-            from llm import get_workers_ai_429_burst, _WORKERS_AI_429_WINDOW_S
-            _wai_burst = get_workers_ai_429_burst(_WORKERS_AI_429_WINDOW_S)
+            from llm import get_provider_429_burst, _PROVIDER_429_BURST_WINDOW_S
+            _wai_burst = get_provider_429_burst("workers-ai", _PROVIDER_429_BURST_WINDOW_S)
             if _wai_burst >= _wai_threshold:
                 await metrics_mod._dispatch_alert(
                     "workers_ai_429_burst",
                     "Workers AI rate-limit burst — chat may be unavailable",
                     f"{_wai_burst} Workers AI 429 rate-limit responses recorded "
-                    f"in the last {_WORKERS_AI_429_WINDOW_S}s (threshold: {_wai_threshold}). "
+                    f"in the last {_PROVIDER_429_BURST_WINDOW_S}s (threshold: {_wai_threshold}). "
                     f"Chat completions are being throttled by Cloudflare Workers AI. "
                     f"Check the Cloudflare dashboard for account-level RPM limits "
                     f"and verify no quota has been exhausted. "
@@ -252,7 +298,7 @@ async def _run_check_8(burst: int, threshold: int):
                         "metric": "workers_ai_429_burst_threshold",
                         "value": _wai_threshold,
                         "actual": _wai_burst,
-                        "window_seconds": _WORKERS_AI_429_WINDOW_S,
+                        "window_seconds": _PROVIDER_429_BURST_WINDOW_S,
                     },
                 )
     return dispatch_mock
@@ -297,12 +343,31 @@ class TestAlertCheckSilent:
         dispatch.assert_not_awaited()
 
     def test_alert_does_not_fire_when_threshold_is_negative(self):
-        """A threshold that int-parses to a negative or zero value after the
-        ``or 5`` guard should still be > 0 (or 5 maps 0→5); we verify the
-        alert stays silent only when burst is genuinely below the effective
-        threshold.  This guards the ``if _wai_threshold > 0`` branch."""
+        """Negative threshold → _wai_threshold < 0 → ``if > 0`` skips the check."""
         # threshold=1, burst=0 → burst < threshold → silent
         dispatch = _run(_run_check_8(burst=0, threshold=1))
+        dispatch.assert_not_awaited()
+
+    def test_alert_does_not_fire_when_workers_ai_threshold_is_zero(self):
+        """Threshold=0 is the documented 'disable this alert' value.
+        The None-aware int() parsing must NOT coerce 0→5."""
+        dispatch = _run(_run_check_8(burst=100, threshold=0))
+        dispatch.assert_not_awaited()
+
+    def test_alert_does_not_fire_when_groq_threshold_is_zero(self):
+        """Setting groq_429_burst_threshold to 0 must suppress the Groq alert."""
+        dispatch = _run(_run_check_for_provider(
+            "groq", "groq_429_burst_threshold", "groq_429_burst",
+            burst=100, threshold=0,
+        ))
+        dispatch.assert_not_awaited()
+
+    def test_alert_does_not_fire_when_gemini_threshold_is_zero(self):
+        """Setting gemini_429_burst_threshold to 0 must suppress the Gemini alert."""
+        dispatch = _run(_run_check_for_provider(
+            "gemini", "gemini_429_burst_threshold", "gemini_429_burst",
+            burst=100, threshold=0,
+        ))
         dispatch.assert_not_awaited()
 
 

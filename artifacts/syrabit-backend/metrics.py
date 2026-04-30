@@ -2262,9 +2262,11 @@ async def _alerting_loop():
             # on every 429 hit, so an ongoing outage stays counted.
             # Counter is cleared by mark_ok() on the next successful call.
             try:
-                _wai_threshold = int(
-                    _ALERT_THRESHOLDS.get("workers_ai_429_burst_threshold", 5) or 5
-                )
+                _wai_raw = _ALERT_THRESHOLDS.get("workers_ai_429_burst_threshold")
+                try:
+                    _wai_threshold = int(_wai_raw) if _wai_raw is not None else 5
+                except (TypeError, ValueError):
+                    _wai_threshold = 5
                 if _wai_threshold > 0:
                     from llm import get_provider_429_burst, _PROVIDER_429_BURST_WINDOW_S
                     _wai_burst = get_provider_429_burst("workers-ai", _PROVIDER_429_BURST_WINDOW_S)
@@ -2292,9 +2294,11 @@ async def _alerting_loop():
             # Same semantics as check #8.  Groq has a 30 RPM free-tier cap
             # so 5 hits in 180 s means it is fully throttled.
             try:
-                _groq_threshold = int(
-                    _ALERT_THRESHOLDS.get("groq_429_burst_threshold", 5) or 5
-                )
+                _groq_raw = _ALERT_THRESHOLDS.get("groq_429_burst_threshold")
+                try:
+                    _groq_threshold = int(_groq_raw) if _groq_raw is not None else 5
+                except (TypeError, ValueError):
+                    _groq_threshold = 5
                 if _groq_threshold > 0:
                     from llm import get_provider_429_burst, _PROVIDER_429_BURST_WINDOW_S
                     _groq_burst = get_provider_429_burst("groq", _PROVIDER_429_BURST_WINDOW_S)
@@ -2321,9 +2325,11 @@ async def _alerting_loop():
             # Same semantics.  Gemini's paid quota is high so a burst here
             # usually indicates account-level quota exhaustion.
             try:
-                _gemini_threshold = int(
-                    _ALERT_THRESHOLDS.get("gemini_429_burst_threshold", 5) or 5
-                )
+                _gemini_raw = _ALERT_THRESHOLDS.get("gemini_429_burst_threshold")
+                try:
+                    _gemini_threshold = int(_gemini_raw) if _gemini_raw is not None else 5
+                except (TypeError, ValueError):
+                    _gemini_threshold = 5
                 if _gemini_threshold > 0:
                     from llm import get_provider_429_burst, _PROVIDER_429_BURST_WINDOW_S
                     _gemini_burst = get_provider_429_burst("gemini", _PROVIDER_429_BURST_WINDOW_S)
