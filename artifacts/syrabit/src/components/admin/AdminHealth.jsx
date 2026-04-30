@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi, Copy, Check, Users, Activity, MessageSquare, TrendingUp, DollarSign, BarChart2, RotateCw, Clock, Undo2, Star, ExternalLink } from 'lucide-react';
 import CronHealthPill, { SlackConfigBadge } from './CronHealthPill';
 import CfWafDriftCronPill from './CfWafDriftCronPill';
@@ -647,6 +647,29 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   const [waiThrottle, setWaiThrottle] = useState(null);
   // Task #93 — embed 429 cooldown stats from GET /admin/llm/pool-stats.
   const [embedBurst, setEmbedBurst] = useState(null);
+  // Task #98 — live countdown display for the embed cooldown timer.
+  const [embedCooldownDisplay, setEmbedCooldownDisplay] = useState(0);
+  const embedCooldownRef = useRef(null);
+  useEffect(() => {
+    if (embedCooldownRef.current) {
+      clearInterval(embedCooldownRef.current);
+      embedCooldownRef.current = null;
+    }
+    if (embedBurst?.cooldown) {
+      setEmbedCooldownDisplay(Math.ceil(embedBurst.remainingS));
+      embedCooldownRef.current = setInterval(() => {
+        setEmbedCooldownDisplay(prev => Math.max(0, prev - 1));
+      }, 1000);
+    } else {
+      setEmbedCooldownDisplay(0);
+    }
+    return () => {
+      if (embedCooldownRef.current) {
+        clearInterval(embedCooldownRef.current);
+        embedCooldownRef.current = null;
+      }
+    };
+  }, [embedBurst]);
   const loadWorkersAi = useCallback(() => {
     Promise.allSettled([
       axios.get(`${API_BASE}/admin/workers-ai/status`, {
@@ -2197,7 +2220,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                             <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-red-100 border border-red-200">
                               <AlertTriangle size={14} className="text-red-600 shrink-0" />
                               <span className="text-xs font-semibold text-red-700">
-                                Embed cooldown active — Workers AI embed skipped for {Math.ceil(remainingS)}s
+                                Embed cooldown active — Workers AI embed skipped for {embedCooldownDisplay}s
                                 ({burst} of {threshold} hits in last {durationS}s)
                               </span>
                             </div>
@@ -2230,7 +2253,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                               <div className="rounded-lg p-2.5 bg-white/70 border border-gray-100">
                                 <div className="text-[10px] uppercase text-gray-400 font-semibold mb-0.5">Cooldown clears in</div>
                                 <div className={`text-base font-bold tabular-nums ${cooldown ? 'text-red-600' : 'text-gray-400'}`}>
-                                  {cooldown ? `${Math.ceil(remainingS)} s` : '—'}
+                                  {cooldown ? `${embedCooldownDisplay} s` : '—'}
                                 </div>
                               </div>
                               <div className="rounded-lg p-2.5 bg-white/70 border border-gray-100">
