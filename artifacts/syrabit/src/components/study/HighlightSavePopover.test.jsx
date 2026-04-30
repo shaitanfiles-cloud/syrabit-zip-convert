@@ -112,3 +112,39 @@ describe('HighlightSavePopover — hideQuiz prop', () => {
     expect(screen.queryByText(/save/i)).toBeNull();
   });
 });
+
+describe('HighlightSavePopover — edge cases', () => {
+  it('does not show the popover for text of exactly 5 chars (below minimum)', async () => {
+    render(<HighlightSavePopover />);
+
+    await triggerSelectionChange('abcde');
+
+    expect(screen.queryByText(/save/i)).toBeNull();
+    expect(screen.queryByText(/quiz me/i)).toBeNull();
+    expect(document.querySelector('.fixed.z-\\[110\\]')).toBeNull();
+  });
+
+  it('does not show the popover for text of exactly 4001 chars (above maximum)', async () => {
+    render(<HighlightSavePopover />);
+
+    await triggerSelectionChange('a'.repeat(4001));
+
+    expect(screen.queryByText(/save/i)).toBeNull();
+    expect(screen.queryByText(/quiz me/i)).toBeNull();
+    expect(document.querySelector('.fixed.z-\\[110\\]')).toBeNull();
+  });
+
+  it('does not show the popover when the selection is collapsed', async () => {
+    render(<HighlightSavePopover />);
+
+    getSelectionSpy.mockReturnValue({ isCollapsed: true, toString: () => 'enough text here', getRangeAt: () => ({}) });
+    await act(async () => {
+      document.dispatchEvent(new Event('selectionchange'));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(screen.queryByText(/save/i)).toBeNull();
+    expect(screen.queryByText(/quiz me/i)).toBeNull();
+    expect(document.querySelector('.fixed.z-\\[110\\]')).toBeNull();
+  });
+});
