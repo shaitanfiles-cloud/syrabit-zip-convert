@@ -1,1 +1,0 @@
-import{j as o}from"./react-dom-BCtgtKsU.js";import{c as s}from"./utils-45JRrIRe.js";function m({className:r,...e}){return o.jsx("div",{className:s("animate-pulse rounded-md bg-gray-900/10",r),...e})}export{m as S};
