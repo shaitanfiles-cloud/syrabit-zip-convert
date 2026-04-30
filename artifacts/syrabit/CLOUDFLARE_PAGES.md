@@ -598,6 +598,30 @@ Observed production deployment logs at 11:21–12:12 UTC on 2026-04-30, which co
 | Current code default | **3 000** (Standard plan, unified billing) | `llm.py` `_POOL_RPM_LIMITS` |
 | Peak `rpm_used` approaching 30 RPM? | No | no throttle warnings or 429s seen |
 
+**Pool evidence — startup log extract (2026-04-30T11:21:03 UTC)**
+
+Tuple format: `(provider, model, max_con, rpm_limit)`
+
+```
+SLM SmartKeyPool active slots (chat pool):
+  [('groq', 'meta-llama/llama-4-scout-17b-16e-instruct', 4, 30),
+   ('workers-ai', '@cf/meta/llama-3.3-70b-instruct-fp8-fast', 6, 30),   ← deployed default
+   ('cerebras', 'llama3.1-8b', 4, 30),
+   ('openrouter', 'meta-llama/llama-4-scout', 4, 60)]
+
+SLM SmartKeyPool active slots (content pool):
+  [('workers-ai', '@cf/openai/gpt-oss-120b', 4, 30),                    ← deployed default
+   ('gemini', 'gemini-2.5-flash', 6, 600),
+   ('cerebras', 'qwen-3-235b-a22b-instruct-2507', 4, 30)]
+```
+
+The `rpm_limit=30` confirms the deployed backend was running the pre-Standard-plan code
+default. After the next Railway re-deploy (which picks up `llm.py` with `default=3000`),
+all Workers AI slots will show `rpm_limit=3000`. **At that point, confirm that no**
+**`WORKERS_AI_RPM_LIMIT` env var is set in the Railway service settings — if one exists**
+**at value 30 or 150, delete it.** A stale low override would take precedence over the code
+default and silently cap Workers AI at a fraction of its Standard-plan budget.
+
 **Workers AI embedding** (`@cf/baai/bge-large-en-v1.5`):
 | Signal | Value |
 |--------|-------|
