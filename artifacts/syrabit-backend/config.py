@@ -625,7 +625,7 @@ SUPABASE_ANON_KEY    = os.environ.get('SUPABASE_ANON_KEY', '') or os.environ.get
 
 # ── Cookie security (set SECURE_COOKIES=false in dev to allow HTTP) ───────────
 SECURE_COOKIES  = os.environ.get('SECURE_COOKIES', 'true').lower() not in ('false', '0', 'no')
-COOKIE_SAMESITE = "none" if SECURE_COOKIES else "lax"
+COOKIE_SAMESITE = "lax"
 COOKIE_DOMAIN   = os.environ.get('COOKIE_DOMAIN', '').strip() or None
 
 _cors_raw = os.environ.get('CORS_ORIGINS', '').strip().strip('"').strip("'")
@@ -675,7 +675,7 @@ if _apprunner_url:
     if _ar_origin not in CORS_ORIGINS:
         CORS_ORIGINS.append(_ar_origin)
 
-CORS_ORIGIN_REGEX = r"^https://[a-z0-9-]+(\.[a-z0-9-]+)*\.(awsapprunner\.com|up\.railway\.app|railway\.app|pages\.dev)$"
+CORS_ORIGIN_REGEX = None
 
 # ── Admin accounts ────────────────────────────────────────────────────────────
 # Admin accounts loaded from environment (no credentials in source code).
