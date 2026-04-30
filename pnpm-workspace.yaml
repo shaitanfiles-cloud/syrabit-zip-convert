@@ -127,4 +127,4 @@ overrides:
   rollup>@rollup/rollup-win32-x64-gnu: '-'
   rollup>@rollup/rollup-win32-x64-msvc: '-'
   tar: ^7.5.7
-  undici: 8.1.0
+  undici: 7.25.0
