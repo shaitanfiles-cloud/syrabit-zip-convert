@@ -2252,7 +2252,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                               </div>
                               <div className="rounded-lg p-2.5 bg-white/70 border border-gray-100">
                                 <div className="text-[10px] uppercase text-gray-400 font-semibold mb-0.5">Cooldown clears in</div>
-                                <div className={`text-base font-bold tabular-nums ${cooldown ? 'text-red-600' : 'text-gray-400'}`}>
+                                <div className={`text-base font-bold tabular-nums ${cooldown ? 'text-red-600' : 'text-gray-400'} ${cooldown && embedCooldownDisplay <= 10 ? 'animate-pulse' : ''}`}>
                                   {cooldown ? `${embedCooldownDisplay} s` : '—'}
                                 </div>
                               </div>
