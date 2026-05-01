@@ -6,8 +6,9 @@
  * triggers a redirect to Google → Supabase → back to this origin.
  * After the redirect, AuthContext.onAuthStateChange picks up the SIGNED_IN
  * event, exchanges the Supabase token at /api/auth/supabase-session, and
- * sets the user.  Pages (LoginPage, SignupPage) that render this button
- * listen for the resulting user state and handle post-login navigation.
+ * sets the user.  The root-level GoogleOAuthCallbackEffect (Task #169)
+ * reads the intent from sessionStorage and handles post-login navigation
+ * for any page that renders this button, not just LoginPage/SignupPage.
  *
  * Props:
  *   text     — 'signin_with' (default) | 'signup_with'
