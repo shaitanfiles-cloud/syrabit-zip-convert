@@ -352,6 +352,16 @@ export default function SubjectLandingPage() {
                       <ChevronRight size={16} className="text-muted-foreground/40 group-hover/ch:text-violet-600 transition-colors" />
                     </div>
                   </Link>
+                  {ch.id && (
+                    <div className="border-t border-border/30 px-5 py-2">
+                      <Link
+                        to={`/chat?subject=${subject.id || subject._id || ''}&chapter=${ch.id}`}
+                        className="flex items-center gap-1.5 text-xs text-violet-600 hover:text-violet-700 transition-colors"
+                      >
+                        <Sparkles size={11} /> Ask AI about this chapter
+                      </Link>
+                    </div>
+                  )}
                 </div>
               );
 

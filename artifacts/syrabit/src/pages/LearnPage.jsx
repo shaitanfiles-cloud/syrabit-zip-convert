@@ -599,7 +599,7 @@ export default function LearnPage() {
                 related={related}
                 subjectName={doc?.subject_name || sub?.name || ''}
                 subjectPath={subjectBasePath}
-                chatHref={doc?.subject_id ? `/chat?subject=${doc.subject_id}` : '/chat'}
+                chatHref={doc?.subject_id ? `/chat?subject=${doc.subject_id}${doc?.linked_chapter_id ? `&chapter=${doc.linked_chapter_id}` : ''}` : '/chat'}
               />
             );
           })()}
