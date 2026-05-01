@@ -880,7 +880,7 @@ function renderReport() {
     generated_at: new Date().toISOString(),
     zone_id:      ZONE_ID,
     account_id:   ACCOUNT_ID,
-    summary:      { pass: pass.length, fail: fail.length, warn: warn.length, skip: skip.length, total: items.length },
+    summary:      { pass: pass.length, fail: fail.length, warn: warn.length, skip: skip.length, plan_required: planGated.length, total: items.length },
     items,
   };
 

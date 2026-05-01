@@ -5,6 +5,7 @@ import CfWafDriftCronPill from './CfWafDriftCronPill';
 import TrustpilotRefreshCronPill from './TrustpilotRefreshCronPill';
 import EdgeProxyDeployCronPill from './EdgeProxyDeployCronPill';
 import UnifiedLogsCfPullCronPill from './UnifiedLogsCfPullCronPill';
+import CfAuditCard from './CfAuditCard';
 import { toast } from 'sonner';
 import AdminQuickLinks from './AdminQuickLinks';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar, LineChart, Line } from 'recharts';
@@ -293,6 +294,24 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       .finally(() => setUnifiedLogsCfPullCronLoading(false));
   }, [adminToken]);
 
+  // Task #133 — Cloudflare weekly audit card.  Fetches the latest
+  // cloudflare-weekly-audit.yml run via GitHub API and, when available,
+  // downloads and parses the cf-audit-report artifact ZIP to show
+  // per-status item counts (PASS / WARN / FAIL / PLAN_REQUIRED).
+  // Endpoint: /admin/health/cf-audit/latest.
+  const [cfAuditData, setCfAuditData] = useState(null);
+  const [cfAuditLoading, setCfAuditLoading] = useState(false);
+
+  const loadCfAudit = useCallback(() => {
+    setCfAuditLoading(true);
+    axios.get(`${API_BASE}/admin/health/cf-audit/latest`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setCfAuditData(r.data))
+      .catch(() => setCfAuditData({ _error: true, status: 'unknown', error: 'Request failed' }))
+      .finally(() => setCfAuditLoading(false));
+  }, [adminToken]);
+
   // Task #902 — alerter-state lock-doc snapshots for the three cron
   // pills above. The pill data answers "is the workflow currently
   // red?"; the alert-state data answers "have we paged on-call about
@@ -566,6 +585,12 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     // under the SlackConfigBadge needs the event count up front to
     // decide whether to render at all.
     loadSlackWebhookMissingAlertHistories();
+    // Task #133 — Cloudflare weekly audit card.  The run changes at
+    // most once a week, but we still poll on the 60s cadence so a
+    // manual re-trigger shows up without a page reload.  The backend
+    // Redis-caches the artifact summary per run_id for 4 hours so the
+    // artifact ZIP is not re-downloaded on every poll.
+    loadCfAudit();
     const id = setInterval(() => {
       loadTpJsonldReport();
       loadTpJsonldHistory();
@@ -580,6 +605,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       loadUnifiedLogsCfPullCronAlertState();
       loadSlackWebhookMissingAlertStates();
       loadSlackWebhookMissingAlertHistories();
+      loadCfAudit();
     }, 60000);
     return () => clearInterval(id);
   }, [adminToken, loadTpJsonldReport, loadTpJsonldHistory,
@@ -588,7 +614,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       loadEdgeProxyDeployCronAlertState, loadCfDriftCronAlertState,
       loadTpCronAlertState, loadUnifiedLogsCfPullCronAlertState,
       loadSlackWebhookMissingAlertStates,
-      loadSlackWebhookMissingAlertHistories]);
+      loadSlackWebhookMissingAlertHistories, loadCfAudit]);
 
   // Task #609 — managed AI response cache stats + admin purge controls.
   const [aiCacheStats, setAiCacheStats] = useState(null);
@@ -2848,6 +2874,28 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           slackMissingAlertState={slackWebhookMissingAlertStates['UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK']}
           slackMissingAlertHistory={slackWebhookMissingAlertHistories['UNIFIED_LOGS_CF_PULL_SLACK_WEBHOOK']}
           onSnoozeSlackMissing={snoozeSlackWebhookMissing}
+        />
+        </SectionErrorBoundary>
+
+        <SectionErrorBoundary name="Cloudflare Audit Card">
+        {/*
+          Task #133 — surface the latest cloudflare-weekly-audit.yml run
+          (19-item full audit, Phases 1–6) on the admin health panel so
+          on-call sees the pass/warn/fail breakdown without navigating
+          to GitHub Actions.  The card fetches via
+          /admin/health/cf-audit/latest which:
+            • queries GitHub API for the latest run conclusion + age,
+            • downloads the cf-audit-report artifact ZIP,
+            • parses the embedded JSON for PASS/WARN/FAIL/PLAN_REQUIRED counts,
+            • caches the summary in Redis per run_id for 4 hours.
+          The card turns amber ("stale") when the last run is >8 days old
+          and red when conclusion=failure.  Clicking "View run" deep-links
+          to the specific GitHub Actions run.
+        */}
+        <CfAuditCard
+          data={cfAuditData}
+          loading={cfAuditLoading}
+          onRefresh={loadCfAudit}
         />
         </SectionErrorBoundary>
 
