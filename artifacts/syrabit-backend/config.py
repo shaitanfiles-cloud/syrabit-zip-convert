@@ -300,6 +300,10 @@ _CF_PROVIDER_SLUGS = {
     "sarvam":      "custom-sarvam",
     "cerebras":    "cerebras/v1",
     "openrouter":  "openrouter/v1",
+    # New providers routed through CF AI Gateway
+    "cohere":      "cohere/v1",      # Embeddings/RAG — embed-multilingual-v3.0 (1024-dim)
+    "cartesia":    "cartesia/v1",    # Voice TTS — Sonic-2 model
+    "baseten":     "baseten/v1",     # Fine-tuned EdTech LLMs — OpenAI-compatible endpoint
 }
 
 _DIRECT_PROVIDER_URLS = {
@@ -312,6 +316,10 @@ _DIRECT_PROVIDER_URLS = {
     "sarvam":      "https://api.sarvam.ai",
     "cerebras":    "https://api.cerebras.ai/v1",
     "openrouter":  "https://openrouter.ai/api/v1",
+    # Fallback direct URLs (used when CF gateway is down)
+    "cohere":      "https://api.cohere.com/v1",
+    "cartesia":    "https://api.cartesia.ai/v1",
+    "baseten":     "https://api.baseten.co/v1",   # Baseten universal OpenAI-compatible gateway
 }
 
 _cf_gw_healthy = True
@@ -421,6 +429,28 @@ _SARVAM_LLM_KEY_3 = os.environ.get('SARVAM_API_KEY_3', '').strip()
 _CEREBRAS_KEY = os.environ.get('CEREBRAS_API_KEY', '').strip()
 _OPENROUTER_KEY = os.environ.get('OPENROUTER_API_KEY', '').strip()
 
+# ── New AI provider keys (Cohere, Cartesia, Baseten) ─────────────────────────
+# All three route through CF AI Gateway (BYOK) so local keys are optional
+# once the keys are registered in the CF dashboard. When gateway is enabled
+# and the local env var is missing, BYOK_PLACEHOLDER is substituted so the
+# provider module activates and CF injects the real key on every request.
+#
+# Baseten model selection: BASETEN_MODEL_ID is the deployment ID shown in
+# the Baseten dashboard (e.g. "xyz123abc"). Required to use Baseten even in
+# BYOK mode — it is sent as the "model" field in the chat/completions body.
+_COHERE_KEY    = os.environ.get('COHERE_API_KEY',    '').strip()
+_CARTESIA_KEY  = os.environ.get('CARTESIA_API_KEY',  '').strip()
+_BASETEN_KEY   = os.environ.get('BASETEN_API_KEY',   '').strip()
+BASETEN_MODEL_ID = os.environ.get('BASETEN_MODEL_ID', '').strip()
+
+# Cohere embed config
+COHERE_EMBED_MODEL   = os.environ.get('COHERE_EMBED_MODEL',   'embed-multilingual-v3.0').strip() or 'embed-multilingual-v3.0'
+COHERE_EMBED_PRIMARY = os.environ.get('COHERE_EMBED_PRIMARY', '').strip().lower() in ('1', 'true', 'yes')
+
+# Cartesia voice config
+CARTESIA_DEFAULT_VOICE_ID = os.environ.get('CARTESIA_VOICE_ID', '').strip()
+CARTESIA_MODEL_ID         = os.environ.get('CARTESIA_MODEL_ID', 'sonic-2').strip() or 'sonic-2'
+
 # ── Vertex AI Gemini Flash chat (Task #607) ─────────────────────────────────
 # When VERTEX_PROJECT_ID is set, the chat path can route through Vertex AI's
 # Gemini Flash streaming endpoint for lower TTFT. Auth is via Application
@@ -453,6 +483,11 @@ if CF_GATEWAY_ENABLED:
     _CEREBRAS_KEY = _CEREBRAS_KEY or BYOK_PLACEHOLDER
     _OPENROUTER_KEY = _OPENROUTER_KEY or BYOK_PLACEHOLDER
     _SARVAM_LLM_KEY = _SARVAM_LLM_KEY or BYOK_PLACEHOLDER
+    # New providers: BYOK allows the CF gateway to inject keys stored in
+    # the CF dashboard, so the local env var is optional in production.
+    _COHERE_KEY   = _COHERE_KEY   or BYOK_PLACEHOLDER
+    _CARTESIA_KEY = _CARTESIA_KEY or BYOK_PLACEHOLDER
+    _BASETEN_KEY  = _BASETEN_KEY  or BYOK_PLACEHOLDER
     # Note: _GROQ_KEY_2 / _GEMINI_KEY_2 / _SARVAM_LLM_KEY_2 / _3 stay empty
     # if not set — BYOK means CF handles rotation, so a single logical slot
     # per provider is enough. The pool's secondary-key slots only activate
