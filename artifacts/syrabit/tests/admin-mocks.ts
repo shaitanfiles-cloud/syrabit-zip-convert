@@ -276,7 +276,7 @@ const FIXTURES: Array<[string, Fixture]> = [
     pro:        { req_per_min: 15, credits_per_day: 4000, max_tokens: 20000,  req_per_min_ip: 40 },
     enterprise: { req_per_min: 60, credits_per_day: 99999, max_tokens: 200000, req_per_min_ip: 200 },
   })],
-  ['/api/admin/rate-limits', () => ({ ok: true })],
+  ['/api/admin/rate-stats', () => ({ ok: true })],
 
   // --- AdminUsers & Plans panels ------------------------------------------
   ['/api/admin/users', () => ({
@@ -314,7 +314,7 @@ const FIXTURES: Array<[string, Fixture]> = [
   })],
 
   // --- AdminSeoManager keyword / linker / topic-discovery ----------------
-  ['/api/admin/seo/keywords', () => ({ suggestions: [] })],
+  ['/api/admin/extract-keywords', () => ({ suggestions: [] })],
   ['/api/admin/seo/internal-links/history', () => ({ items: [] })],
   ['/api/admin/seo/internal-links/pending', () => ({ items: [] })],
   ['/api/admin/seo/internal-links/status', () => ({
