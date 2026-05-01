@@ -7,6 +7,9 @@
  *   - any other role (new user)    →  /onboarding
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { axe, toHaveNoViolations } from 'jest-axe';
+
+expect.extend(toHaveNoViolations);
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import React from 'react';
 
@@ -562,5 +565,27 @@ describe('SignupPage — handleSubmit redirect logic', () => {
     await triggerSignup();
     expect(mockNavigate).not.toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalled();
+  });
+});
+
+describe('SignupPage — axe accessibility audit', () => {
+  it('has no axe violations on the clean form (no error state)', async () => {
+    const { container } = render(<SignupPage />);
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  it('has no axe violations when the ToS error is active', async () => {
+    const { container } = render(<SignupPage />);
+    await fillForm({ password: 'Password1!', confirmPassword: 'Password1!', agreed: false, consentDpdp: true });
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  it('has no axe violations when the DPDP error is active', async () => {
+    const { container } = render(<SignupPage />);
+    await fillForm({ password: 'Password1!', confirmPassword: 'Password1!', agreed: true, consentDpdp: false });
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
   });
 });
