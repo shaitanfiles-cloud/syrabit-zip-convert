@@ -483,6 +483,7 @@ if CF_GATEWAY_ENABLED:
     _CEREBRAS_KEY = _CEREBRAS_KEY or BYOK_PLACEHOLDER
     _OPENROUTER_KEY = _OPENROUTER_KEY or BYOK_PLACEHOLDER
     _SARVAM_LLM_KEY = _SARVAM_LLM_KEY or BYOK_PLACEHOLDER
+    _XAI_KEY = _XAI_KEY or BYOK_PLACEHOLDER
     # New providers: BYOK allows the CF gateway to inject keys stored in
     # the CF dashboard, so the local env var is optional in production.
     _COHERE_KEY   = _COHERE_KEY   or BYOK_PLACEHOLDER

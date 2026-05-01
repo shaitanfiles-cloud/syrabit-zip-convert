@@ -83,29 +83,72 @@ def _validate_env():
             _log.warning(f"Recommended env var not set: {key} — {desc}")
     _log.info("Environment validation passed")
 
-    _llm_keys = {
-        "GROQ_API_KEY": os.environ.get("GROQ_API_KEY", "").strip(),
-        "GROQ_API_KEY_2": os.environ.get("GROQ_API_KEY_2", "").strip(),
-        "GEMINI_API_KEY": os.environ.get("GEMINI_API_KEY", "").strip(),
-        "GEMINI_API_KEY_2": os.environ.get("GEMINI_API_KEY_2", "").strip(),
-        "XAI_API_KEY": os.environ.get("XAI_API_KEY", "").strip(),
-        "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", "").strip(),
-        "SARVAM_API_KEY": os.environ.get("SARVAM_API_KEY", "").strip(),
-        "CEREBRAS_API_KEY": os.environ.get("CEREBRAS_API_KEY", "").strip(),
-        "OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "").strip(),
-        "AWS_ACCESS_KEY_ID": os.environ.get("AWS_ACCESS_KEY_ID", "").strip(),
-        "AWS_SECRET_ACCESS_KEY": os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip(),
-        "MONGODB_MODEL_API_KEY": os.environ.get("MONGODB_MODEL_API_KEY", "").strip(),
+    _cf_gw_enabled = bool(
+        os.environ.get("CF_AI_GATEWAY_ACCOUNT_ID", "").strip()
+        and os.environ.get("CF_AI_GATEWAY_ID", "").strip()
+    )
+    # Keys that CF AI Gateway BYOK can manage — when CF_GATEWAY_ENABLED these
+    # do NOT need to be set in Railway/production env. Each entry maps the env
+    # var name to its CF provider slug for reference.
+    _BYOK_CAPABLE = {
+        "GROQ_API_KEY":       "groq/openai/v1",
+        "GEMINI_API_KEY":     "google-ai-studio/v1beta/openai",
+        "CEREBRAS_API_KEY":   "cerebras/v1",
+        "OPENROUTER_API_KEY": "openrouter/v1",
+        "SARVAM_API_KEY":     "custom-sarvam",
+        "XAI_API_KEY":        "grok/v1",
+        "COHERE_API_KEY":     "cohere/v1",
+        "CARTESIA_API_KEY":   "cartesia/v1",
+        "BASETEN_API_KEY":    "baseten/v1",
     }
-    _byok_active = os.environ.get("CF_AI_GATEWAY_BYOK", "1").strip() not in ("", "0", "false", "False")
-    _log.info("─── LLM Provider Key Diagnostic ───")
-    for name, val in _llm_keys.items():
-        status = "SET" if val else "NOT SET"
-        if name.startswith("GEMINI_API_KEY") and _byok_active:
-            _log.info(f"  {name}: {status}  (BYOK — managed by Cloudflare AI Gateway)")
+    # Keys that must always be present in Railway (no CF Gateway substitute).
+    _ALWAYS_NEEDED = [
+        "MONGO_URL",
+        "JWT_SECRET",
+        "ADMIN_JWT_SECRET",
+        "CF_AI_GATEWAY_ACCOUNT_ID",
+        "CF_AI_GATEWAY_ID",
+        "CF_AI_GATEWAY_TOKEN",
+        "SUPABASE_URL",
+        "SUPABASE_SERVICE_KEY",
+        "UPSTASH_REDIS_REST_URL",
+        "UPSTASH_REDIS_REST_TOKEN",
+        "CLOUDFLARE_API_TOKEN",
+        "VOYAGE_API_KEY",
+        "ADMIN_EMAILS",
+        "ADMIN_PASSWORDS",
+        "ADMIN_NAMES",
+        "FRONTEND_URL",
+    ]
+    lines = ["─── Railway / Production Env-Var Audit ───"]
+    if _cf_gw_enabled:
+        lines.append("  CF AI Gateway: ENABLED — BYOK-capable keys do NOT need to be set in Railway.")
+    else:
+        lines.append("  CF AI Gateway: DISABLED — all provider keys must be set in Railway.")
+    lines.append("  BYOK-capable (can delete from Railway when CF Gateway is on):")
+    redundant = []
+    for name, slug in _BYOK_CAPABLE.items():
+        raw = os.environ.get(name, "").strip()
+        if _cf_gw_enabled:
+            if raw:
+                status = f"REDUNDANT  ← safe to delete (CF slug: {slug})"
+                redundant.append(name)
+            else:
+                status = f"BYOK ✓     (CF slug: {slug})"
         else:
-            _log.info(f"  {name}: {status}")
-    _log.info("───────────────────────────────────")
+            status = "SET" if raw else "MISSING ⚠ — gateway is off, key needed"
+        lines.append(f"    {name:<26} {status}")
+    lines.append("  Always needed in Railway (no CF Gateway substitute):")
+    for name in _ALWAYS_NEEDED:
+        raw = os.environ.get(name, "").strip()
+        lines.append(f"    {name:<26} {'SET' if raw else 'MISSING ⚠'}")
+    if redundant:
+        lines.append(
+            f"  ACTION: {len(redundant)} Railway var(s) are now redundant — "
+            f"you can delete them: {', '.join(redundant)}"
+        )
+    lines.append("──────────────────────────────────────────")
+    _log.info("\n".join(lines))
 
 
 _validate_env()
