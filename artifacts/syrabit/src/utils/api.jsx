@@ -698,12 +698,15 @@ export const adminSeoResolveDuplicate = (token, pairId, action = 'ignore') =>
  * the backend. Authenticated via the session cookie so the server can
  * attach the user's email/name.
  *
- * Throws on failure so the caller can distinguish error types:
- *   - AxiosError with status 401 → user is not authenticated
- *   - Any other error → network/API failure
- * The caller is responsible for providing a fallback URL.
+ * Intentionally throws on failure rather than silently returning a fallback,
+ * so the caller (TrustpilotReviewModal) can distinguish error types and show
+ * an appropriate user-facing notice:
+ *   - AxiosError with response.status === 401 → user is not authenticated
+ *   - Any other error → network / Trustpilot API failure
+ * The caller supplies the fallback URL and handles all error cases.
  *
  * @returns {Promise<string>} The personalised invitation URL.
+ * @throws {import('axios').AxiosError} On HTTP errors or network failure.
  */
 export async function generateTrustpilotInvitationLink() {
   const res = await axios.post(
