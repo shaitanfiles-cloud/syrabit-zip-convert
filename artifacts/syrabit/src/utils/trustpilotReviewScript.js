@@ -91,7 +91,7 @@ const _TEMPLATES = {
     return (
       `Syrabit.ai has been a genuinely useful addition to my study routine. ` +
       `The AI tutor gives syllabus-grounded answers rather than generic ones, the chapter notes are well-organised, and having previous year questions in one place makes revision far more efficient. ` +
-      `I appreciate that I get 30 free AI credits every day without needing to sign up. ` +
+      `I appreciate that I get 30 free AI credits every month without needing to sign up. ` +
       `If you're preparing for ${boardName || 'Assam Board'} exams, this platform is worth trying.`
     );
   },
