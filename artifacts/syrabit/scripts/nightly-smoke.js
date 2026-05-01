@@ -471,12 +471,29 @@ async function main() {
   //   FAIL:  any HTTP response — origin reachable without the CF client cert.
   //
   // RAILWAY_ORIGIN_URL must be set in the CI environment to the bare Railway
-  // URL (e.g. https://syrabit-production.up.railway.app).  When unset the
-  // check is skipped with a warning.  Set via: GitHub Actions → Secrets → RAILWAY_ORIGIN_URL.
-  const RAILWAY_ORIGIN_URL = process.env.RAILWAY_ORIGIN_URL;
+  // URL (e.g. https://syrabit-production.up.railway.app).
+  //   CI (process.env.CI === 'true'):   missing value is a hard failure — the
+  //     probe must run in CI so a bypass regression cannot silently go unnoticed.
+  //   Local:                            missing value is a skippable warning.
+  // Set the secret at: GitHub → Settings → Secrets → Actions → RAILWAY_ORIGIN_URL.
+  // The GitHub Actions cf-zone-settings job already passes the secret via
+  // `RAILWAY_ORIGIN_URL: ${{ secrets.RAILWAY_ORIGIN_URL }}`.
+  const RAILWAY_ORIGIN_URL = (process.env.RAILWAY_ORIGIN_URL || '').trim();
+  const IS_CI = process.env.CI === 'true';
   if (!RAILWAY_ORIGIN_URL) {
-    warnings.push('Railway bypass probe skipped: RAILWAY_ORIGIN_URL not set — set the CI secret to verify origin enforcement');
-    console.log('  ⚠  Railway bypass probe: SKIPPED — set RAILWAY_ORIGIN_URL in CI secrets');
+    if (IS_CI) {
+      // In CI the secret must be present — a silent skip would leave the bypass
+      // probe permanently inactive without any operator noticing.
+      failures.push(
+        'Railway bypass probe: RAILWAY_ORIGIN_URL not set in CI environment ' +
+        '— add it at GitHub → Settings → Secrets and variables → Actions → RAILWAY_ORIGIN_URL',
+      );
+      console.log('  ✗  Railway bypass probe: RAILWAY_ORIGIN_URL not set in CI — add GitHub secret RAILWAY_ORIGIN_URL');
+      console.log('      The secret expands to an empty string when unset; set it to the bare Railway backend URL.');
+    } else {
+      warnings.push('Railway bypass probe skipped: RAILWAY_ORIGIN_URL not set — set the CI secret to verify origin enforcement');
+      console.log('  ⚠  Railway bypass probe: SKIPPED — RAILWAY_ORIGIN_URL not set (local run; set CI secret to enforce in CI)');
+    }
   } else {
     try {
       const probeResp = await fetch(`${RAILWAY_ORIGIN_URL}/api/health`, {
