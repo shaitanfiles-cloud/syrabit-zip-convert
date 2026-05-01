@@ -30,10 +30,43 @@ export const AuthProvider = ({ children }) => {
       const headers = _inMemoryToken
         ? { Authorization: `Bearer ${_inMemoryToken}` }
         : {};
-      const res = await axios.get(`${API_BASE}/auth/me`, {
-        withCredentials: true,
-        headers,
-      });
+      let res;
+      try {
+        res = await axios.get(`${API_BASE}/auth/me`, {
+          withCredentials: true,
+          headers,
+        });
+      } catch (err) {
+        // If the server signals the access token has expired, attempt a
+        // silent refresh via POST /auth/refresh (httpOnly refresh-cookie
+        // flow). On success the server issues a new access token; we
+        // re-try /auth/me so the caller sees a fully-hydrated user.
+        const status = err?.response?.status;
+        const detail = err?.response?.data?.detail;
+        if (status === 401 && (detail === 'token_expired' || detail === 'jwt_expired')) {
+          try {
+            const refreshRes = await axios.post(
+              `${API_BASE}/auth/refresh`,
+              {},
+              { withCredentials: true },
+            );
+            const newToken = refreshRes?.data?.access_token;
+            if (newToken) {
+              _inMemoryToken = newToken;
+              setAuthToken(newToken);
+              try { sessionStorage.setItem('syrabit_token', newToken); } catch {}
+            }
+            res = await axios.get(`${API_BASE}/auth/me`, {
+              withCredentials: true,
+              headers: newToken ? { Authorization: `Bearer ${newToken}` } : {},
+            });
+          } catch {
+            throw err;
+          }
+        } else {
+          throw err;
+        }
+      }
       const userData = res.data;
       if (userData && userData.id) {
         setUser(userData);
