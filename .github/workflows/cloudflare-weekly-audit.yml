@@ -31,6 +31,7 @@ on:
 
 permissions:
   contents: read
+  issues: write   # needed to create the weekly digest issue when Slack is not configured
 
 jobs:
   cf-full-audit:
@@ -76,3 +77,335 @@ jobs:
           name: cf-audit-report-${{ github.run_id }}
           path: /tmp/cf-audit-report.json
           retention-days: 90
+
+      - name: Post audit digest (GitHub summary + Slack or GitHub issue)
+        if: always()   # run whether the audit passed or failed
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_API_URL: ${{ github.api_url }}
+        run: |
+          node --input-type=module - <<'DIGEOF'
+          import fs from 'fs';
+
+          const REPORT_FILE    = '/tmp/cf-audit-report.json';
+          const RUN_URL        = process.env.GITHUB_RUN_URL     || '';
+          const SLACK_URL      = process.env.SLACK_WEBHOOK_URL  || '';
+          const GH_TOKEN       = process.env.GITHUB_TOKEN       || '';
+          const GH_REPO        = process.env.GITHUB_REPOSITORY  || '';
+          const GH_API         = process.env.GITHUB_API_URL     || 'https://api.github.com';
+          const STANDING_TITLE = '📋 Cloudflare weekly audit digest (standing tracking issue)';
+
+          // ── Shared helpers (defined before report load so error path can use them) ──
+
+          const STATUS_ICON = {
+            PASS: '✅', FAIL: '❌', WARN: '⚠️', SKIP: '⬜', PLAN_REQUIRED: '💳',
+          };
+
+          function escMd(str) {
+            return String(str || '').replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
+          }
+
+          const ghHeaders = {
+            'Authorization': `Bearer ${GH_TOKEN}`,
+            'Content-Type':  'application/json',
+            'Accept':        'application/vnd.github+json',
+          };
+
+          // Find the open standing audit issue via GitHub search API (exact title
+          // match; no pagination limit) and fall back to label+list if search is
+          // rate-limited or unavailable.  Returns the issue number or null.
+          async function findStandingIssue() {
+            // Primary: use the search API — exact title match avoids per_page limits
+            try {
+              const q   = encodeURIComponent(`repo:${GH_REPO} is:issue is:open "${STANDING_TITLE}"`);
+              const r   = await fetch(`${GH_API}/search/issues?q=${q}&per_page=5`, {
+                headers: { ...ghHeaders, 'Accept': 'application/vnd.github+json' },
+              });
+              const j   = await r.json();
+              if (r.ok && Array.isArray(j.items)) {
+                const found = j.items.find(i => !i.pull_request && i.title === STANDING_TITLE);
+                if (found) return found.number;
+              }
+            } catch (_) {}
+            // Fallback: label-based list search (covers repos where search API is disabled)
+            for (const url of [
+              `${GH_API}/repos/${GH_REPO}/issues?labels=cloudflare-audit&state=open&per_page=30`,
+              `${GH_API}/repos/${GH_REPO}/issues?state=open&per_page=100`,
+            ]) {
+              try {
+                const r = await fetch(url, { headers: ghHeaders });
+                const j = await r.json();
+                if (r.ok && Array.isArray(j)) {
+                  const found = j.find(i => !i.pull_request && i.title === STANDING_TITLE);
+                  if (found) return found.number;
+                }
+              } catch (_) {}
+            }
+            return null;
+          }
+
+          // Find or create the standing issue, then post body as a comment.
+          // Returns true on success, false otherwise.
+          async function postGitHubIssueComment(body) {
+            let issueNumber = await findStandingIssue();
+            if (!issueNumber) {
+              console.log('No standing audit issue found — creating one.');
+              const issueBody = {
+                title:  STANDING_TITLE,
+                body:   'This issue is the standing thread for weekly Cloudflare audit digests. '
+                      + 'Each Monday the CI job posts a comment with the full 19-item result. '
+                      + 'Watch this issue to receive notifications without checking GitHub Actions.',
+                labels: ['cloudflare-audit'],
+              };
+              async function tryCreate(payload) {
+                return fetch(`${GH_API}/repos/${GH_REPO}/issues`, {
+                  method: 'POST', headers: ghHeaders, body: JSON.stringify(payload),
+                });
+              }
+              try {
+                let r = await tryCreate(issueBody);
+                let j = await r.json();
+                if (!r.ok && r.status === 422) {
+                  console.log('Label cloudflare-audit not found — retrying without label.');
+                  const { labels: _l, ...noLabel } = issueBody;
+                  r = await tryCreate(noLabel);
+                  j = await r.json();
+                }
+                if (!r.ok) {
+                  console.error(`Could not create standing issue: ${JSON.stringify(j)}`);
+                } else {
+                  issueNumber = j.number;
+                  console.log(`Created standing audit issue #${issueNumber}: ${j.html_url}`);
+                }
+              } catch (e) {
+                console.error('Standing issue creation failed:', e.message);
+              }
+            }
+            if (!issueNumber) return false;
+            try {
+              const r = await fetch(
+                `${GH_API}/repos/${GH_REPO}/issues/${issueNumber}/comments`,
+                { method: 'POST', headers: ghHeaders, body: JSON.stringify({ body }) },
+              );
+              const j = await r.json();
+              if (!r.ok) {
+                console.error(`Issue comment API ${r.status}: ${JSON.stringify(j)}`);
+                return false;
+              }
+              console.log(`Digest posted as issue comment: ${j.html_url}`);
+              return true;
+            } catch (e) {
+              console.error('Issue comment failed:', e.message);
+              return false;
+            }
+          }
+
+          // ── Load report ───────────────────────────────────────────────────
+          let report;
+          let reportLoadError = null;
+          try {
+            report = JSON.parse(fs.readFileSync(REPORT_FILE, 'utf8'));
+          } catch (e) {
+            reportLoadError = `Audit digest: could not read ${REPORT_FILE}: ${e.message}`;
+            console.error(reportLoadError);
+            try { fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `> ⚠️ ${reportLoadError}\n`); } catch {}
+          }
+
+          // If the JSON report is missing (e.g., audit step itself crashed),
+          // post a minimal error notification before exiting.
+          if (reportLoadError) {
+            const errMsg = `⚠️ Cloudflare weekly audit digest unavailable — JSON report could not be read. `
+              + `Check the run log: ${RUN_URL}\n\nError: \`${reportLoadError}\``;
+            if (SLACK_URL) {
+              try {
+                await fetch(SLACK_URL, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ text: errMsg }),
+                });
+              } catch (_) {}
+            } else {
+              await postGitHubIssueComment(errMsg);
+            }
+            process.exit(0);
+          }
+
+          const { summary, items = [], generated_at } = report;
+          const { pass = 0, fail = 0, warn = 0, skip = 0, total = 0 } = summary || {};
+          const planRequired = items.filter(i => i.status === 'PLAN_REQUIRED').length;
+
+          const failItems = items.filter(i => i.status === 'FAIL');
+          const warnItems = items.filter(i => i.status === 'WARN');
+
+          const overallIcon = fail > 0 ? '🔴' : warn > 0 ? '🟡' : '🟢';
+          const overallText = fail > 0 ? 'FAIL' : warn > 0 ? 'WARN' : 'PASS';
+          const dateStr     = generated_at
+            ? new Date(generated_at).toUTCString()
+            : new Date().toUTCString();
+
+          // ── Build full Markdown digest (GitHub summary / issue body) ──────
+          const mdLines = [];
+          mdLines.push(`## ${overallIcon} Cloudflare Weekly Audit — ${overallText}`);
+          mdLines.push('');
+          mdLines.push(`**Date:** ${dateStr}  `);
+          mdLines.push(`**Run:** [View full log](${RUN_URL})`);
+          mdLines.push('');
+
+          // Count table
+          mdLines.push('### Summary');
+          mdLines.push('');
+          mdLines.push('| ✅ PASS | ❌ FAIL | ⚠️ WARN | 💳 PLAN_REQUIRED | ⬜ SKIP | Total |');
+          mdLines.push('|:------:|:------:|:-------:|:----------------:|:------:|:-----:|');
+          mdLines.push(`| ${pass} | ${fail} | ${warn} | ${planRequired} | ${skip} | ${total} |`);
+          mdLines.push('');
+
+          // All 19 items table (warn in output if count differs from expected)
+          const itemCount = items.length;
+          const itemCountNote = itemCount !== 19 ? ` ⚠️ expected 19, got ${itemCount}` : '';
+          mdLines.push(`### All ${itemCount} audit items${itemCountNote}`);
+          mdLines.push('');
+          mdLines.push('| # | Phase | Status | Item | Detail |');
+          mdLines.push('|--:|:-----:|:------:|:-----|:-------|');
+          for (const item of items) {
+            const icon   = STATUS_ICON[item.status] || item.status;
+            const rawDetail = item.detail || '';
+            const detail = escMd(rawDetail.length > 80 ? rawDetail.slice(0, 77) + '…' : rawDetail);
+            mdLines.push(`| ${item.id} | ${item.phase} | ${icon} ${item.status} | ${escMd(item.label)} | ${detail} |`);
+          }
+
+          // FAIL section with remediation
+          if (failItems.length > 0) {
+            mdLines.push('');
+            mdLines.push('### ❌ Failed items — action required');
+            mdLines.push('');
+            for (const item of failItems) {
+              mdLines.push(`**#${item.id} ${item.label}**`);
+              if (item.detail)      mdLines.push(`- Detail: \`${item.detail}\``);
+              if (item.remediation) mdLines.push(`- Fix: ${item.remediation}`);
+              mdLines.push('');
+            }
+          }
+
+          // WARN section (scope gaps — no paging)
+          if (warnItems.length > 0) {
+            mdLines.push('');
+            mdLines.push('### ⚠️ Warn items — token scope gaps (no action required unless intentional)');
+            mdLines.push('');
+            for (const item of warnItems) {
+              mdLines.push(`- **#${item.id} ${item.label}**: ${item.detail || ''}`);
+            }
+          }
+
+          mdLines.push('');
+          mdLines.push('---');
+          mdLines.push('_19-item Cloudflare audit — Phases 1–6 (Tasks #105–#110). '
+            + 'WARN = token scope gap; PLAN_REQUIRED = paid add-on needed; '
+            + 'neither counts as a failure._');
+
+          const mdDigest = mdLines.join('\n');
+
+          // ── Always write to GitHub step summary ───────────────────────────
+          try {
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, mdDigest + '\n');
+            console.log('Audit digest written to GitHub step summary.');
+          } catch (e) {
+            console.error('Could not write GitHub step summary:', e.message);
+          }
+
+          // ── Slack: post if webhook is configured ──────────────────────────
+          if (SLACK_URL) {
+            const slackLines = [];
+            slackLines.push(`${overallIcon} *Cloudflare Weekly Audit — ${overallText}*`);
+            slackLines.push(`*Date:* ${dateStr}`);
+            slackLines.push(
+              `*Counts:* ✅ ${pass} PASS  ❌ ${fail} FAIL  ⚠️ ${warn} WARN` +
+              `  💳 ${planRequired} PLAN_REQUIRED  ⬜ ${skip} SKIP  (${total} total)`,
+            );
+
+            // All items — compact one-liner each (with count mismatch note if not 19)
+            slackLines.push('');
+            const slackItemNote = itemCount !== 19 ? ` ⚠️ expected 19, got ${itemCount}` : '';
+            slackLines.push(`*All ${itemCount} items:*${slackItemNote}`);
+            for (const item of items) {
+              const icon   = STATUS_ICON[item.status] || item.status;
+              const detail = item.detail ? `  _${item.detail.slice(0, 60)}${item.detail.length > 60 ? '…' : ''}_` : '';
+              slackLines.push(`  ${icon} *#${item.id}* ${item.label}${detail}`);
+            }
+
+            // FAIL section with remediation — highlighted for action
+            // Detail is capped at 120 chars to keep Slack payload size reasonable.
+            if (failItems.length > 0) {
+              slackLines.push('');
+              slackLines.push('*❌ Failed items — action required:*');
+              for (const item of failItems) {
+                slackLines.push(`  • *#${item.id} ${item.label}*`);
+                if (item.detail) {
+                  const d = item.detail.length > 120 ? item.detail.slice(0, 117) + '…' : item.detail;
+                  slackLines.push(`    Detail: \`${d}\``);
+                }
+                if (item.remediation) slackLines.push(`    Fix: ${item.remediation}`);
+              }
+            }
+
+            // WARN section listed separately — no paging, tracked without alerting
+            if (warnItems.length > 0) {
+              slackLines.push('');
+              slackLines.push('*⚠️ Warn items — token scope gaps (no action required unless intentional):*');
+              for (const item of warnItems) {
+                slackLines.push(`  • *#${item.id} ${item.label}*: ${item.detail || ''}`);
+              }
+            }
+
+            slackLines.push('');
+            slackLines.push(`<${RUN_URL}|View full run log>`);
+
+            let slackOk = false;
+            try {
+              const res = await fetch(SLACK_URL, {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ text: slackLines.join('\n') }),
+              });
+              if (!res.ok) {
+                console.error(`Slack webhook returned ${res.status}: ${await res.text()}`);
+              } else {
+                console.log('Audit digest posted to Slack.');
+                slackOk = true;
+              }
+            } catch (e) {
+              console.error('Slack post failed:', e.message);
+            }
+
+            // If Slack delivery failed, fall back to GitHub issue comment so
+            // the digest is never silently lost.
+            let channelOk = slackOk;
+            if (!slackOk) {
+              console.log('Slack delivery failed — falling back to GitHub issue comment.');
+              channelOk = await postGitHubIssueComment(mdDigest);
+            }
+            if (!channelOk) {
+              const warn = '\n> ⚠️ **Digest channel delivery failed**: both Slack and GitHub issue '
+                + 'comment posting encountered errors. The full digest is visible above in this '
+                + 'step summary. Check the run log for details.\n';
+              try { fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, warn); } catch {}
+              console.error('Both Slack and GitHub issue comment delivery failed for this run.');
+            }
+
+          } else {
+            // No Slack webhook configured — use GitHub issue comment directly.
+            console.log('SLACK_WEBHOOK_URL not set — posting GitHub issue comment as digest.');
+            const channelOk = await postGitHubIssueComment(mdDigest);
+            if (!channelOk) {
+              const warn = '\n> ⚠️ **Digest channel delivery failed**: GitHub issue comment posting '
+                + 'encountered errors. The full digest is visible above in this step summary. '
+                + 'Check the run log for details.\n';
+              try { fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, warn); } catch {}
+              console.error('GitHub issue comment delivery failed for this run.');
+            }
+          }
+
+          console.log('Digest step complete.');
+          DIGEOF
