@@ -729,3 +729,29 @@ def test_build_flashcards_qa_with_empty_strings_are_skipped(
     front, back = cards[0]
     assert front == "What is osmosis?"
     assert "membrane" in back
+
+
+def test_build_flashcards_corrupt_json_in_structured_produces_zero_cards(
+    edu_app, fake_conn_factory
+):
+    """When a generated note's ``structured`` column contains invalid JSON
+    (e.g. a truncated AI response), ``json.loads()`` raises and the
+    ``except Exception: structured_raw = None`` branch fires (~line 2104 of
+    ``routes/edu_study.py``).  The route must return
+    ``{"ok": True, "created": 0}`` — no 500, no crash, no junk card.
+
+    We set ``row["structured"]`` directly to a malformed string, bypassing
+    ``_make_generated_note_row``'s JSON serialisation so the corrupt payload
+    reaches the parser intact.
+    """
+    row = _make_generated_note_row(note_id="gen-corrupt", generated=True)
+    row["structured"] = "{invalid json"  # truncated / corrupt AI output
+
+    conn = fake_conn_factory(responses=[[row]])
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"ok": True, "created": 0}, (
+        "Corrupt JSON in structured must degrade to 0 cards, not a 500"
+    )
+    assert _flashcard_inserts(conn) == [], "No edu_flashcards INSERTs on corrupt JSON"
