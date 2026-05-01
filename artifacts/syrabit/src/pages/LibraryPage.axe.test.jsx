@@ -1,9 +1,10 @@
 /**
  * Task #197 — LibraryPage: axe accessibility audit.
  *
- * Covers two key render states:
+ * Covers three key render states:
  *  1. Loading state (bundleLoading=true) — shows LibrarySkeleton
  *  2. Error state (no bundle, not loading) — shows "Failed to load library" UI
+ *  3. Loaded state — subject catalog rendered with VirtualSubjectGrid
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { axe, toHaveNoViolations } from 'jest-axe';
@@ -61,7 +62,7 @@ vi.mock('./library/LibrarySkeleton', () => ({
 }));
 
 vi.mock('./library/FilterChip', () => ({
-  default: ({ label, onClick }) => <button type="button" onClick={onClick}>{label}</button>,
+  default: ({ chip, onClick }) => <button type="button" onClick={onClick}>{chip?.label}</button>,
 }));
 
 vi.mock('./library/ScrollableFilterRow', () => ({
@@ -99,8 +100,26 @@ import {
 } from '@/hooks/useContent';
 import { useToggleSavedSubject } from '@/hooks/useUser';
 
+const SAMPLE_BUNDLE = {
+  boards:   [{ id: 'b1', name: 'AHSEC' }],
+  classes:  [{ id: 'cl1', name: 'Class 11', board_id: 'b1' }],
+  streams:  [{ id: 's1', name: 'Arts', class_id: 'cl1' }],
+  subjects: [
+    { id: 'sub1', name: 'English', class_id: 'cl1', stream_id: 's1', board_id: 'b1', icon: '📖', chapter_count: 5 },
+    { id: 'sub2', name: 'Political Science', class_id: 'cl1', stream_id: 's1', board_id: 'b1', icon: '🏛️', chapter_count: 8 },
+  ],
+};
+
+class MockIntersectionObserver {
+  observe    = vi.fn();
+  unobserve  = vi.fn();
+  disconnect = vi.fn();
+  constructor(_cb, _opts) {}
+}
+
 beforeEach(() => {
   vi.useRealTimers();
+  window.IntersectionObserver = MockIntersectionObserver;
   vi.mocked(useLibraryBundleSlim).mockReturnValue({ data: undefined, isLoading: true });
   vi.mocked(useLibraryBundleBoot).mockReturnValue({ data: undefined });
   vi.mocked(useLibraryBundle).mockReturnValue({ data: undefined, isFetching: false, refetch: vi.fn() });
@@ -124,6 +143,21 @@ describe('LibraryPage — axe accessibility audit', () => {
 
   it('has no axe violations when the bundle fails to load (error state)', async () => {
     vi.mocked(useLibraryBundleSlim).mockReturnValue({ data: undefined, isLoading: false });
+
+    let container;
+    await act(async () => {
+      ({ container } = render(<LibraryPage />));
+    });
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  it('has no axe violations when the subject catalog has loaded (content state)', async () => {
+    vi.mocked(useLibraryBundleSlim).mockReturnValue({ data: SAMPLE_BUNDLE, isLoading: false });
+    vi.mocked(useLibraryBundleBoot).mockReturnValue({ data: SAMPLE_BUNDLE });
+    vi.mocked(useLibraryBundle).mockReturnValue({
+      data: SAMPLE_BUNDLE, isFetching: false, refetch: vi.fn(),
+    });
 
     let container;
     await act(async () => {

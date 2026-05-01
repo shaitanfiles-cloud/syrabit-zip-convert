@@ -1,12 +1,10 @@
 /**
  * Task #197 — ChatPage: axe accessibility audit.
  *
- * Covers the two most common render states students encounter:
- *  1. Anonymous user with no active conversation (EmptyState shown)
- *  2. Authenticated user with no active conversation (EmptyState shown)
- *
- * Complex sub-components and API calls are stubbed so the audit focuses
- * on the page's own markup, not the rendering of child components.
+ * Covers three render states students encounter:
+ *  1. Anonymous user — empty chat (EmptyState shown)
+ *  2. Authenticated user — empty chat (EmptyState shown)
+ *  3. Anonymous user — loaded conversation with messages
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { axe, toHaveNoViolations } from 'jest-axe';
@@ -15,9 +13,10 @@ import React from 'react';
 
 expect.extend(toHaveNoViolations);
 
+const mockSearchParams = vi.fn(() => [new URLSearchParams(), vi.fn()]);
 vi.mock('react-router-dom', () => ({
   useNavigate:     () => vi.fn(),
-  useSearchParams: () => [new URLSearchParams(), vi.fn()],
+  useSearchParams: (...args) => mockSearchParams(...args),
 }));
 
 const mockUseAuth = vi.fn(() => ({ user: null, authChecked: true }));
@@ -57,12 +56,14 @@ vi.mock('./chat/ModelSelector', () => ({
 }));
 
 vi.mock('./chat/MessageBubble', () => ({
-  MessageBubble: () => <div />,
+  MessageBubble: ({ msg }) => <div role="article" aria-label={`${msg.role} message`}>{msg.content}</div>,
 }));
 
+const mockGetAnonConversation = vi.fn(() => new Promise(() => {}));
+const mockGetConversation     = vi.fn(() => new Promise(() => {}));
 vi.mock('@/utils/api', () => ({
-  getConversation:     vi.fn(() => new Promise(() => {})),
-  getAnonConversation: vi.fn(() => new Promise(() => {})),
+  getConversation:     (...args) => mockGetConversation(...args),
+  getAnonConversation: (...args) => mockGetAnonConversation(...args),
   getSubject:          vi.fn(() => new Promise(() => {})),
   getChapters:         vi.fn(() => new Promise(() => {})),
   API_BASE:            'http://localhost',
@@ -99,11 +100,19 @@ import ChatPage from './ChatPage';
 beforeEach(() => {
   vi.useRealTimers();
   HTMLElement.prototype.scrollIntoView = vi.fn();
+  mockSearchParams.mockReturnValue([new URLSearchParams(), vi.fn()]);
+  mockGetAnonConversation.mockReturnValue(new Promise(() => {}));
+  mockGetConversation.mockReturnValue(new Promise(() => {}));
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+const SAMPLE_MESSAGES = [
+  { id: 'm1', role: 'user',      content: 'What is photosynthesis?' },
+  { id: 'm2', role: 'assistant', content: 'Photosynthesis is the process by which plants make food using sunlight.' },
+];
 
 describe('ChatPage — axe accessibility audit', () => {
   it('has no axe violations for an anonymous user (empty chat, no conversation)', async () => {
@@ -119,6 +128,20 @@ describe('ChatPage — axe accessibility audit', () => {
     mockUseAuth.mockReturnValueOnce({
       user:        { id: 'u1', email: 'student@example.com', credits_used: 0, credits_limit: 50 },
       authChecked: true,
+    });
+
+    let container;
+    await act(async () => {
+      ({ container } = render(<ChatPage />));
+    });
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  it('has no axe violations when a conversation with messages is loaded', async () => {
+    mockSearchParams.mockReturnValue([new URLSearchParams('id=conv-123'), vi.fn()]);
+    mockGetAnonConversation.mockResolvedValue({
+      data: { id: 'conv-123', messages: SAMPLE_MESSAGES },
     });
 
     let container;
