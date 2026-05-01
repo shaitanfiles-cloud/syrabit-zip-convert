@@ -1172,3 +1172,41 @@ def test_build_flashcards_qa_cap_excludes_pairs_beyond_position_seven(edu_app, f
             f"{excluded_front!r} (position {excluded_idx}) must not be stored; "
             f"only the first 8 pairs are allowed — stored fronts: {stored_fronts}"
         )
+
+
+def test_build_flashcards_qa_cap_counts_positions_not_valid_pairs(edu_app, fake_conn_factory):
+    """The [:8] cap applies to raw list positions, not to the count of valid pairs.
+
+    Positions 0 and 1 have blank q/a fields — they consume slots but produce no
+    cards.  Positions 2–7 each produce one valid card (6 total).  Positions 8
+    and 9 are never reached regardless of how many valid pairs were found, so
+    those questions must not appear in the stored cards.
+
+    A regression that changed the logic to "collect 8 valid pairs" would store
+    8 cards and include pairs from positions 8 and 9 — this test would catch it.
+    """
+    qa_pairs = (
+        [{"q": "", "a": ""}] * 2  # positions 0–1: blank, consume slots
+        + [{"q": f"Question {i}", "a": f"Answer {i}"} for i in range(2, 10)]  # positions 2–9
+    )
+    structured = {"qa": qa_pairs, "mnemonics": []}
+    conn = fake_conn_factory(
+        responses=[[_make_generated_note_row(note_id="qa-cap-blank", structured=structured)]]
+    )
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+
+    cards = _flashcard_inserts(conn)
+    assert len(cards) <= 6, (
+        f"Expected at most 6 cards (positions 2–7 only); got {len(cards)} — "
+        f"the cap must count raw positions, not valid pairs"
+    )
+
+    stored_fronts = [front for front, _back in cards]
+    for excluded_idx in (8, 9):
+        excluded_front = f"Question {excluded_idx}"
+        assert excluded_front not in stored_fronts, (
+            f"{excluded_front!r} (position {excluded_idx}) must not be stored; "
+            f"blank entries at positions 0–1 already consumed two slots of the 8-pair cap"
+        )
