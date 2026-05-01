@@ -475,11 +475,14 @@ async def _fetch_chunks_semantic(
     limit: int = 10,
     subject_id: Optional[str] = None,
 ) -> list:
-    """Semantic retrieval: embed query → Atlas $vectorSearch on chunks → fetch chapters.
+    """Semantic retrieval: embed query → Pinecone vector search → fetch chapters from MongoDB.
+
+    Uses Pinecone serverless (syrabit-ahsec index) as the primary vector store.
+    Falls back to Atlas $vectorSearch when Pinecone is not configured (PINECONE_KEY
+    not set) or returns no results, so the old path stays warm during validation.
 
     Returns chapter dicts in the same shape as the keyword-search path so they
-    can be deduplicated and reranked together.  Falls back to [] if chunks have
-    no embeddings yet or the index isn't ready.
+    can be deduplicated and reranked together.
     """
     try:
         from providers.pinecone_ai import embed_one as _pc_embed
@@ -490,32 +493,82 @@ async def _fetch_chunks_semantic(
         if not q_vec:
             return []
 
-        vs_filter = {}
+        # ── Primary: Pinecone serverless vector search ────────────────────────
+        # subject_id filter uses Pinecone metadata filter syntax ($eq).
+        pc_filter: Optional[dict] = None
         if subject_id:
-            vs_filter = {"subject_id": {"$eq": subject_id}}
+            pc_filter = {"subject_id": {"$eq": subject_id}}
 
-        pipeline: list = [
-            {
-                "$vectorSearch": {
-                    "index": "vector_index",
-                    "path": "embedding",
-                    "queryVector": q_vec,
-                    "numCandidates": min(limit * 15, 500),
-                    "limit": limit,
-                    **({"filter": vs_filter} if vs_filter else {}),
-                }
-            },
-            {"$addFields": {"_vs_score": {"$meta": "vectorSearchScore"}}},
-            {"$project": {
-                "_id": 0,
-                "chapter_id": 1,
-                "chapter_title": 1,
-                "subject_id": 1,
-                "_vs_score": 1,
-            }},
-        ]
+        raw: list = []
+        try:
+            from retrievers.pinecone_vector import PineconeVectorRetriever
+            _pc_retriever = PineconeVectorRetriever()
+            if _pc_retriever.is_configured():
+                matches = await asyncio.wait_for(
+                    _pc_retriever.query(
+                        q_vec,
+                        top_k=limit,
+                        metadata_filter=pc_filter,
+                        return_metadata=True,
+                    ),
+                    timeout=5.0,
+                )
+                # Normalise to the same shape the Atlas pipeline produced:
+                # {"chapter_id": str, "subject_id": str, "_vs_score": float}
+                raw = [
+                    {
+                        "chapter_id":    m["metadata"].get("chapter_id", ""),
+                        "chapter_title": m["metadata"].get("chapter_title", ""),
+                        "subject_id":    m["metadata"].get("subject_id", ""),
+                        "_vs_score":     m["score"],
+                    }
+                    for m in matches
+                    if m.get("metadata", {}).get("chapter_id")
+                ]
+                logger.debug(
+                    "[INTERNAL_RAG] Pinecone semantic: %d matches for '%s'",
+                    len(raw), query[:50],
+                )
+        except Exception as _pc_err:
+            logger.debug("[INTERNAL_RAG] Pinecone query failed, will try Atlas fallback: %s", _pc_err)
 
-        raw = await db.chunks.aggregate(pipeline).to_list(length=limit)
+        # ── Fallback: MongoDB Atlas $vectorSearch (kept warm during validation) ─
+        # Used when Pinecone is not configured or returns no results.
+        if not raw:
+            try:
+                vs_filter: dict = {}
+                if subject_id:
+                    vs_filter = {"subject_id": {"$eq": subject_id}}
+
+                pipeline: list = [
+                    {
+                        "$vectorSearch": {
+                            "index": "vector_index",
+                            "path": "embedding",
+                            "queryVector": q_vec,
+                            "numCandidates": min(limit * 15, 500),
+                            "limit": limit,
+                            **({"filter": vs_filter} if vs_filter else {}),
+                        }
+                    },
+                    {"$addFields": {"_vs_score": {"$meta": "vectorSearchScore"}}},
+                    {"$project": {
+                        "_id": 0,
+                        "chapter_id": 1,
+                        "chapter_title": 1,
+                        "subject_id": 1,
+                        "_vs_score": 1,
+                    }},
+                ]
+                raw = await db.chunks.aggregate(pipeline).to_list(length=limit)
+                if raw:
+                    logger.debug(
+                        "[INTERNAL_RAG] Atlas $vectorSearch fallback: %d hits for '%s'",
+                        len(raw), query[:50],
+                    )
+            except Exception as _atlas_err:
+                logger.debug("[INTERNAL_RAG] Atlas $vectorSearch fallback also failed: %s", _atlas_err)
+
         if not raw:
             return []
 

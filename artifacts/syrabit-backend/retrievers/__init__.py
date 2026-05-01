@@ -1,11 +1,12 @@
 """
 retrievers — pluggable vector-retrieval backend for Syrabit RAG.
 
-Three implementations live behind a tiny ABC (`base.Retriever`):
+Four implementations live behind a tiny ABC (`base.Retriever`):
 
-  * VectorizeRetriever      — Cloudflare Vectorize (production default)
+  * VectorizeRetriever          — Cloudflare Vectorize (production default)
   * VertexVectorSearchRetriever — Google Vertex AI Vector Search (A/B)
-  * MongoVectorRetriever    — MongoDB Atlas Vector Search (Flex tier, 2026-04)
+  * MongoVectorRetriever        — MongoDB Atlas Vector Search (Flex tier, 2026-04)
+  * PineconeVectorRetriever     — Pinecone serverless (AHSEC/SEBA chunks, 2026-05)
 
 Selection happens via `factory.get_retriever()` which inspects (in order):
 

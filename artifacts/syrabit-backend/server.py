@@ -872,6 +872,15 @@ async def lifespan(app):
             except Exception as _vs_err:
                 logger.warning("Atlas Vector Search index ensure failed (non-blocking): %s", _vs_err)
 
+            # Pinecone serverless index — syrabit-ahsec, 1024-dim cosine (2026-05).
+            # Safe to call every boot: no-op if index already exists.
+            try:
+                from retrievers.pinecone_vector import ensure_pinecone_index as _ensure_pc
+                _pc_result = await _ensure_pc()
+                logger.info("Pinecone index check: %s", _pc_result)
+            except Exception as _pc_err:
+                logger.warning("Pinecone index ensure failed (non-blocking): %s", _pc_err)
+
             await db.analytics.create_index([("event_type", 1), ("timestamp", -1)])
             await db.analytics.create_index([("subject_id", 1), ("event_type", 1)])
             await db.analytics.create_index("user_id")

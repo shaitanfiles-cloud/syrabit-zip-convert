@@ -132,11 +132,15 @@ async def embed_chunks_bulk(
         idxs, embed_texts = zip(*to_embed)
         vecs = await _cohere_embed_batch(list(embed_texts))
 
-        # Update MongoDB
+        # Update MongoDB (source of truth — always written)
         from motor.motor_asyncio import AsyncIOMotorDatabase
         from pymongo import UpdateOne
+        import os as _os
+
+        _pinecone_write = _os.environ.get("PINECONE_WRITE", "").strip().lower() in ("1", "true", "yes")
 
         ops = []
+        pinecone_vectors: list = []
         for i, vec in zip(idxs, vecs):
             if vec is None:
                 failed += 1
@@ -153,6 +157,19 @@ async def embed_chunks_bulk(
                 }},
                 upsert=False,
             ))
+            # Queue for Pinecone upsert if PINECONE_WRITE is enabled
+            if _pinecone_write:
+                pinecone_vectors.append({
+                    "id": str(chunk["_id"]),
+                    "values": vec,
+                    "metadata": {
+                        "chapter_id":      chunk.get("chapter_id", ""),
+                        "subject_id":      chunk.get("subject_id", ""),
+                        "chapter_title":   chunk.get("chapter_title", ""),
+                        "topic_name":      chunk.get("topic_name", ""),
+                        "embedding_model": _EMBED_MODEL,
+                    },
+                })
             embedded += 1
 
         if ops:
@@ -162,6 +179,20 @@ async def embed_chunks_bulk(
                 logger.warning("[chunk_embedder] Bulk write error: %s", exc)
                 failed += len(ops)
                 embedded -= len(ops)
+
+        # Upsert to Pinecone when PINECONE_WRITE=true
+        if pinecone_vectors:
+            try:
+                from retrievers.pinecone_vector import PineconeVectorRetriever
+                _pc = PineconeVectorRetriever()
+                if _pc.is_configured():
+                    pc_result = await _pc.upsert(pinecone_vectors)
+                    logger.info(
+                        "[chunk_embedder] Pinecone upsert: %d vectors → %s",
+                        len(pinecone_vectors), pc_result,
+                    )
+            except Exception as exc:
+                logger.warning("[chunk_embedder] Pinecone upsert failed (non-fatal): %s", exc)
 
         logger.info(
             "[chunk_embedder] Progress %d/%d — embedded=%d failed=%d skipped=%d",
