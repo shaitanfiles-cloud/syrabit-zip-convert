@@ -365,6 +365,27 @@ def test_new_google_user_auto_created_with_student_role():
     assert resp.json()["user"]["email"] == "newuser@gmail.com"
 
 
+def test_banned_account_returns_403():
+    """A user whose DB record has status='banned' must be refused with HTTP 403
+    and never reach token-issuance logic."""
+    from fastapi.testclient import TestClient
+
+    app, auth_mod = _build_app()
+
+    sb_user = _make_sb_user(email="banned@example.com")
+    _patch_supa_client(auth_mod, sb_user)
+
+    banned_record = _base_user_record(email="banned@example.com")
+    banned_record["status"] = "banned"
+    auth_mod.supa_get_user = AsyncMock(return_value=banned_record)
+
+    client = TestClient(app)
+    resp = client.post("/api/auth/supabase-session", json=_SUPABASE_SESSION_BODY)
+
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"] == "Account banned"
+
+
 def test_existing_user_can_sign_in_when_registrations_closed():
     """An existing user must receive a 200 and a valid token even when
     registrations_open=False.  The guard only applies to brand-new accounts;
