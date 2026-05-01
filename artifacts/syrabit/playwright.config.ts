@@ -43,7 +43,16 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: {
+        ...devices['Desktop Chrome'],
+        // pwa-push.spec.ts and pwa-permission.spec.ts register /sw.js directly
+        // via context.waitForEvent('serviceworker') + navigator.serviceWorker.register().
+        // The global serviceWorkers:'block' is overridden here so those tests
+        // can exercise the real SW event handlers (push, notificationclick) and
+        // the permission-request timing without ECONNREFUSED proxy errors on
+        // API routes (which are all mocked via page.route anyway).
+        serviceWorkers: 'allow',
+      },
       // pwa-mobile.spec.ts is scoped to mobile-chrome; skip it here so the
       // suite does not run twice under a desktop UA where mobile assertions
       // (viewport meta, touch events, install prompt) have different semantics.
@@ -54,7 +63,14 @@ export default defineConfig({
       // Uses a Pixel 5 profile: 393 × 851 logical px, deviceScaleFactor 2.75,
       // touch enabled, mobile UA — mirrors how most users access the PWA.
       name: 'mobile-chrome',
-      use: { ...devices['Pixel 5'] },
+      use: {
+        ...devices['Pixel 5'],
+        // pwa-mobile.spec.ts exercises navigator.serviceWorker.register() to
+        // verify SW registration succeeds on the mobile viewport — allow SW
+        // registration for this project so the context.waitForEvent call
+        // doesn't time out.
+        serviceWorkers: 'allow',
+      },
       testMatch: '**/pwa-mobile.spec.ts',
     },
   ],
