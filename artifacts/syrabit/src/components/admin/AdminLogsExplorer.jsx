@@ -641,10 +641,15 @@ export default function AdminLogsExplorer({ adminToken }) {
                       <td className={`px-3 py-1.5 font-mono text-xs ${statusClass(row.status)}`}>
                         {row.status ?? '—'}
                       </td>
-                      <td className="px-3 py-1.5 max-w-md truncate font-mono text-xs"
+                      <td className="px-3 py-1.5 max-w-md font-mono text-xs"
                           title={row.message || row.route}>
-                        <span className="text-slate-400 mr-1">{row.method || '—'}</span>
-                        {row.route || row.message || '—'}
+                        <div className="truncate">
+                          <span className="text-slate-400 mr-1">{row.method || '—'}</span>
+                          {row.route || '—'}
+                        </div>
+                        {row.message && row.message !== `${row.method} ${row.route} → ${row.status}` && (
+                          <div className="text-slate-500 text-[10px] truncate mt-0.5">{row.message}</div>
+                        )}
                       </td>
                       <td className="px-3 py-1.5 whitespace-nowrap text-xs">
                         {row.country || '—'}{row.colo ? ` / ${row.colo}` : ''}
