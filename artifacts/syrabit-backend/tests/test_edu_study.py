@@ -880,6 +880,55 @@ def test_build_flashcards_qa_truncation(edu_app, fake_conn_factory):
     assert back == "A" * 800, "Back must not be blank and must match the first 800 chars"
 
 
+def test_build_flashcards_qa_field_order(edu_app, fake_conn_factory):
+    """Q&A cards must store the question in front and the answer in back.
+
+    A regression that swaps the two fields (e.g. a→front, q→back) must be
+    caught.  Each card is checked individually so a per-pair swap cannot hide
+    behind set membership.  The test also asserts that neither field starts
+    with the other's content.
+    """
+    qa_pairs = [
+        {
+            "q": "What is the powerhouse of the cell?",
+            "a": "The mitochondria.",
+        },
+        {
+            "q": "Which pigment makes plants green?",
+            "a": "Chlorophyll.",
+        },
+    ]
+    structured = {"qa": qa_pairs, "mnemonics": []}
+    conn = fake_conn_factory(
+        responses=[[_make_generated_note_row(note_id="gen-qa-order", structured=structured)]]
+    )
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json()["created"] == 2
+
+    cards = _flashcard_inserts(conn)
+    assert len(cards) == 2
+
+    for idx, (front, back) in enumerate(cards):
+        expected_q = qa_pairs[idx]["q"]
+        expected_a = qa_pairs[idx]["a"]
+
+        assert front == expected_q, (
+            f"Card {idx}: front must be the question {expected_q!r}; got {front!r}"
+        )
+        assert back == expected_a, (
+            f"Card {idx}: back must be the answer {expected_a!r}; got {back!r}"
+        )
+
+        assert not front.startswith(expected_a[:10]), (
+            f"Card {idx}: front must not start with the answer text"
+        )
+        assert not back.startswith(expected_q[:10]), (
+            f"Card {idx}: back must not start with the question text"
+        )
+
+
 def test_build_flashcards_mnemonic_topic_truncation(edu_app, fake_conn_factory):
     """A mnemonic with a 300-char 'for' field must be trimmed to 200 chars.
 
