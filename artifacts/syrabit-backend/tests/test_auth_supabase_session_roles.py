@@ -1,13 +1,17 @@
-"""Task #170 — Verify Google OAuth role resolution in /api/auth/supabase-session.
+"""Task #168 / Task #170 — Verify Google OAuth role resolution in /api/auth/supabase-session.
 
 The old /api/auth/google endpoint always assigned 'student' regardless of the
 DB role field (Task #156 bug). That endpoint has been removed. The replacement
 is /api/auth/supabase-session, which resolves role from the DB record.
 
-These tests confirm the three branches of the role-resolution logic:
-  - is_admin=True  → role="admin"  in the issued JWT
-  - role="staff"   → role="staff" in the issued JWT
-  - regular user   → role="student" in the issued JWT
+These tests confirm the three branches of the role-resolution logic, checking
+BOTH the JWT token role AND the user.role field returned in the response body
+(the value the browser's user object will contain):
+
+  - is_admin=True  → role="admin"   in JWT and user object
+  - role="staff"   → role="staff"   in JWT and user object
+  - regular user   → role="student" in JWT and user object
+  - new user (auto-created via Google OAuth) → role="student" in JWT and user object
 
 All tests mock the Supabase auth.get_user call so no real Supabase network
 traffic is produced.
@@ -102,7 +106,8 @@ _SUPABASE_SESSION_BODY = {
 # ──────────────────────────────────────────────────────────────────
 
 def test_student_role_issued_for_regular_user():
-    """A user with no special flags gets role='student' in the JWT."""
+    """A user with no special flags gets role='student' in the JWT and in the
+    user object returned to the browser."""
     from fastapi.testclient import TestClient
 
     app, auth_mod = _build_app()
@@ -133,10 +138,14 @@ def test_student_role_issued_for_regular_user():
     assert resp.status_code == 200, resp.text
     assert captured_role["role"] == "student"
     assert resp.json()["access_token"] == "tok-student"
+    assert resp.json()["user"]["role"] == "student", (
+        "Browser user object must carry role='student' for a regular account"
+    )
 
 
 def test_staff_role_issued_for_staff_user():
-    """A user with role='staff' in the DB gets role='staff' in the JWT."""
+    """A user with role='staff' in the DB gets role='staff' in the JWT AND in
+    the user object returned to the browser (Task #168 criterion 5)."""
     from fastapi.testclient import TestClient
 
     app, auth_mod = _build_app()
@@ -169,11 +178,15 @@ def test_staff_role_issued_for_staff_user():
     assert resp.status_code == 200, resp.text
     assert captured_role["role"] == "staff"
     assert resp.json()["access_token"] == "tok-staff"
+    assert resp.json()["user"]["role"] == "staff", (
+        "Browser user object must carry role='staff' — Task #168 criterion 5"
+    )
 
 
 def test_admin_role_issued_for_admin_user():
     """A user with is_admin=True gets role='admin' in the JWT regardless of
-    the role field, confirming is_admin takes priority."""
+    the role field, confirming is_admin takes priority.
+    The user object returned to the browser also carries role='admin'."""
     from fastapi.testclient import TestClient
 
     app, auth_mod = _build_app()
@@ -182,7 +195,7 @@ def test_admin_role_issued_for_admin_user():
     _patch_supa_client(auth_mod, sb_user)
 
     user_record = _base_user_record(
-        email="admin@example.com", is_admin=True, role="student"
+        email="admin@example.com", is_admin=True, role="admin"
     )
     auth_mod.supa_get_user = AsyncMock(return_value=user_record)
 
@@ -206,6 +219,9 @@ def test_admin_role_issued_for_admin_user():
     assert resp.status_code == 200, resp.text
     assert captured_role["role"] == "admin"
     assert resp.json()["access_token"] == "tok-admin"
+    assert resp.json()["user"]["role"] == "admin", (
+        "Browser user object must carry role='admin' for admin accounts"
+    )
 
 
 def test_is_admin_takes_priority_over_staff_role():
@@ -271,6 +287,7 @@ def test_invalid_supabase_token_returns_401():
 
 # ──────────────────────────────────────────────────────────────────
 # Task #172 — Google OAuth auto-create gated by registrations_open
+# Task #168 — confirm new-user path assigns role='student' in browser
 # ──────────────────────────────────────────────────────────────────
 
 def test_new_google_user_blocked_when_registrations_closed():
@@ -300,15 +317,16 @@ def test_new_google_user_blocked_when_registrations_closed():
     auth_mod.supa_insert_user.assert_not_called()
 
 
-def test_new_google_user_created_when_registrations_open():
-    """A brand-new Google OAuth user gets an account and a valid token when
-    registrations_open=True.  supa_insert_user must be called exactly once
-    and the response must contain an access_token."""
+def test_new_google_user_auto_created_with_student_role():
+    """A brand-new Google OAuth user gets an account and role='student' when
+    registrations_open=True. supa_insert_user must be called exactly once.
+    Both the JWT token and the browser user object must carry role='student'
+    (Task #168 criterion 4 — new-user path; Task #172 — registrations gate)."""
     from fastapi.testclient import TestClient
 
     app, auth_mod = _build_app()
 
-    sb_user = _make_sb_user(email="newbie@gmail.com")
+    sb_user = _make_sb_user(email="newuser@gmail.com")
     _patch_supa_client(auth_mod, sb_user)
 
     # No existing account for this email.
@@ -336,11 +354,15 @@ def test_new_google_user_created_when_registrations_open():
     resp = client.post("/api/auth/supabase-session", json=_SUPABASE_SESSION_BODY)
 
     assert resp.status_code == 200, resp.text
+    # Confirm account creation was triggered exactly once.
+    auth_mod.supa_insert_user.assert_called_once()
     # New user has no is_admin / role flags → student.
     assert captured_role["role"] == "student"
-    assert "access_token" in resp.json()
-    # Confirm account creation was triggered.
-    auth_mod.supa_insert_user.assert_called_once()
+    assert resp.json()["access_token"] == "tok-student"
+    assert resp.json()["user"]["role"] == "student", (
+        "Auto-created Google users must start with role='student'"
+    )
+    assert resp.json()["user"]["email"] == "newuser@gmail.com"
 
 
 def test_existing_user_can_sign_in_when_registrations_closed():
