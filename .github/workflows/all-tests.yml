@@ -96,6 +96,15 @@ jobs:
       - name: Install Playwright Chromium + system deps
         run: pnpm --filter @workspace/syrabit exec playwright install --with-deps chromium
 
+      - name: Build syrabit app (pre-compile for vite preview)
+        # build:client = bare `vite build` — skips env-var gating, SSR, prerender,
+        # and verify scripts that require a real backend.  The resulting dist/ is
+        # served by `vite preview` during the Playwright run so every module is
+        # already compiled and page loads stay well under the 10 s assertion timeout.
+        run: pnpm --filter @workspace/syrabit run build:client
+        env:
+          VITE_BACKEND_URL: http://localhost:8080
+
       - name: Run full Playwright E2E suite
         run: pnpm --filter @workspace/syrabit run test:e2e
         env:
