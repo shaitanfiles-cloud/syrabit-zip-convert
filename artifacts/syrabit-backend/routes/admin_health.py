@@ -1031,3 +1031,169 @@ async def admin_diagnostics(admin: dict = Depends(get_admin_user)) -> dict[str, 
         result["circuit_breakers"]["vertex"] = {"status": "error", "error": str(e)}
     
     return result
+
+
+# ── Pinecone index health (Task #207) ─────────────────────────────────────────
+
+_PINECONE_CTRL = "https://api.pinecone.io"
+_PINECONE_API_VERSION = "2024-10"
+_PINECONE_HEALTH_TIMEOUT = 10.0
+
+
+def _pinecone_cfg() -> dict[str, str]:
+    key = (
+        os.environ.get("PINECONE_KEY", "").strip()
+        or os.environ.get("PINECONE_API_KEY", "").strip()
+    )
+    index = (os.environ.get("PINECONE_INDEX", "syrabit-ahsec") or "syrabit-ahsec").strip()
+    try:
+        dims = int(os.environ.get("PINECONE_INDEX_DIMS", "1024") or "1024")
+        if dims <= 0:
+            dims = 1024
+    except (ValueError, TypeError):
+        dims = 1024
+    return {"key": key, "index": index, "dims": dims}
+
+
+def _pinecone_ctrl_headers(key: str) -> dict:
+    return {
+        "Api-Key": key,
+        "Content-Type": "application/json",
+        "X-Pinecone-API-Version": _PINECONE_API_VERSION,
+    }
+
+
+@router.get("/admin/health/pinecone")
+async def admin_pinecone_health(admin: dict = Depends(get_admin_user)) -> dict[str, Any]:
+    """Return Pinecone index health: status, vector count, and last-query latency.
+
+    Always returns 200. Individual failures are reported inline.
+
+    Response shape::
+
+        {
+          "configured": bool,
+          "index_name": str,
+          "status": "ready" | "initializing" | "unknown" | "error",
+          "state": str,          # raw Pinecone status.state string
+          "total_vectors": int | null,
+          "dimensions": int,
+          "latency_ms": float | null,
+          "host": str | null,
+          "error": str | null,
+        }
+    """
+    cfg = _pinecone_cfg()
+
+    if not cfg["key"]:
+        return {
+            "configured": False,
+            "index_name": cfg["index"],
+            "status": "not_configured",
+            "state": None,
+            "total_vectors": None,
+            "dimensions": cfg["dims"],
+            "latency_ms": None,
+            "host": None,
+            "error": "PINECONE_KEY is not set",
+        }
+
+    ctrl_headers = _pinecone_ctrl_headers(cfg["key"])
+    index_name = cfg["index"]
+    dims = cfg["dims"]
+    host: Optional[str] = None
+    state: Optional[str] = None
+    status_str: str = "unknown"
+    total_vectors: Optional[int] = None
+    latency_ms: Optional[float] = None
+    error: Optional[str] = None
+
+    # ── 1. Describe the index (control plane) ─────────────────────────────────
+    try:
+        async with httpx.AsyncClient(timeout=_PINECONE_HEALTH_TIMEOUT) as client:
+            r = await client.get(
+                f"{_PINECONE_CTRL}/indexes/{index_name}",
+                headers=ctrl_headers,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                raw_host = data.get("host", "")
+                if raw_host and not raw_host.startswith("https://"):
+                    raw_host = f"https://{raw_host}"
+                host = raw_host or None
+
+                status_obj = data.get("status") or {}
+                state = str(status_obj.get("state") or "unknown").lower()
+                ready = bool(status_obj.get("ready", False))
+                if ready and state in ("ready",):
+                    status_str = "ready"
+                elif state in ("initializing", "scaling", "creating"):
+                    status_str = "initializing"
+                elif state in ("ready",):
+                    status_str = "ready"
+                else:
+                    status_str = state or "unknown"
+            elif r.status_code == 404:
+                status_str = "not_found"
+                error = f"Index '{index_name}' not found"
+            else:
+                status_str = "error"
+                error = f"HTTP {r.status_code}: {r.text[:120]}"
+    except Exception as exc:
+        status_str = "error"
+        error = str(exc)[:200]
+
+    # ── 2. Describe index stats (data plane) to get vector count ──────────────
+    if host:
+        try:
+            async with httpx.AsyncClient(timeout=_PINECONE_HEALTH_TIMEOUT) as client:
+                r = await client.post(
+                    f"{host}/describe_index_stats",
+                    headers=_pinecone_ctrl_headers(cfg["key"]),
+                    json={},
+                )
+                if r.status_code == 200:
+                    stats = r.json()
+                    total_vectors = int(stats.get("totalVectorCount", 0))
+                else:
+                    logger.warning(
+                        "[pinecone_health] describe_index_stats HTTP %d: %s",
+                        r.status_code, r.text[:100],
+                    )
+        except Exception as exc:
+            logger.warning("[pinecone_health] describe_index_stats failed: %s", exc)
+
+    # ── 3. Test query latency ─────────────────────────────────────────────────
+    if host and status_str == "ready":
+        try:
+            zero_vec = [0.0] * dims
+            import time as _time
+            t0 = _time.perf_counter()
+            async with httpx.AsyncClient(timeout=_PINECONE_HEALTH_TIMEOUT) as client:
+                r = await client.post(
+                    f"{host}/query",
+                    headers=_pinecone_ctrl_headers(cfg["key"]),
+                    json={"vector": zero_vec, "topK": 1, "includeMetadata": False},
+                )
+            latency_ms = round((_time.perf_counter() - t0) * 1000, 1)
+            if r.status_code != 200:
+                logger.warning(
+                    "[pinecone_health] test query HTTP %d: %s",
+                    r.status_code, r.text[:100],
+                )
+                latency_ms = None
+        except Exception as exc:
+            logger.warning("[pinecone_health] test query failed: %s", exc)
+            latency_ms = None
+
+    return {
+        "configured": True,
+        "index_name": index_name,
+        "status": status_str,
+        "state": state,
+        "total_vectors": total_vectors,
+        "dimensions": dims,
+        "latency_ms": latency_ms,
+        "host": host,
+        "error": error,
+    }

@@ -662,6 +662,42 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     return () => clearInterval(id);
   }, [adminToken, loadAiCacheStats]);
 
+  // Task #207 — Pinecone index health card.
+  const [pineconeHealth, setPineconeHealth] = useState(null);
+  const [pineconeLoading, setPineconeLoading] = useState(false);
+  const [pineconeSwitch, setPineconeSwitch] = useState('');
+
+  const loadPineconeHealth = useCallback(() => {
+    setPineconeLoading(true);
+    axios.get(`${API_BASE}/admin/health/pinecone`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setPineconeHealth(r.data))
+      .catch(() => setPineconeHealth({ _error: true }))
+      .finally(() => setPineconeLoading(false));
+  }, [adminToken]);
+
+  const switchPineconeRetriever = useCallback(async (name) => {
+    setPineconeSwitch(name);
+    try {
+      await axios.put(`${API_BASE}/admin/retriever/config`, { active: name }, {
+        headers: adminHeaders(adminToken), withCredentials: true,
+      });
+      toast.success(`Active retriever switched to "${name}"`);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Switch failed');
+    } finally {
+      setPineconeSwitch('');
+    }
+  }, [adminToken]);
+
+  useEffect(() => {
+    if (!adminToken) return;
+    loadPineconeHealth();
+    const id = setInterval(loadPineconeHealth, 60000);
+    return () => clearInterval(id);
+  }, [adminToken, loadPineconeHealth]);
+
   // Task #636 — Workers AI fallback admin panel state. Polled every
   // 30s on the same cadence as the other health widgets. The
   // kill-switch toggles are per-capability so an outage in one model
@@ -3097,6 +3133,143 @@ export default function AdminHealth({ adminToken, onNavigate }) {
             {' · '}Last purge: <span className="font-mono">{aiCacheStats?.managed?.purge_count ?? 0}×</span>
           </div>
         </div>
+        </SectionErrorBoundary>
+
+        <SectionErrorBoundary name="Pinecone Index Health">
+        {(() => {
+          const fetchFailed = pineconeHealth?._error === true;
+          const ph = pineconeHealth && !fetchFailed ? pineconeHealth : null;
+          const configured = ph ? ph.configured : false;
+          const status = ph?.status ?? 'unknown';
+          const isReady = status === 'ready';
+          const isUnconfigured = !fetchFailed && (!configured || status === 'not_configured');
+          const isEmpty = configured && isReady && ph?.total_vectors === 0;
+          const hasWarning = isUnconfigured || isEmpty;
+          const containerCls = fetchFailed
+            ? 'bg-gray-50 border-gray-200'
+            : isUnconfigured
+              ? 'bg-gray-50 border-gray-200'
+              : isEmpty
+                ? 'bg-amber-50 border-amber-200'
+                : isReady
+                  ? 'bg-emerald-50 border-emerald-200'
+                  : 'bg-amber-50 border-amber-200';
+          const headerColor = fetchFailed
+            ? 'text-gray-400'
+            : isUnconfigured
+              ? 'text-gray-500'
+              : isEmpty
+                ? 'text-amber-600'
+                : isReady
+                  ? 'text-emerald-600'
+                  : 'text-amber-600';
+
+          return (
+            <div className={`rounded-2xl p-4 border ${containerCls}`} data-testid="pinecone-health-tile">
+              <div className="flex items-center gap-3 mb-3">
+                <Database size={18} className={fetchFailed || isUnconfigured ? 'text-gray-400' : isReady && !isEmpty ? 'text-emerald-500' : 'text-amber-500'} />
+                <div className="flex-1 min-w-0">
+                  <p className={`text-sm font-semibold ${headerColor}`} data-testid="pinecone-health-status">
+                    Pinecone vector index
+                    {fetchFailed && ' — health check unavailable'}
+                    {!fetchFailed && isUnconfigured && ' — not configured'}
+                    {!fetchFailed && !isUnconfigured && ` — ${ph?.index_name ?? '—'}`}
+                  </p>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    {fetchFailed
+                      ? 'Could not reach the health endpoint — check backend logs'
+                      : isUnconfigured
+                        ? 'Set PINECONE_KEY + PINECONE_INDEX to enable'
+                        : `${ph?.dimensions ?? '—'}-dim cosine · serverless`}
+                  </p>
+                </div>
+
+                {!fetchFailed && hasWarning && (
+                  <span className="flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+                    <AlertTriangle size={11} />
+                    {isUnconfigured ? 'Unconfigured' : 'Empty index'}
+                  </span>
+                )}
+                {fetchFailed && (
+                  <span className="flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 border border-gray-200">
+                    <AlertTriangle size={11} />
+                    Unavailable
+                  </span>
+                )}
+
+                <button
+                  onClick={loadPineconeHealth}
+                  disabled={pineconeLoading}
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-white/60"
+                  data-testid="button-refresh-pinecone"
+                  title="Refresh Pinecone health"
+                >
+                  <RefreshCw size={13} className={pineconeLoading ? 'animate-spin' : ''} />
+                </button>
+              </div>
+
+              {ph && !isUnconfigured && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+                  <div className="rounded-xl p-3 border border-white/70 bg-white/60">
+                    <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1">Status</p>
+                    <p className={`text-sm font-bold font-mono capitalize ${isReady ? 'text-emerald-600' : 'text-amber-600'}`} data-testid="pinecone-status-value">
+                      {status}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl p-3 border border-white/70 bg-white/60">
+                    <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1">Vectors</p>
+                    <p className="text-sm font-bold font-mono text-gray-900" data-testid="pinecone-vector-count">
+                      {ph.total_vectors != null ? ph.total_vectors.toLocaleString() : '—'}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl p-3 border border-white/70 bg-white/60">
+                    <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1">Query latency</p>
+                    <p className="text-sm font-bold font-mono" data-testid="pinecone-latency">
+                      {ph.latency_ms != null
+                        ? <LatencyBadge ms={ph.latency_ms} />
+                        : <span className="text-gray-400">—</span>}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl p-3 border border-white/70 bg-white/60">
+                    <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1">Index name</p>
+                    <p className="text-sm font-bold font-mono text-gray-700 truncate" title={ph.index_name}>
+                      {ph.index_name ?? '—'}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {ph?.error && (
+                <div className="flex items-start gap-2 p-2 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700 mb-3">
+                  <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+                  <span className="font-mono break-all">{ph.error}</span>
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[11px] text-gray-500 font-medium">Switch active retriever:</span>
+                {['pinecone_vector', 'mongodb_vector'].map((name) => (
+                  <button
+                    key={name}
+                    onClick={() => switchPineconeRetriever(name)}
+                    disabled={!!pineconeSwitch}
+                    data-testid={`pinecone-switch-${name}`}
+                    className={`text-[11px] px-2.5 py-1 rounded-lg border font-mono font-semibold transition-colors ${
+                      pineconeSwitch === name
+                        ? 'bg-violet-100 text-violet-700 border-violet-300 animate-pulse'
+                        : 'bg-white text-violet-600 border-violet-200 hover:bg-violet-50'
+                    }`}
+                  >
+                    {pineconeSwitch === name ? 'Switching…' : name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
         </SectionErrorBoundary>
 
         <SectionErrorBoundary name="Dependency Status">
