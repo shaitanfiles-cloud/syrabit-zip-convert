@@ -485,11 +485,33 @@ async def _fetch_chunks_semantic(
     can be deduplicated and reranked together.
     """
     try:
-        from providers.pinecone_ai import embed_one as _pc_embed
-        q_vec = await asyncio.wait_for(
-            _pc_embed(query, input_type="query"),
-            timeout=4.0,
-        )
+        # Embed the query using Cohere embed-multilingual-v3.0 (1024-dim) — the
+        # same model used for document ingestion in chunk_embedder.py — so query
+        # and chunk vectors are in the same embedding space and Pinecone's 1024-dim
+        # index dimensions match.  Pinecone's multilingual-e5-large (768-dim) would
+        # cause a dimension mismatch against the stored 1024-dim Cohere vectors.
+        q_vec: Optional[list] = None
+        try:
+            from providers.cohere import embed_query as _cohere_embed_query, ENABLED as _cohere_on
+            if _cohere_on:
+                q_vec = await asyncio.wait_for(
+                    _cohere_embed_query(query),
+                    timeout=4.0,
+                )
+        except Exception as _cohere_qerr:
+            logger.debug("[INTERNAL_RAG] Cohere query embed failed, falling back to Pinecone: %s", _cohere_qerr)
+
+        # Fallback: Pinecone Inference embed (only if Cohere is down)
+        if not q_vec:
+            try:
+                from providers.pinecone_ai import embed_one as _pc_embed
+                q_vec = await asyncio.wait_for(
+                    _pc_embed(query, input_type="query"),
+                    timeout=4.0,
+                )
+            except Exception as _pc_qerr:
+                logger.debug("[INTERNAL_RAG] Pinecone query embed also failed: %s", _pc_qerr)
+
         if not q_vec:
             return []
 
