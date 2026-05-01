@@ -76,6 +76,55 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+async function fillForm({ password = 'Password1!', confirmPassword = 'Password1!', agreed = false, consentDpdp = false } = {}) {
+  await act(async () => {
+    fireEvent.change(screen.getByPlaceholderText('Your name'), {
+      target: { value: 'Test User' },
+    });
+    fireEvent.change(screen.getByTestId('auth-email-input'), {
+      target: { value: 'user@test.com' },
+    });
+    fireEvent.change(screen.getByTestId('auth-password-input'), {
+      target: { value: password },
+    });
+    const [confirmInput] = screen.getAllByPlaceholderText('••••••••').slice(-1);
+    fireEvent.change(confirmInput, { target: { value: confirmPassword } });
+    if (agreed) {
+      fireEvent.click(screen.getByRole('button', { name: /agree to terms/i }));
+    }
+    if (consentDpdp) {
+      fireEvent.click(screen.getByRole('button', { name: /consent to data processing/i }));
+    }
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByTestId('auth-submit-button'));
+  });
+  await act(async () => {});
+}
+
+describe('SignupPage — handleSubmit validation guards', () => {
+  it('shows "Passwords do not match" and never calls signup when passwords differ', async () => {
+    render(<SignupPage />);
+    await fillForm({ password: 'Password1!', confirmPassword: 'Different1!', agreed: true, consentDpdp: true });
+    expect(screen.getByText('Passwords do not match')).toBeTruthy();
+    expect(mockSignup).not.toHaveBeenCalled();
+  });
+
+  it('shows "Please agree to the Terms of Service" and never calls signup when Terms unchecked', async () => {
+    render(<SignupPage />);
+    await fillForm({ password: 'Password1!', confirmPassword: 'Password1!', agreed: false, consentDpdp: true });
+    expect(screen.getByText('Please agree to the Terms of Service')).toBeTruthy();
+    expect(mockSignup).not.toHaveBeenCalled();
+  });
+
+  it('shows the DPDP error and never calls signup when DPDP consent is missing', async () => {
+    render(<SignupPage />);
+    await fillForm({ password: 'Password1!', confirmPassword: 'Password1!', agreed: true, consentDpdp: false });
+    expect(screen.getByText('Please provide consent for data processing under the DPDP Act')).toBeTruthy();
+    expect(mockSignup).not.toHaveBeenCalled();
+  });
+});
+
 describe('SignupPage — handleSubmit redirect logic', () => {
   it('navigates to /onboarding when user has onboarding_done=false', async () => {
     mockSignup.mockResolvedValueOnce({ role: '', onboarding_done: false });
