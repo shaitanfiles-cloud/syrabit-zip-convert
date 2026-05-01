@@ -1,12 +1,11 @@
 """Syrabit.ai — Database seeding logic."""
 import uuid, logging
 from datetime import datetime, timezone
-from config import SEED_DATA, ADMIN_ACCOUNTS
-from deps import db, pwd_ctx, is_mongo_available
+from config import SEED_DATA
+from deps import db, is_mongo_available
 
 logger = logging.getLogger(__name__)
 
-from db_ops import supa_get_user, supa_insert_user
 
 _seeded = False
 
@@ -19,33 +18,9 @@ async def ensure_seeded():
     if not await is_mongo_available():
         return
 
-    # Ensure admin users exist FIRST, independent of the structural-seed
-    # early-return below. Without this, adding a new entry to
-    # ADMIN_ACCOUNTS (e.g. ENABLE_E2E_ADMIN=true on an existing
-    # database) would never insert the row, and login would 401 forever.
-    try:
-        for admin_acc in ADMIN_ACCOUNTS:
-            existing = await supa_get_user(admin_acc["email"])
-            if not existing:
-                admin_doc = {
-                    "id": str(uuid.uuid4()),
-                    "name": admin_acc["name"],
-                    "email": admin_acc["email"],
-                    "password_hash": pwd_ctx.hash(admin_acc["password"]),
-                    "plan": "pro",
-                    "credits_used": 0,
-                    "credits_limit": 4000,
-                    "document_access": "full",
-                    "onboarding_done": True,
-                    "is_admin": True,
-                    "status": "active",
-                    "bio": "",
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                }
-                await supa_insert_user(admin_doc)
-                logger.info(f"Seeded admin user: {admin_acc['email']}")
-    except Exception as e:
-        logger.warning(f"Admin-account seed pass failed (non-fatal): {e}")
+    # Admin accounts are managed via Supabase Auth + the users table
+    # (is_admin=True). Use the Supabase dashboard to create or update them.
+    # No auto-seeding is done here.
 
     try:
         ahsec_exists  = await db.boards.find_one({"id": "b1"})
@@ -132,26 +107,5 @@ async def ensure_seeded():
             # Remove the dupe class
             await db.classes.delete_one({"id": dupe_id})
             logger.info(f"Dedup: removed duplicate class {dupe_id} (same as {canon_cls['id']})")
-    # Ensure admin user exists for each admin account in ADMIN_ACCOUNTS
-    for admin_acc in ADMIN_ACCOUNTS:
-        existing = await supa_get_user(admin_acc["email"])
-        if not existing:
-            admin_doc = {
-                "id": str(uuid.uuid4()),
-                "name": admin_acc["name"],
-                "email": admin_acc["email"],
-                "password_hash": pwd_ctx.hash(admin_acc["password"]),
-                "plan": "pro",
-                "credits_used": 0,
-                "credits_limit": 4000,
-                "document_access": "full",
-                "onboarding_done": True,
-                "is_admin": True,
-                "status": "active",
-                "bio": "",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            await supa_insert_user(admin_doc)
-            logger.info(f"Seeded admin user: {admin_acc['email']}")
     _seeded = True
     logger.info("Content seeded successfully")

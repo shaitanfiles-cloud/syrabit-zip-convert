@@ -8,11 +8,12 @@ from fastapi import (
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
+import os as _os
+
 from models import (
     AdminLoginReq, UserStatusUpdate, UserPlanUpdate, UserRoleUpdate, UserCreditsUpdate,
 )
 from config import (
-    ADMIN_ACCOUNTS,
     ADMIN_JWT_SECRET,
     COOKIE_DOMAIN,
     COOKIE_SAMESITE,
@@ -38,6 +39,7 @@ from db_ops import (
     _pg_rows,
     _supa,
     supa_count_users,
+    supa_get_user,
     supa_get_user_by_id,
     supa_get_users_by_ids,
     supa_insert_activity_log,
@@ -47,6 +49,22 @@ from db_ops import (
 from analytics_helpers import get_recent_user_events, get_session_metrics
 import cloudflare_client
 from cf_access import require_cf_access_admin
+
+# Supabase Auth error class — raised on wrong email/password.
+try:
+    from supabase_auth.errors import AuthApiError as _SupaAuthApiError
+except ImportError:
+    class _SupaAuthApiError(Exception):  # noqa: N818
+        pass
+
+# E2E test backdoor — only active when ENABLE_E2E_ADMIN=1/true/yes.
+# Never set this in production.
+_E2E_ADMIN_ENABLED: bool = _os.environ.get("ENABLE_E2E_ADMIN", "").strip().lower() in ("1", "true", "yes")
+_E2E_ADMIN: dict = {
+    "email": "e2e-admin@syrabit-e2e.com",
+    "password": "e2e-test-admin-2026",
+    "name": "E2E Test Admin",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -67,48 +85,78 @@ async def admin_login(
     # request before the password compare in production.
     _cf_access_claims: Optional[dict] = Depends(require_cf_access_admin),
 ):
-    # Task #700 — defensive normalisation + structured failure logging.
-    # Login was returning a generic "Invalid credentials" even when the
-    # email/password were correct because (a) the env-side parser was
-    # dropping wrapping quotes only on passwords, and (b) the form was
-    # round-tripping a stray space/newline. We strip on both sides now,
-    # and log the exact failure reason server-side (without echoing the
-    # password) so future regressions are immediately visible in logs.
     submitted_email = (data.email or "").strip().lower()
     submitted_password = (data.password or "").strip()
 
-    if not ADMIN_ACCOUNTS:
-        logger.critical(
-            "admin_login refused — ADMIN_ACCOUNTS is empty (env not configured); "
-            "submitted_email=%r", submitted_email,
-        )
-        raise HTTPException(status_code=503, detail="Admin login is not configured")
+    # ── E2E test backdoor ────────────────────────────────────────────────────
+    # Only active when ENABLE_E2E_ADMIN=1/true/yes. Never set in production.
+    # Bypasses Supabase Auth so integration test suites don't need a live
+    # Supabase instance.
+    if (
+        _E2E_ADMIN_ENABLED
+        and submitted_email == _E2E_ADMIN["email"]
+        and submitted_password == _E2E_ADMIN["password"]
+    ):
+        matched_email = _E2E_ADMIN["email"]
+        matched_name  = _E2E_ADMIN["name"]
+    else:
+        # ── Verify credentials via Supabase Auth ─────────────────────────────
+        # Admin accounts live in Supabase Auth + the `users` table
+        # (is_admin=True). No credentials are stored in Railway env vars.
+        if deps.supa is None:
+            logger.critical(
+                "admin_login refused — Supabase client not initialized; "
+                "check SUPABASE_URL and SUPABASE_SERVICE_KEY. submitted_email=%r",
+                submitted_email,
+            )
+            raise HTTPException(status_code=503, detail="Admin login is not configured")
 
-    matched = next(
-        (a for a in ADMIN_ACCOUNTS
-         if a["email"].lower() == submitted_email
-         and a["password"] == submitted_password),
-        None,
-    )
-    if not matched:
-        email_known = any(a["email"].lower() == submitted_email for a in ADMIN_ACCOUNTS)
-        reason = "wrong_password" if email_known else "unknown_email"
-        logger.warning(
-            "admin_login rejected — reason=%s submitted_email=%r configured_admins=%d",
-            reason, submitted_email, len(ADMIN_ACCOUNTS),
-        )
-        raise HTTPException(status_code=401, detail="Invalid admin credentials")
+        try:
+            auth_resp = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: deps.supa.auth.sign_in_with_password(
+                    {"email": submitted_email, "password": submitted_password}
+                ),
+            )
+            auth_user = auth_resp.user if auth_resp else None
+        except _SupaAuthApiError:
+            logger.warning(
+                "admin_login rejected — Supabase rejected credentials. submitted_email=%r",
+                submitted_email,
+            )
+            raise HTTPException(status_code=401, detail="Invalid admin credentials")
+        except Exception as _auth_exc:
+            logger.error("admin_login Supabase auth error: %s", _auth_exc)
+            raise HTTPException(status_code=503, detail="Authentication service unavailable")
 
-    # Token payload includes name so the frontend welcome toast can greet by name
+        if not auth_user:
+            raise HTTPException(status_code=401, detail="Invalid admin credentials")
+
+        # ── Confirm is_admin in the users table ──────────────────────────────
+        user_record = await supa_get_user(submitted_email)
+        if not user_record or not user_record.get("is_admin"):
+            logger.warning(
+                "admin_login denied — account not flagged is_admin. submitted_email=%r",
+                submitted_email,
+            )
+            raise HTTPException(status_code=403, detail="Not an admin account")
+
+        matched_email = submitted_email
+        matched_name  = user_record.get("name") or submitted_email
+
+    # ── Issue admin JWT (24-hour session) ────────────────────────────────────
+    # Token payload includes name so the frontend welcome toast can greet
+    # by name. Signed with ADMIN_JWT_SECRET (distinct from JWT_SECRET) so
+    # admin tokens are cryptographically segregated from user tokens.
     token = create_token(
         {
-            "sub":      matched["email"],
-            "email":    matched["email"],
-            "name":     matched["name"],
+            "sub":      matched_email,
+            "email":    matched_email,
+            "name":     matched_name,
             "is_admin": True,
         },
         secret=ADMIN_JWT_SECRET,
-        expires_delta=60 * 24,   # 24-hour session
+        expires_delta=60 * 24,
     )
     _ck = dict(key="syrabit_admin_session", value=token, httponly=True, secure=SECURE_COOKIES, samesite=COOKIE_SAMESITE, max_age=60 * 24 * 60)
     if COOKIE_DOMAIN:
@@ -121,8 +169,8 @@ async def admin_login(
     try:
         if await is_mongo_available():
             await db.admin_login_log.insert_one({
-                "email": matched["email"],
-                "name": matched["name"],
+                "email": matched_email,
+                "name":  matched_name,
                 "success": True,
                 "ts": datetime.now(timezone.utc),
                 "cf_access_email": (_cf_access_claims or {}).get("email"),
@@ -133,8 +181,8 @@ async def admin_login(
     return {
         "access_token": token,
         "token_type":   "bearer",
-        "email":        matched["email"],
-        "name":         matched["name"],
+        "email":        matched_email,
+        "name":         matched_name,
     }
 
 @router.post("/auth/refresh")

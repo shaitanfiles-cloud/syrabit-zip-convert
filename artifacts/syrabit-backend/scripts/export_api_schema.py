@@ -57,7 +57,6 @@ def main() -> int:
         Configurator.set_runtime_env("MONGO_URL", "mongodb://localhost:27017/openapi-dump")
         Configurator.set_runtime_env("JWT_SECRET", secrets.token_hex(48))
         Configurator.set_runtime_env("ADMIN_JWT_SECRET", secrets.token_hex(48))
-        Configurator.set_runtime_env("ADMIN_PASSWORDS", "openapi-dump-no-real-password")
 
         from _deps_stub import install_deps_stub  # noqa: E402
 

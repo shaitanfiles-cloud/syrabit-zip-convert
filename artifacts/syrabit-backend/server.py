@@ -58,10 +58,9 @@ _configure_logging()
 
 def _validate_env():
     _required = {
-        "MONGO_URL": "MongoDB connection string (content/RAG database)",
-        "JWT_SECRET": "JWT signing secret for user auth tokens",
+        "MONGO_URL":       "MongoDB connection string (content/RAG database)",
+        "JWT_SECRET":      "JWT signing secret for user auth tokens",
         "ADMIN_JWT_SECRET": "JWT signing secret for admin auth tokens",
-        "ADMIN_PASSWORDS": "Comma-separated admin account passwords",
     }
     _recommended = {
         "GROQ_API_KEY": "Groq LLM API key (primary AI provider)",
@@ -102,6 +101,10 @@ def _validate_env():
         "BASETEN_API_KEY":    "baseten/v1",
     }
     # Keys that must always be present in Railway (no CF Gateway substitute).
+    # NOTE: Admin and staff credentials are now managed via Supabase Auth
+    # and the `users` table (is_admin / role fields). ADMIN_EMAILS,
+    # ADMIN_PASSWORDS, ADMIN_NAMES, and STAFF_PASSWORDS are no longer needed
+    # in Railway — delete them from your Railway project to reduce secret sprawl.
     _ALWAYS_NEEDED = [
         "MONGO_URL",
         "JWT_SECRET",
@@ -114,9 +117,6 @@ def _validate_env():
         "UPSTASH_REDIS_REST_URL",
         "UPSTASH_REDIS_REST_TOKEN",
         "CLOUDFLARE_API_TOKEN",
-        "ADMIN_EMAILS",
-        "ADMIN_PASSWORDS",
-        "ADMIN_NAMES",
         "FRONTEND_URL",
     ]
     lines = ["─── Railway / Production Env-Var Audit ───"]

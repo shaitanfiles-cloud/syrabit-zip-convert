@@ -4,7 +4,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 __all__ = [
-    "ADMIN_ACCOUNTS", "ADMIN_JWT_SECRET",
+    "ADMIN_JWT_SECRET",
     "CF_CACHE_TTL", "CF_GATEWAY_ENABLED",
     "CF_TURNSTILE_ENABLED", "CF_TURNSTILE_SECRET_KEY",
     "CHAT_ENHANCE_ENABLED",
@@ -757,74 +757,15 @@ if _apprunner_url:
 CORS_ORIGIN_REGEX = None
 
 # ── Admin accounts ────────────────────────────────────────────────────────────
-# Admin accounts loaded from environment (no credentials in source code).
+# Admin credentials are now managed entirely via Supabase Auth + the
+# `users` table (is_admin=True flag). The old ADMIN_EMAILS / ADMIN_PASSWORDS /
+# ADMIN_NAMES env vars have been removed. Set or update admin accounts
+# directly in the Supabase dashboard; no Railway redeployment required.
 #
-# Task #700 hardening — the parser strips wrapping quotes/whitespace from
-# every field (not just passwords) because operators routinely paste
-# values like `"admin@syrabit.ai"` into Railway/Cloudflare dashboards
-# which would otherwise compare unequal to a plain `admin@syrabit.ai`
-# from the login form. We also log a structured WARN on length-mismatch
-# so future drift between ADMIN_EMAILS / ADMIN_PASSWORDS / ADMIN_NAMES
-# is obvious in startup logs instead of silently dropping accounts.
-def _strip_env_field(raw: str) -> str:
-    s = (raw or "").strip()
-    # Strip a single layer of wrapping quotes (handles `"foo"` and `'foo'`)
-    if len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
-        s = s[1:-1].strip()
-    return s
-
-
-def _split_csv_env(name: str) -> list:
-    raw = os.environ.get(name, "")
-    return [_strip_env_field(p) for p in raw.split(",") if _strip_env_field(p)]
-
-
-def _load_admin_accounts():
-    emails    = _split_csv_env("ADMIN_EMAILS")
-    passwords = _split_csv_env("ADMIN_PASSWORDS")
-    names     = _split_csv_env("ADMIN_NAMES")
-    n = min(len(emails), len(passwords), len(names))
-    if not n:
-        _cfg_log.critical(
-            "ADMIN ACCOUNTS NOT CONFIGURED — emails=%d passwords=%d names=%d. "
-            "Admin login will reject every request until ADMIN_EMAILS / "
-            "ADMIN_PASSWORDS / ADMIN_NAMES are set (comma-separated, equal length).",
-            len(emails), len(passwords), len(names),
-        )
-        return []
-    if not (len(emails) == len(passwords) == len(names)):
-        _cfg_log.warning(
-            "ADMIN ACCOUNTS MISALIGNED — emails=%d passwords=%d names=%d; "
-            "using first %d (extras dropped). Re-align the three env vars "
-            "to silence this warning.",
-            len(emails), len(passwords), len(names), n,
-        )
-    # Normalise emails to lowercase once at parse-time so login compares
-    # lowercase-vs-lowercase regardless of how the row was entered.
-    return [{"email": emails[i].lower(), "password": passwords[i], "name": names[i]}
-            for i in range(n)]
-
-
-ADMIN_ACCOUNTS = _load_admin_accounts()
-
-_E2E_ADMIN_ENABLED = os.environ.get('ENABLE_E2E_ADMIN', '').strip().lower() in ('1', 'true', 'yes')
-_E2E_ADMIN = {
-    # NB: Pydantic's `EmailStr` validator (via `email-validator`)
-    # rejects IETF special-use TLDs like `.test`, so a `@*.test`
-    # address would fail with HTTP 422 at the very first step of
-    # POST /api/auth/login. Use a non-special domain that is
-    # obviously test-only so it can't collide with a real signup.
-    "email": "e2e-admin@syrabit-e2e.com",
-    "password": "e2e-test-admin-2026",
-    "name": "E2E Test Admin",
-}
-if _E2E_ADMIN_ENABLED and not any(a["email"] == _E2E_ADMIN["email"] for a in ADMIN_ACCOUNTS):
-    ADMIN_ACCOUNTS.append(_E2E_ADMIN)
-    import logging as _adm_log
-    _adm_log.getLogger("config").info("E2E test admin account enabled (ENABLE_E2E_ADMIN=true)")
-
-ADMIN_EMAIL    = ADMIN_ACCOUNTS[0]["email"]    if ADMIN_ACCOUNTS else ""
-ADMIN_PASSWORD = ADMIN_ACCOUNTS[0]["password"] if ADMIN_ACCOUNTS else ""
+# Staff credentials follow the same pattern: staff users sign in via the
+# standard Supabase flow and are identified by role='staff' in the users
+# table. The STAFF_PASSWORDS env var was only ever needed for the one-time
+# seed script (scripts/seed_staff_users.py) and is not used at runtime.
 
 _PG_DSN_RAW = os.environ.get("DATABASE_URL", "") or os.environ.get("SUPABASE_DB_URL", "")
 _PG_DSN = _PG_DSN_RAW.strip().strip('"').strip("'").strip()

@@ -60,8 +60,6 @@ def _set_dummy_env() -> None:
       reusing the same value raises ``ADMIN_JWT_SECRET must be
       different from JWT_SECRET``. Two independent ``token_hex(48)``
       calls satisfy this.
-    * ``ADMIN_PASSWORDS`` must be set and non-empty.
-
     We **overwrite** these vars unconditionally rather than using
     ``setdefault`` so that a runner with stale / bad placeholders
     inherited from a parent shell (e.g. ``JWT_SECRET=test`` left over
@@ -73,7 +71,6 @@ def _set_dummy_env() -> None:
     Configurator.set_runtime_env("MONGO_URL", "mongodb://localhost:27017/openapi-dump")
     Configurator.set_runtime_env("JWT_SECRET", secrets.token_hex(48))
     Configurator.set_runtime_env("ADMIN_JWT_SECRET", secrets.token_hex(48))
-    Configurator.set_runtime_env("ADMIN_PASSWORDS", "openapi-dump-no-real-password")
 
 
 def _install_deps_stub() -> None:
