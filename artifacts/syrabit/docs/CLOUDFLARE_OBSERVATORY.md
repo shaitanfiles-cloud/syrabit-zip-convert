@@ -270,7 +270,7 @@ team knows the paging chain has been verified against the live environment.
 
 | Date | Verified by | Outcome | Notes |
 |------|-------------|---------|-------|
-| _pending_ | — | — | Live Cloudflare dashboard + Slack access required; run the steps above and record here. |
+| 2026-05-01 | automated code review | Code-level PASS; live delivery unconfirmed | All code paths verified correct (Task #130 wires `OBSERVATORY_ALERT_SLACK_WEBHOOK_ID` → `mechanisms.webhooks`; Task #139 makes weekly audit hard-FAIL on missing webhook; Task #140 documents steps). **Live delivery test is still pending** — requires Cloudflare dashboard access + a live Slack workspace to lower a threshold, trigger a manual Lighthouse run, and confirm the POST fires to the channel. Record that result as a new row here once completed. |
 
 ---
 
