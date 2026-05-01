@@ -64,7 +64,7 @@ export default function LoginPage() {
       toast.success('Welcome back!');
       setTimeout(() => {
         const role = user.role || '';
-        if (role === 'staff') {
+        if (role === 'staff' || role === 'admin') {
           navigate('/staff');
         } else if (!user.onboarding_done) {
           navigate('/onboarding');

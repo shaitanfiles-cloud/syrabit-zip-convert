@@ -36,6 +36,10 @@ export default function GoogleOAuthCallbackEffect() {
       return;
     }
     if (!intent) return;
+    if (intent !== 'signin_with' && intent !== 'signup_with') {
+      try { sessionStorage.removeItem(GOOGLE_OAUTH_INTENT_KEY); } catch {}
+      return;
+    }
 
     try {
       sessionStorage.removeItem(GOOGLE_OAUTH_INTENT_KEY);
