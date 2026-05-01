@@ -60,14 +60,14 @@ below.
 
 ```bash
 CLOUDFLARE_API_TOKEN=<your-token> \
-  node -e "
+  node -e "(async () => {
     const r = await fetch(
       'https://api.cloudflare.com/client/v4/accounts/d66e40eac539fff1db270fddf384a5ec/mtls_certificates',
       { headers: { Authorization: 'Bearer ' + process.env.CLOUDFLARE_API_TOKEN } }
     );
     const j = await r.json();
     console.log(j.result.map(c => c.name + '  ' + c.id + '  ' + c.expires_on));
-  "
+  })()"
 ```
 
 Expected: `syrabit-railway-mtls  <uuid>  <expiry-date>` appears in the output.
