@@ -732,7 +732,7 @@ def test_build_flashcards_qa_with_empty_strings_are_skipped(
 
 
 def test_build_flashcards_corrupt_json_in_structured_produces_zero_cards(
-    edu_app, fake_conn_factory
+    edu_app, fake_conn_factory, caplog
 ):
     """When a generated note's ``structured`` column contains invalid JSON
     (e.g. a truncated AI response), ``json.loads()`` raises and the
@@ -743,18 +743,30 @@ def test_build_flashcards_corrupt_json_in_structured_produces_zero_cards(
     We set ``row["structured"]`` directly to a malformed string, bypassing
     ``_make_generated_note_row``'s JSON serialisation so the corrupt payload
     reaches the parser intact.
+
+    A WARNING log must also be emitted so corrupted notes are visible in
+    production logs rather than silently producing 0 cards.
     """
+    import logging
+
     row = _make_generated_note_row(note_id="gen-corrupt", generated=True)
     row["structured"] = "{invalid json"  # truncated / corrupt AI output
 
     conn = fake_conn_factory(responses=[[row]])
 
-    res = edu_app.post("/api/edu/flashcards/build", json={})
+    with caplog.at_level(logging.WARNING):
+        res = edu_app.post("/api/edu/flashcards/build", json={})
+
     assert res.status_code == 200, res.text
     assert res.json() == {"ok": True, "created": 0}, (
         "Corrupt JSON in structured must degrade to 0 cards, not a 500"
     )
     assert _flashcard_inserts(conn) == [], "No edu_flashcards INSERTs on corrupt JSON"
+
+    warning_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("gen-corrupt" in m and "[edu_study]" in m for m in warning_msgs), (
+        f"Expected a [edu_study] WARNING mentioning note id 'gen-corrupt'; got: {warning_msgs}"
+    )
 
 
 def test_build_flashcards_mnemonic_with_empty_topic_or_phrase_is_skipped(

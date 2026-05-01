@@ -2101,7 +2101,11 @@ async def build_flashcards(req: CardBuildReq, request: Request,
                 if isinstance(structured_raw, str):
                     try:
                         structured_raw = json.loads(structured_raw)
-                    except Exception:
+                    except Exception as exc:
+                        logger.warning(
+                            f"[edu_study] note {note_id!r} has corrupted structured JSON"
+                            f" — flashcards skipped ({type(exc).__name__}: {exc})"
+                        )
                         structured_raw = None
                 structured_raw = structured_raw or {}
 
