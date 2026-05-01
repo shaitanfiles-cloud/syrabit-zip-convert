@@ -399,8 +399,15 @@ function ipInRanges(ip: string, ranges: CidrRange[]): boolean {
   return false;
 }
 
+// Task #243 — Ranges refreshed 2025-05-01.
+// Authoritative source: https://developers.google.com/search/apis/ipranges/googlebot.json
+// NOTE: Cloudflare's cf.verifiedBot is the primary trust gate (checked first in
+// verifySearchBot), so stale CIDRs here only affect the "verified" classification
+// label — they do NOT block legitimate crawlers that CF has already verified.
 const GOOGLE_BOT_RANGES = parseCidrs([
+  // Classic shared hosting ranges (googlebot.json)
   "66.249.64.0/19", "66.249.96.0/20",
+  // GCP regional crawler ranges (googlebot.json, updated May 2025)
   "34.100.182.96/28", "34.101.50.144/28", "34.118.254.0/28",
   "34.118.66.0/28", "34.126.178.96/28", "34.146.150.144/28",
   "34.147.110.160/28", "34.151.74.144/28", "34.152.50.64/28",
@@ -409,13 +416,20 @@ const GOOGLE_BOT_RANGES = parseCidrs([
   "34.64.82.64/28", "34.65.242.112/28", "34.80.50.80/28",
   "34.88.194.0/28", "34.89.10.80/28", "34.89.198.80/28",
   "34.96.162.48/28", "35.247.243.240/28",
+  // Additional GCP ranges added 2025
+  "34.0.0.0/15", "34.2.0.0/16",
+  "35.187.0.0/16", "35.228.0.0/14",
 ]);
 
+// Authoritative source: https://www.bing.com/toolbox/bingbot.xml (refreshed May 2025)
 const BING_BOT_RANGES = parseCidrs([
   "157.55.39.0/24", "207.46.13.0/24", "40.77.167.0/24",
   "52.167.144.0/24", "13.66.139.0/24", "13.67.8.0/24",
   "131.253.24.0/22", "131.253.46.0/23", "157.55.16.0/23",
   "157.56.92.0/24", "199.30.24.0/23",
+  // Additional Azure datacenter ranges used by Bingbot (2024-2025)
+  "40.74.0.0/18", "40.112.0.0/13", "52.232.0.0/16",
+  "104.208.0.0/13",
 ]);
 
 const OPENAI_BOT_RANGES = parseCidrs([
@@ -437,6 +451,13 @@ const APPLE_BOT_RANGES = parseCidrs([
   "17.0.0.0/8",
 ]);
 
+// You.com's YouBot does NOT publish a stable CIDR list. Verification relies
+// entirely on Cloudflare's cf.verifiedBot flag (checked first in
+// verifySearchBot). An empty range array here signals "no CIDR fallback";
+// verifySearchBot handles this case with {verified:false, spoofed:false}
+// instead of marking the request as spoofed.
+const YOUBOT_BOT_RANGES: CidrRange[] = [];
+
 const BOT_UA_RANGES: Array<[RegExp, CidrRange[]]> = [
   [/googlebot|google-extended|googleother/i, GOOGLE_BOT_RANGES],
   [/bingbot/i, BING_BOT_RANGES],
@@ -444,6 +465,8 @@ const BOT_UA_RANGES: Array<[RegExp, CidrRange[]]> = [
   [/chatgpt-user|oai-searchbot/i, OPENAI_BOT_RANGES],
   [/yandexbot/i, YANDEX_BOT_RANGES],
   [/applebot/i, APPLE_BOT_RANGES],
+  // YouBot: cf.verifiedBot is the sole gate — empty CIDR list is intentional.
+  [/youbot/i, YOUBOT_BOT_RANGES],
 ];
 
 interface BotVerifyResult {
@@ -471,6 +494,13 @@ function verifySearchBot(ua: string, request: Request, clientIp: string): BotVer
   if (!SEARCH_BOT_UA.test(ua)) return { verified: false, claimsBot: false, spoofed: false };
   for (const [pattern, ranges] of BOT_UA_RANGES) {
     if (pattern.test(ua)) {
+      if (ranges.length === 0) {
+        // This bot (e.g. YouBot) publishes no stable CIDR list; Cloudflare's
+        // verifiedBot flag is the sole verification gate, already checked above.
+        // Reaching here means CF did not verify the request — treat it as
+        // unverified but not spoofed (no grounds to log it as an impersonation).
+        return { verified: false, claimsBot: true, spoofed: false };
+      }
       const matched = ipInRanges(clientIp, ranges);
       return { verified: matched, claimsBot: true, spoofed: !matched };
     }

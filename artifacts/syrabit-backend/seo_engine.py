@@ -2462,8 +2462,22 @@ async def get_seo_page_typed(board: str, class_slug: str, subject_slug: str, top
         {"_id": 0},
     )
     if not page:
-        # 410 Gone tells crawlers the URL is permanently absent and to stop
-        # re-crawling it, reducing wasted crawl budget on unpublished paths.
+        # Distinguish permanently-gone from temporarily-unavailable:
+        #  404 — a draft/pending document exists; content may be published later.
+        #  410 — no document at all for these slugs; URL is permanently absent and
+        #         crawlers should stop re-visiting it (saves crawl budget).
+        draft = await _db.seo_pages.find_one(
+            {
+                "board_slug": board,
+                "class_slug": class_slug,
+                "subject_slug": subject_slug,
+                "topic_slug": topic_slug,
+                "page_type": page_type,
+            },
+            {"_id": 1},
+        )
+        if draft:
+            raise HTTPException(status_code=404, detail="Page not published")
         raise HTTPException(status_code=410, detail="Page not found")
     result = await _inject_qa(page)
     kw = _build_expanded_keywords(
@@ -4438,7 +4452,22 @@ async def get_seo_page_default(board: str, class_slug: str, subject_slug: str, t
         {"_id": 0},
     )
     if not page:
-        # 410 Gone — valid URL pattern but no published content in the database.
+        # Distinguish permanently-gone from temporarily-unavailable:
+        #  404 — a draft/pending "notes" document exists; content may publish later.
+        #  410 — no document at all for these slugs; URL is permanently absent so
+        #         crawlers should stop re-visiting it (saves crawl budget).
+        draft = await _db.seo_pages.find_one(
+            {
+                "board_slug": board,
+                "class_slug": class_slug,
+                "subject_slug": subject_slug,
+                "topic_slug": topic_slug,
+                "page_type": "notes",
+            },
+            {"_id": 1},
+        )
+        if draft:
+            raise HTTPException(status_code=404, detail="Page not published")
         raise HTTPException(status_code=410, detail="Page not found")
     result = await _inject_qa(page)
     kw = _build_expanded_keywords(
