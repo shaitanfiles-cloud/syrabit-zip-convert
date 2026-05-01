@@ -58,56 +58,101 @@ python scripts/validate_rag_parity.py
 
 ---
 
-## Drop MongoDB embedding arrays (Task #208)
+## Drop MongoDB embedding arrays (Task #208 / Task #216)
 
-After Pinecone parity is confirmed (≥95 % top-K overlap on 10+ queries), run
-this to reclaim ~8 KB per chunk document from MongoDB.
+After Pinecone parity is confirmed (≥70 % top-K overlap on the built-in
+5 AHSEC/SEBA queries, or a larger custom set), run this to reclaim ~8 KB
+per chunk document from MongoDB.  Each 1024-float embedding stored in Atlas
+inflates document reads with no query benefit once Pinecone is the active
+vector store.
 
-### Pre-flight
+### Pre-flight checklist
+
+Work through every item in order before running the drop.
 
 ```bash
-# 1. Validate Pinecone parity (requires ≥95% top-K overlap on 10+ real queries)
+# 1. Confirm chunks collection is non-empty (content must be ingested first)
+#    Connect to Atlas / mongosh and run:
+db.chunks.countDocuments()
+#    Expected: > 0
+
+# 2. Validate Pinecone parity (≥70% top-K overlap on all 5 built-in queries)
 python scripts/validate_rag_parity.py
-# Expected: "PARITY VALIDATED — N/N queries above 95% threshold"
+#    Expected: "PARITY VALIDATED — 5/5 queries above 70% threshold"
+#    For higher confidence, add more queries:
+python scripts/validate_rag_parity.py \
+    --queries "Newton laws of motion AHSEC Class 11" \
+              "Photosynthesis SEBA Class 10 Biology" \
+              "French Revolution AHSEC History" \
+              "Linear equations algebra SEBA Class 9" \
+              "Organic chemistry reactions AHSEC Class 12"
+#    Expected: "PARITY VALIDATED — 10/10 queries above 70% threshold"
 
-# 2. Confirm PINECONE_WRITE=true in env
-echo $PINECONE_WRITE
+# 3. Confirm PINECONE_WRITE=true (dual-write active — no new embeddings lost)
+echo $PINECONE_WRITE   # must print "true"
 
-# 3. Disable Atlas $vectorSearch fallback in RAG
-#    Set PINECONE_ATLAS_FALLBACK=false (or confirm it is already false)
+# 4. Confirm Atlas fallback is already disabled
+echo $PINECONE_ATLAS_FALLBACK   # must print "false"
+
+# 5. Confirm Atlas continuous backup is active in Atlas UI, OR take a
+#    manual snapshot before proceeding.
 ```
 
-### Drop the embedding field
+### Execute the drop
 
 ```bash
-# Dry run first — prints count, no writes
+# Step A — dry run: prints document count, makes no writes
 python scripts/drop_mongo_embeddings.py --dry-run
+#   Expected log line: "[DRY RUN] Would unset embedding on N chunk documents."
 
-# Validate on a single subject first (recommended)
+# Step B — validate on one subject first (optional but recommended)
 python scripts/drop_mongo_embeddings.py --subject-id <subject_id> --dry-run
 python scripts/drop_mongo_embeddings.py --subject-id <subject_id>
+#   Expected log line: "remaining_with_embedding (subject_id=<id>)=0"
 
-# Full drop — cursor-batched in groups of 500 to avoid collection lock
+# Step C — full drop across all chunks
 python scripts/drop_mongo_embeddings.py
+#   Expected log line: "remaining_with_embedding=0"
+#   Exit code 0 = success.  Exit code 1 = pre-flight guard failed, no writes.
 ```
 
-Exit code 0 = success. Exit code 1 = pre-flight guard failed (no writes made).
+### Drop the Atlas Vector Search index (manual, Atlas UI)
 
-### Drop the Atlas Vector Search index
+Run this only after the script logs `remaining_with_embedding=0`.
 
-After the script confirms `remaining_with_embedding=0`:
+1. Open **Atlas UI → Database → Browse Collections → chunks →
+   Indexes → Search Indexes**.
+2. Delete the index named **`vector_index`**.
+3. Confirm `ATLAS_VS_ENABLED` is **not** set (or is `false`) so startup
+   no longer calls `ensure_vector_index()`.
 
-1. Open **Atlas UI → Database → Browse Collections → chunks → Indexes → Search Indexes**.
-2. Delete the index named `vector_index` (or whatever you named it at creation).
-3. Confirm `ATLAS_VS_ENABLED` is **not** set (or set to `false`) so startup no
-   longer calls `ensure_vector_index()`.
+### Run evidence
 
-### Initial evidence (2026-05-01)
+#### Initial cutover (2026-05-01) — deferred, content not yet ingested
 
-Chunks collection was empty at cutover time (content not yet ingested).  Parity
-validation confirmed 0/0 overlap (both backends agree: empty results for all
-AHSEC/SEBA test queries).  Drop script will be run once content is ingested and
-parity re-validated with real chunks.
+| Metric | Value |
+|--------|-------|
+| Chunks with `embedding` field | 0 |
+| Parity queries passed | 0/5 (both backends returned empty — consistent) |
+| Dry-run output | `[DRY RUN] Would unset embedding on 0 chunk documents.` |
+| Drop executed | No — deferred until content is ingested |
+| Atlas vector index deleted | No — deferred |
+| Reason for deferral | `embed_chunks_bulk` had not run; chunks collection was empty at Pinecone cutover time |
+
+#### Post-ingestion run (date TBD) — to be filled in by operator
+
+| Metric | Value |
+|--------|-------|
+| Chunks with `embedding` field (pre-drop) | _fill in_ |
+| Parity queries passed | _fill in_ (e.g. "10/10 above 70% threshold") |
+| Dry-run reported count | _fill in_ |
+| Drop duration | _fill in_ (e.g. "42.3 s") |
+| `dropped` count logged | _fill in_ |
+| `failed` count logged | _fill in_ |
+| `remaining_with_embedding` after drop | _fill in_ (target: 0) |
+| Atlas vector index deleted | _fill in_ (Yes / No + date) |
+| Operator | _fill in_ |
+| Run date | _fill in_ |
 
 ### New ingestion behaviour
 
