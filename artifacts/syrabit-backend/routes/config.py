@@ -58,8 +58,8 @@ async def get_trustpilot_config() -> Dict[str, Any]:
 # Generates a unique per-user invitation link via Trustpilot's Invitations API.
 # Reviews submitted through an invitation link are tagged "Invited" by
 # Trustpilot — far less likely to be filtered than organic reviews.
-# Falls back to the generic profile URL when the user is unauthenticated or
-# the API call fails.
+# Requires authentication (401 for anonymous callers). Falls back to the
+# generic profile URL only for post-auth failures (API error, no email, etc.).
 
 _TP_INVITE_DAILY_LIMIT = int(os.environ.get("TRUSTPILOT_INVITE_DAILY_LIMIT") or 3)
 _TP_INVITE_WINDOW_S = 86400  # 24 h
@@ -74,8 +74,9 @@ async def generate_invitation_link(request: Request) -> Dict[str, Any]:
     The link is personalised with the user's email and display name so
     Trustpilot tags the resulting review as "Invited" (verified customer).
 
-    Auth: optional — if no session cookie/JWT is present the endpoint
-    immediately returns the generic fallback URL.
+    Auth: required — returns 401 if no valid session cookie/JWT is present.
+    Post-auth failures (Trustpilot API error, missing email, rate-limit)
+    fall back gracefully to the generic profile URL.
 
     Rate limit: max ``TRUSTPILOT_INVITE_DAILY_LIMIT`` (default 3) link
     generations per user per 24 h, enforced in-process via
@@ -129,7 +130,10 @@ async def generate_invitation_link(request: Request) -> Dict[str, Any]:
         check_rate_limit = None
 
     if not user:
-        return {"url": fallback_url, "source": "fallback_unauthenticated"}
+        raise HTTPException(
+            status_code=401,
+            detail="authentication_required",
+        )
 
     user_id = str(user.get("id") or user.get("_id") or "")
     if not user_id:

@@ -696,23 +696,22 @@ export const adminSeoResolveDuplicate = (token, pairId, action = 'ignore') =>
 /**
  * Task #155 — Request a unique per-user Trustpilot invitation link from
  * the backend. Authenticated via the session cookie so the server can
- * attach the user's email/name. Falls back to the generic profile URL
- * on any network or auth error.
+ * attach the user's email/name.
  *
- * @returns {Promise<string>} The invitation URL (or generic fallback).
+ * Throws on failure so the caller can distinguish error types:
+ *   - AxiosError with status 401 → user is not authenticated
+ *   - Any other error → network/API failure
+ * The caller is responsible for providing a fallback URL.
+ *
+ * @returns {Promise<string>} The personalised invitation URL.
  */
 export async function generateTrustpilotInvitationLink() {
-  const fallback = 'https://www.trustpilot.com/review/syrabit.ai';
-  try {
-    const res = await axios.post(
-      `${API_BASE}/trustpilot/invitation-link`,
-      {},
-      { withCredentials: true },
-    );
-    return res.data?.url || fallback;
-  } catch {
-    return fallback;
-  }
+  const res = await axios.post(
+    `${API_BASE}/trustpilot/invitation-link`,
+    {},
+    { withCredentials: true },
+  );
+  return res.data?.url || 'https://www.trustpilot.com/review/syrabit.ai';
 }
 
 export const seoRelatedByChapter = (chapterId, excludeTopicId = null, limit = 5) =>

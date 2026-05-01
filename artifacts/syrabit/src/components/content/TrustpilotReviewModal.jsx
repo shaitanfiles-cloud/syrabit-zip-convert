@@ -30,19 +30,32 @@ export default function TrustpilotReviewModal({
   const [inviteUrl, setInviteUrl] = useState(FALLBACK_URL);
   const [loadingUrl, setLoadingUrl] = useState(false);
   const [copied, setCopied] = useState(false);
+  // null | 'auth' | 'api'
+  const [urlError, setUrlError] = useState(null);
 
   useEffect(() => {
     if (!open) return;
     const script = buildReviewScript({ subjectName, boardName, className });
     setText(script);
     setCopied(false);
+    setUrlError(null);
 
     let cancelled = false;
     setLoadingUrl(true);
     setInviteUrl(FALLBACK_URL);
     generateTrustpilotInvitationLink()
-      .then((url) => { if (!cancelled) setInviteUrl(url || FALLBACK_URL); })
-      .catch(() => { if (!cancelled) setInviteUrl(FALLBACK_URL); })
+      .then((url) => {
+        if (!cancelled) {
+          setInviteUrl(url || FALLBACK_URL);
+          setUrlError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setInviteUrl(FALLBACK_URL);
+          setUrlError(err?.response?.status === 401 ? 'auth' : 'api');
+        }
+      })
       .finally(() => { if (!cancelled) setLoadingUrl(false); });
 
     return () => { cancelled = true; };
@@ -146,10 +159,22 @@ export default function TrustpilotReviewModal({
             className="w-full rounded-xl border border-border bg-muted/20 px-3.5 py-3 text-sm text-foreground placeholder:text-muted-foreground resize-none outline-none focus:border-violet-500/40 focus:ring-1 focus:ring-violet-500/20 transition-colors"
             aria-label="Review draft — edit before copying"
           />
-          <p className="text-[11px] text-muted-foreground mt-2">
-            Clicking the button below copies this text and opens Trustpilot in a new tab.
-            Paste the text into the Trustpilot review form.
-          </p>
+          {urlError === 'auth' && (
+            <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-2" role="alert">
+              Sign in to get a personalised review link — the button below will open our general Trustpilot page instead.
+            </p>
+          )}
+          {urlError === 'api' && (
+            <p className="text-[11px] text-muted-foreground mt-2" role="alert">
+              Couldn't generate a personalised link — the button below will open our Trustpilot page directly.
+            </p>
+          )}
+          {!urlError && (
+            <p className="text-[11px] text-muted-foreground mt-2">
+              Clicking the button below copies this text and opens Trustpilot in a new tab.
+              Paste the text into the Trustpilot review form.
+            </p>
+          )}
         </div>
 
         <div className="shrink-0 p-5 pt-3 border-t border-border/30 flex flex-col gap-2">
