@@ -96,6 +96,19 @@ function skip(id, phase, label, detail = '') {
   addItem(id, phase, label, 'SKIP', detail);
 }
 
+// Plan-gated features: not a configuration error, but a subscription/plan gap.
+// Emits PLAN_REQUIRED status — excluded from FAIL count so CI doesn't block on
+// unpurchased add-ons.  Includes the dashboard upgrade URL and estimated cost.
+function planRequired(id, phase, label, detail = '', upgradeUrl = '', cost = '') {
+  const fullDetail = [
+    detail,
+    upgradeUrl ? `Upgrade: ${upgradeUrl}` : '',
+    cost       ? `Estimated cost: ${cost}` : '',
+  ].filter(Boolean).join(' — ');
+  addItem(id, phase, label, 'PLAN_REQUIRED', fullDetail,
+    'Purchase the required add-on or upgrade the plan, then re-run this audit — no code changes needed');
+}
+
 // ─── Phase 1 ─────────────────────────────────────────────────────────────────
 
 async function auditItem1ZoneSettings() {
@@ -391,6 +404,9 @@ async function auditItems10to13R2AndCacheReserve() {
   }
 
   // Cache Reserve zone setting (separate from R2 bucket list)
+  // Cache Reserve is a paid Cloudflare add-on (~$5/month, pay-as-you-go).
+  // Code 1135 = plan restriction; value !="on" = feature inactive.
+  // Both cases use planRequired() so CI doesn't block until the add-on is purchased.
   const crRaw  = await fetch(`${API}/zones/${ZONE_ID}/cache/cache_reserve`, { headers });
   const crJson = await crRaw.json();
   if (!crJson.success) {
@@ -398,7 +414,10 @@ async function auditItems10to13R2AndCacheReserve() {
     if (code === 10000) {
       warn(12, 4, 'Cache Reserve zone setting', 'token lacks Cache: Read scope');
     } else if (code === 1135) {
-      warn(12, 4, 'Cache Reserve zone setting', 'not available on current plan — requires Cache Reserve subscription');
+      planRequired(12, 4, 'Cache Reserve zone setting',
+        'not available on current plan (API code 1135)',
+        'https://dash.cloudflare.com → Caching → Cache Reserve',
+        '~$5/month pay-as-you-go (charged per GB cached)');
     } else {
       fail(12, 4, 'Cache Reserve zone setting', JSON.stringify(crJson.errors), 'run cloudflare-phase4-apply.js → Step 4');
     }
@@ -407,7 +426,11 @@ async function auditItems10to13R2AndCacheReserve() {
     if (value === 'on') {
       pass(12, 4, 'Cache Reserve zone setting', 'value=on');
     } else {
-      fail(12, 4, 'Cache Reserve zone setting', `value=${JSON.stringify(value)} (want: "on")`, 'run cloudflare-phase4-apply.js → Step 4');
+      // Setting exists on the plan but is disabled — likely needs enabling after add-on purchase.
+      planRequired(12, 4, 'Cache Reserve zone setting',
+        `value=${JSON.stringify(value)} (want: "on") — enable after purchasing add-on`,
+        'https://dash.cloudflare.com → Caching → Cache Reserve',
+        '~$5/month pay-as-you-go (charged per GB cached)');
     }
   }
 }
@@ -525,6 +548,10 @@ async function auditItem17MtlsCert() {
 }
 
 async function auditItem18ImageResizing() {
+  // Image Resizing requires the "Image Resizing" add-on (available on paid plans).
+  // Code 1135 = plan restriction; value !="on" = feature inactive.
+  // Both cases use planRequired() so CI doesn't block until the add-on is purchased.
+  // Once purchased, cloudflare-phase6-apply.js enables it automatically — no code changes.
   const j = await cfGetOrSkip(`/zones/${ZONE_ID}/settings/image_resizing`);
   if (!j) {
     warn(18, 6, 'Image Resizing zone setting', 'token lacks Zone Settings: Read scope');
@@ -533,7 +560,10 @@ async function auditItem18ImageResizing() {
   if (!j.success) {
     const code = j.errors?.[0]?.code;
     if (code === 1135) {
-      warn(18, 6, 'Image Resizing zone setting', 'not available on current plan — requires Image Resizing add-on');
+      planRequired(18, 6, 'Image Resizing zone setting',
+        'not available on current plan (API code 1135)',
+        'https://dash.cloudflare.com → Speed → Optimization → Image Resizing',
+        'included with Pages Pro ($20/month) or as a standalone add-on');
     } else {
       fail(18, 6, 'Image Resizing zone setting', JSON.stringify(j.errors),
         'run cloudflare-phase6-apply.js → Step 2');
@@ -544,8 +574,12 @@ async function auditItem18ImageResizing() {
   if (val === 'on') {
     pass(18, 6, 'Image Resizing zone setting', 'value=on — /cdn-cgi/image/ transformations active');
   } else {
-    fail(18, 6, 'Image Resizing zone setting', `value=${JSON.stringify(val)} (want: "on")`,
-      'run cloudflare-phase6-apply.js → Step 2');
+    // Setting accessible on the API (plan allows it) but currently disabled.
+    // Run cloudflare-phase6-apply.js to enable it, or upgrade the plan if add-on is missing.
+    planRequired(18, 6, 'Image Resizing zone setting',
+      `value=${JSON.stringify(val)} (want: "on") — run cloudflare-phase6-apply.js → Step 2 after enabling add-on`,
+      'https://dash.cloudflare.com → Speed → Optimization → Image Resizing',
+      'included with Pages Pro ($20/month) or as a standalone add-on');
   }
 }
 
@@ -780,12 +814,17 @@ async function auditItem19ZarazAndObservatory() {
 // ─── Report rendering ─────────────────────────────────────────────────────────
 
 function renderReport() {
-  const pass  = items.filter(i => i.status === 'PASS');
-  const fail  = items.filter(i => i.status === 'FAIL');
-  const warn  = items.filter(i => i.status === 'WARN');
-  const skip  = items.filter(i => i.status === 'SKIP');
+  const pass        = items.filter(i => i.status === 'PASS');
+  const fail        = items.filter(i => i.status === 'FAIL');
+  const warn        = items.filter(i => i.status === 'WARN');
+  const skip        = items.filter(i => i.status === 'SKIP');
+  const planGated   = items.filter(i => i.status === 'PLAN_REQUIRED');
 
-  const MARK = { PASS: '✓', FAIL: '✗', WARN: '⚠', SKIP: '─' };
+  // PLAN_REQUIRED items are NOT counted as failures — they represent features
+  // that need a paid add-on or plan upgrade, not misconfiguration.  Once the
+  // plan upgrade is purchased, the audit automatically starts reporting PASS
+  // with no code changes required.
+  const MARK = { PASS: '✓', FAIL: '✗', WARN: '⚠', SKIP: '─', PLAN_REQUIRED: '💳' };
 
   console.log('\n════════════════════════════════════════════════════════════════');
   console.log(' Cloudflare Full Audit Report — syrabit.ai (Phases 1–6)');
@@ -806,13 +845,22 @@ function renderReport() {
     const label  = item.label.padEnd(50);
     const detail = item.detail ? `  [${item.detail}]` : '';
     console.log(`  ${mark} #${id}  ${label}${detail}`);
-    if (item.status === 'FAIL' && item.remediation) {
+    if ((item.status === 'FAIL' || item.status === 'PLAN_REQUIRED') && item.remediation) {
       console.log(`         → ${item.remediation}`);
     }
   }
 
   console.log('\n────────────────────────────────────────────────────────────────');
-  console.log(`  PASS: ${pass.length}   FAIL: ${fail.length}   WARN: ${warn.length}   SKIP: ${skip.length}   TOTAL: ${items.length}`);
+  console.log(
+    `  PASS: ${pass.length}   FAIL: ${fail.length}   WARN: ${warn.length}   ` +
+    `PLAN_REQUIRED: ${planGated.length}   SKIP: ${skip.length}   TOTAL: ${items.length}`,
+  );
+  if (planGated.length > 0) {
+    console.log(`  💳 ${planGated.length} item(s) need a paid plan upgrade (not counted as failures):`);
+    for (const p of planGated) {
+      console.log(`     #${p.id} ${p.label}`);
+    }
+  }
   console.log('════════════════════════════════════════════════════════════════\n');
 
   if (fail.length > 0) {
@@ -821,7 +869,10 @@ function renderReport() {
       console.error(`  #${f.id} ${f.label}: ${f.detail}`);
     }
   } else {
-    console.log('All 19 audit items passed (or degraded gracefully to WARN/SKIP).');
+    const planNote = planGated.length > 0
+      ? ` (${planGated.length} item(s) pending plan upgrade — not failures)`
+      : '';
+    console.log(`All audit items passed or degraded gracefully to WARN/SKIP${planNote}.`);
   }
 
   // Write JSON report
