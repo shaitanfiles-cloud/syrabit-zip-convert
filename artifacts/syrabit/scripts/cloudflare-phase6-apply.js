@@ -31,6 +31,8 @@
  *     node artifacts/syrabit/scripts/cloudflare-phase6-apply.js
  */
 
+const crypto     = require('crypto');
+
 const TOKEN      = process.env.CLOUDFLARE_API_TOKEN;
 const ZONE_ID    = process.env.CLOUDFLARE_ZONE_ID    || '5b8c97df4431491dc7f60ea72fb61871';
 const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID || 'd66e40eac539fff1db270fddf384a5ec';
@@ -86,6 +88,24 @@ function err(label) { console.log(`  ✗  ${label}`); }
 function info(msg)  { console.log(`  ℹ  ${msg}`); }
 function dry(label) { console.log(`  ─  [DRY-RUN] would: ${label}`); }
 
+/**
+ * Compute the SHA-256 fingerprint of a PEM-encoded certificate.
+ * The fingerprint is derived from the DER (binary) form of the certificate,
+ * which matches what `openssl x509 -fingerprint -sha256` produces.
+ * Returns lowercase hex without colons, matching the format expected by
+ * MtlsClientCertMiddleware's MTLS_CERT_SHA256 comparison.
+ *
+ * @param {string} pem  PEM-encoded certificate (BEGIN CERTIFICATE … END CERTIFICATE)
+ * @returns {string}    64-character lowercase hex SHA-256 fingerprint
+ */
+function computeCertFingerprint(pem) {
+  const der = Buffer.from(
+    pem.replace(/-----[^-]+-----/g, '').replace(/\s+/g, ''),
+    'base64',
+  );
+  return crypto.createHash('sha256').update(der).digest('hex');
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Step 1: Issue mTLS client certificate
 // ────────────────────────────────────────────────────────────────────────────
@@ -100,14 +120,22 @@ async function stepMtlsCert() {
     if (found) {
       ok(`mTLS certificate already exists: id=${found.id} expires=${found.expires_on}`);
       info(`Fill this certificate_id into workers/edge-proxy/wrangler.toml [[mtls_certificates]].`);
-      return found.id;
+      let fingerprint = null;
+      if (found.certificate) {
+        fingerprint = computeCertFingerprint(found.certificate);
+        ok(`SHA-256 fingerprint: ${fingerprint}`);
+      } else {
+        info('Certificate PEM not returned by list API — fingerprint cannot be computed automatically.');
+        info('Run: openssl x509 -fingerprint -sha256 -noout -in cert.pem | sed "s/.*=//;s/://g" | tr A-F a-f');
+      }
+      return { id: found.id, fingerprint };
     }
   }
 
   if (DRY_RUN) {
     dry('POST /accounts/{id}/mtls_certificates — issue syrabit-railway-mtls');
     info('After dry-run: fill the returned certificate_id into wrangler.toml and run wrangler deploy.');
-    return null;
+    return { id: null, fingerprint: null };
   }
 
   // Issue the certificate — Cloudflare generates the keypair server-side.
@@ -127,11 +155,16 @@ async function stepMtlsCert() {
     console.log('  • API token lacks "SSL and Certificates: Edit" scope.');
     console.log('  • Account is not on a plan that supports client certificates.');
     console.log('  • Use dash.cloudflare.com → SSL/TLS → Client Certificates → Create.');
-    return null;
+    return { id: null, fingerprint: null };
   }
 
   const cert = r.result;
+  const fingerprint = cert.certificate ? computeCertFingerprint(cert.certificate) : null;
+
   ok(`mTLS certificate issued: id=${cert.id} expires=${cert.expires_on}`);
+  if (fingerprint) {
+    ok(`SHA-256 fingerprint:     ${fingerprint}`);
+  }
   console.log('');
   console.log('  ══════════════════════════════════════════════════════════════');
   console.log('  SAVE THE PRIVATE KEY — it is shown only once:');
@@ -147,7 +180,7 @@ async function stepMtlsCert() {
   info('  3. Run: cd workers/edge-proxy && wrangler deploy');
   info('  4. Configure Railway to require mTLS (see docs/CLOUDFLARE_MTLS.md).');
 
-  return cert.id;
+  return { id: cert.id, fingerprint };
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -395,7 +428,7 @@ async function stepObservatory() {
 // ────────────────────────────────────────────────────────────────────────────
 // Step 5: Post-apply summary
 // ────────────────────────────────────────────────────────────────────────────
-function printSummary(certId) {
+function printSummary(certId, fingerprint) {
   console.log('\n── Phase 6 Post-Apply Checklist ──');
   console.log('');
   if (certId) {
@@ -405,8 +438,30 @@ function printSummary(certId) {
     console.log('  ③ Deploy the worker:         cd workers/edge-proxy && wrangler deploy');
     console.log('  ④ Configure Railway mTLS:    add the certificate to the Railway service (see docs/CLOUDFLARE_MTLS.md)');
     console.log('');
+    if (fingerprint) {
+      console.log('  ══════════════════════════════════════════════════════════════');
+      console.log('  SHA-256 fingerprint (lowercase hex, no colons):');
+      console.log(`    ${fingerprint}`);
+      console.log('');
+      console.log('  Store as Wrangler secret (used by MtlsClientCertMiddleware):');
+      console.log(`    echo "${fingerprint}" | wrangler secret put MTLS_CERT_SHA256 --name syrabit-edge`);
+      console.log('');
+      console.log('  Store as Railway environment variable:');
+      console.log(`    CF_MTLS_CERT_SHA256=${fingerprint}`);
+      console.log('  ══════════════════════════════════════════════════════════════');
+      console.log('');
+    } else {
+      console.log('  SHA-256 fingerprint: not available (cert PEM was not returned).');
+      console.log('  Compute it manually from the saved cert PEM:');
+      console.log('    openssl x509 -fingerprint -sha256 -noout -in cert.pem \\');
+      console.log('      | sed "s/.*=//;s/://g" | tr A-F a-f');
+      console.log('  Then run:');
+      console.log('    echo "<fingerprint>" | wrangler secret put MTLS_CERT_SHA256 --name syrabit-edge');
+      console.log('  And set Railway env var: CF_MTLS_CERT_SHA256=<fingerprint>');
+      console.log('');
+    }
   } else {
-    console.log('  mTLS certificate was not issued (already exists, dry-run, or error above).');
+    console.log('  mTLS certificate was not issued (dry-run or error above).');
     console.log('  If not yet done, issue it manually at dash.cloudflare.com → SSL/TLS → Client Certificates.');
     console.log('');
   }
@@ -441,11 +496,11 @@ async function main() {
   console.log(`GA4 ID:  ${GA4_ID || '(not set — Zaraz step will be skipped)'}`);
   console.log('');
 
-  const certId = await stepMtlsCert();
+  const { id: certId, fingerprint } = await stepMtlsCert();
   await stepImageResizing();
   await stepZaraz();
   await stepObservatory();
-  printSummary(certId);
+  printSummary(certId, fingerprint);
 }
 
 main().catch((err) => {
