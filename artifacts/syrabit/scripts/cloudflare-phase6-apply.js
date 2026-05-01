@@ -417,8 +417,11 @@ function printSummary(certId) {
   console.log('    (client-side gtag.js is disabled — Zaraz handles all tracking)');
   console.log('');
   console.log('  Observatory:');
-  console.log('  • Set Core Web Vitals alert thresholds at dash.cloudflare.com → Speed → Observatory');
-  console.log('    (LCP > 2.5 s, CLS > 0.1, INP > 200 ms → alert admin@syrabit.ai)');
+  console.log('  • Step 4b above auto-creates the speed_insights notification policy');
+  console.log('    (LCP > 2.5 s, CLS > 0.1, INP > 200 ms → email admin@syrabit.ai).');
+  console.log('    If Step 4b printed a manual-fallback link, add the policy at:');
+  console.log('    dash.cloudflare.com → Notifications → Add → "Speed Insights".');
+  console.log('    See docs/CLOUDFLARE_OBSERVATORY.md for the full on-call runbook.');
   console.log('');
   console.log('  Nightly smoke:');
   console.log('  • Phase 6 assertions are added to nightly-smoke.js and will run in the next CI cycle.');
