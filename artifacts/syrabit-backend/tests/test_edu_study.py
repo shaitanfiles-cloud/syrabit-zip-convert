@@ -669,3 +669,63 @@ def test_build_flashcards_mixed_note_list_routes_each_correctly(
     assert "What is mitosis?" in fronts   # generated Q&A path
     assert "ATP" in fronts                # manual heuristic path
     assert "two identical cells" in backs
+
+
+# ─────────────── Task #224 — edge-case fallbacks ───────────────
+
+def test_build_flashcards_missing_structured_field_produces_zero_cards(
+    edu_app, fake_conn_factory
+):
+    """A generated note where the ``structured`` column is absent from the DB
+    row (``"structured" not in n.keys()``) must produce 0 cards and return
+    normally — no KeyError, no crash.
+
+    ``_make_generated_note_row()`` with no ``structured`` argument omits the
+    key entirely, exercising the ``else None`` branch in build_flashcards.
+    """
+    row = _make_generated_note_row(note_id="gen-no-struct", generated=True)
+    assert "structured" not in row, "Precondition: key must be absent from row"
+
+    conn = fake_conn_factory(responses=[[row]])
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"ok": True, "created": 0}
+    assert _flashcard_inserts(conn) == [], "No INSERTs should happen when structured is absent"
+
+
+def test_build_flashcards_qa_with_empty_strings_are_skipped(
+    edu_app, fake_conn_factory
+):
+    """Q&A pairs where ``q`` or ``a`` is an empty string after stripping must
+    be silently skipped — only pairs with both non-empty strings become cards.
+
+    Mix:
+      - {"q": "", "a": "Valid answer"} → skipped (empty question)
+      - {"q": "Valid question?", "a": ""} → skipped (empty answer)
+      - {"q": "What is osmosis?", "a": "Movement of water across a membrane."} → card
+    Expected: exactly 1 card created, no junk fronts/backs.
+    """
+    structured = {
+        "qa": [
+            {"q": "", "a": "Valid answer but no question"},
+            {"q": "Valid question?", "a": ""},
+            {"q": "What is osmosis?", "a": "Movement of water across a membrane."},
+        ],
+        "mnemonics": [],
+    }
+    conn = fake_conn_factory(
+        responses=[[_make_generated_note_row(note_id="gen-empty-qa", structured=structured)]]
+    )
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"ok": True, "created": 1}, (
+        "Only the one fully-populated Q&A pair should produce a card"
+    )
+
+    cards = _flashcard_inserts(conn)
+    assert len(cards) == 1
+    front, back = cards[0]
+    assert front == "What is osmosis?"
+    assert "membrane" in back
