@@ -1256,3 +1256,40 @@ def test_build_flashcards_mnemonic_cap_counts_positions_not_valid_entries(
             f"{excluded_front!r} (position {excluded_idx}) must not be stored; "
             f"blank entries at positions 0–1 already consumed two of the four cap slots"
         )
+
+
+def test_build_flashcards_qa_all_capped_positions_blank_yields_zero_cards(
+    edu_app, fake_conn_factory
+):
+    """All 8 capped positions (0–7) are blank; positions 8–9 are valid but unreachable.
+
+    The [:8] slice is applied before any validity filtering, so when every entry
+    in positions 0–7 has an empty ``q`` or ``a`` field, zero cards are created.
+    Positions 8 and 9 carry valid pairs but are never evaluated because they fall
+    outside the cap window.
+
+    A regression that changed the logic to "collect 8 valid pairs" would reach
+    positions 8–9 and return created: 2 — this test would catch it.
+    """
+    qa_pairs = (
+        [{"q": "", "a": ""}] * 8  # positions 0–7: all blank, fill the cap
+        + [{"q": "Valid Question 8", "a": "Valid Answer 8"},  # position 8: valid but out of cap
+           {"q": "Valid Question 9", "a": "Valid Answer 9"}]  # position 9: valid but out of cap
+    )
+    structured = {"qa": qa_pairs, "mnemonics": []}
+    conn = fake_conn_factory(
+        responses=[[_make_generated_note_row(note_id="qa-all-blank-cap", structured=structured)]]
+    )
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"ok": True, "created": 0}, (
+        f"Expected created: 0 when all 8 capped positions are blank; "
+        f"got {res.json()!r} — pairs at positions 8–9 must not be reached"
+    )
+
+    cards = _flashcard_inserts(conn)
+    assert len(cards) == 0, (
+        f"Expected 0 stored cards when all capped positions are blank; "
+        f"got {len(cards)} — the cap must apply before validity filtering"
+    )
