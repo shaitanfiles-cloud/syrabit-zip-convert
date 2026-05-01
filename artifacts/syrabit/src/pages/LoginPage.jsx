@@ -185,8 +185,12 @@ export default function LoginPage() {
             </div>
 
             {error && (
-              <div className="flex items-center gap-2 text-red-600 rounded-xl p-3 mb-5 text-sm"
-                style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}>
+              <div
+                id="login-error-message"
+                role="alert"
+                className="flex items-center gap-2 text-red-600 rounded-xl p-3 mb-5 text-sm"
+                style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}
+              >
                 <AlertCircle size={16} className="flex-shrink-0" />
                 {error}
               </div>
@@ -226,6 +230,8 @@ export default function LoginPage() {
                     className="pl-10 h-11"
                     style={{ scrollMarginBottom: '4rem' }}
                     required
+                    aria-invalid={error ? true : undefined}
+                    aria-describedby={error ? 'login-error-message' : undefined}
                     data-testid="auth-email-input"
                   />
                 </div>
@@ -249,6 +255,8 @@ export default function LoginPage() {
                     className="pl-10 pr-11 h-11"
                     style={{ scrollMarginBottom: '4rem' }}
                     required
+                    aria-invalid={error ? true : undefined}
+                    aria-describedby={error ? 'login-error-message' : undefined}
                     data-testid="auth-password-input"
                   />
                   <button
