@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Mail, Lock, Eye, EyeOff, Loader2, User, CheckCircle, AlertCircle, BookOpen, Zap, GraduationCap } from 'lucide-react';
 import { usePublicStats } from '@/hooks/usePublicStats';
@@ -45,8 +45,20 @@ export default function SignupPage() {
   const [consentDpdp, setConsentDpdp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const { signup } = useAuth();
+  const { signup, user } = useAuth();
   const navigate = useNavigate();
+
+  // Task #156 — after Google OAuth redirect, Supabase fires onAuthStateChange
+  // which sets `user` in AuthContext.  Always send new Google OAuth users through
+  // onboarding (new account auto-created by /api/auth/supabase-session).
+  useEffect(() => {
+    const intent = sessionStorage.getItem('syrabit_google_oauth_intent');
+    if (!user || !intent) return;
+    if (intent !== 'signup_with') return;
+    sessionStorage.removeItem('syrabit_google_oauth_intent');
+    toast.success('Account created! Welcome to Syrabit.ai!');
+    navigate('/onboarding');
+  }, [user, navigate]);
 
   const strength = getPasswordStrength(password);
   const passwordsMatch = confirmPassword && password === confirmPassword;

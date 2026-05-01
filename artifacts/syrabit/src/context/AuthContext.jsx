@@ -225,16 +225,30 @@ export const AuthProvider = ({ children }) => {
     return userData;
   };
 
-  const googleLogin = async (credential, _turnstileToken = '') => {
-    const res = await axios.post(`${API_BASE}/auth/google`, { credential }, { withCredentials: true });
-    const { user: userData, access_token } = res.data;
-    if (access_token) _storeToken(access_token);
-    justAuthenticated.current = true;
-    setUser(userData);
-    hydrateAdsOptOutFromServer(userData?.ads_opt_out);
-    try { Analytics.login(userData.id, userData.email); } catch {}
-    return userData;
-  };
+  // Task #156 — Handle Google OAuth redirect callback.
+  // After supabase.auth.signInWithOAuth() redirects the user back to the app,
+  // Supabase fires SIGNED_IN with provider='google'. We exchange the Supabase
+  // access token at /api/auth/supabase-session (same path as email/password)
+  // to get our custom httpOnly cookie + JWT.
+  // Email/password sign-ins have provider='email' and are skipped here —
+  // they call _exchangeSupabaseSession directly in login()/signup().
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (event !== 'SIGNED_IN') return;
+        const provider = session?.user?.app_metadata?.provider;
+        if (provider !== 'google') return;
+        try {
+          const userData = await _exchangeSupabaseSession(session.access_token);
+          try { Analytics.login(userData.id, userData.email); } catch {}
+        } catch (err) {
+          console.error('[Auth] Google OAuth token exchange failed:', err);
+        }
+      },
+    );
+    return () => subscription.unsubscribe();
+  }, []); // empty — all captures (_exchangeSupabaseSession, Analytics) are stable
 
   const logout = async () => {
     try {
@@ -264,7 +278,6 @@ export const AuthProvider = ({ children }) => {
       authChecked,
       login,
       signup,
-      googleLogin,
       logout,
       refreshUser,
       updateUser,
