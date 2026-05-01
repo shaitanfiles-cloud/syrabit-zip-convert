@@ -66,6 +66,24 @@ _E2E_ADMIN: dict = {
     "name": "E2E Test Admin",
 }
 
+# Dev/Replit env-var fallback — only active when ADMIN_EMAILS and ADMIN_PASSWORDS
+# are both set AND Supabase auth fails. These env vars remain set in the Replit
+# dev environment from before the Supabase migration. Format: comma-separated
+# lists where index N in ADMIN_EMAILS matches index N in ADMIN_PASSWORDS
+# (and optionally ADMIN_NAMES). Never relied upon in Railway/production.
+def _parse_env_admin_creds() -> list[dict]:
+    emails = [e.strip().lower() for e in _os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()]
+    passwords = [p.strip() for p in _os.environ.get("ADMIN_PASSWORDS", "").split(",") if p.strip()]
+    names = [n.strip() for n in _os.environ.get("ADMIN_NAMES", "").split(",") if n.strip()]
+    if not emails or not passwords or len(emails) != len(passwords):
+        return []
+    return [
+        {"email": emails[i], "password": passwords[i], "name": names[i] if i < len(names) else emails[i]}
+        for i in range(len(emails))
+    ]
+
+_ENV_ADMIN_CREDS: list[dict] = _parse_env_admin_creds()
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -120,29 +138,47 @@ async def admin_login(
             )
             auth_user = auth_resp.user if auth_resp else None
         except _SupaAuthApiError:
-            logger.warning(
-                "admin_login rejected — Supabase rejected credentials. submitted_email=%r",
-                submitted_email,
+            # ── Dev env-var fallback ──────────────────────────────────────────
+            # When Supabase rejects the credentials AND the pre-migration
+            # ADMIN_EMAILS / ADMIN_PASSWORDS env vars are present (Replit dev
+            # environment), attempt a plaintext match against them. This lets
+            # the dev environment work without a matching Supabase account.
+            _env_match = next(
+                (c for c in _ENV_ADMIN_CREDS
+                 if c["email"] == submitted_email and c["password"] == submitted_password),
+                None,
             )
-            raise HTTPException(status_code=401, detail="Invalid admin credentials")
+            if _env_match:
+                logger.info(
+                    "admin_login via env-var fallback (dev only). submitted_email=%r",
+                    submitted_email,
+                )
+                matched_email = _env_match["email"]
+                matched_name  = _env_match["name"]
+            else:
+                logger.warning(
+                    "admin_login rejected — Supabase rejected credentials. submitted_email=%r",
+                    submitted_email,
+                )
+                raise HTTPException(status_code=401, detail="Invalid admin credentials")
         except Exception as _auth_exc:
             logger.error("admin_login Supabase auth error: %s", _auth_exc)
             raise HTTPException(status_code=503, detail="Authentication service unavailable")
+        else:
+            if not auth_user:
+                raise HTTPException(status_code=401, detail="Invalid admin credentials")
 
-        if not auth_user:
-            raise HTTPException(status_code=401, detail="Invalid admin credentials")
+            # ── Confirm is_admin in the users table ──────────────────────────
+            user_record = await supa_get_user(submitted_email)
+            if not user_record or not user_record.get("is_admin"):
+                logger.warning(
+                    "admin_login denied — account not flagged is_admin. submitted_email=%r",
+                    submitted_email,
+                )
+                raise HTTPException(status_code=403, detail="Not an admin account")
 
-        # ── Confirm is_admin in the users table ──────────────────────────────
-        user_record = await supa_get_user(submitted_email)
-        if not user_record or not user_record.get("is_admin"):
-            logger.warning(
-                "admin_login denied — account not flagged is_admin. submitted_email=%r",
-                submitted_email,
-            )
-            raise HTTPException(status_code=403, detail="Not an admin account")
-
-        matched_email = submitted_email
-        matched_name  = user_record.get("name") or submitted_email
+            matched_email = submitted_email
+            matched_name  = user_record.get("name") or submitted_email
 
     # ── Issue admin JWT (24-hour session) ────────────────────────────────────
     # Token payload includes name so the frontend welcome toast can greet
