@@ -125,6 +125,50 @@ describe('SignupPage — handleSubmit validation guards', () => {
   });
 });
 
+describe('SignupPage — error banner is cleared on retry', () => {
+  it('clears a stale validation error when the user fixes the form and resubmits', async () => {
+    mockSignup.mockResolvedValueOnce({ role: '', onboarding_done: false });
+    render(<SignupPage />);
+
+    // Phase 1: submit with mismatched passwords → error banner appears
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText('Your name'), {
+        target: { value: 'Test User' },
+      });
+      fireEvent.change(screen.getByTestId('auth-email-input'), {
+        target: { value: 'user@test.com' },
+      });
+      fireEvent.change(screen.getByTestId('auth-password-input'), {
+        target: { value: 'Password1!' },
+      });
+      const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+      fireEvent.change(confirmInput, { target: { value: 'Different1!' } });
+      fireEvent.click(screen.getByRole('button', { name: /agree to terms/i }));
+      fireEvent.click(screen.getByRole('button', { name: /consent to data processing/i }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('auth-submit-button'));
+    });
+    await act(async () => {});
+
+    expect(screen.getByText('Passwords do not match')).toBeTruthy();
+
+    // Phase 2: fix the confirm password and resubmit — setError('') fires at
+    // the top of handleSubmit, so the banner must be gone before signup runs
+    await act(async () => {
+      const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+      fireEvent.change(confirmInput, { target: { value: 'Password1!' } });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('auth-submit-button'));
+    });
+    await act(async () => {});
+
+    expect(screen.queryByText('Passwords do not match')).toBeNull();
+    expect(mockSignup).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('SignupPage — handleSubmit redirect logic', () => {
   it('navigates to /onboarding when user has onboarding_done=false', async () => {
     mockSignup.mockResolvedValueOnce({ role: '', onboarding_done: false });
