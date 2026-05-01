@@ -200,6 +200,41 @@ describe('SignupPage — error banner is cleared on retry', () => {
   });
 });
 
+describe('SignupPage — confirm-password red border', () => {
+  it('applies border-red-500/40 to the confirm-password input when passwords do not match', async () => {
+    render(<SignupPage />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-password-input'), {
+        target: { value: 'Password1!' },
+      });
+      const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+      fireEvent.change(confirmInput, { target: { value: 'Different1!' } });
+    });
+    const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+    expect(confirmInput.className).toContain('border-red-500/40');
+  });
+
+  it('removes border-red-500/40 from the confirm-password input once passwords match', async () => {
+    render(<SignupPage />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-password-input'), {
+        target: { value: 'Password1!' },
+      });
+      const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+      fireEvent.change(confirmInput, { target: { value: 'Different1!' } });
+    });
+    // Confirm the red border is present first
+    expect(screen.getAllByPlaceholderText('••••••••').slice(-1)[0].className).toContain('border-red-500/40');
+
+    await act(async () => {
+      const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+      fireEvent.change(confirmInput, { target: { value: 'Password1!' } });
+    });
+    const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+    expect(confirmInput.className).not.toContain('border-red-500/40');
+  });
+});
+
 describe('SignupPage — handleSubmit redirect logic', () => {
   it('navigates to /onboarding when user has onboarding_done=false', async () => {
     mockSignup.mockResolvedValueOnce({ role: '', onboarding_done: false });
