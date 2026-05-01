@@ -823,3 +823,97 @@ async def admin_get_conversations(admin: dict = Depends(get_admin_user)):
 
     return merged
 
+
+# ── Supabase Auth migration ────────────────────────────────────────────────────
+
+class SupabaseSyncResult(BaseModel):
+    created: int
+    skipped_exists: int
+    skipped_google: int
+    error: int
+    email_sent: int
+    dry_run: bool
+
+
+@router.post("/admin/sync-users-to-supabase", response_model=SupabaseSyncResult)
+async def admin_sync_users_to_supabase(
+    dry_run: bool = False,
+    skip_email: bool = False,
+    admin: dict = Depends(get_admin_user),
+):
+    """
+    Create Supabase Auth accounts for every local-DB user who doesn't already
+    have one, then send each a password-reset email so they can regain access.
+
+    Google OAuth users are skipped — Supabase creates their accounts on first login.
+
+    Query params:
+      dry_run=true    — preview only, make no changes
+      skip_email=true — create accounts but don't send reset emails
+    """
+    if not supa:
+        raise HTTPException(status_code=503, detail="Supabase not configured on this server")
+    if not deps.pg_pool:
+        raise HTTPException(status_code=503, detail="PostgreSQL not available")
+
+    from scripts.sync_users_to_supabase import (
+        _fetch_all_local_users,
+        _fetch_all_supabase_auth_emails,
+        _create_supabase_user,
+        _generate_recovery_link,
+        _send_reset_email,
+    )
+
+    _log = logging.getLogger(__name__)
+
+    local_users = await _fetch_all_local_users(deps.pg_pool)
+    existing_emails = await asyncio.to_thread(_fetch_all_supabase_auth_emails, supa)
+
+    stats = {"created": 0, "skipped_google": 0, "skipped_exists": 0, "error": 0, "email_sent": 0}
+
+    for user in local_users:
+        email    = (user.get("email") or "").lower().strip()
+        name     = user.get("name") or ""
+        provider = user.get("auth_provider") or "email"
+        status   = user.get("status") or "active"
+
+        if not email or status == "banned":
+            continue
+
+        if provider == "google":
+            stats["skipped_google"] += 1
+            continue
+
+        if email in existing_emails:
+            stats["skipped_exists"] += 1
+            continue
+
+        if dry_run:
+            stats["created"] += 1
+            continue
+
+        ok, err = await asyncio.to_thread(_create_supabase_user, supa, email, name)
+        if not ok:
+            _log.error("sync_users_to_supabase: error creating %s: %s", email, err)
+            stats["error"] += 1
+            continue
+
+        if err == "already_exists":
+            stats["skipped_exists"] += 1
+            continue
+
+        stats["created"] += 1
+        existing_emails.add(email)
+
+        if skip_email:
+            continue
+
+        link = await asyncio.to_thread(_generate_recovery_link, supa, email)
+        if link:
+            await asyncio.to_thread(_send_reset_email, email, name, link)
+            stats["email_sent"] += 1
+        else:
+            _log.warning("sync_users_to_supabase: no recovery link for %s", email)
+
+    return {**stats, "dry_run": dry_run}
+
