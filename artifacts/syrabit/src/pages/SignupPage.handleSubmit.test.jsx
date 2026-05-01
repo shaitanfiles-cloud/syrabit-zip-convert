@@ -102,6 +102,37 @@ async function fillForm({ password = 'Password1!', confirmPassword = 'Password1!
   await act(async () => {});
 }
 
+describe('SignupPage — inline password-mismatch hint', () => {
+  it('shows the inline hint when confirm password differs from password', async () => {
+    render(<SignupPage />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-password-input'), {
+        target: { value: 'Password1!' },
+      });
+      const [confirmInput] = screen.getAllByPlaceholderText('••••••••').slice(-1);
+      fireEvent.change(confirmInput, { target: { value: 'Different1!' } });
+    });
+    expect(screen.getByText("Passwords don't match")).toBeTruthy();
+  });
+
+  it('hides the inline hint once confirm password is corrected to match', async () => {
+    render(<SignupPage />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-password-input'), {
+        target: { value: 'Password1!' },
+      });
+      const [confirmInput] = screen.getAllByPlaceholderText('••••••••').slice(-1);
+      fireEvent.change(confirmInput, { target: { value: 'Different1!' } });
+    });
+    expect(screen.getByText("Passwords don't match")).toBeTruthy();
+    await act(async () => {
+      const [confirmInput] = screen.getAllByPlaceholderText('••••••••').slice(-1);
+      fireEvent.change(confirmInput, { target: { value: 'Password1!' } });
+    });
+    expect(screen.queryByText("Passwords don't match")).toBeNull();
+  });
+});
+
 describe('SignupPage — handleSubmit validation guards', () => {
   it('shows "Passwords do not match" and never calls signup when passwords differ', async () => {
     render(<SignupPage />);
