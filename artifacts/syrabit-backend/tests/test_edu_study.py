@@ -958,3 +958,12 @@ def test_build_flashcards_mnemonic_back_combined_truncation(edu_app, fake_conn_f
         f"Combined back must be at most 800 chars; got {len(back)}"
     )
     assert back, "Combined back must not be blank"
+    assert back.startswith("P"), (
+        f"Back must begin with the mnemonic phrase; got {back[:20]!r}"
+    )
+    first_explanation = back.find("E")
+    first_phrase = back.find("P")
+    assert first_phrase < first_explanation, (
+        "Phrase characters must appear before explanation characters in back; "
+        f"first 'P' at {first_phrase}, first 'E' at {first_explanation}"
+    )
