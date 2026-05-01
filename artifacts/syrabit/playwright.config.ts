@@ -31,6 +31,13 @@ export default defineConfig({
     trace: 'retain-on-failure',
     actionTimeout: 10_000,
     navigationTimeout: 20_000,
+    // Block service-worker registration so Playwright's page.route()
+    // intercepts all /api/** requests before the SW can claim them.
+    // In CI the app is served via `vite preview` with NODE_ENV=production
+    // so import.meta.env.PROD === true and the SW would otherwise register
+    // and intercept /api/content/boards, /api/content/subjects, etc.,
+    // bypassing every page.route() mock and causing ECONNREFUSED proxy errors.
+    serviceWorkers: 'block',
     ...(launchOptions ? { launchOptions } : {}),
   },
   projects: [
