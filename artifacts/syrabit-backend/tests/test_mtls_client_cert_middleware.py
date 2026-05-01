@@ -451,14 +451,21 @@ def test_options_to_data_endpoint_does_not_return_data():
 
     Confirms the CORS bypass cannot be abused to exfiltrate data.  A GET-only
     route has no OPTIONS handler; Starlette returns 405 Method Not Allowed
-    (or a CORS-headers-only 200) — never the application data body.
+    (or a CORS-headers-only 200 from a future CORSMiddleware) — never the
+    application data body {"data": [...]}.
+
+    The assertion is intentionally content-type-safe: a 200 that returns a
+    non-JSON body (e.g., an empty CORS preflight response) also passes.
     """
     app = _build_app(enforce_mtls=True, secret=_TEST_SECRET)
     client = TestClient(app)
     resp = client.options("/api/admin/data")
-    # The response must not contain the data payload {"data": []}.
-    # 405 is the expected Starlette default for a method-not-allowed route.
-    assert resp.status_code != 200 or "data" not in resp.json(), (
-        "OPTIONS to a GET-only endpoint must not return the route's data body; "
-        f"got status={resp.status_code} body={resp.text!r}"
-    )
+    if resp.status_code == 200:
+        content_type = resp.headers.get("content-type", "")
+        if "application/json" in content_type:
+            body = resp.json()
+            assert "data" not in body, (
+                "OPTIONS to a GET-only endpoint must not return the route's "
+                f"data body; got body={body!r}"
+            )
+        # Non-JSON 200 (e.g. an empty CORS preflight body) is safe — pass.
