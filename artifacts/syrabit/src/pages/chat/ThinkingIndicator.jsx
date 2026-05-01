@@ -1,259 +1,180 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 
-const STEP_DELAYS_MS = [0, 1200, 2500, 3600];
+/**
+ * Single-line thinking indicator that cycles through three search phases:
+ *   Phase 0 → "Searching Assam Board Syllabus"   (shown for ≥ 2 s)
+ *   Phase 1 → "Searching <Subject Name>"          (shown for ≥ 2 s)
+ *   Phase 2 → "Searching <Chapter Name>"          (cycles until response)
+ *
+ * Each phase replaces the previous with a quick fade-out / fade-in.
+ * Discovery events from the backend can advance phases early, but the
+ * 2-second minimum per phase is always respected.
+ */
 
-// Map discovery event names → step indices (0-based).
-const DISCOVERY_STEP_MAP = {
-  'discovery:searching': 0,
-  'discovery:class':     1,
-  'discovery:subject':   2,
-  'discovery:chapter':   3,
-};
+const MIN_PHASE_MS    = 2000; // each phase visible for at least 2 s
+const PHASE_SCHEDULE  = [2000, 4000]; // default timers: advance at 2 s, then at 4 s
 
-const PULSE_STYLE = `
-@keyframes syra-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50%       { opacity: 0.35; transform: scale(0.6); }
+const DOT_KEYFRAMES = `
+@keyframes syra-think-pulse {
+  0%, 100% { opacity: 1;    transform: scale(1);   }
+  50%       { opacity: 0.3; transform: scale(0.55); }
 }
 `;
 
+const DISCOVERY_EVENT_MAP = {
+  'discovery:subject': 1,
+  'discovery:chapter': 2,
+};
+
 export function ThinkingIndicator({
-  subject,
-  scopedChapters = [],
-  chapterMatch = null,
+  subject         = null,
+  scopedChapters  = [],
+  chapterMatch    = null,
   discoveryEvents = [],
 }) {
-  const [activeStep, setActiveStep] = useState(0);
-  const [elapsed, setElapsed]       = useState(0);
-  const [chapterIdx, setChapterIdx] = useState(0);
+  const [phase,    setPhase]    = useState(0);
+  const [fading,   setFading]   = useState(false);
+  const [chapIdx,  setChapIdx]  = useState(0);
 
+  // Track current phase + when it started so we can honour the 2-s minimum.
+  const phaseRef      = useRef(0);
+  const phaseStartRef = useRef(Date.now());
+  const pendingRef    = useRef(null); // timeout id for the scheduled fade
+
+  // Chapters sorted by order so the cycling is predictable.
   const sortedChapters = useMemo(
-    () =>
-      [...(scopedChapters || [])].sort(
-        (a, b) => (a.order_index ?? a.order ?? 0) - (b.order_index ?? b.order ?? 0),
-      ),
+    () => [...(scopedChapters || [])].sort(
+      (a, b) => (a.order_index ?? a.order ?? 0) - (b.order_index ?? b.order ?? 0),
+    ),
     [scopedChapters],
   );
 
-  // Derive labels and values directly from discovery events when available.
-  const discoveryValues = useMemo(() => {
-    const vals = {};
-    for (const ev of discoveryEvents) {
-      const idx = DISCOVERY_STEP_MAP[ev.event];
-      if (idx !== undefined && ev.value) vals[idx] = ev.value;
-    }
-    return vals;
-  }, [discoveryEvents]);
+  // ----- label derivation ------------------------------------------------
 
-  // Highest step index signalled by discovery events so far.
-  const discoveryMaxStep = useMemo(() => {
-    let max = -1;
-    for (const ev of discoveryEvents) {
-      const idx = DISCOVERY_STEP_MAP[ev.event] ?? -1;
-      if (idx > max) max = idx;
-    }
-    return max;
-  }, [discoveryEvents]);
-
-  const steps = useMemo(() => {
-    const classLine = [subject?.class_name, subject?.stream_name]
-      .filter(Boolean)
-      .join(' \u00b7 ');
-
-    return [
-      { icon: '🔍', label: 'Searching Assam Board syllabus' },
-      { icon: '📚', label: classLine || 'Assam Board curriculum' },
-      { icon: '📖', label: subject?.name || 'Your subject' },
-      { icon: '📄', label: null },
-    ];
-  }, [subject]);
-
-  // Chapter label for Step 4:
-  // Priority: WAI match > discovery:chapter value > cycling through subject chapters.
   const chapterLabel = useMemo(() => {
     if (chapterMatch) {
-      const num = chapterMatch.chapter_number;
+      const num   = chapterMatch.chapter_number;
       const title = chapterMatch.chapter_title;
-      const prefix = num ? `Chapter\u00a0${num}\u00a0\u2014\u00a0` : '';
-      return `${prefix}${title}`;
+      return num ? `Chapter\u00a0${num}\u00a0\u2014\u00a0${title}` : title;
     }
-    if (discoveryValues[3]) return discoveryValues[3];
-    if (!sortedChapters.length) return 'Finding relevant chapter\u2026';
-    const ch  = sortedChapters[chapterIdx];
-    const num = ch.chapter_number ?? ch.order_index ?? chapterIdx + 1;
-    return `Chapter\u00a0${num}\u00a0\u2014\u00a0${ch.title}`;
-  }, [chapterMatch, discoveryValues, sortedChapters, chapterIdx]);
+    if (!sortedChapters.length) return 'relevant chapters';
+    const ch  = sortedChapters[chapIdx] || sortedChapters[0];
+    const num = ch.chapter_number ?? ch.order_index ?? chapIdx + 1;
+    return `Chapter\u00a0${num}\u00a0\u2014\u00a0${ch.title || ch.name || 'chapter'}`;
+  }, [chapterMatch, sortedChapters, chapIdx]);
 
-  // Override step labels with discovery values when available.
-  const effectiveLabel = (i) => {
-    if (i === 3) return chapterLabel;
-    if (discoveryValues[i]) return discoveryValues[i];
-    return steps[i]?.label ?? '';
+  const label = useMemo(() => {
+    if (phase === 0) return 'Searching Assam Board Syllabus';
+    if (phase === 1) return `Searching ${subject?.name || 'your subject'}`;
+    return `Searching ${chapterLabel}`;
+  }, [phase, subject, chapterLabel]);
+
+  // ----- phase advancement -----------------------------------------------
+
+  /** Schedule a transition to `target` phase, respecting the 2-s minimum. */
+  const scheduleAdvance = (target) => {
+    if (phaseRef.current >= target) return; // already there
+    const elapsed = Date.now() - phaseStartRef.current;
+    const wait    = Math.max(0, MIN_PHASE_MS - elapsed);
+
+    if (pendingRef.current !== null) return; // a transition is already queued
+
+    pendingRef.current = setTimeout(() => {
+      pendingRef.current = null;
+      if (phaseRef.current >= target) return;
+
+      // Fade out → swap → fade in
+      setFading(true);
+      setTimeout(() => {
+        phaseRef.current    = target;
+        phaseStartRef.current = Date.now();
+        setPhase(target);
+        setFading(false);
+      }, 220);
+    }, wait);
   };
 
-  // Timer-based fallback: advance steps on a fixed schedule so the
-  // indicator never stalls if discovery events are slow or absent.
+  // Timer-based fallback: advance phases on a fixed schedule.
   useEffect(() => {
-    const timers = STEP_DELAYS_MS.slice(1).map((delay, i) =>
-      setTimeout(() => setActiveStep((s) => Math.max(s, i + 1)), delay),
-    );
-    const sec = setInterval(() => setElapsed((s) => s + 1), 1000);
+    const t0 = setTimeout(() => scheduleAdvance(1), PHASE_SCHEDULE[0]);
+    const t1 = setTimeout(() => scheduleAdvance(2), PHASE_SCHEDULE[1]);
     return () => {
-      timers.forEach(clearTimeout);
-      clearInterval(sec);
+      clearTimeout(t0);
+      clearTimeout(t1);
+      if (pendingRef.current !== null) clearTimeout(pendingRef.current);
     };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Event-driven advance: jump to the step immediately when a
-  // discovery event arrives from the backend.
+  // Discovery event-driven advance (backend signals which phase to jump to).
   useEffect(() => {
-    if (discoveryMaxStep >= 0) {
-      setActiveStep((s) => Math.max(s, discoveryMaxStep));
+    for (const ev of discoveryEvents) {
+      const target = DISCOVERY_EVENT_MAP[ev.event];
+      if (target !== undefined && target > phaseRef.current) {
+        scheduleAdvance(target);
+      }
     }
-  }, [discoveryMaxStep]);
+  }, [discoveryEvents]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Stop cycling once the real chapter match arrives.
+  // WAI chapter match → immediately signal phase 2.
   useEffect(() => {
-    if (chapterMatch) return;
-    if (sortedChapters.length < 2) return;
+    if (chapterMatch) scheduleAdvance(2);
+  }, [chapterMatch]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Cycle through chapters while on phase 2 (until real match arrives).
+  useEffect(() => {
+    if (phase !== 2 || chapterMatch || sortedChapters.length < 2) return;
     const t = setInterval(
-      () => setChapterIdx((i) => (i + 1) % sortedChapters.length),
+      () => setChapIdx((i) => (i + 1) % sortedChapters.length),
       2000,
     );
     return () => clearInterval(t);
-  }, [sortedChapters, chapterMatch]);
+  }, [phase, chapterMatch, sortedChapters]);
 
-  // When a WAI match arrives, fast-forward Step 4 into view.
-  useEffect(() => {
-    if (chapterMatch && activeStep < 3) {
-      setActiveStep(3);
-    }
-  }, [chapterMatch]); // eslint-disable-line
-
-  const progress = Math.min(100, (elapsed / 5) * 100);
+  // ----- render ----------------------------------------------------------
 
   return (
     <>
-      <style>{PULSE_STYLE}</style>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '8px 0' }}>
-        {steps.map((step, i) => {
-          const visible  = i <= activeStep;
-          const isActive = i === activeStep;
-          const isStep4  = i === 3;
-          const label    = effectiveLabel(i);
-          const locked   = isStep4 && (chapterMatch || discoveryValues[3]);
-
-          return (
-            <div
-              key={i}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                opacity: visible ? (isActive ? 1 : 0.5) : 0,
-                transform: visible ? 'translateY(0)' : 'translateY(5px)',
-                transition: 'opacity 0.4s ease, transform 0.4s ease',
-                pointerEvents: 'none',
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  width: 20,
-                  flexShrink: 0,
-                }}
-              >
-                {i > 0 && (
-                  <div
-                    style={{
-                      width: 1,
-                      height: 6,
-                      marginBottom: 2,
-                      background: visible ? 'rgba(124,58,237,0.25)' : 'transparent',
-                      transition: 'background 0.4s ease',
-                    }}
-                  />
-                )}
-                <span style={{ fontSize: 13, lineHeight: 1 }}>
-                  {locked ? '✅' : step.icon}
-                </span>
-              </div>
-
-              <span
-                style={{
-                  fontSize: 12.5,
-                  lineHeight: '18px',
-                  color: locked
-                    ? '#059669'
-                    : isActive
-                      ? '#5b21b6'
-                      : '#6b7280',
-                  fontWeight: (isActive || locked) ? 600 : 400,
-                  letterSpacing: '0.01em',
-                  transition: 'color 0.3s ease, font-weight 0.3s ease',
-                  flex: 1,
-                  minWidth: 0,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {label}
-                {isActive && !locked && (
-                  <span style={{ opacity: 0.6, marginLeft: 1 }}>\u2026</span>
-                )}
-              </span>
-
-              {isActive && !locked && (
-                <span
-                  style={{
-                    display: 'inline-block',
-                    width: 6,
-                    height: 6,
-                    borderRadius: '50%',
-                    background: '#7c3aed',
-                    flexShrink: 0,
-                    animation: 'syra-pulse 1.1s ease-in-out infinite',
-                  }}
-                />
-              )}
-            </div>
-          );
-        })}
-
-        <div
+      <style>{DOT_KEYFRAMES}</style>
+      <div
+        style={{
+          display:    'flex',
+          alignItems: 'center',
+          gap:        8,
+          padding:    '6px 0',
+          userSelect: 'none',
+        }}
+      >
+        {/* Animated pulse dot */}
+        <span
+          aria-hidden="true"
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            marginTop: 6,
-            paddingLeft: 28,
+            display:      'inline-block',
+            width:        7,
+            height:       7,
+            borderRadius: '50%',
+            flexShrink:   0,
+            background:   '#7c3aed',
+            animation:    'syra-think-pulse 1.1s ease-in-out infinite',
+          }}
+        />
+
+        {/* Fading label */}
+        <span
+          style={{
+            fontSize:     13,
+            lineHeight:   '20px',
+            fontWeight:   500,
+            color:        '#5b21b6',
+            overflow:     'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace:   'nowrap',
+            opacity:      fading ? 0 : 1,
+            transition:   'opacity 0.22s ease',
           }}
         >
-          <div
-            style={{
-              height: 2,
-              flex: 1,
-              maxWidth: 110,
-              borderRadius: 4,
-              background: 'rgba(124,58,237,0.10)',
-              overflow: 'hidden',
-            }}
-          >
-            <div
-              style={{
-                height: '100%',
-                width: `${progress}%`,
-                borderRadius: 4,
-                background: 'linear-gradient(90deg,#7c3aed,#a78bfa)',
-                transition: 'width 1s linear',
-              }}
-            />
-          </div>
-          <span style={{ fontSize: 11, color: '#9ca3af' }}>{elapsed}s</span>
-        </div>
+          {label}
+          <span style={{ opacity: 0.45, marginLeft: 1 }}>\u2026</span>
+        </span>
       </div>
     </>
   );
