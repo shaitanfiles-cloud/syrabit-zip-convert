@@ -165,10 +165,14 @@ def _under_tier_quota_and_reserve(tier: int) -> bool:
     """Atomically check and increment the per-tier counter. Returns True
     iff the submission should proceed under the tier sub-cap.
 
-    Tier ordering guarantee: Tier-3 is additionally blocked when global quota
-    is less than 25% remaining, ensuring Tier-1/Tier-2 always retain capacity
-    for late-day high-priority submissions even if Tier-3 pages are published
-    early in the day.
+    Priority protection semantics (Task #246):
+    - A floor of 30% of the daily quota is reserved exclusively for Tier-1 by
+      capping Tier-2+Tier-3 combined at 70% of the global limit. This guarantees
+      Tier-1 capacity even if lower-priority pages are published early in the day.
+    - Tier-3 is additionally blocked once 75% of the global quota is spent,
+      providing a second layer of protection so Tier-1/Tier-2 can always get
+      through late in the day.
+    - Tier-1 itself is gated only by the global daily limit.
     """
     with _tier_lock:
         _roll_tier_if_needed()
@@ -176,8 +180,14 @@ def _under_tier_quota_and_reserve(tier: int) -> bool:
         cap = _tier_daily_limit(tier)
         if _tier_sent.get(tier, 0) >= cap:
             return False
-        # Back-pressure: when global quota is running low (< 25% remaining),
-        # block Tier-3 submissions so Tier-1 and Tier-2 can always get through.
+        # Floor protection: Tier-2 + Tier-3 combined may not consume more than
+        # 70% of the daily limit, so Tier-1 always retains ≥30% of capacity.
+        if tier in (2, 3):
+            t23_total = _tier_sent.get(2, 0) + _tier_sent.get(3, 0)
+            if t23_total >= (limit * 7) // 10:
+                return False
+        # Second-layer back-pressure for Tier-3: block once global usage
+        # exceeds 75% so Tier-1/Tier-2 can still squeeze in before day-end.
         if tier == 3:
             total_sent = sum(_tier_sent.values())
             if total_sent >= (limit * 3) // 4:

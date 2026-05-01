@@ -2828,6 +2828,22 @@ async function _handleEdgeFetch(
       } catch { /* fall through to Pages on D1 failure */ }
     }
 
+    // Task #246: alias /sitemap-delta.xml to the D1 delta-sitemap handler.
+    // Must be handled before the isApiRoute / !isApiRoute split or it falls
+    // through to PAGES_ORIGIN (no static file there) and returns 404/SPA.
+    if (
+      pathname === "/sitemap-delta.xml" &&
+      (request.method === "GET" || request.method === "HEAD") &&
+      env.CONTENT_DB
+    ) {
+      try {
+        const deltaResult = await tryD1Route(env, "/sitemap-delta.xml", url.searchParams);
+        if (deltaResult !== null && deltaResult.type === "xml") {
+          return d1XmlResponse(deltaResult.data, cors, remaining);
+        }
+      } catch { /* fall through on D1 failure */ }
+    }
+
     // Bot-discovery endpoints live on the FastAPI backend (not Pages and not
     // D1). Crawlers probe these at the zone root; without these internal
     // rewrites the request would fall through to PAGES_ORIGIN and return
