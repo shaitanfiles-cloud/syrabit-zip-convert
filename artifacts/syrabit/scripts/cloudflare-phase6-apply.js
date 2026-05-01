@@ -351,13 +351,20 @@ async function stepObservatory() {
   // ── Step 4b: Verify/create Observatory alert notification policy ──────────
   // Cloudflare Notifications API: /accounts/{id}/alerting/v3/policies
   // Alert type "speed_insights" covers Observatory Core Web Vitals regression.
+  //
+  // Slack paging: set OBSERVATORY_ALERT_SLACK_WEBHOOK_ID to the ID of a
+  // pre-registered Cloudflare notification webhook destination that points at
+  // the Slack incoming-webhook URL.  Register it once at:
+  //   dash.cloudflare.com → Notifications → Destinations → Webhooks → Add
+  // then paste the returned ID into the env var.
   console.log('\n── Step 4b: Observatory alert notification policy ──');
-  console.log('  Target: speed_insights alert → email admin@syrabit.ai');
+  console.log('  Target: speed_insights alert → email admin@syrabit.ai + Slack webhook');
   console.log('  Thresholds: LCP>2.5 s, CLS>0.1, INP>200 ms');
 
-  const ALERT_TYPE    = 'speed_insights';
-  const ADMIN_EMAIL   = process.env.OBSERVATORY_ALERT_EMAIL || 'admin@syrabit.ai';
-  const policies      = await cfGet(`/accounts/${ACCOUNT_ID}/alerting/v3/policies`);
+  const ALERT_TYPE          = 'speed_insights';
+  const ADMIN_EMAIL         = process.env.OBSERVATORY_ALERT_EMAIL         || 'admin@syrabit.ai';
+  const SLACK_WEBHOOK_ID    = process.env.OBSERVATORY_ALERT_SLACK_WEBHOOK_ID || '';
+  const policies            = await cfGet(`/accounts/${ACCOUNT_ID}/alerting/v3/policies`);
 
   if (!policies.success) {
     const code = policies.errors?.[0]?.code;
@@ -377,31 +384,104 @@ async function stepObservatory() {
 
   if (existing) {
     ok(`Observatory alert policy already exists: "${existing.name}" (id=${existing.id})`);
-    const emailMechs = (existing.mechanisms?.email || []).map(m => m.id);
+    const emailMechs   = (existing.mechanisms?.email    || []).map(m => m.id);
+    const webhookMechs = (existing.mechanisms?.webhooks || []).map(m => m.id);
     if (emailMechs.length) {
       ok(`  Email recipients: ${emailMechs.join(', ')}`);
     } else {
       info(`  No email recipient on existing policy — add ${ADMIN_EMAIL} via dashboard.`);
     }
+    if (webhookMechs.length) {
+      ok(`  Slack/webhook destinations: ${webhookMechs.join(', ')}`);
+    }
+
+    // If a Slack webhook ID is provided but not yet on the policy, update the
+    // existing policy to add it rather than returning without making changes.
+    // We preserve all existing mechanisms and conditions to stay idempotent.
+    const slackMissing = SLACK_WEBHOOK_ID && !webhookMechs.includes(SLACK_WEBHOOK_ID);
+    if (!slackMissing) {
+      if (!SLACK_WEBHOOK_ID) {
+        info('  OBSERVATORY_ALERT_SLACK_WEBHOOK_ID not set — Slack mechanism will not be added.');
+        info('  Set the env var and re-run to page on-call via Slack.');
+      }
+      return;
+    }
+
+    info(`  Slack webhook id=${SLACK_WEBHOOK_ID} not yet on policy — updating now.`);
+    if (DRY_RUN) {
+      dry(`PUT /accounts/{id}/alerting/v3/policies/${existing.id} — add Slack webhook id=${SLACK_WEBHOOK_ID}`);
+      return;
+    }
+
+    // Build merged mechanisms: preserve existing emails/webhooks, add new webhook ID.
+    const mergedMechanisms = {
+      ...existing.mechanisms,
+      email:    [...(existing.mechanisms?.email    || [])],
+      webhooks: [
+        ...(existing.mechanisms?.webhooks || []),
+        { id: SLACK_WEBHOOK_ID },
+      ],
+    };
+    // Ensure the admin email is always present.
+    if (!mergedMechanisms.email.find(m => m.id === ADMIN_EMAIL)) {
+      mergedMechanisms.email.push({ id: ADMIN_EMAIL });
+    }
+
+    const updateBody = {
+      name:        existing.name,
+      description: existing.description,
+      enabled:     existing.enabled,
+      alert_type:  existing.alert_type,
+      mechanisms:  mergedMechanisms,
+      conditions:  existing.conditions,
+      filters:     existing.filters,
+    };
+
+    const ur = await cfPut(`/accounts/${ACCOUNT_ID}/alerting/v3/policies/${existing.id}`, updateBody);
+    if (ur.success) {
+      ok(`Observatory alert policy updated: added Slack webhook id=${SLACK_WEBHOOK_ID}`);
+    } else {
+      err(`Observatory alert policy update failed: ${JSON.stringify(ur.errors)}`);
+      info('Manual fix: dash.cloudflare.com → Notifications → (edit policy) → Destinations → Webhooks → Add.');
+    }
     return;
   }
 
   if (DRY_RUN) {
-    dry(`POST /accounts/{id}/alerting/v3/policies — speed_insights alert → ${ADMIN_EMAIL}`);
+    const slackNote = SLACK_WEBHOOK_ID ? ` + Slack webhook id=${SLACK_WEBHOOK_ID}` : ' (no OBSERVATORY_ALERT_SLACK_WEBHOOK_ID set — Slack skipped)';
+    dry(`POST /accounts/{id}/alerting/v3/policies — speed_insights alert → ${ADMIN_EMAIL}${slackNote}`);
     return;
   }
 
   // Create the Observatory alert policy.
   // The Cloudflare Notifications API creates a policy; threshold values for
   // LCP/CLS/INP are configured via Observatory-specific "conditions" fields.
+  //
+  // mechanisms.webhooks references a pre-registered Cloudflare notification
+  // webhook destination (Slack incoming-webhook URL registered at
+  // dash.cloudflare.com → Notifications → Destinations → Webhooks).
+  // When OBSERVATORY_ALERT_SLACK_WEBHOOK_ID is set, Cloudflare will POST the
+  // speed_insights alert JSON to that Slack webhook so the on-call is paged
+  // immediately instead of waiting for email.
+  const mechanisms = {
+    email: [{ id: ADMIN_EMAIL }],
+  };
+  if (SLACK_WEBHOOK_ID) {
+    mechanisms.webhooks = [{ id: SLACK_WEBHOOK_ID }];
+    info(`Slack webhook destination id=${SLACK_WEBHOOK_ID} will be added to the policy.`);
+  } else {
+    info('OBSERVATORY_ALERT_SLACK_WEBHOOK_ID not set — policy will use email only.');
+    info('To page on-call via Slack: register a webhook destination at');
+    info('  dash.cloudflare.com → Notifications → Destinations → Webhooks → Add');
+    info('then re-run with OBSERVATORY_ALERT_SLACK_WEBHOOK_ID=<id>.');
+  }
+
   const alertBody = {
     name:        'Observatory Core Web Vitals regression — syrabit.ai',
     description: 'Fires when weekly Lighthouse run detects LCP>2.5 s, CLS>0.1, or INP>200 ms',
     enabled:     true,
     alert_type:  ALERT_TYPE,
-    mechanisms:  {
-      email: [{ id: ADMIN_EMAIL }],
-    },
+    mechanisms,
     // Observatory-specific conditions — thresholds interpreted by CF Observatory
     conditions: {
       lcp:  { operator: 'greater_than', value: 2500 },    // ms
@@ -418,10 +498,16 @@ async function stepObservatory() {
   if (ar.success) {
     ok(`Observatory alert policy created: id=${ar.result.id}`);
     ok(`  LCP>2.5 s, CLS>0.1, INP>200 ms → email ${ADMIN_EMAIL}`);
+    if (SLACK_WEBHOOK_ID) {
+      ok(`  Slack webhook destination: id=${SLACK_WEBHOOK_ID}`);
+    }
   } else {
     err(`Alert policy creation failed: ${JSON.stringify(ar.errors)}`);
     info(`Manual setup required: dash.cloudflare.com → Notifications → Add → "Speed Insights".`);
     info(`Required thresholds: LCP>2.5 s (2500 ms), CLS>0.1, INP>200 ms. Recipient: ${ADMIN_EMAIL}.`);
+    if (SLACK_WEBHOOK_ID) {
+      info(`Also add Slack webhook destination id=${SLACK_WEBHOOK_ID} manually.`);
+    }
   }
 }
 
@@ -473,7 +559,11 @@ function printSummary(certId, fingerprint) {
   console.log('');
   console.log('  Observatory:');
   console.log('  • Step 4b above auto-creates the speed_insights notification policy');
-  console.log('    (LCP > 2.5 s, CLS > 0.1, INP > 200 ms → email admin@syrabit.ai).');
+  console.log('    (LCP > 2.5 s, CLS > 0.1, INP > 200 ms → email admin@syrabit.ai + Slack).');
+  console.log('  • Slack paging: set OBSERVATORY_ALERT_SLACK_WEBHOOK_ID to the ID of a');
+  console.log('    Cloudflare webhook destination (Slack incoming-webhook URL). Register at:');
+  console.log('    dash.cloudflare.com → Notifications → Destinations → Webhooks → Add');
+  console.log('    Then re-run this script with the ID set to add it to the policy.');
   console.log('    If Step 4b printed a manual-fallback link, add the policy at:');
   console.log('    dash.cloudflare.com → Notifications → Add → "Speed Insights".');
   console.log('    See docs/CLOUDFLARE_OBSERVATORY.md for the full on-call runbook.');

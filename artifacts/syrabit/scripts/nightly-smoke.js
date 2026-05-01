@@ -577,12 +577,27 @@ async function main() {
       failures.push('Observatory alert policy (speed_insights) NOT FOUND');
       console.log('  ✗  Observatory alert policy: NOT FOUND — run cloudflare-phase6-apply.js (step 4b creates it)');
     } else {
-      const hasEmail = (speedAlert.mechanisms?.email || []).length > 0;
+      const hasEmail   = (speedAlert.mechanisms?.email    || []).length > 0;
+      const hasWebhook = (speedAlert.mechanisms?.webhooks || []).length > 0;
       console.log(`  ✓  Observatory alert policy: "${speedAlert.name}" enabled=${speedAlert.enabled}`);
       assert('  speed_insights policy enabled', speedAlert.enabled, true);
       if (!hasEmail) {
         warnings.push('Observatory alert policy has no email recipient — add admin@syrabit.ai via dashboard');
         console.log('  ⚠  Observatory alert policy: no email recipient configured');
+      }
+      // Assert that a Slack (webhook) mechanism is present so the on-call is
+      // paged immediately — email alone can sit unread overnight.
+      // cloudflare-phase6-apply.js step 4b adds mechanisms.webhooks when
+      // OBSERVATORY_ALERT_SLACK_WEBHOOK_ID is set.
+      if (!hasWebhook) {
+        failures.push('Observatory alert policy has no Slack/webhook mechanism — on-call will not be paged (email only)');
+        console.log('  ✗  Observatory alert policy: no Slack/webhook mechanism found');
+        console.log('     Set OBSERVATORY_ALERT_SLACK_WEBHOOK_ID and re-run cloudflare-phase6-apply.js,');
+        console.log('     or add a webhook destination manually at:');
+        console.log('     dash.cloudflare.com → Notifications → (edit policy) → Destinations → Webhooks.');
+      } else {
+        const webhookIds = (speedAlert.mechanisms.webhooks).map(m => m.id).join(', ');
+        console.log(`  ✓  Observatory alert Slack/webhook destination(s): ${webhookIds}`);
       }
       // Assert Core Web Vitals threshold values are set correctly.
       // cloudflare-phase6-apply.js creates: lcp>2500 ms, cls>0.1, inp>200 ms.
