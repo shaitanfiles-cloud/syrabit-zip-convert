@@ -797,11 +797,6 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
   useEffect(() => {
     if (!adminToken) return;
     let cancelled = false;
-    // True iff the response shape is one we can actually surface as a
-    // unique-visitors total. We check `totals.visitors` (CF uniq.uniques)
-    // which is available on all plans and retains 30 days — no session
-    // coverage check needed since `uniq.uniques` is not capped the way
-    // `sum.visits` (adaptive-groups) was.
     const isUsable = (data) => {
       if (!data || data.connected === false) return false;
       const v = data?.totals?.visitors;
@@ -822,23 +817,39 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       if (!data) {
         data = await tryRange('7d');
         window = '7d';
-        if (data) {
-          log.warn('CF visitors fell back to 7d window — 30d returned no data');
-        }
+        if (data) log.warn('CF visitors fell back to 7d window — 30d returned no data');
       }
       if (cancelled) return;
       if (data) {
         setCfVisitors30d(data);
         setCfVisitorsWindow(window);
-      } else {
-        log.error('CF visitors fetch failed for both 30d and 7d windows');
-        // Don't wipe the previous good value — leaving the existing
-        // state in place means the tile keeps showing the last known
-        // count instead of flashing back to the active-range fallback.
       }
     };
     fetchVisitors();
     const interval = setInterval(fetchVisitors, 60 * 60 * 1000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [adminToken]);
+
+  // Dedicated 24-hour unique-visitors fetch for the Unique Visitors stat card.
+  // Uses the hourly CF dataset (`httpRequests1hGroups`) so the total is the
+  // rolling 24-hour unique count and the "last hour" sub-value is the most
+  // recent hourly bucket. Refreshes every 5 minutes.
+  const [cfVisitors24h, setCfVisitors24h] = useState(null);
+  useEffect(() => {
+    if (!adminToken) return;
+    let cancelled = false;
+    const fetch24h = async () => {
+      try {
+        const r = await adminGetCfOverview(adminToken, '24h');
+        if (!cancelled && r?.data?.totals?.visitors != null) {
+          setCfVisitors24h(r.data);
+        }
+      } catch (e) {
+        log.warn('CF 24h visitors fetch failed', { error: e.message });
+      }
+    };
+    fetch24h();
+    const interval = setInterval(fetch24h, 5 * 60 * 1000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [adminToken]);
 
@@ -1451,22 +1462,22 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
         <p className="text-[10px] text-gray-400 mb-2">{TODAY_BUCKET_CAPTION}</p>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
-          {/* "Unique Visitors" — always uses `totals.visitors` (unique
-              visitor count from httpRequests1dGroups, 30-day retention)
-              rather than `totals.visits` (sessions). Falls back to
-              `vs.total_visitors` before the CF overview loads. */}
+          {/* "Unique Visitors" — always shows the rolling 24-hour unique
+              visitor count fetched from CF's hourly dataset. The sub-line
+              shows the most recent hourly bucket. Falls back to
+              `vs.visitors_today` (daily bucket) before the 24h fetch lands. */}
           {(() => {
-            const todayBucket = cfOverview?.series?.length
-              ? cfOverview.series[cfOverview.series.length - 1]
+            const lastHourBucket = cfVisitors24h?.series?.length
+              ? cfVisitors24h.series[cfVisitors24h.series.length - 1]
               : null;
-            const headline = cfOverview?.totals?.visitors ?? vs?.total_visitors ?? 0;
-            const todayValue = todayBucket?.visitors ?? todayBucket?.uniques ?? vs?.visitors_today ?? 0;
+            const headline = cfVisitors24h?.totals?.visitors ?? vs?.visitors_today ?? 0;
+            const lastHourValue = lastHourBucket?.visitors ?? lastHourBucket?.uniques ?? 0;
             return (
               <StatCard label="Unique Visitors"
                 value={headline}
                 icon={Users} color="#84cc16"
-                subLabel="Today"
-                subValue={todayValue} />
+                subLabel="Last hour"
+                subValue={lastHourValue} />
             );
           })()}
           <StatCard label="Bounce Rate"  value={vs.bounce_rate != null ? `${vs.bounce_rate}%` : '—'} icon={TrendingUp} color="#f59e0b" />
