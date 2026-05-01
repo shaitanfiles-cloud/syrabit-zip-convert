@@ -199,6 +199,7 @@ _SEARCH_BOT_UA_RE = re.compile(
     r"applebot|applebot-extended|ia_archiver|msnbot|"
     r"gptbot|oai-searchbot|chatgpt-user|claudebot|claude-web|perplexitybot|"
     r"perplexity-user|anthropic-ai|meta-externalagent|"
+    r"youbot|"  # You.com search/answer engine — cites sources, drives referral traffic
     r"rogerbot|embedly|quora link preview|showyoubot|"
     r"outbrain|pinterest/0\.|developers\.google\.com/\+/web/snippet|slackbot|"
     r"vkshare|w3c_validator|redditbot|googleweblight",
@@ -210,9 +211,12 @@ _SEARCH_BOT_UA_RE = re.compile(
 # is for crawlers we treat as "training-only / low-SEO-value" — kept
 # separate so future logic can choose to throttle one bucket without
 # the other. The unified `_BOT_PATTERNS` re-unions both.
+# NOTE: YouBot (You.com) was removed from this list — it is a search and
+# answer engine that cites sources and drives referral traffic, so it is
+# now classified as a search bot in `_SEARCH_BOT_UA_RE` above.
 _TRAINING_SCRAPER_UA_RE = re.compile(
     r"ccbot|cohere-ai|bytespider|petalbot|"
-    r"facebookbot|amazonbot|youbot|diffbot|img2dataset|omgili|"
+    r"facebookbot|amazonbot|diffbot|img2dataset|omgili|"
     r"dotbot|mj12bot",
     re.IGNORECASE,
 )

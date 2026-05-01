@@ -343,7 +343,7 @@ function isAiPath(p: string): boolean {
 // edge-proxy analytics to count them even though we don't always serve
 // them prerendered HTML (that decision is made downstream).
 // ────────────────────────────────────────────────────────────────────────────
-const SEARCH_BOT_UA = /googlebot|google-extended|googleother|google-inspectiontool|bingbot|yandexbot|duckduckbot|slurp|baiduspider|applebot|applebot-extended|chatgpt-user|oai-searchbot|gptbot|perplexitybot|perplexity-user|claudebot|claude-web|anthropic-ai|meta-externalagent|bytespider|ccbot|amazonbot|facebookexternalhit|facebookbot|twitterbot|linkedinbot|whatsapp|telegrambot|discordbot/i;
+const SEARCH_BOT_UA = /googlebot|google-extended|googleother|google-inspectiontool|bingbot|yandexbot|duckduckbot|slurp|baiduspider|applebot|applebot-extended|chatgpt-user|oai-searchbot|gptbot|perplexitybot|perplexity-user|claudebot|claude-web|anthropic-ai|meta-externalagent|bytespider|ccbot|amazonbot|facebookexternalhit|facebookbot|twitterbot|linkedinbot|whatsapp|telegrambot|discordbot|youbot/i;
 
 // ─── AI CRAWLER BLOCK LIST — DO NOT DRIFT ───────────────────────────────────
 // Blocks pure AI *training* crawlers that scrape content to train LLMs
@@ -358,16 +358,21 @@ const SEARCH_BOT_UA = /googlebot|google-extended|googleother|google-inspectionto
 //   ClaudeBot / Claude-Web — Claude web-search citations
 //
 // Blocked (pure training scrapers with no referral benefit):
-//   GPTBot, CCBot, Bytespider, Diffbot, Cohere-AI, YouBot
+//   GPTBot, CCBot, Bytespider, Diffbot, Cohere-AI
 //   Google-Extended, Applebot-Extended (AI opt-out variants of real search bots)
 //   Meta-ExternalAgent (Meta training crawler)
 //   Amazonbot (Amazon Alexa training, no referral traffic)
+//
+// NOT blocked (search/answer engines that cite sources and drive referral traffic):
+//   YouBot — You.com is a search and answer engine; removed from this list so
+//   it can index Syrabit and send students who search there. CF's verifiedBot
+//   flag is the primary trust gate for YouBot (no fixed CIDR range is published).
 //
 // Mirrors `_AI_BOT_NAMES` in artifacts/syrabit-backend/cf_bot_report.py
 // so robots.txt, this hard block, and the dashboard analytics agree.
 // Each pattern is anchored with \b so "GPTBotHelper" would not be falsely
 // matched. Case-insensitive because real UAs use mixed case.
-const AI_BOT_UA = /\b(?:GPTBot|CCBot|Google-Extended|Applebot-Extended|Meta-ExternalAgent|Bytespider|Amazonbot|YouBot|Cohere-AI|Diffbot)\b/i;
+const AI_BOT_UA = /\b(?:GPTBot|CCBot|Google-Extended|Applebot-Extended|Meta-ExternalAgent|Bytespider|Amazonbot|Cohere-AI|Diffbot)\b/i;
 
 interface CidrRange { network: number; mask: number }
 
@@ -457,9 +462,13 @@ function hashIp(ip: string): string {
 }
 
 function verifySearchBot(ua: string, request: Request, clientIp: string): BotVerifyResult {
-  if (!SEARCH_BOT_UA.test(ua)) return { verified: false, claimsBot: false, spoofed: false };
+  // cf.verifiedBot is the unconditional trust gate: if Cloudflare has
+  // cryptographically verified the request came from a legitimate crawler,
+  // we trust it regardless of UA string or CIDR range match. This prevents
+  // legitimate crawlers on new/unpublished IP ranges from being downgraded.
   const cf = (request as unknown as { cf?: { verifiedBot?: boolean } }).cf;
   if (cf && cf.verifiedBot === true) return { verified: true, claimsBot: true, spoofed: false };
+  if (!SEARCH_BOT_UA.test(ua)) return { verified: false, claimsBot: false, spoofed: false };
   for (const [pattern, ranges] of BOT_UA_RANGES) {
     if (pattern.test(ua)) {
       const matched = ipInRanges(clientIp, ranges);
@@ -497,6 +506,46 @@ async function logSpoofedBot(
     `SPOOFED_BOT ip_hash=${ipHash} claimed=${claimedBot} ` +
     `ua="${ua.slice(0, 150)}" colo=${colo} ts=${new Date(now).toISOString()}`
   );
+}
+
+// Task #243 — Log unsuccessful bot responses so the 2.48K "unsuccessful
+// requests" bucket in the CF Search Crawler Activity dashboard becomes
+// actionable. Emits a structured console.log (readable via `wrangler tail`)
+// and optionally writes a datapoint to the Analytics Engine dataset.
+function logBotErrorResponse(
+  env: Env,
+  ctx: ExecutionContext,
+  status: number,
+  botResult: BotVerifyResult,
+  ua: string,
+  pathname: string,
+): void {
+  if (status < 400) return; // only 4xx and 5xx
+  const botMatch = ua.match(SEARCH_BOT_UA);
+  const botName = botMatch ? botMatch[0].toLowerCase() : "unknown";
+  console.log(
+    JSON.stringify({
+      event: "BOT_ERROR_RESPONSE",
+      status,
+      bot: botName,
+      verified: botResult.verified,
+      spoofed: botResult.spoofed,
+      pathname: pathname.slice(0, 200),
+      ts: new Date().toISOString(),
+    })
+  );
+  // Optionally emit to Analytics Engine for dashboard visibility.
+  if (env.ANALYTICS) {
+    try {
+      ctx.waitUntil(Promise.resolve(
+        env.ANALYTICS.writeDataPoint({
+          blobs: [botName, pathname.slice(0, 100)],
+          doubles: [status],
+          indexes: ["bot_error"],
+        })
+      ));
+    } catch { /* Analytics Engine unavailable — console log above is sufficient */ }
+  }
 }
 
 function isVerifiedSearchBot(ua: string, request: Request, clientIp: string): boolean {
@@ -2616,8 +2665,26 @@ async function _handleEdgeFetch(
     //     above, so this block runs after them.
     // CORS headers are included so the response is well-formed even if
     // a browser-side preview ever hits this branch.
+    // Resolve bot identity BEFORE the AI hard-block so that Cloudflare-verified
+    // crawlers (cf.verifiedBot === true) are never incorrectly 403'd even if
+    // their UA string matches the AI_BOT_UA pattern. The trust hierarchy is:
+    //   1. CF verifiedBot flag — unconditional pass (handled inside verifySearchBot)
+    //   2. CIDR range match against known publisher ranges — trusted
+    //   3. UA claims bot but IP not in any known range — spoofed, logged
+    const botResult = verifySearchBot(ua, request, clientIp);
+    const isSearchBot = botResult.verified;
+    let remaining = 999999;
+
+    if (botResult.spoofed) {
+      const ipH = hashIp(clientIp);
+      const colo = (request as unknown as { cf?: { colo?: string } }).cf?.colo || "unknown";
+      ctx.waitUntil(logSpoofedBot(env.RATE_LIMIT, ipH, ua, clientIp, colo));
+    }
+
+    // AI crawler hard-block — bypassed when CF has verified the bot (isSearchBot).
+    // This allows legitimate search crawlers on new IP ranges to always get through.
     const isRobotsRequest = /^\/robots\.txt$/i.test(pathname);
-    if (AI_BOT_UA.test(ua) && !isRobotsRequest) {
+    if (AI_BOT_UA.test(ua) && !isRobotsRequest && !isSearchBot) {
       return new Response(
         "Forbidden: AI crawlers are not permitted on this site. " +
         "See https://syrabit.ai/robots.txt for the policy.\n",
@@ -2631,16 +2698,6 @@ async function _handleEdgeFetch(
           },
         },
       );
-    }
-
-    const botResult = verifySearchBot(ua, request, clientIp);
-    const isSearchBot = botResult.verified;
-    let remaining = 999999;
-
-    if (botResult.spoofed) {
-      const ipH = hashIp(clientIp);
-      const colo = (request as unknown as { cf?: { colo?: string } }).cf?.colo || "unknown";
-      ctx.waitUntil(logSpoofedBot(env.RATE_LIMIT, ipH, ua, clientIp, colo));
     }
 
     const isApiRoute = pathname.startsWith("/api/");
@@ -2790,11 +2847,19 @@ async function _handleEdgeFetch(
       if (ct.startsWith("image/") && !out.headers.has("cache-control")) {
         out.headers.set("cache-control", "public, max-age=86400");
       }
+      // Log 4xx/5xx responses served to known bot UAs for crawl-budget analysis.
+      if (botResult.claimsBot && out.status >= 400) {
+        logBotErrorResponse(env, ctx, out.status, botResult, ua, pathname);
+      }
       return out;
     }
 
     if ((request.method !== "GET" && request.method !== "HEAD") || isBypass(pathname)) {
-      return proxyToBackend(request, env, pathname, url.search, clientIp, cors, remaining);
+      const proxyResp = await proxyToBackend(request, env, pathname, url.search, clientIp, cors, remaining);
+      if (botResult.claimsBot && proxyResp.status >= 400) {
+        logBotErrorResponse(env, ctx, proxyResp.status, botResult, ua, pathname);
+      }
+      return proxyResp;
     }
 
     const hasAuth =

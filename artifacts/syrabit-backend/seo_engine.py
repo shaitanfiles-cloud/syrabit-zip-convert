@@ -2462,7 +2462,9 @@ async def get_seo_page_typed(board: str, class_slug: str, subject_slug: str, top
         {"_id": 0},
     )
     if not page:
-        raise HTTPException(status_code=404, detail="Page not found")
+        # 410 Gone tells crawlers the URL is permanently absent and to stop
+        # re-crawling it, reducing wasted crawl budget on unpublished paths.
+        raise HTTPException(status_code=410, detail="Page not found")
     result = await _inject_qa(page)
     kw = _build_expanded_keywords(
         result.get("topic_title", ""), result.get("subject_name", ""),
@@ -4436,7 +4438,8 @@ async def get_seo_page_default(board: str, class_slug: str, subject_slug: str, t
         {"_id": 0},
     )
     if not page:
-        raise HTTPException(status_code=404, detail="Page not found")
+        # 410 Gone — valid URL pattern but no published content in the database.
+        raise HTTPException(status_code=410, detail="Page not found")
     result = await _inject_qa(page)
     kw = _build_expanded_keywords(
         result.get("topic_title", ""), result.get("subject_name", ""),
