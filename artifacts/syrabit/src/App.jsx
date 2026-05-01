@@ -24,6 +24,7 @@ const LazyGlobalSeo = lazy(() => import("@/components/seo/GlobalSeo"));
 // the 5 content pages that render <TrustpilotReviewsSection />.
 const LazyGlobalTrustpilotJsonLd = lazy(() => import("@/components/seo/GlobalTrustpilotJsonLd"));
 import { apiClient } from "@/utils/api";
+import { probeImageResizer } from "@/utils/imageCdn";
 
 // ── React Query client ────────────────────────────────────────────────────────
 // `queryClient` lives in its own leaf module (`./queryClient`) so it has no
@@ -399,6 +400,12 @@ export function AppShell({ children, ssr = false, helmetContext }) {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 function App() {
+  // Probe Cloudflare Image Resizing once on mount. If the plan add-on is not
+  // active, probeImageResizer() calls markImageResizerUnavailable() so every
+  // subsequent cdnImage() / cdnSrcSet() call silently returns the original URL
+  // instead of a broken /cdn-cgi/image/ path. No-op when VITE_DISABLE_IMAGE_CDN=1.
+  useEffect(() => { probeImageResizer('/logo-56.webp'); }, []); // eslint-disable-line
+
   useEffect(() => { prefetchCriticalRoutes(); }, []); // eslint-disable-line
 
   useEffect(() => {
