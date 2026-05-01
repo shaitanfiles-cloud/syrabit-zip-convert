@@ -1251,9 +1251,9 @@ _TASK_ROUTE: dict[str, tuple] = {
     "routing":       ("workers-ai", "@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
     "rewrite":       ("workers-ai", "@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
     # ── RAG quality (factual, multi-doc, citation-heavy) ─────────────────────
-    "rag_answer":    ("gemini",     "gemini-2.5-flash"),
-    "synthesis":     ("gemini",     "gemini-2.5-flash"),
-    "pyq_solve":     ("gemini",     "gemini-2.5-flash"),
+    "rag_answer":    ("workers-ai", "@cf/openai/gpt-oss-120b"),
+    "synthesis":     ("workers-ai", "@cf/openai/gpt-oss-120b"),
+    "pyq_solve":     ("workers-ai", "@cf/openai/gpt-oss-120b"),
     # ── Long-form content (notes, MCQs, PYQs) ────────────────────────────────
     "content":       ("workers-ai", "@cf/openai/gpt-oss-120b"),
     "notes":         ("workers-ai", "@cf/openai/gpt-oss-120b"),

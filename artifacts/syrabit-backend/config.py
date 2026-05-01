@@ -430,11 +430,12 @@ VERTEX_GEMINI_MODEL = os.environ.get('VERTEX_GEMINI_MODEL', 'gemini-2.5-flash').
 # when the client does not pin a specific model. Admin UI can override this
 # at runtime (db.api_config.chat_model.default), which takes precedence.
 # Accepted values:
-#   "vertex/gemini-flash"  — Vertex AI Gemini Flash (preferred when configured)
-#   "openai/gpt-oss-20b"   — Legacy hedged SLM pool (Cerebras/Groq/OpenRouter)
+#   "openai/gpt-oss-20b"   — Workers AI GPT-OSS-20B (primary, no quota issues)
+#   "openai/gpt-oss-120b"  — Workers AI GPT-OSS-120B (higher quality, content tasks)
+#   "vertex/gemini-flash"  — Vertex AI Gemini Flash (set via CHAT_DEFAULT_MODEL env if needed)
 CHAT_DEFAULT_MODEL = os.environ.get(
     'CHAT_DEFAULT_MODEL',
-    'vertex/gemini-flash' if VERTEX_PROJECT_ID else 'openai/gpt-oss-20b',
+    'openai/gpt-oss-20b',
 ).strip()
 
 # BYOK fallback: when CF AI Gateway is enabled, any missing provider env key

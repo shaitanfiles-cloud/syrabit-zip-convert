@@ -73,9 +73,10 @@ DEFAULT_API_CONFIG = {
     "google_auth": {"client_id": "", "client_secret": "", "enabled": False},
     "supabase":    {"url": "", "service_key": "", "anon_key": ""},
     # Task #607: active chat model for the user-facing chat stream.
-    # "vertex/gemini-flash" → Vertex AI Gemini Flash (low-TTFT)
-    # "openai/gpt-oss-20b"  → legacy hedged SLM pool (auto-fallback)
-    "chat_model":  {"default": "vertex/gemini-flash"},
+    # "openai/gpt-oss-20b"  → Workers AI GPT-OSS-20B (primary, no quota issues)
+    # "openai/gpt-oss-120b" → Workers AI GPT-OSS-120B (higher quality)
+    # "vertex/gemini-flash" → Vertex AI Gemini Flash (if quota available)
+    "chat_model":  {"default": "openai/gpt-oss-20b"},
 }
 
 @router.get("/admin/api-config")
