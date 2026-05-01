@@ -12,6 +12,8 @@ Coverage:
   * Route ``POST /edu/guardian/pin/verify`` — exercises the Task #594
     rate limiter (8 attempts per 5 min) so a brute-force attacker can't
     walk the 10⁴ PIN space in seconds.
+  * Route ``POST /edu/flashcards/build`` — Task #215: generated-note path
+    (Q&A extraction + mnemonic cards) and manual-note heuristic path.
 """
 from __future__ import annotations
 
@@ -435,3 +437,235 @@ def test_pin_verify_rate_limit_is_per_actor(edu_app):
     fresh = edu_app.post("/api/edu/guardian/pin/verify",
                          json={"pin": "1234"}, headers=h2)
     assert fresh.status_code == 200
+
+
+# ─────────────── /edu/flashcards/build — Task #215 ───────────────
+
+import json as _json_mod
+
+
+def _make_generated_note_row(
+    note_id: str = "gen-note-1",
+    *,
+    generated: bool = True,
+    structured=None,
+    text: str = "",
+):
+    """Build a fake asyncpg row dict for a generated or manual note.
+
+    *structured* is serialised to a JSON string (as Postgres stores it)
+    when provided and *generated* is True; it is left as ``None`` for
+    manual notes so the route exercises the ``"structured" not in keys``
+    fallback.
+    """
+    now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    row: dict = {
+        "id": note_id,
+        "actor_kind": "anon",
+        "actor": "ip:test",
+        "generated": generated,
+        "text": text,
+        "source_url": "https://example.org",
+        "source_title": "Chapter 1",
+        "chapter_ref": "ch-1",
+        "tags": [],
+        "created_at": now,
+        "updated_at": now,
+    }
+    if structured is not None:
+        row["structured"] = _json_mod.dumps(structured)
+    return row
+
+
+def _flashcard_inserts(conn) -> list[tuple[str, str]]:
+    """Return (front, back) tuples for every edu_flashcards INSERT recorded."""
+    return [
+        (c[2][4], c[2][5])
+        for c in conn.calls
+        if c[0] == "execute" and "edu_flashcards" in c[1]
+    ]
+
+
+def test_build_flashcards_mnemonic_produces_correct_front_and_back(
+    edu_app, fake_conn_factory
+):
+    """A generated note with a mnemonic must produce a card whose front is
+    'Mnemonic for: <topic>' and whose back contains the phrase and explanation."""
+    structured = {
+        "qa": [],
+        "mnemonics": [
+            {
+                "for": "Laws of Motion",
+                "mnemonic": "FANF – Force Accelerates Non-Frozen objects",
+                "explanation": "Newton's second law: F = ma",
+            }
+        ],
+    }
+    conn = fake_conn_factory(responses=[[_make_generated_note_row(structured=structured)]])
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"ok": True, "created": 1}
+
+    cards = _flashcard_inserts(conn)
+    assert len(cards) == 1
+    front, back = cards[0]
+    assert front == "Mnemonic for: Laws of Motion"
+    assert "FANF" in back
+    assert "Newton's second law" in back
+
+
+def test_build_flashcards_qa_pairs_produce_one_card_each(
+    edu_app, fake_conn_factory
+):
+    """Each Q&A pair in a generated note must become exactly one flashcard
+    with front=question and back=answer."""
+    structured = {
+        "qa": [
+            {"q": "What is photosynthesis?",
+             "a": "The process plants use to make food from sunlight."},
+            {"q": "Where does photosynthesis occur?",
+             "a": "In the chloroplasts."},
+        ],
+        "mnemonics": [],
+    }
+    conn = fake_conn_factory(
+        responses=[[_make_generated_note_row(note_id="gen-qa", structured=structured)]]
+    )
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json()["created"] == 2
+
+    cards = _flashcard_inserts(conn)
+    assert len(cards) == 2
+    fronts = {c[0] for c in cards}
+    backs = {c[1] for c in cards}
+    assert "What is photosynthesis?" in fronts
+    assert "Where does photosynthesis occur?" in fronts
+    assert any("chloroplasts" in b for b in backs)
+
+
+def test_build_flashcards_manual_note_uses_split_heuristic(
+    edu_app, fake_conn_factory
+):
+    """A manual (non-generated) note must use _split_front_back, not the
+    structured extraction path. A 'X — Y' note → front=X, back=Y."""
+    row = _make_generated_note_row(
+        note_id="manual-1",
+        generated=False,
+        text="Photosynthesis — process by which plants make food using sunlight",
+    )
+    conn = fake_conn_factory(responses=[[row]])
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json()["created"] == 1
+
+    cards = _flashcard_inserts(conn)
+    assert len(cards) == 1
+    front, back = cards[0]
+    assert front == "Photosynthesis"
+    assert "plants make food" in back
+
+
+def test_build_flashcards_generated_note_no_content_emits_zero_cards(
+    edu_app, fake_conn_factory
+):
+    """A generated note with no Q&A pairs and no mnemonics must produce
+    zero flashcards — a graceful no-op, not a crash or junk card."""
+    structured = {"qa": [], "mnemonics": []}
+    conn = fake_conn_factory(
+        responses=[[_make_generated_note_row(note_id="gen-empty", structured=structured)]]
+    )
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"ok": True, "created": 0}
+    assert _flashcard_inserts(conn) == []
+
+
+def test_build_flashcards_mnemonic_without_explanation_back_is_phrase_only(
+    edu_app, fake_conn_factory
+):
+    """When a mnemonic has no explanation, the card back must be the
+    phrase alone — no trailing newlines, empty lines, or 'None' text."""
+    structured = {
+        "qa": [],
+        "mnemonics": [
+            {"for": "Colour bands", "mnemonic": "ROY G BIV", "explanation": ""},
+        ],
+    }
+    conn = fake_conn_factory(responses=[[_make_generated_note_row(structured=structured)]])
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+
+    _front, back = _flashcard_inserts(conn)[0]
+    assert back == "ROY G BIV"
+    assert "None" not in back
+
+
+def test_build_flashcards_respects_qa_cap_of_eight(edu_app, fake_conn_factory):
+    """Q&A extraction is capped at 8 cards — more than 8 pairs in the
+    structured payload must not produce extra cards."""
+    structured = {
+        "qa": [{"q": f"Q{i}?", "a": f"Answer {i}"} for i in range(12)],
+        "mnemonics": [],
+    }
+    fake_conn_factory(responses=[[_make_generated_note_row(structured=structured)]])
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json()["created"] == 8
+
+
+def test_build_flashcards_structured_as_json_string_is_decoded(
+    edu_app, fake_conn_factory
+):
+    """When n['structured'] is stored as a JSON string (Postgres text column),
+    the route must decode it before extracting Q&A and mnemonics."""
+    row = _make_generated_note_row(
+        structured={
+            "qa": [{"q": "Define osmosis.", "a": "Movement of water across a membrane."}],
+            "mnemonics": [],
+        }
+    )
+    conn = fake_conn_factory(responses=[[row]])
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json()["created"] == 1
+
+    cards = _flashcard_inserts(conn)
+    assert cards[0][0] == "Define osmosis."
+    assert "membrane" in cards[0][1]
+
+
+def test_build_flashcards_mixed_note_list_routes_each_correctly(
+    edu_app, fake_conn_factory
+):
+    """When a generated note and a manual note appear together, each must
+    take its own extraction path independently."""
+    gen_structured = {
+        "qa": [{"q": "What is mitosis?", "a": "Cell division producing two identical cells."}],
+        "mnemonics": [],
+    }
+    gen_row = _make_generated_note_row(note_id="gen", structured=gen_structured)
+    manual_row = _make_generated_note_row(
+        note_id="man",
+        generated=False,
+        text="ATP — adenosine triphosphate, the energy currency of the cell",
+    )
+    conn = fake_conn_factory(responses=[[gen_row, manual_row]])
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json()["created"] == 2
+
+    cards = _flashcard_inserts(conn)
+    fronts = {c[0] for c in cards}
+    backs = " ".join(c[1] for c in cards)
+    assert "What is mitosis?" in fronts   # generated Q&A path
+    assert "ATP" in fronts                # manual heuristic path
+    assert "two identical cells" in backs
