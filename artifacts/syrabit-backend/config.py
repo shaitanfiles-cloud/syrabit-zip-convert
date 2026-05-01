@@ -478,21 +478,21 @@ CHAT_DEFAULT_MODEL = os.environ.get(
 # safely remove GROQ_API_KEY, GEMINI_API_KEY, CEREBRAS_API_KEY, etc. from
 # production secrets once BYOK is verified in the CF dashboard.
 if CF_GATEWAY_ENABLED:
-    _GROQ_KEY = _GROQ_KEY or BYOK_PLACEHOLDER
-    _GEMINI_KEY = _GEMINI_KEY or BYOK_PLACEHOLDER
+    _GROQ_KEY     = _GROQ_KEY     or BYOK_PLACEHOLDER
+    _GEMINI_KEY   = _GEMINI_KEY   or BYOK_PLACEHOLDER
     _CEREBRAS_KEY = _CEREBRAS_KEY or BYOK_PLACEHOLDER
     _OPENROUTER_KEY = _OPENROUTER_KEY or BYOK_PLACEHOLDER
     _SARVAM_LLM_KEY = _SARVAM_LLM_KEY or BYOK_PLACEHOLDER
-    _XAI_KEY = _XAI_KEY or BYOK_PLACEHOLDER
+    _XAI_KEY      = _XAI_KEY      or BYOK_PLACEHOLDER
+    _OPENAI_KEY   = _OPENAI_KEY   or BYOK_PLACEHOLDER  # CF slug: openai/v1
     # New providers: BYOK allows the CF gateway to inject keys stored in
     # the CF dashboard, so the local env var is optional in production.
     _COHERE_KEY   = _COHERE_KEY   or BYOK_PLACEHOLDER
     _CARTESIA_KEY = _CARTESIA_KEY or BYOK_PLACEHOLDER
     _BASETEN_KEY  = _BASETEN_KEY  or BYOK_PLACEHOLDER
-    # Note: _GROQ_KEY_2 / _GEMINI_KEY_2 / _SARVAM_LLM_KEY_2 / _3 stay empty
-    # if not set — BYOK means CF handles rotation, so a single logical slot
-    # per provider is enough. The pool's secondary-key slots only activate
-    # when operators explicitly set the `*_KEY_2/3` env vars.
+    # Secondary/tertiary keys (_GROQ_KEY_2, _GEMINI_KEY_2, _SARVAM_LLM_KEY_2/3)
+    # stay empty if not set — CF Gateway manages rate limiting at the edge via
+    # the single BYOK key per provider. Delete these from Railway to clean up.
 # LLM_PRIMARY_PROVIDER is the canonical name (PR #36); LLM_PROVIDER kept as alias.
 _EXPLICIT_PROVIDER = (
     os.environ.get('LLM_PRIMARY_PROVIDER', '').strip() or

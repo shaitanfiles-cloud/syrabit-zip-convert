@@ -86,66 +86,194 @@ def _validate_env():
         os.environ.get("CF_AI_GATEWAY_ACCOUNT_ID", "").strip()
         and os.environ.get("CF_AI_GATEWAY_ID", "").strip()
     )
-    # Keys that CF AI Gateway BYOK can manage — when CF_GATEWAY_ENABLED these
-    # do NOT need to be set in Railway/production env. Each entry maps the env
-    # var name to its CF provider slug for reference.
-    _BYOK_CAPABLE = {
+
+    # ── Category 1: CF AI Gateway BYOK — primary provider keys ───────────────
+    # When CF Gateway is on, these keys live ONLY in the CF AI Gateway BYOK
+    # store (dashboard → AI Gateway → Authentication → BYOK). The backend
+    # sends a placeholder; the gateway appends the real key at the edge.
+    # Safe to delete from Railway as soon as you've added the key to CF BYOK.
+    _BYOK_PRIMARY = {
         "GROQ_API_KEY":       "groq/openai/v1",
         "GEMINI_API_KEY":     "google-ai-studio/v1beta/openai",
         "CEREBRAS_API_KEY":   "cerebras/v1",
         "OPENROUTER_API_KEY": "openrouter/v1",
         "SARVAM_API_KEY":     "custom-sarvam",
         "XAI_API_KEY":        "grok/v1",
+        "OPENAI_API_KEY":     "openai/v1",
         "COHERE_API_KEY":     "cohere/v1",
         "CARTESIA_API_KEY":   "cartesia/v1",
         "BASETEN_API_KEY":    "baseten/v1",
     }
-    # Keys that must always be present in Railway (no CF Gateway substitute).
-    # NOTE: Admin and staff credentials are now managed via Supabase Auth
-    # and the `users` table (is_admin / role fields). ADMIN_EMAILS,
-    # ADMIN_PASSWORDS, ADMIN_NAMES, and STAFF_PASSWORDS are no longer needed
-    # in Railway — delete them from your Railway project to reduce secret sprawl.
+
+    # ── Category 2: Secondary/tertiary AI keys — always redundant with BYOK ──
+    # These backup keys were used to handle per-key rate limits. With CF Gateway
+    # BYOK, the gateway manages a single provider key at the edge and handles
+    # retries. All secondary keys can be deleted from Railway unconditionally.
+    _BYOK_SECONDARY = [
+        "GROQ_API_KEY_2",
+        "GEMINI_API_KEY_2",
+        "SARVAM_API_KEY_2",
+        "SARVAM_API_KEY_3",
+    ]
+
+    # ── Category 3: AWS / Bedrock — BYOK via CF Gateway aws-bedrock ──────────
+    # CF AI Gateway supports AWS Bedrock (slug: aws-bedrock/v1). Store the
+    # AWS credentials in CF BYOK instead of Railway. Until migrated, the
+    # backend falls back to direct Bedrock calls using these Railway vars.
+    _BYOK_AWS = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]
+
+    # ── Category 4: Supabase-managed (already removed from Railway) ───────────
+    # Admin and staff credentials were migrated from env vars to Supabase Auth.
+    # If any of these still exist in Railway, they are safe to delete now.
+    _SUPABASE_MANAGED_LEGACY = [
+        "ADMIN_EMAILS", "ADMIN_PASSWORDS", "ADMIN_NAMES",
+        "STAFF_PASSWORDS",
+        "MONGODB_MODEL_API_KEY",   # removed (dead code)
+        "VOYAGE_API_KEY",          # removed (dead code)
+    ]
+
+    # ── Category 5: DB-stored credentials (Railway fallback only) ─────────────
+    # Payment and webhook credentials are read from the Supabase DB first
+    # (admin settings table). Railway vars are a fallback that can be removed
+    # once the values are saved via the Admin panel → Settings → Payments.
+    _DB_FIRST = [
+        "STRIPE_SECRET_KEY",
+        "STRIPE_WEBHOOK_SECRET",
+        "RAZORPAY_KEY_SECRET",
+        "RAZORPAY_WEBHOOK_SECRET",
+        "ADSENSE_CLIENT_SECRET",
+    ]
+
+    # ── Category 6: Webhook & cron secrets (can move to Supabase) ─────────────
+    # These single-use secrets authenticate cron jobs and Slack webhooks.
+    # They can be stored in Supabase (e.g. the admin_notification_prefs table
+    # or a new `app_secrets` table) to avoid Railway secret sprawl.
+    _MOVEABLE_TO_SUPABASE = [
+        "SLACK_TRUSTPILOT_FEED_WEBHOOK_URL",
+        "EDU_APPEAL_ALERT_WEBHOOK",
+        "CF_WAF_DRIFT_HEARTBEAT_SECRET",
+        "D1_SYNC_SECRET",
+        "KV_ALERT_SECRET",
+        "SYNTHETIC_PROBE_SECRETS_CHECK_TOKEN",
+        "TRUSTPILOT_REFRESH_SECRET",
+    ]
+
+    # ── Category 7: Always needed in Railway (true infrastructure secrets) ────
+    # No third-party store can substitute for these. They must stay in Railway.
     _ALWAYS_NEEDED = [
-        "MONGO_URL",
-        "JWT_SECRET",
-        "ADMIN_JWT_SECRET",
-        "CF_AI_GATEWAY_ACCOUNT_ID",
-        "CF_AI_GATEWAY_ID",
-        "CF_AI_GATEWAY_TOKEN",
-        "SUPABASE_URL",
-        "SUPABASE_SERVICE_KEY",
+        "MONGO_URL",              # MongoDB Atlas (content/RAG DB)
+        "JWT_SECRET",             # User JWT signing
+        "ADMIN_JWT_SECRET",       # Admin JWT signing (must differ from JWT_SECRET)
+        "SUPABASE_URL",           # Supabase project URL
+        "SUPABASE_SERVICE_KEY",   # Supabase service role (high-privilege)
+        "DATABASE_URL",           # Supabase Postgres DSN (direct DB access)
+        "CF_AI_GATEWAY_ACCOUNT_ID",  # CF Gateway config
+        "CF_AI_GATEWAY_ID",          # CF Gateway config
+        "CF_AI_GATEWAY_TOKEN",        # CF Gateway BYOK master token
+        "CLOUDFLARE_API_TOKEN",   # CF API (WAF drift, cache purge, analytics)
+        "CF_ZONE_ID",             # CF zone for cache purge
+        "CF_TURNSTILE_SECRET_KEY", # CF Turnstile (bot protection)
         "UPSTASH_REDIS_REST_URL",
         "UPSTASH_REDIS_REST_TOKEN",
-        "CLOUDFLARE_API_TOKEN",
-        "FRONTEND_URL",
+        "RESEND_API_KEY",         # Transactional email
+        "GOOGLE_OAUTH_CLIENT_ID",     # GA4 reporting OAuth (not user auth)
+        "GOOGLE_OAUTH_CLIENT_SECRET", # GA4 reporting OAuth (not user auth)
+        "R2_ACCESS_KEY_ID",       # Cloudflare R2 storage
+        "R2_SECRET_ACCESS_KEY",   # Cloudflare R2 storage
+        "FRONTEND_URL",           # CORS / redirect base URL
     ]
+
+    # ── Build audit output ────────────────────────────────────────────────────
     lines = ["─── Railway / Production Env-Var Audit ───"]
-    if _cf_gw_enabled:
-        lines.append("  CF AI Gateway: ENABLED — BYOK-capable keys do NOT need to be set in Railway.")
-    else:
-        lines.append("  CF AI Gateway: DISABLED — all provider keys must be set in Railway.")
-    lines.append("  BYOK-capable (can delete from Railway when CF Gateway is on):")
-    redundant = []
-    for name, slug in _BYOK_CAPABLE.items():
+    lines.append(
+        f"  CF AI Gateway: {'ENABLED' if _cf_gw_enabled else 'DISABLED'}"
+        + (" — BYOK keys do NOT need to be in Railway." if _cf_gw_enabled
+           else " — all provider keys must be set in Railway.")
+    )
+
+    # BYOK primary
+    redundant: list[str] = []
+    lines.append("")
+    lines.append("  [1] BYOK-primary (CF AI Gateway handles key injection):")
+    for name, slug in _BYOK_PRIMARY.items():
         raw = os.environ.get(name, "").strip()
         if _cf_gw_enabled:
             if raw:
-                status = f"REDUNDANT  ← safe to delete (CF slug: {slug})"
+                status = f"REDUNDANT  ← delete from Railway (CF slug: {slug})"
                 redundant.append(name)
             else:
                 status = f"BYOK ✓     (CF slug: {slug})"
         else:
-            status = "SET" if raw else "MISSING ⚠ — gateway is off, key needed"
-        lines.append(f"    {name:<26} {status}")
-    lines.append("  Always needed in Railway (no CF Gateway substitute):")
+            status = "SET" if raw else "MISSING ⚠ — gateway off, key needed"
+        lines.append(f"    {name:<30} {status}")
+
+    # BYOK secondary — always deletable when CF Gateway is on
+    sec_redundant: list[str] = []
+    lines.append("")
+    lines.append("  [2] BYOK-secondary (always redundant when CF Gateway is on — delete these):")
+    for name in _BYOK_SECONDARY:
+        raw = os.environ.get(name, "").strip()
+        if raw:
+            status = "REDUNDANT  ← delete (CF Gateway uses primary BYOK key)"
+            sec_redundant.append(name)
+        else:
+            status = "not set ✓"
+        lines.append(f"    {name:<30} {status}")
+
+    # AWS / Bedrock BYOK
+    lines.append("")
+    lines.append("  [3] AWS / Bedrock (can migrate to CF Gateway BYOK slug: aws-bedrock/v1):")
+    for name in _BYOK_AWS:
+        raw = os.environ.get(name, "").strip()
+        status = "SET — move to CF BYOK when ready" if raw else "not set"
+        lines.append(f"    {name:<30} {status}")
+
+    # Supabase-managed legacy
+    legacy_present: list[str] = []
+    lines.append("")
+    lines.append("  [4] Supabase-managed (migrated — safe to delete if still in Railway):")
+    for name in _SUPABASE_MANAGED_LEGACY:
+        raw = os.environ.get(name, "").strip()
+        if raw:
+            status = "STILL SET  ← safe to delete from Railway"
+            legacy_present.append(name)
+        else:
+            status = "not set ✓"
+        lines.append(f"    {name:<30} {status}")
+
+    # DB-first payment keys
+    lines.append("")
+    lines.append("  [5] DB-first credentials (Railway is fallback — save in Admin→Settings to remove):")
+    for name in _DB_FIRST:
+        raw = os.environ.get(name, "").strip()
+        status = "SET (Railway fallback)" if raw else "not set (using DB value)"
+        lines.append(f"    {name:<30} {status}")
+
+    # Moveable to Supabase
+    lines.append("")
+    lines.append("  [6] Webhook/cron secrets (consider moving to Supabase app_secrets table):")
+    for name in _MOVEABLE_TO_SUPABASE:
+        raw = os.environ.get(name, "").strip()
+        status = "SET" if raw else "not set"
+        lines.append(f"    {name:<30} {status}")
+
+    # Always needed
+    lines.append("")
+    lines.append("  [7] Always needed in Railway (true infrastructure — cannot move):")
     for name in _ALWAYS_NEEDED:
         raw = os.environ.get(name, "").strip()
-        lines.append(f"    {name:<26} {'SET' if raw else 'MISSING ⚠'}")
-    if redundant:
+        lines.append(f"    {name:<30} {'SET' if raw else 'MISSING ⚠'}")
+
+    # Action summary
+    all_redundant = redundant + sec_redundant + legacy_present
+    lines.append("")
+    if all_redundant:
         lines.append(
-            f"  ACTION: {len(redundant)} Railway var(s) are now redundant — "
-            f"you can delete them: {', '.join(redundant)}"
+            f"  ✂  ACTION: {len(all_redundant)} Railway var(s) can be deleted right now:\n"
+            + "     " + ", ".join(all_redundant)
         )
+    else:
+        lines.append("  ✓  No immediately-deletable Railway vars found.")
     lines.append("──────────────────────────────────────────")
     _log.info("\n".join(lines))
 
