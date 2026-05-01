@@ -341,3 +341,48 @@ def test_new_google_user_created_when_registrations_open():
     assert "access_token" in resp.json()
     # Confirm account creation was triggered.
     auth_mod.supa_insert_user.assert_called_once()
+
+
+def test_existing_user_can_sign_in_when_registrations_closed():
+    """An existing user must receive a 200 and a valid token even when
+    registrations_open=False.  The guard only applies to brand-new accounts;
+    it lives in the ``else`` branch of ``if existing:``, so existing users
+    should never see a 403 regardless of the registration setting."""
+    from fastapi.testclient import TestClient
+
+    app, auth_mod = _build_app()
+
+    sb_user = _make_sb_user(email="returning@example.com")
+    _patch_supa_client(auth_mod, sb_user)
+
+    # Existing account found — registrations_open check must be skipped.
+    auth_mod.supa_get_user = AsyncMock(
+        return_value=_base_user_record(email="returning@example.com")
+    )
+    # Registrations are closed — must NOT affect existing users.
+    auth_mod.supa_get_settings = AsyncMock(
+        return_value={"registrations_open": False}
+    )
+
+    captured_role = {}
+
+    def _fake_token(user_id, *, role, plan):
+        captured_role["role"] = role
+        return f"tok-{role}"
+
+    auth_mod.create_access_token = _fake_token
+    auth_mod.create_refresh_token = lambda *a, **k: "refresh"
+
+    async def _credits(_u):
+        return {"used": 0, "limit": 30}
+
+    auth_mod.get_user_credits = _credits
+
+    client = TestClient(app)
+    resp = client.post("/api/auth/supabase-session", json=_SUPABASE_SESSION_BODY)
+
+    assert resp.status_code == 200, resp.text
+    assert "access_token" in resp.json()
+    assert captured_role["role"] == "student"
+    # Existing user — no new account should be created.
+    auth_mod.supa_insert_user.assert_not_called()
