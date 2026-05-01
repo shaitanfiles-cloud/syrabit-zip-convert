@@ -1115,3 +1115,60 @@ def test_build_flashcards_mnemonic_back_combined_truncation(edu_app, fake_conn_f
         "Phrase characters must appear before explanation characters in back; "
         f"first 'P' at {first_phrase}, first 'E' at {first_explanation}"
     )
+
+
+def test_build_flashcards_qa_cap_preserves_first_eight_in_order(edu_app, fake_conn_factory):
+    """The Q&A cap must keep the *first* 8 pairs and must preserve insertion order.
+
+    Supplying 10 pairs with distinct, sequentially-numbered questions means that
+    a shuffle or arbitrary-pick implementation would fail: the stored fronts must
+    be exactly Q0..Q7 in that order, not merely any 8 of the 10.
+    """
+    qa_pairs = [{"q": f"Question {i}", "a": f"Answer {i}"} for i in range(10)]
+    structured = {"qa": qa_pairs, "mnemonics": []}
+    conn = fake_conn_factory(
+        responses=[[_make_generated_note_row(note_id="qa-cap-order", structured=structured)]]
+    )
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"ok": True, "created": 8}
+
+    cards = _flashcard_inserts(conn)
+    assert len(cards) == 8, f"Expected exactly 8 cards; got {len(cards)}"
+
+    for idx in range(8):
+        expected_front = f"Question {idx}"
+        actual_front = cards[idx][0]
+        assert actual_front == expected_front, (
+            f"Card at position {idx} must have front {expected_front!r}; "
+            f"got {actual_front!r} — cap must keep the first 8 pairs in order"
+        )
+
+
+def test_build_flashcards_qa_cap_excludes_pairs_beyond_position_seven(edu_app, fake_conn_factory):
+    """Q&A pairs at positions 8 and 9 must not appear in the stored cards.
+
+    This is the complement of the ordering test: we explicitly check that none
+    of the stored card fronts match a question that was supplied after the 8-pair
+    cap boundary, ruling out any scheme that picks later entries instead of
+    earlier ones.
+    """
+    qa_pairs = [{"q": f"Question {i}", "a": f"Answer {i}"} for i in range(10)]
+    structured = {"qa": qa_pairs, "mnemonics": []}
+    conn = fake_conn_factory(
+        responses=[[_make_generated_note_row(note_id="qa-cap-exclude", structured=structured)]]
+    )
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+
+    cards = _flashcard_inserts(conn)
+    stored_fronts = [front for front, _back in cards]
+
+    for excluded_idx in (8, 9):
+        excluded_front = f"Question {excluded_idx}"
+        assert excluded_front not in stored_fronts, (
+            f"{excluded_front!r} (position {excluded_idx}) must not be stored; "
+            f"only the first 8 pairs are allowed — stored fronts: {stored_fronts}"
+        )
