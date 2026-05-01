@@ -416,7 +416,7 @@ async function auditItems10to13R2AndCacheReserve() {
     } else if (code === 1135) {
       planRequired(12, 4, 'Cache Reserve zone setting',
         'not available on current plan (API code 1135)',
-        'https://dash.cloudflare.com → Caching → Cache Reserve',
+        `https://dash.cloudflare.com/${ACCOUNT_ID}/${ZONE_ID}/caching/cache-reserve`,
         '~$5/month pay-as-you-go (charged per GB cached)');
     } else {
       fail(12, 4, 'Cache Reserve zone setting', JSON.stringify(crJson.errors), 'run cloudflare-phase4-apply.js → Step 4');
@@ -429,7 +429,7 @@ async function auditItems10to13R2AndCacheReserve() {
       // Setting exists on the plan but is disabled — likely needs enabling after add-on purchase.
       planRequired(12, 4, 'Cache Reserve zone setting',
         `value=${JSON.stringify(value)} (want: "on") — enable after purchasing add-on`,
-        'https://dash.cloudflare.com → Caching → Cache Reserve',
+        `https://dash.cloudflare.com/${ACCOUNT_ID}/${ZONE_ID}/caching/cache-reserve`,
         '~$5/month pay-as-you-go (charged per GB cached)');
     }
   }
@@ -562,7 +562,7 @@ async function auditItem18ImageResizing() {
     if (code === 1135) {
       planRequired(18, 6, 'Image Resizing zone setting',
         'not available on current plan (API code 1135)',
-        'https://dash.cloudflare.com → Speed → Optimization → Image Resizing',
+        `https://dash.cloudflare.com/${ACCOUNT_ID}/${ZONE_ID}/speed/optimization`,
         'included with Pages Pro ($20/month) or as a standalone add-on');
     } else {
       fail(18, 6, 'Image Resizing zone setting', JSON.stringify(j.errors),
@@ -578,7 +578,7 @@ async function auditItem18ImageResizing() {
     // Run cloudflare-phase6-apply.js to enable it, or upgrade the plan if add-on is missing.
     planRequired(18, 6, 'Image Resizing zone setting',
       `value=${JSON.stringify(val)} (want: "on") — run cloudflare-phase6-apply.js → Step 2 after enabling add-on`,
-      'https://dash.cloudflare.com → Speed → Optimization → Image Resizing',
+      `https://dash.cloudflare.com/${ACCOUNT_ID}/${ZONE_ID}/speed/optimization`,
       'included with Pages Pro ($20/month) or as a standalone add-on');
   }
 }

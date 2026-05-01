@@ -279,8 +279,8 @@ async function main() {
       // rather than a hard failure.  CI will not block until the add-on is purchased.
       // Once purchased and enabled, this check will automatically report ✓.
       warn('Cache Reserve',
-        `value=${JSON.stringify(value)} (want: "on") — requires Cache Reserve paid add-on: ` +
-        'dash.cloudflare.com → Caching → Cache Reserve (~$5/month pay-as-you-go)');
+        `value=${JSON.stringify(value)} (want: "on") — requires Cache Reserve paid add-on (~$5/month): ` +
+        `https://dash.cloudflare.com/${ACCOUNT_ID}/${ZONE_ID}/caching/cache-reserve`);
     }
   }
 
@@ -542,8 +542,8 @@ async function main() {
       warn('image_resizing zone setting', 'token lacks Zone Settings: Read — add scope to verify');
     } else if (code === 1135) {
       warn('image_resizing zone setting',
-        'not available on current plan (API code 1135) — requires Image Resizing add-on: ' +
-        'dash.cloudflare.com → Speed → Optimization → Image Resizing');
+        `not available on current plan (API code 1135) — requires Image Resizing add-on: ` +
+        `https://dash.cloudflare.com/${ACCOUNT_ID}/${ZONE_ID}/speed/optimization`);
     } else {
       failures.push(`image_resizing (unexpected API error code ${code}: ${imgResJson.errors?.[0]?.message})`);
       console.log(`  ✗  image_resizing: unexpected API error code ${code} — run cloudflare-phase6-apply.js`);
@@ -556,7 +556,7 @@ async function main() {
       // Not "on" — plan add-on not yet purchased or not yet enabled. Warn, don't fail.
       warn('image_resizing zone setting',
         `value=${JSON.stringify(val)} (want: "on") — requires Image Resizing paid add-on: ` +
-        'dash.cloudflare.com → Speed → Optimization → Image Resizing');
+        `https://dash.cloudflare.com/${ACCOUNT_ID}/${ZONE_ID}/speed/optimization`);
     }
   }
 
