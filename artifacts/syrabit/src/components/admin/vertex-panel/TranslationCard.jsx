@@ -33,7 +33,7 @@ export default function TranslationCard({ token }) {
     setLoading(true);
     try {
       const r = await vertexTranslate(token, text.trim(), lang);
-      setResult(r.data.translated || '');
+      setResult(r.data.translated_text || r.data.translated || '');
       toast.success('Translation complete');
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Translation failed');
