@@ -2711,10 +2711,15 @@ async function _handleEdgeFetch(
       ctx.waitUntil(logSpoofedBot(env.RATE_LIMIT, ipH, ua, clientIp, colo));
     }
 
-    // AI crawler hard-block — bypassed when CF has verified the bot (isSearchBot).
-    // This allows legitimate search crawlers on new IP ranges to always get through.
+    // AI crawler hard-block — unconditional: any UA that matches AI_BOT_UA is
+    // 403'd regardless of cf.verifiedBot. The AI block runs AFTER botResult is
+    // computed (so the logging helper has access to botResult) but the block
+    // itself does NOT use isSearchBot as a bypass gate. YouBot was removed from
+    // AI_BOT_UA entirely so it will never hit this branch; other verified AI
+    // training bots (GPTBot, CCBot, …) stay hard-blocked even when CF marks them
+    // as verifiedBot — that is intentional and within task scope.
     const isRobotsRequest = /^\/robots\.txt$/i.test(pathname);
-    if (AI_BOT_UA.test(ua) && !isRobotsRequest && !isSearchBot) {
+    if (AI_BOT_UA.test(ua) && !isRobotsRequest) {
       return new Response(
         "Forbidden: AI crawlers are not permitted on this site. " +
         "See https://syrabit.ai/robots.txt for the policy.\n",
@@ -3009,7 +3014,7 @@ async function _handleEdgeFetch(
         }
 
         const body = await backendResp.text();
-        return new Response(body, {
+        const nonOkResp = new Response(body, {
           status: backendResp.status,
           headers: {
             ...cors,
@@ -3019,18 +3024,30 @@ async function _handleEdgeFetch(
             "X-Source": "backend",
           },
         });
+        if (botResult.claimsBot && nonOkResp.status >= 400) {
+          logBotErrorResponse(env, ctx, nonOkResp.status, botResult, ua, pathname);
+        }
+        return nonOkResp;
       } catch (err) {
-        return new Response(
+        const unavailResp = new Response(
           JSON.stringify({ detail: "Backend unavailable", edge: true }),
           {
             status: 502,
             headers: { ...cors, "Content-Type": "application/json", "X-Source": "backend" },
           }
         );
+        if (botResult.claimsBot) {
+          logBotErrorResponse(env, ctx, 502, botResult, ua, pathname);
+        }
+        return unavailResp;
       }
     }
 
-    return proxyToBackend(request, env, pathname, url.search, clientIp, cors, remaining);
+    const finalResp = await proxyToBackend(request, env, pathname, url.search, clientIp, cors, remaining);
+    if (botResult.claimsBot && finalResp.status >= 400) {
+      logBotErrorResponse(env, ctx, finalResp.status, botResult, ua, pathname);
+    }
+    return finalResp;
 }
 
 export default {
