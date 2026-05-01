@@ -786,6 +786,16 @@ async def _cf_access_silent_lockout_loop() -> None:
         await asyncio.sleep(_CF_ACCESS_SILENT_LOCKOUT_LOOP_INTERVAL_S)
 
 
+async def _run_atlas_vs_startup_check() -> dict:
+    """Thin wrapper — delegates to startup_checks.run_atlas_vs_startup_check().
+
+    Factored into startup_checks.py so it can be imported and tested
+    independently without pulling in the full server.py module graph.
+    """
+    from startup_checks import run_atlas_vs_startup_check as _check
+    return await _check()
+
+
 @asynccontextmanager
 async def lifespan(app):
     import deps as _deps_mod
@@ -863,23 +873,9 @@ async def lifespan(app):
             await db.chunks.create_index("chapter_id")
             await db.chunks.create_index("subject_id")
 
-            # Atlas Vector Search index — Pinecone is now the primary vector
-            # store (Task #203/208). The Atlas $vectorSearch path is kept as an
-            # emergency fallback gated by PINECONE_ATLAS_FALLBACK. Set
-            # ATLAS_VS_ENABLED=true explicitly to re-enable the Atlas index
-            # check at startup (e.g. during fallback recovery). Default: false.
-            _atlas_vs_enabled = os.environ.get("ATLAS_VS_ENABLED", "").strip().lower() in (
-                "1", "true", "yes"
-            )
-            if _atlas_vs_enabled:
-                try:
-                    from retrievers.mongodb_vector import ensure_vector_index as _ensure_vs
-                    _vs_result = await _ensure_vs()
-                    logger.info("Atlas Vector Search index check: %s", _vs_result)
-                except Exception as _vs_err:
-                    logger.warning("Atlas Vector Search index ensure failed (non-blocking): %s", _vs_err)
-            else:
-                logger.debug("Atlas Vector Search index check skipped (ATLAS_VS_ENABLED not set)")
+            # Atlas Vector Search index check — see _run_atlas_vs_startup_check()
+            # for the full logic. Default: skipped (ATLAS_VS_ENABLED not set).
+            await _run_atlas_vs_startup_check()
 
             # Pinecone serverless index — syrabit-ahsec, 1024-dim cosine (2026-05).
             # Safe to call every boot: no-op if index already exists.

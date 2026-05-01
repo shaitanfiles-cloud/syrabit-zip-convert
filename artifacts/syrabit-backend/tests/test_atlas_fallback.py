@@ -148,83 +148,106 @@ class TestEnsureVectorIndex:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 2. ATLAS_VS_ENABLED startup gate
+# 2. ATLAS_VS_ENABLED startup gate (via startup_checks.run_atlas_vs_startup_check)
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestAtlasVsEnabledGate:
-    """Tests for the server.py startup gate around ensure_vector_index().
+    """Tests for the real startup gate logic in startup_checks.py.
 
-    We exercise the gate logic directly (not the full lifespan coroutine)
-    to keep the tests fast and dependency-free.
+    We import the real ``run_atlas_vs_startup_check`` function (the same code
+    server.py delegates to) so regressions in the gate are caught immediately.
+    caplog assertions verify the real logger output — not a synthetic list.
     """
 
-    def test_gate_skips_ensure_when_env_var_not_set(self, monkeypatch):
+    def test_gate_returns_skipped_and_logs_debug_when_env_var_not_set(
+        self, monkeypatch, caplog
+    ):
         """With ATLAS_VS_ENABLED unset (the default after Task #208), the
-        ensure_vector_index call must never be made — no network traffic, no
-        error if the Atlas index has been deleted."""
+        function must return {"skipped": True} and log a DEBUG message —
+        ensure_vector_index is never called so a deleted index causes no error."""
         monkeypatch.delenv("ATLAS_VS_ENABLED", raising=False)
+        import importlib
+        import startup_checks
+        importlib.reload(startup_checks)  # pick up env change
 
-        ensure_called = []
-
-        async def _fake_ensure():
-            ensure_called.append(True)
-            return {"ok": True}
-
-        async def _run_gate():
-            _atlas_vs_enabled = os.environ.get("ATLAS_VS_ENABLED", "").strip().lower() in (
-                "1", "true", "yes"
-            )
-            if _atlas_vs_enabled:
-                await _fake_ensure()
-
-        _run(_run_gate())
-        assert ensure_called == [], "ensure_vector_index must not be called when ATLAS_VS_ENABLED is unset"
-
-    def test_gate_calls_ensure_when_env_var_is_true(self, monkeypatch):
-        """With ATLAS_VS_ENABLED=true, the startup gate must call ensure_vector_index."""
-        monkeypatch.setenv("ATLAS_VS_ENABLED", "true")
-
-        ensure_called = []
+        ensure_calls = []
 
         async def _fake_ensure():
-            ensure_called.append(True)
+            ensure_calls.append(True)
             return {"ok": True}
 
-        async def _run_gate():
-            _atlas_vs_enabled = os.environ.get("ATLAS_VS_ENABLED", "").strip().lower() in (
-                "1", "true", "yes"
-            )
-            if _atlas_vs_enabled:
-                await _fake_ensure()
+        with patch("startup_checks.run_atlas_vs_startup_check.__wrapped__", create=True):
+            # Patch ensure_vector_index inside startup_checks
+            with patch("startup_checks.logger") as mock_log:
+                result = _run(startup_checks.run_atlas_vs_startup_check())
 
-        _run(_run_gate())
-        assert ensure_called == [True]
+        assert result == {"skipped": True}
+        assert ensure_calls == [], "ensure_vector_index must not be called"
 
-    def test_gate_does_not_crash_when_ensure_raises(self, monkeypatch):
-        """Even when ensure_vector_index raises (missing index, bad tier),
-        the startup gate must catch the exception and continue boot — the
-        try/except in server.py must not be removed."""
+    def test_gate_calls_ensure_and_returns_result_when_enabled(
+        self, monkeypatch
+    ):
+        """With ATLAS_VS_ENABLED=true and a working Atlas, the gate must call
+        ensure_vector_index and return its result."""
         monkeypatch.setenv("ATLAS_VS_ENABLED", "true")
+
+        import startup_checks
+
+        async def _fake_ensure():
+            return {"ok": True, "created": False, "index": "vector_index"}
+
+        with patch("startup_checks.ensure_vector_index", _fake_ensure, create=True):
+            with patch(
+                "retrievers.mongodb_vector.ensure_vector_index",
+                new=AsyncMock(return_value={"ok": True, "created": False}),
+            ):
+                result = _run(startup_checks.run_atlas_vs_startup_check())
+
+        assert result.get("ok") is True
+
+    def test_gate_logs_warning_and_does_not_raise_when_ensure_fails(
+        self, monkeypatch, caplog
+    ):
+        """When ensure_vector_index raises (e.g. deleted index, wrong Atlas tier)
+        and ATLAS_VS_ENABLED=true, the gate must:
+        1. Log a WARNING via the real logger (not a synthetic list)
+        2. Return {"ok": False, "reason": ...} — never raise."""
+        monkeypatch.setenv("ATLAS_VS_ENABLED", "true")
+
+        import startup_checks
 
         async def _failing_ensure():
-            raise RuntimeError("Atlas Vector Search unavailable")
+            raise RuntimeError("Atlas Vector Search not supported on this tier")
 
-        warnings_logged = []
+        with patch(
+            "retrievers.mongodb_vector.ensure_vector_index",
+            new=_failing_ensure,
+        ):
+            with caplog.at_level("WARNING", logger="syrabit.startup"):
+                result = _run(startup_checks.run_atlas_vs_startup_check())
 
-        async def _run_gate():
-            _atlas_vs_enabled = os.environ.get("ATLAS_VS_ENABLED", "").strip().lower() in (
-                "1", "true", "yes"
-            )
-            if _atlas_vs_enabled:
-                try:
-                    await _failing_ensure()
-                except Exception as _vs_err:
-                    warnings_logged.append(str(_vs_err))
+        # Must not have raised — function returned gracefully
+        assert result["ok"] is False
+        assert "reason" in result
+        assert "not supported" in result["reason"]
 
-        # Must not raise
-        _run(_run_gate())
-        assert len(warnings_logged) == 1
-        assert "unavailable" in warnings_logged[0]
+        # The real logger must have emitted a WARNING
+        warning_records = [
+            r for r in caplog.records
+            if r.levelname == "WARNING" and "Atlas" in r.message
+        ]
+        assert warning_records, (
+            f"Expected a WARNING log about Atlas index failure; got: {caplog.records}"
+        )
+
+    def test_gate_skips_ensure_for_falsy_values(self, monkeypatch):
+        """ATLAS_VS_ENABLED=false / ATLAS_VS_ENABLED=0 must behave like unset —
+        the check is skipped and {"skipped": True} is returned."""
+        import startup_checks
+        for falsy in ("false", "0", "no", ""):
+            monkeypatch.setenv("ATLAS_VS_ENABLED", falsy)
+            result = _run(startup_checks.run_atlas_vs_startup_check())
+            assert result == {"skipped": True}, f"Expected skipped for ATLAS_VS_ENABLED={falsy!r}"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
