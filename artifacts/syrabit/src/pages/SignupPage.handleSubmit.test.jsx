@@ -235,6 +235,49 @@ describe('SignupPage — confirm-password red border', () => {
   });
 });
 
+describe('SignupPage — password input red border', () => {
+  it('applies border-red-500/40 to the password input when confirm password is non-empty and does not match', async () => {
+    render(<SignupPage />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-password-input'), {
+        target: { value: 'Password1!' },
+      });
+      const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+      fireEvent.change(confirmInput, { target: { value: 'Different1!' } });
+    });
+    const passwordInput = screen.getByTestId('auth-password-input');
+    expect(passwordInput.className).toContain('border-red-500/40');
+  });
+
+  it('removes border-red-500/40 from the password input once passwords match', async () => {
+    render(<SignupPage />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-password-input'), {
+        target: { value: 'Password1!' },
+      });
+      const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+      fireEvent.change(confirmInput, { target: { value: 'Different1!' } });
+    });
+    expect(screen.getByTestId('auth-password-input').className).toContain('border-red-500/40');
+
+    await act(async () => {
+      const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+      fireEvent.change(confirmInput, { target: { value: 'Password1!' } });
+    });
+    expect(screen.getByTestId('auth-password-input').className).not.toContain('border-red-500/40');
+  });
+
+  it('does not apply border-red-500/40 to the password input when confirm password is empty', async () => {
+    render(<SignupPage />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-password-input'), {
+        target: { value: 'Password1!' },
+      });
+    });
+    expect(screen.getByTestId('auth-password-input').className).not.toContain('border-red-500/40');
+  });
+});
+
 describe('SignupPage — handleSubmit redirect logic', () => {
   it('navigates to /onboarding when user has onboarding_done=false', async () => {
     mockSignup.mockResolvedValueOnce({ role: '', onboarding_done: false });

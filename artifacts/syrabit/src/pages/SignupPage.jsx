@@ -275,7 +275,7 @@ export default function SignupPage() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     onFocus={handleInputFocus}
-                    className="pl-10 pr-11 h-11"
+                    className={`pl-10 pr-11 h-11 ${confirmPassword && !passwordsMatch ? 'border-red-500/40' : ''}`}
                     style={{ scrollMarginBottom: '4rem' }}
                     required
                     data-testid="auth-password-input"
