@@ -44,6 +44,7 @@ export default function ChatPage() {
   const convId     = searchParams.get('id');
   const subjectId  = searchParams.get('subject');
   const documentId = searchParams.get('document_id');
+  const chapterId  = searchParams.get('chapter');
 
   const [messages, setMessages]           = useState([]);
   const [input, setInput]                 = useState('');
@@ -228,6 +229,21 @@ export default function ChatPage() {
 
   useEffect(() => { adjustTextarea(); }, [input, adjustTextarea]);
 
+  const activeChapter = useMemo(
+    () => (chapterId && scopedChapters.length
+      ? scopedChapters.find((ch) => ch.id === chapterId) ?? null
+      : null),
+    [chapterId, scopedChapters],
+  );
+
+  const onDismissChapter = useCallback(() => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('chapter');
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
   const cardContext = useMemo(() => {
     if (!subjectId || !subject) return null;
     const lines = [];
@@ -239,22 +255,35 @@ export default function ChatPage() {
     const boardLabel = rawBoard ? `${rawBoard}` : null;
     const parts = [boardLabel, user?.class_name, user?.stream_name].filter(Boolean);
     if (parts.length) lines.push(`Board/Class: ${parts.join(' | ')}`);
-    if (scopedChapters.length) {
+
+    // When a specific chapter is active, surface its full content first so
+    // the LLM and vector retrieval both weight it highest.
+    if (activeChapter) {
+      lines.push('');
+      lines.push(`Active chapter (priority context): ${activeChapter.title}`);
+      if (activeChapter.description) lines.push(`Description: ${activeChapter.description}`);
+      if (activeChapter.content) lines.push(activeChapter.content.slice(0, 1200));
+      lines.push('');
+      lines.push('Other chapters in this subject:');
+    } else if (scopedChapters.length) {
       lines.push('');
       lines.push('Syllabus chapters:');
-      scopedChapters
-        .slice()
-        .sort((a, b) => (a.order_index ?? a.order ?? 0) - (b.order_index ?? b.order ?? 0))
-        .forEach((ch, i) => {
-          const num = ch.chapter_number ?? ch.order_index ?? i + 1;
-          let entry = `Chapter ${num} — ${ch.title}`;
-          if (ch.description) entry += `: ${ch.description}`;
-          if (ch.content) entry += `\n${ch.content.slice(0, 400)}`;
-          lines.push(entry);
-        });
     }
+
+    scopedChapters
+      .slice()
+      .sort((a, b) => (a.order_index ?? a.order ?? 0) - (b.order_index ?? b.order ?? 0))
+      .forEach((ch, i) => {
+        if (activeChapter && ch.id === activeChapter.id) return;
+        const num = ch.chapter_number ?? ch.order_index ?? i + 1;
+        let entry = `Chapter ${num} — ${ch.title}`;
+        if (ch.description) entry += `: ${ch.description}`;
+        if (ch.content) entry += `\n${ch.content.slice(0, 400)}`;
+        lines.push(entry);
+      });
+
     return lines.join('\n').slice(0, 4000);
-  }, [subjectId, subject, scopedChapters, user]);
+  }, [subjectId, subject, scopedChapters, activeChapter, user]);
 
   const effectiveLimit = credits.limit ?? user?.credits_limit ?? null;
   const remaining    = effectiveLimit !== null ? Math.max(0, effectiveLimit - credits.used) : null;
@@ -307,6 +336,7 @@ export default function ChatPage() {
     const payload = {
       message: text, conversation_id: conversationId,
       subject_id: subjectId || null, subject_name: subject?.name || null,
+      chapter_id: chapterId || null, chapter_name: activeChapter?.title || null,
       board_id: user?.board_id || null, board_name: user?.board_name || null,
       class_id: user?.class_id || null, class_name: user?.class_name || null,
       stream_name: user?.stream_name || null, model,
@@ -705,6 +735,8 @@ export default function ChatPage() {
           isAnon={!user}
           getTurnstileToken={getTurnstileToken}
           turnstileEnabled={turnstileEnabled}
+          activeChapter={activeChapter}
+          onDismissChapter={onDismissChapter}
         />
       </div>
       </AppLayout>
