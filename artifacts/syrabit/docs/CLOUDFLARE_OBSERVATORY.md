@@ -239,6 +239,8 @@ The weekly full audit (`scripts/cloudflare-full-audit.js`) covers **audit item 1
 
 - Zaraz GA4 tool configured.
 - `speed_insights` alert policy present, enabled, and has an email recipient.
+- **`speed_insights` policy has at least one Slack/webhook mechanism** — hard FAIL if
+  missing (Task #139; matches the nightly smoke assertion).
 - Observatory schedules exist for the homepage and chapter page.
 
 ```
@@ -260,6 +262,15 @@ breached:
    - LCP > 2.5 s, CLS > 0.1, INP > 200 ms.
 6. Re-run `cloudflare-phase6-apply.js` (step 4b) to programmatically restore
    the policy if you prefer not to edit via the dashboard.
+
+#### End-to-end verification log
+
+Each time the steps above are run to completion, record the result here so the
+team knows the paging chain has been verified against the live environment.
+
+| Date | Verified by | Outcome | Notes |
+|------|-------------|---------|-------|
+| _pending_ | — | — | Live Cloudflare dashboard + Slack access required; run the steps above and record here. |
 
 ---
 
