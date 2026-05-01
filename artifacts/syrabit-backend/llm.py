@@ -462,6 +462,12 @@ _MODEL_PROVIDER_MAP = {
 _MODEL_ALIAS_MAP = {
     "openai/gpt-oss-20b": "deepseek/deepseek-chat-v3-0324",
     "openai/gpt-oss-120b": "qwen-3-235b-a22b-instruct-2507",
+    # Cerebras dropped llama-3.3-70b — redirect to Workers AI FP8 equivalent.
+    # Handles both the Groq-style "-versatile" suffix and the bare form so
+    # any caller or env var using these names automatically gets the correct
+    # Workers AI model without a 404 round-trip.
+    "llama-3.3-70b-versatile": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "llama-3.3-70b": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
 }
 
 # ── SLM slot table ────────────────────────────────────────────────────────────
