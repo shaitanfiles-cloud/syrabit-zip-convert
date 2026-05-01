@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable no-console */
 /**
  * post-deploy-lighthouse.js
  *
@@ -63,6 +64,8 @@
  *   1  — one or more scores breach a threshold, metric unavailable, or
  *         an unrecoverable API error
  */
+
+import { fileURLToPath } from 'node:url';
 
 const TOKEN           = process.env.CLOUDFLARE_API_TOKEN;
 const ZONE_ID         = process.env.CLOUDFLARE_ZONE_ID         || '5b8c97df4431491dc7f60ea72fb61871';
@@ -452,7 +455,18 @@ async function main() {
   }
 }
 
-main().catch(e => {
-  console.error('\nUnhandled error:', e);
-  process.exit(1);
-});
+// ─── Exports (for unit testing) ───────────────────────────────────────────────
+// Pure functions that have no side-effects and do not touch the network.
+// Tests import these directly without triggering the main() entry point.
+export { extractMetrics, checkThresholds, deployMatchesCommit, THRESHOLDS };
+
+// ─── Entry point guard ────────────────────────────────────────────────────────
+// Only run main() when this file is executed directly (node script.js).
+// Importing the file in tests does NOT trigger main(), so API calls and
+// process.exit() are not invoked during the test run.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch(e => {
+    console.error('\nUnhandled error:', e);
+    process.exit(1);
+  });
+}
