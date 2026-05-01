@@ -1346,32 +1346,15 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
             if (n < 1e9) return `${(n / 1e6).toFixed(2).replace(/\.?0+$/, '')}M`;
             return `${(n / 1e9).toFixed(2)}B`;
           };
-          // "Total Visitors" headline is hard-pinned to the locked
-          // visitors window (`cfVisitors30d` — see the fetcher above).
-          // The fetcher prefers a 30-day window and transparently
-          // degrades to 7-day if Cloudflare returns incomplete or no
-          // visits data for 30d (typical because the adaptive-groups
-          // dataset that exposes `sum.visits` is capped at ~8 days
-          // retention on most CF plans).
-          //
-          // We use `totals.visits` (total sessions / visits) rather
-          // than `totals.visitors` (uniques) per product requirement.
-          // The "today" sub-line uses `lastBucket.visits` so it stays
-          // consistent with the headline; on the initial-paint path
-          // (before cfOverview lands) we fall back to `cf.visitors_today`
-          // (uniques) — the only "visits today" signal available before
-          // the GraphQL overview returns — which is harmless because
-          // it's only used for one paint and the active-range refresh
-          // immediately replaces it.
-          const visitorsLockedTotal = cfVisitors30d?.totals?.visits ?? totals.visits ?? totals.visitors;
-          // The locked-window fetcher transparently degrades 30d → 7d
-          // when Cloudflare's adaptive-groups dataset can't return a
-          // complete 30-day series. Per product feedback, the tile
-          // label should NOT advertise that fallback — always read
-          // "Total Visitors", regardless of which window the data
-          // ended up coming from.
-          const visitorsLabel = 'Total Visitors';
-          const visitorsToday = useOverview ? (lastBucket?.visits ?? lastBucket?.visitors) : cf.visitors_today;
+          // "Unique Visitors" headline — uses `totals.visitors` (unique
+          // visitor count from Cloudflare's httpRequests1dGroups dataset,
+          // which retains 30 days on all plans) rather than `totals.visits`
+          // (session count, capped at ~8 days on most CF plans).
+          // The sparkline already uses key `'visitors'` so the chart stays
+          // consistent with the headline.
+          const visitorsLockedTotal = cfVisitors30d?.totals?.visitors ?? totals.visitors;
+          const visitorsLabel = 'Unique Visitors';
+          const visitorsToday = useOverview ? (lastBucket?.visitors ?? lastBucket?.uniques) : cf.visitors_today;
           const tiles = [
             { key: 'requests',   label: 'Interactions',     total: totals.requests,       today: useOverview ? lastBucket?.requests   : cf.requests_today,   fmt: fmtNum },
             { key: 'bytes',      label: 'Bandwidth',        total: totals.bytes,          today: useOverview ? lastBucket?.bytes      : cf.bytes_today,      fmt: fmtBytes },
@@ -1478,53 +1461,22 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
         <p className="text-[10px] text-gray-400 mb-2">{TODAY_BUCKET_CAPTION}</p>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
-          {/* "Total Visitors" — auto-swaps between two CF metrics
-              depending on what the active range can actually deliver:
-
-                * If `visits_coverage.complete` is true (24h + 7d
-                  always; 30d when the CF plan retains 30 days of
-                  adaptive-groups data), show `totals.visits` —
-                  Cloudflare's "Visits" (sessions) metric, where every
-                  return after a 30-minute idle gap counts as a new
-                  visit. Matches the CF Analytics dashboard 1:1.
-
-                * If coverage is INCOMPLETE (e.g. 30d on a plan with
-                  only 8 days of adaptive-groups retention), CF cannot
-                  give us 30 days of session data — the most we can
-                  get is the recent 7-8 days, so showing that as a
-                  "30-day total" would silently under-report by 4x.
-                  In that case we switch to `totals.visitors` (unique
-                  visitors from `httpRequests1dGroups`, which DOES
-                  retain 30 days), update the label to "Unique
-                  Visitors" so the metric matches the headline, and
-                  put the partial-coverage note in the tooltip.
-
-              Final fallback to `vs.total_visitors` (server-side
-              7-day count) if the CF overview hasn't loaded yet. */}
+          {/* "Unique Visitors" — always uses `totals.visitors` (unique
+              visitor count from httpRequests1dGroups, 30-day retention)
+              rather than `totals.visits` (sessions). Falls back to
+              `vs.total_visitors` before the CF overview loads. */}
           {(() => {
-            const cov = cfOverview?.totals?.visits_coverage;
-            const visitsComplete = cov?.complete === true;
-            const useUniques = !visitsComplete && cfOverview?.totals?.visitors != null;
-            const headline = useUniques
-              ? cfOverview.totals.visitors
-              : (cfOverview?.totals?.visits ?? vs?.total_visitors ?? 0);
             const todayBucket = cfOverview?.series?.length
               ? cfOverview.series[cfOverview.series.length - 1]
               : null;
-            const todayValue = useUniques
-              ? (todayBucket?.uniques ?? todayBucket?.visitors ?? vs?.visitors_today ?? 0)
-              : ((todayBucket?.visits) ?? vs?.visitors_today ?? 0);
-            const label = useUniques ? 'Unique Visitors' : 'Total Visitors';
-            const tooltip = useUniques && cov
-              ? `Switched from "Visits" (sessions) to "Unique Visitors" because Cloudflare only kept ${cov.returned_buckets} of ${cov.requested_buckets} days of session data for this range. Unique-visitors data covers the full ${cov.requested_buckets}-day window.`
-              : undefined;
+            const headline = cfOverview?.totals?.visitors ?? vs?.total_visitors ?? 0;
+            const todayValue = todayBucket?.visitors ?? todayBucket?.uniques ?? vs?.visitors_today ?? 0;
             return (
-              <StatCard label={label}
+              <StatCard label="Unique Visitors"
                 value={headline}
                 icon={Users} color="#84cc16"
                 subLabel="Today"
-                subValue={todayValue}
-                title={tooltip} />
+                subValue={todayValue} />
             );
           })()}
           <StatCard label="Bounce Rate"  value={vs.bounce_rate != null ? `${vs.bounce_rate}%` : '—'} icon={TrendingUp} color="#f59e0b" />
