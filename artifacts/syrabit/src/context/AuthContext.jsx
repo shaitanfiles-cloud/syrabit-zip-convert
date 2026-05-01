@@ -192,6 +192,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const login = async (email, password, _turnstileToken = '') => {
+    if (!supabase) throw new Error('Authentication is not configured.');
     const { data: sbData, error: sbError } = await supabase.auth.signInWithPassword({ email, password });
     if (sbError) {
       const err = new Error(sbError.message);
@@ -207,6 +208,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const signup = async (name, email, password, consent_dpdp = false, _turnstileToken = '') => {
+    if (!supabase) throw new Error('Authentication is not configured.');
     const { data: sbData, error: sbError } = await supabase.auth.signUp({
       email,
       password,
@@ -234,6 +236,7 @@ export const AuthProvider = ({ children }) => {
   // they call _exchangeSupabaseSession directly in login()/signup().
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
+    if (!supabase) return;
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (event !== 'SIGNED_IN') return;
@@ -254,7 +257,7 @@ export const AuthProvider = ({ children }) => {
     try {
       await axios.post(`${API_BASE}/auth/logout`, {}, { withCredentials: true });
     } catch {}
-    try { await supabase.auth.signOut(); } catch {}
+    try { if (supabase) await supabase.auth.signOut(); } catch {}
     _storeToken(null);
     justAuthenticated.current = false;
     localStorage.removeItem('syrabit:onboarding');
