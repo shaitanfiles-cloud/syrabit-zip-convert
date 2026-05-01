@@ -8,6 +8,15 @@ Embeds all chunks that are missing an `embedding` field using Cohere
 After running, the Atlas `vector_index` on `chunks.embedding` becomes
 queryable via `$vectorSearch`.
 
+Completion markers
+------------------
+* Default (PINECONE_SKIP_MONGO_EMBED=false): writes ``embedding`` + metadata
+  to MongoDB.  Next run skips via ``{"embedding": {"$exists": false}}``.
+* Post-cutover (PINECONE_SKIP_MONGO_EMBED=true): does NOT write ``embedding``
+  to MongoDB, but DOES write ``{"vector_store": "pinecone", "embedded_at": …}``
+  after a successful Pinecone upsert.  Next run skips via that marker, so
+  chunks are never re-embedded on repeated runs.
+
 Usage (from admin endpoint):
     from providers.chunk_embedder import embed_chunks_bulk
     result = await embed_chunks_bulk(db, batch_size=64, force_all=False)
@@ -86,9 +95,20 @@ async def embed_chunks_bulk(
     """
     t0 = time.perf_counter()
 
+    # Select chunks that haven't been embedded via EITHER path:
+    #   • "embedding" missing → not yet in Atlas Vector Search
+    #   • "vector_store" absent/not "pinecone" → not yet in Pinecone
+    # Using $and so both exclusion conditions must be satisfied (i.e., a
+    # chunk already upserted to Pinecone with PINECONE_SKIP_MONGO_EMBED=true
+    # will have vector_store="pinecone" and be excluded from future runs).
     query: dict = {}
     if not force_all:
-        query["embedding"] = {"$exists": False}
+        query = {
+            "$and": [
+                {"embedding": {"$exists": False}},
+                {"vector_store": {"$ne": "pinecone"}},
+            ]
+        }
     if subject_id:
         query["subject_id"] = subject_id
 
@@ -150,6 +170,9 @@ async def embed_chunks_bulk(
 
         ops = []
         pinecone_vectors: list = []
+        # Track which chunk _ids were successfully queued for Pinecone upsert
+        # so we can write the completion marker after the upsert succeeds.
+        pinecone_chunk_ids: list = []
         for i, vec in zip(idxs, vecs):
             if vec is None:
                 failed += 1
@@ -181,6 +204,7 @@ async def embed_chunks_bulk(
                         "embedding_model": _EMBED_MODEL,
                     },
                 })
+                pinecone_chunk_ids.append(chunk["_id"])
             embedded += 1
 
         if ops:
@@ -202,6 +226,24 @@ async def embed_chunks_bulk(
                         "[chunk_embedder] Pinecone upsert: %d vectors → %s",
                         len(pinecone_vectors), pc_result,
                     )
+                    # When skipping MongoDB embedding write, mark chunks with a
+                    # completion marker so subsequent runs skip them instead of
+                    # re-embedding the same documents on every invocation.
+                    if _skip_mongo_embed and pinecone_chunk_ids:
+                        import datetime as _dt
+                        _now = _dt.datetime.utcnow()
+                        _marker_ops = [
+                            UpdateOne(
+                                {"_id": cid},
+                                {"$set": {"vector_store": "pinecone", "embedded_at": _now}},
+                                upsert=False,
+                            )
+                            for cid in pinecone_chunk_ids
+                        ]
+                        try:
+                            await db.chunks.bulk_write(_marker_ops, ordered=False)
+                        except Exception as _me:
+                            logger.warning("[chunk_embedder] Completion marker write failed: %s", _me)
             except Exception as exc:
                 logger.warning("[chunk_embedder] Pinecone upsert failed (non-fatal): %s", exc)
 
