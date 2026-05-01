@@ -1,12 +1,11 @@
 /**
  * Task #137 — TrustpilotReviewsSection render tests.
  * Task #138 — StarRow unit tests + star rating row integration tests.
+ * Task #155 — CTA is now a <button> that opens a modal (not a direct <a> link).
  *
- * Covers (Task #137):
- * 1. CTA button appears with the correct Trustpilot profile href when config
- *    is present and provides a profileUrl.
- * 2. The section falls back to the hardcoded href when config is present but
- *    does not supply a profileUrl.
+ * Covers (Task #137 / #155):
+ * 1. CTA button is rendered when config is present and provides a profileUrl.
+ * 2. CTA button is rendered when config is present but omits profileUrl (fallback).
  * 3. The section is not visible (hidden gracefully) when config returns null.
  * 4. The aggregate-rating JSON-LD <script> tag is injected into <head> when
  *    the aggregate endpoint returns valid ratingValue / ratingCount data.
@@ -81,7 +80,9 @@ describe('TrustpilotReviewsSection', () => {
   });
 
   // ------------------------------------------------------------------
-  // 1. CTA button links to the profileUrl returned by the config endpoint
+  // 1. CTA button is rendered when config returns a profileUrl
+  //    (Task #155: the button now opens a modal instead of linking directly;
+  //    the invitation link / fallback URL is resolved inside the modal.)
   // ------------------------------------------------------------------
   it('shows "Rate us on Trustpilot" button with the profileUrl from config', async () => {
     vi.stubGlobal(
@@ -94,15 +95,13 @@ describe('TrustpilotReviewsSection', () => {
 
     render(<TrustpilotReviewsSection heading="Leave a review" />);
 
-    const link = await screen.findByRole('link', { name: /rate us on trustpilot/i });
-    expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute('href', CUSTOM_URL);
-    expect(link).toHaveAttribute('target', '_blank');
-    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    const btn = await screen.findByRole('button', { name: /rate us on trustpilot/i });
+    expect(btn).toBeInTheDocument();
   });
 
   // ------------------------------------------------------------------
-  // 2. Falls back to the hardcoded href when config has no profileUrl
+  // 2. CTA button is rendered even when config has no profileUrl
+  //    (modal falls back to the generic Trustpilot profile URL internally)
   // ------------------------------------------------------------------
   it('falls back to the hardcoded Trustpilot href when config omits profileUrl', async () => {
     vi.stubGlobal(
@@ -115,8 +114,8 @@ describe('TrustpilotReviewsSection', () => {
 
     render(<TrustpilotReviewsSection />);
 
-    const link = await screen.findByRole('link', { name: /rate us on trustpilot/i });
-    expect(link).toHaveAttribute('href', PROFILE_URL);
+    const btn = await screen.findByRole('button', { name: /rate us on trustpilot/i });
+    expect(btn).toBeInTheDocument();
   });
 
   // ------------------------------------------------------------------
@@ -136,7 +135,7 @@ describe('TrustpilotReviewsSection', () => {
     // Wait for the async fetch to settle (the component removes itself on null).
     await waitFor(() =>
       expect(
-        screen.queryByRole('link', { name: /rate us on trustpilot/i }),
+        screen.queryByRole('button', { name: /rate us on trustpilot/i }),
       ).toBeNull(),
     );
 
@@ -201,8 +200,8 @@ describe('TrustpilotReviewsSection', () => {
       />,
     );
 
-    // Give the component time to settle (wait for the CTA to appear).
-    await screen.findByRole('link', { name: /rate us on trustpilot/i });
+    // Give the component time to settle (wait for the CTA button to appear).
+    await screen.findByRole('button', { name: /rate us on trustpilot/i });
 
     expect(document.getElementById('missing-jsonld')).toBeNull();
   });
@@ -246,8 +245,8 @@ describe('TrustpilotReviewsSection', () => {
 
     render(<TrustpilotReviewsSection />);
 
-    // Wait for the CTA to appear (fetch settled)
-    await screen.findByRole('link', { name: /rate us on trustpilot/i });
+    // Wait for the CTA button to appear (fetch settled)
+    await screen.findByRole('button', { name: /rate us on trustpilot/i });
 
     expect(screen.queryByTestId('tp-star-row')).toBeNull();
     expect(screen.queryByTestId('tp-rating-value')).toBeNull();

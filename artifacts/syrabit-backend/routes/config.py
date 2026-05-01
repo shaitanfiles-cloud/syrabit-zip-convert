@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional
 import hmac
 
 import httpx
-from fastapi import APIRouter, Body, Header, HTTPException
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,147 @@ async def get_trustpilot_config() -> Dict[str, Any]:
         "writeReviewUrl": review_url,
         "scriptSrc": "https://widget.trustpilot.com/bootstrap/v5/tp.widget.bootstrap.min.js",
     }
+
+
+# ─── Trustpilot invitation-link (Task #155) ─────────────────────────────────
+#
+# Generates a unique per-user invitation link via Trustpilot's Invitations API.
+# Reviews submitted through an invitation link are tagged "Invited" by
+# Trustpilot — far less likely to be filtered than organic reviews.
+# Falls back to the generic profile URL when the user is unauthenticated or
+# the API call fails.
+
+_TP_INVITE_DAILY_LIMIT = int(os.environ.get("TRUSTPILOT_INVITE_DAILY_LIMIT") or 3)
+_TP_INVITE_WINDOW_S = 86400  # 24 h
+_TP_INVITE_API_URL = "https://invitations-api.trustpilot.com/v1/invitation-links"
+_TP_INVITE_TIMEOUT_S = 8.0
+
+
+@router.post("/api/trustpilot/invitation-link")
+async def generate_invitation_link(request: Request) -> Dict[str, Any]:
+    """Generate a unique Trustpilot invitation link for the authenticated user.
+
+    The link is personalised with the user's email and display name so
+    Trustpilot tags the resulting review as "Invited" (verified customer).
+
+    Auth: optional — if no session cookie/JWT is present the endpoint
+    immediately returns the generic fallback URL.
+
+    Rate limit: max ``TRUSTPILOT_INVITE_DAILY_LIMIT`` (default 3) link
+    generations per user per 24 h, enforced in-process via
+    ``auth_deps.check_rate_limit``.
+
+    Falls back to ``TRUSTPILOT_PROFILE_URL`` (or the generic
+    trustpilot.com review page) on any error so the frontend always
+    gets a usable URL.
+    """
+    domain = (os.environ.get("TRUSTPILOT_DOMAIN") or "syrabit.ai").strip()
+    fallback_url = (
+        os.environ.get("TRUSTPILOT_PROFILE_URL")
+        or (f"https://www.trustpilot.com/review/{domain}" if domain else
+            "https://www.trustpilot.com/review/syrabit.ai")
+    ).strip()
+
+    api_key = (os.environ.get("TRUSTPILOT_API_KEY") or "").strip()
+    business_unit_id = (os.environ.get("TRUSTPILOT_BUSINESS_UNIT_ID") or "").strip()
+
+    if not api_key or not business_unit_id:
+        return {"url": fallback_url, "source": "fallback_not_configured"}
+
+    try:
+        from auth_deps import decode_token, check_rate_limit
+        from db_ops import supa_get_user_by_id
+
+        token = None
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:].strip()
+        if not token:
+            token = request.cookies.get("syrabit_session")
+
+        user = None
+        if token:
+            try:
+                payload = decode_token(token)
+                if payload.get("type") != "refresh":
+                    uid = payload.get("sub")
+                    if uid:
+                        from cache import _redis_get_session
+                        user = _redis_get_session(uid) or await supa_get_user_by_id(uid)
+                        if user and not user.get("status") in ("banned", "suspended"):
+                            pass
+                        else:
+                            user = None
+            except Exception:
+                user = None
+    except Exception:
+        user = None
+        check_rate_limit = None
+
+    if not user:
+        return {"url": fallback_url, "source": "fallback_unauthenticated"}
+
+    user_id = str(user.get("id") or user.get("_id") or "")
+    if not user_id:
+        return {"url": fallback_url, "source": "fallback_no_user_id"}
+
+    try:
+        if check_rate_limit is not None:
+            rl_key = f"tp_invite:{user_id}"
+            allowed = check_rate_limit(rl_key, max_requests=_TP_INVITE_DAILY_LIMIT,
+                                       window_seconds=_TP_INVITE_WINDOW_S)
+            if not allowed:
+                logger.info("trustpilot invitation-link rate-limited for user=%s", user_id)
+                return {"url": fallback_url, "source": "fallback_rate_limited"}
+    except Exception as exc:
+        logger.debug("trustpilot invite rate-limit check failed: %s", exc)
+
+    email = (user.get("email") or "").strip()
+    name = (user.get("display_name") or user.get("name") or user.get("username") or "").strip()
+
+    if not email:
+        return {"url": fallback_url, "source": "fallback_no_email"}
+
+    try:
+        payload = {
+            "referenceId": user_id,
+            "email": email,
+            "locale": "en-IN",
+            "businessUnitId": business_unit_id,
+        }
+        if name:
+            payload["name"] = name
+
+        async with httpx.AsyncClient(timeout=_TP_INVITE_TIMEOUT_S) as client:
+            resp = await client.post(
+                _TP_INVITE_API_URL,
+                json=payload,
+                headers={
+                    "apikey": api_key,
+                    "Content-Type": "application/json",
+                },
+            )
+
+        if resp.status_code == 200:
+            data = resp.json()
+            invite_url = data.get("url") or data.get("invitationLink") or ""
+            if invite_url:
+                logger.info(
+                    "trustpilot invitation-link generated for user=%s", user_id
+                )
+                return {"url": invite_url, "source": "invitation"}
+            logger.warning(
+                "trustpilot invitation API 200 but no url field: %s", data
+            )
+        else:
+            logger.warning(
+                "trustpilot invitation API returned %s: %.200s",
+                resp.status_code, resp.text,
+            )
+    except Exception as exc:
+        logger.warning("trustpilot invitation API call failed: %s", exc)
+
+    return {"url": fallback_url, "source": "fallback_api_error"}
 
 
 # ─── Trustpilot aggregate rating (Task #725) ────────────────────────────────

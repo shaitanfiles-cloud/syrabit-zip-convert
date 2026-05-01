@@ -392,6 +392,9 @@ export default function SubjectLandingPage() {
 
         <TrustpilotReviewsSection
           subheading={`Finding Syrabit.ai useful for ${boardName} ${className} ${subjectName}? Share your experience and help other students.`}
+          subjectName={subjectName}
+          boardName={boardName}
+          className={className}
         />
 
         <nav className="mt-10 pt-6 border-t border-border/30" aria-label="Site navigation">

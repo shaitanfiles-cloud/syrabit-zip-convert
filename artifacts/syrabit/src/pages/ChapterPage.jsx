@@ -1371,6 +1371,9 @@ export default function ChapterPage() {
 
         <TrustpilotReviewsSection
           subheading={`Finding Syrabit.ai helpful for ${subjectName} ${className}? Share your experience and help other students.`}
+          subjectName={subjectName}
+          boardName={boardName}
+          className={className}
         />
 
         <nav className="mt-10 pt-6 border-t border-border/30" aria-label="Site navigation">

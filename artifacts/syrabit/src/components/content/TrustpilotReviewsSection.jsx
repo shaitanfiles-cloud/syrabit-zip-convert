@@ -24,6 +24,7 @@
  */
 import { useEffect, useId, useState } from 'react';
 import { API_BASE } from '@/utils/api';
+import TrustpilotReviewModal from './TrustpilotReviewModal';
 
 let _configPromise = null;
 let _configCache = null;
@@ -140,10 +141,14 @@ export default function TrustpilotReviewsSection({
   jsonLdId,
   jsonLdName,
   jsonLdUrl,
+  subjectName = '',
+  boardName = '',
+  className = '',
 }) {
   const [config, setConfig] = useState(_configCache);
   const [aggregate, setAggregate] = useState(_aggregateCache);
   const [failed, setFailed] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -174,54 +179,64 @@ export default function TrustpilotReviewsSection({
   if (failed) return jsonLd;
 
   return (
-    <section
-      className="mt-12 max-w-5xl mx-auto px-4"
-      aria-label="Leave a Trustpilot review"
-    >
-      {jsonLd}
-      <div className="rounded-3xl border border-border/40 bg-gradient-to-br from-emerald-50/40 via-background to-violet-50/30 p-6 sm:p-8">
-        <div className="mb-5">
-          <h2 className="text-xl sm:text-2xl font-bold text-foreground">{heading}</h2>
-          {subheading && (
-            <p className="text-sm text-muted-foreground mt-1">{subheading}</p>
-          )}
-        </div>
-
-        {/* Task #138 — live star rating row, shown only when aggregate data is available */}
-        {aggregate && (
-          <div
-            className="flex items-center gap-2 mb-4"
-            aria-label={`Rated ${aggregate.ratingValue.toFixed(1)} out of 5 from ${aggregate.ratingCount.toLocaleString()} reviews`}
-            data-testid="tp-star-row"
-          >
-            <StarRow rating={aggregate.ratingValue} />
-            <span className="text-sm font-semibold text-foreground" data-testid="tp-rating-value">
-              {aggregate.ratingValue.toFixed(1)}
-            </span>
-            <span className="text-sm text-muted-foreground" data-testid="tp-review-count">
-              &middot; {aggregate.ratingCount.toLocaleString()} reviews
-            </span>
+    <>
+      <section
+        className="mt-12 max-w-5xl mx-auto px-4"
+        aria-label="Leave a Trustpilot review"
+      >
+        {jsonLd}
+        <div className="rounded-3xl border border-border/40 bg-gradient-to-br from-emerald-50/40 via-background to-violet-50/30 p-6 sm:p-8">
+          <div className="mb-5">
+            <h2 className="text-xl sm:text-2xl font-bold text-foreground">{heading}</h2>
+            {subheading && (
+              <p className="text-sm text-muted-foreground mt-1">{subheading}</p>
+            )}
           </div>
-        )}
 
-        <a
-          href={profileUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-2 rounded-xl bg-[#00b67a] hover:bg-[#00a368] active:bg-[#008f5a] transition-colors px-5 py-2.5 text-sm font-semibold text-white shadow-sm"
-        >
-          <svg
-            aria-hidden="true"
-            viewBox="0 0 24 24"
-            fill="currentColor"
-            className="w-4 h-4 shrink-0"
+          {/* Task #138 — live star rating row */}
+          {aggregate && (
+            <div
+              className="flex items-center gap-2 mb-4"
+              aria-label={`Rated ${aggregate.ratingValue.toFixed(1)} out of 5 from ${aggregate.ratingCount.toLocaleString()} reviews`}
+              data-testid="tp-star-row"
+            >
+              <StarRow rating={aggregate.ratingValue} />
+              <span className="text-sm font-semibold text-foreground" data-testid="tp-rating-value">
+                {aggregate.ratingValue.toFixed(1)}
+              </span>
+              <span className="text-sm text-muted-foreground" data-testid="tp-review-count">
+                &middot; {aggregate.ratingCount.toLocaleString()} reviews
+              </span>
+            </div>
+          )}
+
+          {/* Task #155 — open modal instead of direct external link */}
+          <button
+            type="button"
+            onClick={() => setModalOpen(true)}
+            className="inline-flex items-center gap-2 rounded-xl bg-[#00b67a] hover:bg-[#00a368] active:bg-[#008f5a] transition-colors px-5 py-2.5 text-sm font-semibold text-white shadow-sm"
           >
-            <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
-          </svg>
-          Rate us on Trustpilot
-        </a>
-      </div>
-    </section>
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              className="w-4 h-4 shrink-0"
+            >
+              <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
+            </svg>
+            Rate us on Trustpilot
+          </button>
+        </div>
+      </section>
+
+      <TrustpilotReviewModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        subjectName={subjectName}
+        boardName={boardName}
+        className={className}
+      />
+    </>
   );
 }
 
