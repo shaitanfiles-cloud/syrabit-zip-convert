@@ -16,11 +16,16 @@ Task #135 — misconfiguration alerting:
 10. MTLS_MISCONFIGURED flag is False when ENFORCE_MTLS is not set.
 11. A readyz-style endpoint returns 503 when MTLS_MISCONFIGURED is True.
 12. A readyz-style endpoint returns 200 when MTLS_MISCONFIGURED is False.
+13. The startup ERROR log contains the expected keywords when misconfigured.
+14. The REAL /api/readyz handler returns 503 + mtls_config=misconfigured on misconfig.
+15. The REAL /api/readyz handler returns 200 + mtls_config=ok when correctly configured.
 """
 import hashlib
 import hmac
 import importlib
+import logging
 import os
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -270,6 +275,145 @@ def test_readyz_returns_200_when_mtls_correctly_configured():
     app = _build_readyz_app(enforce_mtls=True, secret=_TEST_SECRET)
     client = TestClient(app)
     resp = client.get("/api/readyz")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ready"
+    assert body["checks"]["mtls_config"]["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Task #135 — additional coverage: log text + real readyz route integration
+# ---------------------------------------------------------------------------
+
+def test_startup_error_log_contains_expected_keywords(caplog):
+    """MtlsClientCertMiddleware.__init__ must log at ERROR with key terms when
+    ENFORCE_MTLS=true but ORIGIN_SHARED_SECRET is absent, so log-based alerting
+    rules that look for 'MISCONFIGURED' or 'UNPROTECTED' fire correctly.
+
+    Note: Starlette builds the middleware stack lazily — __init__ is called on
+    the first request, not at TestClient construction time, so we send one
+    dummy request inside the caplog capture block to trigger instantiation.
+    """
+    from config import Configurator
+
+    Configurator.set_runtime_env("ENFORCE_MTLS", "true")
+    os.environ.pop("ORIGIN_SHARED_SECRET", None)
+
+    import middleware
+    importlib.reload(middleware)
+
+    from fastapi import FastAPI as _FA
+
+    test_app = _FA()
+    test_app.add_middleware(middleware.MtlsClientCertMiddleware)
+
+    @test_app.get("/probe")
+    async def _probe():
+        return {}
+
+    with caplog.at_level(logging.ERROR, logger="middleware"):
+        client = TestClient(test_app, raise_server_exceptions=False)
+        client.get("/probe")
+
+    error_messages = [r.message for r in caplog.records if r.levelno >= logging.ERROR]
+    assert any("MISCONFIGURED" in m for m in error_messages), (
+        f"Expected ERROR log containing 'MISCONFIGURED', got: {error_messages}"
+    )
+    assert any("UNPROTECTED" in m for m in error_messages), (
+        f"Expected ERROR log containing 'UNPROTECTED', got: {error_messages}"
+    )
+    assert any("ORIGIN_SHARED_SECRET" in m for m in error_messages), (
+        f"Expected ERROR log mentioning 'ORIGIN_SHARED_SECRET', got: {error_messages}"
+    )
+
+
+def _build_real_readyz_app(*, enforce_mtls: bool, secret: str | None):
+    """Build a FastAPI app that registers the REAL cms_sarvam_health readyz handler,
+    with health_snapshot_cache and _vertex_block_for_health patched out so the test
+    does not require Mongo / Postgres / Vertex to be available."""
+    from config import Configurator
+
+    if enforce_mtls:
+        Configurator.set_runtime_env("ENFORCE_MTLS", "true")
+    else:
+        os.environ.pop("ENFORCE_MTLS", None)
+
+    if secret is None:
+        os.environ.pop("ORIGIN_SHARED_SECRET", None)
+    else:
+        Configurator.set_runtime_env("ORIGIN_SHARED_SECRET", secret)
+
+    import middleware
+    importlib.reload(middleware)
+
+    from fastapi import FastAPI as _FA
+    import routes.cms_sarvam_health as _health_route
+
+    test_app = _FA()
+    test_app.include_router(_health_route.router, prefix="/api")
+    return test_app
+
+
+def test_real_readyz_returns_503_when_mtls_misconfigured():
+    """The REAL readyz handler must return 503 with mtls_config=misconfigured
+    when ENFORCE_MTLS=true but ORIGIN_SHARED_SECRET is absent.
+    health_snapshot_cache and vertex are patched to isolate the mTLS path."""
+    app = _build_real_readyz_app(enforce_mtls=True, secret=None)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    _ok_snapshot = {
+        "mongodb": {"status": "ok"},
+        "postgresql": {"status": "ok"},
+        "cloudflare_cache": {"status": "ok"},
+        "razorpay": {"status": "ok"},
+    }
+    _vertex_block = ({"status": "ok"}, True)
+
+    with (
+        patch(
+            "routes.cms_sarvam_health.health_snapshot_cache.get_all",
+            new=AsyncMock(return_value=_ok_snapshot),
+        ),
+        patch(
+            "routes.cms_sarvam_health._vertex_block_for_health",
+            return_value=_vertex_block,
+        ),
+    ):
+        resp = client.get("/api/readyz")
+
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["status"] == "degraded"
+    assert body["checks"]["mtls_config"]["status"] == "misconfigured"
+    assert "ORIGIN_SHARED_SECRET" in body["checks"]["mtls_config"]["detail"]
+
+
+def test_real_readyz_returns_200_when_mtls_correctly_configured():
+    """The REAL readyz handler must return 200 with mtls_config=ok when
+    ENFORCE_MTLS=true and ORIGIN_SHARED_SECRET is present."""
+    app = _build_real_readyz_app(enforce_mtls=True, secret=_TEST_SECRET)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    _ok_snapshot = {
+        "mongodb": {"status": "ok"},
+        "postgresql": {"status": "ok"},
+        "cloudflare_cache": {"status": "ok"},
+        "razorpay": {"status": "ok"},
+    }
+    _vertex_block = ({"status": "ok"}, True)
+
+    with (
+        patch(
+            "routes.cms_sarvam_health.health_snapshot_cache.get_all",
+            new=AsyncMock(return_value=_ok_snapshot),
+        ),
+        patch(
+            "routes.cms_sarvam_health._vertex_block_for_health",
+            return_value=_vertex_block,
+        ),
+    ):
+        resp = client.get("/api/readyz")
+
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ready"
