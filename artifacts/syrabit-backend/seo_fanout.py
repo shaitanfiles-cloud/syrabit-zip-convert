@@ -132,7 +132,6 @@ _GOOGLE_SITEMAP_PING_TPL = "https://www.google.com/ping?sitemap={sitemap}"
 async def _do_ping_delta_sitemap() -> bool:
     """Task #246: After a page is published/updated, ping Google with the
     delta sitemap URL so it re-fetches the 48-hour rolling sub-sitemap.
-    Also schedules an IndexNow notification for the delta sitemap itself.
 
     This is a best-effort fire-and-forget helper: failures are logged but
     never propagate back to the content generator.

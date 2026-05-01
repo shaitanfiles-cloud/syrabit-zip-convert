@@ -2910,6 +2910,23 @@ async function _handleEdgeFetch(
 
     if (!isApiRoute && (request.method === "GET" || request.method === "HEAD")) {
       if (isSearchBot && request.method === "GET") {
+        // Rate-limit verified bots to BOT_RATE_LIMIT_RPM (3000 RPM) per IP so
+        // aggressive re-crawls of the same origin shard don't overwhelm the
+        // backend. Unverified traffic hits the general 120 RPM path above.
+        const botRlKey = `rl:bot:${clientIp}`;
+        const botRl = await checkRateLimitWithDO(botRlKey, env, BOT_RATE_LIMIT_RPM);
+        if (!botRl.allowed) {
+          return new Response("Too Many Requests", {
+            status: 429,
+            headers: {
+              ...cors,
+              "Retry-After": String(RATE_LIMIT_WINDOW_S),
+              "X-RateLimit-Limit": String(BOT_RATE_LIMIT_RPM),
+              "X-RateLimit-Remaining": "0",
+              "X-RateLimit-Scope": "bot",
+            },
+          });
+        }
         const botResp = await handleBotContentRequest(env, pathname, clientIp, request, ctx);
         if (botResp) return botResp;
       }

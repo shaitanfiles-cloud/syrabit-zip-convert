@@ -163,12 +163,25 @@ def _roll_tier_if_needed() -> None:
 
 def _under_tier_quota_and_reserve(tier: int) -> bool:
     """Atomically check and increment the per-tier counter. Returns True
-    iff the submission should proceed under the tier sub-cap."""
+    iff the submission should proceed under the tier sub-cap.
+
+    Tier ordering guarantee: Tier-3 is additionally blocked when global quota
+    is less than 25% remaining, ensuring Tier-1/Tier-2 always retain capacity
+    for late-day high-priority submissions even if Tier-3 pages are published
+    early in the day.
+    """
     with _tier_lock:
         _roll_tier_if_needed()
+        limit = _daily_limit()
         cap = _tier_daily_limit(tier)
         if _tier_sent.get(tier, 0) >= cap:
             return False
+        # Back-pressure: when global quota is running low (< 25% remaining),
+        # block Tier-3 submissions so Tier-1 and Tier-2 can always get through.
+        if tier == 3:
+            total_sent = sum(_tier_sent.values())
+            if total_sent >= (limit * 3) // 4:
+                return False
         _tier_sent[tier] = _tier_sent.get(tier, 0) + 1
         return True
 
@@ -180,19 +193,24 @@ def classify_url_tier(url: str) -> int:
     Tier-2: definitions + examples (useful secondary content).
     Tier-3: FAQs, older or non-priority page types.
 
-    The URL format is: /board/class/subject/topic[/page_type]
+    URL format (path segments after the domain):
+        /{board}/{class}/{subject}/{topic}            → notes page (default)
+        /{board}/{class}/{subject}/{topic}/{page_type} → typed page
+
+    Segment indices (0-based path segments with empties removed):
+        0=board, 1=class, 2=subject, 3=topic, 4=page_type (optional)
     """
     if not url:
         return 3
     try:
-        parts = url.split("/")
-        # Minimum meaningful URL: /board/class/subject/topic → 5 non-empty parts
-        # after splitting "https://syrabit.ai/board/class/subject/topic".
-        # Find subject slug (index 5 in "https://domain/board/class/subject/topic").
-        if len(parts) < 6:
+        from urllib.parse import urlparse
+        path = urlparse(url).path
+        segments = [s for s in path.split("/") if s]
+        # Minimum: board + class + subject + topic = 4 segments
+        if len(segments) < 4:
             return 3
-        subject_slug = parts[5].lower().strip()
-        page_type = parts[6].lower().strip() if len(parts) > 6 else "notes"
+        subject_slug = segments[2].lower()
+        page_type = segments[4].lower() if len(segments) > 4 else "notes"
 
         # Tier-3: FAQ and anything not in notes/mcqs/definition/examples
         if page_type in ("faq", "important-questions"):
