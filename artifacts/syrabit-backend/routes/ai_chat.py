@@ -137,15 +137,15 @@ def _record_llm_cost(model, prompt_tokens, completion_tokens, provider="gemini",
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Assamese translation: Gemini main + Sarvam polish
+# Assamese translation: Qwen fallback + Sarvam polish
 # ────────────────────────────────────────────────────────────────────────────
 # User-mandated routing (2026-04-26):
-#   • English → Assamese translation: Gemini does the heavy lifting
-#     (vertex_services.translate, 600 RPM headroom, reliable native
-#     multilingual). Sarvam then polishes the Gemini output for native
+#   • English → Assamese translation: Qwen (Cerebras Qwen-3-235B) does the heavy lifting
+#     via the `_assamese_translate_gemini_main_sarvam_polish` pipeline,
+#     multilingual). Sarvam then polishes the Qwen output for native
 #     Assamese fluency (sarvam-m chat, ~30 RPM but excellent for Indic).
 #   • For chat *response* generation (not translation), the routing is
-#     the inverse: Sarvam main + Gemini fallback — see `llm.py` indic
+#     the inverse: Sarvam main + Qwen fallback — see `llm.py` indic
 #     race phase logic.
 #
 # Tradeoffs documented in `_make_assamese_translate_callable` docstring.
@@ -157,14 +157,15 @@ def _record_llm_cost(model, prompt_tokens, completion_tokens, provider="gemini",
 _POLISH_MIN_LEN = 80
 
 # Hard ceiling on the Sarvam polish call so a slow/dead Sarvam never holds
-# up the translation pipeline. On timeout we return the un-polished Gemini
+# up the translation pipeline. On timeout we return the un-polished Qwen
 # output (graceful degradation).
 _SARVAM_POLISH_TIMEOUT_SEC = 1.8
 
-# Hard ceiling on the Gemini translate call. vertex_services.translate
-# already has its own internal timeout (60s), but we wrap it so a stalled
-# Gemini call cannot block the chat path indefinitely.
-_GEMINI_TRANSLATE_TIMEOUT_SEC = 4.0
+# Hard ceiling for the Qwen fallback translate call.
+# Cerebras Qwen-3-235B is typically <500ms; Workers AI Qwen2.5-72B ~1-2s.
+# We budget 5s total for the Qwen tier so a cold Workers AI container
+# doesn't hold up the pipeline indefinitely.
+_QWEN_TRANSLATE_TIMEOUT_SEC = 5.0
 
 _POLISH_SYSTEM_PROMPT = (
     "You are a native Assamese (অসমীয়া) editor. The user message is an "
@@ -186,46 +187,46 @@ async def _assamese_translate_gemini_main_sarvam_polish(
     *,
     target_lang_code: str = "as-IN",
 ) -> str:
-    """Assamese translation pipeline: Sarvam-primary → Gemini-fallback → Sarvam-polish.
+    """Assamese translation pipeline: Sarvam-primary → Qwen-fallback → Sarvam-polish.
 
     Step 0 (primary): English text → Assamese via Sarvam translate:v1 (/translate API).
         Sarvam's dedicated translation model is purpose-built for Indic languages
-        and produces more natural Assamese than Gemini. Typical latency: 300-800ms.
+        and produces more natural Assamese than Qwen alone. Typical latency: 300-800ms.
 
     Step 1 (fallback): If Sarvam translate is unavailable or fails, English text →
-        Assamese via Gemini (vertex_services.translate).
+        Assamese via Qwen (Cerebras Qwen-3-235B or Workers AI Qwen2.5-72B).
 
-    Step 2 (polish, optional): Gemini Assamese output → polished Assamese
+    Step 2 (polish, optional): Qwen Assamese output → polished Assamese
         via Sarvam-m chat. Skipped for short fragments (< _POLISH_MIN_LEN
         chars), AND skipped entirely when Step 0 succeeded (Sarvam translate
         already produces fluent Assamese).
 
     Failure modes:
-        • Sarvam translate fails → falls through to Gemini (Step 1).
-        • Gemini fails or returns empty → returns "" (caller falls back to
+        • Sarvam translate fails → falls through to Qwen (Step 1).
+        • Qwen fails or returns empty → returns "" (caller falls back to
           its own strip / original-text path).
-        • Sarvam polish fails / times out → returns the un-polished Gemini
+        • Sarvam polish fails / times out → returns the un-polished Qwen
           output (graceful degradation — translation still landed).
 
     Args:
         text: Source English text to translate.
         target_lang_code: Sarvam-style language code (e.g., "as-IN"). The
-            Gemini translator only uses the bare language ("as"); the full
+            Qwen translator only uses the bare language ("as"); the full
             code is kept in the signature for symmetry with the legacy
             Sarvam /translate API and forward-compatibility if other Indic
             targets are ever added.
 
     Returns:
-        Polished Assamese string, or un-polished Gemini output, or "".
+        Polished Assamese string, or un-polished Qwen output, or "".
     """
     src = (text or "").strip()
     if not src:
         return ""
 
-    # Derive bare language ("as-IN" → "as") for the Gemini translator.
+    # Derive bare language ("as-IN" → "as") for the Qwen translator.
     _bare_lang = (target_lang_code or "as-IN").split("-", 1)[0].lower() or "as"
 
-    # ── Redis translation cache (avoids repeated Gemini+Sarvam round-trips) ─
+    # ── Redis translation cache (avoids repeated Qwen+Sarvam round-trips) ─
     _cache_key = "tr:" + hashlib.md5(f"{_bare_lang}:{src[:1000]}".encode()).hexdigest()
     _TRANSLATE_CACHE_TTL = 1800  # 30 minutes
 
@@ -250,7 +251,7 @@ async def _assamese_translate_gemini_main_sarvam_polish(
 
     # ── Step 0: Sarvam translate:v1 (primary — dedicated translation model) ─
     # Sarvam's /translate endpoint is purpose-built for Indic languages and
-    # outperforms Gemini on Assamese fluency. Gemini is kept as Step 1 fallback.
+    # outperforms Gemini on Assamese fluency. Qwen is the Step 1 fallback.
     _sarvam_tc = getattr(deps, "sarvam_translate_client", None) or getattr(deps, "sarvam_client", None)
     if _sarvam_tc:
         try:
@@ -272,76 +273,100 @@ async def _assamese_translate_gemini_main_sarvam_polish(
                     logger.debug("[INDIC-TRANSLATE] Sarvam translate:v1 primary OK for %r", src[:40])
                     return _tr_cache_store(_sv_result)
             else:
-                logger.warning("[INDIC-TRANSLATE] Sarvam translate HTTP %d — falling back to Gemini", _sv_resp.status_code)
+                logger.warning("[INDIC-TRANSLATE] Sarvam translate HTTP %d — falling back to Qwen", _sv_resp.status_code)
         except asyncio.TimeoutError:
-            logger.info("[INDIC-TRANSLATE] Sarvam translate timed out after 3.5s — falling back to Gemini")
+            logger.info("[INDIC-TRANSLATE] Sarvam translate timed out after 3.5s — falling back to Qwen")
         except Exception as _sv_err:
-            logger.warning("[INDIC-TRANSLATE] Sarvam translate failed (%s) — falling back to Gemini", _sv_err)
+            logger.warning("[INDIC-TRANSLATE] Sarvam translate failed (%s) — falling back to Qwen", _sv_err)
 
-    # ── Step 1: Gemini main (fallback) ──────────────────────────────────
-    gemini_out = ""
-    _gemini_timed_out = False
+    # ── Step 1: Qwen fallback (Cerebras Qwen-3-235B → Workers AI Qwen2.5-72B) ──
+    # Gemini translate has been removed from this pipeline. Qwen is now the sole
+    # fallback when Sarvam translate:v1 is unavailable or returns empty.
+    #
+    # Tier A — Cerebras Qwen-3-235B: fastest, highest quality, ~200-500ms.
+    # Tier B — Workers AI Qwen2.5-72B: separate quota, ~1-2s cold, reliable.
+    # Both tiers share the same 5s budget (_QWEN_TRANSLATE_TIMEOUT_SEC).
+    #
+    # Translation prompt: explicit Assamese-only instruction so the model
+    # doesn't produce code-switched output. Numbers, units, proper nouns
+    # (AHSEC, SEBA, DNA, ATP) are allowed in Latin per the Assamese style guide.
+    _QWEN_TRANSLATE_SYSTEM = (
+        "You are an expert English-to-Assamese (অসমীয়া) translator. "
+        "Translate the input text to fluent, standard Assamese script. "
+        "Rules: (1) Output ONLY the Assamese translation — no English words "
+        "except pure numbers, scientific units (cm, kg, °C, eV), math symbols, "
+        "and well-known proper nouns/acronyms (AHSEC, SEBA, NCERT, DNA, ATP, GDP, Newton). "
+        "(2) No preamble, no explanation, no quote marks around the output."
+    )
+    _QWEN_TRANSLATE_USER = f"Translate to Assamese:\n\n{src[:2000]}"
+
+    qwen_out = ""
+    _qwen_timed_out = False
+
+    # Tier A: Cerebras Qwen-3-235B
     try:
-        import vertex_services  # local import — keeps cold-start cost off the main chat path
-        gemini_out = await asyncio.wait_for(
-            vertex_services.translate(src[:4000], target_lang=_bare_lang, source_lang="en"),
-            timeout=_GEMINI_TRANSLATE_TIMEOUT_SEC,
-        ) or ""
-        gemini_out = gemini_out.strip()
+        from llm import call_llm_api as _call_llm
+        _qwen_a = await asyncio.wait_for(
+            _call_llm(
+                [
+                    {"role": "system", "content": _QWEN_TRANSLATE_SYSTEM},
+                    {"role": "user", "content": _QWEN_TRANSLATE_USER},
+                ],
+                model="qwen-3-235b-a22b-instruct-2507",
+                max_tokens=1200,
+                temperature=0.1,
+            ),
+            timeout=_QWEN_TRANSLATE_TIMEOUT_SEC,
+        )
+        qwen_out = (_qwen_a or "").strip()
+        if qwen_out:
+            logger.info("[INDIC-TRANSLATE] Cerebras Qwen-3-235B OK for %r", src[:40])
     except asyncio.TimeoutError:
-        logger.warning(
-            f"[INDIC-TRANSLATE] Gemini main timed out after "
-            f"{_GEMINI_TRANSLATE_TIMEOUT_SEC}s for {src[:60]!r}"
-        )
-        _gemini_timed_out = True
-    except Exception as _e:  # pragma: no cover — network defensive
-        logger.warning(
-            f"[INDIC-TRANSLATE] Gemini main failed for {src[:60]!r}: "
-            f"{type(_e).__name__}: {str(_e)[:160]}"
-        )
+        logger.warning("[INDIC-TRANSLATE] Cerebras Qwen timed out after %ss", _QWEN_TRANSLATE_TIMEOUT_SEC)
+        _qwen_timed_out = True
+    except Exception as _qe_a:
+        logger.warning("[INDIC-TRANSLATE] Cerebras Qwen failed (%s: %s) — trying Workers AI Qwen",
+                       type(_qe_a).__name__, str(_qe_a)[:120])
 
-    # ── Step 1.5: Qwen fallback (when Gemini fails or returns empty, not timeout) ──
-    # Skip if Gemini timed out — stacking another 6s would be too slow for the user.
-    if not gemini_out and not _gemini_timed_out:
+    # Tier B: Workers AI Qwen2.5-72B (only if Tier A failed/empty AND didn't timeout)
+    if not qwen_out and not _qwen_timed_out:
         try:
             from providers.cloudflare_ai import chat as _cf_chat_tr
-            _qwen_tr_msgs = [
-                {"role": "system", "content": (
-                    "You are an expert English-to-Assamese translator. "
-                    "Translate the given English text to fluent, standard Assamese (অসমীয়া) script. "
-                    "Output only the Assamese translation — no explanation, no English words."
-                )},
-                {"role": "user", "content": f"Translate to Assamese:\n\n{src[:1500]}"},
+            _qwen_b_msgs = [
+                {"role": "system", "content": _QWEN_TRANSLATE_SYSTEM},
+                {"role": "user", "content": _QWEN_TRANSLATE_USER},
             ]
-            _qwen_tr = await asyncio.wait_for(
-                _cf_chat_tr(_qwen_tr_msgs, model_key="@cf/qwen/qwen2.5-72b-instruct", max_tokens=1024),
-                timeout=6.0,
+            _qwen_b = await asyncio.wait_for(
+                _cf_chat_tr(_qwen_b_msgs, model_key="@cf/qwen/qwen2.5-72b-instruct", max_tokens=1200),
+                timeout=_QWEN_TRANSLATE_TIMEOUT_SEC,
             )
-            _qwen_tr = (_qwen_tr or "").strip()
-            if _qwen_tr:
-                logger.info("[INDIC-TRANSLATE] Qwen fallback succeeded for %r", src[:40])
-                return _tr_cache_store(_qwen_tr)
-        except Exception as _qe:
-            logger.warning("[INDIC-TRANSLATE] Qwen fallback failed: %s: %s", type(_qe).__name__, str(_qe)[:120])
+            qwen_out = (_qwen_b or "").strip()
+            if qwen_out:
+                logger.info("[INDIC-TRANSLATE] Workers AI Qwen2.5-72B OK for %r", src[:40])
+            else:
+                logger.info("[INDIC-TRANSLATE] Workers AI Qwen returned empty for %r", src[:40])
+        except asyncio.TimeoutError:
+            logger.warning("[INDIC-TRANSLATE] Workers AI Qwen timed out — pipeline exhausted for %r", src[:40])
+            _qwen_timed_out = True
+        except Exception as _qe_b:
+            logger.warning("[INDIC-TRANSLATE] Workers AI Qwen failed: %s: %s",
+                           type(_qe_b).__name__, str(_qe_b)[:120])
 
-    if not gemini_out:
-        if _gemini_timed_out:
-            return ""
-        logger.info(f"[INDIC-TRANSLATE] Gemini + Qwen both returned empty for {src[:60]!r}")
+    if not qwen_out:
+        logger.info("[INDIC-TRANSLATE] Qwen tier exhausted (timeout=%s) for %r", _qwen_timed_out, src[:60])
         return ""
 
     # ── Step 2: Sarvam polish (optional, best-effort) ───────────────────
-    if len(gemini_out) < _POLISH_MIN_LEN:
-        # Short fragment — skip polish, return Gemini output verbatim.
-        return _tr_cache_store(gemini_out)
+    if len(qwen_out) < _POLISH_MIN_LEN:
+        return _tr_cache_store(qwen_out)
 
     # Read the live `sarvam_llm_client` attribute off the deps module so
     # tests that monkey-patch `deps.sarvam_llm_client = None` see the
     # current value rather than the import-time snapshot.
     _sarvam_chat = getattr(deps, "sarvam_llm_client", None)
     if _sarvam_chat is None:
-        # No Sarvam client configured — return un-polished Gemini.
-        return _tr_cache_store(gemini_out)
+        # No Sarvam client configured — return un-polished Qwen output.
+        return _tr_cache_store(qwen_out)
 
     try:
         polish_resp = await asyncio.wait_for(
@@ -351,9 +376,9 @@ async def _assamese_translate_gemini_main_sarvam_polish(
                     "model": "sarvam-m",
                     "messages": [
                         {"role": "system", "content": _POLISH_SYSTEM_PROMPT},
-                        {"role": "user", "content": gemini_out[:4000]},
+                        {"role": "user", "content": qwen_out[:4000]},
                     ],
-                    "max_tokens": min(1200, len(gemini_out) * 3 + 200),
+                    "max_tokens": min(1200, len(qwen_out) * 3 + 200),
                     "temperature": 0.05,
                     "top_p": 0.9,
                     "stream": False,
@@ -378,25 +403,25 @@ async def _assamese_translate_gemini_main_sarvam_polish(
                 return _tr_cache_store(_polished)
             logger.info(
                 f"[INDIC-TRANSLATE] Sarvam polish returned empty body for "
-                f"{gemini_out[:60]!r} — using un-polished Gemini output"
+                f"{qwen_out[:60]!r} — using un-polished Qwen output"
             )
         else:
             logger.warning(
                 f"[INDIC-TRANSLATE] Sarvam polish HTTP {polish_resp.status_code} "
-                f"for {gemini_out[:60]!r} — using un-polished Gemini output"
+                f"for {qwen_out[:60]!r} — using un-polished Qwen output"
             )
     except asyncio.TimeoutError:
         logger.info(
             f"[INDIC-TRANSLATE] Sarvam polish timed out after "
-            f"{_SARVAM_POLISH_TIMEOUT_SEC}s — using un-polished Gemini output"
+            f"{_SARVAM_POLISH_TIMEOUT_SEC}s — using un-polished Qwen output"
         )
     except Exception as _pe:  # pragma: no cover — network defensive
         logger.warning(
             f"[INDIC-TRANSLATE] Sarvam polish exception "
-            f"({type(_pe).__name__}: {str(_pe)[:120]}) — using un-polished Gemini output"
+            f"({type(_pe).__name__}: {str(_pe)[:120]}) — using un-polished Qwen output"
         )
 
-    return _tr_cache_store(gemini_out)
+    return _tr_cache_store(qwen_out)
 
 
 router = APIRouter()
@@ -1373,20 +1398,20 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
         Routing contract (user-mandated 2026-04-26 — see replit.md
         "LLM Providers"):
-          • English → Assamese translation: **Gemini main + Sarvam polish**
-          • Gemini does the heavy translation via `vertex_services.translate`
+          • English → Assamese translation: **Qwen fallback + Sarvam polish**
+          • Qwen (Cerebras Qwen-3-235B) does the heavy translation
             (high RPM headroom, native multilingual quality).
           • For substantive output (≥ `_POLISH_MIN_LEN` chars), Sarvam
-            polishes the Gemini text via `sarvam-m` chat to lift it to
+            polishes the Qwen text via `sarvam-m` chat to lift it to
             native-Assamese fluency.
           • For short fragments (< `_POLISH_MIN_LEN` chars) — the common
             sanitiser case where leaked English runs are typically just a
             few words — polish is **skipped** because the per-fragment
             polish round-trip (~0.8-1.5s) would compound across N
-            fragments into multi-second post-stream latency. Gemini's
+            fragments into multi-second post-stream latency. Qwen's
             translation is already high-quality at that length.
           • All Sarvam polish failures degrade gracefully to the
-            un-polished Gemini output. Gemini failure returns "" so the
+            un-polished Qwen output. Qwen failure returns "" so the
             sanitiser falls back to its existing `strip` behaviour.
         """
         async def _translate(fragment: str) -> str:
@@ -1402,7 +1427,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _instant_s = get_instant_response(msg.message) if _stream_intent == "casual" else None
     if _instant_s:
         if _want_translate and _instant_s:
-            # Gemini-main + Sarvam-polish translation (user-mandated routing).
+            # Qwen-fallback + Sarvam-polish translation (user-mandated routing).
             # Polish is applied here because the instant fast-path is a single
             # substantive translation, not a fragment splice — the polish
             # quality lift is worth the extra ~1-1.5s round-trip.
