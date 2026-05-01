@@ -5,6 +5,57 @@ tactical — link out to source for the gory details.
 
 ---
 
+## Pinecone chunk migration (task #206)
+
+### One-time migration
+
+After running `embed_chunks_bulk` to ensure all chunks have embeddings,
+copy them to Pinecone:
+
+```bash
+# Dry run first
+python scripts/migrate_chunks_to_pinecone.py --dry-run --ensure-index
+
+# Real migration
+python scripts/migrate_chunks_to_pinecone.py --ensure-index
+```
+
+### Initial run evidence (2026-05-01)
+
+| Metric | Value |
+|--------|-------|
+| MongoDB embedded chunks | 0 |
+| Pinecone `syrabit-ahsec` vectors | 0 |
+| Migration result | `{total: 0, upserted: 0, failed: 0, duration_s: 4.01}` |
+| Index host | `syrabit-ahsec-vtlityl.svc.aped-4627-b74a.pinecone.io` |
+| Index spec | AWS us-east-1, 1024-dim cosine, serverless |
+| `PINECONE_WRITE` | `true` (set after migration) |
+
+The chunks collection was empty at migration time — chapter content has not
+been ingested yet. Both Atlas $vectorSearch and Pinecone returned empty results
+for all 5 AHSEC/SEBA parity queries (consistent — both backends agree).
+
+### Re-run after content ingestion
+
+Once `embed_chunks_bulk` has run with the content pipeline:
+
+```bash
+# Verify counts match
+python scripts/validate_rag_parity.py
+# Expected: "PARITY VALIDATED — 5/5 queries above 70% threshold"
+```
+
+### Environment variables
+
+| Variable | Value | Notes |
+|----------|-------|-------|
+| `PINECONE_API_KEY` | secret | Pinecone API key |
+| `PINECONE_INDEX` | `syrabit-ahsec` | Index name |
+| `PINECONE_WRITE` | `true` | Enables Pinecone writes in embed_chunks_bulk |
+| `PINECONE_SKIP_MONGO_EMBED` | unset | Keep unset until Pinecone parity is confirmed |
+
+---
+
 ## Assamese purity override propagation
 
 **Endpoints**
