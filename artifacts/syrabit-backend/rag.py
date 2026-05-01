@@ -533,8 +533,15 @@ async def _fetch_chunks_semantic(
             logger.debug("[INTERNAL_RAG] Pinecone query failed, will try Atlas fallback: %s", _pc_err)
 
         # ── Fallback: MongoDB Atlas $vectorSearch (kept warm during validation) ─
-        # Used when Pinecone is not configured or returns no results.
-        if not raw:
+        # Gated by PINECONE_ATLAS_FALLBACK env var (default: true).
+        # Once Pinecone parity is validated, set PINECONE_ATLAS_FALLBACK=false
+        # to stop hitting Atlas $vectorSearch entirely (Pinecone-only mode).
+        import os as _os
+        _atlas_fallback_enabled = _os.environ.get(
+            "PINECONE_ATLAS_FALLBACK", "true"
+        ).strip().lower() not in ("0", "false", "no")
+
+        if not raw and _atlas_fallback_enabled:
             try:
                 vs_filter: dict = {}
                 if subject_id:

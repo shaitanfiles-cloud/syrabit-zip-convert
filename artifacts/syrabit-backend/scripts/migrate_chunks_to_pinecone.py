@@ -126,6 +126,7 @@ async def migrate(
         "_id": 1,
         "chapter_id": 1,
         "subject_id": 1,
+        "board_id": 1,
         "chapter_title": 1,
         "topic_name": 1,
         "embedding": 1,
@@ -137,30 +138,38 @@ async def migrate(
         cursor = cursor.limit(limit)
         logger.info("Limiting to first %d chunks", limit)
 
-    logger.info("Fetching chunks from MongoDB …")
-    chunks = await cursor.to_list(length=limit or 100_000)
-    total = len(chunks)
-    logger.info("Found %d chunks with embeddings", total)
+    # Count for progress display (best-effort; does not affect correctness)
+    try:
+        total_estimate = await db.chunks.count_documents(query)
+        if limit:
+            total_estimate = min(total_estimate, limit)
+        logger.info("Found ~%d chunks with embeddings to migrate", total_estimate)
+    except Exception:
+        total_estimate = 0
+        logger.info("Fetching chunks from MongoDB (count unavailable) …")
 
-    if total == 0:
-        logger.warning("No embedded chunks found — run embed_chunks_bulk first")
-        return {"total": 0, "upserted": 0, "failed": 0, "duration_s": 0}
+    if total_estimate == 0 and limit is None:
+        # Do a quick check — count might fail on some Atlas configs
+        pass
 
-    # ── Batch upsert to Pinecone ─────────────────────────────────────────────
+    # ── Cursor-based streaming: batch without loading all docs into memory ────
+    # This avoids any fixed cap on corpus size. Each batch is fetched from the
+    # cursor incrementally so multi-million chunk collections are handled safely.
     upserted = 0
     failed = 0
+    processed = 0
     batch_num = 0
+    batch: list = []
 
-    for i in range(0, total, batch_size):
-        batch = chunks[i : i + batch_size]
-        batch_num += 1
-
+    async def _flush_batch(batch: list, batch_num: int) -> tuple[int, int]:
+        """Upsert one batch to Pinecone. Returns (upserted, failed) counts."""
         vectors = []
+        local_failed = 0
         for ch in batch:
             emb = ch.get("embedding")
             if not emb or not isinstance(emb, list):
                 logger.warning("Chunk %s has invalid embedding — skipping", ch.get("_id"))
-                failed += 1
+                local_failed += 1
                 continue
             vectors.append({
                 "id": str(ch["_id"]),
@@ -168,6 +177,7 @@ async def migrate(
                 "metadata": {
                     "chapter_id":      ch.get("chapter_id", ""),
                     "subject_id":      ch.get("subject_id", ""),
+                    "board_id":        ch.get("board_id", ""),
                     "chapter_title":   ch.get("chapter_title", ""),
                     "topic_name":      ch.get("topic_name", ""),
                     "embedding_model": ch.get("embedding_model", "embed-multilingual-v3.0"),
@@ -175,34 +185,56 @@ async def migrate(
             })
 
         if not vectors:
-            continue
-
-        logger.info(
-            "Batch %d/%d — upserting %d vectors [%d/%d] …",
-            batch_num, -(-total // batch_size), len(vectors), i + len(batch), total,
-        )
+            return 0, local_failed
 
         if dry_run:
-            logger.info("  [DRY RUN] Would upsert %d vectors — skipping", len(vectors))
-            upserted += len(vectors)
-            continue
+            logger.info(
+                "  [DRY RUN] Batch %d — would upsert %d vectors", batch_num, len(vectors)
+            )
+            return len(vectors), local_failed
 
         try:
             result = await retriever.upsert(vectors)
             n = result.get("upserted", 0)
             errs = result.get("errors", [])
-            upserted += n
             if errs:
                 logger.warning("  Batch %d partial failure: %s", batch_num, errs)
-                failed += len(vectors) - n
+                local_failed += len(vectors) - n
             else:
                 logger.info("  Batch %d OK — upserted %d", batch_num, n)
+            return n, local_failed
         except Exception as exc:
             logger.error("  Batch %d FAILED: %s", batch_num, exc)
-            failed += len(vectors)
+            return 0, local_failed + len(vectors)
 
-        # Brief throttle to stay under Pinecone rate limits
-        await asyncio.sleep(0.2)
+    async for doc in cursor:
+        batch.append(doc)
+        processed += 1
+
+        if len(batch) >= batch_size:
+            batch_num += 1
+            logger.info(
+                "Batch %d — processing %d vectors [%d processed …] …",
+                batch_num, len(batch), processed,
+            )
+            n_up, n_fail = await _flush_batch(batch, batch_num)
+            upserted += n_up
+            failed += n_fail
+            batch = []
+            await asyncio.sleep(0.2)  # throttle
+
+    # Final partial batch
+    if batch:
+        batch_num += 1
+        logger.info(
+            "Batch %d (final) — processing %d vectors [%d processed] …",
+            batch_num, len(batch), processed,
+        )
+        n_up, n_fail = await _flush_batch(batch, batch_num)
+        upserted += n_up
+        failed += n_fail
+
+    total = processed
 
     duration = round(time.perf_counter() - t0, 2)
     summary = {

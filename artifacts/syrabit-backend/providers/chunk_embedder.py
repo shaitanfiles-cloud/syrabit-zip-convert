@@ -94,7 +94,7 @@ async def embed_chunks_bulk(
 
     cursor = db.chunks.find(
         query,
-        {"_id": 1, "id": 1, "chapter_id": 1, "subject_id": 1,
+        {"_id": 1, "id": 1, "chapter_id": 1, "subject_id": 1, "board_id": 1,
          "chapter_title": 1, "topic_name": 1, "content": 1, "content_as": 1},
     )
     if limit:
@@ -138,6 +138,15 @@ async def embed_chunks_bulk(
         import os as _os
 
         _pinecone_write = _os.environ.get("PINECONE_WRITE", "").strip().lower() in ("1", "true", "yes")
+        # PINECONE_SKIP_MONGO_EMBED=true stops writing the embedding field to MongoDB.
+        # Set this only after Pinecone parity is confirmed and PINECONE_WRITE=true,
+        # so future ingestion goes Pinecone-only. MongoDB chunk docs keep all other
+        # fields; only the large float array is omitted. Default: false (keep warm).
+        _skip_mongo_embed = (
+            _pinecone_write
+            and _os.environ.get("PINECONE_SKIP_MONGO_EMBED", "").strip().lower()
+            in ("1", "true", "yes")
+        )
 
         ops = []
         pinecone_vectors: list = []
@@ -147,16 +156,17 @@ async def embed_chunks_bulk(
                 continue
             chunk = batch[i]
             filter_q = {"_id": chunk["_id"]}
-            ops.append(UpdateOne(
-                filter_q,
-                {"$set": {
-                    "embedding":        vec,
-                    "embedding_model":  _EMBED_MODEL,
-                    "embedding_dim":    _EMBED_DIM,
-                    "embedding_source": "cohere",
-                }},
-                upsert=False,
-            ))
+            if not _skip_mongo_embed:
+                ops.append(UpdateOne(
+                    filter_q,
+                    {"$set": {
+                        "embedding":        vec,
+                        "embedding_model":  _EMBED_MODEL,
+                        "embedding_dim":    _EMBED_DIM,
+                        "embedding_source": "cohere",
+                    }},
+                    upsert=False,
+                ))
             # Queue for Pinecone upsert if PINECONE_WRITE is enabled
             if _pinecone_write:
                 pinecone_vectors.append({
@@ -165,6 +175,7 @@ async def embed_chunks_bulk(
                     "metadata": {
                         "chapter_id":      chunk.get("chapter_id", ""),
                         "subject_id":      chunk.get("subject_id", ""),
+                        "board_id":        chunk.get("board_id", ""),
                         "chapter_title":   chunk.get("chapter_title", ""),
                         "topic_name":      chunk.get("topic_name", ""),
                         "embedding_model": _EMBED_MODEL,
