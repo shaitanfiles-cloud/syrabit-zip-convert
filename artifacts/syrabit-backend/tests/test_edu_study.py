@@ -921,3 +921,40 @@ def test_build_flashcards_mnemonic_topic_truncation(edu_app, fake_conn_factory):
         f"Total front must be at most 300 chars; got {len(front)}"
     )
     assert front.startswith(prefix + "T"), "Front must not be blank after the prefix"
+
+
+def test_build_flashcards_mnemonic_back_combined_truncation(edu_app, fake_conn_factory):
+    """A mnemonic whose phrase is 300 chars and explanation is 500 chars must have
+    its combined back field capped at 800 chars and must not be blank.
+
+    phrase[:300] + "\\n\\n" + explanation[:500] = 804 chars, so the final [:800]
+    guard is what keeps the stored value within the column limit.
+    """
+    long_phrase = "P" * 300
+    long_explanation = "E" * 500
+    structured = {
+        "qa": [],
+        "mnemonics": [
+            {
+                "for": "Some Topic",
+                "mnemonic": long_phrase,
+                "explanation": long_explanation,
+            }
+        ],
+    }
+    conn = fake_conn_factory(
+        responses=[[_make_generated_note_row(structured=structured)]]
+    )
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"ok": True, "created": 1}
+
+    cards = _flashcard_inserts(conn)
+    assert len(cards) == 1
+    _front, back = cards[0]
+
+    assert len(back) <= 800, (
+        f"Combined back must be at most 800 chars; got {len(back)}"
+    )
+    assert back, "Combined back must not be blank"
