@@ -1370,7 +1370,7 @@ export default function ChapterPage() {
         </div>
 
         <TrustpilotReviewsSection
-          subheading={`Verified Trustpilot reviews from students using Syrabit.ai for ${subjectName} ${className} notes.`}
+          subheading={`Finding Syrabit.ai helpful for ${subjectName} ${className}? Share your experience and help other students.`}
         />
 
         <nav className="mt-10 pt-6 border-t border-border/30" aria-label="Site navigation">

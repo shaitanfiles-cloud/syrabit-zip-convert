@@ -1,24 +1,23 @@
 /**
- * TrustpilotReviewsSection — Task #724
+ * TrustpilotReviewsSection — Task #126
  *
- * Renders the official Trustpilot TrustBox widget at the bottom of
- * content pages (Landing, Library, Subject, Chapter, PYQ). The widget
- * is lazy-loaded via an IntersectionObserver so it never blocks first
- * paint or hurts LCP, and the bootstrap script is fetched at most once
- * per page lifecycle. The business unit ID and review URL come from a
- * server-exposed config endpoint backed by the Trustpilot secret —
- * never hard-coded in the JS bundle.
+ * Renders a review-collection CTA that invites students to leave a
+ * Trustpilot review for Syrabit.ai. The Trustpilot embed widget and its
+ * bootstrap script have been removed; this section now shows a styled
+ * card with a direct link to the Trustpilot review submission page.
  *
- * If Trustpilot is not configured, the script fails to load, or the
- * widget never renders, the section hides itself gracefully so the
- * page below the footer stays clean.
+ * The profile URL is sourced from the server config endpoint so it
+ * stays in sync with the backend Trustpilot secret — with a hardcoded
+ * fallback so the CTA always renders even before the fetch resolves.
+ *
+ * The aggregate rating JSON-LD (for SEO / Google stars) is preserved
+ * whenever the backend returns valid aggregate data.
+ *
+ * If the config endpoint returns null (Trustpilot not configured on the
+ * server) the section hides itself gracefully — same behaviour as before.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { API_BASE } from '@/utils/api';
-
-const TRUSTPILOT_SCRIPT_ID = 'trustpilot-widget-script';
-const TRUSTPILOT_SCRIPT_SRC =
-  'https://widget.trustpilot.com/bootstrap/v5/tp.widget.bootstrap.min.js';
 
 let _configPromise = null;
 let _configCache = null;
@@ -37,11 +36,6 @@ export function fetchTrustpilotConfigOnce() {
   return _configPromise;
 }
 
-// Aggregate rating fetched once per app session and reused across every
-// page — feeds the Organization-level JSON-LD so Google can render
-// stars next to Syrabit.ai listings (Task #725). The backend already
-// caches the upstream Trustpilot Business API call for several hours,
-// so this single client-side fetch is the entire cost per session.
 let _aggregatePromise = null;
 let _aggregateCache = null;
 
@@ -69,55 +63,23 @@ export function fetchTrustpilotAggregateOnce() {
   return _aggregatePromise;
 }
 
-let _scriptPromise = null;
-function loadTrustpilotScript(src) {
-  if (typeof window === 'undefined') return Promise.resolve(false);
-  if (window.Trustpilot) return Promise.resolve(true);
-  if (_scriptPromise) return _scriptPromise;
-  _scriptPromise = new Promise((resolve) => {
-    const existing = document.getElementById(TRUSTPILOT_SCRIPT_ID);
-    if (existing) {
-      existing.addEventListener('load', () => resolve(!!window.Trustpilot));
-      existing.addEventListener('error', () => resolve(false));
-      return;
-    }
-    const s = document.createElement('script');
-    s.id = TRUSTPILOT_SCRIPT_ID;
-    s.src = src || TRUSTPILOT_SCRIPT_SRC;
-    s.async = true;
-    s.onload = () => resolve(!!window.Trustpilot);
-    s.onerror = () => { _scriptPromise = null; resolve(false); };
-    document.head.appendChild(s);
-  });
-  return _scriptPromise;
-}
-
 export default function TrustpilotReviewsSection({
-  heading = 'What students say',
+  heading = 'Share your experience',
   subheading = '',
-  templateId = '53aa8912dec7e10d38f59f36',
-  height = '240px',
-  theme = 'light',
   jsonLdId,
   jsonLdName,
   jsonLdUrl,
 }) {
-  const containerRef = useRef(null);
-  const widgetRef = useRef(null);
   const [config, setConfig] = useState(_configCache);
   const [aggregate, setAggregate] = useState(_aggregateCache);
-  const [visible, setVisible] = useState(false);
   const [failed, setFailed] = useState(false);
 
-  // Resolve Trustpilot config + live aggregate rating once per app session.
-  // The aggregate fetch runs eagerly (not gated on IntersectionObserver)
-  // so the JSON-LD is in the DOM before Googlebot leaves the page.
   useEffect(() => {
     let cancelled = false;
     fetchTrustpilotConfigOnce().then((c) => {
       if (cancelled) return;
       setConfig(c);
-      if (!c || !c.businessUnitId) setFailed(true);
+      if (!c) setFailed(true);
     });
     fetchTrustpilotAggregateOnce().then((a) => {
       if (cancelled) return;
@@ -126,49 +88,8 @@ export default function TrustpilotReviewsSection({
     return () => { cancelled = true; };
   }, []);
 
-  // Defer mounting the widget until the section scrolls near the
-  // viewport — avoids paying the Trustpilot script + iframe cost for
-  // users who never scroll to the footer.
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el || visible) return;
-    if (typeof IntersectionObserver === 'undefined') { setVisible(true); return; }
-    const io = new IntersectionObserver((entries) => {
-      if (entries.some((e) => e.isIntersecting)) {
-        setVisible(true);
-        io.disconnect();
-      }
-    }, { rootMargin: '400px' });
-    io.observe(el);
-    return () => io.disconnect();
-  }, [visible]);
-
-  // Once visible AND config is ready, load the script + render the widget.
-  useEffect(() => {
-    if (!visible) return;
-    if (!config || !config.businessUnitId) return;
-    let cancelled = false;
-    loadTrustpilotScript(config.scriptSrc).then((ok) => {
-      if (cancelled) return;
-      if (!ok || !window.Trustpilot || !widgetRef.current) {
-        setFailed(true);
-        return;
-      }
-      try {
-        window.Trustpilot.loadFromElement(widgetRef.current, true);
-      } catch {
-        setFailed(true);
-      }
-    });
-    return () => { cancelled = true; };
-  }, [visible, config]);
-
-  const businessUnitId = config?.businessUnitId || '';
   const profileUrl = config?.profileUrl || 'https://www.trustpilot.com/review/syrabit.ai';
 
-  // Render the aggregate-rating JSON-LD whenever we have a real value
-  // from the backend, even if the embed widget itself failed to load —
-  // the schema is what powers the Google search-result stars.
   const jsonLd = aggregate ? (
     <TrustpilotAggregateRatingJsonLd
       id={jsonLdId}
@@ -183,9 +104,8 @@ export default function TrustpilotReviewsSection({
 
   return (
     <section
-      ref={containerRef}
       className="mt-12 max-w-5xl mx-auto px-4"
-      aria-label="Trustpilot reviews"
+      aria-label="Leave a Trustpilot review"
     >
       {jsonLd}
       <div className="rounded-3xl border border-border/40 bg-gradient-to-br from-emerald-50/40 via-background to-violet-50/30 p-6 sm:p-8">
@@ -196,29 +116,22 @@ export default function TrustpilotReviewsSection({
           )}
         </div>
 
-        {businessUnitId ? (
-          <div
-            ref={widgetRef}
-            className="trustpilot-widget"
-            data-locale="en-US"
-            data-template-id={templateId}
-            data-businessunit-id={businessUnitId}
-            data-style-height={height}
-            data-style-width="100%"
-            data-theme={theme}
+        <a
+          href={profileUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-2 rounded-xl bg-[#00b67a] hover:bg-[#00a368] active:bg-[#008f5a] transition-colors px-5 py-2.5 text-sm font-semibold text-white shadow-sm"
+        >
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            className="w-4 h-4 shrink-0"
           >
-            <a
-              href={profileUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground"
-            >
-              See our reviews on Trustpilot
-            </a>
-          </div>
-        ) : (
-          <div style={{ minHeight: height }} aria-hidden="true" />
-        )}
+            <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
+          </svg>
+          Rate us on Trustpilot
+        </a>
       </div>
     </section>
   );

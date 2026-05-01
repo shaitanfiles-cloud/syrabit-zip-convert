@@ -279,7 +279,7 @@ export default function PYQReplicaPage() {
       </div>
 
       <TrustpilotReviewsSection
-        subheading={`Verified Trustpilot reviews from students preparing with Syrabit.ai${pyqMeta.subject ? ' for ' + pyqMeta.subject : ''}.`}
+        subheading={`Finding Syrabit.ai useful${pyqMeta.subject ? ' for ' + pyqMeta.subject : ''}? Share your experience and help other students.`}
       />
 
       <div

@@ -128,7 +128,7 @@ export default function LandingPage() {
         </div>
       </Suspense>
       <TrustpilotReviewsSection
-        subheading="Verified Trustpilot reviews from students using Syrabit.ai across Assam."
+        subheading="Enjoying Syrabit.ai? Help other students across Assam discover it — leave us a quick review."
       />
       <Suspense fallback={<div style={{ minHeight: '480px' }} aria-hidden />}>
         <div style={{ minHeight: '480px' }}>
