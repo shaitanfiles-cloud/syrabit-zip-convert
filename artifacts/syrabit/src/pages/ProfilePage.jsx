@@ -95,7 +95,7 @@ export default function ProfilePage() {
   const isDegreeProfile = isDegreeBoard(profile?.board_name);
   const creditsUsed      = profile?.credits_used  ?? 0;
   const creditsLimit     = profile?.credits_limit ?? 0;
-  const creditsRemaining = Math.max(0, profile?.credits_remaining ?? 0);
+  const creditsRemaining = Math.max(0, profile?.credits_remaining ?? (creditsLimit - creditsUsed));
   const creditPercent = creditsLimit > 0 ? Math.min(100, (creditsUsed / creditsLimit) * 100) : 0;
   const isLowCredits  = creditsLimit > 0 && creditsRemaining <= 5;
 
