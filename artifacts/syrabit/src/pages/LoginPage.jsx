@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Mail, Lock, Eye, EyeOff, Loader2, MessageSquare, BarChart3, AlertCircle, Sparkles } from 'lucide-react';
 import { usePublicStats } from '@/hooks/usePublicStats';
@@ -46,26 +46,8 @@ export default function LoginPage() {
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const { login, user } = useAuth();
+  const { login } = useAuth();
   const navigate = useNavigate();
-
-  // Task #156 — after Google OAuth redirect, Supabase fires onAuthStateChange
-  // which sets `user` in AuthContext.  Navigate the same way email/password does.
-  useEffect(() => {
-    const intent = sessionStorage.getItem('syrabit_google_oauth_intent');
-    if (!user || !intent) return;
-    if (intent !== 'signin_with') return;
-    sessionStorage.removeItem('syrabit_google_oauth_intent');
-    toast.success('Welcome back!');
-    const role = user.role || '';
-    if (role === 'staff') {
-      navigate('/staff');
-    } else if (!user.onboarding_done) {
-      navigate('/onboarding');
-    } else {
-      navigate('/library');
-    }
-  }, [user, navigate]);
 
   const handleInputFocus = useCallback((e) => {
     setTimeout(() => {

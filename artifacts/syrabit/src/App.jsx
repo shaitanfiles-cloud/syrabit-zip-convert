@@ -6,6 +6,7 @@ import { LanguageProvider } from "@/context/LanguageContext";
 import { AuthGuard } from "@/components/AuthGuard";
 import { AdminGuard } from "@/components/AdminGuard";
 import { StaffGuard } from "@/components/StaffGuard";
+import GoogleOAuthCallbackEffect from "@/components/GoogleOAuthCallbackEffect";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "./queryClient";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -269,7 +270,9 @@ function LegacyTopicRedirect() {
 // ── Routes (extracted so SSR can render them inside a StaticRouter) ───────
 export function AppRoutes() {
   return (
-    <Routes>
+    <>
+      <GoogleOAuthCallbackEffect />
+      <Routes>
       {/* ── Public routes ── */}
       <Route path="/"         element={<Navigate to="/chat" replace />} />
       <Route path="/home"     element={<LandingPage />} />
@@ -359,6 +362,7 @@ export function AppRoutes() {
       {/* ── 404 ── */}
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
+    </>
   );
 }
 
