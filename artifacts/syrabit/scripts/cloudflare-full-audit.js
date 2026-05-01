@@ -743,6 +743,18 @@ async function auditItem19ZarazAndObservatory() {
         'add admin@syrabit.ai as email recipient via dash.cloudflare.com → Notifications → Policies');
       return;
     }
+    // Task #139 — verify a Slack/webhook mechanism is attached so the on-call is
+    // paged immediately; email alone can sit unread overnight.
+    // cloudflare-phase6-apply.js step 4b adds mechanisms.webhooks when
+    // OBSERVATORY_ALERT_SLACK_WEBHOOK_ID is set in the deployment environment.
+    const hasWebhook = (speedAlert.mechanisms?.webhooks || []).length > 0;
+    if (!hasWebhook) {
+      fail(19, 6, 'Zaraz GA4 + Observatory',
+        `Observatory alert policy "${speedAlert.name}" has no Slack/webhook mechanism — on-call will not be paged (email only)`,
+        'set OBSERVATORY_ALERT_SLACK_WEBHOOK_ID and re-run cloudflare-phase6-apply.js, ' +
+        'or add a webhook destination manually: dash.cloudflare.com → Notifications → (edit policy) → Destinations → Webhooks');
+      return;
+    }
     // Assert Core Web Vitals threshold values match the required values:
     //   LCP > 2500 ms, CLS > 0.1, INP > 200 ms
     const c = speedAlert.conditions || {};
