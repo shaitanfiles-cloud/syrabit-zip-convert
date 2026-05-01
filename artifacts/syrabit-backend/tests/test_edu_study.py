@@ -861,6 +861,91 @@ def test_build_flashcards_respects_mnemonic_cap_of_four(edu_app, fake_conn_facto
     )
 
 
+def test_build_flashcards_mnemonic_cap_preserves_insertion_order(
+    edu_app, fake_conn_factory
+):
+    """The mnemonic cap must keep the *first* 4 entries in their original order.
+
+    Given 5 mnemonics (topics 0–4), the stored flashcard fronts must appear
+    exactly as 'Mnemonic for: Topic 0', 'Mnemonic for: Topic 1', …,
+    'Mnemonic for: Topic 3' — in that positional order.  A shuffle or
+    arbitrary-pick regression would violate this ordering guarantee even if
+    the count remained 4.
+    """
+    mnemonics = [
+        {"for": f"Topic {i}", "mnemonic": f"Phrase {i}", "explanation": f"Exp {i}"}
+        for i in range(5)
+    ]
+    structured = {"qa": [], "mnemonics": mnemonics}
+    conn = fake_conn_factory(
+        responses=[[_make_generated_note_row(note_id="mn-order", structured=structured)]]
+    )
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json()["created"] == 4, (
+        "Exactly the first 4 mnemonics must be kept; topic 4 must be dropped"
+    )
+
+    cards = _flashcard_inserts(conn)
+    assert len(cards) == 4
+
+    fronts = [c[0] for c in cards]
+
+    # Each position must match the corresponding input mnemonic, in order.
+    for i in range(4):
+        assert fronts[i] == f"Mnemonic for: Topic {i}", (
+            f"Position {i}: expected 'Mnemonic for: Topic {i}', got {fronts[i]!r}; "
+            "the cap must preserve insertion order, not pick arbitrarily"
+        )
+
+
+def test_build_flashcards_mnemonic_cap_excludes_later_entries(
+    edu_app, fake_conn_factory
+):
+    """Mnemonics beyond position 3 (0-indexed) must never appear in the deck.
+
+    Providing 7 mnemonics (topics 0–6) and capping at 4 means topics 4, 5, and
+    6 must be entirely absent from the inserted flashcard fronts.  This is the
+    targeted regression guard: a faulty implementation that picks *any* 4
+    (instead of the first 4) could accidentally include a later topic while
+    still passing a count-only assertion.
+    """
+    mnemonics = [
+        {"for": f"Topic {i}", "mnemonic": f"Phrase {i}", "explanation": f"Exp {i}"}
+        for i in range(7)
+    ]
+    structured = {"qa": [], "mnemonics": mnemonics}
+    conn = fake_conn_factory(
+        responses=[[_make_generated_note_row(note_id="mn-excl", structured=structured)]]
+    )
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json()["created"] == 4, (
+        "Cap of 4 must be enforced even when 7 mnemonics are supplied"
+    )
+
+    cards = _flashcard_inserts(conn)
+    assert len(cards) == 4
+
+    fronts = [c[0] for c in cards]
+
+    # Positions 0–3 must be present in order.
+    for i in range(4):
+        assert fronts[i] == f"Mnemonic for: Topic {i}", (
+            f"Position {i}: expected 'Mnemonic for: Topic {i}', got {fronts[i]!r}"
+        )
+
+    # Topics 4, 5, and 6 must not appear anywhere in the stored fronts.
+    excluded = {4, 5, 6}
+    for front in fronts:
+        for j in excluded:
+            assert f"Topic {j}" not in front, (
+                f"Topic {j} must not appear in the capped deck; got front {front!r}"
+            )
+
+
 def test_build_flashcards_qa_truncation(edu_app, fake_conn_factory):
     """Q&A pairs with overlong fields must be stored at exactly the limit.
 
