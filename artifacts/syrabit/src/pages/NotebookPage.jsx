@@ -12,6 +12,7 @@ import {
   Search, Tag as TagIcon, Trash2, Download, ExternalLink,
   Loader2, NotebookPen, Pencil, Check, X, Sparkles, Wand2,
   BookOpen, MessageSquare, ListChecks, AlertCircle,
+  Table2, GitBranch, Share2, Lightbulb, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { PageTitle } from '@/components/PageTitle';
@@ -67,6 +68,150 @@ function CitationList({ ids, citationsMap }) {
         <CitationChip key={cid} id={cid} citationsMap={citationsMap} />
       ))}
     </span>
+  );
+}
+
+/* ─────────────── Note tables ─────────────── */
+
+function NoteTable({ table }) {
+  const { caption, headers, rows } = table;
+  return (
+    <div className="rounded-lg border border-border/60 overflow-x-auto">
+      <table className="w-full text-xs border-collapse min-w-[400px]">
+        {caption && (
+          <caption className="text-left text-[11px] font-semibold text-muted-foreground px-3 py-1.5 bg-muted/40 border-b border-border/40">
+            {caption}
+          </caption>
+        )}
+        <thead>
+          <tr className="bg-muted/60 sticky top-0">
+            {headers.map((h, i) => (
+              <th key={i}
+                  className="px-3 py-2 text-left font-semibold text-foreground border-r last:border-r-0 border-border/30 whitespace-nowrap font-mono">
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, ri) => (
+            <tr key={ri} className={ri % 2 === 0 ? 'bg-background' : 'bg-muted/20'}>
+              {row.map((cell, ci) => (
+                <td key={ci}
+                    className="px-3 py-1.5 border-r last:border-r-0 border-border/20 font-mono text-muted-foreground whitespace-pre-wrap">
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ─────────────── Note diagrams ─────────────── */
+
+const _DIAGRAM_STYLES = {
+  cell:      'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800',
+  flowchart: 'bg-blue-50   dark:bg-blue-950/30   border-blue-200   dark:border-blue-800',
+  timeline:  'bg-amber-50  dark:bg-amber-950/30  border-amber-200  dark:border-amber-800',
+  other:     'bg-muted/40  border-border/50',
+};
+
+function NoteDiagram({ diagram }) {
+  const style = _DIAGRAM_STYLES[diagram.type] || _DIAGRAM_STYLES.other;
+  return (
+    <div className={`rounded-lg border p-3 space-y-2 ${style}`}>
+      <div className="flex items-center gap-2">
+        <GitBranch className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+        <span className="text-xs font-semibold">{diagram.label}</span>
+        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-background/60 border border-border/30 text-muted-foreground capitalize">
+          {diagram.type}
+        </span>
+      </div>
+      <pre className="text-xs leading-relaxed whitespace-pre-wrap font-mono text-foreground/80 bg-background/50 rounded p-2 border border-border/20 overflow-x-auto">
+        {diagram.content}
+      </pre>
+    </div>
+  );
+}
+
+/* ─────────────── Note mindmap ─────────────── */
+
+function NoteMindmap({ mindmap }) {
+  const [open, setOpen] = useState({});
+  const toggle = (i) => setOpen((p) => ({ ...p, [i]: !p[i] }));
+
+  return (
+    <div className="rounded-lg border border-border/50 bg-muted/10 overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-2 bg-muted/30 border-b border-border/40">
+        <Share2 className="w-3.5 h-3.5 text-primary shrink-0" />
+        <span className="text-xs font-semibold">{mindmap.root}</span>
+        <span className="text-[10px] text-muted-foreground ml-auto">Mind map</span>
+      </div>
+      <ul className="p-2 space-y-1">
+        {(mindmap.branches || []).map((br, i) => {
+          const isOpen = open[i] !== false && (open[i] === true || br.children?.length <= 3);
+          return (
+            <li key={i} className="rounded-md overflow-hidden border border-border/30">
+              <button
+                onClick={() => toggle(i)}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-background hover:bg-muted/40 transition text-left"
+              >
+                {isOpen
+                  ? <ChevronDown className="w-3 h-3 shrink-0 text-muted-foreground" />
+                  : <ChevronRight className="w-3 h-3 shrink-0 text-muted-foreground" />}
+                <span>{br.label}</span>
+                {br.children?.length > 0 && (
+                  <span className="ml-auto text-[10px] text-muted-foreground font-mono">
+                    {br.children.length}
+                  </span>
+                )}
+              </button>
+              {isOpen && br.children?.length > 0 && (
+                <ul className="px-3 pb-2 pt-1 flex flex-wrap gap-1.5 border-t border-border/20 bg-muted/20">
+                  {br.children.map((child, j) => (
+                    <li key={j}
+                        className="text-[11px] px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20 text-primary">
+                      {child}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+/* ─────────────── Note mnemonics ─────────────── */
+
+function NoteMnemonics({ mnemonics }) {
+  if (!mnemonics?.length) return null;
+  return (
+    <section className="space-y-2">
+      <h4 className="text-sm font-semibold flex items-center gap-1.5">
+        <Lightbulb className="w-3.5 h-3.5 text-amber-500" />
+        Mnemonics
+      </h4>
+      <div className="space-y-2">
+        {mnemonics.map((mn, i) => (
+          <div key={i}
+               className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 space-y-1">
+            <div className="text-[10px] font-medium text-amber-700 dark:text-amber-400 uppercase tracking-wide">
+              {mn.for}
+            </div>
+            <div className="text-sm font-bold text-foreground leading-snug">{mn.mnemonic}</div>
+            {mn.explanation && (
+              <div className="text-xs text-muted-foreground leading-relaxed">{mn.explanation}</div>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -140,6 +285,48 @@ function StructuredNoteBody({ structured, citations }) {
             ))}
           </div>
         </section>
+      )}
+
+      {structured.tables?.length > 0 && (
+        <section className="space-y-2">
+          <h4 className="text-sm font-semibold flex items-center gap-1.5">
+            <Table2 className="w-3.5 h-3.5 text-muted-foreground" />
+            Tables
+          </h4>
+          <div className="space-y-3">
+            {structured.tables.map((tbl, i) => (
+              <NoteTable key={i} table={tbl} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {structured.diagrams?.length > 0 && (
+        <section className="space-y-2">
+          <h4 className="text-sm font-semibold flex items-center gap-1.5">
+            <GitBranch className="w-3.5 h-3.5 text-muted-foreground" />
+            Diagrams
+          </h4>
+          <div className="space-y-2">
+            {structured.diagrams.map((diag, i) => (
+              <NoteDiagram key={i} diagram={diag} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {structured.mindmap && (
+        <section className="space-y-2">
+          <h4 className="text-sm font-semibold flex items-center gap-1.5">
+            <Share2 className="w-3.5 h-3.5 text-muted-foreground" />
+            Mind Map
+          </h4>
+          <NoteMindmap mindmap={structured.mindmap} />
+        </section>
+      )}
+
+      {structured.mnemonics?.length > 0 && (
+        <NoteMnemonics mnemonics={structured.mnemonics} />
       )}
 
       {citations?.length > 0 && (

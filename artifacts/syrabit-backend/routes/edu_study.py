@@ -1124,12 +1124,12 @@ async def export_notes(request: Request, format: str = "md",
 # NotebookLM-style structured notes grounded in the user's own sources
 # (a chat conversation, a published chapter, or saved highlights).
 
-_NOTES_GEN_SYS = """You are an expert NotebookLM-style study-note writer for Indian school
-and college students. You will receive a set of SOURCE PASSAGES, each labelled
-with a stable anchor id like [S1], [S2], … . Your job is to produce a
-well-structured study note that is GROUNDED ONLY in those passages.
+_NOTES_GEN_SYS = """You are an expert study-note writer for Indian school and college students,
+specialising in Assam Board examinations (SEBA for Class 9–10, AHSEC for
+Class 11–12). You receive SOURCE PASSAGES labelled [S1], [S2], … and produce a
+visually rich, board-exam-ready study note GROUNDED ONLY in those passages.
 
-Return a STRICT JSON object (no prose, no markdown fences) of the form:
+━━━ REQUIRED JSON OUTPUT (no prose, no markdown fences) ━━━
 {
   "title": "Concise note title (≤ 80 chars)",
   "summary": "2-4 sentence plain-language summary.",
@@ -1148,16 +1148,76 @@ Return a STRICT JSON object (no prose, no markdown fences) of the form:
   ]
 }
 
-Rules:
-- Use ONLY information present in the supplied SOURCE PASSAGES. Do NOT invent
-  facts, definitions, dates, or examples that are not in the sources.
-- Every outline section, key term, and Q&A item MUST cite at least one
-  anchor id from the sources (e.g. "S1"). Never cite an anchor that wasn't
-  supplied.
-- Keep each bullet point ≤ 200 characters. 3-7 outline sections, 4-10 key
-  terms, 4-8 Q&A pairs are typical targets — emit fewer if sources are thin.
-- Prefer board-exam-style clarity over academic prose. No first-person.
-- Never reference "Syrabit" or yourself; never include PII or personal opinions."""
+━━━ OPTIONAL VISUAL FIELDS (omit each field entirely if not applicable) ━━━
+
+"tables": [
+  {
+    "caption": "Table title (e.g. Journal Entry for Apr 1)",
+    "headers": ["Date", "Particulars", "L.F.", "Debit (₹)", "Credit (₹)"],
+    "rows": [
+      ["Apr 1", "Cash A/c  Dr.", "1", "50,000", ""],
+      ["", "  To Capital A/c", "2", "", "50,000"]
+    ]
+  }
+]
+Emit tables when the content naturally calls for one:
+  • Commerce: journal entries, ledger accounts, trial balance, Trading/P&L,
+    Balance Sheet, ratio comparison tables.
+  • Science/Geography: element/compound properties, organism classification,
+    measurement data, comparative features.
+  • Any subject: "Distinguish between X and Y" — 2-column comparison table.
+Every row MUST have exactly the same number of cells as headers (pad with "" if empty).
+Maximum 6 tables, 10 rows each.
+
+"diagrams": [
+  {
+    "label": "Diagram title",
+    "type": "cell" | "flowchart" | "timeline" | "other",
+    "content": "Structured ASCII or labelled-list description (≤ 600 chars)\nUse arrows (→ ↓) and indentation to show structure.\nLabel every named part that appears in the sources."
+  }
+]
+Emit diagrams for: cell/tissue structure, body systems, plant/animal anatomy,
+process flowcharts, historical timelines, geographical features. Maximum 4 diagrams.
+
+"mindmap": {
+  "root": "Central concept",
+  "branches": [
+    {"label": "Branch topic", "children": ["Leaf detail 1", "Leaf detail 2"]}
+  ]
+}
+Emit ONLY when the topic has a clear hierarchical/radial structure
+(e.g. classification hierarchies, concept maps with multiple sub-categories).
+Omit entirely (do NOT emit null or {}) for linear or narrative topics.
+Maximum 8 branches, 6 children each.
+
+"mnemonics": [
+  {
+    "for": "What the mnemonic helps remember",
+    "mnemonic": "The phrase or acronym itself",
+    "explanation": "How each word/letter maps to the content"
+  }
+]
+Emit ONLY when a strong, logically coherent mnemonic naturally fits — for
+sequences, ordered lists, classification steps, kingdom/phylum orders, etc.
+Never force a mnemonic. Omit the array entirely if none fits well. Max 4.
+
+━━━ ASSAM BOARD STYLE RULES ━━━
+• Q&A language: "Write short notes on…", "Distinguish between…",
+  "State and explain…", "Give two differences between…",
+  "What do you mean by…", "Mention any two…"
+• Match marks patterns: 1-mark = one-line; 2-mark = 2–3 sentences;
+  4/5-mark = structured paragraph with examples or numbered points.
+• Use Assam-specific examples where supported by sources: Brahmaputra,
+  North-East economy, Assam industries, AHSEC/SEBA exam question patterns.
+
+━━━ GROUNDING RULES ━━━
+• Use ONLY information present in the SOURCE PASSAGES. Do NOT invent facts,
+  definitions, dates, or examples not in the sources.
+• outline, key_terms, and qa items MUST cite at least one anchor id.
+  tables, diagrams, mindmap, mnemonics do NOT require citations but must be
+  grounded in the sources.
+• 3–7 outline sections, 4–10 key terms, 4–8 Q&A pairs (fewer if thin sources).
+• Bullet points ≤ 200 chars. No first-person. Never mention "Syrabit"."""
 
 
 def _coerce_notes_payload(raw: str) -> dict:
@@ -1244,6 +1304,76 @@ def _validate_notes_payload(payload: dict, valid_anchors: set[str]) -> dict:
             continue
         qa.append({"q": q, "a": a, "citations": cits})
 
+    # ── Optional: tables ─────────────────────────────────────────────────────
+    tables: list = []
+    for tbl in (payload.get("tables") or [])[:6]:
+        if not isinstance(tbl, dict):
+            continue
+        caption = str(tbl.get("caption") or "").strip()[:200]
+        headers = [str(h).strip()[:100] for h in (tbl.get("headers") or [])
+                   if str(h).strip()]
+        if len(headers) < 2:
+            continue
+        n_cols = len(headers)
+        rows: list = []
+        for row in (tbl.get("rows") or [])[:10]:
+            if not isinstance(row, list):
+                continue
+            cells = [str(c).strip()[:200] for c in row]
+            # Pad short rows; truncate overlong ones
+            while len(cells) < n_cols:
+                cells.append("")
+            rows.append(cells[:n_cols])
+        if rows:
+            tables.append({"caption": caption, "headers": headers, "rows": rows})
+
+    # ── Optional: diagrams ───────────────────────────────────────────────────
+    diagrams: list = []
+    _valid_diagram_types = {"cell", "flowchart", "timeline", "other"}
+    for diag in (payload.get("diagrams") or [])[:4]:
+        if not isinstance(diag, dict):
+            continue
+        label = str(diag.get("label") or "").strip()[:160]
+        dtype = str(diag.get("type") or "other").strip().lower()
+        if dtype not in _valid_diagram_types:
+            dtype = "other"
+        content = str(diag.get("content") or "").strip()[:800]
+        if label and content:
+            diagrams.append({"label": label, "type": dtype, "content": content})
+
+    # ── Optional: mindmap ────────────────────────────────────────────────────
+    mindmap: dict | None = None
+    mm_raw = payload.get("mindmap")
+    if isinstance(mm_raw, dict) and mm_raw:
+        mm_root = str(mm_raw.get("root") or "").strip()[:120]
+        branches: list = []
+        for br in (mm_raw.get("branches") or [])[:8]:
+            if not isinstance(br, dict):
+                continue
+            blabel = str(br.get("label") or "").strip()[:120]
+            children = [str(c).strip()[:120] for c in (br.get("children") or [])
+                        if str(c).strip()][:6]
+            if blabel:
+                branches.append({"label": blabel, "children": children})
+        if mm_root and branches:
+            mindmap = {"root": mm_root, "branches": branches}
+
+    # ── Optional: mnemonics ──────────────────────────────────────────────────
+    mnemonics: list = []
+    for mn in (payload.get("mnemonics") or [])[:4]:
+        if not isinstance(mn, dict):
+            continue
+        for_text = str(mn.get("for") or "").strip()[:200]
+        mnemonic_str = str(mn.get("mnemonic") or "").strip()[:300]
+        explanation = str(mn.get("explanation") or "").strip()[:500]
+        if for_text and mnemonic_str:
+            mnemonics.append({
+                "for": for_text,
+                "mnemonic": mnemonic_str,
+                "explanation": explanation,
+            })
+
+    # ── Hard requirements ────────────────────────────────────────────────────
     if not title:
         raise HTTPException(status_code=502, detail="notes_missing_title")
     if not summary:
@@ -1254,13 +1384,24 @@ def _validate_notes_payload(payload: dict, valid_anchors: set[str]) -> dict:
         # an empty note.
         raise HTTPException(status_code=502, detail="notes_no_cited_content")
 
-    return {
+    result: dict = {
         "title": title,
         "summary": summary,
         "outline": outline,
         "key_terms": key_terms,
         "qa": qa,
     }
+    # Only include optional fields in the payload when they have content so
+    # the frontend can safely branch on truthiness.
+    if tables:
+        result["tables"] = tables
+    if diagrams:
+        result["diagrams"] = diagrams
+    if mindmap:
+        result["mindmap"] = mindmap
+    if mnemonics:
+        result["mnemonics"] = mnemonics
+    return result
 
 
 # ───── Source assemblers ─────
@@ -1801,7 +1942,7 @@ async def generate_notes(req: NotesGenReq, request: Request,
             {"role": "user",   "content": "\n".join(parts)},
         ]
 
-        raw = await _call_gemini_strict(messages, max_tokens=2200)
+        raw = await _call_gemini_strict(messages, max_tokens=4096)
         payload = _coerce_notes_payload(raw)
         structured = _validate_notes_payload(payload, valid_anchor_ids)
 
@@ -1814,6 +1955,9 @@ async def generate_notes(req: NotesGenReq, request: Request,
             flat_parts.append(kt["term"]); flat_parts.append(kt["definition"])
         for q in structured["qa"]:
             flat_parts.append(q["q"]); flat_parts.append(q["a"])
+        for mn in structured.get("mnemonics") or []:
+            flat_parts.append(mn.get("mnemonic") or "")
+            flat_parts.append(mn.get("explanation") or "")
         ok, _why = validate_llm_output(" ".join(flat_parts))
         if not ok:
             raise HTTPException(status_code=502, detail="notes_safety_block")
@@ -1836,6 +1980,11 @@ async def generate_notes(req: NotesGenReq, request: Request,
             for qa in structured["qa"]:
                 plain_lines.append(f"Q: {qa['q']}")
                 plain_lines.append(f"A: {qa['a']}")
+            plain_lines.append("")
+        for mn in structured.get("mnemonics") or []:
+            plain_lines.append(f"Mnemonic ({mn.get('for', '')}): {mn.get('mnemonic', '')}")
+        for diag in structured.get("diagrams") or []:
+            plain_lines.append(f"Diagram: {diag.get('label', '')}")
         plain_text = "\n".join(plain_lines).strip()
 
         # Citations table: id → {label, url, kind} so the frontend can render
@@ -1941,14 +2090,62 @@ async def build_flashcards(req: CardBuildReq, request: Request,
             )
         created = 0
         for n in rows:
-            front, back = _split_front_back(n["text"])
-            await conn.execute(
-                """INSERT INTO edu_flashcards (id, actor_kind, actor, note_id,
-                       front, back, due_at)
-                   VALUES ($1,$2,$3,$4,$5,$6,NOW())""",
-                str(uuid.uuid4()), kind, actor, n["id"], front, back,
-            )
-            created += 1
+            is_generated = bool(n["generated"]) if "generated" in n.keys() else False
+            note_id = n["id"]
+
+            if is_generated:
+                # AI-generated notes: emit one card per Q&A pair + one per mnemonic.
+                # The flat n["text"] is a concatenation of the structured fields used
+                # for full-text search — it is not suitable for a single flashcard.
+                structured_raw = n["structured"] if "structured" in n.keys() else None
+                if isinstance(structured_raw, str):
+                    try:
+                        structured_raw = json.loads(structured_raw)
+                    except Exception:
+                        structured_raw = None
+                structured_raw = structured_raw or {}
+
+                # Q&A cards
+                for qa_item in (structured_raw.get("qa") or [])[:8]:
+                    q = str(qa_item.get("q") or "").strip()[:400]
+                    a = str(qa_item.get("a") or "").strip()[:800]
+                    if q and a:
+                        await conn.execute(
+                            """INSERT INTO edu_flashcards (id, actor_kind, actor, note_id,
+                                   front, back, due_at)
+                               VALUES ($1,$2,$3,$4,$5,$6,NOW())""",
+                            str(uuid.uuid4()), kind, actor, note_id, q, a,
+                        )
+                        created += 1
+
+                # Mnemonic cards — front = "Mnemonic for <topic>?", back = phrase + explanation
+                for mn in (structured_raw.get("mnemonics") or [])[:4]:
+                    for_text = str(mn.get("for") or "").strip()[:200]
+                    mnemonic_str = str(mn.get("mnemonic") or "").strip()[:300]
+                    explanation = str(mn.get("explanation") or "").strip()[:500]
+                    if for_text and mnemonic_str:
+                        front_mn = f"Mnemonic for: {for_text}"[:300]
+                        back_mn = mnemonic_str
+                        if explanation:
+                            back_mn += f"\n\n{explanation}"
+                        back_mn = back_mn[:800]
+                        await conn.execute(
+                            """INSERT INTO edu_flashcards (id, actor_kind, actor, note_id,
+                                   front, back, due_at)
+                               VALUES ($1,$2,$3,$4,$5,$6,NOW())""",
+                            str(uuid.uuid4()), kind, actor, note_id, front_mn, back_mn,
+                        )
+                        created += 1
+            else:
+                # Manual highlight notes: split the raw text heuristically.
+                front, back = _split_front_back(n["text"])
+                await conn.execute(
+                    """INSERT INTO edu_flashcards (id, actor_kind, actor, note_id,
+                           front, back, due_at)
+                       VALUES ($1,$2,$3,$4,$5,$6,NOW())""",
+                    str(uuid.uuid4()), kind, actor, note_id, front, back,
+                )
+                created += 1
     return {"ok": True, "created": created}
 
 
