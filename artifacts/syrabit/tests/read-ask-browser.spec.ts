@@ -12,8 +12,8 @@
  * 5. SSE tokens from grounded-answer stream render in the answer panel.
  * 6. AskPanel suggested prompt is visible in the ask panel.
  *
- * Route registration: broad "**/api/**" first, then narrow routes AFTER
- * (correct Playwright LIFO priority).
+ * Route registration: the broad api catch-all route is registered first,
+ * then the narrow routes AFTER (correct Playwright LIFO priority).
  */
 import { test, expect, type Page, type Route } from '@playwright/test';
 
