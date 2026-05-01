@@ -19,6 +19,10 @@ Task #135 — misconfiguration alerting:
 13. The startup ERROR log contains the expected keywords when misconfigured.
 14. The REAL /api/readyz handler returns 503 + mtls_config=misconfigured on misconfig.
 15. The REAL /api/readyz handler returns 200 + mtls_config=ok when correctly configured.
+
+Task #136 — CORS preflight bypass:
+16. OPTIONS to a protected endpoint is NOT rejected 403 (bypass is working / intentional).
+17. OPTIONS to a GET-only data endpoint does NOT return the data body (bypass is safe).
 """
 import hashlib
 import hmac
@@ -418,3 +422,43 @@ def test_real_readyz_returns_200_when_mtls_correctly_configured():
     body = resp.json()
     assert body["status"] == "ready"
     assert body["checks"]["mtls_config"]["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Task #136 — CORS preflight bypass: intentional and safe
+# ---------------------------------------------------------------------------
+
+def test_options_bypasses_hmac_check_intentionally():
+    """OPTIONS to a protected endpoint must NOT be rejected with 403.
+
+    Browsers send an OPTIONS preflight before every cross-origin request.
+    The Cloudflare edge worker does not attach X-Cf-Mtls-Active on preflights,
+    so the middleware must let OPTIONS through unconditionally.  This test
+    confirms that the bypass is present and working as intended.
+    """
+    app = _build_app(enforce_mtls=True, secret=_TEST_SECRET)
+    client = TestClient(app)
+    # Send OPTIONS with no HMAC header — must NOT get 403.
+    resp = client.options("/api/admin/data")
+    assert resp.status_code != 403, (
+        "OPTIONS preflight must not be blocked by the mTLS HMAC check "
+        f"(got {resp.status_code})"
+    )
+
+
+def test_options_to_data_endpoint_does_not_return_data():
+    """OPTIONS to a GET-only data endpoint must not return the data payload.
+
+    Confirms the CORS bypass cannot be abused to exfiltrate data.  A GET-only
+    route has no OPTIONS handler; Starlette returns 405 Method Not Allowed
+    (or a CORS-headers-only 200) — never the application data body.
+    """
+    app = _build_app(enforce_mtls=True, secret=_TEST_SECRET)
+    client = TestClient(app)
+    resp = client.options("/api/admin/data")
+    # The response must not contain the data payload {"data": []}.
+    # 405 is the expected Starlette default for a method-not-allowed route.
+    assert resp.status_code != 200 or "data" not in resp.json(), (
+        "OPTIONS to a GET-only endpoint must not return the route's data body; "
+        f"got status={resp.status_code} body={resp.text!r}"
+    )

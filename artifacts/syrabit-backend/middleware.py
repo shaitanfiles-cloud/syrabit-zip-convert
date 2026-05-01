@@ -942,6 +942,22 @@ class MtlsClientCertMiddleware:
             return
         method = scope.get("method", "GET")
         if method == "OPTIONS":
+            # CORS preflight bypass — intentional and safe.
+            #
+            # Browsers always send an OPTIONS preflight before a cross-origin
+            # request (e.g. the Syrabit React SPA calling /api/* from a
+            # different origin).  The Cloudflare edge worker does NOT attach
+            # the X-Cf-Mtls-Active HMAC on OPTIONS requests because the mTLS
+            # handshake completes before the preflight is forwarded; injecting
+            # the HMAC into the preflight would require a second Worker round-
+            # trip and is not standard practice.
+            #
+            # Safety: OPTIONS responses are controlled by CORSMiddleware (or
+            # Starlette's default 405 handler when CORS is not configured).
+            # Neither path returns application data, so bypassing the HMAC
+            # check here does not expose any sensitive route payload.  An
+            # attacker who sends OPTIONS to a data endpoint receives only CORS
+            # headers or a 405 Method Not Allowed — not the response body.
             await self.app(scope, receive, send)
             return
         path = scope.get("path", "")
