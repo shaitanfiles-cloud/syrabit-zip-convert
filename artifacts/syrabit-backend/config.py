@@ -134,11 +134,9 @@ if ADMIN_JWT_SECRET == JWT_SECRET:
     )
 
 # ── Google Analytics (GA4) OAuth — NOT used for Google sign-in (see Supabase) ─
-# Read new-name first; fall back to legacy name so existing deployments keep working.
-GOOGLE_OAUTH_CLIENT_ID     = (os.environ.get('GOOGLE_OAUTH_CLIENT_ID', '').strip()
-                               or os.environ.get('GOOGLE_CLIENT_ID', '').strip())
-GOOGLE_OAUTH_CLIENT_SECRET = (os.environ.get('GOOGLE_OAUTH_CLIENT_SECRET', '').strip()
-                               or os.environ.get('GOOGLE_CLIENT_SECRET', '').strip())
+# Google sign-in is handled by Supabase. These vars are only for ga4_client.py.
+GOOGLE_OAUTH_CLIENT_ID     = os.environ.get('GOOGLE_OAUTH_CLIENT_ID', '').strip()
+GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get('GOOGLE_OAUTH_CLIENT_SECRET', '').strip()
 
 # ── Email Configuration ───────────────────────────────────────────────────────
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()

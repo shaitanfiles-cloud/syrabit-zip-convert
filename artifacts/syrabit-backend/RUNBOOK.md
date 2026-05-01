@@ -150,3 +150,50 @@ the alert body's "Misses" section.
   fail (alert dispatched with metric delta + miss list), missing
   baseline (no alert spam on first deploy), scheduling window, and
   cross-replica dedup.
+
+---
+
+## Google sign-in via Supabase OAuth (setup checklist)
+
+As of Task #156, Google sign-in is handled entirely by Supabase. The backend no
+longer issues Google credentials or verifies Google ID tokens. All Google OAuth
+flows go through Supabase and are exchanged at `/api/auth/supabase-session`.
+
+### One-time Supabase dashboard configuration
+
+1. Open your Supabase project → **Authentication → Providers → Google**.
+2. Toggle **Enable Sign in with Google** to on.
+3. Paste your **Google Cloud OAuth 2.0 Client ID** and **Client Secret**
+   (from Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Client IDs).
+4. Copy the **Redirect URL** shown by Supabase
+   (format: `https://<project-ref>.supabase.co/auth/v1/callback`).
+5. In Google Cloud Console, add that Redirect URL to
+   **Authorised redirect URIs** on the same OAuth 2.0 client.
+6. Save both.
+
+### How the frontend flow works
+
+1. User clicks **Sign in with Google** → `GoogleSignInButton` calls
+   `supabase.auth.signInWithOAuth({ provider: 'google' })`.
+2. Browser redirects to Google, user authenticates, Google redirects back to
+   the Supabase callback URL.
+3. Supabase sets its own session and redirects to the app's `redirectTo` URL
+   (the current page — `/login` or `/signup`).
+4. `AuthContext.onAuthStateChange` fires `SIGNED_IN` with `provider='google'`.
+5. The handler calls `_exchangeSupabaseSession(session.access_token)` which
+   hits `POST /api/auth/supabase-session` and sets the httpOnly cookie + JWT.
+6. User is now fully authenticated with the correct role
+   (`admin` / `staff` / `student` resolved in `supabase_session` handler).
+
+### Role resolution (staff fix from Task #156)
+
+The old `/auth/google` endpoint had a bug: it only checked `is_admin` and
+defaulted to `student`, skipping the `staff` role entirely.
+Now that Google sign-in goes through `/auth/supabase-session`, staff users
+get `role="staff"` correctly (lines 262-266 of `routes/auth.py`).
+
+### GA4 credentials (separate from sign-in)
+
+`GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` in the environment are
+**only** for the GA4 Data API client (`ga4_client.py`). They are not used for
+Google sign-in. Set them separately from the Supabase provider credentials.
