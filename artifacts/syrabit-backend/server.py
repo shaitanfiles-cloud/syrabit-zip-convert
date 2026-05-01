@@ -2293,6 +2293,7 @@ from middleware import (
     GlobalRateLimitMiddleware,
     ServerSideTrackingMiddleware,
     OriginSharedSecretMiddleware,
+    MtlsClientCertMiddleware,
 )
 from routes.cms_sarvam_health import CmsNoIndexMiddleware, BotRenderMiddleware
 app.add_middleware(CmsNoIndexMiddleware)
@@ -2314,6 +2315,12 @@ app.add_middleware(DeviceCookieMiddleware)
 # rejected. No-op when ORIGIN_SHARED_SECRET env var is unset, so the
 # Railway origin keeps working until cutover.
 app.add_middleware(OriginSharedSecretMiddleware)
+# Task #120: Application-layer mTLS enforcement — validate the HMAC proof
+# header injected by the CF Worker on every backend request when the mTLS
+# cert (MTLS_CERT binding) is active.  The HMAC is non-spoofable without
+# ORIGIN_SHARED_SECRET.  Active when ENFORCE_MTLS=true is set in the
+# Railway service environment AND ORIGIN_SHARED_SECRET is configured.
+app.add_middleware(MtlsClientCertMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=_CORS_ALLOW_CREDENTIALS,

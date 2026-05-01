@@ -31,6 +31,6 @@ ENV PYTHONDONTWRITEBYTECODE=1
 EXPOSE ${PORT}
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=90s \
-    CMD curl -f http://localhost:${PORT}/api/health || exit 1
+    CMD curl -f http://localhost:${PORT}/api/livez || exit 1
 
 CMD ["gunicorn", "server:app", "-c", "gunicorn.conf.py"]

@@ -827,3 +827,136 @@ class ServerSideTrackingMiddleware(BaseHTTPMiddleware):
 
         return response
 
+
+# ── MtlsClientCertMiddleware (Task #120) ──────────────────────────────────────
+#
+# Application-layer defence-in-depth complement to Railway's TLS-level mTLS
+# enforcement.  When Railway requires the Cloudflare-issued client certificate
+# at the TLS handshake (configured via Railway dashboard → Service → Settings →
+# mTLS), connections without a valid cert are rejected before HTTP is reached.
+# This middleware is the belt-and-suspenders layer: if the TLS-level check ever
+# lapses (misconfiguration, cert rotation gap, Railway plan downgrade), the
+# backend still rejects requests that are missing a cryptographic proof that
+# the CF Worker sent this request WITH the mTLS cert bound.
+#
+# How it works:
+#   1. cloudflare-phase6-apply.js issues an mTLS client certificate.
+#   2. The CF Worker's addMtlsActiveHeader() computes
+#        HMAC-SHA256("mtls-active", BACKEND_ORIGIN_SECRET)
+#      and injects it as X-Cf-Mtls-Active header, ONLY when env.MTLS_CERT is
+#      bound (i.e. the cert has been provisioned and wrangler deploy has run).
+#   3. This middleware validates the HMAC using ORIGIN_SHARED_SECRET (the same
+#      secret used by OriginSharedSecretMiddleware).
+#
+# Security properties:
+#   • Non-spoofable: BACKEND_ORIGIN_SECRET must be known to forge the HMAC.
+#   • Bound to cert deployment: X-Cf-Mtls-Active is set ONLY when MTLS_CERT is
+#     bound in the CF Worker, so requests succeed only when the cert is active.
+#   • BACKEND_ORIGIN_SECRET rotation simultaneously invalidates both headers
+#     (X-Origin-Auth and X-Cf-Mtls-Active), so there is no extra key to manage.
+#
+# Activation:
+#   Set ENFORCE_MTLS=true in the Railway service environment.
+#   The middleware is a no-op when ENFORCE_MTLS is absent or ORIGIN_SHARED_SECRET
+#   is not set, so it cannot break deployments during the rollout window.
+#
+# Exempt paths:
+#   /api/livez, /api/readyz, /api/ready — Railway's own infrastructure health
+#   probes reach these from Railway's internal subnet without the CF HMAC.
+#   /api/health is intentionally NOT exempt: it is the path used by external
+#   bypass probes (nightly-smoke.js 6a-iv) so the enforcement has real teeth.
+
+import hmac as _hmac_mod
+import hashlib as _hashlib_mod
+
+_ENFORCE_MTLS = _env_bool("ENFORCE_MTLS", False)
+_MTLS_ACTIVE_HEADER = b"x-cf-mtls-active"
+
+# Railway internal liveness/readiness probes — these never carry the CF HMAC
+# because they originate from Railway's own infrastructure, not from the CF edge.
+# /api/health is intentionally excluded so the bypass-probe assertion works.
+_MTLS_PROBE_PATHS = (
+    "/api/livez",
+    "/api/readyz",
+    "/api/ready",
+)
+
+def _compute_mtls_hmac(secret: str) -> str:
+    """Compute HMAC-SHA256("mtls-active", secret) — same algorithm as the CF Worker."""
+    return _hmac_mod.new(secret.encode("utf-8"), b"mtls-active", _hashlib_mod.sha256).hexdigest()
+
+
+class MtlsClientCertMiddleware:
+    """Reject requests that did not flow through the Cloudflare edge with the mTLS cert.
+
+    When ``ENFORCE_MTLS=true`` is set AND ``ORIGIN_SHARED_SECRET`` is configured,
+    every non-probe request must carry a matching ``X-Cf-Mtls-Active`` header
+    containing HMAC-SHA256("mtls-active", ORIGIN_SHARED_SECRET).  The CF Worker
+    computes and injects this header automatically when ``MTLS_CERT`` is bound.
+
+    The HMAC is non-spoofable without ORIGIN_SHARED_SECRET and is only emitted
+    by the CF Worker when the mTLS cert binding (env.MTLS_CERT) is present,
+    ensuring that both the cert is provisioned AND the request came from the
+    CF edge.
+
+    Disabled (no enforcement) when ENFORCE_MTLS is not set or ORIGIN_SHARED_SECRET
+    is empty, so existing deployments keep working during the rollout window.
+    """
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+        self._expected_hmac: str | None = None
+        if _ENFORCE_MTLS and _ORIGIN_SHARED_SECRET:
+            self._expected_hmac = _compute_mtls_hmac(_ORIGIN_SHARED_SECRET)
+            logger.info(
+                "MtlsClientCertMiddleware: ACTIVE — rejecting requests without "
+                "X-Cf-Mtls-Active HMAC proof from the CF Worker"
+            )
+        elif _ENFORCE_MTLS and not _ORIGIN_SHARED_SECRET:
+            logger.warning(
+                "MtlsClientCertMiddleware: ENFORCE_MTLS=true but ORIGIN_SHARED_SECRET "
+                "is not set — enforcement is inactive (no HMAC key available)"
+            )
+        else:
+            logger.info("MtlsClientCertMiddleware: inactive (ENFORCE_MTLS not set)")
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http" or not self._expected_hmac:
+            await self.app(scope, receive, send)
+            return
+        method = scope.get("method", "GET")
+        if method == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        if any(path == p or path.startswith(p) for p in _MTLS_PROBE_PATHS):
+            await self.app(scope, receive, send)
+            return
+        # Look up the HMAC header injected by the CF Worker (only when cert is bound).
+        provided = b""
+        for k, v in scope.get("headers", []):
+            if k == _MTLS_ACTIVE_HEADER:
+                provided = v
+                break
+        provided_str = provided.decode("latin-1", "ignore").lower()
+        if provided_str and _hmac_mod.compare_digest(provided_str, self._expected_hmac):
+            await self.app(scope, receive, send)
+            return
+        # Missing or wrong HMAC — reject with 403.
+        logger.warning(
+            f"MtlsClientCertMiddleware: rejected {method} {path} "
+            f"(X-Cf-Mtls-Active={'present but wrong' if provided_str else 'absent'})"
+        )
+        from fastapi.responses import JSONResponse
+        resp = JSONResponse(
+            status_code=403,
+            content={
+                "detail": (
+                    "mTLS client certificate required — "
+                    "request must originate from the Cloudflare edge worker "
+                    "with the mTLS certificate bound."
+                )
+            },
+        )
+        await resp(scope, receive, send)
+

@@ -741,6 +741,57 @@ function buildProxyHeaders(request: Request, clientIp: string, env?: Env): Heade
 }
 
 /**
+ * Task #120 — Inject a cryptographic proof that the mTLS client certificate is
+ * bound and active in this Worker deployment.
+ *
+ * When MTLS_CERT is bound (cert provisioned + wrangler deploy run), computes
+ *   HMAC-SHA256("mtls-active", BACKEND_ORIGIN_SECRET)
+ * and sets it as the X-Cf-Mtls-Active header on the outbound request.
+ *
+ * Security properties:
+ *   • Non-spoofable: requires BACKEND_ORIGIN_SECRET, which is kept secret.
+ *   • Bound to cert deployment: the header is ONLY set when env.MTLS_CERT is
+ *     present, so even a caller with the secret cannot produce this header
+ *     without also deploying a Worker with [[mtls_certificates]] wired in.
+ *   • Consistent: same HMAC value on every call — no timestamp / nonce
+ *     complexity needed since BACKEND_ORIGIN_SECRET rotation is the revocation
+ *     mechanism and it already rotates X-Origin-Auth simultaneously.
+ *
+ * The backend MtlsClientCertMiddleware validates this HMAC using the same
+ * BACKEND_ORIGIN_SECRET (stored as ORIGIN_SHARED_SECRET on Railway).
+ *
+ * Must be awaited AFTER buildProxyHeaders() at every backend call site.
+ */
+async function addMtlsActiveHeader(
+  headers: Headers | Record<string, string>,
+  env: Env,
+): Promise<void> {
+  if (!env.MTLS_CERT || !env.BACKEND_ORIGIN_SECRET) return;
+  const encoder = new TextEncoder();
+  const keyData = encoder.encode(env.BACKEND_ORIGIN_SECRET);
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    keyData,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign(
+    "HMAC",
+    cryptoKey,
+    encoder.encode("mtls-active"),
+  );
+  const hex = Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  if (headers instanceof Headers) {
+    headers.set("X-Cf-Mtls-Active", hex);
+  } else {
+    headers["X-Cf-Mtls-Active"] = hex;
+  }
+}
+
+/**
  * Task #110 Phase 6 — Central mTLS-aware fetch for ALL Railway backend calls.
  *
  * Every fetch to env.BACKEND_URL MUST go through this function so that the
@@ -784,6 +835,8 @@ async function proxyToBackend(
   // when env is passed — covers proxyToBackend, bot-prerender, cache-miss
   // fallback, and any future call site uniformly.
   const proxyHeaders = buildProxyHeaders(request, clientIp, env);
+  // Task #120: inject HMAC proof that the mTLS cert is bound (non-spoofable).
+  await addMtlsActiveHeader(proxyHeaders, env);
 
   try {
     // Phase 6 (Task #110): use the mTLS-bound fetcher when the certificate has
@@ -1531,6 +1584,7 @@ export async function probeBotLastModified(
     // Tell the backend this is a metadata-only probe so it can skip
     // any expensive render work and just emit headers.
     proxyHeaders.set("X-Bot-Probe", "1");
+    await addMtlsActiveHeader(proxyHeaders, env);
     // Strip any inbound conditional headers — a crawler that arrived
     // with `If-None-Match` / `If-Modified-Since` would otherwise
     // induce a 304 from the backend, which carries no
@@ -1565,6 +1619,7 @@ async function fetchBotRenderedHtml(
   try {
     const proxyHeaders = buildProxyHeaders(request, clientIp, env);
     proxyHeaders.set("X-Bot-Request", "1");
+    await addMtlsActiveHeader(proxyHeaders, env);
     const resp = await fetchBackend(env, apiUrl, {
       method: "GET",
       headers: proxyHeaders,
@@ -2061,6 +2116,10 @@ async function handleScheduledSync(env: Env): Promise<void> {
     if (env.BACKEND_ORIGIN_SECRET) {
       syncHeaders["X-Origin-Auth"] = env.BACKEND_ORIGIN_SECRET;
     }
+    // Task #120: inject the HMAC proof that the CF Worker is making this
+    // request with the mTLS cert bound — validates against
+    // MtlsClientCertMiddleware on the backend when ENFORCE_MTLS=true.
+    await addMtlsActiveHeader(syncHeaders, env);
     // Phase 6 (Task #110): use fetchBackend() so the mTLS cert is presented
     // on this scheduled cron fetch too — Railway mTLS enforcement applies to
     // all connections, not just the primary request proxy path.
@@ -2808,6 +2867,7 @@ async function _handleEdgeFetch(
 
       const backendUrl = `${env.BACKEND_URL}${pathname}${url.search}`;
       const backendHeaders = buildProxyHeaders(request, clientIp, env);
+      await addMtlsActiveHeader(backendHeaders, env);
 
       try {
         // Phase 6 (Task #110): use fetchBackend() — mTLS cert presented here too.

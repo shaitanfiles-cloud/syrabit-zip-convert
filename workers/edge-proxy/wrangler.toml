@@ -337,15 +337,26 @@ crons = ["* * * * *", "0 */6 * * *"]
 #   1. Issue the cert:
 #        CLOUDFLARE_API_TOKEN=<tok> \
 #          node artifacts/syrabit/scripts/cloudflare-phase6-apply.js
-#      Prints the certificate_id UUID.
+#      Prints the certificate_id UUID and the certificate PEM.
 #   2. Store the private key as a wrangler secret:
 #        echo "<pem>" | wrangler secret put MTLS_PRIVATE_KEY --name syrabit-edge
 #   3. Add CF_MTLS_CERT_ID to GitHub repo secrets (Settings → Secrets → Actions):
 #        CF_MTLS_CERT_ID = <uuid-from-step-1>
 #      The next push to master/main triggers edge-proxy-deploy.yml which injects
 #      the UUID into this block and calls wrangler deploy — binding goes live.
-#   4. Configure Railway to require the cert (Railway → Service → mTLS).
-#   5. Flip the fail-closed gate AFTER Railway requires the cert:
+#      The worker now presents the cert on every TLS handshake with Railway, AND
+#      injects X-Cf-Mtls-Active: HMAC-SHA256("mtls-active", BACKEND_ORIGIN_SECRET)
+#      on every request so the Railway MtlsClientCertMiddleware can validate it.
+#   4. Enable application-layer mTLS enforcement on the Railway backend:
+#        Railway service → Variables → add ENFORCE_MTLS=true
+#      The MtlsClientCertMiddleware rejects requests missing the HMAC proof
+#      (non-spoofable: requires BACKEND_ORIGIN_SECRET to forge).
+#   5. Configure Railway to require the CF client cert at the TLS level:
+#        Railway dashboard → Service → Settings → mTLS → require Cloudflare cert.
+#      With TLS-level enforcement, connections without the cert are rejected
+#      BEFORE HTTP is reached — the gold-standard protection that makes the
+#      nightly-smoke.js 6a-iv bypass probe pass with a network/TLS error.
+#   6. Flip the fail-closed gate AFTER Railway requires the cert:
 #        wrangler secret put MTLS_REQUIRED --name syrabit-edge  (value: true)
 #      MTLS_REQUIRED=true makes proxyToBackend() return 503 if MTLS_CERT is
 #      absent, preventing any insecure plain-fetch bypass.

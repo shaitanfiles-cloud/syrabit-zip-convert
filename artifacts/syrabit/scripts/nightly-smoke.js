@@ -448,43 +448,52 @@ async function main() {
 
   // 6a-iv: Railway origin bypass probe.
   // Attempts a direct HTTP request to the Railway backend WITHOUT the Cloudflare
-  // worker (no BACKEND_ORIGIN_SECRET, no mTLS cert). When Railway mTLS is
-  // correctly configured, this request should be rejected (connection refused,
-  // TLS error, or 401/403 from Railway's own policy). A 200 would mean the
-  // origin is still publicly reachable without a cert — a security regression.
+  // worker (no BACKEND_ORIGIN_SECRET, no mTLS cert).  This verifies that Railway
+  // enforces the mTLS client certificate at the TLS level: a connection made
+  // without the CF-issued cert must fail at the TLS handshake before HTTP is
+  // reached.
+  //
+  // When Railway TLS-level mTLS is correctly configured, fetch() throws a
+  // network/TLS error before any HTTP response is received.  Any HTTP response
+  // (including 4xx/5xx from application middleware) means the connection was
+  // accepted at the TLS layer — only application-layer guards are active, which
+  // is weaker: if BACKEND_ORIGIN_SECRET ever leaks the origin is fully exposed.
+  //
+  // The backend also has MtlsClientCertMiddleware (Task #120) which rejects
+  // requests missing a valid HMAC proof that the CF Worker sent them with the
+  // cert bound.  This is a non-spoofable belt-and-suspenders layer, but it does
+  // NOT substitute for TLS-level enforcement: this probe must still see a
+  // network error (not 403) for the gold standard to be met.
+  //
+  // Acceptable outcomes:
+  //   PASS:  network/TLS error — TLS handshake rejected before HTTP (gold standard).
+  //   WARN:  connection timeout — origin not reachable (mTLS or firewall).
+  //   FAIL:  any HTTP response — origin reachable without the CF client cert.
   //
   // RAILWAY_ORIGIN_URL must be set in the CI environment to the bare Railway
   // URL (e.g. https://syrabit-production.up.railway.app).  When unset the
-  // check is skipped with a warning so local dev / accounts without Railway
-  // are not blocked.  Set via: GitHub Actions → Secrets → RAILWAY_ORIGIN_URL.
-  //
-  // Note: probe path is /api/health which returns 200 on a healthy origin
-  // if mTLS is NOT enforced. When Railway mTLS is enforced, the TLS handshake
-  // fails before HTTP is reached, so fetch() throws a network error.
+  // check is skipped with a warning.  Set via: GitHub Actions → Secrets → RAILWAY_ORIGIN_URL.
   const RAILWAY_ORIGIN_URL = process.env.RAILWAY_ORIGIN_URL;
   if (!RAILWAY_ORIGIN_URL) {
     warnings.push('Railway bypass probe skipped: RAILWAY_ORIGIN_URL not set — set the CI secret to verify origin enforcement');
     console.log('  ⚠  Railway bypass probe: SKIPPED — set RAILWAY_ORIGIN_URL in CI secrets');
   } else {
-    // STRICT: ANY HTTP response (any status code, including 4xx/5xx) means
-    // Railway is reachable at the HTTP layer without a client cert — that means
-    // only header-based auth (BACKEND_ORIGIN_SECRET) guards the origin.
-    // If that header ever leaks, the origin is fully bypassed.
-    // The ONLY acceptable outcomes are:
-    //   PASS: network/TLS error — connection rejected before HTTP (mTLS enforced)
-    //   WARN: connection timeout — origin not reachable (mTLS or firewall)
-    //   FAIL: any HTTP response received — origin accessible without cert
     try {
       const probeResp = await fetch(`${RAILWAY_ORIGIN_URL}/api/health`, {
         signal: AbortSignal.timeout(8000),
       });
-      // ANY HTTP response (2xx, 4xx, 5xx) = origin reachable = mTLS NOT enforced
+      // ANY HTTP response — even 403 from MtlsClientCertMiddleware — means
+      // Railway accepted the connection at the TLS layer without requiring the
+      // client cert.  TLS-level enforcement is not active.
+      const hint = probeResp.status === 403
+        ? ' (MtlsClientCertMiddleware active, but TLS-level enforcement not configured — configure Railway mTLS for the gold standard)'
+        : '';
       failures.push(
-        `Railway bypass probe received HTTP ${probeResp.status} — origin reachable without mTLS cert (X-header-only auth is bypassable if header leaks)`,
+        `Railway bypass probe received HTTP ${probeResp.status} — origin reachable at TLS layer without mTLS cert${hint}`,
       );
-      console.log(`  ✗  Railway bypass probe: HTTP ${probeResp.status} received — origin is accessible without a client cert`);
+      console.log(`  ✗  Railway bypass probe: HTTP ${probeResp.status} received — origin accessible without client cert at TLS level`);
       console.log('      → Configure Railway mTLS: Railway dashboard → Service → Settings → mTLS → require Cloudflare client cert');
-      console.log('      → Until mTLS is enforced at TLS level, BACKEND_ORIGIN_SECRET is the only guard');
+      console.log('      → Until TLS-level mTLS is enforced, BACKEND_ORIGIN_SECRET + HMAC are the only guards (Task #120)');
     } catch (e) {
       const msg = e.message || String(e);
       if (msg.includes('abort') || msg.includes('timeout') || msg.includes('timed out')) {
@@ -492,7 +501,7 @@ async function main() {
         warnings.push('Railway bypass probe: connection timeout — cannot confirm TLS rejection vs unreachable host');
         console.log('  ⚠  Railway bypass probe: connection timeout — origin not reachable (mTLS or firewall; cannot distinguish)');
       } else {
-        // TLS handshake failure, connection refused, SSL error — mTLS enforced
+        // TLS handshake failure, connection refused, SSL error — TLS-level mTLS enforced
         console.log(`  ✓  Railway bypass probe: rejected at network/TLS level — "${msg}" — mTLS enforcement confirmed`);
       }
     }
