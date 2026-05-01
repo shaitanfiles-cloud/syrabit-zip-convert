@@ -501,18 +501,13 @@ async def _fetch_chunks_semantic(
         except Exception as _cohere_qerr:
             logger.debug("[INTERNAL_RAG] Cohere query embed failed, falling back to Pinecone: %s", _cohere_qerr)
 
-        # Fallback: Pinecone Inference embed (only if Cohere is down)
+        # Note: Do NOT fall back to Pinecone Inference (multilingual-e5-large,
+        # 768-dim default) for query embedding — it would produce dimension-mismatch
+        # errors against the 1024-dim syrabit-ahsec index. Semantic search is
+        # simply skipped when Cohere is unavailable; keyword search + reranking
+        # still function normally via _fetch_internal_chapters.
         if not q_vec:
-            try:
-                from providers.pinecone_ai import embed_one as _pc_embed
-                q_vec = await asyncio.wait_for(
-                    _pc_embed(query, input_type="query"),
-                    timeout=4.0,
-                )
-            except Exception as _pc_qerr:
-                logger.debug("[INTERNAL_RAG] Pinecone query embed also failed: %s", _pc_qerr)
-
-        if not q_vec:
+            logger.debug("[INTERNAL_RAG] Query embedding unavailable — skipping semantic search")
             return []
 
         # ── Primary: Pinecone serverless vector search ────────────────────────

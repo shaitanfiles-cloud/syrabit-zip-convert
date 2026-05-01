@@ -1,6 +1,28 @@
 """
 retrievers.mongodb_vector — MongoDB Atlas Vector Search adapter.
 
+DEPRECATION NOTICE (Task #203, 2026-05)
+----------------------------------------
+MongoVectorRetriever is the **legacy** Atlas $vectorSearch backend.
+The AHSEC/SEBA RAG hot path (``rag.py::_fetch_chunks_semantic``) now
+queries the Pinecone serverless index (``retrievers.pinecone_vector``)
+as its primary vector store.  MongoVectorRetriever is kept for:
+
+  * Emergency fallback (set PINECONE_ATLAS_FALLBACK=true, which is the
+    default during the transition window).
+  * Admin/diagnostic retriever toggle (``POST /admin/retriever/config
+    {"active": "mongodb_vector"}``).
+  * Non-chunk collections that have not been migrated to Pinecone (e.g.
+    any future use-case with a separate Atlas index).
+
+New ingestion via ``chunk_embedder.py`` no longer writes to MongoDB
+``chunks.embedding`` by default when ``PINECONE_SKIP_MONGO_EMBED=true``;
+existing stored embeddings remain in place (safe archive).
+
+Once parity validation (Task #206) is complete, set:
+  PINECONE_ATLAS_FALLBACK=false  — stop using Atlas $vectorSearch fallback
+and the ensure_vector_index() call in server.py can be removed.
+
 Uses the ``$vectorSearch`` aggregation stage available on MongoDB Flex
 and Dedicated (M10+) tiers with Atlas Vector Search enabled.
 
