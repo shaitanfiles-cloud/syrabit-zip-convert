@@ -267,3 +267,77 @@ def test_invalid_supabase_token_returns_401():
 
     assert resp.status_code == 401, resp.text
     assert resp.json()["detail"] == "Invalid or expired Supabase token"
+
+
+# ──────────────────────────────────────────────────────────────────
+# Task #172 — Google OAuth auto-create gated by registrations_open
+# ──────────────────────────────────────────────────────────────────
+
+def test_new_google_user_blocked_when_registrations_closed():
+    """A brand-new Google OAuth user is rejected with 403 when
+    registrations_open=False.  supa_get_user returns None (unknown email),
+    so the endpoint must check settings before creating an account."""
+    from fastapi.testclient import TestClient
+
+    app, auth_mod = _build_app()
+
+    sb_user = _make_sb_user(email="newcomer@gmail.com")
+    _patch_supa_client(auth_mod, sb_user)
+
+    # No existing account for this email.
+    auth_mod.supa_get_user = AsyncMock(return_value=None)
+    # Registrations are closed.
+    auth_mod.supa_get_settings = AsyncMock(
+        return_value={"registrations_open": False}
+    )
+
+    client = TestClient(app)
+    resp = client.post("/api/auth/supabase-session", json=_SUPABASE_SESSION_BODY)
+
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"] == "Registrations are currently closed"
+    # Confirm no account was written.
+    auth_mod.supa_insert_user.assert_not_called()
+
+
+def test_new_google_user_created_when_registrations_open():
+    """A brand-new Google OAuth user gets an account and a valid token when
+    registrations_open=True.  supa_insert_user must be called exactly once
+    and the response must contain an access_token."""
+    from fastapi.testclient import TestClient
+
+    app, auth_mod = _build_app()
+
+    sb_user = _make_sb_user(email="newbie@gmail.com")
+    _patch_supa_client(auth_mod, sb_user)
+
+    # No existing account for this email.
+    auth_mod.supa_get_user = AsyncMock(return_value=None)
+    # Registrations are open (default, but be explicit).
+    auth_mod.supa_get_settings = AsyncMock(
+        return_value={"registrations_open": True}
+    )
+
+    captured_role = {}
+
+    def _fake_token(user_id, *, role, plan):
+        captured_role["role"] = role
+        return f"tok-{role}"
+
+    auth_mod.create_access_token = _fake_token
+    auth_mod.create_refresh_token = lambda *a, **k: "refresh"
+
+    async def _credits(_u):
+        return {"used": 0, "limit": 30}
+
+    auth_mod.get_user_credits = _credits
+
+    client = TestClient(app)
+    resp = client.post("/api/auth/supabase-session", json=_SUPABASE_SESSION_BODY)
+
+    assert resp.status_code == 200, resp.text
+    # New user has no is_admin / role flags → student.
+    assert captured_role["role"] == "student"
+    assert "access_token" in resp.json()
+    # Confirm account creation was triggered.
+    auth_mod.supa_insert_user.assert_called_once()
