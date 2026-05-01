@@ -35,6 +35,54 @@ function safeHref(url) {
   return '';
 }
 
+/* ─────────────── Visual element helpers ─────────────── */
+
+function countVisualElements(structured) {
+  if (!structured) return {};
+  const counts = {};
+  if (structured.tables?.length)    counts.tables    = structured.tables.length;
+  if (structured.diagrams?.length)  counts.diagrams  = structured.diagrams.length;
+  if (structured.mindmap)           counts.mindmap   = 1;
+  if (structured.mnemonics?.length) counts.mnemonics = structured.mnemonics.length;
+  return counts;
+}
+
+function visualElementParts(structured) {
+  const c = countVisualElements(structured);
+  const parts = [];
+  if (c.tables)    parts.push(`${c.tables} ${c.tables === 1 ? 'table' : 'tables'}`);
+  if (c.diagrams)  parts.push(`${c.diagrams} ${c.diagrams === 1 ? 'diagram' : 'diagrams'}`);
+  if (c.mindmap)   parts.push('1 mind map');
+  if (c.mnemonics) parts.push(`${c.mnemonics} ${c.mnemonics === 1 ? 'mnemonic' : 'mnemonics'}`);
+  return parts;
+}
+
+const _ELEMENT_BADGES = [
+  { key: 'tables',    Icon: Table2,    label: (n) => `${n} ${n === 1 ? 'table' : 'tables'}`,       color: 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20' },
+  { key: 'diagrams',  Icon: GitBranch, label: (n) => `${n} ${n === 1 ? 'diagram' : 'diagrams'}`,   color: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20' },
+  { key: 'mindmap',   Icon: Share2,    label: () => 'mind map',                                     color: 'bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-500/20' },
+  { key: 'mnemonics', Icon: Lightbulb, label: (n) => `${n} ${n === 1 ? 'mnemonic' : 'mnemonics'}`, color: 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20' },
+];
+
+function VisualElementBadges({ structured }) {
+  const counts = countVisualElements(structured);
+  const badges = _ELEMENT_BADGES.filter(({ key }) => counts[key]);
+  if (!badges.length) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {badges.map(({ key, Icon, label, color }) => (
+        <span
+          key={key}
+          className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${color}`}
+        >
+          <Icon className="w-3 h-3" />
+          {label(counts[key])}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /* ─────────────── Citation chip ─────────────── */
 
 function CitationChip({ id, citationsMap }) {
@@ -236,6 +284,8 @@ function StructuredNoteBody({ structured, citations }) {
           <h3 className="text-base font-semibold leading-snug truncate">{structured.title}</h3>
         )}
       </div>
+
+      <VisualElementBadges structured={structured} />
 
       {structured.summary && (
         <p className="text-sm text-muted-foreground leading-relaxed">{structured.summary}</p>
@@ -699,7 +749,12 @@ function GenerateNotesModal({ open, onClose, onGenerated, selectedNoteIds, allNo
     try {
       const r = await studyApi.generateNotes(payload);
       onGenerated(r.note);
-      toast.success('Generated note saved.');
+      const parts = visualElementParts(r.note?.structured);
+      toast.success(
+        parts.length
+          ? `Note generated with ${parts.join(', ')}`
+          : 'Generated note saved.'
+      );
       onClose();
     } catch (e) {
       // Surface the backend's clear message — Gemini-only path means we
