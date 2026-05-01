@@ -1373,7 +1373,12 @@ async function trySitemapD1Route(
       '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
     ];
     for (const name of sitemapNames) {
-      lines.push(`  <sitemap><loc>${BASE_URL}/api/seo/${name}</loc><lastmod>${today}</lastmod></sitemap>`);
+      // sitemap-delta.xml is served at the root path (canonical per task #246);
+      // all other sub-sitemaps live under /api/seo/.
+      const loc = name === "sitemap-delta.xml"
+        ? `${BASE_URL}/${name}`
+        : `${BASE_URL}/api/seo/${name}`;
+      lines.push(`  <sitemap><loc>${loc}</loc><lastmod>${today}</lastmod></sitemap>`);
     }
     lines.push("</sitemapindex>");
     return { type: "xml", data: lines.join("\n") };
@@ -1462,7 +1467,9 @@ async function trySitemapD1Route(
   // crawling the full (potentially 50k-URL) sitemap tree.
   // Cache-Control is set in the outer response handler when type === "xml"
   // for delta routes.
-  if (pathname === "/api/seo/sitemap-delta.xml") {
+  // Accept both the canonical root path and the /api/seo/ alias so that
+  // existing sitemap-index registrations and fanout pings continue to work.
+  if (pathname === "/sitemap-delta.xml" || pathname === "/api/seo/sitemap-delta.xml") {
     const since48h = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
     const deltaPages = await getDeltaSitemapEntries(db, since48h, 1000);
     if (deltaPages === null) return null;
@@ -2910,9 +2917,8 @@ async function _handleEdgeFetch(
 
     if (!isApiRoute && (request.method === "GET" || request.method === "HEAD")) {
       if (isSearchBot && request.method === "GET") {
-        // Rate-limit verified bots to BOT_RATE_LIMIT_RPM (3000 RPM) per IP so
-        // aggressive re-crawls of the same origin shard don't overwhelm the
-        // backend. Unverified traffic hits the general 120 RPM path above.
+        // Verified bots (cf.verifiedBot === true): rate-cap at BOT_RATE_LIMIT_RPM (3000 RPM)
+        // per IP to prevent aggressive re-crawl from overwhelming the backend.
         const botRlKey = `rl:bot:${clientIp}`;
         const botRl = await checkRateLimitWithDO(botRlKey, env, BOT_RATE_LIMIT_RPM);
         if (!botRl.allowed) {
@@ -2929,6 +2935,23 @@ async function _handleEdgeFetch(
         }
         const botResp = await handleBotContentRequest(env, pathname, clientIp, request, ctx);
         if (botResp) return botResp;
+      } else if (botResult.claimsBot && !isSearchBot && request.method === "GET") {
+        // Unverified claimed bots (UA matches bot pattern but cf.verifiedBot is false):
+        // enforce the same 120 RPM ceiling as general API traffic to prevent scraping.
+        const unverifiedBotRlKey = `rl:${clientIp}`;
+        const unverifiedBotRl = await checkRateLimitWithDO(unverifiedBotRlKey, env, RATE_LIMIT_RPM);
+        if (!unverifiedBotRl.allowed) {
+          return new Response("Too Many Requests", {
+            status: 429,
+            headers: {
+              ...cors,
+              "Retry-After": String(RATE_LIMIT_WINDOW_S),
+              "X-RateLimit-Limit": String(RATE_LIMIT_RPM),
+              "X-RateLimit-Remaining": "0",
+              "X-RateLimit-Scope": "unverified_bot",
+            },
+          });
+        }
       }
       // CRITICAL: do NOT call fetch(request) — this worker is bound to
       // syrabit.ai/* and www.syrabit.ai/*, and fetch(request) re-enters

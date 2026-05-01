@@ -125,7 +125,7 @@ async def _do_google_indexing(url: str, source: str) -> bool:
 
 
 # Task #246 — Delta sitemap ping constants.
-_DELTA_SITEMAP_URL = "https://syrabit.ai/api/seo/sitemap-delta.xml"
+_DELTA_SITEMAP_URL = "https://syrabit.ai/sitemap-delta.xml"
 _GOOGLE_SITEMAP_PING_TPL = "https://www.google.com/ping?sitemap={sitemap}"
 
 
