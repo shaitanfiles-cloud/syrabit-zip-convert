@@ -142,9 +142,49 @@ after **every push to `master`/`main`** via the
 
 The CI job does not literally block the Pages deploy that triggered it (Pages
 deploys on push independently of GitHub Actions). The check gates *future*
-pushes: if branch protection is configured to require the
-`lighthouse-check / Lighthouse post-deploy check (LCP / CLS / INP)` status
-check before merging, subsequent PRs are blocked until the regression is fixed.
+pushes: once branch protection is configured to require the status check
+below, subsequent PRs are blocked until the regression is fixed.
+
+**Required status check context** (GitHub Actions format: `workflow name / job name`):
+
+```
+post-deploy-lighthouse / Lighthouse post-deploy check (LCP / CLS / INP)
+```
+
+#### Applying branch protection automatically (Task #141)
+
+`.github/workflows/enforce-branch-protection.yml` applies the required status
+check idempotently via the GitHub REST API.  It runs weekly (Mondays 06:00 UTC)
+to re-apply the rule if it is ever accidentally removed, and can be triggered
+manually at any time:
+
+1. Open **Actions → enforce-branch-protection → Run workflow**.
+2. Leave **Branch** as `master` (or enter `main`).
+3. Leave **Dry run** unchecked for a real update (check it to preview the
+   payload without writing).
+4. Click **Run workflow**.
+
+The underlying script (`scripts/enforce-branch-protection.js`) is idempotent —
+running it when the check is already configured exits 0 with no API write.
+
+**PAT requirement:** the workflow uses the `GITHUB_TOKEN` *secret* (a PAT
+stored by a repo admin with `repo` scope) — not the automatic Actions token,
+which lacks admin permission for branch protection writes.  Set the secret at
+**Settings → Secrets and variables → Actions → Secrets → GITHUB_TOKEN**.
+
+#### Applying branch protection manually (dashboard path)
+
+If you prefer to configure branch protection via the GitHub UI rather than
+running the workflow:
+
+1. Open **Settings → Branches → Branch protection rules** and edit (or create)
+   the rule for `master`.
+2. Under **Require status checks to pass before merging**, enable the setting
+   and search for:
+   ```
+   post-deploy-lighthouse / Lighthouse post-deploy check (LCP / CLS / INP)
+   ```
+3. Add it as a required check and save the rule.
 
 ### Disabling for emergency hotfixes
 
@@ -160,9 +200,11 @@ Two ways to bypass the check for an urgent fix:
 **Option B — Temporary branch protection relaxation**
 
 1. Under **Settings → Branches → Branch protection rules**, temporarily remove
-   `post-deploy-lighthouse` from the required status checks.
+   the `post-deploy-lighthouse / Lighthouse post-deploy check (LCP / CLS / INP)`
+   entry from the required status checks.
 2. Merge the hotfix.
-3. Immediately restore the branch protection rule.
+3. Immediately restore the branch protection rule (or re-run the
+   `enforce-branch-protection` workflow — it will re-add the check in seconds).
 4. Track the performance regression in the next regular CI run or a manual
    Observatory run (see "Simulating a regression" below).
 
@@ -326,8 +368,10 @@ manual-setup instructions and continues without failing.
 
 | File | Purpose |
 |------|---------|
-| `scripts/post-deploy-lighthouse.js`           | Post-deploy Lighthouse trigger + threshold gate (Task #131) |
+| `scripts/post-deploy-lighthouse.js`            | Post-deploy Lighthouse trigger + threshold gate (Task #131) |
 | `.github/workflows/post-deploy-lighthouse.yml` | CI workflow that runs the post-deploy check on every push to master/main |
+| `scripts/enforce-branch-protection.js`         | Idempotent script that adds the Lighthouse check to branch protection (Task #141) |
+| `.github/workflows/enforce-branch-protection.yml` | workflow_dispatch + weekly schedule to apply the branch protection rule (Task #141) |
 | `scripts/cloudflare-phase6-apply.js`           | Creates Observatory schedules (Step 4) and the alert policy with Slack webhook (Step 4b) |
 | `scripts/nightly-smoke.js`                     | Assertion 6d-alert verifies the policy nightly, including Slack webhook presence |
 | `scripts/cloudflare-full-audit.js`             | Audit item 19 verifies Zaraz + Observatory weekly |
