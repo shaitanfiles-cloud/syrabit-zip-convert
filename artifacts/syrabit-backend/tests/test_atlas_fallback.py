@@ -159,30 +159,30 @@ class TestAtlasVsEnabledGate:
     caplog assertions verify the real logger output — not a synthetic list.
     """
 
-    def test_gate_returns_skipped_and_logs_debug_when_env_var_not_set(
-        self, monkeypatch, caplog
+    def test_gate_returns_skipped_and_ensure_not_called_when_env_var_not_set(
+        self, monkeypatch
     ):
         """With ATLAS_VS_ENABLED unset (the default after Task #208), the
-        function must return {"skipped": True} and log a DEBUG message —
-        ensure_vector_index is never called so a deleted index causes no error."""
+        function must return {"skipped": True} — ensure_vector_index is never
+        called so a deleted Atlas index causes no error at startup."""
         monkeypatch.delenv("ATLAS_VS_ENABLED", raising=False)
-        import importlib
+
         import startup_checks
-        importlib.reload(startup_checks)  # pick up env change
 
         ensure_calls = []
 
-        async def _fake_ensure():
+        async def _tracking_ensure():
             ensure_calls.append(True)
             return {"ok": True}
 
-        with patch("startup_checks.run_atlas_vs_startup_check.__wrapped__", create=True):
-            # Patch ensure_vector_index inside startup_checks
-            with patch("startup_checks.logger") as mock_log:
-                result = _run(startup_checks.run_atlas_vs_startup_check())
+        with patch(
+            "retrievers.mongodb_vector.ensure_vector_index",
+            new=_tracking_ensure,
+        ):
+            result = _run(startup_checks.run_atlas_vs_startup_check())
 
         assert result == {"skipped": True}
-        assert ensure_calls == [], "ensure_vector_index must not be called"
+        assert ensure_calls == [], "ensure_vector_index must not be called when gate is off"
 
     def test_gate_calls_ensure_and_returns_result_when_enabled(
         self, monkeypatch
@@ -193,15 +193,13 @@ class TestAtlasVsEnabledGate:
 
         import startup_checks
 
-        async def _fake_ensure():
-            return {"ok": True, "created": False, "index": "vector_index"}
+        expected = {"ok": True, "created": False, "index": "vector_index"}
 
-        with patch("startup_checks.ensure_vector_index", _fake_ensure, create=True):
-            with patch(
-                "retrievers.mongodb_vector.ensure_vector_index",
-                new=AsyncMock(return_value={"ok": True, "created": False}),
-            ):
-                result = _run(startup_checks.run_atlas_vs_startup_check())
+        with patch(
+            "retrievers.mongodb_vector.ensure_vector_index",
+            new=AsyncMock(return_value=expected),
+        ):
+            result = _run(startup_checks.run_atlas_vs_startup_check())
 
         assert result.get("ok") is True
 
@@ -402,6 +400,73 @@ class TestFetchChunksSemanticFallback:
         assert aggregate_calls == [], (
             "Atlas aggregate must not be called when Pinecone returned results"
         )
+
+    def test_pinecone_returns_chapter_even_when_atlas_index_absent(self, monkeypatch):
+        """Decisive end-to-end positive test — no silent empty.
+
+        Scenario: PINECONE_ATLAS_FALLBACK=true, Atlas vector_index deleted,
+        Pinecone returns a match, chapter lookup finds the chapter doc.
+        Expected: _fetch_chunks_semantic returns the chapter (not []).
+
+        This is the key guarantee: even after the embedding cleanup drops the
+        Atlas vector_index, Pinecone still delivers results and the function
+        does not silently return an empty list.
+        """
+        import rag as _rag
+
+        monkeypatch.setenv("PINECONE_ATLAS_FALLBACK", "true")
+
+        monkeypatch.setattr("providers.cohere.ENABLED", True, raising=False)
+        monkeypatch.setattr(
+            "providers.cohere.embed_query",
+            AsyncMock(return_value=_FAKE_QVEC),
+            raising=False,
+        )
+
+        # Pinecone returns one result — chapter_id present
+        pc_results = [
+            {
+                "score": 0.91,
+                "metadata": {
+                    "chapter_id": "ch-bio-photosyn",
+                    "chapter_title": "Photosynthesis",
+                    "subject_id": "bio-11",
+                },
+            }
+        ]
+        FakePc = _make_pc_retriever(configured=True, results=pc_results)
+        monkeypatch.setattr("retrievers.pinecone_vector.PineconeVectorRetriever", FakePc)
+
+        # Chapters collection returns the chapter doc
+        chapter_doc = {
+            "id": "ch-bio-photosyn",
+            "title": "Photosynthesis",
+            "content": "Plants convert sunlight to chemical energy via chlorophyll.",
+            "slug": "photosynthesis",
+            "subject_id": "bio-11",
+        }
+
+        class _FakeFindCursor:
+            async def to_list(self, length=None):
+                return [chapter_doc]
+
+        mock_chunks = MagicMock()
+        # Atlas NOT called (Pinecone raw is non-empty)
+        mock_chunks.aggregate = lambda pipeline: _AggregateCursor(
+            raise_exc=Exception("No vector_index — should not be reached")
+        )
+        mock_chapters = MagicMock()
+        mock_chapters.find = lambda *a, **kw: _FakeFindCursor()
+        mock_db = MagicMock()
+        mock_db.chunks = mock_chunks
+        mock_db.chapters = mock_chapters
+        monkeypatch.setattr(_rag, "db", mock_db)
+
+        result = _run(_rag._fetch_chunks_semantic("photosynthesis"))
+
+        assert len(result) == 1, f"Expected 1 chapter from Pinecone, got: {result!r}"
+        assert result[0]["id"] == "ch-bio-photosyn"
+        assert "Photosynthesis" in result[0]["title"]
 
     def test_cohere_unavailable_returns_empty_without_querying_either_backend(self, monkeypatch):
         """When Cohere embed is unavailable (ENABLED=False), _fetch_chunks_semantic
