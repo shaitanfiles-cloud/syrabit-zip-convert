@@ -10,12 +10,14 @@ queryable via `$vectorSearch`.
 
 Completion markers
 ------------------
-* Default (PINECONE_SKIP_MONGO_EMBED=false): writes ``embedding`` + metadata
+* PINECONE_WRITE=false (Atlas-only legacy): writes ``embedding`` + metadata
   to MongoDB.  Next run skips via ``{"embedding": {"$exists": false}}``.
-* Post-cutover (PINECONE_SKIP_MONGO_EMBED=true): does NOT write ``embedding``
-  to MongoDB, but DOES write ``{"vector_store": "pinecone", "embedded_at": …}``
-  after a successful Pinecone upsert.  Next run skips via that marker, so
-  chunks are never re-embedded on repeated runs.
+* PINECONE_WRITE=true (Pinecone-primary, Task #203/208 default): does NOT
+  write ``embedding`` to MongoDB.  DOES write
+  ``{"vector_store": "pinecone", "embedded_at": …}`` after a successful
+  Pinecone upsert.  Next run skips via that marker, so chunks are never
+  re-embedded on repeated runs.  Set ``PINECONE_SKIP_MONGO_EMBED=false`` to
+  force the old path (e.g. to warm up Atlas fallback).
 
 Usage (from admin endpoint):
     from providers.chunk_embedder import embed_chunks_bulk
@@ -158,15 +160,18 @@ async def embed_chunks_bulk(
         import os as _os
 
         _pinecone_write = _os.environ.get("PINECONE_WRITE", "").strip().lower() in ("1", "true", "yes")
-        # PINECONE_SKIP_MONGO_EMBED=true stops writing the embedding field to MongoDB.
-        # Set this only after Pinecone parity is confirmed and PINECONE_WRITE=true,
-        # so future ingestion goes Pinecone-only. MongoDB chunk docs keep all other
-        # fields; only the large float array is omitted. Default: false (keep warm).
-        _skip_mongo_embed = (
-            _pinecone_write
-            and _os.environ.get("PINECONE_SKIP_MONGO_EMBED", "").strip().lower()
-            in ("1", "true", "yes")
-        )
+        # When PINECONE_WRITE=true, Pinecone is the primary vector store
+        # (Task #203/208). Pinecone-primary mode defaults to NOT writing the
+        # large embedding array to MongoDB — it wastes ~8 KB per chunk and
+        # inflates collection reads. Set PINECONE_SKIP_MONGO_EMBED=false to
+        # re-enable the MongoDB embedding write (e.g. for Atlas fallback warm-up).
+        _skip_mongo_embed_env = _os.environ.get("PINECONE_SKIP_MONGO_EMBED", "").strip().lower()
+        if _pinecone_write:
+            # Pinecone-primary: skip mongo embed UNLESS explicitly set to false.
+            _skip_mongo_embed = _skip_mongo_embed_env not in ("0", "false", "no")
+        else:
+            # Atlas-only path: write embedding to MongoDB (legacy default).
+            _skip_mongo_embed = _skip_mongo_embed_env in ("1", "true", "yes")
 
         ops = []
         pinecone_vectors: list = []

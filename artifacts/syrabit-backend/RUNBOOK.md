@@ -52,7 +52,69 @@ python scripts/validate_rag_parity.py
 | `PINECONE_API_KEY` | secret | Pinecone API key |
 | `PINECONE_INDEX` | `syrabit-ahsec` | Index name |
 | `PINECONE_WRITE` | `true` | Enables Pinecone writes in embed_chunks_bulk |
-| `PINECONE_SKIP_MONGO_EMBED` | unset | Keep unset until Pinecone parity is confirmed |
+| `PINECONE_SKIP_MONGO_EMBED` | unset | When `PINECONE_WRITE=true`, MongoDB embedding write is already skipped by default. Set to `false` to re-enable it (Atlas fallback warm-up only). |
+| `ATLAS_VS_ENABLED` | unset | Set to `true` to re-enable the Atlas $vectorSearch index check at startup (emergency fallback recovery only). Default: off. |
+| `PINECONE_ATLAS_FALLBACK` | `false` | Set to `false` once Pinecone parity is confirmed to disable the Atlas fallback in RAG queries. |
+
+---
+
+## Drop MongoDB embedding arrays (Task #208)
+
+After Pinecone parity is confirmed (≥95 % top-K overlap on 10+ queries), run
+this to reclaim ~8 KB per chunk document from MongoDB.
+
+### Pre-flight
+
+```bash
+# 1. Validate Pinecone parity
+python scripts/validate_rag_parity.py
+# Expected: "PARITY VALIDATED — N/N queries above 70% threshold"
+
+# 2. Confirm PINECONE_WRITE=true in env
+echo $PINECONE_WRITE
+
+# 3. Disable Atlas $vectorSearch fallback in RAG
+#    Set PINECONE_ATLAS_FALLBACK=false (or confirm it is already false)
+```
+
+### Drop the embedding field
+
+```bash
+# Dry run first — prints count, no writes
+python scripts/drop_mongo_embeddings.py --dry-run
+
+# Validate on a single subject first (recommended)
+python scripts/drop_mongo_embeddings.py --subject-id <subject_id> --dry-run
+python scripts/drop_mongo_embeddings.py --subject-id <subject_id>
+
+# Full drop — cursor-batched in groups of 500 to avoid collection lock
+python scripts/drop_mongo_embeddings.py
+```
+
+Exit code 0 = success. Exit code 1 = pre-flight guard failed (no writes made).
+
+### Drop the Atlas Vector Search index
+
+After the script confirms `remaining_with_embedding=0`:
+
+1. Open **Atlas UI → Database → Browse Collections → chunks → Indexes → Search Indexes**.
+2. Delete the index named `vector_index` (or whatever you named it at creation).
+3. Confirm `ATLAS_VS_ENABLED` is **not** set (or set to `false`) so startup no
+   longer calls `ensure_vector_index()`.
+
+### Initial evidence (2026-05-01)
+
+Chunks collection was empty at cutover time (content not yet ingested).  Parity
+validation confirmed 0/0 overlap (both backends agree: empty results for all
+AHSEC/SEBA test queries).  Drop script will be run once content is ingested and
+parity re-validated with real chunks.
+
+### New ingestion behaviour
+
+With `PINECONE_WRITE=true`, `embed_chunks_bulk` now defaults to **not** writing
+the `embedding` float array to MongoDB (Task #208 default flip).  To restore
+the old behaviour for an emergency Atlas warm-up, set
+`PINECONE_SKIP_MONGO_EMBED=false` temporarily then restart workers.
 
 ---
 
