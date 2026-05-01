@@ -11,6 +11,20 @@ backend (already deployed).
 
 ---
 
+## Four required gates (in order)
+
+| Gate | What it does |
+|---|---|
+| **1. Issue cert** | Cloudflare generates the mTLS keypair; you capture the UUID and private key |
+| **2. Store secrets** | Private key, fingerprint, and UUID reach Wrangler, GitHub CI, and Railway |
+| **3. Railway requires cert** | TLS-level enforcement — connections without the cert are dropped at the network layer |
+| **4. Arm fail-closed gate** | Worker returns 503 if its cert binding is ever absent; backend rejects unsigned requests |
+
+> Completing all four gates makes the bypass attack surface zero-knowledge — a leaked
+> `BACKEND_ORIGIN_SECRET` alone cannot reach the backend.
+
+---
+
 ## Prerequisites
 
 | Item | Where to get it |
