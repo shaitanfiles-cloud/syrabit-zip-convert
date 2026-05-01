@@ -11,22 +11,38 @@
  *   "post-deploy-lighthouse / Lighthouse post-deploy check (LCP / CLS / INP)"
  *
  * The script:
- *   1. GETs the current branch protection rule (tolerates "no protection yet").
- *   2. Checks whether the Lighthouse context is already in required_status_checks.
- *   3. If present → reports "already configured" and exits 0.
- *   4. If absent → PUTs the updated rule preserving every existing setting
- *      (enforce_admins, required_pull_request_reviews, restrictions, strict).
+ *   1. Iterates over BRANCHES (comma-separated, default: "master,main").
+ *   2. For each branch: GETs the current protection rule.
+ *        - 404 → branch exists but has no protection yet → creates a minimal rule.
+ *        - 403 → PAT lacks admin permission → exits 1 immediately.
+ *        - branch not found (422/404 on branch) → skips silently (repo may
+ *          use only one of master/main).
+ *   3. Checks whether the Lighthouse context is already present → no-op if so.
+ *   4. If absent: PUTs the updated rule, preserving *all* known settings from
+ *      the GET response including:
+ *        required_status_checks (strict, contexts)
+ *        enforce_admins
+ *        required_pull_request_reviews (all sub-fields)
+ *        restrictions (users, teams, apps)
+ *        required_linear_history
+ *        allow_force_pushes
+ *        allow_deletions
+ *        block_creations
+ *        required_conversation_resolution
+ *        lock_branch
+ *        allow_fork_syncing
  *
  * Required env vars:
- *   GITHUB_TOKEN       — PAT with `repo` scope; the token owner must have
- *                        admin permission on the repository.  The standard
- *                        Actions GITHUB_TOKEN does not have admin scope for
- *                        branch protection — store a PAT as a repo secret.
- *   GITHUB_REPOSITORY  — "owner/repo" — set automatically by GitHub Actions.
+ *   BRANCH_PROTECTION_TOKEN  — PAT with `repo` scope; the token owner must
+ *                              have admin permission on the repository.
+ *                              Do NOT use `secrets.GITHUB_TOKEN` (the built-in
+ *                              Actions automation token) — it cannot write
+ *                              branch protection rules.
+ *   GITHUB_REPOSITORY        — "owner/repo" — set automatically by GitHub Actions.
  *
  * Optional env vars:
- *   BRANCH             — branch to update (default: master)
- *   DRY_RUN            — set to "1" to print the payload without sending it
+ *   BRANCHES  — comma-separated list of branches to update (default: "master,main")
+ *   DRY_RUN   — set to "1" to print the payload without sending it
  */
 
 'use strict';
@@ -43,42 +59,113 @@ function env(name, fallback) {
   return val || fallback;
 }
 
-async function ghFetch(url, options = {}) {
-  const token = env('GITHUB_TOKEN');
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
-  });
-  return res;
+// Build headers using the PAT secret (BRANCH_PROTECTION_TOKEN).
+function headers() {
+  const token = env('BRANCH_PROTECTION_TOKEN');
+  return {
+    Authorization: `Bearer ${token}`,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'Content-Type': 'application/json',
+  };
 }
 
-async function main() {
-  const repo   = env('GITHUB_REPOSITORY');
-  const branch = env('BRANCH', 'master');
-  const dryRun = process.env.DRY_RUN === '1';
+async function ghFetch(url, options = {}) {
+  return fetch(url, { ...options, headers: { ...headers(), ...options.headers } });
+}
 
-  if (dryRun) console.log('DRY_RUN=1 — payload will be printed but not sent.\n');
+/**
+ * Reconstruct the full PUT payload from the GET response object.
+ * GitHub's PUT /branches/{branch}/protection is a full replacement — every
+ * field must be supplied.  Fields absent from the GET response default to
+ * their safe "off" values so existing relaxed settings are not silently
+ * downgraded to more restrictive ones.
+ */
+function buildPayload(current, newContexts, strict) {
+  const prReviews    = current?.required_pull_request_reviews ?? null;
+  const restrictions = current?.restrictions                  ?? null;
 
+  return {
+    // ── Required status checks ───────────────────────────────────────────
+    required_status_checks: {
+      strict,
+      contexts: newContexts,
+    },
+
+    // ── Admin enforcement ────────────────────────────────────────────────
+    enforce_admins: current?.enforce_admins?.enabled ?? false,
+
+    // ── Pull-request review requirements ─────────────────────────────────
+    required_pull_request_reviews: prReviews
+      ? {
+          dismissal_restrictions: prReviews.dismissal_restrictions
+            ? {
+                users: (prReviews.dismissal_restrictions.users || []).map(u => u.login),
+                teams: (prReviews.dismissal_restrictions.teams || []).map(t => t.slug),
+                apps:  (prReviews.dismissal_restrictions.apps  || []).map(a => a.slug),
+              }
+            : undefined,
+          bypass_pull_request_allowances: prReviews.bypass_pull_request_allowances
+            ? {
+                users: (prReviews.bypass_pull_request_allowances.users || []).map(u => u.login),
+                teams: (prReviews.bypass_pull_request_allowances.teams || []).map(t => t.slug),
+                apps:  (prReviews.bypass_pull_request_allowances.apps  || []).map(a => a.slug),
+              }
+            : undefined,
+          dismiss_stale_reviews:           prReviews.dismiss_stale_reviews           ?? false,
+          require_code_owner_reviews:      prReviews.require_code_owner_reviews      ?? false,
+          required_approving_review_count: prReviews.required_approving_review_count ?? 1,
+          require_last_push_approval:      prReviews.require_last_push_approval      ?? false,
+        }
+      : null,
+
+    // ── Push / delete restrictions ────────────────────────────────────────
+    restrictions: restrictions
+      ? {
+          users: (restrictions.users || []).map(u => u.login),
+          teams: (restrictions.teams || []).map(t => t.slug),
+          apps:  (restrictions.apps  || []).map(a => a.slug),
+        }
+      : null,
+
+    // ── Additional protection flags (preserve; default to false/off) ──────
+    required_linear_history:         current?.required_linear_history?.enabled         ?? false,
+    allow_force_pushes:              current?.allow_force_pushes?.enabled               ?? false,
+    allow_deletions:                 current?.allow_deletions?.enabled                  ?? false,
+    block_creations:                 current?.block_creations?.enabled                  ?? false,
+    required_conversation_resolution: current?.required_conversation_resolution?.enabled ?? false,
+    lock_branch:                     current?.lock_branch?.enabled                      ?? false,
+    allow_fork_syncing:              current?.allow_fork_syncing?.enabled               ?? false,
+  };
+}
+
+async function enforceBranch(repo, branch, dryRun) {
   const baseUrl = `https://api.github.com/repos/${repo}/branches/${branch}/protection`;
 
   // ── Step 1: GET current protection ──────────────────────────────────────
-  console.log(`Fetching branch protection for ${repo}@${branch} …`);
+  console.log(`\n── ${branch} ──`);
+  console.log(`  Fetching branch protection for ${repo}@${branch} …`);
   const getRes = await ghFetch(baseUrl);
 
   let current = null;
+
   if (getRes.status === 404) {
-    console.log('  No branch protection rule found — one will be created.');
+    // The 404 can mean either (a) the branch exists but has no protection, or
+    // (b) the branch itself doesn't exist.  Distinguish by checking for the
+    // "Branch not found" message vs "Branch not protected".
+    const body = await getRes.json().catch(() => ({}));
+    const msg  = body?.message ?? '';
+    if (/branch not found/i.test(msg)) {
+      console.log(`  Branch "${branch}" does not exist in this repository — skipping.`);
+      return 'skipped';
+    }
+    console.log(`  No protection rule on "${branch}" — one will be created.`);
+    // current stays null; buildPayload handles null gracefully.
   } else if (getRes.status === 403) {
     console.error(
-      '  403 — the GITHUB_TOKEN lacks admin permission on this repository.\n' +
-      '  Use a PAT (not the default Actions token) with `repo` scope stored\n' +
-      '  as the GITHUB_TOKEN repo secret. The token owner must be a repo admin.',
+      '  403 — BRANCH_PROTECTION_TOKEN lacks admin permission on this repository.\n' +
+      '  Ensure the PAT has the `repo` scope and its owner is a repository admin.\n' +
+      '  Do NOT use the built-in Actions GITHUB_TOKEN — it cannot write branch protection.',
     );
     process.exit(1);
   } else if (!getRes.ok) {
@@ -94,63 +181,28 @@ async function main() {
 
   if (existingContexts.includes(REQUIRED_CONTEXT)) {
     console.log(
-      `✓  Required status check is already present:\n   "${REQUIRED_CONTEXT}"\n` +
-      '   Nothing to update.',
+      `  ✓  Already present: "${REQUIRED_CONTEXT}"\n` +
+      '     No update needed.',
     );
-    return;
+    return 'ok';
   }
 
   console.log(
-    `  Adding required context:\n   "${REQUIRED_CONTEXT}"\n` +
+    `  Adding:\n   "${REQUIRED_CONTEXT}"\n` +
     `  Existing contexts (${existingContexts.length}): ${existingContexts.join(', ') || '(none)'}`,
   );
 
-  // ── Step 3: Build PUT payload preserving existing settings ───────────────
-  //
-  // GitHub's PUT /branches/{branch}/protection is a full replacement — every
-  // field must be supplied even if unchanged.  We reconstruct the put-friendly
-  // shape from the get-response shape, which differs in several places.
-  //
-  const prReviews = current?.required_pull_request_reviews ?? null;
-  const restrictions = current?.restrictions ?? null;
-
-  const payload = {
-    required_status_checks: {
-      strict,
-      contexts: [...existingContexts, REQUIRED_CONTEXT],
-    },
-    enforce_admins: current?.enforce_admins?.enabled ?? false,
-    required_pull_request_reviews: prReviews
-      ? {
-          dismissal_restrictions: prReviews.dismissal_restrictions
-            ? {
-                users: (prReviews.dismissal_restrictions.users  || []).map(u => u.login),
-                teams: (prReviews.dismissal_restrictions.teams  || []).map(t => t.slug),
-                apps:  (prReviews.dismissal_restrictions.apps   || []).map(a => a.slug),
-              }
-            : undefined,
-          dismiss_stale_reviews:          prReviews.dismiss_stale_reviews          ?? false,
-          require_code_owner_reviews:     prReviews.require_code_owner_reviews     ?? false,
-          required_approving_review_count: prReviews.required_approving_review_count ?? 1,
-          require_last_push_approval:     prReviews.require_last_push_approval     ?? false,
-        }
-      : null,
-    restrictions: restrictions
-      ? {
-          users: (restrictions.users || []).map(u => u.login),
-          teams: (restrictions.teams || []).map(t => t.slug),
-          apps:  (restrictions.apps  || []).map(a => a.slug),
-        }
-      : null,
-  };
+  // ── Step 3: Build PUT payload ────────────────────────────────────────────
+  const newContexts = [...existingContexts, REQUIRED_CONTEXT];
+  const payload     = buildPayload(current, newContexts, strict);
 
   if (dryRun) {
-    console.log('\nDRY_RUN payload (PUT):\n', JSON.stringify(payload, null, 2));
-    return;
+    console.log('\n  DRY_RUN payload (PUT):\n', JSON.stringify(payload, null, 2));
+    return 'dry_run';
   }
 
   // ── Step 4: PUT updated protection ──────────────────────────────────────
-  console.log('\nApplying update …');
+  console.log('  Applying update …');
   const putRes = await ghFetch(baseUrl, {
     method: 'PUT',
     body: JSON.stringify(payload),
@@ -158,8 +210,7 @@ async function main() {
 
   if (putRes.status === 403) {
     console.error(
-      '  403 — PUT protection failed: token lacks admin permission.\n' +
-      '  See note above about GITHUB_TOKEN PAT requirements.',
+      '  403 — PUT protection failed: BRANCH_PROTECTION_TOKEN lacks admin permission.',
     );
     process.exit(1);
   }
@@ -169,12 +220,36 @@ async function main() {
   }
 
   console.log(
-    `✓  Branch protection updated on ${repo}@${branch}.\n` +
-    `   "${REQUIRED_CONTEXT}" is now a required status check.\n` +
-    '   PRs that breach LCP > 2.5 s / CLS > 0.1 / INP > 200 ms cannot merge\n' +
-    '   until the regression is fixed or the check is bypassed via\n' +
-    '   "Actions → post-deploy-lighthouse → Run workflow → skip_lighthouse: true".',
+    `  ✓  Branch protection updated on ${repo}@${branch}.\n` +
+    `     "${REQUIRED_CONTEXT}" is now a required status check.\n` +
+    '     PRs breaching LCP > 2.5 s / CLS > 0.1 / INP > 200 ms cannot merge\n' +
+    '     until fixed or bypassed via the emergency workflow dispatch.',
   );
+  return 'updated';
+}
+
+async function main() {
+  const repo    = env('GITHUB_REPOSITORY');
+  const dryRun  = process.env.DRY_RUN === '1';
+  const branches = (env('BRANCHES', 'master,main'))
+    .split(',')
+    .map(b => b.trim())
+    .filter(Boolean);
+
+  console.log(`enforce-branch-protection — repo: ${repo}`);
+  console.log(`  Branches to check: ${branches.join(', ')}`);
+  if (dryRun) console.log('  DRY_RUN=1 — no writes will be made.\n');
+
+  const results = {};
+  for (const branch of branches) {
+    results[branch] = await enforceBranch(repo, branch, dryRun);
+  }
+
+  console.log('\n── Summary ──');
+  for (const [branch, result] of Object.entries(results)) {
+    const icon = result === 'ok' ? '✓' : result === 'updated' ? '✓' : result === 'skipped' ? '─' : '?';
+    console.log(`  ${icon}  ${branch}: ${result}`);
+  }
 }
 
 main().catch(err => {

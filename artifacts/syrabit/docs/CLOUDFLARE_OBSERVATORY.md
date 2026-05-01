@@ -167,10 +167,15 @@ manually at any time:
 The underlying script (`scripts/enforce-branch-protection.js`) is idempotent —
 running it when the check is already configured exits 0 with no API write.
 
-**PAT requirement:** the workflow uses the `GITHUB_TOKEN` *secret* (a PAT
-stored by a repo admin with `repo` scope) — not the automatic Actions token,
-which lacks admin permission for branch protection writes.  Set the secret at
-**Settings → Secrets and variables → Actions → Secrets → GITHUB_TOKEN**.
+**PAT requirement:** the workflow uses a repo secret named
+`BRANCH_PROTECTION_TOKEN` — a Personal Access Token (PAT) with `repo` scope
+whose owner is a repository admin.  Do **not** rely on the built-in
+`GITHUB_TOKEN` Actions token — it cannot write branch protection rules.
+Set the secret at **Settings → Secrets and variables → Actions → Secrets →
+BRANCH_PROTECTION_TOKEN**.
+
+The script runs against **both `master` and `main`** by default, silently
+skipping whichever branch does not exist in this repository.
 
 #### Applying branch protection manually (dashboard path)
 

@@ -12,59 +12,57 @@ name: enforce-branch-protection
 # check on the master/main branch protection rule so a PR that introduces an
 # LCP / CLS / INP regression cannot be merged until it is fixed.
 #
-# Trigger: workflow_dispatch (one-shot admin tool) plus a weekly schedule to
-# re-apply the rule in case it is ever accidentally removed.
-#
 # What it does:
 #   Runs artifacts/syrabit/scripts/enforce-branch-protection.js which:
-#   1. GETs the current branch protection rule for master.
-#   2. Checks whether the Lighthouse context is already present.
-#   3. If absent: PUTs the updated rule with the context added, preserving
-#      every existing setting (enforce_admins, required_pull_request_reviews,
-#      restrictions, strict).
-#   The script is idempotent — running it when the check is already configured
-#   is a no-op (exits 0 without making any API write).
+#   1. Iterates over BRANCHES (default: "master,main"), skipping any that
+#      don't exist in this repository.
+#   2. For each branch: GETs the current protection rule (tolerates 404/new).
+#   3. Idempotently adds the Lighthouse context to required_status_checks,
+#      preserving ALL existing settings (including required_linear_history,
+#      allow_force_pushes, allow_deletions, required_conversation_resolution,
+#      lock_branch, etc.) in the PUT payload.
+#   Exiting 0 on an already-configured branch is a no-op.
 #
-# Required repo secret (Settings → Secrets and variables → Actions → Secrets):
-#   GITHUB_TOKEN — a Personal Access Token (not the standard Actions token)
-#                  with the `repo` scope.  The PAT owner must be a repository
-#                  admin.  The default Actions GITHUB_TOKEN does not include
-#                  the `admin:repo` permission needed to write branch protection.
-#
-# Optional repo variable:
-#   ENFORCE_PROTECTION_BRANCH — branch to target (default: master)
+# Required repo secret (Settings → Secrets → Actions → Secrets):
+#   BRANCH_PROTECTION_TOKEN — a Personal Access Token (PAT) with the `repo`
+#                             scope whose owner is a repository admin.
+#                             The built-in Actions GITHUB_TOKEN cannot write
+#                             branch protection rules — a named PAT is required.
+#                             Do NOT reuse secrets.GITHUB_TOKEN here.
 #
 # Required status check context applied:
 #   "post-deploy-lighthouse / Lighthouse post-deploy check (LCP / CLS / INP)"
+#
+# Trigger: workflow_dispatch (one-shot admin tool) + weekly cron (guard).
+# The weekly run catches any accidental removal of the protection rule.
 #
 
 on:
   workflow_dispatch:
     inputs:
-      branch:
-        description: "Branch to update (default: master)"
+      branches:
+        description: "Comma-separated list of branches to update (default: master,main)"
         required: false
-        default: "master"
+        default: "master,main"
         type: string
       dry_run:
-        description: "Print the payload without sending it (smoke-test mode)."
+        description: "Print the PUT payload without sending it (smoke-test mode)."
         required: false
         type: boolean
         default: false
 
   schedule:
     # Re-apply weekly (Mondays at 06:00 UTC) so an accidental removal is
-    # caught within a week rather than silently leaving PRs unprotected.
+    # detected and repaired within a week.
     - cron: "0 6 * * 1"
 
-# No concurrent protection-edit runs — serialise to avoid race conditions on
-# the GitHub branch-protection API.
+# Serialise protection-edit runs to avoid race conditions on the API.
 concurrency:
   group: enforce-branch-protection
   cancel-in-progress: false
 
-# Least-privilege: this workflow needs no repository contents write access.
-# Branch-protection API calls are authenticated via the GITHUB_TOKEN PAT secret.
+# Least-privilege: no repository contents write access needed.
+# Branch-protection API calls use the BRANCH_PROTECTION_TOKEN PAT secret.
 permissions:
   contents: read
 
@@ -87,13 +85,14 @@ jobs:
 
       - name: Enforce branch protection
         env:
-          # Use the GITHUB_TOKEN *secret* (a PAT stored by a repo admin) — not
-          # the automatic ${{ secrets.GITHUB_TOKEN }} Actions token, which lacks
-          # admin permission for branch protection writes.
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # BRANCH_PROTECTION_TOKEN must be a PAT with `repo` scope stored by a
+          # repo admin.  It is NOT the same as the automatic ${{ secrets.GITHUB_TOKEN }}
+          # Actions token — that token cannot write branch protection rules.
+          BRANCH_PROTECTION_TOKEN: ${{ secrets.BRANCH_PROTECTION_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          # workflow_dispatch: use the user-supplied branch input.
-          # schedule: fall back to the repo variable or "master".
-          BRANCH: ${{ inputs.branch || vars.ENFORCE_PROTECTION_BRANCH || 'master' }}
+          # workflow_dispatch: use the user-supplied branch list.
+          # schedule: update both master and main (one or both may not exist;
+          # the script skips branches that are absent).
+          BRANCHES: ${{ inputs.branches || 'master,main' }}
           DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '0' }}
         run: node artifacts/syrabit/scripts/enforce-branch-protection.js
