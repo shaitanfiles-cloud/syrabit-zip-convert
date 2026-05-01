@@ -105,6 +105,94 @@ Alert settings** in the Cloudflare dashboard.
 
 ---
 
+## Post-deploy Lighthouse check (per-deploy, Task #131)
+
+In addition to the weekly scheduled runs, a Lighthouse check runs automatically
+after **every push to `master`/`main`** via the
+`.github/workflows/post-deploy-lighthouse.yml` CI workflow.
+
+### What it does
+
+1. **Correlates to the specific commit being deployed** — the CI workflow passes
+   `COMMIT_SHA` (populated from `GITHUB_SHA`) to the script.  The Pages poll
+   scans recent production deployments and waits specifically for the deployment
+   whose `deployment_trigger.metadata.commit_hash` matches the triggering commit.
+   This prevents measuring a previous release that already reached "success"
+   before the current commit's Pages build even started.
+2. **Waits for that deployment to land** — polls
+   `GET /accounts/{id}/pages/projects/syrabit-analytics/deployments?env=production`
+   (up to 20 minutes) until the matched deployment reaches `success` status.
+   If the deploy reaches `failure`, the job fails immediately (nothing to measure).
+   If the poll timeout is exceeded, the job also **fails hard** — running Lighthouse
+   against a stale deploy would miss the current commit's regression.  (Re-run
+   manually with `skip_pages_wait = true` once the deploy is live.)
+3. **Triggers Observatory speed tests** — calls
+   `POST /zones/{id}/speed/tests` for the homepage and chapter page (region
+   `us-central1`).
+4. **Polls for results** — calls
+   `GET /zones/{id}/speed/tests?url={url}` every 15 seconds (up to 10 minutes
+   per page) until the Lighthouse report is available.
+5. **Checks thresholds strictly** — compares LCP, CLS, and INP against the limits
+   in the table above and **exits non-zero on any breach or missing metric**.
+   A metric that wasn't captured by the Lighthouse run (e.g. the page failed to
+   load) is treated as a failure rather than a pass, so a broken page cannot
+   produce a false green.
+
+### Blocking future deploys
+
+The CI job does not literally block the Pages deploy that triggered it (Pages
+deploys on push independently of GitHub Actions). The check gates *future*
+pushes: if branch protection is configured to require the
+`lighthouse-check / Lighthouse post-deploy check (LCP / CLS / INP)` status
+check before merging, subsequent PRs are blocked until the regression is fixed.
+
+### Disabling for emergency hotfixes
+
+Two ways to bypass the check for an urgent fix:
+
+**Option A — Workflow dispatch (preferred)**
+
+1. Open the repository on GitHub.
+2. Go to **Actions → post-deploy-lighthouse → Run workflow**.
+3. Set **"Skip Lighthouse threshold checks"** to `true`.
+4. Trigger the run — it will exit 0 without calling the Observatory API.
+
+**Option B — Temporary branch protection relaxation**
+
+1. Under **Settings → Branches → Branch protection rules**, temporarily remove
+   `post-deploy-lighthouse` from the required status checks.
+2. Merge the hotfix.
+3. Immediately restore the branch protection rule.
+4. Track the performance regression in the next regular CI run or a manual
+   Observatory run (see "Simulating a regression" below).
+
+In both cases, open a follow-up ticket to address the root cause before the
+next planned release.
+
+### Running locally
+
+```sh
+CLOUDFLARE_API_TOKEN=<tok> \
+SKIP_PAGES_WAIT=1 \
+node artifacts/syrabit/scripts/post-deploy-lighthouse.js
+```
+
+Set `SKIP_PAGES_WAIT=1` to skip the Pages deploy poll when testing against
+the already-live version.
+
+### Required API token scopes (post-deploy script)
+
+| Scope | Purpose |
+|-------|---------|
+| **Speed (Observatory): Edit** | `POST /zones/{id}/speed/tests` |
+| **Speed (Observatory): Read** | `GET /zones/{id}/speed/tests?url={url}` |
+| **Cloudflare Pages: Read** | Poll Pages deploy status (optional — falls back gracefully) |
+
+The `CLOUDFLARE_API_TOKEN` repo secret must include these scopes in addition to
+those already required by the weekly audit and nightly smoke.
+
+---
+
 ## Scheduled Lighthouse runs
 
 Weekly Lighthouse runs are also configured by `cloudflare-phase6-apply.js`
@@ -179,10 +267,11 @@ breached:
 
 | Scope | Purpose |
 |-------|---------|
-| **Speed (Observatory): Edit** | Schedule Lighthouse runs |
+| **Speed (Observatory): Edit** | Schedule Lighthouse runs; trigger post-deploy speed tests |
+| **Speed (Observatory): Read** | Verify schedules in the smoke and audit scripts; poll post-deploy test results |
 | **Account Notifications: Edit** | Create / update the alert policy |
-| **Speed (Observatory): Read** | Verify schedules in the smoke and audit scripts |
 | **Account Notifications: Read** | Verify the alert policy in the smoke and audit scripts |
+| **Cloudflare Pages: Read** | Poll deploy status in the post-deploy Lighthouse script (optional — missing scope causes a graceful warning) |
 
 If the token lacks the `Edit` scopes, the apply script falls back to printing
 manual-setup instructions and continues without failing.
@@ -191,13 +280,34 @@ manual-setup instructions and continues without failing.
 
 ## Environment variables
 
+### Shared
+
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `CLOUDFLARE_API_TOKEN` | Yes | Cloudflare API token (see scopes above) |
 | `CLOUDFLARE_ZONE_ID` | No | Zone ID for `syrabit.ai` (defaults to hardcoded value) |
 | `CLOUDFLARE_ACCOUNT_ID` | No | Account ID (defaults to hardcoded value) |
+
+### Weekly schedule / alert policy (`cloudflare-phase6-apply.js`)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
 | `OBSERVATORY_ALERT_EMAIL` | No | Alert email recipient (defaults to `admin@syrabit.ai`) |
 | `OBSERVATORY_ALERT_SLACK_WEBHOOK_ID` | No | Cloudflare webhook destination ID for Slack paging |
+
+### Post-deploy Lighthouse check (`post-deploy-lighthouse.js` / CI workflow)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `COMMIT_SHA` | No (but strongly recommended) | Git SHA of the commit being deployed. Set automatically from `GITHUB_SHA` in CI. Used to correlate the Pages poll to the exact deployment for this commit rather than any previous successful deploy. Without it the script falls back to monitoring the newest deployment (emits a warning). |
+| `CLOUDFLARE_PAGES_PROJECT` | No | Pages project name (defaults to `syrabit-analytics`) |
+| `SKIP_LIGHTHOUSE` | No | Set to `1` to bypass the entire script (emergency hotfix mode) |
+| `SKIP_PAGES_WAIT` | No | Set to `1` to skip polling Pages for deploy completion. Use when the deploy is confirmed live and you want to run Lighthouse immediately without waiting for the Pages poll (e.g. manual re-run after a timeout) |
+| `LIGHTHOUSE_REGION` | No | Cloudflare region for speed tests (default: `us-central1`) |
+| `LIGHTHOUSE_POLL_TIMEOUT_MS` | No | Max ms to wait for a test result (default: `600000` = 10 min) |
+| `LIGHTHOUSE_POLL_INTERVAL_MS` | No | Observatory polling interval in ms (default: `15000`) |
+| `PAGES_POLL_TIMEOUT_MS` | No | Max ms to wait for Pages deploy (default: `1200000` = 20 min) |
+| `PAGES_POLL_INTERVAL_MS` | No | Pages polling interval in ms (default: `20000`) |
 
 ---
 
@@ -205,7 +315,9 @@ manual-setup instructions and continues without failing.
 
 | File | Purpose |
 |------|---------|
-| `scripts/cloudflare-phase6-apply.js` | Creates Observatory schedules (Step 4) and the alert policy with Slack webhook (Step 4b) |
-| `scripts/nightly-smoke.js`           | Assertion 6d-alert verifies the policy nightly, including Slack webhook presence |
-| `scripts/cloudflare-full-audit.js`   | Audit item 19 verifies Zaraz + Observatory weekly |
-| `docs/CLOUDFLARE_OBSERVATORY.md`     | This file — on-call runbook |
+| `scripts/post-deploy-lighthouse.js`           | Post-deploy Lighthouse trigger + threshold gate (Task #131) |
+| `.github/workflows/post-deploy-lighthouse.yml` | CI workflow that runs the post-deploy check on every push to master/main |
+| `scripts/cloudflare-phase6-apply.js`           | Creates Observatory schedules (Step 4) and the alert policy with Slack webhook (Step 4b) |
+| `scripts/nightly-smoke.js`                     | Assertion 6d-alert verifies the policy nightly, including Slack webhook presence |
+| `scripts/cloudflare-full-audit.js`             | Audit item 19 verifies Zaraz + Observatory weekly |
+| `docs/CLOUDFLARE_OBSERVATORY.md`               | This file — on-call runbook |
