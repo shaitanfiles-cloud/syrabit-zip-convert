@@ -65,6 +65,14 @@ name: edge-proxy-deploy
 #
 # Required repo secrets (set under Settings → Secrets and variables →
 # Actions → Secrets):
+#   CF_MTLS_CERT_ID        — UUID of the Cloudflare mTLS client certificate.
+#                            Obtain from cloudflare-phase6-apply.js (printed on
+#                            first run) or dash.cloudflare.com → SSL/TLS →
+#                            Client Certificates. Deploy is BLOCKED if this
+#                            secret is absent or still set to the sentinel
+#                            "PENDING_CERT_PROVISIONING". Injected into
+#                            wrangler.toml at deploy time by
+#                            workers/edge-proxy/scripts/inject-mtls-cert-id.js.
 #   CLOUDFLARE_API_TOKEN   — token with Workers Scripts:Edit, Workers KV
 #                            Storage:Edit, D1:Edit, Workers AI:Edit on the
 #                            Syrabit account.
