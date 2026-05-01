@@ -845,3 +845,79 @@ def test_build_flashcards_respects_mnemonic_cap_of_four(edu_app, fake_conn_facto
     assert all(f"Topic {j}" not in f for f in fronts for j in (4, 5)), (
         "Topics 4 and 5 must not appear in the capped deck"
     )
+
+
+def test_build_flashcards_qa_truncation(edu_app, fake_conn_factory):
+    """Q&A pairs with overlong fields must be stored at exactly the limit.
+
+    A question of 600 chars must be truncated to 400 chars (front), and an
+    answer of 1000 chars must be truncated to 800 chars (back).  The stored
+    values must not be blank.
+    """
+    long_q = "Q" * 600
+    long_a = "A" * 1000
+    structured = {"qa": [{"q": long_q, "a": long_a}], "mnemonics": []}
+    conn = fake_conn_factory(
+        responses=[[_make_generated_note_row(structured=structured)]]
+    )
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"ok": True, "created": 1}
+
+    cards = _flashcard_inserts(conn)
+    assert len(cards) == 1
+    front, back = cards[0]
+
+    assert len(front) == 400, (
+        f"Front must be exactly 400 chars after truncation; got {len(front)}"
+    )
+    assert front == "Q" * 400, "Front must not be blank and must match the first 400 chars"
+
+    assert len(back) == 800, (
+        f"Back must be exactly 800 chars after truncation; got {len(back)}"
+    )
+    assert back == "A" * 800, "Back must not be blank and must match the first 800 chars"
+
+
+def test_build_flashcards_mnemonic_topic_truncation(edu_app, fake_conn_factory):
+    """A mnemonic with a 300-char 'for' field must be trimmed to 200 chars.
+
+    The stored front must start with 'Mnemonic for: ', contain only the first
+    200 chars of the topic, and must not exceed 300 chars in total.  It must
+    not be blank.
+    """
+    long_topic = "T" * 300
+    structured = {
+        "qa": [],
+        "mnemonics": [{"for": long_topic, "mnemonic": "Some phrase", "explanation": ""}],
+    }
+    conn = fake_conn_factory(
+        responses=[[_make_generated_note_row(structured=structured)]]
+    )
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"ok": True, "created": 1}
+
+    cards = _flashcard_inserts(conn)
+    assert len(cards) == 1
+    front, _back = cards[0]
+
+    prefix = "Mnemonic for: "
+    assert front.startswith(prefix), (
+        f"Front must start with {prefix!r}; got {front[:30]!r}"
+    )
+
+    topic_portion = front[len(prefix):]
+    assert len(topic_portion) == 200, (
+        f"Topic portion must be exactly 200 chars after truncation; got {len(topic_portion)}"
+    )
+    assert topic_portion == "T" * 200, (
+        "Topic portion must be the first 200 chars of the topic string"
+    )
+
+    assert len(front) <= 300, (
+        f"Total front must be at most 300 chars; got {len(front)}"
+    )
+    assert front.startswith(prefix + "T"), "Front must not be blank after the prefix"
