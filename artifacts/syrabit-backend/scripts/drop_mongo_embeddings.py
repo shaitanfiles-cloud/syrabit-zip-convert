@@ -148,18 +148,30 @@ async def run_drop(
         await asyncio.sleep(0.05)  # brief yield to avoid starving other ops
 
     duration = round(time.perf_counter() - t0, 2)
-    remaining = await db.chunks.count_documents({"embedding": {"$exists": True}})
+    # Count remaining within the same scope (subject_id filter if provided)
+    remaining_filter: dict = {"embedding": {"$exists": True}}
+    if subject_id:
+        remaining_filter["subject_id"] = subject_id
+    remaining = await db.chunks.count_documents(remaining_filter)
+    scoped_note = f" (subject_id={subject_id})" if subject_id else ""
 
     logger.info(
-        "Done in %.1fs — dropped=%d failed=%d remaining_with_embedding=%d",
-        duration, dropped, failed, remaining,
+        "Done in %.1fs — dropped=%d failed=%d remaining_with_embedding%s=%d",
+        duration, dropped, failed, scoped_note, remaining,
     )
 
     if remaining > 0:
         logger.warning(
-            "%d chunks still have an embedding field. "
+            "%d chunks%s still have an embedding field. "
             "Re-run the script to continue.",
-            remaining,
+            remaining, scoped_note,
+        )
+    elif subject_id:
+        logger.info(
+            "All embedding arrays removed for subject_id=%s. "
+            "Run without --subject-id to process remaining subjects, "
+            "then drop the Atlas Vector Search index in the Atlas UI.",
+            subject_id,
         )
     else:
         logger.info(

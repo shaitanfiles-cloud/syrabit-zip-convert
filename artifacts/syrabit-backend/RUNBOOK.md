@@ -66,9 +66,9 @@ this to reclaim ~8 KB per chunk document from MongoDB.
 ### Pre-flight
 
 ```bash
-# 1. Validate Pinecone parity
+# 1. Validate Pinecone parity (requires ≥95% top-K overlap on 10+ real queries)
 python scripts/validate_rag_parity.py
-# Expected: "PARITY VALIDATED — N/N queries above 70% threshold"
+# Expected: "PARITY VALIDATED — N/N queries above 95% threshold"
 
 # 2. Confirm PINECONE_WRITE=true in env
 echo $PINECONE_WRITE
