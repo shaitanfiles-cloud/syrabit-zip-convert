@@ -6,6 +6,7 @@ import {
   getSeoPageBySlugs, getSeoPageTypes, getSeoPageBundle,
   getSeoPagesByType, getPublishedPageTypes,
   getSubjectSitemapEntries, getChapterSitemapEntries,
+  getDeltaSitemapEntries,
 } from "./d1-queries";
 import { syncFromPayload, getSyncStatus } from "./d1-sync";
 import {
@@ -320,7 +321,7 @@ const USER_SPECIFIC_PREFIXES = getUserSpecificPrefixes();
 const BYPASS_PREFIXES = getBypassPrefixes();
 
 const RATE_LIMIT_RPM = 120;
-const BOT_RATE_LIMIT_RPM = 1200;
+const BOT_RATE_LIMIT_RPM = 3000;
 const RATE_LIMIT_WINDOW_S = 60;
 const AI_RATE_LIMIT_RPM = 30;
 const AI_RATE_LIMIT_PREFIXES = ["/api/ai/chat", "/api/ai/generate", "/api/ai/grounded", "/api/ai/explain", "/api/ai/quiz", "/api/ai/summarize", "/api/chat"];
@@ -1124,6 +1125,22 @@ function buildUrlset(entries: Array<{ loc: string; lastmod: string; pri: string;
   return lines.join("\n");
 }
 
+/**
+ * Compute changefreq + priority from a lastmod date string (YYYY-MM-DD).
+ * Task #246 — fresher pages get higher crawl signals so Googlebot returns sooner.
+ *   < 7 days  → daily   / 0.9
+ *   < 30 days → weekly  / 0.8
+ *   older     → monthly / 0.6
+ */
+function _changefreqFromLastmod(lastmod: string, today: string): { freq: string; pri: string } {
+  if (!lastmod || lastmod.length < 10) return { freq: "monthly", pri: "0.6" };
+  const diffMs = new Date(today).getTime() - new Date(lastmod.slice(0, 10)).getTime();
+  const diffDays = diffMs / 86400000;
+  if (diffDays < 7) return { freq: "daily", pri: "0.9" };
+  if (diffDays < 30) return { freq: "weekly", pri: "0.8" };
+  return { freq: "monthly", pri: "0.6" };
+}
+
 function seoPageToSitemapEntry(
   p: { board_slug: string; class_slug: string; subject_slug: string; topic_slug: string; page_type: string; updated_at?: string; created_at?: string },
   today: string,
@@ -1134,11 +1151,12 @@ function seoPageToSitemapEntry(
   const path = p.page_type === "notes" ? basePath : `${basePath}/${p.page_type}`;
   const raw = p.updated_at || p.created_at || "";
   const lastmod = raw && raw.length >= 10 ? raw.slice(0, 10) : today;
+  const { freq, pri } = _changefreqFromLastmod(lastmod, today);
   return {
     loc: `${BASE_URL}${path}`,
     lastmod,
-    pri: p.page_type === "notes" ? "0.8" : "0.7",
-    freq: "monthly",
+    pri,
+    freq,
     page_type: p.page_type,
   };
 }
@@ -1334,6 +1352,7 @@ async function trySitemapD1Route(
       "sitemap-chapters.xml",
       "sitemap-learn.xml",
       "sitemap-notes.xml",
+      "sitemap-delta.xml",
     ];
     const typeToSitemap: Record<string, string> = {
       "mcqs": "sitemap-mcqs.xml",
@@ -1382,12 +1401,15 @@ async function trySitemapD1Route(
   if (pathname === "/api/seo/sitemap-chapters.xml") {
     const chapterEntries = await getChapterSitemapEntries(db);
     if (chapterEntries === null) return null;
-    const entries = chapterEntries.map(e => ({
-      loc: `${BASE_URL}/${e.board_slug}/${e.class_slug}/${e.subject_slug}/${e.chapter_slug}`,
-      lastmod: e.updated_at && e.updated_at.length >= 10 ? e.updated_at.slice(0, 10) : today,
-      pri: "0.8", freq: "monthly",
-      has_assamese: e.has_assamese,
-    }));
+    const entries = chapterEntries.map(e => {
+      const lastmod = e.updated_at && e.updated_at.length >= 10 ? e.updated_at.slice(0, 10) : today;
+      const { freq, pri } = _changefreqFromLastmod(lastmod, today);
+      return {
+        loc: `${BASE_URL}/${e.board_slug}/${e.class_slug}/${e.subject_slug}/${e.chapter_slug}`,
+        lastmod, pri, freq,
+        has_assamese: e.has_assamese,
+      };
+    });
     return { type: "xml", data: buildUrlset(entries) };
   }
 
@@ -1432,6 +1454,26 @@ async function trySitemapD1Route(
       return { type: "xml", data: buildUrlset([...staticEntries, ...seoEntries]) };
     }
     return null;
+  }
+
+  // Task #246 — Delta sitemap: pages updated in the last 48 hours, capped at 1000.
+  // Crawlers that ping us after an IndexNow/Google notification can re-fetch
+  // this small sub-sitemap to discover exactly which pages changed without
+  // crawling the full (potentially 50k-URL) sitemap tree.
+  // Cache-Control is set in the outer response handler when type === "xml"
+  // for delta routes.
+  if (pathname === "/api/seo/sitemap-delta.xml") {
+    const since48h = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
+    const deltaPages = await getDeltaSitemapEntries(db, since48h, 1000);
+    if (deltaPages === null) return null;
+    const entries: Array<{ loc: string; lastmod: string; pri: string; freq: string }> = [];
+    for (const p of deltaPages) {
+      const entry = seoPageToSitemapEntry(p, today);
+      if (entry) {
+        entries.push({ loc: entry.loc, lastmod: entry.lastmod, pri: entry.pri, freq: entry.freq });
+      }
+    }
+    return { type: "xml", data: buildUrlset(entries) };
   }
 
   return null;

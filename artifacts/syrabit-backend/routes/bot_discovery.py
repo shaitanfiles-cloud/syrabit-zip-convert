@@ -1145,7 +1145,10 @@ async def _collect_current_sitemap_urls() -> List[str]:
         except Exception as e:
             logger.debug(f"sitemap diff: cms_documents fetch failed: {e}")
 
-        # Notes / MCQs / PYQs / examples / definitions — every published seo_page
+        # Notes / MCQs / PYQs / examples / definitions — every published seo_page.
+        # Task #246: pages updated within the last 7 days are fetched first so
+        # they appear at the front of the URL list. When the 10k/day Bing cap is
+        # hit, recently-updated content has already been submitted.
         try:
             valid_chains: Optional[set] = None
             try:
@@ -1154,11 +1157,27 @@ async def _collect_current_sitemap_urls() -> List[str]:
             except Exception as e:
                 logger.debug(f"sitemap diff: valid_chains load failed: {e}")
             allowed_types = {"notes", "mcqs", "important-questions", "examples", "definition"}
-            pages = await db.seo_pages.find(
-                {"status": "published"},
-                {"_id": 0, "board_slug": 1, "class_slug": 1,
-                 "subject_slug": 1, "topic_slug": 1, "page_type": 1},
+            from datetime import timedelta
+            _seven_days_ago = (
+                datetime.now(timezone.utc) - timedelta(days=7)
+            ).strftime("%Y-%m-%dT%H:%M:%S")
+            _page_fields = {"_id": 0, "board_slug": 1, "class_slug": 1,
+                            "subject_slug": 1, "topic_slug": 1, "page_type": 1}
+            # Fetch recently-updated pages first (updated in the last 7 days)
+            recent_pages = await db.seo_pages.find(
+                {"status": "published", "updated_at": {"$gte": _seven_days_ago}},
+                _page_fields,
+            ).sort("updated_at", -1).to_list(10000)
+            # Then fetch the rest (older pages), excluding those already fetched
+            older_pages = await db.seo_pages.find(
+                {"status": "published",
+                 "$or": [
+                     {"updated_at": {"$lt": _seven_days_ago}},
+                     {"updated_at": {"$exists": False}},
+                 ]},
+                _page_fields,
             ).to_list(50000)
+            pages = recent_pages + older_pages
             for p in pages:
                 if p.get("page_type", "notes") not in allowed_types:
                     continue

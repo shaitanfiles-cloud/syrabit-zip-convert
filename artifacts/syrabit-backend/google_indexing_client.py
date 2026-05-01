@@ -96,6 +96,124 @@ def _enabled() -> bool:
 
 
 # -----------------------------------------------------------------------------
+# Task #246 — Priority tier system for Google Indexing API quota.
+#
+# URLs are classified into 3 tiers so high-value fresh content always gets
+# notified, even when the daily quota is nearly exhausted by lower-value URLs.
+#
+#   Tier 1 — notes + MCQs for top-20 subjects: full daily quota
+#   Tier 2 — definitions + examples: up to 75% of daily quota
+#   Tier 3 — FAQs / older / non-priority: up to 25% of daily quota
+#
+# The per-tier cap is enforced in-memory only (not persisted to Mongo).
+# A worker restart resets the tier counters — which is intentional, since a
+# restart typically happens at deploy time (a natural quota boundary) and the
+# Mongo-authoritative global quota remains intact.
+#
+# `GOOGLE_INDEXING_TIER1_SUBJECTS` env var: comma-separated subject slugs that
+# should be treated as Tier-1 (in addition to the top-20 defaults below).
+# -----------------------------------------------------------------------------
+
+_TIER1_DEFAULT_SUBJECTS = frozenset([
+    "physics", "chemistry", "mathematics", "biology", "english",
+    "assamese", "history", "political-science", "economics", "geography",
+    "hindi", "alternative-english", "logic-philosophy", "sociology",
+    "education", "computer-science", "business-studies", "accountancy",
+    "environmental-studies", "statistics",
+])
+
+_tier_sent: Dict[int, int] = {1: 0, 2: 0, 3: 0}
+_tier_day: str = ""
+_tier_lock = threading.Lock()
+
+
+def _tier1_subjects() -> frozenset:
+    extra = os.getenv("GOOGLE_INDEXING_TIER1_SUBJECTS", "").strip()
+    if not extra:
+        return _TIER1_DEFAULT_SUBJECTS
+    return _TIER1_DEFAULT_SUBJECTS | frozenset(
+        s.strip().lower() for s in extra.split(",") if s.strip()
+    )
+
+
+def _tier_daily_limit(tier: int) -> int:
+    """Per-tier sub-cap derived from the global daily limit.
+
+    Tier-1 → 100% of daily limit (full access, highest priority)
+    Tier-2 → 75%  of daily limit
+    Tier-3 → 25%  of daily limit  (cannot crowd out higher tiers)
+    """
+    limit = _daily_limit()
+    if tier == 3:
+        return max(1, limit // 4)
+    if tier == 2:
+        return max(1, (limit * 3) // 4)
+    return limit  # tier == 1
+
+
+def _roll_tier_if_needed() -> None:
+    """Reset per-tier counters on UTC-day rollover. Must be called under
+    `_tier_lock`."""
+    global _tier_day, _tier_sent
+    today = _today_key()
+    if _tier_day != today:
+        _tier_day = today
+        _tier_sent = {1: 0, 2: 0, 3: 0}
+
+
+def _under_tier_quota_and_reserve(tier: int) -> bool:
+    """Atomically check and increment the per-tier counter. Returns True
+    iff the submission should proceed under the tier sub-cap."""
+    with _tier_lock:
+        _roll_tier_if_needed()
+        cap = _tier_daily_limit(tier)
+        if _tier_sent.get(tier, 0) >= cap:
+            return False
+        _tier_sent[tier] = _tier_sent.get(tier, 0) + 1
+        return True
+
+
+def classify_url_tier(url: str) -> int:
+    """Classify a Syrabit URL into a priority tier (1 = highest, 3 = lowest).
+
+    Tier-1: notes + MCQs for top-20 subjects (drive 90%+ of search traffic).
+    Tier-2: definitions + examples (useful secondary content).
+    Tier-3: FAQs, older or non-priority page types.
+
+    The URL format is: /board/class/subject/topic[/page_type]
+    """
+    if not url:
+        return 3
+    try:
+        parts = url.split("/")
+        # Minimum meaningful URL: /board/class/subject/topic → 5 non-empty parts
+        # after splitting "https://syrabit.ai/board/class/subject/topic".
+        # Find subject slug (index 5 in "https://domain/board/class/subject/topic").
+        if len(parts) < 6:
+            return 3
+        subject_slug = parts[5].lower().strip()
+        page_type = parts[6].lower().strip() if len(parts) > 6 else "notes"
+
+        # Tier-3: FAQ and anything not in notes/mcqs/definition/examples
+        if page_type in ("faq", "important-questions"):
+            return 3
+
+        # Tier-1: notes or MCQs for a top-20 subject
+        if page_type in ("notes", "mcqs", ""):
+            if subject_slug in _tier1_subjects():
+                return 1
+            return 2
+
+        # Tier-2: definitions + examples (all subjects)
+        if page_type in ("definition", "examples"):
+            return 2
+
+        return 3
+    except Exception:
+        return 3
+
+
+# -----------------------------------------------------------------------------
 # Service-account loading (lazy, cached, never raises)
 # -----------------------------------------------------------------------------
 
@@ -179,6 +297,11 @@ def _reset_state_for_tests() -> None:
         _last_flushed_stats[k] = 0
     _last_flushed_day = ""
     _quota_alert_fired_day = ""
+    # Task #246 — reset per-tier counters.
+    global _tier_day, _tier_sent
+    with _tier_lock:
+        _tier_day = ""
+        _tier_sent = {1: 0, 2: 0, 3: 0}
 
 
 # -----------------------------------------------------------------------------
@@ -896,6 +1019,12 @@ def get_stats() -> Dict[str, Any]:
     snapshot["enabled"] = _enabled()
     snapshot["service_account_loaded"] = _load_service_account() is not None
     snapshot["service_account_error"] = _sa_load_error
+    # Task #246 — per-tier quota snapshot for the admin dashboard.
+    with _tier_lock:
+        _roll_tier_if_needed()
+        tier_snapshot = dict(_tier_sent)
+    snapshot["tier_sent"] = tier_snapshot
+    snapshot["tier_limits"] = {t: _tier_daily_limit(t) for t in (1, 2, 3)}
     return snapshot
 
 
@@ -930,10 +1059,24 @@ async def get_stats_with_history() -> Dict[str, Any]:
 # Public API
 # -----------------------------------------------------------------------------
 
-async def notify_url_updated(url: str, source: str = "content_fanout") -> Dict[str, Any]:
+async def notify_url_updated(
+    url: str,
+    source: str = "content_fanout",
+    tier: int = 0,
+) -> Dict[str, Any]:
     """Send `type=URL_UPDATED` to the Indexing API for `url`. Returns a
     small result dict so callers (and tests) can verify what happened.
-    Never raises."""
+    Never raises.
+
+    `tier` controls which priority bucket this submission draws from:
+      0 (default) → auto-classify via `classify_url_tier(url)`
+      1           → Tier-1 (notes + MCQs, top subjects — full daily quota)
+      2           → Tier-2 (definitions + examples — up to 75% of quota)
+      3           → Tier-3 (FAQs, older content — up to 25% of quota)
+
+    Task #246: per-tier sub-caps prevent low-priority URLs from exhausting
+    the daily quota before high-priority content is notified.
+    """
     result: Dict[str, Any] = {"url": url, "status": "skipped", "reason": ""}
     if not url or not isinstance(url, str):
         result["reason"] = "empty_url"
@@ -950,9 +1093,22 @@ async def notify_url_updated(url: str, source: str = "content_fanout") -> Dict[s
         result["reason"] = "no_service_account"
         _bump("skipped_disabled")
         return result
+
+    # Task #246: classify tier if not provided, then check per-tier sub-cap.
+    effective_tier = tier if tier in (1, 2, 3) else classify_url_tier(url)
+    result["tier"] = effective_tier
+    if not _under_tier_quota_and_reserve(effective_tier):
+        result["status"] = "quota_blocked"
+        result["reason"] = f"tier_{effective_tier}_limit_reached"
+        return result
+
     if not await _reserve_quota(_daily_limit()):
         result["status"] = "quota_blocked"
         result["reason"] = "daily_limit_reached"
+        # Roll back the tier reservation since the global quota denied us.
+        with _tier_lock:
+            _roll_tier_if_needed()
+            _tier_sent[effective_tier] = max(0, _tier_sent.get(effective_tier, 0) - 1)
         return result
 
     token = await _get_cached_token()

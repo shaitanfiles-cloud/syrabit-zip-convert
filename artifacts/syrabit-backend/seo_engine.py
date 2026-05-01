@@ -4700,6 +4700,25 @@ async def _build_valid_slug_chains() -> set[tuple[str, str, str]]:
         return set()
 
 
+def _changefreq_from_lastmod(lastmod: str, today: str) -> tuple[str, str]:
+    """Task #246 — derive changefreq + priority from the age of lastmod.
+
+    < 7 days  → daily   / 0.9
+    < 30 days → weekly  / 0.8
+    older     → monthly / 0.6
+    """
+    try:
+        from datetime import datetime as _dt
+        diff = (_dt.fromisoformat(today) - _dt.fromisoformat(lastmod[:10])).days
+        if diff < 7:
+            return "daily", "0.9"
+        if diff < 30:
+            return "weekly", "0.8"
+    except Exception:
+        pass
+    return "monthly", "0.6"
+
+
 def _page_to_entry(p: dict, today: str, valid_chains: set[tuple[str, str, str]] | None = None) -> dict | None:
     bs, cs, ss, ts = p.get("board_slug"), p.get("class_slug"), p.get("subject_slug"), p.get("topic_slug")
     pt = p.get("page_type", "notes")
@@ -4718,11 +4737,12 @@ def _page_to_entry(p: dict, today: str, valid_chains: set[tuple[str, str, str]] 
         lastmod = raw[:10] if raw else today
     except Exception:
         lastmod = today
+    freq, pri = _changefreq_from_lastmod(lastmod, today)
     return {
         "loc": f"{BASE_URL}{path}",
         "lastmod": lastmod,
-        "pri": "0.8" if pt == "notes" else "0.7",
-        "freq": "monthly",
+        "pri": pri,
+        "freq": freq,
         "page_type": pt,
     }
 
@@ -4852,9 +4872,10 @@ async def get_sitemap_chapters():
             continue
         raw = ch.get("updated_at", "") or ch.get("created_at", "")
         lastmod = raw[:10] if raw else today
+        freq, pri = _changefreq_from_lastmod(lastmod, today)
         entries.append({
             "loc": f"{BASE_URL}/{b_slug}/{c_slug}/{sub['slug']}/{ch_slug}",
-            "lastmod": lastmod, "pri": "0.8", "freq": "monthly",
+            "lastmod": lastmod, "pri": pri, "freq": freq,
             "has_assamese": bool((ch.get("content_as") or "").strip()),
         })
     return _xml_response(_build_urlset(entries))
@@ -4873,11 +4894,12 @@ async def _fetch_learn_entries(today: str) -> list[dict]:
                 continue
             raw = doc.get("updated_at", "") or doc.get("created_at", "")
             lastmod = raw[:10] if raw else today
+            freq, pri = _changefreq_from_lastmod(lastmod, today)
             entries.append({
                 "loc": f"{BASE_URL}/learn/{slug}",
                 "lastmod": lastmod,
-                "pri": "0.8",
-                "freq": "monthly",
+                "pri": pri,
+                "freq": freq,
             })
         return entries
     except Exception:

@@ -124,6 +124,36 @@ async def _do_google_indexing(url: str, source: str) -> bool:
     return (res or {}).get("status") == "ok"
 
 
+# Task #246 — Delta sitemap ping constants.
+_DELTA_SITEMAP_URL = "https://syrabit.ai/api/seo/sitemap-delta.xml"
+_GOOGLE_SITEMAP_PING_TPL = "https://www.google.com/ping?sitemap={sitemap}"
+
+
+async def _do_ping_delta_sitemap() -> bool:
+    """Task #246: After a page is published/updated, ping Google with the
+    delta sitemap URL so it re-fetches the 48-hour rolling sub-sitemap.
+    Also schedules an IndexNow notification for the delta sitemap itself.
+
+    This is a best-effort fire-and-forget helper: failures are logged but
+    never propagate back to the content generator.
+    """
+    import httpx
+    from urllib.parse import quote as _quote
+    ping_url = _GOOGLE_SITEMAP_PING_TPL.format(sitemap=_quote(_DELTA_SITEMAP_URL, safe=""))
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(ping_url)
+        ok = 200 <= resp.status_code < 300
+        if not ok:
+            logger.debug(
+                "seo_fanout: delta sitemap ping returned %d", resp.status_code
+            )
+        return ok
+    except Exception as e:
+        logger.debug("seo_fanout: delta sitemap ping failed: %s", e)
+        return False
+
+
 async def _run_fanout(url: str, parent_subject_url: Optional[str],
                       page_type: str, source: str, event: dict) -> None:
     try:
@@ -132,6 +162,7 @@ async def _run_fanout(url: str, parent_subject_url: Optional[str],
             _do_cache_purge(url, parent_subject_url, page_type),
             _do_prewarm([u for u in [url, parent_subject_url] if u]),
             _do_google_indexing(url, source),
+            _do_ping_delta_sitemap(),
             return_exceptions=True,
         )
     except Exception as e:  # defensive: gather() shouldn't raise here
@@ -144,12 +175,13 @@ async def _run_fanout(url: str, parent_subject_url: Optional[str],
     event["cache_purge"] = _ok(results[1])
     event["prewarm"] = _ok(results[2])
     event["google_indexing"] = _ok(results[3])
+    event["delta_sitemap_ping"] = _ok(results[4])
     event["completed_at"] = datetime.now(timezone.utc).isoformat()
     logger.info(
         "seo_fanout: url=%s indexnow=%s cache_purge=%s prewarm=%s "
-        "google_indexing=%s source=%s",
+        "google_indexing=%s delta_ping=%s source=%s",
         url, event["indexnow"], event["cache_purge"], event["prewarm"],
-        event["google_indexing"], source,
+        event["google_indexing"], event["delta_sitemap_ping"], source,
     )
 
 
