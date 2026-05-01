@@ -312,6 +312,13 @@ export const adminGetCfOverview = (token, range = '7d') =>
     withCredentials: true,
   });
 
+export const adminGetBotTraffic = (token, period = '24h') =>
+  axios.get(`${API_BASE}/admin/analytics/bot-traffic`, {
+    params: { period },
+    headers: adminHeaders(token),
+    withCredentials: true,
+  });
+
 // Task #408: hydrate-lifecycle / stale-build telemetry tile
 export const adminGetHydrateStats = (token, days = 7) =>
   axios.get(`${API_BASE}/admin/analytics/hydrate-stats`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
