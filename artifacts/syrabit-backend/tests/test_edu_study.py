@@ -755,3 +755,44 @@ def test_build_flashcards_corrupt_json_in_structured_produces_zero_cards(
         "Corrupt JSON in structured must degrade to 0 cards, not a 500"
     )
     assert _flashcard_inserts(conn) == [], "No edu_flashcards INSERTs on corrupt JSON"
+
+
+def test_build_flashcards_mnemonic_with_empty_topic_or_phrase_is_skipped(
+    edu_app, fake_conn_factory
+):
+    """Mnemonic entries where ``for`` (topic) or ``mnemonic`` (phrase) is blank
+    must be silently skipped — only entries with both non-empty strings become cards.
+
+    Mix:
+      - {"for": "", "mnemonic": "HOMES"} → skipped (empty topic)
+      - {"for": "Great Lakes", "mnemonic": ""} → skipped (empty phrase)
+      - {"for": "Cranial nerves", "mnemonic": "On Old Olympus Towering Tops..."} → card
+    Expected: exactly 1 card created, no blank fronts like "Mnemonic for: ".
+    """
+    structured = {
+        "qa": [],
+        "mnemonics": [
+            {"for": "", "mnemonic": "HOMES", "explanation": "Great Lakes"},
+            {"for": "Great Lakes", "mnemonic": "", "explanation": "Huron, Ontario..."},
+            {
+                "for": "Cranial nerves",
+                "mnemonic": "On Old Olympus Towering Tops...",
+                "explanation": "I Olfactory, II Optic, III Oculomotor...",
+            },
+        ],
+    }
+    conn = fake_conn_factory(
+        responses=[[_make_generated_note_row(note_id="gen-empty-mn", structured=structured)]]
+    )
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"ok": True, "created": 1}, (
+        "Only the one fully-populated mnemonic entry should produce a card"
+    )
+
+    cards = _flashcard_inserts(conn)
+    assert len(cards) == 1
+    front, back = cards[0]
+    assert front == "Mnemonic for: Cranial nerves"
+    assert "On Old Olympus" in back
