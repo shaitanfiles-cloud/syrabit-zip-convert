@@ -362,6 +362,8 @@ crons = ["* * * * *", "0 */6 * * *"]
 #      absent, preventing any insecure plain-fetch bypass.
 # ---------------------------------------------------------------------------
 
+# Step-by-step activation instructions (commands, expected output, verification):
+#   docs/ops/mtls-activation.md
 [[mtls_certificates]]
 binding        = "MTLS_CERT"
 certificate_id = "PENDING_CERT_PROVISIONING"
