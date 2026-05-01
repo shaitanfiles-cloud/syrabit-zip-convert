@@ -214,16 +214,6 @@ export default function LoginPage() {
               <GoogleSignInButton
                 text="signin_with"
                 disabled={loading}
-                onSuccess={(user) => {
-                  toast.success('Welcome back!');
-                  setTimeout(() => {
-                    if (!user.onboarding_done) {
-                      navigate('/onboarding');
-                    } else {
-                      navigate('/library');
-                    }
-                  }, 100);
-                }}
                 onError={(err) => {
                   setError(formatAuthError(err, 'Google sign-in failed. Please try again.'));
                 }}

@@ -9,13 +9,10 @@
  * sets the user.  Pages (LoginPage, SignupPage) that render this button
  * listen for the resulting user state and handle post-login navigation.
  *
- * The `text` prop is kept for API compatibility with existing callers:
- *   'signin_with' → "Sign in with Google"  (default)
- *   'signup_with' → "Sign up with Google"
- * `onSuccess` and `getTurnstileToken` are no longer used (the redirect
- * leaves the page before a user object is available) — they are accepted
- * but ignored so callers do not need to change their prop interfaces.
- * `onError` is called if the OAuth redirect itself fails to initiate.
+ * Props:
+ *   text     — 'signin_with' (default) | 'signup_with'
+ *   onError  — called if the OAuth redirect itself fails to initiate
+ *   disabled — disables the button
  */
 import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
@@ -27,8 +24,6 @@ export default function GoogleSignInButton({
   text = 'signin_with',
   onError,
   disabled = false,
-  onSuccess,
-  getTurnstileToken,
 }) {
   const [busy, setBusy] = useState(false);
 

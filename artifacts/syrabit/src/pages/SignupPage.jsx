@@ -204,10 +204,6 @@ export default function SignupPage() {
               <GoogleSignInButton
                 text="signup_with"
                 disabled={loading}
-                onSuccess={() => {
-                  toast.success('Account created! Welcome to Syrabit.ai!');
-                  navigate('/onboarding');
-                }}
                 onError={(err) => {
                   setError(formatAuthError(err, 'Google sign-up failed. Please try again.'));
                 }}
