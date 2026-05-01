@@ -25,7 +25,7 @@ The project is built as a pnpm workspace monorepo, integrating a React + Vite fr
 
 **Backend Architecture:**
 - **Modular Design:** App factory pattern with shared modules and route modules.
-- **AI Integration:** On-demand generation and management of chapter embeddings. Utilizes Vertex AI / Gemini for embeddings, translation, vision analysis, content enhancement, quality scoring, and SEO meta generation via a single-LLM pipeline.
+- **AI Integration:** All AI calls route exclusively through Cloudflare Workers AI (via CF AI Gateway). `vertex_services.py` is a drop-in Workers AI backend — no Google/Gemini credentials used. Covers embeddings (bge-large-en-v1.5, 1024-dim), vision/OCR (llama-3.2-11b), translation (indictrans2 + LLM fallback), content generation (gpt-oss-120b), and all admin tools. `providers/cloudflare_ai.py` handles retry logic with exponential back-off on 429/5xx.
 - **Content Pipeline:** Parallel generation of notes, MCQs, and flashcards using `asyncio.gather` with detailed prompts for exam-ready study notes.
 - **Content Feedback Loop:** Auto-detection of thin chapters, auto-healing with version history, and quality gates.
 - **Admin Analytics:** Dashboard displaying RAG telemetry, chat latency, user counts, content heatmaps, and a historical alert log.
