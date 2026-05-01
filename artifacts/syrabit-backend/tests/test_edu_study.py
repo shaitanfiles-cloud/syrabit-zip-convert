@@ -796,3 +796,40 @@ def test_build_flashcards_mnemonic_with_empty_topic_or_phrase_is_skipped(
     front, back = cards[0]
     assert front == "Mnemonic for: Cranial nerves"
     assert "On Old Olympus" in back
+
+
+def test_build_flashcards_respects_mnemonic_cap_of_four(edu_app, fake_conn_factory):
+    """Mnemonic extraction is capped at 4 cards — providing 6 valid mnemonic
+    entries must produce exactly 4 cards, and the first 4 (in order) are kept.
+
+    The cap is the ``[:4]`` slice at ~line 2122 of ``routes/edu_study.py``.
+    Its removal would let a single AI-generated note inject an unbounded number
+    of mnemonic cards into a user's study deck.
+    """
+    mnemonics = [
+        {"for": f"Topic {i}", "mnemonic": f"Phrase {i}", "explanation": f"Exp {i}"}
+        for i in range(6)
+    ]
+    structured = {"qa": [], "mnemonics": mnemonics}
+    conn = fake_conn_factory(
+        responses=[[_make_generated_note_row(note_id="gen-mn-cap", structured=structured)]]
+    )
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+    assert res.json()["created"] == 4, (
+        "Mnemonic cap must be 4; topics 0–3 kept, topics 4–5 dropped"
+    )
+
+    cards = _flashcard_inserts(conn)
+    assert len(cards) == 4
+
+    # First 4 topics are retained in order; topics 4 and 5 are dropped.
+    fronts = [c[0] for c in cards]
+    for i in range(4):
+        assert fronts[i] == f"Mnemonic for: Topic {i}", (
+            f"Expected card {i} to be 'Mnemonic for: Topic {i}'; got {fronts[i]!r}"
+        )
+    assert all(f"Topic {j}" not in f for f in fronts for j in (4, 5)), (
+        "Topics 4 and 5 must not appear in the capped deck"
+    )
