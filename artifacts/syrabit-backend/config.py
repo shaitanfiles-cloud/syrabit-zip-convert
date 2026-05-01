@@ -284,7 +284,11 @@ CF_GATEWAY_BASE = (
     f"https://gateway.ai.cloudflare.com/v1/{_CF_ACCOUNT_ID}/{_CF_GATEWAY_ID}"
     if CF_GATEWAY_ENABLED else ""
 )
-CF_CACHE_TTL = int(os.environ.get('CF_AI_GATEWAY_CACHE_TTL', '3600'))
+# AI Gateway response cache TTL — cache hits are free on the Standard plan.
+# Gateway caches by exact request hash (messages + model + params), so only
+# identical requests benefit. 86 400s = 24 h is safe for this workload.
+# Override with CF_AI_GATEWAY_CACHE_TTL env var (seconds) if needed.
+CF_CACHE_TTL = int(os.environ.get('CF_AI_GATEWAY_CACHE_TTL', '86400'))
 
 _CF_PROVIDER_SLUGS = {
     "openai":      "openai",

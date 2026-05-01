@@ -116,8 +116,13 @@ _EMBED_DIMENSIONS = 1024
 # successful embed call.  Note: this is a sliding-window burst count (not
 # strictly consecutive 429s) — a single success does not cancel accumulated
 # 429s from different calls earlier in the window.
-_EMBED_429_THRESHOLD  = 3     # 429 hits in window before cooldown activates
-_EMBED_429_COOLDOWN_S = 60    # seconds to skip Workers AI embed
+#
+# Threshold raised to 10 (was 3) — on the Standard unified billing plan the
+# embedding model (@cf/baai/bge-large-en-v1.5) has 3 000 RPM, so transient
+# 429s are rare spikes rather than a chronic free-tier cap.  Cooldown reduced
+# to 30s (was 60s) — the model recovers fast at 3 000 RPM capacity.
+_EMBED_429_THRESHOLD  = 10    # 429 hits in window before cooldown activates
+_EMBED_429_COOLDOWN_S = 30    # seconds to skip Workers AI embed
 _embed_429_timestamps: List[float] = []   # recent 429 hit timestamps
 _embed_cooldown_until: float = 0.0        # epoch; 0 = no cooldown
 

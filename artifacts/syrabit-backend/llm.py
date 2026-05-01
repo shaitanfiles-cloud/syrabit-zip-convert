@@ -475,25 +475,31 @@ _MODEL_ALIAS_MAP = {
 # speed_tier: lower = faster provider, used by pick() to prefer fast slots.
 # Slots in the same tier are load-balanced by in-flight count.
 #
-# Concurrency caps per slot — Workers AI unified billing allows much higher
-# parallelism than the old free-tier defaults.  The account is on CF Standard
-# (billing enabled), which means 3 000 RPM per model and no hard concurrent
-# cap beyond what the semaphore allows here.
+# Concurrency caps — Cloudflare Workers AI unified billing (Standard plan).
+# Each model carries its own independent 3 000 RPM quota; the 5 chat models
+# give a combined ~15 000 RPM headroom.  The shared SmartKeyPool rpm_window
+# tracks them under a single 10 000 RPM budget (_POOL_RPM_LIMITS["workers-ai"])
+# to avoid over-counting while still letting the pool fill each model's quota.
 #
-# Rule of thumb: rpm / 60 * avg_response_s ≈ optimal concurrent.
-# At 3 000 RPM, 2-4 s avg → 100-200 concurrent across all slots.
-# 5 WAI chat slots × 24 = 120 total, which is within that band.
+# Per-model concurrency math (rpm / 60 × avg_resp_s):
+#   70B FP8 (~2.0s):  3 000/60 × 2.0  = 100 concurrent  → cap at 64 (headroom)
+#   20B     (~0.8s):  3 000/60 × 0.8  =  40 concurrent  → cap at 64 (safe)
+#   72B     (~2.0s):  3 000/60 × 2.0  = 100 concurrent  → cap at 64
+#   3B      (~0.3s):  3 000/60 × 0.3  =  15 concurrent  → cap at 128 (burst)
+#   8B FP8  (~0.6s):  3 000/60 × 0.6  =  30 concurrent  → cap at 64
+#
+# Total chat caps: 64+64+64+128+64 = 384 concurrent (within combined RPM budget).
 _SLM_SLOT_CANDIDATES = [
     # Tier 0: Workers AI llama-3.3-70b-fp8 — primary chat provider (70B, FP8).
-    ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",        24, 0),
-    # Tier 1: Workers AI GPT-OSS-20B — fast 20B model, own quota.
-    ("workers-ai",  "@cf/openai/gpt-oss-20b",                          24, 1),
+    ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",        64, 0),
+    # Tier 1: Workers AI GPT-OSS-20B — fast 20B model, own 3 000 RPM quota.
+    ("workers-ai",  "@cf/openai/gpt-oss-20b",                          64, 1),
     # Tier 2: Workers AI Qwen 2.5-72B — high-quality 72B on separate quota.
-    ("workers-ai",  "@cf/qwen/qwen2.5-72b-instruct",                   24, 2),
+    ("workers-ai",  "@cf/qwen/qwen2.5-72b-instruct",                   64, 2),
     # Tier 3: Workers AI llama-3.2-3b — ultrafast 3B for burst traffic.
-    ("workers-ai",  "@cf/meta/llama-3.2-3b-instruct",                  32, 3),
+    ("workers-ai",  "@cf/meta/llama-3.2-3b-instruct",                 128, 3),
     # Tier 4: Workers AI llama-3.1-8b — fast 8B fallback.
-    ("workers-ai",  "@cf/meta/llama-3.1-8b-instruct-fp8",              24, 4),
+    ("workers-ai",  "@cf/meta/llama-3.1-8b-instruct-fp8",              64, 4),
     # Tier 5: Groq llama-4-scout — external fallback when Workers AI is saturated.
     ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",        4, 5),
     # Tier 6: Cerebras llama3.1-8b — secondary external fallback.
@@ -506,10 +512,13 @@ _SLM_SLOT_CANDIDATES = [
 # Tier order:
 #   0 — Workers AI gpt-oss-120b: 120B model, best for long-form content.
 #   1 — Workers AI llama-3.3-70b: fallback for content generation.
-# Concurrency raised to 16 per slot (unified billing standard RPM = 3 000).
+#
+# Content calls are longer (300-600 tokens output, ~4-8s) but lower volume.
+# Cap at 48 per slot: 3 000/60 × 6s = 300 theoretical → 48 leaves headroom
+# for the shared 10 000 RPM combined budget.
 _CONTENT_SLOT_CANDIDATES = [
-    ("workers-ai",  "@cf/openai/gpt-oss-120b",                         16, 0),
-    ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",        16, 1),
+    ("workers-ai",  "@cf/openai/gpt-oss-120b",                         48, 0),
+    ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",        48, 1),
 ]
 
 _CONTENT_INTENTS = {"notes", "important_questions", "pyq"}
@@ -543,32 +552,25 @@ def _parse_rpm_limit(env_var: str, default: int) -> int:
 # All values are env-overridable so ops can tune them without a deploy.
 #
 # Workers AI — Cloudflare Standard plan (unified billing enabled).
-# Standard plan rate limit is 3 000 RPM per model per account.
-# All LLM pool Workers AI slots share one rpm_window (same API token),
-# so the 3 000 budget is shared across them, not per-slot.
-# Override with WORKERS_AI_RPM_LIMIT if the account has custom caps.
+# Each model has its own independent 3 000 RPM quota (not shared across models).
+# The SmartKeyPool tracks all Workers AI slots via a single shared rpm_window
+# (same API token / key_idx), so we set the combined budget to 10 000 RPM —
+# safely below the ~15 000 total (5 models × 3 000) but high enough that the
+# pool never soft-deprioritises Workers AI under normal load.
+# Override with WORKERS_AI_RPM_LIMIT env var if the account tier changes.
 #
-# Task #81 — measurement (2026-04-30):
-#   Zero LLM-level Workers AI 429s observed in production logs.  Current
-#   traffic is well below 3 000 RPM.  No Railway env var override needed;
-#   leave WORKERS_AI_RPM_LIMIT unset so the 3 000 default applies.
-#   If the Railway env has WORKERS_AI_RPM_LIMIT set to an older value
-#   (e.g. 30 or 150), remove it — the default is now correct.
-#
-# NOTE: Workers AI embedding (@cf/baai/bge-large-en-v1.5) gets separate
-#   429s in production but is NOT rate-limited by this pool — it goes
-#   through vertex_services._workers_ai_primary_embed() which has its own
-#   cooldown path.  Embedding 429 burst tracking lives in vertex_services
-#   (_track_embed_429/ get_embed_429_burst) and is exposed via
-#   GET /admin/llm/pool-stats (embed_429_burst, embed_cooldown_active).
-#   Those 429s are from the CF free-tier embedding model limit (~50 RPM),
-#   not the 3 000 RPM LLM limit.
+# NOTE: Workers AI embedding (@cf/baai/bge-large-en-v1.5) is NOT rate-limited
+#   by this pool — it goes through vertex_services._workers_ai_primary_embed()
+#   which has its own burst-cooldown path (vertex_services._track_embed_429).
+#   On the Standard plan, the embedding model also has 3 000 RPM (same as LLMs);
+#   the old ~50 RPM free-tier limit no longer applies.  See _EMBED_429_THRESHOLD
+#   in vertex_services.py — threshold raised to 10 hits accordingly.
 _POOL_RPM_LIMITS = {
-    "workers-ai": _parse_rpm_limit("WORKERS_AI_RPM_LIMIT", 3000),
-    "groq":        _parse_rpm_limit("GROQ_RPM_LIMIT",         30),
-    "cerebras":    _parse_rpm_limit("CEREBRAS_RPM_LIMIT",     30),
-    "sarvam":      _parse_rpm_limit("SARVAM_RPM_LIMIT",       30),
-    "gemini":      _parse_rpm_limit("GEMINI_RPM_LIMIT",      600),
+    "workers-ai": _parse_rpm_limit("WORKERS_AI_RPM_LIMIT", 10000),
+    "groq":        _parse_rpm_limit("GROQ_RPM_LIMIT",          30),
+    "cerebras":    _parse_rpm_limit("CEREBRAS_RPM_LIMIT",      30),
+    "sarvam":      _parse_rpm_limit("SARVAM_RPM_LIMIT",        30),
+    "gemini":      _parse_rpm_limit("GEMINI_RPM_LIMIT",       600),
     "openrouter":  60,
     "openai":      60,
     "bedrock":     30,
@@ -593,10 +595,10 @@ class _SmartKeyPool:
     """
     _RL_COOLDOWN  = 20.0
     _ERR_COOLDOWN = 7.0
-    # With unified billing (3 000 RPM), keep Workers AI as primary until 85%
-    # of budget (2 550 RPM) before soft-shifting to Groq/Cerebras, and hard-
-    # deprioritize only at 95% (2 850 RPM).  The old 70/90 split was
-    # calibrated for the 150 RPM free-tier cap — too aggressive now.
+    # With unified billing and a combined 10 000 RPM budget, keep Workers AI
+    # as primary until 85% (8 500 RPM) before soft-shifting to Groq/Cerebras,
+    # and hard-deprioritize only at 95% (9 500 RPM).  Per-model quota is
+    # independent so a single model saturating does not affect others.
     _RPM_SOFT_THRESHOLD = 0.85
     _RPM_HARD_THRESHOLD = 0.95
 
