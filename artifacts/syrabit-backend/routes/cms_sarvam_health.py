@@ -216,10 +216,11 @@ def _vertex_block_for_health() -> tuple[dict, bool]:
 # made the health card flip to "degraded" whenever that one provider had
 # a transient error or rate-limit, even though real chat traffic was fine.
 _LLM_PROBE_MODELS = (
-    "gemini-2.5-flash",
-    "llama-4-scout-17b-16e-instruct",
+    # Fast providers first — probe succeeds without waiting on quota-limited models.
+    "llama-4-scout-17b-16e-instruct",        # Workers AI — reliable, sub-200ms
     "meta-llama/llama-4-scout-17b-16e-instruct",
-    "sarvam-m",
+    "sarvam-m",                               # Sarvam AI
+    "gemini-2.5-flash",                       # Last: may be rate-limited/quota exceeded
 )
 
 async def _bg_llm_health_probe():
