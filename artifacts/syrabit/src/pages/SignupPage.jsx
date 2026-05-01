@@ -74,9 +74,14 @@ export default function SignupPage() {
     }
     setLoading(true);
     try {
-      await signup(name, email, password, consentDpdp);
+      const user = await signup(name, email, password, consentDpdp);
       toast.success('Account created! Welcome to Syrabit.ai!');
-      navigate('/onboarding');
+      const role = user?.role || '';
+      if (role === 'staff' || role === 'admin') {
+        navigate('/staff');
+      } else {
+        navigate('/onboarding');
+      }
     } catch (err) {
       setError(formatAuthError(err, 'Signup failed. Please try again.'));
     } finally {
