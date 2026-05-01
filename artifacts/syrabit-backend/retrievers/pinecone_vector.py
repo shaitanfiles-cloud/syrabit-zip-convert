@@ -257,6 +257,44 @@ class PineconeVectorRetriever(Retriever):
             logger.error("PineconeVectorRetriever.delete failed: %s", exc)
             return 0
 
+    async def get_by_ids(self, ids: list[str]) -> list[dict[str, Any]]:
+        """Fetch vectors by ID using Pinecone's /vectors/fetch endpoint."""
+        if not ids:
+            return []
+        if not self.is_configured():
+            return []
+
+        host = await _get_index_host()
+        if not host:
+            return []
+
+        # Pinecone fetch: GET /vectors/fetch?ids=id1&ids=id2&...
+        try:
+            params = [("ids", i) for i in ids]
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                resp = await client.get(
+                    f"{host}/vectors/fetch",
+                    params=params,
+                    headers=_data_headers(),
+                )
+                resp.raise_for_status()
+        except Exception as exc:
+            logger.error("PineconeVectorRetriever.get_by_ids failed: %s", exc)
+            return []
+
+        data = resp.json()
+        vectors = data.get("vectors") or {}
+        results = []
+        for vid, v in vectors.items():
+            entry: dict[str, Any] = {
+                "id": vid,
+                "score": 0.0,
+                "metadata": v.get("metadata") or {},
+                "values": v.get("values", []),
+            }
+            results.append(entry)
+        return results
+
     async def index_info(self) -> dict[str, Any]:
         if not self.is_configured():
             return {"error": "not configured"}
