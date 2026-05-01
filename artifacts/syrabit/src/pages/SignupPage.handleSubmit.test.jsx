@@ -353,6 +353,186 @@ describe('SignupPage — aria-invalid and aria-describedby on password mismatch'
   });
 });
 
+describe('SignupPage — email format error aria attributes', () => {
+  it('shows the email error paragraph with role="alert" and id="email-format-error" after blur with an invalid email', async () => {
+    render(<SignupPage />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-email-input'), {
+        target: { value: 'notanemail' },
+      });
+      fireEvent.blur(screen.getByTestId('auth-email-input'));
+    });
+    const errorEl = document.getElementById('email-format-error');
+    expect(errorEl).toBeTruthy();
+    expect(errorEl.getAttribute('role')).toBe('alert');
+    expect(errorEl.textContent).toBe('Please enter a valid email address');
+  });
+
+  it('sets aria-invalid and aria-describedby on the email input when the email is invalid', async () => {
+    render(<SignupPage />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-email-input'), {
+        target: { value: 'bad-email' },
+      });
+      fireEvent.blur(screen.getByTestId('auth-email-input'));
+    });
+    const emailInput = screen.getByTestId('auth-email-input');
+    expect(emailInput.getAttribute('aria-invalid')).toBe('true');
+    expect(emailInput.getAttribute('aria-describedby')).toBe('email-format-error');
+  });
+
+  it('removes email error and aria attributes once a valid email is entered', async () => {
+    render(<SignupPage />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-email-input'), {
+        target: { value: 'bad-email' },
+      });
+      fireEvent.blur(screen.getByTestId('auth-email-input'));
+    });
+    expect(document.getElementById('email-format-error')).toBeTruthy();
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-email-input'), {
+        target: { value: 'valid@example.com' },
+      });
+      fireEvent.blur(screen.getByTestId('auth-email-input'));
+    });
+    expect(document.getElementById('email-format-error')).toBeNull();
+    const emailInput = screen.getByTestId('auth-email-input');
+    expect(emailInput.getAttribute('aria-invalid')).toBeNull();
+    expect(emailInput.getAttribute('aria-describedby')).toBeNull();
+  });
+
+  it('blocks submit and shows the email error when submit is attempted with an invalid email', async () => {
+    render(<SignupPage />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-email-input'), {
+        target: { value: 'notvalid' },
+      });
+      fireEvent.change(screen.getByTestId('auth-password-input'), {
+        target: { value: 'Password1!' },
+      });
+      const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+      fireEvent.change(confirmInput, { target: { value: 'Password1!' } });
+      fireEvent.click(screen.getByRole('button', { name: /agree to terms/i }));
+      fireEvent.click(screen.getByRole('button', { name: /consent to data processing/i }));
+    });
+    await act(async () => {
+      // Use fireEvent.submit on the form to bypass jsdom native email validation
+      // so our custom handleSubmit guard is exercised
+      fireEvent.submit(screen.getByTestId('auth-submit-button').closest('form'));
+    });
+    await act(async () => {});
+    expect(document.getElementById('email-format-error')).toBeTruthy();
+    expect(mockSignup).not.toHaveBeenCalled();
+  });
+
+  it('does not show an email error when no email has been entered yet', () => {
+    render(<SignupPage />);
+    expect(document.getElementById('email-format-error')).toBeNull();
+    expect(screen.getByTestId('auth-email-input').getAttribute('aria-invalid')).toBeNull();
+  });
+});
+
+describe('SignupPage — error banner aria attributes', () => {
+  it('gives the error banner role="alert" and id="signup-error-message" when an error is shown', async () => {
+    render(<SignupPage />);
+    await fillForm({ password: 'Password1!', confirmPassword: 'Password1!', agreed: false, consentDpdp: true });
+    const banner = document.getElementById('signup-error-message');
+    expect(banner).toBeTruthy();
+    expect(banner.getAttribute('role')).toBe('alert');
+  });
+
+  it('does not render signup-error-message element when there is no error', () => {
+    render(<SignupPage />);
+    expect(document.getElementById('signup-error-message')).toBeNull();
+  });
+});
+
+describe('SignupPage — ToS button aria attributes on error', () => {
+  it('sets aria-invalid and aria-describedby on the ToS button when the ToS error fires', async () => {
+    render(<SignupPage />);
+    await fillForm({ password: 'Password1!', confirmPassword: 'Password1!', agreed: false, consentDpdp: true });
+    const tosBtn = screen.getByRole('button', { name: /agree to terms/i });
+    expect(tosBtn.getAttribute('aria-invalid')).toBe('true');
+    expect(tosBtn.getAttribute('aria-describedby')).toBe('signup-error-message');
+  });
+
+  it('removes aria-invalid from the ToS button after the error is resolved', async () => {
+    mockSignup.mockResolvedValueOnce({ role: '', onboarding_done: false });
+    render(<SignupPage />);
+    // Trigger ToS error
+    await fillForm({ password: 'Password1!', confirmPassword: 'Password1!', agreed: false, consentDpdp: true });
+    expect(screen.getByRole('button', { name: /agree to terms/i }).getAttribute('aria-invalid')).toBe('true');
+    // Fix: check Terms and resubmit successfully
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /agree to terms/i }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('auth-submit-button'));
+    });
+    await act(async () => {});
+    expect(screen.getByRole('button', { name: /agree to terms/i }).getAttribute('aria-invalid')).toBeNull();
+    expect(screen.getByRole('button', { name: /agree to terms/i }).getAttribute('aria-describedby')).toBeNull();
+  });
+});
+
+describe('SignupPage — DPDP button aria attributes on error', () => {
+  it('sets aria-invalid and aria-describedby on the DPDP button when the DPDP error fires', async () => {
+    render(<SignupPage />);
+    await fillForm({ password: 'Password1!', confirmPassword: 'Password1!', agreed: true, consentDpdp: false });
+    const dpdpBtn = screen.getByRole('button', { name: /consent to data processing/i });
+    expect(dpdpBtn.getAttribute('aria-invalid')).toBe('true');
+    expect(dpdpBtn.getAttribute('aria-describedby')).toBe('signup-error-message');
+  });
+
+  it('removes aria-invalid from the DPDP button after the error is resolved', async () => {
+    mockSignup.mockResolvedValueOnce({ role: '', onboarding_done: false });
+    render(<SignupPage />);
+    // Trigger DPDP error
+    await fillForm({ password: 'Password1!', confirmPassword: 'Password1!', agreed: true, consentDpdp: false });
+    expect(screen.getByRole('button', { name: /consent to data processing/i }).getAttribute('aria-invalid')).toBe('true');
+    // Fix: check DPDP and resubmit successfully
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /consent to data processing/i }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('auth-submit-button'));
+    });
+    await act(async () => {});
+    expect(screen.getByRole('button', { name: /consent to data processing/i }).getAttribute('aria-invalid')).toBeNull();
+    expect(screen.getByRole('button', { name: /consent to data processing/i }).getAttribute('aria-describedby')).toBeNull();
+  });
+});
+
+describe('SignupPage — password strength hint aria attributes', () => {
+  it('gives the strength paragraph id="password-strength-hint" and aria-live="polite"', async () => {
+    render(<SignupPage />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-password-input'), {
+        target: { value: 'Password1!' },
+      });
+    });
+    const hint = document.getElementById('password-strength-hint');
+    expect(hint).toBeTruthy();
+    expect(hint.getAttribute('aria-live')).toBe('polite');
+  });
+
+  it('links the password input to the strength hint via aria-describedby when password is non-empty', async () => {
+    render(<SignupPage />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-password-input'), {
+        target: { value: 'Password1!' },
+      });
+    });
+    expect(screen.getByTestId('auth-password-input').getAttribute('aria-describedby')).toBe('password-strength-hint');
+  });
+
+  it('does not set aria-describedby on the password input when password is empty', () => {
+    render(<SignupPage />);
+    expect(screen.getByTestId('auth-password-input').getAttribute('aria-describedby')).toBeNull();
+  });
+});
+
 describe('SignupPage — handleSubmit redirect logic', () => {
   it('navigates to /onboarding when user has onboarding_done=false', async () => {
     mockSignup.mockResolvedValueOnce({ role: '', onboarding_done: false });

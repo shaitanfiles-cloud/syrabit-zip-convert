@@ -45,6 +45,7 @@ export default function SignupPage() {
   const [consentDpdp, setConsentDpdp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [emailError, setEmailError] = useState('');
   const { signup } = useAuth();
   const navigate = useNavigate();
 
@@ -57,9 +58,29 @@ export default function SignupPage() {
     }, 300);
   }, []);
 
+  const validateEmail = (value) => {
+    if (!value) return '';
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ? '' : 'Please enter a valid email address';
+  };
+
+  const handleEmailChange = (e) => {
+    const value = e.target.value;
+    setEmail(value);
+    if (emailError) setEmailError(validateEmail(value));
+  };
+
+  const handleEmailBlur = (e) => {
+    setEmailError(validateEmail(e.target.value));
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    const emailValidationError = validateEmail(email);
+    if (emailValidationError) {
+      setEmailError(emailValidationError);
+      return;
+    }
     if (password !== confirmPassword) {
       setError('Passwords do not match');
       return;
@@ -186,8 +207,12 @@ export default function SignupPage() {
             </div>
 
             {error && (
-              <div className="flex items-center gap-2 text-red-600 rounded-xl p-3 mb-5 text-sm"
-                style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}>
+              <div
+                id="signup-error-message"
+                role="alert"
+                className="flex items-center gap-2 text-red-600 rounded-xl p-3 mb-5 text-sm"
+                style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}
+              >
                 <AlertCircle size={16} className="flex-shrink-0" />
                 {error}
               </div>
@@ -250,14 +275,20 @@ export default function SignupPage() {
                     autoComplete="email"
                     placeholder="your@email.com"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={handleEmailChange}
+                    onBlur={handleEmailBlur}
                     onFocus={handleInputFocus}
-                    className="pl-10 h-11"
+                    className={`pl-10 h-11 ${emailError ? 'border-red-500/40' : ''}`}
                     style={{ scrollMarginBottom: '4rem' }}
                     required
+                    aria-invalid={emailError ? true : undefined}
+                    aria-describedby={emailError ? 'email-format-error' : undefined}
                     data-testid="auth-email-input"
                   />
                 </div>
+                {emailError && (
+                  <p id="email-format-error" role="alert" className="text-xs text-red-500">{emailError}</p>
+                )}
               </div>
 
               <div className="space-y-1.5">
@@ -279,6 +310,7 @@ export default function SignupPage() {
                     style={{ scrollMarginBottom: '4rem' }}
                     required
                     aria-invalid={confirmPassword && !passwordsMatch ? true : undefined}
+                    aria-describedby={password ? 'password-strength-hint' : undefined}
                     data-testid="auth-password-input"
                   />
                   <button
@@ -299,7 +331,11 @@ export default function SignupPage() {
                         />
                       ))}
                     </div>
-                    <p className={`text-xs ${strength.score <= 2 ? 'text-orange-500' : 'text-emerald-600'}`}>
+                    <p
+                      id="password-strength-hint"
+                      aria-live="polite"
+                      className={`text-xs ${strength.score <= 2 ? 'text-orange-500' : 'text-emerald-600'}`}
+                    >
                       {strength.label}
                     </p>
                   </div>
@@ -346,6 +382,8 @@ export default function SignupPage() {
                   onClick={() => setAgreed(!agreed)}
                   className="-ml-3 p-3 min-w-[44px] min-h-[44px] rounded flex-shrink-0 flex items-center justify-center transition-all cursor-pointer"
                   aria-label="Agree to terms"
+                  aria-invalid={error === 'Please agree to the Terms of Service' ? 'true' : undefined}
+                  aria-describedby={error === 'Please agree to the Terms of Service' ? 'signup-error-message' : undefined}
                 >
                   <span
                     className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${agreed ? 'border-violet-500' : 'border-border bg-muted/50'}`}
@@ -368,6 +406,8 @@ export default function SignupPage() {
                   onClick={() => setConsentDpdp(!consentDpdp)}
                   className="-ml-3 p-3 min-w-[44px] min-h-[44px] rounded flex-shrink-0 flex items-center justify-center transition-all cursor-pointer"
                   aria-label="Consent to data processing"
+                  aria-invalid={error === 'Please provide consent for data processing under the DPDP Act' ? 'true' : undefined}
+                  aria-describedby={error === 'Please provide consent for data processing under the DPDP Act' ? 'signup-error-message' : undefined}
                 >
                   <span
                     className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${consentDpdp ? 'border-violet-500' : 'border-border bg-muted/50'}`}
