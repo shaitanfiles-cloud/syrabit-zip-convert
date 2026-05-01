@@ -1,10 +1,16 @@
 /**
- * TrustpilotReviewsSection — Task #126
+ * TrustpilotReviewsSection — Task #126 / Task #138
  *
  * Renders a review-collection CTA that invites students to leave a
  * Trustpilot review for Syrabit.ai. The Trustpilot embed widget and its
  * bootstrap script have been removed; this section now shows a styled
  * card with a direct link to the Trustpilot review submission page.
+ *
+ * Task #138: when aggregate data is available (ratingValue + ratingCount),
+ * the card shows a live star-rating row (e.g. ★★★★½ 4.7 · 320 reviews)
+ * above the CTA button using data already fetched — no extra API call.
+ * When aggregate data is unavailable the card renders without the rating
+ * row so there is no layout shift.
  *
  * The profile URL is sourced from the server config endpoint so it
  * stays in sync with the backend Trustpilot secret — with a hardcoded
@@ -63,6 +69,67 @@ export function fetchTrustpilotAggregateOnce() {
   return _aggregatePromise;
 }
 
+/**
+ * StarRow — Task #138
+ *
+ * Renders 5 SVG stars reflecting `rating` (0–5, decimal supported).
+ * Each star position can be full, half, or empty:
+ *   full  → rating >= position
+ *   half  → rating >= position - 0.5 (but < position)
+ *   empty → otherwise
+ *
+ * A per-star SVG clipPath drives partial fills — no Unicode hacks.
+ * Trustpilot green (#00b67a) for filled portions; muted grey for empty.
+ */
+export function StarRow({ rating, className = '' }) {
+  const stars = [1, 2, 3, 4, 5].map((pos) => {
+    let fill = 'empty';
+    if (rating >= pos) fill = 'full';
+    else if (rating >= pos - 0.5) fill = 'half';
+    return fill;
+  });
+
+  return (
+    <span
+      className={`inline-flex items-center gap-0.5 ${className}`}
+      aria-hidden="true"
+    >
+      {stars.map((fill, i) => {
+        const id = `tp-star-clip-${i}`;
+        return (
+          <svg
+            key={i}
+            viewBox="0 0 24 24"
+            className="w-5 h-5 shrink-0"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            {fill === 'half' && (
+              <defs>
+                <clipPath id={id}>
+                  <rect x="0" y="0" width="12" height="24" />
+                </clipPath>
+              </defs>
+            )}
+            {/* Empty star background */}
+            <path
+              d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"
+              fill="#d4d4d4"
+            />
+            {/* Filled overlay — full or half via clipPath */}
+            {fill !== 'empty' && (
+              <path
+                d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"
+                fill="#00b67a"
+                clipPath={fill === 'half' ? `url(#${id})` : undefined}
+              />
+            )}
+          </svg>
+        );
+      })}
+    </span>
+  );
+}
+
 export default function TrustpilotReviewsSection({
   heading = 'Share your experience',
   subheading = '',
@@ -115,6 +182,23 @@ export default function TrustpilotReviewsSection({
             <p className="text-sm text-muted-foreground mt-1">{subheading}</p>
           )}
         </div>
+
+        {/* Task #138 — live star rating row, shown only when aggregate data is available */}
+        {aggregate && (
+          <div
+            className="flex items-center gap-2 mb-4"
+            aria-label={`Rated ${aggregate.ratingValue.toFixed(1)} out of 5 from ${aggregate.ratingCount.toLocaleString()} reviews`}
+            data-testid="tp-star-row"
+          >
+            <StarRow rating={aggregate.ratingValue} />
+            <span className="text-sm font-semibold text-foreground" data-testid="tp-rating-value">
+              {aggregate.ratingValue.toFixed(1)}
+            </span>
+            <span className="text-sm text-muted-foreground" data-testid="tp-review-count">
+              &middot; {aggregate.ratingCount.toLocaleString()} reviews
+            </span>
+          </div>
+        )}
 
         <a
           href={profileUrl}
