@@ -22,7 +22,7 @@
  * If the config endpoint returns null (Trustpilot not configured on the
  * server) the section hides itself gracefully — same behaviour as before.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { API_BASE } from '@/utils/api';
 
 let _configPromise = null;
@@ -82,6 +82,10 @@ export function fetchTrustpilotAggregateOnce() {
  * Trustpilot green (#00b67a) for filled portions; muted grey for empty.
  */
 export function StarRow({ rating, className = '' }) {
+  // useId produces a per-instance unique prefix so clip-path IDs never
+  // collide when multiple StarRow instances are rendered on the same page.
+  const uid = useId();
+
   const stars = [1, 2, 3, 4, 5].map((pos) => {
     let fill = 'empty';
     if (rating >= pos) fill = 'full';
@@ -95,7 +99,7 @@ export function StarRow({ rating, className = '' }) {
       aria-hidden="true"
     >
       {stars.map((fill, i) => {
-        const id = `tp-star-clip-${i}`;
+        const clipId = `${uid}-tp-star-clip-${i}`;
         return (
           <svg
             key={i}
@@ -105,7 +109,7 @@ export function StarRow({ rating, className = '' }) {
           >
             {fill === 'half' && (
               <defs>
-                <clipPath id={id}>
+                <clipPath id={clipId}>
                   <rect x="0" y="0" width="12" height="24" />
                 </clipPath>
               </defs>
@@ -120,7 +124,7 @@ export function StarRow({ rating, className = '' }) {
               <path
                 d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"
                 fill="#00b67a"
-                clipPath={fill === 'half' ? `url(#${id})` : undefined}
+                clipPath={fill === 'half' ? `url(#${clipId})` : undefined}
               />
             )}
           </svg>
