@@ -458,7 +458,7 @@ async function main() {
 // ─── Exports (for unit testing) ───────────────────────────────────────────────
 // Pure functions that have no side-effects and do not touch the network.
 // Tests import these directly without triggering the main() entry point.
-export { extractMetrics, checkThresholds, deployMatchesCommit, THRESHOLDS };
+export { extractMetrics, checkThresholds, deployMatchesCommit, THRESHOLDS, main };
 
 // ─── Entry point guard ────────────────────────────────────────────────────────
 // Only run main() when this file is executed directly (node script.js).
