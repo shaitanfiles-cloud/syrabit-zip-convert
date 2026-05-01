@@ -101,9 +101,18 @@ jobs:
         # and verify scripts that require a real backend.  The resulting dist/ is
         # served by `vite preview` during the Playwright run so every module is
         # already compiled and page loads stay well under the 10 s assertion timeout.
+        #
+        # IMPORTANT: do NOT set VITE_BACKEND_URL here.  When it is set to an
+        # absolute URL (e.g. http://localhost:8080), it gets baked into the
+        # production bundle.  Every API call then goes to a different origin than
+        # the vite-preview server (127.0.0.1:4317), triggering the browser's
+        # CORS + withCredentials check — which blocks the response even though
+        # Playwright's page.route() interceptor fulfills it.  Without the env
+        # var, VITE_BACKEND_URL defaults to '' so API_BASE resolves to '/api'
+        # (same-origin relative path).  vite preview serves the SPA on 4317;
+        # Playwright's '**/api/**' glob matches the resolved same-origin URLs
+        # and intercepts them correctly, letting AdminGuard pass.
         run: pnpm --filter @workspace/syrabit run build:client
-        env:
-          VITE_BACKEND_URL: http://localhost:8080
 
       - name: Run full Playwright E2E suite
         run: pnpm --filter @workspace/syrabit run test:e2e
