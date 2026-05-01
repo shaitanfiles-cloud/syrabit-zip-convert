@@ -50,14 +50,24 @@ name: cf-waf-drift-daily
 #   final step — the GitHub Actions failed-run email then carries the full
 #   captured `verify` / `aggregate` output via the run log.
 #
-# Required repo secrets
-# ---------------------
+# Required repo secret
+# --------------------
 #   CF_WAF_OVERRIDE_TOKEN       Cloudflare API token with the scopes listed
 #                               in cf_waf_override.py's module docstring
 #                               (Zone:Read, WAF:Edit, Account Rulesets:Edit,
 #                               Zone Analytics:Read).
-#   CF_ZONE_ID                  syrabit.ai zone id (same value the analytics
-#                               token already uses).
+#
+# Required repo variable (not a secret — zone IDs are not sensitive)
+# -----------------------------------------------------------------
+#   CLOUDFLARE_ZONE_ID          syrabit.ai zone id, exposed to this job as
+#                               CF_ZONE_ID. Stored as a repository *variable*
+#                               (Settings → Secrets and variables → Actions →
+#                               Variables tab) rather than a secret: zone IDs
+#                               appear in public Cloudflare URLs and audit
+#                               reports, so masking them buys nothing. Using
+#                               vars.* means a zone migration only requires
+#                               updating one place in the GitHub UI instead of
+#                               a grep-and-replace across multiple YAML files.
 #
 # Optional repo secret
 # --------------------
@@ -115,7 +125,9 @@ jobs:
 
     env:
       CF_WAF_OVERRIDE_TOKEN: ${{ secrets.CF_WAF_OVERRIDE_TOKEN }}
-      CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
+      # Zone ID is not sensitive — stored as a repo variable, not a secret.
+      # See "Required repo variable" section in the file header above.
+      CF_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
       AGGREGATE_HOURS: ${{ github.event.inputs.hours || '24' }}
       AGGREGATE_RULE_ID: ${{ github.event.inputs.rule_id || '874a3e315c344b1281ad4f00046aab6f' }}
 

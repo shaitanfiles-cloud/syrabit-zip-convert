@@ -107,8 +107,14 @@ jobs:
       - name: Run post-deploy Lighthouse check
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ZONE_ID: "5b8c97df4431491dc7f60ea72fb61871"
-          CLOUDFLARE_ACCOUNT_ID: "d66e40eac539fff1db270fddf384a5ec"
+          # These IDs are not sensitive (they appear in public Cloudflare
+          # URLs and audit reports) so they are stored as repository
+          # *variables* (Settings → Secrets and variables → Actions →
+          # Variables tab) rather than secrets. Using vars.* means a zone
+          # migration only requires updating one place in the GitHub UI
+          # instead of a grep-and-replace across multiple workflow files.
+          CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT || 'syrabit-analytics' }}
           # Pass the triggering commit SHA so the script correlates the Pages poll
           # to the specific deployment for this push rather than any recent success.
