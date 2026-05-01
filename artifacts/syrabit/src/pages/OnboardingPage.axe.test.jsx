@@ -1,13 +1,14 @@
 /**
- * Task #194 — OnboardingPage: axe accessibility audit.
+ * Task #194 / Task #198 — OnboardingPage: axe audit + step-indicator ARIA.
  *
- * Covers two key render states of the onboarding wizard:
- *  - Board-selection step while boards are still loading (Loader2 spinner)
- *  - Board-selection step after boards have resolved (board buttons visible)
+ * Covers:
+ *  - axe audit on two key render states (loading spinner, boards loaded)
+ *  - Step-indicator structural assertions: nav landmark, aria-label on each
+ *    step item, aria-current="step" on the active step (Task #198)
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { axe, toHaveNoViolations } from 'jest-axe';
-import { render, act } from '@testing-library/react';
+import { render, screen, act } from '@testing-library/react';
 import React from 'react';
 
 expect.extend(toHaveNoViolations);
@@ -83,5 +84,30 @@ describe('OnboardingPage — axe accessibility audit', () => {
     });
     const results = await axe(container);
     expect(results).toHaveNoViolations();
+  });
+});
+
+describe('OnboardingPage — step indicator ARIA structure (Task #198)', () => {
+  it('renders a nav landmark with aria-label="Onboarding progress"', async () => {
+    mockGetBoards.mockResolvedValue({ data: SAMPLE_BOARDS });
+    await act(async () => { render(<OnboardingPage />); });
+    expect(screen.getByRole('navigation', { name: 'Onboarding progress' })).toBeInTheDocument();
+  });
+
+  it('gives each step item an aria-label describing its number, name, and status', async () => {
+    mockGetBoards.mockResolvedValue({ data: SAMPLE_BOARDS });
+    await act(async () => { render(<OnboardingPage />); });
+    expect(screen.getByRole('listitem', { name: /Step 1 of 3: Board – current/i })).toBeInTheDocument();
+    expect(screen.getByRole('listitem', { name: /Step 2 of 3: Class – upcoming/i })).toBeInTheDocument();
+    expect(screen.getByRole('listitem', { name: /Step 3 of 3: Stream – upcoming/i })).toBeInTheDocument();
+  });
+
+  it('sets aria-current="step" only on the active step item', async () => {
+    mockGetBoards.mockResolvedValue({ data: SAMPLE_BOARDS });
+    await act(async () => { render(<OnboardingPage />); });
+    const currentItem = screen.getByRole('listitem', { name: /Board – current/i });
+    expect(currentItem).toHaveAttribute('aria-current', 'step');
+    const upcomingItems = screen.getAllByRole('listitem', { name: /upcoming/i });
+    upcomingItems.forEach((item) => expect(item).not.toHaveAttribute('aria-current'));
   });
 });

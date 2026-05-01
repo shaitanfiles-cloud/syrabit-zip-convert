@@ -176,27 +176,40 @@ export default function OnboardingPage() {
           <p className="text-muted-foreground text-sm">Tell us about your studies so we can personalize your experience</p>
         </div>
 
-        <div className="flex items-center gap-1 sm:gap-2 mb-8">
-          {STEPS.map((label, i) => (
-            <div key={label} className="flex items-center gap-1 sm:gap-2 flex-1 min-w-0">
-              <div className={`flex items-center justify-center w-7 h-7 rounded-full text-xs font-semibold transition-colors flex-shrink-0 ${
-                i < step ? 'bg-emerald-500 text-white' :
-                i === step ? 'bg-violet-600 text-white' :
-                'bg-muted text-muted-foreground'
-              }`}>
-                {i < step ? <Check size={14} /> : i + 1}
-              </div>
-              <span className={`text-xs font-medium truncate hidden min-[360px]:inline ${
-                i <= step ? 'text-foreground' : 'text-muted-foreground/50'
-              }`}>{label}</span>
-              {i < STEPS.length - 1 && (
-                <div className={`h-px flex-1 min-w-[8px] ${
-                  i < step ? 'bg-emerald-500/50' : 'bg-border'
-                }`} />
-              )}
-            </div>
-          ))}
-        </div>
+        <nav aria-label="Onboarding progress">
+          <ol className="flex items-center gap-1 sm:gap-2 mb-8 list-none p-0 m-0">
+            {STEPS.map((label, i) => {
+              const status = i < step ? 'completed' : i === step ? 'current' : 'upcoming';
+              return (
+                <li
+                  key={label}
+                  className="flex items-center gap-1 sm:gap-2 flex-1 min-w-0"
+                  aria-label={`Step ${i + 1} of ${totalSteps}: ${label} – ${status}`}
+                  aria-current={i === step ? 'step' : undefined}
+                >
+                  <div
+                    aria-hidden="true"
+                    className={`flex items-center justify-center w-7 h-7 rounded-full text-xs font-semibold transition-colors flex-shrink-0 ${
+                      i < step ? 'bg-emerald-500 text-white' :
+                      i === step ? 'bg-violet-600 text-white' :
+                      'bg-muted text-muted-foreground'
+                    }`}
+                  >
+                    {i < step ? <Check size={14} /> : i + 1}
+                  </div>
+                  <span aria-hidden="true" className={`text-xs font-medium truncate hidden min-[360px]:inline ${
+                    i <= step ? 'text-foreground' : 'text-muted-foreground/50'
+                  }`}>{label}</span>
+                  {i < STEPS.length - 1 && (
+                    <div aria-hidden="true" className={`h-px flex-1 min-w-[8px] ${
+                      i < step ? 'bg-emerald-500/50' : 'bg-border'
+                    }`} />
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+        </nav>
 
         <div className="glass-card rounded-2xl p-6 min-h-[300px]">
             <div>
