@@ -252,15 +252,23 @@ def _get_cf_client():
 
 
 def _account_id() -> str:
-    aid = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+    aid = (
+        os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+        or os.environ.get("CF_AI_GATEWAY_ACCOUNT_ID", "").strip()
+    )
     if not aid:
-        raise RuntimeError("CLOUDFLARE_ACCOUNT_ID must be set")
+        raise RuntimeError(
+            "CLOUDFLARE_ACCOUNT_ID (or CF_AI_GATEWAY_ACCOUNT_ID) must be set"
+        )
     return aid
 
 
 def is_configured() -> bool:
     token = _runtime_token()
-    account = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+    account = (
+        os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+        or os.environ.get("CF_AI_GATEWAY_ACCOUNT_ID", "").strip()
+    )
     return bool(token and account)
 
 

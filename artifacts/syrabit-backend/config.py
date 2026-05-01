@@ -528,6 +528,19 @@ SARVAM_BASE_URL = 'https://api.sarvam.ai'
 # All call sites guard with `if voyage.ENABLED` and fall back gracefully.
 MONGODB_MODEL_API_KEY = os.environ.get('MONGODB_MODEL_API_KEY', '').strip()
 
+# Alias: VOYAGE_API_KEY → MONGODB_MODEL_API_KEY when not explicitly set.
+# voyage.py already handles this fallback internally, but injecting it here
+# makes it available to any tool (wrangler, scripts) that reads env vars.
+if not os.environ.get('VOYAGE_API_KEY', '').strip() and MONGODB_MODEL_API_KEY:
+    os.environ['VOYAGE_API_KEY'] = MONGODB_MODEL_API_KEY
+
+# Alias: CLOUDFLARE_ACCOUNT_ID → CF_AI_GATEWAY_ACCOUNT_ID when not set.
+# vectorize_client, wrangler scripts, and CF SDK all expect CLOUDFLARE_ACCOUNT_ID;
+# CF_AI_GATEWAY_ACCOUNT_ID holds the same value in Railway/Replit deployments.
+_cf_gw_account = os.environ.get('CF_AI_GATEWAY_ACCOUNT_ID', '').strip()
+if not os.environ.get('CLOUDFLARE_ACCOUNT_ID', '').strip() and _cf_gw_account:
+    os.environ['CLOUDFLARE_ACCOUNT_ID'] = _cf_gw_account
+
 # ── Distributed cache — Upstash Redis (REST-based, serverless) ────────────────
 # Upstash is used for L2 cross-worker cache, anonymous chat history,
 # atomic rate-limit credit deduction, and AI response caching.
