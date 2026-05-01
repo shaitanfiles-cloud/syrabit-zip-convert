@@ -797,25 +797,15 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
   useEffect(() => {
     if (!adminToken) return;
     let cancelled = false;
-    // True iff the response shape is one we can actually surface:
-    // a connected-CF payload with a non-null total-visits count AND
-    // complete bucket coverage for the requested window. We require
-    // `visits_coverage.complete` because Cloudflare's adaptive-groups
-    // dataset (the only one that still exposes `sum.visits`) is capped
-    // at ~8 days of retention on most plans — so a 30d call typically
-    // returns a non-null but partial total (~7-8 of 30 days), which
-    // would under-count by 4x if shown under a "30 days" headline.
-    // Falling through to the 7d window in that case gives a complete,
-    // honest number.
+    // True iff the response shape is one we can actually surface as a
+    // unique-visitors total. We check `totals.visitors` (CF uniq.uniques)
+    // which is available on all plans and retains 30 days — no session
+    // coverage check needed since `uniq.uniques` is not capped the way
+    // `sum.visits` (adaptive-groups) was.
     const isUsable = (data) => {
       if (!data || data.connected === false) return false;
-      const v = data?.totals?.visits;
-      if (v === null || v === undefined) return false;
-      const cov = data?.totals?.visits_coverage;
-      // If coverage info is missing assume usable (back-compat with
-      // older backend versions that don't emit the field).
-      if (!cov) return true;
-      return cov.complete === true;
+      const v = data?.totals?.visitors;
+      return v !== null && v !== undefined;
     };
     const tryRange = async (range) => {
       try {
