@@ -201,7 +201,9 @@ class TestAtlasVsEnabledGate:
         ):
             result = _run(startup_checks.run_atlas_vs_startup_check())
 
-        assert result.get("ok") is True
+        assert result == expected, (
+            f"Gate must pass through ensure_vector_index payload unchanged; got {result!r}"
+        )
 
     def test_gate_logs_warning_and_does_not_raise_when_ensure_fails(
         self, monkeypatch, caplog
