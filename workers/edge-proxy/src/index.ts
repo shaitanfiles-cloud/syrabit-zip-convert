@@ -399,17 +399,30 @@ function ipInRanges(ip: string, ranges: CidrRange[]): boolean {
   return false;
 }
 
-// Task #243 — Ranges last validated 2025-05-01 against vendor-published lists.
-// IMPORTANT: Only exact ranges from authoritative crawler-specific publications
-// are listed here. Generic cloud/datacenter supernets are intentionally excluded
-// because they would incorrectly verify spoofed-UA traffic from large cloud pools.
-// Authoritative source: https://developers.google.com/search/apis/ipranges/googlebot.json
-// NOTE: Cloudflare's cf.verifiedBot is the primary trust gate (checked first in
-// verifySearchBot), so ranges here are a secondary verification layer only.
+// ── Crawler IP verification ranges ────────────────────────────────────────────
+//
+// Design rationale (Task #243):
+//   Cloudflare's cf.verifiedBot flag is checked FIRST in verifySearchBot and
+//   immediately returns {verified:true} without consulting any of the ranges
+//   below. That means every legitimate crawler on a newly-added IP range will
+//   be verified by Cloudflare before it would ever be rejected here. These
+//   CIDR lists are therefore a secondary fallback — they classify the minority
+//   of requests where CF hasn't yet verified the bot (fresh IPs, edge cases).
+//
+// Update policy:
+//   Only exact subnets from the crawler's own published source are included.
+//   Generic cloud / datacenter supernets MUST NOT be added: they let spoofed
+//   UAs from cloud IP pools be treated as verified crawlers, breaking spoof
+//   detection and rate-limit enforcement.
+//   To refresh: fetch the source URL for each provider, diff against this list,
+//   and add only the new /24 or narrower subnets that appear.
+//
+// Validated: 2025-05-01
+// Source: https://developers.google.com/search/apis/ipranges/googlebot.json
 const GOOGLE_BOT_RANGES = parseCidrs([
-  // Legacy shared-hosting crawler ranges (listed in googlebot.json)
+  // Legacy shared-hosting crawler ranges (googlebot.json)
   "66.249.64.0/19", "66.249.96.0/20",
-  // GCP regional crawler ranges — all /27 or narrower (from googlebot.json)
+  // GCP regional crawler ranges — all /27 or narrower (googlebot.json)
   "34.100.182.96/28", "34.101.50.144/28", "34.118.254.0/28",
   "34.118.66.0/28", "34.126.178.96/28", "34.146.150.144/28",
   "34.147.110.160/28", "34.151.74.144/28", "34.152.50.64/28",
@@ -420,8 +433,7 @@ const GOOGLE_BOT_RANGES = parseCidrs([
   "34.96.162.48/28", "35.247.243.240/28",
 ]);
 
-// Authoritative source: https://www.bing.com/toolbox/bingbot.xml (validated 2025-05-01)
-// Only subnets explicitly listed in Microsoft's bingbot.xml are included.
+// Source: https://www.bing.com/toolbox/bingbot.xml (validated 2025-05-01)
 const BING_BOT_RANGES = parseCidrs([
   "157.55.39.0/24", "207.46.13.0/24", "40.77.167.0/24",
   "52.167.144.0/24", "13.66.139.0/24", "13.67.8.0/24",
@@ -437,6 +449,7 @@ const OPENAI_BOT_RANGES = parseCidrs([
   "52.230.152.0/24", "52.233.106.0/24",
 ]);
 
+// Source: https://yandex.com/ips (validated 2025-05-01)
 const YANDEX_BOT_RANGES = parseCidrs([
   "5.255.253.0/24", "77.88.5.0/24", "77.88.47.0/24",
   "87.250.224.0/19", "93.158.161.0/24", "95.108.128.0/17",
@@ -444,6 +457,8 @@ const YANDEX_BOT_RANGES = parseCidrs([
   "199.21.99.0/24", "213.180.192.0/19",
 ]);
 
+// Source: https://support.apple.com/en-us/101555 — Applebot uses 17.0.0.0/8
+// (the entire Apple-owned /8 block). Apple does not publish a narrower list.
 const APPLE_BOT_RANGES = parseCidrs([
   "17.0.0.0/8",
 ]);
@@ -2692,12 +2707,19 @@ async function _handleEdgeFetch(
     //     above, so this block runs after them.
     // CORS headers are included so the response is well-formed even if
     // a browser-side preview ever hits this branch.
-    // Resolve bot identity BEFORE the AI hard-block so that Cloudflare-verified
-    // crawlers (cf.verifiedBot === true) are never incorrectly 403'd even if
-    // their UA string matches the AI_BOT_UA pattern. The trust hierarchy is:
-    //   1. CF verifiedBot flag — unconditional pass (handled inside verifySearchBot)
-    //   2. CIDR range match against known publisher ranges — trusted
-    //   3. UA claims bot but IP not in any known range — spoofed, logged
+    // Resolve bot identity now so that (a) the AI hard-block below has access
+    // to botResult for structured error logging, and (b) the rate-limit and
+    // SEO-content paths later in this handler can use isSearchBot.
+    //
+    // Trust hierarchy inside verifySearchBot:
+    //   1. cf.verifiedBot === true → {verified: true} immediately, no CIDR check.
+    //      This means any legitimate search crawler on a newly-added IP range
+    //      that Cloudflare has already verified is treated as trusted even before
+    //      the CIDR list is refreshed.
+    //   2. UA matches SEARCH_BOT_UA + IP in BOT_UA_RANGES → {verified: true}
+    //   3. UA matches SEARCH_BOT_UA + no registered CIDR list (e.g. YouBot) →
+    //      {verified: false, spoofed: false} — unverified but not an impersonation
+    //   4. UA matches SEARCH_BOT_UA + IP NOT in ranges → {verified: false, spoofed: true}
     const botResult = verifySearchBot(ua, request, clientIp);
     const isSearchBot = botResult.verified;
     let remaining = 999999;
@@ -2708,13 +2730,13 @@ async function _handleEdgeFetch(
       ctx.waitUntil(logSpoofedBot(env.RATE_LIMIT, ipH, ua, clientIp, colo));
     }
 
-    // AI crawler hard-block — unconditional: any UA that matches AI_BOT_UA is
-    // 403'd regardless of cf.verifiedBot. The AI block runs AFTER botResult is
-    // computed (so the logging helper has access to botResult) but the block
-    // itself does NOT use isSearchBot as a bypass gate. YouBot was removed from
-    // AI_BOT_UA entirely so it will never hit this branch; other verified AI
-    // training bots (GPTBot, CCBot, …) stay hard-blocked even when CF marks them
-    // as verifiedBot — that is intentional and within task scope.
+    // AI crawler hard-block.
+    // This block is UNCONDITIONAL — `isSearchBot` / `cf.verifiedBot` do NOT
+    // bypass it. AI training scrapers (GPTBot, CCBot, Google-Extended, …) are
+    // blocked regardless of whether Cloudflare has verified them, because the
+    // verification only proves the request genuinely came from those crawlers,
+    // not that we want to serve them. YouBot was removed from AI_BOT_UA
+    // entirely and reclassified as a search bot, so it never reaches this branch.
     const isRobotsRequest = /^\/robots\.txt$/i.test(pathname);
     if (AI_BOT_UA.test(ua) && !isRobotsRequest) {
       return new Response(
