@@ -196,17 +196,29 @@ class SyllabusEmbedder:
         topics: list = None,
         content: str = "",
     ) -> int:
-        # ── Embed function: Pinecone primary, vertex_services fallback ────────
-        # Pinecone multilingual-e5-large (1024-dim) is the preferred embedder:
+        # ── Embed function: Cohere primary (via vertex_services), Pinecone fallback
+        # Cohere embed-multilingual-v3.0 (1024-dim) via CF AI Gateway BYOK:
         # - Multilingual: handles Assamese/Bengali queries natively
         # - 1024-dim: matches Atlas vector_index and Cloudflare Vectorize dims
-        # - No gateway rate-limit issues (direct Pinecone API)
+        # - Routes through CF AI Gateway — no extra API key needed in Railway
+        # Pinecone multilingual-e5-large is kept as fallback if Cohere is down.
         _pc_available = False
         try:
             from providers.pinecone_ai import ENABLED as _pc_enabled, embed_passages as _pc_embed_passages
             _pc_available = _pc_enabled
         except Exception:
             pass
+
+        async def _embed_fn_cohere(text: str, task_type: str = "RETRIEVAL_DOCUMENT", **_kw) -> Optional[list]:
+            try:
+                from vertex_services import embed_text as _vt_embed
+                return await asyncio.wait_for(
+                    _vt_embed(text, task_type=task_type),
+                    timeout=20.0,
+                )
+            except Exception as exc:
+                logger.warning("Cohere/vertex embed failed for '%s': %s", text[:40], exc)
+                return None
 
         async def _embed_fn_pinecone(text: str, **_kw) -> Optional[list]:
             try:
@@ -219,26 +231,8 @@ class SyllabusEmbedder:
                 logger.warning("Pinecone embed failed for '%s': %s", text[:40], exc)
                 return None
 
-        async def _embed_fn_vertex(text: str, task_type: str = "RETRIEVAL_DOCUMENT", **_kw):
-            try:
-                from vertex_services import embed_text as _vt_embed
-                return await asyncio.wait_for(
-                    _vt_embed(text, task_type=task_type),
-                    timeout=20.0,
-                )
-            except Exception as exc:
-                logger.warning("Vertex embed failed for '%s': %s", text[:40], exc)
-                return None
-
-        if _pc_available:
-            _embed_fn = _embed_fn_pinecone
-            _current_embed_model = "pinecone/multilingual-e5-large"
-        else:
-            _embed_fn = _embed_fn_vertex
-            try:
-                from vertex_services import _EMBED_MODEL as _current_embed_model
-            except ImportError:
-                _current_embed_model = "vertex"
+        _embed_fn = _embed_fn_cohere
+        _current_embed_model = "cohere/embed-multilingual-v3.0"
 
         retriever = await self._get_retriever()
         if not retriever.is_configured():
@@ -263,11 +257,11 @@ class SyllabusEmbedder:
             logger.warning(f"Embed chapter failed for {title[:40]}: {exc}")
             vec = None
 
-        # Fallback: if Pinecone failed, try vertex
+        # Fallback: if Cohere failed, try Pinecone
         if not vec and _pc_available:
-            logger.info("Pinecone embed returned empty — retrying with vertex_services for '%s'", title[:40])
+            logger.info("Cohere embed returned empty — retrying with Pinecone for '%s'", title[:40])
             try:
-                vec = await _embed_fn_vertex(embed_text_input, task_type="RETRIEVAL_DOCUMENT")
+                vec = await _embed_fn_pinecone(embed_text_input)
             except Exception:
                 pass
 

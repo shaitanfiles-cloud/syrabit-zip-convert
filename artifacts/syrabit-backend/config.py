@@ -445,7 +445,7 @@ BASETEN_MODEL_ID = os.environ.get('BASETEN_MODEL_ID', '').strip()
 
 # Cohere embed config
 COHERE_EMBED_MODEL   = os.environ.get('COHERE_EMBED_MODEL',   'embed-multilingual-v3.0').strip() or 'embed-multilingual-v3.0'
-COHERE_EMBED_PRIMARY = os.environ.get('COHERE_EMBED_PRIMARY', '').strip().lower() in ('1', 'true', 'yes')
+COHERE_EMBED_PRIMARY = os.environ.get('COHERE_EMBED_PRIMARY', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 
 # Cartesia voice config
 CARTESIA_DEFAULT_VOICE_ID = os.environ.get('CARTESIA_VOICE_ID', '').strip()
@@ -560,18 +560,6 @@ SARVAM_API_KEY = os.environ.get('SARVAM_API_KEY', '').strip()
 SARVAM_API_KEY_2 = os.environ.get('SARVAM_API_KEY_2', '').strip()
 SARVAM_TRANSLATE_KEY = SARVAM_API_KEY or SARVAM_API_KEY_2
 SARVAM_BASE_URL = 'https://api.sarvam.ai'
-
-# ── MongoDB Atlas Embedding & Reranking API (Voyage AI) ──────────────────────
-# MongoDB acquired Voyage AI and provides embedding + reranking models as
-# a managed API service. Set MONGODB_MODEL_API_KEY in Replit Secrets.
-# All call sites guard with `if voyage.ENABLED` and fall back gracefully.
-MONGODB_MODEL_API_KEY = os.environ.get('MONGODB_MODEL_API_KEY', '').strip()
-
-# Alias: VOYAGE_API_KEY → MONGODB_MODEL_API_KEY when not explicitly set.
-# voyage.py already handles this fallback internally, but injecting it here
-# makes it available to any tool (wrangler, scripts) that reads env vars.
-if not os.environ.get('VOYAGE_API_KEY', '').strip() and MONGODB_MODEL_API_KEY:
-    os.environ['VOYAGE_API_KEY'] = MONGODB_MODEL_API_KEY
 
 # Alias: CLOUDFLARE_ACCOUNT_ID → CF_AI_GATEWAY_ACCOUNT_ID when not set.
 # vectorize_client, wrangler scripts, and CF SDK all expect CLOUDFLARE_ACCOUNT_ID;

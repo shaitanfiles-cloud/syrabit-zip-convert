@@ -1,8 +1,10 @@
 """
 providers.chunk_embedder — Batch embedding pipeline for the chunks collection.
 
-Embeds all chunks that are missing an `embedding` field using Pinecone
-`multilingual-e5-large` (1024-dim, multilingual — handles Assamese content).
+Embeds all chunks that are missing an `embedding` field using Cohere
+`embed-multilingual-v3.0` via Cloudflare AI Gateway (BYOK).
+1024-dim, multilingual — handles Assamese, Bengali, Hindi, English content.
+
 After running, the Atlas `vector_index` on `chunks.embedding` becomes
 queryable via `$vectorSearch`.
 
@@ -23,23 +25,43 @@ from typing import Any, Optional
 
 logger = logging.getLogger("providers.chunk_embedder")
 
-_EMBED_MODEL = "multilingual-e5-large"
+_EMBED_MODEL = "embed-multilingual-v3.0"
 _EMBED_DIM   = 1024
-_BATCH_SIZE  = 48   # Pinecone allows up to 96 inputs; keep below for safety
+_BATCH_SIZE  = 48   # Cohere allows up to 96 inputs; keep below for safety
 
 
-async def _pinecone_embed_batch(texts: list[str]) -> list[Optional[list[float]]]:
-    """Embed a batch of texts using Pinecone. Returns None for failures."""
+async def _cohere_embed_batch(texts: list[str]) -> list[Optional[list[float]]]:
+    """Embed a batch of texts using Cohere via CF AI Gateway (BYOK).
+
+    Returns None slots for any individual failure; never raises.
+    Falls back to Pinecone if Cohere is unavailable.
+    """
     try:
-        from providers.pinecone_ai import embed as pc_embed
-        vecs = await asyncio.wait_for(
-            pc_embed(texts, input_type="passage"),
-            timeout=20.0,
-        )
-        return vecs
+        from providers.cohere import embed as _cohere_embed, ENABLED as _cohere_on
+        if _cohere_on:
+            vecs = await asyncio.wait_for(
+                _cohere_embed(texts, input_type="search_document"),
+                timeout=25.0,
+            )
+            if vecs and len(vecs) == len(texts):
+                return vecs
     except Exception as exc:
-        logger.warning("[chunk_embedder] Pinecone embed batch failed: %s", exc)
-        return [None] * len(texts)
+        logger.warning("[chunk_embedder] Cohere embed batch failed: %s", exc)
+
+    # Fallback: Pinecone multilingual-e5-large
+    try:
+        from providers.pinecone_ai import embed as pc_embed, ENABLED as _pc_on
+        if _pc_on:
+            logger.info("[chunk_embedder] Falling back to Pinecone for this batch")
+            vecs = await asyncio.wait_for(
+                pc_embed(texts, input_type="passage"),
+                timeout=20.0,
+            )
+            return vecs
+    except Exception as exc:
+        logger.warning("[chunk_embedder] Pinecone fallback also failed: %s", exc)
+
+    return [None] * len(texts)
 
 
 async def embed_chunks_bulk(
@@ -108,7 +130,7 @@ async def embed_chunks_bulk(
             continue
 
         idxs, embed_texts = zip(*to_embed)
-        vecs = await _pinecone_embed_batch(list(embed_texts))
+        vecs = await _cohere_embed_batch(list(embed_texts))
 
         # Update MongoDB
         from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -127,7 +149,7 @@ async def embed_chunks_bulk(
                     "embedding":        vec,
                     "embedding_model":  _EMBED_MODEL,
                     "embedding_dim":    _EMBED_DIM,
-                    "embedding_source": "pinecone",
+                    "embedding_source": "cohere",
                 }},
                 upsert=False,
             ))

@@ -114,7 +114,6 @@ def _validate_env():
         "UPSTASH_REDIS_REST_URL",
         "UPSTASH_REDIS_REST_TOKEN",
         "CLOUDFLARE_API_TOKEN",
-        "VOYAGE_API_KEY",
         "ADMIN_EMAILS",
         "ADMIN_PASSWORDS",
         "ADMIN_NAMES",
