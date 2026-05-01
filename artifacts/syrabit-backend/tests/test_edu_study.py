@@ -608,16 +608,30 @@ def test_build_flashcards_mnemonic_without_explanation_back_is_phrase_only(
 
 def test_build_flashcards_respects_qa_cap_of_eight(edu_app, fake_conn_factory):
     """Q&A extraction is capped at 8 cards — more than 8 pairs in the
-    structured payload must not produce extra cards."""
+    structured payload must not produce extra cards, must keep the first 8
+    pairs in order, and must not include pairs 8-11."""
     structured = {
         "qa": [{"q": f"Q{i}?", "a": f"Answer {i}"} for i in range(12)],
         "mnemonics": [],
     }
-    fake_conn_factory(responses=[[_make_generated_note_row(structured=structured)]])
+    conn = fake_conn_factory(responses=[[_make_generated_note_row(structured=structured)]])
 
     res = edu_app.post("/api/edu/flashcards/build", json={})
     assert res.status_code == 200, res.text
     assert res.json()["created"] == 8
+
+    cards = _flashcard_inserts(conn)
+    fronts = [front for front, _back in cards]
+
+    assert fronts == [f"Q{i}?" for i in range(8)], (
+        f"Expected first 8 questions in order (Q0?–Q7?), got: {fronts}"
+    )
+
+    excluded = {f"Q{i}?" for i in range(8, 12)}
+    assert not excluded.intersection(fronts), (
+        f"Pairs 8–11 must not appear in stored cards, but found: "
+        f"{excluded.intersection(fronts)}"
+    )
 
 
 def test_build_flashcards_structured_as_json_string_is_decoded(
