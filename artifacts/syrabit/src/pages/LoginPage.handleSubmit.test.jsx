@@ -8,8 +8,11 @@
  *   - onboarding_done === true      →  /library
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { axe, toHaveNoViolations } from 'jest-axe';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import React from 'react';
+
+expect.extend(toHaveNoViolations);
 
 const mockNavigate = vi.fn();
 vi.mock('react-router-dom', () => ({
@@ -107,5 +110,29 @@ describe('LoginPage — handleSubmit redirect logic', () => {
     await triggerLogin();
     expect(mockNavigate).not.toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalled();
+  });
+});
+
+describe('LoginPage — axe accessibility audit', () => {
+  beforeEach(() => { vi.useRealTimers(); });
+  afterEach(()  => { vi.useRealTimers(); });
+
+  it('has no axe violations on the clean form (no error state)', async () => {
+    const { container } = render(<LoginPage />);
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  it('has no axe violations when an error banner is active after failed login', async () => {
+    mockLogin.mockRejectedValueOnce(new Error('Bad credentials'));
+    const { container } = render(<LoginPage />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-email-input'), { target: { value: 'u@test.com' } });
+      fireEvent.change(screen.getByTestId('auth-password-input'), { target: { value: 'wrong' } });
+      fireEvent.click(screen.getByTestId('auth-submit-button'));
+    });
+    await act(async () => {});
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
   });
 });

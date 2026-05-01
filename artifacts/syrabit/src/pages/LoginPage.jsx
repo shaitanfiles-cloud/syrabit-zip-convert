@@ -104,7 +104,7 @@ export default function LoginPage() {
           }} />
 
         <div className="relative z-10">
-          <Link to="/" className="inline-block mb-14">
+          <Link to="/" className="inline-block mb-14" aria-label="Go to Syrabit home">
             <LogoFull size="md" textClassName="text-foreground text-2xl" />
           </Link>
 
@@ -172,7 +172,7 @@ export default function LoginPage() {
         </div>
 
         <div className="w-full max-w-sm relative z-10 anim-slide-right">
-          <Link to="/" className="flex items-center gap-2 mb-4 lg:hidden">
+          <Link to="/" className="flex items-center gap-2 mb-4 lg:hidden" aria-label="Go to Syrabit home">
             <LogoFull size="sm" textClassName="text-foreground" />
           </Link>
 
@@ -254,6 +254,7 @@ export default function LoginPage() {
                   <button
                     type="button"
                     onClick={() => setShowPass(!showPass)}
+                    aria-label={showPass ? 'Hide password' : 'Show password'}
                     className="absolute right-1 top-1/2 -translate-y-1/2 min-w-[44px] min-h-[44px] flex items-center justify-center text-muted-foreground/40 hover:text-foreground transition-colors"
                   >
                     {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
