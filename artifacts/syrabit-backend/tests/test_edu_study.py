@@ -1210,3 +1210,49 @@ def test_build_flashcards_qa_cap_counts_positions_not_valid_pairs(edu_app, fake_
             f"{excluded_front!r} (position {excluded_idx}) must not be stored; "
             f"blank entries at positions 0–1 already consumed two slots of the 8-pair cap"
         )
+
+
+def test_build_flashcards_mnemonic_cap_counts_positions_not_valid_entries(
+    edu_app, fake_conn_factory
+):
+    """The [:4] mnemonic cap applies to raw list positions, not to the count of
+    valid (non-blank) entries.
+
+    Positions 0 and 1 have blank ``for``/``mnemonic`` fields — they consume
+    slots inside the [:4] window but produce no cards because the blank-filter
+    (``if for_text and mnemonic_str``) skips them.  Positions 2 and 3 each
+    hold a valid entry and are within the cap, so they produce exactly 2 cards.
+    Positions 4 and 5 hold valid entries but are beyond the raw [:4] boundary
+    and must never be stored.
+
+    A regression that changed the logic to "collect 4 *valid* entries" would
+    reach into positions 4 and 5 to fill the quota — this test would catch it.
+    """
+    mnemonics = (
+        [{"for": "", "mnemonic": ""}] * 2  # positions 0–1: blank, consume slots
+        + [
+            {"for": f"Topic {i}", "mnemonic": f"Phrase {i}", "explanation": f"Exp {i}"}
+            for i in range(2, 6)  # positions 2–5: valid entries
+        ]
+    )
+    structured = {"qa": [], "mnemonics": mnemonics}
+    conn = fake_conn_factory(
+        responses=[[_make_generated_note_row(note_id="mn-cap-blank", structured=structured)]]
+    )
+
+    res = edu_app.post("/api/edu/flashcards/build", json={})
+    assert res.status_code == 200, res.text
+
+    cards = _flashcard_inserts(conn)
+    assert len(cards) <= 2, (
+        f"Expected at most 2 mnemonic cards (positions 2–3 only); got {len(cards)} — "
+        "blank entries at positions 0–1 must consume cap slots, not be skipped over"
+    )
+
+    stored_fronts = [front for front, _back in cards]
+    for excluded_idx in (4, 5):
+        excluded_front = f"Mnemonic for: Topic {excluded_idx}"
+        assert excluded_front not in stored_fronts, (
+            f"{excluded_front!r} (position {excluded_idx}) must not be stored; "
+            f"blank entries at positions 0–1 already consumed two of the four cap slots"
+        )
