@@ -278,6 +278,7 @@ export default function SignupPage() {
                     className={`pl-10 pr-11 h-11 ${confirmPassword && !passwordsMatch ? 'border-red-500/40' : ''}`}
                     style={{ scrollMarginBottom: '4rem' }}
                     required
+                    aria-invalid={confirmPassword && !passwordsMatch ? true : undefined}
                     data-testid="auth-password-input"
                   />
                   <button
@@ -323,6 +324,8 @@ export default function SignupPage() {
                     className={`pl-10 pr-11 h-11 ${confirmPassword && !passwordsMatch ? 'border-red-500/40' : ''}`}
                     style={{ scrollMarginBottom: '4rem' }}
                     required
+                    aria-invalid={confirmPassword && !passwordsMatch ? true : undefined}
+                    aria-describedby={confirmPassword && !passwordsMatch ? 'confirm-password-mismatch' : undefined}
                   />
                   <button
                     type="button"
@@ -333,7 +336,7 @@ export default function SignupPage() {
                   </button>
                 </div>
                 {confirmPassword && !passwordsMatch && (
-                  <p className="text-xs text-red-500">Passwords don't match</p>
+                  <p id="confirm-password-mismatch" className="text-xs text-red-500" role="alert">Passwords don't match</p>
                 )}
               </div>
 

@@ -278,6 +278,81 @@ describe('SignupPage — password input red border', () => {
   });
 });
 
+describe('SignupPage — aria-invalid and aria-describedby on password mismatch', () => {
+  it('sets aria-invalid on both inputs when confirm is non-empty and passwords differ', async () => {
+    render(<SignupPage />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-password-input'), {
+        target: { value: 'Password1!' },
+      });
+      const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+      fireEvent.change(confirmInput, { target: { value: 'Different1!' } });
+    });
+    expect(screen.getByTestId('auth-password-input').getAttribute('aria-invalid')).toBe('true');
+    const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+    expect(confirmInput.getAttribute('aria-invalid')).toBe('true');
+  });
+
+  it('removes aria-invalid from both inputs once passwords match', async () => {
+    render(<SignupPage />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-password-input'), {
+        target: { value: 'Password1!' },
+      });
+      const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+      fireEvent.change(confirmInput, { target: { value: 'Different1!' } });
+    });
+    await act(async () => {
+      const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+      fireEvent.change(confirmInput, { target: { value: 'Password1!' } });
+    });
+    expect(screen.getByTestId('auth-password-input').getAttribute('aria-invalid')).toBeNull();
+    const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+    expect(confirmInput.getAttribute('aria-invalid')).toBeNull();
+  });
+
+  it('does not set aria-invalid when confirm password is empty', async () => {
+    render(<SignupPage />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-password-input'), {
+        target: { value: 'Password1!' },
+      });
+    });
+    expect(screen.getByTestId('auth-password-input').getAttribute('aria-invalid')).toBeNull();
+  });
+
+  it('sets aria-describedby on the confirm input pointing to the error message id', async () => {
+    render(<SignupPage />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-password-input'), {
+        target: { value: 'Password1!' },
+      });
+      const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+      fireEvent.change(confirmInput, { target: { value: 'Different1!' } });
+    });
+    const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+    expect(confirmInput.getAttribute('aria-describedby')).toBe('confirm-password-mismatch');
+    expect(document.getElementById('confirm-password-mismatch')).toBeTruthy();
+  });
+
+  it('removes aria-describedby from the confirm input once passwords match', async () => {
+    render(<SignupPage />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('auth-password-input'), {
+        target: { value: 'Password1!' },
+      });
+      const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+      fireEvent.change(confirmInput, { target: { value: 'Different1!' } });
+    });
+    await act(async () => {
+      const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+      fireEvent.change(confirmInput, { target: { value: 'Password1!' } });
+    });
+    const confirmInput = screen.getAllByPlaceholderText('••••••••').slice(-1)[0];
+    expect(confirmInput.getAttribute('aria-describedby')).toBeNull();
+  });
+});
+
 describe('SignupPage — handleSubmit redirect logic', () => {
   it('navigates to /onboarding when user has onboarding_done=false', async () => {
     mockSignup.mockResolvedValueOnce({ role: '', onboarding_done: false });
