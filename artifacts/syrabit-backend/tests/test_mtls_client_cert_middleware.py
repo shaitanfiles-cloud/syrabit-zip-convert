@@ -9,6 +9,13 @@ Verifies all guard cases for the mTLS HMAC enforcement middleware:
 5. Passes (200) when the header carries the correct HMAC.
 6. Probe paths /api/livez, /api/readyz, /api/ready are exempt without the header.
 7. /api/health is NOT exempt — blocked without the correct HMAC.
+
+Task #135 — misconfiguration alerting:
+8. MTLS_MISCONFIGURED flag is True when ENFORCE_MTLS=true but secret is absent.
+9. MTLS_MISCONFIGURED flag is False when ENFORCE_MTLS=true and secret is present.
+10. MTLS_MISCONFIGURED flag is False when ENFORCE_MTLS is not set.
+11. A readyz-style endpoint returns 503 when MTLS_MISCONFIGURED is True.
+12. A readyz-style endpoint returns 200 when MTLS_MISCONFIGURED is False.
 """
 import hashlib
 import hmac
@@ -154,3 +161,116 @@ def test_health_is_not_exempt():
     client = TestClient(app)
     resp = client.get("/api/health")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Task #135 — MTLS_MISCONFIGURED flag and /readyz 503 alerting
+# ---------------------------------------------------------------------------
+
+def _reload_middleware_flag(*, enforce_mtls: bool, secret: str | None) -> bool:
+    """Reload the middleware module with the given env config and return MTLS_MISCONFIGURED."""
+    from config import Configurator
+
+    if enforce_mtls:
+        Configurator.set_runtime_env("ENFORCE_MTLS", "true")
+    else:
+        os.environ.pop("ENFORCE_MTLS", None)
+
+    if secret is None:
+        os.environ.pop("ORIGIN_SHARED_SECRET", None)
+    else:
+        Configurator.set_runtime_env("ORIGIN_SHARED_SECRET", secret)
+
+    import middleware
+    importlib.reload(middleware)
+    return middleware.MTLS_MISCONFIGURED
+
+
+def test_misconfigured_flag_set_when_enforce_without_secret():
+    """MTLS_MISCONFIGURED must be True when ENFORCE_MTLS=true but no secret is set."""
+    flag = _reload_middleware_flag(enforce_mtls=True, secret=None)
+    assert flag is True
+
+
+def test_misconfigured_flag_clear_when_enforce_with_secret():
+    """MTLS_MISCONFIGURED must be False when ENFORCE_MTLS=true and secret is present."""
+    flag = _reload_middleware_flag(enforce_mtls=True, secret=_TEST_SECRET)
+    assert flag is False
+
+
+def test_misconfigured_flag_clear_when_enforce_not_set():
+    """MTLS_MISCONFIGURED must be False when ENFORCE_MTLS is not set at all."""
+    flag = _reload_middleware_flag(enforce_mtls=False, secret=None)
+    assert flag is False
+
+
+def _build_readyz_app(*, enforce_mtls: bool, secret: str | None):
+    """Build a minimal app whose /api/readyz mirrors the mtls_config check from
+    cms_sarvam_health.readyz so we can test the 503 path without the full
+    health-snapshot-cache machinery."""
+    from config import Configurator
+
+    if enforce_mtls:
+        Configurator.set_runtime_env("ENFORCE_MTLS", "true")
+    else:
+        os.environ.pop("ENFORCE_MTLS", None)
+
+    if secret is None:
+        os.environ.pop("ORIGIN_SHARED_SECRET", None)
+    else:
+        Configurator.set_runtime_env("ORIGIN_SHARED_SECRET", secret)
+
+    import middleware
+    importlib.reload(middleware)
+
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse as _JSONResponse
+    import middleware as _mw
+
+    test_app = FastAPI()
+
+    @test_app.get("/api/readyz")
+    async def readyz():
+        mtls_ok = not _mw.MTLS_MISCONFIGURED
+        mtls_check = (
+            {"status": "ok"}
+            if mtls_ok
+            else {
+                "status": "misconfigured",
+                "detail": (
+                    "ENFORCE_MTLS=true but ORIGIN_SHARED_SECRET is not set — "
+                    "mTLS enforcement is INACTIVE and the origin is UNPROTECTED."
+                ),
+            }
+        )
+        critical_ok = mtls_ok
+        return _JSONResponse(
+            status_code=200 if critical_ok else 503,
+            content={"status": "ready" if critical_ok else "degraded", "checks": {"mtls_config": mtls_check}},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    return test_app
+
+
+def test_readyz_returns_503_when_mtls_misconfigured():
+    """/api/readyz must return 503 when ENFORCE_MTLS=true but ORIGIN_SHARED_SECRET is absent."""
+    app = _build_readyz_app(enforce_mtls=True, secret=None)
+    client = TestClient(app)
+    resp = client.get("/api/readyz")
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["status"] == "degraded"
+    assert body["checks"]["mtls_config"]["status"] == "misconfigured"
+    assert "ORIGIN_SHARED_SECRET" in body["checks"]["mtls_config"]["detail"]
+
+
+def test_readyz_returns_200_when_mtls_correctly_configured():
+    """/api/readyz must return 200 (for the mtls check) when both env vars are set."""
+    app = _build_readyz_app(enforce_mtls=True, secret=_TEST_SECRET)
+    client = TestClient(app)
+    resp = client.get("/api/readyz")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ready"
+    assert body["checks"]["mtls_config"]["status"] == "ok"

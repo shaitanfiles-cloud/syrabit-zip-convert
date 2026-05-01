@@ -886,6 +886,14 @@ def _compute_mtls_hmac(secret: str) -> str:
     return _hmac_mod.new(secret.encode("utf-8"), b"mtls-active", _hashlib_mod.sha256).hexdigest()
 
 
+# Task #135 — module-level misconfiguration flag.
+# Set to True at import time when ENFORCE_MTLS=true but ORIGIN_SHARED_SECRET is
+# absent.  Exported so /api/readyz can include it in its critical-dependency
+# check and return 503 rather than silently advertising "ready" while the
+# origin is actually unprotected.
+MTLS_MISCONFIGURED: bool = _ENFORCE_MTLS and not bool(_ORIGIN_SHARED_SECRET)
+
+
 class MtlsClientCertMiddleware:
     """Reject requests that did not flow through the Cloudflare edge with the mTLS cert.
 
@@ -901,6 +909,10 @@ class MtlsClientCertMiddleware:
 
     Disabled (no enforcement) when ENFORCE_MTLS is not set or ORIGIN_SHARED_SECRET
     is empty, so existing deployments keep working during the rollout window.
+
+    Misconfiguration (ENFORCE_MTLS=true but ORIGIN_SHARED_SECRET absent) sets
+    the module-level ``MTLS_MISCONFIGURED`` flag and logs at ERROR level so
+    log-based alerting catches it; /api/readyz also returns 503 in this state.
     """
 
     def __init__(self, app: ASGIApp):
@@ -913,9 +925,13 @@ class MtlsClientCertMiddleware:
                 "X-Cf-Mtls-Active HMAC proof from the CF Worker"
             )
         elif _ENFORCE_MTLS and not _ORIGIN_SHARED_SECRET:
-            logger.warning(
-                "MtlsClientCertMiddleware: ENFORCE_MTLS=true but ORIGIN_SHARED_SECRET "
-                "is not set — enforcement is inactive (no HMAC key available)"
+            # Use ERROR (not WARNING) so log-based alerting rules fire.
+            # MTLS_MISCONFIGURED is also True — /api/readyz will return 503.
+            logger.error(
+                "MtlsClientCertMiddleware: MISCONFIGURED — ENFORCE_MTLS=true but "
+                "ORIGIN_SHARED_SECRET is not set. Enforcement is INACTIVE and the "
+                "origin is UNPROTECTED. Set ORIGIN_SHARED_SECRET or unset "
+                "ENFORCE_MTLS to suppress this alert."
             )
         else:
             logger.info("MtlsClientCertMiddleware: inactive (ENFORCE_MTLS not set)")

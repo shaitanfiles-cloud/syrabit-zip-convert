@@ -1635,7 +1635,29 @@ async def readyz():
     # (LLM probe loop is 5 min; vertex probe loop is independent).
     vertex_block, vertex_ok = _vertex_block_for_health()
 
-    critical_ok = (mongo.get("status") == "ok") and (pg.get("status") == "ok")
+    # Task #135 — surface mTLS misconfiguration in readyz so any load balancer
+    # or health-monitor that polls this endpoint gets a 503 rather than a false
+    # "ready" while the origin is actually unprotected.
+    import middleware as _middleware_mod
+    mtls_ok = not _middleware_mod.MTLS_MISCONFIGURED
+    mtls_check = (
+        {"status": "ok"}
+        if mtls_ok
+        else {
+            "status": "misconfigured",
+            "detail": (
+                "ENFORCE_MTLS=true but ORIGIN_SHARED_SECRET is not set — "
+                "mTLS enforcement is INACTIVE and the origin is UNPROTECTED. "
+                "Set ORIGIN_SHARED_SECRET or unset ENFORCE_MTLS."
+            ),
+        }
+    )
+
+    critical_ok = (
+        (mongo.get("status") == "ok")
+        and (pg.get("status") == "ok")
+        and mtls_ok
+    )
     body = {
         "status": "ready" if critical_ok else "degraded",
         "checks": {
@@ -1644,6 +1666,7 @@ async def readyz():
             "cloudflare_cache": cf_cache_dep,
             "razorpay": razorpay_dep,
             "vertex": vertex_block,
+            "mtls_config": mtls_check,
         },
     }
     return JSONResponse(
