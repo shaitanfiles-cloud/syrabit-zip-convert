@@ -40,7 +40,7 @@ async def ga4_status(admin: dict = Depends(get_admin_user)):
         "token_source": "env" if token_env else ("db" if token_db else "none"),
         "property_id": Configurator.get("GA4_PROPERTY_ID", ""),
         "client_id_set": bool(Configurator.get("GOOGLE_OAUTH_CLIENT_ID")),
-        "client_secret_set": bool(Configurator.get("GOOGLE_CLIENT_SECRET")),
+        "client_secret_set": bool(Configurator.get("GOOGLE_OAUTH_CLIENT_SECRET")),
     }
 
 

@@ -11,7 +11,7 @@ __all__ = [
     "COOKIE_DOMAIN", "COOKIE_SAMESITE",
     "CORS_ORIGINS", "CORS_ORIGIN_REGEX",
     "DB_NAME", "EMAIL_FROM", "FRONTEND_URL",
-    "GOOGLE_CLIENT_ID",
+    "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET",
     "JWT_ACCESS_EXPIRE_MINUTES", "JWT_ALGORITHM",
     "JWT_EXPIRE_MINUTES", "JWT_REFRESH_EXPIRE_MINUTES", "JWT_SECRET",
     "LLM_MODEL", "LLM_PROVIDER",
@@ -133,11 +133,12 @@ if ADMIN_JWT_SECRET == JWT_SECRET:
         "signing key. Generate two independent secrets."
     )
 
-# ── Google OAuth ──────────────────────────────────────────────────────────────
-GOOGLE_CLIENT_ID     = (os.environ.get('GOOGLE_CLIENT_ID', '').strip()
-                        or os.environ.get('GOOGLE_OAUTH_CLIENT_ID', '').strip())
-GOOGLE_CLIENT_SECRET = (os.environ.get('GOOGLE_CLIENT_SECRET', '').strip()
-                        or os.environ.get('GOOGLE_OAUTH_CLIENT_SECRET', '').strip())
+# ── Google Analytics (GA4) OAuth — NOT used for Google sign-in (see Supabase) ─
+# Read new-name first; fall back to legacy name so existing deployments keep working.
+GOOGLE_OAUTH_CLIENT_ID     = (os.environ.get('GOOGLE_OAUTH_CLIENT_ID', '').strip()
+                               or os.environ.get('GOOGLE_CLIENT_ID', '').strip())
+GOOGLE_OAUTH_CLIENT_SECRET = (os.environ.get('GOOGLE_OAUTH_CLIENT_SECRET', '').strip()
+                               or os.environ.get('GOOGLE_CLIENT_SECRET', '').strip())
 
 # ── Email Configuration ───────────────────────────────────────────────────────
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
