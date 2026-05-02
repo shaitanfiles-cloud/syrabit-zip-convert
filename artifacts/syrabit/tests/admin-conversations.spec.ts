@@ -55,7 +55,7 @@ test.describe('Admin Conversations', () => {
   test('conversations panel lists sessions with title and user name', async ({ page }) => {
     await installAdminApiMocks(page);
 
-    await page.route('**/api/admin/conversations*', async (route: Route) => {
+    await page.route('**/api/admin/conversations/**', async (route: Route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(CONVERSATIONS_ARRAY) });
     });
 
