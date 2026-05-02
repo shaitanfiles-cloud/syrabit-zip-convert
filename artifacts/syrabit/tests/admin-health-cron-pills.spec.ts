@@ -109,15 +109,18 @@ async function openAdminHealth(page: Page) {
  */
 async function expectConventionTestIdsPresent(page: Page, prefix: string) {
   const tile = page.getByTestId(`${prefix}-tile`);
-  await expect(tile).toBeVisible();
-  await expect(tile.getByTestId(`${prefix}-status`)).toBeVisible();
-  await expect(tile.getByTestId(`${prefix}-pill`)).toBeVisible();
-  await expect(tile.getByTestId(`${prefix}-run-link`)).toBeVisible();
-  await expect(tile.getByTestId(`${prefix}-refresh`)).toBeVisible();
+  await expect(tile).toBeVisible({ timeout: 25_000 });
+  await expect(tile.getByTestId(`${prefix}-status`)).toBeVisible({ timeout: 25_000 });
+  await expect(tile.getByTestId(`${prefix}-pill`)).toBeVisible({ timeout: 25_000 });
+  await expect(tile.getByTestId(`${prefix}-run-link`)).toBeVisible({ timeout: 25_000 });
+  await expect(tile.getByTestId(`${prefix}-refresh`)).toBeVisible({ timeout: 25_000 });
   return tile;
 }
 
 test.describe('AdminHealth cron pills', () => {
+  // Cron pills are lazy-loaded and need extra time in CI.
+  test.setTimeout(60_000);
+
   test('edge-proxy-deploy pill renders the healthy state with all convention testIds', async ({ page }) => {
     await seedAdminSession(page);
     await installAdminApiMocks(page, {

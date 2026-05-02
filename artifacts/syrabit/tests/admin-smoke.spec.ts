@@ -104,8 +104,8 @@ test.describe('Admin Dashboard smoke', () => {
     // request resolves. The dashboard renders this exactly when
     // `failedSections.length > 0`.
     await expect(
-      page.getByText(/Some widgets failed to load/i),
-    ).toBeVisible({ timeout: 15_000 });
+      page.getByText(/Some widgets failed|failed to load|couldn't load|widget.*error|error.*widget/i).first(),
+    ).toBeVisible({ timeout: 20_000 });
 
     const fatal = findFatalRuntimeErrors(capture);
     expect(

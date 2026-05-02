@@ -162,7 +162,7 @@ test.describe('Content Library & Curriculum', () => {
     await page.goto('/ahsec/class-11/biology-class-11/photosynthesis-class-11');
 
     await expect(page.getByText(/Photosynthesis/i).first()).toBeVisible({ timeout: 12_000 });
-    await expect(page.getByText(/light.*reaction|overview|summary|photosynthesis/i)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/light.*reaction|overview|summary|photosynthesis/i).first()).toBeVisible({ timeout: 10_000 });
   });
 
   test('deep-linked chapter URL resolves and renders correctly', async ({ page }) => {

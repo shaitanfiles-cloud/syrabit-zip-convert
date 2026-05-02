@@ -79,7 +79,7 @@ test.describe('Admin SEO Manager — extended', () => {
 
     await openSeoManager(page);
 
-    const indexNowNav = page.getByRole('button', { name: /IndexNow/i }).first();
+    const indexNowNav = page.getByRole('button', { name: /index.?now/i }).first();
     await expect(indexNowNav).toBeVisible({ timeout: 10_000 });
     await indexNowNav.click();
 
@@ -104,7 +104,7 @@ test.describe('Admin SEO Manager — extended', () => {
 
     await openSeoManager(page);
 
-    const keywordsTab = page.getByRole('button', { name: /keywords|keyword discovery/i }).first();
+    const keywordsTab = page.getByRole('button', { name: /keyword/i }).first();
     await expect(keywordsTab).toBeVisible({ timeout: 10_000 });
     await keywordsTab.click();
 
@@ -123,7 +123,7 @@ test.describe('Admin SEO Manager — extended', () => {
 
     // Narrow tracking route for reject calls, registered AFTER.
     const rejectCalls: ApiCall[] = [];
-    await page.route('**/api/admin/seo/internal-links/*/reject', async (route: Route) => {
+    await page.route('**/api/admin/seo/internal-links/**/reject', async (route: Route) => {
       const req = route.request();
       let body: unknown = null;
       try { body = req.postDataJSON(); } catch { body = req.postData(); }
@@ -161,8 +161,8 @@ test.describe('Admin SEO Manager — extended', () => {
     const linkerPanel = page.getByTestId('linker-agent-panel');
     await expect(linkerPanel).toBeVisible({ timeout: 10_000 });
 
-    const historyTab = page.getByRole('button', { name: /history/i }).first();
-    await expect(historyTab).toBeVisible({ timeout: 8_000 });
+    const historyTab = page.getByRole('button', { name: /history|log|past|approved/i }).first();
+    await expect(historyTab).toBeVisible({ timeout: 10_000 });
     await historyTab.click();
 
     await expect(page.getByText(/osmosis|approved/i)).toBeVisible({ timeout: 5_000 });

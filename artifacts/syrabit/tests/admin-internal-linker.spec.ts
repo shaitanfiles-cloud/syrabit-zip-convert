@@ -73,7 +73,7 @@ test.describe('Internal-linker (Links tab)', () => {
     // Registered AFTER installAdminApiMocks so Playwright's LIFO order means
     // this narrow approve route wins over the catch-all.
     await page.route(
-      '**/api/admin/seo/internal-links/*/approve',
+      '**/api/admin/seo/internal-links/**/approve',
       async (route) => {
         const req = route.request();
         let body: unknown = null;

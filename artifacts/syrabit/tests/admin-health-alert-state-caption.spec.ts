@@ -154,6 +154,9 @@ async function openAdminHealth(page: Page) {
 }
 
 test.describe('AdminHealth alert-state caption', () => {
+  // Cron pills and alert-state captions are lazy-loaded and need extra time in CI.
+  test.setTimeout(60_000);
+
   test('edge-proxy-deploy pill shows the "last paged Xh ago" caption when the alerter lock doc is seeded', async ({ page }) => {
     await seedAdminSession(page);
     await installAdminApiMocks(page, {
@@ -174,10 +177,10 @@ test.describe('AdminHealth alert-state caption', () => {
     await alertStateRequest;
 
     const tile = page.getByTestId(`${EDGE_PROXY_PREFIX}-tile`);
-    await expect(tile).toBeVisible();
+    await expect(tile).toBeVisible({ timeout: 25_000 });
 
     const caption = tile.getByTestId(`${EDGE_PROXY_PREFIX}-alert-state`);
-    await expect(caption).toBeVisible();
+    await expect(caption).toBeVisible({ timeout: 25_000 });
     await expect(caption).toHaveText('last paged 2h ago');
   });
 
@@ -198,7 +201,7 @@ test.describe('AdminHealth alert-state caption', () => {
     const caption = page
       .getByTestId(`${EDGE_PROXY_PREFIX}-tile`)
       .getByTestId(`${EDGE_PROXY_PREFIX}-alert-state`);
-    await expect(caption).toBeVisible();
+    await expect(caption).toBeVisible({ timeout: 25_000 });
     await expect(caption).toHaveText('last paged 2h ago · in debounce ~3h remaining');
   });
 
@@ -221,7 +224,7 @@ test.describe('AdminHealth alert-state caption', () => {
     const caption = page
       .getByTestId(`${CF_WAF_DRIFT_PREFIX}-tile`)
       .getByTestId(`${CF_WAF_DRIFT_PREFIX}-alert-state`);
-    await expect(caption).toBeVisible();
+    await expect(caption).toBeVisible({ timeout: 25_000 });
     await expect(caption).toHaveText('last paged 2h ago');
   });
 
@@ -244,7 +247,7 @@ test.describe('AdminHealth alert-state caption', () => {
     const caption = page
       .getByTestId(`${TRUSTPILOT_PREFIX}-tile`)
       .getByTestId(`${TRUSTPILOT_PREFIX}-alert-state`);
-    await expect(caption).toBeVisible();
+    await expect(caption).toBeVisible({ timeout: 25_000 });
     await expect(caption).toHaveText('last paged 2h ago');
   });
 
@@ -272,7 +275,7 @@ test.describe('AdminHealth alert-state caption', () => {
     const caption = page
       .getByTestId(`${UNIFIED_LOGS_CF_PULL_PREFIX}-tile`)
       .getByTestId(`${UNIFIED_LOGS_CF_PULL_PREFIX}-alert-state`);
-    await expect(caption).toBeVisible();
+    await expect(caption).toBeVisible({ timeout: 25_000 });
     await expect(caption).toHaveText('last paged 2h ago');
   });
 
@@ -336,10 +339,10 @@ test.describe('AdminHealth alert-state caption', () => {
     // Wait for at least one pill to render before asserting the
     // captions are absent — otherwise a slow load could pass the
     // negative assertion before the page has even hydrated.
-    await expect(page.getByTestId(`${EDGE_PROXY_PREFIX}-tile`)).toBeVisible();
-    await expect(page.getByTestId(`${CF_WAF_DRIFT_PREFIX}-tile`)).toBeVisible();
-    await expect(page.getByTestId(`${TRUSTPILOT_PREFIX}-tile`)).toBeVisible();
-    await expect(page.getByTestId(`${UNIFIED_LOGS_CF_PULL_PREFIX}-tile`)).toBeVisible();
+    await expect(page.getByTestId(`${EDGE_PROXY_PREFIX}-tile`)).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByTestId(`${CF_WAF_DRIFT_PREFIX}-tile`)).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByTestId(`${TRUSTPILOT_PREFIX}-tile`)).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByTestId(`${UNIFIED_LOGS_CF_PULL_PREFIX}-tile`)).toBeVisible({ timeout: 25_000 });
 
     await expect(page.getByTestId(`${EDGE_PROXY_PREFIX}-alert-state`)).toHaveCount(0);
     await expect(page.getByTestId(`${CF_WAF_DRIFT_PREFIX}-alert-state`)).toHaveCount(0);

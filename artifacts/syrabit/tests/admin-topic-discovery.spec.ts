@@ -102,7 +102,7 @@ test.describe('Topic Discovery tab', () => {
     // Registered AFTER installAdminApiMocks (LIFO priority) so this narrow route
     // wins over the catch-all for the override endpoint.
     await page.route(
-      '**/api/admin/seo/topic-discovery/*/override',
+      '**/api/admin/seo/topic-discovery/**/override',
       async (route) => {
         const req = route.request();
         let body: unknown = null;

@@ -327,7 +327,11 @@ async function installStripePaymentMocks(page: import('@playwright/test').Page, 
   await page.addInitScript(() => {
     try { window.sessionStorage.setItem('syrabit_token', 'e2e.user.jwt'); } catch {}
     // Shim Razorpay so any open() call is a no-op; success is simulated in tests.
-    (window as unknown as Record<string, unknown>).Razorpay = function(this: { opts: unknown }, o: unknown) { this.opts = o; };
+    // Store opts on window.__rzpOptions so tests can waitForFunction on it.
+    (window as unknown as Record<string, unknown>).Razorpay = function(this: { opts: unknown }, o: unknown) {
+      this.opts = o;
+      (window as unknown as Record<string, unknown>).__rzpOptions = o;
+    };
     (window as unknown as Record<string, { prototype: { open: () => void } }>).Razorpay.prototype.open = function() {};
   });
 
@@ -447,7 +451,7 @@ test.describe('Payment edge cases', () => {
 
     expect(state.verifyRequests).toHaveLength(0);
     expect(state.upgraded).toBe(false);
-    await expect(page.getByText(new RegExp(`${FREE_CREDITS_LIMIT}`))).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(new RegExp(`${FREE_CREDITS_LIMIT}`)).first()).toBeVisible({ timeout: 5_000 });
   });
 
   test('payment success upgrades plan to starter and profile reflects new credits', async ({ page }) => {
@@ -480,7 +484,7 @@ test.describe('Payment edge cases', () => {
     // Profile now shows Starter plan and increased credit limit.
     await page.goto('/profile');
     await expect(page.getByText(/Starter/i).first()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(new RegExp(String(STARTER_CREDITS_LIMIT)))).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(new RegExp(String(STARTER_CREDITS_LIMIT))).first()).toBeVisible({ timeout: 5_000 });
   });
 
   test('payment failure retains free plan and shows error feedback', async ({ page }) => {
@@ -525,10 +529,13 @@ test.describe('Payment edge cases', () => {
     await expect(page.getByText(new RegExp(String(STARTER_CREDITS_LIMIT))).first()).toBeVisible({ timeout: 10_000 });
 
     // Click the manage / cancel subscription button on the profile page.
-    const manageBtn = page.getByRole('button', { name: /downgrade|cancel|manage|free plan/i }).first();
-    await expect(manageBtn).toBeVisible({ timeout: 8_000 });
-    await manageBtn.click();
-
+    // Try both button and link roles since different implementations may use either.
+    const manageLocator = page
+      .getByRole('button', { name: /downgrade|cancel|manage|free plan|switch/i })
+      .or(page.getByRole('link', { name: /downgrade|cancel|manage|free plan|switch/i }));
+    // Require the UI control to be present — if it is absent the downgrade flow is broken.
+    await expect(manageLocator.first()).toBeVisible({ timeout: 8_000 });
+    await manageLocator.first().click();
     // Confirm the downgrade if a confirmation dialog appears.
     const confirmBtn = page.getByRole('button', { name: /confirm|yes|downgrade|cancel plan/i }).first();
     if (await confirmBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
@@ -542,7 +549,7 @@ test.describe('Payment edge cases', () => {
     // Profile now shows Free plan — Starter label and 1500-credit limit are gone.
     await page.goto('/profile');
     await expect(page.getByText(/Free/i).first()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(/Starter/i)).not.toBeVisible({ timeout: 3_000 });
+    await expect(page.getByText('Starter', { exact: true }).first()).not.toBeVisible({ timeout: 3_000 });
     await expect(page.getByText(new RegExp(String(FREE_CREDITS_LIMIT))).first()).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(new RegExp(String(STARTER_CREDITS_LIMIT))).first()).not.toBeVisible({ timeout: 3_000 });
   });

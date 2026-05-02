@@ -51,33 +51,27 @@ test.beforeEach(async ({ context }) => {
  * The SW calls self.skipWaiting() in its install handler, so it activates
  * without waiting for existing clients to be closed.
  *
- * In sequential test runs within the same browser context the SW may already
- * be registered from a previous test — in that case `context.waitForEvent`
- * would time out because the 'serviceworker' event already fired.  We race
- * the event against a small poll that returns an already-active worker so
- * both the first-registration path and the already-active path succeed.
+ * In CI (vite preview / production mode) the app auto-registers the SW
+ * during page.goto('/'), so the 'serviceworker' event may have already fired
+ * before this function is called.  Polling context.serviceWorkers() is more
+ * reliable than context.waitForEvent because it handles both the first-
+ * registration path and the already-active path uniformly.
  */
 async function registerSW(context: BrowserContext, page: Page) {
-  // Check if a worker is already active BEFORE we register (covers tests 2-N).
-  const existingWorkers = context.serviceWorkers();
-  if (existingWorkers.length > 0) {
-    // SW already running — re-register to pick up any updates, then return
-    // the existing (or newly activated) worker.
-    await page.evaluate(() =>
-      navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }),
-    );
-    // Give the SW a tick to potentially update, then return the first worker.
-    return context.serviceWorkers()[0];
-  }
+  // Trigger registration (idempotent — safe to call even if already registered).
+  await page.evaluate(() =>
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }),
+  );
 
-  // First registration — wait for the serviceworker event.
-  const [sw] = await Promise.all([
-    context.waitForEvent('serviceworker', { timeout: 30_000 }),
-    page.evaluate(() =>
-      navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }),
-    ),
-  ]);
-  return sw;
+  // Poll for an active SW — covers the case where the app auto-registered
+  // the SW during page.goto and the 'serviceworker' event already fired.
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const workers = context.serviceWorkers();
+    if (workers.length > 0) return workers[0];
+    await new Promise<void>((r) => setTimeout(r, 200));
+  }
+  throw new Error('registerSW: no service worker became active within 30 s');
 }
 
 // ---------------------------------------------------------------------------

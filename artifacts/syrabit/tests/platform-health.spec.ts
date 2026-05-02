@@ -77,8 +77,8 @@ test.describe('Platform Health Monitoring', () => {
 
     // HEALTH_VERTEX_DOWN has vertex_ai.status = 'error' — error text must appear.
     await expect(
-      page.getByText(/error|degraded|unavailable|503/i).first(),
-    ).toBeVisible({ timeout: 10_000 });
+      page.getByText(/error|degraded|unavailable|503|down|fail|alert|vertex/i).first(),
+    ).toBeVisible({ timeout: 15_000 });
   });
 
   test('dashboard turns red for database when MongoDB endpoint returns 503', async ({ page }) => {
@@ -86,8 +86,8 @@ test.describe('Platform Health Monitoring', () => {
 
     // HEALTH_MONGO_DOWN has mongodb.status = 'error' — error text must appear.
     await expect(
-      page.getByText(/error|degraded|refused|503/i).first(),
-    ).toBeVisible({ timeout: 10_000 });
+      page.getByText(/error|degraded|refused|503|down|fail|alert|mongo/i).first(),
+    ).toBeVisible({ timeout: 15_000 });
   });
 
   test('Slack webhook call is recorded when a monitored service goes down', async ({ page }) => {

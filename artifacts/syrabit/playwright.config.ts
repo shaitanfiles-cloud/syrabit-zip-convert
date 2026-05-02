@@ -45,18 +45,31 @@ export default defineConfig({
       name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
-        // pwa-push.spec.ts and pwa-permission.spec.ts register /sw.js directly
-        // via context.waitForEvent('serviceworker') + navigator.serviceWorker.register().
-        // The global serviceWorkers:'block' is overridden here so those tests
-        // can exercise the real SW event handlers (push, notificationclick) and
-        // the permission-request timing without ECONNREFUSED proxy errors on
-        // API routes (which are all mocked via page.route anyway).
+        // Keep service workers BLOCKED for the main chromium suite so that
+        // Playwright's page.route() intercepts all /api/** requests before
+        // the production SW can claim them.  In CI the app is served with
+        // vite preview (NODE_ENV=production) so the SW would otherwise
+        // intercept every mocked API call and proxy it to the non-existent
+        // backend, producing ECONNREFUSED errors that crash the preview server.
+        serviceWorkers: 'block',
+      },
+      // pwa-mobile.spec.ts  → mobile-chrome project
+      // pwa-push.spec.ts    → pwa-chromium project (needs SW allowed)
+      // pwa-permission.spec.ts → pwa-chromium project (needs SW allowed)
+      testIgnore: ['**/pwa-mobile.spec.ts', '**/pwa-push.spec.ts', '**/pwa-permission.spec.ts'],
+    },
+    {
+      // pwa-push.spec.ts and pwa-permission.spec.ts register /sw.js directly
+      // via context.waitForEvent('serviceworker') + navigator.serviceWorker.register()
+      // and call sw.evaluate() to exercise push/notificationclick handlers.
+      // Service workers must be allowed so the SW activates and the tests can
+      // obtain a Worker handle via context.serviceWorkers().
+      name: 'pwa-chromium',
+      use: {
+        ...devices['Desktop Chrome'],
         serviceWorkers: 'allow',
       },
-      // pwa-mobile.spec.ts is scoped to mobile-chrome; skip it here so the
-      // suite does not run twice under a desktop UA where mobile assertions
-      // (viewport meta, touch events, install prompt) have different semantics.
-      testIgnore: '**/pwa-mobile.spec.ts',
+      testMatch: ['**/pwa-push.spec.ts', '**/pwa-permission.spec.ts'],
     },
     {
       // Task #3 — mobile viewport for PWA install-prompt & offline-fallback tests.
