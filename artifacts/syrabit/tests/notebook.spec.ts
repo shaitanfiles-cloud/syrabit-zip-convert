@@ -9,7 +9,8 @@
  *   5. Empty-state renders when user has no highlights.
  *
  * Stubs GET /api/edu/notes, DELETE /api/edu/notes/:id,
- * POST /api/edu/notes/generate-guide via page.route.
+ * POST /api/edu/notes/generate (actual endpoint — not /generate-guide),
+ * GET /api/conversations via page.route.
  */
 import { test, expect, type Page, type Route } from '@playwright/test';
 
@@ -50,20 +51,36 @@ async function installNotebookMocks(page: Page, opts: { notes?: typeof NOTES; de
 
     if (method === 'OPTIONS') { await route.fulfill({ status: 204, body: '' }); return; }
 
-    if (url.includes('/api/edu/notes/generate-guide') && method === 'POST') {
+    // POST /api/edu/notes/generate — actual endpoint used by GenerateNotesModal.
+    if (url.includes('/api/edu/notes/generate') && method === 'POST') {
       guideCalls.push(Date.now());
       await route.fulfill({
         status: 200, contentType: 'application/json',
         body: JSON.stringify({
           ok: true,
-          guide: {
-            title: 'Study Guide: Photosynthesis',
-            sections: [
-              { heading: 'Key Concepts', content: 'Photosynthesis converts light to chemical energy.' },
-              { heading: 'Light Reactions', content: 'Occur in thylakoids; produce ATP and NADPH.' },
-              { heading: 'Dark Reactions', content: 'Calvin cycle in stroma; fix CO2 into G3P.' },
-            ],
+          note: {
+            id: 'gen-note-1',
+            text: 'Photosynthesis converts light energy into chemical energy stored in glucose.',
+            tags: ['biology', 'photosynthesis'],
+            generated: true,
+            structured: { sections: [{ heading: 'Overview', content: 'Calvin cycle + light reactions.' }] },
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
           },
+        }),
+      });
+      return;
+    }
+
+    // GET /api/conversations — used by the modal's conversation picker tab.
+    if (url.includes('/api/conversations') && method === 'GET') {
+      await route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          conversations: [
+            { id: 'conv-mock-1', title: 'Photosynthesis discussion', created_at: new Date().toISOString() },
+          ],
         }),
       });
       return;
@@ -114,12 +131,18 @@ test.describe('Notebook', () => {
 
     await expect(page.getByText(/Calvin cycle/i)).toBeVisible({ timeout: 10_000 });
 
-    const guideBtn = page.getByRole('button', { name: /generate with ai/i });
+    const guideBtn = page.getByRole('button', { name: /generate with ai/i }).first();
     await expect(guideBtn).toBeVisible({ timeout: 5_000 });
     await guideBtn.click();
 
-    // After clicking, the modal opens and we submit — the API gets called.
-    const generateBtn = page.getByRole('button', { name: /generate/i }).last();
+    // Modal opens with "Conversation" tab selected by default.
+    // Select the mock conversation so the form validation passes.
+    const convSelect = page.locator('select').first();
+    await expect(convSelect).toBeVisible({ timeout: 8_000 });
+    await convSelect.selectOption({ index: 1 });
+
+    // Now click Generate — the API should be called.
+    const generateBtn = page.getByRole('button', { name: /^generate$/i });
     await expect(generateBtn).toBeVisible({ timeout: 5_000 });
     await generateBtn.click();
     await expect.poll(() => guideCalls.length, { timeout: 8_000 }).toBeGreaterThan(0);
@@ -143,7 +166,7 @@ test.describe('Notebook', () => {
 
     await expect(page.getByText(/Calvin cycle/i)).toBeVisible({ timeout: 10_000 });
     await expect(
-      page.getByText(/Photosynthesis|photosynthesis-class-11/i).first(),
+      page.getByText(/Photosynthesis|photosynthesis-class-11/i).filter({ visible: true }).first(),
     ).toBeVisible({ timeout: 10_000 });
   });
 

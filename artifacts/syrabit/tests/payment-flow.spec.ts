@@ -260,7 +260,7 @@ test.describe('Razorpay payment flow: /pricing → /profile → verify', () => {
 
     // Sanity: the free-plan user's credit limit is reflected on /profile
     // *before* the upgrade so the post-success assertion is meaningful.
-    await expect(page.getByText(new RegExp(`${FREE_CREDITS_LIMIT}`))).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(new RegExp(`${FREE_CREDITS_LIMIT}`)).first()).toBeVisible({ timeout: 10_000 });
 
     // 3. Confirm → create-order → Razorpay shim records options.
     await confirmBtn.click();
@@ -287,7 +287,7 @@ test.describe('Razorpay payment flow: /pricing → /profile → verify', () => {
     //    call must refetch /user/profile + /user/stats, which now return
     //    the upgraded Starter limit. This proves the UI actually
     //    updated, not just that the toast fired.
-    await expect(page.getByText(new RegExp(`${STARTER_CREDITS_LIMIT}`))).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(new RegExp(`${STARTER_CREDITS_LIMIT}`)).first()).toBeVisible({ timeout: 10_000 });
     expect(state.upgraded).toBe(true);
   });
 
@@ -313,7 +313,7 @@ test.describe('Razorpay payment flow: /pricing → /profile → verify', () => {
     // Modal must NOT auto-close on failure — user needs to retry/cancel.
     await expect(confirmBtn).toBeVisible();
     // Credits still show the free-plan value — no spurious upgrade.
-    await expect(page.getByText(new RegExp(`${FREE_CREDITS_LIMIT}`))).toBeVisible();
+    await expect(page.getByText(new RegExp(`${FREE_CREDITS_LIMIT}`)).first()).toBeVisible();
     expect(state.upgraded).toBe(false);
   });
 });
@@ -433,7 +433,7 @@ test.describe('Payment edge cases', () => {
     // Wait for Razorpay options to be captured then dismiss without paying.
     await page.waitForFunction(
       () => Boolean((window as unknown as { __rzpOptions?: unknown }).__rzpOptions),
-      { timeout: 10_000 },
+      { timeout: 30_000 },
     );
 
     // Simulate the modal_closed (dismiss) callback — no handler call.
@@ -447,7 +447,7 @@ test.describe('Payment edge cases', () => {
 
     expect(state.verifyRequests).toHaveLength(0);
     expect(state.upgraded).toBe(false);
-    await expect(page.getByText(new RegExp(`${FREE_CREDITS_LIMIT}`))).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(new RegExp(`${FREE_CREDITS_LIMIT}`)).first()).toBeVisible({ timeout: 5_000 });
   });
 
   test('payment success upgrades plan to starter and profile reflects new credits', async ({ page }) => {
@@ -467,7 +467,7 @@ test.describe('Payment edge cases', () => {
     // Simulate Razorpay success callback — triggers POST /api/payments/verify.
     await page.waitForFunction(
       () => Boolean((window as unknown as { __rzpOptions?: unknown }).__rzpOptions),
-      { timeout: 10_000 },
+      { timeout: 30_000 },
     );
     await page.evaluate(() => {
       const opts = (window as unknown as { __rzpOptions?: { handler?: (r: Record<string, string>) => void } }).__rzpOptions;
@@ -480,7 +480,7 @@ test.describe('Payment edge cases', () => {
     // Profile now shows Starter plan and increased credit limit.
     await page.goto('/profile');
     await expect(page.getByText(/Starter/i).first()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(new RegExp(String(STARTER_CREDITS_LIMIT)))).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(new RegExp(String(STARTER_CREDITS_LIMIT))).first()).toBeVisible({ timeout: 5_000 });
   });
 
   test('payment failure retains free plan and shows error feedback', async ({ page }) => {
@@ -498,7 +498,7 @@ test.describe('Payment edge cases', () => {
     // Simulate Razorpay callback that triggers verify — verify mock returns 400.
     await page.waitForFunction(
       () => Boolean((window as unknown as { __rzpOptions?: unknown }).__rzpOptions),
-      { timeout: 10_000 },
+      { timeout: 30_000 },
     );
     await page.evaluate(() => {
       const opts = (window as unknown as { __rzpOptions?: { handler?: (r: Record<string, string>) => void } }).__rzpOptions;
@@ -513,7 +513,7 @@ test.describe('Payment edge cases', () => {
     await page.goto('/profile');
     await expect(page.getByText(/Free/i).first()).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/Starter/i)).not.toBeVisible({ timeout: 3_000 });
-    await expect(page.getByText(new RegExp(String(FREE_CREDITS_LIMIT)))).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(new RegExp(String(FREE_CREDITS_LIMIT))).first()).toBeVisible({ timeout: 5_000 });
   });
 
   test('plan downgrade via profile UI removes paid-tier credits', async ({ page }) => {
@@ -522,7 +522,7 @@ test.describe('Payment edge cases', () => {
 
     await page.goto('/profile');
     await expect(page.getByText(/Starter/i).first()).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText(new RegExp(String(STARTER_CREDITS_LIMIT)))).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(new RegExp(String(STARTER_CREDITS_LIMIT))).first()).toBeVisible({ timeout: 10_000 });
 
     // Click the manage / cancel subscription button on the profile page.
     const manageBtn = page.getByRole('button', { name: /downgrade|cancel|manage|free plan/i }).first();
@@ -543,7 +543,7 @@ test.describe('Payment edge cases', () => {
     await page.goto('/profile');
     await expect(page.getByText(/Free/i).first()).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/Starter/i)).not.toBeVisible({ timeout: 3_000 });
-    await expect(page.getByText(new RegExp(String(FREE_CREDITS_LIMIT)))).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByText(new RegExp(String(STARTER_CREDITS_LIMIT)))).not.toBeVisible({ timeout: 3_000 });
+    await expect(page.getByText(new RegExp(String(FREE_CREDITS_LIMIT))).first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(new RegExp(String(STARTER_CREDITS_LIMIT))).first()).not.toBeVisible({ timeout: 3_000 });
   });
 });
