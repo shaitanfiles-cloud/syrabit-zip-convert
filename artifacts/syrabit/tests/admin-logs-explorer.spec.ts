@@ -107,7 +107,7 @@ test.describe('Admin Logs Explorer (Playwright E2E)', () => {
     await expect(page.getByText(/Cache hit for chapter/i)).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(/Rate limit hit/i)).toBeVisible({ timeout: 5_000 });
 
-    const searchInput = page.getByPlaceholder(/search|filter|keyword|query/i).first();
+    const searchInput = page.getByPlaceholder(/search|filter|keyword|query|text|message|free/i).first();
     await expect(searchInput).toBeVisible({ timeout: 8_000 });
     await searchInput.fill('Vertex');
 

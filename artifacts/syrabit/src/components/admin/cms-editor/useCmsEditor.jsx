@@ -15,6 +15,7 @@ export default function useCmsEditor(adminToken, onNavigate, hubContext) {
   const [docs, setDocs]               = useState([]);
   const [loading, setLoading]         = useState(true);
   const [editDoc, setEditDoc]         = useState(null);
+  const [isNewDoc, setIsNewDoc]       = useState(false);
   const [form, setForm]               = useState(EMPTY_DOC);
   const [saving, setSaving]           = useState(false);
   const [publishing, setPublishing]   = useState(false);
@@ -134,10 +135,11 @@ export default function useCmsEditor(adminToken, onNavigate, hubContext) {
     }
   }, [editDoc]);
 
-  const openNew = () => { setEditDoc(null); setForm({ ...EMPTY_DOC }); setSeoTab('content'); setLinkedScopeLabel(''); setShowPreview(false); };
+  const openNew = () => { setEditDoc(null); setIsNewDoc(true); setForm({ ...EMPTY_DOC }); setSeoTab('content'); setLinkedScopeLabel(''); setShowPreview(false); };
 
   const openEdit = (doc) => {
     setEditDoc(doc);
+    setIsNewDoc(false);
     setForm({
       title: doc.title || '', content: doc.content || '',
       meta_description: doc.meta_description || '', description: doc.description || '',
@@ -188,6 +190,7 @@ export default function useCmsEditor(adminToken, onNavigate, hubContext) {
       } else {
         const res = await axios.post(`${API}/admin/content/cms-documents`, payload, authHeaders(adminToken));
         setEditDoc(res.data);
+        setIsNewDoc(false);
         toast.success('Document created');
       }
       await load();
@@ -428,7 +431,7 @@ export default function useCmsEditor(adminToken, onNavigate, hubContext) {
     return matchQ && matchType;
   });
 
-  const inEditor = editDoc !== null || form.title || form.content;
+  const inEditor = editDoc !== null || isNewDoc || form.title || form.content;
   const canPreview = showPreview && !!form.seo_slug;
 
   const selectStyle = {

@@ -9,7 +9,7 @@ import {
   LineChart, Line, BarChart, Bar, AreaChart, Area, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts';
-import { adminGetSpoofedBots, adminGetBlockedIps, adminGetBlockTrends, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings, adminTestAlertDelivery, adminGetTtlMonitor, adminGetCollectionSizeHistory, adminGetAlerts, adminAcknowledgeAlert, adminAcknowledgeAllAlerts, adminBackfillThresholds, adminSendReviewPromptWeeklyDigest, adminGetAlertCooldowns, adminReleaseAlertCooldown } from '@/utils/api';
+import { adminGetSpoofedBots, adminGetBlockedIps, adminGetBlockTrends, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings, adminTestAlertDelivery, adminGetTtlMonitor, adminGetCollectionSizeHistory, adminGetAlerts, adminAcknowledgeAlert, adminAcknowledgeAllAlerts, adminBackfillThresholds, adminSendReviewPromptWeeklyDigest, adminGetAlertCooldowns, adminReleaseAlertCooldown, adminGetBotTraffic } from '@/utils/api';
 import { Database, Activity, CheckCircle2, XCircle } from 'lucide-react';
 
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
@@ -1682,6 +1682,7 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
   const [blockTrends, setBlockTrends] = useState([]);
   const [actionLoading, setActionLoading] = useState({});
   const [blockDurationMenu, setBlockDurationMenu] = useState(null);
+  const [botTraffic, setBotTraffic] = useState(null);
   // Task #573 — bumped on every successful refetch so per-card
   // SectionErrorBoundary instances can drop any stale fallback the
   // moment fresh data arrives. Without this, a transient API blip
@@ -1709,6 +1710,9 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
       adminGetBlockTrends(adminToken, 30)
         .then(res => setBlockTrends(res.data?.series || []))
         .catch(() => setBlockTrends([]));
+      adminGetBotTraffic(adminToken)
+        .then(res => setBotTraffic(res.data))
+        .catch(() => setBotTraffic(null));
       setRefreshCounter((n) => n + 1);
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to load spoofed bot data');
@@ -1832,6 +1836,33 @@ export default function AdminBotSecurity({ adminToken, navContext }) {
             </button>
           </div>
         </div>
+
+        {botTraffic && (
+          <GlassCard>
+            <div className="p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Bot size={14} className="text-violet-500" />
+                <span className="text-xs font-semibold text-gray-700">Cloudflare Bot Traffic ({botTraffic.period || '24h'})</span>
+                {botTraffic.status === 'amber' && (
+                  <span className="ml-auto text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">Warning</span>
+                )}
+                {botTraffic.status === 'red' && (
+                  <span className="ml-auto text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700">Critical</span>
+                )}
+              </div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-2xl font-bold text-gray-900">{botTraffic.bot_pct != null ? `${botTraffic.bot_pct}%` : '—'}</span>
+                <span className="text-xs text-gray-400">bot requests</span>
+              </div>
+              <div className="mt-1 text-xs text-gray-500">
+                {botTraffic.bot_requests?.toLocaleString() || 0} / {botTraffic.total_requests?.toLocaleString() || 0} requests
+              </div>
+              {botTraffic.break_glass && (
+                <div className="mt-2 text-xs font-bold text-red-600 bg-red-50 rounded px-2 py-1">Break-glass threshold exceeded</div>
+              )}
+            </div>
+          </GlassCard>
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           <StatCard

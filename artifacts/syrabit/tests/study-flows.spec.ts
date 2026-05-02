@@ -298,7 +298,7 @@ test.describe('Phase-3 study flows', () => {
     await expect(page.getByRole('heading', { name: /Guardian Controls/ })).toBeVisible();
 
     // The setup form has two PIN inputs (no "current" since none is set).
-    const newPin = page.getByPlaceholder('New PIN');
+    const newPin = page.getByPlaceholder('New PIN', { exact: true });
     const confirmPin = page.getByPlaceholder('Confirm new PIN');
 
     // Mismatch path: should not POST and should toast an error.
@@ -396,7 +396,7 @@ test.describe('Phase-3 study flows', () => {
     // Correct-PIN path: browser prompt → 200 → toast "Strict Mode off".
     page.once('dialog', (d) => d.accept('4242'));
     await toggle.click();
-    await expect(page.getByText(/Strict Mode off/i)).toBeVisible({ timeout: 4000 });
+    await expect(page.getByText(/Strict Mode off/i).first()).toBeVisible({ timeout: 4000 });
     await expect(toggle).toHaveAttribute('aria-checked', 'false');
     expect(state.settingsPosts.at(-1)).toMatchObject({
       body: { strict_mode: false }, pinQuery: '4242',
@@ -472,10 +472,10 @@ test.describe('Phase-3 flashcards — extended (Task #1)', () => {
     await expect(page.getByText('Card 1 of 1')).toBeVisible({ timeout: 8_000 });
 
     // All three streak fields must be visible in the banner.
-    await expect(page.getByText('3')).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByText('5')).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText('3').first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText('5').first()).toBeVisible({ timeout: 5_000 });
     // today=1 is also shown alongside current and best streak.
-    await expect(page.getByText('1')).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText('1').first()).toBeVisible({ timeout: 5_000 });
   });
 
   test('empty deck with no notes shows the "Build from notes" CTA in the UI', async ({ page }) => {

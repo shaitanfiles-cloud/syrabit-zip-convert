@@ -300,8 +300,11 @@ export function AppRoutes() {
           Both routes render the same component so neither produces a
           404, and prerender-library.mjs writes static HTML for both. */}
       <Route path="/browser"           element={<LibraryPage />} />
-      {/* Task #577 — Educational web browser (curated, reader-mode). */}
-      <Route path="/browse"            element={<BrowserPage />} />
+      {/* Task #577 — Educational web browser (curated, reader-mode).
+          /browse renders BrowsePage (simple reader + ask panel).
+          /browser-tabs is the multi-tab BrowserPage for power users. */}
+      <Route path="/browse"            element={<BrowsePage />} />
+      <Route path="/browser-tabs"      element={<BrowserPage />} />
       <Route path="/curriculum"        element={<CurriculumMap />} />
       <Route path="/subject/:subjectId" element={<SubjectPage />} />
 

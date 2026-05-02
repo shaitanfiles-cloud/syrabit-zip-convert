@@ -156,6 +156,178 @@ const FIXTURES: Array<[string, Fixture]> = [
     missingClaims: [], alertState: null,
     refresh: { claimed: true, stored: true, regression_count: 0, paged: false },
   })],
+
+  // --- AdminHealth cron endpoints (Task #894 / #919 / #956) ---------------
+  // These are the four cron-pill data endpoints.  Returning a healthy
+  // payload means every pill renders green and the waitForRequest()
+  // assertions inside admin-health-cron-pills.spec.ts and
+  // admin-health-alert-state-caption.spec.ts resolve quickly.
+  ['/api/admin/health/edge-proxy-deploy/cron/alert-state', () => ({
+    present: false,
+    lastAlertAt: null,
+    lastAlertAgeSeconds: null,
+    inDebounce: false,
+    debounceRemainingSeconds: null,
+    realertIntervalSeconds: 21600,
+  })],
+  ['/api/admin/health/cf-waf-drift/cron/alert-state', () => ({
+    present: false,
+    lastAlertAt: null,
+    lastAlertAgeSeconds: null,
+    inDebounce: false,
+    debounceRemainingSeconds: null,
+    realertIntervalSeconds: 21600,
+  })],
+  ['/api/admin/health/trustpilot/refresh-cron/alert-state', () => ({
+    present: false,
+    lastAlertAt: null,
+    lastAlertAgeSeconds: null,
+    inDebounce: false,
+    debounceRemainingSeconds: null,
+    realertIntervalSeconds: 21600,
+  })],
+  ['/api/admin/health/unified-logs/cf-pull/cron/alert-state', () => ({
+    present: false,
+    lastAlertAt: null,
+    lastAlertAgeSeconds: null,
+    inDebounce: false,
+    debounceRemainingSeconds: null,
+    realertIntervalSeconds: 21600,
+  })],
+  // The cron-status endpoints must come AFTER their alert-state siblings
+  // so the longer (more-specific) alert-state paths win when sorted by
+  // descending length in installAdminApiMocks.
+  ['/api/admin/health/edge-proxy-deploy/cron', () => ({
+    configured: true,
+    status: 'healthy',
+    conclusion: 'success',
+    html_url: 'https://github.com/syrabit/syrabit/actions/runs/777',
+    lastRunUrl: 'https://github.com/syrabit/syrabit/actions/runs/777',
+    updated_at: '2026-04-25T10:00:00Z',
+    ageSeconds: 3600,
+    runStatus: 'completed',
+    workflowUrl: 'https://github.com/syrabit/syrabit/actions/workflows/edge-proxy-deploy.yml',
+    staleThresholdSeconds: 604800,
+    error: null,
+  })],
+  ['/api/admin/health/cf-waf-drift/cron', () => ({
+    configured: true,
+    status: 'healthy',
+    lastHeartbeatAgeSeconds: 1800,
+    lastSuccessHeartbeatAgeSeconds: 1800,
+    lastRunUrl: 'https://github.com/syrabit/syrabit/actions/runs/555',
+    workflowUrl: 'https://github.com/syrabit/syrabit/actions/workflows/cf-waf-drift-daily.yml',
+    staleThresholdSeconds: 129600,
+    error: null,
+  })],
+  ['/api/admin/health/trustpilot/refresh-cron', () => ({
+    configured: true,
+    status: 'healthy',
+    lastHeartbeatAgeSeconds: 1800,
+    lastSuccessHeartbeatAgeSeconds: 1800,
+    workflowUrl: 'https://github.com/syrabit/syrabit/actions/workflows/trustpilot-aggregate-refresh.yml',
+    staleThresholdSeconds: 129600,
+    error: null,
+  })],
+  ['/api/admin/health/unified-logs/cf-pull/cron', () => ({
+    configured: true,
+    status: 'healthy',
+    lastUpdatedTs: 1700000000,
+    lastUpdatedAt: '2026-04-26T05:00:00Z',
+    lastUpdatedAgeSeconds: 1800,
+    leaseOwner: 'replica-A',
+    leaseExpiresAt: '2026-04-26T05:30:00Z',
+    cursor: 'cursor-xyz',
+    silentThresholdSeconds: 900,
+    statusUrl: '/api/admin/logs/status',
+  })],
+
+  // --- Analytics cf-ai-crawl-control (Task #xxx) --------------------------
+  // Dashboard fetches /api/admin/analytics/cf-ai-crawl-control?days=7
+  // on every load; without a fixture it falls through to the catch-all
+  // EMPTY response which is fine but keeps it in failed[] for smoke test.
+  ['/api/admin/analytics/cf-ai-crawl-control', () => ({
+    ok: true, days: 7, zones: [],
+  })],
+
+  // --- AdminContentHub hierarchy (loaded on mount) ------------------------
+  // AdminContentHub.reloadHierarchy() fires four GETs on mount.
+  // Without fixtures the component stays in "loading" state and the
+  // tab-bar buttons are never rendered, causing strict-mode failures.
+  ['/api/admin/content/boards', () => []],
+  ['/api/admin/content/classes', () => []],
+  ['/api/admin/content/streams', () => []],
+  ['/api/admin/content/subjects', () => []],
+
+  // --- AdminLogs status endpoint (AdminLogsExplorer mount) ----------------
+  ['/api/admin/logs/status', () => ({
+    paused: false, ttl_days: 14, ingest_token_configured: true,
+    backend_sample_rate: 0.05, edge_sample_rate: 0.05,
+    max_ingest_batch: 500, cf_pull_interval_s: 60, cf_pull_24h: null,
+  })],
+  ['/api/admin/logs', () => ({
+    logs: [], total: 0, total_capped: false, next_before: null,
+  })],
+
+  // --- AdminRateLimits panel (rate-policies GET on mount) -----------------
+  ['/api/admin/rate-policies', () => ({
+    free:       { req_per_min: 5,  credits_per_day: 30,   max_tokens: 10000,  req_per_min_ip: 20 },
+    starter:    { req_per_min: 10, credits_per_day: 500,  max_tokens: 15000,  req_per_min_ip: 30 },
+    pro:        { req_per_min: 15, credits_per_day: 4000, max_tokens: 20000,  req_per_min_ip: 40 },
+    enterprise: { req_per_min: 60, credits_per_day: 99999, max_tokens: 200000, req_per_min_ip: 200 },
+  })],
+  ['/api/admin/rate-stats', () => ({ ok: true })],
+
+  // --- AdminUsers & Plans panels ------------------------------------------
+  ['/api/admin/users', () => ({
+    users: [
+      { id: 'user-001', email: 'alice@example.com', name: 'Alice', plan: 'starter', credits_used: 45, credits_limit: 1500 },
+      { id: 'user-002', email: 'bob@example.com', name: 'Bob', plan: 'free', credits_used: 8, credits_limit: 30 },
+    ],
+    total: 2, page: 1, per_page: 20,
+  })],
+  ['/api/admin/plan-config', () => ({
+    free:    { price: 0,   credits: 30,   validity: 'daily reset' },
+    starter: { price: 99,  credits: 500,  validity: 'daily reset' },
+    pro:     { price: 999, credits: 4000, validity: 'daily reset' },
+  })],
+
+  // --- AdminConversations panel -------------------------------------------
+  ['/api/admin/conversations', () => ([
+    {
+      id: 'conv-001', title: 'Photosynthesis inquiry',
+      user_id: 'user-a', user_name: 'Alice Barua', user_email: 'alice@example.com',
+      is_anonymous: false, flagged: false,
+      created_at: new Date(Date.now() - 3600_000).toISOString(),
+      updated_at: new Date(Date.now() - 1800_000).toISOString(),
+      messages: [],
+    },
+  ])],
+
+  // --- AdminNotifications panel -------------------------------------------
+  ['/api/admin/notifications', () => []],
+
+  // --- AdminAnalytics panel (GA4) -----------------------------------------
+  ['/api/admin/analytics', () => ({
+    ok: true, pageviews: 0, sessions: 0, bounce_rate: 0,
+    avg_session_duration_sec: 0, top_pages: [],
+  })],
+
+  // --- AdminSeoManager keyword / linker / topic-discovery ----------------
+  ['/api/admin/extract-keywords', () => ({ suggestions: [] })],
+  ['/api/admin/seo/internal-links/history', () => ({ items: [] })],
+  ['/api/admin/seo/internal-links/pending', () => ({ items: [] })],
+  ['/api/admin/seo/internal-links/status', () => ({
+    enabled: true,
+    budget: { auto_used: 0, auto_cap: 100 },
+    pendingCount: 0,
+    recentAutoApplied24h: 0,
+    config: { autoApplyThreshold: 0.75, minLinksPerTarget: 3, maxLinksPerTarget: 5, candidatePoolSize: 30, nightlyTopN: 50 },
+  })],
+  ['/api/admin/seo/internal-links', () => ({ items: [], pendingCount: 0 })],
+  ['/api/admin/seo/topic-discovery/runs', () => ({ runs: [] })],
+  ['/api/admin/seo/topic-discovery/candidates', () => ({ candidates: [] })],
+  ['/api/admin/seo/topic-discovery', () => ({ runs: [], candidates: [] })],
 ];
 
 /**

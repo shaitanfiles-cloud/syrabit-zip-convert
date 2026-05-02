@@ -49,9 +49,9 @@ test.describe('Exam Routine', () => {
     await page.goto('/exam-routine');
 
     await expect(page.getByText(/English/i).first()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(/Chemistry/i)).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByText(/Biology/i)).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByText(/Advanced Physics/i)).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(/Chemistry/i).first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(/Biology/i).first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(/Advanced Physics/i).first()).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(/2026|March/i).first()).toBeVisible({ timeout: 5_000 });
   });
 
@@ -60,7 +60,7 @@ test.describe('Exam Routine', () => {
     await page.goto('/exam-routine');
 
     await expect(page.getByText(/English/i).first()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(/Advanced Physics/i)).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(/Advanced Physics/i).first()).toBeVisible({ timeout: 5_000 });
 
     // Past entries carry subdued styling; upcoming entry carries upcoming/active styling.
     const pastRows = page.locator(

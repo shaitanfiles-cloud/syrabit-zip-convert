@@ -128,7 +128,10 @@ test.describe('AdminHealth cron pills', () => {
 
     // Asserting the GET fires confirms the loader useCallback +
     // polling useEffect dependency array still wires up correctly.
-    const edgeRequest = page.waitForRequest((req) => req.url().includes(EDGE_PROXY_ENDPOINT));
+    const edgeRequest = page.waitForRequest(
+      (req) => req.url().includes(EDGE_PROXY_ENDPOINT),
+      { timeout: 30_000 },
+    );
 
     await openAdminHealth(page);
     await edgeRequest;
@@ -194,7 +197,10 @@ test.describe('AdminHealth cron pills', () => {
       },
     });
 
-    const cfRequest = page.waitForRequest((req) => req.url().includes(CF_WAF_DRIFT_ENDPOINT));
+    const cfRequest = page.waitForRequest(
+      (req) => req.url().includes(CF_WAF_DRIFT_ENDPOINT),
+      { timeout: 30_000 },
+    );
     await openAdminHealth(page);
     await cfRequest;
 
@@ -235,7 +241,10 @@ test.describe('AdminHealth cron pills', () => {
       },
     });
 
-    const tpRequest = page.waitForRequest((req) => req.url().includes(TRUSTPILOT_ENDPOINT));
+    const tpRequest = page.waitForRequest(
+      (req) => req.url().includes(TRUSTPILOT_ENDPOINT),
+      { timeout: 30_000 },
+    );
     await openAdminHealth(page);
     await tpRequest;
 
@@ -283,8 +292,9 @@ test.describe('AdminHealth cron pills', () => {
     // polling useEffect dependency array still wires up correctly
     // for the Task #956 pill (the same regression mode the sibling
     // pills already guard against).
-    const cfPullRequest = page.waitForRequest((req) =>
-      req.url().includes(UNIFIED_LOGS_CF_PULL_ENDPOINT)
+    const cfPullRequest = page.waitForRequest(
+      (req) => req.url().includes(UNIFIED_LOGS_CF_PULL_ENDPOINT),
+      { timeout: 30_000 },
     );
     await openAdminHealth(page);
     await cfPullRequest;

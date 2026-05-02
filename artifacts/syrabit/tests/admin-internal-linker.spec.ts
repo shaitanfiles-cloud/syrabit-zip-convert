@@ -61,8 +61,17 @@ test.describe('Internal-linker (Links tab)', () => {
   test('renders pending queue and submits approve', async ({ page }) => {
     const captured: ApproveCall[] = [];
 
-    // Capture the approve POST. The record id lives in the URL path,
-    // not the body — same convention as the topic-discovery override.
+    await seedAdminSession(page);
+    await installAdminApiMocks(page, {
+      overrides: {
+        '/api/admin/seo/internal-links/status':  () => STATUS_PAYLOAD,
+        '/api/admin/seo/internal-links/pending': () => PENDING_PAYLOAD,
+        '/api/admin/seo/internal-links/history': () => ({ items: [] }),
+      },
+    });
+
+    // Registered AFTER installAdminApiMocks so Playwright's LIFO order means
+    // this narrow approve route wins over the catch-all.
     await page.route(
       '**/api/admin/seo/internal-links/*/approve',
       async (route) => {
@@ -77,15 +86,6 @@ test.describe('Internal-linker (Links tab)', () => {
         });
       },
     );
-
-    await seedAdminSession(page);
-    await installAdminApiMocks(page, {
-      overrides: {
-        '/api/admin/seo/internal-links/status':  () => STATUS_PAYLOAD,
-        '/api/admin/seo/internal-links/pending': () => PENDING_PAYLOAD,
-        '/api/admin/seo/internal-links/history': () => ({ items: [] }),
-      },
-    });
 
     await page.goto('/admin');
     await expect(page.getByTestId('admin-dashboard')).toBeVisible();

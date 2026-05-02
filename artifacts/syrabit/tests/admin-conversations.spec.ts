@@ -55,6 +55,8 @@ test.describe('Admin Conversations', () => {
   test('conversations panel lists sessions with title and user name', async ({ page }) => {
     await installAdminApiMocks(page);
 
+    // Registered AFTER installAdminApiMocks so Playwright's LIFO order means
+    // this narrow route wins over the catch-all registered inside installAdminApiMocks.
     await page.route('**/api/admin/conversations*', async (route: Route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(CONVERSATIONS_ARRAY) });
     });

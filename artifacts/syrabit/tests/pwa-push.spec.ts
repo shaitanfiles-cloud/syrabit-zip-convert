@@ -50,10 +50,29 @@ test.beforeEach(async ({ context }) => {
  * Register /sw.js from the page and return the Playwright Worker handle.
  * The SW calls self.skipWaiting() in its install handler, so it activates
  * without waiting for existing clients to be closed.
+ *
+ * In sequential test runs within the same browser context the SW may already
+ * be registered from a previous test — in that case `context.waitForEvent`
+ * would time out because the 'serviceworker' event already fired.  We race
+ * the event against a small poll that returns an already-active worker so
+ * both the first-registration path and the already-active path succeed.
  */
 async function registerSW(context: BrowserContext, page: Page) {
+  // Check if a worker is already active BEFORE we register (covers tests 2-N).
+  const existingWorkers = context.serviceWorkers();
+  if (existingWorkers.length > 0) {
+    // SW already running — re-register to pick up any updates, then return
+    // the existing (or newly activated) worker.
+    await page.evaluate(() =>
+      navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }),
+    );
+    // Give the SW a tick to potentially update, then return the first worker.
+    return context.serviceWorkers()[0];
+  }
+
+  // First registration — wait for the serviceworker event.
   const [sw] = await Promise.all([
-    context.waitForEvent('serviceworker'),
+    context.waitForEvent('serviceworker', { timeout: 30_000 }),
     page.evaluate(() =>
       navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }),
     ),

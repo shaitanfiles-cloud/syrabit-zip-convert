@@ -33,6 +33,7 @@ export default function GoogleSignInButton({
     setBusy(true);
     try {
       sessionStorage.setItem(INTENT_KEY, text);
+      if (!supabase) throw new Error('Authentication is not configured.');
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {

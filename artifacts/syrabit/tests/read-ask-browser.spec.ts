@@ -12,8 +12,8 @@
  * 5. SSE tokens from grounded-answer stream render in the answer panel.
  * 6. AskPanel suggested prompt is visible in the ask panel.
  *
- * Route registration: broad "**/api/**" first, then narrow routes AFTER
- * (correct Playwright LIFO priority).
+ * Route registration: the broad api catch-all route is registered first,
+ * then the narrow routes AFTER (correct Playwright LIFO priority).
  */
 import { test, expect, type Page, type Route } from '@playwright/test';
 
@@ -85,7 +85,7 @@ test.describe('Read & Ask Browser', () => {
     await expect(urlInput).toBeVisible({ timeout: 10_000 });
     await urlInput.fill('https://ncert.nic.in/photosynthesis');
 
-    const fetchBtn = page.locator('button').filter({ hasText: /fetch|go|load|read/i }).first();
+    const fetchBtn = page.locator('button').filter({ hasText: /fetch|go|load|read|open/i }).first();
     await fetchBtn.click();
 
     await expect(page.getByText(/Photosynthesis in Plants/i)).toBeVisible({ timeout: 12_000 });
@@ -99,7 +99,7 @@ test.describe('Read & Ask Browser', () => {
     await expect(urlInput).toBeVisible({ timeout: 10_000 });
     await urlInput.fill('https://this-url-does-not-exist-broken.com/page');
 
-    const fetchBtn = page.locator('button').filter({ hasText: /fetch|go|load|read/i }).first();
+    const fetchBtn = page.locator('button').filter({ hasText: /fetch|go|load|read|open/i }).first();
     await fetchBtn.click();
 
     await expect(page.getByText(/could not|failed|error|fetch/i)).toBeVisible({ timeout: 10_000 });
@@ -124,7 +124,7 @@ test.describe('Read & Ask Browser', () => {
     await expect(urlInput).toBeVisible({ timeout: 10_000 });
     await urlInput.fill('https://ncert.nic.in/photosynthesis');
 
-    const fetchBtn = page.locator('button').filter({ hasText: /fetch|go|load|read/i }).first();
+    const fetchBtn = page.locator('button').filter({ hasText: /fetch|go|load|read|open/i }).first();
     await fetchBtn.click();
     await expect(page.getByText(/Photosynthesis in Plants/i)).toBeVisible({ timeout: 12_000 });
 
@@ -146,7 +146,7 @@ test.describe('Read & Ask Browser', () => {
     await expect(urlInput).toBeVisible({ timeout: 10_000 });
     await urlInput.fill('https://ncert.nic.in/photosynthesis');
 
-    const fetchBtn = page.locator('button').filter({ hasText: /fetch|go|load|read/i }).first();
+    const fetchBtn = page.locator('button').filter({ hasText: /fetch|go|load|read|open/i }).first();
     await fetchBtn.click();
     await expect(page.getByText(/Photosynthesis in Plants/i)).toBeVisible({ timeout: 12_000 });
 

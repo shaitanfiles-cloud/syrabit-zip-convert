@@ -30,10 +30,43 @@ export const AuthProvider = ({ children }) => {
       const headers = _inMemoryToken
         ? { Authorization: `Bearer ${_inMemoryToken}` }
         : {};
-      const res = await axios.get(`${API_BASE}/auth/me`, {
-        withCredentials: true,
-        headers,
-      });
+      let res;
+      try {
+        res = await axios.get(`${API_BASE}/auth/me`, {
+          withCredentials: true,
+          headers,
+        });
+      } catch (err) {
+        // If the server signals the access token has expired, attempt a
+        // silent refresh via POST /auth/refresh (httpOnly refresh-cookie
+        // flow). On success the server issues a new access token; we
+        // re-try /auth/me so the caller sees a fully-hydrated user.
+        const status = err?.response?.status;
+        const detail = err?.response?.data?.detail;
+        if (status === 401 && (detail === 'token_expired' || detail === 'jwt_expired')) {
+          try {
+            const refreshRes = await axios.post(
+              `${API_BASE}/auth/refresh`,
+              {},
+              { withCredentials: true },
+            );
+            const newToken = refreshRes?.data?.access_token;
+            if (newToken) {
+              _inMemoryToken = newToken;
+              setAuthToken(newToken);
+              try { sessionStorage.setItem('syrabit_token', newToken); } catch {}
+            }
+            res = await axios.get(`${API_BASE}/auth/me`, {
+              withCredentials: true,
+              headers: newToken ? { Authorization: `Bearer ${newToken}` } : {},
+            });
+          } catch {
+            throw err;
+          }
+        } else {
+          throw err;
+        }
+      }
       const userData = res.data;
       if (userData && userData.id) {
         setUser(userData);
@@ -192,6 +225,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const login = async (email, password, _turnstileToken = '') => {
+    if (!supabase) throw new Error('Authentication is not configured.');
     const { data: sbData, error: sbError } = await supabase.auth.signInWithPassword({ email, password });
     if (sbError) {
       const err = new Error(sbError.message);
@@ -207,6 +241,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const signup = async (name, email, password, consent_dpdp = false, _turnstileToken = '') => {
+    if (!supabase) throw new Error('Authentication is not configured.');
     const { data: sbData, error: sbError } = await supabase.auth.signUp({
       email,
       password,
@@ -234,6 +269,7 @@ export const AuthProvider = ({ children }) => {
   // they call _exchangeSupabaseSession directly in login()/signup().
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
+    if (!supabase) return;
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (event !== 'SIGNED_IN') return;
@@ -254,7 +290,7 @@ export const AuthProvider = ({ children }) => {
     try {
       await axios.post(`${API_BASE}/auth/logout`, {}, { withCredentials: true });
     } catch {}
-    try { await supabase.auth.signOut(); } catch {}
+    try { if (supabase) await supabase.auth.signOut(); } catch {}
     _storeToken(null);
     justAuthenticated.current = false;
     localStorage.removeItem('syrabit:onboarding');

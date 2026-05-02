@@ -136,6 +136,7 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate, n
             <span key={i} className="flex items-center gap-1">
               <button
                 onClick={() => setActiveTab(step.tab)}
+                aria-label={`workflow-step-${step.tab}`}
                 className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold transition-all ${
                   activeTab === step.tab
                     ? COLOR_MAP[TABS.find(t => t.id === step.tab)?.color]?.badge

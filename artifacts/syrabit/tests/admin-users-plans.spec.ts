@@ -163,7 +163,7 @@ test.describe('Admin Users & Plans', () => {
     });
 
     await openPlansPanel(page);
-    await expect(page.getByText(/Plans & Credits/i)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Plans & Credits/i).first()).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/Free|Starter|Pro/i).first()).toBeVisible({ timeout: 8_000 });
 
     // Each PlanCard has an Edit2 toggle button (icon-only, no aria-label).

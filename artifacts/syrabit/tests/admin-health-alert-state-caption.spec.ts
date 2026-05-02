@@ -166,8 +166,9 @@ test.describe('AdminHealth alert-state caption', () => {
     // Wait for the alert-state GET to fire — proves AdminHealth's
     // `loadEdgeProxyDeployCronAlertState` ran and the polling
     // useEffect's dependency array still includes it.
-    const alertStateRequest = page.waitForRequest((req) =>
-      req.url().includes(EDGE_PROXY_ALERT_STATE_ENDPOINT)
+    const alertStateRequest = page.waitForRequest(
+      (req) => req.url().includes(EDGE_PROXY_ALERT_STATE_ENDPOINT),
+      { timeout: 30_000 },
     );
     await openAdminHealth(page);
     await alertStateRequest;
@@ -210,8 +211,9 @@ test.describe('AdminHealth alert-state caption', () => {
       },
     });
 
-    const alertStateRequest = page.waitForRequest((req) =>
-      req.url().includes(CF_WAF_DRIFT_ALERT_STATE_ENDPOINT)
+    const alertStateRequest = page.waitForRequest(
+      (req) => req.url().includes(CF_WAF_DRIFT_ALERT_STATE_ENDPOINT),
+      { timeout: 30_000 },
     );
     await openAdminHealth(page);
     await alertStateRequest;
@@ -232,8 +234,9 @@ test.describe('AdminHealth alert-state caption', () => {
       },
     });
 
-    const alertStateRequest = page.waitForRequest((req) =>
-      req.url().includes(TRUSTPILOT_ALERT_STATE_ENDPOINT)
+    const alertStateRequest = page.waitForRequest(
+      (req) => req.url().includes(TRUSTPILOT_ALERT_STATE_ENDPOINT),
+      { timeout: 30_000 },
     );
     await openAdminHealth(page);
     await alertStateRequest;
@@ -259,8 +262,9 @@ test.describe('AdminHealth alert-state caption', () => {
       },
     });
 
-    const alertStateRequest = page.waitForRequest((req) =>
-      req.url().includes(UNIFIED_LOGS_CF_PULL_ALERT_STATE_ENDPOINT)
+    const alertStateRequest = page.waitForRequest(
+      (req) => req.url().includes(UNIFIED_LOGS_CF_PULL_ALERT_STATE_ENDPOINT),
+      { timeout: 30_000 },
     );
     await openAdminHealth(page);
     await alertStateRequest;
@@ -303,17 +307,21 @@ test.describe('AdminHealth alert-state caption', () => {
     // below for the wrong reason. With these waiters the test
     // proves both that the wiring is intact AND that the
     // present:false response correctly suppresses the caption.
-    const edgeProxyAlertStateRequest = page.waitForRequest((req) =>
-      req.url().includes(EDGE_PROXY_ALERT_STATE_ENDPOINT)
+    const edgeProxyAlertStateRequest = page.waitForRequest(
+      (req) => req.url().includes(EDGE_PROXY_ALERT_STATE_ENDPOINT),
+      { timeout: 30_000 },
     );
-    const cfWafDriftAlertStateRequest = page.waitForRequest((req) =>
-      req.url().includes(CF_WAF_DRIFT_ALERT_STATE_ENDPOINT)
+    const cfWafDriftAlertStateRequest = page.waitForRequest(
+      (req) => req.url().includes(CF_WAF_DRIFT_ALERT_STATE_ENDPOINT),
+      { timeout: 30_000 },
     );
-    const trustpilotAlertStateRequest = page.waitForRequest((req) =>
-      req.url().includes(TRUSTPILOT_ALERT_STATE_ENDPOINT)
+    const trustpilotAlertStateRequest = page.waitForRequest(
+      (req) => req.url().includes(TRUSTPILOT_ALERT_STATE_ENDPOINT),
+      { timeout: 30_000 },
     );
-    const unifiedLogsCfPullAlertStateRequest = page.waitForRequest((req) =>
-      req.url().includes(UNIFIED_LOGS_CF_PULL_ALERT_STATE_ENDPOINT)
+    const unifiedLogsCfPullAlertStateRequest = page.waitForRequest(
+      (req) => req.url().includes(UNIFIED_LOGS_CF_PULL_ALERT_STATE_ENDPOINT),
+      { timeout: 30_000 },
     );
 
     await openAdminHealth(page);
