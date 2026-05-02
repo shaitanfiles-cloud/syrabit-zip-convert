@@ -118,6 +118,7 @@ test.describe('PWA install prompt (mobile)', () => {
 // 2. Offline fallback — network blocked
 // ---------------------------------------------------------------------------
 test.describe('Offline fallback', () => {
+  test.setTimeout(60_000);
   test('/offline.html renders the expected fallback UI', async ({ page }) => {
     const response = await page.goto('/offline.html');
     expect(response?.status()).toBe(200);

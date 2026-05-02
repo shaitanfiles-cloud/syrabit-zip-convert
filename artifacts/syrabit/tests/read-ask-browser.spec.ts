@@ -85,8 +85,7 @@ test.describe('Read & Ask Browser', () => {
     await expect(urlInput).toBeVisible({ timeout: 10_000 });
     await urlInput.fill('https://ncert.nic.in/photosynthesis');
 
-    const fetchBtn = page.locator('button').filter({ hasText: /fetch|go|load|read|open/i }).first();
-    await fetchBtn.click();
+    await urlInput.press('Enter');
 
     await expect(page.getByText(/Photosynthesis in Plants/i)).toBeVisible({ timeout: 12_000 });
   });
@@ -99,8 +98,7 @@ test.describe('Read & Ask Browser', () => {
     await expect(urlInput).toBeVisible({ timeout: 10_000 });
     await urlInput.fill('https://this-url-does-not-exist-broken.com/page');
 
-    const fetchBtn = page.locator('button').filter({ hasText: /fetch|go|load|read|open/i }).first();
-    await fetchBtn.click();
+    await urlInput.press('Enter');
 
     await expect(page.getByText(/could not|failed|error|fetch/i)).toBeVisible({ timeout: 10_000 });
   });
@@ -124,8 +122,7 @@ test.describe('Read & Ask Browser', () => {
     await expect(urlInput).toBeVisible({ timeout: 10_000 });
     await urlInput.fill('https://ncert.nic.in/photosynthesis');
 
-    const fetchBtn = page.locator('button').filter({ hasText: /fetch|go|load|read|open/i }).first();
-    await fetchBtn.click();
+    await urlInput.press('Enter');
     await expect(page.getByText(/Photosynthesis in Plants/i)).toBeVisible({ timeout: 12_000 });
 
     const textarea = page.locator('#ask-syra-input, textarea').first();
@@ -146,8 +143,7 @@ test.describe('Read & Ask Browser', () => {
     await expect(urlInput).toBeVisible({ timeout: 10_000 });
     await urlInput.fill('https://ncert.nic.in/photosynthesis');
 
-    const fetchBtn = page.locator('button').filter({ hasText: /fetch|go|load|read|open/i }).first();
-    await fetchBtn.click();
+    await urlInput.press('Enter');
     await expect(page.getByText(/Photosynthesis in Plants/i)).toBeVisible({ timeout: 12_000 });
 
     const textarea = page.locator('#ask-syra-input, textarea').first();
@@ -159,12 +155,12 @@ test.describe('Read & Ask Browser', () => {
     await expect(page.getByText(/Chlorophyll|wavelength|absorbs/i)).toBeVisible({ timeout: 10_000 });
   });
 
-  test('AskPanel suggested prompt "Explain this for an AHSEC student" is visible', async ({ page }) => {
+  test('AskPanel quick-action chips are visible', async ({ page }) => {
     await installBrowserMocks(page);
     await page.goto('/browse');
 
     await expect(
-      page.getByText(/Explain this for an AHSEC student/i),
+      page.getByText(/Summarize this page|Explain simply|Translate to Assamese/i).first(),
     ).toBeVisible({ timeout: 10_000 });
   });
 
@@ -190,15 +186,14 @@ test.describe('Read & Ask Browser', () => {
     await expect(urlInput).toBeVisible({ timeout: 10_000 });
     await urlInput.fill('https://random-not-in-allowlist-domain.com/page');
 
-    const fetchBtn = page.locator('button').filter({ hasText: /fetch|go|load|read|Open/i }).first();
-    await fetchBtn.click();
+    await urlInput.press('Enter');
 
     await expect(
       page.getByText(/not.*allowed|allowlist|domain|forbidden|blocked/i).first(),
     ).toBeVisible({ timeout: 10_000 });
   });
 
-  test('clicking "Summarise this page" chip fires POST /api/edu/grounded-answer', async ({ page }) => {
+  test('clicking "Summarize this page" chip fires POST /api/edu/grounded-answer', async ({ page }) => {
     const { groundedCalls } = await installBrowserMocks(page, {
       fetchOk: true,
       askContent: 'Summary: Photosynthesis converts light to glucose and oxygen.',
@@ -209,11 +204,10 @@ test.describe('Read & Ask Browser', () => {
     const urlInput = page.getByRole('textbox').first();
     await expect(urlInput).toBeVisible({ timeout: 10_000 });
     await urlInput.fill('https://ncert.nic.in/photosynthesis');
-    const fetchBtn = page.locator('button').filter({ hasText: /fetch|go|load|read|Open/i }).first();
-    await fetchBtn.click();
+    await urlInput.press('Enter');
     await expect(page.getByText(/Photosynthesis in Plants/i)).toBeVisible({ timeout: 12_000 });
 
-    const summariseChip = page.getByRole('button', { name: /Summarise this page in 5 bullet points/i });
+    const summariseChip = page.getByRole('button', { name: /Summarize this page/i });
     await expect(summariseChip).toBeVisible({ timeout: 8_000 });
     await summariseChip.click();
 
@@ -221,7 +215,7 @@ test.describe('Read & Ask Browser', () => {
     expect(groundedCalls[0].url).toContain('/api/edu/grounded-answer');
   });
 
-  test('clicking "Make a short quiz" chip fires POST /api/edu/grounded-answer', async ({ page }) => {
+  test('clicking "Translate to Assamese" chip fires POST /api/edu/grounded-answer', async ({ page }) => {
     const { groundedCalls } = await installBrowserMocks(page, {
       fetchOk: true,
       askContent: 'Q1: What is photosynthesis? A) Energy conversion.',
@@ -231,11 +225,10 @@ test.describe('Read & Ask Browser', () => {
     const urlInput = page.getByRole('textbox').first();
     await expect(urlInput).toBeVisible({ timeout: 10_000 });
     await urlInput.fill('https://ncert.nic.in/photosynthesis');
-    const fetchBtn = page.locator('button').filter({ hasText: /fetch|go|load|read|Open/i }).first();
-    await fetchBtn.click();
+    await urlInput.press('Enter');
     await expect(page.getByText(/Photosynthesis in Plants/i)).toBeVisible({ timeout: 12_000 });
 
-    const quizChip = page.getByRole('button', { name: /Make a short quiz from this page/i });
+    const quizChip = page.getByRole('button', { name: /Translate to Assamese/i });
     await expect(quizChip).toBeVisible({ timeout: 8_000 });
     await quizChip.click();
 
@@ -243,7 +236,7 @@ test.describe('Read & Ask Browser', () => {
     expect(groundedCalls[0].url).toContain('/api/edu/grounded-answer');
   });
 
-  test('clicking "Explain this for an AHSEC student" chip fires POST /api/edu/grounded-answer', async ({ page }) => {
+  test('clicking "Explain simply" chip fires POST /api/edu/grounded-answer', async ({ page }) => {
     const explainContent = 'Photosynthesis: plants convert CO2 + water + light → glucose + oxygen, explained simply.';
     const { groundedCalls } = await installBrowserMocks(page, {
       fetchOk: true,
@@ -255,12 +248,11 @@ test.describe('Read & Ask Browser', () => {
     const urlInput = page.getByRole('textbox').first();
     await expect(urlInput).toBeVisible({ timeout: 10_000 });
     await urlInput.fill('https://ncert.nic.in/photosynthesis');
-    const fetchBtn = page.locator('button').filter({ hasText: /fetch|go|load|read|Open/i }).first();
-    await fetchBtn.click();
+    await urlInput.press('Enter');
     await expect(page.getByText(/Photosynthesis in Plants/i)).toBeVisible({ timeout: 12_000 });
 
-    // AskPanel.jsx: "Explain this for an AHSEC student" chip (visible once canAsk=true).
-    const explainChip = page.getByRole('button', { name: /Explain this for an AHSEC student/i });
+    // AskPanel.jsx: "Explain simply" chip (visible once canAsk=true).
+    const explainChip = page.getByRole('button', { name: /Explain simply/i });
     await expect(explainChip).toBeVisible({ timeout: 8_000 });
     await explainChip.click();
 

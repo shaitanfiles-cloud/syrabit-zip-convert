@@ -142,6 +142,10 @@ test.describe('Content Library & Curriculum', () => {
     await page.goto('/library');
 
     await expect(page.getByText(/AHSEC|Board/i)).toBeVisible({ timeout: 10_000 });
+    // Click the AHSEC board to reveal class/stream selection (board is a clickable card).
+    const ahsecCard = page.getByText(/AHSEC/i).first();
+    await expect(ahsecCard).toBeVisible({ timeout: 8_000 });
+    await ahsecCard.click();
     await expect(page.getByText(/Class 11|11th/i)).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/Biology|Science/i)).toBeVisible({ timeout: 10_000 });
   });

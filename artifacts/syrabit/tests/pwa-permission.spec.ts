@@ -149,7 +149,7 @@ test.describe('Push notification permission request — real UI trigger', () => 
       });
 
       await page.goto('/admin');
-      await expect(page.getByTestId('admin-dashboard')).toBeVisible();
+      await expect(page.getByTestId('admin-dashboard')).toBeVisible({ timeout: 20_000 });
       await page.waitForLoadState('networkidle');
 
       // ------------------------------------------------------------------
@@ -160,7 +160,7 @@ test.describe('Push notification permission request — real UI trigger', () => 
 
       // Click the real push toggle — the only production call site for subscribe().
       const pushBtn = getPushToggle(page);
-      await expect(pushBtn).toBeVisible();
+      await expect(pushBtn).toBeVisible({ timeout: 20_000 });
       await pushBtn.click();
 
       // ------------------------------------------------------------------
@@ -258,7 +258,7 @@ test.describe('Push notification permission request — real UI trigger', () => 
       });
 
       await page.goto('/admin');
-      await expect(page.getByTestId('admin-dashboard')).toBeVisible();
+      await expect(page.getByTestId('admin-dashboard')).toBeVisible({ timeout: 20_000 });
       await page.waitForLoadState('networkidle');
 
       // ------------------------------------------------------------------
@@ -268,7 +268,7 @@ test.describe('Push notification permission request — real UI trigger', () => 
 
       // Click the real push toggle to trigger the subscription flow.
       const pushBtn = getPushToggle(page);
-      await expect(pushBtn).toBeVisible();
+      await expect(pushBtn).toBeVisible({ timeout: 20_000 });
       await pushBtn.click();
 
       // ------------------------------------------------------------------

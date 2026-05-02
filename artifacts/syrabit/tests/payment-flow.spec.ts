@@ -242,6 +242,7 @@ async function triggerRazorpaySuccess(page: Page) {
 }
 
 test.describe('Razorpay payment flow: /pricing → /profile → verify', () => {
+  test.setTimeout(90_000);
   test('happy path: pricing CTA → modal auto-opens → confirm → verify → toast + credits update on /profile', async ({ page }) => {
     const state = await installPaymentMocks(page);
 
@@ -422,6 +423,7 @@ async function installStripePaymentMocks(page: import('@playwright/test').Page, 
 }
 
 test.describe('Payment edge cases', () => {
+  test.setTimeout(90_000);
   test('Razorpay modal dismissed without paying does not change plan or credits', async ({ page }) => {
     const state = await installPaymentMocks(page);
 

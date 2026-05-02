@@ -79,12 +79,12 @@ test.describe('Admin SEO Manager — extended', () => {
 
     await openSeoManager(page);
 
-    const indexNowNav = page.getByRole('button', { name: /index.?now/i }).first();
-    await expect(indexNowNav).toBeVisible({ timeout: 10_000 });
-    await indexNowNav.click();
+    // Navigate to the Sitemap tab which hosts IndexNow submission UI.
+    await page.getByRole('button', { name: /sitemap/i }).first().click();
 
-    const submitBtn = page.getByRole('button', { name: /submit|index now/i }).first();
-    await expect(submitBtn).toBeVisible({ timeout: 8_000 });
+    // IndexNow action button (backfill start, submit URLs, or smoke run).
+    const submitBtn = page.getByRole('button', { name: /submit|start.*backfill|backfill|smoke|index/i }).first();
+    await expect(submitBtn).toBeVisible({ timeout: 10_000 });
     await submitBtn.click();
 
     await expect.poll(() => indexNowCalls.length, { timeout: 5_000 }).toBeGreaterThan(0);
@@ -104,11 +104,11 @@ test.describe('Admin SEO Manager — extended', () => {
 
     await openSeoManager(page);
 
-    const keywordsTab = page.getByRole('button', { name: /keyword/i }).first();
-    await expect(keywordsTab).toBeVisible({ timeout: 10_000 });
-    await keywordsTab.click();
+    // Navigate to the Pilot tab which has the subject-keyword research UI.
+    await page.getByRole('button', { name: /pilot/i }).first().click();
 
-    await expect(page.getByText(/photosynthesis.*ahsec|keyword/i).first()).toBeVisible({ timeout: 8_000 });
+    // The Pilot tab always renders a "Subject keyword" labelled input.
+    await expect(page.getByText(/keyword/i).first()).toBeVisible({ timeout: 8_000 });
   });
 
   test('internal linker "Reject" flow hits the reject endpoint', async ({ page }) => {
@@ -161,11 +161,8 @@ test.describe('Admin SEO Manager — extended', () => {
     const linkerPanel = page.getByTestId('linker-agent-panel');
     await expect(linkerPanel).toBeVisible({ timeout: 10_000 });
 
-    const historyTab = page.getByRole('button', { name: /history|log|past|approved/i }).first();
-    await expect(historyTab).toBeVisible({ timeout: 10_000 });
-    await historyTab.click();
-
-    await expect(page.getByText(/osmosis|approved/i)).toBeVisible({ timeout: 5_000 });
+    // LinksTab renders history items directly below pending (no separate tab click needed).
+    await expect(page.getByText(/osmosis|approved/i)).toBeVisible({ timeout: 8_000 });
     await expect(page.getByText(/diffusion|rejected/i)).toBeVisible({ timeout: 5_000 });
   });
 });

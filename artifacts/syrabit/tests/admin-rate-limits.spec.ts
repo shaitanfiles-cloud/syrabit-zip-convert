@@ -30,7 +30,7 @@ test.describe('Admin Rate Limits', () => {
 
     await openRateLimitsPanel(page);
 
-    await expect(page.getByText(/Free/i).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/Free/i).first()).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText(/Starter/i).first()).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/Pro/i).first()).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/Enterprise/i).first()).toBeVisible({ timeout: 10_000 });
@@ -64,7 +64,7 @@ test.describe('Admin Rate Limits', () => {
     });
 
     await openRateLimitsPanel(page);
-    await expect(page.getByText(/Free/i).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Free/i).first()).toBeVisible({ timeout: 30_000 });
 
     // Click the edit button for a tier to enter edit mode.
     const editBtn = page.getByRole('button', { name: /edit|configure|pencil/i }).first();

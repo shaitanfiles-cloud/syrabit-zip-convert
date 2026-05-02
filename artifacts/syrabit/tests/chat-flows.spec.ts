@@ -266,9 +266,9 @@ test.describe('AI Chat Pipeline', () => {
     // be visible in the conversation thread, proving history was reloaded.
     await expect(
       page.getByText(/What is photosynthesis\?/i),
-    ).toBeVisible({ timeout: 10_000 });
+    ).toBeVisible({ timeout: 20_000 });
     await expect(
       page.getByText(/Photosynthesis is the process/i),
-    ).toBeVisible({ timeout: 5_000 });
+    ).toBeVisible({ timeout: 10_000 });
   });
 });

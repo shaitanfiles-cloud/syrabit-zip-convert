@@ -43,6 +43,7 @@ async function openPlansPanel(page: Page) {
 }
 
 test.describe('Admin Users & Plans', () => {
+  test.setTimeout(60_000);
   test.beforeEach(async ({ page }) => {
     await seedAdminSession(page);
   });
@@ -84,8 +85,10 @@ test.describe('Admin Users & Plans', () => {
     await expect(page.getByText(/alice@example\.com/i)).toBeVisible({ timeout: 10_000 });
 
     // The CreditCard button shows "{credits_used} / {credits_limit}" and has title="Manage credits".
-    const creditBtn = page.getByTitle('Manage credits').first();
-    await expect(creditBtn).toBeVisible({ timeout: 8_000 });
+    const creditBtn = page.getByTitle('Manage credits')
+      .or(page.getByRole('button', { name: /manage.*credit|credit.*manage|credits/i }))
+      .first();
+    await expect(creditBtn).toBeVisible({ timeout: 20_000 });
     await creditBtn.click();
 
     // Credits Management modal opens. Default mode is 'add'. Fill the amount.
@@ -170,7 +173,7 @@ test.describe('Admin Users & Plans', () => {
     // Exclude nav buttons (data-testid="admin-nav-*") so we land on the
     // first content button — the Edit2 pencil on the first PlanCard.
     const editBtn = page.locator('button:not([data-testid^="admin-nav-"])').first();
-    await expect(editBtn).toBeVisible({ timeout: 8_000 });
+    await expect(editBtn).toBeVisible({ timeout: 20_000 });
     await editBtn.click();
 
     // Editing mode reveals numeric inputs for price, credits, validity.

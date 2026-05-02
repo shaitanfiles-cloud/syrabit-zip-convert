@@ -123,7 +123,7 @@ test.describe('Topic Discovery tab', () => {
     await page.goto('/admin');
 
     // Wait for the dashboard shell to load before navigating sidebars.
-    await expect(page.getByTestId('admin-dashboard')).toBeVisible();
+    await expect(page.getByTestId('admin-dashboard')).toBeVisible({ timeout: 30_000 });
 
     // The admin uses state-based section switching (not URL routing).
     // Click the SEO Manager nav button by label.

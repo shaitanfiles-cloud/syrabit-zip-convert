@@ -14,7 +14,7 @@ const PAST_EXAMS = [
 ];
 
 const UPCOMING_EXAM = {
-  id: 'e99', subject: 'Advanced Physics', code: 'PHY', date: '2099-12-25', time: '09:00', duration_hours: 3, is_past: false,
+  id: 'e99', subject: 'Advanced Physics', code: 'PHY', date: '2026-12-25', time: '09:00', duration_hours: 3, is_past: false,
 };
 
 const EXAM_ROUTINE_API = {

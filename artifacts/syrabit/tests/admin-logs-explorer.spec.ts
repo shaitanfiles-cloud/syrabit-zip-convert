@@ -120,8 +120,13 @@ test.describe('Admin Logs Explorer (Playwright E2E)', () => {
       await searchInput.press('Enter');
     }
 
+    // Wait for the search response before asserting absence of non-matching rows.
+    await page.waitForResponse(
+      (res) => res.url().includes('/api/admin/logs') && !res.url().includes('/status'),
+      { timeout: 10_000 },
+    );
     await expect(page.getByText(/Vertex AI returned 503/i)).toBeVisible({ timeout: 8_000 });
-    await expect(page.getByText(/Cache hit for chapter/i)).not.toBeVisible({ timeout: 5_000 });
-    await expect(page.getByText(/Rate limit hit/i)).not.toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(/Cache hit for chapter/i)).not.toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText(/Rate limit hit/i)).not.toBeVisible({ timeout: 8_000 });
   });
 });
