@@ -9,10 +9,31 @@ import type { Page, Route } from '@playwright/test';
 const EMPTY = {};
 
 /**
- * Per-endpoint fixtures. Keys are matched as substrings against the
- * request URL. The first match wins. Each handler returns the JSON body to
- * respond with (status 200) — return `null` to fall through to the
- * catch-all empty payload.
+ * Strict path-segment key match.
+ *
+ * Returns true only when `key` appears in `url` AND the character
+ * immediately following the key is either absent (end of URL), a `?`
+ * (query string), or a `#` (fragment).  This prevents a shorter key such
+ * as `/api/admin/health/edge-proxy-deploy/cron` from matching the longer
+ * URL `/api/admin/health/edge-proxy-deploy/cron/alert-state` — the latter
+ * has a `/` after the key, which is not in the allowed-terminator set.
+ *
+ * Without this guard, `Array.find` on the overrides/FIXTURES list would
+ * return the shorter cron key for the alert-state request, serving the
+ * wrong fixture shape and silently breaking the alert-state caption tests.
+ */
+function keyMatchesUrl(url: string, key: string): boolean {
+  const idx = url.indexOf(key);
+  if (idx === -1) return false;
+  const charAfter = url[idx + key.length];
+  return charAfter === undefined || charAfter === '?' || charAfter === '#';
+}
+
+/**
+ * Per-endpoint fixtures. Keys are matched as path-segment boundaries against
+ * the request URL (see keyMatchesUrl above). The first match wins. Each
+ * handler returns the JSON body to respond with (status 200) — return `null`
+ * to fall through to the catch-all empty payload.
  */
 type Fixture = (url: string) => unknown;
 
@@ -162,6 +183,13 @@ const FIXTURES: Array<[string, Fixture]> = [
   // payload means every pill renders green and the waitForRequest()
   // assertions inside admin-health-cron-pills.spec.ts and
   // admin-health-alert-state-caption.spec.ts resolve quickly.
+  //
+  // IMPORTANT: the alert-state entries MUST appear before their
+  // cron-status siblings in this array so that keyMatchesUrl's
+  // path-boundary check (which stops a shorter key from matching a
+  // longer URL) is never even needed for the FIXTURES path —
+  // Array.find returns the first match, and the longer/more-specific
+  // alert-state key is listed first.
   ['/api/admin/health/edge-proxy-deploy/cron/alert-state', () => ({
     present: false,
     lastAlertAt: null,
@@ -408,7 +436,10 @@ export async function installAdminApiMocks(page: Page, opts: InstallOptions = {}
       return;
     }
 
-    const override = overrides.find(([key]) => url.includes(key));
+    // Use keyMatchesUrl for override lookup so that a shorter key such as
+    // '/api/admin/health/edge-proxy-deploy/cron' does NOT intercept requests
+    // to '/api/admin/health/edge-proxy-deploy/cron/alert-state'.
+    const override = overrides.find(([key]) => keyMatchesUrl(url, key));
     if (override) {
       const [, value] = override;
       const body = typeof value === 'function' ? (value as (u: string) => unknown)(url) : value;
@@ -420,7 +451,10 @@ export async function installAdminApiMocks(page: Page, opts: InstallOptions = {}
       return;
     }
 
-    const fixture = FIXTURES.find(([key]) => url.includes(key));
+    // Use keyMatchesUrl for FIXTURES lookup as well so that '/api/admin/logs'
+    // does not match '/api/admin/logs/status', and '/api/admin/analytics' does
+    // not match '/api/admin/analytics/bot-traffic'.
+    const fixture = FIXTURES.find(([key]) => keyMatchesUrl(url, key));
     const body = fixture ? fixture[1](url) : EMPTY;
     await route.fulfill({
       status: 200,
