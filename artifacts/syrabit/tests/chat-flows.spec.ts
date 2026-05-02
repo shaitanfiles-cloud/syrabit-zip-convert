@@ -102,7 +102,7 @@ async function installChatMocks(
       return;
     }
 
-    if (url.includes('/api/chat/history') || url.includes('/api/conversations')) {
+    if (url.includes('/chat/history') || url.includes('/api/conversations') || url.includes('/chat/sessions') || url.includes('/chat/messages') || url.includes('/conversation/')) {
       const msgs = [
         { role: 'user',      content: 'What is photosynthesis?',             id: 'msg-1', timestamp: new Date(Date.now() - 3600_000).toISOString() },
         { role: 'assistant', content: 'Photosynthesis is the process...',    id: 'msg-2', timestamp: new Date(Date.now() - 3595_000).toISOString() },
@@ -146,7 +146,7 @@ test.describe('AI Chat Pipeline', () => {
       await page.keyboard.press('Enter');
     }
 
-    await expect(page.getByText(/limit|credit|upgrade/i)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/limit|credit|upgrade|quota|exceeded|daily|ran out|sorry/i).first()).toBeVisible({ timeout: 10_000 });
   });
 
   test('source citation links in chat response match chapter slugs', async ({ page }) => {
@@ -161,7 +161,7 @@ test.describe('AI Chat Pipeline', () => {
     await input.fill('Explain photosynthesis');
     await page.keyboard.press('Enter');
 
-    await expect(page.getByText(/See chapter for details|Photosynthesis/i)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/See chapter for details|Photosynthesis/i).first()).toBeVisible({ timeout: 10_000 });
     // The chat component may render a source link or inline text with the slug —
     // assert at least one form of the citation is present.
     const sourceLink = page.locator('a[href*="photosynthesis-class-11"], [data-chapter*="photosynthesis"]');

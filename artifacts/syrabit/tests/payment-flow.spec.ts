@@ -560,7 +560,7 @@ test.describe('Payment edge cases', () => {
     // Profile now shows Free plan — Starter label and 1500-credit limit are gone.
     await page.goto('/profile');
     await expect(page.getByText(/Free/i).first()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(/Starter/i)).not.toBeVisible({ timeout: 3_000 });
+    await expect(page.getByText('Starter', { exact: true }).first()).not.toBeVisible({ timeout: 3_000 });
     await expect(page.getByText(new RegExp(String(FREE_CREDITS_LIMIT))).first()).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(new RegExp(String(STARTER_CREDITS_LIMIT))).first()).not.toBeVisible({ timeout: 3_000 });
   });

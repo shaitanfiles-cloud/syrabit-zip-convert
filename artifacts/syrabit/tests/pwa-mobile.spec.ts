@@ -139,25 +139,32 @@ test.describe('Offline fallback', () => {
 
     // Intercept every subsequent navigation request and return the cached
     // offline.html — this mirrors what the production service worker does.
-    await context.route(
-      (url) => url.pathname !== '/offline.html',
-      async (route) => {
-        if (route.request().resourceType() === 'document') {
-          await route.fulfill({
-            status: 200,
-            contentType: 'text/html; charset=utf-8',
-            body: offlineBody,
-          });
-        } else {
-          await route.abort('internetdisconnected');
-        }
-      },
-    );
+    // Use page.route('**', ...) for reliable interception of all requests,
+    // and allow non-document resources through so React can render the
+    // offline page heading.
+    await page.route('**', async (route) => {
+      const reqUrl = route.request().url();
+      // Skip interception for the offline.html source itself
+      if (reqUrl.includes('/offline.html')) {
+        await route.continue();
+        return;
+      }
+      if (route.request().resourceType() === 'document') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'text/html; charset=utf-8',
+          body: offlineBody,
+        });
+      } else {
+        // Allow JS/CSS through so the page can hydrate and render the heading
+        await route.continue();
+      }
+    });
 
     await page.goto('/library', { waitUntil: 'domcontentloaded' });
 
-    await expect(page.getByRole('heading', { name: /offline/i })).toBeVisible();
-    await expect(page.getByText(/waiting for connection/i)).toBeVisible();
+    await expect(page.getByRole('heading', { name: /offline/i })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/waiting for connection/i)).toBeVisible({ timeout: 10_000 });
   });
 });
 

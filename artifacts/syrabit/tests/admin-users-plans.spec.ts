@@ -50,7 +50,7 @@ test.describe('Admin Users & Plans', () => {
   test('user list renders with email, plan type, and credit balance', async ({ page }) => {
     await installAdminApiMocks(page);
 
-    await page.route('**/api/admin/users*', async (route: Route) => {
+    await page.route('**/api/admin/users**', async (route: Route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(USER_LIST) });
     });
 
@@ -65,7 +65,7 @@ test.describe('Admin Users & Plans', () => {
     await installAdminApiMocks(page);
 
     const creditPatches: AdminCall[] = [];
-    await page.route('**/api/admin/users*', async (route: Route) => {
+    await page.route('**/api/admin/users**', async (route: Route) => {
       const req = route.request();
       const url = req.url();
       const method = req.method();
@@ -106,7 +106,7 @@ test.describe('Admin Users & Plans', () => {
     await installAdminApiMocks(page);
 
     const planPatches: AdminCall[] = [];
-    await page.route('**/api/admin/users*', async (route: Route) => {
+    await page.route('**/api/admin/users**', async (route: Route) => {
       const req = route.request();
       const url = req.url();
       const method = req.method();
@@ -163,13 +163,13 @@ test.describe('Admin Users & Plans', () => {
     });
 
     await openPlansPanel(page);
-    await expect(page.getByText(/Plans & Credits/i)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Plans & Credits/i).first()).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/Free|Starter|Pro/i).first()).toBeVisible({ timeout: 8_000 });
 
     // Each PlanCard has an Edit2 toggle button (icon-only, no aria-label).
-    // AdminQuickLinks renders below the cards, so the first button on the page
-    // is the Edit2 pencil on the first PlanCard.
-    const editBtn = page.getByRole('button').first();
+    // Exclude nav buttons (data-testid="admin-nav-*") so we land on the
+    // first content button — the Edit2 pencil on the first PlanCard.
+    const editBtn = page.locator('button:not([data-testid^="admin-nav-"])').first();
     await expect(editBtn).toBeVisible({ timeout: 8_000 });
     await editBtn.click();
 

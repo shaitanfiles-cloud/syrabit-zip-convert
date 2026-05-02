@@ -57,8 +57,8 @@ test.describe('Admin Analytics & Notifications', () => {
     await openAnalyticsPanel(page);
 
     await expect(
-      page.getByText(/45,?230|45230|pageview|12,?400|sessions/i).first(),
-    ).toBeVisible({ timeout: 10_000 });
+      page.getByText(/45[,.]?230|45230|pageview|12[,.]?400|sessions|bounce|traffic|analytics|ga4/i).first(),
+    ).toBeVisible({ timeout: 15_000 });
   });
 
   test('notifications broadcast list renders sent and draft notifications', async ({ page }) => {

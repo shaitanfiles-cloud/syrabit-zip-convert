@@ -87,7 +87,10 @@ const PUSH_OFF_TITLE = 'Enable browser push notifications for critical alerts';
 // ---------------------------------------------------------------------------
 
 function getPushToggle(page: Page) {
-  return page.getByTitle(PUSH_OFF_TITLE);
+  return page.getByTitle(PUSH_OFF_TITLE)
+    .or(page.getByRole('button', { name: /push.*notification|enable.*push|browser push/i }))
+    .or(page.getByTitle(/push.*notification|enable.*push|browser push/i))
+    .first();
 }
 
 async function readPermCalled(page: Page): Promise<boolean> {

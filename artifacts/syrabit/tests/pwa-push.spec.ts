@@ -50,15 +50,28 @@ test.beforeEach(async ({ context }) => {
  * Register /sw.js from the page and return the Playwright Worker handle.
  * The SW calls self.skipWaiting() in its install handler, so it activates
  * without waiting for existing clients to be closed.
+ *
+ * In CI (vite preview / production mode) the app auto-registers the SW
+ * during page.goto('/'), so the 'serviceworker' event may have already fired
+ * before this function is called.  Polling context.serviceWorkers() is more
+ * reliable than context.waitForEvent because it handles both the first-
+ * registration path and the already-active path uniformly.
  */
 async function registerSW(context: BrowserContext, page: Page) {
-  const [sw] = await Promise.all([
-    context.waitForEvent('serviceworker'),
-    page.evaluate(() =>
-      navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }),
-    ),
-  ]);
-  return sw;
+  // Trigger registration (idempotent — safe to call even if already registered).
+  await page.evaluate(() =>
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }),
+  );
+
+  // Poll for an active SW — covers the case where the app auto-registered
+  // the SW during page.goto and the 'serviceworker' event already fired.
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const workers = context.serviceWorkers();
+    if (workers.length > 0) return workers[0];
+    await new Promise<void>((r) => setTimeout(r, 200));
+  }
+  throw new Error('registerSW: no service worker became active within 30 s');
 }
 
 // ---------------------------------------------------------------------------

@@ -107,13 +107,18 @@ test.describe('Admin Logs Explorer (Playwright E2E)', () => {
     await expect(page.getByText(/Cache hit for chapter/i)).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(/Rate limit hit/i)).toBeVisible({ timeout: 5_000 });
 
-    const searchInput = page.getByPlaceholder(/search|filter|keyword|query/i).first();
+    const searchInput = page.getByPlaceholder(/search|filter|keyword|query|text|message|free/i).first();
     await expect(searchInput).toBeVisible({ timeout: 8_000 });
     await searchInput.fill('Vertex');
 
-    const applyBtn = page.getByRole('button', { name: /apply/i }).first();
-    await expect(applyBtn).toBeVisible({ timeout: 5_000 });
-    await applyBtn.click();
+    // Apply button is optional — some implementations search on input change or Enter.
+    const applyBtn = page.getByRole('button', { name: /apply|search|filter|go/i }).first();
+    const applyVisible = await applyBtn.isVisible({ timeout: 3_000 }).catch(() => false);
+    if (applyVisible) {
+      await applyBtn.click();
+    } else {
+      await searchInput.press('Enter');
+    }
 
     await expect(page.getByText(/Vertex AI returned 503/i)).toBeVisible({ timeout: 8_000 });
     await expect(page.getByText(/Cache hit for chapter/i)).not.toBeVisible({ timeout: 5_000 });

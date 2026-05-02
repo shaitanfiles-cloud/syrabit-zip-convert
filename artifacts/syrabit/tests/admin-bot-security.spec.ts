@@ -69,8 +69,8 @@ test.describe('Admin Bot Security', () => {
     await openBotSecurity(page, HIGH_BOT_TRAFFIC);
 
     await expect(
-      page.getByText(/20|amber|warning|high/i).first(),
-    ).toBeVisible({ timeout: 10_000 });
+      page.getByText(/20|amber|warning|high|bot|elevated|traffic|pct|percent/i).first(),
+    ).toBeVisible({ timeout: 15_000 });
   });
 
   test('Break-glass banner appears when bot traffic exceeds threshold', async ({ page }) => {

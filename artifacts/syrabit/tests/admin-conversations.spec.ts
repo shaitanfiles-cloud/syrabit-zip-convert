@@ -57,7 +57,7 @@ test.describe('Admin Conversations', () => {
 
     // Registered AFTER installAdminApiMocks so Playwright's LIFO order means
     // this narrow route wins over the catch-all registered inside installAdminApiMocks.
-    await page.route('**/api/admin/conversations*', async (route: Route) => {
+    await page.route('**/api/admin/conversations**', async (route: Route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(CONVERSATIONS_ARRAY) });
     });
 
@@ -72,7 +72,7 @@ test.describe('Admin Conversations', () => {
   test('clicking a conversation reveals its embedded messages', async ({ page }) => {
     await installAdminApiMocks(page);
 
-    await page.route('**/api/admin/conversations*', async (route: Route) => {
+    await page.route('**/api/admin/conversations**', async (route: Route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(CONVERSATIONS_ARRAY) });
     });
 
@@ -91,7 +91,7 @@ test.describe('Admin Conversations', () => {
     const flagCalls: Array<{ url: string; method: string }> = [];
     let conv1Flagged = false;
 
-    await page.route('**/api/admin/conversations*', async (route: Route) => {
+    await page.route('**/api/admin/conversations**', async (route: Route) => {
       const req = route.request();
       const url = req.url();
       const method = req.method();

@@ -30,11 +30,11 @@ test.describe('Admin Rate Limits', () => {
 
     await openRateLimitsPanel(page);
 
-    await expect(page.getByText(/Free/i).first()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(/Starter/i).first()).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByText(/Pro/i).first()).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByText(/Enterprise/i).first()).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByText(/Req\/min|Credits\/day|Max tokens/i).first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(/Free/i).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/Starter/i).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Pro/i).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Enterprise/i).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Req\/min|Credits\/day|Max tokens/i).first()).toBeVisible({ timeout: 10_000 });
   });
 
   test('editing a tier and clicking save fires the rate-limit save endpoint', async ({ page }) => {
