@@ -533,24 +533,13 @@ test.describe('Payment edge cases', () => {
     const manageLocator = page
       .getByRole('button', { name: /downgrade|cancel|manage|free plan|switch/i })
       .or(page.getByRole('link', { name: /downgrade|cancel|manage|free plan|switch/i }));
-    const manageBtnVisible = await manageLocator.first().isVisible({ timeout: 8_000 }).catch(() => false);
-    if (manageBtnVisible) {
-      await manageLocator.first().click();
-      // Confirm the downgrade if a confirmation dialog appears.
-      const confirmBtn = page.getByRole('button', { name: /confirm|yes|downgrade|cancel plan/i }).first();
-      if (await confirmBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
-        await confirmBtn.click();
-      }
-    } else {
-      // Fallback: trigger the downgrade endpoint programmatically when no UI
-      // button is found (e.g. the component renders a different label).
-      await page.evaluate(() =>
-        fetch('/api/payments/downgrade', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ plan: 'free' }),
-        }),
-      );
+    // Require the UI control to be present — if it is absent the downgrade flow is broken.
+    await expect(manageLocator.first()).toBeVisible({ timeout: 8_000 });
+    await manageLocator.first().click();
+    // Confirm the downgrade if a confirmation dialog appears.
+    const confirmBtn = page.getByRole('button', { name: /confirm|yes|downgrade|cancel plan/i }).first();
+    if (await confirmBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await confirmBtn.click();
     }
 
     // Route interceptor captures the downgrade call.
