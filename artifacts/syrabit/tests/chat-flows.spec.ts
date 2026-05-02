@@ -54,7 +54,7 @@ async function installChatMocks(
     if (url.includes('/api/user/credits') || url.includes('/user/stats')) {
       await route.fulfill({
         status: 200, contentType: 'application/json',
-        body: JSON.stringify(credits),
+        body: JSON.stringify({ ...credits, credits_used: credits.used, credits_limit: credits.limit }),
       });
       return;
     }
@@ -103,12 +103,13 @@ async function installChatMocks(
     }
 
     if (url.includes('/api/chat/history') || url.includes('/api/conversations')) {
+      const msgs = [
+        { role: 'user',      content: 'What is photosynthesis?',             id: 'msg-1', timestamp: new Date(Date.now() - 3600_000).toISOString() },
+        { role: 'assistant', content: 'Photosynthesis is the process...',    id: 'msg-2', timestamp: new Date(Date.now() - 3595_000).toISOString() },
+      ];
       await route.fulfill({
         status: 200, contentType: 'application/json',
-        body: JSON.stringify({ messages: [
-          { role: 'user', content: 'What is photosynthesis?', id: 'msg-1' },
-          { role: 'assistant', content: 'Photosynthesis is the process...', id: 'msg-2' },
-        ], conversation_id: 'conv-e2e-001' }),
+        body: JSON.stringify({ messages: msgs, history: msgs, conversation_id: 'conv-e2e-001' }),
       });
       return;
     }

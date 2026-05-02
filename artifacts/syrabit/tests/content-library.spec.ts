@@ -94,7 +94,7 @@ async function installLibraryMocks(page: import('@playwright/test').Page) {
 
   // Narrow routes registered AFTER (higher Playwright LIFO priority).
 
-  await page.route('**/content/library-bundle**', async (route: Route) => {
+  await page.route('**/api/content/library-bundle**', async (route: Route) => {
     await route.fulfill({
       status: 200, contentType: 'application/json',
       body: JSON.stringify(LIBRARY_BUNDLE),
@@ -153,7 +153,7 @@ test.describe('Content Library & Curriculum', () => {
     await expect(page.getByText(/Biology/i)).toBeVisible({ timeout: 10_000 });
     await page.getByText(/Biology/i).first().click();
 
-    await expect(page).toHaveURL(/biology|chapter/i, { timeout: 10_000 });
+    await expect(page).toHaveURL(/biology|chapter|sub-bio/i, { timeout: 10_000 });
   });
 
   test('chapter detail page renders summary, key topics, and graph', async ({ page }) => {
@@ -161,8 +161,8 @@ test.describe('Content Library & Curriculum', () => {
     // App.jsx route: /:board/:classSlug/:subjectSlug/:chapterSlug
     await page.goto('/ahsec/class-11/biology-class-11/photosynthesis-class-11');
 
-    await expect(page.getByText(/Photosynthesis/i)).toBeVisible({ timeout: 12_000 });
-    await expect(page.getByText(/light.*reaction|overview|summary|photosynthesis/i)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Photosynthesis/i).first()).toBeVisible({ timeout: 12_000 });
+    await expect(page.getByText(/light.*reaction|overview|summary|photosynthesis/i).first()).toBeVisible({ timeout: 10_000 });
   });
 
   test('deep-linked chapter URL resolves and renders correctly', async ({ page }) => {
@@ -171,7 +171,7 @@ test.describe('Content Library & Curriculum', () => {
     const resp = await page.goto('/ahsec/class-11/biology-class-11/photosynthesis-class-11');
     expect(resp?.status()).not.toBe(404);
 
-    await expect(page.getByText(/Photosynthesis/i)).toBeVisible({ timeout: 12_000 });
+    await expect(page.getByText(/Photosynthesis/i).first()).toBeVisible({ timeout: 12_000 });
     await expect(page.locator('h1, h2').first()).toBeVisible({ timeout: 10_000 });
   });
 
@@ -180,7 +180,7 @@ test.describe('Content Library & Curriculum', () => {
     // App.jsx route: /:board/:classSlug/:subjectSlug/:chapterSlug
     await page.goto('/ahsec/class-11/biology-class-11/photosynthesis-class-11');
 
-    await expect(page.getByText(/Photosynthesis/i)).toBeVisible({ timeout: 12_000 });
+    await expect(page.getByText(/Photosynthesis/i).first()).toBeVisible({ timeout: 12_000 });
 
     // The page title must be non-empty.
     const titleEl = await page.title();

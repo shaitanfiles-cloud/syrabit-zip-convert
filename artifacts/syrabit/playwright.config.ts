@@ -45,38 +45,31 @@ export default defineConfig({
       name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
-        // Service workers are blocked globally (see above) so page.route()
-        // mocks work reliably for all non-PWA tests. The two desktop PWA
-        // specs (pwa-push.spec.ts, pwa-permission.spec.ts) that need a live
-        // SW handle run under the chromium-pwa-desktop project below instead.
+        // Keep service workers BLOCKED for the main chromium suite so that
+        // Playwright's page.route() intercepts all /api/** requests before
+        // the production SW can claim them.  In CI the app is served with
+        // vite preview (NODE_ENV=production) so the SW would otherwise
+        // intercept every mocked API call and proxy it to the non-existent
+        // backend, producing ECONNREFUSED errors that crash the preview server.
         serviceWorkers: 'block',
       },
-      // pwa-mobile.spec.ts is scoped to mobile-chrome (below).
-      // pwa-push.spec.ts and pwa-permission.spec.ts run under
-      // chromium-pwa-desktop (below) where SW is allowed.
-      testIgnore: [
-        '**/pwa-mobile.spec.ts',
-        '**/pwa-push.spec.ts',
-        '**/pwa-permission.spec.ts',
-      ],
+      // pwa-mobile.spec.ts  → mobile-chrome project
+      // pwa-push.spec.ts    → pwa-chromium project (needs SW allowed)
+      // pwa-permission.spec.ts → pwa-chromium project (needs SW allowed)
+      testIgnore: ['**/pwa-mobile.spec.ts', '**/pwa-push.spec.ts', '**/pwa-permission.spec.ts'],
     },
     {
-      // Desktop PWA specs that register /sw.js directly and obtain a
-      // Playwright Worker handle via context.waitForEvent('serviceworker').
-      // serviceWorkers:'allow' is required so the SW can register and fire
-      // push/notificationclick events inside the test. All /api/** routes
-      // in these tests are still mocked via page.route() — Playwright's CDP
-      // interception fires before the SW fetch handler on non-navigation
-      // requests so the mocks remain effective.
-      name: 'chromium-pwa-desktop',
+      // pwa-push.spec.ts and pwa-permission.spec.ts register /sw.js directly
+      // via context.waitForEvent('serviceworker') + navigator.serviceWorker.register()
+      // and call sw.evaluate() to exercise push/notificationclick handlers.
+      // Service workers must be allowed so the SW activates and the tests can
+      // obtain a Worker handle via context.serviceWorkers().
+      name: 'pwa-chromium',
       use: {
         ...devices['Desktop Chrome'],
         serviceWorkers: 'allow',
       },
-      testMatch: [
-        '**/pwa-push.spec.ts',
-        '**/pwa-permission.spec.ts',
-      ],
+      testMatch: ['**/pwa-push.spec.ts', '**/pwa-permission.spec.ts'],
     },
     {
       // Task #3 — mobile viewport for PWA install-prompt & offline-fallback tests.
