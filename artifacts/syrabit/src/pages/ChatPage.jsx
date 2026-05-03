@@ -44,6 +44,7 @@ export default function ChatPage() {
   const convId     = searchParams.get('id');
   const subjectId  = searchParams.get('subject');
   const documentId = searchParams.get('document_id');
+  const chapterId  = searchParams.get('chapter');
 
   const [messages, setMessages]           = useState([]);
   const [input, setInput]                 = useState('');
@@ -89,6 +90,9 @@ export default function ChatPage() {
   const abortControllerRef = useRef(null);
   const modelMenuRef      = useRef(null);
   const scrollTimeoutRef  = useRef(null);
+  const autoRetryTimerRef = useRef(null);
+  // Always points to the latest sendMsg closure so timers can call it safely.
+  const sendMsgRef        = useRef(null);
   const pendingSendScroll = useRef(false);
   // Conversation IDs created locally during this session — we already
   // have their messages in state, so the URL→DB loader effect must
@@ -98,7 +102,10 @@ export default function ChatPage() {
   const ownedConvIds = useRef(new Set());
 
   useEffect(() => {
-    return () => { if (abortControllerRef.current) abortControllerRef.current.abort(); };
+    return () => {
+      if (abortControllerRef.current) abortControllerRef.current.abort();
+      if (autoRetryTimerRef.current) clearTimeout(autoRetryTimerRef.current);
+    };
   }, []);
 
   const lastMsgLenRef = useRef(0);
@@ -222,6 +229,21 @@ export default function ChatPage() {
 
   useEffect(() => { adjustTextarea(); }, [input, adjustTextarea]);
 
+  const activeChapter = useMemo(
+    () => (chapterId && scopedChapters.length
+      ? scopedChapters.find((ch) => ch.id === chapterId) ?? null
+      : null),
+    [chapterId, scopedChapters],
+  );
+
+  const onDismissChapter = useCallback(() => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('chapter');
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
   const cardContext = useMemo(() => {
     if (!subjectId || !subject) return null;
     const lines = [];
@@ -233,22 +255,35 @@ export default function ChatPage() {
     const boardLabel = rawBoard ? `${rawBoard}` : null;
     const parts = [boardLabel, user?.class_name, user?.stream_name].filter(Boolean);
     if (parts.length) lines.push(`Board/Class: ${parts.join(' | ')}`);
-    if (scopedChapters.length) {
+
+    // When a specific chapter is active, surface its full content first so
+    // the LLM and vector retrieval both weight it highest.
+    if (activeChapter) {
+      lines.push('');
+      lines.push(`Active chapter (priority context): ${activeChapter.title}`);
+      if (activeChapter.description) lines.push(`Description: ${activeChapter.description}`);
+      if (activeChapter.content) lines.push(activeChapter.content.slice(0, 1200));
+      lines.push('');
+      lines.push('Other chapters in this subject:');
+    } else if (scopedChapters.length) {
       lines.push('');
       lines.push('Syllabus chapters:');
-      scopedChapters
-        .slice()
-        .sort((a, b) => (a.order_index ?? a.order ?? 0) - (b.order_index ?? b.order ?? 0))
-        .forEach((ch, i) => {
-          const num = ch.chapter_number ?? ch.order_index ?? i + 1;
-          let entry = `Chapter ${num} — ${ch.title}`;
-          if (ch.description) entry += `: ${ch.description}`;
-          if (ch.content) entry += `\n${ch.content.slice(0, 400)}`;
-          lines.push(entry);
-        });
     }
+
+    scopedChapters
+      .slice()
+      .sort((a, b) => (a.order_index ?? a.order ?? 0) - (b.order_index ?? b.order ?? 0))
+      .forEach((ch, i) => {
+        if (activeChapter && ch.id === activeChapter.id) return;
+        const num = ch.chapter_number ?? ch.order_index ?? i + 1;
+        let entry = `Chapter ${num} — ${ch.title}`;
+        if (ch.description) entry += `: ${ch.description}`;
+        if (ch.content) entry += `\n${ch.content.slice(0, 400)}`;
+        lines.push(entry);
+      });
+
     return lines.join('\n').slice(0, 4000);
-  }, [subjectId, subject, scopedChapters, user]);
+  }, [subjectId, subject, scopedChapters, activeChapter, user]);
 
   const effectiveLimit = credits.limit ?? user?.credits_limit ?? null;
   const remaining    = effectiveLimit !== null ? Math.max(0, effectiveLimit - credits.used) : null;
@@ -275,6 +310,11 @@ export default function ChatPage() {
 
   const sendMsg = async (text) => {
     if (!text.trim() || isLoading || isOutOfCredits || (!user && turnstileEnabled && !turnstileReady)) return;
+    // Cancel any pending auto-retry from a previous error.
+    if (autoRetryTimerRef.current) {
+      clearTimeout(autoRetryTimerRef.current);
+      autoRetryTimerRef.current = null;
+    }
     const msgId = Date.now().toString();
     const userMsg = { id: msgId + '_u', role: 'user', content: text, timestamp: new Date().toISOString() };
     const aiMsgId = msgId + '_a';
@@ -296,6 +336,7 @@ export default function ChatPage() {
     const payload = {
       message: text, conversation_id: conversationId,
       subject_id: subjectId || null, subject_name: subject?.name || null,
+      chapter_id: chapterId || null, chapter_name: activeChapter?.title || null,
       board_id: user?.board_id || null, board_name: user?.board_name || null,
       class_id: user?.class_id || null, class_name: user?.class_name || null,
       stream_name: user?.stream_name || null, model,
@@ -411,14 +452,39 @@ export default function ChatPage() {
           if (parsed.content_card_board && !meta.ragBoardName) meta.ragBoardName = parsed.content_card_board;
           if (parsed.content_card_class && !meta.ragClassName) meta.ragClassName = parsed.content_card_class;
           if (parsed.content_card_subject && !meta.ragSubjectName) meta.ragSubjectName = parsed.content_card_subject;
+          if (parsed.wai_chapter_match) {
+            meta.waiChapterMatch = parsed.wai_chapter_match;
+            setMessages((prev) => prev.map((m) =>
+              m.id === aiMsgId ? { ...m, wai_chapter_match: parsed.wai_chapter_match } : m
+            ));
+          }
+          if (parsed.event && parsed.event.startsWith('discovery:')) {
+            const ev = { event: parsed.event, value: parsed.value || null };
+            setMessages((prev) => prev.map((m) =>
+              m.id === aiMsgId
+                ? { ...m, discovery_events: [...(m.discovery_events || []), ev] }
+                : m
+            ));
+          }
           if (parsed.translating) {
             setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: '', translating: true } : m));
             continue;
           }
           if (parsed.error) {
             meta.hasError = true;
-            toast.error(parsed.error || 'AI service error — please try again.');
-            setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: 'Sorry, something went wrong. Please try again.', streaming: false } : m));
+            // Clear any previous auto-retry timer before scheduling a new one.
+            if (autoRetryTimerRef.current) clearTimeout(autoRetryTimerRef.current);
+            setMessages((prev) => prev.map((m) =>
+              m.id === aiMsgId
+                ? { ...m, content: '', isAiUnavailable: true, retryText: text, streaming: false }
+                : m
+            ));
+            // Auto-retry once after 8 seconds using the latest sendMsg closure.
+            autoRetryTimerRef.current = setTimeout(() => {
+              autoRetryTimerRef.current = null;
+              setMessages((prev) => prev.filter((m) => m.id !== aiMsgId));
+              sendMsgRef.current?.(text);
+            }, 8000);
             continue;
           }
           if (meta.hasError) continue;
@@ -493,6 +559,8 @@ export default function ChatPage() {
       try { _perfTotal.stop(); } catch {}
     }
   };
+  // Keep the ref in sync so auto-retry timers always call the freshest closure.
+  sendMsgRef.current = sendMsg;
 
   const handleRegenerate = useCallback(() => {
     const lastUser = [...messages].reverse().find((m) => m.role === 'user');
@@ -619,7 +687,7 @@ export default function ChatPage() {
                 messages.forEach((msg, i) => {
                   out.push(
                     <div key={msg.id || i} ref={i === lastUIdx ? lastUserMsgRef : undefined}>
-                      <MessageBubble msg={msg} isLast={i === messages.length - 1} onCopy={handleCopy} onRegenerate={msg.role === 'assistant' && i === messages.length - 1 ? handleRegenerate : null} messageIndex={i} conversationId={conversationId} responseLang={responseLang} />
+                      <MessageBubble msg={msg} isLast={i === messages.length - 1} onCopy={handleCopy} onRegenerate={msg.role === 'assistant' && i === messages.length - 1 ? handleRegenerate : null} onRetry={msg.isAiUnavailable && msg.retryText ? () => { if (autoRetryTimerRef.current) { clearTimeout(autoRetryTimerRef.current); autoRetryTimerRef.current = null; } setMessages((prev) => prev.filter((m) => m.id !== msg.id)); sendMsgRef.current?.(msg.retryText); } : null} messageIndex={i} conversationId={conversationId} responseLang={responseLang} subject={subject} scopedChapters={scopedChapters} />
                     </div>
                   );
                 });
@@ -667,6 +735,8 @@ export default function ChatPage() {
           isAnon={!user}
           getTurnstileToken={getTurnstileToken}
           turnstileEnabled={turnstileEnabled}
+          activeChapter={activeChapter}
+          onDismissChapter={onDismissChapter}
         />
       </div>
       </AppLayout>

@@ -5,6 +5,164 @@ tactical — link out to source for the gory details.
 
 ---
 
+## Pinecone chunk migration (task #206)
+
+### One-time migration
+
+After running `embed_chunks_bulk` to ensure all chunks have embeddings,
+copy them to Pinecone:
+
+```bash
+# Dry run first
+python scripts/migrate_chunks_to_pinecone.py --dry-run --ensure-index
+
+# Real migration
+python scripts/migrate_chunks_to_pinecone.py --ensure-index
+```
+
+### Initial run evidence (2026-05-01)
+
+| Metric | Value |
+|--------|-------|
+| MongoDB embedded chunks | 0 |
+| Pinecone `syrabit-ahsec` vectors | 0 |
+| Migration result | `{total: 0, upserted: 0, failed: 0, duration_s: 4.01}` |
+| Index host | `syrabit-ahsec-vtlityl.svc.aped-4627-b74a.pinecone.io` |
+| Index spec | AWS us-east-1, 1024-dim cosine, serverless |
+| `PINECONE_WRITE` | `true` (set after migration) |
+
+The chunks collection was empty at migration time — chapter content has not
+been ingested yet. Both Atlas $vectorSearch and Pinecone returned empty results
+for all 5 AHSEC/SEBA parity queries (consistent — both backends agree).
+
+### Re-run after content ingestion
+
+Once `embed_chunks_bulk` has run with the content pipeline:
+
+```bash
+# Verify counts match
+python scripts/validate_rag_parity.py
+# Expected: "PARITY VALIDATED — 5/5 queries above 70% threshold"
+```
+
+### Environment variables
+
+| Variable | Value | Notes |
+|----------|-------|-------|
+| `PINECONE_API_KEY` | secret | Pinecone API key |
+| `PINECONE_INDEX` | `syrabit-ahsec` | Index name |
+| `PINECONE_WRITE` | `true` | Enables Pinecone writes in embed_chunks_bulk |
+| `PINECONE_SKIP_MONGO_EMBED` | unset | When `PINECONE_WRITE=true`, MongoDB embedding write is already skipped by default. Set to `false` to re-enable it (Atlas fallback warm-up only). |
+| `ATLAS_VS_ENABLED` | unset | Set to `true` to re-enable the Atlas $vectorSearch index check at startup (emergency fallback recovery only). Default: off. |
+| `PINECONE_ATLAS_FALLBACK` | `false` | Set to `false` once Pinecone parity is confirmed to disable the Atlas fallback in RAG queries. |
+
+---
+
+## Drop MongoDB embedding arrays (Task #208 / Task #216)
+
+After Pinecone parity is confirmed (≥70 % top-K overlap on the built-in
+5 AHSEC/SEBA queries, or a larger custom set), run this to reclaim ~8 KB
+per chunk document from MongoDB.  Each 1024-float embedding stored in Atlas
+inflates document reads with no query benefit once Pinecone is the active
+vector store.
+
+### Pre-flight checklist
+
+Work through every item in order before running the drop.
+
+```bash
+# 1. Confirm chunks collection is non-empty (content must be ingested first)
+#    Connect to Atlas / mongosh and run:
+db.chunks.countDocuments()
+#    Expected: > 0
+
+# 2. Validate Pinecone parity (≥70% top-K overlap on all 5 built-in queries)
+python scripts/validate_rag_parity.py
+#    Expected: "PARITY VALIDATED — 5/5 queries above 70% threshold"
+#    For higher confidence, add more queries:
+python scripts/validate_rag_parity.py \
+    --queries "Newton laws of motion AHSEC Class 11" \
+              "Photosynthesis SEBA Class 10 Biology" \
+              "French Revolution AHSEC History" \
+              "Linear equations algebra SEBA Class 9" \
+              "Organic chemistry reactions AHSEC Class 12"
+#    Expected: "PARITY VALIDATED — 10/10 queries above 70% threshold"
+
+# 3. Confirm PINECONE_WRITE=true (dual-write active — no new embeddings lost)
+echo $PINECONE_WRITE   # must print "true"
+
+# 4. Confirm Atlas fallback is already disabled
+echo $PINECONE_ATLAS_FALLBACK   # must print "false"
+
+# 5. Confirm Atlas continuous backup is active in Atlas UI, OR take a
+#    manual snapshot before proceeding.
+```
+
+### Execute the drop
+
+```bash
+# Step A — dry run: prints document count, makes no writes
+python scripts/drop_mongo_embeddings.py --dry-run
+#   Expected log line: "[DRY RUN] Would unset embedding on N chunk documents."
+
+# Step B — validate on one subject first (optional but recommended)
+python scripts/drop_mongo_embeddings.py --subject-id <subject_id> --dry-run
+python scripts/drop_mongo_embeddings.py --subject-id <subject_id>
+#   Expected log line: "remaining_with_embedding (subject_id=<id>)=0"
+
+# Step C — full drop across all chunks
+python scripts/drop_mongo_embeddings.py
+#   Expected log line: "remaining_with_embedding=0"
+#   Exit code 0 = success.  Exit code 1 = pre-flight guard failed, no writes.
+```
+
+### Drop the Atlas Vector Search index (manual, Atlas UI)
+
+Run this only after the script logs `remaining_with_embedding=0`.
+
+1. Open **Atlas UI → Database → Browse Collections → chunks →
+   Indexes → Search Indexes**.
+2. Delete the index named **`vector_index`**.
+3. Confirm `ATLAS_VS_ENABLED` is **not** set (or is `false`) so startup
+   no longer calls `ensure_vector_index()`.
+
+### Run evidence
+
+#### Initial cutover (2026-05-01) — deferred, content not yet ingested
+
+| Metric | Value |
+|--------|-------|
+| Chunks with `embedding` field | 0 |
+| Parity queries passed | 0/5 (both backends returned empty — consistent) |
+| Dry-run output | `[DRY RUN] Would unset embedding on 0 chunk documents.` |
+| Drop executed | No — deferred until content is ingested |
+| Atlas vector index deleted | No — deferred |
+| Reason for deferral | `embed_chunks_bulk` had not run; chunks collection was empty at Pinecone cutover time |
+
+#### Post-ingestion run (date TBD) — to be filled in by operator
+
+| Metric | Value |
+|--------|-------|
+| Chunks with `embedding` field (pre-drop) | _fill in_ |
+| Parity queries passed | _fill in_ (e.g. "10/10 above 70% threshold") |
+| Dry-run reported count | _fill in_ |
+| Drop duration | _fill in_ (e.g. "42.3 s") |
+| `dropped` count logged | _fill in_ |
+| `failed` count logged | _fill in_ |
+| `remaining_with_embedding` after drop | _fill in_ (target: 0) |
+| Atlas vector index deleted | _fill in_ (Yes / No + date) |
+| Operator | _fill in_ |
+| Run date | _fill in_ |
+
+### New ingestion behaviour
+
+With `PINECONE_WRITE=true`, `embed_chunks_bulk` now defaults to **not** writing
+the `embedding` float array to MongoDB (Task #208 default flip).  To restore
+the old behaviour for an emergency Atlas warm-up, set
+`PINECONE_SKIP_MONGO_EMBED=false` temporarily then restart workers.
+
+---
+
 ## Assamese purity override propagation
 
 **Endpoints**
@@ -150,3 +308,50 @@ the alert body's "Misses" section.
   fail (alert dispatched with metric delta + miss list), missing
   baseline (no alert spam on first deploy), scheduling window, and
   cross-replica dedup.
+
+---
+
+## Google sign-in via Supabase OAuth (setup checklist)
+
+As of Task #156, Google sign-in is handled entirely by Supabase. The backend no
+longer issues Google credentials or verifies Google ID tokens. All Google OAuth
+flows go through Supabase and are exchanged at `/api/auth/supabase-session`.
+
+### One-time Supabase dashboard configuration
+
+1. Open your Supabase project → **Authentication → Providers → Google**.
+2. Toggle **Enable Sign in with Google** to on.
+3. Paste your **Google Cloud OAuth 2.0 Client ID** and **Client Secret**
+   (from Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Client IDs).
+4. Copy the **Redirect URL** shown by Supabase
+   (format: `https://<project-ref>.supabase.co/auth/v1/callback`).
+5. In Google Cloud Console, add that Redirect URL to
+   **Authorised redirect URIs** on the same OAuth 2.0 client.
+6. Save both.
+
+### How the frontend flow works
+
+1. User clicks **Sign in with Google** → `GoogleSignInButton` calls
+   `supabase.auth.signInWithOAuth({ provider: 'google' })`.
+2. Browser redirects to Google, user authenticates, Google redirects back to
+   the Supabase callback URL.
+3. Supabase sets its own session and redirects to the app's `redirectTo` URL
+   (the current page — `/login` or `/signup`).
+4. `AuthContext.onAuthStateChange` fires `SIGNED_IN` with `provider='google'`.
+5. The handler calls `_exchangeSupabaseSession(session.access_token)` which
+   hits `POST /api/auth/supabase-session` and sets the httpOnly cookie + JWT.
+6. User is now fully authenticated with the correct role
+   (`admin` / `staff` / `student` resolved in `supabase_session` handler).
+
+### Role resolution (staff fix from Task #156)
+
+The old `/auth/google` endpoint had a bug: it only checked `is_admin` and
+defaulted to `student`, skipping the `staff` role entirely.
+Now that Google sign-in goes through `/auth/supabase-session`, staff users
+get `role="staff"` correctly (lines 262-266 of `routes/auth.py`).
+
+### GA4 credentials (separate from sign-in)
+
+`GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` in the environment are
+**only** for the GA4 Data API client (`ga4_client.py`). They are not used for
+Google sign-in. Set them separately from the Supabase provider credentials.

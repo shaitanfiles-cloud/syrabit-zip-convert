@@ -137,6 +137,11 @@ preview_id = "2c67fcc51dbf430391602e11d7a5e9fe"
 [[kv_namespaces]]
 binding = "CONTENT_CACHE"
 id = "981e939bcca445c481d4be818ebefee7"
+# ⚠ MISCONFIGURATION: preview_id is identical to production id. This means
+# `wrangler dev --remote` reads/writes the live production KV namespace,
+# which can silently corrupt cached content. Fix:
+#   wrangler kv namespace create CONTENT_CACHE --preview
+# Then replace this preview_id with the output ID.
 preview_id = "981e939bcca445c481d4be818ebefee7"
 
 [[d1_databases]]
@@ -144,6 +149,20 @@ binding = "CONTENT_DB"
 database_name = "syrabit-content"
 database_id = "da5b5b9d-a8f9-43dd-bd23-a938f5c0cf69"
 migrations_dir = "migrations"
+
+# Task #108 — Phase 4: R2 student asset storage.
+# Serves AHSEC/SEBA past-year question papers, syllabi, and study PDFs.
+# Admins upload via POST /admin/assets/upload (protected by Zero Trust from Phase 3).
+# Files are served at https://assets.syrabit.ai/<key> via the R2 custom domain.
+#
+# To create the bucket and custom domain before deploying:
+#   node artifacts/syrabit/scripts/cloudflare-phase4-apply.js
+[[r2_buckets]]
+binding     = "ASSETS"
+bucket_name = "syrabit-assets"
+# preview_bucket_name omitted — `wrangler dev` will error with a clear message
+# if you try to use ASSETS locally without it. Add a test bucket when needed:
+#   wrangler r2 bucket create syrabit-assets-dev
 
 # Vectorize binding — currently OFF by design.
 #
@@ -198,6 +217,42 @@ index_name = "syllabus-index-v2"
 [[vectorize]]
 binding    = "SYLLABUS_INDEX_LEGACY"
 index_name = "syllabus-index"
+
+# ---------------------------------------------------------------------------
+# Phase 5 (Task #109) — Workers Analytics Engine: custom edge metrics dataset.
+#
+# ANALYTICS is writable from the edge worker via env.ANALYTICS.writeDataPoint().
+# The dataset is created automatically on first write; no API call needed.
+# Query the dataset via the Analytics Engine SQL API or the /api/edge/analytics
+# worker route (requires CF_ANALYTICS_TOKEN secret with Analytics Read scope).
+#
+# Set the CF Analytics token as a Worker secret before deploying:
+#   wrangler secret put CF_ANALYTICS_TOKEN
+# ---------------------------------------------------------------------------
+[[analytics_engine_datasets]]
+binding = "ANALYTICS"
+dataset = "syrabit-edge-metrics"
+
+# ---------------------------------------------------------------------------
+# Phase 5 (Task #109) — Durable Object rate limiter.
+#
+# RateLimiter provides strongly-consistent, per-key sliding-window rate limits.
+# The edge worker uses it instead of the KV-based checkRateLimit() for all
+# API and AI rate-limit checks. KV remains as a fallback when the DO namespace
+# is not yet bound (e.g. local dev without wrangler.toml migration applied).
+#
+# Deploy steps:
+#   1. wrangler deploy   ← runs the [[migrations]] below, creating the namespace
+#   2. The DO namespace ID is auto-assigned and pinned on the CF dashboard.
+#      It is NOT stored in wrangler.toml — wrangler resolves it by class name.
+# ---------------------------------------------------------------------------
+[[durable_objects.bindings]]
+name       = "RATE_LIMITER_DO"
+class_name = "RateLimiter"
+
+[[migrations]]
+tag         = "v1"
+new_classes = ["RateLimiter"]
 
 [triggers]
 # Two crons fan out from the same `scheduled` handler in src/index.ts —
@@ -258,3 +313,57 @@ index_name = "syllabus-index"
 #
 #   "0 */6 * * *" → 6-hourly D1 content sync from the Railway backend.
 crons = ["* * * * *", "0 */6 * * *"]
+
+# ---------------------------------------------------------------------------
+# Phase 6 (Task #110) — mTLS client certificate for Railway origin hardening.
+#
+# The `MTLS_CERT` binding presents a Cloudflare-issued client certificate on
+# every outbound TLS connection to the Railway backend.  Railway's mTLS policy
+# (configured separately) rejects connections that do not present this cert,
+# closing the bypass risk where a leaked BACKEND_ORIGIN_SECRET could be used
+# to hit the backend directly.  BACKEND_ORIGIN_SECRET is kept as belt-and-
+# suspenders; the cert is the primary enforcement mechanism.
+#
+# DEPLOYMENT GATE: The CI pre-deploy step in edge-proxy-deploy.yml calls
+# `node workers/edge-proxy/scripts/inject-mtls-cert-id.js` which reads
+# CF_MTLS_CERT_ID from the CI environment and rewrites the sentinel value
+# "PENDING_CERT_PROVISIONING" below with the real UUID before wrangler runs.
+# If CF_MTLS_CERT_ID is absent, the script exits 1 and the deploy is aborted.
+# This means the binding is ALWAYS present in deployable config, but the worker
+# silently falls back to plain fetch (MTLS_REQUIRED gate) until the cert UUID
+# is supplied. Never commit a real cert UUID to source — store it as a secret.
+#
+# HOW TO PROVISION (one-time, ~10-year lifecycle):
+#   1. Issue the cert:
+#        CLOUDFLARE_API_TOKEN=<tok> \
+#          node artifacts/syrabit/scripts/cloudflare-phase6-apply.js
+#      Prints the certificate_id UUID and the certificate PEM.
+#   2. Store the private key as a wrangler secret:
+#        echo "<pem>" | wrangler secret put MTLS_PRIVATE_KEY --name syrabit-edge
+#   3. Add CF_MTLS_CERT_ID to GitHub repo secrets (Settings → Secrets → Actions):
+#        CF_MTLS_CERT_ID = <uuid-from-step-1>
+#      The next push to master/main triggers edge-proxy-deploy.yml which injects
+#      the UUID into this block and calls wrangler deploy — binding goes live.
+#      The worker now presents the cert on every TLS handshake with Railway, AND
+#      injects X-Cf-Mtls-Active: HMAC-SHA256("mtls-active", BACKEND_ORIGIN_SECRET)
+#      on every request so the Railway MtlsClientCertMiddleware can validate it.
+#   4. Enable application-layer mTLS enforcement on the Railway backend:
+#        Railway service → Variables → add ENFORCE_MTLS=true
+#      The MtlsClientCertMiddleware rejects requests missing the HMAC proof
+#      (non-spoofable: requires BACKEND_ORIGIN_SECRET to forge).
+#   5. Configure Railway to require the CF client cert at the TLS level:
+#        Railway dashboard → Service → Settings → mTLS → require Cloudflare cert.
+#      With TLS-level enforcement, connections without the cert are rejected
+#      BEFORE HTTP is reached — the gold-standard protection that makes the
+#      nightly-smoke.js 6a-iv bypass probe pass with a network/TLS error.
+#   6. Flip the fail-closed gate AFTER Railway requires the cert:
+#        wrangler secret put MTLS_REQUIRED --name syrabit-edge  (value: true)
+#      MTLS_REQUIRED=true makes proxyToBackend() return 503 if MTLS_CERT is
+#      absent, preventing any insecure plain-fetch bypass.
+# ---------------------------------------------------------------------------
+
+# Step-by-step activation instructions (commands, expected output, verification):
+#   docs/ops/mtls-activation.md
+[[mtls_certificates]]
+binding        = "MTLS_CERT"
+certificate_id = "PENDING_CERT_PROVISIONING"

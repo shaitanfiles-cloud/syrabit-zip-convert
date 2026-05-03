@@ -58,10 +58,9 @@ _configure_logging()
 
 def _validate_env():
     _required = {
-        "MONGO_URL": "MongoDB connection string (content/RAG database)",
-        "JWT_SECRET": "JWT signing secret for user auth tokens",
+        "MONGO_URL":       "MongoDB connection string (content/RAG database)",
+        "JWT_SECRET":      "JWT signing secret for user auth tokens",
         "ADMIN_JWT_SECRET": "JWT signing secret for admin auth tokens",
-        "ADMIN_PASSWORDS": "Comma-separated admin account passwords",
     }
     _recommended = {
         "GROQ_API_KEY": "Groq LLM API key (primary AI provider)",
@@ -83,28 +82,200 @@ def _validate_env():
             _log.warning(f"Recommended env var not set: {key} — {desc}")
     _log.info("Environment validation passed")
 
-    _llm_keys = {
-        "GROQ_API_KEY": os.environ.get("GROQ_API_KEY", "").strip(),
-        "GROQ_API_KEY_2": os.environ.get("GROQ_API_KEY_2", "").strip(),
-        "GEMINI_API_KEY": os.environ.get("GEMINI_API_KEY", "").strip(),
-        "GEMINI_API_KEY_2": os.environ.get("GEMINI_API_KEY_2", "").strip(),
-        "XAI_API_KEY": os.environ.get("XAI_API_KEY", "").strip(),
-        "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", "").strip(),
-        "SARVAM_API_KEY": os.environ.get("SARVAM_API_KEY", "").strip(),
-        "CEREBRAS_API_KEY": os.environ.get("CEREBRAS_API_KEY", "").strip(),
-        "OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "").strip(),
-        "AWS_ACCESS_KEY_ID": os.environ.get("AWS_ACCESS_KEY_ID", "").strip(),
-        "AWS_SECRET_ACCESS_KEY": os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip(),
+    _cf_gw_enabled = bool(
+        os.environ.get("CF_AI_GATEWAY_ACCOUNT_ID", "").strip()
+        and os.environ.get("CF_AI_GATEWAY_ID", "").strip()
+    )
+
+    # ── Category 1: CF AI Gateway BYOK — primary provider keys ───────────────
+    # When CF Gateway is on, these keys live ONLY in the CF AI Gateway BYOK
+    # store (dashboard → AI Gateway → Authentication → BYOK). The backend
+    # sends a placeholder; the gateway appends the real key at the edge.
+    # Safe to delete from Railway as soon as you've added the key to CF BYOK.
+    _BYOK_PRIMARY = {
+        "GROQ_API_KEY":       "groq/openai/v1",
+        "GEMINI_API_KEY":     "google-ai-studio/v1beta/openai",
+        "CEREBRAS_API_KEY":   "cerebras/v1",
+        "OPENROUTER_API_KEY": "openrouter/v1",
+        "SARVAM_API_KEY":     "custom-sarvam",
+        "XAI_API_KEY":        "grok/v1",
+        "OPENAI_API_KEY":     "openai/v1",
+        "COHERE_API_KEY":     "cohere/v1",
+        "CARTESIA_API_KEY":   "cartesia/v1",
+        "BASETEN_API_KEY":    "baseten/v1",
     }
-    _byok_active = os.environ.get("CF_AI_GATEWAY_BYOK", "1").strip() not in ("", "0", "false", "False")
-    _log.info("─── LLM Provider Key Diagnostic ───")
-    for name, val in _llm_keys.items():
-        status = "SET" if val else "NOT SET"
-        if name.startswith("GEMINI_API_KEY") and _byok_active:
-            _log.info(f"  {name}: {status}  (BYOK — managed by Cloudflare AI Gateway)")
+
+    # ── Category 2: Secondary/tertiary AI keys — always redundant with BYOK ──
+    # These backup keys were used to handle per-key rate limits. With CF Gateway
+    # BYOK, the gateway manages a single provider key at the edge and handles
+    # retries. All secondary keys can be deleted from Railway unconditionally.
+    _BYOK_SECONDARY = [
+        "GROQ_API_KEY_2",
+        "GEMINI_API_KEY_2",
+        "SARVAM_API_KEY_2",
+        "SARVAM_API_KEY_3",
+    ]
+
+    # ── Category 3: AWS / Bedrock — BYOK via CF Gateway aws-bedrock ──────────
+    # CF AI Gateway supports AWS Bedrock (slug: aws-bedrock/v1). Store the
+    # AWS credentials in CF BYOK instead of Railway. Until migrated, the
+    # backend falls back to direct Bedrock calls using these Railway vars.
+    _BYOK_AWS = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]
+
+    # ── Category 4: Supabase-managed (already removed from Railway) ───────────
+    # Admin and staff credentials were migrated from env vars to Supabase Auth.
+    # If any of these still exist in Railway, they are safe to delete now.
+    _SUPABASE_MANAGED_LEGACY = [
+        "ADMIN_EMAILS", "ADMIN_PASSWORDS", "ADMIN_NAMES",
+        "STAFF_PASSWORDS",
+        "MONGODB_MODEL_API_KEY",   # removed (dead code)
+        "VOYAGE_API_KEY",          # removed (dead code)
+    ]
+
+    # ── Category 5: DB-stored credentials (Railway fallback only) ─────────────
+    # Payment and webhook credentials are read from the Supabase DB first
+    # (admin settings table). Railway vars are a fallback that can be removed
+    # once the values are saved via the Admin panel → Settings → Payments.
+    _DB_FIRST = [
+        "STRIPE_SECRET_KEY",
+        "STRIPE_WEBHOOK_SECRET",
+        "RAZORPAY_KEY_SECRET",
+        "RAZORPAY_WEBHOOK_SECRET",
+        "ADSENSE_CLIENT_SECRET",
+    ]
+
+    # ── Category 6: Webhook & cron secrets (can move to Supabase) ─────────────
+    # These single-use secrets authenticate cron jobs and Slack webhooks.
+    # They can be stored in Supabase (e.g. the admin_notification_prefs table
+    # or a new `app_secrets` table) to avoid Railway secret sprawl.
+    _MOVEABLE_TO_SUPABASE = [
+        "SLACK_TRUSTPILOT_FEED_WEBHOOK_URL",
+        "EDU_APPEAL_ALERT_WEBHOOK",
+        "CF_WAF_DRIFT_HEARTBEAT_SECRET",
+        "D1_SYNC_SECRET",
+        "KV_ALERT_SECRET",
+        "SYNTHETIC_PROBE_SECRETS_CHECK_TOKEN",
+        "TRUSTPILOT_REFRESH_SECRET",
+    ]
+
+    # ── Category 7: Always needed in Railway (true infrastructure secrets) ────
+    # No third-party store can substitute for these. They must stay in Railway.
+    _ALWAYS_NEEDED = [
+        "MONGO_URL",              # MongoDB Atlas (content/RAG DB)
+        "JWT_SECRET",             # User JWT signing
+        "ADMIN_JWT_SECRET",       # Admin JWT signing (must differ from JWT_SECRET)
+        "SUPABASE_URL",           # Supabase project URL
+        "SUPABASE_SERVICE_KEY",   # Supabase service role (high-privilege)
+        "DATABASE_URL",           # Supabase Postgres DSN (direct DB access)
+        "CF_AI_GATEWAY_ACCOUNT_ID",  # CF Gateway config
+        "CF_AI_GATEWAY_ID",          # CF Gateway config
+        "CF_AI_GATEWAY_TOKEN",        # CF Gateway BYOK master token
+        "CLOUDFLARE_API_TOKEN",   # CF API (WAF drift, cache purge, analytics)
+        "CF_ZONE_ID",             # CF zone for cache purge
+        "CF_TURNSTILE_SECRET_KEY", # CF Turnstile (bot protection)
+        "UPSTASH_REDIS_REST_URL",
+        "UPSTASH_REDIS_REST_TOKEN",
+        "RESEND_API_KEY",         # Transactional email
+        "GOOGLE_OAUTH_CLIENT_ID",     # GA4 reporting OAuth (not user auth)
+        "GOOGLE_OAUTH_CLIENT_SECRET", # GA4 reporting OAuth (not user auth)
+        "R2_ACCESS_KEY_ID",       # Cloudflare R2 storage
+        "R2_SECRET_ACCESS_KEY",   # Cloudflare R2 storage
+        "FRONTEND_URL",           # CORS / redirect base URL
+    ]
+
+    # ── Build audit output ────────────────────────────────────────────────────
+    lines = ["─── Railway / Production Env-Var Audit ───"]
+    lines.append(
+        f"  CF AI Gateway: {'ENABLED' if _cf_gw_enabled else 'DISABLED'}"
+        + (" — BYOK keys do NOT need to be in Railway." if _cf_gw_enabled
+           else " — all provider keys must be set in Railway.")
+    )
+
+    # BYOK primary
+    redundant: list[str] = []
+    lines.append("")
+    lines.append("  [1] BYOK-primary (CF AI Gateway handles key injection):")
+    for name, slug in _BYOK_PRIMARY.items():
+        raw = os.environ.get(name, "").strip()
+        if _cf_gw_enabled:
+            if raw:
+                status = f"REDUNDANT  ← delete from Railway (CF slug: {slug})"
+                redundant.append(name)
+            else:
+                status = f"BYOK ✓     (CF slug: {slug})"
         else:
-            _log.info(f"  {name}: {status}")
-    _log.info("───────────────────────────────────")
+            status = "SET" if raw else "MISSING ⚠ — gateway off, key needed"
+        lines.append(f"    {name:<30} {status}")
+
+    # BYOK secondary — always deletable when CF Gateway is on
+    sec_redundant: list[str] = []
+    lines.append("")
+    lines.append("  [2] BYOK-secondary (always redundant when CF Gateway is on — delete these):")
+    for name in _BYOK_SECONDARY:
+        raw = os.environ.get(name, "").strip()
+        if raw:
+            status = "REDUNDANT  ← delete (CF Gateway uses primary BYOK key)"
+            sec_redundant.append(name)
+        else:
+            status = "not set ✓"
+        lines.append(f"    {name:<30} {status}")
+
+    # AWS / Bedrock BYOK
+    lines.append("")
+    lines.append("  [3] AWS / Bedrock (can migrate to CF Gateway BYOK slug: aws-bedrock/v1):")
+    for name in _BYOK_AWS:
+        raw = os.environ.get(name, "").strip()
+        status = "SET — move to CF BYOK when ready" if raw else "not set"
+        lines.append(f"    {name:<30} {status}")
+
+    # Supabase-managed legacy
+    legacy_present: list[str] = []
+    lines.append("")
+    lines.append("  [4] Supabase-managed (migrated — safe to delete if still in Railway):")
+    for name in _SUPABASE_MANAGED_LEGACY:
+        raw = os.environ.get(name, "").strip()
+        if raw:
+            status = "STILL SET  ← safe to delete from Railway"
+            legacy_present.append(name)
+        else:
+            status = "not set ✓"
+        lines.append(f"    {name:<30} {status}")
+
+    # DB-first payment keys
+    lines.append("")
+    lines.append("  [5] DB-first credentials (Railway is fallback — save in Admin→Settings to remove):")
+    for name in _DB_FIRST:
+        raw = os.environ.get(name, "").strip()
+        status = "SET (Railway fallback)" if raw else "not set (using DB value)"
+        lines.append(f"    {name:<30} {status}")
+
+    # Moveable to Supabase
+    lines.append("")
+    lines.append("  [6] Webhook/cron secrets (consider moving to Supabase app_secrets table):")
+    for name in _MOVEABLE_TO_SUPABASE:
+        raw = os.environ.get(name, "").strip()
+        status = "SET" if raw else "not set"
+        lines.append(f"    {name:<30} {status}")
+
+    # Always needed
+    lines.append("")
+    lines.append("  [7] Always needed in Railway (true infrastructure — cannot move):")
+    for name in _ALWAYS_NEEDED:
+        raw = os.environ.get(name, "").strip()
+        lines.append(f"    {name:<30} {'SET' if raw else 'MISSING ⚠'}")
+
+    # Action summary
+    all_redundant = redundant + sec_redundant + legacy_present
+    lines.append("")
+    if all_redundant:
+        lines.append(
+            f"  ✂  ACTION: {len(all_redundant)} Railway var(s) can be deleted right now:\n"
+            + "     " + ", ".join(all_redundant)
+        )
+    else:
+        lines.append("  ✓  No immediately-deletable Railway vars found.")
+    lines.append("──────────────────────────────────────────")
+    _log.info("\n".join(lines))
 
 
 _validate_env()
@@ -233,7 +404,7 @@ async def _vertex_startup_probe() -> None:
             f"timed out after {timeout_s:.0f}s — upstream (Vertex / AI Gateway) "
             f"is unreachable or hung."
         )
-        logger.error(f"[STARTUP-PROBE] Gemini self-check FAILED: {reason}")
+        logger.error(f"[STARTUP-PROBE] Workers AI self-check FAILED: {reason}")
         vertex_health_cache.record(
             False,
             reason=reason,
@@ -276,7 +447,7 @@ async def _vertex_startup_probe() -> None:
         if gateway_failed_but_direct_works:
             # Gateway auth issue but direct fallback available - warn but don't fail
             logger.warning(
-                f"[STARTUP-PROBE] Gemini Gateway auth failed but direct fallback works. "
+                f"[STARTUP-PROBE] Workers AI Gateway auth failed but direct fallback works. "
                 f"Service operational via direct API. Check CF_AI_GATEWAY_TOKEN and "
                 f"CLOUDFLARE_ACCOUNT_ID env vars. Reason: {reason}"
             )
@@ -289,7 +460,7 @@ async def _vertex_startup_probe() -> None:
                 source="startup",
             )
         else:
-            logger.error(f"[STARTUP-PROBE] Gemini self-check FAILED: {reason}")
+            logger.error(f"[STARTUP-PROBE] Workers AI self-check FAILED: {reason}")
             vertex_health_cache.record(
                 False,
                 reason=reason,
@@ -299,7 +470,7 @@ async def _vertex_startup_probe() -> None:
             )
     else:
         logger.info(
-            f"[STARTUP-PROBE] Gemini self-check OK "
+            f"[STARTUP-PROBE] Workers AI self-check OK "
             f"(auth_mode={result.get('auth_mode')!r})"
         )
         vertex_health_cache.record(
@@ -412,7 +583,7 @@ async def _vertex_periodic_probe_loop() -> None:
         else:
             consecutive_failures += 1
             logger.error(
-                f"[PERIODIC-PROBE] Gemini self-check FAILED "
+                f"[PERIODIC-PROBE] Workers AI self-check FAILED "
                 f"(consecutive={consecutive_failures}): {reason}"
             )
             if (
@@ -615,6 +786,16 @@ async def _cf_access_silent_lockout_loop() -> None:
         await asyncio.sleep(_CF_ACCESS_SILENT_LOCKOUT_LOOP_INTERVAL_S)
 
 
+async def _run_atlas_vs_startup_check() -> dict:
+    """Thin wrapper — delegates to startup_checks.run_atlas_vs_startup_check().
+
+    Factored into startup_checks.py so it can be imported and tested
+    independently without pulling in the full server.py module graph.
+    """
+    from startup_checks import run_atlas_vs_startup_check as _check
+    return await _check()
+
+
 @asynccontextmanager
 async def lifespan(app):
     import deps as _deps_mod
@@ -691,6 +872,20 @@ async def lifespan(app):
             await db.classes.create_index("board_id")
             await db.chunks.create_index("chapter_id")
             await db.chunks.create_index("subject_id")
+
+            # Atlas Vector Search index check — see _run_atlas_vs_startup_check()
+            # for the full logic. Default: skipped (ATLAS_VS_ENABLED not set).
+            await _run_atlas_vs_startup_check()
+
+            # Pinecone serverless index — syrabit-ahsec, 1024-dim cosine (2026-05).
+            # Safe to call every boot: no-op if index already exists.
+            try:
+                from retrievers.pinecone_vector import ensure_pinecone_index as _ensure_pc
+                _pc_result = await _ensure_pc()
+                logger.info("Pinecone index check: %s", _pc_result)
+            except Exception as _pc_err:
+                logger.warning("Pinecone index ensure failed (non-blocking): %s", _pc_err)
+
             await db.analytics.create_index([("event_type", 1), ("timestamp", -1)])
             await db.analytics.create_index([("subject_id", 1), ("event_type", 1)])
             await db.analytics.create_index("user_id")
@@ -1626,12 +1821,14 @@ from routes.admin_advanced import router as admin_advanced_router
 from routes.admin_retriever import router as admin_retriever_router
 from routes.admin_benchmark import router as admin_benchmark_router
 from routes.admin_kv_health import router as admin_kv_health_router
+from routes.admin_edge_analytics import router as admin_edge_analytics_router
 from routes.admin_ci_status import router as admin_ci_status_router
 from routes.admin_trustpilot_alerts import router as admin_trustpilot_alerts_router
 from routes.admin_trustpilot_jsonld_status import router as admin_trustpilot_jsonld_status_router
 from routes.admin_trustpilot_cron_alerts import router as admin_trustpilot_cron_alerts_router
 from routes.cf_waf_drift_cron_heartbeat import router as cf_waf_drift_cron_heartbeat_router
 from routes.admin_cf_waf_drift_cron_alerts import router as admin_cf_waf_drift_cron_alerts_router
+from routes.admin_cf_enterprise import router as admin_cf_enterprise_router
 # Task #951 — silence alerter for the unified-logs Cloudflare GraphQL
 # pull. Pages on-call when every backend replica has stopped advancing
 # the ``unified_logs_cf_pull_lock.updated_at`` cursor (e.g. all
@@ -1701,12 +1898,14 @@ api.include_router(admin_advanced_router)
 api.include_router(admin_retriever_router)
 api.include_router(admin_benchmark_router)
 api.include_router(admin_kv_health_router)
+api.include_router(admin_edge_analytics_router)
 api.include_router(admin_ci_status_router)
 api.include_router(admin_trustpilot_alerts_router)
 api.include_router(admin_trustpilot_jsonld_status_router)
 api.include_router(admin_trustpilot_cron_alerts_router)
 api.include_router(cf_waf_drift_cron_heartbeat_router)
 api.include_router(admin_cf_waf_drift_cron_alerts_router)
+api.include_router(admin_cf_enterprise_router)
 api.include_router(admin_logs_cf_pull_silence_alerts_router)
 api.include_router(admin_logs_cf_pull_saturation_alerts_router)
 api.include_router(admin_slack_webhook_missing_alerts_router)
@@ -1721,6 +1920,9 @@ api.include_router(admin_topic_discovery_router)
 api.include_router(admin_seo_remediation_router)
 api.include_router(admin_seo_internal_linker_router)
 api.include_router(admin_entity_seo_router)
+
+from routes.voice import router as voice_router
+api.include_router(voice_router)
 
 from llm import call_llm_api_content
 from auth_deps import get_admin_user
@@ -1747,6 +1949,9 @@ app.include_router(pyq_router)
 from routes.config import router as config_router
 app.include_router(config_router)
 
+from routes.staff_content import router as staff_content_router
+app.include_router(staff_content_router)
+
 @app.get("/healthz/ai")
 async def healthz_ai():
     """Task #678 — Railway-friendly liveness probe for Gemini.
@@ -1757,10 +1962,31 @@ async def healthz_ai():
     (``2 * VERTEX_PROBE_INTERVAL_S`` by default). When this endpoint
     flips to 503 Railway will refuse to mark the rollout as healthy
     and auto-rollback instead of serving 502s to users.
+
+    Also surfaces Workers AI 429 burst counts (informational — they do
+    not affect the HTTP status code, which is driven solely by the
+    Vertex/Gemini probe result).
     """
     import vertex_health_cache
     code, body = vertex_health_cache.healthz_ai_response()
+    try:
+        from llm import get_workers_ai_429_burst, get_workers_ai_429_burst_inprocess
+        # burst_60s: in-process timestamp list (always exact 60s window, this worker only)
+        # burst_180s: Redis counter (cross-worker, 180s TTL) with in-process fallback
+        body["workers_ai_429_burst_60s"] = get_workers_ai_429_burst_inprocess(60)
+        body["workers_ai_429_burst_180s"] = get_workers_ai_429_burst(180)
+    except Exception:
+        pass
     return JSONResponse(status_code=code, content=body)
+
+
+@app.get("/healthz/r2")
+async def healthz_r2():
+    """Liveness probe for Cloudflare R2 Object Storage."""
+    from r2_storage import r2_health
+    result = await r2_health()
+    code = 200 if result.get("ok") else 503
+    return JSONResponse(status_code=code, content=result)
 
 
 @app.get("/robots.txt", response_class=Response)
@@ -2250,9 +2476,11 @@ class HeadAsGetMiddleware:
 
 from middleware import (
     SecurityHeadersMiddleware,
+    CfPerformanceMiddleware,
     GlobalRateLimitMiddleware,
     ServerSideTrackingMiddleware,
     OriginSharedSecretMiddleware,
+    MtlsClientCertMiddleware,
 )
 from routes.cms_sarvam_health import CmsNoIndexMiddleware, BotRenderMiddleware
 app.add_middleware(CmsNoIndexMiddleware)
@@ -2260,6 +2488,7 @@ app.add_middleware(BotRenderMiddleware)
 app.add_middleware(ServerSideTrackingMiddleware)
 app.add_middleware(GlobalRateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(CfPerformanceMiddleware)
 # Task #793: re-applies a freshly-minted ``syrabit_device`` cookie to
 # the outgoing response when the route handler returned its own
 # ``Response`` (e.g. ``StreamingResponse`` on /ai/chat/stream), which
@@ -2273,6 +2502,12 @@ app.add_middleware(DeviceCookieMiddleware)
 # rejected. No-op when ORIGIN_SHARED_SECRET env var is unset, so the
 # Railway origin keeps working until cutover.
 app.add_middleware(OriginSharedSecretMiddleware)
+# Task #120: Application-layer mTLS enforcement — validate the HMAC proof
+# header injected by the CF Worker on every backend request when the mTLS
+# cert (MTLS_CERT binding) is active.  The HMAC is non-spoofable without
+# ORIGIN_SHARED_SECRET.  Active when ENFORCE_MTLS=true is set in the
+# Railway service environment AND ORIGIN_SHARED_SECRET is configured.
+app.add_middleware(MtlsClientCertMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=_CORS_ALLOW_CREDENTIALS,

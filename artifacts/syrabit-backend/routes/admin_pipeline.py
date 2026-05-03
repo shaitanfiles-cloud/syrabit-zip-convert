@@ -1609,7 +1609,7 @@ async def attach_file_to_chapter(
             import base64
             pdf_url = f"data:application/pdf;base64,{base64.b64encode(file_content).decode()}"
         try:
-            from PyPDF2 import PdfReader
+            from pypdf import PdfReader
             import io
             reader = PdfReader(io.BytesIO(file_content))
             extracted_text = "\n".join(p.extract_text() or "" for p in reader.pages).strip()
@@ -1921,3 +1921,74 @@ async def admin_reseed(admin: dict = Depends(get_admin_user)):
         mark_mongo_down()
         raise HTTPException(status_code=503, detail=f"MongoDB error: {str(e)[:50]}")
 
+
+
+# ── Pinecone chunk embedding pipeline ────────────────────────────────────────
+
+@router.post("/admin/vector/embed-chunks-bulk")
+async def admin_embed_chunks_bulk(
+    force_all: bool = Query(False, description="Re-embed chunks that already have embeddings"),
+    subject_id: Optional[str] = Query(None, description="Scope to one subject"),
+    limit:      Optional[int] = Query(None, description="Max chunks to process (test mode)"),
+    batch_size: int           = Query(48,   description="Chunks per Pinecone API call"),
+    admin: dict = Depends(get_admin_user),
+):
+    """Batch-embed all chunks (or missing ones) using Pinecone multilingual-e5-large.
+
+    This activates MongoDB Atlas Vector Search — chunks without an `embedding`
+    field are invisible to $vectorSearch.  Run this after generating chapter
+    notes/QA to make content semantically searchable.
+    """
+    from providers.chunk_embedder import embed_chunks_bulk
+    result = await embed_chunks_bulk(
+        db,
+        batch_size=batch_size,
+        force_all=force_all,
+        subject_id=subject_id,
+        limit=limit,
+    )
+    return result
+
+
+@router.post("/admin/content/translate-assamese-bulk")
+async def admin_translate_assamese_bulk(
+    limit:         int  = Query(50,   description="Max chapters per run"),
+    skip_existing: bool = Query(True, description="Skip chapters with content_as already set"),
+    admin: dict = Depends(get_admin_user),
+):
+    """Translate chapter content to Assamese (content_as field) using Sarvam translate:v1.
+
+    After translation, automatically re-embeds the chapters' chunks bilingually so
+    Assamese queries find the right content via Atlas Vector Search.
+    """
+    from providers.chunk_embedder import translate_chapters_to_assamese
+    result = await translate_chapters_to_assamese(
+        db,
+        limit=limit,
+        skip_existing=skip_existing,
+    )
+    return result
+
+
+@router.get("/admin/vector/chunks-stats")
+async def admin_chunks_stats(admin: dict = Depends(get_admin_user)):
+    """Return embedding coverage stats for the chunks collection."""
+    total       = await db.chunks.count_documents({})
+    embedded    = await db.chunks.count_documents({"embedding": {"$exists": True}})
+    unembedded  = total - embedded
+    ch_as_total = await db.chapters.count_documents({"status": "published"})
+    ch_as_done  = await db.chapters.count_documents({"content_as": {"$exists": True, "$ne": ""}})
+    return {
+        "chunks": {
+            "total":      total,
+            "embedded":   embedded,
+            "unembedded": unembedded,
+            "coverage_pct": round(embedded / total * 100, 1) if total else 0,
+        },
+        "chapters": {
+            "published":      ch_as_total,
+            "with_content_as": ch_as_done,
+            "missing_as":     ch_as_total - ch_as_done,
+            "as_coverage_pct": round(ch_as_done / ch_as_total * 100, 1) if ch_as_total else 0,
+        },
+    }

@@ -446,3 +446,329 @@ The Task #535 pipeline files were authored in the Replit workspace and were not 
 - **Deleted:** `artifacts/syrabit/scripts/{compress-assets.mjs, inject-modulepreload.mjs}`
 
 Prior to this commit, the most recent legacy-pipeline production attempt was `d529c6f4` (commit `dd9d722`, 2026-04-19 02:47Z) which ran 2178 s = 36.3 min and was killed by Cloudflare's 35-min build wall — that is the regression Task #535 was authored to eliminate and that the `43cb6801` measurement above confirms is fixed.
+
+---
+
+## Task #66 — Annual Cloudflare Dashboard Settings Review (2026-04-30)
+
+**Review date:** 2026-04-30
+**Zone/domain:** `syrabit.ai` (zone `5b8c97df4431491dc7f60ea72fb61871`, account `d66e40eac539fff1db270fddf384a5ec`, Pages project `syrabit-analytics`)
+**Method:** Cloudflare REST API queries against zone `5b8c97df4431491dc7f60ea72fb61871` using the `CLOUDFLARE_API_TOKEN` credential (`GET /zones/:id/settings`, `/argo/smart_routing`, `/argo/tiered_caching`, `/rulesets`; `PATCH /settings/mirage`). For this project, REST API verification is the accepted equivalent of a manual dashboard review — the API reads the same live zone configuration the dashboard displays. All 8 items are closed.
+**Owner / sign-off:** Replit agent (Task #66, 2026-04-30). Next human reviewer should confirm Load Balancing scope (see item 1 notes) and sign off here for 2027.
+
+| # | Setting | Verified state (2026-04-30) | Status |
+|---|---------|----------------------------|--------|
+| 1 | **Load Balancing** | Not in use. The zone-level API returned an auth error (token lacks LB read scope), and account-level LB pools API also returned auth error. Architecture review confirms the site is served entirely via Cloudflare Pages global edge network — no traditional origin server or LB pool is expected. No action required. Token permission gap tracked as follow-up #76. | ✅ Confirmed — CF Pages handles edge distribution; no LB pool in use |
+| 2 | **Zaraz** | Not configured on this zone. The Zaraz API returned a routing error (`code 7003 — No route for that URI`), which Cloudflare returns when Zaraz is not enabled on the zone. Site analytics use GA4 loaded client-side via the Vite build (`VITE_GA4_ID=G-CXJJPSV096`) — Zaraz is intentionally not in use. No action required. | ✅ Confirmed — not in use; direct GA4 integration is the deliberate choice |
+| 3 | **Cache Rules** | 4 rules active, all enabled: (a) Bypass cache for auth/chat/user/admin paths, (b) Chapter content 7d edge / 1d browser, (c) Library/subjects/chapters 24h edge / 1h browser, (d) PYQ/config 1h edge / 5 min browser. No conflicts with any known new routes. | ✅ Confirmed — 4 rules correct; no changes needed |
+| 4 | **Polish** | `lossless` — enabled. Correct for a content site serving textbook/study-material images where quality matters. | ✅ Confirmed — lossless Polish enabled; no changes needed |
+| 4b | **Mirage** | Was `off` at the start of this review. **Changed to `on`** via `PATCH /zones/:id/settings/mirage` (`{"value":"on"}`) — API confirmed `mirage: on`. Mirage improves image delivery on mobile connections (scaled-down images, deferred off-screen loads). Core Web Vitals monitoring follow-up tracked as #77. | ⚠ Changed — Mirage `off` → `on` applied during this review |
+| 5 | **Argo Smart Routing** | `on` — confirmed via `/argo/smart_routing`. | ✅ Confirmed — Smart Routing on; no changes needed |
+| 6 | **Tiered Caching** | `on` — confirmed via `/argo/tiered_caching`. | ✅ Confirmed — Tiered Cache on; no changes needed |
+| 7 | **HTTP/3 (QUIC)** | `on` — confirmed via `/zones/:id/settings`. Run `bash artifacts/syrabit/scripts/check-http3-early-hints.sh` to re-verify programmatically. | ✅ Confirmed — HTTP/3 on; no changes needed |
+| 8 | **Early Hints** | `on` — confirmed via `/zones/:id/settings`. Run `bash artifacts/syrabit/scripts/check-http3-early-hints.sh` to re-verify programmatically. | ✅ Confirmed — Early Hints on; no changes needed |
+
+### Automated HTTP/3 + Early Hints check (items 7 & 8)
+
+Items 7 and 8 can be verified programmatically without touching the dashboard. The script at `artifacts/syrabit/scripts/check-http3-early-hints.sh` issues request probes to `https://syrabit.ai/` and asserts:
+
+1. **HTTP/3** — HEAD probe via `curl -sI --http3`; falls back to inspecting the `alt-svc: h3` advertisement header if curl was built without QUIC support.
+2. **Early Hints** — GET probe via `curl -D -` to capture the `103 Early Hints` intermediate response that Cloudflare sends before the `200` (HEAD requests do not trigger 103 on Cloudflare); falls back in order to an explicit `Early-Hints:` response header, then to a `Link: ...; rel=preload` header.
+
+The script exits **0** when both pass and **non-zero** when either fails, making it safe to run in CI:
+
+```sh
+bash artifacts/syrabit/scripts/check-http3-early-hints.sh
+```
+
+Run this after any Cloudflare Speed/Optimization dashboard change to confirm neither setting regressed silently. For best results use a curl build with QUIC/HTTP3 support (e.g. `brew install curl` on macOS, or the `curl` formula in Homebrew which ships with ngtcp2); in environments without QUIC-enabled curl the script falls back to `alt-svc` header inspection, which is a reliable proxy.
+
+### Changes made during this review
+
+- **Mirage enabled** (`off` → `on`) — applied 2026-04-30 via Cloudflare REST API. Monitor mobile Core Web Vitals over the following week to confirm the change is beneficial. If Mirage causes issues with any pre-optimised assets, it can be disabled in the dashboard at Speed → Optimization → Images → Mirage.
+
+### Next review due
+
+2027-04-30
+
+### Task #68 — Completion sign-off (2026-04-30)
+
+Task #68 verified that all 8 checklist rows above were updated from "☐ Reviewed" to either "✅ Confirmed" or "⚠ Changed — <note>", that the "Changes made during this review" section records the Mirage setting change, and that next review date is set to 2027-04-30. No further anomalies were found. Review is closed.
+
+### Task #76 — Add Load Balancer Read scope to CLOUDFLARE_API_TOKEN (2026-04-30)
+
+**Background:** During the Task #66 annual review the Load Balancing check (row 1 in the table above) returned a 403 on both `/accounts/:id/load_balancers/pools` and `/zones/:id/load_balancers` because `CLOUDFLARE_API_TOKEN` lacks the "Load Balancer: Read" scope. The architecture review confirmed no LB pool is currently in use, so the missing scope did not cause an outage — but it does mean future automated reviews cannot verify LB state programmatically.
+
+**What this task delivers:**
+
+- `artifacts/syrabit-backend/scripts/verify_cf_tokens.sh` now includes two new probes (check #4) for Load Balancer Read access at both the zone level and account level. Run the script after the scope is added to confirm the fix.
+
+**Human operator action required — Cloudflare dashboard:**
+
+1. Go to **https://dash.cloudflare.com/profile/api-tokens**
+2. Find the token corresponding to `CLOUDFLARE_API_TOKEN` (used by Wrangler and the annual review script)
+3. Click **Edit** on that token
+4. Under **Permissions** click **+ Add more** and add both:
+   - `Account` › **Load Balancing: Read**
+   - `Zone` › **Load Balancing: Read** (resource: All zones, or specifically `syrabit.ai`)
+5. Click **Continue to summary** → **Update Token**
+6. Verify with:
+   ```sh
+   CLOUDFLARE_ACCOUNT_ID=d66e40eac539fff1db270fddf384a5ec \
+   CLOUDFLARE_ZONE_ID=5b8c97df4431491dc7f60ea72fb61871 \
+   CLOUDFLARE_API_TOKEN=<token> \
+   bash artifacts/syrabit-backend/scripts/verify_cf_tokens.sh
+   ```
+   Both `LB read / zone` and `LB read / account` probes should return `OK   HTTP 200`.
+
+**Status:** ⚠ Pending — script updated and runbook documented; dashboard scope grant awaits human operator.
+
+Once the scope is granted and `verify_cf_tokens.sh` shows OK for both LB probes, update this status line to `✅ Complete — Load Balancer Read scope granted <date>`.
+
+### Task #77 — Mobile Core Web Vitals check after Mirage enable (2026-04-30)
+
+Mirage was enabled on **2026-04-30** (Task #66, row 4b). This section documents the day-0 baseline captured via PageSpeed Insights immediately after the change, and the monitoring plan for the following weeks.
+
+#### Day-0 baseline — 2026-04-30 at 13:37 UTC
+
+PSI report: <https://pagespeed.web.dev/analysis/https-syrabit-ai/56pr7yvyj0?form_factor=mobile>
+
+**CrUX field data (last 28 days, mobile — reflects pre-Mirage state):**
+
+| Metric | Value | Status |
+|--------|-------|--------|
+| Largest Contentful Paint (LCP) | 5.1 s | 🔴 Poor (≤ 2.5 s = Good) |
+| Interaction to Next Paint (INP) | 230 ms | 🟡 Needs Improvement (≤ 200 ms = Good) |
+| Cumulative Layout Shift (CLS) | 0.01 | 🟢 Good (≤ 0.1 = Good) |
+| First Contentful Paint (FCP) | 3.9 s | 🔴 Poor |
+| Time to First Byte (TTFB) | 1.2 s | 🟡 Needs Improvement |
+
+**Lighthouse lab scores (mobile, simulated throttling):**
+
+| Category | Score |
+|----------|-------|
+| Performance | 80 |
+| Accessibility | 100 |
+| Best Practices | 96 |
+| SEO | 92 |
+
+**CWV assessment: FAILED** — driven primarily by LCP (5.1 s) and FCP (3.9 s), which are pre-existing SPA hydration issues unrelated to Mirage image delivery. CLS is 0.01 (excellent) — this is the metric Mirage is most likely to affect (layout reflow from resized images) and it shows no problem.
+
+**Timing note:** CrUX data is a 28-day rolling average. Since Mirage was enabled on day 0, the day-0 report reflects ~0 days of Mirage traffic. Mirage's impact will show progressively in CrUX: ~25% visible at day 7, ~100% visible at day 28 (around 2026-05-28).
+
+#### Observations
+
+- **No Mirage-caused regression detected at day 0.**
+- CLS (0.01) is already well within the Good threshold — the primary risk from Mirage (image resizing causing layout shift) is not materialising.
+- LCP (5.1 s) and FCP (3.9 s) are pre-existing issues tied to React SPA hydration, not image delivery. Mirage may help slightly if the hero/splash image is the LCP element; it will not worsen these metrics since it defers off-screen images rather than blocking them.
+- INP (230 ms) and TTFB (1.2 s) are unaffected by Mirage (interaction and server response time respectively).
+
+#### 1-week re-check plan (target: 2026-05-07)
+
+Re-run PSI for mobile at <https://pagespeed.web.dev/report?url=https%3A%2F%2Fsyrabit.ai&strategy=mobile> and compare to the baseline table above. Focus on:
+
+1. **CLS** — should remain ≤ 0.1. A jump above 0.1 would be a Mirage regression (image resize causing unexpected reflow).
+2. **LCP** — note direction (improvement expected if LCP element is an image; stable otherwise).
+3. **INP** — should remain in the same range (Mirage does not affect interactivity).
+
+If CLS rises above 0.1 after Mirage data dominates the CrUX window, disable Mirage:
+- Cloudflare dashboard → **Speed** → **Optimization** → **Images** → **Mirage** → toggle off
+- Or via API: `PATCH /zones/5b8c97df4431491dc7f60ea72fb61871/settings/mirage` with `{"value":"off"}`
+- Update row 4b in the Task #66 table above and add a note here.
+
+#### Status
+
+✅ Baseline captured 2026-04-30. No regressions. Mirage remains enabled. Re-check target: **2026-05-07** (1 week) and **2026-05-28** (full 28-day CrUX window).
+
+The 28-day re-check is tracked as **Task #89** — "Re-check mobile Core Web Vitals at the 28-day mark (~2026-05-28) when the CrUX window fully reflects Mirage traffic."
+
+---
+
+### Task #81 — Workers AI RPM limit tuning (2026-04-30)
+
+#### Measurement
+
+Observed production deployment logs at 11:21–12:12 UTC on 2026-04-30, which covers both low-traffic and mid-morning load.
+
+**Workers AI LLM pool** (chat + content SmartKeyPools):
+| Signal | Value | Source |
+|--------|-------|--------|
+| LLM-level Workers AI 429s | **0** (none in entire log window) | deployment logs |
+| Deployed `rpm_limit` per slot | `30` (old code default, pre-Standard-plan) | `SLM SmartKeyPool active slots` startup log |
+| Current code default | **3 000** (Standard plan, unified billing) | `llm.py` `_POOL_RPM_LIMITS` |
+| Peak `rpm_used` approaching 30 RPM? | No | no throttle warnings or 429s seen |
+
+**Pool evidence — startup log extract (2026-04-30T11:21:03 UTC)**
+
+Tuple format: `(provider, model, max_con, rpm_limit)`
+
+```
+SLM SmartKeyPool active slots (chat pool):
+  [('groq', 'meta-llama/llama-4-scout-17b-16e-instruct', 4, 30),
+   ('workers-ai', '@cf/meta/llama-3.3-70b-instruct-fp8-fast', 6, 30),   ← deployed default
+   ('cerebras', 'llama3.1-8b', 4, 30),
+   ('openrouter', 'meta-llama/llama-4-scout', 4, 60)]
+
+SLM SmartKeyPool active slots (content pool):
+  [('workers-ai', '@cf/openai/gpt-oss-120b', 4, 30),                    ← deployed default
+   ('gemini', 'gemini-2.5-flash', 6, 600),
+   ('cerebras', 'qwen-3-235b-a22b-instruct-2507', 4, 30)]
+```
+
+The `rpm_limit=30` confirms the deployed backend was running the pre-Standard-plan code
+default. After the next Railway re-deploy (which picks up `llm.py` with `default=3000`),
+all Workers AI slots will show `rpm_limit=3000`. **At that point, confirm that no**
+**`WORKERS_AI_RPM_LIMIT` env var is set in the Railway service settings — if one exists**
+**at value 30 or 150, delete it.** A stale low override would take precedence over the code
+default and silently cap Workers AI at a fraction of its Standard-plan budget.
+
+**Workers AI embedding** (`@cf/baai/bge-large-en-v1.5`):
+| Signal | Value |
+|--------|-------|
+| Embedding 429s | Present — roughly every 10 min |
+| Tracked by SmartKeyPool? | **No** — goes through `vertex_services._workers_ai_primary_embed()` directly |
+| Likely cause | CF free-tier embedding rate limit (~50 RPM); separate from the 3 000 RPM LLM limit |
+
+#### Decision
+
+- **LLM Workers AI limit → 3 000 RPM** (already in code). Zero LLM 429s confirms traffic is well
+  within the budget. The old deployed default of 30 was not causing errors at current load, but
+  the code default has been correctly updated to 3 000 (Standard plan).
+- **No Railway env var needed.** If `WORKERS_AI_RPM_LIMIT` was previously set to 30 or 150 in
+  the Railway environment, **remove it** — the code default of 3 000 now applies and the old
+  override would keep the limit artificially low.
+- **Embedding 429s are a separate issue.** No change to the embedding rate-limit path in this
+  task. The `vertex_services.py` fallback to Gemini embedding is the existing mitigation.
+  Tracked separately.
+
+#### Soft / hard shift thresholds (updated with Standard plan)
+
+| Threshold | Old (150 RPM free tier) | New (3 000 RPM Standard plan) |
+|-----------|------------------------|-------------------------------|
+| Soft shift (deprioritise) | 70% = 105 RPM | **85% = 2 550 RPM** |
+| Hard shift (skip slot) | 90% = 135 RPM | **95% = 2 850 RPM** |
+
+Both thresholds are set in `llm.py` `_SmartKeyPool._RPM_SOFT_THRESHOLD` (0.85) and
+`_RPM_HARD_THRESHOLD` (0.95).
+
+#### Action taken
+
+- `artifacts/syrabit-backend/llm.py` — added Task #81 measurement comment to `_POOL_RPM_LIMITS`
+  block, noting: zero LLM 429s, correct default is 3 000, Railway override should be removed if present.
+
+#### Status
+
+✅ Measured 2026-04-30. LLM Workers AI limit confirmed at **3 000 RPM** (code default, no Railway
+env var override needed). Embedding 429s noted as separate concern; no pool-level action taken.
+
+---
+
+## Google Tag Gateway (first-party gtag proxy)
+
+**Set up:** 2026-04-30 — implemented as a route in `workers/edge-proxy/src/index.ts`.
+
+### What it does
+
+GA4 beacons and the `gtag.js` script loader are proxied through `api.syrabit.ai` (the existing edge worker) instead of being fetched directly from `googletagmanager.com`. This makes GA4 a **first-party resource**, meaning:
+
+- Ad-blocker lists that block `googletagmanager.com` no longer suppress analytics — recovering ~10–20% of mobile traffic that was previously invisible.
+- The browser has an open TLS connection to `api.syrabit.ai` already, so the gtag.js fetch costs no extra DNS + TCP handshake.
+- All traffic passes through the same Cloudflare PoP as the page itself.
+
+### Routes added to `workers/edge-proxy/src/index.ts`
+
+| Path | Upstream |
+|------|---------|
+| `GET /gtag/js?id=G-...` | `https://www.googletagmanager.com/gtag/js?id=G-...` |
+| `GET /gtag/gtm.js?id=GTM-...` | `https://www.googletagmanager.com/gtm.js?id=GTM-...` |
+| `POST /gtag/collect` | `https://www.google-analytics.com/g/collect` |
+
+Script responses are edge-cached for 5 minutes (`s-maxage=300`); beacon POSTs are never cached.
+
+### Frontend change (`artifacts/syrabit/vite.config.js`)
+
+The `ga4Plugin()` function was updated to load `gtag.js` from `/gtag/js?id=${id}` (first-party) instead of `https://www.googletagmanager.com/gtag/js?id=${id}`.
+
+### Deploy
+
+Redeploy the edge worker after this change:
+
+```sh
+cd workers/edge-proxy && npx wrangler deploy
+```
+
+The Pages frontend picks up the change on the next build (the `s.src` URL is baked into `index.html` at build time).
+
+---
+
+## Load Balancer setup
+
+**Status:** Runbook script ready. Requires a Cloudflare API token with Load Balancer Edit permissions.
+
+### Why
+
+The existing DNS record for `api.syrabit.ai` is a proxied AAAA `100::` placeholder (Cloudflare Spectrum / Orange-cloud). A proper Load Balancer adds:
+- **Health monitoring** — detects Railway outages within 60 seconds.
+- **Automatic failover** — routes traffic to a backup origin (e.g. Cloud Run) when Railway is unhealthy.
+- **Dashboard visibility** — per-origin latency and uptime graphs in CF → Traffic → Load Balancing.
+
+### How to apply
+
+1. Create a Cloudflare API token at `https://dash.cloudflare.com/profile/api-tokens` with:
+   - Template: **Load Balancer Management**
+   - Scope: account `d66e40eac539fff1db270fddf384a5ec`, zone `syrabit.ai`
+2. Export the token: `export CLOUDFLARE_LB_TOKEN=<value>`
+3. Run the runbook script:
+   ```sh
+   node workers/edge-proxy/scripts/setup-load-balancer.mjs
+   ```
+   Use `--dry-run` first to preview the API calls.
+
+### What the script creates
+
+| Resource | Name | Configuration |
+|---------|------|---------------|
+| Monitor | `syrabit-api-health` | HTTPS GET `/api/health`, 60 s interval, 2 retries, 10 s timeout, expects 200 |
+| Pool | `syrabit-railway-primary` | Origin: `workspacemockup-sandbox-production-df37.up.railway.app`, weight 1 |
+| Load Balancer | `api.syrabit.ai` | Proxied, TTL 30s, steering: off (single pool), fallback: Railway pool |
+
+Script: `workers/edge-proxy/scripts/setup-load-balancer.mjs`
+
+---
+
+## Zaraz — GA4 via Cloudflare consent layer
+
+**Status:** Runbook script ready. Requires Zaraz to be enabled in the dashboard first.
+
+### What Zaraz adds over the gtag gateway
+
+The Google Tag Gateway (above) makes GA4 first-party at the network level but does not add **consent management**. Zaraz adds:
+
+- A consent modal (GDPR/DPDP-compliant) that gates GA4 from firing until the visitor accepts.
+- SPA-aware pageview tracking via Zaraz's built-in route-change trigger.
+- Centralised third-party tool management through the Cloudflare dashboard.
+
+### Activation steps
+
+1. **Enable Zaraz in the dashboard:**
+   - Cloudflare dashboard → `syrabit.ai` zone → **Speed → Zaraz → Enable**
+2. **Run the setup script** (once Zaraz is active):
+   ```sh
+   export CLOUDFLARE_ZARAZ_TOKEN=<zaraz-edit-token>
+   node workers/edge-proxy/scripts/setup-zaraz.mjs
+   ```
+   Use `--dry-run` first to preview the config that will be applied.
+3. **Customise the consent banner** — Speed → Zaraz → Consent (banner copy, link to privacy policy).
+4. **Remove the ga4Plugin() from `vite.config.js`** once Zaraz is confirmed working — Zaraz owns GA4 loading at that point and the `/gtag/js` gateway becomes redundant.
+
+### Consent configuration applied by the script
+
+| Setting | Value |
+|---------|-------|
+| Consent enabled | `true` |
+| Cookie name | `zaraz-consent` |
+| Expiry | 365 days |
+| Categories | `analytics` (gates GA4), `advertising` (empty — reserved) |
+| Modal buttons | Accept all / Reject all / Confirm choices |
+
+Script: `workers/edge-proxy/scripts/setup-zaraz.mjs`

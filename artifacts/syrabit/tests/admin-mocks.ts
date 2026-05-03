@@ -9,10 +9,31 @@ import type { Page, Route } from '@playwright/test';
 const EMPTY = {};
 
 /**
- * Per-endpoint fixtures. Keys are matched as substrings against the
- * request URL. The first match wins. Each handler returns the JSON body to
- * respond with (status 200) — return `null` to fall through to the
- * catch-all empty payload.
+ * Strict path-segment key match.
+ *
+ * Returns true only when `key` appears in `url` AND the character
+ * immediately following the key is either absent (end of URL), a `?`
+ * (query string), or a `#` (fragment).  This prevents a shorter key such
+ * as `/api/admin/health/edge-proxy-deploy/cron` from matching the longer
+ * URL `/api/admin/health/edge-proxy-deploy/cron/alert-state` — the latter
+ * has a `/` after the key, which is not in the allowed-terminator set.
+ *
+ * Without this guard, `Array.find` on the overrides/FIXTURES list would
+ * return the shorter cron key for the alert-state request, serving the
+ * wrong fixture shape and silently breaking the alert-state caption tests.
+ */
+function keyMatchesUrl(url: string, key: string): boolean {
+  const idx = url.indexOf(key);
+  if (idx === -1) return false;
+  const charAfter = url[idx + key.length];
+  return charAfter === undefined || charAfter === '?' || charAfter === '#';
+}
+
+/**
+ * Per-endpoint fixtures. Keys are matched as path-segment boundaries against
+ * the request URL (see keyMatchesUrl above). The first match wins. Each
+ * handler returns the JSON body to respond with (status 200) — return `null`
+ * to fall through to the catch-all empty payload.
  */
 type Fixture = (url: string) => unknown;
 
@@ -30,7 +51,17 @@ const FIXTURES: Array<[string, Fixture]> = [
   })],
 
   // --- Top-level chrome ---------------------------------------------------
-  ['/api/health', () => ({ status: 'ok', dependencies: {} })],
+  // HealthOut (response_model on GET /api/health) requires: status, version,
+  // service, workers, uptime_seconds, dependencies.  Keep all fields so the
+  // global fixture-schema validator does not flag missing required fields.
+  ['/api/health', () => ({
+    status: 'ok',
+    version: '0.0.0-e2e',
+    service: 'syrabit-api',
+    workers: 1,
+    uptime_seconds: 0,
+    dependencies: {},
+  })],
   ['/api/admin/settings', () => ({ maintenance_mode: false })],
   ['/api/admin/alerts/unacknowledged-count', () => ({ count: 0 })],
   ['/api/admin/notification-prefs', () => ({
@@ -71,8 +102,12 @@ const FIXTURES: Array<[string, Fixture]> = [
   ['/api/admin/alerts', () => ({ alerts: [] })],
   ['/api/admin/seo/health-history', () => ({ history: [] })],
   ['/api/admin/seo/deep-scan-history', () => ({})],
-  ['/api/admin/cf/overview', () => ({})],
-  ['/api/seo/pipeline/status', () => ({
+  // Corrected from /api/admin/cf/overview — the real backend path is
+  // /api/admin/analytics/cf-overview (confirmed in server.py + api.jsx).
+  ['/api/admin/analytics/cf-overview', () => ({})],
+  // Corrected from /api/seo/pipeline/status — the real backend path is
+  // /api/admin/seo/pipeline-status (confirmed in server.py + api.jsx).
+  ['/api/admin/seo/pipeline-status', () => ({
     total_topics: 0, published: 0, has_content: 0,
     needs_schema: 0, needs_internal_links: 0,
     pages_total: 0, published_today: 0,
@@ -142,7 +177,215 @@ const FIXTURES: Array<[string, Fixture]> = [
     missingClaims: [], alertState: null,
     refresh: { claimed: true, stored: true, regression_count: 0, paged: false },
   })],
+
+  // --- AdminHealth cron endpoints (Task #894 / #919 / #956) ---------------
+  // These are the four cron-pill data endpoints.  Returning a healthy
+  // payload means every pill renders green and the waitForRequest()
+  // assertions inside admin-health-cron-pills.spec.ts and
+  // admin-health-alert-state-caption.spec.ts resolve quickly.
+  //
+  // IMPORTANT: the alert-state entries MUST appear before their
+  // cron-status siblings in this array so that keyMatchesUrl's
+  // path-boundary check (which stops a shorter key from matching a
+  // longer URL) is never even needed for the FIXTURES path —
+  // Array.find returns the first match, and the longer/more-specific
+  // alert-state key is listed first.
+  ['/api/admin/health/edge-proxy-deploy/cron/alert-state', () => ({
+    present: false,
+    lastAlertAt: null,
+    lastAlertAgeSeconds: null,
+    inDebounce: false,
+    debounceRemainingSeconds: null,
+    realertIntervalSeconds: 21600,
+  })],
+  ['/api/admin/health/cf-waf-drift/cron/alert-state', () => ({
+    present: false,
+    lastAlertAt: null,
+    lastAlertAgeSeconds: null,
+    inDebounce: false,
+    debounceRemainingSeconds: null,
+    realertIntervalSeconds: 21600,
+  })],
+  ['/api/admin/health/trustpilot/refresh-cron/alert-state', () => ({
+    present: false,
+    lastAlertAt: null,
+    lastAlertAgeSeconds: null,
+    inDebounce: false,
+    debounceRemainingSeconds: null,
+    realertIntervalSeconds: 21600,
+  })],
+  ['/api/admin/health/unified-logs/cf-pull/cron/alert-state', () => ({
+    present: false,
+    lastAlertAt: null,
+    lastAlertAgeSeconds: null,
+    inDebounce: false,
+    debounceRemainingSeconds: null,
+    realertIntervalSeconds: 21600,
+  })],
+  // The cron-status endpoints must come AFTER their alert-state siblings
+  // so the longer (more-specific) alert-state paths win when sorted by
+  // descending length in installAdminApiMocks.
+  ['/api/admin/health/edge-proxy-deploy/cron', () => ({
+    configured: true,
+    status: 'healthy',
+    conclusion: 'success',
+    html_url: 'https://github.com/syrabit/syrabit/actions/runs/777',
+    lastRunUrl: 'https://github.com/syrabit/syrabit/actions/runs/777',
+    updated_at: '2026-04-25T10:00:00Z',
+    ageSeconds: 3600,
+    runStatus: 'completed',
+    workflowUrl: 'https://github.com/syrabit/syrabit/actions/workflows/edge-proxy-deploy.yml',
+    staleThresholdSeconds: 604800,
+    error: null,
+  })],
+  ['/api/admin/health/cf-waf-drift/cron', () => ({
+    configured: true,
+    status: 'healthy',
+    lastHeartbeatAgeSeconds: 1800,
+    lastSuccessHeartbeatAgeSeconds: 1800,
+    lastRunUrl: 'https://github.com/syrabit/syrabit/actions/runs/555',
+    workflowUrl: 'https://github.com/syrabit/syrabit/actions/workflows/cf-waf-drift-daily.yml',
+    staleThresholdSeconds: 129600,
+    error: null,
+  })],
+  ['/api/admin/health/trustpilot/refresh-cron', () => ({
+    configured: true,
+    status: 'healthy',
+    lastHeartbeatAgeSeconds: 1800,
+    lastSuccessHeartbeatAgeSeconds: 1800,
+    workflowUrl: 'https://github.com/syrabit/syrabit/actions/workflows/trustpilot-aggregate-refresh.yml',
+    staleThresholdSeconds: 129600,
+    error: null,
+  })],
+  ['/api/admin/health/unified-logs/cf-pull/cron', () => ({
+    configured: true,
+    status: 'healthy',
+    lastUpdatedTs: 1700000000,
+    lastUpdatedAt: '2026-04-26T05:00:00Z',
+    lastUpdatedAgeSeconds: 1800,
+    leaseOwner: 'replica-A',
+    leaseExpiresAt: '2026-04-26T05:30:00Z',
+    cursor: 'cursor-xyz',
+    silentThresholdSeconds: 900,
+    statusUrl: '/api/admin/logs/status',
+  })],
+
+  // --- Analytics cf-ai-crawl-control (Task #xxx) --------------------------
+  // Dashboard fetches /api/admin/analytics/cf-ai-crawl-control?days=7
+  // on every load; without a fixture it falls through to the catch-all
+  // EMPTY response which is fine but keeps it in failed[] for smoke test.
+  ['/api/admin/analytics/cf-ai-crawl-control', () => ({
+    ok: true, days: 7, zones: [],
+  })],
+
+  // --- AdminContentHub hierarchy (loaded on mount) ------------------------
+  // AdminContentHub.reloadHierarchy() fires four GETs on mount.
+  // Without fixtures the component stays in "loading" state and the
+  // tab-bar buttons are never rendered, causing strict-mode failures.
+  ['/api/admin/content/boards', () => []],
+  ['/api/admin/content/classes', () => []],
+  ['/api/admin/content/streams', () => []],
+  ['/api/admin/content/subjects', () => []],
+
+  // --- AdminLogs status endpoint (AdminLogsExplorer mount) ----------------
+  ['/api/admin/logs/status', () => ({
+    paused: false, ttl_days: 14, ingest_token_configured: true,
+    backend_sample_rate: 0.05, edge_sample_rate: 0.05,
+    max_ingest_batch: 500, cf_pull_interval_s: 60, cf_pull_24h: null,
+  })],
+  ['/api/admin/logs', () => ({
+    logs: [], total: 0, total_capped: false, next_before: null,
+  })],
+
+  // --- AdminRateLimits panel (rate-policies GET on mount) -----------------
+  ['/api/admin/rate-policies', () => ({
+    free:       { req_per_min: 5,  credits_per_day: 30,   max_tokens: 10000,  req_per_min_ip: 20 },
+    starter:    { req_per_min: 10, credits_per_day: 500,  max_tokens: 15000,  req_per_min_ip: 30 },
+    pro:        { req_per_min: 15, credits_per_day: 4000, max_tokens: 20000,  req_per_min_ip: 40 },
+    enterprise: { req_per_min: 60, credits_per_day: 99999, max_tokens: 200000, req_per_min_ip: 200 },
+  })],
+  ['/api/admin/rate-stats', () => ({ ok: true })],
+
+  // --- AdminUsers & Plans panels ------------------------------------------
+  ['/api/admin/users', () => ({
+    users: [
+      { id: 'user-001', email: 'alice@example.com', name: 'Alice', plan: 'starter', credits_used: 45, credits_limit: 1500 },
+      { id: 'user-002', email: 'bob@example.com', name: 'Bob', plan: 'free', credits_used: 8, credits_limit: 30 },
+    ],
+    total: 2, page: 1, per_page: 20,
+  })],
+  ['/api/admin/plan-config', () => ({
+    free:    { price: 0,   credits: 30,   validity: 'daily reset' },
+    starter: { price: 99,  credits: 500,  validity: 'daily reset' },
+    pro:     { price: 999, credits: 4000, validity: 'daily reset' },
+  })],
+
+  // --- AdminConversations panel -------------------------------------------
+  ['/api/admin/conversations', () => ([
+    {
+      id: 'conv-001', title: 'Photosynthesis inquiry',
+      user_id: 'user-a', user_name: 'Alice Barua', user_email: 'alice@example.com',
+      is_anonymous: false, flagged: false,
+      created_at: new Date(Date.now() - 3600_000).toISOString(),
+      updated_at: new Date(Date.now() - 1800_000).toISOString(),
+      messages: [],
+    },
+  ])],
+
+  // --- AdminNotifications panel -------------------------------------------
+  ['/api/admin/notifications', () => []],
+
+  // --- AdminAnalytics panel (GA4) -----------------------------------------
+  ['/api/admin/analytics', () => ({
+    ok: true, pageviews: 0, sessions: 0, bounce_rate: 0,
+    avg_session_duration_sec: 0, top_pages: [],
+  })],
+
+  // --- AdminSeoManager keyword / linker / topic-discovery ----------------
+  ['/api/admin/extract-keywords', () => ({ suggestions: [] })],
+  ['/api/admin/seo/internal-links/history', () => ({ items: [] })],
+  ['/api/admin/seo/internal-links/pending', () => ({ items: [] })],
+  ['/api/admin/seo/internal-links/status', () => ({
+    enabled: true,
+    budget: { auto_used: 0, auto_cap: 100 },
+    pendingCount: 0,
+    recentAutoApplied24h: 0,
+    config: { autoApplyThreshold: 0.75, minLinksPerTarget: 3, maxLinksPerTarget: 5, candidatePoolSize: 30, nightlyTopN: 50 },
+  })],
+  ['/api/admin/seo/internal-links', () => ({ items: [], pendingCount: 0 })],
+  ['/api/admin/seo/topic-discovery/runs', () => ({ runs: [] })],
+  ['/api/admin/seo/topic-discovery/candidates', () => ({ candidates: [] })],
+  ['/api/admin/seo/topic-discovery', () => ({ runs: [], candidates: [] })],
 ];
+
+/**
+ * Flat list of every URL substring key registered in FIXTURES.
+ *
+ * Imported by tests/global-setup.ts so the fixture-schema drift
+ * validator can check each key against the committed OpenAPI snapshot
+ * (tests/api-schema.json) at test startup without duplicating the list
+ * here and in the setup file.
+ */
+export const FIXTURE_KEYS: readonly string[] = FIXTURES.map(([key]) => key);
+
+/**
+ * Representative fixture body for every URL key in FIXTURES.
+ *
+ * Each entry is the JSON object that the mock will actually return for
+ * a request whose URL contains the corresponding key.  Calling the
+ * fixture function with the key as the URL is correct for all fixtures
+ * that ignore the URL argument (the vast majority); the few that do
+ * use the URL (e.g. history paginators) return a type-stable shape at
+ * any URL, so the key itself is a safe stand-in.
+ *
+ * Imported by tests/global-setup.ts so the drift validator can validate
+ * these payloads against the OpenAPI response schemas for their
+ * matching backend paths — catching field renames, type changes, and
+ * removed required fields automatically at test startup.
+ */
+export const FIXTURE_SAMPLES: ReadonlyMap<string, unknown> = new Map(
+  FIXTURES.map(([key, fn]) => [key, fn(key)] as const),
+);
 
 interface InstallOptions {
   /**
@@ -193,7 +436,10 @@ export async function installAdminApiMocks(page: Page, opts: InstallOptions = {}
       return;
     }
 
-    const override = overrides.find(([key]) => url.includes(key));
+    // Use keyMatchesUrl for override lookup so that a shorter key such as
+    // '/api/admin/health/edge-proxy-deploy/cron' does NOT intercept requests
+    // to '/api/admin/health/edge-proxy-deploy/cron/alert-state'.
+    const override = overrides.find(([key]) => keyMatchesUrl(url, key));
     if (override) {
       const [, value] = override;
       const body = typeof value === 'function' ? (value as (u: string) => unknown)(url) : value;
@@ -205,7 +451,10 @@ export async function installAdminApiMocks(page: Page, opts: InstallOptions = {}
       return;
     }
 
-    const fixture = FIXTURES.find(([key]) => url.includes(key));
+    // Use keyMatchesUrl for FIXTURES lookup as well so that '/api/admin/logs'
+    // does not match '/api/admin/logs/status', and '/api/admin/analytics' does
+    // not match '/api/admin/analytics/bot-traffic'.
+    const fixture = FIXTURES.find(([key]) => keyMatchesUrl(url, key));
     const body = fixture ? fixture[1](url) : EMPTY;
     await route.fulfill({
       status: 200,

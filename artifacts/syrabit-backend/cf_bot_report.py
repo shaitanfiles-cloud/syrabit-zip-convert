@@ -465,7 +465,9 @@ _AI_BOT_NAMES: frozenset[str] = frozenset({
     "PerplexityBot", "Perplexity-User",
     "ClaudeBot", "Claude-Web", "Anthropic-AI",
     "Meta-ExternalAgent",
-    "Bytespider", "CCBot", "Amazonbot", "YouBot", "Cohere-AI", "Diffbot",
+    "Bytespider", "CCBot", "Amazonbot", "Cohere-AI", "Diffbot",
+    # YouBot (You.com) removed — it is a search/answer engine that cites
+    # sources and drives referral traffic; treated as a search bot henceforth.
     # Both of these are AI-training opt-out crawlers operated by Google/Apple
     # respectively — CF files them under the "AI Crawler" verifiedBotCategory.
     "Google-Extended", "Applebot-Extended",

@@ -48,8 +48,11 @@ cache hit rates, and last D1 sync timestamp.
 """
 from __future__ import annotations
 
+import io
+import json as _json
 import logging
 import os
+import zipfile
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -657,6 +660,244 @@ async def admin_edge_proxy_deploy_cron_alert_history(
 # Task #DIAGNOSTICS — System diagnostics endpoint
 # ──────────────────────────────────────────────────────────────────────────────
 
+# ─── Task #133 — Cloudflare weekly audit card ─────────────────────────────
+#
+# Surface the latest ``cloudflare-weekly-audit.yml`` run on the admin health
+# panel so teams see pass/warn/fail counts without navigating to GitHub.
+#
+# Strategy for the summary counts:
+#   • The run ``conclusion`` ("success"/"failure") tells us whether any FAIL
+#     occurred, but not the individual PASS/WARN/FAIL/PLAN_REQUIRED totals.
+#   • The detailed counts live in the ``cf-audit-report-<run_id>`` artifact
+#     (a ZIP containing cf-audit-report.json written by cloudflare-full-audit.js).
+#   • We download and parse that ZIP with a short timeout and cache the result
+#     in Redis (keyed by run_id) for 4 hours so repeated dashboard loads are
+#     cheap.  If the download fails we return ``summary: null`` and the card
+#     degrades to showing only the run status / age.
+#
+# Stale threshold: 8 days (the workflow runs weekly; a gap longer than this
+# means the schedule broke or the workflow was disabled — shown as amber).
+
+_CF_AUDIT_WORKFLOW = os.environ.get(
+    "CF_AUDIT_WORKFLOW", "cloudflare-weekly-audit.yml"
+)
+_CF_AUDIT_STALE_S = int(os.environ.get("CF_AUDIT_STALE_THRESHOLD_S") or 8 * 86400)
+_CF_AUDIT_ARTIFACT_CACHE_TTL_S = 4 * 3600  # 4 hours in Redis
+
+
+def _cf_audit_github_headers(token: str) -> dict[str, str]:
+    h = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+    return h
+
+
+async def _download_cf_audit_summary(
+    repo: str, run_id: int, token: str
+) -> Optional[dict[str, Any]]:
+    """Download the cf-audit-report artifact for *run_id* and return its summary dict.
+
+    Returns ``None`` when the artifact is not found, the download fails, or
+    the JSON cannot be parsed — so callers can degrade gracefully.
+    """
+    headers = _cf_audit_github_headers(token)
+    artifact_list_url = (
+        f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/artifacts"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=8.0, headers=headers) as client:
+            list_resp = await client.get(artifact_list_url)
+            if list_resp.status_code != 200:
+                return None
+            artifacts = (list_resp.json() or {}).get("artifacts") or []
+            report_art = next(
+                (a for a in artifacts if a.get("name", "").startswith("cf-audit-report-")),
+                None,
+            )
+            if not report_art:
+                return None
+            art_id = report_art["id"]
+            zip_url = (
+                f"https://api.github.com/repos/{repo}/actions/artifacts/{art_id}/zip"
+            )
+            zip_resp = await client.get(zip_url, follow_redirects=True)
+            if zip_resp.status_code != 200:
+                return None
+            with zipfile.ZipFile(io.BytesIO(zip_resp.content)) as zf:
+                names = zf.namelist()
+                json_name = next(
+                    (n for n in names if n.endswith(".json")), None
+                )
+                if not json_name:
+                    return None
+                with zf.open(json_name) as f:
+                    report = _json.load(f)
+            raw = report.get("summary") or {}
+            # Normalise: ensure all expected keys exist with int defaults.
+            return {
+                "pass": int(raw.get("pass") or 0),
+                "warn": int(raw.get("warn") or 0),
+                "fail": int(raw.get("fail") or 0),
+                "skip": int(raw.get("skip") or 0),
+                "plan_required": int(raw.get("plan_required") or 0),
+                "total": int(raw.get("total") or 0),
+            }
+    except Exception as exc:
+        logger.debug(f"[cf-audit] artifact download failed for run {run_id}: {exc}")
+        return None
+
+
+async def _get_cf_audit_latest() -> dict[str, Any]:
+    """Fetch the latest cloudflare-weekly-audit.yml run plus its artifact summary.
+
+    Always returns a dict; never raises.  The ``summary`` key will be ``None``
+    when the artifact cannot be fetched (the card degrades to run-status only).
+    """
+    cfg = {
+        "repo": (os.environ.get("GITHUB_REPO") or "").strip(),
+        "token": (os.environ.get("GITHUB_TOKEN") or "").strip(),
+        "workflow": _CF_AUDIT_WORKFLOW,
+    }
+    workflow_url = (
+        f"https://github.com/{cfg['repo'] or 'syrabit/syrabit'}"
+        f"/actions/workflows/{cfg['workflow']}"
+    )
+    base: dict[str, Any] = {
+        "configured": bool(cfg["repo"]),
+        "workflowUrl": workflow_url,
+        "staleThresholdSeconds": _CF_AUDIT_STALE_S,
+    }
+
+    if not cfg["repo"]:
+        return {
+            **base,
+            "status": "not_configured",
+            "conclusion": None,
+            "lastRunUrl": None,
+            "ageSeconds": None,
+            "runId": None,
+            "summary": None,
+            "error": None,
+        }
+
+    headers = _cf_audit_github_headers(cfg["token"])
+    runs_url = (
+        f"https://api.github.com/repos/{cfg['repo']}"
+        f"/actions/workflows/{cfg['workflow']}/runs?per_page=1"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=6.0, headers=headers) as client:
+            resp = await client.get(runs_url)
+    except Exception as exc:
+        logger.warning(f"[cf-audit] GitHub fetch failed: {exc}")
+        return {
+            **base, "status": "unknown", "conclusion": None, "lastRunUrl": None,
+            "ageSeconds": None, "runId": None, "summary": None,
+            "error": f"github unreachable: {type(exc).__name__}",
+        }
+
+    if resp.status_code == 404:
+        return {
+            **base, "status": "never_observed", "conclusion": None,
+            "lastRunUrl": None, "ageSeconds": None, "runId": None,
+            "summary": None, "error": None,
+        }
+    if resp.status_code != 200:
+        return {
+            **base, "status": "unknown", "conclusion": None, "lastRunUrl": None,
+            "ageSeconds": None, "runId": None, "summary": None,
+            "error": f"github returned {resp.status_code}",
+        }
+
+    try:
+        data = resp.json() or {}
+    except Exception:
+        data = {}
+    runs = data.get("workflow_runs") or []
+    if not runs:
+        return {
+            **base, "status": "never_observed", "conclusion": None,
+            "lastRunUrl": None, "ageSeconds": None, "runId": None,
+            "summary": None, "error": None,
+        }
+
+    run = runs[0]
+    conclusion = run.get("conclusion")
+    html_url = run.get("html_url")
+    updated_at = run.get("updated_at") or run.get("created_at")
+    age_s = _age_seconds(updated_at)
+    run_id = run.get("id")
+
+    if (conclusion or "").lower() == "failure":
+        pill_status = "silent"
+    elif age_s is not None and age_s > _CF_AUDIT_STALE_S:
+        pill_status = "degraded"
+    else:
+        pill_status = "healthy"
+
+    # Attempt to load the artifact summary — Redis-cached per run_id.
+    summary: Optional[dict[str, Any]] = None
+    if run_id:
+        cache_key = f"cf_audit_summary:{run_id}"
+        try:
+            from deps import redis_client
+            if redis_client:
+                raw_cached = await redis_client.get(cache_key)
+                if raw_cached:
+                    summary = _json.loads(raw_cached)
+        except Exception:
+            pass
+
+        if summary is None:
+            summary = await _download_cf_audit_summary(cfg["repo"], run_id, cfg["token"])
+            if summary is not None:
+                try:
+                    from deps import redis_client
+                    if redis_client:
+                        await redis_client.set(
+                            cache_key,
+                            _json.dumps(summary),
+                            ex=_CF_AUDIT_ARTIFACT_CACHE_TTL_S,
+                        )
+                except Exception:
+                    pass
+
+    return {
+        **base,
+        "status": pill_status,
+        "conclusion": conclusion,
+        "lastRunUrl": html_url,
+        "ageSeconds": age_s,
+        "updatedAt": updated_at,
+        "runId": run_id,
+        "runNumber": run.get("run_number"),
+        "headSha": (run.get("head_sha") or "")[:7] or None,
+        "event": run.get("event"),
+        "summary": summary,
+        "error": None,
+    }
+
+
+@router.get("/admin/health/cf-audit/latest")
+async def admin_cf_audit_latest(
+    admin: dict = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """Return the latest cloudflare-weekly-audit run shaped for the admin health panel.
+
+    Always 200.  The ``summary`` key holds the per-status item counts
+    (pass/warn/fail/skip/plan_required/total) parsed from the GitHub Actions artifact
+    ZIP; it will be ``null`` when the artifact cannot be fetched (the card degrades
+    gracefully to showing only run status and age).
+
+    Task #133.
+    """
+    return await _get_cf_audit_latest()
+
+
 @router.get("/admin/diagnostics")
 async def admin_diagnostics(admin: dict = Depends(get_admin_user)) -> dict[str, Any]:
     """Return comprehensive system health diagnostics.
@@ -689,20 +930,25 @@ async def admin_diagnostics(admin: dict = Depends(get_admin_user)) -> dict[str, 
     # LLM Provider Status
     try:
         import vertex_services
+        import vertex_chat as _vc
         vertex_health = await vertex_services.health_check()
-        result["llm_providers"]["vertex_gemini"] = {
+        ai_entry = {
             "status": "healthy" if vertex_health.get("ok") else "unhealthy",
             "auth_mode": vertex_health.get("auth_mode"),
+            "chat_auth_mode": _vc.auth_mode(),
             "via_gateway": vertex_health.get("via_cf_gateway"),
             "embeddings": vertex_health.get("embeddings"),
             "generation": vertex_health.get("generation"),
             "details": vertex_health.get("reason") if not vertex_health.get("ok") else None,
         }
+        result["llm_providers"]["workers_ai"] = ai_entry
+        result["llm_providers"]["gemini"] = ai_entry
+        result["llm_providers"]["vertex_gemini"] = ai_entry
     except Exception as e:
-        result["llm_providers"]["vertex_gemini"] = {
-            "status": "error",
-            "error": str(e),
-        }
+        err_entry = {"status": "error", "error": str(e)}
+        result["llm_providers"]["workers_ai"] = err_entry
+        result["llm_providers"]["gemini"] = err_entry
+        result["llm_providers"]["vertex_gemini"] = err_entry
     
     # Check Sarvam status
     try:
@@ -785,3 +1031,169 @@ async def admin_diagnostics(admin: dict = Depends(get_admin_user)) -> dict[str, 
         result["circuit_breakers"]["vertex"] = {"status": "error", "error": str(e)}
     
     return result
+
+
+# ── Pinecone index health (Task #207) ─────────────────────────────────────────
+
+_PINECONE_CTRL = "https://api.pinecone.io"
+_PINECONE_API_VERSION = "2024-10"
+_PINECONE_HEALTH_TIMEOUT = 10.0
+
+
+def _pinecone_cfg() -> dict[str, str]:
+    key = (
+        os.environ.get("PINECONE_KEY", "").strip()
+        or os.environ.get("PINECONE_API_KEY", "").strip()
+    )
+    index = (os.environ.get("PINECONE_INDEX", "syrabit-ahsec") or "syrabit-ahsec").strip()
+    try:
+        dims = int(os.environ.get("PINECONE_INDEX_DIMS", "1024") or "1024")
+        if dims <= 0:
+            dims = 1024
+    except (ValueError, TypeError):
+        dims = 1024
+    return {"key": key, "index": index, "dims": dims}
+
+
+def _pinecone_ctrl_headers(key: str) -> dict:
+    return {
+        "Api-Key": key,
+        "Content-Type": "application/json",
+        "X-Pinecone-API-Version": _PINECONE_API_VERSION,
+    }
+
+
+@router.get("/admin/health/pinecone")
+async def admin_pinecone_health(admin: dict = Depends(get_admin_user)) -> dict[str, Any]:
+    """Return Pinecone index health: status, vector count, and last-query latency.
+
+    Always returns 200. Individual failures are reported inline.
+
+    Response shape::
+
+        {
+          "configured": bool,
+          "index_name": str,
+          "status": "ready" | "initializing" | "unknown" | "error",
+          "state": str,          # raw Pinecone status.state string
+          "total_vectors": int | null,
+          "dimensions": int,
+          "latency_ms": float | null,
+          "host": str | null,
+          "error": str | null,
+        }
+    """
+    cfg = _pinecone_cfg()
+
+    if not cfg["key"]:
+        return {
+            "configured": False,
+            "index_name": cfg["index"],
+            "status": "not_configured",
+            "state": None,
+            "total_vectors": None,
+            "dimensions": cfg["dims"],
+            "latency_ms": None,
+            "host": None,
+            "error": "PINECONE_KEY is not set",
+        }
+
+    ctrl_headers = _pinecone_ctrl_headers(cfg["key"])
+    index_name = cfg["index"]
+    dims = cfg["dims"]
+    host: Optional[str] = None
+    state: Optional[str] = None
+    status_str: str = "unknown"
+    total_vectors: Optional[int] = None
+    latency_ms: Optional[float] = None
+    error: Optional[str] = None
+
+    # ── 1. Describe the index (control plane) ─────────────────────────────────
+    try:
+        async with httpx.AsyncClient(timeout=_PINECONE_HEALTH_TIMEOUT) as client:
+            r = await client.get(
+                f"{_PINECONE_CTRL}/indexes/{index_name}",
+                headers=ctrl_headers,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                raw_host = data.get("host", "")
+                if raw_host and not raw_host.startswith("https://"):
+                    raw_host = f"https://{raw_host}"
+                host = raw_host or None
+
+                status_obj = data.get("status") or {}
+                state = str(status_obj.get("state") or "unknown").lower()
+                ready = bool(status_obj.get("ready", False))
+                if ready and state in ("ready",):
+                    status_str = "ready"
+                elif state in ("initializing", "scaling", "creating"):
+                    status_str = "initializing"
+                elif state in ("ready",):
+                    status_str = "ready"
+                else:
+                    status_str = state or "unknown"
+            elif r.status_code == 404:
+                status_str = "not_found"
+                error = f"Index '{index_name}' not found"
+            else:
+                status_str = "error"
+                error = f"HTTP {r.status_code}: {r.text[:120]}"
+    except Exception as exc:
+        status_str = "error"
+        error = str(exc)[:200]
+
+    # ── 2. Describe index stats (data plane) to get vector count ──────────────
+    if host:
+        try:
+            async with httpx.AsyncClient(timeout=_PINECONE_HEALTH_TIMEOUT) as client:
+                r = await client.post(
+                    f"{host}/describe_index_stats",
+                    headers=_pinecone_ctrl_headers(cfg["key"]),
+                    json={},
+                )
+                if r.status_code == 200:
+                    stats = r.json()
+                    total_vectors = int(stats.get("totalVectorCount", 0))
+                else:
+                    logger.warning(
+                        "[pinecone_health] describe_index_stats HTTP %d: %s",
+                        r.status_code, r.text[:100],
+                    )
+        except Exception as exc:
+            logger.warning("[pinecone_health] describe_index_stats failed: %s", exc)
+
+    # ── 3. Test query latency ─────────────────────────────────────────────────
+    if host and status_str == "ready":
+        try:
+            zero_vec = [0.0] * dims
+            import time as _time
+            t0 = _time.perf_counter()
+            async with httpx.AsyncClient(timeout=_PINECONE_HEALTH_TIMEOUT) as client:
+                r = await client.post(
+                    f"{host}/query",
+                    headers=_pinecone_ctrl_headers(cfg["key"]),
+                    json={"vector": zero_vec, "topK": 1, "includeMetadata": False},
+                )
+            latency_ms = round((_time.perf_counter() - t0) * 1000, 1)
+            if r.status_code != 200:
+                logger.warning(
+                    "[pinecone_health] test query HTTP %d: %s",
+                    r.status_code, r.text[:100],
+                )
+                latency_ms = None
+        except Exception as exc:
+            logger.warning("[pinecone_health] test query failed: %s", exc)
+            latency_ms = None
+
+    return {
+        "configured": True,
+        "index_name": index_name,
+        "status": status_str,
+        "state": state,
+        "total_vectors": total_vectors,
+        "dimensions": dims,
+        "latency_ms": latency_ms,
+        "host": host,
+        "error": error,
+    }

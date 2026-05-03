@@ -32,7 +32,7 @@ Public API
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Awaitable, Callable
 from urllib.parse import urljoin, urlparse
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -120,6 +120,7 @@ async def safe_get_with_redirects(
     *,
     max_hops: int = 5,
     headers: dict | None = None,
+    hop_validator: Callable[[str], Awaitable[bool]] | None = None,
 ) -> tuple["httpx.Response | None", str, str]:
     """GET ``url`` with manual redirect handling and per-hop SSRF re-checks.
 
@@ -130,12 +131,20 @@ async def safe_get_with_redirects(
     validation (private-IP, hard-deny, operator-block, DNS-resolution)
     on every Location target before issuing the next request.
 
+    ``hop_validator``, when provided, is awaited with each redirect
+    destination URL *before* the next GET is issued. If it returns
+    ``False`` the chain is aborted and ``"hop_policy_rejected"`` is
+    returned as the reason without issuing the blocked request. The
+    caller is responsible for validating the initial ``url`` itself;
+    this callback only fires for redirect destinations (hops >= 2).
+
     Returns ``(response, final_url, reason)`` where ``reason`` is
     ``"ok"`` on success or an error code (``bad_redirect_scheme`` /
-    ``too_many_redirects`` / ``no_location`` / a value forwarded from
-    ``validate_host_for_ssrf`` prefixed with ``redirect_``) on failure.
-    On failure ``response`` may still hold the last successful hop but
-    callers should treat the request as rejected.
+    ``too_many_redirects`` / ``no_location`` / ``hop_policy_rejected``
+    / a value forwarded from ``validate_host_for_ssrf`` prefixed with
+    ``redirect_``) on failure. On failure ``response`` may still hold
+    the last successful hop but callers should treat the request as
+    rejected.
     """
     current = url
     resp: "httpx.Response | None" = None
@@ -153,5 +162,7 @@ async def safe_get_with_redirects(
         ok, why = await validate_host_for_ssrf((p.hostname or "").lower())
         if not ok:
             return resp, current, f"redirect_{why}"
+        if hop_validator and not await hop_validator(nxt):
+            return resp, nxt, "hop_policy_rejected"
         current = nxt
     return resp, current, "too_many_redirects"

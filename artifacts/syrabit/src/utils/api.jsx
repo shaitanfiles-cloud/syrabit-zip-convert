@@ -312,6 +312,13 @@ export const adminGetCfOverview = (token, range = '7d') =>
     withCredentials: true,
   });
 
+export const adminGetBotTraffic = (token, period = '24h') =>
+  axios.get(`${API_BASE}/admin/analytics/bot-traffic`, {
+    params: { period },
+    headers: adminHeaders(token),
+    withCredentials: true,
+  });
+
 // Task #408: hydrate-lifecycle / stale-build telemetry tile
 export const adminGetHydrateStats = (token, days = 7) =>
   axios.get(`${API_BASE}/admin/analytics/hydrate-stats`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
@@ -692,6 +699,30 @@ export const adminSeoResolveDuplicate = (token, pairId, action = 'ignore') =>
     headers: adminHeaders(token), withCredentials: true,
     params: { action },
   });
+
+/**
+ * Task #155 — Request a unique per-user Trustpilot invitation link from
+ * the backend. Authenticated via the session cookie so the server can
+ * attach the user's email/name.
+ *
+ * Intentionally throws on failure rather than silently returning a fallback,
+ * so the caller (TrustpilotReviewModal) can distinguish error types and show
+ * an appropriate user-facing notice:
+ *   - AxiosError with response.status === 401 → user is not authenticated
+ *   - Any other error → network / Trustpilot API failure
+ * The caller supplies the fallback URL and handles all error cases.
+ *
+ * @returns {Promise<string>} The personalised invitation URL.
+ * @throws {import('axios').AxiosError} On HTTP errors or network failure.
+ */
+export async function generateTrustpilotInvitationLink() {
+  const res = await axios.post(
+    `${API_BASE}/trustpilot/invitation-link`,
+    {},
+    { withCredentials: true },
+  );
+  return res.data?.url || 'https://www.trustpilot.com/review/syrabit.ai';
+}
 
 export const seoRelatedByChapter = (chapterId, excludeTopicId = null, limit = 5) =>
   axios.get(`${API_BASE}/seo/related-by-chapter/${chapterId}`, {

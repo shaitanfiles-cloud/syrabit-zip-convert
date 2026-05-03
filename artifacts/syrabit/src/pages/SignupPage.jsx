@@ -5,7 +5,6 @@ import { usePublicStats } from '@/hooks/usePublicStats';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
-import { useTurnstile } from '@/hooks/useTurnstile';
 import { formatAuthError } from '@/lib/authErrors';
 import { toast } from 'sonner';
 import { LogoFull } from '@/components/Logo';
@@ -46,8 +45,8 @@ export default function SignupPage() {
   const [consentDpdp, setConsentDpdp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [emailError, setEmailError] = useState('');
   const { signup } = useAuth();
-  const { getToken: getTurnstileToken, ready: turnstileReady, enabled: turnstileEnabled, reset: resetTurnstile } = useTurnstile();
   const navigate = useNavigate();
 
   const strength = getPasswordStrength(password);
@@ -59,9 +58,29 @@ export default function SignupPage() {
     }, 300);
   }, []);
 
+  const validateEmail = (value) => {
+    if (!value) return '';
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ? '' : 'Please enter a valid email address';
+  };
+
+  const handleEmailChange = (e) => {
+    const value = e.target.value;
+    setEmail(value);
+    if (emailError) setEmailError(validateEmail(value));
+  };
+
+  const handleEmailBlur = (e) => {
+    setEmailError(validateEmail(e.target.value));
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    const emailValidationError = validateEmail(email);
+    if (emailValidationError) {
+      setEmailError(emailValidationError);
+      return;
+    }
     if (password !== confirmPassword) {
       setError('Passwords do not match');
       return;
@@ -76,15 +95,15 @@ export default function SignupPage() {
     }
     setLoading(true);
     try {
-      let turnstileToken = '';
-      if (turnstileEnabled) {
-        turnstileToken = await getTurnstileToken();
-      }
-      await signup(name, email, password, consentDpdp, turnstileToken);
+      const user = await signup(name, email, password, consentDpdp);
       toast.success('Account created! Welcome to Syrabit.ai!');
-      navigate('/onboarding');
+      const role = user?.role || '';
+      if (role === 'staff' || role === 'admin') {
+        navigate('/staff');
+      } else {
+        navigate('/onboarding');
+      }
     } catch (err) {
-      try { resetTurnstile(); } catch {}
       setError(formatAuthError(err, 'Signup failed. Please try again.'));
     } finally {
       setLoading(false);
@@ -116,7 +135,7 @@ export default function SignupPage() {
           }} />
 
         <div className="relative z-10">
-          <Link to="/" className="inline-block mb-14">
+          <Link to="/" className="inline-block mb-14" aria-label="Go to Syrabit home">
             <LogoFull size="md" textClassName="text-foreground text-2xl" />
           </Link>
 
@@ -177,7 +196,7 @@ export default function SignupPage() {
         </div>
 
         <div className="w-full max-w-sm relative z-10 anim-slide-right py-4 lg:py-8">
-          <Link to="/" className="flex items-center gap-2 mb-4 lg:hidden">
+          <Link to="/" className="flex items-center gap-2 mb-4 lg:hidden" aria-label="Go to Syrabit home">
             <LogoFull size="sm" textClassName="text-foreground" />
           </Link>
 
@@ -188,8 +207,12 @@ export default function SignupPage() {
             </div>
 
             {error && (
-              <div className="flex items-center gap-2 text-red-600 rounded-xl p-3 mb-5 text-sm"
-                style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}>
+              <div
+                id="signup-error-message"
+                role="alert"
+                className="flex items-center gap-2 text-red-600 rounded-xl p-3 mb-5 text-sm"
+                style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}
+              >
                 <AlertCircle size={16} className="flex-shrink-0" />
                 {error}
               </div>
@@ -199,13 +222,7 @@ export default function SignupPage() {
               <GoogleSignInButton
                 text="signup_with"
                 disabled={loading}
-                getTurnstileToken={turnstileEnabled ? getTurnstileToken : undefined}
-                onSuccess={() => {
-                  toast.success('Account created! Welcome to Syrabit.ai!');
-                  navigate('/onboarding');
-                }}
                 onError={(err) => {
-                  try { resetTurnstile(); } catch {}
                   setError(formatAuthError(err, 'Google sign-up failed. Please try again.'));
                 }}
               />
@@ -258,14 +275,20 @@ export default function SignupPage() {
                     autoComplete="email"
                     placeholder="your@email.com"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={handleEmailChange}
+                    onBlur={handleEmailBlur}
                     onFocus={handleInputFocus}
-                    className="pl-10 h-11"
+                    className={`pl-10 h-11 ${emailError ? 'border-red-500/40' : ''}`}
                     style={{ scrollMarginBottom: '4rem' }}
                     required
+                    aria-invalid={emailError ? true : undefined}
+                    aria-describedby={emailError ? 'email-format-error' : undefined}
                     data-testid="auth-email-input"
                   />
                 </div>
+                {emailError && (
+                  <p id="email-format-error" role="alert" className="text-xs text-red-500">{emailError}</p>
+                )}
               </div>
 
               <div className="space-y-1.5">
@@ -283,14 +306,17 @@ export default function SignupPage() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     onFocus={handleInputFocus}
-                    className="pl-10 pr-11 h-11"
+                    className={`pl-10 pr-11 h-11 ${confirmPassword && !passwordsMatch ? 'border-red-500/40' : ''}`}
                     style={{ scrollMarginBottom: '4rem' }}
                     required
+                    aria-invalid={confirmPassword && !passwordsMatch ? true : undefined}
+                    aria-describedby={password ? 'password-strength-hint' : undefined}
                     data-testid="auth-password-input"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPass(!showPass)}
+                    aria-label={showPass ? 'Hide password' : 'Show password'}
                     className="absolute right-1 top-1/2 -translate-y-1/2 min-w-[44px] min-h-[44px] flex items-center justify-center text-muted-foreground/40 hover:text-foreground transition-colors"
                   >
                     {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
@@ -306,7 +332,11 @@ export default function SignupPage() {
                         />
                       ))}
                     </div>
-                    <p className={`text-xs ${strength.score <= 2 ? 'text-orange-500' : 'text-emerald-600'}`}>
+                    <p
+                      id="password-strength-hint"
+                      aria-live="polite"
+                      className={`text-xs ${strength.score <= 2 ? 'text-orange-500' : 'text-emerald-600'}`}
+                    >
                       {strength.label}
                     </p>
                   </div>
@@ -331,17 +361,20 @@ export default function SignupPage() {
                     className={`pl-10 pr-11 h-11 ${confirmPassword && !passwordsMatch ? 'border-red-500/40' : ''}`}
                     style={{ scrollMarginBottom: '4rem' }}
                     required
+                    aria-invalid={confirmPassword && !passwordsMatch ? true : undefined}
+                    aria-describedby={confirmPassword && !passwordsMatch ? 'confirm-password-mismatch' : undefined}
                   />
                   <button
                     type="button"
                     onClick={() => setShowConfirm(!showConfirm)}
+                    aria-label={showConfirm ? 'Hide confirm password' : 'Show confirm password'}
                     className="absolute right-1 top-1/2 -translate-y-1/2 min-w-[44px] min-h-[44px] flex items-center justify-center text-muted-foreground/40 hover:text-foreground transition-colors"
                   >
                     {showConfirm ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
                 </div>
                 {confirmPassword && !passwordsMatch && (
-                  <p className="text-xs text-red-500">Passwords don't match</p>
+                  <p id="confirm-password-mismatch" className="text-xs text-red-500" role="alert">Passwords don't match</p>
                 )}
               </div>
 
@@ -351,6 +384,8 @@ export default function SignupPage() {
                   onClick={() => setAgreed(!agreed)}
                   className="-ml-3 p-3 min-w-[44px] min-h-[44px] rounded flex-shrink-0 flex items-center justify-center transition-all cursor-pointer"
                   aria-label="Agree to terms"
+                  aria-invalid={error === 'Please agree to the Terms of Service' ? 'true' : undefined}
+                  aria-describedby={error === 'Please agree to the Terms of Service' ? 'signup-error-message' : undefined}
                 >
                   <span
                     className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${agreed ? 'border-violet-500' : 'border-border bg-muted/50'}`}
@@ -373,6 +408,8 @@ export default function SignupPage() {
                   onClick={() => setConsentDpdp(!consentDpdp)}
                   className="-ml-3 p-3 min-w-[44px] min-h-[44px] rounded flex-shrink-0 flex items-center justify-center transition-all cursor-pointer"
                   aria-label="Consent to data processing"
+                  aria-invalid={error === 'Please provide consent for data processing under the DPDP Act' ? 'true' : undefined}
+                  aria-describedby={error === 'Please provide consent for data processing under the DPDP Act' ? 'signup-error-message' : undefined}
                 >
                   <span
                     className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${consentDpdp ? 'border-violet-500' : 'border-border bg-muted/50'}`}
@@ -390,7 +427,7 @@ export default function SignupPage() {
 
               <button
                 type="submit"
-                disabled={loading || (turnstileEnabled && !turnstileReady)}
+                disabled={loading}
                 className="w-full flex items-center justify-center gap-2 h-11 rounded-xl text-sm font-bold text-white transition-all duration-150 active:scale-[0.97] disabled:opacity-60 btn-gradient"
                 data-testid="auth-submit-button"
               >

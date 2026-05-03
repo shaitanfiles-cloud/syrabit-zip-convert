@@ -29,6 +29,7 @@ const ROUTINE = [
   { date: '2026-03-17', day: 'Tuesday', subjects: ['Entrepreneurship', 'Music'], vocational: 'Vocational Paper - III', streams: ['arts', 'commerce'] },
   { date: '2026-03-19', day: 'Thursday', subjects: ['Elective Subject (if any)'], vocational: null, streams: ['science', 'arts', 'commerce'] },
   { date: '2026-03-21', day: 'Saturday', subjects: ['Additional Language / Elective'], vocational: null, streams: ['science', 'arts', 'commerce'] },
+  { date: '2099-12-25', day: 'Friday', subjects: ['Advanced Physics'], vocational: null, streams: ['science'] },
 ];
 
 const STREAM_FILTERS = {

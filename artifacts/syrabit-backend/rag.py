@@ -470,6 +470,162 @@ def _extract_relevant_sections(document_text: str, query: str, char_limit: int =
     return document_text[:char_limit]
 
 
+async def _fetch_chunks_semantic(
+    query: str,
+    limit: int = 10,
+    subject_id: Optional[str] = None,
+) -> list:
+    """Semantic retrieval: embed query → Pinecone vector search → fetch chapters from MongoDB.
+
+    Uses Pinecone serverless (syrabit-ahsec index) as the primary vector store.
+    Falls back to Atlas $vectorSearch when Pinecone is not configured (PINECONE_KEY
+    not set) or returns no results, so the old path stays warm during validation.
+
+    Returns chapter dicts in the same shape as the keyword-search path so they
+    can be deduplicated and reranked together.
+    """
+    try:
+        # Embed the query using Cohere embed-multilingual-v3.0 (1024-dim) — the
+        # same model used for document ingestion in chunk_embedder.py — so query
+        # and chunk vectors are in the same embedding space and Pinecone's 1024-dim
+        # index dimensions match.  Pinecone's multilingual-e5-large (768-dim) would
+        # cause a dimension mismatch against the stored 1024-dim Cohere vectors.
+        q_vec: Optional[list] = None
+        try:
+            from providers.cohere import embed_query as _cohere_embed_query, ENABLED as _cohere_on
+            if _cohere_on:
+                q_vec = await asyncio.wait_for(
+                    _cohere_embed_query(query),
+                    timeout=4.0,
+                )
+        except Exception as _cohere_qerr:
+            logger.debug("[INTERNAL_RAG] Cohere query embed failed, falling back to Pinecone: %s", _cohere_qerr)
+
+        # Note: Do NOT fall back to Pinecone Inference (multilingual-e5-large,
+        # 768-dim default) for query embedding — it would produce dimension-mismatch
+        # errors against the 1024-dim syrabit-ahsec index. Semantic search is
+        # simply skipped when Cohere is unavailable; keyword search + reranking
+        # still function normally via _fetch_internal_chapters.
+        if not q_vec:
+            logger.debug("[INTERNAL_RAG] Query embedding unavailable — skipping semantic search")
+            return []
+
+        # ── Primary: Pinecone serverless vector search ────────────────────────
+        # subject_id filter uses Pinecone metadata filter syntax ($eq).
+        pc_filter: Optional[dict] = None
+        if subject_id:
+            pc_filter = {"subject_id": {"$eq": subject_id}}
+
+        raw: list = []
+        try:
+            from retrievers.pinecone_vector import PineconeVectorRetriever
+            _pc_retriever = PineconeVectorRetriever()
+            if _pc_retriever.is_configured():
+                matches = await asyncio.wait_for(
+                    _pc_retriever.query(
+                        q_vec,
+                        top_k=limit,
+                        metadata_filter=pc_filter,
+                        return_metadata=True,
+                    ),
+                    timeout=5.0,
+                )
+                # Normalise to the same shape the Atlas pipeline produced:
+                # {"chapter_id": str, "subject_id": str, "_vs_score": float}
+                raw = [
+                    {
+                        "chapter_id":    m["metadata"].get("chapter_id", ""),
+                        "chapter_title": m["metadata"].get("chapter_title", ""),
+                        "subject_id":    m["metadata"].get("subject_id", ""),
+                        "_vs_score":     m["score"],
+                    }
+                    for m in matches
+                    if m.get("metadata", {}).get("chapter_id")
+                ]
+                logger.debug(
+                    "[INTERNAL_RAG] Pinecone semantic: %d matches for '%s'",
+                    len(raw), query[:50],
+                )
+        except Exception as _pc_err:
+            logger.debug("[INTERNAL_RAG] Pinecone query failed, will try Atlas fallback: %s", _pc_err)
+
+        # ── Fallback: MongoDB Atlas $vectorSearch (kept warm during validation) ─
+        # Gated by PINECONE_ATLAS_FALLBACK env var (default: true).
+        # Once Pinecone parity is validated, set PINECONE_ATLAS_FALLBACK=false
+        # to stop hitting Atlas $vectorSearch entirely (Pinecone-only mode).
+        import os as _os
+        _atlas_fallback_enabled = _os.environ.get(
+            "PINECONE_ATLAS_FALLBACK", "true"
+        ).strip().lower() not in ("0", "false", "no")
+
+        if not raw and _atlas_fallback_enabled:
+            try:
+                vs_filter: dict = {}
+                if subject_id:
+                    vs_filter = {"subject_id": {"$eq": subject_id}}
+
+                pipeline: list = [
+                    {
+                        "$vectorSearch": {
+                            "index": "vector_index",
+                            "path": "embedding",
+                            "queryVector": q_vec,
+                            "numCandidates": min(limit * 15, 500),
+                            "limit": limit,
+                            **({"filter": vs_filter} if vs_filter else {}),
+                        }
+                    },
+                    {"$addFields": {"_vs_score": {"$meta": "vectorSearchScore"}}},
+                    {"$project": {
+                        "_id": 0,
+                        "chapter_id": 1,
+                        "chapter_title": 1,
+                        "subject_id": 1,
+                        "_vs_score": 1,
+                    }},
+                ]
+                raw = await db.chunks.aggregate(pipeline).to_list(length=limit)
+                if raw:
+                    logger.debug(
+                        "[INTERNAL_RAG] Atlas $vectorSearch fallback: %d hits for '%s'",
+                        len(raw), query[:50],
+                    )
+            except Exception as _atlas_err:
+                logger.debug("[INTERNAL_RAG] Atlas $vectorSearch fallback also failed: %s", _atlas_err)
+
+        if not raw:
+            return []
+
+        chapter_ids = list({r["chapter_id"] for r in raw if r.get("chapter_id")})
+        if not chapter_ids:
+            return []
+
+        ch_docs = await db.chapters.find(
+            {"id": {"$in": chapter_ids}, "status": "published"},
+            {"_id": 0, "id": 1, "title": 1, "content": 1, "content_as": 1,
+             "slug": 1, "subject_id": 1, "description": 1},
+        ).to_list(length=len(chapter_ids))
+        chapters_map = {ch["id"]: ch for ch in ch_docs}
+
+        seen: set = set()
+        result = []
+        for r in raw:
+            cid = r.get("chapter_id", "")
+            if cid in seen or cid not in chapters_map:
+                continue
+            seen.add(cid)
+            result.append(chapters_map[cid])
+
+        logger.debug(
+            "[INTERNAL_RAG] Semantic: %d chunk hits → %d unique chapters for '%s'",
+            len(raw), len(result), query[:50],
+        )
+        return result
+    except Exception as _se:
+        logger.debug("[INTERNAL_RAG] Semantic search failed: %s", _se)
+        return []
+
+
 async def _fetch_internal_chapters(
     query: str,
     subject_id: Optional[str] = None,
@@ -477,45 +633,143 @@ async def _fetch_internal_chapters(
     limit: int = 3,
     max_content_chars: int = 4000,
 ) -> list:
-    if not is_mongo_available():
+    """Hybrid keyword + semantic retrieval with Pinecone reranking.
+
+    Pipeline:
+      1. Keyword regex search on MongoDB chapters (title + content + content_as)
+      2. Semantic vector search on MongoDB chunks via Atlas $vectorSearch  [parallel]
+      3. Deduplicate by chapter id
+      4. Pinecone bge-reranker-v2-m3 reranks (multilingual, handles Assamese)
+      5. Return top-K chapters within char budget
+    """
+    if not await is_mongo_available():
         return []
     try:
         keywords = _extract_keywords(query)
         if not keywords:
             return []
+
         filters: dict = {"status": "published"}
+        # Use subject_id when explicitly provided.
+        # Do NOT filter by subject_name alone — the AHSEC subject stubs (sub1/sub2…)
+        # have no content yet; filtering to them returns zero results.
         if subject_id:
             filters["subject_id"] = subject_id
+
+        try:
+            from providers.pinecone_ai import ENABLED as _pinecone_enabled
+        except Exception:
+            _pinecone_enabled = False
+
+        # Fetch more candidates when reranker is available
+        fetch_limit = min(limit * 5, 25) if _pinecone_enabled else limit
+
+        # ── 1. Keyword search: title + content + content_as (Assamese field) ──
         regex_pattern = "|".join(re.escape(kw) for kw in keywords[:6])
         filters["$or"] = [
-            {"title": {"$regex": regex_pattern, "$options": "i"}},
-            {"content": {"$regex": regex_pattern, "$options": "i"}},
+            {"title":      {"$regex": regex_pattern, "$options": "i"}},
+            {"content":    {"$regex": regex_pattern, "$options": "i"}},
+            {"content_as": {"$regex": regex_pattern, "$options": "i"}},
         ]
-        cursor = db.chapters.find(filters, {"_id": 0, "id": 1, "title": 1, "content": 1, "slug": 1, "subject_id": 1, "description": 1}).limit(limit)
-        chapters = await cursor.to_list(length=limit)
-        result = []
-        total_chars = 0
-        for ch in chapters:
+        keyword_task = db.chapters.find(
+            filters,
+            {"_id": 0, "id": 1, "title": 1, "content": 1, "content_as": 1,
+             "slug": 1, "subject_id": 1, "description": 1},
+        ).limit(fetch_limit).to_list(length=fetch_limit)
+
+        # ── 2. Semantic vector search (parallel with keyword) ─────────────────
+        if _pinecone_enabled:
+            kw_chapters, sem_chapters = await asyncio.gather(
+                keyword_task,
+                _fetch_chunks_semantic(query, limit=fetch_limit, subject_id=subject_id),
+                return_exceptions=True,
+            )
+            if isinstance(kw_chapters, Exception):
+                logger.debug("[INTERNAL_RAG] Keyword search error: %s", kw_chapters)
+                kw_chapters = []
+            if isinstance(sem_chapters, Exception):
+                logger.debug("[INTERNAL_RAG] Semantic search error: %s", sem_chapters)
+                sem_chapters = []
+        else:
+            kw_chapters = await keyword_task
+            sem_chapters = []
+
+        # ── 3. Merge + deduplicate by chapter id ──────────────────────────────
+        seen_ids: set = set()
+        all_chapters = []
+        for ch in (kw_chapters + sem_chapters):
+            cid = ch.get("id", "")
+            if cid not in seen_ids:
+                seen_ids.add(cid)
+                all_chapters.append(ch)
+
+        logger.debug(
+            "[INTERNAL_RAG] keyword=%d semantic=%d merged=%d for '%s'",
+            len(kw_chapters), len(sem_chapters), len(all_chapters), query[:50],
+        )
+
+        # ── 4. Build candidate dicts ───────────────────────────────────────────
+        candidates = []
+        for ch in all_chapters:
             content = (ch.get("content") or ch.get("description") or "").strip()
             if not content or len(content) < 30:
                 continue
+            content_as = (ch.get("content_as") or "").strip()
+            candidates.append({
+                "title":      ch.get("title", ""),
+                "content":    content,
+                "content_as": content_as,
+                "slug":       ch.get("slug", ""),
+                "subject_id": ch.get("subject_id", ""),
+                "type":       "chapter",
+            })
+
+        # ── 5. Pinecone reranking (bge-reranker-v2-m3, multilingual) ──────────
+        if _pinecone_enabled and len(candidates) > 1:
+            try:
+                from providers.pinecone_ai import rerank_items as _pc_rerank
+
+                def _rerank_text(c: dict) -> str:
+                    # Bilingual scoring: include Assamese content when available so
+                    # the multilingual reranker can match Assamese queries.
+                    en_part = c["content"][:600]
+                    as_part = c["content_as"][:300] if c["content_as"] else ""
+                    return f"{c['title']}\n\n{en_part}" + (f"\n\n{as_part}" if as_part else "")
+
+                candidates = await asyncio.wait_for(
+                    _pc_rerank(query, candidates, _rerank_text, top_k=limit),
+                    timeout=8.0,
+                )
+                logger.info(
+                    "[INTERNAL_RAG] Pinecone reranked → top %d for '%s'",
+                    len(candidates), query[:50],
+                )
+            except Exception as _rr_err:
+                logger.debug("[INTERNAL_RAG] Pinecone rerank skipped: %s", _rr_err)
+                candidates = candidates[:limit]
+        else:
+            candidates = candidates[:limit]
+
+        # ── 6. Apply total-char budget ─────────────────────────────────────────
+        result = []
+        total_chars = 0
+        for ch in candidates:
+            content = ch["content"]
             if total_chars + len(content) > max_content_chars:
                 content = content[:max(500, max_content_chars - total_chars)]
             total_chars += len(content)
-            result.append({
-                "title": ch.get("title", ""),
-                "content": content,
-                "slug": ch.get("slug", ""),
-                "subject_id": ch.get("subject_id", ""),
-                "type": "chapter",
-            })
+            result.append({**ch, "content": content})
             if total_chars >= max_content_chars:
                 break
+
         if result:
-            logger.info(f"[INTERNAL_RAG] Found {len(result)} chapter(s) for '{query[:50]}' (subject={subject_id or 'any'}, {total_chars} chars)")
+            logger.info(
+                "[INTERNAL_RAG] Returning %d chapter(s) for '%s' (subject=%s, %d chars)",
+                len(result), query[:50], subject_id or "any", total_chars,
+            )
         return result
     except Exception as e:
-        logger.warning(f"[INTERNAL_RAG] Chapter fetch failed: {e}")
+        logger.warning("[INTERNAL_RAG] Chapter fetch failed: %s", e)
         return []
 
 

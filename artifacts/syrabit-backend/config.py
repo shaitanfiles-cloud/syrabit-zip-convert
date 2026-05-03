@@ -4,14 +4,14 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 __all__ = [
-    "ADMIN_ACCOUNTS", "ADMIN_JWT_SECRET",
+    "ADMIN_JWT_SECRET",
     "CF_CACHE_TTL", "CF_GATEWAY_ENABLED",
     "CF_TURNSTILE_ENABLED", "CF_TURNSTILE_SECRET_KEY",
     "CHAT_ENHANCE_ENABLED",
     "COOKIE_DOMAIN", "COOKIE_SAMESITE",
     "CORS_ORIGINS", "CORS_ORIGIN_REGEX",
     "DB_NAME", "EMAIL_FROM", "FRONTEND_URL",
-    "GOOGLE_CLIENT_ID",
+    "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET",
     "JWT_ACCESS_EXPIRE_MINUTES", "JWT_ALGORITHM",
     "JWT_EXPIRE_MINUTES", "JWT_REFRESH_EXPIRE_MINUTES", "JWT_SECRET",
     "LLM_MODEL", "LLM_PROVIDER",
@@ -133,9 +133,10 @@ if ADMIN_JWT_SECRET == JWT_SECRET:
         "signing key. Generate two independent secrets."
     )
 
-# ── Google OAuth ──────────────────────────────────────────────────────────────
-GOOGLE_CLIENT_ID     = os.environ.get('GOOGLE_CLIENT_ID', '').strip()
-GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '').strip()
+# ── Google Analytics (GA4) OAuth — NOT used for Google sign-in (see Supabase) ─
+# Google sign-in is handled by Supabase. These vars are only for ga4_client.py.
+GOOGLE_OAUTH_CLIENT_ID     = os.environ.get('GOOGLE_OAUTH_CLIENT_ID', '').strip()
+GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get('GOOGLE_OAUTH_CLIENT_SECRET', '').strip()
 
 # ── Email Configuration ───────────────────────────────────────────────────────
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
@@ -241,6 +242,21 @@ CF_ACCESS_ENFORCE = os.environ.get('CF_ACCESS_ENFORCE', '').strip().lower() in (
 CF_TURNSTILE_SECRET_KEY = os.environ.get('CF_TURNSTILE_SECRET_KEY', '').strip()
 CF_TURNSTILE_ENABLED = bool(CF_TURNSTILE_SECRET_KEY)
 
+# ── Cloudflare R2 Object Storage ─────────────────────────────────────────────
+# R2 uses S3-compatible API with account-scoped endpoint.
+# Create R2 API tokens at: CF Dashboard → R2 → Manage R2 API Tokens
+R2_ACCESS_KEY_ID     = os.environ.get('R2_ACCESS_KEY_ID', '').strip()
+R2_SECRET_ACCESS_KEY = os.environ.get('R2_SECRET_ACCESS_KEY', '').strip()
+R2_BUCKET_NAME       = os.environ.get('R2_BUCKET_NAME', 'syrabit-media').strip()
+R2_PUBLIC_URL        = os.environ.get('R2_PUBLIC_URL', '').strip().rstrip('/')
+# Endpoint derived from account ID: https://<account_id>.r2.cloudflarestorage.com
+_R2_ACCOUNT_ID = os.environ.get('CF_AI_GATEWAY_ACCOUNT_ID', '').strip()
+R2_ENDPOINT_URL = (
+    os.environ.get('R2_ENDPOINT_URL', '').strip()
+    or (f'https://{_R2_ACCOUNT_ID}.r2.cloudflarestorage.com' if _R2_ACCOUNT_ID else '')
+)
+R2_ENABLED = bool(R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_ENDPOINT_URL)
+
 # ── Chat Enhancement Feature Flag ────────────────────────────────────────────
 # Controls whether cognitive anchors, engagement hooks, and trend signals are
 # injected into AI chat responses.  Defaults ON; set CHAT_ENHANCE_ENABLED=0
@@ -267,7 +283,11 @@ CF_GATEWAY_BASE = (
     f"https://gateway.ai.cloudflare.com/v1/{_CF_ACCOUNT_ID}/{_CF_GATEWAY_ID}"
     if CF_GATEWAY_ENABLED else ""
 )
-CF_CACHE_TTL = int(os.environ.get('CF_AI_GATEWAY_CACHE_TTL', '3600'))
+# AI Gateway response cache TTL — cache hits are free on the Standard plan.
+# Gateway caches by exact request hash (messages + model + params), so only
+# identical requests benefit. 86 400s = 24 h is safe for this workload.
+# Override with CF_AI_GATEWAY_CACHE_TTL env var (seconds) if needed.
+CF_CACHE_TTL = int(os.environ.get('CF_AI_GATEWAY_CACHE_TTL', '86400'))
 
 _CF_PROVIDER_SLUGS = {
     "openai":      "openai",
@@ -280,6 +300,10 @@ _CF_PROVIDER_SLUGS = {
     "sarvam":      "custom-sarvam",
     "cerebras":    "cerebras/v1",
     "openrouter":  "openrouter/v1",
+    # New providers routed through CF AI Gateway
+    "cohere":      "cohere/v1",      # Embeddings/RAG — embed-multilingual-v3.0 (1024-dim)
+    "cartesia":    "cartesia/v1",    # Voice TTS — Sonic-2 model
+    "baseten":     "baseten/v1",     # Fine-tuned EdTech LLMs — OpenAI-compatible endpoint
 }
 
 _DIRECT_PROVIDER_URLS = {
@@ -292,6 +316,10 @@ _DIRECT_PROVIDER_URLS = {
     "sarvam":      "https://api.sarvam.ai",
     "cerebras":    "https://api.cerebras.ai/v1",
     "openrouter":  "https://openrouter.ai/api/v1",
+    # Fallback direct URLs (used when CF gateway is down)
+    "cohere":      "https://api.cohere.com/v1",
+    "cartesia":    "https://api.cartesia.ai/v1",
+    "baseten":     "https://api.baseten.co/v1",   # Baseten universal OpenAI-compatible gateway
 }
 
 _cf_gw_healthy = True
@@ -401,6 +429,28 @@ _SARVAM_LLM_KEY_3 = os.environ.get('SARVAM_API_KEY_3', '').strip()
 _CEREBRAS_KEY = os.environ.get('CEREBRAS_API_KEY', '').strip()
 _OPENROUTER_KEY = os.environ.get('OPENROUTER_API_KEY', '').strip()
 
+# ── New AI provider keys (Cohere, Cartesia, Baseten) ─────────────────────────
+# All three route through CF AI Gateway (BYOK) so local keys are optional
+# once the keys are registered in the CF dashboard. When gateway is enabled
+# and the local env var is missing, BYOK_PLACEHOLDER is substituted so the
+# provider module activates and CF injects the real key on every request.
+#
+# Baseten model selection: BASETEN_MODEL_ID is the deployment ID shown in
+# the Baseten dashboard (e.g. "xyz123abc"). Required to use Baseten even in
+# BYOK mode — it is sent as the "model" field in the chat/completions body.
+_COHERE_KEY    = os.environ.get('COHERE_API_KEY',    '').strip()
+_CARTESIA_KEY  = os.environ.get('CARTESIA_API_KEY',  '').strip()
+_BASETEN_KEY   = os.environ.get('BASETEN_API_KEY',   '').strip()
+BASETEN_MODEL_ID = os.environ.get('BASETEN_MODEL_ID', '').strip()
+
+# Cohere embed config
+COHERE_EMBED_MODEL   = os.environ.get('COHERE_EMBED_MODEL',   'embed-multilingual-v3.0').strip() or 'embed-multilingual-v3.0'
+COHERE_EMBED_PRIMARY = os.environ.get('COHERE_EMBED_PRIMARY', '1').strip().lower() not in ('0', 'false', 'no', 'off')
+
+# Cartesia voice config
+CARTESIA_DEFAULT_VOICE_ID = os.environ.get('CARTESIA_VOICE_ID', '').strip()
+CARTESIA_MODEL_ID         = os.environ.get('CARTESIA_MODEL_ID', 'sonic-2').strip() or 'sonic-2'
+
 # ── Vertex AI Gemini Flash chat (Task #607) ─────────────────────────────────
 # When VERTEX_PROJECT_ID is set, the chat path can route through Vertex AI's
 # Gemini Flash streaming endpoint for lower TTFT. Auth is via Application
@@ -413,11 +463,12 @@ VERTEX_GEMINI_MODEL = os.environ.get('VERTEX_GEMINI_MODEL', 'gemini-2.5-flash').
 # when the client does not pin a specific model. Admin UI can override this
 # at runtime (db.api_config.chat_model.default), which takes precedence.
 # Accepted values:
-#   "vertex/gemini-flash"  — Vertex AI Gemini Flash (preferred when configured)
-#   "openai/gpt-oss-20b"   — Legacy hedged SLM pool (Cerebras/Groq/OpenRouter)
+#   "openai/gpt-oss-20b"   — Workers AI GPT-OSS-20B (primary, no quota issues)
+#   "openai/gpt-oss-120b"  — Workers AI GPT-OSS-120B (higher quality, content tasks)
+#   "vertex/gemini-flash"  — Vertex AI Gemini Flash (set via CHAT_DEFAULT_MODEL env if needed)
 CHAT_DEFAULT_MODEL = os.environ.get(
     'CHAT_DEFAULT_MODEL',
-    'vertex/gemini-flash' if VERTEX_PROJECT_ID else 'openai/gpt-oss-20b',
+    'openai/gpt-oss-20b',
 ).strip()
 
 # BYOK fallback: when CF AI Gateway is enabled, any missing provider env key
@@ -427,15 +478,21 @@ CHAT_DEFAULT_MODEL = os.environ.get(
 # safely remove GROQ_API_KEY, GEMINI_API_KEY, CEREBRAS_API_KEY, etc. from
 # production secrets once BYOK is verified in the CF dashboard.
 if CF_GATEWAY_ENABLED:
-    _GROQ_KEY = _GROQ_KEY or BYOK_PLACEHOLDER
-    _GEMINI_KEY = _GEMINI_KEY or BYOK_PLACEHOLDER
+    _GROQ_KEY     = _GROQ_KEY     or BYOK_PLACEHOLDER
+    _GEMINI_KEY   = _GEMINI_KEY   or BYOK_PLACEHOLDER
     _CEREBRAS_KEY = _CEREBRAS_KEY or BYOK_PLACEHOLDER
     _OPENROUTER_KEY = _OPENROUTER_KEY or BYOK_PLACEHOLDER
     _SARVAM_LLM_KEY = _SARVAM_LLM_KEY or BYOK_PLACEHOLDER
-    # Note: _GROQ_KEY_2 / _GEMINI_KEY_2 / _SARVAM_LLM_KEY_2 / _3 stay empty
-    # if not set — BYOK means CF handles rotation, so a single logical slot
-    # per provider is enough. The pool's secondary-key slots only activate
-    # when operators explicitly set the `*_KEY_2/3` env vars.
+    _XAI_KEY      = _XAI_KEY      or BYOK_PLACEHOLDER
+    _OPENAI_KEY   = _OPENAI_KEY   or BYOK_PLACEHOLDER  # CF slug: openai/v1
+    # New providers: BYOK allows the CF gateway to inject keys stored in
+    # the CF dashboard, so the local env var is optional in production.
+    _COHERE_KEY   = _COHERE_KEY   or BYOK_PLACEHOLDER
+    _CARTESIA_KEY = _CARTESIA_KEY or BYOK_PLACEHOLDER
+    _BASETEN_KEY  = _BASETEN_KEY  or BYOK_PLACEHOLDER
+    # Secondary/tertiary keys (_GROQ_KEY_2, _GEMINI_KEY_2, _SARVAM_LLM_KEY_2/3)
+    # stay empty if not set — CF Gateway manages rate limiting at the edge via
+    # the single BYOK key per provider. Delete these from Railway to clean up.
 # LLM_PRIMARY_PROVIDER is the canonical name (PR #36); LLM_PROVIDER kept as alias.
 _EXPLICIT_PROVIDER = (
     os.environ.get('LLM_PRIMARY_PROVIDER', '').strip() or
@@ -504,6 +561,13 @@ SARVAM_API_KEY_2 = os.environ.get('SARVAM_API_KEY_2', '').strip()
 SARVAM_TRANSLATE_KEY = SARVAM_API_KEY or SARVAM_API_KEY_2
 SARVAM_BASE_URL = 'https://api.sarvam.ai'
 
+# Alias: CLOUDFLARE_ACCOUNT_ID → CF_AI_GATEWAY_ACCOUNT_ID when not set.
+# vectorize_client, wrangler scripts, and CF SDK all expect CLOUDFLARE_ACCOUNT_ID;
+# CF_AI_GATEWAY_ACCOUNT_ID holds the same value in Railway/Replit deployments.
+_cf_gw_account = os.environ.get('CF_AI_GATEWAY_ACCOUNT_ID', '').strip()
+if not os.environ.get('CLOUDFLARE_ACCOUNT_ID', '').strip() and _cf_gw_account:
+    os.environ['CLOUDFLARE_ACCOUNT_ID'] = _cf_gw_account
+
 # ── Distributed cache — Upstash Redis (REST-based, serverless) ────────────────
 # Upstash is used for L2 cross-worker cache, anonymous chat history,
 # atomic rate-limit credit deduction, and AI response caching.
@@ -512,11 +576,13 @@ SARVAM_BASE_URL = 'https://api.sarvam.ai'
 # to in-process L1 only when these env vars are absent.
 REDIS_URL   = os.environ.get('UPSTASH_REDIS_REST_URL', '').strip()
 REDIS_TOKEN = os.environ.get('UPSTASH_REDIS_REST_TOKEN', '').strip()
-REDIS_AI_CACHE_TTL = int(os.environ.get('REDIS_AI_CACHE_TTL', '3600') or '3600')
-REDIS_CASUAL_CACHE_TTL = int(os.environ.get('REDIS_CASUAL_CACHE_TTL', '300') or '300')
-REDIS_CHAT_CACHE_TTL = 600
-REDIS_SEARCH_CACHE_TTL = 300
-REDIS_SESSION_CACHE_TTL = 1800
+# Upgraded Upstash tier (2026-04-30): longer TTLs — more capacity means more
+# aggressive caching benefits chat speed and repeat-query hit rate.
+REDIS_AI_CACHE_TTL     = int(os.environ.get('REDIS_AI_CACHE_TTL',     '7200') or '7200')   # 2h (was 1h)
+REDIS_CASUAL_CACHE_TTL = int(os.environ.get('REDIS_CASUAL_CACHE_TTL', '600')  or '600')    # 10m (was 5m)
+REDIS_CHAT_CACHE_TTL   = int(os.environ.get('REDIS_CHAT_CACHE_TTL',   '1200') or '1200')   # 20m (was 10m)
+REDIS_SEARCH_CACHE_TTL = 600   # 10m (was 5m)
+REDIS_SESSION_CACHE_TTL = 3600  # 1h (was 30m)
 REDIS_RATE_WINDOW = 60
 
 # ── Memorystore-backed AI response cache (Task #609) ────────────────────────
@@ -552,18 +618,46 @@ def _extract_redis_url(raw: str) -> str:
     return url
 
 
-# MEMORYSTORE_REDIS_URL intentionally pinned to empty (Cloudflare-native).
-# Cloudflare AI Gateway handles upstream LLM cache (cache_ttl=3600s).
-# Edge worker's RATE_LIMIT KV binding handles distributed rate limiting.
-# Per-worker L1 in-memory cache handles hot-path dedupe.
-# To re-enable a managed Redis L2 in the future (e.g. GCP Memorystore on
-# Cloud Run), restore the line below and ensure the secret is reachable:
-#   MEMORYSTORE_REDIS_URL = _extract_redis_url(os.environ.get('MEMORYSTORE_REDIS_URL', ''))
-MEMORYSTORE_REDIS_URL = ''
+# ── Upstash native-protocol L2 AI cache (enabled 2026-04-30) ────────────────
+# Upstash exposes a native Redis endpoint at rediss://default:TOKEN@HOST:6379
+# alongside the REST API. We derive it automatically from the REST credentials
+# already in env — no extra secret needed. This enables aioredis-based L2 so
+# the AI response cache is shared across all gunicorn workers (cross-worker
+# dedupe). With the upgraded Upstash plan this is safe to turn on:
+#   • Higher connection limits (native connections are separate from REST)
+#   • Larger data limit — 1 KB average AI answer × 10 000 entries < plan max
+#   • TLS is enforced automatically (rediss://)
+# Operators can override by setting MEMORYSTORE_REDIS_URL explicitly.
+def _build_upstash_native_url(rest_url: str, token: str) -> str:
+    """Derive native Redis URL from Upstash REST credentials.
+    REST URL example: https://eager-mouse-40471.upstash.io
+    Native URL:       rediss://default:TOKEN@eager-mouse-40471.upstash.io:6379
+    """
+    import re as _re
+    rest_url = (rest_url or '').strip()
+    token    = (token or '').strip()
+    if not rest_url or not token:
+        return ''
+    host = _re.sub(r'^https?://', '', rest_url).rstrip('/')
+    if not host:
+        return ''
+    return f'rediss://default:{token}@{host}:6379'
+
+_explicit_memstore = os.environ.get('MEMORYSTORE_REDIS_URL', '').strip()
+if _explicit_memstore:
+    MEMORYSTORE_REDIS_URL = _extract_redis_url(_explicit_memstore)
+else:
+    # Auto-derive from Upstash REST credentials (upgraded plan — safe to enable)
+    _rest_url = os.environ.get('UPSTASH_REDIS_REST_URL', '').strip()
+    _rest_tok = os.environ.get('UPSTASH_REDIS_REST_TOKEN', '').strip()
+    MEMORYSTORE_REDIS_URL = _build_upstash_native_url(_rest_url, _rest_tok)
+
 REDIS_AI_CACHE_NAMESPACE = (os.environ.get('REDIS_AI_CACHE_NAMESPACE', 'ai_cache').strip() or 'ai_cache')
-REDIS_AI_CACHE_MAX_ENTRY_BYTES = int(os.environ.get('REDIS_AI_CACHE_MAX_ENTRY_BYTES', str(64 * 1024)) or 64 * 1024)
-REDIS_AI_CACHE_CONNECT_TIMEOUT_MS = int(os.environ.get('REDIS_AI_CACHE_CONNECT_TIMEOUT_MS', '200') or '200')
-REDIS_AI_CACHE_OP_TIMEOUT_MS = int(os.environ.get('REDIS_AI_CACHE_OP_TIMEOUT_MS', '150') or '150')
+# Upgraded plan: allow larger cached entries (128 KB vs 64 KB).
+REDIS_AI_CACHE_MAX_ENTRY_BYTES = int(os.environ.get('REDIS_AI_CACHE_MAX_ENTRY_BYTES', str(128 * 1024)) or 128 * 1024)
+# Slightly more generous timeouts since Upstash upgraded tier has lower p99.
+REDIS_AI_CACHE_CONNECT_TIMEOUT_MS = int(os.environ.get('REDIS_AI_CACHE_CONNECT_TIMEOUT_MS', '300') or '300')
+REDIS_AI_CACHE_OP_TIMEOUT_MS = int(os.environ.get('REDIS_AI_CACHE_OP_TIMEOUT_MS', '200') or '200')
 
 # ── Slow-query logging ────────────────────────────────────────────────────────
 SLOW_QUERY_THRESHOLD_MS = float(os.environ.get("SLOW_QUERY_THRESHOLD_MS", "200"))
@@ -610,7 +704,7 @@ SUPABASE_ANON_KEY    = os.environ.get('SUPABASE_ANON_KEY', '') or os.environ.get
 
 # ── Cookie security (set SECURE_COOKIES=false in dev to allow HTTP) ───────────
 SECURE_COOKIES  = os.environ.get('SECURE_COOKIES', 'true').lower() not in ('false', '0', 'no')
-COOKIE_SAMESITE = "none" if SECURE_COOKIES else "lax"
+COOKIE_SAMESITE = "lax"
 COOKIE_DOMAIN   = os.environ.get('COOKIE_DOMAIN', '').strip() or None
 
 _cors_raw = os.environ.get('CORS_ORIGINS', '').strip().strip('"').strip("'")
@@ -660,77 +754,18 @@ if _apprunner_url:
     if _ar_origin not in CORS_ORIGINS:
         CORS_ORIGINS.append(_ar_origin)
 
-CORS_ORIGIN_REGEX = r"^https://[a-z0-9-]+(\.[a-z0-9-]+)*\.(awsapprunner\.com|up\.railway\.app|railway\.app|pages\.dev)$"
+CORS_ORIGIN_REGEX = None
 
 # ── Admin accounts ────────────────────────────────────────────────────────────
-# Admin accounts loaded from environment (no credentials in source code).
+# Admin credentials are now managed entirely via Supabase Auth + the
+# `users` table (is_admin=True flag). The old ADMIN_EMAILS / ADMIN_PASSWORDS /
+# ADMIN_NAMES env vars have been removed. Set or update admin accounts
+# directly in the Supabase dashboard; no Railway redeployment required.
 #
-# Task #700 hardening — the parser strips wrapping quotes/whitespace from
-# every field (not just passwords) because operators routinely paste
-# values like `"admin@syrabit.ai"` into Railway/Cloudflare dashboards
-# which would otherwise compare unequal to a plain `admin@syrabit.ai`
-# from the login form. We also log a structured WARN on length-mismatch
-# so future drift between ADMIN_EMAILS / ADMIN_PASSWORDS / ADMIN_NAMES
-# is obvious in startup logs instead of silently dropping accounts.
-def _strip_env_field(raw: str) -> str:
-    s = (raw or "").strip()
-    # Strip a single layer of wrapping quotes (handles `"foo"` and `'foo'`)
-    if len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
-        s = s[1:-1].strip()
-    return s
-
-
-def _split_csv_env(name: str) -> list:
-    raw = os.environ.get(name, "")
-    return [_strip_env_field(p) for p in raw.split(",") if _strip_env_field(p)]
-
-
-def _load_admin_accounts():
-    emails    = _split_csv_env("ADMIN_EMAILS")
-    passwords = _split_csv_env("ADMIN_PASSWORDS")
-    names     = _split_csv_env("ADMIN_NAMES")
-    n = min(len(emails), len(passwords), len(names))
-    if not n:
-        _cfg_log.critical(
-            "ADMIN ACCOUNTS NOT CONFIGURED — emails=%d passwords=%d names=%d. "
-            "Admin login will reject every request until ADMIN_EMAILS / "
-            "ADMIN_PASSWORDS / ADMIN_NAMES are set (comma-separated, equal length).",
-            len(emails), len(passwords), len(names),
-        )
-        return []
-    if not (len(emails) == len(passwords) == len(names)):
-        _cfg_log.warning(
-            "ADMIN ACCOUNTS MISALIGNED — emails=%d passwords=%d names=%d; "
-            "using first %d (extras dropped). Re-align the three env vars "
-            "to silence this warning.",
-            len(emails), len(passwords), len(names), n,
-        )
-    # Normalise emails to lowercase once at parse-time so login compares
-    # lowercase-vs-lowercase regardless of how the row was entered.
-    return [{"email": emails[i].lower(), "password": passwords[i], "name": names[i]}
-            for i in range(n)]
-
-
-ADMIN_ACCOUNTS = _load_admin_accounts()
-
-_E2E_ADMIN_ENABLED = os.environ.get('ENABLE_E2E_ADMIN', '').strip().lower() in ('1', 'true', 'yes')
-_E2E_ADMIN = {
-    # NB: Pydantic's `EmailStr` validator (via `email-validator`)
-    # rejects IETF special-use TLDs like `.test`, so a `@*.test`
-    # address would fail with HTTP 422 at the very first step of
-    # POST /api/auth/login. Use a non-special domain that is
-    # obviously test-only so it can't collide with a real signup.
-    "email": "e2e-admin@syrabit-e2e.com",
-    "password": "e2e-test-admin-2026",
-    "name": "E2E Test Admin",
-}
-if _E2E_ADMIN_ENABLED and not any(a["email"] == _E2E_ADMIN["email"] for a in ADMIN_ACCOUNTS):
-    ADMIN_ACCOUNTS.append(_E2E_ADMIN)
-    import logging as _adm_log
-    _adm_log.getLogger("config").info("E2E test admin account enabled (ENABLE_E2E_ADMIN=true)")
-
-ADMIN_EMAIL    = ADMIN_ACCOUNTS[0]["email"]    if ADMIN_ACCOUNTS else ""
-ADMIN_PASSWORD = ADMIN_ACCOUNTS[0]["password"] if ADMIN_ACCOUNTS else ""
+# Staff credentials follow the same pattern: staff users sign in via the
+# standard Supabase flow and are identified by role='staff' in the users
+# table. The STAFF_PASSWORDS env var was only ever needed for the one-time
+# seed script (scripts/seed_staff_users.py) and is not used at runtime.
 
 _PG_DSN_RAW = os.environ.get("DATABASE_URL", "") or os.environ.get("SUPABASE_DB_URL", "")
 _PG_DSN = _PG_DSN_RAW.strip().strip('"').strip("'").strip()
@@ -749,7 +784,7 @@ else:
     _cfg_log.warning("PG DSN empty — neither DATABASE_URL nor SUPABASE_DB_URL is set")
 
 
-SARVAM_THINK_BUFFER = 80
+SARVAM_THINK_BUFFER = 512  # Sarvam-m thinks in ~385 English tokens; give headroom for answer
 
 CONTENT_CACHE_SECONDS = 600
 REDIS_CONTENT_PREFIX = "content:"

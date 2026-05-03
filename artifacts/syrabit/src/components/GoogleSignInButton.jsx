@@ -1,161 +1,107 @@
-import { useEffect, useRef, useState } from 'react';
-import axios from 'axios';
+/**
+ * GoogleSignInButton — Task #156
+ *
+ * Uses Supabase OAuth (supabase.auth.signInWithOAuth) instead of the
+ * deprecated Google Identity Services (GIS) flow.  Clicking the button
+ * triggers a redirect to Google → Supabase → back to this origin.
+ * After the redirect, AuthContext.onAuthStateChange picks up the SIGNED_IN
+ * event, exchanges the Supabase token at /api/auth/supabase-session, and
+ * sets the user.  The root-level GoogleOAuthCallbackEffect (Task #169)
+ * reads the intent from sessionStorage and handles post-login navigation
+ * for any page that renders this button, not just LoginPage/SignupPage.
+ *
+ * Props:
+ *   text     — 'signin_with' (default) | 'signup_with'
+ *   onError  — called if the OAuth redirect itself fails to initiate
+ *   disabled — disables the button
+ */
+import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/lib/supabase';
 
-const GIS_SRC = 'https://accounts.google.com/gsi/client';
-
-let _scriptPromise = null;
-function loadGisScript() {
-  if (_scriptPromise) return _scriptPromise;
-  _scriptPromise = new Promise((resolve, reject) => {
-    if (typeof window === 'undefined') return reject(new Error('window unavailable'));
-    if (window.google?.accounts?.id) return resolve();
-
-    const existing = document.querySelector(`script[src="${GIS_SRC}"]`);
-    if (existing) {
-      existing.addEventListener('load', () => resolve());
-      existing.addEventListener('error', () =>
-        reject(new Error('Failed to load Google Identity Services'))
-      );
-      return;
-    }
-
-    const s = document.createElement('script');
-    s.src = GIS_SRC;
-    s.async = true;
-    s.defer = true;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error('Failed to load Google Identity Services'));
-    document.head.appendChild(s);
-  });
-  return _scriptPromise;
-}
-
-let _clientIdPromise = null;
-function fetchClientId(apiBase) {
-  if (_clientIdPromise) return _clientIdPromise;
-  _clientIdPromise = axios
-    .get(`${apiBase}/auth/google/client-id`)
-    .then((r) => r.data?.client_id || null)
-    .catch(() => null);
-  return _clientIdPromise;
-}
+const INTENT_KEY = 'syrabit_google_oauth_intent';
 
 export default function GoogleSignInButton({
   text = 'signin_with',
-  onSuccess,
   onError,
-  getTurnstileToken,
   disabled = false,
 }) {
-  const { googleLogin, API } = useAuth();
-  const containerRef = useRef(null);
-  const [state, setState] = useState('loading');
   const [busy, setBusy] = useState(false);
-  const busyRef = useRef(false);
-  busyRef.current = busy;
 
-  useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const clientId = await fetchClientId(API);
-        if (cancelled) return;
-        if (!clientId) {
-          setState('unavailable');
-          return;
-        }
-
-        await loadGisScript();
-        if (cancelled) return;
-        if (!window.google?.accounts?.id || !containerRef.current) {
-          setState('error');
-          return;
-        }
-
-        window.google.accounts.id.initialize({
-          client_id: clientId,
-          callback: async (response) => {
-            if (busyRef.current) return;
-            setBusy(true);
-            try {
-              let ttoken = '';
-              if (typeof getTurnstileToken === 'function') {
-                try {
-                  ttoken = await getTurnstileToken();
-                } catch {
-                  ttoken = '';
-                }
-              }
-              const user = await googleLogin(response.credential, ttoken);
-              if (!cancelled) onSuccess?.(user);
-            } catch (err) {
-              if (!cancelled) onError?.(err);
-            } finally {
-              if (!cancelled) setBusy(false);
-            }
-          },
-          ux_mode: 'popup',
-          auto_select: false,
-          itp_support: true,
-          context: text === 'signup_with' ? 'signup' : 'signin',
-        });
-
-        const width = Math.max(
-          240,
-          Math.min(400, containerRef.current.offsetWidth || 320)
-        );
-
-        window.google.accounts.id.renderButton(containerRef.current, {
-          type: 'standard',
-          theme: 'outline',
-          size: 'large',
-          text,
-          shape: 'rectangular',
-          logo_alignment: 'left',
-          width,
-        });
-
-        setState('ready');
-      } catch (e) {
-        if (!cancelled) setState('error');
+  const handleClick = async () => {
+    if (busy || disabled) return;
+    setBusy(true);
+    try {
+      sessionStorage.setItem(INTENT_KEY, text);
+      if (!supabase) throw new Error('Authentication is not configured.');
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.href,
+        },
+      });
+      if (error) {
+        sessionStorage.removeItem(INTENT_KEY);
+        onError?.(error);
+        setBusy(false);
       }
-    })();
+    } catch (err) {
+      sessionStorage.removeItem(INTENT_KEY);
+      onError?.(err);
+      setBusy(false);
+    }
+  };
 
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  if (state === 'unavailable') return null;
-
-  if (state === 'error') {
-    return (
-      <p className="text-xs text-muted-foreground text-center py-2">
-        Google sign-in is temporarily unavailable — please use email and password below.
-      </p>
-    );
-  }
+  const label = text === 'signup_with' ? 'Sign up with Google' : 'Sign in with Google';
 
   return (
     <div className="relative w-full flex justify-center">
-      <div
-        ref={containerRef}
-        className={
-          disabled || busy
-            ? 'pointer-events-none opacity-60 w-full flex justify-center'
-            : 'w-full flex justify-center'
-        }
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={disabled || busy}
+        className="w-full inline-flex items-center justify-center gap-3 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-medium text-foreground shadow-sm hover:bg-muted/40 active:bg-muted disabled:opacity-60 transition-colors"
         style={{ minHeight: 44 }}
-      />
-      {(state === 'loading' || busy) && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <Loader2 size={16} className="animate-spin text-muted-foreground" />
-        </div>
-      )}
+        aria-label={label}
+      >
+        {busy ? (
+          <Loader2 size={16} className="animate-spin shrink-0" />
+        ) : (
+          <GoogleColorIcon />
+        )}
+        {busy ? 'Redirecting to Google…' : label}
+      </button>
     </div>
   );
 }
+
+function GoogleColorIcon() {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 18 18"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        fill="#4285F4"
+        d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615Z"
+      />
+      <path
+        fill="#34A853"
+        d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18Z"
+      />
+      <path
+        fill="#FBBC05"
+        d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332Z"
+      />
+      <path
+        fill="#EA4335"
+        d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58Z"
+      />
+    </svg>
+  );
+}
+
+export { INTENT_KEY as GOOGLE_OAUTH_INTENT_KEY };

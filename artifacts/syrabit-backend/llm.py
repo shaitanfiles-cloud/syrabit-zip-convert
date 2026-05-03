@@ -61,20 +61,193 @@ logger = logging.getLogger(__name__)
 
 _oai_client_cache: Dict[str, _oai.AsyncOpenAI] = {}
 
+# Shared HTTP/2 transport reused by every provider client.
+# HTTP/2 multiplexes multiple requests over a single TCP connection, eliminating
+# per-request TLS handshake overhead for the CF AI Gateway.  Connection limits
+# are sized to cover the worst-case concurrency:
+#   chat pool: 5 WAI slots × 24 + Groq×4 + Cerebras×4 = 128
+#   content pool: 2 WAI slots × 16 = 32
+#   total: ~160 — so 256 max_connections gives comfortable headroom.
+_OAI_HTTP_TRANSPORT = httpx.AsyncHTTPTransport(
+    http2=True,
+    limits=httpx.Limits(
+        max_connections=256,
+        max_keepalive_connections=128,
+        keepalive_expiry=60.0,
+    ),
+)
+
 def _get_oai_client(api_key: str, base_url: str) -> _oai.AsyncOpenAI:
     key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:16]
     ck = f"{base_url}|{key_hash}"
     client = _oai_client_cache.get(ck)
     if client is None:
-        client = _oai.AsyncOpenAI(api_key=api_key, base_url=base_url)
+        # Custom httpx client shares the high-limit HTTP/2 transport above.
+        # Each unique base_url gets its own AsyncClient so cookies / headers
+        # don't bleed between providers, but the underlying TCP pool is shared.
+        http_client = httpx.AsyncClient(
+            transport=_OAI_HTTP_TRANSPORT,
+            timeout=httpx.Timeout(connect=5.0, read=90.0, write=15.0, pool=10.0),
+        )
+        client = _oai.AsyncOpenAI(api_key=api_key, base_url=base_url,
+                                   http_client=http_client)
         _oai_client_cache[ck] = client
     return client
 
-_LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("LLM_MAX_CONCURRENT", 40)))
-_ADMIN_LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("ADMIN_LLM_MAX_CONCURRENT", 6)))
+# Global outer semaphores.  Sized to the total slot capacity so they never
+# become the bottleneck — the per-slot SmartKeyPool semaphores (max_con) are
+# the real rate-control layer.
+#   chat pool:    5×24 + 4 + 4 = 136  → round up to 200
+#   admin pool:   2×16           = 32  → keep at 30 (admin is low-traffic)
+_LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("LLM_MAX_CONCURRENT", 200)))
+_ADMIN_LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("ADMIN_LLM_MAX_CONCURRENT", 30)))
 
 _LLM_PROVIDER_METRICS: list = []
 _LLM_PROVIDER_METRICS_MAX = 20_000
+
+# ── Per-provider 429 burst tracking (Task #70 + Task #75) ───────────────────
+# Unified sliding-window counter for every LLM provider.
+# Each provider gets its own in-memory list and its own Redis key so the
+# alerting loop can fire a targeted alert for each independently.
+#
+# Window is 180s — deliberately larger than the 120s _alerting_loop interval
+# so a burst that starts near a tick boundary is never silently missed.
+# Redis TTL is refreshed on every 429 hit so an ongoing outage never
+# silently auto-expires mid-burst.  The counter resets on the next
+# successful call (mark_ok → _reset_provider_429).
+#
+# Providers included: workers-ai, groq, gemini.  Others silently no-op.
+_PROVIDER_429_BURST_WINDOW_S = 180   # shared lookback / Redis TTL for all providers
+_PROVIDER_429_WINDOWS: dict = {       # provider → list[float epoch timestamps]
+    "workers-ai": [],
+    "groq":       [],
+    "gemini":     [],
+}
+_PROVIDER_429_REDIS_KEYS: dict = {
+    "workers-ai": "wai_429_burst",    # keeps existing Redis key for backwards compat
+    "groq":       "groq_429_burst",
+    "gemini":     "gemini_429_burst",
+}
+
+# Backwards-compat module-level aliases for code that references these directly
+# (server.py, vertex_health_cache.py, tests).  They are aliases to the list
+# inside _PROVIDER_429_WINDOWS["workers-ai"] — never reassign the list object,
+# use .clear() to reset so the aliases stay valid.
+_WORKERS_AI_429_WINDOW   = _PROVIDER_429_WINDOWS["workers-ai"]
+_WORKERS_AI_429_WINDOW_S = _PROVIDER_429_BURST_WINDOW_S
+_WORKERS_AI_429_REDIS_KEY = _PROVIDER_429_REDIS_KEYS["workers-ai"]
+
+
+def _track_provider_429(provider: str) -> None:
+    """Record one 429 hit for *provider* (in-memory + Redis).
+
+    No-ops silently for providers not in ``_PROVIDER_429_WINDOWS``.
+    """
+    window = _PROVIDER_429_WINDOWS.get(provider)
+    if window is None:
+        return
+    window.append(time.time())
+    redis_key = _PROVIDER_429_REDIS_KEYS.get(provider)
+    if not redis_key:
+        return
+    try:
+        from deps import redis_client as _rc
+        if _rc:
+            _rc.incr(redis_key)
+            _rc.expire(redis_key, _PROVIDER_429_BURST_WINDOW_S)
+    except Exception:
+        pass
+
+
+def _reset_provider_429(provider: str) -> None:
+    """Reset 429 counter for *provider* after a successful call.
+
+    Uses list.clear() (not reassignment) so module-level aliases stay valid.
+    No-ops silently for providers not in ``_PROVIDER_429_WINDOWS``.
+    """
+    window = _PROVIDER_429_WINDOWS.get(provider)
+    if window is None:
+        return
+    window.clear()
+    redis_key = _PROVIDER_429_REDIS_KEYS.get(provider)
+    if not redis_key:
+        return
+    try:
+        from deps import redis_client as _rc
+        if _rc:
+            _rc.delete(redis_key)
+    except Exception:
+        pass
+
+
+def get_provider_429_burst(provider: str,
+                           window_seconds: int = _PROVIDER_429_BURST_WINDOW_S) -> int:
+    """Return the number of 429s for *provider* in the last *window_seconds*.
+
+    Redis is the primary source (cross-worker, TTL-backed). Falls back to the
+    in-process sliding window when Redis is unavailable.
+
+    NOTE: when Redis is available the *window_seconds* parameter is ignored —
+    Redis stores a cumulative counter with a fixed TTL.  Use
+    ``get_provider_429_burst_inprocess()`` when you need an accurate short
+    window that is always timestamp-filtered.
+    """
+    redis_key = _PROVIDER_429_REDIS_KEYS.get(provider)
+    if redis_key:
+        try:
+            from deps import redis_client as _rc
+            if _rc:
+                val = _rc.get(redis_key)
+                if val is not None:
+                    return int(val)
+        except Exception:
+            pass
+    return get_provider_429_burst_inprocess(provider, window_seconds)
+
+
+def get_provider_429_burst_inprocess(provider: str,
+                                     window_seconds: int = 60) -> int:
+    """Return the number of 429s for *provider* in the last *window_seconds*
+    using only the in-process timestamp list (no Redis).
+
+    Use this when you need an accurate short window (e.g. 60 s) or when
+    Redis is unavailable.
+    """
+    window = _PROVIDER_429_WINDOWS.get(provider, [])
+    cutoff = time.time() - window_seconds
+    return sum(1 for t in window if t > cutoff)
+
+
+# ── Backwards-compat wrappers — Workers AI specific public API ────────────────
+# Existing callers (server.py, vertex_health_cache.py, metrics.py, tests)
+# import these by name.  They delegate to the generic helpers above.
+
+def _track_workers_ai_429() -> None:
+    """Record one Workers AI 429 hit (in-memory + Redis)."""
+    _track_provider_429("workers-ai")
+
+
+def _reset_workers_ai_429() -> None:
+    """Reset Workers AI 429 counter after a successful call."""
+    _reset_provider_429("workers-ai")
+
+
+def get_workers_ai_429_burst(window_seconds: int = _WORKERS_AI_429_WINDOW_S) -> int:
+    """Return the number of Workers AI 429s in the last *window_seconds*.
+
+    Redis is the primary source. Falls back to the in-process sliding window.
+    See ``get_provider_429_burst`` for the generic version.
+    """
+    return get_provider_429_burst("workers-ai", window_seconds)
+
+
+def get_workers_ai_429_burst_inprocess(window_seconds: int = 60) -> int:
+    """Return Workers AI 429 burst using only the in-process timestamp list.
+
+    See ``get_provider_429_burst_inprocess`` for the generic version.
+    """
+    return get_provider_429_burst_inprocess("workers-ai", window_seconds)
+
 
 def _record_llm_call(provider: str, model: str, duration_ms: float, success: bool, tokens_approx: int = 0, fallback: bool = False, error_type: str = ""):
     _LLM_PROVIDER_METRICS.append({
@@ -242,41 +415,22 @@ _CF_AI_ENABLED = bool(_CF_AI_ACCOUNT_ID and _CF_API_TOKEN)
 _LLM_PROVIDERS = []
 if _CF_AI_ENABLED:
     _LLM_PROVIDERS.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
-if _GEMINI_KEY:
-    _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
-if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
-    _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY_2,   "default_model": "gemini-2.5-flash"})
 if _GROQ_KEY:
-    _LLM_PROVIDERS.append({"provider": "groq",         "key": _GROQ_KEY,       "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
-if _GROQ_KEY_2 and _GROQ_KEY_2 != _GROQ_KEY:
-    _LLM_PROVIDERS.append({"provider": "groq",         "key": _GROQ_KEY_2,     "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
+    _LLM_PROVIDERS.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
+if _GEMINI_KEY:
+    _LLM_PROVIDERS.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
 if _CEREBRAS_KEY:
-    # Cerebras dropped llama-3.3-70b from this account's catalog (verified
-    # 2026-04-26: GET /v1/models returns only llama3.1-8b, gpt-oss-120b,
-    # zai-glm-4.7, qwen-3-235b-a22b-instruct-2507; only the 8B and the
-    # 235B qwen are accessible to us — gpt-oss-120b and zai-glm both
-    # return 404 "does not have access"). llama3.1-8b is the fast-tier
-    # SLM choice; the 235B qwen is reserved for the higher-quality
-    # content slot (see _CONTENT_SLOT_CANDIDATES below).
-    _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama3.1-8b"})
-if _OPENROUTER_KEY:
-    _LLM_PROVIDERS.append({"provider": "openrouter",  "key": _OPENROUTER_KEY, "default_model": "deepseek/deepseek-chat-v3-0324"})
-if _OPENAI_KEY and _OPENAI_KEY != 'x':
-    _LLM_PROVIDERS.append({"provider": "openai",      "key": _OPENAI_KEY,     "default_model": "gpt-4o-mini"})
+    _LLM_PROVIDERS.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
 
 _LLM_PROVIDERS_CHAT: list[dict] = []
-# Groq leads the chat pool — measured 1.6s avg for 300-token educational answers.
-# Workers AI 70B is only fast for short outputs (<50 tokens); at 300+ tokens it
-# takes 14s (confirmed benchmark 2026-04-29). Groq and Cerebras are both faster
-# for real chat responses. Workers AI stays as burst fallback.
-if _GROQ_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "groq",       "key": _GROQ_KEY,       "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
-if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras",   "key": _CEREBRAS_KEY,   "default_model": "qwen-3-235b-a22b-instruct-2507"})
 if _CF_AI_ENABLED:
-    _LLM_PROVIDERS_CHAT.append({"provider": "workers-ai", "key": _CF_API_TOKEN,   "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
-if _OPENROUTER_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "meta-llama/llama-4-scout"})
+    _LLM_PROVIDERS_CHAT.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
+if _GROQ_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
+if _GEMINI_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
 
 _MODEL_PROVIDER_MAP = {
     "sarvam-m": "sarvam",
@@ -308,6 +462,12 @@ _MODEL_PROVIDER_MAP = {
 _MODEL_ALIAS_MAP = {
     "openai/gpt-oss-20b": "deepseek/deepseek-chat-v3-0324",
     "openai/gpt-oss-120b": "qwen-3-235b-a22b-instruct-2507",
+    # Cerebras dropped llama-3.3-70b — redirect to Workers AI FP8 equivalent.
+    # Handles both the Groq-style "-versatile" suffix and the bare form so
+    # any caller or env var using these names automatically gets the correct
+    # Workers AI model without a 404 round-trip.
+    "llama-3.3-70b-versatile": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "llama-3.3-70b": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
 }
 
 # ── SLM slot table ────────────────────────────────────────────────────────────
@@ -315,35 +475,108 @@ _MODEL_ALIAS_MAP = {
 # speed_tier: lower = faster provider, used by pick() to prefer fast slots.
 # Slots in the same tier are load-balanced by in-flight count.
 #
+# Concurrency caps — Cloudflare Workers AI unified billing (Standard plan).
+# Each model carries its own independent 3 000 RPM quota; the 5 chat models
+# give a combined ~15 000 RPM headroom.  The shared SmartKeyPool rpm_window
+# tracks them under a single 10 000 RPM budget (_POOL_RPM_LIMITS["workers-ai"])
+# to avoid over-counting while still letting the pool fill each model's quota.
+#
+# Per-model concurrency math (rpm / 60 × avg_resp_s):
+#   70B FP8 (~2.0s):  3 000/60 × 2.0  = 100 concurrent  → cap at 64 (headroom)
+#   20B     (~0.8s):  3 000/60 × 0.8  =  40 concurrent  → cap at 64 (safe)
+#   72B     (~2.0s):  3 000/60 × 2.0  = 100 concurrent  → cap at 64
+#   3B      (~0.3s):  3 000/60 × 0.3  =  15 concurrent  → cap at 128 (burst)
+#   8B FP8  (~0.6s):  3 000/60 × 0.6  =  30 concurrent  → cap at 64
+#
+# Total chat caps: 64+64+64+128+64 = 384 concurrent (within combined RPM budget).
 _SLM_SLOT_CANDIDATES = [
-    # Tier 0: Workers AI llama-3.3-70b-fp8 — fastest slot (840ms measured),
-    # free under CF startup credits. Used for routing/classification/short
-    # rewrites where a large reasoning model is unnecessary.
-    ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",         6, 0),
-    # Tier 1: Cerebras llama3.1-8b — ultra-fast SLM backup (kept for
-    # burst headroom when Workers AI hits concurrency limits).
-    ("cerebras",    "llama3.1-8b",                                       4, 1),
-    # Tier 2/3: Groq and OpenRouter as further fallbacks.
-    ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 2),
-    ("openrouter",  "meta-llama/llama-4-scout",                          4, 3),
+    # Tier 0: Workers AI llama-3.3-70b-fp8 — primary chat provider (70B, FP8).
+    ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",        64, 0),
+    # Tier 1: Workers AI GPT-OSS-20B — fast 20B model, own 3 000 RPM quota.
+    ("workers-ai",  "@cf/openai/gpt-oss-20b",                          64, 1),
+    # Tier 2: Workers AI Qwen 2.5-72B — high-quality 72B on separate quota.
+    ("workers-ai",  "@cf/qwen/qwen2.5-72b-instruct",                   64, 2),
+    # Tier 3: Workers AI llama-3.2-3b — ultrafast 3B for burst traffic.
+    ("workers-ai",  "@cf/meta/llama-3.2-3b-instruct",                 128, 3),
+    # Tier 4: Workers AI llama-3.1-8b — fast 8B fallback.
+    ("workers-ai",  "@cf/meta/llama-3.1-8b-instruct-fp8",              64, 4),
+    # Tier 5: Groq llama-4-scout — external fallback when Workers AI is saturated.
+    ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",        4, 5),
+    # Tier 6: Cerebras llama3.1-8b — secondary external fallback.
+    ("cerebras",    "llama3.1-8b",                                       4, 6),
 ]
 
 # Content SmartKeyPool — serves `_CONTENT_INTENTS` (notes, important_questions,
-# pyq) for ALL languages. Sarvam is intentionally NOT in this pool — see
-# `_SARVAM_PROVIDERS` rationale above.
+# pyq) for ALL languages.
 #
-# Tier order (quality + speed priority):
-#   0 — Workers AI gpt-oss-120b: 120B model free under CF credits, best
-#       for long-form structured educational content (notes, MCQs).
-#   1 — Gemini 2.5 Flash: excellent multilingual reasoning, 600 RPM headroom.
-#   2 — Cerebras qwen-3-235b: high-quality reasoning fallback.
+# Tier order:
+#   0 — Workers AI gpt-oss-120b: 120B model, best for long-form content.
+#   1 — Workers AI llama-3.3-70b: fallback for content generation.
+#
+# Content calls are longer (300-600 tokens output, ~4-8s) but lower volume.
+# Cap at 48 per slot: 3 000/60 × 6s = 300 theoretical → 48 leaves headroom
+# for the shared 10 000 RPM combined budget.
 _CONTENT_SLOT_CANDIDATES = [
-    ("workers-ai",  "@cf/openai/gpt-oss-120b",                           4, 0),
-    ("gemini",      "gemini-2.5-flash",                                  6, 1),
-    ("cerebras",    "qwen-3-235b-a22b-instruct-2507",                    4, 2),
+    ("workers-ai",  "@cf/openai/gpt-oss-120b",                         48, 0),
+    ("workers-ai",  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",        48, 1),
 ]
 
 _CONTENT_INTENTS = {"notes", "important_questions", "pyq"}
+
+
+def _parse_rpm_limit(env_var: str, default: int) -> int:
+    """Safely parse an RPM-limit env var, falling back to *default* on bad input.
+
+    Logs a warning (never raises) so a misconfigured value never prevents
+    the service from starting.
+    """
+    raw = os.environ.get(env_var, "")
+    if raw:
+        try:
+            val = int(raw)
+            if val > 0:
+                return val
+            logger.warning(
+                "RPM env var %s=%r is not a positive integer — using default %d",
+                env_var, raw, default,
+            )
+        except ValueError:
+            logger.warning(
+                "RPM env var %s=%r is not an integer — using default %d",
+                env_var, raw, default,
+            )
+    return default
+
+
+# Per-provider RPM caps used by _SmartKeyPool._PROVIDER_RPM_LIMITS.
+# All values are env-overridable so ops can tune them without a deploy.
+#
+# Workers AI — Cloudflare Standard plan (unified billing enabled).
+# Each model has its own independent 3 000 RPM quota (not shared across models).
+# The SmartKeyPool tracks all Workers AI slots via a single shared rpm_window
+# (same API token / key_idx), so we set the combined budget to 10 000 RPM —
+# safely below the ~15 000 total (5 models × 3 000) but high enough that the
+# pool never soft-deprioritises Workers AI under normal load.
+# Override with WORKERS_AI_RPM_LIMIT env var if the account tier changes.
+#
+# NOTE: Workers AI embedding (@cf/baai/bge-large-en-v1.5) is NOT rate-limited
+#   by this pool — it goes through vertex_services._workers_ai_primary_embed()
+#   which has its own burst-cooldown path (vertex_services._track_embed_429).
+#   On the Standard plan, the embedding model also has 3 000 RPM (same as LLMs);
+#   the old ~50 RPM free-tier limit no longer applies.  See _EMBED_429_THRESHOLD
+#   in vertex_services.py — threshold raised to 10 hits accordingly.
+_POOL_RPM_LIMITS = {
+    "workers-ai": _parse_rpm_limit("WORKERS_AI_RPM_LIMIT", 10000),
+    "groq":        _parse_rpm_limit("GROQ_RPM_LIMIT",          30),
+    "cerebras":    _parse_rpm_limit("CEREBRAS_RPM_LIMIT",      30),
+    "sarvam":      _parse_rpm_limit("SARVAM_RPM_LIMIT",        30),
+    "gemini":      _parse_rpm_limit("GEMINI_RPM_LIMIT",       600),
+    "openrouter":  60,
+    "openai":      60,
+    "bedrock":     30,
+}
+logger.info("SLM RPM limits (overridable via env): %s", _POOL_RPM_LIMITS)
+
 
 class _SmartKeyPool:
     """Concurrent smart pool — maximises RPS across all providers.
@@ -362,18 +595,19 @@ class _SmartKeyPool:
     """
     _RL_COOLDOWN  = 20.0
     _ERR_COOLDOWN = 7.0
-    _RPM_SOFT_THRESHOLD = 0.70
-    _RPM_HARD_THRESHOLD = 0.90
+    # With unified billing and a combined 10 000 RPM budget, keep Workers AI
+    # as primary until 85% (8 500 RPM) before soft-shifting to Groq/Cerebras,
+    # and hard-deprioritize only at 95% (9 500 RPM).  Per-model quota is
+    # independent so a single model saturating does not affect others.
+    _RPM_SOFT_THRESHOLD = 0.85
+    _RPM_HARD_THRESHOLD = 0.95
 
-    _PROVIDER_RPM_LIMITS = {
-        "groq": 30,
-        "cerebras": 30,
-        "sarvam": 30,
-        "gemini": 600,
-        "openrouter": 60,
-        "openai": 60,
-        "bedrock": 30,
-    }
+    # RPM limits per provider — see _parse_rpm_limit() for the env-var safe parser.
+    # Workers AI: CF Standard plan with unified billing — 3 000 RPM per model.
+    # Override with WORKERS_AI_RPM_LIMIT env var if the account tier differs.
+    # Groq / Cerebras: 30 RPM on the free / preview tier; set GROQ_RPM_LIMIT
+    # or CEREBRAS_RPM_LIMIT to a higher value on a paid plan.
+    _PROVIDER_RPM_LIMITS = _POOL_RPM_LIMITS  # module-level dict, populated just above
 
     def __init__(self, candidates: list):
         pmap: dict = {}
@@ -404,6 +638,7 @@ class _SmartKeyPool:
                     "priority": tier,
                     "rpm_window": shared_rpm[rpm_key], "rpm_limit": rpm,
                     "base_priority": tier,
+                    "rpm_warn_until": 0.0,  # suppresses repeated soft-threshold warnings
                 })
         logger.info(
             f"SLM SmartKeyPool active slots: "
@@ -441,13 +676,23 @@ class _SmartKeyPool:
             return None
 
         for s in available:
-            if self._rpm_ratio(s) >= self._RPM_HARD_THRESHOLD:
+            ratio = self._rpm_ratio(s)
+            # Soft-threshold warning: log once per 60s per slot so the team
+            # can see RPM pressure building before a 429 actually fires.
+            if ratio >= self._RPM_SOFT_THRESHOLD and now >= s.get("rpm_warn_until", 0.0):
                 remaining = self._seconds_until_rpm_drop(s)
-                if remaining > 0:
-                    logger.info(
-                        f"SLM pool: {s['provider']}/{s['model']} at {self._rpm_ratio(s)*100:.0f}% RPM "
-                        f"({self._rpm_count(s)}/{s['rpm_limit']}) — deprioritizing for ~{remaining:.0f}s"
-                    )
+                level = "WARNING" if ratio >= self._RPM_HARD_THRESHOLD else "INFO"
+                msg = (
+                    f"SLM pool: {s['provider']}/{s['model']} at {ratio*100:.0f}% RPM "
+                    f"({self._rpm_count(s)}/{s['rpm_limit']}) — "
+                    f"{'near limit, strongly deprioritizing' if ratio >= self._RPM_HARD_THRESHOLD else 'soft threshold crossed, shifting traffic'}"
+                    + (f" (~{remaining:.0f}s to free)" if remaining > 0 else "")
+                )
+                if level == "WARNING":
+                    logger.warning(msg)
+                else:
+                    logger.info(msg)
+                s["rpm_warn_until"] = now + 60.0  # suppress for 60 s
 
         with_capacity = [s for s in available if s["sem"]._value > 0]
         pool = with_capacity if with_capacity else available
@@ -466,6 +711,7 @@ class _SmartKeyPool:
         slot["last_used"] = time.time()
         slot["errors"] = 0
         self._record_request(slot)
+        _reset_provider_429(slot["provider"])   # no-op for untracked providers
 
     def mark_429(self, slot):
         slot["cooldown_until"] = time.time() + self._RL_COOLDOWN
@@ -474,6 +720,7 @@ class _SmartKeyPool:
             f"SLM pool: {slot['provider']}/{slot['model']} → 429 rate-limit "
             f"(RPM {self._rpm_count(slot)}/{slot['rpm_limit']}), cooling {self._RL_COOLDOWN}s"
         )
+        _track_provider_429(slot["provider"])   # no-op for untracked providers
 
     def mark_403(self, slot):
         slot["cooldown_until"] = float("inf")
@@ -769,13 +1016,16 @@ async def _call_single_provider(messages: list, provider: str, api_key: str, mod
     max_tokens = _clamp_max_tokens(model, max_tokens)
     if provider == "workers-ai":
         from providers.cloudflare_ai import chat as _cf_chat, MODELS as _CF_MODELS
-        model_key = "chat"
-        if "120b" in model or "gpt-oss" in model:
-            model_key = "chat_long"
-        elif "coder" in model or "qwen2.5" in model:
-            model_key = "chat_code"
-        elif "8b" in model or "fast" in model.lower():
-            model_key = "chat_fast"
+        if model.startswith("@cf/"):
+            model_key = model
+        else:
+            model_key = "chat"
+            if "120b" in model or "gpt-oss" in model:
+                model_key = "chat_long"
+            elif "coder" in model:
+                model_key = "chat_code"
+            elif "8b" in model or "fast" in model.lower():
+                model_key = "chat_fast"
         text = await _cf_chat(messages, model_key=model_key, max_tokens=max_tokens)
         return re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
     if provider == "sarvam":
@@ -1009,9 +1259,9 @@ _TASK_ROUTE: dict[str, tuple] = {
     "routing":       ("workers-ai", "@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
     "rewrite":       ("workers-ai", "@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
     # ── RAG quality (factual, multi-doc, citation-heavy) ─────────────────────
-    "rag_answer":    ("gemini",     "gemini-2.5-flash"),
-    "synthesis":     ("gemini",     "gemini-2.5-flash"),
-    "pyq_solve":     ("gemini",     "gemini-2.5-flash"),
+    "rag_answer":    ("workers-ai", "@cf/openai/gpt-oss-120b"),
+    "synthesis":     ("workers-ai", "@cf/openai/gpt-oss-120b"),
+    "pyq_solve":     ("workers-ai", "@cf/openai/gpt-oss-120b"),
     # ── Long-form content (notes, MCQs, PYQs) ────────────────────────────────
     "content":       ("workers-ai", "@cf/openai/gpt-oss-120b"),
     "notes":         ("workers-ai", "@cf/openai/gpt-oss-120b"),
@@ -1041,18 +1291,9 @@ def route_for_task(task: str) -> tuple[str, str]:
 #
 # Falls back to Workers AI 70B if Gemini is unavailable or hits quota.
 _RAG_PROVIDERS: list[dict] = []
-# Groq leads RAG: fastest at 1.6s, good quality for 1024-2048 token answers.
-# Cerebras qwen-3-235b is second: 235B reasoning model, ~1.7s avg, excellent accuracy.
-# Gemini 2.5-flash is quality fallback: best accuracy but 6-10s with thinking tokens.
-# Workers AI last resort: slow (10s+) for long outputs but guaranteed capacity.
-if _GROQ_KEY:
-    _RAG_PROVIDERS.append({"provider": "groq",       "key": _GROQ_KEY,       "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
-if _CEREBRAS_KEY:
-    _RAG_PROVIDERS.append({"provider": "cerebras",   "key": _CEREBRAS_KEY,   "default_model": "qwen-3-235b-a22b-instruct-2507"})
-if _GEMINI_KEY:
-    _RAG_PROVIDERS.append({"provider": "gemini",     "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
 if _CF_AI_ENABLED:
-    _RAG_PROVIDERS.append({"provider": "workers-ai", "key": _CF_API_TOKEN,   "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
+    _RAG_PROVIDERS.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/openai/gpt-oss-120b"})
+    _RAG_PROVIDERS.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
 
 
 async def call_llm_for_rag(messages: list, max_tokens: int = 2048) -> str:
@@ -1086,12 +1327,10 @@ async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048
 _LLM_PROVIDERS_CONTENT: list[dict] = []
 if _CF_AI_ENABLED:
     _LLM_PROVIDERS_CONTENT.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/openai/gpt-oss-120b"})
-if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "qwen-3-235b-a22b-instruct-2507"})
+    _LLM_PROVIDERS_CONTENT.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/qwen/qwen2.5-72b-instruct"})
+    _LLM_PROVIDERS_CONTENT.append({"provider": "workers-ai", "key": _CF_API_TOKEN, "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
-if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
 
 logger.info(
     f"Admin content providers (quality-first order): "
@@ -1174,37 +1413,44 @@ def _inject_think_budget(messages: list) -> list:
 
 async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: int, *, response_lang: str = ""):
     """Token-by-token SSE streaming from Sarvam — reuses persistent sarvam_llm_client (zero TCP overhead).
-    For Indic languages: skips think budget injection and think buffer to reduce TTFT.
+    For Indic languages: enables native thinking in Assamese — model reasons in অসমীয়া inside
+    <think> blocks (stripped by _emit_tokens before reaching the student) then answers in Assamese.
     For English: adds SARVAM_THINK_BUFFER so <think> reasoning never crowds out the answer budget.
     Falls back to direct client if CF gateway connection fails.
     """
     _indic = _is_indic_lang(response_lang)
     if _indic:
-        api_max = max_tokens + 100
+        # Enable thinking in Assamese: give the model a reasoning budget so it
+        # can work through the problem in অসমীয়া before writing the answer.
+        # SARVAM_THINK_BUFFER tokens are reserved for the <think> block; the
+        # _emit_tokens layer strips the block before it reaches the student.
+        api_max = max_tokens + SARVAM_THINK_BUFFER
         patched = [dict(m) for m in messages]
+        _indic_preface = (
+            "/think অসমীয়াত চমুকৈ চিন্তা কৰা — তাৰ পিছত সম্পূৰ্ণ উত্তৰ অসমীয়াত দিয়া।\n"
+            "CRITICAL: Think in Assamese (অসমীয়া) first, then reply DIRECTLY in Assamese.\n"
+            "Do NOT start with 'Okay', 'Let me', or any English opener. Begin your answer immediately.\n"
+            "STRICT LANGUAGE RULES:\n"
+            "- Every running word in the answer MUST be in Assamese script. NO mid-sentence English.\n"
+            "- NEVER emit partial English fragments such as 'me uses', 'terms', 'ssible',\n"
+            "  'ble', 'tion', 'ssing'. If you start a word in English, switch back to Assamese.\n"
+            "- Latin script is allowed ONLY for: pure numbers/dates, scientific units\n"
+            "  (cm, kg, Hz, °C, eV…), math symbols/equations, code, URLs, well-known\n"
+            "  proper nouns and acronyms (AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
+            "- For everyday nouns/verbs, always use the Assamese word — never English.\n"
+            "BAD vs GOOD examples (follow the pattern, do not copy text):\n"
+            "  BAD : 'উৰুকা me uses ssible terms চমুকৈ ক'লে…'\n"
+            "  GOOD: 'উৰুকা চমুকৈ ক'লে অসমৰ এক প্ৰিয় উৎসৱ।'\n"
+            "  BAD : 'জল 100°C ত boil হয়।'\n"
+            "  GOOD: 'পানী 100°C ত উতলে।'\n"
+            "  BAD : 'Newton ৰ first law explains inertia।'\n"
+            "  GOOD: 'Newton ৰ গতিৰ প্ৰথম সূত্ৰে জড়তা ব্যাখ্যা কৰে।'\n"
+        )
         if patched and patched[0].get("role") == "system":
-            patched[0]["content"] = (
-                "CRITICAL: Do NOT use <think> tags. Do NOT write internal thoughts. "
-                "Do NOT start with 'Okay' or 'Let me'. "
-                "Reply DIRECTLY in Assamese (অসমীয়া). Start your answer immediately.\n"
-                "STRICT LANGUAGE RULES:\n"
-                "- Every running word MUST be in Assamese script. NO mid-sentence English words.\n"
-                "- NEVER emit partial English fragments such as 'me uses', 'terms', 'ssible',\n"
-                "  'ble', 'tion', 'ssing'. If you start a word in English, you MUST switch\n"
-                "  back to Assamese for the rest of that sentence.\n"
-                "- Latin script is allowed ONLY for: pure numbers/dates, scientific units\n"
-                "  (cm, kg, Hz, °C, eV…), math symbols/equations, code, URLs, well-known\n"
-                "  proper nouns and acronyms (AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
-                "- For everyday nouns/verbs, use the Assamese word — do NOT fall back to English.\n"
-                "BAD vs GOOD examples (follow the pattern, do not copy text):\n"
-                "  BAD : 'উৰুকা me uses ssible terms চমুকৈ ক'লে…'\n"
-                "  GOOD: 'উৰুকা চমুকৈ ক'লে অসমৰ এক প্ৰিয় উৎসৱ।'\n"
-                "  BAD : 'জল 100°C ত boil হয়।'\n"
-                "  GOOD: 'পানী 100°C ত উতলে।'\n"
-                "  BAD : 'Newton ৰ first law explains inertia।'\n"
-                "  GOOD: 'Newton ৰ গতিৰ প্ৰথম সূত্ৰে জড়তা ব্যাখ্যা কৰে।'\n"
-            ) + patched[0]["content"]
-        logger.info(f"[SARVAM-INDIC] No-think mode for {response_lang} — model={model}, api_max={api_max}")
+            patched[0]["content"] = _indic_preface + patched[0]["content"]
+        else:
+            patched.insert(0, {"role": "system", "content": _indic_preface})
+        logger.info(f"[SARVAM-INDIC] Think-in-Assamese mode for {response_lang} — model={model}, api_max={api_max}")
     else:
         api_max = max_tokens + SARVAM_THINK_BUFFER
         patched = _inject_think_budget(messages)
@@ -1213,14 +1459,17 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
         "model": model,
         "messages": patched,
         "max_tokens": api_max,
-        "temperature": 0.05 if _indic else 0.1,
+        "temperature": 0.1,
         "top_p": 0.9 if _indic else 0.95,
         "frequency_penalty": 0,
         "presence_penalty": 0,
         "stream": True,
     }
     if _indic:
-        payload["thinking"] = {"enabled": False}
+        # Enable Sarvam's native thinking so the model reasons in Assamese
+        # before writing the answer. The <think> block is stripped by
+        # _emit_tokens before any tokens reach the student.
+        payload["thinking"] = {"enabled": True}
         if response_lang in _SARVAM_LANG_CODE_MAP:
             payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
     elif response_lang in _SARVAM_LANG_CODE_MAP:
@@ -1515,7 +1764,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
 
     if _use_vertex_fastpath:
         if not _vertex_chat.is_configured():
-            logger.warning("vertex/gemini-flash requested but VERTEX_PROJECT_ID is not set — falling back to legacy SLM pool")
+            logger.warning("gemini-flash requested but neither GEMINI_API_KEY nor VERTEX_PROJECT_ID is set — falling back to legacy SLM pool")
             use_model_raw = _vertex_fallback_target
         elif not _vertex_chat.is_available():
             # Circuit breaker is open — Vertex is known-broken right now.
@@ -1542,8 +1791,9 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 if _indic_vertex_active:
                     _vx_messages = [dict(m) for m in messages]
                     _asm_preface = (
-                        "CRITICAL: Reply DIRECTLY in Assamese (অসমীয়া). "
-                        "Do NOT use <think> tags. Do NOT write internal thoughts.\n"
+                        "/think অসমীয়াত চমুকৈ চিন্তা কৰা — তাৰ পিছত সম্পূৰ্ণ উত্তৰ অসমীয়াত দিয়া।\n"
+                        "CRITICAL: Think in Assamese (অসমীয়া) first, then reply DIRECTLY in Assamese.\n"
+                        "Do NOT start with 'Okay' or 'Let me'. Begin your answer immediately.\n"
                         "STRICT LANGUAGE RULES:\n"
                         "- Every running word MUST be in Assamese script. "
                         "NO mid-sentence English words.\n"
@@ -1624,9 +1874,12 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     _SSE_BATCH = 2    # flush every 2 chars — near-instant token delivery
 
     async def _emit_tokens(token_source):
-        nonlocal in_think, buf
+        # All state is LOCAL — each call (including parallel producers in Phase 1)
+        # gets its own independent think-strip state, preventing race conditions.
         import re as _re
         _CLOSE_KEEP = len('</think>') - 1   # 7
+        _in_think   = False
+        _buf        = ""
         think_done  = False
         batch       = ""
         _visible_text = ""
@@ -1643,80 +1896,80 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                         batch = ""
                 continue
 
-            buf += token
-            while buf:
-                if in_think:
-                    close_idx = buf.find('</think>')
+            _buf += token
+            while _buf:
+                if _in_think:
+                    close_idx = _buf.find('</think>')
                     if close_idx != -1:
-                        _think_buf.append(buf[:close_idx])
-                        buf = buf[close_idx + 8:]
-                        in_think   = False
+                        _think_buf.append(_buf[:close_idx])
+                        _buf = _buf[close_idx + 8:]
+                        _in_think  = False
                         think_done = True
-                        if buf:
-                            batch += buf
-                            buf = ""
+                        if _buf:
+                            batch += _buf
+                            _buf = ""
                             if len(batch) >= _SSE_BATCH:
                                 _visible_text += batch
                                 yield f"data: {json.dumps({'content': batch})}\n\n"
                                 batch = ""
                         break
                     else:
-                        if len(buf) > _CLOSE_KEEP:
-                            _think_buf.append(buf[:-_CLOSE_KEEP])
-                            buf = buf[-_CLOSE_KEEP:]
+                        if len(_buf) > _CLOSE_KEEP:
+                            _think_buf.append(_buf[:-_CLOSE_KEEP])
+                            _buf = _buf[-_CLOSE_KEEP:]
                         break
                 else:
-                    open_idx = buf.find('<think>')
+                    open_idx = _buf.find('<think>')
                     if open_idx != -1:
-                        before = buf[:open_idx]
+                        before = _buf[:open_idx]
                         if before:
                             batch += before
                             if len(batch) >= _SSE_BATCH:
                                 _visible_text += batch
                                 yield f"data: {json.dumps({'content': batch})}\n\n"
                                 batch = ""
-                        buf      = buf[open_idx + 7:]
-                        in_think = True
-                    elif buf.endswith(('<', '<t', '<th', '<thi', '<thin', '<think')):
-                        partial_start = buf.rfind('<')
-                        candidate     = buf[partial_start:]
+                        _buf      = _buf[open_idx + 7:]
+                        _in_think = True
+                    elif _buf.endswith(('<', '<t', '<th', '<thi', '<thin', '<think')):
+                        partial_start = _buf.rfind('<')
+                        candidate     = _buf[partial_start:]
                         if '<think>'[:len(candidate)] == candidate:
-                            before = buf[:partial_start]
+                            before = _buf[:partial_start]
                             if before:
                                 batch += before
                                 if len(batch) >= _SSE_BATCH:
                                     _visible_text += batch
                                     yield f"data: {json.dumps({'content': batch})}\n\n"
                                     batch = ""
-                            buf = candidate
+                            _buf = candidate
                             break
                         else:
-                            batch += buf
-                            buf    = ""
+                            batch += _buf
+                            _buf   = ""
                             if len(batch) >= _SSE_BATCH:
                                 _visible_text += batch
                                 yield f"data: {json.dumps({'content': batch})}\n\n"
                                 batch = ""
                     else:
-                        batch += buf
-                        buf    = ""
+                        batch += _buf
+                        _buf   = ""
                         if len(batch) >= _SSE_BATCH:
                             _visible_text += batch
                             yield f"data: {json.dumps({'content': batch})}\n\n"
                             batch = ""
                         break
 
-        if batch and not in_think:
+        if batch and not _in_think:
             _visible_text += batch
             yield f"data: {json.dumps({'content': batch})}\n\n"
-        if buf and not in_think:
-            _visible_text += buf
-            yield f"data: {json.dumps({'content': buf})}\n\n"
+        if _buf and not _in_think:
+            _visible_text += _buf
+            yield f"data: {json.dumps({'content': _buf})}\n\n"
 
-        if not _visible_text.strip() and (in_think or think_done):
+        if not _visible_text.strip() and (_in_think or think_done):
             fallback_text = "".join(_think_buf)
-            if in_think and buf:
-                fallback_text += buf
+            if _in_think and _buf:
+                fallback_text += _buf
             fallback_text = _re.sub(r'</?think\s*/?>', '', fallback_text).strip()
             fallback_text = _re.sub(r'</?\w*$', '', fallback_text).strip()
             if fallback_text and len(fallback_text) > 5:
@@ -1729,19 +1982,22 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         if p_name == "workers-ai":
             logger.info(f"LLM stream: provider=workers-ai, model={p_model}")
             from providers.cloudflare_ai import stream_chat as _cf_stream
-            model_key = "chat"
-            if "120b" in p_model or "gpt-oss" in p_model:
-                model_key = "chat_long"
-            elif "coder" in p_model or "qwen2.5" in p_model:
-                model_key = "chat_code"
-            elif "8b" in p_model or "fast" in p_model.lower():
-                model_key = "chat_fast"
+            if p_model.startswith("@cf/"):
+                model_key = p_model
+            else:
+                model_key = "chat"
+                if "120b" in p_model or "gpt-oss" in p_model:
+                    model_key = "chat_long"
+                elif "coder" in p_model:
+                    model_key = "chat_code"
+                elif "8b" in p_model or "fast" in p_model.lower():
+                    model_key = "chat_fast"
             async for token in _cf_stream(messages, model_key=model_key, max_tokens=_mt):
                 yield token
             return
         if p_name == "sarvam":
             _input_est = sum(len(m.get("content", "")) for m in messages) // 4
-            _think_overhead = 0 if _indic_mode else SARVAM_THINK_BUFFER
+            _think_overhead = SARVAM_THINK_BUFFER
             _sarvam_cap = max(256, 7192 - _input_est - _think_overhead - 100)
             _mt = min(_mt, _sarvam_cap)
             async for token in _stream_sarvam(messages, p_key, p_model, _mt, response_lang=response_lang):
@@ -1782,7 +2038,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     # Tokens are yielded in real-time as they arrive (true streaming).
     # TTFT timeout ensures fast failover when a provider is unresponsive.
     _SLM_SLOT_TIMEOUT = 0.7    # max seconds between any two tokens mid-stream
-    _SLM_TTFT_TIMEOUT = 0.8    # max seconds to wait for FIRST token from a slot
+    _SLM_TTFT_TIMEOUT = 1.5    # max seconds to wait for FIRST token from a slot
 
     _SLM_PROVIDER_MAX_INPUT_CHARS = {
         "cerebras": 24000,
@@ -1812,11 +2068,11 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 continue
             _candidates.append(slot)
             _skipped_slots.add(id(slot))
-            if len(_candidates) >= 2:
+            if len(_candidates) >= 3:
                 break
 
         if _candidates:
-            _effective_ttft = min(1.2, _SLM_TTFT_TIMEOUT + (0.2 if _input_chars > 8000 else 0.0))
+            _effective_ttft = min(2.0, _SLM_TTFT_TIMEOUT + (0.3 if _input_chars > 8000 else 0.0))
             _hedged_q: asyncio.Queue = asyncio.Queue()
             _hedged_errors: dict = {}
 
@@ -1916,6 +2172,28 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                         _slm_pool.mark_err(s)
                         logger.warning(f"SLM hedged: {s['provider']}/{s['model']} TTFT timeout after {_effective_ttft}s")
 
+        # SLM pool exhausted — hard-fall-back to Workers AI direct stream
+        # (bypassing the pool's concurrency accounting).
+        if _CF_AI_ENABLED:
+            _fb_model = "@cf/meta/llama-3.1-8b-instruct-fp8"
+            logger.warning(
+                f"SLM pool exhausted — hard-fallback to workers-ai/{_fb_model}"
+            )
+            _fb_ok = False
+            try:
+                from providers.cloudflare_ai import chat_stream as _cf_cs
+                async def _slm_wai_fb():
+                    async for _tok in _cf_cs(messages, model_key=_fb_model, max_tokens=max_tokens):
+                        yield _tok
+                async for chunk in _emit_tokens(_slm_wai_fb()):
+                    _fb_ok = True
+                    yield chunk
+                if _fb_ok:
+                    yield f"data: {json.dumps({'__provider': 'workers-ai'})}\n\n"
+                    return
+            except Exception as _fb_err:
+                logger.warning(f"SLM workers-ai-fallback failed: {type(_fb_err).__name__}: {str(_fb_err)[:120]}")
+
         yield f"data: {json.dumps({'error': 'All AI providers temporarily unavailable'})}\n\n"
         return
 
@@ -1938,8 +2216,17 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     #             directly from Gemini 2.5 Flash. This is a fallback path,
     #             not a hedged co-runner — Gemini cannot "steal" the
     #             first-token slot from Sarvam due to network jitter.
-    _SARVAM_TTFT_TIMEOUT = 3.0
-    _SARVAM_SLOT_TIMEOUT = 1.2
+    # Two-stage Sarvam timeout:
+    #   Stage 1 — connection probe: Sarvam must return its FIRST RAW TOKEN
+    #             (even a think token) within _SARVAM_CONN_TIMEOUT seconds.
+    #             If no raw token arrives → Sarvam is dead → go to Phase 2.
+    #   Stage 2 — visible answer: after a key proves it's alive, we wait up to
+    #             _SARVAM_VISIBLE_TIMEOUT more seconds for the first non-think
+    #             chunk (after </think>).  Sarvam-m with think enabled can
+    #             spend 10-15 s in its <think> block before writing the answer.
+    _SARVAM_CONN_TIMEOUT    = 2.5   # max seconds to receive ANY raw token
+    _SARVAM_VISIBLE_TIMEOUT = 16.0  # max additional seconds for visible chunk
+    _SARVAM_SLOT_TIMEOUT    = 1.2
     if _indic_mode and provider == "sarvam":
         # Pull Sarvam keys from `_SARVAM_PROVIDERS` (the dedicated
         # Assamese-only list). `_prov_list` may also contain Sarvam entries
@@ -1961,11 +2248,24 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             _cprov, _ckey, _cmodel = _cand["provider"], _cand["key"], _cand["model"]
             try:
                 _cn = 0
-                async for chunk in _emit_tokens(_stream_from_provider(_cprov, _ckey, _cmodel)):
+                _conn_signaled = False
+
+                async def _raw_conn_wrapper():
+                    """Intercept raw tokens before _emit_tokens strips think blocks.
+                    Emits a 'connected' queue event on the very first token (even a
+                    think token) so the Phase 1 race knows this key is alive."""
+                    nonlocal _conn_signaled
+                    async for _raw_tok in _stream_from_provider(_cprov, _ckey, _cmodel):
+                        if not _conn_signaled:
+                            _conn_signaled = True
+                            await _indic_q.put((_cand_idx, "connected", None))
+                        yield _raw_tok
+
+                async for chunk in _emit_tokens(_raw_conn_wrapper()):
                     _cn += 1
                     await _indic_q.put((_cand_idx, "chunk", chunk))
                 if _cn == 0:
-                    logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} returned 0 chunks")
+                    logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} returned 0 visible chunks (think-only?)")
                 await _indic_q.put((_cand_idx, "done", None))
             except Exception as _e:
                 _is_rate = any(s in str(_e).lower() for s in ("429", "rate", "quota", "throttl"))
@@ -1976,7 +2276,11 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         _sarvam_race_t0 = time.monotonic()
         _phase1_tasks: list = []
 
-        # ── Phase 1: Sarvam-only race ────────────────────────────────────
+        # ── Phase 1: two-stage Sarvam race ───────────────────────────────
+        # Stage 1: wait up to _SARVAM_CONN_TIMEOUT for ANY key to signal
+        #          "connected" (first raw token, including think tokens).
+        # Stage 2: once ≥1 key is connected, wait up to _SARVAM_VISIBLE_TIMEOUT
+        #          for a "chunk" (first non-think visible token).
         if _sarvam_candidates:
             _phase1_tasks = [
                 asyncio.create_task(_indic_producer(c, i))
@@ -1992,20 +2296,55 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             )
 
             _sarvam_finished: set = set()
+            _sarvam_connected: set = set()
             try:
-                _deadline = time.monotonic() + _SARVAM_TTFT_TIMEOUT
-                while _sarvam_winner is None and len(_sarvam_finished) < len(_sarvam_candidates):
-                    _rem = _deadline - time.monotonic()
+                # Stage 1 — connection probe
+                _conn_deadline = time.monotonic() + _SARVAM_CONN_TIMEOUT
+                while (
+                    not _sarvam_connected
+                    and len(_sarvam_finished) < len(_sarvam_candidates)
+                ):
+                    _rem = _conn_deadline - time.monotonic()
                     if _rem <= 0:
                         break
                     try:
                         _sid, _evt, _data = await asyncio.wait_for(_indic_q.get(), timeout=_rem)
                     except asyncio.TimeoutError:
                         break
-                    if _evt == "chunk":
+                    if _evt == "connected":
+                        _sarvam_connected.add(_sid)
+                        logger.info(
+                            f"[INDIC] key idx={_sid} connected in "
+                            f"{(time.monotonic()-_sarvam_race_t0)*1000:.0f}ms"
+                        )
+                    elif _evt == "chunk":
+                        # Visible token arrived during Stage 1 (think was very short)
                         _sarvam_winner = _sid
                     elif _evt in ("done", "error"):
                         _sarvam_finished.add(_sid)
+
+                # Stage 2 — wait for visible token (only if ≥1 key is alive)
+                if _sarvam_winner is None and _sarvam_connected:
+                    _vis_deadline = time.monotonic() + _SARVAM_VISIBLE_TIMEOUT
+                    while _sarvam_winner is None and len(_sarvam_finished) < len(_sarvam_candidates):
+                        _rem = _vis_deadline - time.monotonic()
+                        if _rem <= 0:
+                            break
+                        try:
+                            _sid, _evt, _data = await asyncio.wait_for(_indic_q.get(), timeout=_rem)
+                        except asyncio.TimeoutError:
+                            break
+                        if _evt == "chunk":
+                            _sarvam_winner = _sid
+                        elif _evt == "connected":
+                            _sarvam_connected.add(_sid)
+                        elif _evt in ("done", "error"):
+                            _sarvam_finished.add(_sid)
+                elif not _sarvam_connected:
+                    logger.warning(
+                        f"[INDIC] Phase 1 — no Sarvam key connected within "
+                        f"{_SARVAM_CONN_TIMEOUT}s — skipping to Phase 2"
+                    )
             except Exception:
                 pass
         else:
@@ -2060,10 +2399,10 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             yield f"data: {json.dumps({'__provider': _win_cand['provider']})}\n\n"
             return
 
-        # ── Phase 1 LOST → Phase 2: Gemini fallback ─────────────────────
-        # Cancel any straggler Sarvam tasks before starting Gemini so we
-        # don't double-stream. We don't await them here — they'll be GC'd
-        # by the event loop. (`_emit_tokens` is cancellation-safe.)
+        # ── Phase 1 LOST → Phase 2: Workers AI fallback ──────────────────
+        # Cancel any straggler Sarvam tasks before starting Workers AI so
+        # we don't double-stream. We don't await them here — they'll be
+        # GC'd by the event loop. (`_emit_tokens` is cancellation-safe.)
         for t in _phase1_tasks:
             t.cancel()
 
@@ -2072,44 +2411,60 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             logger.warning(
                 f"[INDIC] Phase 1 LOST — all {len(_sarvam_candidates)} "
                 f"Sarvam keys failed/timed out in {_phase1_elapsed:.0f}ms — "
-                f"falling back to Gemini (Phase 2)"
+                f"falling back to Workers AI (Phase 2)"
             )
 
-        _gemini_keys_for_indic = [
-            p["key"] for p in _LLM_PROVIDERS
-            if p["provider"] == "gemini" and p.get("key")
-        ]
-        if not _gemini_keys_for_indic:
+        if not _CF_AI_ENABLED:
             logger.warning(
-                f"[INDIC] Phase 2 unavailable — no Gemini key configured. "
+                f"[INDIC] Phase 2 unavailable — Workers AI not configured. "
                 f"Returning error for {response_lang}."
             )
             yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
             return
 
-        _gemini_key = _gemini_keys_for_indic[0]
-        _gemini_model = "gemini-2.5-flash"
+        # Strip the Sarvam-specific `/think …` prefix from the system
+        # message — Workers AI doesn't understand the Sarvam `/think`
+        # directive. Replace it with a plain Assamese-only instruction.
+        import re as _re2
+        _wai_msgs = []
+        for _gm in messages:
+            if _gm.get("role") == "system":
+                _gc = _gm["content"]
+                _gc = _re2.sub(r"^/think[^\n]*\n?", "", _gc, flags=_re2.MULTILINE)
+                _gc = (
+                    "CRITICAL: Reply entirely in Assamese (অসমীয়া) script. "
+                    "Do NOT write in English. Every word must be in Assamese. "
+                    "Technical terms/units/proper nouns (AHSEC, SEBA, Newton, cm, kg) may stay in Latin.\n\n"
+                    + _gc.lstrip()
+                )
+                _wai_msgs.append({**_gm, "content": _gc})
+            else:
+                _wai_msgs.append(_gm)
+
+        _wai_model = "@cf/qwen/qwen2.5-72b-instruct"
         _phase2_t0 = time.monotonic()
         logger.info(
-            f"[INDIC] Phase 2 (Gemini-FALLBACK): streaming from "
-            f"gemini/{_gemini_model} for {response_lang}"
+            f"[INDIC] Phase 2 (Qwen FALLBACK): streaming from "
+            f"workers-ai/{_wai_model} for {response_lang}"
         )
+
         _phase2_first_token = False
         try:
-            async for chunk in _emit_tokens(
-                _stream_from_provider("gemini", _gemini_key, _gemini_model)
-            ):
+            from providers.cloudflare_ai import chat_stream as _cf_chat_stream
+            async def _wai_phase2_stream():
+                async for _tok in _cf_chat_stream(_wai_msgs, model_key=_wai_model, max_tokens=max(max_tokens, 1024)):
+                    yield _tok
+            async for chunk in _emit_tokens(_wai_phase2_stream()):
                 if not _phase2_first_token:
                     _ttft_ms = (time.monotonic() - _phase2_t0) * 1000
                     logger.info(
                         f"[INDIC-PERF] Phase 2 TTFT={_ttft_ms:.0f}ms "
-                        f"lang={response_lang} provider=gemini/{_gemini_model}"
+                        f"lang={response_lang} provider=workers-ai/{_wai_model}"
                     )
                     _phase2_first_token = True
                 yield chunk
         except Exception as _ge:
             if _phase2_first_token:
-                # We already streamed something to the client — can't restart.
                 logger.warning(
                     f"[INDIC] Phase 2 mid-stream error: "
                     f"{type(_ge).__name__}: {str(_ge)[:160]}"
@@ -2126,9 +2481,9 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         _phase2_total_ms = (time.monotonic() - _phase2_t0) * 1000
         logger.info(
             f"[INDIC-PERF] Phase 2 Total={_phase2_total_ms:.0f}ms "
-            f"lang={response_lang} provider=gemini/{_gemini_model}"
+            f"lang={response_lang} provider=workers-ai/{_wai_model}"
         )
-        yield f"data: {json.dumps({'__provider': 'gemini'})}\n\n"
+        yield f"data: {json.dumps({'__provider': 'workers-ai'})}\n\n"
         return
 
     # ── All other models: single provider ───────────────────────────────────────

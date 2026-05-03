@@ -5,7 +5,6 @@ import { usePublicStats } from '@/hooks/usePublicStats';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
-import { useTurnstile } from '@/hooks/useTurnstile';
 import { formatAuthError } from '@/lib/authErrors';
 import { toast } from 'sonner';
 import { LogoFull } from '@/components/Logo';
@@ -48,7 +47,6 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const { login } = useAuth();
-  const { getToken: getTurnstileToken, ready: turnstileReady, enabled: turnstileEnabled, reset: resetTurnstile } = useTurnstile();
   const navigate = useNavigate();
 
   const handleInputFocus = useCallback((e) => {
@@ -62,21 +60,19 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      let turnstileToken = '';
-      if (turnstileEnabled) {
-        turnstileToken = await getTurnstileToken();
-      }
-      const user = await login(email, password, turnstileToken);
+      const user = await login(email, password);
       toast.success('Welcome back!');
       setTimeout(() => {
-        if (!user.onboarding_done) {
+        const role = user.role || '';
+        if (role === 'staff' || role === 'admin') {
+          navigate('/staff');
+        } else if (!user.onboarding_done) {
           navigate('/onboarding');
         } else {
           navigate('/library');
         }
       }, 100);
     } catch (err) {
-      try { resetTurnstile(); } catch {}
       setError(formatAuthError(err, 'Login failed. Please check your credentials.'));
     } finally {
       setLoading(false);
@@ -108,7 +104,7 @@ export default function LoginPage() {
           }} />
 
         <div className="relative z-10">
-          <Link to="/" className="inline-block mb-14">
+          <Link to="/" className="inline-block mb-14" aria-label="Go to Syrabit home">
             <LogoFull size="md" textClassName="text-foreground text-2xl" />
           </Link>
 
@@ -176,7 +172,7 @@ export default function LoginPage() {
         </div>
 
         <div className="w-full max-w-sm relative z-10 anim-slide-right">
-          <Link to="/" className="flex items-center gap-2 mb-4 lg:hidden">
+          <Link to="/" className="flex items-center gap-2 mb-4 lg:hidden" aria-label="Go to Syrabit home">
             <LogoFull size="sm" textClassName="text-foreground" />
           </Link>
 
@@ -189,8 +185,12 @@ export default function LoginPage() {
             </div>
 
             {error && (
-              <div className="flex items-center gap-2 text-red-600 rounded-xl p-3 mb-5 text-sm"
-                style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}>
+              <div
+                id="login-error-message"
+                role="alert"
+                className="flex items-center gap-2 text-red-600 rounded-xl p-3 mb-5 text-sm"
+                style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}
+              >
                 <AlertCircle size={16} className="flex-shrink-0" />
                 {error}
               </div>
@@ -200,19 +200,7 @@ export default function LoginPage() {
               <GoogleSignInButton
                 text="signin_with"
                 disabled={loading}
-                getTurnstileToken={turnstileEnabled ? getTurnstileToken : undefined}
-                onSuccess={(user) => {
-                  toast.success('Welcome back!');
-                  setTimeout(() => {
-                    if (!user.onboarding_done) {
-                      navigate('/onboarding');
-                    } else {
-                      navigate('/library');
-                    }
-                  }, 100);
-                }}
                 onError={(err) => {
-                  try { resetTurnstile(); } catch {}
                   setError(formatAuthError(err, 'Google sign-in failed. Please try again.'));
                 }}
               />
@@ -242,6 +230,8 @@ export default function LoginPage() {
                     className="pl-10 h-11"
                     style={{ scrollMarginBottom: '4rem' }}
                     required
+                    aria-invalid={error ? true : undefined}
+                    aria-describedby={error ? 'login-error-message' : undefined}
                     data-testid="auth-email-input"
                   />
                 </div>
@@ -265,11 +255,14 @@ export default function LoginPage() {
                     className="pl-10 pr-11 h-11"
                     style={{ scrollMarginBottom: '4rem' }}
                     required
+                    aria-invalid={error ? true : undefined}
+                    aria-describedby={error ? 'login-error-message' : undefined}
                     data-testid="auth-password-input"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPass(!showPass)}
+                    aria-label={showPass ? 'Hide password' : 'Show password'}
                     className="absolute right-1 top-1/2 -translate-y-1/2 min-w-[44px] min-h-[44px] flex items-center justify-center text-muted-foreground/40 hover:text-foreground transition-colors"
                   >
                     {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
@@ -285,7 +278,7 @@ export default function LoginPage() {
 
               <button
                 type="submit"
-                disabled={loading || (turnstileEnabled && !turnstileReady)}
+                disabled={loading}
                 className="w-full flex items-center justify-center gap-2 h-11 rounded-xl text-sm font-bold text-white transition-all duration-150 active:scale-[0.97] disabled:opacity-60 btn-gradient"
                 data-testid="auth-submit-button"
               >

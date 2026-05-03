@@ -10,6 +10,7 @@ import {
   setAdsUserPlan,
   setAdsAuthChecked,
 } from '@/utils/adsConfig';
+import { supabase } from '@/lib/supabase';
 
 const AuthContext = createContext(null);
 
@@ -29,10 +30,43 @@ export const AuthProvider = ({ children }) => {
       const headers = _inMemoryToken
         ? { Authorization: `Bearer ${_inMemoryToken}` }
         : {};
-      const res = await axios.get(`${API_BASE}/auth/me`, {
-        withCredentials: true,
-        headers,
-      });
+      let res;
+      try {
+        res = await axios.get(`${API_BASE}/auth/me`, {
+          withCredentials: true,
+          headers,
+        });
+      } catch (err) {
+        // If the server signals the access token has expired, attempt a
+        // silent refresh via POST /auth/refresh (httpOnly refresh-cookie
+        // flow). On success the server issues a new access token; we
+        // re-try /auth/me so the caller sees a fully-hydrated user.
+        const status = err?.response?.status;
+        const detail = err?.response?.data?.detail;
+        if (status === 401 && (detail === 'token_expired' || detail === 'jwt_expired')) {
+          try {
+            const refreshRes = await axios.post(
+              `${API_BASE}/auth/refresh`,
+              {},
+              { withCredentials: true },
+            );
+            const newToken = refreshRes?.data?.access_token;
+            if (newToken) {
+              _inMemoryToken = newToken;
+              setAuthToken(newToken);
+              try { sessionStorage.setItem('syrabit_token', newToken); } catch {}
+            }
+            res = await axios.get(`${API_BASE}/auth/me`, {
+              withCredentials: true,
+              headers: newToken ? { Authorization: `Bearer ${newToken}` } : {},
+            });
+          } catch {
+            throw err;
+          }
+        } else {
+          throw err;
+        }
+      }
       const userData = res.data;
       if (userData && userData.id) {
         setUser(userData);
@@ -177,54 +211,86 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const login = async (email, password, turnstileToken = '') => {
-    const headers = turnstileToken ? { 'x-turnstile-token': turnstileToken } : undefined;
-    const res = await axios.post(`${API_BASE}/auth/login`, { email, password }, { withCredentials: true, headers });
+  const _exchangeSupabaseSession = async (supabaseToken, name, consent_dpdp) => {
+    const body = { supabase_token: supabaseToken };
+    if (name) body.name = name;
+    if (consent_dpdp) body.consent_dpdp = consent_dpdp;
+    const res = await axios.post(`${API_BASE}/auth/supabase-session`, body, { withCredentials: true });
     const { user: userData, access_token } = res.data;
     if (access_token) _storeToken(access_token);
     justAuthenticated.current = true;
     setUser(userData);
     hydrateAdsOptOutFromServer(userData?.ads_opt_out);
+    return userData;
+  };
+
+  const login = async (email, password, _turnstileToken = '') => {
+    if (!supabase) throw new Error('Authentication is not configured.');
+    const { data: sbData, error: sbError } = await supabase.auth.signInWithPassword({ email, password });
+    if (sbError) {
+      const err = new Error(sbError.message);
+      err.response = { data: { detail: sbError.message } };
+      throw err;
+    }
+    if (!sbData?.session?.access_token) {
+      throw new Error('No session returned from Supabase');
+    }
+    const userData = await _exchangeSupabaseSession(sbData.session.access_token);
     try { Analytics.login(userData.id, userData.email); } catch {}
     return userData;
   };
 
-  const signup = async (name, email, password, consent_dpdp = false, turnstileToken = '') => {
-    const headers = turnstileToken ? { 'x-turnstile-token': turnstileToken } : undefined;
-    const res = await axios.post(`${API_BASE}/auth/signup`, {
-      name, email, password, consent_dpdp,
-    }, { withCredentials: true, headers });
-    const { user: userData, access_token } = res.data;
-    if (access_token) _storeToken(access_token);
-    justAuthenticated.current = true;
-    setUser(userData);
-    hydrateAdsOptOutFromServer(userData?.ads_opt_out);
+  const signup = async (name, email, password, consent_dpdp = false, _turnstileToken = '') => {
+    if (!supabase) throw new Error('Authentication is not configured.');
+    const { data: sbData, error: sbError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { full_name: name } },
+    });
+    if (sbError) {
+      const err = new Error(sbError.message);
+      err.response = { data: { detail: sbError.message } };
+      throw err;
+    }
+    if (!sbData?.session?.access_token) {
+      throw new Error('Please check your email to confirm your account before signing in.');
+    }
+    const userData = await _exchangeSupabaseSession(sbData.session.access_token, name, consent_dpdp);
     try { Analytics.signup(userData.email, userData.plan); } catch {}
     return userData;
   };
 
-  const googleLogin = async (credential, turnstileToken = '') => {
-    // Task #697 — mirror the email/password flow: forward the
-    // Turnstile token (when the call site obtained one) as the
-    // `x-turnstile-token` header so the backend can fail-closed on
-    // automated attempts. Header is omitted entirely when no token is
-    // supplied so callers in dev / Turnstile-disabled environments
-    // remain backwards-compatible.
-    const headers = turnstileToken ? { 'x-turnstile-token': turnstileToken } : undefined;
-    const res = await axios.post(`${API_BASE}/auth/google`, { credential }, { withCredentials: true, headers });
-    const { user: userData, access_token } = res.data;
-    if (access_token) _storeToken(access_token);
-    justAuthenticated.current = true;
-    setUser(userData);
-    hydrateAdsOptOutFromServer(userData?.ads_opt_out);
-    try { Analytics.login(userData.id, userData.email); } catch {}
-    return userData;
-  };
+  // Task #156 — Handle Google OAuth redirect callback.
+  // After supabase.auth.signInWithOAuth() redirects the user back to the app,
+  // Supabase fires SIGNED_IN with provider='google'. We exchange the Supabase
+  // access token at /api/auth/supabase-session (same path as email/password)
+  // to get our custom httpOnly cookie + JWT.
+  // Email/password sign-ins have provider='email' and are skipped here —
+  // they call _exchangeSupabaseSession directly in login()/signup().
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!supabase) return;
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (event !== 'SIGNED_IN') return;
+        const provider = session?.user?.app_metadata?.provider;
+        if (provider !== 'google') return;
+        try {
+          const userData = await _exchangeSupabaseSession(session.access_token);
+          try { Analytics.login(userData.id, userData.email); } catch {}
+        } catch (err) {
+          console.error('[Auth] Google OAuth token exchange failed:', err);
+        }
+      },
+    );
+    return () => subscription.unsubscribe();
+  }, []); // empty — all captures (_exchangeSupabaseSession, Analytics) are stable
 
   const logout = async () => {
     try {
       await axios.post(`${API_BASE}/auth/logout`, {}, { withCredentials: true });
     } catch {}
+    try { if (supabase) await supabase.auth.signOut(); } catch {}
     _storeToken(null);
     justAuthenticated.current = false;
     localStorage.removeItem('syrabit:onboarding');
@@ -248,7 +314,6 @@ export const AuthProvider = ({ children }) => {
       authChecked,
       login,
       signup,
-      googleLogin,
       logout,
       refreshUser,
       updateUser,

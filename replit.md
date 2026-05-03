@@ -25,7 +25,7 @@ The project is built as a pnpm workspace monorepo, integrating a React + Vite fr
 
 **Backend Architecture:**
 - **Modular Design:** App factory pattern with shared modules and route modules.
-- **AI Integration:** On-demand generation and management of chapter embeddings. Utilizes Vertex AI / Gemini for embeddings, translation, vision analysis, content enhancement, quality scoring, and SEO meta generation via a single-LLM pipeline.
+- **AI Integration:** All AI calls route exclusively through Cloudflare Workers AI (via CF AI Gateway). `vertex_services.py` is a drop-in Workers AI backend — no Google/Gemini credentials used. Covers embeddings (bge-large-en-v1.5, 1024-dim), vision/OCR (llama-3.2-11b), translation (indictrans2 + LLM fallback), content generation (gpt-oss-120b), and all admin tools. `providers/cloudflare_ai.py` handles retry logic with exponential back-off on 429/5xx.
 - **Content Pipeline:** Parallel generation of notes, MCQs, and flashcards using `asyncio.gather` with detailed prompts for exam-ready study notes.
 - **Content Feedback Loop:** Auto-detection of thin chapters, auto-healing with version history, and quality gates.
 - **Admin Analytics:** Dashboard displaying RAG telemetry, chat latency, user counts, content heatmaps, and a historical alert log.
@@ -44,9 +44,15 @@ The project is built as a pnpm workspace monorepo, integrating a React + Vite fr
 - **Data State (2026-04-29):** MongoDB `test_database` now has 99 subjects (AHSEC: 28, DEGREE: 65, other: 6) and 593 chapters. AHSEC sub-style subjects (sub1–sub50) have been synced with correct `board_slug`, `class_slug`, `stream_slug` metadata from D1. DEGREE NEP semester subjects fixed with `board_slug=degree`. `resolve-subject` (with-stream variant) now returns full metadata. Library bundle correctly shows 91 public subjects with chapter counts. Chapter content for AHSEC (500 chapters) is placeholder — requires AI generation via admin panel.
 - **Neural Mesh (2026-04-29):** `neural_mesh.py` implements multi-tier caching + inflight deduplication. `NeuralMesh` class: L1 in-process TTLCache, `AsyncBarrier` for concurrent request dedup (concurrent requests share one DB round-trip). Startup `warm_all()` pre-warms 200 chapter paths + library bundle (both slim/full variants) + populates `_content_cache` in `cache.py`. `topic_graph.py` rewritten: `_resolve_chapter_path` cached (3600s TTL), cross-chapter topics use ONE batch `$in` query instead of N sequential queries. Performance: `library-bundle?slim=1` went 2400ms→12ms (first request), `topics-related` went 4665ms→7ms (on cache hits). Metrics exposed via `get_mesh_stats()` + `neural_mesh_stats` log every 5 min.
 - **Databases:** PostgreSQL, MongoDB, Cloudflare D1.
-- **Authentication:** Supabase, JWT helpers, Google OAuth.
+- **Authentication:** Supabase Auth for email/password sign-in and sign-up (frontend uses `@supabase/supabase-js`). After a successful Supabase auth call, the frontend exchanges the Supabase access token at `/api/auth/supabase-session` which issues the app's custom httpOnly session cookie and JWT. Google OAuth still uses the existing `/api/auth/google` endpoint. Cloudflare Turnstile removed from all auth flows.
 - **Caching:** Cloudflare AI Gateway (upstream LLM cache), Cloudflare edge worker KV bindings.
 - **LLM Providers (2026-04-29):** Cloudflare Workers AI is now the PRIMARY provider for all three pools — `llama-3.3-70b-instruct-fp8-fast` for chat/general, `gpt-oss-120b` for admin content generation. Gemini, Groq, Cerebras, OpenRouter remain as ordered fallbacks. Workers AI also handles Assamese/Indic translation via `indictrans2-en-indic-1B` (replaces Sarvam as primary), and embeddings via `bge-large-en-v1.5` (1024-dim, matches Vectorize). All LLM traffic routes through Cloudflare AI Gateway (`CF_AI_GATEWAY_ID=syrabit`).
+- **Pinecone Inference API (2026-04-30):** `providers/pinecone_ai.py` — REST-only (no SDK). Embed: `multilingual-e5-large` (1024-dim, matches Atlas `vector_index`, multilingual incl. Assamese). Rerank: `bge-reranker-v2-m3` (multilingual reranker, ~400ms warm). Integrated into `rag.py::_fetch_internal_chapters`: fetches 5× candidates from MongoDB keyword search then reranks with Pinecone; falls back to keyword order on timeout/error. Architecture doc: `docs/db_delegation_architecture.md`.
+- **Assamese translation cache (2026-04-30):** `routes/ai_chat.py::_assamese_translate_gemini_main_sarvam_polish` now caches every successful translation in Upstash Redis (`tr:<MD5>`, TTL=30min). Cache hit eliminates the ~2.5s Gemini+Sarvam round-trip for repeated phrases/questions.
+- **Sarvam primary translation (2026-04-30):** Translation pipeline flipped — Sarvam `translate:v1` is now PRIMARY (Step 0, ~300-1200ms, purpose-built for Indic languages), Gemini is FALLBACK (Step 1), Sarvam-m LLM polish is STEP 2 (only applies when Gemini fallback was used). Assamese output quality improved — dedicated Sarvam translation model vs general-purpose Gemini.
+- **Hybrid RAG pipeline (2026-04-30):** `rag.py` now runs keyword search + semantic vector search in PARALLEL. `_fetch_chunks_semantic()` embeds query via Pinecone → `$vectorSearch` on chunks → fetch chapters. Results are deduplicated by chapter_id then Pinecone reranked. Keyword search also includes `content_as` (Assamese content field) so Assamese queries match translated content.
+- **Chunk embedding (2026-04-30):** `providers/chunk_embedder.py` — batch embeds chunks collection using Pinecone `multilingual-e5-large`. Ran on all 1,841 existing chunks (1,107 newly embedded) → 100% coverage. `$vectorSearch` is now fully active. Also provides `translate_chapters_to_assamese()` for content_as generation. New admin endpoints: `POST /admin/vector/embed-chunks-bulk`, `POST /admin/content/translate-assamese-bulk`, `GET /admin/vector/chunks-stats`.
+- **SyllabusEmbedder upgraded (2026-04-30):** `embed_chapter()` and `classify()` now use Pinecone `multilingual-e5-large` as primary embed provider, with `vertex_services` as fallback. Multilingual embeddings improve Assamese query classification accuracy.
 - **Payment Gateways:** Razorpay (INR), Stripe (USD).
 - **Email Service:** CF Email Worker (`syrabit-email`) is now PRIMARY (zero-cost under CF credits), deployed at `https://syrabit-email.axomxplain.workers.dev`. Uses CF `send_email` binding + `mimetext`. Backend (`email_templates.py`) tries CF worker first, falls back to Resend. Auth via `EMAIL_WORKER_AUTH_KEY` secret. CF Email Routing requires manual DNS fix (remove Hostinger MX records, keep only CF MX). Until routing is live, Resend handles all delivery. Env vars: `EMAIL_WORKER_URL`, `EMAIL_WORKER_AUTH_KEY` (shared secrets).
 - **UI/UX Frameworks:** React, Vite, React Router, Tailwind CSS.
@@ -55,8 +61,8 @@ The project is built as a pnpm workspace monorepo, integrating a React + Vite fr
 - **Schema Validation:** Zod.
 - **API Codegen:** Orval.
 - **Build Tools:** esbuild, pnpm, Docker.
-- **Production Deployment:** Hybrid architecture with FastAPI on Railway, Cloudflare Worker edge proxy, and frontend on Cloudflare Pages. **Deployed 2026-04-29:** Edge worker `syrabit-edge` v`d8509bb0` (bundled, no --no-bundle), Pages frontend `d4344f1d` live at `syrabit.ai` + `www.syrabit.ai`, email worker `syrabit-email` v`111055bc`. CF Pages project name: `syrabit-analytics` (subdomain: `syrabit-zip-convert.pages.dev`). Build config fixed: `pnpm --filter @workspace/syrabit run build:client` (not full prerender build). Pages deployed via `CLOUDFLARE_ACCOUNT_ID` env var bypass for wrangler `/memberships` check. App.jsx: removed broken inline lazy imports for non-existent staff/jarvis routes.
-- **Cloudflare Services (Enterprise):** Cloudflare Cache Purge API, Worker Cache API, IndexNow Integration, Vectorize (syllabus-index-v2 1024-dim + syllabus-index 768-dim legacy), D1 (syrabit-content + syrabit-content-preview), KV namespaces (RATE_LIMIT, BOT_HTML_CACHE), Smart Placement, Workers Observability (10% sampling), Workers Logpush, Enterprise WAF (security_level=high, image_resizing=on). Edge worker `wrangler.toml` upgraded Apr 2026: compatibility_date=2025-05-01, nodejs_compat_v2 flag, Vectorize bindings enabled, enterprise AI models (llama-3.3-70b-instruct-fp8-fast for chat, bge-large-en-v1.5 for embed, whisper-large-v3-turbo for STT). New endpoint: POST /api/edge/search — edge-side semantic search via Vectorize + Workers AI with no backend round-trip.
+- **Production Deployment:** Hybrid architecture with FastAPI on Railway, Cloudflare Worker edge proxy, and frontend on Cloudflare Pages. **Deployed 2026-04-29:** Edge worker `syrabit-edge` v`d8509bb0` (bundled, no --no-bundle), Pages frontend `d4344f1d` live at `syrabit.ai` + `www.syrabit.ai`, email worker `syrabit-email` v`111055bc`. CF Pages project name: `syrabit-analytics` (subdomain: `syrabit-zip-convert.pages.dev`). Build config fixed: `pnpm --filter @workspace/syrabit run build:client` (not full prerender build). Pages deployed via `CLOUDFLARE_ACCOUNT_ID` env var bypass for wrangler `/memberships` check. App.jsx: removed broken inline lazy imports for non-existent staff/jarvis routes (staff routes now fully implemented — see Staff Portal below).
+- **Cloudflare Services (Enterprise):** Cloudflare Cache Purge API, Worker Cache API, IndexNow Integration, Vectorize (syllabus-index-v2 1024-dim + syllabus-index 768-dim legacy), D1 (syrabit-content + syrabit-content-preview), KV namespaces (RATE_LIMIT, BOT_HTML_CACHE), Smart Placement, Workers Observability (10% sampling), Workers Logpush, Enterprise WAF (security_level=high, image_resizing=on). Edge worker `wrangler.toml` upgraded Apr 2026: compatibility_date=2025-05-01, nodejs_compat_v2 flag, Vectorize bindings enabled, enterprise AI models. Phase 5 (Task #109): Analytics Engine dataset `syrabit-edge-metrics` for per-request metrics (cache hit/miss, chapter ID, AI provider, response time); RateLimiter Durable Object for strongly-consistent sliding-window rate limiting (replaces KV-based rate limit); `/api/edge/analytics` endpoint queries AE SQL API; EdgeMetricsPanel in AdminHealth. Deploy: `cd workers/edge-proxy && wrangler deploy` (runs [[migrations]] v1 for DO namespace).
 - **Observability:** Firebase Performance Monitoring for RUM and Core Web Vitals. OpenTelemetry for distributed tracing to Cloud Trace.
 
 ## Cloudflare Upgrade Script
@@ -74,6 +80,46 @@ Steps requiring extra token permissions (skip gracefully if absent):
 - **Step 3** R2: Enable R2 in Dashboard first, then re-run.
 - **Step 4** WAF: Needs `Zone > Firewall Services > Edit`.
 - **Step 6** Rate Limiting: Needs `Zone > Rate Limiting > Edit`.
+
+## Staff Portal
+
+A separate content management panel for staff users (role=`staff`) built at `/staff`.
+
+**Route:** `GET /staff` — protected by `StaffGuard` (redirects to `/login` if not staff/admin)
+
+**Login:** Staff log in through the regular `/login` page. After successful login the `LoginPage` checks `user.role === 'staff'` and redirects to `/staff` automatically.
+
+**Staff accounts (seeded 2026-04-30):**
+| Name | Email |
+|---|---|
+| Rohan Sahu | priya.sharma@syrabit.ai |
+| Prakash Sahu | rahul.bora@syrabit.ai |
+| Pari Saikia | ananya.das@syrabit.ai |
+| Nahida Ahmed | kunal.bhuyan@syrabit.ai |
+| Rashmita Sharma | riya.gogoi@syrabit.ai |
+
+> **Passwords are never stored in this file.** Current hashes live in MongoDB. To look up or rotate credentials use the `STAFF_PASSWORDS` Replit secret.
+
+**Password management:**
+- Passwords are stored as bcrypt hashes in MongoDB — never in plaintext.
+- To re-seed with new passwords, set the `STAFF_PASSWORDS` secret (comma-separated, one per account in order) then run `python scripts/seed_staff_users.py --update` from the backend root.
+- Staff can also change their own password any time from the "Change password" button in the staff portal sidebar — no admin required.
+
+**Backend API endpoints (require `role=staff` or `role=admin`):**
+- `GET /api/staff/content/boards` — list boards
+- `GET /api/staff/content/classes` — list classes
+- `GET /api/staff/content/streams` — list streams
+- `GET /api/staff/content/subjects` — list all subjects (including drafts)
+- `GET /api/staff/content/chapters/{subject_id}` — list chapters in a subject
+- `GET /api/staff/content/chapter/{chapter_id}` — get chapter detail
+- `PATCH /api/staff/content/chapter/{chapter_id}` — update chapter (fields: title, description, content, status only)
+
+**Frontend files:**
+- `artifacts/syrabit/src/components/StaffGuard.jsx` — route guard
+- `artifacts/syrabit/src/pages/staff/StaffDashboard.jsx` — full dashboard
+- `artifacts/syrabit-backend/routes/staff_content.py` — API routes
+- `artifacts/syrabit-backend/auth_deps.py` — `get_staff_user()` dependency
+- `artifacts/syrabit-backend/scripts/seed_staff_users.py` — seed script
 
 ## GitHub Sync Scripts
 

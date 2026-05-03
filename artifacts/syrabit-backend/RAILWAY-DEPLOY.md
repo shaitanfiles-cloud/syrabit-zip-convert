@@ -58,8 +58,8 @@ railway variables set ADMIN_JWT_SECRET="$(python3 -c 'import secrets;print(secre
 railway variables set ADMIN_EMAILS="admin@syrabit.ai"
 railway variables set ADMIN_PASSWORDS="your-secure-password"
 railway variables set ADMIN_NAMES="Admin"
-railway variables set GOOGLE_CLIENT_ID="xxx.apps.googleusercontent.com"
-railway variables set GOOGLE_CLIENT_SECRET="GOCSPx-xxx"
+railway variables set GOOGLE_OAUTH_CLIENT_ID="xxx.apps.googleusercontent.com"
+railway variables set GOOGLE_OAUTH_CLIENT_SECRET="GOCSPx-xxx"
 
 # CORS & Cookies
 railway variables set CORS_ORIGINS="https://syrabit.ai,https://www.syrabit.ai,https://api.syrabit.ai"

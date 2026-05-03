@@ -5,6 +5,8 @@ import { AuthProvider } from "@/context/AuthContext";
 import { LanguageProvider } from "@/context/LanguageContext";
 import { AuthGuard } from "@/components/AuthGuard";
 import { AdminGuard } from "@/components/AdminGuard";
+import { StaffGuard } from "@/components/StaffGuard";
+import GoogleOAuthCallbackEffect from "@/components/GoogleOAuthCallbackEffect";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "./queryClient";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -23,6 +25,7 @@ const LazyGlobalSeo = lazy(() => import("@/components/seo/GlobalSeo"));
 // the 5 content pages that render <TrustpilotReviewsSection />.
 const LazyGlobalTrustpilotJsonLd = lazy(() => import("@/components/seo/GlobalTrustpilotJsonLd"));
 import { apiClient } from "@/utils/api";
+import { probeImageResizer } from "@/utils/imageCdn";
 
 // ── React Query client ────────────────────────────────────────────────────────
 // `queryClient` lives in its own leaf module (`./queryClient`) so it has no
@@ -97,6 +100,7 @@ const PrivacyPage        = lazy(() => import("@/pages/PrivacyPage"));
 const NotFoundPage       = lazy(() => import("@/pages/NotFoundPage"));
 const AdminLoginPage     = lazy(() => import("@/pages/AdminLoginPage"));
 const AdminPage          = lazy(() => import("@/pages/AdminPage"));
+const StaffDashboard     = lazy(() => import("@/pages/staff/StaffDashboard"));
 const ExamRoutinePage    = lazy(() => import("@/pages/ExamRoutinePage"));
 const CurriculumMap      = lazy(() => import("@/pages/CurriculumMap"));
 const PaymentSuccessPage = lazy(() => import("@/pages/PaymentSuccessPage"));
@@ -266,7 +270,9 @@ function LegacyTopicRedirect() {
 // ── Routes (extracted so SSR can render them inside a StaticRouter) ───────
 export function AppRoutes() {
   return (
-    <Routes>
+    <>
+      <GoogleOAuthCallbackEffect />
+      <Routes>
       {/* ── Public routes ── */}
       <Route path="/"         element={<Navigate to="/chat" replace />} />
       <Route path="/home"     element={<LandingPage />} />
@@ -294,8 +300,11 @@ export function AppRoutes() {
           Both routes render the same component so neither produces a
           404, and prerender-library.mjs writes static HTML for both. */}
       <Route path="/browser"           element={<LibraryPage />} />
-      {/* Task #577 — Educational web browser (curated, reader-mode). */}
-      <Route path="/browse"            element={<BrowserPage />} />
+      {/* Task #577 — Educational web browser (curated, reader-mode).
+          /browse renders BrowsePage (simple reader + ask panel).
+          /browser-tabs is the multi-tab BrowserPage for power users. */}
+      <Route path="/browse"            element={<BrowsePage />} />
+      <Route path="/browser-tabs"      element={<BrowserPage />} />
       <Route path="/curriculum"        element={<CurriculumMap />} />
       <Route path="/subject/:subjectId" element={<SubjectPage />} />
 
@@ -350,9 +359,13 @@ export function AppRoutes() {
       <Route path="/admin/login" element={<AdminLoginPage />} />
       <Route path="/admin"       element={<AdminGuard><AdminPage /></AdminGuard>} />
 
+      {/* ── Staff routes ── */}
+      <Route path="/staff" element={<StaffGuard><StaffDashboard /></StaffGuard>} />
+
       {/* ── 404 ── */}
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
+    </>
   );
 }
 
@@ -394,6 +407,12 @@ export function AppShell({ children, ssr = false, helmetContext }) {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 function App() {
+  // Probe Cloudflare Image Resizing once on mount. If the plan add-on is not
+  // active, probeImageResizer() calls markImageResizerUnavailable() so every
+  // subsequent cdnImage() / cdnSrcSet() call silently returns the original URL
+  // instead of a broken /cdn-cgi/image/ path. No-op when VITE_DISABLE_IMAGE_CDN=1.
+  useEffect(() => { probeImageResizer('/logo-56.webp'); }, []); // eslint-disable-line
+
   useEffect(() => { prefetchCriticalRoutes(); }, []); // eslint-disable-line
 
   useEffect(() => {

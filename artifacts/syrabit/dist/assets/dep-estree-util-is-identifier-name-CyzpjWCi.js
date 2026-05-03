@@ -1,1 +1,0 @@
-const o=/[$_\p{ID_Start}]/u,e=/[$_\u{200C}\u{200D}\p{ID_Continue}]/u,r=/[-$_\u{200C}\u{200D}\p{ID_Continue}]/u,u={};function c(t){return t?o.test(String.fromCodePoint(t)):!1}function a(t,n){const s=(n||u).jsx?r:e;return t?s.test(String.fromCodePoint(t)):!1}export{a as c,c as s};

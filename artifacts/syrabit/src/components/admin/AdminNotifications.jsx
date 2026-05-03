@@ -137,6 +137,16 @@ export default function AdminNotifications({ adminToken, onNavigate }) {
     } catch { toast.error('Failed to delete'); }
   };
 
+  const handleMarkRead = async (id) => {
+    try {
+      await axios.patch(`${API_BASE}/admin/notifications/${id}/read`, {}, {
+        headers: adminHeaders(adminToken),
+        withCredentials: true,
+      });
+      setNotifs((prev) => prev.map((n) => n.id === id ? { ...n, read: true } : n));
+    } catch { toast.error('Failed to mark as read'); }
+  };
+
   const adminAxios = useCallback((url) => axios.get(url, {
     headers: adminHeaders(adminToken),
     withCredentials: true,
@@ -440,6 +450,16 @@ export default function AdminNotifications({ adminToken, onNavigate }) {
                       <p className="text-[11px] text-gray-500 truncate">{n.message}</p>
                       <p className="text-[10px] text-gray-400 mt-0.5">→ {n.audience}</p>
                     </div>
+                    {!n.read && (
+                      <button
+                        onClick={() => handleMarkRead(n.id)}
+                        aria-label="Mark as read"
+                        title="Mark as read"
+                        className="opacity-0 group-hover:opacity-100 p-1 text-gray-300 hover:text-emerald-500 transition-all"
+                      >
+                        <Eye size={12} />
+                      </button>
+                    )}
                     <button
                       onClick={() => handleDelete(n.id)}
                       className="opacity-0 group-hover:opacity-100 p-1 text-gray-300 hover:text-red-500 transition-all"

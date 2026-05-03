@@ -338,9 +338,9 @@ export default function SubjectLandingPage() {
                       {i + 1}
                     </span>
                     <div className="flex-1 min-w-0">
-                      <h3 className="text-sm font-semibold text-foreground group-hover/ch:text-violet-600 transition-colors">
+                      <h2 className="text-sm font-semibold text-foreground group-hover/ch:text-violet-600 transition-colors">
                         {ch.title}
-                      </h3>
+                      </h2>
                       {ch.description && (
                         <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{ch.description}</p>
                       )}
@@ -352,6 +352,16 @@ export default function SubjectLandingPage() {
                       <ChevronRight size={16} className="text-muted-foreground/40 group-hover/ch:text-violet-600 transition-colors" />
                     </div>
                   </Link>
+                  {ch.id && (
+                    <div className="border-t border-border/30 px-5 py-2">
+                      <Link
+                        to={`/chat?subject=${subject.id || subject._id || ''}&chapter=${ch.id}`}
+                        className="flex items-center gap-1.5 text-xs text-violet-600 hover:text-violet-700 transition-colors"
+                      >
+                        <Sparkles size={11} /> Ask AI about this chapter
+                      </Link>
+                    </div>
+                  )}
                 </div>
               );
 
@@ -379,7 +389,7 @@ export default function SubjectLandingPage() {
 
         {subject.tags?.length > 0 && (
           <div className="mt-8 p-5 rounded-2xl glass-card">
-            <h3 className="text-sm font-semibold text-muted-foreground mb-3">Related Topics</h3>
+            <h2 className="text-sm font-semibold text-muted-foreground mb-3">Related Topics</h2>
             <div className="flex flex-wrap gap-2">
               {subject.tags.map((tag) => (
                 <span key={tag} className="text-xs px-3 py-1.5 rounded-full bg-violet-500/5 text-violet-600 border border-violet-500/15">
@@ -391,7 +401,10 @@ export default function SubjectLandingPage() {
         )}
 
         <TrustpilotReviewsSection
-          subheading={`Verified Trustpilot reviews from students using Syrabit.ai for ${boardName} ${className} ${subjectName}.`}
+          subheading={`Finding Syrabit.ai useful for ${boardName} ${className} ${subjectName}? Share your experience and help other students.`}
+          subjectName={subjectName}
+          boardName={boardName}
+          className={className}
         />
 
         <nav className="mt-10 pt-6 border-t border-border/30" aria-label="Site navigation">

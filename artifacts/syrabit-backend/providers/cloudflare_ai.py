@@ -41,7 +41,7 @@ _ACCOUNT_ID  = os.environ.get("CF_AI_GATEWAY_ACCOUNT_ID", "").strip()
 _API_TOKEN   = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
 _GW_ID       = os.environ.get("CF_AI_GATEWAY_ID", "").strip()
 _GW_TOKEN    = os.environ.get("CF_AI_GATEWAY_TOKEN", "").strip()
-_GW_CACHE_TTL = int(os.environ.get("CF_AI_GATEWAY_CACHE_TTL", "3600"))
+_GW_CACHE_TTL = int(os.environ.get("CF_AI_GATEWAY_CACHE_TTL", "86400"))
 
 # Use AI Gateway URL when available — adds caching + logging in CF dashboard
 if _ACCOUNT_ID and _GW_ID:
@@ -53,11 +53,14 @@ _ENABLED = bool(_ACCOUNT_ID and _API_TOKEN)
 
 # ── Model catalog ─────────────────────────────────────────────────────────────
 MODELS = {
-    "chat":        "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-    "chat_long":   "@cf/openai/gpt-oss-120b",
-    "chat_code":   "@cf/qwen/qwen2.5-coder-32b-instruct",
-    "chat_fast":   "@cf/meta/llama-3.1-8b-instruct-fp8",
-    "chat_indic":  "@cf/aisingapore/gemma-sea-lion-v4-27b-it",
+    "chat":          "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "chat_long":     "@cf/openai/gpt-oss-120b",
+    "chat_gpt_oss":  "@cf/openai/gpt-oss-20b",
+    "chat_qwen":     "@cf/qwen/qwen2.5-72b-instruct",
+    "chat_code":     "@cf/qwen/qwen2.5-coder-32b-instruct",
+    "chat_fast":     "@cf/meta/llama-3.1-8b-instruct-fp8",
+    "chat_ultrafast": "@cf/meta/llama-3.2-3b-instruct",
+    "chat_indic":    "@cf/aisingapore/gemma-sea-lion-v4-27b-it",
     "embed":       "@cf/baai/bge-large-en-v1.5",
     "embed_multi": "@cf/baai/bge-m3",
     "embed_small": "@cf/baai/bge-small-en-v1.5",
@@ -101,18 +104,76 @@ def _model_url(model_key: str) -> str:
     return f"https://api.cloudflare.com/client/v4/accounts/{_ACCOUNT_ID}/ai/run/{model}"
 
 
+# ── Rate-limit retry config ────────────────────────────────────────────────────
+# Workers AI returns 429 when a per-model RPM window is hit.  Back off with
+# truncated exponential jitter: 1s → 2s → 4s (max 3 attempts).  5xx errors
+# from the gateway (transient upstream timeouts) are retried once.
+_POST_MAX_RETRIES = int(os.environ.get("CF_AI_POST_MAX_RETRIES", "3"))
+_POST_RETRY_BASE_S = float(os.environ.get("CF_AI_POST_RETRY_BASE_S", "1.0"))
+
+
 async def _post(model_key: str, payload: dict, *, stream: bool = False,
                 timeout: float = 90.0) -> Any:
+    """POST to a Workers AI model endpoint with automatic 429/5xx retry.
+
+    Retry policy (non-streaming only):
+      - 429 (rate-limited): exponential back-off with jitter, up to
+        _POST_MAX_RETRIES attempts total.
+      - 5xx (transient gateway error): single immediate retry.
+      - Any other 4xx or final failure: raise_for_status().
+    Streaming responses are NOT retried (caller controls the stream lifecycle).
+    """
+    import random  # stdlib, cheap import
     url = _model_url(model_key)
     client = await _get_client()
     headers = {**_headers(), "Content-Type": "application/json"}
     if stream:
         headers["Accept"] = "text/event-stream"
-    resp = await client.post(url, json=payload, headers=headers, timeout=timeout)
-    resp.raise_for_status()
-    if stream:
-        return resp
-    data = resp.json()
+
+    last_resp = None
+    for attempt in range(1, _POST_MAX_RETRIES + 1):
+        resp = await client.post(url, json=payload, headers=headers, timeout=timeout)
+        last_resp = resp
+
+        if stream:
+            resp.raise_for_status()
+            return resp
+
+        if resp.status_code == 429:
+            if attempt == _POST_MAX_RETRIES:
+                break
+            # Respect Retry-After header if present, else exponential back-off
+            retry_after = resp.headers.get("retry-after", "")
+            try:
+                wait_s = float(retry_after)
+            except (ValueError, TypeError):
+                wait_s = _POST_RETRY_BASE_S * (2 ** (attempt - 1)) * (0.5 + random.random() * 0.5)
+            wait_s = min(wait_s, 30.0)
+            logger.warning(
+                "[cf-ai] %s 429 rate-limited (attempt %d/%d) — waiting %.1fs",
+                MODELS.get(model_key, model_key), attempt, _POST_MAX_RETRIES, wait_s,
+            )
+            await asyncio.sleep(wait_s)
+            continue
+
+        if resp.status_code >= 500 and attempt < _POST_MAX_RETRIES:
+            wait_s = _POST_RETRY_BASE_S * attempt
+            logger.warning(
+                "[cf-ai] %s HTTP %d (attempt %d/%d) — retrying in %.1fs",
+                MODELS.get(model_key, model_key), resp.status_code, attempt, _POST_MAX_RETRIES, wait_s,
+            )
+            await asyncio.sleep(wait_s)
+            continue
+
+        resp.raise_for_status()
+        data = resp.json()
+        if "result" in data:
+            return data["result"]
+        return data
+
+    # All retries exhausted — surface the final 429 / 5xx
+    last_resp.raise_for_status()
+    data = last_resp.json()
     if "result" in data:
         return data["result"]
     return data

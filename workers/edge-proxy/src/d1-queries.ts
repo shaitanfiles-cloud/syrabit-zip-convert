@@ -358,6 +358,36 @@ export async function getSitemapEntries(db: D1Database, pageType?: string): Prom
   }
 }
 
+/**
+ * Task #246 — Delta sitemap: pages created OR updated within the last 48 h,
+ * capped at `cap` rows, ordered newest-first. Used to serve /sitemap-delta.xml
+ * so Googlebot and Bingbot see a fast-refresh sub-sitemap between full crawls.
+ *
+ * Uses COALESCE(updated_at, created_at) so newly-published pages that have no
+ * updated_at yet are included in the window.
+ *
+ * `sinceIso` is an ISO-8601 string (e.g. "2026-04-29T00:00:00.000Z"). D1
+ * stores timestamps as ISO text, so lexicographic comparison is correct.
+ */
+export async function getDeltaSitemapEntries(
+  db: D1Database,
+  sinceIso: string,
+  cap: number = 1000,
+): Promise<Array<{ board_slug: string; class_slug: string; subject_slug: string; topic_slug: string; page_type: string; updated_at: string }> | null> {
+  try {
+    const { results } = await db.prepare(
+      "SELECT board_slug, class_slug, subject_slug, topic_slug, page_type, " +
+      "COALESCE(updated_at, created_at) AS updated_at " +
+      "FROM seo_pages WHERE status = 'published' " +
+      "AND COALESCE(updated_at, created_at) >= ? " +
+      "ORDER BY COALESCE(updated_at, created_at) DESC LIMIT ?"
+    ).bind(sinceIso, cap).all<{ board_slug: string; class_slug: string; subject_slug: string; topic_slug: string; page_type: string; updated_at: string }>();
+    return results;
+  } catch {
+    return null;
+  }
+}
+
 export async function getSeoPagesByType(
   db: D1Database,
   pageType: string,

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import MarkdownRenderer from '@/components/MarkdownRenderer';
@@ -637,7 +638,9 @@ export default function ChapterPage() {
   const topicParam = searchParams.get('topic') || searchParams.get('highlight') || '';
   const chunkParam = searchParams.get('chunk') || '';
   const rchunkParam = searchParams.get('rchunk') || '';
-  useEffect(() => { highlightDoneRef.current = false; }, [chapterSlug]);
+  const fromChatParam = searchParams.get('from') === 'chat';
+  const [fromChatTopicSlug, setFromChatTopicSlug] = useState(null);
+  useEffect(() => { highlightDoneRef.current = false; setFromChatTopicSlug(null); }, [chapterSlug]);
   useEffect(() => {
     if (loading || !data) return;
     if (highlightDoneRef.current) return;
@@ -785,6 +788,13 @@ export default function ChapterPage() {
     };
 
     const applyHighlight = (el) => {
+      // Task #64 — if arrived from chat, detect which TopicAnswerCard
+      // was matched and trigger the green flash on it.
+      if (fromChatParam) {
+        const card = el.closest('[data-topic-answer-card]') || el.querySelector('[data-topic-answer-card]');
+        const slug = card?.dataset?.topicSlug || null;
+        if (slug) setFromChatTopicSlug(slug);
+      }
       document.querySelectorAll('.highlight-active, .highlight-section-start, .highlight-section-end, .highlight-single').forEach(e => {
         e.classList.remove('highlight-active', 'highlight-section-start', 'highlight-section-end', 'highlight-single');
       });
@@ -821,6 +831,7 @@ export default function ChapterPage() {
         cleanUrl.searchParams.delete('highlight');
         cleanUrl.searchParams.delete('chunk');
         cleanUrl.searchParams.delete('rchunk');
+        cleanUrl.searchParams.delete('from');
         window.history.replaceState(window.history.state, '', cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
       } catch {}
     };
@@ -1189,7 +1200,7 @@ export default function ChapterPage() {
 
           <div className="flex items-center gap-2 mt-4 flex-wrap">
             <Link
-              to={`/chat?subject=${subjectSlug}`}
+              to={`/chat?subject=${data?.subject_id || subjectSlug}&chapter=${data?.chapter_id || ''}`}
               onClick={() => Analytics.chapterAskAi(subjectSlug, data?.topic_title || data?.chapter_title || chapterSlug)}
               className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white transition-all hover:opacity-90 active:scale-95"
               style={{ background: 'linear-gradient(135deg, #7c3aed, #8b5cf6)', boxShadow: '0 2px 10px rgba(139,92,246,0.20)' }}
@@ -1204,13 +1215,15 @@ export default function ChapterPage() {
             >
               {sharing ? <svg className="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> : <Share2 size={14} />} {contentLang === 'as' ? 'শ্বেয়াৰ' : 'Share'}
             </button>
-            <button
-              onClick={() => setQuizOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-muted-foreground transition-all hover:text-foreground hover:bg-accent/30 active:scale-95"
-              style={{ border: '1px solid hsl(var(--border) / 0.3)' }}
-            >
-              <HelpCircle size={14} /> {contentLang === 'as' ? 'কুইজ' : 'Quiz Me'}
-            </button>
+            {!isQuestionPaper && (
+              <button
+                onClick={() => setQuizOpen(true)}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-muted-foreground transition-all hover:text-foreground hover:bg-accent/30 active:scale-95"
+                style={{ border: '1px solid hsl(var(--border) / 0.3)' }}
+              >
+                <HelpCircle size={14} /> {contentLang === 'as' ? 'কুইজ' : 'Quiz Me'}
+              </button>
+            )}
             {isQuestionPaper ? (
               <span className="ml-auto px-3 py-1 rounded-lg text-xs font-bold bg-amber-100 text-amber-700 border border-amber-200">
                 Question Paper
@@ -1267,13 +1280,17 @@ export default function ChapterPage() {
                   contract is preserved. */}
               {publishedTopics.length > 0 && (
                 <div data-testid="topic-answer-cards" className="mb-8">
-                  {publishedTopics.map((t) => (
-                    <TopicAnswerCard
-                      key={t.id || t.topic_slug}
-                      topic={t}
-                      chapterUrl={chapterUrl}
-                    />
-                  ))}
+                  {publishedTopics.map((t) => {
+                    const tSlug = t.topic_slug || t.slug || '';
+                    return (
+                      <TopicAnswerCard
+                        key={t.id || tSlug}
+                        topic={t}
+                        chapterUrl={chapterUrl}
+                        fromChat={!!(fromChatTopicSlug && fromChatTopicSlug === tSlug)}
+                      />
+                    );
+                  })}
                 </div>
               )}
               {/* Topical-mapping — siblings + cross-chapter related
@@ -1333,7 +1350,7 @@ export default function ChapterPage() {
                   related={related}
                   subjectName={subjectName}
                   subjectPath={basePath}
-                  chatHref={`/chat?subject=${subjectSlug}`}
+                  chatHref={`/chat?subject=${data?.subject_id || subjectSlug}&chapter=${data?.chapter_id || ''}`}
                   contentLang={contentLang}
                 />
               );
@@ -1353,7 +1370,10 @@ export default function ChapterPage() {
         </div>
 
         <TrustpilotReviewsSection
-          subheading={`Verified Trustpilot reviews from students using Syrabit.ai for ${subjectName} ${className} notes.`}
+          subheading={`Finding Syrabit.ai helpful for ${subjectName} ${className}? Share your experience and help other students.`}
+          subjectName={subjectName}
+          boardName={boardName}
+          className={className}
         />
 
         <nav className="mt-10 pt-6 border-t border-border/30" aria-label="Site navigation">
@@ -1377,14 +1397,19 @@ export default function ChapterPage() {
         sourceTitle={`${chapterTitle} — ${subjectName}`}
         chapterRef={`${board}/${classSlug}/${subjectSlug}/${chapterSlug}`}
         subjectName={subjectName}
+        hideQuiz={isQuestionPaper}
+        hideSave={isQuestionPaper}
       />
-      <QuizModal
-        open={quizOpen} onClose={() => setQuizOpen(false)}
-        topic={chapterTitle} subject_name={subjectName}
-        chapter_ref={`${board}/${classSlug}/${subjectSlug}/${chapterSlug}`}
-        response_lang={contentLang}
-        count={7}
-      />
+      {!isQuestionPaper && typeof document !== 'undefined' && createPortal(
+        <QuizModal
+          open={quizOpen} onClose={() => setQuizOpen(false)}
+          topic={chapterTitle} subject_name={subjectName}
+          chapter_ref={`${board}/${classSlug}/${subjectSlug}/${chapterSlug}`}
+          response_lang={contentLang}
+          count={7}
+        />,
+        document.body,
+      )}
     </div>
   );
 }

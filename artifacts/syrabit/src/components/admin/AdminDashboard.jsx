@@ -427,6 +427,7 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
   // when the API responded. Surfaced so the on-call admin sees red CI
   // without leaving the app.
   const [ciStatus, setCiStatus] = useState(null);
+  const [ciRerunning, setCiRerunning] = useState(null);
   // Task #434 — last_success_at / last_error for the browser-push
   // channel from /admin/alert-settings (channel_status.push). Surfaced
   // inline in the notifications tile so admins notice a degraded push
@@ -796,25 +797,10 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
   useEffect(() => {
     if (!adminToken) return;
     let cancelled = false;
-    // True iff the response shape is one we can actually surface:
-    // a connected-CF payload with a non-null total-visits count AND
-    // complete bucket coverage for the requested window. We require
-    // `visits_coverage.complete` because Cloudflare's adaptive-groups
-    // dataset (the only one that still exposes `sum.visits`) is capped
-    // at ~8 days of retention on most plans — so a 30d call typically
-    // returns a non-null but partial total (~7-8 of 30 days), which
-    // would under-count by 4x if shown under a "30 days" headline.
-    // Falling through to the 7d window in that case gives a complete,
-    // honest number.
     const isUsable = (data) => {
       if (!data || data.connected === false) return false;
-      const v = data?.totals?.visits;
-      if (v === null || v === undefined) return false;
-      const cov = data?.totals?.visits_coverage;
-      // If coverage info is missing assume usable (back-compat with
-      // older backend versions that don't emit the field).
-      if (!cov) return true;
-      return cov.complete === true;
+      const v = data?.totals?.visitors;
+      return v !== null && v !== undefined;
     };
     const tryRange = async (range) => {
       try {
@@ -831,23 +817,39 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       if (!data) {
         data = await tryRange('7d');
         window = '7d';
-        if (data) {
-          log.warn('CF visitors fell back to 7d window — 30d returned no data');
-        }
+        if (data) log.warn('CF visitors fell back to 7d window — 30d returned no data');
       }
       if (cancelled) return;
       if (data) {
         setCfVisitors30d(data);
         setCfVisitorsWindow(window);
-      } else {
-        log.error('CF visitors fetch failed for both 30d and 7d windows');
-        // Don't wipe the previous good value — leaving the existing
-        // state in place means the tile keeps showing the last known
-        // count instead of flashing back to the active-range fallback.
       }
     };
     fetchVisitors();
     const interval = setInterval(fetchVisitors, 60 * 60 * 1000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [adminToken]);
+
+  // Dedicated 24-hour unique-visitors fetch for the Unique Visitors stat card.
+  // Uses the hourly CF dataset (`httpRequests1hGroups`) so the total is the
+  // rolling 24-hour unique count and the "last hour" sub-value is the most
+  // recent hourly bucket. Refreshes every 5 minutes.
+  const [cfVisitors24h, setCfVisitors24h] = useState(null);
+  useEffect(() => {
+    if (!adminToken) return;
+    let cancelled = false;
+    const fetch24h = async () => {
+      try {
+        const r = await adminGetCfOverview(adminToken, '24h');
+        if (!cancelled && r?.data?.totals?.visitors != null) {
+          setCfVisitors24h(r.data);
+        }
+      } catch (e) {
+        log.warn('CF 24h visitors fetch failed', { error: e.message });
+      }
+    };
+    fetch24h();
+    const interval = setInterval(fetch24h, 5 * 60 * 1000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [adminToken]);
 
@@ -1058,6 +1060,23 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
       toast.error(`Retry failed: ${e.response?.data?.error || e.message}`);
     } finally {
       setRetryingEndpoint(null);
+    }
+  };
+
+  const handleCiRerun = async (runId, failedOnly = true) => {
+    setCiRerunning(runId);
+    try {
+      await axios.post(
+        `${API_BASE}/admin/ci-rerun`,
+        { run_id: runId, failed_only: failedOnly },
+        adminHdr(adminToken),
+      );
+      toast.success(`Re-run queued for run #${runId} — refresh in a moment to see it start`);
+    } catch (e) {
+      const detail = e.response?.data?.detail || e.message;
+      toast.error(`Re-run failed: ${detail}`);
+    } finally {
+      setCiRerunning(null);
     }
   };
 
@@ -1328,32 +1347,15 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
             if (n < 1e9) return `${(n / 1e6).toFixed(2).replace(/\.?0+$/, '')}M`;
             return `${(n / 1e9).toFixed(2)}B`;
           };
-          // "Total Visitors" headline is hard-pinned to the locked
-          // visitors window (`cfVisitors30d` — see the fetcher above).
-          // The fetcher prefers a 30-day window and transparently
-          // degrades to 7-day if Cloudflare returns incomplete or no
-          // visits data for 30d (typical because the adaptive-groups
-          // dataset that exposes `sum.visits` is capped at ~8 days
-          // retention on most CF plans).
-          //
-          // We use `totals.visits` (total sessions / visits) rather
-          // than `totals.visitors` (uniques) per product requirement.
-          // The "today" sub-line uses `lastBucket.visits` so it stays
-          // consistent with the headline; on the initial-paint path
-          // (before cfOverview lands) we fall back to `cf.visitors_today`
-          // (uniques) — the only "visits today" signal available before
-          // the GraphQL overview returns — which is harmless because
-          // it's only used for one paint and the active-range refresh
-          // immediately replaces it.
-          const visitorsLockedTotal = cfVisitors30d?.totals?.visits ?? totals.visits ?? totals.visitors;
-          // The locked-window fetcher transparently degrades 30d → 7d
-          // when Cloudflare's adaptive-groups dataset can't return a
-          // complete 30-day series. Per product feedback, the tile
-          // label should NOT advertise that fallback — always read
-          // "Total Visitors", regardless of which window the data
-          // ended up coming from.
-          const visitorsLabel = 'Total Visitors';
-          const visitorsToday = useOverview ? (lastBucket?.visits ?? lastBucket?.visitors) : cf.visitors_today;
+          // "Unique Visitors" headline — uses `totals.visitors` (unique
+          // visitor count from Cloudflare's httpRequests1dGroups dataset,
+          // which retains 30 days on all plans) rather than `totals.visits`
+          // (session count, capped at ~8 days on most CF plans).
+          // The sparkline already uses key `'visitors'` so the chart stays
+          // consistent with the headline.
+          const visitorsLockedTotal = cfVisitors30d?.totals?.visitors ?? totals.visitors;
+          const visitorsLabel = 'Unique Visitors';
+          const visitorsToday = useOverview ? (lastBucket?.visitors ?? lastBucket?.uniques) : cf.visitors_today;
           const tiles = [
             { key: 'requests',   label: 'Interactions',     total: totals.requests,       today: useOverview ? lastBucket?.requests   : cf.requests_today,   fmt: fmtNum },
             { key: 'bytes',      label: 'Bandwidth',        total: totals.bytes,          today: useOverview ? lastBucket?.bytes      : cf.bytes_today,      fmt: fmtBytes },
@@ -1460,53 +1462,22 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
         <p className="text-[10px] text-gray-400 mb-2">{TODAY_BUCKET_CAPTION}</p>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
-          {/* "Total Visitors" — auto-swaps between two CF metrics
-              depending on what the active range can actually deliver:
-
-                * If `visits_coverage.complete` is true (24h + 7d
-                  always; 30d when the CF plan retains 30 days of
-                  adaptive-groups data), show `totals.visits` —
-                  Cloudflare's "Visits" (sessions) metric, where every
-                  return after a 30-minute idle gap counts as a new
-                  visit. Matches the CF Analytics dashboard 1:1.
-
-                * If coverage is INCOMPLETE (e.g. 30d on a plan with
-                  only 8 days of adaptive-groups retention), CF cannot
-                  give us 30 days of session data — the most we can
-                  get is the recent 7-8 days, so showing that as a
-                  "30-day total" would silently under-report by 4x.
-                  In that case we switch to `totals.visitors` (unique
-                  visitors from `httpRequests1dGroups`, which DOES
-                  retain 30 days), update the label to "Unique
-                  Visitors" so the metric matches the headline, and
-                  put the partial-coverage note in the tooltip.
-
-              Final fallback to `vs.total_visitors` (server-side
-              7-day count) if the CF overview hasn't loaded yet. */}
+          {/* "Unique Visitors" — always shows the rolling 24-hour unique
+              visitor count fetched from CF's hourly dataset. The sub-line
+              shows the most recent hourly bucket. Falls back to
+              `vs.visitors_today` (daily bucket) before the 24h fetch lands. */}
           {(() => {
-            const cov = cfOverview?.totals?.visits_coverage;
-            const visitsComplete = cov?.complete === true;
-            const useUniques = !visitsComplete && cfOverview?.totals?.visitors != null;
-            const headline = useUniques
-              ? cfOverview.totals.visitors
-              : (cfOverview?.totals?.visits ?? vs?.total_visitors ?? 0);
-            const todayBucket = cfOverview?.series?.length
-              ? cfOverview.series[cfOverview.series.length - 1]
+            const lastHourBucket = cfVisitors24h?.series?.length
+              ? cfVisitors24h.series[cfVisitors24h.series.length - 1]
               : null;
-            const todayValue = useUniques
-              ? (todayBucket?.uniques ?? todayBucket?.visitors ?? vs?.visitors_today ?? 0)
-              : ((todayBucket?.visits) ?? vs?.visitors_today ?? 0);
-            const label = useUniques ? 'Unique Visitors' : 'Total Visitors';
-            const tooltip = useUniques && cov
-              ? `Switched from "Visits" (sessions) to "Unique Visitors" because Cloudflare only kept ${cov.returned_buckets} of ${cov.requested_buckets} days of session data for this range. Unique-visitors data covers the full ${cov.requested_buckets}-day window.`
-              : undefined;
+            const headline = cfVisitors24h?.totals?.visitors ?? vs?.visitors_today ?? 0;
+            const lastHourValue = lastHourBucket?.visitors ?? lastHourBucket?.uniques ?? 0;
             return (
-              <StatCard label={label}
+              <StatCard label="Unique Visitors"
                 value={headline}
                 icon={Users} color="#84cc16"
-                subLabel="Today"
-                subValue={todayValue}
-                title={tooltip} />
+                subLabel="Last hour"
+                subValue={lastHourValue} />
             );
           })()}
           <StatCard label="Bounce Rate"  value={vs.bounce_rate != null ? `${vs.bounce_rate}%` : '—'} icon={TrendingUp} color="#f59e0b" />
@@ -3002,16 +2973,28 @@ export default function AdminDashboard({ adminToken, onNavigate, navContext }) {
                             <span>
                               #{run.run_number} · {run.head_sha} · {run.event} · {ageStr}
                             </span>
-                            {run.html_url && (
-                              <a
-                                href={run.html_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-blue-600 hover:underline"
-                              >
-                                view run →
-                              </a>
-                            )}
+                            <div className="flex items-center gap-2">
+                              {!inProgress && run.conclusion !== 'success' && run.id && (
+                                <button
+                                  onClick={() => handleCiRerun(run.id, true)}
+                                  disabled={ciRerunning === run.id}
+                                  className="text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded ring-1 bg-amber-50 text-amber-700 ring-amber-200 hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                  title="Re-run failed jobs only"
+                                >
+                                  {ciRerunning === run.id ? 're-running…' : 're-run'}
+                                </button>
+                              )}
+                              {run.html_url && (
+                                <a
+                                  href={run.html_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-blue-600 hover:underline"
+                                >
+                                  view run →
+                                </a>
+                              )}
+                            </div>
                           </div>
                         </li>
                       );

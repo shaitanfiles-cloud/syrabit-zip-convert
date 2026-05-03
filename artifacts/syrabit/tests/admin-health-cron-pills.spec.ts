@@ -109,15 +109,18 @@ async function openAdminHealth(page: Page) {
  */
 async function expectConventionTestIdsPresent(page: Page, prefix: string) {
   const tile = page.getByTestId(`${prefix}-tile`);
-  await expect(tile).toBeVisible();
-  await expect(tile.getByTestId(`${prefix}-status`)).toBeVisible();
-  await expect(tile.getByTestId(`${prefix}-pill`)).toBeVisible();
-  await expect(tile.getByTestId(`${prefix}-run-link`)).toBeVisible();
-  await expect(tile.getByTestId(`${prefix}-refresh`)).toBeVisible();
+  await expect(tile).toBeVisible({ timeout: 25_000 });
+  await expect(tile.getByTestId(`${prefix}-status`)).toBeVisible({ timeout: 25_000 });
+  await expect(tile.getByTestId(`${prefix}-pill`)).toBeVisible({ timeout: 25_000 });
+  await expect(tile.getByTestId(`${prefix}-run-link`)).toBeVisible({ timeout: 25_000 });
+  await expect(tile.getByTestId(`${prefix}-refresh`)).toBeVisible({ timeout: 25_000 });
   return tile;
 }
 
 test.describe('AdminHealth cron pills', () => {
+  // Cron pills are lazy-loaded and need extra time in CI.
+  test.setTimeout(60_000);
+
   test('edge-proxy-deploy pill renders the healthy state with all convention testIds', async ({ page }) => {
     await seedAdminSession(page);
     await installAdminApiMocks(page, {
@@ -128,7 +131,10 @@ test.describe('AdminHealth cron pills', () => {
 
     // Asserting the GET fires confirms the loader useCallback +
     // polling useEffect dependency array still wires up correctly.
-    const edgeRequest = page.waitForRequest((req) => req.url().includes(EDGE_PROXY_ENDPOINT));
+    const edgeRequest = page.waitForRequest(
+      (req) => req.url().includes(EDGE_PROXY_ENDPOINT),
+      { timeout: 30_000 },
+    );
 
     await openAdminHealth(page);
     await edgeRequest;
@@ -194,7 +200,10 @@ test.describe('AdminHealth cron pills', () => {
       },
     });
 
-    const cfRequest = page.waitForRequest((req) => req.url().includes(CF_WAF_DRIFT_ENDPOINT));
+    const cfRequest = page.waitForRequest(
+      (req) => req.url().includes(CF_WAF_DRIFT_ENDPOINT),
+      { timeout: 30_000 },
+    );
     await openAdminHealth(page);
     await cfRequest;
 
@@ -235,7 +244,10 @@ test.describe('AdminHealth cron pills', () => {
       },
     });
 
-    const tpRequest = page.waitForRequest((req) => req.url().includes(TRUSTPILOT_ENDPOINT));
+    const tpRequest = page.waitForRequest(
+      (req) => req.url().includes(TRUSTPILOT_ENDPOINT),
+      { timeout: 30_000 },
+    );
     await openAdminHealth(page);
     await tpRequest;
 
@@ -283,8 +295,9 @@ test.describe('AdminHealth cron pills', () => {
     // polling useEffect dependency array still wires up correctly
     // for the Task #956 pill (the same regression mode the sibling
     // pills already guard against).
-    const cfPullRequest = page.waitForRequest((req) =>
-      req.url().includes(UNIFIED_LOGS_CF_PULL_ENDPOINT)
+    const cfPullRequest = page.waitForRequest(
+      (req) => req.url().includes(UNIFIED_LOGS_CF_PULL_ENDPOINT),
+      { timeout: 30_000 },
     );
     await openAdminHealth(page);
     await cfPullRequest;

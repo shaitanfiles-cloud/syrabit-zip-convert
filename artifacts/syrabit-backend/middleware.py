@@ -151,6 +151,91 @@ class OriginSharedSecretMiddleware:
         await resp(scope, receive, send)
 
 
+_RE_SMAXAGE = re.compile(r"s-maxage=(\d+)")
+_RE_SWR      = re.compile(r"stale-while-revalidate=(\d+)")
+_RE_SIE      = re.compile(r"stale-if-error=(\d+)")
+_RE_UA_VARY  = re.compile(r",?\s*User-Agent\b", re.IGNORECASE)
+_COMPRESSIBLE_CTYPES = ("text/", "application/json", "application/javascript", "application/xml")
+
+
+class CfPerformanceMiddleware:
+    """
+    Injects Cloudflare-specific performance headers into every HTTP response.
+
+    What it does — without touching your route handlers:
+
+    1. ``stale-if-error=86400`` — appended to every public Cache-Control header
+       so CF serves stale content for 24 h if the origin goes down.
+
+    2. ``Cloudflare-CDN-Cache-Control`` — mirrors the public Cache-Control but
+       promotes ``s-maxage`` to ``max-age`` so the CF edge obeys a different
+       (usually longer) TTL than the browser independently.
+
+    3. ``Vary: Accept-Encoding`` — appended to compressible content-types so
+       CF correctly deduplicates gzip / brotli cache buckets.
+
+    4. Bad ``Vary: User-Agent`` — stripped out; it forces CF to store a
+       separate cache copy per UA, fragmenting the cache by billions of buckets.
+    """
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def _send_with_cf_headers(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                cc = headers.get("cache-control", "")
+                ct = headers.get("content-type", "")
+
+                if "public" in cc and "no-store" not in cc:
+                    # ── 1. stale-if-error ─────────────────────────────────
+                    if "stale-if-error" not in cc:
+                        cc = cc.rstrip(", ") + ", stale-if-error=86400"
+                        headers["cache-control"] = cc
+
+                    # ── 2. Cloudflare-CDN-Cache-Control ───────────────────
+                    if not headers.get("cloudflare-cdn-cache-control"):
+                        sm = _RE_SMAXAGE.search(cc)
+                        swr = _RE_SWR.search(cc)
+                        sie = _RE_SIE.search(cc)
+                        if sm:
+                            edge_ttl = sm.group(1)
+                            cf_parts = [f"public, max-age={edge_ttl}"]
+                            if swr:
+                                cf_parts.append(f"stale-while-revalidate={swr.group(1)}")
+                            if sie:
+                                cf_parts.append(f"stale-if-error={sie.group(1)}")
+                            headers.append(
+                                "Cloudflare-CDN-Cache-Control", ", ".join(cf_parts)
+                            )
+
+                    # ── 3. Vary: Accept-Encoding ──────────────────────────
+                    if any(ct.startswith(t) for t in _COMPRESSIBLE_CTYPES):
+                        vary = headers.get("vary", "")
+                        if "Accept-Encoding" not in vary:
+                            headers["vary"] = (
+                                f"{vary}, Accept-Encoding" if vary else "Accept-Encoding"
+                            )
+
+                # ── 4. Strip bad Vary: User-Agent ─────────────────────────
+                vary = headers.get("vary", "")
+                if vary and "User-Agent" in vary:
+                    cleaned = _RE_UA_VARY.sub("", vary).strip(", ")
+                    if cleaned:
+                        headers["vary"] = cleaned
+                    else:
+                        del headers["vary"]
+
+            await send(message)
+
+        await self.app(scope, receive, _send_with_cf_headers)
+
+
 class SecurityHeadersMiddleware:
     def __init__(self, app: ASGIApp):
         self.app = app
@@ -741,4 +826,169 @@ class ServerSideTrackingMiddleware(BaseHTTPMiddleware):
         asyncio.create_task(_bg_track())
 
         return response
+
+
+# ── MtlsClientCertMiddleware (Task #120) ──────────────────────────────────────
+#
+# Application-layer defence-in-depth complement to Railway's TLS-level mTLS
+# enforcement.  When Railway requires the Cloudflare-issued client certificate
+# at the TLS handshake (configured via Railway dashboard → Service → Settings →
+# mTLS), connections without a valid cert are rejected before HTTP is reached.
+# This middleware is the belt-and-suspenders layer: if the TLS-level check ever
+# lapses (misconfiguration, cert rotation gap, Railway plan downgrade), the
+# backend still rejects requests that are missing a cryptographic proof that
+# the CF Worker sent this request WITH the mTLS cert bound.
+#
+# How it works:
+#   1. cloudflare-phase6-apply.js issues an mTLS client certificate.
+#   2. The CF Worker's addMtlsActiveHeader() computes
+#        HMAC-SHA256("mtls-active", BACKEND_ORIGIN_SECRET)
+#      and injects it as X-Cf-Mtls-Active header, ONLY when env.MTLS_CERT is
+#      bound (i.e. the cert has been provisioned and wrangler deploy has run).
+#   3. This middleware validates the HMAC using ORIGIN_SHARED_SECRET (the same
+#      secret used by OriginSharedSecretMiddleware).
+#
+# Security properties:
+#   • Non-spoofable: BACKEND_ORIGIN_SECRET must be known to forge the HMAC.
+#   • Bound to cert deployment: X-Cf-Mtls-Active is set ONLY when MTLS_CERT is
+#     bound in the CF Worker, so requests succeed only when the cert is active.
+#   • BACKEND_ORIGIN_SECRET rotation simultaneously invalidates both headers
+#     (X-Origin-Auth and X-Cf-Mtls-Active), so there is no extra key to manage.
+#
+# Activation:
+#   Set ENFORCE_MTLS=true in the Railway service environment.
+#   The middleware is a no-op when ENFORCE_MTLS is absent or ORIGIN_SHARED_SECRET
+#   is not set, so it cannot break deployments during the rollout window.
+#
+# Exempt paths:
+#   /api/livez, /api/readyz, /api/ready — Railway's own infrastructure health
+#   probes reach these from Railway's internal subnet without the CF HMAC.
+#   /api/health is intentionally NOT exempt: it is the path used by external
+#   bypass probes (nightly-smoke.js 6a-iv) so the enforcement has real teeth.
+
+import hmac as _hmac_mod
+import hashlib as _hashlib_mod
+
+_ENFORCE_MTLS = _env_bool("ENFORCE_MTLS", False)
+_MTLS_ACTIVE_HEADER = b"x-cf-mtls-active"
+
+# Railway internal liveness/readiness probes — these never carry the CF HMAC
+# because they originate from Railway's own infrastructure, not from the CF edge.
+# /api/health is intentionally excluded so the bypass-probe assertion works.
+_MTLS_PROBE_PATHS = (
+    "/api/livez",
+    "/api/readyz",
+    "/api/ready",
+)
+
+def _compute_mtls_hmac(secret: str) -> str:
+    """Compute HMAC-SHA256("mtls-active", secret) — same algorithm as the CF Worker."""
+    return _hmac_mod.new(secret.encode("utf-8"), b"mtls-active", _hashlib_mod.sha256).hexdigest()
+
+
+# Task #135 — module-level misconfiguration flag.
+# Set to True at import time when ENFORCE_MTLS=true but ORIGIN_SHARED_SECRET is
+# absent.  Exported so /api/readyz can include it in its critical-dependency
+# check and return 503 rather than silently advertising "ready" while the
+# origin is actually unprotected.
+MTLS_MISCONFIGURED: bool = _ENFORCE_MTLS and not bool(_ORIGIN_SHARED_SECRET)
+
+
+class MtlsClientCertMiddleware:
+    """Reject requests that did not flow through the Cloudflare edge with the mTLS cert.
+
+    When ``ENFORCE_MTLS=true`` is set AND ``ORIGIN_SHARED_SECRET`` is configured,
+    every non-probe request must carry a matching ``X-Cf-Mtls-Active`` header
+    containing HMAC-SHA256("mtls-active", ORIGIN_SHARED_SECRET).  The CF Worker
+    computes and injects this header automatically when ``MTLS_CERT`` is bound.
+
+    The HMAC is non-spoofable without ORIGIN_SHARED_SECRET and is only emitted
+    by the CF Worker when the mTLS cert binding (env.MTLS_CERT) is present,
+    ensuring that both the cert is provisioned AND the request came from the
+    CF edge.
+
+    Disabled (no enforcement) when ENFORCE_MTLS is not set or ORIGIN_SHARED_SECRET
+    is empty, so existing deployments keep working during the rollout window.
+
+    Misconfiguration (ENFORCE_MTLS=true but ORIGIN_SHARED_SECRET absent) sets
+    the module-level ``MTLS_MISCONFIGURED`` flag and logs at ERROR level so
+    log-based alerting catches it; /api/readyz also returns 503 in this state.
+    """
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+        self._expected_hmac: str | None = None
+        if _ENFORCE_MTLS and _ORIGIN_SHARED_SECRET:
+            self._expected_hmac = _compute_mtls_hmac(_ORIGIN_SHARED_SECRET)
+            logger.info(
+                "MtlsClientCertMiddleware: ACTIVE — rejecting requests without "
+                "X-Cf-Mtls-Active HMAC proof from the CF Worker"
+            )
+        elif _ENFORCE_MTLS and not _ORIGIN_SHARED_SECRET:
+            # Use ERROR (not WARNING) so log-based alerting rules fire.
+            # MTLS_MISCONFIGURED is also True — /api/readyz will return 503.
+            logger.error(
+                "MtlsClientCertMiddleware: MISCONFIGURED — ENFORCE_MTLS=true but "
+                "ORIGIN_SHARED_SECRET is not set. Enforcement is INACTIVE and the "
+                "origin is UNPROTECTED. Set ORIGIN_SHARED_SECRET or unset "
+                "ENFORCE_MTLS to suppress this alert."
+            )
+        else:
+            logger.info("MtlsClientCertMiddleware: inactive (ENFORCE_MTLS not set)")
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http" or not self._expected_hmac:
+            await self.app(scope, receive, send)
+            return
+        method = scope.get("method", "GET")
+        if method == "OPTIONS":
+            # CORS preflight bypass — intentional and safe.
+            #
+            # Browsers always send an OPTIONS preflight before a cross-origin
+            # request (e.g. the Syrabit React SPA calling /api/* from a
+            # different origin).  The Cloudflare edge worker does NOT attach
+            # the X-Cf-Mtls-Active HMAC on OPTIONS requests because the mTLS
+            # handshake completes before the preflight is forwarded; injecting
+            # the HMAC into the preflight would require a second Worker round-
+            # trip and is not standard practice.
+            #
+            # Safety: OPTIONS responses are controlled by CORSMiddleware (or
+            # Starlette's default 405 handler when CORS is not configured).
+            # Neither path returns application data, so bypassing the HMAC
+            # check here does not expose any sensitive route payload.  An
+            # attacker who sends OPTIONS to a data endpoint receives only CORS
+            # headers or a 405 Method Not Allowed — not the response body.
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        if any(path == p or path.startswith(p) for p in _MTLS_PROBE_PATHS):
+            await self.app(scope, receive, send)
+            return
+        # Look up the HMAC header injected by the CF Worker (only when cert is bound).
+        provided = b""
+        for k, v in scope.get("headers", []):
+            if k == _MTLS_ACTIVE_HEADER:
+                provided = v
+                break
+        provided_str = provided.decode("latin-1", "ignore").lower()
+        if provided_str and _hmac_mod.compare_digest(provided_str, self._expected_hmac):
+            await self.app(scope, receive, send)
+            return
+        # Missing or wrong HMAC — reject with 403.
+        logger.warning(
+            f"MtlsClientCertMiddleware: rejected {method} {path} "
+            f"(X-Cf-Mtls-Active={'present but wrong' if provided_str else 'absent'})"
+        )
+        from fastapi.responses import JSONResponse
+        resp = JSONResponse(
+            status_code=403,
+            content={
+                "detail": (
+                    "mTLS client certificate required — "
+                    "request must originate from the Cloudflare edge worker "
+                    "with the mTLS certificate bound."
+                )
+            },
+        )
+        await resp(scope, receive, send)
 

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { visualizer } from 'rollup-plugin-visualizer';
 import codemirrorStubPlugin from './vite-plugins/codemirror-stub.js';
 import modulepreloadInjectPlugin from './vite-plugins/modulepreload-inject.js';
+import preloadHeadersInjectPlugin from './vite-plugins/preload-headers-inject.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isProd = process.env.NODE_ENV === 'production';
@@ -468,10 +469,23 @@ function cfAnalyticsPlugin() {
 // defined — the analytics call sites in src/utils/{usePageTracking,
 // webVitals}.js already gate on `typeof window.gtag === 'function'`
 // so they no-op cleanly without throwing.
+//
+// Phase 6 (Task #110): VITE_GA4_ID MUST NOT be set in production.
+// Analytics are handled server-side by Cloudflare Zaraz. Setting
+// VITE_GA4_ID in the production build CI env will cause this plugin to
+// throw a hard build error so the error is caught before it reaches users.
 const GA4_ID_RE = /^G-[A-Z0-9]{6,12}$/;
 function ga4Plugin() {
   const raw = (process.env.VITE_GA4_ID || '').trim();
   const id = GA4_ID_RE.test(raw) ? raw : '';
+  // Phase 6: fail the production build if GA4 ID is set — Zaraz handles it.
+  if (id && isProd) {
+    throw new Error(
+      `[ga4] VITE_GA4_ID is set in a production build. ` +
+      `Phase 6 disables client-side GA4 in favour of Cloudflare Zaraz server-side tracking. ` +
+      `Remove VITE_GA4_ID from the production CI environment and re-run the build.`
+    );
+  }
   return {
     name: 'syrabit-ga4',
     transformIndexHtml(html) {
@@ -494,7 +508,7 @@ function ga4Plugin() {
       // src/utils/{usePageTracking,webVitals}.js can queue events
       // immediately — once gtag.js loads, the queued commands flush.
       const tag = [
-        `<!-- Google Analytics 4 (LCP-deferred) — Task #639 -->`,
+        `<!-- Google Analytics 4 (LCP-deferred, first-party gtag gateway) -->`,
         `    <script>`,
         `      window.dataLayer=window.dataLayer||[];`,
         `      function gtag(){dataLayer.push(arguments);}`,
@@ -506,7 +520,7 @@ function ga4Plugin() {
         `        function load(){`,
         `          if(loaded)return;loaded=true;`,
         `          var s=document.createElement('script');`,
-        `          s.src='https://www.googletagmanager.com/gtag/js?id=${id}';`,
+        `          s.src='/gtag/js?id=${id}';`,
         `          s.async=true;document.head.appendChild(s);`,
         `          if(po){try{po.disconnect()}catch(e){}}`,
         `          if(timer){clearTimeout(timer);timer=null;}`,
@@ -565,9 +579,9 @@ function backendPreconnectPlugin() {
           : '';
         // Always inject the library-bundle preload using a relative URL so it
         // goes through the Vite proxy in dev and the CDN edge in production.
-        // No crossOrigin attr: same-origin relative URL uses credentials:same-origin
-        // which matches the actual fetch() so the browser reuses the preloaded response.
-        const preloadScript = `<script>(function(){if(/^\\/library(\\/|$)/.test(location.pathname)){var l=document.createElement('link');l.rel='preload';l.as='fetch';l.href='/api/content/library-bundle?slim=1';document.head.appendChild(l);}})();</script>`;
+        // crossOrigin='use-credentials' matches fetch({ credentials:'include' })
+        // so the browser can reuse the preloaded response (fixes mode-mismatch warning).
+        const preloadScript = `<script>(function(){if(/^\\/library(\\/|$)/.test(location.pathname)){var l=document.createElement('link');l.rel='preload';l.as='fetch';l.crossOrigin='use-credentials';l.href='/api/content/library-bundle?slim=1';document.head.appendChild(l);}})();</script>`;
         const tags = [preconnectTags, preloadScript].filter(Boolean).join('\n    ');
         return html.replace('<!--BACKEND_PRECONNECT-->', tags);
       } catch {
@@ -618,6 +632,10 @@ export default defineConfig(({ mode }) => ({
     // build so it runs as the bundle is written instead of as a
     // separate post-build node invocation.
     modulepreloadInjectPlugin(),
+    // Task #79: post-build — write Link: rel=preload headers into
+    // dist/_headers using the hashed filenames from this build so
+    // Cloudflare can emit 103 Early Hints for the critical JS/CSS.
+    preloadHeadersInjectPlugin(),
   ],
 
   resolve: {

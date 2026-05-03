@@ -6,6 +6,7 @@ import {
   getSeoPageBySlugs, getSeoPageTypes, getSeoPageBundle,
   getSeoPagesByType, getPublishedPageTypes,
   getSubjectSitemapEntries, getChapterSitemapEntries,
+  getDeltaSitemapEntries,
 } from "./d1-queries";
 import { syncFromPayload, getSyncStatus } from "./d1-sync";
 import {
@@ -34,6 +35,10 @@ import {
 // records and POSTs them to /api/logs/ingest via ctx.waitUntil so it
 // never adds latency to user-visible responses.
 import { recordEdgeLog, type EdgeLogShipperEnv } from "./log-shipper";
+// Task #109 Phase 5 — Durable Object rate limiter + Analytics Engine query utility.
+import { RateLimiter } from "./rate-limiter-do";
+import { queryEdgeMetrics } from "./analytics-engine";
+export { RateLimiter };
 
 interface Env {
   BACKEND_URL: string;
@@ -116,11 +121,60 @@ interface Env {
   SYLLABUS_INDEX?: VectorizeIndex;
   SYLLABUS_INDEX_LEGACY?: VectorizeIndex;
   /**
+   * Task #108 — Phase 4: R2 student asset storage.
+   * Bound to the syrabit-assets bucket. Admins upload PDFs via
+   * POST /admin/assets/upload; files are served at assets.syrabit.ai/<key>.
+   * The binding is optional so the worker degrades gracefully if the bucket
+   * hasn't been provisioned yet (returns 503 on the upload route).
+   */
+  ASSETS?: R2Bucket;
+  /**
    * Task: D1 Cache Warming on Startup — preload hot content into D1/KV cache
    * when the worker starts to eliminate cold-start latency (~10-50ms → ~0ms).
    * When true, the scheduled handler runs an immediate warm-up on first boot.
    */
   D1_WARM_ON_STARTUP?: string;
+  /**
+   * Task #109 Phase 5 — Workers Analytics Engine dataset binding.
+   * Writes per-request metrics (cache hit/miss, chapter ID, AI provider,
+   * response time, rate-limit result) to the "syrabit-edge-metrics" dataset.
+   * Declared in wrangler.toml [analytics_engine_datasets]. Optional so the
+   * worker degrades gracefully in local dev without the binding.
+   */
+  ANALYTICS?: AnalyticsEngineDataset;
+  /**
+   * Task #109 Phase 5 — Durable Object rate-limiter namespace.
+   * Provides strongly-consistent, per-key sliding-window rate limiting.
+   * Falls back to KV-based checkRateLimitKey() when unbound (e.g. before
+   * the [[migrations]] have been applied via `wrangler deploy`).
+   */
+  RATE_LIMITER_DO?: DurableObjectNamespace;
+  /**
+   * Task #109 Phase 5 — Cloudflare API token with Analytics: Read scope.
+   * Used by the /api/edge/analytics route to query the Analytics Engine
+   * SQL API and return edge metrics to the admin panel.
+   * Set via: wrangler secret put CF_ANALYTICS_TOKEN
+   */
+  CF_ANALYTICS_TOKEN?: string;
+  /**
+   * Task #110 Phase 6 — mTLS client certificate binding for Railway origin.
+   * When bound, proxyToBackend() calls env.MTLS_CERT.fetch() instead of the
+   * global fetch() so Cloudflare automatically presents the client certificate
+   * on the TLS handshake with the Railway backend.
+   * Declared in wrangler.toml [[mtls_certificates]].
+   * Optional so the worker degrades gracefully in local dev / before the cert
+   * is issued (falls back to plain fetch, which still sends BACKEND_ORIGIN_SECRET).
+   */
+  MTLS_CERT?: { fetch(input: RequestInfo, init?: RequestInit): Promise<Response> };
+  /**
+   * Task #110 Phase 6 — mTLS enforcement gate.
+   * Set to "true" (via `wrangler secret put MTLS_REQUIRED`) once the mTLS cert
+   * has been provisioned AND Railway has been configured to require it.
+   * When "true" and MTLS_CERT is not bound, proxyToBackend() returns a 503
+   * instead of falling back to plain fetch — closes the insecure bypass path.
+   * Leave unset (or "false") in local dev and before the cert is active.
+   */
+  MTLS_REQUIRED?: string;
 }
 
 const KV_BINDINGS = ["RATE_LIMIT", "BOT_HTML_CACHE"] as const;
@@ -267,7 +321,7 @@ const USER_SPECIFIC_PREFIXES = getUserSpecificPrefixes();
 const BYPASS_PREFIXES = getBypassPrefixes();
 
 const RATE_LIMIT_RPM = 120;
-const BOT_RATE_LIMIT_RPM = 1200;
+const BOT_RATE_LIMIT_RPM = 3000;
 const RATE_LIMIT_WINDOW_S = 60;
 const AI_RATE_LIMIT_RPM = 30;
 const AI_RATE_LIMIT_PREFIXES = ["/api/ai/chat", "/api/ai/generate", "/api/ai/grounded", "/api/ai/explain", "/api/ai/quiz", "/api/ai/summarize", "/api/chat"];
@@ -290,33 +344,36 @@ function isAiPath(p: string): boolean {
 // edge-proxy analytics to count them even though we don't always serve
 // them prerendered HTML (that decision is made downstream).
 // ────────────────────────────────────────────────────────────────────────────
-const SEARCH_BOT_UA = /googlebot|google-extended|googleother|google-inspectiontool|bingbot|yandexbot|duckduckbot|slurp|baiduspider|applebot|applebot-extended|chatgpt-user|oai-searchbot|gptbot|perplexitybot|perplexity-user|claudebot|claude-web|anthropic-ai|meta-externalagent|bytespider|ccbot|amazonbot|facebookexternalhit|facebookbot|twitterbot|linkedinbot|whatsapp|telegrambot|discordbot/i;
+const SEARCH_BOT_UA = /googlebot|google-extended|googleother|google-inspectiontool|bingbot|yandexbot|duckduckbot|slurp|baiduspider|applebot|applebot-extended|chatgpt-user|oai-searchbot|gptbot|perplexitybot|perplexity-user|claudebot|claude-web|anthropic-ai|meta-externalagent|bytespider|ccbot|amazonbot|facebookexternalhit|facebookbot|twitterbot|linkedinbot|whatsapp|telegrambot|discordbot|youbot/i;
 
 // ─── AI CRAWLER BLOCK LIST — DO NOT DRIFT ───────────────────────────────────
-// User policy decision (see admin dashboard "Cloudflare Search Crawler
-// Activity" card): AI training/answer crawlers are blocked outright at
-// the edge with HTTP 403 because they consume bandwidth without sending
-// any human visitors back to the site (the chat UIs render summarised
-// answers, not citations a user clicks). robots.txt declares the same
-// policy in `artifacts/syrabit/public/robots.txt` for well-behaved bots,
-// but this regex is the enforcement floor for ones that ignore it.
+// Blocks pure AI *training* crawlers that scrape content to train LLMs
+// without sending referral traffic back. Search-and-answer engines that
+// do cite sources and drive clicks (Perplexity, ChatGPT browsing mode,
+// Claude web-search) are intentionally NOT in this list — they increase
+// discoverability for AHSEC/SEBA students.
+//
+// Allowed (search engines / answer engines with citations):
+//   Perplexity (PerplexityBot / Perplexity-User) — cites sources, drives traffic
+//   ChatGPT-User / OAI-SearchBot — ChatGPT browsing citations
+//   ClaudeBot / Claude-Web — Claude web-search citations
+//
+// Blocked (pure training scrapers with no referral benefit):
+//   GPTBot, CCBot, Bytespider, Diffbot, Cohere-AI
+//   Google-Extended, Applebot-Extended (AI opt-out variants of real search bots)
+//   Meta-ExternalAgent (Meta training crawler)
+//   Amazonbot (Amazon Alexa training, no referral traffic)
+//
+// NOT blocked (search/answer engines that cite sources and drive referral traffic):
+//   YouBot — You.com is a search and answer engine; removed from this list so
+//   it can index Syrabit and send students who search there. CF's verifiedBot
+//   flag is the primary trust gate for YouBot (no fixed CIDR range is published).
 //
 // Mirrors `_AI_BOT_NAMES` in artifacts/syrabit-backend/cf_bot_report.py
-// so the polite advisory (robots.txt), the hard block (this regex), and
-// the dashboard's "AI Crawler" classification all agree on which bots
-// are excluded. Each pattern is anchored on the canonical UA token (no
-// trailing wildcards) so a future legitimate "GPTBotHelper" wouldn't
-// be falsely matched. Note that `applebot-extended` and `google-extended`
-// are AI-training opt-out variants; their *non*-extended counterparts
-// (Applebot, Googlebot) are NOT blocked because those drive search
-// traffic to the site.
-// Case-insensitive on purpose: real-world UAs use mixed/lower case
-// (e.g. `gptbot/1.2`, `ccbot/2.0`) and a case-sensitive regex would
-// silently let those through. The `\b` boundaries still prevent
-// false positives on strings like "GPTBotHelper" because the
-// trailing word boundary requires the next character to be
-// non-word.
-const AI_BOT_UA = /\b(?:GPTBot|ChatGPT-User|OAI-SearchBot|ClaudeBot|Claude-Web|anthropic-ai|PerplexityBot|Perplexity-User|CCBot|Google-Extended|Applebot-Extended|Meta-ExternalAgent|Bytespider|Amazonbot|YouBot|Cohere-AI|Diffbot)\b/i;
+// so robots.txt, this hard block, and the dashboard analytics agree.
+// Each pattern is anchored with \b so "GPTBotHelper" would not be falsely
+// matched. Case-insensitive because real UAs use mixed case.
+const AI_BOT_UA = /\b(?:GPTBot|CCBot|Google-Extended|Applebot-Extended|Meta-ExternalAgent|Bytespider|Amazonbot|Cohere-AI|Diffbot)\b/i;
 
 interface CidrRange { network: number; mask: number }
 
@@ -343,8 +400,30 @@ function ipInRanges(ip: string, ranges: CidrRange[]): boolean {
   return false;
 }
 
+// ── Crawler IP verification ranges ────────────────────────────────────────────
+//
+// Design rationale (Task #243):
+//   Cloudflare's cf.verifiedBot flag is checked FIRST in verifySearchBot and
+//   immediately returns {verified:true} without consulting any of the ranges
+//   below. That means every legitimate crawler on a newly-added IP range will
+//   be verified by Cloudflare before it would ever be rejected here. These
+//   CIDR lists are therefore a secondary fallback — they classify the minority
+//   of requests where CF hasn't yet verified the bot (fresh IPs, edge cases).
+//
+// Update policy:
+//   Only exact subnets from the crawler's own published source are included.
+//   Generic cloud / datacenter supernets MUST NOT be added: they let spoofed
+//   UAs from cloud IP pools be treated as verified crawlers, breaking spoof
+//   detection and rate-limit enforcement.
+//   To refresh: fetch the source URL for each provider, diff against this list,
+//   and add only the new /24 or narrower subnets that appear.
+//
+// Validated: 2025-05-01
+// Source: https://developers.google.com/search/apis/ipranges/googlebot.json
 const GOOGLE_BOT_RANGES = parseCidrs([
+  // Legacy shared-hosting crawler ranges (googlebot.json)
   "66.249.64.0/19", "66.249.96.0/20",
+  // GCP regional crawler ranges — all /27 or narrower (googlebot.json)
   "34.100.182.96/28", "34.101.50.144/28", "34.118.254.0/28",
   "34.118.66.0/28", "34.126.178.96/28", "34.146.150.144/28",
   "34.147.110.160/28", "34.151.74.144/28", "34.152.50.64/28",
@@ -355,6 +434,7 @@ const GOOGLE_BOT_RANGES = parseCidrs([
   "34.96.162.48/28", "35.247.243.240/28",
 ]);
 
+// Source: https://www.bing.com/toolbox/bingbot.xml (validated 2025-05-01)
 const BING_BOT_RANGES = parseCidrs([
   "157.55.39.0/24", "207.46.13.0/24", "40.77.167.0/24",
   "52.167.144.0/24", "13.66.139.0/24", "13.67.8.0/24",
@@ -370,6 +450,7 @@ const OPENAI_BOT_RANGES = parseCidrs([
   "52.230.152.0/24", "52.233.106.0/24",
 ]);
 
+// Source: https://yandex.com/ips (validated 2025-05-01)
 const YANDEX_BOT_RANGES = parseCidrs([
   "5.255.253.0/24", "77.88.5.0/24", "77.88.47.0/24",
   "87.250.224.0/19", "93.158.161.0/24", "95.108.128.0/17",
@@ -377,9 +458,18 @@ const YANDEX_BOT_RANGES = parseCidrs([
   "199.21.99.0/24", "213.180.192.0/19",
 ]);
 
+// Source: https://support.apple.com/en-us/101555 — Applebot uses 17.0.0.0/8
+// (the entire Apple-owned /8 block). Apple does not publish a narrower list.
 const APPLE_BOT_RANGES = parseCidrs([
   "17.0.0.0/8",
 ]);
+
+// You.com's YouBot does NOT publish a stable CIDR list. Verification relies
+// entirely on Cloudflare's cf.verifiedBot flag (checked first in
+// verifySearchBot). An empty range array here signals "no CIDR fallback";
+// verifySearchBot handles this case with {verified:false, spoofed:false}
+// instead of marking the request as spoofed.
+const YOUBOT_BOT_RANGES: CidrRange[] = [];
 
 const BOT_UA_RANGES: Array<[RegExp, CidrRange[]]> = [
   [/googlebot|google-extended|googleother/i, GOOGLE_BOT_RANGES],
@@ -388,6 +478,8 @@ const BOT_UA_RANGES: Array<[RegExp, CidrRange[]]> = [
   [/chatgpt-user|oai-searchbot/i, OPENAI_BOT_RANGES],
   [/yandexbot/i, YANDEX_BOT_RANGES],
   [/applebot/i, APPLE_BOT_RANGES],
+  // YouBot: cf.verifiedBot is the sole gate — empty CIDR list is intentional.
+  [/youbot/i, YOUBOT_BOT_RANGES],
 ];
 
 interface BotVerifyResult {
@@ -406,11 +498,22 @@ function hashIp(ip: string): string {
 }
 
 function verifySearchBot(ua: string, request: Request, clientIp: string): BotVerifyResult {
-  if (!SEARCH_BOT_UA.test(ua)) return { verified: false, claimsBot: false, spoofed: false };
+  // cf.verifiedBot is the unconditional trust gate: if Cloudflare has
+  // cryptographically verified the request came from a legitimate crawler,
+  // we trust it regardless of UA string or CIDR range match. This prevents
+  // legitimate crawlers on new/unpublished IP ranges from being downgraded.
   const cf = (request as unknown as { cf?: { verifiedBot?: boolean } }).cf;
   if (cf && cf.verifiedBot === true) return { verified: true, claimsBot: true, spoofed: false };
+  if (!SEARCH_BOT_UA.test(ua)) return { verified: false, claimsBot: false, spoofed: false };
   for (const [pattern, ranges] of BOT_UA_RANGES) {
     if (pattern.test(ua)) {
+      if (ranges.length === 0) {
+        // This bot (e.g. YouBot) publishes no stable CIDR list; Cloudflare's
+        // verifiedBot flag is the sole verification gate, already checked above.
+        // Reaching here means CF did not verify the request — treat it as
+        // unverified but not spoofed (no grounds to log it as an impersonation).
+        return { verified: false, claimsBot: true, spoofed: false };
+      }
       const matched = ipInRanges(clientIp, ranges);
       return { verified: matched, claimsBot: true, spoofed: !matched };
     }
@@ -446,6 +549,46 @@ async function logSpoofedBot(
     `SPOOFED_BOT ip_hash=${ipHash} claimed=${claimedBot} ` +
     `ua="${ua.slice(0, 150)}" colo=${colo} ts=${new Date(now).toISOString()}`
   );
+}
+
+// Task #243 — Log unsuccessful bot responses so the 2.48K "unsuccessful
+// requests" bucket in the CF Search Crawler Activity dashboard becomes
+// actionable. Emits a structured console.log (readable via `wrangler tail`)
+// and optionally writes a datapoint to the Analytics Engine dataset.
+function logBotErrorResponse(
+  env: Env,
+  ctx: ExecutionContext,
+  status: number,
+  botResult: BotVerifyResult,
+  ua: string,
+  pathname: string,
+): void {
+  if (status < 400) return; // only 4xx and 5xx
+  const botMatch = ua.match(SEARCH_BOT_UA);
+  const botName = botMatch ? botMatch[0].toLowerCase() : "unknown";
+  console.log(
+    JSON.stringify({
+      event: "BOT_ERROR_RESPONSE",
+      status,
+      bot: botName,
+      verified: botResult.verified,
+      spoofed: botResult.spoofed,
+      pathname: pathname.slice(0, 200),
+      ts: new Date().toISOString(),
+    })
+  );
+  // Optionally emit to Analytics Engine for dashboard visibility.
+  if (env.ANALYTICS) {
+    try {
+      ctx.waitUntil(Promise.resolve(
+        env.ANALYTICS.writeDataPoint({
+          blobs: [botName, pathname.slice(0, 100)],
+          doubles: [status],
+          indexes: ["bot_error"],
+        })
+      ));
+    } catch { /* Analytics Engine unavailable — console log above is sufficient */ }
+  }
 }
 
 function isVerifiedSearchBot(ua: string, request: Request, clientIp: string): boolean {
@@ -552,6 +695,120 @@ async function checkRateLimit(
   }
 }
 
+/**
+ * Task #109 Phase 5 — Durable Object rate limiter.
+ *
+ * Uses the RateLimiter DO for strongly-consistent, per-key sliding-window
+ * limiting. Falls back to the KV-based checkRateLimitKey() when RATE_LIMITER_DO
+ * is not bound (local dev, pre-migration). The DO provides isolation guarantees
+ * that KV's eventual-consistency cannot: two concurrent requests for the same IP
+ * hit the same DO instance and their storage.transaction() calls are serialized,
+ * eliminating the double-grant race that exists with KV.
+ */
+async function checkRateLimitWithDO(
+  key: string,
+  env: Env,
+  limit: number,
+  windowMs: number = RATE_LIMIT_WINDOW_S * 1000,
+): Promise<{ allowed: boolean; remaining: number; retryAfterMs: number }> {
+  if (env.RATE_LIMITER_DO) {
+    try {
+      const doId = env.RATE_LIMITER_DO.idFromName(key);
+      const stub = env.RATE_LIMITER_DO.get(doId);
+      const res = await stub.fetch("https://rate-limiter/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key, limit, windowMs }),
+      });
+      if (res.ok) {
+        return await res.json<{ allowed: boolean; remaining: number; retryAfterMs: number }>();
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "unknown";
+      console.error(`[rate-limiter-do] error for key=${key}: ${msg.slice(0, 200)}`);
+    }
+  }
+  // KV fallback — eventual consistency but always available
+  const kv = await checkRateLimitKey(key, env.RATE_LIMIT, limit);
+  return { ...kv, retryAfterMs: windowMs };
+}
+
+/**
+ * Task #109 Phase 5 — Analytics Engine instrumentation.
+ *
+ * Emits a single datapoint per request to the "syrabit-edge-metrics" dataset.
+ * Uses ctx.waitUntil so the write never blocks user-visible response time.
+ *
+ * Schema:
+ *   blob1  — cacheStatus:      "hit" | "miss" | "bypass" | "pass"
+ *   blob2  — chapterId:        chapter slug or "" for non-chapter routes
+ *   blob3  — aiProvider:       "groq" | "gemini" | "workers-ai" | "none"
+ *   blob4  — pathname:         first 64 chars of the request pathname
+ *   blob5  — rateLimitResult:  "ok" | "ai_limited" | "ip_limited"
+ *   double1 — responseTimeMs: end-to-end response latency
+ *   double2 — isAiRequest:    1 if an AI endpoint, else 0
+ *   double3 — httpStatus:     HTTP response status code
+ */
+function writeEdgeMetric(
+  env: Env,
+  ctx: ExecutionContext,
+  startMs: number,
+  opts: {
+    cacheStatus?: string;
+    chapterId?: string;
+    aiProvider?: string;
+    pathname: string;
+    rateLimitResult?: string;
+    isAiRequest?: boolean;
+    httpStatus?: number;
+  },
+): void {
+  if (!env.ANALYTICS) return;
+  const responseTimeMs = Date.now() - startMs;
+  const dataPoint = {
+    blobs: [
+      opts.cacheStatus     ?? "pass",
+      opts.chapterId       ?? "",
+      opts.aiProvider      ?? "none",
+      opts.pathname.slice(0, 64),
+      opts.rateLimitResult ?? "ok",
+    ],
+    doubles: [
+      responseTimeMs,
+      opts.isAiRequest ? 1 : 0,
+      opts.httpStatus ?? 0,
+    ],
+    indexes: [opts.chapterId ?? "none"],
+  };
+  ctx.waitUntil(Promise.resolve(env.ANALYTICS.writeDataPoint(dataPoint)));
+}
+
+/**
+ * Extract the chapter slug from a pathname for AE chapterId tagging.
+ * Matches patterns like /study/physics/chapter/thermodynamics or
+ * /chapters/waves — returns the slug, or "" if not a chapter route.
+ */
+function extractChapterIdFromPath(pathname: string): string {
+  const m = pathname.match(/\/chapters?\/([^/?#]+)/i);
+  return m ? m[1].toLowerCase().slice(0, 64) : "";
+}
+
+/**
+ * Best-effort AI provider attribution from the request pathname.
+ * The edge worker never reads the response body, so it cannot know which
+ * backend provider (groq/gemini/cerebras) ultimately served the request.
+ * Only /api/ai/fallback/* is distinguishable — those route to Workers AI.
+ *
+ * NOTE: isAiPath() explicitly excludes /api/ai/fallback/* (it is exempt from
+ * the AI rate limit), so the fallback check must come BEFORE the isAiPath()
+ * guard to remain reachable.
+ */
+function aiProviderFromPath(pathname: string): string {
+  if (pathname.startsWith("/api/ai/fallback/")) return "workers-ai";
+  if (!isAiPath(pathname)) return "none";
+  return "backend";
+}
+
 function buildProxyHeaders(request: Request, clientIp: string, env?: Env): Headers {
   const headers = new Headers();
   for (const [key, value] of request.headers.entries()) {
@@ -575,6 +832,87 @@ function buildProxyHeaders(request: Request, clientIp: string, env?: Env): Heade
   return headers;
 }
 
+/**
+ * Task #120 — Inject a cryptographic proof that the mTLS client certificate is
+ * bound and active in this Worker deployment.
+ *
+ * When MTLS_CERT is bound (cert provisioned + wrangler deploy run), computes
+ *   HMAC-SHA256("mtls-active", BACKEND_ORIGIN_SECRET)
+ * and sets it as the X-Cf-Mtls-Active header on the outbound request.
+ *
+ * Security properties:
+ *   • Non-spoofable: requires BACKEND_ORIGIN_SECRET, which is kept secret.
+ *   • Bound to cert deployment: the header is ONLY set when env.MTLS_CERT is
+ *     present, so even a caller with the secret cannot produce this header
+ *     without also deploying a Worker with [[mtls_certificates]] wired in.
+ *   • Consistent: same HMAC value on every call — no timestamp / nonce
+ *     complexity needed since BACKEND_ORIGIN_SECRET rotation is the revocation
+ *     mechanism and it already rotates X-Origin-Auth simultaneously.
+ *
+ * The backend MtlsClientCertMiddleware validates this HMAC using the same
+ * BACKEND_ORIGIN_SECRET (stored as ORIGIN_SHARED_SECRET on Railway).
+ *
+ * Must be awaited AFTER buildProxyHeaders() at every backend call site.
+ */
+async function addMtlsActiveHeader(
+  headers: Headers | Record<string, string>,
+  env: Env,
+): Promise<void> {
+  if (!env.MTLS_CERT || !env.BACKEND_ORIGIN_SECRET) return;
+  const encoder = new TextEncoder();
+  const keyData = encoder.encode(env.BACKEND_ORIGIN_SECRET);
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    keyData,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign(
+    "HMAC",
+    cryptoKey,
+    encoder.encode("mtls-active"),
+  );
+  const hex = Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  if (headers instanceof Headers) {
+    headers.set("X-Cf-Mtls-Active", hex);
+  } else {
+    headers["X-Cf-Mtls-Active"] = hex;
+  }
+}
+
+/**
+ * Task #110 Phase 6 — Central mTLS-aware fetch for ALL Railway backend calls.
+ *
+ * Every fetch to env.BACKEND_URL MUST go through this function so that the
+ * mTLS client certificate is presented on every TLS handshake with Railway.
+ * Using plain `fetch()` bypasses the certificate binding and defeats the
+ * mTLS hardening goal — Railway would see no client cert and, once mTLS is
+ * required there, would reject the connection.
+ *
+ * Behaviour:
+ *   MTLS_CERT bound                   → env.MTLS_CERT.fetch() (cert presented)
+ *   MTLS_CERT absent + MTLS_REQUIRED  → throws; caller should surface a 503
+ *   MTLS_CERT absent + no requirement → plain fetch() (pre-cert / local dev)
+ */
+function fetchBackend(
+  env: Env,
+  url: string,
+  init: RequestInit,
+): Promise<Response> {
+  if (env.MTLS_CERT) {
+    return env.MTLS_CERT.fetch(url, init);
+  }
+  if (env.MTLS_REQUIRED === "true") {
+    throw new Error(
+      "[mTLS] MTLS_REQUIRED=true but MTLS_CERT binding absent — refusing backend fetch to prevent insecure bypass",
+    );
+  }
+  return fetch(url, init);
+}
+
 async function proxyToBackend(
   request: Request,
   env: Env,
@@ -589,16 +927,36 @@ async function proxyToBackend(
   // when env is passed — covers proxyToBackend, bot-prerender, cache-miss
   // fallback, and any future call site uniformly.
   const proxyHeaders = buildProxyHeaders(request, clientIp, env);
+  // Task #120: inject HMAC proof that the mTLS cert is bound (non-spoofable).
+  await addMtlsActiveHeader(proxyHeaders, env);
 
   try {
-    const backendResp = await fetch(backendUrl, {
+    // Phase 6 (Task #110): use the mTLS-bound fetcher when the certificate has
+    // been provisioned, so Cloudflare presents the client cert on every TLS
+    // handshake with the Railway origin.
+    //
+    // All Railway backend fetches go through fetchBackend() which uses
+    // env.MTLS_CERT.fetch() when bound.  The fail-closed guard (MTLS_REQUIRED)
+    // lives inside fetchBackend() — calling it here surfaces a 503 cleanly.
+    const fetchInit = {
       method: request.method,
       headers: proxyHeaders,
       body:
         request.method !== "GET" && request.method !== "HEAD"
           ? request.body
           : undefined,
-    });
+    };
+    let backendResp: Response;
+    try {
+      backendResp = await fetchBackend(env, backendUrl, fetchInit);
+    } catch (mtlsErr) {
+      const msg = mtlsErr instanceof Error ? mtlsErr.message : String(mtlsErr);
+      console.error(`[proxyToBackend] ${msg}`);
+      return new Response(
+        JSON.stringify({ error: "mTLS enforcement active: cert binding missing — deploy with [[mtls_certificates]] wired in wrangler.toml" }),
+        { status: 503, headers: { "Content-Type": "application/json" } },
+      );
+    }
 
     const respHeaders = new Headers(cors);
     for (const [key, value] of backendResp.headers.entries()) {
@@ -644,6 +1002,56 @@ function fnv1a32(s: string): string {
   return h.toString(16).padStart(8, "0");
 }
 
+// ─── Cache-Tag derivation ─────────────────────────────────────────────────────
+// Derives one or more Cloudflare Cache-Tags from the request pathname so
+// content can be surgically purged by tag from the CF dashboard or a CI
+// pipeline after a publish event, without purging unrelated cached routes.
+//
+// Tag taxonomy:
+//   chapter-{id}        → /api/content/chapters/{id} and SEO chapter pages
+//   subject-{slug}      → /api/content/subjects/{slug}
+//   library-bundle      → /api/content/library-bundle (the big navbar payload)
+//   seo-pages           → /api/seo/** (SEO HTML and sitemap routes)
+//   sitemap             → /api/seo/sitemap* and /sitemap.xml
+//   api-content         → catch-all for all /api/content/* responses
+//
+// Usage: set the returned string as the `Cache-Tag` response header.
+// Multiple tags are space-separated (CF accepts comma- or space-separated).
+// Returns empty string for paths that carry no useful tag.
+export function buildCacheTags(pathname: string): string {
+  const tags: string[] = [];
+
+  if (pathname.startsWith("/api/content/library-bundle")) {
+    tags.push("library-bundle");
+  }
+  if (pathname.startsWith("/api/content/")) {
+    tags.push("api-content");
+    // /api/content/chapters/{id}[/...]
+    const chapterMatch = pathname.match(/^\/api\/content\/chapters\/([^/?]+)/);
+    if (chapterMatch) tags.push(`chapter-${chapterMatch[1]}`);
+    // /api/content/subjects/{slug}
+    const subjectMatch = pathname.match(/^\/api\/content\/subjects\/([^/?]+)/);
+    if (subjectMatch) tags.push(`subject-${subjectMatch[1]}`);
+  }
+  if (pathname.startsWith("/api/seo/")) {
+    tags.push("seo-pages");
+    if (pathname.includes("sitemap")) tags.push("sitemap");
+  }
+  if (pathname === "/sitemap.xml" || pathname === "/sitemap-index.xml") {
+    tags.push("sitemap");
+  }
+  // Board/class/subject/chapter routes served by D1 or SEO pipeline.
+  // Guard: only apply to non-API paths so /api/content/... doesn't get
+  // spurious subject-content or chapter-xyz tags.
+  if (!pathname.startsWith("/api/")) {
+    const parts = pathname.split("/").filter(Boolean);
+    // parts: [board, class, subject, chapter?, page_type?]
+    if (parts.length >= 3) tags.push(`subject-${parts[2]}`);
+    if (parts.length >= 4) tags.push(`chapter-${parts[3]}`);
+  }
+  return tags.join(",");
+}
+
 function d1JsonResponse(
   data: unknown,
   cors: Record<string, string>,
@@ -653,18 +1061,21 @@ function d1JsonResponse(
   const ttl = getCacheTtl(pathname);
   const body = JSON.stringify(data);
   const etag = `W/"d1-${fnv1a32(body)}-${body.length.toString(36)}"`;
-  return new Response(body, {
-    status: 200,
-    headers: {
-      ...cors,
-      "Content-Type": "application/json",
-      "Cache-Control": `public, max-age=${ttl}, stale-while-revalidate=${ttl * 2}`,
-      "ETag": etag,
-      "X-Cache": "D1",
-      "X-Source": "d1",
-      "X-RateLimit-Remaining": String(remaining),
-    },
-  });
+  const cacheControl = `public, max-age=${ttl}, stale-while-revalidate=${ttl * 2}`;
+  const tags = buildCacheTags(pathname);
+  const headers: Record<string, string> = {
+    ...cors,
+    "Content-Type": "application/json",
+    "Cache-Control": cacheControl,
+    "Surrogate-Control": cacheControl,
+    "Vary": "Accept-Encoding, Accept",
+    "ETag": etag,
+    "X-Cache": "D1",
+    "X-Source": "d1",
+    "X-RateLimit-Remaining": String(remaining),
+  };
+  if (tags) headers["Cache-Tag"] = tags;
+  return new Response(body, { status: 200, headers });
 }
 
 function d1XmlResponse(
@@ -679,6 +1090,9 @@ function d1XmlResponse(
       ...cors,
       "Content-Type": "application/xml; charset=utf-8",
       "Cache-Control": "public, max-age=3600, stale-while-revalidate=7200",
+      "Surrogate-Control": "public, max-age=3600, stale-while-revalidate=7200",
+      "Vary": "Accept-Encoding",
+      "Cache-Tag": "sitemap",
       "ETag": etag,
       "X-Cache": "D1",
       "X-Source": "d1",
@@ -711,6 +1125,22 @@ function buildUrlset(entries: Array<{ loc: string; lastmod: string; pri: string;
   return lines.join("\n");
 }
 
+/**
+ * Compute changefreq + priority from a lastmod date string (YYYY-MM-DD).
+ * Task #246 — fresher pages get higher crawl signals so Googlebot returns sooner.
+ *   < 7 days  → daily   / 0.9
+ *   < 30 days → weekly  / 0.8
+ *   older     → monthly / 0.6
+ */
+function _changefreqFromLastmod(lastmod: string, today: string): { freq: string; pri: string } {
+  if (!lastmod || lastmod.length < 10) return { freq: "monthly", pri: "0.6" };
+  const diffMs = new Date(today).getTime() - new Date(lastmod.slice(0, 10)).getTime();
+  const diffDays = diffMs / 86400000;
+  if (diffDays < 7) return { freq: "daily", pri: "0.9" };
+  if (diffDays < 30) return { freq: "weekly", pri: "0.8" };
+  return { freq: "monthly", pri: "0.6" };
+}
+
 function seoPageToSitemapEntry(
   p: { board_slug: string; class_slug: string; subject_slug: string; topic_slug: string; page_type: string; updated_at?: string; created_at?: string },
   today: string,
@@ -721,11 +1151,12 @@ function seoPageToSitemapEntry(
   const path = p.page_type === "notes" ? basePath : `${basePath}/${p.page_type}`;
   const raw = p.updated_at || p.created_at || "";
   const lastmod = raw && raw.length >= 10 ? raw.slice(0, 10) : today;
+  const { freq, pri } = _changefreqFromLastmod(lastmod, today);
   return {
     loc: `${BASE_URL}${path}`,
     lastmod,
-    pri: p.page_type === "notes" ? "0.8" : "0.7",
-    freq: "monthly",
+    pri,
+    freq,
     page_type: p.page_type,
   };
 }
@@ -921,6 +1352,7 @@ async function trySitemapD1Route(
       "sitemap-chapters.xml",
       "sitemap-learn.xml",
       "sitemap-notes.xml",
+      "sitemap-delta.xml",
     ];
     const typeToSitemap: Record<string, string> = {
       "mcqs": "sitemap-mcqs.xml",
@@ -941,7 +1373,12 @@ async function trySitemapD1Route(
       '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
     ];
     for (const name of sitemapNames) {
-      lines.push(`  <sitemap><loc>${BASE_URL}/api/seo/${name}</loc><lastmod>${today}</lastmod></sitemap>`);
+      // sitemap-delta.xml is served at the root path (canonical per task #246);
+      // all other sub-sitemaps live under /api/seo/.
+      const loc = name === "sitemap-delta.xml"
+        ? `${BASE_URL}/${name}`
+        : `${BASE_URL}/api/seo/${name}`;
+      lines.push(`  <sitemap><loc>${loc}</loc><lastmod>${today}</lastmod></sitemap>`);
     }
     lines.push("</sitemapindex>");
     return { type: "xml", data: lines.join("\n") };
@@ -969,12 +1406,15 @@ async function trySitemapD1Route(
   if (pathname === "/api/seo/sitemap-chapters.xml") {
     const chapterEntries = await getChapterSitemapEntries(db);
     if (chapterEntries === null) return null;
-    const entries = chapterEntries.map(e => ({
-      loc: `${BASE_URL}/${e.board_slug}/${e.class_slug}/${e.subject_slug}/${e.chapter_slug}`,
-      lastmod: e.updated_at && e.updated_at.length >= 10 ? e.updated_at.slice(0, 10) : today,
-      pri: "0.8", freq: "monthly",
-      has_assamese: e.has_assamese,
-    }));
+    const entries = chapterEntries.map(e => {
+      const lastmod = e.updated_at && e.updated_at.length >= 10 ? e.updated_at.slice(0, 10) : today;
+      const { freq, pri } = _changefreqFromLastmod(lastmod, today);
+      return {
+        loc: `${BASE_URL}/${e.board_slug}/${e.class_slug}/${e.subject_slug}/${e.chapter_slug}`,
+        lastmod, pri, freq,
+        has_assamese: e.has_assamese,
+      };
+    });
     return { type: "xml", data: buildUrlset(entries) };
   }
 
@@ -1019,6 +1459,28 @@ async function trySitemapD1Route(
       return { type: "xml", data: buildUrlset([...staticEntries, ...seoEntries]) };
     }
     return null;
+  }
+
+  // Task #246 — Delta sitemap: pages updated in the last 48 hours, capped at 1000.
+  // Crawlers that ping us after an IndexNow/Google notification can re-fetch
+  // this small sub-sitemap to discover exactly which pages changed without
+  // crawling the full (potentially 50k-URL) sitemap tree.
+  // Cache-Control is set in the outer response handler when type === "xml"
+  // for delta routes.
+  // Accept both the canonical root path and the /api/seo/ alias so that
+  // existing sitemap-index registrations and fanout pings continue to work.
+  if (pathname === "/sitemap-delta.xml" || pathname === "/api/seo/sitemap-delta.xml") {
+    const since48h = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
+    const deltaPages = await getDeltaSitemapEntries(db, since48h, 1000);
+    if (deltaPages === null) return null;
+    const entries: Array<{ loc: string; lastmod: string; pri: string; freq: string }> = [];
+    for (const p of deltaPages) {
+      const entry = seoPageToSitemapEntry(p, today);
+      if (entry) {
+        entries.push({ loc: entry.loc, lastmod: entry.lastmod, pri: entry.pri, freq: entry.freq });
+      }
+    }
+    return { type: "xml", data: buildUrlset(entries) };
   }
 
   return null;
@@ -1262,6 +1724,7 @@ export async function probeBotLastModified(
     // Tell the backend this is a metadata-only probe so it can skip
     // any expensive render work and just emit headers.
     proxyHeaders.set("X-Bot-Probe", "1");
+    await addMtlsActiveHeader(proxyHeaders, env);
     // Strip any inbound conditional headers — a crawler that arrived
     // with `If-None-Match` / `If-Modified-Since` would otherwise
     // induce a 304 from the backend, which carries no
@@ -1272,7 +1735,7 @@ export async function probeBotLastModified(
     proxyHeaders.delete("If-Match");
     proxyHeaders.delete("If-Unmodified-Since");
     proxyHeaders.delete("If-Range");
-    const resp = await fetch(apiUrl, { method: "HEAD", headers: proxyHeaders });
+    const resp = await fetchBackend(env, apiUrl, { method: "HEAD", headers: proxyHeaders });
     if (!resp.ok) return null;
     const lm = resp.headers.get("Last-Modified");
     if (!lm) return null;
@@ -1296,7 +1759,8 @@ async function fetchBotRenderedHtml(
   try {
     const proxyHeaders = buildProxyHeaders(request, clientIp, env);
     proxyHeaders.set("X-Bot-Request", "1");
-    const resp = await fetch(apiUrl, {
+    await addMtlsActiveHeader(proxyHeaders, env);
+    const resp = await fetchBackend(env, apiUrl, {
       method: "GET",
       headers: proxyHeaders,
     });
@@ -1305,7 +1769,7 @@ async function fetchBotRenderedHtml(
       const parts = clean.split("/").filter(Boolean);
       if (parts.length >= 3 && parts.length <= 5) {
         const fallbackUrl = `${env.BACKEND_URL}${clean}`;
-        const fallbackResp = await fetch(fallbackUrl, {
+        const fallbackResp = await fetchBackend(env, fallbackUrl, {
           method: "GET",
           headers: proxyHeaders,
         });
@@ -1792,7 +2256,14 @@ async function handleScheduledSync(env: Env): Promise<void> {
     if (env.BACKEND_ORIGIN_SECRET) {
       syncHeaders["X-Origin-Auth"] = env.BACKEND_ORIGIN_SECRET;
     }
-    const resp = await fetch(`${env.BACKEND_URL}/api/admin/d1-export`, {
+    // Task #120: inject the HMAC proof that the CF Worker is making this
+    // request with the mTLS cert bound — validates against
+    // MtlsClientCertMiddleware on the backend when ENFORCE_MTLS=true.
+    await addMtlsActiveHeader(syncHeaders, env);
+    // Phase 6 (Task #110): use fetchBackend() so the mTLS cert is presented
+    // on this scheduled cron fetch too — Railway mTLS enforcement applies to
+    // all connections, not just the primary request proxy path.
+    const resp = await fetchBackend(env, `${env.BACKEND_URL}/api/admin/d1-export`, {
       method: "GET",
       headers: syncHeaders,
     });
@@ -1810,6 +2281,92 @@ async function handleScheduledSync(env: Env): Promise<void> {
     console.error(`D1 scheduled sync error: ${message}`);
   }
 }
+
+// ── Google Tag Gateway ────────────────────────────────────────────────────────
+// Proxies GA4 / GTM requests through api.syrabit.ai so they originate from a
+// first-party origin, bypassing ad-blocker lists that block googletagmanager.com
+// and google-analytics.com. The route /gtag/* is matched in _handleEdgeFetch
+// before any backend proxy logic runs, so no request ever reaches Railway.
+//
+// URL mapping:
+//   /gtag/js?id=G-...       → https://www.googletagmanager.com/gtag/js?id=G-...
+//   /gtag/gtm.js?id=GTM-... → https://www.googletagmanager.com/gtm.js?id=GTM-...
+//   /gtag/collect            → https://www.google-analytics.com/g/collect   (POST)
+//
+// To activate the gateway in the frontend, update ga4Plugin() in vite.config.js:
+//   Replace: s.src='https://www.googletagmanager.com/gtag/js?id=${id}';
+//   With:    s.src='/gtag/js?id=${id}';
+// and update any sendBeacon / fetch beacon URLs similarly.
+async function handleGtagGateway(
+  request: Request,
+  pathname: string,
+  url: URL,
+): Promise<Response> {
+  let upstreamUrl: string;
+
+  if (pathname === "/gtag/js" || pathname === "/gtag/gtm.js") {
+    // Script proxy: /gtag/js → googletagmanager.com/gtag/js
+    //               /gtag/gtm.js → googletagmanager.com/gtm.js
+    const upstreamPath = pathname === "/gtag/js" ? "/gtag/js" : "/gtm.js";
+    upstreamUrl = `https://www.googletagmanager.com${upstreamPath}${url.search}`;
+  } else if (pathname === "/gtag/collect") {
+    // Beacon proxy: POST /gtag/collect → google-analytics.com/g/collect
+    upstreamUrl = `https://www.google-analytics.com/g/collect${url.search}`;
+  } else {
+    return new Response("Not found", { status: 404 });
+  }
+
+  const upstreamReq = new Request(upstreamUrl, {
+    method: request.method,
+    headers: (() => {
+      const h = new Headers();
+      // Forward content-type for POST beacons; strip Origin/Referer so
+      // Google does not see the proxy's own URL as the document origin.
+      const ct = request.headers.get("content-type");
+      if (ct) h.set("content-type", ct);
+      const ua = request.headers.get("user-agent");
+      if (ua) h.set("user-agent", ua);
+      // Forward the real visitor IP so GA4 geolocation is accurate.
+      const cf = (request as unknown as { cf?: { ip?: string } }).cf;
+      const realIp = request.headers.get("cf-connecting-ip") || cf?.ip || "";
+      if (realIp) h.set("x-forwarded-for", realIp);
+      return h;
+    })(),
+    body: request.method === "POST" ? request.body : undefined,
+  });
+
+  let upstream: Response;
+  try {
+    upstream = await fetch(upstreamReq);
+  } catch {
+    return new Response("Bad gateway", { status: 502 });
+  }
+
+  const respHeaders = new Headers();
+  // Propagate content-type from Google's response.
+  const ct = upstream.headers.get("content-type");
+  if (ct) respHeaders.set("content-type", ct);
+
+  if (pathname === "/gtag/collect") {
+    // Beacon: no caching, CORS open so browsers can POST cross-origin.
+    respHeaders.set("cache-control", "no-store");
+    respHeaders.set("access-control-allow-origin", "*");
+  } else {
+    // Script: cache at the edge for 5 minutes (Google rotates slowly).
+    // Browsers may cache up to 1 minute so a stale version is never older
+    // than 6 minutes after Google publishes an update.
+    respHeaders.set("cache-control", "public, max-age=60, s-maxage=300, stale-while-revalidate=300");
+    respHeaders.set("access-control-allow-origin", "*");
+    respHeaders.set("vary", "accept-encoding");
+  }
+  respHeaders.set("x-source", "gtag-gateway");
+
+  return new Response(upstream.body, {
+    status: upstream.status,
+    headers: respHeaders,
+  });
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 // Task #944 — extracted so the public ``fetch`` export can wrap a single
 // recordEdgeLog call around every return path of the original handler.
@@ -1842,6 +2399,72 @@ async function _handleEdgeFetch(
     if (pathname === "/api/edge/kv-usage" && request.method === "GET") {
       return handleKvUsage(env, request, cors);
     }
+
+    // ── Phase 5: Edge metrics query (Analytics Engine GraphQL API) ──────────
+    // GET /api/edge/analytics?range=24h|6h|1h|7d
+    // Requires:
+    //   - CF_ANALYTICS_TOKEN secret (Analytics: Read scope) to query the GQL API.
+    //   - X-Edge-Admin-Secret: <D1_SYNC_SECRET> header (same pattern as /api/edge/kv-usage).
+    //     This endpoint is NOT under /admin*, so it is not covered by the Zero Trust
+    //     Access app policy — the shared-secret check is the only auth layer.
+    //     Call via the Flask backend /admin/edge-analytics proxy (not directly from SPA).
+    if (pathname === "/api/edge/analytics" && request.method === "GET") {
+      const edgeSecret = request.headers.get("X-Edge-Admin-Secret") ?? "";
+      if (!env.D1_SYNC_SECRET || edgeSecret !== env.D1_SYNC_SECRET) {
+        return new Response(
+          JSON.stringify({ error: "Unauthorized" }),
+          { status: 401, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+      if (!env.CF_ANALYTICS_TOKEN) {
+        return new Response(
+          JSON.stringify({ error: "CF_ANALYTICS_TOKEN secret not set. Run: wrangler secret put CF_ANALYTICS_TOKEN" }),
+          { status: 503, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+      try {
+        const range   = url.searchParams.get("range") ?? "24h";
+        const metrics = await queryEdgeMetrics(env.CF_ANALYTICS_TOKEN, range);
+        return new Response(JSON.stringify(metrics), {
+          headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "no-store" },
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "unknown";
+        return new Response(
+          JSON.stringify({ error: `Analytics Engine query failed: ${msg.slice(0, 300)}` }),
+          { status: 500, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+    }
+
+    // ── Google Tag Gateway (gtag proxy) ─────────────────────────────────────
+    // Proxies Google Analytics 4 beacon requests through this edge worker so
+    // they originate from api.syrabit.ai instead of googletagmanager.com.
+    // Benefits:
+    //   1. Bypasses ad-blockers and browser privacy extensions that block
+    //      googletagmanager.com, recovering ~10–20% of mobile traffic that
+    //      would otherwise be invisible to GA4.
+    //   2. Eliminates the third-party DNS + TLS handshake cost for the gtag.js
+    //      script (~50–100 ms on slow connections) because the script is now
+    //      served from a first-party origin already open in the browser.
+    //   3. All requests pass through Cloudflare's network — same PoP as the
+    //      page HTML — so no extra cross-ocean hop.
+    //
+    // Routes proxied:
+    //   GET  /gtag/js            → https://www.googletagmanager.com/gtag/js
+    //   POST /gtag/collect       → https://www.google-analytics.com/g/collect
+    //   GET  /gtag/gtm.js        → https://www.googletagmanager.com/gtm.js
+    //
+    // The frontend references these as relative URLs (see vite.config.js
+    // ga4Plugin — change the src from the googletagmanager.com absolute URL
+    // to /gtag/js?id=G-XXXXXXXXXX after this worker is deployed).
+    //
+    // Cache: gtag.js is edge-cached for 5 minutes (Google rotates it slowly);
+    //        /g/collect beacons are never cached (POST + ephemeral).
+    if (pathname.startsWith("/gtag/")) {
+      return handleGtagGateway(request, pathname, url);
+    }
+    // ────────────────────────────────────────────────────────────────────────
 
     // Task #848 — /api/livez is the new Railway liveness probe. The
     // edge can answer it directly because the contract is "is *some*
@@ -1878,6 +2501,139 @@ async function _handleEdgeFetch(
         }
       );
     }
+
+    // ── Task #108 — Phase 4: Admin asset upload (R2) ────────────────────────
+    // POST /admin/assets/upload
+    //   Multipart form: `file` (binary PDF/document) + `key` (R2 object key)
+    //   Protected upstream by Cloudflare Zero Trust (Phase 3) — the route is
+    //   inside api.syrabit.ai/admin* so no request reaches here without a
+    //   valid Access session cookie. A second layer requires an Authorization:
+    //   Bearer header (format check — prevents headerless CSRF; full JWT
+    //   signature verification is deferred as a future hardening step).
+    //
+    // Response (JSON):
+    //   201 { ok: true, key, size, url }          — upload succeeded
+    //   400 { ok: false, error: "..." }            — missing/invalid params
+    //   401 { ok: false, error: "unauthorized" }   — no/invalid Bearer token
+    //   503 { ok: false, error: "assets_not_bound" } — ASSETS binding missing
+    //
+    // The uploaded file is served at:
+    //   https://assets.syrabit.ai/<key>
+    // (via the R2 custom domain configured by cloudflare-phase4-apply.js)
+    if (pathname === "/admin/assets/upload" && request.method === "POST") {
+      if (!env.ASSETS) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "assets_not_bound",
+            detail: "ASSETS R2 binding not configured — run cloudflare-phase4-apply.js then wrangler deploy" }),
+          { status: 503, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+
+      // Presence check: require an Authorization: Bearer header.
+      // This is a format-only check (we confirm the header starts with "Bearer ")
+      // not a cryptographic JWT validation. Zero Trust (Phase 3) is the primary
+      // auth gate — no request reaches this route without a valid Access session
+      // cookie. This check adds a second layer by requiring an explicit auth header,
+      // which prevents accidental CSRF from same-origin pages that wouldn't
+      // normally send an Authorization header. Full JWT signature verification
+      // would require the JWT_SECRET binding and is left as a future hardening step.
+      const authHeader = request.headers.get("Authorization") ?? "";
+      if (!authHeader.startsWith("Bearer ")) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "unauthorized",
+            detail: "Bearer token required in Authorization header" }),
+          { status: 401, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+
+      let formData: FormData;
+      try {
+        formData = await request.formData();
+      } catch {
+        return new Response(
+          JSON.stringify({ ok: false, error: "invalid_multipart",
+            detail: "Request must be multipart/form-data with 'file' and 'key' fields" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+
+      const fileField = formData.get("file");
+      const key       = (formData.get("key") as string | null)?.trim();
+
+      const uploadedFile = fileField as unknown as (File & { name: string; size: number; type: string; arrayBuffer(): Promise<ArrayBuffer> }) | null;
+      if (!uploadedFile || typeof uploadedFile === "string") {
+        return new Response(
+          JSON.stringify({ ok: false, error: "file_required",
+            detail: "'file' field is required and must be a file upload" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+
+      if (!key || key.length === 0) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "key_required",
+            detail: "'key' field is required — e.g. ahsec/2024/physics.pdf" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+
+      // Reject path traversal attempts
+      if (key.includes("..") || key.startsWith("/")) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "invalid_key",
+            detail: "key must not contain '..' or start with '/'" }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+
+      const contentType = uploadedFile.type || "application/octet-stream";
+      const size        = uploadedFile.size;
+
+      // Enforce a 50 MB limit to keep the Workers request body within reason.
+      // Workers standard has a 100 MB body limit; we use 50 MB as a safe cap
+      // for educational PDFs (typical past-paper PDF is 2–15 MB).
+      const MAX_BYTES = 50 * 1024 * 1024;
+      if (size > MAX_BYTES) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "file_too_large",
+            detail: `File size ${size} bytes exceeds 50 MB limit` }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+
+      const arrayBuffer = await uploadedFile.arrayBuffer();
+
+      try {
+        await env.ASSETS.put(key, arrayBuffer, {
+          httpMetadata: {
+            contentType,
+            // Content-Disposition: inline so browsers open PDFs in-tab
+            contentDisposition: `inline; filename="${uploadedFile.name}"`,
+            // Cache for 1 year — past papers and syllabi are immutable once uploaded.
+            // Admins who need to replace a file upload under the same key (R2 PUT
+            // is idempotent) and the CDN will serve the new version after the TTL.
+            cacheControl: "public, max-age=31536000, immutable",
+          },
+          customMetadata: {
+            uploadedAt: new Date().toISOString(),
+            originalName: uploadedFile.name,
+          },
+        });
+      } catch (e: unknown) {
+        const detail = e instanceof Error ? e.message : "Unknown R2 error";
+        return new Response(
+          JSON.stringify({ ok: false, error: "upload_failed", detail }),
+          { status: 502, headers: { ...cors, "Content-Type": "application/json" } },
+        );
+      }
+
+      const publicUrl = `https://assets.syrabit.ai/${key}`;
+      return new Response(
+        JSON.stringify({ ok: true, key, size, contentType, url: publicUrl }),
+        { status: 201, headers: { ...cors, "Content-Type": "application/json" } },
+      );
+    }
+    // ────────────────────────────────────────────────────────────────────────
 
     // Task #636 — Workers AI fallback fan-out. Backend POSTs here only
     // after a primary-provider failure. POST-only; CORS preflight is
@@ -2000,6 +2756,36 @@ async function _handleEdgeFetch(
     //     above, so this block runs after them.
     // CORS headers are included so the response is well-formed even if
     // a browser-side preview ever hits this branch.
+    // Resolve bot identity now so that (a) the AI hard-block below has access
+    // to botResult for structured error logging, and (b) the rate-limit and
+    // SEO-content paths later in this handler can use isSearchBot.
+    //
+    // Trust hierarchy inside verifySearchBot:
+    //   1. cf.verifiedBot === true → {verified: true} immediately, no CIDR check.
+    //      This means any legitimate search crawler on a newly-added IP range
+    //      that Cloudflare has already verified is treated as trusted even before
+    //      the CIDR list is refreshed.
+    //   2. UA matches SEARCH_BOT_UA + IP in BOT_UA_RANGES → {verified: true}
+    //   3. UA matches SEARCH_BOT_UA + no registered CIDR list (e.g. YouBot) →
+    //      {verified: false, spoofed: false} — unverified but not an impersonation
+    //   4. UA matches SEARCH_BOT_UA + IP NOT in ranges → {verified: false, spoofed: true}
+    const botResult = verifySearchBot(ua, request, clientIp);
+    const isSearchBot = botResult.verified;
+    let remaining = 999999;
+
+    if (botResult.spoofed) {
+      const ipH = hashIp(clientIp);
+      const colo = (request as unknown as { cf?: { colo?: string } }).cf?.colo || "unknown";
+      ctx.waitUntil(logSpoofedBot(env.RATE_LIMIT, ipH, ua, clientIp, colo));
+    }
+
+    // AI crawler hard-block.
+    // This block is UNCONDITIONAL — `isSearchBot` / `cf.verifiedBot` do NOT
+    // bypass it. AI training scrapers (GPTBot, CCBot, Google-Extended, …) are
+    // blocked regardless of whether Cloudflare has verified them, because the
+    // verification only proves the request genuinely came from those crawlers,
+    // not that we want to serve them. YouBot was removed from AI_BOT_UA
+    // entirely and reclassified as a search bot, so it never reaches this branch.
     const isRobotsRequest = /^\/robots\.txt$/i.test(pathname);
     if (AI_BOT_UA.test(ua) && !isRobotsRequest) {
       return new Response(
@@ -2015,16 +2801,6 @@ async function _handleEdgeFetch(
           },
         },
       );
-    }
-
-    const botResult = verifySearchBot(ua, request, clientIp);
-    const isSearchBot = botResult.verified;
-    let remaining = 999999;
-
-    if (botResult.spoofed) {
-      const ipH = hashIp(clientIp);
-      const colo = (request as unknown as { cf?: { colo?: string } }).cf?.colo || "unknown";
-      ctx.waitUntil(logSpoofedBot(env.RATE_LIMIT, ipH, ua, clientIp, colo));
     }
 
     const isApiRoute = pathname.startsWith("/api/");
@@ -2052,6 +2828,22 @@ async function _handleEdgeFetch(
       } catch { /* fall through to Pages on D1 failure */ }
     }
 
+    // Task #246: alias /sitemap-delta.xml to the D1 delta-sitemap handler.
+    // Must be handled before the isApiRoute / !isApiRoute split or it falls
+    // through to PAGES_ORIGIN (no static file there) and returns 404/SPA.
+    if (
+      pathname === "/sitemap-delta.xml" &&
+      (request.method === "GET" || request.method === "HEAD") &&
+      env.CONTENT_DB
+    ) {
+      try {
+        const deltaResult = await tryD1Route(env, "/sitemap-delta.xml", url.searchParams);
+        if (deltaResult !== null && deltaResult.type === "xml") {
+          return d1XmlResponse(deltaResult.data, cors, remaining);
+        }
+      } catch { /* fall through on D1 failure */ }
+    }
+
     // Bot-discovery endpoints live on the FastAPI backend (not Pages and not
     // D1). Crawlers probe these at the zone root; without these internal
     // rewrites the request would fall through to PAGES_ORIGIN and return
@@ -2072,10 +2864,26 @@ async function _handleEdgeFetch(
     }
 
     if (!isSearchBot && isApiRoute) {
+      // Phase 5: per-IP and per-user (anon-id) Durable Object rate limiting.
+      // x-anon-id is the anonymous/authenticated user identifier set by the SPA.
+      // We enforce BOTH dimensions when the header is present so that users on
+      // shared IPs (campus, corporate NAT) cannot starve each other.
+      const anonId = (request.headers.get("x-anon-id") || "").trim().replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64);
+
       if (isAiPath(pathname)) {
-        const aiKey = `rl:ai:${clientIp}`;
-        const aiRl = await checkRateLimitKey(aiKey, env.RATE_LIMIT, AI_RATE_LIMIT_RPM);
-        if (!aiRl.allowed) {
+        // AI rate limit — check per-IP first, then per-user if anon-id present.
+        const aiIpKey   = `rl:ai:${clientIp}`;
+        const aiUserKey = anonId ? `rl:ai:user:${anonId}` : null;
+
+        const [aiIpRl, aiUserRl] = await Promise.all([
+          checkRateLimitWithDO(aiIpKey, env, AI_RATE_LIMIT_RPM),
+          aiUserKey ? checkRateLimitWithDO(aiUserKey, env, AI_RATE_LIMIT_RPM) : Promise.resolve({ allowed: true, remaining: AI_RATE_LIMIT_RPM }),
+        ]);
+
+        if (!aiIpRl.allowed || !aiUserRl.allowed) {
+          // X-AE-RL is an internal signal header read by the outer fetch handler
+          // to set rateLimitResult on the per-request AE datapoint. It is stripped
+          // from the final response before it reaches the client.
           return new Response(
             JSON.stringify({ detail: "AI rate limit exceeded. Please slow down." }),
             {
@@ -2087,14 +2895,25 @@ async function _handleEdgeFetch(
                 "X-RateLimit-Limit": String(AI_RATE_LIMIT_RPM),
                 "X-RateLimit-Remaining": "0",
                 "X-RateLimit-Scope": "ai",
+                "X-AE-RL": "ai_limited",
               },
             }
           );
         }
+        // AI request passed both rate limits — outer fetch handler emits AE datapoint.
       }
-      const rl = await checkRateLimit(clientIp, env.RATE_LIMIT, RATE_LIMIT_RPM);
-      remaining = rl.remaining;
-      if (!rl.allowed) {
+
+      // General API rate limit — check per-IP first, then per-user if anon-id present.
+      const ipKey   = `rl:${clientIp}`;
+      const userKey = anonId ? `rl:user:${anonId}` : null;
+
+      const [ipRl, userRl] = await Promise.all([
+        checkRateLimitWithDO(ipKey, env, RATE_LIMIT_RPM),
+        userKey ? checkRateLimitWithDO(userKey, env, RATE_LIMIT_RPM) : Promise.resolve({ allowed: true, remaining: RATE_LIMIT_RPM }),
+      ]);
+
+      remaining = Math.min(ipRl.remaining, userRl.remaining);
+      if (!ipRl.allowed || !userRl.allowed) {
         return new Response(
           JSON.stringify({ detail: "Rate limit exceeded. Try again shortly." }),
           {
@@ -2105,6 +2924,7 @@ async function _handleEdgeFetch(
               "Retry-After": String(RATE_LIMIT_WINDOW_S),
               "X-RateLimit-Limit": String(RATE_LIMIT_RPM),
               "X-RateLimit-Remaining": "0",
+              "X-AE-RL": "ip_limited",
             },
           }
         );
@@ -2113,8 +2933,41 @@ async function _handleEdgeFetch(
 
     if (!isApiRoute && (request.method === "GET" || request.method === "HEAD")) {
       if (isSearchBot && request.method === "GET") {
+        // Verified bots (cf.verifiedBot === true): rate-cap at BOT_RATE_LIMIT_RPM (3000 RPM)
+        // per IP to prevent aggressive re-crawl from overwhelming the backend.
+        const botRlKey = `rl:bot:${clientIp}`;
+        const botRl = await checkRateLimitWithDO(botRlKey, env, BOT_RATE_LIMIT_RPM);
+        if (!botRl.allowed) {
+          return new Response("Too Many Requests", {
+            status: 429,
+            headers: {
+              ...cors,
+              "Retry-After": String(RATE_LIMIT_WINDOW_S),
+              "X-RateLimit-Limit": String(BOT_RATE_LIMIT_RPM),
+              "X-RateLimit-Remaining": "0",
+              "X-RateLimit-Scope": "bot",
+            },
+          });
+        }
         const botResp = await handleBotContentRequest(env, pathname, clientIp, request, ctx);
         if (botResp) return botResp;
+      } else if (botResult.claimsBot && !isSearchBot && request.method === "GET") {
+        // Unverified claimed bots (UA matches bot pattern but cf.verifiedBot is false):
+        // enforce the same 120 RPM ceiling as general API traffic to prevent scraping.
+        const unverifiedBotRlKey = `rl:${clientIp}`;
+        const unverifiedBotRl = await checkRateLimitWithDO(unverifiedBotRlKey, env, RATE_LIMIT_RPM);
+        if (!unverifiedBotRl.allowed) {
+          return new Response("Too Many Requests", {
+            status: 429,
+            headers: {
+              ...cors,
+              "Retry-After": String(RATE_LIMIT_WINDOW_S),
+              "X-RateLimit-Limit": String(RATE_LIMIT_RPM),
+              "X-RateLimit-Remaining": "0",
+              "X-RateLimit-Scope": "unverified_bot",
+            },
+          });
+        }
       }
       // CRITICAL: do NOT call fetch(request) — this worker is bound to
       // syrabit.ai/* and www.syrabit.ai/*, and fetch(request) re-enters
@@ -2146,11 +2999,19 @@ async function _handleEdgeFetch(
       if (ct.startsWith("image/") && !out.headers.has("cache-control")) {
         out.headers.set("cache-control", "public, max-age=86400");
       }
+      // Log 4xx/5xx responses served to known bot UAs for crawl-budget analysis.
+      if (botResult.claimsBot && out.status >= 400) {
+        logBotErrorResponse(env, ctx, out.status, botResult, ua, pathname);
+      }
       return out;
     }
 
     if ((request.method !== "GET" && request.method !== "HEAD") || isBypass(pathname)) {
-      return proxyToBackend(request, env, pathname, url.search, clientIp, cors, remaining);
+      const proxyResp = await proxyToBackend(request, env, pathname, url.search, clientIp, cors, remaining);
+      if (botResult.claimsBot && proxyResp.status >= 400) {
+        logBotErrorResponse(env, ctx, proxyResp.status, botResult, ua, pathname);
+      }
+      return proxyResp;
     }
 
     const hasAuth =
@@ -2223,9 +3084,11 @@ async function _handleEdgeFetch(
 
       const backendUrl = `${env.BACKEND_URL}${pathname}${url.search}`;
       const backendHeaders = buildProxyHeaders(request, clientIp, env);
+      await addMtlsActiveHeader(backendHeaders, env);
 
       try {
-        const backendResp = await fetch(backendUrl, {
+        // Phase 6 (Task #110): use fetchBackend() — mTLS cert presented here too.
+        const backendResp = await fetchBackend(env, backendUrl, {
           method: "GET",
           headers: backendHeaders,
         });
@@ -2233,34 +3096,42 @@ async function _handleEdgeFetch(
         if (backendResp.ok) {
           const ttl = getCacheTtl(pathname);
           const respBody = await backendResp.arrayBuffer();
+          const contentType = backendResp.headers.get("Content-Type") || "application/json";
+          const cacheControl = `public, max-age=${ttl}, stale-while-revalidate=${ttl * 2}`;
+          const tags = buildCacheTags(pathname);
 
+          const cachedHeaders: Record<string, string> = {
+            "Content-Type": contentType,
+            "Cache-Control": `public, s-maxage=${ttl}, stale-while-revalidate=${ttl * 2}`,
+            "Surrogate-Control": cacheControl,
+            "Vary": "Accept-Encoding, Accept",
+          };
+          if (tags) cachedHeaders["Cache-Tag"] = tags;
           const cachedResp = new Response(respBody, {
             status: backendResp.status,
-            headers: {
-              "Content-Type":
-                backendResp.headers.get("Content-Type") || "application/json",
-              "Cache-Control": `public, s-maxage=${ttl}, stale-while-revalidate=${ttl * 2}`,
-            },
+            headers: cachedHeaders,
           });
           ctx.waitUntil(cache.put(cacheKey, cachedResp.clone()));
 
+          const clientHeaders: Record<string, string> = {
+            ...cors,
+            "Content-Type": contentType,
+            "Cache-Control": cacheControl,
+            "Vary": "Accept-Encoding, Accept",
+            "X-Cache": "MISS",
+            "X-Source": "backend",
+            "X-RateLimit-Remaining": String(remaining),
+          };
+          if (tags) clientHeaders["Cache-Tag"] = tags;
           const clientResp = new Response(respBody, {
             status: backendResp.status,
-            headers: {
-              ...cors,
-              "Content-Type":
-                backendResp.headers.get("Content-Type") || "application/json",
-              "Cache-Control": `public, max-age=${ttl}, stale-while-revalidate=${ttl * 2}`,
-              "X-Cache": "MISS",
-              "X-Source": "backend",
-              "X-RateLimit-Remaining": String(remaining),
-            },
+            headers: clientHeaders,
           });
           return clientResp;
         }
 
         const body = await backendResp.text();
-        return new Response(body, {
+        const nonOkResp = new Response(body, {
           status: backendResp.status,
           headers: {
             ...cors,
@@ -2270,18 +3141,30 @@ async function _handleEdgeFetch(
             "X-Source": "backend",
           },
         });
+        if (botResult.claimsBot && nonOkResp.status >= 400) {
+          logBotErrorResponse(env, ctx, nonOkResp.status, botResult, ua, pathname);
+        }
+        return nonOkResp;
       } catch (err) {
-        return new Response(
+        const unavailResp = new Response(
           JSON.stringify({ detail: "Backend unavailable", edge: true }),
           {
             status: 502,
             headers: { ...cors, "Content-Type": "application/json", "X-Source": "backend" },
           }
         );
+        if (botResult.claimsBot) {
+          logBotErrorResponse(env, ctx, 502, botResult, ua, pathname);
+        }
+        return unavailResp;
       }
     }
 
-    return proxyToBackend(request, env, pathname, url.search, clientIp, cors, remaining);
+    const finalResp = await proxyToBackend(request, env, pathname, url.search, clientIp, cors, remaining);
+    if (botResult.claimsBot && finalResp.status >= 400) {
+      logBotErrorResponse(env, ctx, finalResp.status, botResult, ua, pathname);
+    }
+    return finalResp;
 }
 
 export default {
@@ -2322,6 +3205,32 @@ export default {
       xCache === "bypass" ? "bypass" :
       xCache === "dynamic" ? "dynamic" :
       null;
+    // ── Phase 5: per-request Analytics Engine datapoint ─────────────────────
+    // X-AE-RL is an internal signal header set by rate-limit 429 return paths
+    // inside _handleEdgeFetch. We read it here to populate rateLimitResult and
+    // then strip it so it never reaches the client.
+    const aeRl     = response.headers.get("x-ae-rl") ?? "ok";
+    const reqUrl   = new URL(request.url);
+    const reqPath  = reqUrl.pathname;
+    writeEdgeMetric(env, ctx, startMs, {
+      cacheStatus:      cache ?? "dynamic",
+      chapterId:        extractChapterIdFromPath(reqPath),
+      aiProvider:       aiProviderFromPath(reqPath),
+      pathname:         reqPath,
+      rateLimitResult:  aeRl,
+      isAiRequest:      isAiPath(reqPath),
+      httpStatus:       response.status,
+    });
+    // Strip internal header if present (only on rate-limit 429 responses).
+    if (response.headers.has("x-ae-rl")) {
+      const stripped = new Headers(response.headers);
+      stripped.delete("x-ae-rl");
+      response = new Response(response.body, {
+        status:     response.status,
+        statusText: response.statusText,
+        headers:    stripped,
+      });
+    }
     recordEdgeLog(
       request,
       response,

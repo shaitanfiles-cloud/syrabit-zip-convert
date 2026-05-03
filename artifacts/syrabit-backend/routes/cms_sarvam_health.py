@@ -105,6 +105,7 @@ Module-level helpers + middleware that other modules / tests import from here:
     ``_ASM_REFRESH_INTERVAL_SECONDS``
 """
 import re, json, asyncio, time, uuid, logging, hashlib, os, html as _html_mod
+import nh3 as _nh3
 from typing import Optional, List
 from datetime import datetime, timezone, timedelta
 from fastapi import (
@@ -215,10 +216,11 @@ def _vertex_block_for_health() -> tuple[dict, bool]:
 # made the health card flip to "degraded" whenever that one provider had
 # a transient error or rate-limit, even though real chat traffic was fine.
 _LLM_PROBE_MODELS = (
-    "gemini-2.5-flash",
-    "llama-4-scout-17b-16e-instruct",
+    # Fast providers first — probe succeeds without waiting on quota-limited models.
+    "llama-4-scout-17b-16e-instruct",        # Workers AI — reliable, sub-200ms
     "meta-llama/llama-4-scout-17b-16e-instruct",
-    "sarvam-m",
+    "sarvam-m",                               # Sarvam AI
+    "gemini-2.5-flash",                       # Last: may be rate-limited/quota exceeded
 )
 
 async def _bg_llm_health_probe():
@@ -400,12 +402,43 @@ async def get_cms_documents(admin: dict = Depends(get_admin_user)):
         mark_mongo_down()
         return []
 
+def _sanitize_html(raw_html: str) -> str:
+    """Strip dangerous tags and event-handler attributes from HTML using nh3."""
+    if not raw_html:
+        return ""
+    return _nh3.clean(
+        raw_html,
+        tags={
+            "a", "abbr", "b", "blockquote", "br", "caption", "code",
+            "col", "colgroup", "dd", "del", "details", "dfn", "div",
+            "dl", "dt", "em", "figcaption", "figure", "h1", "h2", "h3",
+            "h4", "h5", "h6", "hr", "i", "img", "ins", "kbd", "li",
+            "mark", "ol", "p", "pre", "q", "s", "section", "small",
+            "span", "strike", "strong", "sub", "summary", "sup",
+            "table", "tbody", "td", "tfoot", "th", "thead", "tr",
+            "u", "ul", "var",
+        },
+        attributes={
+            "*": {"id", "class"},
+            "a": {"href", "title", "target"},
+            "img": {"src", "alt", "width", "height", "loading"},
+            "td": {"colspan", "rowspan", "align"},
+            "th": {"colspan", "rowspan", "align", "scope"},
+            "col": {"span"},
+            "colgroup": {"span"},
+        },
+        url_schemes={"http", "https", "mailto"},
+        link_rel=None,
+        strip_comments=True,
+    )
+
+
 @router.post("/admin/content/cms-documents")
 async def create_cms_document(doc: CMSDocument, admin: dict = Depends(get_admin_user)):
     """Create new SEO-optimized CMS document with auto markdown→HTML processing"""
     doc_id = str(uuid.uuid4())
     raw_md = doc.content or ""
-    content_html = doc.content_html or _md_to_html(raw_md)
+    content_html = _sanitize_html(doc.content_html or _md_to_html(raw_md))
     headings_json = doc.headings or _extract_headings_json(raw_md)
     word_count = len(re.sub(r'<[^>]+>', '', content_html).split())
     now = datetime.now(timezone.utc).isoformat()
@@ -456,12 +489,12 @@ async def update_cms_document(doc_id: str, doc: CMSDocumentUpdate, admin: dict =
     if "content" in patch:
         raw_md = patch["content"]
         updates["content"] = raw_md
-        updates["content_html"] = patch.pop("content_html", None) or _md_to_html(raw_md)
+        updates["content_html"] = _sanitize_html(patch.pop("content_html", None) or _md_to_html(raw_md))
         updates["headings"] = patch.pop("headings", None) or _extract_headings_json(raw_md)
         content_html_for_wc = updates["content_html"]
         updates["word_count"] = len(re.sub(r'<[^>]+>', '', content_html_for_wc).split())
     elif "content_html" in patch:
-        updates["content_html"] = patch.pop("content_html")
+        updates["content_html"] = _sanitize_html(patch.pop("content_html"))
     if "headings" in patch:
         updates["headings"] = patch.pop("headings")
 
@@ -618,27 +651,16 @@ async def extract_pdf_text(file: UploadFile = File(...), admin: dict = Depends(g
         raise HTTPException(status_code=413, detail="File too large (max 20 MB)")
 
     def _extract_sync(data: bytes):
-        try:
-            import io as _io
-            import pypdf
-            reader = pypdf.PdfReader(_io.BytesIO(data))
-            pages = []
-            for page in reader.pages:
-                text = page.extract_text() or ""
-                if text.strip():
-                    pages.append(text.strip())
-            extracted = "\n\n".join(pages)
-            return {"text": extracted, "pages": len(reader.pages), "chars": len(extracted)}
-        except ImportError:
-            import PyPDF2, io as _io
-            reader = PyPDF2.PdfReader(_io.BytesIO(data))
-            pages = []
-            for page in reader.pages:
-                text = page.extract_text() or ""
-                if text.strip():
-                    pages.append(text.strip())
-            extracted = "\n\n".join(pages)
-            return {"text": extracted, "pages": len(reader.pages), "chars": len(extracted)}
+        import io as _io
+        from pypdf import PdfReader
+        reader = PdfReader(_io.BytesIO(data))
+        pages = []
+        for page in reader.pages:
+            text = page.extract_text() or ""
+            if text.strip():
+                pages.append(text.strip())
+        extracted = "\n\n".join(pages)
+        return {"text": extracted, "pages": len(reader.pages), "chars": len(extracted)}
 
     try:
         loop = asyncio.get_event_loop()
@@ -735,14 +757,19 @@ async def upload_image(file: UploadFile = File(...), admin: dict = Depends(get_a
     return {"url": data_url, "id": image_id, "filename": file.filename}
 
 # Public CMS endpoints (no auth required)
+_PUBLIC_CMS_FILTER = {
+    "doc_type": {"$ne": "personalized"},
+    "meta.is_private": {"$ne": True},
+}
+
 @router.get("/content/cms-library")
 async def get_public_cms_library():
-    """Get published CMS documents for public library"""
+    """Get published CMS documents for public library (personalized/private plans excluded)."""
     try:
         if not await is_mongo_available():
             return []
         docs = await db.cms_documents.find(
-            {"status": "published"},
+            {"status": "published", **_PUBLIC_CMS_FILTER},
             {"_id": 0, "content": 0}
         ).sort("updated_at", -1).limit(50).to_list(50)
         return docs
@@ -752,12 +779,18 @@ async def get_public_cms_library():
 
 @router.get("/content/cms-documents/{doc_id}")
 async def get_public_cms_document(doc_id: str):
-    """Get single CMS document for public view (PYQs and notes are freely scrapable)."""
+    """Get single CMS document for public view (PYQs and notes are freely scrapable).
+    Personalized or private documents are never returned — use the authenticated
+    /cms/{user_id}/{slug} endpoint for those."""
     try:
         if not await is_mongo_available():
             raise HTTPException(status_code=503, detail="Content service unavailable")
         doc = await db.cms_documents.find_one(
-            {"$or": [{"id": doc_id}, {"seo_slug": doc_id}], "status": "published"},
+            {
+                "$or": [{"id": doc_id}, {"seo_slug": doc_id}],
+                "status": "published",
+                **_PUBLIC_CMS_FILTER,
+            },
             {"_id": 0}
         )
         if not doc:
@@ -1335,7 +1368,7 @@ async def upload_pdf_document(
     is_scanned = False
     
     try:
-        from PyPDF2 import PdfReader
+        from pypdf import PdfReader
         import io
         
         pdf_reader = PdfReader(io.BytesIO(content))
@@ -1602,7 +1635,29 @@ async def readyz():
     # (LLM probe loop is 5 min; vertex probe loop is independent).
     vertex_block, vertex_ok = _vertex_block_for_health()
 
-    critical_ok = (mongo.get("status") == "ok") and (pg.get("status") == "ok")
+    # Task #135 — surface mTLS misconfiguration in readyz so any load balancer
+    # or health-monitor that polls this endpoint gets a 503 rather than a false
+    # "ready" while the origin is actually unprotected.
+    import middleware as _middleware_mod
+    mtls_ok = not _middleware_mod.MTLS_MISCONFIGURED
+    mtls_check = (
+        {"status": "ok"}
+        if mtls_ok
+        else {
+            "status": "misconfigured",
+            "detail": (
+                "ENFORCE_MTLS=true but ORIGIN_SHARED_SECRET is not set — "
+                "mTLS enforcement is INACTIVE and the origin is UNPROTECTED. "
+                "Set ORIGIN_SHARED_SECRET or unset ENFORCE_MTLS."
+            ),
+        }
+    )
+
+    critical_ok = (
+        (mongo.get("status") == "ok")
+        and (pg.get("status") == "ok")
+        and mtls_ok
+    )
     body = {
         "status": "ready" if critical_ok else "degraded",
         "checks": {
@@ -1611,6 +1666,7 @@ async def readyz():
             "cloudflare_cache": cf_cache_dep,
             "razorpay": razorpay_dep,
             "vertex": vertex_block,
+            "mtls_config": mtls_check,
         },
     }
     return JSONResponse(
@@ -3270,9 +3326,8 @@ def _bot_html_response(html: str, *, robots_tag: str = "index, follow"):
     return HTMLResponse(
         content=html, status_code=200,
         headers={
-            "Cache-Control": "public, max-age=3600, s-maxage=86400",
+            "Cache-Control": "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400",
             "X-Bot-Rendered": "1",
-            "Vary": "User-Agent",
             "X-Robots-Tag": robots_tag,
             "Content-Language": "en-IN",
         },
@@ -4707,6 +4762,25 @@ async def admin_dashboard_metrics(admin: dict = Depends(get_admin_user)):
 
         elapsed = round((time.time() - start) * 1000, 1)
 
+        # Workers AI 429 burst — cross-worker via Redis, in-process fallback.
+        _wai_burst_60 = 0
+        _wai_burst_180 = 0
+        _wai_threshold = 5
+        try:
+            from llm import get_workers_ai_429_burst as _get_wai_burst
+            from llm import get_workers_ai_429_burst_inprocess as _get_wai_burst_ip
+            # burst_60s: in-process timestamps (exact 60s, single-worker)
+            # burst_180s: Redis counter (cross-worker, 180s TTL) with in-process fallback
+            _wai_burst_60 = _get_wai_burst_ip(60)
+            _wai_burst_180 = _get_wai_burst(180)
+        except Exception:
+            pass
+        try:
+            from metrics import _ALERT_THRESHOLDS as _at
+            _wai_threshold = int(_at.get("workers_ai_429_burst_threshold", 5))
+        except Exception:
+            pass
+
         result = {
             "dependencies": deps_status,
             "response_time_ms": elapsed,
@@ -4715,6 +4789,12 @@ async def admin_dashboard_metrics(admin: dict = Depends(get_admin_user)):
             "seo": {"topics": seo_count, "published_pages": seo_published},
             "payments_count": len(payments),
             "bot_render": await get_bot_render_metrics_async(),
+            "workers_ai_throttle": {
+                "burst_60s": _wai_burst_60,
+                "burst_180s": _wai_burst_180,
+                "alert_threshold": _wai_threshold,
+                "throttled": _wai_burst_60 >= _wai_threshold,
+            },
         }
         _metrics_cache["data"] = result
         _metrics_cache["ts"] = now_ts

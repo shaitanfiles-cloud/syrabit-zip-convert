@@ -73,9 +73,10 @@ DEFAULT_API_CONFIG = {
     "google_auth": {"client_id": "", "client_secret": "", "enabled": False},
     "supabase":    {"url": "", "service_key": "", "anon_key": ""},
     # Task #607: active chat model for the user-facing chat stream.
-    # "vertex/gemini-flash" → Vertex AI Gemini Flash (low-TTFT)
-    # "openai/gpt-oss-20b"  → legacy hedged SLM pool (auto-fallback)
-    "chat_model":  {"default": "vertex/gemini-flash"},
+    # "openai/gpt-oss-20b"  → Workers AI GPT-OSS-20B (primary, no quota issues)
+    # "openai/gpt-oss-120b" → Workers AI GPT-OSS-120B (higher quality)
+    # "vertex/gemini-flash" → Vertex AI Gemini Flash (if quota available)
+    "chat_model":  {"default": "openai/gpt-oss-20b"},
 }
 
 @router.get("/admin/api-config")
@@ -1267,7 +1268,7 @@ async def admin_apply_supabase(data: dict, admin: dict = Depends(get_admin_user)
 
 _md_renderer = _mistune.create_markdown(
     plugins=["table", "strikethrough", "footnotes", "task_lists"],
-    escape=False,
+    escape=True,
 )
 
 def _md_to_html(raw: str) -> str:

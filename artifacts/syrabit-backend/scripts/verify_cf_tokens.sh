@@ -28,6 +28,7 @@
 set -uo pipefail
 
 ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-}"
+ZONE_ID="${CLOUDFLARE_ZONE_ID:-}"
 
 # Each spec env var is checked for PRESENCE separately from probe success.
 # A legacy fallback that happens to work is still a FAIL because Task #534
@@ -89,6 +90,38 @@ probe "CLOUDFLARE_PAGES_TOKEN     (Pages CI)            " \
       "$PAGES_TOKEN_SPEC" "$PAGES_TOKEN" \
       "$api/accounts/$ACCOUNT_ID/pages/projects" \
       "CLOUDFLARE_PAGES_TOKEN"
+
+# 4) Load Balancer Read scope — Task #76.
+#
+# The annual review (Task #66) hit a 403 on these endpoints because
+# CLOUDFLARE_API_TOKEN lacked the "Load Balancer: Read" permission.
+# These probes verify that the scope has been added to the token.
+#
+# To fix a FAIL here:
+#   1. Go to https://dash.cloudflare.com/profile/api-tokens
+#   2. Edit the token named for CLOUDFLARE_API_TOKEN
+#   3. Under "Permissions" add:
+#        Account > Load Balancer: Read
+#        Zone > Load Balancer: Read
+#   4. Save and re-run this script.
+#
+# Note: CLOUDFLARE_ZONE_ID is required for the zone-level probe.
+# Set it as CLOUDFLARE_ZONE_ID=5b8c97df4431491dc7f60ea72fb61871 (syrabit.ai).
+echo ""
+echo "── Load Balancer scope check (Task #76) ──"
+if [[ -z "$ZONE_ID" ]]; then
+  echo "SKIP  LB zone probe — CLOUDFLARE_ZONE_ID is not set (set to the syrabit.ai zone ID)"
+else
+  probe "CLOUDFLARE_API_TOKEN       (LB read / zone)      " \
+        "$DEPLOY_TOKEN_SPEC" "$DEPLOY_TOKEN" \
+        "$api/zones/$ZONE_ID/load_balancers" \
+        "CLOUDFLARE_API_TOKEN"
+fi
+
+probe "CLOUDFLARE_API_TOKEN       (LB read / account)   " \
+      "$DEPLOY_TOKEN_SPEC" "$DEPLOY_TOKEN" \
+      "$api/accounts/$ACCOUNT_ID/load_balancers/pools" \
+      "CLOUDFLARE_API_TOKEN"
 
 rm -f /tmp/cf-verify-body
 echo "──"

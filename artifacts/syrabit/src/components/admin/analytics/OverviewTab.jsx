@@ -134,6 +134,20 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
         <Stat icon={Users} label="Active Users" value={data?.active_users ?? 0} color="#8b5cf6" />
       </div>
 
+      {(data?.pageviews != null || data?.sessions != null) && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {data?.pageviews != null && (
+            <Stat icon={Eye} label="Pageviews" value={(data.pageviews ?? 0).toLocaleString()} color="#6366f1" sub="Analytics" />
+          )}
+          {data?.sessions != null && (
+            <Stat icon={Users} label="Sessions" value={(data.sessions ?? 0).toLocaleString()} color="#8b5cf6" sub="Analytics" />
+          )}
+          {data?.bounce_rate != null && (
+            <Stat icon={TrendingUp} label="Bounce Rate" value={`${Math.round((data.bounce_rate ?? 0) * 100)}%`} color="#f59e0b" sub="Analytics" />
+          )}
+        </div>
+      )}
+
       {mrr > 0 && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat icon={DollarSign} label="MRR (30d)"       value={fmtInr(mrr)}       color="#10b981" trend={growth} />

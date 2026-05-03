@@ -196,11 +196,43 @@ class SyllabusEmbedder:
         topics: list = None,
         content: str = "",
     ) -> int:
+        # ── Embed function: Cohere primary (via vertex_services), Pinecone fallback
+        # Cohere embed-multilingual-v3.0 (1024-dim) via CF AI Gateway BYOK:
+        # - Multilingual: handles Assamese/Bengali queries natively
+        # - 1024-dim: matches Atlas vector_index and Cloudflare Vectorize dims
+        # - Routes through CF AI Gateway — no extra API key needed in Railway
+        # Pinecone multilingual-e5-large is kept as fallback if Cohere is down.
+        _pc_available = False
         try:
-            from vertex_services import embed_text as _embed_fn
-        except ImportError:
-            logger.warning("vertex_services unavailable — skipping chapter embedding")
-            return 0
+            from providers.pinecone_ai import ENABLED as _pc_enabled, embed_passages as _pc_embed_passages
+            _pc_available = _pc_enabled
+        except Exception:
+            pass
+
+        async def _embed_fn_cohere(text: str, task_type: str = "RETRIEVAL_DOCUMENT", **_kw) -> Optional[list]:
+            try:
+                from vertex_services import embed_text as _vt_embed
+                return await asyncio.wait_for(
+                    _vt_embed(text, task_type=task_type),
+                    timeout=20.0,
+                )
+            except Exception as exc:
+                logger.warning("Cohere/vertex embed failed for '%s': %s", text[:40], exc)
+                return None
+
+        async def _embed_fn_pinecone(text: str, **_kw) -> Optional[list]:
+            try:
+                vecs = await asyncio.wait_for(
+                    _pc_embed_passages([text[:2048]]),
+                    timeout=12.0,
+                )
+                return vecs[0] if vecs else None
+            except Exception as exc:
+                logger.warning("Pinecone embed failed for '%s': %s", text[:40], exc)
+                return None
+
+        _embed_fn = _embed_fn_cohere
+        _current_embed_model = "cohere/embed-multilingual-v3.0"
 
         retriever = await self._get_retriever()
         if not retriever.is_configured():
@@ -214,24 +246,24 @@ class SyllabusEmbedder:
         stream_name = subj.get("streamName", "")
         subject_name = subj.get("title") or subj.get("name", "")
 
-        try:
-            from vertex_services import _EMBED_MODEL as _current_embed_model
-        except ImportError:
-            _current_embed_model = "unknown"
-
         embed_text_input = _build_rich_embed_text(
             board_name, class_name, stream_name, subject_name,
             title, description, topics or [], content,
         )
 
         try:
-            vec = await asyncio.wait_for(
-                _embed_fn(embed_text_input, task_type="RETRIEVAL_DOCUMENT"),
-                timeout=20.0,  # Task #545: was 5.0; bumped so embed retry-with-backoff can land
-            )
+            vec = await _embed_fn(embed_text_input, task_type="RETRIEVAL_DOCUMENT")
         except Exception as exc:
             logger.warning(f"Embed chapter failed for {title[:40]}: {exc}")
             vec = None
+
+        # Fallback: if Cohere failed, try Pinecone
+        if not vec and _pc_available:
+            logger.info("Cohere embed returned empty — retrying with Pinecone for '%s'", title[:40])
+            try:
+                vec = await _embed_fn_pinecone(embed_text_input)
+            except Exception:
+                pass
 
         if not vec:
             return 0
@@ -307,12 +339,6 @@ class SyllabusEmbedder:
         return inserted
 
     async def classify(self, query: str, subject_id: Optional[str] = None) -> Optional[SyllabusMatch]:
-        try:
-            from vertex_services import embed_text
-        except ImportError:
-            logger.warning("vertex_services not available — syllabus vector classify skipped")
-            return None
-
         retriever = await self._get_retriever()
         if not retriever.is_configured():
             return None
@@ -326,20 +352,34 @@ class SyllabusEmbedder:
         q_vec = _query_embed_cache.get(_embed_key) if _query_embed_cache is not None else None
 
         if q_vec is None:
+            # ── Pinecone primary, vertex fallback for query embedding ─────
             try:
-                q_vec = await asyncio.wait_for(
-                    embed_text(query, task_type="RETRIEVAL_QUERY"),
-                    timeout=1.5,
-                )
-                if not q_vec:
+                from providers.pinecone_ai import ENABLED as _pc_on, embed_one as _pc_embed_one
+                if _pc_on:
+                    q_vec = await asyncio.wait_for(
+                        _pc_embed_one(query[:1024], input_type="query"),
+                        timeout=3.0,
+                    )
+            except Exception:
+                q_vec = None
+
+            if not q_vec:
+                try:
+                    from vertex_services import embed_text
+                    q_vec = await asyncio.wait_for(
+                        embed_text(query, task_type="RETRIEVAL_QUERY"),
+                        timeout=3.0,
+                    )
+                except Exception as exc:
+                    logger.warning(f"Embed query failed (both Pinecone+vertex): {exc}")
                     return None
-                if _query_embed_cache is not None:
-                    _query_embed_cache[_embed_key] = q_vec
-            except Exception as exc:
-                logger.warning(f"Embed query failed: {exc}")
+
+            if not q_vec:
                 return None
+            if _query_embed_cache is not None:
+                _query_embed_cache[_embed_key] = q_vec
         else:
-            logger.info(f"SyllabusEmbed: reusing cached query embedding for '{query[:40]}'")
+            logger.debug(f"SyllabusEmbed: reusing cached query embedding for '{query[:40]}'")
 
         mf = {"subject_id": subject_id} if subject_id else None
         matches = await retriever.query(

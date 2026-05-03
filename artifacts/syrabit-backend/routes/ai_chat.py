@@ -1,5 +1,5 @@
 """Syrabit.ai — AI chat & search routes"""
-import re, json, asyncio, time as _time_mod, uuid, logging
+import re, json, asyncio, time as _time_mod, uuid, logging, hashlib
 
 from typing import Optional
 from datetime import datetime, timezone
@@ -14,8 +14,6 @@ from models import (
     SearchResultOut,
 )
 from config import (
-    CF_TURNSTILE_ENABLED,
-    CF_TURNSTILE_SECRET_KEY,
     LLM_MODEL,
     PLAN_LIMITS,
 )
@@ -70,7 +68,8 @@ from tracing import (
     emit_phase_span,
 )
 from followup_context import detect_followup, build_followup_context, merge_followup_into_query
-from pipeline import should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query, get_instant_response
+from pipeline import should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query, get_instant_response, get_instant_assamese_response
+import wai_chapter_index as _wai_idx
 
 # Chat Enhancement Layer
 try:
@@ -84,23 +83,6 @@ except ImportError as e:
 _CONTENT_INTENTS_SET = {"notes", "important_questions", "pyq"}
 
 import httpx as _httpx_mod
-
-async def _verify_turnstile(token: str, ip: str = "") -> bool:
-    if not CF_TURNSTILE_ENABLED or not token:
-        return True
-    try:
-        async with _httpx_mod.AsyncClient(timeout=3.0) as _tc:
-            r = await _tc.post(
-                "https://challenges.cloudflare.com/turnstile/v0/siteverify",
-                data={"secret": CF_TURNSTILE_SECRET_KEY, "response": token, "remoteip": ip},
-            )
-            if r.status_code != 200:
-                logger.warning(f"Turnstile siteverify returned {r.status_code}")
-                return False
-            return r.json().get("success", False)
-    except Exception as e:
-        logger.warning(f"Turnstile verification error: {type(e).__name__}: {e}")
-        return False
 
 def _tune_response_stream(chunk_text: str, intent: str, _buf: dict) -> str:
     _buf["total"] += chunk_text
@@ -125,7 +107,7 @@ def _safe_metadata(raw) -> dict:
             return {}
     return {}
 from qa_engine import log_chat_message as _log_chat_message
-from guardrails.prompt_safety import evaluate_prompt_safety, validate_llm_output
+from guardrails.prompt_safety import evaluate_prompt_safety, validate_llm_output, llm_classify_safety
 import chat_speedup_metrics as _speedup
 
 logger = logging.getLogger(__name__)
@@ -136,15 +118,15 @@ def _record_llm_cost(model, prompt_tokens, completion_tokens, provider="gemini",
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Assamese translation: Gemini main + Sarvam polish
+# Assamese translation: Qwen fallback + Sarvam polish
 # ────────────────────────────────────────────────────────────────────────────
 # User-mandated routing (2026-04-26):
-#   • English → Assamese translation: Gemini does the heavy lifting
-#     (vertex_services.translate, 600 RPM headroom, reliable native
-#     multilingual). Sarvam then polishes the Gemini output for native
+#   • English → Assamese translation: Qwen (Cerebras Qwen-3-235B) does the heavy lifting
+#     via the `_assamese_translate_gemini_main_sarvam_polish` pipeline,
+#     multilingual). Sarvam then polishes the Qwen output for native
 #     Assamese fluency (sarvam-m chat, ~30 RPM but excellent for Indic).
 #   • For chat *response* generation (not translation), the routing is
-#     the inverse: Sarvam main + Gemini fallback — see `llm.py` indic
+#     the inverse: Sarvam main + Qwen fallback — see `llm.py` indic
 #     race phase logic.
 #
 # Tradeoffs documented in `_make_assamese_translate_callable` docstring.
@@ -153,17 +135,20 @@ def _record_llm_cost(model, prompt_tokens, completion_tokens, provider="gemini",
 # Polish only kicks in for substantive output. Below this length the polish
 # round-trip cost (~0.8-1.5s) outweighs the marginal quality lift, and N
 # small fragments would compound into multi-second post-stream latency.
-_POLISH_MIN_LEN = 80
+# Raised from 80→250: one-sentence answers from IndicTrans2 are already
+# fluent; the extra 0.8-1.5s round-trip is only justified for longer text.
+_POLISH_MIN_LEN = 250
 
 # Hard ceiling on the Sarvam polish call so a slow/dead Sarvam never holds
-# up the translation pipeline. On timeout we return the un-polished Gemini
+# up the translation pipeline. On timeout we return the un-polished Qwen
 # output (graceful degradation).
 _SARVAM_POLISH_TIMEOUT_SEC = 1.8
 
-# Hard ceiling on the Gemini translate call. vertex_services.translate
-# already has its own internal timeout (60s), but we wrap it so a stalled
-# Gemini call cannot block the chat path indefinitely.
-_GEMINI_TRANSLATE_TIMEOUT_SEC = 4.0
+# Hard ceiling for the Qwen fallback translate call.
+# Cerebras Qwen-3-235B is typically <500ms; Workers AI Qwen2.5-72B ~1-2s.
+# We budget 5s total for the Qwen tier so a cold Workers AI container
+# doesn't hold up the pipeline indefinitely.
+_QWEN_TRANSLATE_TIMEOUT_SEC = 5.0
 
 _POLISH_SYSTEM_PROMPT = (
     "You are a native Assamese (অসমীয়া) editor. The user message is an "
@@ -185,75 +170,182 @@ async def _assamese_translate_gemini_main_sarvam_polish(
     *,
     target_lang_code: str = "as-IN",
 ) -> str:
-    """User-mandated Assamese translation pipeline: Gemini-main + Sarvam-polish.
+    """Assamese translation pipeline: Sarvam-primary → Qwen-fallback → Sarvam-polish.
 
-    Step 1 (main): English text → Assamese via Gemini (vertex_services.translate).
-    Step 2 (polish, optional): Gemini Assamese output → polished Assamese
+    Step 0 (primary): English text → Assamese via Sarvam translate:v1 (/translate API).
+        Sarvam's dedicated translation model is purpose-built for Indic languages
+        and produces more natural Assamese than Qwen alone. Typical latency: 300-800ms.
+
+    Step 1 (fallback): If Sarvam translate is unavailable or fails, English text →
+        Assamese via Qwen (Cerebras Qwen-3-235B or Workers AI Qwen2.5-72B).
+
+    Step 2 (polish, optional): Qwen Assamese output → polished Assamese
         via Sarvam-m chat. Skipped for short fragments (< _POLISH_MIN_LEN
-        chars) where the polish round-trip overhead is not justified.
+        chars), AND skipped entirely when Step 0 succeeded (Sarvam translate
+        already produces fluent Assamese).
 
     Failure modes:
-        • Gemini fails or returns empty → returns "" (caller falls back to
+        • Sarvam translate fails → falls through to Qwen (Step 1).
+        • Qwen fails or returns empty → returns "" (caller falls back to
           its own strip / original-text path).
-        • Sarvam polish fails / times out → returns the un-polished Gemini
+        • Sarvam polish fails / times out → returns the un-polished Qwen
           output (graceful degradation — translation still landed).
 
     Args:
         text: Source English text to translate.
         target_lang_code: Sarvam-style language code (e.g., "as-IN"). The
-            Gemini translator only uses the bare language ("as"); the full
+            Qwen translator only uses the bare language ("as"); the full
             code is kept in the signature for symmetry with the legacy
             Sarvam /translate API and forward-compatibility if other Indic
             targets are ever added.
 
     Returns:
-        Polished Assamese string, or un-polished Gemini output, or "".
+        Polished Assamese string, or un-polished Qwen output, or "".
     """
     src = (text or "").strip()
     if not src:
         return ""
 
-    # Derive bare language ("as-IN" → "as") for the Gemini translator.
+    # Derive bare language ("as-IN" → "as") for the Qwen translator.
     _bare_lang = (target_lang_code or "as-IN").split("-", 1)[0].lower() or "as"
 
-    # ── Step 1: Gemini main ─────────────────────────────────────────────
-    gemini_out = ""
-    try:
-        import vertex_services  # local import — keeps cold-start cost off the main chat path
-        gemini_out = await asyncio.wait_for(
-            vertex_services.translate(src[:4000], target_lang=_bare_lang, source_lang="en"),
-            timeout=_GEMINI_TRANSLATE_TIMEOUT_SEC,
-        ) or ""
-        gemini_out = gemini_out.strip()
-    except asyncio.TimeoutError:
-        logger.warning(
-            f"[INDIC-TRANSLATE] Gemini main timed out after "
-            f"{_GEMINI_TRANSLATE_TIMEOUT_SEC}s for {src[:60]!r}"
-        )
-        return ""
-    except Exception as _e:  # pragma: no cover — network defensive
-        logger.warning(
-            f"[INDIC-TRANSLATE] Gemini main failed for {src[:60]!r}: "
-            f"{type(_e).__name__}: {str(_e)[:160]}"
-        )
-        return ""
+    # ── Redis translation cache (avoids repeated Qwen+Sarvam round-trips) ─
+    _cache_key = "tr:" + hashlib.md5(f"{_bare_lang}:{src[:1000]}".encode()).hexdigest()
+    _TRANSLATE_CACHE_TTL = 1800  # 30 minutes
 
-    if not gemini_out:
-        logger.info(f"[INDIC-TRANSLATE] Gemini main returned empty for {src[:60]!r}")
+    def _tr_cache_store(result: str) -> str:
+        """Store result in Redis and return it unchanged."""
+        if result:
+            try:
+                if redis_client:
+                    redis_client.setex(_cache_key, _TRANSLATE_CACHE_TTL, result)
+            except Exception:
+                pass
+        return result
+
+    try:
+        if redis_client:
+            _cached = redis_client.get(_cache_key)
+            if _cached:
+                logger.debug("[INDIC-TRANSLATE] Redis cache hit for %r", src[:40])
+                return _cached if isinstance(_cached, str) else _cached.decode("utf-8", errors="replace")
+    except Exception:
+        pass  # cache miss — proceed normally
+
+    # ── Step 0: Sarvam translate:v1 (primary — dedicated translation model) ─
+    # Sarvam's /translate endpoint is purpose-built for Indic languages and
+    # outperforms Gemini on Assamese fluency. Qwen is the Step 1 fallback.
+    _sarvam_tc = getattr(deps, "sarvam_translate_client", None) or getattr(deps, "sarvam_client", None)
+    if _sarvam_tc:
+        try:
+            _sv_resp = await asyncio.wait_for(
+                _sarvam_tc.post("/translate", json={
+                    "input": src[:1950],
+                    "source_language_code": "en-IN",
+                    "target_language_code": target_lang_code,
+                    "speaker_gender": "Female",
+                    "mode": "formal",
+                    "model": "sarvam-translate:v1",
+                    "enable_preprocessing": False,
+                }),
+                timeout=2.0,
+            )
+            if _sv_resp.status_code == 200:
+                _sv_result = (_sv_resp.json().get("translated_text") or "").strip()
+                if _sv_result:
+                    logger.debug("[INDIC-TRANSLATE] Sarvam translate:v1 primary OK for %r", src[:40])
+                    return _tr_cache_store(_sv_result)
+            else:
+                logger.warning("[INDIC-TRANSLATE] Sarvam translate HTTP %d — falling back to Qwen", _sv_resp.status_code)
+        except asyncio.TimeoutError:
+            logger.info("[INDIC-TRANSLATE] Sarvam translate timed out after 3.5s — falling back to Qwen")
+        except Exception as _sv_err:
+            logger.warning("[INDIC-TRANSLATE] Sarvam translate failed (%s) — falling back to Qwen", _sv_err)
+
+    # ── Step 1: IndicTrans2 fallback (Workers AI) → Gemini fallback ───────────
+    # Workers AI IndicTrans2 (primary): purpose-built Indic neural MT model.
+    #   Fast (~300-600ms), zero LLM quota consumed, best Assamese script output.
+    # Gemini (secondary): handles edge-cases where IndicTrans2 returns empty.
+    #
+    # Translation prompt: explicit Assamese-only instruction so Gemini
+    # doesn't produce code-switched output. Numbers, units, proper nouns
+    # (AHSEC, SEBA, DNA, ATP) are allowed in Latin per the Assamese style guide.
+    _TRANSLATE_SYSTEM = (
+        "You are an expert English-to-Assamese (অসমীয়া) translator. "
+        "Translate the input text to fluent, standard Assamese script. "
+        "Rules: (1) Output ONLY the Assamese translation — no English words "
+        "except pure numbers, scientific units (cm, kg, °C, eV), math symbols, "
+        "and well-known proper nouns/acronyms (AHSEC, SEBA, NCERT, DNA, ATP, GDP, Newton). "
+        "(2) No preamble, no explanation, no quote marks around the output."
+    )
+    _TRANSLATE_USER = f"Translate to Assamese:\n\n{src[:2000]}"
+
+    translate_out = ""
+    _translate_timed_out = False
+
+    # Tier A: Workers AI IndicTrans2 — dedicated Indic neural MT
+    try:
+        from providers.workers_indic import call_indic_trans as _indic_trans
+        _indic_result = await asyncio.wait_for(
+            _indic_trans(src[:2000], direction="en-indic"),
+            timeout=_QWEN_TRANSLATE_TIMEOUT_SEC,
+        )
+        translate_out = (_indic_result or "").strip()
+        if translate_out:
+            logger.info("[INDIC-TRANSLATE] Workers AI IndicTrans2 OK for %r", src[:40])
+        else:
+            logger.info("[INDIC-TRANSLATE] Workers AI IndicTrans2 returned empty for %r", src[:40])
+    except asyncio.TimeoutError:
+        logger.warning("[INDIC-TRANSLATE] Workers AI IndicTrans2 timed out after %ss", _QWEN_TRANSLATE_TIMEOUT_SEC)
+        _translate_timed_out = True
+    except Exception as _it_err:
+        logger.warning("[INDIC-TRANSLATE] Workers AI IndicTrans2 failed (%s: %s) — trying Gemini",
+                       type(_it_err).__name__, str(_it_err)[:120])
+
+    # Tier B: Gemini (only if Tier A failed/empty AND didn't timeout)
+    if not translate_out and not _translate_timed_out:
+        try:
+            from llm import _call_gemini as _gemini_call, _GEMINI_KEY as _gkey
+            if _gkey:
+                _gemini_result = await asyncio.wait_for(
+                    _gemini_call(
+                        [
+                            {"role": "system", "content": _TRANSLATE_SYSTEM},
+                            {"role": "user", "content": _TRANSLATE_USER},
+                        ],
+                        _gkey, "gemini-2.5-flash", 1200,
+                    ),
+                    timeout=_QWEN_TRANSLATE_TIMEOUT_SEC,
+                )
+                translate_out = (_gemini_result or "").strip()
+                if translate_out:
+                    logger.info("[INDIC-TRANSLATE] Gemini fallback OK for %r", src[:40])
+                else:
+                    logger.info("[INDIC-TRANSLATE] Gemini returned empty for %r", src[:40])
+            else:
+                logger.info("[INDIC-TRANSLATE] Gemini key not available — skipping")
+        except asyncio.TimeoutError:
+            logger.warning("[INDIC-TRANSLATE] Gemini timed out — pipeline exhausted for %r", src[:40])
+            _translate_timed_out = True
+        except Exception as _ge:
+            logger.warning("[INDIC-TRANSLATE] Gemini failed: %s: %s",
+                           type(_ge).__name__, str(_ge)[:120])
+
+    if not translate_out:
+        logger.info("[INDIC-TRANSLATE] translation tier exhausted (timeout=%s) for %r", _translate_timed_out, src[:60])
         return ""
 
     # ── Step 2: Sarvam polish (optional, best-effort) ───────────────────
-    if len(gemini_out) < _POLISH_MIN_LEN:
-        # Short fragment — skip polish, return Gemini output verbatim.
-        return gemini_out
+    if len(translate_out) < _POLISH_MIN_LEN:
+        return _tr_cache_store(translate_out)
 
     # Read the live `sarvam_llm_client` attribute off the deps module so
     # tests that monkey-patch `deps.sarvam_llm_client = None` see the
     # current value rather than the import-time snapshot.
     _sarvam_chat = getattr(deps, "sarvam_llm_client", None)
     if _sarvam_chat is None:
-        # No Sarvam client configured — return un-polished Gemini.
-        return gemini_out
+        # No Sarvam client configured — return un-polished translation output.
+        return _tr_cache_store(translate_out)
 
     try:
         polish_resp = await asyncio.wait_for(
@@ -263,9 +355,9 @@ async def _assamese_translate_gemini_main_sarvam_polish(
                     "model": "sarvam-m",
                     "messages": [
                         {"role": "system", "content": _POLISH_SYSTEM_PROMPT},
-                        {"role": "user", "content": gemini_out[:4000]},
+                        {"role": "user", "content": translate_out[:4000]},
                     ],
-                    "max_tokens": min(1200, len(gemini_out) * 3 + 200),
+                    "max_tokens": min(1200, len(translate_out) * 3 + 200),
                     "temperature": 0.05,
                     "top_p": 0.9,
                     "stream": False,
@@ -287,28 +379,28 @@ async def _assamese_translate_gemini_main_sarvam_polish(
             if _polished.startswith(('"', "'", "“", "‘")) and _polished.endswith(('"', "'", "”", "’")):
                 _polished = _polished[1:-1].strip()
             if _polished:
-                return _polished
+                return _tr_cache_store(_polished)
             logger.info(
                 f"[INDIC-TRANSLATE] Sarvam polish returned empty body for "
-                f"{gemini_out[:60]!r} — using un-polished Gemini output"
+                f"{translate_out[:60]!r} — using un-polished translation output"
             )
         else:
             logger.warning(
                 f"[INDIC-TRANSLATE] Sarvam polish HTTP {polish_resp.status_code} "
-                f"for {gemini_out[:60]!r} — using un-polished Gemini output"
+                f"for {translate_out[:60]!r} — using un-polished translation output"
             )
     except asyncio.TimeoutError:
         logger.info(
             f"[INDIC-TRANSLATE] Sarvam polish timed out after "
-            f"{_SARVAM_POLISH_TIMEOUT_SEC}s — using un-polished Gemini output"
+            f"{_SARVAM_POLISH_TIMEOUT_SEC}s — using un-polished translation output"
         )
     except Exception as _pe:  # pragma: no cover — network defensive
         logger.warning(
             f"[INDIC-TRANSLATE] Sarvam polish exception "
-            f"({type(_pe).__name__}: {str(_pe)[:120]}) — using un-polished Gemini output"
+            f"({type(_pe).__name__}: {str(_pe)[:120]}) — using un-polished translation output"
         )
 
-    return gemini_out
+    return _tr_cache_store(translate_out)
 
 
 router = APIRouter()
@@ -431,33 +523,21 @@ async def ocr_chat_image(
     not consume the daily chat-message budget — Task #819. The follow-up
     chat send still costs 1 credit on its own; OCR is free.
 
-    Other safeguards mirror the chat endpoint: Cloudflare Turnstile for
-    anonymous callers, bounded streaming reads to cap memory pressure,
-    and magic-byte sniffing to refuse non-image payloads before any
+    Bounded streaming reads cap memory pressure and magic-byte sniffing
+    refuses non-image payloads before any
     Vertex call is made (a Vertex Vision call is far more expensive than
     a chat call). No documents/PDFs — the chat composer is image-only by
     product decision.
     """
     is_anon = user is None
 
-    # 1. Anti-bot: Turnstile parity with /ai/chat for anonymous callers.
-    if CF_TURNSTILE_ENABLED and is_anon:
-        _ts_tok = request.headers.get("x-turnstile-token", "")
-        _ts_ip = (
-            request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-            if request.headers.get("x-forwarded-for")
-            else (request.client.host if request.client else "")
-        )
-        if not _ts_tok:
-            raise HTTPException(status_code=403, detail="Turnstile token required")
-        if not await _verify_turnstile(_ts_tok, _ts_ip):
-            raise HTTPException(status_code=403, detail="Turnstile verification failed")
-
-    # 2. Mime check on the client-supplied Content-Type (cheap fast-path).
+    # 1. Mime check on the client-supplied Content-Type (cheap fast-path).
+    # 415 Unsupported Media Type is the semantically correct status for an
+    # unaccepted Content-Type header — RFC 9110 §15.5.16.
     ct = (file.content_type or "").lower()
     if ct not in _OCR_ALLOWED_MIME:
         raise HTTPException(
-            status_code=400,
+            status_code=415,
             detail=f"Unsupported file type: {ct or 'unknown'}. Please upload an image (JPEG, PNG, WebP, GIF or HEIC).",
         )
 
@@ -547,14 +627,6 @@ async def ocr_chat_image(
 async def chat(msg: ChatMessage, request: Request, user: Optional[dict] = Depends(rate_limit_chat_optional)):
     _chat_t0 = _time_mod.time()
     is_anon = user is None
-
-    if CF_TURNSTILE_ENABLED and is_anon:
-        _ts_tok = request.headers.get("x-turnstile-token", "")
-        _ts_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() if request.headers.get("x-forwarded-for") else (request.client.host if request.client else "")
-        if not _ts_tok:
-            raise HTTPException(status_code=403, detail="Turnstile token required")
-        if not await _verify_turnstile(_ts_tok, _ts_ip):
-            raise HTTPException(status_code=403, detail="Turnstile verification failed")
 
     plan = user.get("plan", "free") if user else "free"
     _plan_max_tokens = PLAN_LIMITS[plan]["max_tokens"]
@@ -759,10 +831,12 @@ async def chat(msg: ChatMessage, request: Request, user: Optional[dict] = Depend
         rag_ctx["_stage1_subject"] = _s1_subject_str
 
     _use_prefetched = _prefetched_chapters if (_prefetched_chapters and _rag_query == _original_message) else None
+    _rag_content_budget = 8000 if _detected_intent in ("notes", "important_questions", "pyq") else 4000
     rag_ctx = await resolve_rag_context(
         _rag_query, subject_id=msg.subject_id, subject_name=msg.subject_name,
         document_text=document_text, intent=_detected_intent,
         prefetched_chapters=_use_prefetched,
+        max_content_chars=_rag_content_budget,
     )
     if _s1_subject_str:
         rag_ctx["_stage1_subject"] = _s1_subject_str
@@ -877,7 +951,7 @@ async def chat(msg: ChatMessage, request: Request, user: Optional[dict] = Depend
     if answer is None:
         _t_llm_start = _time_mod.time()
         try:
-            answer = await call_llm_api_chat(messages, model=_ns_model, max_tokens=max_tokens)
+            answer = await call_llm_api_chat(messages, model=_ns_model, max_tokens=max_tokens, lang=_ns_resp_lang or "en")
             _llm_elapsed_ms = (_time_mod.time() - _t_llm_start) * 1000
             await ai_cache_aset(cache_key, answer, _cache_ttl, saved_ms=_llm_elapsed_ms)
             _ai_response_cache[cache_key] = answer
@@ -1204,15 +1278,13 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         if _raw_anon and re.match(r"^anon_[a-f0-9]{32}$", _raw_anon):
             anon_id = _raw_anon
 
-    if CF_TURNSTILE_ENABLED and is_anon:
-        _ts_tok = request.headers.get("x-turnstile-token", "")
-        _ts_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() if request.headers.get("x-forwarded-for") else (request.client.host if request.client else "")
-        if not _ts_tok:
-            raise HTTPException(status_code=403, detail="Turnstile token required")
-        if not await _verify_turnstile(_ts_tok, _ts_ip):
-            raise HTTPException(status_code=403, detail="Turnstile verification failed")
-
     safe_prompt, fallback_msg, guardrail_tag = evaluate_prompt_safety(msg.message)
+    if safe_prompt is not None:
+        _llm_safety_tag = await llm_classify_safety(safe_prompt)
+        if _llm_safety_tag:
+            guardrail_tag = _llm_safety_tag
+            safe_prompt = None
+            fallback_msg = "I can only help with educational questions. Let's keep our conversation on-topic."
     _stream_intent, _stream_db_category = classify_intent(msg.message)
 
     # Task #610 — annotate the auto-created request span so chat traces are
@@ -1285,20 +1357,20 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
         Routing contract (user-mandated 2026-04-26 — see replit.md
         "LLM Providers"):
-          • English → Assamese translation: **Gemini main + Sarvam polish**
-          • Gemini does the heavy translation via `vertex_services.translate`
+          • English → Assamese translation: **Qwen fallback + Sarvam polish**
+          • Qwen (Cerebras Qwen-3-235B) does the heavy translation
             (high RPM headroom, native multilingual quality).
           • For substantive output (≥ `_POLISH_MIN_LEN` chars), Sarvam
-            polishes the Gemini text via `sarvam-m` chat to lift it to
+            polishes the Qwen text via `sarvam-m` chat to lift it to
             native-Assamese fluency.
           • For short fragments (< `_POLISH_MIN_LEN` chars) — the common
             sanitiser case where leaked English runs are typically just a
             few words — polish is **skipped** because the per-fragment
             polish round-trip (~0.8-1.5s) would compound across N
-            fragments into multi-second post-stream latency. Gemini's
+            fragments into multi-second post-stream latency. Qwen's
             translation is already high-quality at that length.
           • All Sarvam polish failures degrade gracefully to the
-            un-polished Gemini output. Gemini failure returns "" so the
+            un-polished Qwen output. Qwen failure returns "" so the
             sanitiser falls back to its existing `strip` behaviour.
         """
         async def _translate(fragment: str) -> str:
@@ -1311,10 +1383,35 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _sarvam_target = _SARVAM_LANG_MAP.get(_resp_lang)
     _want_translate = bool(_sarvam_target and _resp_lang != "en")
 
+    # S2: Assamese greeting fast-path — returns pre-translated text directly,
+    # skipping the entire LLM + translation pipeline (~3-7 s saved per greeting).
+    if _want_translate and _stream_intent == "casual":
+        _instant_as = get_instant_assamese_response(msg.message)
+        if _instant_as:
+            logger.info(f"[STREAM] INSTANT Assamese fast-path: '{msg.message[:30]}' → {len(_instant_as)} chars (0 LLM calls)")
+            _speedup.record_instant_fastpath()
+            _instant_as_ms = (_time_mod.time() - _stream_t0) * 1000
+            _speedup.record_ttfb(_instant_as_ms)
+            _speedup.record_total_latency(_instant_as_ms)
+            try:
+                _speedup.record_lang_ttfb(_resp_lang, _instant_as_ms, _instant_as_ms)
+            except Exception:
+                pass
+            _instant_as_text = _instant_as
+            async def _instant_as_stream():
+                yield f"data: {json.dumps({'conversation_id': msg.conversation_id or '', 'rag_source': 'none', 'rag_quality': 'none', 'rag_chunks': 0})}\n\n"
+                yield f"data: {json.dumps({'content': _instant_as_text})}\n\n"
+                yield f"data: {json.dumps({'event': 'syrabit_done', 'conversation_id': msg.conversation_id or ''})}\n\n"
+                yield "data: [DONE]\n\n"
+            if not is_anon and credits_info:
+                asyncio.create_task(_refund_credit(user_id, credits_info["used"] + 1))
+            return StreamingResponse(_instant_as_stream(), media_type="text/event-stream",
+                                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
     _instant_s = get_instant_response(msg.message) if _stream_intent == "casual" else None
     if _instant_s:
         if _want_translate and _instant_s:
-            # Gemini-main + Sarvam-polish translation (user-mandated routing).
+            # Qwen-fallback + Sarvam-polish translation (user-mandated routing).
             # Polish is applied here because the instant fast-path is a single
             # substantive translation, not a fragment splice — the polish
             # quality lift is worth the extra ~1-1.5s round-trip.
@@ -1330,6 +1427,10 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         _instant_ms = (_time_mod.time() - _stream_t0) * 1000
         _speedup.record_ttfb(_instant_ms)
         _speedup.record_total_latency(_instant_ms)
+        try:
+            _speedup.record_lang_ttfb(_resp_lang, _instant_ms, _instant_ms)
+        except Exception:
+            pass
         try:
             record_first_token(_instant_ms, source="instant")
             record_chat_attrs(**{
@@ -1554,6 +1655,25 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 return {}
         _stage1_task = asyncio.create_task(_stage1_wrapper())
 
+    # WAI chapter classification — runs in parallel with Stage 1 + Phase 0.
+    # Uses Workers AI @cf/baai/bge-small-en-v1.5 to embed the query and find
+    # the closest matching chapter in the subject's vector index.
+    # Falls back gracefully (returns None) on cold-start or error.
+    _wai_chapter_task = None
+    _wai_subject_id_for_classify = msg.subject_id
+    if _wai_subject_id_for_classify and not _is_casual:
+        async def _wai_classify_wrapper():
+            try:
+                return await _wai_idx.classify(
+                    msg.message,
+                    _wai_subject_id_for_classify,
+                    timeout_s=3.5,
+                )
+            except Exception as _wai_err:
+                logger.debug("[WAI] classify error (non-fatal): %s", _wai_err)
+                return None
+        _wai_chapter_task = asyncio.create_task(_wai_classify_wrapper())
+
     async def _fetch_followup_info():
         if is_anon or _is_casual:
             return None
@@ -1631,6 +1751,49 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
     _PRE_LLM_BUDGET = 0.15
 
+    # F2: Warm-cache helpers — /ai/warm-query endpoint pre-populates Redis
+    # (20s TTL) via the frontend 800ms debounce. Phase 0 only does a fast Redis
+    # check (T006) so the 150ms budget always completes. Phase 2 / resolve_rag_context
+    # handles the full _fetch_internal_chapters call if Redis misses.
+
+    async def _check_warm_redis() -> list:
+        """Redis-only check used in Phase 0 (150ms budget).
+        Uses run_in_executor so the sync Upstash REST call doesn't block
+        the event loop — critical when the Phase-0 asyncio.wait fires."""
+        import hashlib as _hl, json as _json
+        _sid = msg.subject_id or ""
+        _wkey = f"warm_ch:{_hl.md5(f'{msg.message.strip()}|{_sid}'.encode()).hexdigest()}"
+        if redis_client:
+            try:
+                _loop = asyncio.get_event_loop()
+                _wdata = await _loop.run_in_executor(None, redis_client.get, _wkey)
+                if _wdata:
+                    _parsed = _json.loads(_wdata)
+                    if _parsed:
+                        logger.debug("[F2-WARM] Phase-0 Redis hit — %d chapters cached", len(_parsed))
+                        return _parsed
+            except Exception:
+                pass
+        return []  # cache miss → resolve_rag_context will call _fetch_internal_chapters
+
+    async def _fetch_chapters_warm_first():
+        """Redis check + _fetch_internal_chapters fallback. Kept for Phase 2 if needed."""
+        import hashlib as _hl, json as _json
+        _sid = msg.subject_id or ""
+        _wkey = f"warm_ch:{_hl.md5(f'{msg.message.strip()}|{_sid}'.encode()).hexdigest()}"
+        if redis_client:
+            try:
+                _loop = asyncio.get_event_loop()
+                _wdata = await _loop.run_in_executor(None, redis_client.get, _wkey)
+                if _wdata:
+                    _parsed = _json.loads(_wdata)
+                    if _parsed:
+                        logger.debug("[F2-WARM] Redis hit — skipping _fetch_internal_chapters")
+                        return _parsed
+            except Exception:
+                pass
+        return await _fetch_internal_chapters(msg.message, subject_id=msg.subject_id, subject_name=msg.subject_name)
+
     # Speculative web search runs OUTSIDE the Phase-0 budget so the 150ms cap
     # doesn't kill it before HTTP can return (Task #282 T003/T005). It still
     # has its own internal 1.5s wait_for inside _early_web_search, so it
@@ -1653,7 +1816,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             asyncio.create_task(_fetch_doc()),
             asyncio.create_task(_fetch_followup_info()),
             asyncio.create_task(_prefetch_history()),
-            asyncio.create_task(_fetch_internal_chapters(msg.message, subject_id=msg.subject_id, subject_name=msg.subject_name) if (msg.subject_id or msg.subject_name) else asyncio.sleep(0)),
+            asyncio.create_task(_check_warm_redis() if (msg.subject_id or msg.subject_name) else asyncio.sleep(0)),
         ]
         _defaults_pre = [None, None, None, None, None, []]
 
@@ -1785,10 +1948,12 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     raw_conv = _prefetched_conv
 
     _s_use_prefetched = _s_prefetched_chapters if (_s_prefetched_chapters and _s_rag_query == _s_original_message) else None
+    _s_rag_content_budget = 8000 if _stream_intent in ("notes", "important_questions", "pyq") else 4000
     rag_ctx = await resolve_rag_context(
         _s_rag_query, subject_id=msg.subject_id, subject_name=msg.subject_name,
         document_text=document_text, intent=_stream_intent,
         prefetched_chapters=_s_use_prefetched,
+        max_content_chars=_s_rag_content_budget,
     )
     if _s1_subject_str:
         rag_ctx["_stage1_subject"] = _s1_subject_str
@@ -1856,6 +2021,13 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
     _t_phase2_done = _time_mod.time()
     logger.info(f"[STREAM][TIMING] Phase 2 (context): {_t_phase2_done - _t_phase2:.3f}s | total pre-LLM: {_t_phase2_done - _stream_t0:.3f}s")
+
+    # ── WAI chapter classification result (T002) ──────────────────────────────
+    # Resolved inside event_stream() so StreamingResponse is returned immediately
+    # and discovery:searching reaches the client ~0ms after submit.
+    # The outer handler no longer awaits the WAI task — event_stream handles it
+    # after yielding the initial discovery:searching/class/subject SSE events.
+    _wai_match: Optional[dict] = None
 
     # ── Build prompt ───────────────────────────────────────────────────────────
     system_prompt = build_rag_system_prompt(
@@ -1950,7 +2122,9 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     if _want_translate and _target_lang_name:
         from prompts import assamese_enforcement_block as _asm_block
         _indic_system_prompt = (
-            "তুমি Syra, এগৰাকী AI শিক্ষক। কেৱল অসমীয়াত উত্তৰ দিয়া। "
+            "/think অসমীয়াত চমুকৈ চিন্তা কৰক — তাৰ পিছত সম্পূৰ্ণ উত্তৰ অসমীয়াত দিয়ক।\n"
+            "তুমি Syra, এগৰাকী AI শিক্ষক। উত্তৰ দিয়াৰ আগতে অসমীয়াত চিন্তা কৰা। "
+            "কেৱল অসমীয়াত উত্তৰ দিয়া। "
             "কাৰিকৰী শব্দ/সূত্ৰ ইংৰাজীত ৰাখিব পাৰা। চমুকৈ লিখা: ৩০-৬০ শব্দ, সৰ্বাধিক ২০০।\n"
             + _asm_block()
         )
@@ -2103,14 +2277,76 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             pass
 
     async def event_stream():
-        nonlocal full_response
+        nonlocal full_response, rag_chapter_name, rag_chapter_slug, _wai_match
         _credit_saved = False  # set True when answer is committed; controls refund in finally
         try:
+            # ── Discovery SSE events ───────────────────────────────────────────
+            # Emitted before _meta_event so the ThinkingIndicator can advance
+            # each step as the backend reports what it found (step 0→3).
+            # These arrive in the same TCP frame as _meta_event today but the
+            # frontend handles them independently so future streaming
+            # architecture improvements (emitting mid-resolve) will work
+            # without any frontend changes.
+            yield f"data: {json.dumps({'event': 'discovery:searching'})}\n\n"
+            _disc_class = ctx_class_name or (ctx_stream_name if ctx_stream_name else None)
+            if _disc_class:
+                yield f"data: {json.dumps({'event': 'discovery:class', 'value': _disc_class})}\n\n"
+            _disc_subject = rag_subject_name or (msg.subject_name if msg.subject_name else None)
+            if _disc_subject:
+                yield f"data: {json.dumps({'event': 'discovery:subject', 'value': _disc_subject})}\n\n"
+            # ── WAI chapter classification (T002) — resolved here, not in outer handler ──
+            # discovery:searching + class + subject are already in-flight to the client.
+            # Await WAI with remaining grace (up to 1.0s from request start) so that
+            # discovery:chapter and _meta_event include the matched chapter.
+            if _wai_chapter_task is not None:
+                if _wai_chapter_task.done():
+                    try:
+                        _wai_match = _wai_chapter_task.result()
+                    except Exception:
+                        _wai_match = None
+                else:
+                    _wai_elapsed_es = _time_mod.time() - _stream_t0
+                    _wai_grace_es = max(0.0, 1.0 - _wai_elapsed_es)
+                    if _wai_grace_es > 0.02:
+                        try:
+                            _wai_match = await asyncio.wait_for(_wai_chapter_task, timeout=_wai_grace_es)
+                        except (asyncio.TimeoutError, asyncio.CancelledError):
+                            _wai_match = None
+                            logger.info("[WAI] classify not ready inside event_stream — skipping")
+                        except Exception:
+                            _wai_match = None
+                    else:
+                        _wai_chapter_task.cancel()
+                if _wai_match:
+                    logger.info(
+                        "[WAI] chapter match: '%s' (sim=%.3f, confident=%s)",
+                        _wai_match.get("chapter_title"), _wai_match.get("similarity"),
+                        _wai_match.get("confident"),
+                    )
+                    if not rag_chapter_name and _wai_match.get("chapter_title"):
+                        rag_chapter_name = _wai_match["chapter_title"]
+                    if not rag_chapter_slug and _wai_match.get("slug"):
+                        rag_chapter_slug = _wai_match["slug"]
+            _disc_chapter = rag_chapter_name or (_wai_match.get('chapter_title') if _wai_match else None)
+            if _disc_chapter:
+                yield f"data: {json.dumps({'event': 'discovery:chapter', 'value': _disc_chapter})}\n\n"
+            # ── Meta event ────────────────────────────────────────────────────
             _meta_event = {'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'rag_subject_icon': rag_subject_icon or '', 'rag_subject_gradient': rag_subject_gradient or '', 'rag_chapter_name': rag_chapter_name, 'rag_chapter_slug': rag_chapter_slug or '', 'rag_topic_name': rag_topic_name or '', 'rag_chunk_snippet': rag_chunk_snippet, 'router_subject': _router_subject, 'router_chapter': _router_chapter, 'router_board': _router_board, 'web_search_used': web_search_used, 'ctx_board_name': ctx_board_name or '', 'ctx_class_name': ctx_class_name or '', 'ctx_stream_name': ctx_stream_name or ''}
             if content_card_meta:
                 _meta_event['content_card_name'] = content_card_meta.get('card_name', '')
                 _meta_event['content_card_lesson'] = content_card_meta.get('lesson_name', '')
                 _meta_event['content_card_subject'] = content_card_meta.get('subject_name', '')
+            # WAI chapter match — lets the frontend ThinkingIndicator show the
+            # REAL matched chapter during the thinking animation (Step 4),
+            # instead of cycling through all chapters randomly.
+            if _wai_match:
+                _meta_event['wai_chapter_match'] = {
+                    'chapter_title':  _wai_match.get('chapter_title', ''),
+                    'chapter_number': _wai_match.get('chapter_number', 0),
+                    'slug':           _wai_match.get('slug', ''),
+                    'similarity':     _wai_match.get('similarity', 0.0),
+                    'confident':      _wai_match.get('confident', False),
+                }
             yield f"data: {json.dumps(_meta_event)}\n\n"
 
             cached_answer = _cached_answer
@@ -2232,6 +2468,11 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 )
                 _indic_buffer_mode = bool(_want_translate) and _asm_behaviour() != "off"
                 _indic_pending_chunks: list = []
+                # S1: rolling chunk translate — 250-char English windows flushed as
+                # Assamese immediately, cutting TTFB from 5-18 s → ~3-5 s.
+                _rolling_en_buf = ""        # accumulated English content
+                _rolling_as_chunks: list = []  # Assamese chunks already yielded
+                _ROLL_CHUNK_CHARS = 250     # translate every ~250 English chars
 
                 # When buffering Assamese, the user otherwise sees a blank
                 # bubble for the entire LLM generation + sanitize window
@@ -2259,6 +2500,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                             logger.info(f"[STREAM][TIMING] TTFT (first LLM token): {_ttfb_llm_ms / 1000:.3f}s")
                             try:
                                 _speedup.record_ttfb(_ttfb_llm_ms)
+                                _speedup.record_lang_ttfb(_resp_lang, _ttfb_llm_ms)
                             except Exception:
                                 pass
                             try:
@@ -2268,10 +2510,12 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                             except Exception:
                                 pass
                             _first_token_logged = True
+                        _roll_piece = ""  # S1: reset per-chunk accumulator
                         try:
                             data = json.loads(chunk[6:])
                             _piece = data.get("content", "")
                             _tuned = _tune_response_stream(_piece, _stream_intent, _tune_buf)
+                            _roll_piece = _tuned  # S1: capture for rolling buffer
                             full_response.append(_tuned)
                             _output_buf += _tuned
                             if _tuned != _piece:
@@ -2288,7 +2532,23 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                     if _output_violation:
                         break
                     if _indic_buffer_mode:
-                        _indic_pending_chunks.append(chunk)
+                        if '"content"' in chunk and _sarvam_target and _roll_piece:
+                            # S1: accumulate English content; translate at threshold boundary
+                            _rolling_en_buf += _roll_piece
+                            if len(_rolling_en_buf) >= _ROLL_CHUNK_CHARS:
+                                try:
+                                    _tr_rolled = await _assamese_translate_gemini_main_sarvam_polish(
+                                        _rolling_en_buf, target_lang_code=_sarvam_target,
+                                    )
+                                    if _tr_rolled:
+                                        _rolling_as_chunks.append(_tr_rolled)
+                                        yield f"data: {json.dumps({'content': _tr_rolled})}\n\n"
+                                except Exception as _roll_err:
+                                    logger.debug("[S1-ROLL] chunk translate error: %s", _roll_err)
+                                _rolling_en_buf = ""
+                        else:
+                            # Non-content events (metadata, SSE markers) buffered for later
+                            _indic_pending_chunks.append(chunk)
                     else:
                         yield chunk
                     _bp_count += 1
@@ -2298,6 +2558,18 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 # after this point (Indic sanitize, cache write, persist,
                 # log fan-out) is `chat.post_processing`.
                 _t_llm_end = _time_mod.time()
+                # S1: flush any remaining English in the rolling buffer (tail of response)
+                if _indic_buffer_mode and _rolling_en_buf and _sarvam_target:
+                    try:
+                        _tr_tail = await _assamese_translate_gemini_main_sarvam_polish(
+                            _rolling_en_buf, target_lang_code=_sarvam_target,
+                        )
+                        if _tr_tail:
+                            _rolling_as_chunks.append(_tr_tail)
+                            yield f"data: {json.dumps({'content': _tr_tail})}\n\n"
+                    except Exception as _tail_err:
+                        logger.debug("[S1-ROLL] tail flush error: %s", _tail_err)
+                    _rolling_en_buf = ""
                 if _output_violation:
                     full_response.clear()
                     _fallback = "I need to stop here — my response was heading in a direction that doesn't align with my guidelines. Please try rephrasing your question."
@@ -2348,7 +2620,9 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
                     _cleaned_indic, _asm_diag = await _sanitize_asm_async(
                         _raw_indic,
-                        regenerate_callable=_regenerate_indic,
+                        # S1 rolling mode: content already yielded — retraction not
+                        # possible, so skip regeneration (diagnostics still run).
+                        regenerate_callable=None if _rolling_as_chunks else _regenerate_indic,
                         translate_callable=_make_assamese_translate_callable(_sarvam_target or "as-IN"),
                         trace={
                             "conversation_id": conv_id or msg.conversation_id or None,
@@ -2372,7 +2646,15 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                         logger.info(_asm_log)
                     else:
                         logger.warning(_asm_log)
-                    if _asm_action not in (None, "noop") or _asm_diag.get("regenerated"):
+                    if _rolling_as_chunks:
+                        # S1 rolling mode: content already yielded in translated chunks;
+                        # update full_response with assembled Assamese for cache storage.
+                        full_response.clear()
+                        full_response.append("".join(_rolling_as_chunks))
+                        # Yield any buffered non-content events (metadata SSE markers)
+                        for _pc in _indic_pending_chunks:
+                            yield _pc
+                    elif _asm_action not in (None, "noop") or _asm_diag.get("regenerated"):
                         full_response.clear()
                         full_response.append(_cleaned_indic)
                         _CHUNK_SIZE_INDIC = 300
@@ -2519,6 +2801,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 _final_total_ms = (_time_mod.time() - _stream_t0) * 1000
                 _record_chat_latency(_final_total_ms)
                 _speedup.record_total_latency(_final_total_ms)
+                _speedup.record_lang_ttfb(_resp_lang, 0.0, _final_total_ms)
                 # Preserve the path label set earlier by the cache-hit
                 # branch (`cache`) — only attribute as `main` for true
                 # non-cached LLM responses, otherwise the request-span
@@ -2773,6 +3056,50 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
     return StreamingResponse(event_stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+# ─────────────────────────────────────────────
+# F2: SPECULATIVE WARM-QUERY  — /api/ai/warm-query
+# Fired by the frontend on a typing pause (≥15 chars, ≥800ms idle).
+# Pre-fetches internal chapters into Redis so the next /ai/chat request
+# can skip _fetch_internal_chapters entirely in Phase 0.
+# ─────────────────────────────────────────────
+@router.post("/ai/warm-query", status_code=202)
+async def warm_query_endpoint(request: Request):
+    """F2: Pre-fetch RAG chapters for a query being typed; cache for 20 s."""
+    import hashlib as _hl, json as _json
+    try:
+        _body = await request.json()
+    except Exception:
+        return {"status": "skip"}
+    query = (_body.get("query") or "").strip()
+    _subject_id = _body.get("subject_id") or None
+    _subject_name = _body.get("subject_name") or None
+    if len(query) < 15 or not (_subject_id or _subject_name):
+        return {"status": "skip"}
+
+    _sid = _subject_id or ""
+    _wkey = f"warm_ch:{_hl.md5(f'{query}|{_sid}'.encode()).hexdigest()}"
+
+    # Skip if already warmed for this exact query
+    if redis_client:
+        try:
+            if redis_client.exists(_wkey):
+                return {"status": "cached"}
+        except Exception:
+            pass
+
+    async def _bg_prefetch():
+        try:
+            chapters = await _fetch_internal_chapters(query, subject_id=_subject_id, subject_name=_subject_name)
+            if chapters and redis_client:
+                redis_client.setex(_wkey, 20, _json.dumps(chapters))
+                logger.debug("[F2-WARM] Pre-fetched %d chapters for warm key", len(chapters))
+        except Exception as _e:
+            logger.debug("[F2-WARM] Background prefetch error (non-fatal): %s", _e)
+
+    asyncio.create_task(_bg_prefetch())
+    return {"status": "warming"}
+
 
 # ─────────────────────────────────────────────
 # PUBLIC SEARCH API  — /api/v1/search

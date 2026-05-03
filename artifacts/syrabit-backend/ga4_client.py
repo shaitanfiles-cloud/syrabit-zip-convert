@@ -47,8 +47,8 @@ def _cfg():
     """Read GA4 credentials from environment at call time (never cached at module level)."""
     return {
         "property_id":    Configurator.get("GA4_PROPERTY_ID", ""),
-        "client_id":      Configurator.get("GOOGLE_OAUTH_CLIENT_ID", "") or Configurator.get("GOOGLE_CLIENT_ID", ""),
-        "client_secret":  Configurator.get("GOOGLE_CLIENT_SECRET", ""),
+        "client_id":      Configurator.get("GOOGLE_OAUTH_CLIENT_ID", ""),
+        "client_secret":  Configurator.get("GOOGLE_OAUTH_CLIENT_SECRET", ""),
         "refresh_token":  Configurator.get("GA4_REFRESH_TOKEN", ""),
     }
 

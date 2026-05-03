@@ -65,6 +65,14 @@ name: edge-proxy-deploy
 #
 # Required repo secrets (set under Settings → Secrets and variables →
 # Actions → Secrets):
+#   CF_MTLS_CERT_ID        — UUID of the Cloudflare mTLS client certificate.
+#                            Obtain from cloudflare-phase6-apply.js (printed on
+#                            first run) or dash.cloudflare.com → SSL/TLS →
+#                            Client Certificates. Deploy is BLOCKED if this
+#                            secret is absent or still set to the sentinel
+#                            "PENDING_CERT_PROVISIONING". Injected into
+#                            wrangler.toml at deploy time by
+#                            workers/edge-proxy/scripts/inject-mtls-cert-id.js.
 #   CLOUDFLARE_API_TOKEN   — token with Workers Scripts:Edit, Workers KV
 #                            Storage:Edit, D1:Edit, Workers AI:Edit on the
 #                            Syrabit account.
@@ -142,7 +150,7 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           # Task #906 — strip the GITHUB_TOKEN from .git/config after
           # checkout. This pipeline drives wrangler with the
@@ -152,12 +160,10 @@ jobs:
           persist-credentials: false
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@a3252b78c470c02df07e9d59298aecedc3ccdd6d # v3.0.0
-        with:
-          version: 9
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
 
       - name: Set up Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "20"
           cache: pnpm
@@ -175,6 +181,16 @@ jobs:
 
       - name: Install workspace deps (resolves wrangler from the lockfile)
         run: pnpm --filter syrabit-edge install --frozen-lockfile
+
+      - name: Inject mTLS certificate ID into wrangler.toml (Phase 6 gate)
+        # Task #110: replaces the sentinel "PENDING_CERT_PROVISIONING" in
+        # [[mtls_certificates]].certificate_id with the real UUID from the
+        # CF_MTLS_CERT_ID repo secret.  Exits 1 (aborts deploy) when the
+        # secret is absent so the mTLS binding is NEVER silently skipped.
+        # See workers/edge-proxy/scripts/inject-mtls-cert-id.js for details.
+        env:
+          CF_MTLS_CERT_ID: ${{ secrets.CF_MTLS_CERT_ID }}
+        run: node workers/edge-proxy/scripts/inject-mtls-cert-id.js
 
       - name: wrangler deploy --env preview
         run: pnpm --filter syrabit-edge run deploy:preview
@@ -199,7 +215,7 @@ jobs:
       CF_WORKERS_SUBDOMAIN: ${{ vars.CF_WORKERS_SUBDOMAIN }}
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           # Task #906 — strip the GITHUB_TOKEN from .git/config after
           # checkout. This pipeline drives wrangler with the
@@ -209,12 +225,10 @@ jobs:
           persist-credentials: false
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@a3252b78c470c02df07e9d59298aecedc3ccdd6d # v3.0.0
-        with:
-          version: 9
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
 
       - name: Set up Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "20"
           cache: pnpm
@@ -301,7 +315,7 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           # Task #906 — strip the GITHUB_TOKEN from .git/config after
           # checkout. This pipeline drives wrangler with the
@@ -311,18 +325,24 @@ jobs:
           persist-credentials: false
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@a3252b78c470c02df07e9d59298aecedc3ccdd6d # v3.0.0
-        with:
-          version: 9
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
 
       - name: Set up Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "20"
           cache: pnpm
 
       - name: Install workspace deps (frozen lockfile)
         run: pnpm --filter syrabit-edge install --frozen-lockfile
+
+      - name: Inject mTLS certificate ID into wrangler.toml (Phase 6 gate)
+        # Task #110: same gate as the preview deploy — must pass before prod
+        # wrangler deploy runs. Uses the production environment's CF_MTLS_CERT_ID
+        # secret so the mTLS binding is active in every production deploy.
+        env:
+          CF_MTLS_CERT_ID: ${{ secrets.CF_MTLS_CERT_ID }}
+        run: node workers/edge-proxy/scripts/inject-mtls-cert-id.js
 
       - name: wrangler deploy (prod)
         run: pnpm --filter syrabit-edge run deploy
@@ -355,7 +375,7 @@ jobs:
       AI_FALLBACK_SECRET: ${{ secrets.AI_FALLBACK_SECRET_PROD }}
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           # Task #906 — strip the GITHUB_TOKEN from .git/config after
           # checkout. This pipeline drives wrangler with the
@@ -365,12 +385,10 @@ jobs:
           persist-credentials: false
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@a3252b78c470c02df07e9d59298aecedc3ccdd6d # v3.0.0
-        with:
-          version: 9
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
 
       - name: Set up Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "20"
           cache: pnpm
@@ -429,7 +447,7 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           # Task #906 — strip the GITHUB_TOKEN from .git/config after
           # checkout. This pipeline drives wrangler with the
@@ -439,12 +457,10 @@ jobs:
           persist-credentials: false
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@a3252b78c470c02df07e9d59298aecedc3ccdd6d # v3.0.0
-        with:
-          version: 9
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
 
       - name: Set up Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "20"
           cache: pnpm

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
 import {
-  Send, Square, Plus, Camera, Image as ImageIcon, X, Loader2,
+  Send, Square, Plus, Camera, Image as ImageIcon, X, Loader2, BookOpen,
 } from 'lucide-react';
 import { MicButton } from '@/components/study/MicButton';
 import { getTTSLang } from '@/hooks/useTTS';
@@ -19,6 +19,7 @@ export function InputBar({
   textareaRef, adjustTextarea, sendMsg, handleStop,
   isAnon,
   getTurnstileToken, turnstileEnabled,
+  activeChapter, onDismissChapter,
 }) {
   const navigate = useNavigate();
   const [maxTextareaHeight, setMaxTextareaHeight] = useState(160);
@@ -189,6 +190,34 @@ export function InputBar({
           data-testid="chat-gallery-input"
         />
 
+        {/* Active chapter context chip — shows which content card is grounding the RAG. */}
+        {activeChapter && (
+          <div className="mb-2 flex items-center gap-2" data-testid="chat-chapter-chip">
+            <div
+              className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-full border text-xs font-medium"
+              style={{
+                borderColor: 'rgba(139,92,246,0.30)',
+                background: 'rgba(124,58,237,0.08)',
+                color: '#a78bfa',
+              }}
+            >
+              <BookOpen size={12} aria-hidden="true" style={{ flexShrink: 0 }} />
+              <span className="max-w-[240px] truncate" title={activeChapter.title}>
+                {activeChapter.title}
+              </span>
+              <button
+                type="button"
+                onClick={onDismissChapter}
+                className="ml-0.5 w-4 h-4 rounded-full flex items-center justify-center hover:bg-black/10 transition-colors flex-shrink-0"
+                aria-label={`Remove ${activeChapter.title} filter`}
+                data-testid="chat-chapter-chip-dismiss"
+              >
+                <X size={10} aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Attached-image preview chip (ChatGPT-style, sits above the composer). */}
         {attachedImage && (
           <div className="mb-2 flex items-center gap-2" data-testid="chat-image-preview">
@@ -317,6 +346,8 @@ export function InputBar({
                 ? (isAnon
                     ? 'Free daily messages used — sign in to keep chatting'
                     : 'No credits remaining — upgrade to continue')
+                : activeChapter
+                ? `Ask about ${activeChapter.title}…`
                 : subject
                 ? `Ask about ${subject.name}…`
                 : 'Ask anything about your Syllabus...'

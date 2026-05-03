@@ -89,13 +89,20 @@ function setupTopicDiscoveryRoutes(page: Page) {
 test.describe('Topic Discovery tab', () => {
   test('renders runs + candidates and submits an admin override', async ({ page }) => {
     const { overrideCalls } = setupTopicDiscoveryRoutes(page);
-
-    // Capture POST bodies for the override endpoint. The real route
-    // is /api/admin/seo/topic-discovery/{candidateId}/override — the
-    // candidate id is in the path, not the body.
     const captured: OverrideCall[] = [];
+
+    await seedAdminSession(page);
+    await installAdminApiMocks(page, {
+      overrides: {
+        '/api/admin/seo/topic-discovery/runs': () => RUNS_PAYLOAD,
+        '/api/admin/seo/topic-discovery/candidates': () => CANDIDATES_PAYLOAD,
+      },
+    });
+
+    // Registered AFTER installAdminApiMocks (LIFO priority) so this narrow route
+    // wins over the catch-all for the override endpoint.
     await page.route(
-      '**/api/admin/seo/topic-discovery/*/override',
+      '**/api/admin/seo/topic-discovery/**/override',
       async (route) => {
         const req = route.request();
         let body: unknown = null;
@@ -112,14 +119,6 @@ test.describe('Topic Discovery tab', () => {
         });
       },
     );
-
-    await seedAdminSession(page);
-    await installAdminApiMocks(page, {
-      overrides: {
-        '/api/admin/seo/topic-discovery/runs': () => RUNS_PAYLOAD,
-        '/api/admin/seo/topic-discovery/candidates': () => CANDIDATES_PAYLOAD,
-      },
-    });
 
     await page.goto('/admin');
 

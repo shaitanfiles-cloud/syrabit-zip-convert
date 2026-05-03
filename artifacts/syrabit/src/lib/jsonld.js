@@ -451,13 +451,25 @@ export function chapterSchema(data, url, basePath = '') {
       },
     },
     {
+      /* Task #246 step 5 — BreadcrumbList using full board › class › subject › chapter hierarchy */
       '@type': 'BreadcrumbList',
-      itemListElement: [
-        { '@type': 'ListItem', position: 1, name: 'Home', item: `${SITE_ORIGIN}/` },
-        { '@type': 'ListItem', position: 2, name: 'Library', item: `${SITE_ORIGIN}/library` },
-        { '@type': 'ListItem', position: 3, name: subjectName, item: subjectUrl },
-        { '@type': 'ListItem', position: 4, name: chapterTitle, item: url },
-      ],
+      itemListElement: (() => {
+        const items = [
+          { '@type': 'ListItem', position: 1, name: 'Home', item: `${SITE_ORIGIN}/` },
+        ];
+        let pos = 2;
+        // Derive board/class URL from basePath (/board/class/subject) when available
+        if (basePath) {
+          const segs = basePath.split('/').filter(Boolean);
+          if (segs.length >= 2 && (boardName || className)) {
+            const classLabel = [boardName, className].filter(Boolean).join(' ');
+            items.push({ '@type': 'ListItem', position: pos++, name: classLabel, item: `${SITE_ORIGIN}/${segs[0]}/${segs[1]}` });
+          }
+        }
+        items.push({ '@type': 'ListItem', position: pos++, name: subjectName, item: subjectUrl });
+        items.push({ '@type': 'ListItem', position: pos, name: chapterTitle, item: url });
+        return items;
+      })(),
     },
   ];
 
@@ -628,12 +640,21 @@ export function subjectHubSchema(subject, url) {
       inLanguage,
     },
     {
+      /* Task #246 step 5 — BreadcrumbList using full board › class › subject hierarchy */
       '@type': 'BreadcrumbList',
-      itemListElement: [
-        { '@type': 'ListItem', position: 1, name: 'Home', item: `${SITE_ORIGIN}/` },
-        { '@type': 'ListItem', position: 2, name: 'Library', item: `${SITE_ORIGIN}/library` },
-        { '@type': 'ListItem', position: 3, name: subject.name, item: url },
-      ],
+      itemListElement: (() => {
+        const items = [
+          { '@type': 'ListItem', position: 1, name: 'Home', item: `${SITE_ORIGIN}/` },
+        ];
+        let pos = 2;
+        // Use board+class slugs to build an intermediate breadcrumb level
+        if (subject.board_slug && subject.class_slug) {
+          const classLabel = [subject.board_name || subject.board_slug, subject.class_name || subject.class_slug].filter(Boolean).join(' ');
+          items.push({ '@type': 'ListItem', position: pos++, name: classLabel, item: `${SITE_ORIGIN}/${subject.board_slug}/${subject.class_slug}` });
+        }
+        items.push({ '@type': 'ListItem', position: pos, name: subject.name, item: url });
+        return items;
+      })(),
     },
   ];
 
@@ -774,6 +795,9 @@ export function homeSchema(url) {
         name: 'Syrabit.ai',
         publisher: { '@id': `${SITE_ORIGIN}/#organization` },
         inLanguage: 'en-IN',
+        /* Task #246 step 5 — SiteLinksSearchBox: per schema.org, SearchAction
+           in potentialAction of a WebSite node is the canonical signal Google
+           uses to render the sitelinks search box in SERPs. */
         potentialAction: {
           '@type': 'SearchAction',
           target: {

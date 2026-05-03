@@ -826,6 +826,15 @@ async def classify_subject(
     tokens = _tokenise(query)
 
     # Tier 0 — Syllabus DB vector search (highest accuracy, uses live embeddings)
+    #
+    # Pinecone migration decision (Task #203, 2026-05):
+    # This Tier 0 path uses SyllabusEmbedder.classify(), which operates on the
+    # *syllabus* collection (subjects, chapters, streams), NOT the `chunks`
+    # collection that was migrated to Pinecone. It has its own separate vector
+    # index managed by syllabus_embedder.py and is intentionally kept in Atlas:
+    # (a) the syllabus corpus is tiny (<500 docs, <1 KB each) — Atlas overhead
+    #     is negligible, and (b) it is a separate index that is not part of the
+    #     chunks $vectorSearch migration. No change needed here.
     if embedder is not None:
         try:
             match = await asyncio.wait_for(embedder.classify(query), timeout=0.8)

@@ -60,15 +60,28 @@ try:
         raise ValueError(f"MONGO_URL has invalid scheme — must begin with mongodb:// or mongodb+srv://. Got: {_raw_mongo_url[:30]!r}...")
     mongo_client = AsyncIOMotorClient(
         _raw_mongo_url,
-        serverSelectionTimeoutMS=20000,
-        connectTimeoutMS=20000,
-        socketTimeoutMS=45000,
-        maxPoolSize=50,
-        minPoolSize=2,
-        maxIdleTimeMS=120000,
-        waitQueueTimeoutMS=10000,
+        # ── Flex-tier tuned settings (2026-04-30) ──────────────────────────
+        # Flex tier has better SLAs and dedicated compute vs shared M0/M10.
+        # serverSelection and connect timeouts reduced: Flex handshake is ~2s.
+        serverSelectionTimeoutMS=10000,
+        connectTimeoutMS=10000,
+        socketTimeoutMS=30000,
+        # Higher pool: Flex supports more concurrent connections; Railway has
+        # 3 gunicorn workers × up to 10 concurrent async tasks each = ~30 in-
+        # flight at peak. 100 gives plenty of headroom.
+        maxPoolSize=100,
+        minPoolSize=5,
+        maxIdleTimeMS=60000,
+        waitQueueTimeoutMS=15000,
         retryReads=True,
         retryWrites=True,
+        # zlib compresses wire traffic on JSON-heavy BSON (chapters/PYQ).
+        # zstd/snappy would be better but require extra C packages
+        # (backports.zstd / python-snappy) not in the current Python env.
+        compressors=["zlib"],
+        # Route reads to secondaries where possible — Flex provisions
+        # hidden secondaries that take read load off the primary.
+        readPreference="secondaryPreferred",
     )
     db = mongo_client[DB_NAME]
     logging.info("MongoDB client initialised (connection not yet verified)")

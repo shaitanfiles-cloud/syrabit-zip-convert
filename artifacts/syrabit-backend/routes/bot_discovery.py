@@ -1145,7 +1145,10 @@ async def _collect_current_sitemap_urls() -> List[str]:
         except Exception as e:
             logger.debug(f"sitemap diff: cms_documents fetch failed: {e}")
 
-        # Notes / MCQs / PYQs / examples / definitions — every published seo_page
+        # Notes / MCQs / PYQs / examples / definitions — every published seo_page.
+        # Task #246: pages updated within the last 7 days are fetched first so
+        # they appear at the front of the URL list. When the 10k/day Bing cap is
+        # hit, recently-updated content has already been submitted.
         try:
             valid_chains: Optional[set] = None
             try:
@@ -1154,11 +1157,27 @@ async def _collect_current_sitemap_urls() -> List[str]:
             except Exception as e:
                 logger.debug(f"sitemap diff: valid_chains load failed: {e}")
             allowed_types = {"notes", "mcqs", "important-questions", "examples", "definition"}
-            pages = await db.seo_pages.find(
-                {"status": "published"},
-                {"_id": 0, "board_slug": 1, "class_slug": 1,
-                 "subject_slug": 1, "topic_slug": 1, "page_type": 1},
+            from datetime import timedelta
+            _seven_days_ago = (
+                datetime.now(timezone.utc) - timedelta(days=7)
+            ).strftime("%Y-%m-%dT%H:%M:%S")
+            _page_fields = {"_id": 0, "board_slug": 1, "class_slug": 1,
+                            "subject_slug": 1, "topic_slug": 1, "page_type": 1}
+            # Fetch recently-updated pages first (updated in the last 7 days)
+            recent_pages = await db.seo_pages.find(
+                {"status": "published", "updated_at": {"$gte": _seven_days_ago}},
+                _page_fields,
+            ).sort("updated_at", -1).to_list(10000)
+            # Then fetch the rest (older pages), excluding those already fetched
+            older_pages = await db.seo_pages.find(
+                {"status": "published",
+                 "$or": [
+                     {"updated_at": {"$lt": _seven_days_ago}},
+                     {"updated_at": {"$exists": False}},
+                 ]},
+                _page_fields,
             ).to_list(50000)
+            pages = recent_pages + older_pages
             for p in pages:
                 if p.get("page_type", "notes") not in allowed_types:
                     continue
@@ -2122,50 +2141,30 @@ async def indexnow_keyfile():
     return PlainTextResponse(INDEXNOW_KEY, media_type="text/plain; charset=utf-8")
 
 
-@router.get("/seo/health")
-async def seo_health_check(
-    request: Request = None,
-    deep_scan: Optional[str] = Query(
-        None,
-        description=(
-            "Task #345: when set to a sitemap filename (e.g. "
-            "'sitemap-learn.xml'), return that sitemap's FULL failing "
-            "URL list instead of the 10-URL random sample. Requires "
-            "admin auth because a full scan probes up to 500 URLs."
-        ),
-    ),
-):
+# ── SEO health in-memory response cache ──────────────────────────────────────
+# The full seo_health_check probes every sitemap + up to 10 URLs per sitemap
+# over the public internet — typical runtime 10-15 s. Serving that live on
+# every GET is unacceptable for monitoring dashboards and uptime checkers.
+# Cache the last successful result for 30 minutes; serve the cache instantly
+# while triggering a background refresh so the data never gets too stale.
+_seo_health_response_cache: dict = {}           # {"data": ..., "ts": float}
+_SEO_HEALTH_RESPONSE_CACHE_TTL_S: float = 1800  # 30 minutes
+_seo_health_bg_refresh_task = None              # module-level asyncio.Task handle
+
+
+async def _run_seo_health_check_inner() -> dict:
+    """Run the full sitemap + URL spot-check probe and return the raw result.
+
+    This is the slow function (10-15 s) that does real network I/O.
+    Call via the cache layer in ``seo_health_check`` or the background
+    refresh so callers never block on it in steady state.
+    """
     import httpx
+    import random
+    import xml.etree.ElementTree as ET
     from deps import db, is_mongo_available
 
-    # Task #345: deep-scan path. Requires admin auth — the standard
-    # response is public, but probing up to 500 URLs per call is a
-    # DoS vector if exposed to anonymous traffic. We invoke the
-    # `get_admin_user` dependency manually because the rest of this
-    # endpoint is intentionally unauthenticated.
-    if deep_scan is not None:
-        if deep_scan not in SEO_SITEMAP_FILENAMES:
-            raise HTTPException(status_code=400, detail=f"Unknown sitemap: {deep_scan}")
-        admin = await get_admin_user(request)
-        scan_result = await _deep_scan_sitemap(deep_scan)
-        # Task #348: when the scan turns up more than 50 failing URLs,
-        # auto-email the full failing list as a CSV attachment to the
-        # configured alert channel so on-call admins can start triage
-        # from a phone instead of waiting until they're at a desk. The
-        # email is gated by the calling admin's per-account opt-out
-        # toggle (`email_failing_csv_enabled`, default True).
-        try:
-            admin_id = (admin or {}).get("sub") or (admin or {}).get("email") or "default"
-            email_result = await _maybe_email_failing_csv(
-                deep_scan, scan_result, admin_id=admin_id,
-            )
-            scan_result["email"] = email_result
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"[SEO deep-scan email] unexpected error: {exc}")
-            scan_result["email"] = {"sent": False, "reason": f"error:{type(exc).__name__}"}
-        return scan_result
-
-    results = {
+    results: dict = {
         "status": "ok",
         "sitemaps": [],
         "d1_sync": {"status": "unknown"},
@@ -2176,39 +2175,33 @@ async def seo_health_check(
         f"{BASE_URL}/api/seo/{name}" for name in SEO_SITEMAP_FILENAMES
     ]
 
-    import random
-    import xml.etree.ElementTree as ET
-
     async with httpx.AsyncClient(timeout=15.0, headers=_SEO_SELF_CHECK_HEADERS) as client:
         for sm_url in sitemap_urls:
             sm_name = sm_url.split("/")[-1]
-            sm_result = {"name": sm_name, "url": sm_url, "valid_xml": False, "url_count": 0, "sample_checks": []}
-
+            sm_result = {
+                "name": sm_name, "url": sm_url,
+                "valid_xml": False, "url_count": 0, "sample_checks": [],
+            }
             try:
                 resp = await client.get(sm_url)
                 if resp.status_code != 200:
                     sm_result["error"] = f"HTTP {resp.status_code}"
                     results["sitemaps"].append(sm_result)
                     continue
-
                 try:
                     root = ET.fromstring(resp.text)
                     sm_result["valid_xml"] = True
                     ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
                     locs = [loc.text for loc in root.findall(".//sm:loc", ns) if loc.text]
                     sm_result["url_count"] = len(locs)
-
                     sample_urls = random.sample(locs, min(10, len(locs))) if locs else []
                     for sample_url in sample_urls:
-                        # Task #344: probe with one retry so transient
-                        # network blips don't get recorded as failing URLs.
                         check = await _probe_sitemap_url_with_retry(client, sample_url)
                         sm_result["sample_checks"].append(check)
                 except ET.ParseError as parse_err:
                     sm_result["error"] = f"XML parse error: {str(parse_err)[:100]}"
             except Exception as sm_err:
                 sm_result["error"] = str(sm_err)[:200]
-
             results["sitemaps"].append(sm_result)
 
         try:
@@ -2254,6 +2247,97 @@ async def seo_health_check(
             pass
 
     return results
+
+
+async def _refresh_seo_health_cache():
+    """Run the full SEO health check and write the result into the cache.
+    Called from a background task so callers never block."""
+    global _seo_health_response_cache
+    try:
+        result = await _run_seo_health_check_inner()
+        _seo_health_response_cache = {"data": result, "ts": __import__("time").time()}
+    except Exception as exc:
+        logger.warning("[SEO health cache] background refresh failed: %s", exc)
+
+
+def _ensure_seo_health_bg_refresh():
+    """Schedule a background refresh unless one is already in flight."""
+    global _seo_health_bg_refresh_task
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    if _seo_health_bg_refresh_task is None or _seo_health_bg_refresh_task.done():
+        _seo_health_bg_refresh_task = loop.create_task(_refresh_seo_health_cache())
+
+
+@router.get("/seo/health")
+async def seo_health_check(
+    request: Request = None,
+    deep_scan: Optional[str] = Query(
+        None,
+        description=(
+            "Task #345: when set to a sitemap filename (e.g. "
+            "'sitemap-learn.xml'), return that sitemap's FULL failing "
+            "URL list instead of the 10-URL random sample. Requires "
+            "admin auth because a full scan probes up to 500 URLs."
+        ),
+    ),
+):
+    import httpx
+    from deps import db, is_mongo_available
+
+    # Task #345: deep-scan path. Requires admin auth — the standard
+    # response is public, but probing up to 500 URLs per call is a
+    # DoS vector if exposed to anonymous traffic. We invoke the
+    # `get_admin_user` dependency manually because the rest of this
+    # endpoint is intentionally unauthenticated.
+    if deep_scan is not None:
+        if deep_scan not in SEO_SITEMAP_FILENAMES:
+            raise HTTPException(status_code=400, detail=f"Unknown sitemap: {deep_scan}")
+        admin = await get_admin_user(request)
+        scan_result = await _deep_scan_sitemap(deep_scan)
+        # Task #348: when the scan turns up more than 50 failing URLs,
+        # auto-email the full failing list as a CSV attachment to the
+        # configured alert channel so on-call admins can start triage
+        # from a phone instead of waiting until they're at a desk. The
+        # email is gated by the calling admin's per-account opt-out
+        # toggle (`email_failing_csv_enabled`, default True).
+        try:
+            admin_id = (admin or {}).get("sub") or (admin or {}).get("email") or "default"
+            email_result = await _maybe_email_failing_csv(
+                deep_scan, scan_result, admin_id=admin_id,
+            )
+            scan_result["email"] = email_result
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[SEO deep-scan email] unexpected error: {exc}")
+            scan_result["email"] = {"sent": False, "reason": f"error:{type(exc).__name__}"}
+        return scan_result
+
+    # ── Cache-first path ────────────────────────────────────────────────
+    # Serve the cached snapshot if it is fresh (< 30 min old).
+    # If stale (or cold), trigger a background refresh and return the
+    # stale data immediately — callers never block on the 10-15 s probe.
+    import time as _time_import
+    cached = _seo_health_response_cache.get("data")
+    cached_ts = _seo_health_response_cache.get("ts", 0.0)
+    cache_age_s = _time_import.time() - cached_ts
+
+    if cached is not None and cache_age_s < _SEO_HEALTH_RESPONSE_CACHE_TTL_S:
+        # Cache is fresh — return immediately with cache metadata.
+        return {**cached, "_cache": {"hit": True, "age_s": round(cache_age_s, 1)}}
+
+    if cached is not None:
+        # Cache is stale — kick off a background refresh, return stale data.
+        _ensure_seo_health_bg_refresh()
+        return {**cached, "_cache": {"hit": True, "stale": True, "age_s": round(cache_age_s, 1)}}
+
+    # Cold start — no cached data yet. Run inline (first request only).
+    # This will be slow (~10-15 s) but only happens once per worker restart.
+    result = await _run_seo_health_check_inner()
+    _seo_health_response_cache["data"] = result
+    _seo_health_response_cache["ts"] = _time_import.time()
+    return {**result, "_cache": {"hit": False, "cold_start": True}}
 
 
 _seo_health_alert_last_fired: float = 0.0
@@ -2596,19 +2680,23 @@ def _decide_seo_health_alert(
 
 
 async def _record_seo_health_snapshot() -> Dict:
-    """Run seo_health_check, persist a compact snapshot in db.seo_health_history.
+    """Run a fresh SEO health probe, persist a compact snapshot in db.seo_health_history.
 
     Returns the snapshot doc (including status). Designed to be called every
     hour by the background loop and on-demand via admin endpoint.
+
+    Uses _run_seo_health_check_inner() directly so it always gets fresh probe
+    data (not the response cache), and also populates the cache as a side-effect
+    so monitoring requests right after the hourly run get instant responses.
     """
     from deps import db, is_mongo_available
+    import time as _t
 
     try:
-        # Pass explicit kwargs — calling the FastAPI handler directly skips
-        # the request lifecycle, so the `Query(...)` default for `deep_scan`
-        # would otherwise leak through as a ParamFunctionInfo object and
-        # trip the "Unknown sitemap" guard below.
-        report = await seo_health_check(request=None, deep_scan=None)
+        report = await _run_seo_health_check_inner()
+        # Populate the response cache so the next /seo/health GET is instant.
+        _seo_health_response_cache["data"] = report
+        _seo_health_response_cache["ts"] = _t.time()
     except Exception as exc:
         logger.warning(f"seo_health_check raised during snapshot: {exc}")
         report = {

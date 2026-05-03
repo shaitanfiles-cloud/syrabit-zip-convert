@@ -10,7 +10,6 @@ from pydantic import BaseModel
 
 from models import (
     UserCreate, UserLogin, UserOut, TokenOut, PasswordResetReq, PasswordResetConfirm,
-    GoogleAuthRequest,
 )
 from config import (
     COOKIE_DOMAIN,
@@ -50,7 +49,6 @@ async def signup(
     response: Response,
     syrabit_device: Optional[str] = Cookie(default=None),
 ):
-    await require_turnstile(request)
     existing = await supa_get_user(data.email.lower())
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -128,7 +126,6 @@ async def signup(
 
 @router.post("/auth/login", response_model=TokenOut)
 async def login(data: UserLogin, request: Request, response: Response):
-    await require_turnstile(request)
     user = await supa_get_user(data.email.lower())
     pw_hash = user.get("password_hash", "") if user else ""
     if not user or not pw_hash or not await asyncio.to_thread(pwd_ctx.verify, data.password, pw_hash):
@@ -137,7 +134,13 @@ async def login(data: UserLogin, request: Request, response: Response):
         raise HTTPException(status_code=403, detail="Account banned")
 
     credits_info = await get_user_credits(user)
-    role = "admin" if user.get("is_admin") else "student"
+    db_role = user.get("role", "")
+    if user.get("is_admin"):
+        role = "admin"
+    elif db_role == "staff":
+        role = "staff"
+    else:
+        role = "student"
     token = create_access_token(user["id"], role=role, plan=user.get("plan", "free"))
     refresh = create_refresh_token(user["id"])
     user_out = UserOut(
@@ -164,96 +167,52 @@ async def login(data: UserLogin, request: Request, response: Response):
     response.set_cookie(**_refresh_kwargs)
     return TokenOut(access_token=token, user=user_out)
 
-@router.get("/auth/google/client-id")
-async def google_client_id():
-    from config import GOOGLE_CLIENT_ID
-    if not GOOGLE_CLIENT_ID:
-        return {"client_id": None}
-    return {"client_id": GOOGLE_CLIENT_ID}
+class SupabaseSessionRequest(BaseModel):
+    supabase_token: str
+    name: Optional[str] = None
+    consent_dpdp: Optional[bool] = False
 
 
-@router.post("/auth/google")
-async def google_auth(
-    data: GoogleAuthRequest,
+@router.post("/auth/supabase-session")
+async def supabase_session(
+    data: SupabaseSessionRequest,
     request: Request,
     response: Response,
     syrabit_device: Optional[str] = Cookie(default=None),
 ):
-    # Task #697 — gate the Google sign-in endpoint behind the same
-    # Turnstile check as `/auth/login` and `/auth/signup` so the only
-    # password-free auth path isn't an unprotected automation surface.
-    # `require_turnstile` is a no-op when CF_TURNSTILE_ENABLED is
-    # False, preserving today's dev/local behaviour.
-    await require_turnstile(request)
-    from config import GOOGLE_CLIENT_ID
+    """Exchange a Supabase access token for a Syrabit session.
 
-    if not GOOGLE_CLIENT_ID:
-        raise HTTPException(status_code=503, detail="Google sign-in is not configured")
-
-    try:
-        from google.oauth2 import id_token as google_id_token
-        from google.auth.transport import requests as google_requests
-    except ImportError:
-        logger.error("google-auth library not installed")
-        raise HTTPException(status_code=503, detail="Google sign-in is temporarily unavailable")
+    Called by the frontend immediately after a successful
+    supabase.auth.signInWithPassword() or supabase.auth.signUp().
+    Verifies the Supabase JWT, finds or auto-creates the matching
+    profile row in our users table, and issues our custom httpOnly
+    session + refresh cookies so the rest of the app keeps working
+    exactly as before.
+    """
+    from deps import supa as _supa_client
+    if not _supa_client:
+        raise HTTPException(status_code=503, detail="Supabase not configured on this server")
 
     try:
-        idinfo = google_id_token.verify_oauth2_token(
-            data.credential,
-            google_requests.Request(),
-            GOOGLE_CLIENT_ID,
-        )
-    except ValueError as e:
-        logger.warning(f"Google token verification failed: {e}")
-        raise HTTPException(status_code=401, detail="Invalid Google credential")
-    except Exception as e:
-        logger.error(f"Google token verification error: {e}")
-        raise HTTPException(status_code=502, detail="Failed to verify Google credential")
+        sb_response = await asyncio.to_thread(_supa_client.auth.get_user, data.supabase_token)
+        sb_user = sb_response.user
+        if not sb_user:
+            raise ValueError("no user returned")
+    except Exception as exc:
+        logger.warning("Supabase token verification failed: %s", exc)
+        raise HTTPException(status_code=401, detail="Invalid or expired Supabase token")
 
-    google_email = idinfo.get("email", "").lower()
-    google_name = idinfo.get("name", "")
-    google_sub = idinfo.get("sub", "")
-    google_avatar = idinfo.get("picture", "")
+    email = (sb_user.email or "").lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Supabase account has no email address")
 
-    if not google_email or not idinfo.get("email_verified"):
-        raise HTTPException(status_code=400, detail="Google account email not verified")
-
-    existing = await supa_get_user(google_email)
+    existing = await supa_get_user(email)
 
     if existing:
         if existing.get("status") == "banned":
             raise HTTPException(status_code=403, detail="Account banned")
-
-        stored_google_id = existing.get("google_id")
-        if stored_google_id and stored_google_id != google_sub:
-            logger.warning(f"Google ID mismatch for {google_email}: stored={stored_google_id}, incoming={google_sub}")
-            raise HTTPException(status_code=409, detail="This email is linked to a different Google account")
-
-        if not stored_google_id:
-            await supa_update_user(existing["id"], {
-                "google_id": google_sub,
-                "auth_provider": existing.get("auth_provider") or "google",
-            })
-
-        credits_info = await get_user_credits(existing)
-        role = "admin" if existing.get("is_admin") else "student"
-        token = create_access_token(existing["id"], role=role, plan=existing.get("plan", "free"))
-        refresh = create_refresh_token(existing["id"])
-        user_out = UserOut(
-            id=existing["id"], name=existing["name"], email=existing["email"],
-            plan=existing.get("plan", "free"),
-            credits_used=credits_info["used"],
-            credits_limit=credits_info["limit"],
-            onboarding_done=existing.get("onboarding_done", False),
-            is_admin=existing.get("is_admin", False),
-            board_id=existing.get("board_id"),
-            class_id=existing.get("class_id"),
-            stream_id=existing.get("stream_id"),
-            created_at=existing.get("created_at", ""),
-            avatar_url=existing.get("avatar_url", ""),
-            ads_opt_out=bool(existing.get("ads_opt_out", False)),
-            role=existing.get("role", "admin" if existing.get("is_admin") else "student"),
-        )
+        user = existing
+        user_id = user["id"]
     else:
         settings = await supa_get_settings()
         if not settings.get("registrations_open", True):
@@ -261,11 +220,16 @@ async def google_auth(
 
         user_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
-
+        display_name = (
+            data.name
+            or (sb_user.user_metadata or {}).get("full_name")
+            or (sb_user.user_metadata or {}).get("name")
+            or email.split("@")[0]
+        )
         user = {
             "id": user_id,
-            "name": google_name,
-            "email": google_email,
+            "name": display_name,
+            "email": email,
             "password_hash": "",
             "plan": "free",
             "credits_used": 0,
@@ -278,20 +242,13 @@ async def google_auth(
             "phone": "",
             "saved_subjects": [],
             "has_free_credits_issued": True,
+            "auth_provider": "supabase",
+            "consent_dpdp": bool(data.consent_dpdp),
+            "consent_dpdp_version": "1.0" if data.consent_dpdp else None,
+            "consent_dpdp_at": now if data.consent_dpdp else None,
             "created_at": now,
-            "google_id": google_sub,
-            "auth_provider": "google",
-            "avatar_url": google_avatar,
         }
         await supa_insert_user(user)
-
-        role = "student"
-        token = create_access_token(user_id, role=role, plan="free")
-        refresh = create_refresh_token(user_id)
-        # Task #798 — same exhausted -> sign-up funnel pairing as
-        # `/auth/signup`. Only fires in this `else` branch (i.e. a
-        # brand-new account); the `existing` branch above is a
-        # returning-user login and shouldn't influence conversion.
         try:
             from metrics import record_signup_with_device
             from device_token import device_token_id
@@ -300,21 +257,53 @@ async def google_auth(
                 record_signup_with_device(_tid)
         except Exception:
             pass
-        user_out = UserOut(
-            id=user_id, name=google_name, email=google_email,
-            plan="free", credits_used=0, credits_limit=30,
-            onboarding_done=False, is_admin=False, role="student", created_at=now,
-            avatar_url=google_avatar,
-        )
 
-    _session_kwargs = dict(key="syrabit_session", value=token, httponly=True, secure=SECURE_COOKIES, samesite=COOKIE_SAMESITE, max_age=JWT_ACCESS_EXPIRE_MINUTES * 60)
-    _refresh_kwargs = dict(key="syrabit_refresh", value=refresh, httponly=True, secure=SECURE_COOKIES, samesite=COOKIE_SAMESITE, path="/api/auth/refresh", max_age=JWT_REFRESH_EXPIRE_MINUTES * 60)
+    credits_info = await get_user_credits(user)
+    db_role = user.get("role", "")
+    if user.get("is_admin"):
+        role = "admin"
+    elif db_role == "staff":
+        role = "staff"
+    else:
+        role = "student"
+
+    token = create_access_token(user_id, role=role, plan=user.get("plan", "free"))
+    refresh = create_refresh_token(user_id)
+
+    user_out = UserOut(
+        id=user_id,
+        name=user.get("name", ""),
+        email=email,
+        plan=user.get("plan", "free"),
+        credits_used=credits_info["used"],
+        credits_limit=credits_info["limit"],
+        onboarding_done=user.get("onboarding_done", False),
+        is_admin=user.get("is_admin", False),
+        board_id=user.get("board_id"),
+        class_id=user.get("class_id"),
+        stream_id=user.get("stream_id"),
+        created_at=user.get("created_at", ""),
+        avatar_url=user.get("avatar_url", ""),
+        ads_opt_out=bool(user.get("ads_opt_out", False)),
+        role=user.get("role", "admin" if user.get("is_admin") else "student"),
+    )
+
+    _session_kwargs = dict(
+        key="syrabit_session", value=token, httponly=True,
+        secure=SECURE_COOKIES, samesite=COOKIE_SAMESITE,
+        max_age=JWT_ACCESS_EXPIRE_MINUTES * 60,
+    )
+    _refresh_kwargs = dict(
+        key="syrabit_refresh", value=refresh, httponly=True,
+        secure=SECURE_COOKIES, samesite=COOKIE_SAMESITE,
+        path="/api/auth/refresh", max_age=JWT_REFRESH_EXPIRE_MINUTES * 60,
+    )
     if COOKIE_DOMAIN:
         _session_kwargs["domain"] = COOKIE_DOMAIN
         _refresh_kwargs["domain"] = COOKIE_DOMAIN
     response.set_cookie(**_session_kwargs)
     response.set_cookie(**_refresh_kwargs)
-    return {"access_token": token, "token_type": "bearer", "user": user_out.dict()}
+    return TokenOut(access_token=token, user=user_out)
 
 
 async def _send_password_reset_email(email: str, token: str):

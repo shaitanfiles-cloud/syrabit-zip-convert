@@ -2462,7 +2462,23 @@ async def get_seo_page_typed(board: str, class_slug: str, subject_slug: str, top
         {"_id": 0},
     )
     if not page:
-        raise HTTPException(status_code=404, detail="Page not found")
+        # Distinguish permanently-gone from temporarily-unavailable:
+        #  404 — a draft/pending document exists; content may be published later.
+        #  410 — no document at all for these slugs; URL is permanently absent and
+        #         crawlers should stop re-visiting it (saves crawl budget).
+        draft = await _db.seo_pages.find_one(
+            {
+                "board_slug": board,
+                "class_slug": class_slug,
+                "subject_slug": subject_slug,
+                "topic_slug": topic_slug,
+                "page_type": page_type,
+            },
+            {"_id": 1},
+        )
+        if draft:
+            raise HTTPException(status_code=404, detail="Page not published")
+        raise HTTPException(status_code=410, detail="Page not found")
     result = await _inject_qa(page)
     kw = _build_expanded_keywords(
         result.get("topic_title", ""), result.get("subject_name", ""),
@@ -4436,7 +4452,23 @@ async def get_seo_page_default(board: str, class_slug: str, subject_slug: str, t
         {"_id": 0},
     )
     if not page:
-        raise HTTPException(status_code=404, detail="Page not found")
+        # Distinguish permanently-gone from temporarily-unavailable:
+        #  404 — a draft/pending "notes" document exists; content may publish later.
+        #  410 — no document at all for these slugs; URL is permanently absent so
+        #         crawlers should stop re-visiting it (saves crawl budget).
+        draft = await _db.seo_pages.find_one(
+            {
+                "board_slug": board,
+                "class_slug": class_slug,
+                "subject_slug": subject_slug,
+                "topic_slug": topic_slug,
+                "page_type": "notes",
+            },
+            {"_id": 1},
+        )
+        if draft:
+            raise HTTPException(status_code=404, detail="Page not published")
+        raise HTTPException(status_code=410, detail="Page not found")
     result = await _inject_qa(page)
     kw = _build_expanded_keywords(
         result.get("topic_title", ""), result.get("subject_name", ""),
@@ -4668,6 +4700,25 @@ async def _build_valid_slug_chains() -> set[tuple[str, str, str]]:
         return set()
 
 
+def _changefreq_from_lastmod(lastmod: str, today: str) -> tuple[str, str]:
+    """Task #246 — derive changefreq + priority from the age of lastmod.
+
+    < 7 days  → daily   / 0.9
+    < 30 days → weekly  / 0.8
+    older     → monthly / 0.6
+    """
+    try:
+        from datetime import datetime as _dt
+        diff = (_dt.fromisoformat(today) - _dt.fromisoformat(lastmod[:10])).days
+        if diff < 7:
+            return "daily", "0.9"
+        if diff < 30:
+            return "weekly", "0.8"
+    except Exception:
+        pass
+    return "monthly", "0.6"
+
+
 def _page_to_entry(p: dict, today: str, valid_chains: set[tuple[str, str, str]] | None = None) -> dict | None:
     bs, cs, ss, ts = p.get("board_slug"), p.get("class_slug"), p.get("subject_slug"), p.get("topic_slug")
     pt = p.get("page_type", "notes")
@@ -4686,11 +4737,12 @@ def _page_to_entry(p: dict, today: str, valid_chains: set[tuple[str, str, str]] 
         lastmod = raw[:10] if raw else today
     except Exception:
         lastmod = today
+    freq, pri = _changefreq_from_lastmod(lastmod, today)
     return {
         "loc": f"{BASE_URL}{path}",
         "lastmod": lastmod,
-        "pri": "0.8" if pt == "notes" else "0.7",
-        "freq": "monthly",
+        "pri": pri,
+        "freq": freq,
         "page_type": pt,
     }
 
@@ -4820,9 +4872,10 @@ async def get_sitemap_chapters():
             continue
         raw = ch.get("updated_at", "") or ch.get("created_at", "")
         lastmod = raw[:10] if raw else today
+        freq, pri = _changefreq_from_lastmod(lastmod, today)
         entries.append({
             "loc": f"{BASE_URL}/{b_slug}/{c_slug}/{sub['slug']}/{ch_slug}",
-            "lastmod": lastmod, "pri": "0.8", "freq": "monthly",
+            "lastmod": lastmod, "pri": pri, "freq": freq,
             "has_assamese": bool((ch.get("content_as") or "").strip()),
         })
     return _xml_response(_build_urlset(entries))
@@ -4841,11 +4894,12 @@ async def _fetch_learn_entries(today: str) -> list[dict]:
                 continue
             raw = doc.get("updated_at", "") or doc.get("created_at", "")
             lastmod = raw[:10] if raw else today
+            freq, pri = _changefreq_from_lastmod(lastmod, today)
             entries.append({
                 "loc": f"{BASE_URL}/learn/{slug}",
                 "lastmod": lastmod,
-                "pri": "0.8",
-                "freq": "monthly",
+                "pri": pri,
+                "freq": freq,
             })
         return entries
     except Exception:

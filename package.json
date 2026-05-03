@@ -28,7 +28,11 @@
     "overrides": {
       "picomatch@2": "2.3.2",
       "picomatch@4": "4.0.4",
-      "path-to-regexp": "8.4.0"
+      "path-to-regexp": "8.4.0",
+      "follow-redirects": "1.16.0",
+      "lodash": "4.18.1",
+      "postcss": "8.5.12",
+      "undici": "7.25.0"
     }
   }
 }

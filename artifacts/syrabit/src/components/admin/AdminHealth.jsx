@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi, Copy, Check, Users, Activity, MessageSquare, TrendingUp, DollarSign, BarChart2, RotateCw, Clock, Undo2, Star, ExternalLink } from 'lucide-react';
 import CronHealthPill, { SlackConfigBadge } from './CronHealthPill';
 import CfWafDriftCronPill from './CfWafDriftCronPill';
 import TrustpilotRefreshCronPill from './TrustpilotRefreshCronPill';
 import EdgeProxyDeployCronPill from './EdgeProxyDeployCronPill';
 import UnifiedLogsCfPullCronPill from './UnifiedLogsCfPullCronPill';
+import CfAuditCard from './CfAuditCard';
 import { toast } from 'sonner';
 import AdminQuickLinks from './AdminQuickLinks';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar, LineChart, Line } from 'recharts';
@@ -13,6 +14,7 @@ import { llmCosts, API_BASE } from '@/utils/api';
 import { buildHighlightedSegments } from '@/utils/highlightSegments';
 
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
+import EdgeMetricsPanel from './EdgeMetricsPanel';
 const adminHeaders = (token) => {
   const isRealJwt = token && typeof token === 'string' && token.split('.').length === 3;
   return isRealJwt ? { Authorization: `Bearer ${token}` } : {};
@@ -292,6 +294,24 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       .finally(() => setUnifiedLogsCfPullCronLoading(false));
   }, [adminToken]);
 
+  // Task #133 — Cloudflare weekly audit card.  Fetches the latest
+  // cloudflare-weekly-audit.yml run via GitHub API and, when available,
+  // downloads and parses the cf-audit-report artifact ZIP to show
+  // per-status item counts (PASS / WARN / FAIL / PLAN_REQUIRED).
+  // Endpoint: /admin/health/cf-audit/latest.
+  const [cfAuditData, setCfAuditData] = useState(null);
+  const [cfAuditLoading, setCfAuditLoading] = useState(false);
+
+  const loadCfAudit = useCallback(() => {
+    setCfAuditLoading(true);
+    axios.get(`${API_BASE}/admin/health/cf-audit/latest`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setCfAuditData(r.data))
+      .catch(() => setCfAuditData({ _error: true, status: 'unknown', error: 'Request failed' }))
+      .finally(() => setCfAuditLoading(false));
+  }, [adminToken]);
+
   // Task #902 — alerter-state lock-doc snapshots for the three cron
   // pills above. The pill data answers "is the workflow currently
   // red?"; the alert-state data answers "have we paged on-call about
@@ -565,6 +585,12 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     // under the SlackConfigBadge needs the event count up front to
     // decide whether to render at all.
     loadSlackWebhookMissingAlertHistories();
+    // Task #133 — Cloudflare weekly audit card.  The run changes at
+    // most once a week, but we still poll on the 60s cadence so a
+    // manual re-trigger shows up without a page reload.  The backend
+    // Redis-caches the artifact summary per run_id for 4 hours so the
+    // artifact ZIP is not re-downloaded on every poll.
+    loadCfAudit();
     const id = setInterval(() => {
       loadTpJsonldReport();
       loadTpJsonldHistory();
@@ -579,6 +605,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       loadUnifiedLogsCfPullCronAlertState();
       loadSlackWebhookMissingAlertStates();
       loadSlackWebhookMissingAlertHistories();
+      loadCfAudit();
     }, 60000);
     return () => clearInterval(id);
   }, [adminToken, loadTpJsonldReport, loadTpJsonldHistory,
@@ -587,7 +614,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       loadEdgeProxyDeployCronAlertState, loadCfDriftCronAlertState,
       loadTpCronAlertState, loadUnifiedLogsCfPullCronAlertState,
       loadSlackWebhookMissingAlertStates,
-      loadSlackWebhookMissingAlertHistories]);
+      loadSlackWebhookMissingAlertHistories, loadCfAudit]);
 
   // Task #609 — managed AI response cache stats + admin purge controls.
   const [aiCacheStats, setAiCacheStats] = useState(null);
@@ -635,18 +662,104 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     return () => clearInterval(id);
   }, [adminToken, loadAiCacheStats]);
 
+  // Task #207 — Pinecone index health card.
+  const [pineconeHealth, setPineconeHealth] = useState(null);
+  const [pineconeLoading, setPineconeLoading] = useState(false);
+  const [pineconeSwitch, setPineconeSwitch] = useState('');
+
+  const loadPineconeHealth = useCallback(() => {
+    setPineconeLoading(true);
+    axios.get(`${API_BASE}/admin/health/pinecone`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setPineconeHealth(r.data))
+      .catch(() => setPineconeHealth({ _error: true }))
+      .finally(() => setPineconeLoading(false));
+  }, [adminToken]);
+
+  const switchPineconeRetriever = useCallback(async (name) => {
+    setPineconeSwitch(name);
+    try {
+      await axios.put(`${API_BASE}/admin/retriever/config`, { active: name }, {
+        headers: adminHeaders(adminToken), withCredentials: true,
+      });
+      toast.success(`Active retriever switched to "${name}"`);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Switch failed');
+    } finally {
+      setPineconeSwitch('');
+    }
+  }, [adminToken]);
+
+  useEffect(() => {
+    if (!adminToken) return;
+    loadPineconeHealth();
+    const id = setInterval(loadPineconeHealth, 60000);
+    return () => clearInterval(id);
+  }, [adminToken, loadPineconeHealth]);
+
   // Task #636 — Workers AI fallback admin panel state. Polled every
   // 30s on the same cadence as the other health widgets. The
   // kill-switch toggles are per-capability so an outage in one model
   // doesn't force us to disable the entire safety net.
   const [waiStatus, setWaiStatus] = useState(null);
   const [waiToggling, setWaiToggling] = useState('');
+  // Task #78 — 429 burst pressure gauge (burst_60s, burst_180s,
+  // throttled, alert_threshold) from GET /admin/dashboard/metrics.
+  // Piggybacked on the 30s workers-ai poll so no extra interval is needed.
+  const [waiThrottle, setWaiThrottle] = useState(null);
+  // Task #93 — embed 429 cooldown stats from GET /admin/llm/pool-stats.
+  const [embedBurst, setEmbedBurst] = useState(null);
+  // Task #98 — live countdown display for the embed cooldown timer.
+  const [embedCooldownDisplay, setEmbedCooldownDisplay] = useState(0);
+  const embedCooldownRef = useRef(null);
+  useEffect(() => {
+    if (embedCooldownRef.current) {
+      clearInterval(embedCooldownRef.current);
+      embedCooldownRef.current = null;
+    }
+    if (embedBurst?.cooldown) {
+      setEmbedCooldownDisplay(Math.ceil(embedBurst.remainingS));
+      embedCooldownRef.current = setInterval(() => {
+        setEmbedCooldownDisplay(prev => Math.max(0, prev - 1));
+      }, 1000);
+    } else {
+      setEmbedCooldownDisplay(0);
+    }
+    return () => {
+      if (embedCooldownRef.current) {
+        clearInterval(embedCooldownRef.current);
+        embedCooldownRef.current = null;
+      }
+    };
+  }, [embedBurst]);
   const loadWorkersAi = useCallback(() => {
-    axios.get(`${API_BASE}/admin/workers-ai/status`, {
-      headers: adminHeaders(adminToken), withCredentials: true,
-    })
-      .then((r) => setWaiStatus(r.data))
-      .catch(() => setWaiStatus(null));
+    Promise.allSettled([
+      axios.get(`${API_BASE}/admin/workers-ai/status`, {
+        headers: adminHeaders(adminToken), withCredentials: true,
+      }),
+      axios.get(`${API_BASE}/admin/dashboard/metrics`, {
+        headers: adminHeaders(adminToken), withCredentials: true,
+      }),
+      axios.get(`${API_BASE}/admin/llm/pool-stats`, {
+        headers: adminHeaders(adminToken), withCredentials: true,
+      }),
+    ]).then(([statusRes, metricsRes, poolRes]) => {
+      if (statusRes.status === 'fulfilled') setWaiStatus(statusRes.value.data);
+      else setWaiStatus(null);
+      if (metricsRes.status === 'fulfilled')
+        setWaiThrottle(metricsRes.value.data?.workers_ai_throttle ?? null);
+      else setWaiThrottle(null);
+      if (poolRes.status === 'fulfilled')
+        setEmbedBurst({
+          burst:       poolRes.value.data?.embed_429_burst ?? 0,
+          cooldown:    poolRes.value.data?.embed_cooldown_active ?? false,
+          remainingS:  poolRes.value.data?.embed_cooldown_remaining_s ?? 0,
+          threshold:   poolRes.value.data?.embed_429_threshold ?? 3,
+          durationS:   poolRes.value.data?.embed_cooldown_duration_s ?? 60,
+        });
+      else setEmbedBurst(false);
+    });
   }, [adminToken]);
   const toggleWorkersAi = useCallback(async (capability, enabled) => {
     setWaiToggling(capability);
@@ -1995,6 +2108,82 @@ export default function AdminHealth({ adminToken, onNavigate }) {
         {healthTab === 'workers-ai' && (
           <SectionErrorBoundary name="Workers AI Fallback">
             <div className="space-y-4">
+
+              {/* Task #78 — Workers AI 429 burst pressure gauge */}
+              {(() => {
+                const thr = waiThrottle;
+                // Neutral gray while the first fetch is still in-flight.
+                const isLoading = thr === null;
+                const burst60 = thr?.burst_60s ?? 0;
+                const burst180 = thr?.burst_180s ?? 0;
+                const limit = thr?.alert_threshold ?? 5;
+                const throttled = !isLoading && (thr?.throttled ?? false);
+                // Approaching = burst is ≥60% of the alert threshold but not yet firing.
+                const approaching = !isLoading && !throttled && burst60 >= Math.ceil(limit * 0.6);
+                const dotColor = isLoading
+                  ? 'bg-gray-300'
+                  : throttled
+                  ? 'bg-red-500'
+                  : approaching
+                  ? 'bg-amber-400'
+                  : 'bg-emerald-500';
+                const statusLabel = isLoading
+                  ? 'Loading\u2026'
+                  : throttled ? 'Throttled' : approaching ? 'Approaching' : 'OK';
+                const statusText = isLoading
+                  ? 'text-gray-400'
+                  : throttled
+                  ? 'text-red-600'
+                  : approaching
+                  ? 'text-amber-600'
+                  : 'text-emerald-600';
+                return (
+                  <div className={`rounded-2xl p-4 border shadow-sm ${
+                    throttled
+                      ? 'bg-red-50 border-red-200'
+                      : approaching
+                      ? 'bg-amber-50 border-amber-200'
+                      : 'bg-white border-gray-200'
+                  }`}>
+                    {throttled && (
+                      <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-red-100 border border-red-200">
+                        <AlertTriangle size={14} className="text-red-600 shrink-0" />
+                        <span className="text-xs font-semibold text-red-700">
+                          Workers AI is throttled — {burst60} 429s in the last 60 s (threshold: {limit})
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <Zap size={14} className={isLoading ? 'text-gray-300' : throttled ? 'text-red-500' : approaching ? 'text-amber-500' : 'text-gray-400'} />
+                      <span className="text-xs font-semibold text-gray-700">Workers AI — 429 Burst Pressure</span>
+                      <span className={`flex items-center gap-1 text-[11px] font-semibold ${statusText}`}>
+                        <span className={`inline-block w-2 h-2 rounded-full ${dotColor}`} />
+                        {statusLabel}
+                      </span>
+                    </div>
+                    {!isLoading && (
+                      <div className="mt-3 grid grid-cols-3 gap-3">
+                        <div className="rounded-lg p-2.5 bg-white/70 border border-gray-100">
+                          <div className="text-[10px] uppercase text-gray-400 font-semibold mb-0.5">60 s (this worker)</div>
+                          <div className={`text-base font-bold tabular-nums ${burst60 >= limit ? 'text-red-600' : burst60 >= Math.ceil(limit * 0.6) ? 'text-amber-600' : 'text-emerald-600'}`}>
+                            {burst60}
+                            <span className="text-xs font-normal text-gray-400"> / {limit}</span>
+                          </div>
+                        </div>
+                        <div className="rounded-lg p-2.5 bg-white/70 border border-gray-100">
+                          <div className="text-[10px] uppercase text-gray-400 font-semibold mb-0.5">180 s (all workers)</div>
+                          <div className="text-base font-bold tabular-nums text-gray-700">{burst180}</div>
+                        </div>
+                        <div className="rounded-lg p-2.5 bg-white/70 border border-gray-100">
+                          <div className="text-[10px] uppercase text-gray-400 font-semibold mb-0.5">Alert threshold</div>
+                          <div className="text-base font-bold tabular-nums text-gray-700">{limit}</div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
                 <div className="flex items-start justify-between mb-4">
                   <div>
@@ -2040,6 +2229,124 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                         </div>
                       </div>
                     </div>
+
+                    {/* Task #96 — Workers AI embed 429 cooldown indicator */}
+                    {(() => {
+                      const eb = embedBurst;
+                      const isLoading     = eb === null;
+                      const isUnavailable = eb === false;
+                      if (isUnavailable) return (
+                        <div className="rounded-2xl p-4 border border-gray-200 bg-white shadow-sm mb-4">
+                          <div className="flex items-center gap-2">
+                            <Zap size={14} className="text-gray-300" />
+                            <span className="text-xs font-semibold text-gray-700">Workers AI — Embed 429 Cooldown</span>
+                            <span className="flex items-center gap-1 text-[11px] font-semibold text-gray-400">
+                              <span className="inline-block w-2 h-2 rounded-full bg-gray-300" />
+                              Unavailable
+                            </span>
+                          </div>
+                          <p className="mt-2 text-[11px] text-gray-400">Pool stats endpoint unreachable — retry will happen in 30 s.</p>
+                        </div>
+                      );
+                      const burst      = eb?.burst ?? 0;
+                      const cooldown   = eb?.cooldown ?? false;
+                      const remainingS = eb?.remainingS ?? 0;
+                      const threshold  = eb?.threshold ?? 3;
+                      const durationS  = eb?.durationS ?? 60;
+                      const approaching = !isLoading && !cooldown && burst >= Math.ceil(threshold * 0.6);
+                      const dotColor = isLoading
+                        ? 'bg-gray-300'
+                        : cooldown
+                        ? 'bg-red-500'
+                        : approaching
+                        ? 'bg-amber-400'
+                        : 'bg-emerald-500';
+                      const statusLabel = isLoading
+                        ? 'Loading\u2026'
+                        : cooldown ? 'Cooldown Active' : approaching ? 'Approaching' : 'OK';
+                      const statusText = isLoading
+                        ? 'text-gray-400'
+                        : cooldown
+                        ? 'text-red-600'
+                        : approaching
+                        ? 'text-amber-600'
+                        : 'text-emerald-600';
+                      return (
+                        <div className={`rounded-2xl p-4 border shadow-sm mb-4 ${
+                          cooldown
+                            ? 'bg-red-50 border-red-200'
+                            : approaching
+                            ? 'bg-amber-50 border-amber-200'
+                            : 'bg-white border-gray-200'
+                        }`}>
+                          {cooldown && (
+                            <div className={`flex items-center gap-2 mb-3 px-3 py-2 rounded-lg border transition-colors ${
+                              embedCooldownDisplay <= 5
+                                ? 'bg-amber-100 border-amber-300'
+                                : 'bg-red-100 border-red-200'
+                            }`}>
+                              <AlertTriangle size={14} className={`shrink-0 transition-colors ${embedCooldownDisplay <= 5 ? 'text-amber-600' : 'text-red-600'}`} />
+                              <span className={`text-xs font-semibold transition-colors ${embedCooldownDisplay <= 5 ? 'text-amber-700' : 'text-red-700'}`}>
+                                Embed cooldown active — Workers AI embed skipped for {embedCooldownDisplay}s
+                                ({burst} of {threshold} hits in last {durationS}s)
+                              </span>
+                            </div>
+                          )}
+                          {approaching && !cooldown && (
+                            <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-amber-100 border border-amber-200">
+                              <AlertTriangle size={14} className="text-amber-600 shrink-0" />
+                              <span className="text-xs font-semibold text-amber-700">
+                                Approaching cooldown — {burst}/{threshold} embed 429s recorded
+                              </span>
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2">
+                            <Zap size={14} className={isLoading ? 'text-gray-300' : cooldown ? 'text-red-500' : approaching ? 'text-amber-500' : 'text-gray-400'} />
+                            <span className="text-xs font-semibold text-gray-700">Workers AI — Embed 429 Cooldown</span>
+                            <span className={`flex items-center gap-1 text-[11px] font-semibold ${statusText}`}>
+                              <span className={`inline-block w-2 h-2 rounded-full ${dotColor}`} />
+                              {statusLabel}
+                            </span>
+                          </div>
+                          {!isLoading && (
+                            <div className="mt-3 grid grid-cols-3 gap-3">
+                              <div className="rounded-lg p-2.5 bg-white/70 border border-gray-100">
+                                <div className="text-[10px] uppercase text-gray-400 font-semibold mb-0.5">429 hits (60 s)</div>
+                                <div className={`text-base font-bold tabular-nums ${burst >= threshold ? 'text-red-600' : burst >= Math.ceil(threshold * 0.6) ? 'text-amber-600' : 'text-emerald-600'}`}>
+                                  {burst}
+                                  <span className="text-xs font-normal text-gray-400"> / {threshold}</span>
+                                </div>
+                              </div>
+                              {/* Two-stage urgency: red+pulse (6-10s), amber bg + orange text (0-5s) */}
+                              <div className={`rounded-lg p-2.5 border transition-colors ${
+                                cooldown && embedCooldownDisplay <= 5
+                                  ? 'bg-amber-50 border-amber-300'
+                                  : 'bg-white/70 border-gray-100'
+                              }`}>
+                                <div className={`text-[10px] uppercase font-semibold mb-0.5 ${
+                                  cooldown && embedCooldownDisplay <= 5 ? 'text-amber-600' : 'text-gray-400'
+                                }`}>Cooldown clears in</div>
+                                <div className={`text-base font-bold tabular-nums ${
+                                  cooldown && embedCooldownDisplay <= 5
+                                    ? 'text-orange-500 animate-pulse'
+                                    : cooldown && embedCooldownDisplay <= 10
+                                    ? 'text-red-600 animate-pulse'
+                                    : cooldown
+                                    ? 'text-red-600'
+                                    : 'text-gray-400'
+                                }`}>
+                                  {cooldown ? `${embedCooldownDisplay} s` : '—'}
+                                </div>
+                              </div>
+                              <div className="rounded-lg p-2.5 bg-white/70 border border-gray-100">
+                                <div className="text-[10px] uppercase text-gray-400 font-semibold mb-0.5">Skip window</div>
+                                <div className="text-base font-bold tabular-nums text-gray-700">{durationS} s</div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     <div className="overflow-hidden rounded-xl border border-gray-100">
                       <table className="w-full text-xs">
@@ -2606,6 +2913,28 @@ export default function AdminHealth({ adminToken, onNavigate }) {
         />
         </SectionErrorBoundary>
 
+        <SectionErrorBoundary name="Cloudflare Audit Card">
+        {/*
+          Task #133 — surface the latest cloudflare-weekly-audit.yml run
+          (19-item full audit, Phases 1–6) on the admin health panel so
+          on-call sees the pass/warn/fail breakdown without navigating
+          to GitHub Actions.  The card fetches via
+          /admin/health/cf-audit/latest which:
+            • queries GitHub API for the latest run conclusion + age,
+            • downloads the cf-audit-report artifact ZIP,
+            • parses the embedded JSON for PASS/WARN/FAIL/PLAN_REQUIRED counts,
+            • caches the summary in Redis per run_id for 4 hours.
+          The card turns amber ("stale") when the last run is >8 days old
+          and red when conclusion=failure.  Clicking "View run" deep-links
+          to the specific GitHub Actions run.
+        */}
+        <CfAuditCard
+          data={cfAuditData}
+          loading={cfAuditLoading}
+          onRefresh={loadCfAudit}
+        />
+        </SectionErrorBoundary>
+
         <SectionErrorBoundary name="Live Traffic Stats">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <PeakBadge label="Active Now (5m)" value={current?.active_5m ?? 0} color="emerald" />
@@ -2806,6 +3135,143 @@ export default function AdminHealth({ adminToken, onNavigate }) {
         </div>
         </SectionErrorBoundary>
 
+        <SectionErrorBoundary name="Pinecone Index Health">
+        {(() => {
+          const fetchFailed = pineconeHealth?._error === true;
+          const ph = pineconeHealth && !fetchFailed ? pineconeHealth : null;
+          const configured = ph ? ph.configured : false;
+          const status = ph?.status ?? 'unknown';
+          const isReady = status === 'ready';
+          const isUnconfigured = !fetchFailed && (!configured || status === 'not_configured');
+          const isEmpty = configured && isReady && ph?.total_vectors === 0;
+          const hasWarning = isUnconfigured || isEmpty;
+          const containerCls = fetchFailed
+            ? 'bg-gray-50 border-gray-200'
+            : isUnconfigured
+              ? 'bg-gray-50 border-gray-200'
+              : isEmpty
+                ? 'bg-amber-50 border-amber-200'
+                : isReady
+                  ? 'bg-emerald-50 border-emerald-200'
+                  : 'bg-amber-50 border-amber-200';
+          const headerColor = fetchFailed
+            ? 'text-gray-400'
+            : isUnconfigured
+              ? 'text-gray-500'
+              : isEmpty
+                ? 'text-amber-600'
+                : isReady
+                  ? 'text-emerald-600'
+                  : 'text-amber-600';
+
+          return (
+            <div className={`rounded-2xl p-4 border ${containerCls}`} data-testid="pinecone-health-tile">
+              <div className="flex items-center gap-3 mb-3">
+                <Database size={18} className={fetchFailed || isUnconfigured ? 'text-gray-400' : isReady && !isEmpty ? 'text-emerald-500' : 'text-amber-500'} />
+                <div className="flex-1 min-w-0">
+                  <p className={`text-sm font-semibold ${headerColor}`} data-testid="pinecone-health-status">
+                    Pinecone vector index
+                    {fetchFailed && ' — health check unavailable'}
+                    {!fetchFailed && isUnconfigured && ' — not configured'}
+                    {!fetchFailed && !isUnconfigured && ` — ${ph?.index_name ?? '—'}`}
+                  </p>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    {fetchFailed
+                      ? 'Could not reach the health endpoint — check backend logs'
+                      : isUnconfigured
+                        ? 'Set PINECONE_KEY + PINECONE_INDEX to enable'
+                        : `${ph?.dimensions ?? '—'}-dim cosine · serverless`}
+                  </p>
+                </div>
+
+                {!fetchFailed && hasWarning && (
+                  <span className="flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+                    <AlertTriangle size={11} />
+                    {isUnconfigured ? 'Unconfigured' : 'Empty index'}
+                  </span>
+                )}
+                {fetchFailed && (
+                  <span className="flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 border border-gray-200">
+                    <AlertTriangle size={11} />
+                    Unavailable
+                  </span>
+                )}
+
+                <button
+                  onClick={loadPineconeHealth}
+                  disabled={pineconeLoading}
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-white/60"
+                  data-testid="button-refresh-pinecone"
+                  title="Refresh Pinecone health"
+                >
+                  <RefreshCw size={13} className={pineconeLoading ? 'animate-spin' : ''} />
+                </button>
+              </div>
+
+              {ph && !isUnconfigured && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+                  <div className="rounded-xl p-3 border border-white/70 bg-white/60">
+                    <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1">Status</p>
+                    <p className={`text-sm font-bold font-mono capitalize ${isReady ? 'text-emerald-600' : 'text-amber-600'}`} data-testid="pinecone-status-value">
+                      {status}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl p-3 border border-white/70 bg-white/60">
+                    <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1">Vectors</p>
+                    <p className="text-sm font-bold font-mono text-gray-900" data-testid="pinecone-vector-count">
+                      {ph.total_vectors != null ? ph.total_vectors.toLocaleString() : '—'}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl p-3 border border-white/70 bg-white/60">
+                    <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1">Query latency</p>
+                    <p className="text-sm font-bold font-mono" data-testid="pinecone-latency">
+                      {ph.latency_ms != null
+                        ? <LatencyBadge ms={ph.latency_ms} />
+                        : <span className="text-gray-400">—</span>}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl p-3 border border-white/70 bg-white/60">
+                    <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1">Index name</p>
+                    <p className="text-sm font-bold font-mono text-gray-700 truncate" title={ph.index_name}>
+                      {ph.index_name ?? '—'}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {ph?.error && (
+                <div className="flex items-start gap-2 p-2 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700 mb-3">
+                  <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+                  <span className="font-mono break-all">{ph.error}</span>
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[11px] text-gray-500 font-medium">Switch active retriever:</span>
+                {['pinecone_vector', 'mongodb_vector'].map((name) => (
+                  <button
+                    key={name}
+                    onClick={() => switchPineconeRetriever(name)}
+                    disabled={!!pineconeSwitch}
+                    data-testid={`pinecone-switch-${name}`}
+                    className={`text-[11px] px-2.5 py-1 rounded-lg border font-mono font-semibold transition-colors ${
+                      pineconeSwitch === name
+                        ? 'bg-violet-100 text-violet-700 border-violet-300 animate-pulse'
+                        : 'bg-white text-violet-600 border-violet-200 hover:bg-violet-50'
+                    }`}
+                  >
+                    {pineconeSwitch === name ? 'Switching…' : name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+        </SectionErrorBoundary>
+
         <SectionErrorBoundary name="Dependency Status">
         <div className="space-y-3">
           {(() => {
@@ -2879,6 +3345,10 @@ export default function AdminHealth({ adminToken, onNavigate }) {
             ))}
           </ol>
         </div>
+        </SectionErrorBoundary>
+
+        <SectionErrorBoundary name="Edge Metrics">
+          <EdgeMetricsPanel token={adminToken} />
         </SectionErrorBoundary>
         </>)}
         <AdminQuickLinks links={['apiconfig','settings','dashboard','ratelimits']} onNavigate={onNavigate} />

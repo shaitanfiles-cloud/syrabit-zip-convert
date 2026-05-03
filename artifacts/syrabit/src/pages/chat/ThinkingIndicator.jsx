@@ -1,53 +1,181 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 
-const THINKING_STEPS = [
-  'Searching syllabus-aligned sources…',
-  'Checking Syrabit knowledge base…',
-  'Verifying accuracy for board exams…',
-  'Composing your answer…',
-];
+/**
+ * Single-line thinking indicator that cycles through three search phases:
+ *   Phase 0 → "Searching Assam Board Syllabus"   (shown for ≥ 2 s)
+ *   Phase 1 → "Searching <Subject Name>"          (shown for ≥ 2 s)
+ *   Phase 2 → "Searching <Chapter Name>"          (cycles until response)
+ *
+ * Each phase replaces the previous with a quick fade-out / fade-in.
+ * Discovery events from the backend can advance phases early, but the
+ * 2-second minimum per phase is always respected.
+ */
 
-export function ThinkingIndicator() {
-  const [stepIdx, setStepIdx]   = useState(0);
-  const [elapsed, setElapsed]   = useState(0);
-  const [dots, setDots]         = useState('');
+const MIN_PHASE_MS    = 2000; // each phase visible for at least 2 s
+const PHASE_SCHEDULE  = [2000, 4000]; // default timers: advance at 2 s, then at 4 s
 
+const DOT_KEYFRAMES = `
+@keyframes syra-think-pulse {
+  0%, 100% { opacity: 1;    transform: scale(1);   }
+  50%       { opacity: 0.3; transform: scale(0.55); }
+}
+`;
+
+const DISCOVERY_EVENT_MAP = {
+  'discovery:subject': 1,
+  'discovery:chapter': 2,
+};
+
+export function ThinkingIndicator({
+  subject         = null,
+  scopedChapters  = [],
+  chapterMatch    = null,
+  discoveryEvents = [],
+}) {
+  const [phase,    setPhase]    = useState(0);
+  const [fading,   setFading]   = useState(false);
+  const [chapIdx,  setChapIdx]  = useState(0);
+
+  // Track current phase + when it started so we can honour the 2-s minimum.
+  const phaseRef      = useRef(0);
+  const phaseStartRef = useRef(Date.now());
+  const pendingRef    = useRef(null); // timeout id for the scheduled fade
+
+  // Chapters sorted by order so the cycling is predictable.
+  const sortedChapters = useMemo(
+    () => [...(scopedChapters || [])].sort(
+      (a, b) => (a.order_index ?? a.order ?? 0) - (b.order_index ?? b.order ?? 0),
+    ),
+    [scopedChapters],
+  );
+
+  // ----- label derivation ------------------------------------------------
+
+  const chapterLabel = useMemo(() => {
+    if (chapterMatch) {
+      const num   = chapterMatch.chapter_number;
+      const title = chapterMatch.chapter_title;
+      return num ? `Chapter\u00a0${num}\u00a0\u2014\u00a0${title}` : title;
+    }
+    if (!sortedChapters.length) return 'relevant chapters';
+    const ch  = sortedChapters[chapIdx] || sortedChapters[0];
+    const num = ch.chapter_number ?? ch.order_index ?? chapIdx + 1;
+    return `Chapter\u00a0${num}\u00a0\u2014\u00a0${ch.title || ch.name || 'chapter'}`;
+  }, [chapterMatch, sortedChapters, chapIdx]);
+
+  const label = useMemo(() => {
+    if (phase === 0) return 'Searching Assam Board Syllabus';
+    if (phase === 1) return `Searching ${subject?.name || 'your subject'}`;
+    return `Searching ${chapterLabel}`;
+  }, [phase, subject, chapterLabel]);
+
+  // ----- phase advancement -----------------------------------------------
+
+  /** Schedule a transition to `target` phase, respecting the 2-s minimum. */
+  const scheduleAdvance = (target) => {
+    if (phaseRef.current >= target) return; // already there
+    const elapsed = Date.now() - phaseStartRef.current;
+    const wait    = Math.max(0, MIN_PHASE_MS - elapsed);
+
+    if (pendingRef.current !== null) return; // a transition is already queued
+
+    pendingRef.current = setTimeout(() => {
+      pendingRef.current = null;
+      if (phaseRef.current >= target) return;
+
+      // Fade out → swap → fade in
+      setFading(true);
+      setTimeout(() => {
+        phaseRef.current    = target;
+        phaseStartRef.current = Date.now();
+        setPhase(target);
+        setFading(false);
+      }, 220);
+    }, wait);
+  };
+
+  // Timer-based fallback: advance phases on a fixed schedule.
   useEffect(() => {
-    const stepTimer  = setInterval(() => setStepIdx((i) => (i + 1) % THINKING_STEPS.length), 2200);
-    const secTimer   = setInterval(() => setElapsed((s) => s + 1), 1000);
-    const dotTimer   = setInterval(() => setDots((d) => (d.length >= 3 ? '' : d + '.')), 400);
-    return () => { clearInterval(stepTimer); clearInterval(secTimer); clearInterval(dotTimer); };
-  }, []);
+    const t0 = setTimeout(() => scheduleAdvance(1), PHASE_SCHEDULE[0]);
+    const t1 = setTimeout(() => scheduleAdvance(2), PHASE_SCHEDULE[1]);
+    return () => {
+      clearTimeout(t0);
+      clearTimeout(t1);
+      if (pendingRef.current !== null) clearTimeout(pendingRef.current);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Discovery event-driven advance (backend signals which phase to jump to).
+  useEffect(() => {
+    for (const ev of discoveryEvents) {
+      const target = DISCOVERY_EVENT_MAP[ev.event];
+      if (target !== undefined && target > phaseRef.current) {
+        scheduleAdvance(target);
+      }
+    }
+  }, [discoveryEvents]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // WAI chapter match → immediately signal phase 2.
+  useEffect(() => {
+    if (chapterMatch) scheduleAdvance(2);
+  }, [chapterMatch]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Cycle through chapters while on phase 2 (until real match arrives).
+  useEffect(() => {
+    if (phase !== 2 || chapterMatch || sortedChapters.length < 2) return;
+    const t = setInterval(
+      () => setChapIdx((i) => (i + 1) % sortedChapters.length),
+      2000,
+    );
+    return () => clearInterval(t);
+  }, [phase, chapterMatch, sortedChapters]);
+
+  // ----- render ----------------------------------------------------------
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 0' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{ display: 'flex', gap: 4 }}>
-          {[0, 1, 2].map((i) => (
-            <span
-              key={i}
-              style={{ width: 6, height: 6, borderRadius: '50%', background: '#7c3aed', display: 'block', opacity: 0.7 }}
-            />
-          ))}
-        </div>
+    <>
+      <style>{DOT_KEYFRAMES}</style>
+      <div
+        style={{
+          display:    'flex',
+          alignItems: 'center',
+          gap:        8,
+          padding:    '6px 0',
+          userSelect: 'none',
+        }}
+      >
+        {/* Animated pulse dot */}
         <span
-          style={{ fontSize: 13, color: '#6b7280', fontWeight: 500, fontStyle: 'italic' }}
+          aria-hidden="true"
+          style={{
+            display:      'inline-block',
+            width:        7,
+            height:       7,
+            borderRadius: '50%',
+            flexShrink:   0,
+            background:   '#7c3aed',
+            animation:    'syra-think-pulse 1.1s ease-in-out infinite',
+          }}
+        />
+
+        {/* Fading label */}
+        <span
+          style={{
+            fontSize:     13,
+            lineHeight:   '20px',
+            fontWeight:   500,
+            color:        '#5b21b6',
+            overflow:     'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace:   'nowrap',
+            opacity:      fading ? 0 : 1,
+            transition:   'opacity 0.22s ease',
+          }}
         >
-          {THINKING_STEPS[stepIdx]}{dots}
+          {label}
+          <span style={{ opacity: 0.45, marginLeft: 1 }}>\u2026</span>
         </span>
       </div>
-      {elapsed > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 2 }}>
-          <div style={{ height: 2, flex: 1, maxWidth: 140, borderRadius: 4, background: 'rgba(124,58,237,0.12)', overflow: 'hidden' }}>
-            <div
-              style={{ height: '100%', width: '50%', borderRadius: 4, background: 'linear-gradient(90deg,#7c3aed,#a78bfa)' }}
-            />
-          </div>
-          <span style={{ fontSize: 11, color: '#4b5563' }}>
-            {elapsed}s
-          </span>
-        </div>
-      )}
-    </div>
+    </>
   );
 }

@@ -260,7 +260,7 @@ test.describe('Razorpay payment flow: /pricing → /profile → verify', () => {
 
     // Sanity: the free-plan user's credit limit is reflected on /profile
     // *before* the upgrade so the post-success assertion is meaningful.
-    await expect(page.getByText(new RegExp(`${FREE_CREDITS_LIMIT}`))).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(new RegExp(`${FREE_CREDITS_LIMIT}`)).first()).toBeVisible({ timeout: 10_000 });
 
     // 3. Confirm → create-order → Razorpay shim records options.
     await confirmBtn.click();
@@ -287,7 +287,7 @@ test.describe('Razorpay payment flow: /pricing → /profile → verify', () => {
     //    call must refetch /user/profile + /user/stats, which now return
     //    the upgraded Starter limit. This proves the UI actually
     //    updated, not just that the toast fired.
-    await expect(page.getByText(new RegExp(`${STARTER_CREDITS_LIMIT}`))).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(new RegExp(`${STARTER_CREDITS_LIMIT}`)).first()).toBeVisible({ timeout: 10_000 });
     expect(state.upgraded).toBe(true);
   });
 
@@ -313,7 +313,244 @@ test.describe('Razorpay payment flow: /pricing → /profile → verify', () => {
     // Modal must NOT auto-close on failure — user needs to retry/cancel.
     await expect(confirmBtn).toBeVisible();
     // Credits still show the free-plan value — no spurious upgrade.
-    await expect(page.getByText(new RegExp(`${FREE_CREDITS_LIMIT}`))).toBeVisible();
+    await expect(page.getByText(new RegExp(`${FREE_CREDITS_LIMIT}`)).first()).toBeVisible();
     expect(state.upgraded).toBe(false);
+  });
+});
+
+// ─────────────── Payment edge-case specs ───────────────
+
+async function installStripePaymentMocks(page: import('@playwright/test').Page, opts: { payFail?: boolean; downgrade?: boolean } = {}) {
+  const paymentCalls: Array<{ url: string; body: unknown }> = [];
+  const upgraded = { value: opts.downgrade ?? false };
+
+  await page.addInitScript(() => {
+    try { window.sessionStorage.setItem('syrabit_token', 'e2e.user.jwt'); } catch {}
+    // Shim Razorpay so any open() call is a no-op; success is simulated in tests.
+    // Store opts on window.__rzpOptions so tests can waitForFunction on it.
+    (window as unknown as Record<string, unknown>).Razorpay = function(this: { opts: unknown }, o: unknown) {
+      this.opts = o;
+      (window as unknown as Record<string, unknown>).__rzpOptions = o;
+    };
+    (window as unknown as Record<string, { prototype: { open: () => void } }>).Razorpay.prototype.open = function() {};
+  });
+
+  await page.route('**/api/**', async (route: import('@playwright/test').Route) => {
+    const req = route.request();
+    const url = req.url();
+    const method = req.method();
+
+    if (method === 'OPTIONS') { await route.fulfill({ status: 204, body: '' }); return; }
+
+    if (url.includes('/auth/me')) {
+      await route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ id: 'user-e2e', email: 'e2e@syrabit.ai', name: 'E2E User', plan: upgraded.value ? 'starter' : 'free', credits_limit: upgraded.value ? STARTER_CREDITS_LIMIT : FREE_CREDITS_LIMIT, ads_opt_out: false }),
+      });
+      return;
+    }
+    if (url.includes('/user/profile') || url.includes('/user/stats')) {
+      await route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ id: 'user-e2e', email: 'e2e@syrabit.ai', name: 'E2E User', phone: '', plan: upgraded.value ? 'starter' : 'free', credits_used: 0, credits_limit: upgraded.value ? STARTER_CREDITS_LIMIT : FREE_CREDITS_LIMIT, saved_subjects: [] }),
+      });
+      return;
+    }
+    if (url.includes('/user/payments')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
+      return;
+    }
+
+    // Handle Razorpay create-order (UI-triggered).
+    if (url.includes('/api/payments/create-order')) {
+      let body: unknown = null;
+      try { body = req.postDataJSON(); } catch { body = req.postData(); }
+      paymentCalls.push({ url, body });
+      if (opts.payFail) {
+        await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ detail: 'payment_failed', message: 'Card declined.' }) });
+      } else {
+        await route.fulfill({
+          status: 200, contentType: 'application/json',
+          body: JSON.stringify({ order_id: 'order_edge_001', amount: 9900, currency: 'INR', key_id: 'rzp_test_edge', plan_label: 'Starter', plan: 'starter' }),
+        });
+      }
+      return;
+    }
+
+    // Handle verify (Razorpay success callback).
+    if (url.includes('/api/payments/verify')) {
+      let body: unknown = null;
+      try { body = req.postDataJSON(); } catch { body = req.postData(); }
+      paymentCalls.push({ url, body });
+      if (opts.payFail) {
+        await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ detail: 'payment_failed', message: 'Signature mismatch.' }) });
+      } else {
+        upgraded.value = true;
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, plan: 'starter', credits_limit: STARTER_CREDITS_LIMIT }) });
+      }
+      return;
+    }
+
+    // Handle direct Stripe checkout endpoint.
+    if (url.includes('/api/payments/stripe')) {
+      let body: unknown = null;
+      try { body = req.postDataJSON(); } catch { body = req.postData(); }
+      paymentCalls.push({ url, body });
+      if (opts.payFail) {
+        await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ detail: 'payment_failed', message: 'Card declined.' }) });
+      } else {
+        upgraded.value = true;
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, plan: 'starter' }) });
+      }
+      return;
+    }
+
+    // Handle downgrade endpoint.
+    if (url.includes('/api/payments/downgrade') || (url.includes('/api/payments') && method === 'DELETE')) {
+      let body: unknown = null;
+      try { body = req.postDataJSON(); } catch { body = req.postData(); }
+      paymentCalls.push({ url, body });
+      upgraded.value = false;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, plan: 'free' }) });
+      return;
+    }
+
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({}) });
+  });
+
+  return { paymentCalls, upgraded };
+}
+
+test.describe('Payment edge cases', () => {
+  test('Razorpay modal dismissed without paying does not change plan or credits', async ({ page }) => {
+    const state = await installPaymentMocks(page);
+
+    await page.goto('/pricing');
+    const pricingCta = page.getByTestId('pricing-starter-cta-button');
+    await expect(pricingCta).toBeVisible({ timeout: 15_000 });
+    await pricingCta.click();
+
+    const confirmBtn = page.getByTestId('payment-confirm-button');
+    await expect(confirmBtn).toBeVisible({ timeout: 10_000 });
+    await confirmBtn.click();
+
+    // Wait for Razorpay options to be captured then dismiss without paying.
+    await page.waitForFunction(
+      () => Boolean((window as unknown as { __rzpOptions?: unknown }).__rzpOptions),
+      { timeout: 30_000 },
+    );
+
+    // Simulate the modal_closed (dismiss) callback — no handler call.
+    // The dismiss path is signalled by calling the `modal.ondismiss` callback
+    // (if wired) or simply by not calling `opts.handler`. We verify the
+    // verify endpoint was NOT hit and credits remain at the free-plan value.
+    await page.evaluate(() => {
+      const opts = (window as unknown as { __rzpOptions?: { modal?: { ondismiss?: () => void } } }).__rzpOptions;
+      opts?.modal?.ondismiss?.();
+    });
+
+    expect(state.verifyRequests).toHaveLength(0);
+    expect(state.upgraded).toBe(false);
+    await expect(page.getByText(new RegExp(`${FREE_CREDITS_LIMIT}`)).first()).toBeVisible({ timeout: 5_000 });
+  });
+
+  test('payment success upgrades plan to starter and profile reflects new credits', async ({ page }) => {
+    const { paymentCalls, upgraded } = await installStripePaymentMocks(page);
+
+    // Start on pricing page and click the upgrade CTA (same flow as the main Razorpay tests).
+    await page.goto('/pricing');
+    const upgradeCta = page.getByTestId('pricing-starter-cta-button');
+    await expect(upgradeCta).toBeVisible({ timeout: 15_000 });
+    await upgradeCta.click();
+
+    // Click the payment confirm button that opens the payment modal.
+    const confirmBtn = page.getByTestId('payment-confirm-button');
+    await expect(confirmBtn).toBeVisible({ timeout: 10_000 });
+    await confirmBtn.click();
+
+    // Simulate Razorpay success callback — triggers POST /api/payments/verify.
+    await page.waitForFunction(
+      () => Boolean((window as unknown as { __rzpOptions?: unknown }).__rzpOptions),
+      { timeout: 30_000 },
+    );
+    await page.evaluate(() => {
+      const opts = (window as unknown as { __rzpOptions?: { handler?: (r: Record<string, string>) => void } }).__rzpOptions;
+      opts?.handler?.({ razorpay_payment_id: 'pay_edge_001', razorpay_order_id: 'order_edge_001', razorpay_signature: 'sig_edge_001' });
+    });
+
+    await expect.poll(() => paymentCalls.length, { timeout: 10_000 }).toBeGreaterThan(0);
+    expect(upgraded.value).toBe(true);
+
+    // Profile now shows Starter plan and increased credit limit.
+    await page.goto('/profile');
+    await expect(page.getByText(/Starter/i).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(new RegExp(String(STARTER_CREDITS_LIMIT))).first()).toBeVisible({ timeout: 5_000 });
+  });
+
+  test('payment failure retains free plan and shows error feedback', async ({ page }) => {
+    const { paymentCalls, upgraded } = await installStripePaymentMocks(page, { payFail: true });
+
+    await page.goto('/pricing');
+    const upgradeCta = page.getByTestId('pricing-starter-cta-button');
+    await expect(upgradeCta).toBeVisible({ timeout: 15_000 });
+    await upgradeCta.click();
+
+    const confirmBtn = page.getByTestId('payment-confirm-button');
+    await expect(confirmBtn).toBeVisible({ timeout: 10_000 });
+    await confirmBtn.click();
+
+    // Simulate Razorpay callback that triggers verify — verify mock returns 400.
+    await page.waitForFunction(
+      () => Boolean((window as unknown as { __rzpOptions?: unknown }).__rzpOptions),
+      { timeout: 30_000 },
+    );
+    await page.evaluate(() => {
+      const opts = (window as unknown as { __rzpOptions?: { handler?: (r: Record<string, string>) => void } }).__rzpOptions;
+      opts?.handler?.({ razorpay_payment_id: 'pay_fail_001', razorpay_order_id: 'order_edge_001', razorpay_signature: 'sig_fail_001' });
+    });
+
+    await expect.poll(() => paymentCalls.length, { timeout: 10_000 }).toBeGreaterThan(0);
+    // Verify endpoint returned 400 — plan remains free.
+    expect(upgraded.value).toBe(false);
+
+    // Profile shows Free plan and free-tier credits only.
+    await page.goto('/profile');
+    await expect(page.getByText(/Free/i).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Starter/i)).not.toBeVisible({ timeout: 3_000 });
+    await expect(page.getByText(new RegExp(String(FREE_CREDITS_LIMIT))).first()).toBeVisible({ timeout: 5_000 });
+  });
+
+  test('plan downgrade via profile UI removes paid-tier credits', async ({ page }) => {
+    // Seed mock with downgrade:true so auth/me starts as Starter, downgrade endpoint reverts to Free.
+    const { paymentCalls, upgraded } = await installStripePaymentMocks(page, { downgrade: true });
+
+    await page.goto('/profile');
+    await expect(page.getByText(/Starter/i).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(new RegExp(String(STARTER_CREDITS_LIMIT))).first()).toBeVisible({ timeout: 10_000 });
+
+    // Click the manage / cancel subscription button on the profile page.
+    // Try both button and link roles since different implementations may use either.
+    const manageLocator = page
+      .getByRole('button', { name: /downgrade|cancel|manage|free plan|switch/i })
+      .or(page.getByRole('link', { name: /downgrade|cancel|manage|free plan|switch/i }));
+    // Require the UI control to be present — if it is absent the downgrade flow is broken.
+    await expect(manageLocator.first()).toBeVisible({ timeout: 8_000 });
+    await manageLocator.first().click();
+    // Confirm the downgrade if a confirmation dialog appears.
+    const confirmBtn = page.getByRole('button', { name: /confirm|yes|downgrade|cancel plan/i }).first();
+    if (await confirmBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await confirmBtn.click();
+    }
+
+    // Route interceptor captures the downgrade call.
+    await expect.poll(() => paymentCalls.filter((c) => String(c.url).includes('/downgrade') || String(c.url).includes('/payments')).length, { timeout: 8_000 }).toBeGreaterThan(0);
+    expect(upgraded.value).toBe(false);
+
+    // Profile now shows Free plan — Starter label and 1500-credit limit are gone.
+    await page.goto('/profile');
+    await expect(page.getByText(/Free/i).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('Starter', { exact: true }).first()).not.toBeVisible({ timeout: 3_000 });
+    await expect(page.getByText(new RegExp(String(FREE_CREDITS_LIMIT))).first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(new RegExp(String(STARTER_CREDITS_LIMIT))).first()).not.toBeVisible({ timeout: 3_000 });
   });
 });

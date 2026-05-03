@@ -26,6 +26,8 @@ from typing import Optional
 from .base import Retriever
 from .vectorize import VectorizeRetriever
 from .vertex import VertexVectorSearchRetriever
+from .mongodb_vector import MongoVectorRetriever
+from .pinecone_vector import PineconeVectorRetriever
 
 logger = logging.getLogger("retrievers.factory")
 
@@ -33,6 +35,14 @@ DEFAULT_RETRIEVER = "vectorize"
 _KNOWN: dict[str, type[Retriever]] = {
     "vectorize": VectorizeRetriever,
     "vertex": VertexVectorSearchRetriever,
+    # MongoDB Atlas Vector Search — available on Flex/M10+ tiers.
+    # Enable via admin endpoint: POST /admin/retriever/config {"active": "mongodb_vector"}
+    # Requires Atlas VS index + embedding field in the configured collection.
+    "mongodb_vector": MongoVectorRetriever,
+    # Pinecone serverless — ANN index for AHSEC/SEBA chunks (sub-50 ms p99).
+    # Enable via admin endpoint: POST /admin/retriever/config {"active": "pinecone_vector"}
+    # Requires PINECONE_KEY + PINECONE_INDEX env vars; run migrate_chunks_to_pinecone.py first.
+    "pinecone_vector": PineconeVectorRetriever,
 }
 
 _instances: dict[str, Retriever] = {}

@@ -1580,6 +1580,171 @@ async def admin_perf_latency(days: int = 7, admin: dict = Depends(get_admin_user
     }
 
 
+@router.get("/admin/llm/speed-test")
+async def admin_llm_speed_test(admin: dict = Depends(get_admin_user)):
+    """Live TTFB + total latency probe across all active SLM pool slots.
+
+    Sends a short fixed prompt to every slot concurrently and measures
+    time-to-first-token (TTFB) and total generation time for each model.
+    Results are ranked fastest-first by TTFB.
+    """
+    import time as _time
+    from llm import _slm_pool
+    from providers.cloudflare_ai import stream_chat as _cf_stream
+
+    _PROBE_MESSAGES = [
+        {"role": "system", "content": "You are a concise AI assistant."},
+        {"role": "user", "content": "In exactly one sentence, what is photosynthesis?"},
+    ]
+    _PROBE_MAX_TOKENS = 64
+
+    async def _probe_slot(slot: dict) -> dict:
+        p_name = slot["provider"]
+        p_model = slot["model"]
+        result = {
+            "provider": p_name,
+            "model": p_model,
+            "tier": slot.get("base_priority", slot.get("priority", "?")),
+            "ttfb_ms": None,
+            "total_ms": None,
+            "tokens": 0,
+            "ok": False,
+            "error": None,
+        }
+        t0 = _time.perf_counter()
+        try:
+            if p_name == "workers-ai":
+                async with slot["sem"]:
+                    token_count = 0
+                    async for tok in _cf_stream(_PROBE_MESSAGES, model_key=p_model, max_tokens=_PROBE_MAX_TOKENS):
+                        if result["ttfb_ms"] is None:
+                            result["ttfb_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
+                        token_count += 1
+                    result["total_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
+                    result["tokens"] = token_count
+                    result["ok"] = token_count > 0
+            elif p_name == "groq":
+                import httpx as _httpx
+                from config import _GROQ_KEY
+                headers = {"Authorization": f"Bearer {_GROQ_KEY}", "Content-Type": "application/json"}
+                payload = {"model": p_model, "messages": _PROBE_MESSAGES, "max_tokens": _PROBE_MAX_TOKENS, "stream": True}
+                async with _httpx.AsyncClient(timeout=15.0) as _c:
+                    async with _c.stream("POST", "https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload) as _r:
+                        _r.raise_for_status()
+                        token_count = 0
+                        async for line in _r.aiter_lines():
+                            if not line.startswith("data: ") or line.strip() == "data: [DONE]":
+                                continue
+                            import json as _j
+                            try:
+                                delta = _j.loads(line[6:])["choices"][0]["delta"].get("content", "")
+                                if delta:
+                                    if result["ttfb_ms"] is None:
+                                        result["ttfb_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
+                                    token_count += 1
+                            except Exception:
+                                pass
+                result["total_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
+                result["tokens"] = token_count
+                result["ok"] = token_count > 0
+            elif p_name == "cerebras":
+                import httpx as _httpx
+                from config import _CEREBRAS_KEY
+                headers = {"Authorization": f"Bearer {_CEREBRAS_KEY}", "Content-Type": "application/json"}
+                payload = {"model": p_model, "messages": _PROBE_MESSAGES, "max_tokens": _PROBE_MAX_TOKENS, "stream": True}
+                async with _httpx.AsyncClient(timeout=15.0) as _c:
+                    async with _c.stream("POST", "https://api.cerebras.ai/v1/chat/completions", headers=headers, json=payload) as _r:
+                        _r.raise_for_status()
+                        token_count = 0
+                        async for line in _r.aiter_lines():
+                            if not line.startswith("data: ") or line.strip() == "data: [DONE]":
+                                continue
+                            import json as _j
+                            try:
+                                delta = _j.loads(line[6:])["choices"][0]["delta"].get("content", "")
+                                if delta:
+                                    if result["ttfb_ms"] is None:
+                                        result["ttfb_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
+                                    token_count += 1
+                            except Exception:
+                                pass
+                result["total_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
+                result["tokens"] = token_count
+                result["ok"] = token_count > 0
+        except Exception as exc:
+            result["error"] = f"{type(exc).__name__}: {str(exc)[:120]}"
+            result["total_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
+        return result
+
+    all_slots = _slm_pool.all_slots if hasattr(_slm_pool, "all_slots") else getattr(_slm_pool, "_slots", [])
+    tasks = [asyncio.create_task(_probe_slot(s)) for s in all_slots]
+    results = await asyncio.gather(*tasks, return_exceptions=False)
+
+    results_sorted = sorted(results, key=lambda r: (r["ttfb_ms"] or 99999))
+    return {
+        "probe_prompt": _PROBE_MESSAGES[-1]["content"],
+        "probe_max_tokens": _PROBE_MAX_TOKENS,
+        "slot_count": len(all_slots),
+        "results": results_sorted,
+        "fastest_ttfb_ms": results_sorted[0]["ttfb_ms"] if results_sorted else None,
+        "fastest_model": results_sorted[0]["model"] if results_sorted else None,
+    }
+
+
+@router.get("/admin/llm/pool-stats")
+async def admin_llm_pool_stats(admin: dict = Depends(get_admin_user)):
+    """Real-time RPM usage and slot health across both SmartKeyPools.
+
+    Returns per-slot data for the chat SLM pool and the content pool:
+      - rpm_used / rpm_limit / rpm_pct  — current requests-per-minute load
+      - effective_priority               — 0-6 base + deprioritization penalty
+      - cooldown                         — True when slot is cooling after a 429
+
+    Pair with /admin/llm/speed-test for a full latency + throughput picture.
+    """
+    from llm import _slm_pool, _content_pool, _POOL_RPM_LIMITS as _rpm_table
+
+    chat_stats = _slm_pool.rpm_status()
+    content_stats = _content_pool.rpm_status()
+
+    # Annotate each slot with the configured limit and env-var that controls it.
+    _env_keys = {
+        "workers-ai": "WORKERS_AI_RPM_LIMIT",
+        "groq":        "GROQ_RPM_LIMIT",
+        "cerebras":    "CEREBRAS_RPM_LIMIT",
+        "sarvam":      "SARVAM_RPM_LIMIT",
+        "gemini":      "GEMINI_RPM_LIMIT",
+    }
+    for stat in [*chat_stats, *content_stats]:
+        stat["rpm_env_var"] = _env_keys.get(stat["provider"])
+
+    from vertex_services import (
+        get_embed_429_burst,
+        get_embed_cooldown_config,
+        get_embed_cooldown_remaining_s,
+        is_embed_cooldown_active,
+    )
+    _embed_cfg = get_embed_cooldown_config()
+    return {
+        "chat_pool":    chat_stats,
+        "content_pool": content_stats,
+        "rpm_limits":   {p: _rpm_table.get(p) for p in _env_keys},
+        "embed_429_burst":            get_embed_429_burst(window_seconds=60),
+        "embed_cooldown_active":      is_embed_cooldown_active(),
+        "embed_cooldown_remaining_s": round(get_embed_cooldown_remaining_s(), 1),
+        "embed_429_threshold":        _embed_cfg["threshold"],
+        "embed_cooldown_duration_s":  _embed_cfg["duration_s"],
+        "note": (
+            "rpm_used is a rolling 60s window per slot. "
+            "Workers AI slots share one window (same API key). "
+            "Override limits via env vars listed in rpm_env_var. "
+            "embed_429_burst counts Workers AI embed 429s in the last 60 s; "
+            "embed_cooldown_active is true while the 60s skip-window is live; "
+            "embed_cooldown_remaining_s is seconds until the cooldown clears."
+        ),
+    }
+
+
 @router.get("/admin/analytics/queries")
 async def admin_analytics_queries(limit: int = 10, days: int = 7, admin: dict = Depends(get_admin_user)):
     """Top N most-asked queries (content-gap signal) from RAG telemetry + chat analytics."""

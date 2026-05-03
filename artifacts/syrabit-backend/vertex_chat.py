@@ -1,59 +1,34 @@
 """
-vertex_chat — Vertex AI Gemini Flash streaming chat client (Task #607).
+vertex_chat — Workers AI streaming chat client.
 
-Provides token-by-token streaming from Google Vertex AI's
-`streamGenerateContent` REST endpoint using Application Default
-Credentials (ADC) or a service-account JSON blob.
+Previously called Vertex AI / Gemini directly. Now delegates all
+streaming to providers/cloudflare_ai.py (Workers AI via CF AI Gateway)
+so the entire LLM stack runs on a single provider with no external API
+keys needed.
 
-This module is intentionally separate from the disabled
-`vertex_services.py` stub: that one wraps the legacy embeddings /
-OCR / generation surface, while this one is scoped strictly to chat
-streaming as required by Task #607.
-
-Configuration (env):
-  VERTEX_PROJECT_ID            GCP project (REQUIRED to enable)
-  VERTEX_LOCATION              GCP region (default: us-central1)
-  VERTEX_GEMINI_MODEL          Model id (default: gemini-2.5-flash)
-  VERTEX_SERVICE_ACCOUNT_JSON  Service-account JSON blob (string).
-                               Optional — falls back to ADC
-                               (GOOGLE_APPLICATION_CREDENTIALS).
-
-Returns plain text deltas from `async for token in stream(...)`.
-Raises RuntimeError on misconfiguration; httpx exceptions on
-network/auth errors so callers can fall back.
+The public interface (is_configured, is_available, stream_chat,
+breaker_snapshot, force_breaker_close) is unchanged so llm.py and
+routes/edu_study.py keep working without modification.
 """
 from __future__ import annotations
 
-import os
-import json
-import time
 import logging
-import asyncio
-from typing import AsyncIterator, List, Dict, Any, Optional
-
-import httpx
+import os
+from typing import AsyncIterator, List, Dict, Optional
 
 from vertex_breaker import CircuitBreaker
 
 logger = logging.getLogger(__name__)
 
-VERTEX_PROJECT_ID = os.environ.get("VERTEX_PROJECT_ID", "").strip()
-VERTEX_LOCATION = os.environ.get("VERTEX_LOCATION", "us-central1").strip() or "us-central1"
-VERTEX_GEMINI_MODEL = os.environ.get("VERTEX_GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
-_SERVICE_ACCOUNT_JSON = os.environ.get("VERTEX_SERVICE_ACCOUNT_JSON", "").strip()
+_ACCOUNT_ID = os.environ.get("CF_AI_GATEWAY_ACCOUNT_ID", "").strip()
+_API_TOKEN   = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+_CF_ENABLED  = bool(_ACCOUNT_ID and _API_TOKEN)
 
-_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
-_TOKEN_REFRESH_MARGIN_S = 120  # refresh ~2 min before expiry
+_DEFAULT_MODEL = os.environ.get(
+    "VERTEX_GEMINI_MODEL",
+    "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+).strip() or "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 
-_creds = None
-_creds_err: Optional[str] = None
-_token_lock = asyncio.Lock()
-
-# ── Circuit breaker (Task #831) ────────────────────────────────────────────
-# Tighter than vertex_services because chat is latency-sensitive: every
-# attempt against a dead upstream pays the connect timeout (10s) before
-# the SLM-pool fallback runs. Open the breaker quickly and recover
-# eagerly so user-perceived latency stays low during outages.
 _CHAT_BREAKER_THRESHOLD = max(1, int(os.environ.get("VERTEX_CHAT_BREAKER_THRESHOLD", "3")))
 _CHAT_BREAKER_COOLDOWN_S = max(1.0, float(os.environ.get("VERTEX_CHAT_BREAKER_COOLDOWN_S", "180")))
 
@@ -64,108 +39,24 @@ _breaker = CircuitBreaker(
 )
 
 
-def is_configured() -> bool:
-    """True iff the Vertex chat client has the env vars set.
+def auth_mode() -> str:
+    return "workers_ai" if _CF_ENABLED else "unconfigured"
 
-    Static config check only — does NOT consider runtime breaker state.
-    Callers that gate request routing should use `is_available()` so a
-    known-broken upstream is skipped without paying the connect timeout.
-    """
-    return bool(VERTEX_PROJECT_ID)
+
+def is_configured() -> bool:
+    return _CF_ENABLED
 
 
 def is_available() -> bool:
-    """True iff configured AND the circuit breaker currently allows traffic.
-
-    Use this in request-time routing (e.g. the llm.py fast-path) so a
-    Vertex outage degrades to the SLM pool with no per-request latency
-    penalty. Calling `allow()` may transition OPEN → HALF_OPEN as a side
-    effect — that's intentional, the next caller acts as the probe.
-    """
     return is_configured() and _breaker.allow()
 
 
 def breaker_snapshot() -> dict:
-    """Public accessor for admin endpoints / health probes."""
     return _breaker.snapshot()
 
 
 def force_breaker_close() -> None:
-    """Operator override (admin endpoint) to force-close the breaker."""
     _breaker.force_close()
-
-
-def _load_credentials():
-    """Lazily load google-auth credentials. Returns None if unavailable."""
-    global _creds, _creds_err
-    if _creds is not None or _creds_err is not None:
-        return _creds
-    try:
-        from google.oauth2 import service_account  # type: ignore
-        import google.auth  # type: ignore
-
-        if _SERVICE_ACCOUNT_JSON:
-            try:
-                info = json.loads(_SERVICE_ACCOUNT_JSON)
-            except json.JSONDecodeError as e:
-                _creds_err = f"VERTEX_SERVICE_ACCOUNT_JSON is not valid JSON: {e}"
-                logger.error(_creds_err)
-                return None
-            _creds = service_account.Credentials.from_service_account_info(
-                info, scopes=[_SCOPE]
-            )
-            logger.info("Vertex chat: loaded credentials from VERTEX_SERVICE_ACCOUNT_JSON")
-        else:
-            try:
-                _creds, _ = google.auth.default(scopes=[_SCOPE])
-                logger.info("Vertex chat: loaded Application Default Credentials")
-            except Exception as e:
-                _creds_err = f"google.auth.default() failed: {e}"
-                logger.warning(_creds_err)
-                return None
-        return _creds
-    except ImportError as e:
-        _creds_err = f"google-auth not installed: {e}"
-        logger.error(_creds_err)
-        return None
-
-
-async def _get_access_token() -> str:
-    """Return a valid OAuth2 access token, refreshing as needed."""
-    creds = _load_credentials()
-    if creds is None:
-        raise RuntimeError(_creds_err or "Vertex chat: no credentials available")
-
-    async with _token_lock:
-        needs_refresh = (
-            not getattr(creds, "token", None)
-            or not getattr(creds, "expiry", None)
-            or (creds.expiry.timestamp() - time.time()) < _TOKEN_REFRESH_MARGIN_S
-        )
-        if needs_refresh:
-            from google.auth.transport.requests import Request as _GAuthRequest  # type: ignore
-            await asyncio.to_thread(creds.refresh, _GAuthRequest())
-    return creds.token
-
-
-def _convert_messages(messages: List[Dict[str, str]]) -> Dict[str, Any]:
-    """Convert OpenAI-format chat messages → Vertex Gemini contents payload."""
-    system_parts: List[str] = []
-    contents: List[Dict[str, Any]] = []
-    for m in messages:
-        role = (m.get("role") or "user").lower()
-        text = m.get("content") or ""
-        if not text:
-            continue
-        if role == "system":
-            system_parts.append(text)
-            continue
-        gemini_role = "model" if role == "assistant" else "user"
-        contents.append({"role": gemini_role, "parts": [{"text": text}]})
-    payload: Dict[str, Any] = {"contents": contents}
-    if system_parts:
-        payload["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_parts)}]}
-    return payload
 
 
 async def stream_chat(
@@ -176,85 +67,36 @@ async def stream_chat(
     temperature: float = 0.1,
     timeout_s: float = 60.0,
 ) -> AsyncIterator[str]:
-    """Stream text deltas from Vertex AI Gemini Flash.
+    """Stream text deltas from Workers AI (Cloudflare).
 
     Yields raw text chunks. Raises RuntimeError / httpx exceptions on
-    failure so callers can fall back to a different provider.
+    failure so callers can fall back to the SLM pool.
     """
-    if not is_configured():
-        raise RuntimeError("Vertex chat is not configured (VERTEX_PROJECT_ID missing)")
+    if not _CF_ENABLED:
+        raise RuntimeError(
+            "Workers AI not configured: set CF_AI_GATEWAY_ACCOUNT_ID and CLOUDFLARE_API_TOKEN"
+        )
 
-    use_model = (model or VERTEX_GEMINI_MODEL).strip() or VERTEX_GEMINI_MODEL
+    from providers import cloudflare_ai as _cf
 
-    try:
-        token = await _get_access_token()
-    except Exception as e:
-        # Auth failure (no creds, expired key, refresh denied) — feed
-        # the breaker so subsequent requests skip Vertex entirely.
-        _breaker.record_failure(f"auth_{type(e).__name__}")
-        raise
+    use_model = (model or _DEFAULT_MODEL).strip() or _DEFAULT_MODEL
+    if not use_model.startswith("@cf/"):
+        use_model = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 
-    base = f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com/v1"
-    url = (
-        f"{base}/projects/{VERTEX_PROJECT_ID}/locations/{VERTEX_LOCATION}"
-        f"/publishers/google/models/{use_model}:streamGenerateContent?alt=sse"
-    )
-    body = _convert_messages(messages)
-    body["generationConfig"] = {
-        "temperature": float(temperature),
-        "maxOutputTokens": int(max_tokens),
-    }
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "Accept": "text/event-stream",
-    }
-
-    timeout = httpx.Timeout(timeout_s, connect=10.0)
+    # chat_stream's model_key falls back to the raw value when the key is not
+    # in the MODELS dict — passing the full model path directly works fine.
     success_recorded = False
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream("POST", url, json=body, headers=headers) as resp:
-                if resp.status_code >= 400:
-                    err_text = (await resp.aread()).decode("utf-8", errors="replace")[:500]
-                    _breaker.record_failure(f"http_{resp.status_code}")
-                    raise RuntimeError(
-                        f"Vertex Gemini Flash {resp.status_code}: {err_text}"
-                    )
-                # 2xx — upstream accepted our request. Record success
-                # exactly once at the response-status boundary; if the
-                # stream later dies mid-way that's a separate concern
-                # (the upstream WAS alive, so don't re-open the breaker
-                # on transient mid-stream errors).
+        async for chunk in _cf.chat_stream(
+            messages,
+            model_key=use_model,
+            max_tokens=max_tokens,
+        ):
+            if not success_recorded:
                 _breaker.record_success()
                 success_recorded = True
-                async for line in resp.aiter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if not data or data == "[DONE]":
-                        continue
-                    try:
-                        evt = json.loads(data)
-                    except json.JSONDecodeError:
-                        continue
-                    candidates = evt.get("candidates") or []
-                    if not candidates:
-                        continue
-                    parts = (candidates[0].get("content") or {}).get("parts") or []
-                    for p in parts:
-                        txt = p.get("text")
-                        if txt:
-                            yield txt
-    except RuntimeError:
-        # Already recorded above (status >= 400); just propagate.
-        raise
-    except httpx.HTTPError as e:
-        # Only feed the breaker if we never saw a successful response.
-        # Mid-stream errors after a 2xx don't change the "upstream is
-        # alive" verdict — counting them would falsely re-open the
-        # breaker after a successful accept.
+            yield chunk
+    except Exception as e:
         if not success_recorded:
-            _breaker.record_failure(f"network_{type(e).__name__}")
+            _breaker.record_failure(f"{type(e).__name__}")
         raise
