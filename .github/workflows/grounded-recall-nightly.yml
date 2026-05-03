@@ -93,6 +93,14 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run grounded-recall benchmark (offline, gated against baseline)
+        env:
+          # Backend's config.py is imported transitively by grounded_answer
+          # and refuses to start with JWT_SECRET < 64 chars. Throwaway
+          # CI-only values; never used in production.
+          JWT_SECRET: "ci-test-secret-not-real-padded-to-64-chars-of-throwaway-entropy-aaaaaa"
+          ADMIN_JWT_SECRET: "ci-admin-test-secret-not-real-padded-to-64-chars-of-throwaway-entropy-bbbbbb"
+          MONGODB_URL: "mongodb://localhost:27017/test"
+          DB_NAME: "syrabit_test"
         run: |
           python -m bench.grounded_recall \
             --save-results \
